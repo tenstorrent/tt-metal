@@ -1,0 +1,12 @@
+{
+  "status": "complete",
+  "reviewer": "root",
+  "reviewed_results": 108,
+  "counts": {
+    "normal": 60,
+    "other": 13,
+    "native": 35
+  },
+  "policy_selected": false,
+  "evidence": "completion-summary.json"
+}

@@ -1,0 +1,29 @@
+[
+  {
+    "name": "anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix2048.seed42",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix2048/fixtures/full/anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix2048.seed42.private.json",
+    "branches": [
+      "chosen"
+    ],
+    "free_run_tokens": 1024,
+    "free_run_trials": 1
+  },
+  {
+    "name": "anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix2048.seed43",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix2048/fixtures/full/anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix2048.seed43.private.json",
+    "branches": [
+      "chosen"
+    ],
+    "free_run_tokens": 1024,
+    "free_run_trials": 1
+  },
+  {
+    "name": "anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix2048.seed44",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix2048/fixtures/full/anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix2048.seed44.private.json",
+    "branches": [
+      "chosen"
+    ],
+    "free_run_tokens": 1024,
+    "free_run_trials": 1
+  }
+]

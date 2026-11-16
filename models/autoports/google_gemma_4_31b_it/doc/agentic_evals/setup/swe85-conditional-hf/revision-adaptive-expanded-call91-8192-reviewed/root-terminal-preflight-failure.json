@@ -1,0 +1,6 @@
+{
+  "time_unix": 1794727387.5737333,
+  "status": "preflight_blocked_no_HF_execution",
+  "error": "KeyError forecast_source_sha256 in P2 forecast lookup",
+  "correction": "Use admitted P2 proposal candidate_hashes runtime-estimate.json key; frozen forecast hash verified unchanged. No changes to P2 evidence."
+}

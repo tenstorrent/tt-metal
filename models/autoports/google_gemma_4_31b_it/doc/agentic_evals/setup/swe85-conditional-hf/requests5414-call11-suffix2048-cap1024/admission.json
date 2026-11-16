@@ -1,0 +1,21 @@
+{
+  "status": "root_admitted",
+  "reviewer": "root",
+  "accepted": true,
+  "stage_deadline_unix": 1794791725.0,
+  "accepted_runtime_ceiling_seconds": 3660,
+  "primary_hf9_progress_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/progress.json",
+  "primary_hf9_progress_sha256": "4a9363429f50949031da53c13f3156c2bd399f756d227f353babaafd065ec773",
+  "primary_hf9_root_review_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/root-terminal-review.json",
+  "primary_hf9_root_review_sha256": "e7109b54dafdd7f8507703b7f0c31795ee2678b56f9a543a1ef2d0b4f6f36cd5",
+  "execution_note": "Authorized only after actual-branch HF/TT captures have terminated; coordinator serializes launch. Root repeated static validation; prior seven host tests and root review retained.",
+  "driver_sha256": "b874df0314d95bcea18ee4c7569de46f3e4e0617c6ea2db2779983c18dd75a4a",
+  "driver_integrity_sha256": "a0537b2cef1292ef3142097ad96ecd9c46090ddfd9e81b80444a0864d176e6d2",
+  "proposal_sha256": "62d0a479ff9d5d8192e38deaf6dc7a3b61ef5ebf19658f10b89989befddbcbee",
+  "commands_sha256": "ef38d66c41bcf2be8309d79352d8e2339ca0586283eb68392ebb521bae858679",
+  "manifest_sha256": "61914c6361a84f8d5c4f43bcbaccdb786c72b2fed57bf1afdb4e356c6f069b74",
+  "forecast_sha256": "65c0c7a7325e58379b8b5f89f8546074422e949c4e2fc6c5ca6d60d52132a2fb",
+  "source_integrity_sha256": "a1879479576f6cc9728d64b8396f285cebae3a895242c11289645c924a5d215d",
+  "semantic_context_sha256": "8a27f34ab15541d4b75d6e6cb92cc62f489c1e82631aa39de91084eb3bd40c19",
+  "tests_sha256": "8a03de261eb5e2bd790bcf55f56fc28d734e97e684fe64d4d9ca14746f67bebb"
+}

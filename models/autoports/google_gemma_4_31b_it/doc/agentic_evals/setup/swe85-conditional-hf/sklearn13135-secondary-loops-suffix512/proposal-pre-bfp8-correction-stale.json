@@ -1,0 +1,65 @@
+{
+  "status": "candidate_only_not_admitted_not_run",
+  "scope": "Two matched CPU HF reference diagnostics for exact existing Sklearn13135 call29 suffix512 full-mode seed42 and seed43 loops; each retains chosen64 and free512.",
+  "question": "Do pinned HF outputs show the same secondary short-loop families on these exact shortened inputs?",
+  "semantic_basis": {
+    "source_controls": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/completion-summary.json",
+    "full_review": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/root-full-review.json",
+    "served_review": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/root-served-review.json",
+    "triage": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/triage-d.json",
+    "full_seed42": "Repeated unchanged “Since I’ve fixed the source code / check” sentence to the 512-token cap.",
+    "full_seed43": "After an initial applied-fix phrase, repeated apostrophe-a token loop to the 512-token cap.",
+    "served_contrast": "Seed42 normal87; seed43 repeated native-family apostrophe-ve to512; seed44 produces a separate later apostrophe-ve loop at512.",
+    "full_seed44_contrast": "Normal completed response at85 tokens.",
+    "interpretation_limit": "These are different secondary loop families on an exact 512-token suffix. They are not the original full17,395-token missing-tool response, do not establish native-prompt equivalence, and do not imply task score/cause."
+  },
+  "workload": {
+    "prompt_suffix_tokens": 512,
+    "chosen_teacher_forcing_positions": 64,
+    "free_generation_tokens": 512,
+    "trials_per_seed": 1
+  },
+  "serial_groups": [
+    {
+      "order": 1,
+      "seed": 42,
+      "case": "anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix512.seed42",
+      "manifest": "secondary-loop-seed42.json",
+      "manifest_sha256": "e9ef583e1c26d77bd0366884bea508151df2f13498e9bc7e41fd378a571f8621",
+      "timeout_seconds": 3600
+    },
+    {
+      "order": 2,
+      "seed": 43,
+      "case": "anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix512.seed43",
+      "manifest": "secondary-loop-seed43.json",
+      "manifest_sha256": "aa1e3a75676a80f0754db46a90e3e4d8f05c8589f156496108ff9551b742e85b",
+      "timeout_seconds": 3600
+    }
+  ],
+  "compare_dirs": [
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/runs/served",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/runs/full"
+  ],
+  "forecast_file": "forecast.json",
+  "commands_file": "commands.json",
+  "source_integrity": {
+    "path": "source-integrity.json",
+    "sha256": "42703da032dc23dd3a9b110ce372d7dfe2a79fd7f05a8c8772cb3a97d7e9ae78"
+  },
+  "candidate_hashes": {
+    "manifests": {
+      "secondary-loop-seed42.json": "e9ef583e1c26d77bd0366884bea508151df2f13498e9bc7e41fd378a571f8621",
+      "secondary-loop-seed43.json": "aa1e3a75676a80f0754db46a90e3e4d8f05c8589f156496108ff9551b742e85b"
+    },
+    "forecast_sha256": "e5962ee880ae51627e85dda1610342bef8155556850211846424ee473054504b",
+    "commands_sha256": "b746e7675363e774d8b8c4c33f85d268799952a3a372a826106533506a16e68b",
+    "source_integrity_sha256": "42703da032dc23dd3a9b110ce372d7dfe2a79fd7f05a8c8772cb3a97d7e9ae78",
+    "runner_sha256": "aafe67c88bb5a1eb38b8718570bbddd5749e2a9ecbb9dd19cdb100a49572c03e"
+  },
+  "no_claims": [
+    "No exact native token identity; native prompt IDs were unavailable.",
+    "No original native missing-tool reproduction is tested here; full suffix512 did not reproduce that protocol family.",
+    "No task score, serving-rate, or precision-policy conclusion."
+  ]
+}

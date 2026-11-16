@@ -1,0 +1,8 @@
+{
+  "utc": "2026-11-14T22:44:13.522222+00:00",
+  "review": "review/interim-stage12-completed-evidence.md",
+  "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-extended85-head-bfp8/live-tasks/sympy__sympy-14711-first/coordinator.json",
+  "before_sha256": "9553cf26d9c56f78be5a7332c89335a4345787a84321d566a285911d47d192ae",
+  "after_sha256": "77b2cfd2944ec815a28107d35739831d8857d474e5e36908e2a343e1efba841a",
+  "change": "Remove stale no-observed-anomalies clause; preserve localized anomaly call1, passing final patch and reward1. No task grade, fixture or runtime change."
+}

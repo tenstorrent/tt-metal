@@ -1,0 +1,14 @@
+{
+  "status": "passed_host_only_isolated_patch_functions",
+  "patch_sha256": "909490f8bbac6549ce8e68109d0170b197aac32c1385705b2107dc333a26d786",
+  "passed_tests": [
+    "test_comparison_identity_accepts_historical_schema_without_optional_hash_or_window",
+    "test_comparison_identity_can_verify_legacy_prompt_from_saved_case_file",
+    "test_comparison_identity_checks_optional_case_hash_and_explicit_window",
+    "test_comparison_identity_rejects_shifted_window_with_same_repeated_targets",
+    "test_comparison_identity_rejects_unrelated_case_file_even_when_report_conditioning_claims_match",
+    "test_comparison_identity_rejects_unrelated_conditioning_even_when_targets_match"
+  ],
+  "count": 6,
+  "scope": "AST-extracted exact proposed function and six tests; no patch applied to live/pinned files, no model imports or inference. Call-site integration remains to be tested after intentional patch application."
+}

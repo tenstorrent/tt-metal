@@ -1,0 +1,20 @@
+{
+  "created_unix": 1794787214.379897,
+  "scope": "Final stage-owned content before checkpoint; inventory parts/index are additional metadata excluded from their own hashes.",
+  "files": 2195,
+  "bytes": 31680893,
+  "max_file_bytes": 501031,
+  "parts": [
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/review/checkpoint-inventory-part1.json",
+      "sha256": "ba4ea504882934260e910d4339b07b416f22ab97f42fac79954bdb778ba10b12",
+      "bytes": 281777
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/review/checkpoint-inventory-part2.json",
+      "sha256": "f878693c03f07bf0189491c3f3c514350d38c646a02173009c311f113d9feb1b",
+      "bytes": 300478
+    }
+  ],
+  "exclusions": "Unrelated staged benchmark files, copied task source/workspaces, raw/private outputs, logs, tensors, credentials, oversized historical inventory manifests."
+}

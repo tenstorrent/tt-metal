@@ -1,0 +1,41 @@
+{
+  "status": "host tests9 passed; no launch",
+  "server_argv": [
+    "python_env/bin/python",
+    "models/autoports/google_gemma_4_31b_it/tools/benchmark_server.py",
+    "--max-num-seqs",
+    "32",
+    "--expected-precision",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/head_bfp8_precision_config.json",
+    "--output",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/head-bfp8-rates/server/perf-b32-server.json"
+  ],
+  "remeasure_argv": [
+    "python_env/bin/python",
+    "models/autoports/google_gemma_4_31b_it/tools/remeasure_agentic_rates.py",
+    "--output",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/head-bfp8-rates/measurement",
+    "--expected-precision",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/head_bfp8_precision_config.json",
+    "--server-identity",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/head-bfp8-rates/server/perf-b32-server.json",
+    "--budget-seconds",
+    "7200",
+    "--row-timeout-seconds",
+    "1800",
+    "--stop-file",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/head-bfp8-rates/STOP"
+  ],
+  "requirements": [
+    "Root selects candidate default and completes correctness gates first.",
+    "Server launch and remeasurement serialized with device ownership; launch with enough GEMMA4_SERVER_LIFETIME_SECONDS for startup plus measurement.",
+    "No automatic shutdown on timeout; failed client group stopped, parent must inspect/drain server before next work.",
+    "Historical reporter remains head_bfp4-only; new reporter writes fresh candidate rates and configurations archive, never writes original stage11 evidence."
+  ],
+  "hardcoded_precision_audit": {
+    "benchmark_server.py": "Historical fallback head_bfp4 retained; explicit candidate validates entire policy.",
+    "collect_benchmark_roofline.py": "Compares observer to server complete policy, including collection.",
+    "benchmark_work.py": "Head bytes now based on observed bfp4/bfp8/bf16; unchanged BFP4 decoder and BFP8 KV required.",
+    "report_benchmark_v5.py": "Historical stage11 assertions/prose remain untouched and intentionally never called by candidate orchestration."
+  }
+}

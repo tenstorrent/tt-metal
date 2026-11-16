@@ -1,0 +1,105 @@
+{
+  "reviewer": "root",
+  "accepted": true,
+  "rows": [
+    {
+      "manifest_index": 15,
+      "result": "setup/swe85-precision-bisect/down-bfp8-lofi-cap-extension-candidate/merged9/results/p3capext.anomaly.psf__requests-5414.call10.onset.seed42.cap512.json",
+      "sha256": "dd7ff410f4989cfd8c5fe0336e9fdebd2418e21914f93e9ca619eccfc2a1e5d9",
+      "generated_tokens": 512,
+      "exact_prior_prefix": true,
+      "policy_sampling_fixture_match": true
+    },
+    {
+      "manifest_index": 18,
+      "result": "setup/swe85-precision-bisect/down-bfp8-lofi-cap-extension-candidate/merged9/results/p3capext.anomaly.psf__requests-5414.call11.onset.seed42.cap512.json",
+      "sha256": "e9102d4c0f208857957c7591884f5b772199b5ccb8d98eaf2903d037ca8ffeea",
+      "generated_tokens": 512,
+      "exact_prior_prefix": true,
+      "policy_sampling_fixture_match": true
+    },
+    {
+      "manifest_index": 34,
+      "result": "setup/swe85-precision-bisect/down-bfp8-lofi-cap-extension-candidate/merged9/results/p3capext.anomaly.pytest-dev__pytest-5787.call65.onset.seed43.cap4096.json",
+      "sha256": "d60229c3096612fd42b1737e0af93f90ee5fe4b7d64f0dbb0bdd598656e5e7e7",
+      "generated_tokens": 2489,
+      "exact_prior_prefix": true,
+      "policy_sampling_fixture_match": true
+    },
+    {
+      "manifest_index": 43,
+      "result": "setup/swe85-precision-bisect/down-bfp8-lofi-cap-extension-candidate/merged9/results/p3capext.anomaly.requests2931.call20.canonicalprefix.seed43.cap512.json",
+      "sha256": "75a82626429750f26cf501b2b6af7b76f7cc76ac1b1a9bbc4326a016c6bbd9f9",
+      "generated_tokens": 512,
+      "exact_prior_prefix": true,
+      "policy_sampling_fixture_match": true
+    },
+    {
+      "manifest_index": 48,
+      "result": "setup/swe85-precision-bisect/down-bfp8-lofi-cap-extension-candidate/merged9/results/p3capext.anomaly.sphinx-doc__sphinx-10323.call57.onset.seed42.cap1024.json",
+      "sha256": "e775c3348d70d0586d96cff2be2f668ae40252237697bf49c0ab06c39f5f0195",
+      "generated_tokens": 512,
+      "exact_prior_prefix": true,
+      "policy_sampling_fixture_match": true
+    },
+    {
+      "manifest_index": 62,
+      "result": "setup/swe85-precision-bisect/down-bfp8-lofi-cap-extension-candidate/merged9/results/p3capext.anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset.seed44.cap512.json",
+      "sha256": "ec089a94778212e062cf25441d3b923ee3bddf11f48d70ba07794ee7b8b81e1a",
+      "generated_tokens": 512,
+      "exact_prior_prefix": true,
+      "policy_sampling_fixture_match": true
+    },
+    {
+      "manifest_index": 72,
+      "result": "setup/swe85-precision-bisect/down-bfp8-lofi-cap-extension-candidate/merged9/results/p3capext.d.anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.seed42.cap2048.json",
+      "sha256": "4c75791f020b487346a0d40a0a4f36d38b69a90c51d8221f8d4482451d62c01a",
+      "generated_tokens": 1029,
+      "exact_prior_prefix": true,
+      "policy_sampling_fixture_match": true
+    },
+    {
+      "manifest_index": 73,
+      "result": "setup/swe85-precision-bisect/down-bfp8-lofi-cap-extension-candidate/merged9/results/p3capext.d.anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.seed43.cap2048.json",
+      "sha256": "a4ec9f235568a9879569028ad16287fade6f89e3de830fe5324c1bc9abdc0acd",
+      "generated_tokens": 1083,
+      "exact_prior_prefix": true,
+      "policy_sampling_fixture_match": true
+    },
+    {
+      "manifest_index": 82,
+      "result": "setup/swe85-precision-bisect/down-bfp8-lofi-cap-extension-candidate/merged9/results/p3capext.d.anomaly.sympy__sympy-13480.call1.onset.seed43.cap512.json",
+      "sha256": "d537719e5277ce0cc5231fcfb71c452729a8227df3d3469fb5cf2b6e959fc916",
+      "generated_tokens": 277,
+      "exact_prior_prefix": true,
+      "policy_sampling_fixture_match": true
+    }
+  ],
+  "extension_verdicts": {
+    "normal": 5,
+    "reproduced_native_motif": 1,
+    "inconclusive": 3
+  },
+  "updated108_verdicts": {
+    "normal": 81,
+    "reproduced_native_motif": 18,
+    "other_anomaly": 6,
+    "inconclusive": 3
+  },
+  "remaining_progressing_indices": [
+    15,
+    18,
+    62
+  ],
+  "decision": "Not selected. Remaining protocol anomalies are tested by the prepared down BFP8/HiFi2 arm. Diagnostic cap-only rows remain inconclusive, never scored as task failures. Further extensions of this unsettled arm are deferred to prioritize the fidelity test; all scored task results are unchanged.",
+  "triage_sources": [
+    {
+      "path": "triage-b.json",
+      "sha256": "cb11b13f92a3ab7e90bab99221016a05e90681465c131ae763acc68af4125436"
+    },
+    {
+      "path": "triage-cd.json",
+      "sha256": "b5870270fb2e2ab474b0a2afa9ca1cc075b9e4fdeb3987e75953472304c7e689"
+    }
+  ]
+}

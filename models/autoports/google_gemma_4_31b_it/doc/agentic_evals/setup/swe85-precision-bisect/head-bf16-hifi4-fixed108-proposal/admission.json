@@ -1,0 +1,8 @@
+{
+  "status": "admitted",
+  "admitted_unix": 1794724612.5254025,
+  "proposal_sha256": "ddaaa015f62bd731afc6f9f19f37056a0f74d2071023338938420a3a080181a7",
+  "driver_sha256": "2bcfdcc1f018f2398212de0cd94119030dfe54b5dcc9f1578478b1771ecb1836",
+  "source_inventory_sha256": "d8d039fa8fefb072264bc902bc798dd260e00371151eda74b204a5c74a5418ad",
+  "coordinator_review": "Root reviewed complete serial driver and verified89pinned sources, candidate loaded-policy schema/kwargs/command, fixed108manifest and all caps, P1/X immutable evidence, forecast gates, noHF/ownerzero/STOP/duplicateguards. P1 completed rejection14/15targets persist; P2 changes only headBFP8HiFi2 toBF16HiFi4. Root fixed stale top-level proposal driver hash before admission. Wait Xterminalzero and forecast accounting before launch. Diagnostic only; no selectedpolicy/scorechange."
+}

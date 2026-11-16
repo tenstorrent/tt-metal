@@ -1,0 +1,28 @@
+{
+  "status": "admitted",
+  "time_unix": 1794761684.960991,
+  "deadline_unix": 1794791725,
+  "remaining_seconds": 30040.03900909424,
+  "timeout_seconds": 5400,
+  "closure_reserve_seconds": 900,
+  "source_pins_verified": 6,
+  "command_sha256": "d4edc6a1dac266e37d94eba6a8fe2200e78b5f0e253f8bc9e5d3408941b8ab23",
+  "device_owner_returncode": 1,
+  "host_memory_bytes": {
+    "MemTotal": 267699728384,
+    "MemAvailable": 122107568128
+  },
+  "matching_full_tt_controls": [
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/anomaly.psf__requests-5414.call11.onset.json",
+      "sha256": "f02de92f04d37c6202ac72b60baebcc4b393610a63f13ad6425ba0d6fa109fd6"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/anomaly.pytest-dev__pytest-7432.call19.onset.json",
+      "sha256": "62dc8a7a0d36eaadf188803d4e1d08372a099dccb41aaa09ca7119710dfe2f07"
+    }
+  ],
+  "scope": "Two saved full reconstructed onset prompts on pinned CPU BF16 HF,seed42,256-token diagnostic; no forced firstcaret or shortened prefix. Different HF/TT RNG; notnative replay.",
+  "previous_forecast_reconciliation": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/cap-extensions-preparation/batch/root-execution-review.json",
+  "panel_completion_sha256": "2d89f9fa09831fb578458514bf3c522f6e993fa8c844a1b7eeec7df1fd6dedf5"
+}

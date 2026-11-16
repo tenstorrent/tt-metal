@@ -1,0 +1,1781 @@
+{
+  "status": "partial_triage",
+  "reviewer": "independent raw-text review",
+  "candidate": "attention-down-bfp8-lofi-fixed108-candidate",
+  "partition_manifest_indices": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18,
+    19,
+    20,
+    21,
+    22,
+    23,
+    24,
+    25,
+    26,
+    27,
+    28,
+    29,
+    30,
+    31,
+    32,
+    33,
+    34,
+    35
+  ],
+  "rows_reviewed": 36,
+  "rows_pending": 0,
+  "source_manifest_sha256": "57193e4b91af3a31df00f0c92dbc0f2219fbce011e6533594e5244a93a3021ed",
+  "p6_policy_sha256": "00c6a27e6c5f0a568e7f8a59bc9b0ec64e48a9ce85d82804b98be9556d456ccf",
+  "load_sha256": "373de362dfd7998f7a9eae82048bf5503c398a96c3896df32a9574e928b644aa",
+  "scope": "Only currently completed result files among indices 0–35; all generated free-running text inspected. Text semantics only; no answer correctness claim. A capped progressing continuation is not called normal completion. Tool commands are judged by pinned Gemma syntax; no claim that emitted commands executed.",
+  "counts": {
+    "normal": 23,
+    "reproduced_native_motif": 10,
+    "other_anomaly": 2,
+    "inconclusive": 1
+  },
+  "rows": [
+    {
+      "manifest_index": 0,
+      "job": "anomaly.call88.canonicalprefix",
+      "name": "anomaly.call88.canonicalprefix.seed42.cap1024",
+      "seed": 42,
+      "requested_cap": 1024,
+      "input_prompt_tokens": 47038,
+      "verdict": "other_anomaly",
+      "confidence": "high",
+      "evidence": "The continuation starts as a code-repair explanation, then turns into a sustained nonsensical a/la/l fragment cycle and remains there through all 1024 generated tokens. This is a repeated-text semantic anomaly distinct from the source contraction motif; cap reached, so no completion claim.",
+      "native_motif": "it's’s’s defined",
+      "p3_same_index_verdict": "normal",
+      "cap_notes": {
+        "generated_tokens": 1024,
+        "reached_requested_cap": true,
+        "natural_stop": false,
+        "last_token_id": 537,
+        "extension_needed": false
+      },
+      "identity_checks": {
+        "result_case_equals_manifest_fixture": true,
+        "sample_seed_matches_manifest": true,
+        "fixture_prompt_ids_count": 47038,
+        "fixture_sha256": "72d00a7035ece99112f136dc0bac71e03deead3d78421b037a696f1518b6a8d0",
+        "runtime_precision_exactly_matches_p6_policy": true
+      },
+      "runtime": {
+        "config_id": "stage12_swe85_attention_down_bfp8_lofi_fixed108",
+        "policy_sha256": "00c6a27e6c5f0a568e7f8a59bc9b0ec64e48a9ce85d82804b98be9556d456ccf",
+        "load_sha256": "373de362dfd7998f7a9eae82048bf5503c398a96c3896df32a9574e928b644aa"
+      },
+      "hashes": {
+        "result_sha256": "c837befa7470197d993695868fbd52d713e984584b13ff965ab2f72e96a5d531",
+        "fixture_sha256": "72d00a7035ece99112f136dc0bac71e03deead3d78421b037a696f1518b6a8d0"
+      },
+      "result_file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/attention-down-bfp8-lofi-fixed108-candidate/runs/attention_down_bfp8_lofi_fixed108/anomaly.call88.canonicalprefix.seed42.cap1024.json"
+    },
+    {
+      "manifest_index": 1,
+      "job": "anomaly.call88.canonicalprefix",
+      "name": "anomaly.call88.canonicalprefix.seed43.cap1024",
+      "seed": 43,
+      "requested_cap": 1024,
+      "input_prompt_tokens": 47038,
+      "verdict": "normal",
+      "confidence": "medium",
+      "evidence": "The generated continuation is coherent and ends naturally at the ordinary turn/tool-yield EOS. Where it emits a tool handoff, the command uses canonical unquoted Gemma argument keys; the close/yield boundary is normal and does not imply an executed tool result. No sustained native motif or repeated unchanged paragraph cycle is present.",
+      "native_motif": "it's’s’s defined",
+      "p3_same_index_verdict": "normal",
+      "cap_notes": {
+        "generated_tokens": 628,
+        "reached_requested_cap": false,
+        "natural_stop": true,
+        "last_token_id": 50,
+        "extension_needed": false
+      },
+      "identity_checks": {
+        "result_case_equals_manifest_fixture": true,
+        "sample_seed_matches_manifest": true,
+        "fixture_prompt_ids_count": 47038,
+        "fixture_sha256": "98576d3b397f70beb756313aca33a0160aaf9d886a04e931d5e90a71a5eddb23",
+        "runtime_precision_exactly_matches_p6_policy": true
+      },
+      "runtime": {
+        "config_id": "stage12_swe85_attention_down_bfp8_lofi_fixed108",
+        "policy_sha256": "00c6a27e6c5f0a568e7f8a59bc9b0ec64e48a9ce85d82804b98be9556d456ccf",
+        "load_sha256": "373de362dfd7998f7a9eae82048bf5503c398a96c3896df32a9574e928b644aa"
+      },
+      "hashes": {
+        "result_sha256": "8e4604c004f97d5e09f1935b1d309fc104acf5bf5519e1c38966b749ce75bd10",
+        "fixture_sha256": "98576d3b397f70beb756313aca33a0160aaf9d886a04e931d5e90a71a5eddb23"
+      },
+      "result_file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/attention-down-bfp8-lofi-fixed108-candidate/runs/attention_down_bfp8_lofi_fixed108/anomaly.call88.canonicalprefix.seed43.cap1024.json"
+    },
+    {
+      "manifest_index": 2,
+      "job": "anomaly.call88.canonicalprefix",
+      "name": "anomaly.call88.canonicalprefix.seed44.cap1024",
+      "seed": 44,
+      "requested_cap": 1024,
+      "input_prompt_tokens": 47038,
+      "verdict": "normal",
+      "confidence": "medium",
+      "evidence": "The generated continuation is coherent and ends naturally at the ordinary turn/tool-yield EOS. Where it emits a tool handoff, the command uses canonical unquoted Gemma argument keys; the close/yield boundary is normal and does not imply an executed tool result. No sustained native motif or repeated unchanged paragraph cycle is present.",
+      "native_motif": "it's’s’s defined",
+      "p3_same_index_verdict": "normal",
+      "cap_notes": {
+        "generated_tokens": 653,
+        "reached_requested_cap": false,
+        "natural_stop": true,
+        "last_token_id": 50,
+        "extension_needed": false
+      },
+      "identity_checks": {
+        "result_case_equals_manifest_fixture": true,
+        "sample_seed_matches_manifest": true,
+        "fixture_prompt_ids_count": 47038,
+        "fixture_sha256": "48d347c1cc849a516b05939901c09ecd67250a3f27b1312a606af625416d861f",
+        "runtime_precision_exactly_matches_p6_policy": true
+      },
+      "runtime": {
+        "config_id": "stage12_swe85_attention_down_bfp8_lofi_fixed108",
+        "policy_sha256": "00c6a27e6c5f0a568e7f8a59bc9b0ec64e48a9ce85d82804b98be9556d456ccf",
+        "load_sha256": "373de362dfd7998f7a9eae82048bf5503c398a96c3896df32a9574e928b644aa"
+      },
+      "hashes": {
+        "result_sha256": "f4a9593ff0c86722deb3047d81ac65e1730b8a6515f641360c59c736502d42ee",
+        "fixture_sha256": "48d347c1cc849a516b05939901c09ecd67250a3f27b1312a606af625416d861f"
+      },
+      "result_file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/attention-down-bfp8-lofi-fixed108-candidate/runs/attention_down_bfp8_lofi_fixed108/anomaly.call88.canonicalprefix.seed44.cap1024.json"
+    },
+    {
+      "manifest_index": 3,
+      "job": "anomaly.call91.canonicalprefix",
+      "name": "anomaly.call91.canonicalprefix.seed42.cap256",
+      "seed": 42,
+      "requested_cap": 256,
+      "input_prompt_tokens": 48411,
+      "verdict": "normal",
+      "confidence": "medium",
+      "evidence": "The generated continuation is coherent and ends naturally at the ordinary turn/tool-yield EOS. Where it emits a tool handoff, the command uses canonical unquoted Gemma argument keys; the close/yield boundary is normal and does not imply an executed tool result. No sustained native motif or repeated unchanged paragraph cycle is present.",
+      "native_motif": "I've’ve’ve’ve’ve made a mess",
+      "p3_same_index_verdict": "normal",
+      "cap_notes": {
+        "generated_tokens": 32,
+        "reached_requested_cap": false,
+        "natural_stop": true,
+        "last_token_id": 50,
+        "extension_needed": false
+      },
+      "identity_checks": {
+        "result_case_equals_manifest_fixture": true,
+        "sample_seed_matches_manifest": true,
+        "fixture_prompt_ids_count": 48411,
+        "fixture_sha256": "3d32de201c14cf805635d3e38fafc2ff220202aded67b71861e16df4fbdf9180",
+        "runtime_precision_exactly_matches_p6_policy": true
+      },
+      "runtime": {
+        "config_id": "stage12_swe85_attention_down_bfp8_lofi_fixed108",
+        "policy_sha256": "00c6a27e6c5f0a568e7f8a59bc9b0ec64e48a9ce85d82804b98be9556d456ccf",
+        "load_sha256": "373de362dfd7998f7a9eae82048bf5503c398a96c3896df32a9574e928b644aa"
+      },
+      "hashes": {
+        "result_sha256": "54bdff702aa71d57b5f6af3fac5836416450fe8fb922f606943a614eddf65e7a",
+        "fixture_sha256": "3d32de201c14cf805635d3e38fafc2ff220202aded67b71861e16df4fbdf9180"
+      },
+      "result_file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/attention-down-bfp8-lofi-fixed108-candidate/runs/attention_down_bfp8_lofi_fixed108/anomaly.call91.canonicalprefix.seed42.cap256.json"
+    },
+    {
+      "manifest_index": 4,
+      "job": "anomaly.call91.canonicalprefix",
+      "name": "anomaly.call91.canonicalprefix.seed43.cap256",
+      "seed": 43,
+      "requested_cap": 256,
+      "input_prompt_tokens": 48411,
+      "verdict": "reproduced_native_motif",
+      "confidence": "medium",
+      "evidence": "The exact conditioned input is the call91 native contraction onset. The generated boundary begins “’ve’ve messed up…”, continuing the duplicated contraction family at the reply boundary; this is a localized native-family reproduction, not a sustained loop. It then gives coherent repair prose and a canonical tool handoff, ending naturally.",
+      "native_motif": "I've’ve’ve’ve’ve made a mess",
+      "p3_same_index_verdict": "normal",
+      "cap_notes": {
+        "generated_tokens": 51,
+        "reached_requested_cap": false,
+        "natural_stop": true,
+        "last_token_id": 50,
+        "extension_needed": false
+      },
+      "identity_checks": {
+        "result_case_equals_manifest_fixture": true,
+        "sample_seed_matches_manifest": true,
+        "fixture_prompt_ids_count": 48411,
+        "fixture_sha256": "aee3a45967a31c23ea4600517108deb26c0180dbb7f712f09add1aa9bf1cf49c",
+        "runtime_precision_exactly_matches_p6_policy": true
+      },
+      "runtime": {
+        "config_id": "stage12_swe85_attention_down_bfp8_lofi_fixed108",
+        "policy_sha256": "00c6a27e6c5f0a568e7f8a59bc9b0ec64e48a9ce85d82804b98be9556d456ccf",
+        "load_sha256": "373de362dfd7998f7a9eae82048bf5503c398a96c3896df32a9574e928b644aa"
+      },
+      "hashes": {
+        "result_sha256": "815f682a0b3d0df536a67d195b062fa6ff8528b01b5d70a7f35bba0b887889de",
+        "fixture_sha256": "aee3a45967a31c23ea4600517108deb26c0180dbb7f712f09add1aa9bf1cf49c"
+      },
+      "result_file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/attention-down-bfp8-lofi-fixed108-candidate/runs/attention_down_bfp8_lofi_fixed108/anomaly.call91.canonicalprefix.seed43.cap256.json"
+    },
+    {
+      "manifest_index": 5,
+      "job": "anomaly.call91.canonicalprefix",
+      "name": "anomaly.call91.canonicalprefix.seed44.cap1024",
+      "seed": 44,
+      "requested_cap": 1024,
+      "input_prompt_tokens": 48411,
+      "verdict": "normal",
+      "confidence": "medium",
+      "evidence": "The generated continuation is coherent and ends naturally at the ordinary turn/tool-yield EOS. Where it emits a tool handoff, the command uses canonical unquoted Gemma argument keys; the close/yield boundary is normal and does not imply an executed tool result. No sustained native motif or repeated unchanged paragraph cycle is present.",
+      "native_motif": "I've’ve’ve’ve’ve made a mess",
+      "p3_same_index_verdict": "normal",
+      "cap_notes": {
+        "generated_tokens": 56,
+        "reached_requested_cap": false,
+        "natural_stop": true,
+        "last_token_id": 50,
+        "extension_needed": false
+      },
+      "identity_checks": {
+        "result_case_equals_manifest_fixture": true,
+        "sample_seed_matches_manifest": true,
+        "fixture_prompt_ids_count": 48411,
+        "fixture_sha256": "bd5addc9fb08ed0134bdca3d160c4b8ea472b09c26dc36e12e731f8891539ea7",
+        "runtime_precision_exactly_matches_p6_policy": true
+      },
+      "runtime": {
+        "config_id": "stage12_swe85_attention_down_bfp8_lofi_fixed108",
+        "policy_sha256": "00c6a27e6c5f0a568e7f8a59bc9b0ec64e48a9ce85d82804b98be9556d456ccf",
+        "load_sha256": "373de362dfd7998f7a9eae82048bf5503c398a96c3896df32a9574e928b644aa"
+      },
+      "hashes": {
+        "result_sha256": "539d83347e092b33fafcfd67d007e1206d854610b4e3a19d1152b794b7abde9c",
+        "fixture_sha256": "bd5addc9fb08ed0134bdca3d160c4b8ea472b09c26dc36e12e731f8891539ea7"
+      },
+      "result_file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/attention-down-bfp8-lofi-fixed108-candidate/runs/attention_down_bfp8_lofi_fixed108/anomaly.call91.canonicalprefix.seed44.cap1024.json"
+    },
+    {
+      "manifest_index": 6,
+      "job": "anomaly.matplotlib__matplotlib-20488.call82.onset",
+      "name": "anomaly.matplotlib__matplotlib-20488.call82.onset.seed42.cap512",
+      "seed": 42,
+      "requested_cap": 512,
+      "input_prompt_tokens": 44428,
+      "verdict": "normal",
+      "confidence": "medium",
+      "evidence": "The generated continuation is coherent and ends naturally at the ordinary turn/tool-yield EOS. Where it emits a tool handoff, the command uses canonical unquoted Gemma argument keys; the close/yield boundary is normal and does not imply an executed tool result. No sustained native motif or repeated unchanged paragraph cycle is present.",
+      "native_motif": "I've’ve",
+      "p3_same_index_verdict": "normal",
+      "cap_notes": {
+        "generated_tokens": 45,
+        "reached_requested_cap": false,
+        "natural_stop": true,
+        "last_token_id": 50,
+        "extension_needed": false
+      },
+      "identity_checks": {
+        "result_case_equals_manifest_fixture": true,
+        "sample_seed_matches_manifest": true,
+        "fixture_prompt_ids_count": 44428,
+        "fixture_sha256": "d37f66c61164152541887d1a42514cc881424c7c422cfeaaef2128f9d2ce8291",
+        "runtime_precision_exactly_matches_p6_policy": true
+      },
+      "runtime": {
+        "config_id": "stage12_swe85_attention_down_bfp8_lofi_fixed108",
+        "policy_sha256": "00c6a27e6c5f0a568e7f8a59bc9b0ec64e48a9ce85d82804b98be9556d456ccf",
+        "load_sha256": "373de362dfd7998f7a9eae82048bf5503c398a96c3896df32a9574e928b644aa"
+      },
+      "hashes": {
+        "result_sha256": "5753a2c0339e3af5b47f5e3a65c5f08ecbd08fafc06c62cc111957fc4c1cbcc0",
+        "fixture_sha256": "d37f66c61164152541887d1a42514cc881424c7c422cfeaaef2128f9d2ce8291"
+      },
+      "result_file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/attention-down-bfp8-lofi-fixed108-candidate/runs/attention_down_bfp8_lofi_fixed108/anomaly.matplotlib__matplotlib-20488.call82.onset.seed42.cap512.json"
+    },
+    {
+      "manifest_index": 7,
+      "job": "anomaly.matplotlib__matplotlib-20488.call82.onset",
+      "name": "anomaly.matplotlib__matplotlib-20488.call82.onset.seed43.cap256",
+      "seed": 43,
+      "requested_cap": 256,
+      "input_prompt_tokens": 44428,
+      "verdict": "normal",
+      "confidence": "medium",
+      "evidence": "The generated continuation is coherent and ends naturally at the ordinary turn/tool-yield EOS. Where it emits a tool handoff, the command uses canonical unquoted Gemma argument keys; the close/yield boundary is normal and does not imply an executed tool result. No sustained native motif or repeated unchanged paragraph cycle is present.",
+      "native_motif": "I've’ve",
+      "p3_same_index_verdict": "normal",
+      "cap_notes": {
+        "generated_tokens": 90,
+        "reached_requested_cap": false,
+        "natural_stop": true,
+        "last_token_id": 50,
+        "extension_needed": false
+      },
+      "identity_checks": {
+        "result_case_equals_manifest_fixture": true,
+        "sample_seed_matches_manifest": true,
+        "fixture_prompt_ids_count": 44428,
+        "fixture_sha256": "9362636c420da9a77bce5fd6bc9216f97043439733ee329767eedf04cfc7df1f",
+        "runtime_precision_exactly_matches_p6_policy": true
+      },
+      "runtime": {
+        "config_id": "stage12_swe85_attention_down_bfp8_lofi_fixed108",
+        "policy_sha256": "00c6a27e6c5f0a568e7f8a59bc9b0ec64e48a9ce85d82804b98be9556d456ccf",
+        "load_sha256": "373de362dfd7998f7a9eae82048bf5503c398a96c3896df32a9574e928b644aa"
+      },
+      "hashes": {
+        "result_sha256": "c6089139e1c8e3bdedd1fddce0b77992ee6bdb17470ca5472cf0ac52835ba680",
+        "fixture_sha256": "9362636c420da9a77bce5fd6bc9216f97043439733ee329767eedf04cfc7df1f"
+      },
+      "result_file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/attention-down-bfp8-lofi-fixed108-candidate/runs/attention_down_bfp8_lofi_fixed108/anomaly.matplotlib__matplotlib-20488.call82.onset.seed43.cap256.json"
+    },
+    {
+      "manifest_index": 8,
+      "job": "anomaly.matplotlib__matplotlib-20488.call82.onset",
+      "name": "anomaly.matplotlib__matplotlib-20488.call82.onset.seed44.cap256",
+      "seed": 44,
+      "requested_cap": 256,
+      "input_prompt_tokens": 44428,
+      "verdict": "normal",
+      "confidence": "medium",
+      "evidence": "The generated continuation is coherent and ends naturally at the ordinary turn/tool-yield EOS. Where it emits a tool handoff, the command uses canonical unquoted Gemma argument keys; the close/yield boundary is normal and does not imply an executed tool result. No sustained native motif or repeated unchanged paragraph cycle is present.",
+      "native_motif": "I've’ve",
+      "p3_same_index_verdict": "normal",
+      "cap_notes": {
+        "generated_tokens": 94,
+        "reached_requested_cap": false,
+        "natural_stop": true,
+        "last_token_id": 50,
+        "extension_needed": false
+      },
+      "identity_checks": {
+        "result_case_equals_manifest_fixture": true,
+        "sample_seed_matches_manifest": true,
+        "fixture_prompt_ids_count": 44428,
+        "fixture_sha256": "799e35c87366a92ff4a678377c41ebedc7082fda9cd6bc630f22a3f6ba7993c4",
+        "runtime_precision_exactly_matches_p6_policy": true
+      },
+      "runtime": {
+        "config_id": "stage12_swe85_attention_down_bfp8_lofi_fixed108",
+        "policy_sha256": "00c6a27e6c5f0a568e7f8a59bc9b0ec64e48a9ce85d82804b98be9556d456ccf",
+        "load_sha256": "373de362dfd7998f7a9eae82048bf5503c398a96c3896df32a9574e928b644aa"
+      },
+      "hashes": {
+        "result_sha256": "63cf070926581c31c7decbe5f732d558d549d7c2b07ff3c0157f1d58f9966997",
+        "fixture_sha256": "799e35c87366a92ff4a678377c41ebedc7082fda9cd6bc630f22a3f6ba7993c4"
+      },
+      "result_file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/attention-down-bfp8-lofi-fixed108-candidate/runs/attention_down_bfp8_lofi_fixed108/anomaly.matplotlib__matplotlib-20488.call82.onset.seed44.cap256.json"
+    },
+    {
+      "manifest_index": 9,
+      "job": "anomaly.matplotlib__matplotlib-20488.call86.onset",
+      "name": "anomaly.matplotlib__matplotlib-20488.call86.onset.seed42.cap256",
+      "seed": 42,
+      "requested_cap": 256,
+      "input_prompt_tokens": 46118,
+      "verdict": "normal",
+      "confidence": "medium",
+      "evidence": "The generated continuation is coherent and ends naturally at the ordinary turn/tool-yield EOS. Where it emits a tool handoff, the command uses canonical unquoted Gemma argument keys; the close/yield boundary is normal and does not imply an executed tool result. No sustained native motif or repeated unchanged paragraph cycle is present.",
+      "native_motif": "I've’ve",
+      "p3_same_index_verdict": "normal",
+      "cap_notes": {
+        "generated_tokens": 145,
+        "reached_requested_cap": false,
+        "natural_stop": true,
+        "last_token_id": 50,
+        "extension_needed": false
+      },
+      "identity_checks": {
+        "result_case_equals_manifest_fixture": true,
+        "sample_seed_matches_manifest": true,
+        "fixture_prompt_ids_count": 46118,
+        "fixture_sha256": "c11bb5890af7b0166bbbb61c44a3200e58aa3eb4b509403759fbb162ae58d179",
+        "runtime_precision_exactly_matches_p6_policy": true
+      },
+      "runtime": {
+        "config_id": "stage12_swe85_attention_down_bfp8_lofi_fixed108",
+        "policy_sha256": "00c6a27e6c5f0a568e7f8a59bc9b0ec64e48a9ce85d82804b98be9556d456ccf",
+        "load_sha256": "373de362dfd7998f7a9eae82048bf5503c398a96c3896df32a9574e928b644aa"
+      },
+      "hashes": {
+        "result_sha256": "6099f5ac9277134c0cb76ac29a7fdf526bdd79231dc5337d4bb2705464f954ab",
+        "fixture_sha256": "c11bb5890af7b0166bbbb61c44a3200e58aa3eb4b509403759fbb162ae58d179"
+      },
+      "result_file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/attention-down-bfp8-lofi-fixed108-candidate/runs/attention_down_bfp8_lofi_fixed108/anomaly.matplotlib__matplotlib-20488.call86.onset.seed42.cap256.json"
+    },
+    {
+      "manifest_index": 10,
+      "job": "anomaly.matplotlib__matplotlib-20488.call86.onset",
+      "name": "anomaly.matplotlib__matplotlib-20488.call86.onset.seed43.cap256",
+      "seed": 43,
+      "requested_cap": 256,
+      "input_prompt_tokens": 46118,
+      "verdict": "normal",
+      "confidence": "medium",
+      "evidence": "The generated continuation is coherent and ends naturally at the ordinary turn/tool-yield EOS. Where it emits a tool handoff, the command uses canonical unquoted Gemma argument keys; the close/yield boundary is normal and does not imply an executed tool result. No sustained native motif or repeated unchanged paragraph cycle is present.",
+      "native_motif": "I've’ve",
+      "p3_same_index_verdict": "normal",
+      "cap_notes": {
+        "generated_tokens": 105,
+        "reached_requested_cap": false,
+        "natural_stop": true,
+        "last_token_id": 50,
+        "extension_needed": false
+      },
+      "identity_checks": {
+        "result_case_equals_manifest_fixture": true,
+        "sample_seed_matches_manifest": true,
+        "fixture_prompt_ids_count": 46118,
+        "fixture_sha256": "a427e543e23d8291eed5bac6535acc3965401ab0ccf18535cbc4c4d6caf97da3",
+        "runtime_precision_exactly_matches_p6_policy": true
+      },
+      "runtime": {
+        "config_id": "stage12_swe85_attention_down_bfp8_lofi_fixed108",
+        "policy_sha256": "00c6a27e6c5f0a568e7f8a59bc9b0ec64e48a9ce85d82804b98be9556d456ccf",
+        "load_sha256": "373de362dfd7998f7a9eae82048bf5503c398a96c3896df32a9574e928b644aa"
+      },
+      "hashes": {
+        "result_sha256": "74c995a2f9d7ec5567134d65ccbae18f5c6aa1fedb0078f6eb0c45cf8ddc0272",
+        "fixture_sha256": "a427e543e23d8291eed5bac6535acc3965401ab0ccf18535cbc4c4d6caf97da3"
+      },
+      "result_file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/attention-down-bfp8-lofi-fixed108-candidate/runs/attention_down_bfp8_lofi_fixed108/anomaly.matplotlib__matplotlib-20488.call86.onset.seed43.cap256.json"
+    },
+    {
+      "manifest_index": 11,
+      "job": "anomaly.matplotlib__matplotlib-20488.call86.onset",
+      "name": "anomaly.matplotlib__matplotlib-20488.call86.onset.seed44.cap1024",
+      "seed": 44,
+      "requested_cap": 1024,
+      "input_prompt_tokens": 46118,
+      "verdict": "normal",
+      "confidence": "medium",
+      "evidence": "The generated continuation is coherent and ends naturally at the ordinary turn/tool-yield EOS. Where it emits a tool handoff, the command uses canonical unquoted Gemma argument keys; the close/yield boundary is normal and does not imply an executed tool result. No sustained native motif or repeated unchanged paragraph cycle is present.",
+      "native_motif": "I've’ve",
+      "p3_same_index_verdict": "normal",
+      "cap_notes": {
+        "generated_tokens": 127,
+        "reached_requested_cap": false,
+        "natural_stop": true,
+        "last_token_id": 50,
+        "extension_needed": false
+      },
+      "identity_checks": {
+        "result_case_equals_manifest_fixture": true,
+        "sample_seed_matches_manifest": true,
+        "fixture_prompt_ids_count": 46118,
+        "fixture_sha256": "293e6199bf309fd64e0d01abedf532409886a27a209acce69c6bd12a023faf26",
+        "runtime_precision_exactly_matches_p6_policy": true
+      },
+      "runtime": {
+        "config_id": "stage12_swe85_attention_down_bfp8_lofi_fixed108",
+        "policy_sha256": "00c6a27e6c5f0a568e7f8a59bc9b0ec64e48a9ce85d82804b98be9556d456ccf",
+        "load_sha256": "373de362dfd7998f7a9eae82048bf5503c398a96c3896df32a9574e928b644aa"
+      },
+      "hashes": {
+        "result_sha256": "6cf16d18818f8ae2c701a3ba6ee5e59058b9aa1234ab2e7bad5c6769202a8df3",
+        "fixture_sha256": "293e6199bf309fd64e0d01abedf532409886a27a209acce69c6bd12a023faf26"
+      },
+      "result_file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/attention-down-bfp8-lofi-fixed108-candidate/runs/attention_down_bfp8_lofi_fixed108/anomaly.matplotlib__matplotlib-20488.call86.onset.seed44.cap1024.json"
+    },
+    {
+      "manifest_index": 12,
+      "job": "anomaly.psf__requests-1921.call1.onset",
+      "name": "anomaly.psf__requests-1921.call1.onset.seed42.cap256",
+      "seed": 42,
+      "requested_cap": 256,
+      "input_prompt_tokens": 1235,
+      "verdict": "normal",
+      "confidence": "medium",
+      "evidence": "The generated continuation is coherent and ends naturally at the ordinary turn/tool-yield EOS. Where it emits a tool handoff, the command uses canonical unquoted Gemma argument keys; the close/yield boundary is normal and does not imply an executed tool result. No sustained native motif or repeated unchanged paragraph cycle is present.",
+      "native_motif": "GetAll-bash",
+      "p3_same_index_verdict": "normal",
+      "cap_notes": {
+        "generated_tokens": 16,
+        "reached_requested_cap": false,
+        "natural_stop": true,
+        "last_token_id": 50,
+        "extension_needed": false
+      },
+      "identity_checks": {
+        "result_case_equals_manifest_fixture": true,
+        "sample_seed_matches_manifest": true,
+        "fixture_prompt_ids_count": 1235,
+        "fixture_sha256": "ba91bfa87c059b14b4385dcf00dd1e20390c87e320990104fd328ccb18f4d863",
+        "runtime_precision_exactly_matches_p6_policy": true
+      },
+      "runtime": {
+        "config_id": "stage12_swe85_attention_down_bfp8_lofi_fixed108",
+        "policy_sha256": "00c6a27e6c5f0a568e7f8a59bc9b0ec64e48a9ce85d82804b98be9556d456ccf",
+        "load_sha256": "373de362dfd7998f7a9eae82048bf5503c398a96c3896df32a9574e928b644aa"
+      },
+      "hashes": {
+        "result_sha256": "363531a1958cd7a601b834f154c1850e12290144828c6cdac37a01c261278046",
+        "fixture_sha256": "ba91bfa87c059b14b4385dcf00dd1e20390c87e320990104fd328ccb18f4d863"
+      },
+      "result_file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/attention-down-bfp8-lofi-fixed108-candidate/runs/attention_down_bfp8_lofi_fixed108/anomaly.psf__requests-1921.call1.onset.seed42.cap256.json"
+    },
+    {
+      "manifest_index": 13,
+      "job": "anomaly.psf__requests-1921.call1.onset",
+      "name": "anomaly.psf__requests-1921.call1.onset.seed43.cap256",
+      "seed": 43,
+      "requested_cap": 256,
+      "input_prompt_tokens": 1235,
+      "verdict": "normal",
+      "confidence": "medium",
+      "evidence": "The generated continuation is coherent and ends naturally at the ordinary turn/tool-yield EOS. Where it emits a tool handoff, the command uses canonical unquoted Gemma argument keys; the close/yield boundary is normal and does not imply an executed tool result. No sustained native motif or repeated unchanged paragraph cycle is present.",
+      "native_motif": "GetAll-bash",
+      "p3_same_index_verdict": "normal",
+      "cap_notes": {
+        "generated_tokens": 16,
+        "reached_requested_cap": false,
+        "natural_stop": true,
+        "last_token_id": 50,
+        "extension_needed": false
+      },
+      "identity_checks": {
+        "result_case_equals_manifest_fixture": true,
+        "sample_seed_matches_manifest": true,
+        "fixture_prompt_ids_count": 1235,
+        "fixture_sha256": "e33ee2dff8a9566639c27d8cf1854ddc51177bb8687f8f99ed9b16e57ad69934",
+        "runtime_precision_exactly_matches_p6_policy": true
+      },
+      "runtime": {
+        "config_id": "stage12_swe85_attention_down_bfp8_lofi_fixed108",
+        "policy_sha256": "00c6a27e6c5f0a568e7f8a59bc9b0ec64e48a9ce85d82804b98be9556d456ccf",
+        "load_sha256": "373de362dfd7998f7a9eae82048bf5503c398a96c3896df32a9574e928b644aa"
+      },
+      "hashes": {
+        "result_sha256": "63c5b97ad95905cf766c814257e72eb4ab752e4f492ccf43b5ec257e1d3ae36b",
+        "fixture_sha256": "e33ee2dff8a9566639c27d8cf1854ddc51177bb8687f8f99ed9b16e57ad69934"
+      },
+      "result_file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/attention-down-bfp8-lofi-fixed108-candidate/runs/attention_down_bfp8_lofi_fixed108/anomaly.psf__requests-1921.call1.onset.seed43.cap256.json"
+    },
+    {
+      "manifest_index": 14,
+      "job": "anomaly.psf__requests-1921.call1.onset",
+      "name": "anomaly.psf__requests-1921.call1.onset.seed44.cap256",
+      "seed": 44,
+      "requested_cap": 256,
+      "input_prompt_tokens": 1235,
+      "verdict": "normal",
+      "confidence": "medium",
+      "evidence": "The generated continuation is coherent and ends naturally at the ordinary turn/tool-yield EOS. Where it emits a tool handoff, the command uses canonical unquoted Gemma argument keys; the close/yield boundary is normal and does not imply an executed tool result. No sustained native motif or repeated unchanged paragraph cycle is present.",
+      "native_motif": "GetAll-bash",
+      "p3_same_index_verdict": "normal",
+      "cap_notes": {
+        "generated_tokens": 16,
+        "reached_requested_cap": false,
+        "natural_stop": true,
+        "last_token_id": 50,
+        "extension_needed": false
+      },
+      "identity_checks": {
+        "result_case_equals_manifest_fixture": true,
+        "sample_seed_matches_manifest": true,
+        "fixture_prompt_ids_count": 1235,
+        "fixture_sha256": "69e875974441db70e3bd37396b33c4cff19cbdd26906b90ddf2c315ead13c9eb",
+        "runtime_precision_exactly_matches_p6_policy": true
+      },
+      "runtime": {
+        "config_id": "stage12_swe85_attention_down_bfp8_lofi_fixed108",
+        "policy_sha256": "00c6a27e6c5f0a568e7f8a59bc9b0ec64e48a9ce85d82804b98be9556d456ccf",
+        "load_sha256": "373de362dfd7998f7a9eae82048bf5503c398a96c3896df32a9574e928b644aa"
+      },
+      "hashes": {
+        "result_sha256": "4b6915f9c4e8240652f85f7f4dd50728c4276847ba9096ad25f8433cc6c17934",
+        "fixture_sha256": "69e875974441db70e3bd37396b33c4cff19cbdd26906b90ddf2c315ead13c9eb"
+      },
+      "result_file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/attention-down-bfp8-lofi-fixed108-candidate/runs/attention_down_bfp8_lofi_fixed108/anomaly.psf__requests-1921.call1.onset.seed44.cap256.json"
+    },
+    {
+      "manifest_index": 15,
+      "job": "anomaly.psf__requests-5414.call10.onset",
+      "name": "anomaly.psf__requests-5414.call10.onset.seed42.cap256",
+      "seed": 42,
+      "requested_cap": 256,
+      "input_prompt_tokens": 7057,
+      "verdict": "reproduced_native_motif",
+      "confidence": "high",
+      "evidence": "The entire 256-token continuation is the same caret character (token 172109), matching the conditioned native caret motif; this is a sustained native-family collapse through the cap.",
+      "native_motif": "^^^^",
+      "p3_same_index_verdict": "inconclusive",
+      "cap_notes": {
+        "generated_tokens": 256,
+        "reached_requested_cap": true,
+        "natural_stop": false,
+        "last_token_id": 172109,
+        "extension_needed": false
+      },
+      "identity_checks": {
+        "result_case_equals_manifest_fixture": true,
+        "sample_seed_matches_manifest": true,
+        "fixture_prompt_ids_count": 7057,
+        "fixture_sha256": "38cba2429d022e64133da2c34388d9e88a9b26b82ec58594153692842dccb961",
+        "runtime_precision_exactly_matches_p6_policy": true
+      },
+      "runtime": {
+        "config_id": "stage12_swe85_attention_down_bfp8_lofi_fixed108",
+        "policy_sha256": "00c6a27e6c5f0a568e7f8a59bc9b0ec64e48a9ce85d82804b98be9556d456ccf",
+        "load_sha256": "373de362dfd7998f7a9eae82048bf5503c398a96c3896df32a9574e928b644aa"
+      },
+      "hashes": {
+        "result_sha256": "81ba0b0dae43779077ba5bf102117330a85227452c5aa075d4d1324fc81bc9e7",
+        "fixture_sha256": "38cba2429d022e64133da2c34388d9e88a9b26b82ec58594153692842dccb961"
+      },
+      "result_file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/attention-down-bfp8-lofi-fixed108-candidate/runs/attention_down_bfp8_lofi_fixed108/anomaly.psf__requests-5414.call10.onset.seed42.cap256.json"
+    },
+    {
+      "manifest_index": 16,
+      "job": "anomaly.psf__requests-5414.call10.onset",
+      "name": "anomaly.psf__requests-5414.call10.onset.seed43.cap256",
+      "seed": 43,
+      "requested_cap": 256,
+      "input_prompt_tokens": 7057,
+      "verdict": "reproduced_native_motif",
+      "confidence": "high",
+      "evidence": "The entire 256-token continuation is the same caret character (token 172109), matching the conditioned native caret motif; this is a sustained native-family collapse through the cap.",
+      "native_motif": "^^^^",
+      "p3_same_index_verdict": "reproduced_native_motif",
+      "cap_notes": {
+        "generated_tokens": 256,
+        "reached_requested_cap": true,
+        "natural_stop": false,
+        "last_token_id": 172109,
+        "extension_needed": false
+      },
+      "identity_checks": {
+        "result_case_equals_manifest_fixture": true,
+        "sample_seed_matches_manifest": true,
+        "fixture_prompt_ids_count": 7057,
+        "fixture_sha256": "f18f6505069f89e97e8201405745872884ef869f9f2e42229467a91d686e6141",
+        "runtime_precision_exactly_matches_p6_policy": true
+      },
+      "runtime": {
+        "config_id": "stage12_swe85_attention_down_bfp8_lofi_fixed108",
+        "policy_sha256": "00c6a27e6c5f0a568e7f8a59bc9b0ec64e48a9ce85d82804b98be9556d456ccf",
+        "load_sha256": "373de362dfd7998f7a9eae82048bf5503c398a96c3896df32a9574e928b644aa"
+      },
+      "hashes": {
+        "result_sha256": "34d4c6df348519ef4a41c0e1e12363febf2a3609e54a48ca2c1aee8694868709",
+        "fixture_sha256": "f18f6505069f89e97e8201405745872884ef869f9f2e42229467a91d686e6141"
+      },
+      "result_file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/attention-down-bfp8-lofi-fixed108-candidate/runs/attention_down_bfp8_lofi_fixed108/anomaly.psf__requests-5414.call10.onset.seed43.cap256.json"
+    },
+    {
+      "manifest_index": 17,
+      "job": "anomaly.psf__requests-5414.call10.onset",
+      "name": "anomaly.psf__requests-5414.call10.onset.seed44.cap256",
+      "seed": 44,
+      "requested_cap": 256,
+      "input_prompt_tokens": 7057,
+      "verdict": "reproduced_native_motif",
+      "confidence": "high",
+      "evidence": "The entire 256-token continuation is the same caret character (token 172109), matching the conditioned native caret motif; this is a sustained native-family collapse through the cap.",
+      "native_motif": "^^^^",
+      "p3_same_index_verdict": "reproduced_native_motif",
+      "cap_notes": {
+        "generated_tokens": 256,
+        "reached_requested_cap": true,
+        "natural_stop": false,
+        "last_token_id": 172109,
+        "extension_needed": false
+      },
+      "identity_checks": {
+        "result_case_equals_manifest_fixture": true,
+        "sample_seed_matches_manifest": true,
+        "fixture_prompt_ids_count": 7057,
+        "fixture_sha256": "9500b42b72b910e36e1a6639224bdb2d90e51129bdd953d97886af4794b33b01",
+        "runtime_precision_exactly_matches_p6_policy": true
+      },
+      "runtime": {
+        "config_id": "stage12_swe85_attention_down_bfp8_lofi_fixed108",
+        "policy_sha256": "00c6a27e6c5f0a568e7f8a59bc9b0ec64e48a9ce85d82804b98be9556d456ccf",
+        "load_sha256": "373de362dfd7998f7a9eae82048bf5503c398a96c3896df32a9574e928b644aa"
+      },
+      "hashes": {
+        "result_sha256": "9dacb88c4eb9c6ee40f5cdd8d844b52f1ce0bfc6256b1d86ee1e563fc64c25fc",
+        "fixture_sha256": "9500b42b72b910e36e1a6639224bdb2d90e51129bdd953d97886af4794b33b01"
+      },
+      "result_file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/attention-down-bfp8-lofi-fixed108-candidate/runs/attention_down_bfp8_lofi_fixed108/anomaly.psf__requests-5414.call10.onset.seed44.cap256.json"
+    },
+    {
+      "manifest_index": 18,
+      "job": "anomaly.psf__requests-5414.call11.onset",
+      "name": "anomaly.psf__requests-5414.call11.onset.seed42.cap256",
+      "seed": 42,
+      "requested_cap": 256,
+      "input_prompt_tokens": 7226,
+      "verdict": "reproduced_native_motif",
+      "confidence": "high",
+      "evidence": "The entire 256-token continuation is the same caret character (token 172109), matching the conditioned native caret motif; this is a sustained native-family collapse through the cap.",
+      "native_motif": "^^^^",
+      "p3_same_index_verdict": "inconclusive",
+      "cap_notes": {
+        "generated_tokens": 256,
+        "reached_requested_cap": true,
+        "natural_stop": false,
+        "last_token_id": 172109,
+        "extension_needed": false
+      },
+      "identity_checks": {
+        "result_case_equals_manifest_fixture": true,
+        "sample_seed_matches_manifest": true,
+        "fixture_prompt_ids_count": 7226,
+        "fixture_sha256": "50cbd0eb4e62c843a1ec8ac800a580135c3abc5dc2154d6be0a7e39d0c37ed6f",
+        "runtime_precision_exactly_matches_p6_policy": true
+      },
+      "runtime": {
+        "config_id": "stage12_swe85_attention_down_bfp8_lofi_fixed108",
+        "policy_sha256": "00c6a27e6c5f0a568e7f8a59bc9b0ec64e48a9ce85d82804b98be9556d456ccf",
+        "load_sha256": "373de362dfd7998f7a9eae82048bf5503c398a96c3896df32a9574e928b644aa"
+      },
+      "hashes": {
+        "result_sha256": "a8c4a8f3f77af3a669abbc606b715a66aa4a46e6fd6070960ecd577afa4b4a29",
+        "fixture_sha256": "50cbd0eb4e62c843a1ec8ac800a580135c3abc5dc2154d6be0a7e39d0c37ed6f"
+      },
+      "result_file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/attention-down-bfp8-lofi-fixed108-candidate/runs/attention_down_bfp8_lofi_fixed108/anomaly.psf__requests-5414.call11.onset.seed42.cap256.json"
+    },
+    {
+      "manifest_index": 19,
+      "job": "anomaly.psf__requests-5414.call11.onset",
+      "name": "anomaly.psf__requests-5414.call11.onset.seed43.cap256",
+      "seed": 43,
+      "requested_cap": 256,
+      "input_prompt_tokens": 7226,
+      "verdict": "reproduced_native_motif",
+      "confidence": "high",
+      "evidence": "The entire 256-token continuation is the same caret character (token 172109), matching the conditioned native caret motif; this is a sustained native-family collapse through the cap.",
+      "native_motif": "^^^^",
+      "p3_same_index_verdict": "reproduced_native_motif",
+      "cap_notes": {
+        "generated_tokens": 256,
+        "reached_requested_cap": true,
+        "natural_stop": false,
+        "last_token_id": 172109,
+        "extension_needed": false
+      },
+      "identity_checks": {
+        "result_case_equals_manifest_fixture": true,
+        "sample_seed_matches_manifest": true,
+        "fixture_prompt_ids_count": 7226,
+        "fixture_sha256": "b36c62f89d475d3bb0caf1b656f7016b2c9ddfed4411a21a4f3249014c188d76",
+        "runtime_precision_exactly_matches_p6_policy": true
+      },
+      "runtime": {
+        "config_id": "stage12_swe85_attention_down_bfp8_lofi_fixed108",
+        "policy_sha256": "00c6a27e6c5f0a568e7f8a59bc9b0ec64e48a9ce85d82804b98be9556d456ccf",
+        "load_sha256": "373de362dfd7998f7a9eae82048bf5503c398a96c3896df32a9574e928b644aa"
+      },
+      "hashes": {
+        "result_sha256": "360da2398d4ad8575958226d898433d70bd0df3212746eec2a73b03a097a3aa6",
+        "fixture_sha256": "b36c62f89d475d3bb0caf1b656f7016b2c9ddfed4411a21a4f3249014c188d76"
+      },
+      "result_file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/attention-down-bfp8-lofi-fixed108-candidate/runs/attention_down_bfp8_lofi_fixed108/anomaly.psf__requests-5414.call11.onset.seed43.cap256.json"
+    },
+    {
+      "manifest_index": 20,
+      "job": "anomaly.psf__requests-5414.call11.onset",
+      "name": "anomaly.psf__requests-5414.call11.onset.seed44.cap256",
+      "seed": 44,
+      "requested_cap": 256,
+      "input_prompt_tokens": 7226,
+      "verdict": "reproduced_native_motif",
+      "confidence": "high",
+      "evidence": "The entire 256-token continuation is the same caret character (token 172109), matching the conditioned native caret motif; this is a sustained native-family collapse through the cap.",
+      "native_motif": "^^^^",
+      "p3_same_index_verdict": "reproduced_native_motif",
+      "cap_notes": {
+        "generated_tokens": 256,
+        "reached_requested_cap": true,
+        "natural_stop": false,
+        "last_token_id": 172109,
+        "extension_needed": false
+      },
+      "identity_checks": {
+        "result_case_equals_manifest_fixture": true,
+        "sample_seed_matches_manifest": true,
+        "fixture_prompt_ids_count": 7226,
+        "fixture_sha256": "d5d34c7fd8cf7cc824b02db3a6e40a3d930e661e33ee42f92c59def25a22efa5",
+        "runtime_precision_exactly_matches_p6_policy": true
+      },
+      "runtime": {
+        "config_id": "stage12_swe85_attention_down_bfp8_lofi_fixed108",
+        "policy_sha256": "00c6a27e6c5f0a568e7f8a59bc9b0ec64e48a9ce85d82804b98be9556d456ccf",
+        "load_sha256": "373de362dfd7998f7a9eae82048bf5503c398a96c3896df32a9574e928b644aa"
+      },
+      "hashes": {
+        "result_sha256": "c1f5b8baa9e36825db326d9fd195fd0024a74e4f357eb0146463500389888448",
+        "fixture_sha256": "d5d34c7fd8cf7cc824b02db3a6e40a3d930e661e33ee42f92c59def25a22efa5"
+      },
+      "result_file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/attention-down-bfp8-lofi-fixed108-candidate/runs/attention_down_bfp8_lofi_fixed108/anomaly.psf__requests-5414.call11.onset.seed44.cap256.json"
+    },
+    {
+      "manifest_index": 21,
+      "job": "anomaly.psf__requests-5414.call9.onset",
+      "name": "anomaly.psf__requests-5414.call9.onset.seed42.cap256",
+      "seed": 42,
+      "requested_cap": 256,
+      "input_prompt_tokens": 8383,
+      "verdict": "reproduced_native_motif",
+      "confidence": "high",
+      "evidence": "The entire 256-token continuation is the same caret character (token 172109), matching the conditioned native caret motif; this is a sustained native-family collapse through the cap.",
+      "native_motif": "^^^^",
+      "p3_same_index_verdict": "reproduced_native_motif",
+      "cap_notes": {
+        "generated_tokens": 256,
+        "reached_requested_cap": true,
+        "natural_stop": false,
+        "last_token_id": 172109,
+        "extension_needed": false
+      },
+      "identity_checks": {
+        "result_case_equals_manifest_fixture": true,
+        "sample_seed_matches_manifest": true,
+        "fixture_prompt_ids_count": 8383,
+        "fixture_sha256": "5024622915942584d71a4eebe667180b660a2f3c45955bddb72de8e019ad7181",
+        "runtime_precision_exactly_matches_p6_policy": true
+      },
+      "runtime": {
+        "config_id": "stage12_swe85_attention_down_bfp8_lofi_fixed108",
+        "policy_sha256": "00c6a27e6c5f0a568e7f8a59bc9b0ec64e48a9ce85d82804b98be9556d456ccf",
+        "load_sha256": "373de362dfd7998f7a9eae82048bf5503c398a96c3896df32a9574e928b644aa"
+      },
+      "hashes": {
+        "result_sha256": "79b23a2c10db72c2f204f8c569badaefb453acdde011dd3e2c471382b1d96cd1",
+        "fixture_sha256": "5024622915942584d71a4eebe667180b660a2f3c45955bddb72de8e019ad7181"
+      },
+      "result_file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/attention-down-bfp8-lofi-fixed108-candidate/runs/attention_down_bfp8_lofi_fixed108/anomaly.psf__requests-5414.call9.onset.seed42.cap256.json"
+    },
+    {
+      "manifest_index": 22,
+      "job": "anomaly.psf__requests-5414.call9.onset",
+      "name": "anomaly.psf__requests-5414.call9.onset.seed43.cap256",
+      "seed": 43,
+      "requested_cap": 256,
+      "input_prompt_tokens": 8383,
+      "verdict": "reproduced_native_motif",
+      "confidence": "high",
+      "evidence": "The entire 256-token continuation is the same caret character (token 172109), matching the conditioned native caret motif; this is a sustained native-family collapse through the cap.",
+      "native_motif": "^^^^",
+      "p3_same_index_verdict": "reproduced_native_motif",
+      "cap_notes": {
+        "generated_tokens": 256,
+        "reached_requested_cap": true,
+        "natural_stop": false,
+        "last_token_id": 172109,
+        "extension_needed": false
+      },
+      "identity_checks": {
+        "result_case_equals_manifest_fixture": true,
+        "sample_seed_matches_manifest": true,
+        "fixture_prompt_ids_count": 8383,
+        "fixture_sha256": "40e1269b089e2d50a537949711597d228ebc1a6833d8cd3eb22f39e4db6a31c9",
+        "runtime_precision_exactly_matches_p6_policy": true
+      },
+      "runtime": {
+        "config_id": "stage12_swe85_attention_down_bfp8_lofi_fixed108",
+        "policy_sha256": "00c6a27e6c5f0a568e7f8a59bc9b0ec64e48a9ce85d82804b98be9556d456ccf",
+        "load_sha256": "373de362dfd7998f7a9eae82048bf5503c398a96c3896df32a9574e928b644aa"
+      },
+      "hashes": {
+        "result_sha256": "a1868befdf9e3d8bc3aaef30fbb7fc384eb400181ea63bb6565b93ec2f888fb7",
+        "fixture_sha256": "40e1269b089e2d50a537949711597d228ebc1a6833d8cd3eb22f39e4db6a31c9"
+      },
+      "result_file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/attention-down-bfp8-lofi-fixed108-candidate/runs/attention_down_bfp8_lofi_fixed108/anomaly.psf__requests-5414.call9.onset.seed43.cap256.json"
+    },
+    {
+      "manifest_index": 23,
+      "job": "anomaly.psf__requests-5414.call9.onset",
+      "name": "anomaly.psf__requests-5414.call9.onset.seed44.cap256",
+      "seed": 44,
+      "requested_cap": 256,
+      "input_prompt_tokens": 8383,
+      "verdict": "reproduced_native_motif",
+      "confidence": "high",
+      "evidence": "The entire 256-token continuation is the same caret character (token 172109), matching the conditioned native caret motif; this is a sustained native-family collapse through the cap.",
+      "native_motif": "^^^^",
+      "p3_same_index_verdict": "reproduced_native_motif",
+      "cap_notes": {
+        "generated_tokens": 256,
+        "reached_requested_cap": true,
+        "natural_stop": false,
+        "last_token_id": 172109,
+        "extension_needed": false
+      },
+      "identity_checks": {
+        "result_case_equals_manifest_fixture": true,
+        "sample_seed_matches_manifest": true,
+        "fixture_prompt_ids_count": 8383,
+        "fixture_sha256": "480226dd76039d70aa5aae4cfdf5122f6ee8c86237910ccbb15c60caa3255f0c",
+        "runtime_precision_exactly_matches_p6_policy": true
+      },
+      "runtime": {
+        "config_id": "stage12_swe85_attention_down_bfp8_lofi_fixed108",
+        "policy_sha256": "00c6a27e6c5f0a568e7f8a59bc9b0ec64e48a9ce85d82804b98be9556d456ccf",
+        "load_sha256": "373de362dfd7998f7a9eae82048bf5503c398a96c3896df32a9574e928b644aa"
+      },
+      "hashes": {
+        "result_sha256": "c16caedd84ae0fba4204dc74bd6f904ebbdfdd2c0a8be4c0447714c5367507b8",
+        "fixture_sha256": "480226dd76039d70aa5aae4cfdf5122f6ee8c86237910ccbb15c60caa3255f0c"
+      },
+      "result_file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/attention-down-bfp8-lofi-fixed108-candidate/runs/attention_down_bfp8_lofi_fixed108/anomaly.psf__requests-5414.call9.onset.seed44.cap256.json"
+    },
+    {
+      "manifest_index": 24,
+      "job": "anomaly.pylint-dev__pylint-4551.call1.onset",
+      "name": "anomaly.pylint-dev__pylint-4551.call1.onset.seed42.cap256",
+      "seed": 42,
+      "requested_cap": 256,
+      "input_prompt_tokens": 1263,
+      "verdict": "normal",
+      "confidence": "medium",
+      "evidence": "The generated continuation is coherent and ends naturally at the ordinary turn/tool-yield EOS. Where it emits a tool handoff, the command uses canonical unquoted Gemma argument keys; the close/yield boundary is normal and does not imply an executed tool result. No sustained native motif or repeated unchanged paragraph cycle is present.",
+      "native_motif": "GetAll-bash",
+      "p3_same_index_verdict": "normal",
+      "cap_notes": {
+        "generated_tokens": 16,
+        "reached_requested_cap": false,
+        "natural_stop": true,
+        "last_token_id": 50,
+        "extension_needed": false
+      },
+      "identity_checks": {
+        "result_case_equals_manifest_fixture": true,
+        "sample_seed_matches_manifest": true,
+        "fixture_prompt_ids_count": 1263,
+        "fixture_sha256": "34ad0af91e9d911cc9ac0e1bcb97d6adf7e3754df831a45af074c3bdba1fa369",
+        "runtime_precision_exactly_matches_p6_policy": true
+      },
+      "runtime": {
+        "config_id": "stage12_swe85_attention_down_bfp8_lofi_fixed108",
+        "policy_sha256": "00c6a27e6c5f0a568e7f8a59bc9b0ec64e48a9ce85d82804b98be9556d456ccf",
+        "load_sha256": "373de362dfd7998f7a9eae82048bf5503c398a96c3896df32a9574e928b644aa"
+      },
+      "hashes": {
+        "result_sha256": "f36704de3ac7ac87eaaae27148c21e0d9ecdfa4f79fdd38af02a2fbeb177ca15",
+        "fixture_sha256": "34ad0af91e9d911cc9ac0e1bcb97d6adf7e3754df831a45af074c3bdba1fa369"
+      },
+      "result_file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/attention-down-bfp8-lofi-fixed108-candidate/runs/attention_down_bfp8_lofi_fixed108/anomaly.pylint-dev__pylint-4551.call1.onset.seed42.cap256.json"
+    },
+    {
+      "manifest_index": 25,
+      "job": "anomaly.pylint-dev__pylint-4551.call1.onset",
+      "name": "anomaly.pylint-dev__pylint-4551.call1.onset.seed43.cap256",
+      "seed": 43,
+      "requested_cap": 256,
+      "input_prompt_tokens": 1263,
+      "verdict": "normal",
+      "confidence": "medium",
+      "evidence": "The generated continuation is coherent and ends naturally at the ordinary turn/tool-yield EOS. Where it emits a tool handoff, the command uses canonical unquoted Gemma argument keys; the close/yield boundary is normal and does not imply an executed tool result. No sustained native motif or repeated unchanged paragraph cycle is present.",
+      "native_motif": "GetAll-bash",
+      "p3_same_index_verdict": "normal",
+      "cap_notes": {
+        "generated_tokens": 28,
+        "reached_requested_cap": false,
+        "natural_stop": true,
+        "last_token_id": 50,
+        "extension_needed": false
+      },
+      "identity_checks": {
+        "result_case_equals_manifest_fixture": true,
+        "sample_seed_matches_manifest": true,
+        "fixture_prompt_ids_count": 1263,
+        "fixture_sha256": "385791f4b799ff9f68124e0e49e9e8d3a13f895183ed312a8b61a4e53395e2e8",
+        "runtime_precision_exactly_matches_p6_policy": true
+      },
+      "runtime": {
+        "config_id": "stage12_swe85_attention_down_bfp8_lofi_fixed108",
+        "policy_sha256": "00c6a27e6c5f0a568e7f8a59bc9b0ec64e48a9ce85d82804b98be9556d456ccf",
+        "load_sha256": "373de362dfd7998f7a9eae82048bf5503c398a96c3896df32a9574e928b644aa"
+      },
+      "hashes": {
+        "result_sha256": "1d1a076cdc6ab8f83395f23ac8dc158432ef9dcfcc1b9807a1333d134d7ea77c",
+        "fixture_sha256": "385791f4b799ff9f68124e0e49e9e8d3a13f895183ed312a8b61a4e53395e2e8"
+      },
+      "result_file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/attention-down-bfp8-lofi-fixed108-candidate/runs/attention_down_bfp8_lofi_fixed108/anomaly.pylint-dev__pylint-4551.call1.onset.seed43.cap256.json"
+    },
+    {
+      "manifest_index": 26,
+      "job": "anomaly.pylint-dev__pylint-4551.call1.onset",
+      "name": "anomaly.pylint-dev__pylint-4551.call1.onset.seed44.cap256",
+      "seed": 44,
+      "requested_cap": 256,
+      "input_prompt_tokens": 1263,
+      "verdict": "normal",
+      "confidence": "medium",
+      "evidence": "The generated continuation is coherent and ends naturally at the ordinary turn/tool-yield EOS. Where it emits a tool handoff, the command uses canonical unquoted Gemma argument keys; the close/yield boundary is normal and does not imply an executed tool result. No sustained native motif or repeated unchanged paragraph cycle is present.",
+      "native_motif": "GetAll-bash",
+      "p3_same_index_verdict": "normal",
+      "cap_notes": {
+        "generated_tokens": 16,
+        "reached_requested_cap": false,
+        "natural_stop": true,
+        "last_token_id": 50,
+        "extension_needed": false
+      },
+      "identity_checks": {
+        "result_case_equals_manifest_fixture": true,
+        "sample_seed_matches_manifest": true,
+        "fixture_prompt_ids_count": 1263,
+        "fixture_sha256": "076399426476d5f79e11d8f2afa3e815e4c7785bc62f0690d374b681b5fa69fd",
+        "runtime_precision_exactly_matches_p6_policy": true
+      },
+      "runtime": {
+        "config_id": "stage12_swe85_attention_down_bfp8_lofi_fixed108",
+        "policy_sha256": "00c6a27e6c5f0a568e7f8a59bc9b0ec64e48a9ce85d82804b98be9556d456ccf",
+        "load_sha256": "373de362dfd7998f7a9eae82048bf5503c398a96c3896df32a9574e928b644aa"
+      },
+      "hashes": {
+        "result_sha256": "a23482bb7f6c2c540026046bdcfd1ee25941d0de09d57e159329cbb1009e5505",
+        "fixture_sha256": "076399426476d5f79e11d8f2afa3e815e4c7785bc62f0690d374b681b5fa69fd"
+      },
+      "result_file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/attention-down-bfp8-lofi-fixed108-candidate/runs/attention_down_bfp8_lofi_fixed108/anomaly.pylint-dev__pylint-4551.call1.onset.seed44.cap256.json"
+    },
+    {
+      "manifest_index": 27,
+      "job": "anomaly.pylint-dev__pylint-4604.call45.onset",
+      "name": "anomaly.pylint-dev__pylint-4604.call45.onset.seed42.cap256",
+      "seed": 42,
+      "requested_cap": 256,
+      "input_prompt_tokens": 37057,
+      "verdict": "normal",
+      "confidence": "medium",
+      "evidence": "The generated continuation is coherent and ends naturally at the ordinary turn/tool-yield EOS. Where it emits a tool handoff, the command uses canonical unquoted Gemma argument keys; the close/yield boundary is normal and does not imply an executed tool result. No sustained native motif or repeated unchanged paragraph cycle is present.",
+      "native_motif": "it's’s",
+      "p3_same_index_verdict": "normal",
+      "cap_notes": {
+        "generated_tokens": 51,
+        "reached_requested_cap": false,
+        "natural_stop": true,
+        "last_token_id": 50,
+        "extension_needed": false
+      },
+      "identity_checks": {
+        "result_case_equals_manifest_fixture": true,
+        "sample_seed_matches_manifest": true,
+        "fixture_prompt_ids_count": 37057,
+        "fixture_sha256": "ce0cbc8b5fd000b397c01d2e62b16764bccf0bfd113b7e7ce884b992f2a8a42b",
+        "runtime_precision_exactly_matches_p6_policy": true
+      },
+      "runtime": {
+        "config_id": "stage12_swe85_attention_down_bfp8_lofi_fixed108",
+        "policy_sha256": "00c6a27e6c5f0a568e7f8a59bc9b0ec64e48a9ce85d82804b98be9556d456ccf",
+        "load_sha256": "373de362dfd7998f7a9eae82048bf5503c398a96c3896df32a9574e928b644aa"
+      },
+      "hashes": {
+        "result_sha256": "93f447eb446e4bba6308e8ea9f2451c9f532a0b07a3f7b4282e1483e07b342da",
+        "fixture_sha256": "ce0cbc8b5fd000b397c01d2e62b16764bccf0bfd113b7e7ce884b992f2a8a42b"
+      },
+      "result_file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/attention-down-bfp8-lofi-fixed108-candidate/runs/attention_down_bfp8_lofi_fixed108/anomaly.pylint-dev__pylint-4604.call45.onset.seed42.cap256.json"
+    },
+    {
+      "manifest_index": 28,
+      "job": "anomaly.pylint-dev__pylint-4604.call45.onset",
+      "name": "anomaly.pylint-dev__pylint-4604.call45.onset.seed43.cap256",
+      "seed": 43,
+      "requested_cap": 256,
+      "input_prompt_tokens": 37057,
+      "verdict": "normal",
+      "confidence": "medium",
+      "evidence": "The generated continuation is coherent and ends naturally at the ordinary turn/tool-yield EOS. Where it emits a tool handoff, the command uses canonical unquoted Gemma argument keys; the close/yield boundary is normal and does not imply an executed tool result. No sustained native motif or repeated unchanged paragraph cycle is present.",
+      "native_motif": "it's’s",
+      "p3_same_index_verdict": "normal",
+      "cap_notes": {
+        "generated_tokens": 51,
+        "reached_requested_cap": false,
+        "natural_stop": true,
+        "last_token_id": 50,
+        "extension_needed": false
+      },
+      "identity_checks": {
+        "result_case_equals_manifest_fixture": true,
+        "sample_seed_matches_manifest": true,
+        "fixture_prompt_ids_count": 37057,
+        "fixture_sha256": "31fa919d40731cb1a44062d04cd57120aabff05376985c14d42e6904633f1efa",
+        "runtime_precision_exactly_matches_p6_policy": true
+      },
+      "runtime": {
+        "config_id": "stage12_swe85_attention_down_bfp8_lofi_fixed108",
+        "policy_sha256": "00c6a27e6c5f0a568e7f8a59bc9b0ec64e48a9ce85d82804b98be9556d456ccf",
+        "load_sha256": "373de362dfd7998f7a9eae82048bf5503c398a96c3896df32a9574e928b644aa"
+      },
+      "hashes": {
+        "result_sha256": "fcf21e4554efb2df09620dcdc7c482ba8f9e952e95cdc86b10bf0b1f6463baf2",
+        "fixture_sha256": "31fa919d40731cb1a44062d04cd57120aabff05376985c14d42e6904633f1efa"
+      },
+      "result_file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/attention-down-bfp8-lofi-fixed108-candidate/runs/attention_down_bfp8_lofi_fixed108/anomaly.pylint-dev__pylint-4604.call45.onset.seed43.cap256.json"
+    },
+    {
+      "manifest_index": 29,
+      "job": "anomaly.pylint-dev__pylint-4604.call45.onset",
+      "name": "anomaly.pylint-dev__pylint-4604.call45.onset.seed44.cap256",
+      "seed": 44,
+      "requested_cap": 256,
+      "input_prompt_tokens": 37057,
+      "verdict": "normal",
+      "confidence": "medium",
+      "evidence": "The generated continuation is coherent and ends naturally at the ordinary turn/tool-yield EOS. Where it emits a tool handoff, the command uses canonical unquoted Gemma argument keys; the close/yield boundary is normal and does not imply an executed tool result. No sustained native motif or repeated unchanged paragraph cycle is present.",
+      "native_motif": "it's’s",
+      "p3_same_index_verdict": "normal",
+      "cap_notes": {
+        "generated_tokens": 50,
+        "reached_requested_cap": false,
+        "natural_stop": true,
+        "last_token_id": 50,
+        "extension_needed": false
+      },
+      "identity_checks": {
+        "result_case_equals_manifest_fixture": true,
+        "sample_seed_matches_manifest": true,
+        "fixture_prompt_ids_count": 37057,
+        "fixture_sha256": "b43e3fc84374df7937df3083b6821216e1289aa298cba096cbe37cd6c25965ff",
+        "runtime_precision_exactly_matches_p6_policy": true
+      },
+      "runtime": {
+        "config_id": "stage12_swe85_attention_down_bfp8_lofi_fixed108",
+        "policy_sha256": "00c6a27e6c5f0a568e7f8a59bc9b0ec64e48a9ce85d82804b98be9556d456ccf",
+        "load_sha256": "373de362dfd7998f7a9eae82048bf5503c398a96c3896df32a9574e928b644aa"
+      },
+      "hashes": {
+        "result_sha256": "2ec57ebefc63ef3700fd1e108197f9cf46c761b307ef49eb2eee59c58ce14e93",
+        "fixture_sha256": "b43e3fc84374df7937df3083b6821216e1289aa298cba096cbe37cd6c25965ff"
+      },
+      "result_file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/attention-down-bfp8-lofi-fixed108-candidate/runs/attention_down_bfp8_lofi_fixed108/anomaly.pylint-dev__pylint-4604.call45.onset.seed44.cap256.json"
+    },
+    {
+      "manifest_index": 30,
+      "job": "anomaly.pytest-dev__pytest-5787.call1.onset",
+      "name": "anomaly.pytest-dev__pytest-5787.call1.onset.seed42.cap256",
+      "seed": 42,
+      "requested_cap": 256,
+      "input_prompt_tokens": 9606,
+      "verdict": "normal",
+      "confidence": "medium",
+      "evidence": "The generated continuation is coherent and ends naturally at the ordinary turn/tool-yield EOS. Where it emits a tool handoff, the command uses canonical unquoted Gemma argument keys; the close/yield boundary is normal and does not imply an executed tool result. No sustained native motif or repeated unchanged paragraph cycle is present.",
+      "native_motif": "GetAll-bash",
+      "p3_same_index_verdict": "normal",
+      "cap_notes": {
+        "generated_tokens": 16,
+        "reached_requested_cap": false,
+        "natural_stop": true,
+        "last_token_id": 50,
+        "extension_needed": false
+      },
+      "identity_checks": {
+        "result_case_equals_manifest_fixture": true,
+        "sample_seed_matches_manifest": true,
+        "fixture_prompt_ids_count": 9606,
+        "fixture_sha256": "198ec73ad83296c21c93e0484d12b52717c6803b9ae7ea0131dcfac76f6ae3af",
+        "runtime_precision_exactly_matches_p6_policy": true
+      },
+      "runtime": {
+        "config_id": "stage12_swe85_attention_down_bfp8_lofi_fixed108",
+        "policy_sha256": "00c6a27e6c5f0a568e7f8a59bc9b0ec64e48a9ce85d82804b98be9556d456ccf",
+        "load_sha256": "373de362dfd7998f7a9eae82048bf5503c398a96c3896df32a9574e928b644aa"
+      },
+      "hashes": {
+        "result_sha256": "0d0c24af3909f9db7805ea79ad16ee96ddb87cde038b295c6078317174858959",
+        "fixture_sha256": "198ec73ad83296c21c93e0484d12b52717c6803b9ae7ea0131dcfac76f6ae3af"
+      },
+      "result_file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/attention-down-bfp8-lofi-fixed108-candidate/runs/attention_down_bfp8_lofi_fixed108/anomaly.pytest-dev__pytest-5787.call1.onset.seed42.cap256.json"
+    },
+    {
+      "manifest_index": 31,
+      "job": "anomaly.pytest-dev__pytest-5787.call1.onset",
+      "name": "anomaly.pytest-dev__pytest-5787.call1.onset.seed43.cap256",
+      "seed": 43,
+      "requested_cap": 256,
+      "input_prompt_tokens": 9606,
+      "verdict": "normal",
+      "confidence": "medium",
+      "evidence": "The generated continuation is coherent and ends naturally at the ordinary turn/tool-yield EOS. Where it emits a tool handoff, the command uses canonical unquoted Gemma argument keys; the close/yield boundary is normal and does not imply an executed tool result. No sustained native motif or repeated unchanged paragraph cycle is present.",
+      "native_motif": "GetAll-bash",
+      "p3_same_index_verdict": "normal",
+      "cap_notes": {
+        "generated_tokens": 15,
+        "reached_requested_cap": false,
+        "natural_stop": true,
+        "last_token_id": 50,
+        "extension_needed": false
+      },
+      "identity_checks": {
+        "result_case_equals_manifest_fixture": true,
+        "sample_seed_matches_manifest": true,
+        "fixture_prompt_ids_count": 9606,
+        "fixture_sha256": "e91946fd0cb6b8dd0be4d7ec116d495c6c26de6307547e84cad61808912db785",
+        "runtime_precision_exactly_matches_p6_policy": true
+      },
+      "runtime": {
+        "config_id": "stage12_swe85_attention_down_bfp8_lofi_fixed108",
+        "policy_sha256": "00c6a27e6c5f0a568e7f8a59bc9b0ec64e48a9ce85d82804b98be9556d456ccf",
+        "load_sha256": "373de362dfd7998f7a9eae82048bf5503c398a96c3896df32a9574e928b644aa"
+      },
+      "hashes": {
+        "result_sha256": "79fbaa1cb2c7003d85cc19f35de926ea6b081fad8169bb039e1f08fa8841357c",
+        "fixture_sha256": "e91946fd0cb6b8dd0be4d7ec116d495c6c26de6307547e84cad61808912db785"
+      },
+      "result_file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/attention-down-bfp8-lofi-fixed108-candidate/runs/attention_down_bfp8_lofi_fixed108/anomaly.pytest-dev__pytest-5787.call1.onset.seed43.cap256.json"
+    },
+    {
+      "manifest_index": 32,
+      "job": "anomaly.pytest-dev__pytest-5787.call1.onset",
+      "name": "anomaly.pytest-dev__pytest-5787.call1.onset.seed44.cap256",
+      "seed": 44,
+      "requested_cap": 256,
+      "input_prompt_tokens": 9606,
+      "verdict": "other_anomaly",
+      "confidence": "high",
+      "evidence": "The continuation begins with plain-text pseudo-tool narration using quoted JSON arguments (“Calling bash tool call with {\"command\": \"ls -R\"} as arguments”), followed by malformed `<|channel>thought` spelling and then a code-writing narration. The quoted argument is not a canonical Gemma command and no actual tool result is present. This is a protocol-format anomaly; it also reaches the 256-token cap while code discussion is ongoing, so no completion claim.",
+      "native_motif": "GetAll-bash",
+      "p3_same_index_verdict": "normal",
+      "cap_notes": {
+        "generated_tokens": 256,
+        "reached_requested_cap": true,
+        "natural_stop": false,
+        "last_token_id": 236761,
+        "extension_needed": true
+      },
+      "identity_checks": {
+        "result_case_equals_manifest_fixture": true,
+        "sample_seed_matches_manifest": true,
+        "fixture_prompt_ids_count": 9606,
+        "fixture_sha256": "531308e465bdfdf8d0ffa7754f59612f148c704ded59019e5278475983341d38",
+        "runtime_precision_exactly_matches_p6_policy": true
+      },
+      "runtime": {
+        "config_id": "stage12_swe85_attention_down_bfp8_lofi_fixed108",
+        "policy_sha256": "00c6a27e6c5f0a568e7f8a59bc9b0ec64e48a9ce85d82804b98be9556d456ccf",
+        "load_sha256": "373de362dfd7998f7a9eae82048bf5503c398a96c3896df32a9574e928b644aa"
+      },
+      "hashes": {
+        "result_sha256": "b4df5ea53ff31e9dd55f97b1da8adb9130a0857af0fa62779d63397b28a31395",
+        "fixture_sha256": "531308e465bdfdf8d0ffa7754f59612f148c704ded59019e5278475983341d38"
+      },
+      "result_file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/attention-down-bfp8-lofi-fixed108-candidate/runs/attention_down_bfp8_lofi_fixed108/anomaly.pytest-dev__pytest-5787.call1.onset.seed44.cap256.json"
+    },
+    {
+      "manifest_index": 33,
+      "job": "anomaly.pytest-dev__pytest-5787.call65.onset",
+      "name": "anomaly.pytest-dev__pytest-5787.call65.onset.seed42.cap2048",
+      "seed": 42,
+      "requested_cap": 2048,
+      "input_prompt_tokens": 53684,
+      "verdict": "normal",
+      "confidence": "medium",
+      "evidence": "The generated continuation is coherent and ends naturally at the ordinary turn/tool-yield EOS. Where it emits a tool handoff, the command uses canonical unquoted Gemma argument keys; the close/yield boundary is normal and does not imply an executed tool result. No sustained native motif or repeated unchanged paragraph cycle is present.",
+      "native_motif": "I will’ll",
+      "p3_same_index_verdict": "other_anomaly",
+      "cap_notes": {
+        "generated_tokens": 234,
+        "reached_requested_cap": false,
+        "natural_stop": true,
+        "last_token_id": 50,
+        "extension_needed": false
+      },
+      "identity_checks": {
+        "result_case_equals_manifest_fixture": true,
+        "sample_seed_matches_manifest": true,
+        "fixture_prompt_ids_count": 53684,
+        "fixture_sha256": "346ea388c2e71b88d415e67331f6f1c5de4ee428e641e5159adccef0af382331",
+        "runtime_precision_exactly_matches_p6_policy": true
+      },
+      "runtime": {
+        "config_id": "stage12_swe85_attention_down_bfp8_lofi_fixed108",
+        "policy_sha256": "00c6a27e6c5f0a568e7f8a59bc9b0ec64e48a9ce85d82804b98be9556d456ccf",
+        "load_sha256": "373de362dfd7998f7a9eae82048bf5503c398a96c3896df32a9574e928b644aa"
+      },
+      "hashes": {
+        "result_sha256": "0cd845d49916ff162270ae353984bfa37452b9609bb1c7a298c4593c54bc91da",
+        "fixture_sha256": "346ea388c2e71b88d415e67331f6f1c5de4ee428e641e5159adccef0af382331"
+      },
+      "result_file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/attention-down-bfp8-lofi-fixed108-candidate/runs/attention_down_bfp8_lofi_fixed108/anomaly.pytest-dev__pytest-5787.call65.onset.seed42.cap2048.json"
+    },
+    {
+      "manifest_index": 34,
+      "job": "anomaly.pytest-dev__pytest-5787.call65.onset",
+      "name": "anomaly.pytest-dev__pytest-5787.call65.onset.seed43.cap2048",
+      "seed": 43,
+      "requested_cap": 2048,
+      "input_prompt_tokens": 53684,
+      "verdict": "inconclusive",
+      "confidence": "medium",
+      "evidence": "The full 2048-token continuation consists of distinct serializer/deserializer editing ideas and progressively constructed Python code, without a repeated unchanged paragraph cycle or the source native “I will’ll” contraction. It is cut off mid-code at the requested cap, so treat it as progressing and make no completion judgment.",
+      "native_motif": "I will’ll",
+      "p3_same_index_verdict": "inconclusive",
+      "cap_notes": {
+        "generated_tokens": 2048,
+        "reached_requested_cap": true,
+        "natural_stop": false,
+        "last_token_id": 144,
+        "extension_needed": true
+      },
+      "identity_checks": {
+        "result_case_equals_manifest_fixture": true,
+        "sample_seed_matches_manifest": true,
+        "fixture_prompt_ids_count": 53684,
+        "fixture_sha256": "2f36db800a3807dd533cbbbc1071b060fa91cd099371c96894f1cf60123368e7",
+        "runtime_precision_exactly_matches_p6_policy": true
+      },
+      "runtime": {
+        "config_id": "stage12_swe85_attention_down_bfp8_lofi_fixed108",
+        "policy_sha256": "00c6a27e6c5f0a568e7f8a59bc9b0ec64e48a9ce85d82804b98be9556d456ccf",
+        "load_sha256": "373de362dfd7998f7a9eae82048bf5503c398a96c3896df32a9574e928b644aa"
+      },
+      "hashes": {
+        "result_sha256": "373d6fbb12200fb72ba354817d53fd799883527a02f52557e97d2015f558774e",
+        "fixture_sha256": "2f36db800a3807dd533cbbbc1071b060fa91cd099371c96894f1cf60123368e7"
+      },
+      "result_file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/attention-down-bfp8-lofi-fixed108-candidate/runs/attention_down_bfp8_lofi_fixed108/anomaly.pytest-dev__pytest-5787.call65.onset.seed43.cap2048.json"
+    },
+    {
+      "manifest_index": 35,
+      "job": "anomaly.pytest-dev__pytest-5787.call65.onset",
+      "name": "anomaly.pytest-dev__pytest-5787.call65.onset.seed44.cap4096",
+      "seed": 44,
+      "requested_cap": 4096,
+      "input_prompt_tokens": 53684,
+      "verdict": "normal",
+      "confidence": "medium",
+      "evidence": "The continuation presents distinct serializer/deserializer replacement code, ends naturally at token 50, and contains no sustained source contraction or unchanged repeated-paragraph cycle. A valid canonical bash handoff follows; no task-fix correctness claim.",
+      "native_motif": "I will’ll",
+      "p3_same_index_verdict": "normal",
+      "cap_notes": {
+        "generated_tokens": 1916,
+        "reached_requested_cap": false,
+        "natural_stop": true,
+        "last_token_id": 50,
+        "extension_needed": false
+      },
+      "identity_checks": {
+        "result_case_equals_manifest_fixture": true,
+        "sample_seed_matches_manifest": true,
+        "fixture_prompt_ids_count": 53684,
+        "fixture_sha256": "eb66af59398c5cbf2e73697e177ec70330060512e774e76f041839d957b9e77c",
+        "runtime_precision_exactly_matches_p6_policy": true
+      },
+      "runtime": {
+        "config_id": "stage12_swe85_attention_down_bfp8_lofi_fixed108",
+        "policy_sha256": "00c6a27e6c5f0a568e7f8a59bc9b0ec64e48a9ce85d82804b98be9556d456ccf",
+        "load_sha256": "373de362dfd7998f7a9eae82048bf5503c398a96c3896df32a9574e928b644aa"
+      },
+      "hashes": {
+        "result_sha256": "9341692bf4b1a331e858ec15b67e5d3a0f90858e70ab3be7c214079b449c2414",
+        "fixture_sha256": "eb66af59398c5cbf2e73697e177ec70330060512e774e76f041839d957b9e77c"
+      },
+      "result_file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/attention-down-bfp8-lofi-fixed108-candidate/runs/attention_down_bfp8_lofi_fixed108/anomaly.pytest-dev__pytest-5787.call65.onset.seed44.cap4096.json"
+    }
+  ],
+  "same_prompt_policy_comparisons": [
+    {
+      "case": "call88 canonicalprefix seed42",
+      "manifest_index": 0,
+      "same_fixture_and_prompt_ids_across_runs": true,
+      "P3_down_bfp8_lofi_control": {
+        "result_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.call88.canonicalprefix.seed42.cap1024.json",
+        "result_sha256": "6b91eef363c62087ad470ddd81da0a2335e3803682e8530aa8f4404a7d7281e1",
+        "fixture_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.call88.canonicalprefix.cap1024.seed42.private.json",
+        "fixture_sha256": "72d00a7035ece99112f136dc0bac71e03deead3d78421b037a696f1518b6a8d0",
+        "prompt_token_ids_count": 47038,
+        "prompt_ids_sha256_canonical_json": "f80a379999b13c063360ac90b2fc5ae1689b8abe823b8392d49bbfbc1a836866",
+        "seed": 42,
+        "generated_tokens": 619,
+        "terminal_token_id": 50,
+        "natural_stop_token_id_50": true,
+        "runtime_precision": {
+          "config_id": "stage12_swe85_down_bfp8_lofi_isolated_served_head_bfp8_lofi",
+          "weight_groups": {
+            "attention": "bfp4",
+            "mlp": "bfp4",
+            "down": "bfp8_lofi",
+            "lm_head": "bfp8_lofi"
+          },
+          "layer_exceptions": {},
+          "compute_fidelities": {
+            "attention": "LoFi",
+            "mlp": "LoFi",
+            "down": "LoFi",
+            "lm_head": "LoFi"
+          },
+          "activation_dtype": "bfloat8_b",
+          "residual_dtype": "bfloat16",
+          "ccl_dtype": {
+            "prefill": "bfloat8_b",
+            "decode": "bfloat16"
+          },
+          "kv_cache_dtype": "bfloat8_b",
+          "logits_dtype": "bfloat16",
+          "sampling_dtype": "bfloat16",
+          "embedding_dtype": "bfloat16",
+          "norm_dtype": "bfloat16",
+          "max_seq_len": 262144
+        },
+        "text_start": " defined inside _make_norm_from_scale.\n\n# I'll just use a simple replacement for the whole __call__ method.\n# I'll find all occurrences of def __call__(self, value, clip=None):\n# and replace the following block.\n\nnew_lines = []\ni = 0\nwhile i < len(lines):\n    if 'def __call__(self, value, clip=None):' in lines[i]:\n        new_lines.append(lines[i])\n        new_lines.append('            value, is_s",
+        "text_end": "('            ') or lines[i+1].startswith('        ') or lines[i+1].strip() == ''):\n            i += 1\n    else:\n        new_lines.append(lines[i])\n    i += 1\n\nwith open('lib/matplotlib/colors.py', 'w') as f:\n    f.writelines(new_lines)\nEOF\npython3 fix_call_final.py<|\"|>}<tool_call|><|tool_response>"
+      },
+      "P6_attention_down_bfp8_lofi": {
+        "result_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/attention-down-bfp8-lofi-fixed108-candidate/runs/attention_down_bfp8_lofi_fixed108/anomaly.call88.canonicalprefix.seed42.cap1024.json",
+        "result_sha256": "c837befa7470197d993695868fbd52d713e984584b13ff965ab2f72e96a5d531",
+        "fixture_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.call88.canonicalprefix.cap1024.seed42.private.json",
+        "fixture_sha256": "72d00a7035ece99112f136dc0bac71e03deead3d78421b037a696f1518b6a8d0",
+        "prompt_token_ids_count": 47038,
+        "prompt_ids_sha256_canonical_json": "f80a379999b13c063360ac90b2fc5ae1689b8abe823b8392d49bbfbc1a836866",
+        "seed": 42,
+        "generated_tokens": 1024,
+        "terminal_token_id": 537,
+        "natural_stop_token_id_50": false,
+        "runtime_precision": {
+          "config_id": "stage12_swe85_attention_down_bfp8_lofi_fixed108",
+          "weight_groups": {
+            "attention": "bfp8_lofi",
+            "mlp": "bfp4",
+            "down": "bfp8_lofi",
+            "lm_head": "bfp8_lofi"
+          },
+          "layer_exceptions": {},
+          "compute_fidelities": {
+            "attention": "LoFi",
+            "mlp": "LoFi",
+            "down": "LoFi",
+            "lm_head": "LoFi"
+          },
+          "activation_dtype": "bfloat8_b",
+          "residual_dtype": "bfloat16",
+          "ccl_dtype": {
+            "prefill": "bfloat8_b",
+            "decode": "bfloat16"
+          },
+          "kv_cache_dtype": "bfloat8_b",
+          "logits_dtype": "bfloat16",
+          "sampling_dtype": "bfloat16",
+          "embedding_dtype": "bfloat16",
+          "norm_dtype": "bfloat16",
+          "max_seq_len": 262144
+        },
+        "text_start": " defined inside _make_norm_from_scale\n\n# Let's just find the __call__ method in that class and fix it.\n# I'll look for the a la a a la a la a la la l la l la la la la la la l la la l a l la la l la l l la l la la la l a l la la l l la la la l la la la l la l l la l la la l la la l l la l la la l la l la l la la l l l l la l la la la l laL l l l la la la la l l l la la la la l l l la l la l la l l ",
+        "text_end": " l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l l"
+      },
+      "P2_head_only_bf16_hifi4_control_mislabeled_previously": {
+        "result_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/runs/head_bf16_hifi4/anomaly.call88.canonicalprefix.seed42.cap1024.json",
+        "result_sha256": "2f56506c61d7848b5a8523ac06188e74bb375995f1963cecc222e87f1fb8721d",
+        "fixture_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.call88.canonicalprefix.cap1024.seed42.private.json",
+        "fixture_sha256": "72d00a7035ece99112f136dc0bac71e03deead3d78421b037a696f1518b6a8d0",
+        "prompt_token_ids_count": 47038,
+        "prompt_ids_sha256_canonical_json": "f80a379999b13c063360ac90b2fc5ae1689b8abe823b8392d49bbfbc1a836866",
+        "seed": 42,
+        "generated_tokens": 785,
+        "terminal_token_id": 50,
+        "natural_stop_token_id_50": true,
+        "runtime_precision": {
+          "config_id": "stage12_swe85_head_bf16_hifi4",
+          "weight_groups": {
+            "attention": "bfp4",
+            "mlp": "bfp4",
+            "down": "bfp4",
+            "lm_head": "bf16"
+          },
+          "layer_exceptions": {},
+          "compute_fidelities": {
+            "attention": "LoFi",
+            "mlp": "LoFi",
+            "down": "LoFi",
+            "lm_head": "HiFi4"
+          },
+          "activation_dtype": "bfloat8_b",
+          "residual_dtype": "bfloat16",
+          "ccl_dtype": {
+            "prefill": "bfloat8_b",
+            "decode": "bfloat16"
+          },
+          "kv_cache_dtype": "bfloat8_b",
+          "logits_dtype": "bfloat16",
+          "sampling_dtype": "bfloat16",
+          "embedding_dtype": "bfloat16",
+          "norm_dtype": "bfloat16",
+          "max_seq_len": 262144
+        },
+        "text_start": " defined inside _make_norm_from_scale.\n# We can find it by looking for 'class Norm(base_norm_cls):'\n\nnew_lines = []\ni = 0\nwhile i < len(lines):\n    if 'class Norm(base_norm_cls):' in lines[i]:\n        new_lines.append(lines[i])\n        i += 1\n        # Keep __init__\n        while i < len(lines) and ('def __init__' in lines[i] or lines[i].startswith('        ') or lines[i].strip() == ''):\n         ",
+        "text_end": " lines[i+1].startswith('    def'):\n                i += 1\n                break\n            i += 1\n    else:\n        new_lines.append(lines[i])\n        i += 1\n\nwith open('lib/matplotlib/colors.py', 'w') as f:\n    f.writelines(new_lines)\nEOF\npython3 fix_call_final.py<|\"|>}<tool_call|><|tool_response>"
+      },
+      "all_group_bf16_hifi4_control": {
+        "case": "call88 canonicalprefix seed42",
+        "fixed108_manifest_index": 0,
+        "mode": "full",
+        "seed": 42,
+        "requested_cap": 1024,
+        "generated_tokens": 605,
+        "terminal_token_id": 50,
+        "natural_stop_token_id_50": true,
+        "exact_prompt_token_ids_match_p6": true,
+        "prompt_token_count": 47038,
+        "prompt_ids_sha256_canonical_json": "f80a379999b13c063360ac90b2fc5ae1689b8abe823b8392d49bbfbc1a836866",
+        "p6_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/attention-down-bfp8-lofi-fixed108-candidate/runs/attention_down_bfp8_lofi_fixed108/anomaly.call88.canonicalprefix.seed42.cap1024.json",
+        "p6_result_sha256": "c837befa7470197d993695868fbd52d713e984584b13ff965ab2f72e96a5d531",
+        "control_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/runs/full/anomaly.call88.canonicalprefix.cap1024.seed42.json",
+        "control_result_sha256": "759c59189f1b94f73f13f12882e10bc647414537336971ec9eb8085f6531a8d5",
+        "control_fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.call88.canonicalprefix.cap1024.seed42.private.json",
+        "control_fixture_sha256": "72d00a7035ece99112f136dc0bac71e03deead3d78421b037a696f1518b6a8d0",
+        "control_fixture_prompt_ids_sha256_canonical_json": "f80a379999b13c063360ac90b2fc5ae1689b8abe823b8392d49bbfbc1a836866",
+        "control_policy_config_id": "stage12_bf16_hifi4_diagnostic",
+        "control_policy": {
+          "config_id": "stage12_bf16_hifi4_diagnostic",
+          "weight_groups": {
+            "attention": "bf16",
+            "mlp": "bf16",
+            "down": "bf16",
+            "lm_head": "bf16"
+          },
+          "layer_exceptions": {},
+          "compute_fidelities": {
+            "attention": "HiFi4",
+            "mlp": "HiFi4",
+            "down": "HiFi4",
+            "lm_head": "HiFi4"
+          },
+          "activation_dtype": "bfloat16",
+          "residual_dtype": "bfloat16",
+          "ccl_dtype": {
+            "prefill": "bfloat16",
+            "decode": "bfloat16"
+          },
+          "kv_cache_dtype": "bfloat16",
+          "logits_dtype": "bfloat16",
+          "sampling_dtype": "bfloat16",
+          "embedding_dtype": "bfloat16",
+          "norm_dtype": "bfloat16",
+          "max_seq_len": 262144,
+          "sdpa_compute_fidelity": "HiFi4"
+        },
+        "control_sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 42
+        },
+        "scope": "Same prompt IDs and seed, separate free-running trial; no exact stochastic-trajectory equivalence or task correctness claim."
+      },
+      "attribution_correction": "The previous field name overstated this referenced head-only arm. Full precision comparison is the new all_group_bf16_hifi4_control record."
+    },
+    {
+      "case": "pytest5787 call1 seed44",
+      "manifest_index": 32,
+      "same_fixture_and_prompt_ids_across_runs": true,
+      "P3_down_bfp8_lofi_control": {
+        "result_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.pytest-dev__pytest-5787.call1.onset.seed44.cap256.json",
+        "result_sha256": "d27e70bde9fad04b83cb4e6583cf96828f14b8b3e6ebfffdd4a0a3c8bf9f408e",
+        "fixture_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.pytest-dev__pytest-5787.call1.onset.seed44.private.json",
+        "fixture_sha256": "531308e465bdfdf8d0ffa7754f59612f148c704ded59019e5278475983341d38",
+        "prompt_token_ids_count": 9606,
+        "prompt_ids_sha256_canonical_json": "37f60a65b87072893df2669bd8aa339515ccb75579a86650806ec588c28e248f",
+        "seed": 44,
+        "generated_tokens": 17,
+        "terminal_token_id": 50,
+        "natural_stop_token_id_50": true,
+        "runtime_precision": {
+          "config_id": "stage12_swe85_down_bfp8_lofi_isolated_served_head_bfp8_lofi",
+          "weight_groups": {
+            "attention": "bfp4",
+            "mlp": "bfp4",
+            "down": "bfp8_lofi",
+            "lm_head": "bfp8_lofi"
+          },
+          "layer_exceptions": {},
+          "compute_fidelities": {
+            "attention": "LoFi",
+            "mlp": "LoFi",
+            "down": "LoFi",
+            "lm_head": "LoFi"
+          },
+          "activation_dtype": "bfloat8_b",
+          "residual_dtype": "bfloat16",
+          "ccl_dtype": {
+            "prefill": "bfloat8_b",
+            "decode": "bfloat16"
+          },
+          "kv_cache_dtype": "bfloat8_b",
+          "logits_dtype": "bfloat16",
+          "sampling_dtype": "bfloat16",
+          "embedding_dtype": "bfloat16",
+          "norm_dtype": "bfloat16",
+          "max_seq_len": 262144
+        },
+        "text_start": "<channel|>\n<|tool_call>call:bash{command:<|\"|>ls -R<|\"|>}<tool_call|><|tool_response>",
+        "text_end": "<channel|>\n<|tool_call>call:bash{command:<|\"|>ls -R<|\"|>}<tool_call|><|tool_response>"
+      },
+      "P6_attention_down_bfp8_lofi": {
+        "result_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/attention-down-bfp8-lofi-fixed108-candidate/runs/attention_down_bfp8_lofi_fixed108/anomaly.pytest-dev__pytest-5787.call1.onset.seed44.cap256.json",
+        "result_sha256": "b4df5ea53ff31e9dd55f97b1da8adb9130a0857af0fa62779d63397b28a31395",
+        "fixture_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.pytest-dev__pytest-5787.call1.onset.seed44.private.json",
+        "fixture_sha256": "531308e465bdfdf8d0ffa7754f59612f148c704ded59019e5278475983341d38",
+        "prompt_token_ids_count": 9606,
+        "prompt_ids_sha256_canonical_json": "37f60a65b87072893df2669bd8aa339515ccb75579a86650806ec588c28e248f",
+        "seed": 44,
+        "generated_tokens": 256,
+        "terminal_token_id": 236761,
+        "natural_stop_token_id_50": false,
+        "runtime_precision": {
+          "config_id": "stage12_swe85_attention_down_bfp8_lofi_fixed108",
+          "weight_groups": {
+            "attention": "bfp8_lofi",
+            "mlp": "bfp4",
+            "down": "bfp8_lofi",
+            "lm_head": "bfp8_lofi"
+          },
+          "layer_exceptions": {},
+          "compute_fidelities": {
+            "attention": "LoFi",
+            "mlp": "LoFi",
+            "down": "LoFi",
+            "lm_head": "LoFi"
+          },
+          "activation_dtype": "bfloat8_b",
+          "residual_dtype": "bfloat16",
+          "ccl_dtype": {
+            "prefill": "bfloat8_b",
+            "decode": "bfloat16"
+          },
+          "kv_cache_dtype": "bfloat8_b",
+          "logits_dtype": "bfloat16",
+          "sampling_dtype": "bfloat16",
+          "embedding_dtype": "bfloat16",
+          "norm_dtype": "bfloat16",
+          "max_seq_len": 262144
+        },
+        "text_start": "<channel|>Callying bash tool call with {\"command\": \"ls -R\"} as arguments\n<|channel>thought\nOkay, I see the project structure. Now I will create a reproduction script to confirm the issue. I'll use the tests provided in the issue description.\n\n<channel|>Callying bash tool call with {\"command\": \"cat <<'EOF' > reproduce_issue.py\nimport pytest\n\ndef test_chained_exception_with_from():\n    try:\n        ",
+        "text_end": ")\n        except Exception:\n            raise ValueError(22)\n    except Exception:\n        raise ValueError(23)\n\nif __name__ == \\\"__main__\\\":\n    pytest.main([\\\"-n\\\", \\\"auto\\\", \\\"reproduce_issue.py\\\"])\nEOF\n\"} as arguments\n<|channel>thought\nNow I will run the reproduction script to confirm the issue."
+      },
+      "P2_head_only_bf16_hifi4_control_mislabeled_previously": {
+        "result_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/runs/head_bf16_hifi4/anomaly.pytest-dev__pytest-5787.call1.onset.seed44.cap256.json",
+        "result_sha256": "dd21bbf9c34b2a3b5ef13ed2625b47b3a2c70824ef5a0195214df79cd103f08e",
+        "fixture_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.pytest-dev__pytest-5787.call1.onset.seed44.private.json",
+        "fixture_sha256": "531308e465bdfdf8d0ffa7754f59612f148c704ded59019e5278475983341d38",
+        "prompt_token_ids_count": 9606,
+        "prompt_ids_sha256_canonical_json": "37f60a65b87072893df2669bd8aa339515ccb75579a86650806ec588c28e248f",
+        "seed": 44,
+        "generated_tokens": 16,
+        "terminal_token_id": 50,
+        "natural_stop_token_id_50": true,
+        "runtime_precision": {
+          "config_id": "stage12_swe85_head_bf16_hifi4",
+          "weight_groups": {
+            "attention": "bfp4",
+            "mlp": "bfp4",
+            "down": "bfp4",
+            "lm_head": "bf16"
+          },
+          "layer_exceptions": {},
+          "compute_fidelities": {
+            "attention": "LoFi",
+            "mlp": "LoFi",
+            "down": "LoFi",
+            "lm_head": "HiFi4"
+          },
+          "activation_dtype": "bfloat8_b",
+          "residual_dtype": "bfloat16",
+          "ccl_dtype": {
+            "prefill": "bfloat8_b",
+            "decode": "bfloat16"
+          },
+          "kv_cache_dtype": "bfloat8_b",
+          "logits_dtype": "bfloat16",
+          "sampling_dtype": "bfloat16",
+          "embedding_dtype": "bfloat16",
+          "norm_dtype": "bfloat16",
+          "max_seq_len": 262144
+        },
+        "text_start": "<channel|><|tool_call>call:bash{command:<|\"|>ls -R<|\"|>}<tool_call|><|tool_response>",
+        "text_end": "<channel|><|tool_call>call:bash{command:<|\"|>ls -R<|\"|>}<tool_call|><|tool_response>"
+      },
+      "all_group_bf16_hifi4_control": {
+        "case": "pytest5787 call1 seed44",
+        "fixed108_manifest_index": 32,
+        "mode": "full",
+        "seed": 44,
+        "requested_cap": 256,
+        "generated_tokens": 15,
+        "terminal_token_id": 50,
+        "natural_stop_token_id_50": true,
+        "exact_prompt_token_ids_match_p6": true,
+        "prompt_token_count": 9606,
+        "prompt_ids_sha256_canonical_json": "37f60a65b87072893df2669bd8aa339515ccb75579a86650806ec588c28e248f",
+        "p6_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/attention-down-bfp8-lofi-fixed108-candidate/runs/attention_down_bfp8_lofi_fixed108/anomaly.pytest-dev__pytest-5787.call1.onset.seed44.cap256.json",
+        "p6_result_sha256": "b4df5ea53ff31e9dd55f97b1da8adb9130a0857af0fa62779d63397b28a31395",
+        "control_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/anomaly.pytest-dev__pytest-5787.call1.onset.json",
+        "control_result_sha256": "b7a6c040c4d659b8d59c5236993559f7e0cfe2252d28ef766dec69267483c879",
+        "control_fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-pytest5787-controls/pytest-dev__pytest-5787.call1.onset.private.json",
+        "control_fixture_sha256": "198ec73ad83296c21c93e0484d12b52717c6803b9ae7ea0131dcfac76f6ae3af",
+        "control_fixture_prompt_ids_sha256_canonical_json": "37f60a65b87072893df2669bd8aa339515ccb75579a86650806ec588c28e248f",
+        "control_policy_config_id": "stage12_bf16_hifi4_diagnostic",
+        "control_policy": {
+          "config_id": "stage12_bf16_hifi4_diagnostic",
+          "weight_groups": {
+            "attention": "bf16",
+            "mlp": "bf16",
+            "down": "bf16",
+            "lm_head": "bf16"
+          },
+          "layer_exceptions": {},
+          "compute_fidelities": {
+            "attention": "HiFi4",
+            "mlp": "HiFi4",
+            "down": "HiFi4",
+            "lm_head": "HiFi4"
+          },
+          "activation_dtype": "bfloat16",
+          "residual_dtype": "bfloat16",
+          "ccl_dtype": {
+            "prefill": "bfloat16",
+            "decode": "bfloat16"
+          },
+          "kv_cache_dtype": "bfloat16",
+          "logits_dtype": "bfloat16",
+          "sampling_dtype": "bfloat16",
+          "embedding_dtype": "bfloat16",
+          "norm_dtype": "bfloat16",
+          "max_seq_len": 262144,
+          "sdpa_compute_fidelity": "HiFi4"
+        },
+        "control_sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 44
+        },
+        "scope": "Same prompt IDs and seed, separate free-running trial; no exact stochastic-trajectory equivalence or task correctness claim."
+      },
+      "attribution_correction": "The previous field name overstated this referenced head-only arm. Full precision comparison is the new all_group_bf16_hifi4_control record."
+    }
+  ],
+  "comparative_summary": "Both P6 other anomalies are absent from the exact-fixture/seed P3 and all-group head-BF16 controls, which terminate normally. They arise in P6 under the attention-BFP8/LoFi precision policy; this is a policy-associated behavioral difference, not a causal kernel diagnosis. P6 call88 is capped at 1024 with a repeated a/la/l fragment tail; the P3 and BF16 controls stop naturally at 619 and 785. P6 pytest call1 seed44 is capped mid-code at 256 after noncanonical quoted-JSON pseudo-tool narration; P3 and BF16 controls stop naturally after canonical tool calls at 17 and 16 tokens.",
+  "attribution_correction": {
+    "status": "corrected_copy_additive; original triage-b.json and triage-b-at-partial-decision.json preserved",
+    "source_triage_sha256": "363c650d5928b8547da5207686bd605e9a854b87961938c4a000cdabe19d6cfe",
+    "summary": "Previous all_group_head_bf16_hifi4_control keys actually referenced the P2 head-only candidate (BFP4 attention/MLP/down, BF16 head). These are retained under an explicitly mislabeled historical key; true all-group controls added for indices 0 and 32.",
+    "strict_policy_definition": "All runtime_precision.weight_groups values equal bf16 AND all runtime_precision.compute_fidelities values equal HiFi4.",
+    "full_bf16_survey_audit": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/full-bf16-hifi4-control-survey-b.json",
+      "sha256": "353db0c89f44251825534c1e498c88fe4eab5a38f9808b7738896e8027b01419",
+      "verdict": "All seven rows validated against the referenced result files using strict policy definition; no same head-only conflation found."
+    }
+  }
+}

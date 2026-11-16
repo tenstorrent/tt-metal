@@ -1,0 +1,125 @@
+{
+  "status": "independent_review_complete_arm_b_down_precision_sampled_protocol_defect_one_of_two",
+  "review_scope": "Host-only exact-fixture/seed review of the two completed Arm B free runs, each compared to its matched full-BF16/Q32 control and Arm A result. No model or device execution.",
+  "completion": {
+    "start_unix": 1794784335.7640977,
+    "end_unix": 1794784504.8001187,
+    "exit_code": 0,
+    "wall_seconds": 169.0360209941864
+  },
+  "completion_sha256": "611d18d78334c64dc6fb7880b1119c48b73c888f03febc227178f125de594248",
+  "source_pin_count": 160,
+  "pins_verified_in_root_review": 160,
+  "arm_b_root_review_sha256": "e8dfd792818247f8fa2ca83500ea9b1ac8968aed84d48baeba87179ff69b350d",
+  "arm_a_root_review_sha256": "2a659e2d322f670f49dd48511d579434434012e62ce366cc33cdd0b8ca50c75a",
+  "rows": [
+    {
+      "output": "setup/full-q32-production-validation/protocol-group-bisect/arm-b-down-bfp8-lofi-only/runs/fullq32.anomaly.sphinx-doc__sphinx-10323.call70.onset.seed42.cap256.json",
+      "output_sha256": "c304c51d8dff8b1620d7b2803398dd42ca882f4139741d7d373f39975e926109",
+      "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-extra-contraction-controls/sphinx-doc__sphinx-10323.call70.onset.private.json",
+      "fixture_sha256": "7d39e2c87e91327f35317968bf2647887a402d0086085ec8f95db8ff5fc2ab64",
+      "seed": 42,
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 42
+      },
+      "runtime_precision": {
+        "config_id": "stage12_bf16_hifi4_down_bfp8_lofi_protocol_probe",
+        "weight_groups": {
+          "attention": "bf16",
+          "mlp": "bf16",
+          "down": "bfp8_lofi",
+          "lm_head": "bf16"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "HiFi4",
+          "mlp": "HiFi4",
+          "down": "LoFi",
+          "lm_head": "HiFi4"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat16",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144,
+        "sdpa_compute_fidelity": "HiFi4"
+      },
+      "generated_tokens": 40,
+      "generated_ids_sha256": "24893ed5b829e83aadaecb0e86ccc6fdd400fa2ddee8c5d9ccc96e614e85d719",
+      "natural_stop_id": 50,
+      "text_evidence": "40 generated tokens; natural stop ID 50. The tail contains the canonical `<|tool_call>call:bash{command:...}<|tool_call|><|tool_response>` boundary and the expected echo command. This matches the valid full-BF16/Q32 controls for the same exact fixture and seed.",
+      "verdict": "normal",
+      "matched_full_bf16_q32_control": "setup/p19-q32-production-validation/fixed108/full-q32-protocol-controls/runs/fullq32.anomaly.sphinx-doc__sphinx-10323.call70.onset.seed42.cap256.json",
+      "matched_control_sha256": "455d24443acd739c76d949c067d7309164d51ecfdd188b416c24d2cd31831d54",
+      "matched_control_token_count": 64,
+      "matched_control_text": " already tried that and it doesn't work.\n\nFinal decision: the issue is caused by `docutils`'s stripping of option values. I'll submit the result.\n<channel|><|tool_call>call:bash{command:<|\"|>echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT<|\"|>}<tool_call|><|tool_response>"
+    },
+    {
+      "output": "setup/full-q32-production-validation/protocol-group-bisect/arm-b-down-bfp8-lofi-only/runs/fullq32.anomaly.sympy__sympy-13878.call1.onset.seed44.cap256.json",
+      "output_sha256": "024e5f13bf4d1daeb4846bd086e1ab52bcaaccf51ba5a3e306da80d0db468b8b",
+      "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.sympy__sympy-13878.call1.onset.seed44.private.json",
+      "fixture_sha256": "884cc1eebec08f3511e27e1b989fa0a779bf750611494cbbdd7b33937ac54420",
+      "seed": 44,
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 44
+      },
+      "runtime_precision": {
+        "config_id": "stage12_bf16_hifi4_down_bfp8_lofi_protocol_probe",
+        "weight_groups": {
+          "attention": "bf16",
+          "mlp": "bf16",
+          "down": "bfp8_lofi",
+          "lm_head": "bf16"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "HiFi4",
+          "mlp": "HiFi4",
+          "down": "LoFi",
+          "lm_head": "HiFi4"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat16",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144,
+        "sdpa_compute_fidelity": "HiFi4"
+      },
+      "generated_tokens": 19,
+      "generated_ids_sha256": "99c9029b3bf62a0ab60fb03e8f94d32d9be3272dd7132b04fc8bea8a506ec1a1",
+      "natural_stop_id": 50,
+      "text_evidence": "19 generated tokens; natural stop ID 50. The output starts with `<channel|><tool_call|>`; `<tool_call|>` is a malformed opener (the canonical opener is `<|tool_call>`), so the protocol defect remains despite the natural stop. The matched full-BF16/Q32 control for this same fixture and seed has the canonical opener.",
+      "verdict": "other_anomaly",
+      "matched_full_bf16_q32_control": "setup/p19-q32-production-validation/fixed108/full-q32-protocol-controls/runs/fullq32.anomaly.sympy__sympy-13878.call1.onset.seed44.cap256.json",
+      "matched_control_sha256": "119de5e58c4dcdabe39091f332fc9e4e468b452b30b72ae3573e41c5833009c9",
+      "matched_control_token_count": 19,
+      "matched_control_text": "<channel|><|tool_call>call:bash{command:<|\"|>ls -R sympy/stats<|\"|>}<tool_call|><|tool_response>"
+    }
+  ],
+  "comparison": {
+    "arm_a_kv_only": "Both exact cases produced valid canonical bash protocol in the two sampled continuations.",
+    "arm_b_down_only": "Sphinx sample is valid; Sympy seed44 sample has malformed tool opener. The down-only arm changes both down-weight dtype to BFP8 and compute fidelity to LoFi, so the defect cannot be attributed to dtype or fidelity separately.",
+    "joint_p19_sphinx": "The Sphinx defect observed under joint P19 is absent in both isolated arms and is not attributable to either single-group arm from these samples.",
+    "limits": "Two exact fixture/seed observations per arm; no incidence, native-RNG equivalence, task correctness, broad acceptance, or policy-selection inference."
+  }
+}

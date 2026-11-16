@@ -1,0 +1,178 @@
+{
+  "status": "planning_estimate_only_not_serving_performance",
+  "source": "Per-case measurements from admitted V suffix4096 runs, exact same canonical-prefix case and seeds.",
+  "formula": {
+    "low": "same measured V chosen/free components and observed stops; no context cost uplift.",
+    "point": "2x V chosen teacher-forcing wall + 2x (free diagnostic wall minus traced decode wall) + V decode wall at the same seed-specific stop length; add measured V mode load and trace preparation once.",
+    "high": "2x chosen TF + 2x free prefill/text residual + 2x measured decode time per replay for 511 replay steps in each seed; add load/preparation once."
+  },
+  "modes": {
+    "served": {
+      "job_count": 3,
+      "load_source": {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/runs/served/load.json",
+        "sha256": "2608b4c81c74e55c56f336114055df003a3f110b0a46e3877f70d30a75685ee0",
+        "measured_wall_s": 142.2290101600811
+      },
+      "trace_preparation_source": {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/served.log",
+        "sha256": "ebe3af94803736f5ab0514b82d5ddb69570d8bbbd498a9c4ec5600ad0bc86c55",
+        "event": "generator_trace_prepare",
+        "preparation_seconds": 10.190744891995564
+      },
+      "source_prompt_tokens": 4096,
+      "candidate_prompt_tokens": 8192,
+      "context_ratio": 2.0,
+      "case_components": [
+        {
+          "seed": 42,
+          "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/runs/served/anomaly.call91.canonicalprefix.suffix4096.seed42.json",
+          "source_result_sha256": "7f53e3e2e2a091c7128d21ff8cfdcec099fb58e4851ee94ddafc1e7d44843670",
+          "observed_generated_tokens": 56,
+          "observed_decode_replays": 55,
+          "observed_tf_wall_s": 2.931243679020554,
+          "observed_free_wall_s": 2.3155121100135148,
+          "observed_decode_wall_s": 1.6046818210743368,
+          "derived_free_prefill_plus_textdecode_s": 0.710830288939178,
+          "observed_decode_s_per_replay": 0.029176033110442486,
+          "low_variable_s": 5.246755789034069,
+          "point_variable_s": 8.8888297569938,
+          "cap_safe_upper_variable_s": 37.102053774791685
+        },
+        {
+          "seed": 43,
+          "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/runs/served/anomaly.call91.canonicalprefix.suffix4096.seed43.json",
+          "source_result_sha256": "27f7fae378ddd5b117501588bce252cf8e68f25accd3b60b7952e747e19afb28",
+          "observed_generated_tokens": 38,
+          "observed_decode_replays": 37,
+          "observed_tf_wall_s": 2.927707794122398,
+          "observed_free_wall_s": 1.7889536549337208,
+          "observed_decode_wall_s": 1.0801909901201725,
+          "derived_free_prefill_plus_textdecode_s": 0.7087626648135483,
+          "observed_decode_s_per_replay": 0.029194351084328985,
+          "low_variable_s": 4.716661449056119,
+          "point_variable_s": 8.353131907992065,
+          "cap_safe_upper_variable_s": 37.10956772605611
+        },
+        {
+          "seed": 44,
+          "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/runs/served/anomaly.call91.canonicalprefix.suffix4096.seed44.json",
+          "source_result_sha256": "35c67dba68959904229453814285f5eb193d3a2e4aa7e39740ddfe6a767ba813",
+          "observed_generated_tokens": 111,
+          "observed_decode_replays": 110,
+          "observed_tf_wall_s": 2.9564681709744036,
+          "observed_free_wall_s": 3.9168570041656494,
+          "observed_decode_wall_s": 3.2108800411224365,
+          "derived_free_prefill_plus_textdecode_s": 0.7059769630432129,
+          "observed_decode_s_per_replay": 0.029189818555658515,
+          "low_variable_s": 6.873325175140053,
+          "point_variable_s": 10.53577030915767,
+          "cap_safe_upper_variable_s": 37.156884831918234
+        }
+      ],
+      "scenarios": {
+        "low_optimistic_v4096_component_cost_and_same_stops_s": 169.2564974653069,
+        "point_tf_and_prefill_scaled_2x_decode_unchanged_same_stops_s": 180.1974870262202,
+        "high_tf_and_prefill_2x_decode_2x_all_511_replays_per_seed_s": 263.7882613848427
+      },
+      "range_s": [
+        169.2564974653069,
+        263.7882613848427
+      ],
+      "range_caveat": "Planning scenarios, not statistical confidence limits. Low reuses V costs and stop lengths; point doubles only prompt-sensitive chosen and first-token/prefill residual while holding traced decode replay cost fixed, consistent with V per-replay observations but not proven at 8192; high also doubles measured per-replay decode cost and fills each 512-token free-run cap. Output trajectories may differ at 8192, so actual stop-length work is uncertain."
+    },
+    "full": {
+      "job_count": 3,
+      "load_source": {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/runs/full/load.json",
+        "sha256": "344ce5eba8fdafebade63d23e140c3634e163d3c090222b9f794936fdbbad899",
+        "measured_wall_s": 77.52210676879622
+      },
+      "trace_preparation_source": {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/full.log",
+        "sha256": "e4418dca9c91839260ced9cefe2f2f02d874eb83178458941b905fe3b1b31932",
+        "event": "generator_trace_prepare",
+        "preparation_seconds": 12.195039473008364
+      },
+      "source_prompt_tokens": 4096,
+      "candidate_prompt_tokens": 8192,
+      "context_ratio": 2.0,
+      "case_components": [
+        {
+          "seed": 42,
+          "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/runs/full/anomaly.call91.canonicalprefix.suffix4096.seed42.json",
+          "source_result_sha256": "395c749ff59a128749ec3606ada859cca84798e9be3cc73a67bbeac539eee3b4",
+          "observed_generated_tokens": 39,
+          "observed_decode_replays": 38,
+          "observed_tf_wall_s": 5.450392223196104,
+          "observed_free_wall_s": 3.5962340040132403,
+          "observed_decode_wall_s": 2.2408304740674794,
+          "derived_free_prefill_plus_textdecode_s": 1.355403529945761,
+          "observed_decode_s_per_replay": 0.058969223001775775,
+          "low_variable_s": 9.046626227209345,
+          "point_variable_s": 15.85242198035121,
+          "cap_safe_upper_variable_s": 73.87813741409857
+        },
+        {
+          "seed": 43,
+          "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/runs/full/anomaly.call91.canonicalprefix.suffix4096.seed43.json",
+          "source_result_sha256": "0e7ea7bee6d85b8e910228abcb95c665ba62b7c50c09ec0ed21be04fa582373d",
+          "observed_generated_tokens": 148,
+          "observed_decode_replays": 147,
+          "observed_tf_wall_s": 5.460577924037352,
+          "observed_free_wall_s": 10.013813680037856,
+          "observed_decode_wall_s": 8.665292656980455,
+          "derived_free_prefill_plus_textdecode_s": 1.3485210230574012,
+          "observed_decode_s_per_replay": 0.05894756909510514,
+          "low_variable_s": 15.474391604075208,
+          "point_variable_s": 22.28349055116996,
+          "cap_safe_upper_variable_s": 73.86261350938696
+        },
+        {
+          "seed": 44,
+          "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/runs/full/anomaly.call91.canonicalprefix.suffix4096.seed44.json",
+          "source_result_sha256": "aea5b2d0e873e71c856b0e3c22802b30dd468b94d2b9bf8290b7dbd71253a183",
+          "observed_generated_tokens": 264,
+          "observed_decode_replays": 263,
+          "observed_tf_wall_s": 5.460191946942359,
+          "observed_free_wall_s": 16.848424507072195,
+          "observed_decode_wall_s": 15.50513854296878,
+          "derived_free_prefill_plus_textdecode_s": 1.3432859641034156,
+          "observed_decode_s_per_replay": 0.05895489940292312,
+          "low_variable_s": 22.308616454014555,
+          "point_variable_s": 29.11209436506033,
+          "cap_safe_upper_variable_s": 73.85886301187898
+        }
+      ],
+      "scenarios": {
+        "low_optimistic_v4096_component_cost_and_same_stops_s": 136.5467805271037,
+        "point_tf_and_prefill_scaled_2x_decode_unchanged_same_stops_s": 156.96515313838609,
+        "high_tf_and_prefill_2x_decode_2x_all_511_replays_per_seed_s": 311.3167601771691
+      },
+      "range_s": [
+        136.5467805271037,
+        311.3167601771691
+      ],
+      "range_caveat": "Planning scenarios, not statistical confidence limits. Low reuses V costs and stop lengths; point doubles only prompt-sensitive chosen and first-token/prefill residual while holding traced decode replay cost fixed, consistent with V per-replay observations but not proven at 8192; high also doubles measured per-replay decode cost and fills each 512-token free-run cap. Output trajectories may differ at 8192, so actual stop-length work is uncertain."
+    }
+  },
+  "caveats": [
+    "No linear context scaling rule is treated as established. V actuals show roughly stable per-replay decode timing from the 4096 prefix while TF and free first-token/prefill contributions are prompt-sensitive; this motivates the point case but does not validate it at8192.",
+    "The 8192 prefix can change sampled trajectories and stop lengths. Point reuses V seed-specific stop counts only as an explicit planning proxy; high fills every 512-token cap.",
+    "Measured load and trace preparation are from V with the same mode configuration; actual process totals can differ because timing boundaries do not add exactly.",
+    "Not performance benchmark, score evidence, semantic verdict, or admission."
+  ],
+  "serial_total_scenarios": {
+    "low_optimistic_same_as_V4096_components_s": 305.8032779924106,
+    "point_tf_prefill2x_decode_unchanged_s": 337.1626401646063,
+    "high_all_caps_decode2x_s": 575.1050215620119,
+    "serial_combined_range_s": [
+      305.8032779924106,
+      575.1050215620119
+    ],
+    "serial_combined_range_minutes": [
+      5.09672129987351,
+      9.585083692700199
+    ]
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "status": "candidate_only_not_admitted",
+  "proposal_sha256": "a081b947adeeffc996941d52ad7d5cd2c384a1c3866bdf39f09f402b1fa067c2",
+  "driver_sha256": "9511250e40fb64627e2273a6b8c209b7cfab0cdf11c3530ed7f703f8542dc34a",
+  "commands_sha256": "95c300431d8bb617b1b2d64028faee52acc4f07726655463b21c0bb2fa1b6956",
+  "source_integrity_sha256": "8930bc8196f4df36d186741d933d0ae1710dccc9b1552f9538648cc261ae1312",
+  "forecast_sha256": "c9382b55bcc2f54b9f3be6788950fd76487804d6b17b3d49b04887ecd88c3fc0",
+  "runner_sha256": "aafe67c88bb5a1eb38b8718570bbddd5749e2a9ecbb9dd19cdb100a49572c03e",
+  "p_admission_sha256": "91dc764e6a3a6b1e8a1be51e6eee5fc958c19d1dfcfa3d057b989aa325618cdd",
+  "suffix8192_admission_sha256": "300d69403a28112bc5f2a7225df5327bdb9e577ad9ca96cf754ab304f3538205",
+  "note": "Candidate-only 9-case/8-group revision; no launch/admission. Wait for exact P1/X/P2 terminal success and all accepted forecast/resource gates.",
+  "p2_admission_sha256": "74bef162c97e23e882612eb85dae365f32c9da1f13ba4b9b8e1e1f8f582ad1be"
+}

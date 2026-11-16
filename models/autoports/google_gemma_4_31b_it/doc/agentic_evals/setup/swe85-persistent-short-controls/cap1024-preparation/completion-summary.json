@@ -1,0 +1,81 @@
+{
+  "status": "both_modes_completed_root_reviewed",
+  "scope": "Shortened diagnostic controls only; no native-prompt equivalence or score change.",
+  "modes": {
+    "served": {
+      "exit_code": 0,
+      "measured_hours": 0.052640212972958886,
+      "prediction": {
+        "status": "prelaunch_forecast",
+        "cases": 1,
+        "predicted_hours": 0.05167561106966004,
+        "range_hours": [
+          0.04926803367975024,
+          0.055688240052843035
+        ],
+        "basis": "Sameprompt/seed,1023decode replays scaled from existing511 plus observedprefill; branchless noTFrepeat; same-mode observedload. Diagnostic only.",
+        "first_call_preparation_allowance_s": 11.784051147056744,
+        "allowance_basis": "Conservative entire first chosen64 TF branch of prior same-mode suffix512 batch; that branch prepared traces before the sampled continuations used by base forecast. NoTFbranch runs here."
+      },
+      "prediction_range_hit": true,
+      "rows": [
+        {
+          "job": "anomaly.pytest-dev__pytest-7432.call19.onset.optional-suffix512.cap1024.seed42",
+          "mode": "served",
+          "seed": 42,
+          "verdict": "other_anomaly",
+          "exact_native_motif": false,
+          "tokens": 1024,
+          "original512_prefix_identical": true,
+          "reason": "After repeated traceback and initial reasoning, repeats the same function-called-as-function / source-is-method two-sentence cycle more than ten times without new information. Established loop, not progressing cap; native caret-only pattern absent.",
+          "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/cap1024-preparation/runs/served/anomaly.pytest-dev__pytest-7432.call19.onset.optional-suffix512.cap1024.seed42.json",
+          "source_sha256": "22c53e3f2550921c2cbfc21ae589e48398bba558166a3be4519ab8ced1b47591"
+        }
+      ]
+    },
+    "full": {
+      "exit_code": 0,
+      "measured_hours": 0.05955889377329084,
+      "prediction": {
+        "status": "prelaunch_forecast",
+        "cases": 2,
+        "predicted_hours": 0.05934949532112328,
+        "range_hours": [
+          0.04946160399729401,
+          0.07582931419417206
+        ],
+        "basis": "Sameprompt/seed,1023decode replays scaled from existing511 plus observedprefill; branchless noTFrepeat; same-mode observedload. Diagnostic only.",
+        "first_call_preparation_allowance_s": 16.380446143914014,
+        "allowance_basis": "Conservative entire first chosen64 TF branch of prior same-mode suffix512 batch; that branch prepared traces before the sampled continuations used by base forecast. NoTFbranch runs here."
+      },
+      "prediction_range_hit": true,
+      "rows": [
+        {
+          "job": "anomaly.psf__requests-5414.call11.onset.optional-suffix512.cap1024.seed43",
+          "mode": "full",
+          "seed": 43,
+          "verdict": "other_anomaly",
+          "exact_native_motif": false,
+          "tokens": 1024,
+          "original512_prefix_identical": true,
+          "reason": "Fabricated fenced bash/output exchange includes package versions and a second traceback, despite tool-required prefix. No commands executed and no canonical tool boundary; distinct protocol anomaly, nativecaret absent. Capped task completion remains unresolved.",
+          "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/cap1024-preparation/runs/full/anomaly.psf__requests-5414.call11.onset.optional-suffix512.cap1024.seed43.json",
+          "source_sha256": "6b56467f234fa62463361f3c4fcec86a25582c6956cbd534bbf60b8f98789477"
+        },
+        {
+          "job": "anomaly.psf__requests-5414.call11.onset.optional-suffix512.cap1024.seed44",
+          "mode": "full",
+          "seed": 44,
+          "verdict": "inconclusive",
+          "exact_native_motif": false,
+          "tokens": 1024,
+          "original512_prefix_identical": true,
+          "reason": "Returns to URL/error questions but explores distinct prepare_url/connection/hostname/idna hypotheses with changing code. No unchanged multi-cycle loop established yet; advancing at1024 requires2048. No nativecaret collapse.",
+          "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/cap1024-preparation/runs/full/anomaly.psf__requests-5414.call11.onset.optional-suffix512.cap1024.seed44.json",
+          "source_sha256": "c6a307602cf3efb6c7c3455ceb70d3837c70da5db382eb14ef0d394222e6a642"
+        }
+      ]
+    }
+  },
+  "remaining": "full Requests5414call11seed44 progressing at1024;2048 candidate prepared, not admitted"
+}

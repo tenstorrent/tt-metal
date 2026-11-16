@@ -1,0 +1,169 @@
+{
+  "status": "completed_root_and_independent_triage_reconciled",
+  "reviewer": "root",
+  "trials": 108,
+  "counts": {
+    "normal": 60,
+    "other": 13,
+    "native": 35
+  },
+  "target_pairs": [
+    {
+      "job": "anomaly.call91.canonicalprefix",
+      "seed": 42,
+      "candidate_verdict": "native",
+      "result_sha256": "2158529b3687ed77581aa5ed62dc676e4906a34b83ca61658359831dd12ec33f",
+      "prior_served_verdict": "reproduced_native_motif",
+      "prior_full_verdict": "normal"
+    },
+    {
+      "job": "anomaly.psf__requests-1921.call1.onset",
+      "seed": 43,
+      "candidate_verdict": "other",
+      "result_sha256": "fb4d63f8cf7170b94c33c106ffcc726f637defa1de429400b2dad724eda9408b",
+      "prior_served_verdict": "other_anomaly",
+      "prior_full_verdict": "normal"
+    },
+    {
+      "job": "anomaly.psf__requests-1921.call1.onset",
+      "seed": 44,
+      "candidate_verdict": "other",
+      "result_sha256": "a5cfd9d12e39cd4095d099d072b37d6cbd8dc7597e31201a4991d267f9ee2822",
+      "prior_served_verdict": "other_anomaly",
+      "prior_full_verdict": "normal"
+    },
+    {
+      "job": "anomaly.pylint-dev__pylint-4551.call1.onset",
+      "seed": 42,
+      "candidate_verdict": "other",
+      "result_sha256": "9b1a8f0efb9edd3b602bde5f3cdfbf36bc15714b7b68ad5e05b017d050929ab1",
+      "prior_served_verdict": "other_anomaly",
+      "prior_full_verdict": "normal"
+    },
+    {
+      "job": "anomaly.pylint-dev__pylint-4551.call1.onset",
+      "seed": 43,
+      "candidate_verdict": "normal",
+      "result_sha256": "beee33e6d5d82308e847b60eeb236e208747b95ddfa66b76d62733eb4d05f5d7",
+      "prior_served_verdict": "other_anomaly",
+      "prior_full_verdict": "normal"
+    },
+    {
+      "job": "anomaly.pylint-dev__pylint-4551.call1.onset",
+      "seed": 44,
+      "candidate_verdict": "other",
+      "result_sha256": "328bfc66d58ea2348de95f5446686b2b821d1ec208f58465fb66ea43e134a829",
+      "prior_served_verdict": "other_anomaly",
+      "prior_full_verdict": "normal"
+    },
+    {
+      "job": "anomaly.pytest10356-call14.canonicalprefix",
+      "seed": 42,
+      "candidate_verdict": "native",
+      "result_sha256": "527bfb6a26fa89ddf6ee106408ac70d2c3a1e1b51bd7a9247113f3da978964a2",
+      "prior_served_verdict": "other_anomaly",
+      "prior_full_verdict": "normal"
+    },
+    {
+      "job": "anomaly.pytest10356-call14.canonicalprefix",
+      "seed": 43,
+      "candidate_verdict": "native",
+      "result_sha256": "94e8e477dff1a4da17526b51316f5eaac9bce437ba31e87735c5c07a042935f2",
+      "prior_served_verdict": "other_anomaly",
+      "prior_full_verdict": "normal"
+    },
+    {
+      "job": "anomaly.pytest10356-call14.canonicalprefix",
+      "seed": 44,
+      "candidate_verdict": "native",
+      "result_sha256": "0a98a9e984096d6a1ce755df0f71a3388e87a9826e548ba9aefdd8152fefda77",
+      "prior_served_verdict": "other_anomaly",
+      "prior_full_verdict": "normal"
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-10323.call68.onset",
+      "seed": 43,
+      "candidate_verdict": "native",
+      "result_sha256": "698f5cc3f065d09404f2d6ccc8cdd1a1ac8438ab3eb583339d8844e84601171f",
+      "prior_served_verdict": "reproduced_native_motif",
+      "prior_full_verdict": "normal"
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset",
+      "seed": 43,
+      "candidate_verdict": "native",
+      "result_sha256": "59ec312ca56da9f5f8a8ca8cfcd951f578c8ebbe113694e4eae42124b71520cc",
+      "prior_served_verdict": "other_anomaly",
+      "prior_full_verdict": "normal"
+    },
+    {
+      "job": "anomaly.sympy__sympy-13551.call1.onset",
+      "seed": 42,
+      "candidate_verdict": "native",
+      "result_sha256": "e696d2c0eac0cd4b67473df566651694c5ee04e42bb85f90880d70b6a1fbc0a9",
+      "prior_served_verdict": "reproduced_native_motif",
+      "prior_full_verdict": "normal"
+    },
+    {
+      "job": "anomaly.sympy__sympy-14711.call1.onset",
+      "seed": 43,
+      "candidate_verdict": "other",
+      "result_sha256": "93fa130c0b6d715c51d92a4818e2656d31272c7cb6af8865ef3dcab28f946fcb",
+      "prior_served_verdict": "other_anomaly",
+      "prior_full_verdict": "normal"
+    },
+    {
+      "job": "anomaly.sympy__sympy-14711.call1.onset",
+      "seed": 44,
+      "candidate_verdict": "other",
+      "result_sha256": "b8074140a7bf1627ef5940de841a772c7cc3b3c1274a6803dde931b30b7f6476",
+      "prior_served_verdict": "other_anomaly",
+      "prior_full_verdict": "normal"
+    },
+    {
+      "job": "anomaly.sympy__sympy-18763.call1.onset",
+      "seed": 43,
+      "candidate_verdict": "native",
+      "result_sha256": "e53d75ae3d012f699632f667fbb66aed416804d3327b66eb714974453c5860cc",
+      "prior_served_verdict": "reproduced_native_motif",
+      "prior_full_verdict": "normal"
+    }
+  ],
+  "target_counts": {
+    "native": 8,
+    "other": 6,
+    "normal": 1
+  },
+  "candidate_accepted": false,
+  "reason": "14/15 served-anomalous/full-normal targets remain anomalous. No new selected policy or score change.",
+  "trace_counters_all_valid": true,
+  "runtime_integrity_evidence": "runtime-integrity-audit.json",
+  "completion_sha256": "47896893e57257757d1153dd3ae4df6b05985cd97b0fbb9993739e30145b2880",
+  "wall_seconds": 2469.2918775081635,
+  "forecast": "in_range",
+  "forecast_evidence": "root-forecast-review.json",
+  "timing_regime": "TT serial, unintended concurrent HF CPU inference during part of panel; not idle-host policy comparison",
+  "speed_ranking_valid": false,
+  "accounting_seconds": {
+    "load": 139.51283346884884,
+    "cases": 2324.0332636253443,
+    "free_run_including_prefill": 2323.9431495936587,
+    "decode": 1042.8939251902048,
+    "nondecode_inside_free": 1281.049224403454,
+    "outside_load_cases": 5.745780413970351
+  },
+  "decode_replays": 30915,
+  "decode_tps_for_ranking": null,
+  "timing_missing_reason": "Host contention invalidates idle-host ranking; no corrected timing imputed.",
+  "reviewed_unix": 1794727309.5068195,
+  "triage_reconciliation": {
+    "rows": 108,
+    "verdict_mismatches": 0,
+    "evidence": "triage-d/chunk-*.json",
+    "checked_unix": 1794727456.8226674,
+    "label_normalization": {
+      "reproduced_native_motif": "native",
+      "other_anomaly": "other"
+    }
+  }
+}

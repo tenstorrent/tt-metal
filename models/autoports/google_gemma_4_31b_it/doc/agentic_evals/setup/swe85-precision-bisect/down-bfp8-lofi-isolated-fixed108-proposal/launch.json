@@ -1,0 +1,172 @@
+{
+  "status": "running",
+  "command": [
+    "timeout",
+    "9000",
+    "env",
+    "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+    "READINESS_TRACE_REGION_SIZE=134217728",
+    "OMP_NUM_THREADS=16",
+    "MKL_NUM_THREADS=16",
+    "OPENBLAS_NUM_THREADS=16",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+    "-m",
+    "models.autoports.google_gemma_4_31b_it.tools.precision_repro_batch",
+    "--cases",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/candidate-cases.json",
+    "--build-kwargs-file",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/down_bfp8_lofi_isolated_build_kwargs.json",
+    "--output-dir",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated"
+  ],
+  "start_unix": 1794740099.5587447,
+  "timeout_seconds": 9000,
+  "candidate_admission_sha256": "a65c311b3dde652e676d9e0ad02583cf78a52473c3fc59604f45f91959ae8c51",
+  "candidate_proposal_sha256": "dbaa7eb5bdb789586794b5061dd0eda81aea5b2562a77a901d80e2735e63c632",
+  "candidate_source_inventory_sha256": "2c6199d5f2f501f13b9b4f8f419e95df6b62a278a77a46a2fb2f452d0d5c2ecf",
+  "forecast": {
+    "status": "planning_proxy_clean_P1_only_not_measurement",
+    "baseline": {
+      "source": "P1 BFP8/HiFi2 fixed108 completion, clean serial evidence",
+      "completion_sha256": "fa70e146164d0b1b948f3bb969fff7e56b44b8d6cc85912f2dfb814c941675d9",
+      "completion_summary_sha256": "3e235673a01aa0a28ad88d49677ad8099b38dbe6e89d7ce65885365284a8d67f",
+      "forecast_miss_acceptance_sha256": "b33ebae3a3366738541d2983238c18f57cc3841bc539afcc021a85d86fd7c18b",
+      "manifest_sha256": "57193e4b91af3a31df00f0c92dbc0f2219fbce011e6533594e5244a93a3021ed",
+      "trials": 108,
+      "elapsed_seconds": 2018.038988828659,
+      "load_seconds": 138.38867970812134,
+      "case_seconds": 1874.3906799475662,
+      "decode_seconds": 911.1484370483086,
+      "decode_replays": 27884
+    },
+    "candidate_uncertainty": {
+      "low": "P1 wall as optimistic floor; assumes no net slowdown despite adding BFP8 down and retaining BF16 HiFi4 head",
+      "central": "1.7x P1 as planning allowance for changed precision, output-length variance, and host/prefill uncertainty",
+      "high": "3.2x P1 broad tail allowance; not a measured upper confidence bound",
+      "p2_use": "P2 wall is excluded from forecast calibration because an unintended HF CPU process overlapped it; P2 is predecessor/correctness evidence only, not speed ranking."
+    },
+    "scenarios": {
+      "low": {
+        "multiplier": 1.0,
+        "seconds": 2018.038988828659
+      },
+      "central": {
+        "multiplier": 1.7,
+        "seconds": 3430.6662810087205
+      },
+      "high": {
+        "multiplier": 3.2,
+        "seconds": 6457.7247642517095
+      }
+    },
+    "forecast_seconds": {
+      "low": 2018.038988828659,
+      "central": 3430.6662810087205,
+      "high": 6457.7247642517095
+    },
+    "timeout_seconds": 9000,
+    "timeout_margin_seconds_vs_high": 2542.2752357482905,
+    "method": "Scale the exact clean P1 fixed108 measured elapsed. Broad multipliers are planning judgments, not measured precision scaling. Include one model load and one serial fixed108 panel; no selected-policy/rate claim. Reforecast after P2 terminal and root reconciliation before any admission."
+  },
+  "expected_runtime_precision": {
+    "config_id": "stage12_swe85_down_bfp8_lofi_isolated_served_head_bfp8_lofi",
+    "weight_groups": {
+      "attention": "bfp4",
+      "mlp": "bfp4",
+      "down": "bfp8_lofi",
+      "lm_head": "bfp8_lofi"
+    },
+    "layer_exceptions": {},
+    "compute_fidelities": {
+      "attention": "LoFi",
+      "mlp": "LoFi",
+      "down": "LoFi",
+      "lm_head": "LoFi"
+    },
+    "activation_dtype": "bfloat8_b",
+    "residual_dtype": "bfloat16",
+    "ccl_dtype": {
+      "prefill": "bfloat8_b",
+      "decode": "bfloat16"
+    },
+    "kv_cache_dtype": "bfloat8_b",
+    "logits_dtype": "bfloat16",
+    "sampling_dtype": "bfloat16",
+    "embedding_dtype": "bfloat16",
+    "norm_dtype": "bfloat16",
+    "max_seq_len": 262144
+  },
+  "build_kwargs": {
+    "batch_size": 1,
+    "precision_config": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/down_bfp8_lofi_isolated_precision.json"
+  },
+  "p2_terminal": {
+    "admission_sha256": "74bef162c97e23e882612eb85dae365f32c9da1f13ba4b9b8e1e1f8f582ad1be",
+    "queue_sha256": "a3e38a94d97c827735d1f16a868b721dc669984ae26ef0ee42d0c5de2a847e86",
+    "launch_sha256": "fd34812c8d86ace46b6abbd162be21e39a447d79691b48201d1dfd3f479202ef",
+    "completion_sha256": "47896893e57257757d1153dd3ae4df6b05985cd97b0fbb9993739e30145b2880",
+    "elapsed_seconds": 2469.2918775081635,
+    "forecast_range_seconds": [
+      2018.038988828659,
+      5910.468657604884
+    ],
+    "forecast_review_sha256": "bd9643f2926279d315e9774f14b6ace484efdee050a763895b2b1c38c5e91a99"
+  },
+  "sklearn_serial": {
+    "sk_evidence_sha256": {
+      "corrected_bfp8_admission_sha256": "3135aac12cbe11d97803b166dc3173def8f9bc03a6e8bb786fe015ce3f24bf08",
+      "corrected_bfp8_completion_sha256": "1be9414e4447a6600ea163967ec4fc0601ae9ffbbd47e44ab5e407a1c3ee453e",
+      "corrected_bfp8_root_review_sha256": "777d1a61090d8b827c76fc905b1a884b58270613d976c5eed73d8a41c2319151",
+      "corrected_bfp8_triage_sha256": "04195f9c199eac5276e59af247dc20bc7a5965d514ba2f77d7a9f6d56af73de9",
+      "old_full_bf16_admission_sha256": "32fe5e6ccf38aff945424de6b7f3c8e24a7a375cf6a806424bd1097e99bb6194",
+      "old_full_bf16_completion_sha256": "927e9425adeb62200b42d38c6f7fc367358f8fd02ad1bcbabaf4010fc3f76dec",
+      "old_full_bf16_root_review_sha256": "50073a981e1dcfb8446d10bc1c1c7e012cbfa53a8700cca79b952cb12f549fbd",
+      "old_full_bf16_triage_sha256": "ef7d0994f7067d540f7fbd986e8e9769d9440f470e00a8c57125a7458517f7a2",
+      "suffix1024_admission_sha256": "2e635a1169648396cf6abd95a6a3f3918808a45f0918431702fae2f5ff3ba308",
+      "suffix1024_served_completion_sha256": "b0485e6d7f64bfe2e2905c98f8bc493fd5a2db92e59522f58ac2dd972c32cf26",
+      "suffix1024_full_completion_sha256": "c28b61d76a152ef27c7cc92da987ccd80a36cdcea16eb48ef6933a792ce752b9",
+      "suffix1024_served_root_review_sha256": "2ee7c06425277e37c938256fd508c60a855838227058ec5047260a5a0f8b87ff",
+      "suffix1024_full_root_review_sha256": "8736f9c042e98cdeea4b4d158b739b48e46c5ab73b369f87091d1a733f6ccc6b",
+      "suffix1024_served_triage_sha256": "5f48a80b44ce6086390e541eade5c4d9f878e00ef8c6e829d7a1b18d29b04b7b",
+      "suffix1024_full_triage_sha256": "7c5d1a20673ca8036f94fe8f30b5b6ae145a3038fa4f0ccae904030f2ec48791",
+      "suffix1024_summary_sha256": "ecbbc26c4f42b9ca977e06f881c9301eecbb3ed59a0336ccfdcfad5bd05e6781"
+    },
+    "serial_review_sha256": "d94c90d83aa66e6e80df723e0a5ba7cfb7c875f869aec1c07294e81e169f57fa",
+    "hf_decision_sha256": "67c26519c6e852d7f01c372a13d2e85bf75f379f4a110b7ab360b59173cf7267",
+    "hf_followup": {
+      "decision": "not_required",
+      "decision_sha256": "67c26519c6e852d7f01c372a13d2e85bf75f379f4a110b7ab360b59173cf7267",
+      "reason": "Not required as a prerequisite to the P3 full-prompt precision diagnostic: P3 itself includes original full-prompt SK seed42 at cap1024. The SK secondary-HF controls and suffix2048 extension remain required follow-up diagnostics after P3; this decision does not waive or declare them complete."
+    },
+    "h9_terminal": {
+      "review_sha256": "88d22737a84202b16948c9c313654d2d91e2d3263ffe538632a78792f8ec3366",
+      "admission_sha256": "74640276fdf5e463fa968d5d188994622759df96f09d4f408e02712b7d09ae66",
+      "progress_sha256": "4a9363429f50949031da53c13f3156c2bd399f756d227f353babaafd065ec773",
+      "completion_sha256": {
+        "1": "fc52a3d203e4cc299ce8037dde0bf7c25fdcf36c62e767ef98183c46fcb203fe",
+        "2": "e297a2ba0181f1f8fa9c8b9f69d2ea1e68d31b425da587bdbd5faa5415253ebf",
+        "3": "43482c49d0073fa1407d0f919451c7349a8314752c1b555eca4785f458081005",
+        "4": "d39b7440fd10612ecd8e51d84c02db9ea68c8742325c4a2f4597e3df86c3c967",
+        "5": "957d8f1e97def011efef8d7e3aa1024b77f73247d7bcc475b78862bd694e6992",
+        "6": "ad828e22fcc086bfac514723cff621d9b1d7cef84ba1de833351e85e5c2f22a5",
+        "7": "67edd55881ada416e6e9ebcc37a907228b80d8d438fc2b4bfcc5ac47116e84f3",
+        "8": "54c14908183b4c1cee5f986e6321f277fc3b5358486e4d810513000d1643182b"
+      },
+      "output_sha256": {
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/results/seed42-suffix512/anomaly.requests2931.call20.canonicalprefix.optional-suffix512.hf.private.json": "a91e0aff64f340594679d595122c256f280e66e650a512ce34a85d52ed432156",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/results/seed42-suffix512/anomaly.sympy__sympy-14248.call53.onset.optional-suffix512.hf.private.json": "33d3407480d344a1537e40965d584ef95ecae49c5bea9609eacb83cac4783cf3",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/results/seed44-suffix512/anomaly.pytest-dev__pytest-7432.call19.onset.optional-suffix512.hf.private.json": "389d4c9c55f00e544dcacb209814a289e7c61af4dec2ec55ebfc265cd872cb63",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/results/seed44-suffix1024/anomaly.psf__requests-5414.call9.onset.hf.private.json": "4f1a6497eeb57b8754ce74bea702170078d7ce7e93fef610357f785044b2b045",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/results/seed44-suffix2048/anomaly.psf__requests-5414.call11.onset.hf.private.json": "ea3eb180de1ef8898c2565dcb5ffd7700f3e792ccfce8bc279efef80c6dfe9a4",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/results/requests10-cap4096-seed42/anomaly.psf__requests-5414.call10.onset.suffix4096.seed42.hf.private.json": "c4409f7bea3f5af2a80a4f5ee8162e0e282a265ae4b0abb5a5731adff64d275b",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/results/matplotlib86-cap4096-seed43/anomaly.matplotlib__matplotlib-20488.call86.onset.suffix4096.seed43.hf.private.json": "7544c2c7a570e573fa29b8743a75ef5edba01e55de629d35741cc8cb4c59f520",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/results/sphinx70-cap2048-seed43/anomaly.sphinx-doc__sphinx-10323.call70.onset.hf.private.json": "2472008d4ab3ca68d5803944ccf3410c53e603940e62529f062df2e8fdf199a2",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/results/call91-cap8192-seed43/anomaly.call91.canonicalprefix.suffix8192.seed43.hf.private.json": "c42dc1b3206ca95431c91d0468bca2b71dc3386221bc28d12951a6b09cdf8fb9"
+      }
+    },
+    "h9_terminal_review_sha256": "88d22737a84202b16948c9c313654d2d91e2d3263ffe538632a78792f8ec3366"
+  },
+  "forecast_review_sha256": "785368a538df283b778c2aeedddffc569383e22a24a1b439f0d70636ea09ddd8",
+  "active_hf_processes": [],
+  "device_owner_preflight": []
+}

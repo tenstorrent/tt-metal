@@ -1,0 +1,43 @@
+{
+  "status": "prepared_candidate_only_not_admitted_not_run",
+  "argv": [
+    "timeout",
+    "3600",
+    "env",
+    "HF_HUB_OFFLINE=1",
+    "HF_DATASETS_OFFLINE=1",
+    "HF_HUB_DISABLE_TELEMETRY=1",
+    "OMP_NUM_THREADS=16",
+    "MKL_NUM_THREADS=16",
+    "OPENBLAS_NUM_THREADS=16",
+    "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+    "READINESS_TRACE_REGION_SIZE=134217728",
+    "TT_METAL_TRACE_ALLOC_TRACKING=1",
+    "TT_METAL_DEVICE_PROFILER=0",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+    "-m",
+    "models.autoports.google_gemma_4_31b_it.tests.run_datatype_candidate",
+    "--config",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_config.json",
+    "--id",
+    "stage12_full_bf16_hifi4_q32_broad_acceptance",
+    "--output-dir",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full-q32-production-validation/full-bf16-broad-acceptance-candidate/run",
+    "--reference",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/attention-down-acceptance/references/aime24.refpt",
+    "--natural-reference",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/attention-down-acceptance/references/natural.refpt",
+    "--require-accuracy",
+    "--acceptance"
+  ],
+  "output_dir": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full-q32-production-validation/full-bf16-broad-acceptance-candidate/run",
+  "timeout_seconds": 3600,
+  "forecast_seconds": {
+    "low": 800,
+    "point": 1500,
+    "high": 3000
+  },
+  "forecast_basis": "The P19 production-Q32 broad run took965.307s with tracking=1; the prior full-BF16 run was accuracy-only, pre-Q32, and took140.542s, so it is not a matched estimate. Broad full-BF16 forecast uses a deliberately wide P19-scale envelope and is unvalidated until measured.",
+  "scope": "Same AIME/natural references and production broad acceptance gates, six qualitative controls, autoregressive diagnostic, context boundary and runtime inventory under all-group BF16/HiFi4 with BF16 KV and Q32 production geometry. Fresh run ID and output path.",
+  "gate": "Root admission only after full-BF16 fixed108 and resumed-prefill gates pass, no model/HF owners remain, all source pins recheck, and the accepted remaining-time budget fits 3600s timeout plus closure reserve. This is diagnostic acceptance, not a vLLM serving-rate measurement."
+}

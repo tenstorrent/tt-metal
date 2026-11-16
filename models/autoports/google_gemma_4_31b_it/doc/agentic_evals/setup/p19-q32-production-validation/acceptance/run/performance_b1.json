@@ -1,0 +1,62 @@
+{
+  "scope": "full60layers",
+  "source": "autoregressive",
+  "input_tokens": 4096,
+  "generated_tokens": 128,
+  "batch_size": 1,
+  "concurrent_requests": 1,
+  "ttft_ms": 1167.1495148912072,
+  "decode_tps": 18.5037961501331,
+  "decode_ms": 54.0429645833948,
+  "samples": [
+    {
+      "ttft_ms": 1160.5010027997196,
+      "decode_tps": 18.50297969292487,
+      "decode_ms": 54.045349267846724,
+      "counters": {
+        "model_replays": 127,
+        "sample_replays": 128,
+        "token_refreshes": 0,
+        "position_refreshes": 1,
+        "page_refreshes": 0,
+        "readbacks": 2,
+        "captures": 0
+      }
+    },
+    {
+      "ttft_ms": 1167.1495148912072,
+      "decode_tps": 18.5037961501331,
+      "decode_ms": 54.0429645833948,
+      "counters": {
+        "model_replays": 127,
+        "sample_replays": 128,
+        "token_refreshes": 0,
+        "position_refreshes": 1,
+        "page_refreshes": 0,
+        "readbacks": 2,
+        "captures": 0
+      }
+    },
+    {
+      "ttft_ms": 1168.2739940006286,
+      "decode_tps": 18.505359702275634,
+      "decode_ms": 54.03839839314382,
+      "counters": {
+        "model_replays": 127,
+        "sample_replays": 128,
+        "token_refreshes": 0,
+        "position_refreshes": 1,
+        "page_refreshes": 0,
+        "readbacks": 2,
+        "captures": 0
+      }
+    }
+  ],
+  "streaming_exact": true,
+  "diagnostics": {
+    "TT_METAL_TRACE_ALLOC_TRACKING": "1",
+    "TT_METAL_DEVICE_PROFILER": "0",
+    "TT_METAL_WATCHER": "0"
+  },
+  "timing": "Host TTFT through first token read; decode includes 127 nonblocking model/buffered-sampling replays and one final history read; no per-token host boundary"
+}

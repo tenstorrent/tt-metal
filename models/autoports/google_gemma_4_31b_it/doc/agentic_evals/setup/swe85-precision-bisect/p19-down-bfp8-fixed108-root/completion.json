@@ -1,0 +1,442 @@
+{
+  "start_unix": 1794757302.4482362,
+  "end_unix": 1794760882.9198804,
+  "elapsed_seconds": 3580.4716444015503,
+  "process_exit_code": 0,
+  "status": "completed",
+  "validation_errors": [],
+  "output_hashes": [
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.call88.canonicalprefix.seed42.cap1024.json",
+      "sha256": "373a4b1a3b5e0021e962d70d179816ded1bd31763530edc31606f4408b4370ee"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.call88.canonicalprefix.seed43.cap1024.json",
+      "sha256": "9d80abc5cb0d669474bb3973574b0c15577bb002388728a4a7304dcb7c9b25b1"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.call88.canonicalprefix.seed44.cap1024.json",
+      "sha256": "3da7833c01f90abbaba7ade53607c8ff8675c8007186a0a5400a7e5e9ffa52eb"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.call91.canonicalprefix.seed42.cap256.json",
+      "sha256": "4b477f38a7e8906f68e3bff9ad2c01d280ee1854e89f167411c9ecc86dc3e64a"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.call91.canonicalprefix.seed43.cap256.json",
+      "sha256": "32188841600d566c28b0e01ed8acff9befdc4fb023a8e5c59fd9372b79f4af80"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.call91.canonicalprefix.seed44.cap1024.json",
+      "sha256": "9470988dddd581b8dbb6a1405138f5b3e66fe4fa9db9e1cac709c6a7d0105314"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.matplotlib__matplotlib-20488.call82.onset.seed42.cap512.json",
+      "sha256": "264a6d8fd57b10d4dfc4ae0eaaeda4d26ed839e1b4b9b2723015764e05e2f713"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.matplotlib__matplotlib-20488.call82.onset.seed43.cap256.json",
+      "sha256": "33b675f92e1173a382dd7b376a095dc5c2ea9767ad7692e07daf5a6167903c91"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.matplotlib__matplotlib-20488.call82.onset.seed44.cap256.json",
+      "sha256": "770fde77d85183a772c9b6b6acfe979014eec2501bc10e9515f3a90a451f5795"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.matplotlib__matplotlib-20488.call86.onset.seed42.cap256.json",
+      "sha256": "69942caad3edafbfecde83d5d73f4bc73eeed851a1ab7756bfc106530392fd0f"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.matplotlib__matplotlib-20488.call86.onset.seed43.cap256.json",
+      "sha256": "84b2492b334ddfffe11df139d707e35fbb06dcabd6048ed6fe8c5ab5238e9dd4"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.matplotlib__matplotlib-20488.call86.onset.seed44.cap1024.json",
+      "sha256": "37d7632ff7ccf1058f8cac9b57ef6690c7ef207283d511503d5f93693431087a"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.psf__requests-1921.call1.onset.seed42.cap256.json",
+      "sha256": "a43c5ed2d4032bdcec80c17bfcc685e57ea5528a6b820ad4c8b4a88798a86996"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.psf__requests-1921.call1.onset.seed43.cap256.json",
+      "sha256": "c7d55dc808d748d3f10c1418443dd26a401710cdc79ec67fb0d5899a017e2227"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.psf__requests-1921.call1.onset.seed44.cap256.json",
+      "sha256": "afd59a9f647e809e6af80527cc2c5a3310a865fe56e728a68f34affaa0a6a1ab"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.psf__requests-5414.call10.onset.seed42.cap256.json",
+      "sha256": "7bc8e353c0cc590276999e6e3612311ba9212f022639f821addf680745a19bbf"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.psf__requests-5414.call10.onset.seed43.cap256.json",
+      "sha256": "b46b4c9abec211d1c907c520f8b8c70fc9eee412f074ab3637ddd9a911dcba86"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.psf__requests-5414.call10.onset.seed44.cap256.json",
+      "sha256": "05014b944f6a7e0c5bfef99bd19d43e3adee11ad5bdf08baa1fa9295bc959fba"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.psf__requests-5414.call11.onset.seed42.cap256.json",
+      "sha256": "fc8ad8eb441d45761864f6ed0dc2192afd13367976cfab171ce216b785bc9dd8"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.psf__requests-5414.call11.onset.seed43.cap256.json",
+      "sha256": "033dbeff73d34bd127ba1ec7579b7c32af687a0f668f90606e718e5688c71cb6"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.psf__requests-5414.call11.onset.seed44.cap256.json",
+      "sha256": "661b1c3211b1af5ea9d5dcd1196faca61fde9844d26d130d010a1517cda2d105"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.psf__requests-5414.call9.onset.seed42.cap256.json",
+      "sha256": "0d7681f47a425255e040981478e8da227438a2d930dc4f1d9454471aec4afa02"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.psf__requests-5414.call9.onset.seed43.cap256.json",
+      "sha256": "0670fea498df1f226f7af70fc28e7770935f0262b218d94d82cef259e4917bb1"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.psf__requests-5414.call9.onset.seed44.cap256.json",
+      "sha256": "e5c4e4c18149cf08c280263441c1f3a811123deecec2803e3ab5c579e77a082c"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.pylint-dev__pylint-4551.call1.onset.seed42.cap256.json",
+      "sha256": "f9c41948fad64b7321bd85f71fa2a70b73c17a163f8fc2dbb4238d7b47b24504"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.pylint-dev__pylint-4551.call1.onset.seed43.cap256.json",
+      "sha256": "8a8b2de2e38fb81faf75e45a2e60643022d6e78dadf2e1bc7fa16d16927d6d86"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.pylint-dev__pylint-4551.call1.onset.seed44.cap256.json",
+      "sha256": "9cf2c5fcbcebb7145235cae417374f8277b9e6bf55ba1549da9899d527763d94"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.pylint-dev__pylint-4604.call45.onset.seed42.cap256.json",
+      "sha256": "a7c44877e7310c138bd8e1fef8efebbe509cf65bcddfa06f132fc39a423cb962"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.pylint-dev__pylint-4604.call45.onset.seed43.cap256.json",
+      "sha256": "993eb9e15bdf566edeb425f8dc2d36dff1438b41b301ceeb85a41e150f3c36ff"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.pylint-dev__pylint-4604.call45.onset.seed44.cap256.json",
+      "sha256": "0efa2207364e7790dc6ea8a872b6ebe8d77e6128084f5b79b6e0b7b539e3a819"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.pytest-dev__pytest-5787.call1.onset.seed42.cap256.json",
+      "sha256": "774fba0ef2b2e7b2261e85174e7acb79b60044f0bb1b6cec7a6169e31c976dd5"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.pytest-dev__pytest-5787.call1.onset.seed43.cap256.json",
+      "sha256": "ff83fc159ddb8ee020b07994d9539ef7feff6b1a444969416f65ce5bdcae957d"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.pytest-dev__pytest-5787.call1.onset.seed44.cap256.json",
+      "sha256": "b18e2f5de52e62d166249027c21f8557658085d6e2fda41a6f1e69e6d954c834"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.pytest-dev__pytest-5787.call65.onset.seed42.cap2048.json",
+      "sha256": "f4c46388dd8e49d10d7756f320a86c11ef0b917cb22ab613c84122b8b0be1964"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.pytest-dev__pytest-5787.call65.onset.seed43.cap2048.json",
+      "sha256": "0cde215f6ed6078c4e8fb3b186a7a93a8af2698adf24fc5860976225ea9e1b63"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.pytest-dev__pytest-5787.call65.onset.seed44.cap4096.json",
+      "sha256": "7312a5f29a8c672f9a6e1c33b702d29d2ab0fec962df36fb97dd5a0faf1cdf21"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.pytest-dev__pytest-7432.call19.onset.seed42.cap256.json",
+      "sha256": "ec7088f6b0b9405fdeb20193f0247390757b18c620261ff5bf8a0fce70a4b706"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.pytest-dev__pytest-7432.call19.onset.seed43.cap256.json",
+      "sha256": "a367898432d1c5cc0c13ec6eeaea4e80b10e392df21b085556abc9872698d7bb"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.pytest-dev__pytest-7432.call19.onset.seed44.cap256.json",
+      "sha256": "82c3e07f27b68ef21efb13143fdabf09c7d9709a343dec885a236c20eaf33e0e"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.pytest10356-call14.canonicalprefix.seed42.cap256.json",
+      "sha256": "823fcb13fe7f8b4cdff909481590f86f12e034293f8fd2502123cf4639e8723c"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.pytest10356-call14.canonicalprefix.seed43.cap256.json",
+      "sha256": "9ec762e65884b49bc3137de75901361d77e538e12b217235e4ab407dfbfce8fc"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.pytest10356-call14.canonicalprefix.seed44.cap256.json",
+      "sha256": "ffc87c65ba7be33fef5e6ea0e1d05ec3e057e331e64f9fcd650a2f6a9d01a349"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.requests2931.call20.canonicalprefix.seed42.cap256.json",
+      "sha256": "85b67f6a97dc0eddbf6a05f57dc23df96832f778b118136f040413e1575d7840"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.requests2931.call20.canonicalprefix.seed43.cap256.json",
+      "sha256": "c6cfc81950b93a9b3d9f38411c0c1509379339d23fa48aac9502126ff8ee6985"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.requests2931.call20.canonicalprefix.seed44.cap256.json",
+      "sha256": "8e7e612a50d96da98c0db8701d5d8d84081232e5ff69a00025aae066a4720a53"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.scikit-learn__scikit-learn-13135.call29.onset.seed42.cap1024.json",
+      "sha256": "54930cedf54c2a329a59b4f5a340ebc708fcd5559b20808cad5d1afc22b79eff"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.scikit-learn__scikit-learn-13135.call29.onset.seed43.cap512.json",
+      "sha256": "c4ea21291317f89f422a1f3164e8dbbc927c8759c4d7d913700f7b23db0e6012"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.scikit-learn__scikit-learn-13135.call29.onset.seed44.cap512.json",
+      "sha256": "72f3c48bfdd852473242d0fd01ec62cad7205572263f0abfbf0c831eba2755bc"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-10323.call57.onset.seed42.cap512.json",
+      "sha256": "f0c4ae83cf08a2bcdc8adc062f00e437c4aaf516f02896fc67959b08134f1da1"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-10323.call57.onset.seed43.cap256.json",
+      "sha256": "8563ed7f5806f8d002b291d1a4f88858c44ea2f22b98561b2444ce1f34ff57e6"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-10323.call57.onset.seed44.cap512.json",
+      "sha256": "f44e6fd2f8861f90bd1af32ae35c13b963076952ed4397e79008d222345d01a1"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-10323.call68.onset.seed42.cap256.json",
+      "sha256": "ea08e66380cd47ab5d216d9367f7a42d40c07ed4560924703a2dba0d8d3e5bc9"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-10323.call68.onset.seed43.cap256.json",
+      "sha256": "4c6422a609064ffbef0e763cd46a2801391b0c4607b7f7bbf0f3ee4f6a9d368a"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-10323.call68.onset.seed44.cap256.json",
+      "sha256": "64f1f6c912966a4feaaf5c24bd748df8b2737e3fa34d723e647991c2a02ff413"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-10323.call70.onset.seed42.cap256.json",
+      "sha256": "5675101bf0ae32fb7de58cc05c94ed042a51735e12e3a57a6a14275487841993"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-10323.call70.onset.seed43.cap256.json",
+      "sha256": "5d27e822041fdeaeb8970d4796744efba66f293f4b7dc639a3337b2bb9bd2dc6"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-10323.call70.onset.seed44.cap256.json",
+      "sha256": "d0c4bf78f914d8533d0a8fbe9238f9cc95fa5d83df819ebd02baa83b496510fa"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.seed42.cap2048.json",
+      "sha256": "da909d81a3111621cba2a904448363e49961a150d090c0ee60bfdcef4ffd099b"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.seed43.cap2048.json",
+      "sha256": "7f3ba7d5c4c1af658a622f51773512a9b06ecac0160dfcbf4d70bf3f1c08c99a"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.seed44.cap1024.json",
+      "sha256": "256cc2157e9b590752bc0034b7054e1a46e3d767cc115eef7bdead0abd8f5686"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset.seed42.cap256.json",
+      "sha256": "83631d60341fe9de0755089c3a06200d97f8149773d15b277320ade9fd5edbc7"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset.seed43.cap256.json",
+      "sha256": "5cc5331b7f2a1ca8b51c71ff2e7878edc374fe1916bfe7d9cf4fa1bc3939084c"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset.seed44.cap256.json",
+      "sha256": "4b9bcef243fe187f3b467df9b86c76e9a8d4137e386998b8a42a96916ce7fa8e"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-11510.call108.onset.seed42.cap256.json",
+      "sha256": "0f0ddabd04b0e9a21c55fed757018ca194b19a34a382fa0f9d5d9308408fe993"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-11510.call108.onset.seed43.cap256.json",
+      "sha256": "791aaae7f2d27788e86f8ce7dc8044fd63f65c7272c1e277f381eb5e365a4e74"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-11510.call108.onset.seed44.cap256.json",
+      "sha256": "fced4b09b150e42f6475d4f2afd267a3dd8df34de3fec3faf0b2011de360baca"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed42.cap1024.json",
+      "sha256": "e4878adb1a16e1615880e90a21769012a4274e88436d859024fb7fec7d899d42"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed43.cap2048.json",
+      "sha256": "ca3cbf0de39bbedc4340737108381c1c6f97336cc26230bb7678ca3c9f3fa92e"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed44.cap1024.json",
+      "sha256": "fc6f184c1ea1f8a2f6ceda48993ec01e30debbc634c8ce3f96274f94e352b5a6"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-11510.call28.onset.seed42.cap1024.json",
+      "sha256": "db982ca64d8409e8e9aa7979efa60c2d1fd2e24231cbb6be59c6738cba8905e3"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-11510.call28.onset.seed43.cap1024.json",
+      "sha256": "55e455004d91f1cd6c1ffa66018d241ea9a9afd010e66c10ac207bb29719b946"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-11510.call28.onset.seed44.cap1024.json",
+      "sha256": "e23018c5e703a2ba3fd78c41c437da807cfa30a469fc760c876e013937e5461d"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.seed42.cap1024.json",
+      "sha256": "58316d92d4e197c524076461a524f46a7fa422a69085ea9e5ba66aa3f864bcb3"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.seed43.cap1024.json",
+      "sha256": "2e0abecc8cff1c83a0bd150f481ed736ce05736136126147333cc0ffaa907185"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.seed44.cap1024.json",
+      "sha256": "a79a20bd828f19237d4fd30477eca3b19e21761ccbedf2ac4dc075a6edbad117"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.seed42.cap1024.json",
+      "sha256": "f6b8ffe8c4ffeaaa86ce405a40c1ab3f7f06f806b35d541beb0de1a727c5a552"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.seed43.cap1024.json",
+      "sha256": "e4eb61012fa2546ddf6333246e4100e45989cd63b8351a3c851a99ddcc159bc1"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.seed44.cap1024.json",
+      "sha256": "75e61bd6687986adf53ab4ae53d923c1e4d18ba3bd6db42faab19b48a8f5f424"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-9461.call184.onset.seed42.cap1024.json",
+      "sha256": "3bbacf37ff37e887c98c44cf628ccf0acbbd671b09d4fc02ebe6bda193a1316e"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-9461.call184.onset.seed43.cap2048.json",
+      "sha256": "93f9038694233c720956f5d80353a71e79d6ddc4b10bc5ef3deac09247d45f74"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-9461.call184.onset.seed44.cap1024.json",
+      "sha256": "46ca577c8364168c644ad33ce9ae472465b8563385b6b85d2adbffc1d1b2e692"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sympy__sympy-13480.call1.onset.seed42.cap256.json",
+      "sha256": "962c2ba0910bd34518b31e2aa51a0bd5e5bfba1f470e6e90f551ffd47c5ac10e"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sympy__sympy-13480.call1.onset.seed43.cap256.json",
+      "sha256": "1f52e841d0056d3d5693887681bfe479168ff288435d48276de3d91f5b893da1"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sympy__sympy-13480.call1.onset.seed44.cap256.json",
+      "sha256": "0e03c54404c3b2add005bcd4cd33cf926ec32b5d9e84882d0d2e68d64ff4e01c"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sympy__sympy-13551.call1.onset.seed42.cap256.json",
+      "sha256": "b7e6aa672d530edf118ebb56c812f11e93d0d7c72dc1130831a519a934acdb12"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sympy__sympy-13551.call1.onset.seed43.cap512.json",
+      "sha256": "8b55a36547e6a8ba296bcc7ee3ccfb2eeb64937e642f832b7dbc98e8147bd9df"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sympy__sympy-13551.call1.onset.seed44.cap256.json",
+      "sha256": "707bebd560fcc51a73c6522594a5a62c36c36ffc02f4404ea6548419ade5f027"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sympy__sympy-13878.call1.onset.seed42.cap256.json",
+      "sha256": "1d20dc6f826b0a36340f84003a9ef0ccaa462e33f7dc26cab93052be0e479828"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sympy__sympy-13878.call1.onset.seed43.cap256.json",
+      "sha256": "87d6edb8425350091554d46fa663449a935f3baccf9d8c8b803d66c9df9d9f33"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sympy__sympy-13878.call1.onset.seed44.cap256.json",
+      "sha256": "78631d7c10e8503ddb542fa95aaa60bdec81f3afc04bdaf811dd0f9085609790"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sympy__sympy-14248.call53.onset.seed42.cap256.json",
+      "sha256": "c94b605f41eccfdd91227138f829e5f25f67286919d86cde3595c99e567c84c6"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sympy__sympy-14248.call53.onset.seed43.cap256.json",
+      "sha256": "88249a87d40f1de9e039ef1c56695b654d92dd5ed552edc10e5ae166cb6ebb25"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sympy__sympy-14248.call53.onset.seed44.cap256.json",
+      "sha256": "ab6f47551b0e1390bb443f23b1bc16a413744c998478386b3364e78483d21808"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sympy__sympy-14711.call1.onset.seed42.cap256.json",
+      "sha256": "34f94e9896c838cbd4bfe7c3afc8761b91734fb638e33031fc0bac64449e1f6d"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sympy__sympy-14711.call1.onset.seed43.cap256.json",
+      "sha256": "f451305afe520e965db16522b72d0d02c400ecc8026fbea519bd65cc25a036cd"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sympy__sympy-14711.call1.onset.seed44.cap256.json",
+      "sha256": "969e3440cb371c44dc6730b0269ae6d1d0cd5c3dbd71ad0b646091ebe3059405"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sympy__sympy-18763.call1.onset.seed42.cap256.json",
+      "sha256": "bdcf532b1efbc318f9a7333fe492e94c011c607b7d247b73995c4ff8d49d7690"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sympy__sympy-18763.call1.onset.seed43.cap256.json",
+      "sha256": "c9a4f6b5cd90a764831dcf5b3b114ca55b2dbdb86fe6f0e1ff1a298857ea6615"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sympy__sympy-18763.call1.onset.seed44.cap256.json",
+      "sha256": "10351bcf5582de33f8c59370e9e8fdf400ef31192118cd13e3928ac061f6fb70"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sympy__sympy-18763.call10.onset.seed42.cap256.json",
+      "sha256": "22ad047551f259b5d722df4a85afcfa17d283062df4bac59b44b14a6bcb7519a"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sympy__sympy-18763.call10.onset.seed43.cap256.json",
+      "sha256": "6efb0d1cb8ac5daaeb54af8a27753c91deb6714aa15a216414739dbf3794abbf"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sympy__sympy-18763.call10.onset.seed44.cap256.json",
+      "sha256": "54ee367dd1a46969341885f5b09b955acc4a91696fb6c571a217c3a70646f0ef"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.xarray3095-call53.canonicalprefix.seed42.cap256.json",
+      "sha256": "a0b912225c789d193ab9927630abdcde68ecc89b0d692fb399da722e1f01f3f7"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.xarray3095-call53.canonicalprefix.seed43.cap256.json",
+      "sha256": "5c7084459f0796b09315af078a0a39c98e8e64f64f2dc8150142fee72a479fc4"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.xarray3095-call53.canonicalprefix.seed44.cap256.json",
+      "sha256": "b1a1d24b6982646e9014798d67696c62d1d9d607dd2e569e2fbdcfc63f4200d7"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.xarray7233-call1.canonicalprefix.seed42.cap1024.json",
+      "sha256": "080b6b76c06940b1db4778ce18a56ee20c60c2312dd3fe58aabfeba1b5b9637d"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.xarray7233-call1.canonicalprefix.seed43.cap512.json",
+      "sha256": "e424194a11801747752469d935785b155bf3f28cafc05707e8c9a1021c981ef0"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.xarray7233-call1.canonicalprefix.seed44.cap1024.json",
+      "sha256": "d04d90c003769749a88f43c4ce9de53d9be719dec8999c8917f17290551ddeb9"
+    }
+  ]
+}

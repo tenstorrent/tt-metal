@@ -1,0 +1,28 @@
+{
+  "status": "candidate_only_source_pins_not_admission",
+  "hash_algorithm": "sha256",
+  "files": {
+    "models/autoports/google_gemma_4_31b_it/tests/probe_attention_partition.py": "bd3f46c130bac684a567f4738588dc8124e8b42cd4f39914865cce110db23dfc",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/bf16-hifi4-kv-down-bfp8-accuracy-p19/precision.json": "540760ea34cea22459c9248b4ce8c90ad1b34e000b18e82b70552e45fd766fad",
+    "models/tt_transformers/tests/tale-of-two-cities.txt.bz2": "25d33cc39a17a4a576712e29056053cd8f818f1288e7b2a8abd668225e630e1e",
+    "models/autoports/google_gemma_4_31b_it/tt/generator.py": "3276fd7427898077ab25e139f89a7b03d2a968cd9bafb79e9aa08bb975016f22",
+    "models/autoports/google_gemma_4_31b_it/tt/model.py": "c65ed33bb175f63603946eea561a2623cad0b70521428bdf888bd9445457a01e",
+    "models/autoports/google_gemma_4_31b_it/tt/optimized_decoder.py": "24f52653e82392144e880b0677b52cb01f7432a70a966cdd901592cee933e53d",
+    "models/autoports/google_gemma_4_31b_it/tt/multichip_decoder.py": "8b5577586ae1c8d3f323e3ddff08bee1bf0537c8ed643b01585049aa6b090972",
+    "models/autoports/google_gemma_4_31b_it/tt/prefill.py": "4208b8362e997db1845fd98043df9b183e8e17ed789ff5b5ea839739cd0b1f91",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/p19-resume-investigation/AUTODEBUG.md": "ff79a693038929cb5c9ee90a0a95803dab62e397ec42a9dddfa4c308c29e56bd",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/p19-resume-investigation/AUTOFIX.md": "1d6e3ee02dcc13b880c046a48bd13edab049d678f5894505b3481be5932cbd1c",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/p19-resume-investigation/p19-resume-stages.json": "20b023c203cfa4a35bf0223a63eb60f929a25132c28d3286683e3161e200b439",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/p19-resume-investigation/resume-after-position-summary.json": "d3ed985334cea681e34510135d79308048f44983a3be5552060e7b4f46e1f671",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/p19-resume-investigation/resume-after-completion.json": "b3803a7d2a0b44811694060c742f6e115f7efb03df2619d8a71e390ac76e2560",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/p19-resume-investigation/ccl-probe-completion.json": "76d800f39586a0a6a90e25a0acf96baded60277972cf3eb3cc664bc5694fc8eb",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/p19-resume-investigation/root-ccl-probe-review.json": "e2ddf9c756490452401475043fcf7d6567af47466e6838d049bbef94ff7cdc24",
+    "models/autoports/google_gemma_4_31b_it/tests/test_prefill_ccl_phase_policy.py": "51acda7c984f44232823511dda35e1b20880b6fc2d38812adab7abf00acddf7e"
+  },
+  "notes": [
+    "P19 config is exact BF16 activation/attention/MLP/head, BFP8-LoFi down, BF16 prefill/decode CCL, BFP8 KV and SDPA HiFi4. `prefill_sdpa_kernel` sets fp32_dest_acc_en exactly when SDPA fidelity is HiFi4.",
+    "Existing probe source is modified only in tests/ diagnostic harness; production source remains untouched by this candidate.",
+    "D stage-capture JSON and source hashes are pinned as context only; tensor files are not consumed by this probe.",
+    "Root admission must pin final source and command bytes and independently require device ownership/deadline checks."
+  ]
+}

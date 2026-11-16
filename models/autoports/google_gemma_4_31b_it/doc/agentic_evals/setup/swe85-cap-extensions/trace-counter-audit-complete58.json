@@ -1,0 +1,355 @@
+{
+  "status": "all58passed",
+  "scope": "Existing counters only; no device run/profile, not semantic/serving acceptance",
+  "checks": "model/sample/readback deltas equal decode_tokens;captures0;decode_tokens=generated-1",
+  "rows": [
+    {
+      "mode": "served",
+      "job": "anomaly.xarray7233-call1.canonicalprefix.cap512.seed42",
+      "decode_tokens": 511,
+      "source_sha256": "6a746fdcaf3befc90f08eec98f066d6f63e5cce55c33931cff1d9ef2c84a7bba"
+    },
+    {
+      "mode": "served",
+      "job": "anomaly.call88.canonicalprefix.cap512.seed43",
+      "decode_tokens": 511,
+      "source_sha256": "3c3603d0653b6b9e74f13a9dfee6339959c9e619194654ea718685555a0b4ddc"
+    },
+    {
+      "mode": "served",
+      "job": "anomaly.sphinx-doc__sphinx-9461.call184.onset.cap512.seed42",
+      "decode_tokens": 511,
+      "source_sha256": "06ef842e12f1c56099effeadb633fba9874ae264d3285513e0e1cb93662143a1"
+    },
+    {
+      "mode": "served",
+      "job": "anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.cap512.seed44",
+      "decode_tokens": 511,
+      "source_sha256": "24dcc2b92971125d3aaa913a6183ed1828e716a3517c16981c5856a45102a4f0"
+    },
+    {
+      "mode": "served",
+      "job": "anomaly.pytest-dev__pytest-5787.call65.onset.cap512.seed42",
+      "decode_tokens": 264,
+      "source_sha256": "cf5444953d887ebec6bcbadc10fa5ec17303629340f593de344bc96bf7308e49"
+    },
+    {
+      "mode": "served",
+      "job": "anomaly.xarray7233-call1.canonicalprefix.cap512.seed43",
+      "decode_tokens": 344,
+      "source_sha256": "c0b53b8391449da9fa0db2956ee4eb4f0d84e5f1da6109faa65d8a4a2d1afccc"
+    },
+    {
+      "mode": "served",
+      "job": "anomaly.sphinx-doc__sphinx-11510.call28.onset.cap512.seed42",
+      "decode_tokens": 447,
+      "source_sha256": "47ad557d32f3f05c434413efdc522330b3353fd96e9c94dc226c2d0878e5c2b0"
+    },
+    {
+      "mode": "served",
+      "job": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap512.seed42",
+      "decode_tokens": 369,
+      "source_sha256": "ca0bbea0cb7c692c85124e4bcb72a6b05fdabde08041a37d7dcc5a5a7ddfd3d5"
+    },
+    {
+      "mode": "served",
+      "job": "anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.cap512.seed42",
+      "decode_tokens": 511,
+      "source_sha256": "81fd4fa0aebac0e39f9d250af08ffda9cd7172b2a432d8f633fa7d5486b24a07"
+    },
+    {
+      "mode": "served",
+      "job": "anomaly.scikit-learn__scikit-learn-13135.call29.onset.cap512.seed44",
+      "decode_tokens": 399,
+      "source_sha256": "a0454e72dfe1cb7ac0bbe65cd201706f7b02b3c45f5a13cadbad9374464d2cb6"
+    },
+    {
+      "mode": "served",
+      "job": "anomaly.sphinx-doc__sphinx-11510.call28.onset.cap512.seed44",
+      "decode_tokens": 511,
+      "source_sha256": "30e226398d8bd26cb6eecc1ed62ef50ba50470a5c4acd34fe4d69d77ec6d3c67"
+    },
+    {
+      "mode": "served",
+      "job": "anomaly.sphinx-doc__sphinx-9461.call184.onset.cap512.seed43",
+      "decode_tokens": 511,
+      "source_sha256": "39eb0a586dec15856a3512741aed9954a277a524d4a5cc334f22b5b46d39f134"
+    },
+    {
+      "mode": "served",
+      "job": "anomaly.pytest-dev__pytest-5787.call65.onset.cap512.seed43",
+      "decode_tokens": 511,
+      "source_sha256": "14b065a639e15e19a763c99e643d228dfbcce1da34c7bd7561c77cab2bd001f8"
+    },
+    {
+      "mode": "served",
+      "job": "anomaly.sphinx-doc__sphinx-9461.call184.onset.cap512.seed44",
+      "decode_tokens": 511,
+      "source_sha256": "397c82d3b649c99cde44c7eebfcbf861252c3deebd7e9eda3d2a996630761a77"
+    },
+    {
+      "mode": "served",
+      "job": "anomaly.matplotlib__matplotlib-20488.call86.onset.cap512.seed44",
+      "decode_tokens": 511,
+      "source_sha256": "afe4963c1bebeabbcaa97e3411d4b3993b89ab4191fec065040c7991e47f72bf"
+    },
+    {
+      "mode": "served",
+      "job": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap512.seed44",
+      "decode_tokens": 502,
+      "source_sha256": "6b6e165cd0e64f16936b3ea7cc423354b32916559451199562c19c23b612b7b5"
+    },
+    {
+      "mode": "served",
+      "job": "anomaly.sphinx-doc__sphinx-10323.call57.onset.cap512.seed42",
+      "decode_tokens": 256,
+      "source_sha256": "5b18cfaf5f1e12e96f6dda9892c30c2c8bd3d1c574b4af602ee6adec39ac5c9f"
+    },
+    {
+      "mode": "served",
+      "job": "anomaly.call88.canonicalprefix.cap512.seed44",
+      "decode_tokens": 511,
+      "source_sha256": "ed08caf71aa6fe034369cde0fb3a80e07bd546514a72e939c993c9fff8ad30a7"
+    },
+    {
+      "mode": "served",
+      "job": "anomaly.xarray7233-call1.canonicalprefix.cap512.seed44",
+      "decode_tokens": 511,
+      "source_sha256": "03d748d2b941621bc74b851677de99bf495270384706515374d8be367673dab7"
+    },
+    {
+      "mode": "served",
+      "job": "anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.cap512.seed43",
+      "decode_tokens": 511,
+      "source_sha256": "acf053da9f08ed26b0545056f3c1a7ae38dfc4eacdc01c9af9c497c32556c1b5"
+    },
+    {
+      "mode": "served",
+      "job": "anomaly.matplotlib__matplotlib-20488.call82.onset.cap512.seed42",
+      "decode_tokens": 493,
+      "source_sha256": "02c13a3222102146a01e26e46c880c58a323fbb4337472a8f1907265e6afaa7e"
+    },
+    {
+      "mode": "served",
+      "job": "anomaly.call88.canonicalprefix.cap512.seed42",
+      "decode_tokens": 511,
+      "source_sha256": "1358e74c8ed61914cd730785fbea34bbb2a40d5d0ba90db52e3960fcabe5f198"
+    },
+    {
+      "mode": "served",
+      "job": "anomaly.sphinx-doc__sphinx-11510.call28.onset.cap512.seed43",
+      "decode_tokens": 510,
+      "source_sha256": "ff4e6be65a297402e8e975a1cf15ed835cff818a291d33b797ebe34e093b37f9"
+    },
+    {
+      "mode": "served",
+      "job": "anomaly.scikit-learn__scikit-learn-13135.call29.onset.cap512.seed42",
+      "decode_tokens": 465,
+      "source_sha256": "64c679d381610abf89aac0e9261c9851dcdbe00d8c328563c512922bf447853c"
+    },
+    {
+      "mode": "served",
+      "job": "anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.cap512.seed44",
+      "decode_tokens": 453,
+      "source_sha256": "2a1ee3a825384bfeff63e29d3ded37723dad0e31fa9ad77e2857e30d7336c550"
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.xarray7233-call1.canonicalprefix.cap512.seed42",
+      "decode_tokens": 321,
+      "source_sha256": "09a125ccd5fcb75b5409a63ce200bd24aed7b279811392cd827e5881e821cdd0"
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.call91.canonicalprefix.cap512.seed44",
+      "decode_tokens": 511,
+      "source_sha256": "747c9bd5c9674c16c8bfa189824bc5c26d5b9306bddb6c607ea3458a50b36785"
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.call88.canonicalprefix.cap512.seed43",
+      "decode_tokens": 511,
+      "source_sha256": "18b9082ede5634fa7addf968924a9c57baceed3c9674f2b193be283bbc8ac28d"
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.sphinx-doc__sphinx-9461.call184.onset.cap512.seed42",
+      "decode_tokens": 511,
+      "source_sha256": "aa29d23d75545a227bbaa0087bc120b8f25ca93ad67b13d8d483da5ff187db5a"
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.cap512.seed44",
+      "decode_tokens": 511,
+      "source_sha256": "4e05b7ccf7242153d24af07c9b8ff23cd32dfccd33705a89202a4152e16ee657"
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.pytest-dev__pytest-5787.call65.onset.cap512.seed42",
+      "decode_tokens": 511,
+      "source_sha256": "71ddff2767dcfbc635843aa34e9c9bec37f31976365a550005fe05b4e89615d0"
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.xarray7233-call1.canonicalprefix.cap512.seed43",
+      "decode_tokens": 369,
+      "source_sha256": "8bccbe6d1d135f8b0ce0567d2cd3cf7fc02f241e7ad8ab33705d6faee1e10e25"
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.sphinx-doc__sphinx-11510.call28.onset.cap512.seed42",
+      "decode_tokens": 511,
+      "source_sha256": "6f61026f09522249f075eff633a7bc9674fad3a9c1cf03c8e709d80b9a5966eb"
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.cap512.seed42",
+      "decode_tokens": 511,
+      "source_sha256": "b3ba251fdb4c718046989727acfc1c4f2418fdfc47a734ec392fddcf3923117a"
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap512.seed42",
+      "decode_tokens": 511,
+      "source_sha256": "e2b642959c7025ede1de4927863e40c349afe4672dcb98809e1f846f40da5dc2"
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.cap512.seed42",
+      "decode_tokens": 511,
+      "source_sha256": "c6ecadd40547c63de85c38152cf757a5e6aa03fece7b8589a9be172076596e6b"
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.sympy__sympy-13551.call1.onset.cap512.seed43",
+      "decode_tokens": 296,
+      "source_sha256": "2be661f159eeabb7dd3ccaff7af97ad7c9854c48a08238e855a0b19db6d68529"
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.scikit-learn__scikit-learn-13135.call29.onset.cap512.seed43",
+      "decode_tokens": 332,
+      "source_sha256": "3c84da4c1ac6fdca0ba6779fe6c8d9e27b983b4ccaba1fb2d5257975721ca385"
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.cap512.seed43",
+      "decode_tokens": 511,
+      "source_sha256": "f79dc8a5609cc42429c63840ee855bb30883dafcc080c03a02e63e251ba6411d"
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.sphinx-doc__sphinx-11510.call28.onset.cap512.seed44",
+      "decode_tokens": 435,
+      "source_sha256": "56772e0c4533c8b21f64d9ff7f060d909227f4ec477d438cb381b68205864f8f"
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.sphinx-doc__sphinx-9461.call184.onset.cap512.seed43",
+      "decode_tokens": 511,
+      "source_sha256": "ddbc29482e4ef92f0fb5d7967d7e4c04458ac33e1be393bd8a79c6d189b2c872"
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap512.seed43",
+      "decode_tokens": 511,
+      "source_sha256": "fd94ec9981ba9a6d12cf0c1695a0cad0994a9eb3c0fcd87d8f602666d3a3f707"
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.cap512.seed44",
+      "decode_tokens": 511,
+      "source_sha256": "57bc21f9ac53379a5e8e3fd3b36a623ca4dec752d4979213daa963cb4f1c81df"
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.pytest-dev__pytest-5787.call65.onset.cap512.seed43",
+      "decode_tokens": 511,
+      "source_sha256": "4360934f655ff0a6f3900c7d5eb63fb1ef09af6403b450bf7954c2c2ca337328"
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.sphinx-doc__sphinx-9461.call184.onset.cap512.seed44",
+      "decode_tokens": 286,
+      "source_sha256": "42c3fbcc9baad730af0652877f5d8f6276a63fc2dfea7910bf716e3bfc4e9eed"
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.cap512.seed42",
+      "decode_tokens": 511,
+      "source_sha256": "0b2e8beb4f6be4cb8c1abb7fe0a45b7ad92fd17c9c70241c68b90970e20da5b5"
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap512.seed44",
+      "decode_tokens": 511,
+      "source_sha256": "b66d7be79d6633ab249243ef2f1cc62014662e820fa7e51515d6250804f93c95"
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.pytest-dev__pytest-5787.call65.onset.cap512.seed44",
+      "decode_tokens": 511,
+      "source_sha256": "884105c2a905f1c27b6cda62d02b6b8f653729e6e97184e580eaff2e9ca2faf9"
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.sphinx-doc__sphinx-10323.call57.onset.cap512.seed42",
+      "decode_tokens": 350,
+      "source_sha256": "d832e1c6df2f51df3f36600b833b633ab7014409979d7f454736d43aa45be55f"
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.call88.canonicalprefix.cap512.seed44",
+      "decode_tokens": 511,
+      "source_sha256": "4d543fe0fc6fe667b3e58ea73214cb2cf793180613bbbda4d0a37cc96eee20b2"
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.xarray7233-call1.canonicalprefix.cap512.seed44",
+      "decode_tokens": 285,
+      "source_sha256": "d3a8a3aa2f45e24e63fd3b11cfde65eb9cbf879c4c68fcf67bbead7117eee29f"
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.cap512.seed43",
+      "decode_tokens": 511,
+      "source_sha256": "142eeee86fb5b72cffcf679d15b09341d3844ecfb74e560d772d6ac865535d90"
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.call88.canonicalprefix.cap512.seed42",
+      "decode_tokens": 511,
+      "source_sha256": "684a5523073a360057dc00f9d266056a51308f69011a23ff76a550c1e4ecfc0e"
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.sphinx-doc__sphinx-11510.call28.onset.cap512.seed43",
+      "decode_tokens": 511,
+      "source_sha256": "b272601f8a7de63b61df79ede4b26115df1bb4a19246bf2bbf3c4ef2a81a8960"
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.sphinx-doc__sphinx-10323.call57.onset.cap512.seed44",
+      "decode_tokens": 453,
+      "source_sha256": "8bb5d3acf404ca5d7a0e488af2125d83da451afa53a67c8570b5dc894cb150c4"
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.cap512.seed43",
+      "decode_tokens": 511,
+      "source_sha256": "55d1b1f251642a06f436196f7cd1dcadc57cb8b055fd3b14498c529f1a04b93f"
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.scikit-learn__scikit-learn-13135.call29.onset.cap512.seed42",
+      "decode_tokens": 511,
+      "source_sha256": "0c8c1b05d5eb308b5101a9cbfaac37905ce80759d1819a68260e364cd4026b60"
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.cap512.seed44",
+      "decode_tokens": 511,
+      "source_sha256": "2dd4aa97047bf51777098282da9982666c6917b92281015946334bdf9c56bf4f"
+    }
+  ]
+}

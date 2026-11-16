@@ -1,0 +1,5 @@
+{
+  "reason": "After launch, upstream seven-case review was amended only to clarify parser scope and update independent-triage hash. Seven-case semantic verdict remains7normal. Frozen admission references the preserved preamendment hash.",
+  "old_review_sha256": "0b778d7f7d32e1e734811b9b2fb7bb7b2052f95ecf86e8fac6838b6aa4bfe7f9",
+  "updated_review_sha256": "b3b849bcf7da8c5c61839bca14a303b67c6bf580f616f9a4e934bd22f30f1c95"
+}

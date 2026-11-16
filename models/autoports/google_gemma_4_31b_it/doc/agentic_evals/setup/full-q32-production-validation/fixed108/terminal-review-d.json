@@ -1,0 +1,123 @@
+{
+  "status": "independent_host_only_terminal_audit",
+  "scope": "Full-BF16 HiFi4 Q32 fixed108 identity/runtime/timing review; not semantic slice adjudication or policy selection.",
+  "completion": {
+    "start_unix": 1794778823.4747014,
+    "end_unix": 1794782823.681505,
+    "exit_code": 0,
+    "wall_seconds": 4000.206803560257
+  },
+  "forecast": {
+    "forecast_seconds": {
+      "low": 3500,
+      "point": 4316.73,
+      "high": 6000
+    },
+    "timeout_seconds": 6600,
+    "anchors": {
+      "P19_Q32_fixed108_seconds": 3342.1836173534393,
+      "P19_Q32_prefill_and_first_token_seconds": 1601.9326009110082,
+      "P19_Q32_decode_tokens": 28128,
+      "current_full_BF16_load_seconds": 77.67741206008941,
+      "current_full_BF16_long_case_decode_tps": 15.318977345405365
+    },
+    "basis": "Current fullBF16 two-case controls both passed protocol; estimate one measured full load plus P19 observed nondecode time at1.5 allowance plus same decoded token count at measured full long-case diagnostic rate. Output lengths can change; high6000 and timeout6600 include this uncertainty. Diagnostic only, not vLLM forecast.",
+    "extension_reserve_seconds": 1000,
+    "closure_reserve_seconds": 3600,
+    "reason": "FullBF16 restores2P19protocol defects; current full-policy fixed108 evidence is a remaining necessary prerequisite that fits available time. No policy selection/scoredrerun admitted."
+  },
+  "manifest": {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/candidate-cases.json",
+    "sha256": "57193e4b91af3a31df00f0c92dbc0f2219fbce011e6533594e5244a93a3021ed",
+    "expected_jobs": 108,
+    "unique_names": 108,
+    "result_files_excluding_load": 108
+  },
+  "source_pin_audit": {
+    "admission_pin_count": 146,
+    "all_current_hashes_match": true,
+    "mismatches": []
+  },
+  "identity_policy_checks": {
+    "checked_rows": 108,
+    "all_results_present": true,
+    "all_manifest_names_unique": true,
+    "result_case_fixture_objects_exact": true,
+    "prompt_ids_and_chosen_continuations_match_frozen_sources": true,
+    "seed_and_sampling_exact": true,
+    "cap_and_trial_valid": true,
+    "runtime_precision_equals_full_precision_config_all_rows": true,
+    "caps": {
+      "256": 72,
+      "512": 7,
+      "1024": 22,
+      "2048": 6,
+      "4096": 1
+    },
+    "prompt_lengths_min_median_max": [
+      1175,
+      28889.0,
+      76441
+    ],
+    "errors": []
+  },
+  "runtime_policy": {
+    "config_id": "stage12_bf16_hifi4_diagnostic",
+    "weight_groups": {
+      "attention": "bf16",
+      "mlp": "bf16",
+      "down": "bf16",
+      "lm_head": "bf16"
+    },
+    "layer_exceptions": {},
+    "compute_fidelities": {
+      "attention": "HiFi4",
+      "mlp": "HiFi4",
+      "down": "HiFi4",
+      "lm_head": "HiFi4"
+    },
+    "activation_dtype": "bfloat16",
+    "residual_dtype": "bfloat16",
+    "ccl_dtype": {
+      "prefill": "bfloat16",
+      "decode": "bfloat16"
+    },
+    "kv_cache_dtype": "bfloat16",
+    "logits_dtype": "bfloat16",
+    "sampling_dtype": "bfloat16",
+    "embedding_dtype": "bfloat16",
+    "norm_dtype": "bfloat16",
+    "max_seq_len": 262144,
+    "sdpa_compute_fidelity": "HiFi4"
+  },
+  "timing": {
+    "actual_wall_seconds": 4000.206803560257,
+    "forecast_seconds": {
+      "low": 3500,
+      "point": 4316.73,
+      "high": 6000
+    },
+    "load_json_path": "setup/full-q32-production-validation/fixed108/runs/load.json",
+    "load_json_sha256": "97723e7cdb8bf182a3aa0ebf1d7bcc09c3b3be3776f9a6d0125326345bfd62be",
+    "measured_load_wall_s": 77.0810592500493,
+    "sum_diagnostic_trial_wall_s": 3917.822338497732,
+    "residual_wall_after_load_and_trials_s": 5.30340581247583,
+    "trace_allocation_tracking": 1,
+    "qualification": "Actual wall is within forecast range (above low, below point). Sum of generated token counts is compared with prior P19 Q32, but output lengths differ and elapsed time includes diagnostic prefills; not a normalized throughput or causal speed comparison."
+  },
+  "generated_tokens": {
+    "full_bf16_q32_sum": 27077,
+    "p19_q32_sum": 28236,
+    "delta_fullbf16_minus_p19q32": -1159,
+    "full_min_median_max": [
+      15,
+      165.0,
+      1553
+    ],
+    "p19_min_median_max": [
+      15,
+      197.0,
+      1887
+    ]
+  }
+}

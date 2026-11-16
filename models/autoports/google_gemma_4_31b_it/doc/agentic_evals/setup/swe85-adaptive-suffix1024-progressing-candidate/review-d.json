@@ -1,0 +1,79 @@
+{
+  "reviewer": "independent CPU-only fixture/forecast review",
+  "scope": "fixture validity and planning arithmetic only; not admission, anomaly resolution, or stage signoff",
+  "status": "clean after preparation allowance addition",
+  "finding": "Branchless 1024-cap projections now include one measured first generator trace-preparation allowance (12.163562920875847 s) outside variable-work multipliers. The source process had warmed through chosen TF; this branchless run does not.",
+  "fixture_checks": [
+    {
+      "job": "anomaly.psf__requests-5414.call11.onset.suffix1024.cap1024.seed42",
+      "fixture_exact": true,
+      "seed": 42,
+      "branchless": true,
+      "cap": 1024
+    },
+    {
+      "job": "anomaly.matplotlib__matplotlib-20488.call86.onset.suffix1024.cap1024.seed42",
+      "fixture_exact": true,
+      "seed": 42,
+      "branchless": true,
+      "cap": 1024
+    }
+  ],
+  "forecast_recalculation": {
+    "load_fixed_s": 77.84875810099766,
+    "first_trace_preparation_fixed_s": 12.163562920875847,
+    "variable_case_work_s": 120.64421984301507,
+    "point_s": 210.65654086488857,
+    "range_s": [
+      174.46327491198406,
+      295.10749475499915
+    ]
+  },
+  "cpu_validation": "Re-ran --validate-only; validated 2 jobs without importing TTNN.",
+  "no_device_work": true,
+  "no_admission": true,
+  "reviewed_sha256": {
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-extra-contraction-controls/sphinx-doc__sphinx-10323.call70.onset.private.json": "7d39e2c87e91327f35317968bf2647887a402d0086085ec8f95db8ff5fc2ab64",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-precision/call91/canonicalprefix/case.private.json": "3d32de201c14cf805635d3e38fafc2ff220202aded67b71861e16df4fbdf9180",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-protocol-scan83-controls/matplotlib__matplotlib-20488.call86.onset.private.json": "c11bb5890af7b0166bbbb61c44a3200e58aa3eb4b509403759fbb162ae58d179",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-requests5414-caret-controls/psf__requests-5414.call10.onset.private.json": "38cba2429d022e64133da2c34388d9e88a9b26b82ec58594153692842dccb961",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-requests5414-caret-controls/psf__requests-5414.call11.onset.private.json": "50cbd0eb4e62c843a1ec8ac800a580135c3abc5dc2154d6be0a7e39d0c37ed6f",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_build_kwargs.json": "ff2b5ed24e0b6a1dee7eb5cd8bd437d17c3df5f8f25567927d239e666f0699f9",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/head_bfp8_build_kwargs.json": "2e583fa8bd7aff7c5f8be110835df751924d167243c5a44a68aa5b3d70c6845f",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024-progressing-candidate/README.md": "42f81b3588d431ff2ccaa069b66ce91698f138563df4ed0bfa420a15768a1da4",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024-progressing-candidate/command.json": "404637f5894dc098605b8eef5dae506b42848d4c5546336245a401ce062d8a29",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024-progressing-candidate/cpu-validation.json": "0df45d78d70f011c07fcbcb45b8d66564ab97c1c42792fc20b06352eba87a133",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024-progressing-candidate/fixtures/anomaly.matplotlib__matplotlib-20488.call86.onset.suffix1024.cap1024.seed42.private.json": "c34417c0f01d6e78eb4135f3f679c0d706bf9677ee65e3fab121e9ff9ec84192",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024-progressing-candidate/fixtures/anomaly.psf__requests-5414.call11.onset.suffix1024.cap1024.seed42.private.json": "7ea1fe684ccda8d471948d9decc4350fb2efa70d3257eba5a63d0f124313369a",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024-progressing-candidate/forecast.json": "23db981fdcd7f9784b61fbf9e337e1f171c67af9137f175997d454a0ece084c1",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024-progressing-candidate/full-cases.json": "6ca165de414d9c29905de2ace1495ae0cf7947501ccc664216a67f723de01421",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024-progressing-candidate/provenance.json": "1ca0508247685bfd538fdfe2cb07fe28d4b1bf27505bfcbe579aba6aecba76cf",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/fixtures/anomaly.matplotlib__matplotlib-20488.call86.onset.suffix1024.private.json": "56a0d881cd7c275743511dd2ac716c2755c913cbc014e7c9c1dd0713ce46a283",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/fixtures/anomaly.psf__requests-5414.call11.onset.suffix1024.private.json": "069a6794c0474028161f64153453577e07bc1cbde4690d0e77cef0286214ab65",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/full.log": "401c3e9acd302ba8100d3eb8abb95d252af014f4ab48f563621171d6b5380036",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/full/anomaly.call91.canonicalprefix.json": "9ca5ad50c2d6a88f9d777afd8c2e0f9e01b5ab9b6e66f021dc0fe60871e60cc8",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/full/anomaly.matplotlib__matplotlib-20488.call86.onset.json": "a2dc3012fc83468f00dd3dfc66c82c940c093b5b2c6c72c4a7a1bfd09631e7a9",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/full/anomaly.psf__requests-5414.call10.onset.json": "09a4a0cf9159ccdafa8913902f0b53f63c337f33720ea559228c51877a4f90dd",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/full/anomaly.psf__requests-5414.call11.onset.json": "6a22257dbe5b30dec221560fc555e6331e83891872d9e274b89be6b293718b82",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/full/anomaly.sphinx-doc__sphinx-10323.call70.onset.json": "a441ba44ab8294f359c1ea864d045cc4e6fb5d123930684db4b02ee3c1749f77",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/full/load.json": "ff0eaf01861f3664665eb2236dc13d8a0014e981597b0329453dca9ca22768df",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/served/anomaly.call91.canonicalprefix.json": "4291808df0b2ba86956bd4924a8b60e7afcdd7809666f321c8b47ea5803da3eb",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/served/anomaly.matplotlib__matplotlib-20488.call86.onset.json": "0aea28389faa2da5325d78a67b05beadd6c6dd2178fab7e4f56e6f34cef9ca34",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/served/anomaly.psf__requests-5414.call10.onset.json": "90e92015185c5b1b89afbbcd5d11660140b2dee258d055d40dd1025fe36b2476",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/served/anomaly.psf__requests-5414.call11.onset.json": "1a7ec3c160f707145b3d285fd349339348b36cad70dfd5e653c1bf2d0c345c67",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/served/anomaly.sphinx-doc__sphinx-10323.call70.onset.json": "ce633f522c58657f78738d741d04aaca2e58704a8ea0aac93fa8b71440cb2187",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/served/load.json": "6a6e844c58ef400155eb5d22f6354fab01216cf02cc08523f8b5b9309e7062cc",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/README.md": "7445a7c5c0384b66f5b53bf7c343702beb975276bcd9aef6fb56d0625307e312",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/command.json": "3fbbaaa521a0142a33562128c41fe84eccf0a1fa49d072e134e0b213c6a9b6d1",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/cpu-validation.json": "8e83cd8ff02e25942d040609ec711fa49722256ffd245d8a7a7db5b845b66ad1",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/fixtures/anomaly.call91.canonicalprefix.suffix2048.private.json": "c080373efe66b1b5538a3897c372d6db91f8d94db252e1dcf4931b7b0f8f09f0",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/fixtures/anomaly.matplotlib__matplotlib-20488.call86.onset.suffix2048.private.json": "af7483e113b3d7d565ae54cf38a867a93ab1b3c5294b87033f4edf93dd7269a3",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/fixtures/anomaly.psf__requests-5414.call10.onset.suffix2048.private.json": "4cb0ce0c350d029b506ecd31cd5df6a6f0a02a0c49f56761a478f7a1f6b4c781",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/fixtures/anomaly.psf__requests-5414.call11.onset.suffix2048.private.json": "fbe984e026dbe8ef2b9d8a4288056617cbfde5235d1efd4a3bd14038a2db5ad7",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/fixtures/anomaly.sphinx-doc__sphinx-10323.call70.onset.suffix2048.private.json": "3267a7e718c71d0fa067a781f948b1c3d07d335891a90057b4c21435c146f0b1",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/forecast.json": "cb5536feea14246ddef1572d0d9c3742b6c7600ea9db71fa554ffacd51aea0a5",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/full-cases.json": "f74b251f4ba5ef9566cec85b0ba89dff8084a497c8b1517630487423c5dc391e",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/provenance.json": "274b58d099358005a152cc4d98c6be5809a6f9b3b1715e280245fce309950b0a",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/served-cases.json": "f74b251f4ba5ef9566cec85b0ba89dff8084a497c8b1517630487423c5dc391e"
+  }
+}

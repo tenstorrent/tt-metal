@@ -1,0 +1,397 @@
+{
+  "status": "planning_only_not_serving_performance",
+  "method": "Per selected matched 512-token run, preserve measured prefill/host overhead (diagnostic wall minus decode wall) and scale decode by 1023/511, then add same-mode observed model-load time and a first-preparation allowance. Range is 0.7x–1.5x case work plus fixed load/preparation.",
+  "first_preparation_allowance_seconds": 180,
+  "modes": {
+    "served": {
+      "jobs": 14,
+      "load_sources": [
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/served/load.json",
+          "wall_s": 144.17307648900896,
+          "sha256": "82e21dc216777029ea6a6590fa3210955c012a23bc744906638797adae0266fb"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/load.json",
+          "wall_s": 140.70528853707947,
+          "sha256": "b5ed68750af790c5531343cda33e373bc6eeeea0b210de1d98e6d2b8a963c5a6"
+        }
+      ],
+      "load_seconds_used": 144.17307648900896,
+      "first_preparation_allowance_seconds": 180,
+      "case_estimates": [
+        {
+          "job": "anomaly.call88.canonicalprefix.cap1024.seed42",
+          "seed": 42,
+          "source_prefill_host_overhead_seconds": 13.105473581235856,
+          "source_decode_tokens": 511,
+          "source_decode_seconds": 17.011989525984973,
+          "projected_1023_decode_seconds": 34.05727061660005,
+          "projected_case_seconds": 47.162744197835906
+        },
+        {
+          "job": "anomaly.call88.canonicalprefix.cap1024.seed43",
+          "seed": 43,
+          "source_prefill_host_overhead_seconds": 13.094595534028485,
+          "source_decode_tokens": 511,
+          "source_decode_seconds": 16.994700012961403,
+          "projected_1023_decode_seconds": 34.02265775588946,
+          "projected_case_seconds": 47.11725328991795
+        },
+        {
+          "job": "anomaly.call88.canonicalprefix.cap1024.seed44",
+          "seed": 44,
+          "source_prefill_host_overhead_seconds": 13.080482944147661,
+          "source_decode_tokens": 511,
+          "source_decode_seconds": 16.99886780977249,
+          "projected_1023_decode_seconds": 34.03100150566978,
+          "projected_case_seconds": 47.11148444981744
+        },
+        {
+          "job": "anomaly.matplotlib__matplotlib-20488.call86.onset.cap1024.seed44",
+          "seed": 44,
+          "source_prefill_host_overhead_seconds": 12.913913944037631,
+          "source_decode_tokens": 511,
+          "source_decode_seconds": 16.948219367070124,
+          "projected_1023_decode_seconds": 33.92960550393882,
+          "projected_case_seconds": 46.84351944797645
+        },
+        {
+          "job": "anomaly.pytest-dev__pytest-5787.call65.onset.cap1024.seed43",
+          "seed": 43,
+          "source_prefill_host_overhead_seconds": 16.012069640913978,
+          "source_decode_tokens": 511,
+          "source_decode_seconds": 17.321642624912784,
+          "projected_1023_decode_seconds": 34.677182789208956,
+          "projected_case_seconds": 50.689252430122934
+        },
+        {
+          "job": "anomaly.sphinx-doc__sphinx-11510.call28.onset.cap1024.seed44",
+          "seed": 44,
+          "source_prefill_host_overhead_seconds": 5.64200087916106,
+          "source_decode_tokens": 511,
+          "source_decode_seconds": 15.943914880976081,
+          "projected_1023_decode_seconds": 31.91903116093646,
+          "projected_case_seconds": 37.561032040097516
+        },
+        {
+          "job": "anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.cap1024.seed42",
+          "seed": 42,
+          "source_prefill_host_overhead_seconds": 16.88303064997308,
+          "source_decode_tokens": 511,
+          "source_decode_seconds": 17.398326511029154,
+          "projected_1023_decode_seconds": 34.830700627755036,
+          "projected_case_seconds": 51.713731277728115
+        },
+        {
+          "job": "anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.cap1024.seed43",
+          "seed": 43,
+          "source_prefill_host_overhead_seconds": 16.874365916009992,
+          "source_decode_tokens": 511,
+          "source_decode_seconds": 17.409075659001246,
+          "projected_1023_decode_seconds": 34.85221995921384,
+          "projected_case_seconds": 51.72658587522383
+        },
+        {
+          "job": "anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.cap1024.seed44",
+          "seed": 44,
+          "source_prefill_host_overhead_seconds": 16.87254012422636,
+          "source_decode_tokens": 511,
+          "source_decode_seconds": 17.41121627087705,
+          "projected_1023_decode_seconds": 34.85650537202979,
+          "projected_case_seconds": 51.72904549625615
+        },
+        {
+          "job": "anomaly.sphinx-doc__sphinx-9461.call184.onset.cap1024.seed42",
+          "seed": 42,
+          "source_prefill_host_overhead_seconds": 24.736114518949762,
+          "source_decode_tokens": 511,
+          "source_decode_seconds": 18.210560891078785,
+          "projected_1023_decode_seconds": 36.456758887619564,
+          "projected_case_seconds": 61.192873406569326
+        },
+        {
+          "job": "anomaly.sphinx-doc__sphinx-9461.call184.onset.cap1024.seed43",
+          "seed": 43,
+          "source_prefill_host_overhead_seconds": 24.769458379829302,
+          "source_decode_tokens": 511,
+          "source_decode_seconds": 18.211241701152176,
+          "projected_1023_decode_seconds": 36.458121840075684,
+          "projected_case_seconds": 61.227580219904986
+        },
+        {
+          "job": "anomaly.sphinx-doc__sphinx-9461.call184.onset.cap1024.seed44",
+          "seed": 44,
+          "source_prefill_host_overhead_seconds": 24.73852281901054,
+          "source_decode_tokens": 511,
+          "source_decode_seconds": 18.211481496924534,
+          "projected_1023_decode_seconds": 36.45860190088806,
+          "projected_case_seconds": 61.1971247198986
+        },
+        {
+          "job": "anomaly.xarray7233-call1.canonicalprefix.cap1024.seed42",
+          "seed": 42,
+          "source_prefill_host_overhead_seconds": 9.97930142073892,
+          "source_decode_tokens": 511,
+          "source_decode_seconds": 14.78859083307907,
+          "projected_1023_decode_seconds": 29.606122157025222,
+          "projected_case_seconds": 39.585423577764146
+        },
+        {
+          "job": "anomaly.xarray7233-call1.canonicalprefix.cap1024.seed44",
+          "seed": 44,
+          "source_prefill_host_overhead_seconds": 0.29743021121248603,
+          "source_decode_tokens": 511,
+          "source_decode_seconds": 14.796505318954587,
+          "projected_1023_decode_seconds": 29.621966617006933,
+          "projected_case_seconds": 29.91939682821942
+        }
+      ],
+      "estimated_total_seconds": 1008.9501237463418,
+      "estimated_range_seconds": [
+        803.5170095691419,
+        1351.3386473750081
+      ]
+    },
+    "full": {
+      "jobs": 24,
+      "load_sources": [
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/full/load.json",
+          "wall_s": 78.36897834506817,
+          "sha256": "cc5db79ed82d3c92c96961657d53aa8f5903c9cf5c9aabada9ed1e66bb82fafa"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/load.json",
+          "wall_s": 75.54386684880592,
+          "sha256": "6fa1c06ad0cbd8a0b7033d0cd3bef542b62412704c92841b2b8df7b38348dbda"
+        }
+      ],
+      "load_seconds_used": 78.36897834506817,
+      "first_preparation_allowance_seconds": 180,
+      "case_estimates": [
+        {
+          "job": "anomaly.call88.canonicalprefix.cap1024.seed42",
+          "seed": 42,
+          "source_prefill_host_overhead_seconds": 22.598468957003206,
+          "source_decode_tokens": 511,
+          "source_decode_seconds": 32.3837083959952,
+          "projected_1023_decode_seconds": 64.8307899982448,
+          "projected_case_seconds": 87.429258955248
+        },
+        {
+          "job": "anomaly.call88.canonicalprefix.cap1024.seed43",
+          "seed": 43,
+          "source_prefill_host_overhead_seconds": 22.631242965115234,
+          "source_decode_tokens": 511,
+          "source_decode_seconds": 32.37327621295117,
+          "projected_1023_decode_seconds": 64.80990521692573,
+          "projected_case_seconds": 87.44114818204096
+        },
+        {
+          "job": "anomaly.call88.canonicalprefix.cap1024.seed44",
+          "seed": 44,
+          "source_prefill_host_overhead_seconds": 22.63765244395472,
+          "source_decode_tokens": 511,
+          "source_decode_seconds": 32.38416632800363,
+          "projected_1023_decode_seconds": 64.83170675841039,
+          "projected_case_seconds": 87.46935920236511
+        },
+        {
+          "job": "anomaly.call91.canonicalprefix.cap1024.seed44",
+          "seed": 44,
+          "source_prefill_host_overhead_seconds": 23.651415147818625,
+          "source_decode_tokens": 511,
+          "source_decode_seconds": 32.45537674007937,
+          "projected_1023_decode_seconds": 64.97426693757573,
+          "projected_case_seconds": 88.62568208539436
+        },
+        {
+          "job": "anomaly.pytest-dev__pytest-5787.call65.onset.cap1024.seed42",
+          "seed": 42,
+          "source_prefill_host_overhead_seconds": 27.174021884799004,
+          "source_decode_tokens": 511,
+          "source_decode_seconds": 32.73312437813729,
+          "projected_1023_decode_seconds": 65.53030575114373,
+          "projected_case_seconds": 92.70432763594273
+        },
+        {
+          "job": "anomaly.pytest-dev__pytest-5787.call65.onset.cap1024.seed43",
+          "seed": 43,
+          "source_prefill_host_overhead_seconds": 27.21259146905504,
+          "source_decode_tokens": 511,
+          "source_decode_seconds": 32.73449413198978,
+          "projected_1023_decode_seconds": 65.53304793938462,
+          "projected_case_seconds": 92.74563940843966
+        },
+        {
+          "job": "anomaly.pytest-dev__pytest-5787.call65.onset.cap1024.seed44",
+          "seed": 44,
+          "source_prefill_host_overhead_seconds": 27.1940019861795,
+          "source_decode_tokens": 511,
+          "source_decode_seconds": 32.73183297784999,
+          "projected_1023_decode_seconds": 65.527720423367,
+          "projected_case_seconds": 92.7217224095465
+        },
+        {
+          "job": "anomaly.scikit-learn__scikit-learn-13135.call29.onset.cap1024.seed42",
+          "seed": 42,
+          "source_prefill_host_overhead_seconds": 6.569867080077529,
+          "source_decode_tokens": 511,
+          "source_decode_seconds": 30.82965075201355,
+          "projected_1023_decode_seconds": 61.71963350158485,
+          "projected_case_seconds": 68.28950058166238
+        },
+        {
+          "job": "anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.cap1024.seed42",
+          "seed": 42,
+          "source_prefill_host_overhead_seconds": 30.98981090891175,
+          "source_decode_tokens": 511,
+          "source_decode_seconds": 32.99147246195935,
+          "projected_1023_decode_seconds": 66.0475074923374,
+          "projected_case_seconds": 97.03731840124915
+        },
+        {
+          "job": "anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.cap1024.seed43",
+          "seed": 43,
+          "source_prefill_host_overhead_seconds": 30.964591321069747,
+          "source_decode_tokens": 511,
+          "source_decode_seconds": 33.01266127289273,
+          "projected_1023_decode_seconds": 66.0899265795876,
+          "projected_case_seconds": 97.05451790065734
+        },
+        {
+          "job": "anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.cap1024.seed44",
+          "seed": 44,
+          "source_prefill_host_overhead_seconds": 30.96916048694402,
+          "source_decode_tokens": 511,
+          "source_decode_seconds": 32.99867889005691,
+          "projected_1023_decode_seconds": 66.06193445113153,
+          "projected_case_seconds": 97.03109493807555
+        },
+        {
+          "job": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap1024.seed42",
+          "seed": 42,
+          "source_prefill_host_overhead_seconds": 44.913731954060495,
+          "source_decode_tokens": 511,
+          "source_decode_seconds": 33.92719025700353,
+          "projected_1023_decode_seconds": 67.9207742327096,
+          "projected_case_seconds": 112.8345061867701
+        },
+        {
+          "job": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap1024.seed43",
+          "seed": 43,
+          "source_prefill_host_overhead_seconds": 44.89711508806795,
+          "source_decode_tokens": 511,
+          "source_decode_seconds": 33.92660720599815,
+          "projected_1023_decode_seconds": 67.91960698969885,
+          "projected_case_seconds": 112.8167220777668
+        },
+        {
+          "job": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap1024.seed44",
+          "seed": 44,
+          "source_prefill_host_overhead_seconds": 44.880341053940356,
+          "source_decode_tokens": 511,
+          "source_decode_seconds": 33.939343858044595,
+          "projected_1023_decode_seconds": 67.9451052187468,
+          "projected_case_seconds": 112.82544627268716
+        },
+        {
+          "job": "anomaly.sphinx-doc__sphinx-11510.call28.onset.cap1024.seed42",
+          "seed": 42,
+          "source_prefill_host_overhead_seconds": 10.221880556084216,
+          "source_decode_tokens": 511,
+          "source_decode_seconds": 31.21118950494565,
+          "projected_1023_decode_seconds": 62.483457658628964,
+          "projected_case_seconds": 72.70533821471318
+        },
+        {
+          "job": "anomaly.sphinx-doc__sphinx-11510.call28.onset.cap1024.seed43",
+          "seed": 43,
+          "source_prefill_host_overhead_seconds": 10.252768157050014,
+          "source_decode_tokens": 511,
+          "source_decode_seconds": 31.229047073051333,
+          "projected_1023_decode_seconds": 62.51920774115756,
+          "projected_case_seconds": 72.77197589820757
+        },
+        {
+          "job": "anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.cap1024.seed42",
+          "seed": 42,
+          "source_prefill_host_overhead_seconds": 23.03912094095722,
+          "source_decode_tokens": 511,
+          "source_decode_seconds": 32.398259822046384,
+          "projected_1023_decode_seconds": 64.85992132671907,
+          "projected_case_seconds": 87.8990422676763
+        },
+        {
+          "job": "anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.cap1024.seed43",
+          "seed": 43,
+          "source_prefill_host_overhead_seconds": 23.089534995146096,
+          "source_decode_tokens": 511,
+          "source_decode_seconds": 32.41049834480509,
+          "projected_1023_decode_seconds": 64.88442232237888,
+          "projected_case_seconds": 87.97395731752498
+        },
+        {
+          "job": "anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.cap1024.seed44",
+          "seed": 44,
+          "source_prefill_host_overhead_seconds": 23.030508562922478,
+          "source_decode_tokens": 511,
+          "source_decode_seconds": 32.40863915998489,
+          "projected_1023_decode_seconds": 64.88070031441201,
+          "projected_case_seconds": 87.91120887733449
+        },
+        {
+          "job": "anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.cap1024.seed42",
+          "seed": 42,
+          "source_prefill_host_overhead_seconds": 28.539893879787996,
+          "source_decode_tokens": 511,
+          "source_decode_seconds": 32.833820996107534,
+          "projected_1023_decode_seconds": 65.73189604504502,
+          "projected_case_seconds": 94.27178992483302
+        },
+        {
+          "job": "anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.cap1024.seed43",
+          "seed": 43,
+          "source_prefill_host_overhead_seconds": 28.541664086980745,
+          "source_decode_tokens": 511,
+          "source_decode_seconds": 32.8175683261361,
+          "projected_1023_decode_seconds": 65.69935889948577,
+          "projected_case_seconds": 94.24102298646652
+        },
+        {
+          "job": "anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.cap1024.seed44",
+          "seed": 44,
+          "source_prefill_host_overhead_seconds": 28.564749751938507,
+          "source_decode_tokens": 511,
+          "source_decode_seconds": 32.8241130260285,
+          "projected_1023_decode_seconds": 65.71246110690245,
+          "projected_case_seconds": 94.27721085884096
+        },
+        {
+          "job": "anomaly.sphinx-doc__sphinx-9461.call184.onset.cap1024.seed42",
+          "seed": 42,
+          "source_prefill_host_overhead_seconds": 41.098681828938425,
+          "source_decode_tokens": 511,
+          "source_decode_seconds": 33.69616312510334,
+          "projected_1023_decode_seconds": 67.45826786101901,
+          "projected_case_seconds": 108.55694968995743
+        },
+        {
+          "job": "anomaly.sphinx-doc__sphinx-9461.call184.onset.cap1024.seed43",
+          "seed": 43,
+          "source_prefill_host_overhead_seconds": 41.116591768106446,
+          "source_decode_tokens": 511,
+          "source_decode_seconds": 33.68271109391935,
+          "projected_1023_decode_seconds": 67.43133747373679,
+          "projected_case_seconds": 108.54792924184324
+        }
+      ],
+      "estimated_total_seconds": 2494.5516478603117,
+      "estimated_range_seconds": [
+        1823.6968470057386,
+        3612.6429826179337
+      ]
+    }
+  }
+}

@@ -1,0 +1,51 @@
+{
+  "status": "execution_terminal_evidence_repair_host_review_complete_unadmitted",
+  "scope": "Only the P3 unadmitted candidate directory was edited. No inference or device commands were invoked.",
+  "changes": [
+    "Subprocess success, nonzero exit, OSError, and TimeoutExpired all produce a completion record containing exit/error, elapsed time, timeout flag, outputs, and validation errors before the CLI returns.",
+    "Output validation accumulates per-case errors instead of throwing before completion write. Process failure remains nonzero; exit-zero with invalid/missing outputs is also nonzero.",
+    "Every output runtime_precision must exactly equal the validated candidate policy selected by the exact build_kwargs precision_config path. The candidate command must select the candidate build_kwargs file and its batch-size-1 policy.",
+    "Expanded host self-test with mocked success, mismatched runtime policy, and subprocess timeout; no inference command is executed."
+  ],
+  "tests": {
+    "py_compile": "passed",
+    "self_test": "down candidate host-gate self-test passed; no TTNN import or device query",
+    "validate_only": {
+      "admission_present": false,
+      "caps": {
+        "1024": 22,
+        "2048": 6,
+        "256": 72,
+        "4096": 1,
+        "512": 7
+      },
+      "jobs": 108,
+      "seeds": [
+        42,
+        43,
+        44
+      ],
+      "source_count": 59,
+      "status": "host_static_validation_passed_no_ttnn_import",
+      "stop_present": true,
+      "unique_cases": 36
+    },
+    "ttnn_imported": false,
+    "device_queried": false
+  },
+  "hashes_before_followup": {
+    "driver_sha256": "29eec464eb0d8375d7d2584a3a107aa759111261549d8d9bdaa91020f8c05214",
+    "proposal_sha256": "7838be4b984dee7a3f7a2b0f0343d4a9c0ab9334b87847c6589f0681ef29b2cd"
+  },
+  "current_hashes": {
+    "driver_sha256": "b813686bfbb4a5c18326d404999f1ff71c33ce560d9a07011e992b26c27c85b2",
+    "proposal_sha256": "dbaa7eb5bdb789586794b5061dd0eda81aea5b2562a77a901d80e2735e63c632",
+    "source_inventory_sha256": "2c6199d5f2f501f13b9b4f8f419e95df6b62a278a77a46a2fb2f452d0d5c2ecf",
+    "fixed_manifest_sha256": "57193e4b91af3a31df00f0c92dbc0f2219fbce011e6533594e5244a93a3021ed"
+  },
+  "status_guards": {
+    "stop_present": true,
+    "admission_json_present": false,
+    "launch_json_present": false
+  }
+}

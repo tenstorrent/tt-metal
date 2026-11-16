@@ -1,0 +1,11 @@
+{
+  "reviewer": "root",
+  "accepted": true,
+  "status": "matched_TT_next_then_conditional_HF",
+  "hf_followup": "deferred_until_matched_TT",
+  "predecessor_pins_sha256": "027e8243768fcc05e8465f1910dd83a579d7b9a01f9c316c9676fe338cd9e114",
+  "predecessor_admission_sha256": "32fe5e6ccf38aff945424de6b7f3c8e24a7a375cf6a806424bd1097e99bb6194",
+  "reason": "Full-precision suffix512 did not reproduce the original full-prompt missing_tool observation; the selected head-BFP8 LoFi served suffix512 correction completed and was root reviewed. This candidate extends the exact prompt suffix and generation cap to1024.",
+  "predecessor_bfp8_served_admission_sha256": "3135aac12cbe11d97803b166dc3173def8f9bc03a6e8bb786fe015ce3f24bf08",
+  "reviewed_unix": 1794728833.3130307
+}

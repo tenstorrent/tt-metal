@@ -1,0 +1,247 @@
+{
+  "status": "independent_completed_output_triage",
+  "scope": "three served short-suffix correction trials only; no score or policy conclusion",
+  "completed": {
+    "status": null,
+    "exit_code": 0,
+    "elapsed_seconds": 201.28028845787048,
+    "sha256": "1be9414e4447a6600ea163967ec4fc0601ae9ffbbd47e44ab5e407a1c3ee453e"
+  },
+  "tokenizer": {
+    "revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+    "path": "/home/mvasiljevic/.cache/huggingface/hub/models--google--gemma-4-31B-it/snapshots/842da3794eaa0b77d5f08bae87a17459d91ff475/tokenizer.json",
+    "sha256": "cc8d3a0ce36466ccc1278bf987df5f71db1719b9ca6b4118264f45cb627bfe0f"
+  },
+  "source_motif": {
+    "source_fixture": "setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/fixtures/served/anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix512.seed42.private.json",
+    "motif": "I've’ve",
+    "note": "native output IDs unavailable in the archived source; exact token identity is not claimed; diagnostic prefix uses saved original prompt IDs without re-encoding"
+  },
+  "expected_runtime_precision": {
+    "config_id": "stage12_head_bfp8_lofi",
+    "weight_groups": {
+      "attention": "bfp4",
+      "mlp": "bfp4",
+      "down": "bfp4",
+      "lm_head": "bfp8_lofi"
+    }
+  },
+  "rows": [
+    {
+      "seed": 42,
+      "verdict": "reproduced_native_motif",
+      "result": "setup/swe85-conditional-hf/sklearn13135-suffix512-head-bfp8-correction/runs/anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix512.seed42.json",
+      "result_sha256": "cdba56f4ef6f96c94ca131c312f23ebcd615b72704f81353fbaee6ae93d48a49",
+      "tokens": 512,
+      "capped": true,
+      "runtime_precision": {
+        "config_id": "stage12_head_bfp8_lofi",
+        "weight_groups": {
+          "attention": "bfp4",
+          "mlp": "bfp4",
+          "down": "bfp4",
+          "lm_head": "bfp8_lofi"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "LoFi",
+          "mlp": "LoFi",
+          "down": "LoFi",
+          "lm_head": "LoFi"
+        },
+        "activation_dtype": "bfloat8_b",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat8_b",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat8_b",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144
+      },
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 42
+      },
+      "trace_counters_delta": null,
+      "prefix": {
+        "source_fixture": "setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/fixtures/served/anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix512.seed42.private.json",
+        "fixture_sha256": "5a7ba37c9bbe628df48ee771eda26ddae50445000e69c9afa32fcd662206767c",
+        "prompt_tokens": 512,
+        "suffix_tokens": 512,
+        "suffix_ids_sha256": "6cb6161236c625fd131a51c46c0c180f8225366631be9579fb22d1d470a1ab74",
+        "decoded_tail": "], col_max]\\n   177\\t\\n   178\\t        self.bin_edges_ = bin_edges\\n   179\\t        self.n_bins_ = n_bins\\n   180\\t\\n\"\n}<|\"|>}<tool_response|><|channel>thought\n<|channel>thought\nPerfect. Now the fix is applied to the source code.\nSince I've"
+      },
+      "generated_text_start": "’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’v",
+      "generated_text_end": "’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve",
+      "evidence": "Pinned suffix ends `Since I've`; the complete generated text begins `’ve’ve…` and continues the same repeated contraction to cap. Exact boundary reproduction of source `I've’ve`, not merely a related loop.",
+      "comparison": {
+        "old_served_bfp4": {
+          "result": "setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/runs/served/anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix512.seed42.json",
+          "sha256": "923e900812390a6cfe76172d3a34a9e9f02858ace8f6206d6d564e12baa53fd5",
+          "config_id": "head_bfp4",
+          "tokens": 87
+        },
+        "old_full_bf16_valid": {
+          "result": "setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/runs/full/anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix512.seed42.json",
+          "sha256": "81cf6fe18b20cfa30b0ddca5b839b9b8ebf57daf2a899708a84d91b3b1523d2b",
+          "config_id": "stage12_bf16_hifi4_diagnostic",
+          "tokens": 512
+        }
+      }
+    },
+    {
+      "seed": 43,
+      "verdict": "other_anomaly",
+      "result": "setup/swe85-conditional-hf/sklearn13135-suffix512-head-bfp8-correction/runs/anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix512.seed43.json",
+      "result_sha256": "00cc018a2764f67350ba8503451209a16c4f42ad3010af0b4cb17bf392c93de4",
+      "tokens": 512,
+      "capped": true,
+      "runtime_precision": {
+        "config_id": "stage12_head_bfp8_lofi",
+        "weight_groups": {
+          "attention": "bfp4",
+          "mlp": "bfp4",
+          "down": "bfp4",
+          "lm_head": "bfp8_lofi"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "LoFi",
+          "mlp": "LoFi",
+          "down": "LoFi",
+          "lm_head": "LoFi"
+        },
+        "activation_dtype": "bfloat8_b",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat8_b",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat8_b",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144
+      },
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 43
+      },
+      "trace_counters_delta": null,
+      "prefix": {
+        "source_fixture": "setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/fixtures/served/anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix512.seed43.private.json",
+        "fixture_sha256": "cacc24dd02f9bcbc28aad63bc75ca93d1e0cfaccc45eeecc38958db676fa6d4d",
+        "prompt_tokens": 512,
+        "suffix_tokens": 512,
+        "suffix_ids_sha256": "6cb6161236c625fd131a51c46c0c180f8225366631be9579fb22d1d470a1ab74",
+        "decoded_tail": "], col_max]\\n   177\\t\\n   178\\t        self.bin_edges_ = bin_edges\\n   179\\t        self.n_bins_ = n_bins\\n   180\\t\\n\"\n}<|\"|>}<tool_response|><|channel>thought\n<|channel>thought\nPerfect. Now the fix is applied to the source code.\nSince I've"
+      },
+      "generated_text_start": " applied the fix to the source code, I can't’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-",
+      "generated_text_end": "’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-’-",
+      "evidence": "Pinned suffix ends `Since I've`; generated text first continues coherently (` applied the fix to the source code, I can't`) then repeats `’-` through cap. Punctuation degeneration, distinct from original `I've’ve` motif.",
+      "comparison": {
+        "old_served_bfp4": {
+          "result": "setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/runs/served/anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix512.seed43.json",
+          "sha256": "15488420a35897b7c8898161d743e349aaeda40d182ffcb100044183fed77125",
+          "config_id": "head_bfp4",
+          "tokens": 512
+        },
+        "old_full_bf16_valid": {
+          "result": "setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/runs/full/anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix512.seed43.json",
+          "sha256": "548b687b902b17b31e874b20054976ea4ca45c0b3c8ecf2ca989885ff8f2f516",
+          "config_id": "stage12_bf16_hifi4_diagnostic",
+          "tokens": 512
+        }
+      }
+    },
+    {
+      "seed": 44,
+      "verdict": "reproduced_native_motif",
+      "result": "setup/swe85-conditional-hf/sklearn13135-suffix512-head-bfp8-correction/runs/anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix512.seed44.json",
+      "result_sha256": "192beeb384d47ca8fad1dfd801ae8f6beb8884f70255d9dad7fa20b8d8c7a1c4",
+      "tokens": 512,
+      "capped": true,
+      "runtime_precision": {
+        "config_id": "stage12_head_bfp8_lofi",
+        "weight_groups": {
+          "attention": "bfp4",
+          "mlp": "bfp4",
+          "down": "bfp4",
+          "lm_head": "bfp8_lofi"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "LoFi",
+          "mlp": "LoFi",
+          "down": "LoFi",
+          "lm_head": "LoFi"
+        },
+        "activation_dtype": "bfloat8_b",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat8_b",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat8_b",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144
+      },
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 44
+      },
+      "trace_counters_delta": null,
+      "prefix": {
+        "source_fixture": "setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/fixtures/served/anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix512.seed44.private.json",
+        "fixture_sha256": "4a94d27b233d885c8a874ab5c9070a0b6c57d4633ccd230367490ffa6379148e",
+        "prompt_tokens": 512,
+        "suffix_tokens": 512,
+        "suffix_ids_sha256": "6cb6161236c625fd131a51c46c0c180f8225366631be9579fb22d1d470a1ab74",
+        "decoded_tail": "], col_max]\\n   177\\t\\n   178\\t        self.bin_edges_ = bin_edges\\n   179\\t        self.n_bins_ = n_bins\\n   180\\t\\n\"\n}<|\"|>}<tool_response|><|channel>thought\n<|channel>thought\nPerfect. Now the fix is applied to the source code.\nSince I've"
+      },
+      "generated_text_start": "’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’v",
+      "generated_text_end": "’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve’ve",
+      "evidence": "Pinned suffix ends `Since I've`; the complete generated text begins `’ve’ve…` and continues the same repeated contraction to cap. Exact boundary reproduction of source `I've’ve`, not merely a related loop.",
+      "comparison": {
+        "old_served_bfp4": {
+          "result": "setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/runs/served/anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix512.seed44.json",
+          "sha256": "c9e2b3ba0cd30c5811201e1a79d7141beef49a9409b4df1eadb51e6bb84192fc",
+          "config_id": "head_bfp4",
+          "tokens": 512
+        },
+        "old_full_bf16_valid": {
+          "result": "setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/runs/full/anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix512.seed44.json",
+          "sha256": "bc216e065f572ac48d7dc800a72bb73cdcd037e73c7eb50ed88857d2fd4026d5",
+          "config_id": "stage12_bf16_hifi4_diagnostic",
+          "tokens": 85
+        }
+      }
+    }
+  ],
+  "summary": {
+    "reproduced_native_motif": [
+      42,
+      44
+    ],
+    "other_anomaly": [
+      43
+    ],
+    "normal": [],
+    "inconclusive": []
+  },
+  "label_comparison_note": "Old served arm is explicitly runtime head_bfp4 and is not selected BFP8 evidence. Existing full arm is valid but runtime stage12_bf16_hifi4_diagnostic; it is not a BFP8 full-mode replication. The corrected results here alone are served stage12_head_bfp8_lofi."
+}

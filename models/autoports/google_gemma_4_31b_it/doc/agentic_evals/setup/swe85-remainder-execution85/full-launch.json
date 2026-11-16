@@ -1,0 +1,26 @@
+{
+  "command": [
+    "timeout",
+    "21600",
+    "env",
+    "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+    "READINESS_TRACE_REGION_SIZE=134217728",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+    "-m",
+    "models.autoports.google_gemma_4_31b_it.tools.precision_repro_batch",
+    "--cases",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/rest.json",
+    "--build-kwargs-file",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_build_kwargs.json",
+    "--output-dir",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full",
+    "--compare-dir",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served"
+  ],
+  "start_unix": 1794698655.9097002,
+  "device_owner_preflight": [],
+  "manifest_sha256": "494752aae5358a1583735c26b907e45891ddc577c70e385d788627accfe30656",
+  "prediction_hours": 3.576149232076101,
+  "timeout_override_basis": "setup/swe85-remainder-cost-gate.json",
+  "scope": "Existing160 controls; supplemental semantic gaps tracked separately."
+}

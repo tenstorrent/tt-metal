@@ -1,0 +1,130 @@
+{
+  "status": "candidate_provenance_only_not_admission",
+  "candidate": "P6 fixed108: attention BFP8/LoFi + down BFP8/LoFi, MLP BFP4/LoFi, head BFP8/LoFi",
+  "P3_manifest": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/candidate-cases.json",
+  "P3_manifest_sha256": "57193e4b91af3a31df00f0c92dbc0f2219fbce011e6533594e5244a93a3021ed",
+  "candidate_manifest_sha256": "57193e4b91af3a31df00f0c92dbc0f2219fbce011e6533594e5244a93a3021ed",
+  "manifest_byte_identical_to_P3": true,
+  "manifest_rows": 108,
+  "unique_source_jobs": 36,
+  "seeds": [
+    42,
+    43,
+    44
+  ],
+  "P3_policy": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/down_bfp8_lofi_isolated_precision.json",
+  "P3_policy_sha256": "769f6b5d975c3a4b252c01668ded02f32c61c43819117a95868249b4b1fd7350",
+  "P6_policy_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/attention-down-bfp8-lofi-seven-case-candidate/attention_down_bfp8_lofi_precision.json",
+  "P6_policy_source_sha256": "2bd0b009eae49e6a0ee59d957f63fb2d33c13177f7a5e84a830d95e5b694b788",
+  "candidate_policy": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/attention-down-bfp8-lofi-fixed108-candidate/attention_down_bfp8_lofi_precision.json",
+  "candidate_policy_sha256": "8341f61235a6e7c0ffef07494a95712d6f37702c060b06dd90adac65b0eda4cf",
+  "policy_delta_from_P3": {
+    "weight_groups.attention": {
+      "from": "bfp4",
+      "to": "bfp8_lofi"
+    },
+    "other_runtime_values_unchanged": true
+  },
+  "policy_matches_completed_P6_seven_case_except_config_id": true,
+  "legal_source_checks": {
+    "precision.py": {
+      "path": "models/autoports/google_gemma_4_31b_it/tt/precision.py",
+      "sha256": "2f223a118fe713677b9ce4fb3beb2f563e26af56ef45a98b2e03fad1e25664a9",
+      "fact": "bfp8_lofi maps to bfloat8_b/LoFi and policy validation pairs weight dtype/fidelity."
+    },
+    "model.py": {
+      "path": "models/autoports/google_gemma_4_31b_it/tt/model.py",
+      "sha256": "c65ed33bb175f63603946eea561a2623cad0b70521428bdf888bd9445457a01e",
+      "fact": "Selected attention/down groups are passed as attention_precision/down_precision."
+    },
+    "multichip_decoder.py": {
+      "path": "models/autoports/google_gemma_4_31b_it/tt/multichip_decoder.py",
+      "sha256": "c7a4cb14edfe46649b904c0fbb6f3fec14e123e194b31950adfa76c224d201f6",
+      "fact": "Decoder precision table supports bfp8_lofi for attention/down."
+    }
+  },
+  "P3_completion_sha256": "0f4b67270fbca7ed37ae3ebb360c3e4f8ff675ea74f8814b4d09ab3ae7246782",
+  "P6_seven_completion_sha256": "455f63ffa1697c4f2e6ff52264b542b1083c02b8d3901b086b15a44b48dbb66d",
+  "P6_seven_rows": [
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/attention-down-bfp8-lofi-seven-case-candidate/runs/attention_down_bfp8_lofi/anomaly.sympy__sympy-14711.call1.onset.seed42.p6_attention_down_bfp8_lofi.cap256.json",
+      "sha256": "9d177536c99c875a1c8b5b30b3ace9d6a365b8783ac47fe752119d85044aebd7",
+      "task": "sympy__sympy-14711",
+      "call": 1,
+      "seed": 42,
+      "generated_tokens": 139,
+      "decode_tokens": 138,
+      "decode_wall_s": 4.6801479500718415,
+      "decode_tok_s_user": 29.48624733068143
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/attention-down-bfp8-lofi-seven-case-candidate/runs/attention_down_bfp8_lofi/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed44.p6_attention_down_bfp8_lofi.cap1024.json",
+      "sha256": "58f395024dff57d4bf5b89f1ba3ffca36263e5beffa7f609bc611923caaf0d57",
+      "task": "sphinx-doc__sphinx-11510",
+      "call": 119,
+      "seed": 44,
+      "generated_tokens": 507,
+      "decode_tokens": 506,
+      "decode_wall_s": 20.77608523191884,
+      "decode_tok_s_user": 24.354925114699615
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/attention-down-bfp8-lofi-seven-case-candidate/runs/attention_down_bfp8_lofi/anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.seed44.p6_attention_down_bfp8_lofi.cap1024.json",
+      "sha256": "508bc39521e653b1122ed0f69046abb8c7a6290034bd59872a8ace55f07c4c9e",
+      "task": "sphinx-doc__sphinx-11510",
+      "call": 86,
+      "seed": 44,
+      "generated_tokens": 1007,
+      "decode_tokens": 1006,
+      "decode_wall_s": 38.57267236802727,
+      "decode_tok_s_user": 26.08064047006163
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/attention-down-bfp8-lofi-seven-case-candidate/runs/attention_down_bfp8_lofi/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed42.p6_attention_down_bfp8_lofi.cap1024.json",
+      "sha256": "4e9508c54d83e212569348b8b805d8b0fade733a9bc3caa3f48df10e4c9d0fd6",
+      "task": "sphinx-doc__sphinx-11510",
+      "call": 119,
+      "seed": 42,
+      "generated_tokens": 771,
+      "decode_tokens": 770,
+      "decode_wall_s": 31.61438648495823,
+      "decode_tok_s_user": 24.3560000876929
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/attention-down-bfp8-lofi-seven-case-candidate/runs/attention_down_bfp8_lofi/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.seed43.p6_attention_down_bfp8_lofi.cap2048.json",
+      "sha256": "a42e2488a7acddada09a5c58933e49bb61a9acedceebfd67af5b32d715a0b651",
+      "task": "sphinx-doc__sphinx-11510",
+      "call": 101,
+      "seed": 43,
+      "generated_tokens": 1574,
+      "decode_tokens": 1573,
+      "decode_wall_s": 62.051493470789865,
+      "decode_tok_s_user": 25.349913628436266
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/attention-down-bfp8-lofi-seven-case-candidate/runs/attention_down_bfp8_lofi/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed43.p6_attention_down_bfp8_lofi.cap2048.json",
+      "sha256": "273ba61163db37e146c88a4672fef89f08cce6c5592000480739eade4b79aa5d",
+      "task": "sphinx-doc__sphinx-11510",
+      "call": 119,
+      "seed": 43,
+      "generated_tokens": 546,
+      "decode_tokens": 545,
+      "decode_wall_s": 22.373166017001495,
+      "decode_tok_s_user": 24.35953854657188
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/attention-down-bfp8-lofi-seven-case-candidate/runs/attention_down_bfp8_lofi/anomaly.pytest-dev__pytest-5787.call65.onset.seed42.p6_attention_down_bfp8_lofi.cap2048.json",
+      "sha256": "9123a2120e846ec0fa67b8e5fc6e9be28f645fc0d9f81e8ed99a45fd6fa55f0a",
+      "task": "pytest-dev__pytest-5787",
+      "call": 65,
+      "seed": 42,
+      "generated_tokens": 234,
+      "decode_tokens": 233,
+      "decode_wall_s": 9.060962879098952,
+      "decode_tok_s_user": 25.714706384843968
+    }
+  ],
+  "forecast_status": "provisional pending root P6 semantic review",
+  "admission_created": false,
+  "runner_invoked": false
+}

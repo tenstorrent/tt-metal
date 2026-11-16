@@ -1,0 +1,9 @@
+{
+  "status": "admitted",
+  "proposal_sha256": "ab76a7e29f5cb5c0e4232aa0b745800dce5517757fd57cc299c9f095d4eea5f8",
+  "driver_sha256": "8da393d33526d96b22ebe5221781df3448d0d1c49e409adb783ea6f1db85f9fc",
+  "note": "Root reviewed serial driver and host comparator; source and launched manifest hashes rechecked. U terminal success verified. Driver owner-zero check required before each timeout-bounded mode. 12 served suffix4096, 12 paired full plus one full longprompt cap4096; diagnostic only.",
+  "admitted_utc": "2026-11-15T05:26:54.169651+00:00",
+  "review": "pytest-call65-cap4096/review-c.json",
+  "review_sha256": "d41261907d6ded272e404b0d99e77acfbf85813c49b3fe07338fb52842a32a2c"
+}

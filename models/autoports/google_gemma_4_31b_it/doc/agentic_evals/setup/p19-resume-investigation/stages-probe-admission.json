@@ -1,0 +1,29 @@
+{
+  "start": 1794768524.6123583,
+  "command": [
+    "timeout",
+    "1200",
+    "python_env/bin/python",
+    "-m",
+    "models.autoports.google_gemma_4_31b_it.tests.probe_resume_stages_p19",
+    "--starts",
+    "32,64,256",
+    "--config",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/bf16-hifi4-kv-down-bfp8-accuracy-p19/precision.json",
+    "--output",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/p19-resume-investigation/p19-resume-stages.json"
+  ],
+  "probe_sha256": "fd572803a97f064bdf984b85031c352d2024806c202b316949470be9075a4b8f",
+  "owner_check": {
+    "returncode": 1,
+    "stdout": "",
+    "stderr": ""
+  },
+  "forecast_seconds": {
+    "low": 300,
+    "point": 600,
+    "high": 900,
+    "basis": "Unmeasured intermediate capture; conservative allowance over reduced two-layer CCL probe 81.8 seconds"
+  },
+  "scope": "correctness only; P19 unchanged; all four chips serialized"
+}

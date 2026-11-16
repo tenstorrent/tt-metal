@@ -1,0 +1,334 @@
+{
+  "status": "partial_completed_outputs_CPU_stock_nonstreaming_parser_only",
+  "created_utc": "2026-11-15T06:32:08.134831+00:00",
+  "manifest_sha256": "80e8e6c6bab4bef5aba649415a2b9a92695efeca76f426d43a896f596c809ad7",
+  "protocol_jobs_selected": 1,
+  "selected_jobs": [
+    "anomaly.xarray7233-call1.canonicalprefix"
+  ],
+  "completed_case_modes": 1,
+  "completed_trials": 3,
+  "pending": [
+    {
+      "job": "anomaly.xarray7233-call1.canonicalprefix",
+      "mode": "full"
+    }
+  ],
+  "errors": [],
+  "sources_sha256": {
+    "python_env/lib/python3.10/site-packages/vllm/parser/gemma4.py": "c974f47dc39ab7276da1e4ae38c4010e3f5411481f75e3879e29f47b2fd08df7",
+    "python_env/lib/python3.10/site-packages/vllm/parser/engine/parser_engine.py": "d1075deeb25b4872e92752d7ef0598a07a747afaf2afc56058ec30c6dc1da89a",
+    "python_env/lib/python3.10/site-packages/vllm/parser/engine/adapters.py": "7a77bcb86e2129762f4199ee726398a4850b9e207893fc4295f2b759bcfeeb36",
+    "python_env/lib/python3.10/site-packages/vllm/tool_parsers/gemma4_engine_tool_parser.py": "02f31bdcc4d8527440daebb4f4e3e74c83a6010eb56cd33fe7522bea8f51bc65",
+    "python_env/lib/python3.10/site-packages/vllm/reasoning/gemma4_engine_reasoning_parser.py": "3e9adef8ae56ee993fbaee43e82aa36216fb71251ee2de14dc9f8b326220a594",
+    "/home/mvasiljevic/.cache/huggingface/hub/models--google--gemma-4-31B-it/snapshots/842da3794eaa0b77d5f08bae87a17459d91ff475/chat_template.jinja": "ae53464bf3be25802b3a5b37def7fd89667067d7577049b3b2d74c4d8de4c6d4",
+    "/home/mvasiljevic/.cache/huggingface/hub/models--google--gemma-4-31B-it/snapshots/842da3794eaa0b77d5f08bae87a17459d91ff475/tokenizer.json": "cc8d3a0ce36466ccc1278bf987df5f71db1719b9ca6b4118264f45cb627bfe0f",
+    "/home/mvasiljevic/.cache/huggingface/hub/models--google--gemma-4-31B-it/snapshots/842da3794eaa0b77d5f08bae87a17459d91ff475/tokenizer_config.json": "9f4fec4b1dc6ecddf8f4a92e9caea5971c0e67d81309f3f9066a2bee8c362633",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/audit_swe85_protocol_outputs.py": "c049003433ff2fa694206e7f5942a9551f8473763d4d3788c0aeeaa1e35417e9"
+  },
+  "rows": [
+    {
+      "job": "anomaly.xarray7233-call1.canonicalprefix",
+      "mode": "served",
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/triage-d/xarray7233-parser-input/runs/served/anomaly.xarray7233-call1.canonicalprefix.json",
+      "result_sha256": "daca32fc46baa564e261161043c6fa89c40d714cb5ca0b9d9a502b2ccb75e343",
+      "fixture_sha256": "bc0442142f6d925d292476dbf651b0957dfe0e070ace703938102eddc8b7817a",
+      "packet_sha256": "543e27edb27d0f44a4d55f8cf7fd4a661939f558ac60c492a85378b41b7a5c59",
+      "assistant_prefix_token_count": 94,
+      "assistant_prefix_tail_ids": [
+        684,
+        119364,
+        506,
+        4186,
+        236761,
+        107,
+        101,
+        236777,
+        795,
+        2619,
+        496,
+        32029,
+        8948,
+        531,
+        16807,
+        506,
+        4785,
+        4186,
+        236761,
+        108
+      ],
+      "assistant_prefix_tail": "ebase.\n3. Fix the issue.\n4. Verify the fix.\n\nLet's start by reproducing the issue.\n<channel|>I will create a reproduction script to verify the reported issue.\n\n",
+      "native": {
+        "response_id": "chatcmpl-8727bcddaddfa6d9",
+        "structured_tool_names": [],
+        "content_only_current_parser": {
+          "structured_tool_count": 0,
+          "missing_tool": true,
+          "malformed_name": false,
+          "invalid_arguments": false,
+          "tools": [],
+          "visible_content_chars": 881,
+          "visible_content_head": "I will create a reproduction script to verify the reported issue.\n\ncall:bash{command:<|\"|>cat <<'EOF' > reproduce_issue.",
+          "reasoning_chars": 0,
+          "visible_GetAll_bash": false,
+          "visible_pseudo_call": true,
+          "reasoning_literal_thought_tail": false
+        },
+        "canonical_full_reply_current_parser": {
+          "structured_tool_count": 0,
+          "missing_tool": true,
+          "malformed_name": false,
+          "invalid_arguments": false,
+          "tools": [],
+          "visible_content_chars": 881,
+          "visible_content_head": "I will create a reproduction script to verify the reported issue.\n\ncall:bash{command:<|\"|>cat <<'EOF' > reproduce_issue.",
+          "reasoning_chars": 280,
+          "visible_GetAll_bash": false,
+          "visible_pseudo_call": true,
+          "reasoning_literal_thought_tail": false
+        }
+      },
+      "trials": [
+        {
+          "seed": 42,
+          "tokens": 737,
+          "at_requested_token_cap": false,
+          "generated_has_tool_close_token": true,
+          "generated_last_id": 50,
+          "generated_head_ids": [
+            101,
+            48,
+            6639,
+            236787,
+            42422,
+            236782,
+            7674,
+            236787,
+            52,
+            9307,
+            2986,
+            236789
+          ],
+          "generated_text_head": "<channel|><|tool_call>call:bash{command:<|\"|>cat <<'EOF' > reproduce_issue.py\nimport xarray as xr\nim",
+          "generated_text_tail": "python reproduce_issue.py\n<|\"|>}<tool_call|><|tool_response>",
+          "conditioning_plus_generated": {
+            "structured_tool_count": 1,
+            "missing_tool": false,
+            "malformed_name": false,
+            "invalid_arguments": false,
+            "tools": [
+              {
+                "name": "bash",
+                "expected_bash": true,
+                "valid_json": true,
+                "valid_command_schema": true,
+                "argument_keys": [
+                  "command"
+                ]
+              }
+            ],
+            "visible_content_chars": 65,
+            "visible_content_head": "I will create a reproduction script to verify the reported issue.",
+            "reasoning_chars": 280,
+            "visible_GetAll_bash": false,
+            "visible_pseudo_call": false,
+            "reasoning_literal_thought_tail": false
+          },
+          "generated_only": {
+            "structured_tool_count": 1,
+            "missing_tool": false,
+            "malformed_name": false,
+            "invalid_arguments": false,
+            "tools": [
+              {
+                "name": "bash",
+                "expected_bash": true,
+                "valid_json": true,
+                "valid_command_schema": true,
+                "argument_keys": [
+                  "command"
+                ]
+              }
+            ],
+            "visible_content_chars": 0,
+            "visible_content_head": "",
+            "reasoning_chars": 0,
+            "visible_GetAll_bash": false,
+            "visible_pseudo_call": false,
+            "reasoning_literal_thought_tail": false
+          },
+          "mechanical_flag_from_runner": false,
+          "mechanical_repetition_not_adjudicated_by_parser": true
+        },
+        {
+          "seed": 43,
+          "tokens": 335,
+          "at_requested_token_cap": false,
+          "generated_has_tool_close_token": true,
+          "generated_last_id": 50,
+          "generated_head_ids": [
+            101,
+            48,
+            6639,
+            236787,
+            42422,
+            236782,
+            7674,
+            236787,
+            52,
+            9307,
+            2986,
+            236789
+          ],
+          "generated_text_head": "<channel|><|tool_call>call:bash{command:<|\"|>cat <<'EOF' > reproduce_issue.py\nimport xarray as xr\nim",
+          "generated_text_tail": "python reproduce_issue.py\n<|\"|>}<tool_call|><|tool_response>",
+          "conditioning_plus_generated": {
+            "structured_tool_count": 1,
+            "missing_tool": false,
+            "malformed_name": false,
+            "invalid_arguments": false,
+            "tools": [
+              {
+                "name": "bash",
+                "expected_bash": true,
+                "valid_json": true,
+                "valid_command_schema": true,
+                "argument_keys": [
+                  "command"
+                ]
+              }
+            ],
+            "visible_content_chars": 65,
+            "visible_content_head": "I will create a reproduction script to verify the reported issue.",
+            "reasoning_chars": 280,
+            "visible_GetAll_bash": false,
+            "visible_pseudo_call": false,
+            "reasoning_literal_thought_tail": false
+          },
+          "generated_only": {
+            "structured_tool_count": 1,
+            "missing_tool": false,
+            "malformed_name": false,
+            "invalid_arguments": false,
+            "tools": [
+              {
+                "name": "bash",
+                "expected_bash": true,
+                "valid_json": true,
+                "valid_command_schema": true,
+                "argument_keys": [
+                  "command"
+                ]
+              }
+            ],
+            "visible_content_chars": 0,
+            "visible_content_head": "",
+            "reasoning_chars": 0,
+            "visible_GetAll_bash": false,
+            "visible_pseudo_call": false,
+            "reasoning_literal_thought_tail": false
+          },
+          "mechanical_flag_from_runner": false,
+          "mechanical_repetition_not_adjudicated_by_parser": true
+        },
+        {
+          "seed": 44,
+          "tokens": 359,
+          "at_requested_token_cap": false,
+          "generated_has_tool_close_token": true,
+          "generated_last_id": 50,
+          "generated_head_ids": [
+            101,
+            48,
+            6639,
+            236787,
+            42422,
+            236782,
+            7674,
+            236787,
+            52,
+            9307,
+            2986,
+            236789
+          ],
+          "generated_text_head": "<channel|><|tool_call>call:bash{command:<|\"|>cat <<'EOF' > reproduce_issue.py\nimport xarray as xr\nim",
+          "generated_text_tail": "python reproduce_issue.py\n<|\"|>}<tool_call|><|tool_response>",
+          "conditioning_plus_generated": {
+            "structured_tool_count": 1,
+            "missing_tool": false,
+            "malformed_name": false,
+            "invalid_arguments": false,
+            "tools": [
+              {
+                "name": "bash",
+                "expected_bash": true,
+                "valid_json": true,
+                "valid_command_schema": true,
+                "argument_keys": [
+                  "command"
+                ]
+              }
+            ],
+            "visible_content_chars": 65,
+            "visible_content_head": "I will create a reproduction script to verify the reported issue.",
+            "reasoning_chars": 280,
+            "visible_GetAll_bash": false,
+            "visible_pseudo_call": false,
+            "reasoning_literal_thought_tail": false
+          },
+          "generated_only": {
+            "structured_tool_count": 1,
+            "missing_tool": false,
+            "malformed_name": false,
+            "invalid_arguments": false,
+            "tools": [
+              {
+                "name": "bash",
+                "expected_bash": true,
+                "valid_json": true,
+                "valid_command_schema": true,
+                "argument_keys": [
+                  "command"
+                ]
+              }
+            ],
+            "visible_content_chars": 0,
+            "visible_content_head": "",
+            "reasoning_chars": 0,
+            "visible_GetAll_bash": false,
+            "visible_pseudo_call": false,
+            "reasoning_literal_thought_tail": false
+          },
+          "mechanical_flag_from_runner": false,
+          "mechanical_repetition_not_adjudicated_by_parser": true
+        }
+      ]
+    }
+  ],
+  "rules": [
+    "Expected structured tool is bash with JSON mapping containing string command. Missing tool, malformed function name and invalid arguments are separate outcomes.",
+    "Missing tool at token cap may be incomplete; inspect completion/stop and channel context before declaring reproduction.",
+    "Valid structured call does not excuse visible GetAll-bash, stray thought, repetition, wrong actions or other semantic anomalies. Mechanical repetition is not assessed by this parser.",
+    "Raw special-marker display alone is not reproduction: runner decodes skip_special_tokens=False. Compare actual channel-aware structured results with native response body.",
+    "Native token IDs and exact historical stream absent. Canonical reconstruction/current nonstreaming parse is not proof of historical stream/parser equivalence or full-model correctness.",
+    "Full-prefix findings may include fixed inherited anomalous text. Compare generated-only findings and exact prefix before attributing anomaly to new sampling. A capped parser-extracted call is not necessarily complete/executable; tool-close-token presence is recorded separately."
+  ],
+  "partial_counts": {
+    "served": {
+      "case_modes": 1,
+      "trials": 3,
+      "missing_tool": 0,
+      "malformed_name": 0,
+      "invalid_arguments": 0,
+      "capped_trials": 0
+    },
+    "full": {
+      "case_modes": 0,
+      "trials": 0,
+      "missing_tool": 0,
+      "malformed_name": 0,
+      "invalid_arguments": 0,
+      "capped_trials": 0
+    }
+  }
+}

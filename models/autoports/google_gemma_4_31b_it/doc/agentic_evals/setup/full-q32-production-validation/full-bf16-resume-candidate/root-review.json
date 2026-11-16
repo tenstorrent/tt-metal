@@ -1,0 +1,19 @@
+{
+  "status": "full_bf16_resume_pass",
+  "cases_passed": 14,
+  "cases": 14,
+  "negative_controls_failed_as_expected": 24,
+  "minimum_pcc": 0.9999314491442819,
+  "minimum_top1": 1.0,
+  "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full-q32-production-validation/full-bf16-resume-candidate/run/prefill_resume.json",
+  "sha256": "b6111ded1ae6d9c77f97dd1fbf6a033c7d0273671344b15d5dd24413a1b10826",
+  "pins_verified": 173,
+  "completion": {
+    "start_unix": 1794784525.9896798,
+    "end_unix": 1794784844.845618,
+    "exit_code": 0,
+    "wall_seconds": 318.85593819618225
+  },
+  "forecast_result": "318.856s inside200-700s range",
+  "scope": "Full BF16 HiFi4 Q32 baseline; same14cases and thresholds; not serving policy or score acceptance."
+}

@@ -1,0 +1,28 @@
+{
+  "status": "completed_root_raw_reviewed",
+  "admission_sha256": "300d69403a28112bc5f2a7225df5327bdb9e577ad9ca96cf754ab304f3538205",
+  "served": {
+    "normal": 0,
+    "native": 2,
+    "other": 1,
+    "measured_seconds": 186.30404543876648,
+    "forecast_hit": true
+  },
+  "full": {
+    "normal": 2,
+    "native": 1,
+    "other": 0,
+    "measured_seconds": 139.90180444717407,
+    "forecast_hit": true
+  },
+  "full_positive_seed": 43,
+  "shortened_input_tokens": 8192,
+  "hf_control_needed": true,
+  "score_changed": false,
+  "selected_policy_changed": false,
+  "evidence": [
+    "root-served-review.json",
+    "root-full-review.json",
+    "comparison-summary.json"
+  ]
+}

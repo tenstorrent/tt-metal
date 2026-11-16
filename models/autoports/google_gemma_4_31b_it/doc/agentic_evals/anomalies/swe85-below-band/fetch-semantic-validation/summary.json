@@ -1,0 +1,593 @@
+{
+  "status": "diagnostic_only_root_review_before_precision_admission",
+  "n": 22,
+  "valid_next_actions": 22,
+  "tasks": [
+    {
+      "task": "astropy__astropy-13579",
+      "call": 3,
+      "valid_next_action": true,
+      "full_solution_claim": false,
+      "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-semantic-validation/astropy__astropy-13579-attempt2/semantic-validation.json",
+      "candidate_manifest_sha256": "0d24f3ed0f53fa9eb516ea827dfdb57ffe345d751c867f663537400610c27565",
+      "action_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/astropy__astropy-13579/action_counterfactual.candidate.private.json",
+      "action_case_sha256": "818704ce976b75ba3f4fe0139bba86f45e6e51b24de46c979053b8e59b153f4d",
+      "scope": "Original solar-frame reproduction needs extra coordinate-frame support. Import local Astropy and inspect sliced world-to-pixel implementation to continue local investigation; no reproduction-pass claim.",
+      "expectation_correction": null,
+      "attempts": [
+        {
+          "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-semantic-validation/astropy__astropy-13579-attempt1/semantic-validation.json",
+          "status": "validation_error",
+          "valid_next_action": null,
+          "error": "RuntimeError('Command failed: 8')"
+        },
+        {
+          "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-semantic-validation/astropy__astropy-13579-attempt2/semantic-validation.json",
+          "status": "command_completed",
+          "valid_next_action": true,
+          "error": null
+        }
+      ]
+    },
+    {
+      "task": "astropy__astropy-7336",
+      "call": 18,
+      "valid_next_action": true,
+      "full_solution_claim": false,
+      "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-semantic-validation/astropy__astropy-7336-attempt2/semantic-validation.json",
+      "candidate_manifest_sha256": "f8ab18de72e851b857c2d723e01b1fb6b7e4f6c4dbed1d070ab8aa6bf47ba8fd",
+      "action_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/astropy__astropy-7336/action_counterfactual.candidate.private.json",
+      "action_case_sha256": "419a06a00c05c49e4e6b51c9978a1c913ed7c59cf95414bea9d7bc624813aec6",
+      "scope": "Activate the existing image testbed interpreter and run the original local reproduction, without fetching target source. This is an environment-recovery next action, not a complete solution.",
+      "expectation_correction": null,
+      "attempts": [
+        {
+          "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-semantic-validation/astropy__astropy-7336-attempt1/semantic-validation.json",
+          "status": "validation_error",
+          "valid_next_action": null,
+          "error": "RuntimeError('Command failed: 10')"
+        },
+        {
+          "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-semantic-validation/astropy__astropy-7336-attempt2/semantic-validation.json",
+          "status": "command_completed",
+          "valid_next_action": true,
+          "error": null
+        }
+      ]
+    },
+    {
+      "task": "astropy__astropy-8872",
+      "call": 8,
+      "valid_next_action": true,
+      "full_solution_claim": false,
+      "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-semantic-validation/astropy__astropy-8872-attempt2/semantic-validation.json",
+      "candidate_manifest_sha256": "4536b088c2bb6e607f85f4f97f34221920d74f3d502b95055496f0b28c1f3ca6",
+      "action_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/astropy__astropy-8872/action_counterfactual.candidate.private.json",
+      "action_case_sha256": "c1dca0d99577b5bf1ae854f330af3954f7a84e89f41ea6811fc11b4979e8aba5",
+      "scope": "Activate the existing image testbed interpreter and run the original local reproduction, without fetching target source. This is an environment-recovery next action, not a complete solution.",
+      "expectation_correction": null,
+      "attempts": [
+        {
+          "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-semantic-validation/astropy__astropy-8872-attempt1/semantic-validation.json",
+          "status": "validation_error",
+          "valid_next_action": null,
+          "error": "RuntimeError('Command failed: 8')"
+        },
+        {
+          "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-semantic-validation/astropy__astropy-8872-attempt2/semantic-validation.json",
+          "status": "command_completed",
+          "valid_next_action": true,
+          "error": null
+        }
+      ]
+    },
+    {
+      "task": "matplotlib__matplotlib-25332",
+      "call": 2,
+      "valid_next_action": true,
+      "full_solution_claim": false,
+      "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-semantic-validation/matplotlib__matplotlib-25332-attempt2/semantic-validation.json",
+      "candidate_manifest_sha256": "35ffc6dad48bbc060c2a71bcc0d267d47509d8706241532bb181eb0f3f9f1174",
+      "action_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/matplotlib__matplotlib-25332/action_counterfactual.candidate.private.json",
+      "action_case_sha256": "70957d53e94df9eacd837421afdf66bf7c7b46972a52e341f17c96fd8498a6ff",
+      "scope": "Activate the existing image testbed interpreter and run the original local reproduction, without fetching target source. This is an environment-recovery next action, not a complete solution.",
+      "expectation_correction": null,
+      "attempts": [
+        {
+          "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-semantic-validation/matplotlib__matplotlib-25332-attempt1/semantic-validation.json",
+          "status": "validation_error",
+          "valid_next_action": null,
+          "error": "RuntimeError('Command failed: 9')"
+        },
+        {
+          "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-semantic-validation/matplotlib__matplotlib-25332-attempt2/semantic-validation.json",
+          "status": "command_completed",
+          "valid_next_action": true,
+          "error": null
+        }
+      ]
+    },
+    {
+      "task": "matplotlib__matplotlib-25960",
+      "call": 3,
+      "valid_next_action": true,
+      "full_solution_claim": false,
+      "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-semantic-validation/matplotlib__matplotlib-25960-attempt2/semantic-validation.json",
+      "candidate_manifest_sha256": "5a56dfad0fdc39ad2c7b5a9f15d5f377984d8ad49175821ec3614e874484465e",
+      "action_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/matplotlib__matplotlib-25960/action_counterfactual.candidate.private.json",
+      "action_case_sha256": "0ff0f74cf765bbba8acad052b164b1d070775ac8492cc4efcb2716cc87f01ad8",
+      "scope": "Original reproduction calls nonexistent SubFigure.get_position. Import local checkout and inspect Figure.subfigures spacing implementation before repairing reproduction; no false successful-reproduction claim.",
+      "expectation_correction": null,
+      "attempts": [
+        {
+          "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-semantic-validation/matplotlib__matplotlib-25960-attempt1/semantic-validation.json",
+          "status": "validation_error",
+          "valid_next_action": null,
+          "error": "RuntimeError('Command failed: 9')"
+        },
+        {
+          "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-semantic-validation/matplotlib__matplotlib-25960-attempt2/semantic-validation.json",
+          "status": "command_completed",
+          "valid_next_action": true,
+          "error": null
+        }
+      ]
+    },
+    {
+      "task": "matplotlib__matplotlib-26208",
+      "call": 3,
+      "valid_next_action": true,
+      "full_solution_claim": false,
+      "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-semantic-validation/matplotlib__matplotlib-26208-attempt2/semantic-validation.json",
+      "candidate_manifest_sha256": "9739984fb28706b31a9d7668d6f053083d3e48b21b56e198dc7eac8ab4997da4",
+      "action_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/matplotlib__matplotlib-26208/action_counterfactual.candidate.private.json",
+      "action_case_sha256": "d60a3730d0c0792a5c836607969e0a89ec8040d7575a655add74fe904d4f19e9",
+      "scope": "Activate the existing image testbed interpreter and run the original local reproduction, without fetching target source. This is an environment-recovery next action, not a complete solution.",
+      "expectation_correction": null,
+      "attempts": [
+        {
+          "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-semantic-validation/matplotlib__matplotlib-26208-attempt1/semantic-validation.json",
+          "status": "validation_error",
+          "valid_next_action": null,
+          "error": "RuntimeError('Command failed: 9')"
+        },
+        {
+          "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-semantic-validation/matplotlib__matplotlib-26208-attempt2/semantic-validation.json",
+          "status": "command_completed",
+          "valid_next_action": true,
+          "error": null
+        }
+      ]
+    },
+    {
+      "task": "matplotlib__matplotlib-26291",
+      "call": 3,
+      "valid_next_action": true,
+      "full_solution_claim": false,
+      "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-semantic-validation/matplotlib__matplotlib-26291-attempt3/semantic-validation.json",
+      "candidate_manifest_sha256": "c209f5667c220a49f3c8ff16bc970571540a55b9767706ec0d67d4bc9c079b37",
+      "action_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/matplotlib__matplotlib-26291/action_counterfactual.candidate.private.json",
+      "action_case_sha256": "6b3b98d4d9369490b1935d1a462105bb4ace2b1432a67c11ad2242329a4fdec7",
+      "scope": "Activate the existing image testbed interpreter and run the original local reproduction, without fetching target source. This is an environment-recovery next action, not a complete solution.",
+      "expectation_correction": {
+        "previous_manifest_sha256": "09ca56b24ee47fef47a5e7a68de1ee710b00fc64fbbc5a265d18523f1ffb4e4a",
+        "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-semantic-validation/matplotlib__matplotlib-26291-attempt2/semantic-validation.json",
+        "reason": "Original AttributeError expectation was unvalidated and wrong. Exact original reproduction runs successfully against asserted local pinned source. No target bug reproduction or solution claim.",
+        "action_changed": false,
+        "token_branches_changed": false
+      },
+      "attempts": [
+        {
+          "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-semantic-validation/matplotlib__matplotlib-26291-attempt1/semantic-validation.json",
+          "status": "validation_error",
+          "valid_next_action": null,
+          "error": "RuntimeError('Command failed: 9')"
+        },
+        {
+          "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-semantic-validation/matplotlib__matplotlib-26291-attempt2/semantic-validation.json",
+          "status": "command_completed",
+          "valid_next_action": false,
+          "error": null
+        },
+        {
+          "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-semantic-validation/matplotlib__matplotlib-26291-attempt3/semantic-validation.json",
+          "status": "command_completed",
+          "valid_next_action": true,
+          "error": null
+        }
+      ]
+    },
+    {
+      "task": "pydata__xarray-4687",
+      "call": 39,
+      "valid_next_action": true,
+      "full_solution_claim": false,
+      "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-semantic-validation/pydata__xarray-4687-attempt3/semantic-validation.json",
+      "candidate_manifest_sha256": "2dd5b499f85b12681e944ab0fa9dcefbe610653702e5a9276855fc67807ac664",
+      "action_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/pydata__xarray-4687/action_counterfactual.candidate.private.json",
+      "action_case_sha256": "7e0c07030b0bf623c339fe053d59edc4b48d861bbe09a17bfbab1358b3269294",
+      "scope": "Call37 destroyed computation.py with truncated malformed text (TYPE_ Pence). Restore only this file from local image HEAD then inspect local where, preserving other state. Repairs self-inflicted truncation; not target bug fix.",
+      "expectation_correction": {
+        "previous_manifest_sha256": "7813cdabc2c4ffc512c713ddfd8e54ba62c9e50f56e50dca7e6211b918e3feed",
+        "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-semantic-validation/pydata__xarray-4687-attempt2/semantic-validation.json",
+        "reason": "Pinned extracted baseline where lacks keep_attrs; requiring that text incorrectly expected a fix in the unmodified function. Actual restored local function matches source and advances inspection.",
+        "action_changed": false,
+        "token_branches_changed": false
+      },
+      "attempts": [
+        {
+          "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-semantic-validation/pydata__xarray-4687-attempt1/semantic-validation.json",
+          "status": "validation_error",
+          "valid_next_action": null,
+          "error": "RuntimeError('Command failed: 8')"
+        },
+        {
+          "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-semantic-validation/pydata__xarray-4687-attempt2/semantic-validation.json",
+          "status": "command_completed",
+          "valid_next_action": false,
+          "error": null
+        },
+        {
+          "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-semantic-validation/pydata__xarray-4687-attempt3/semantic-validation.json",
+          "status": "command_completed",
+          "valid_next_action": true,
+          "error": null
+        }
+      ]
+    },
+    {
+      "task": "pydata__xarray-7233",
+      "call": 4,
+      "valid_next_action": true,
+      "full_solution_claim": false,
+      "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-semantic-validation/pydata__xarray-7233-attempt2/semantic-validation.json",
+      "candidate_manifest_sha256": "e9344236f1dfbe9c3845c64828b61c299b5e7b646db9f8bec7f88c38d26c9b1f",
+      "action_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/pydata__xarray-7233/action_counterfactual.candidate.private.json",
+      "action_case_sha256": "30ae1e5e6a2ead902fe27b73cedc09c710f2eab176789d8fbcc3b65203bda684",
+      "scope": "Activate the existing image testbed interpreter and run the original local reproduction, without fetching target source. This is an environment-recovery next action, not a complete solution.",
+      "expectation_correction": null,
+      "attempts": [
+        {
+          "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-semantic-validation/pydata__xarray-7233-attempt1/semantic-validation.json",
+          "status": "validation_error",
+          "valid_next_action": null,
+          "error": "RuntimeError('Command failed: 8')"
+        },
+        {
+          "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-semantic-validation/pydata__xarray-7233-attempt2/semantic-validation.json",
+          "status": "command_completed",
+          "valid_next_action": true,
+          "error": null
+        }
+      ]
+    },
+    {
+      "task": "pylint-dev__pylint-4604",
+      "call": 8,
+      "valid_next_action": true,
+      "full_solution_claim": false,
+      "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-semantic-validation/pylint-dev__pylint-4604-attempt2/semantic-validation.json",
+      "candidate_manifest_sha256": "6bc0b65c7d52643484da79f1276c1ad73c61f45e19fd36202eff8fa311334353",
+      "action_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/pylint-dev__pylint-4604/action_counterfactual.candidate.private.json",
+      "action_case_sha256": "0f01a95975a6c04e528a1d6b939806fc2c73cd50e45f4503051c0df58e5c4a12",
+      "scope": "Use existing testbed interpreter and local Pylint instead of upgrading target to overcome base-environment wrapt conflict. Original reproduction should show unused-import bug; nonzero lint code expected.",
+      "expectation_correction": null,
+      "attempts": [
+        {
+          "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-semantic-validation/pylint-dev__pylint-4604-attempt1/semantic-validation.json",
+          "status": "validation_error",
+          "valid_next_action": null,
+          "error": "RuntimeError('Command failed: 8')"
+        },
+        {
+          "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-semantic-validation/pylint-dev__pylint-4604-attempt2/semantic-validation.json",
+          "status": "command_completed",
+          "valid_next_action": true,
+          "error": null
+        }
+      ]
+    },
+    {
+      "task": "pytest-dev__pytest-5787",
+      "call": 12,
+      "valid_next_action": true,
+      "full_solution_claim": false,
+      "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-semantic-validation/pytest-dev__pytest-5787-attempt2/semantic-validation.json",
+      "candidate_manifest_sha256": "fc439a9a7ff68e92885c96f4243acae80a32df813e3137f8000db25abae5f9c9",
+      "action_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/pytest-dev__pytest-5787/action_counterfactual.candidate.private.json",
+      "action_case_sha256": "6bed68e36238b97ebb2fee8fb7db215d095bfc8ed60781e62a5d7adee6bb8586",
+      "scope": "Inspect local pytest report serialization, which owns chained exception encoding used by xdist. No xdist install or target pytest upgrade; this is a local investigation next step, not a completed fix.",
+      "expectation_correction": null,
+      "attempts": [
+        {
+          "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-semantic-validation/pytest-dev__pytest-5787-attempt1/semantic-validation.json",
+          "status": "validation_error",
+          "valid_next_action": null,
+          "error": "RuntimeError('Command failed: 8')"
+        },
+        {
+          "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-semantic-validation/pytest-dev__pytest-5787-attempt2/semantic-validation.json",
+          "status": "command_completed",
+          "valid_next_action": true,
+          "error": null
+        }
+      ]
+    },
+    {
+      "task": "scikit-learn__scikit-learn-13135",
+      "call": 9,
+      "valid_next_action": true,
+      "full_solution_claim": false,
+      "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-semantic-validation/scikit-learn__scikit-learn-13135-attempt2/semantic-validation.json",
+      "candidate_manifest_sha256": "6212b0955c1610cf643e0d393a90a6883e64e661f56552eab7e03e443c930e25",
+      "action_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/scikit-learn__scikit-learn-13135/action_counterfactual.candidate.private.json",
+      "action_case_sha256": "3690a5be8a7e9906ffcc7429684a6bf42523f0fc94b489ec2ba6c6b56da5d5a7",
+      "scope": "Activate the existing image testbed interpreter and run the original local reproduction, without fetching target source. This is an environment-recovery next action, not a complete solution.",
+      "expectation_correction": null,
+      "attempts": [
+        {
+          "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-semantic-validation/scikit-learn__scikit-learn-13135-attempt1/semantic-validation.json",
+          "status": "validation_error",
+          "valid_next_action": null,
+          "error": "RuntimeError('Command failed: 14')"
+        },
+        {
+          "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-semantic-validation/scikit-learn__scikit-learn-13135-attempt2/semantic-validation.json",
+          "status": "command_completed",
+          "valid_next_action": true,
+          "error": null
+        }
+      ]
+    },
+    {
+      "task": "scikit-learn__scikit-learn-13328",
+      "call": 3,
+      "valid_next_action": true,
+      "full_solution_claim": false,
+      "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-semantic-validation/scikit-learn__scikit-learn-13328-attempt2/semantic-validation.json",
+      "candidate_manifest_sha256": "2726f1386fd49eb03e2d74de30c95ed529b9d305df43c34d96f8c072c11096f3",
+      "action_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/scikit-learn__scikit-learn-13328/action_counterfactual.candidate.private.json",
+      "action_case_sha256": "52f6614498c828972727e13a1086bb30323983eae756e9989ed4d4e44e6d4cf2",
+      "scope": "Activate the existing image testbed interpreter and run the original local reproduction, without fetching target source. This is an environment-recovery next action, not a complete solution.",
+      "expectation_correction": null,
+      "attempts": [
+        {
+          "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-semantic-validation/scikit-learn__scikit-learn-13328-attempt1/semantic-validation.json",
+          "status": "validation_error",
+          "valid_next_action": null,
+          "error": "RuntimeError('Command failed: 14')"
+        },
+        {
+          "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-semantic-validation/scikit-learn__scikit-learn-13328-attempt2/semantic-validation.json",
+          "status": "command_completed",
+          "valid_next_action": true,
+          "error": null
+        }
+      ]
+    },
+    {
+      "task": "scikit-learn__scikit-learn-14053",
+      "call": 13,
+      "valid_next_action": true,
+      "full_solution_claim": false,
+      "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-semantic-validation/scikit-learn__scikit-learn-14053-attempt2/semantic-validation.json",
+      "candidate_manifest_sha256": "fdf6c95b27dac9977628158ffb442bb27a55bdd14257d0d9ca48100ece3fec57",
+      "action_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/scikit-learn__scikit-learn-14053/action_counterfactual.candidate.private.json",
+      "action_case_sha256": "0a46e147aeeeecfd9af92f33074485993ede14d196a3d64f8664aca22fd1ce22",
+      "scope": "Activate the existing image testbed interpreter and run the original local reproduction, without fetching target source. This is an environment-recovery next action, not a complete solution.",
+      "expectation_correction": null,
+      "attempts": [
+        {
+          "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-semantic-validation/scikit-learn__scikit-learn-14053-attempt1/semantic-validation.json",
+          "status": "validation_error",
+          "valid_next_action": null,
+          "error": "RuntimeError('Command failed: 14')"
+        },
+        {
+          "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-semantic-validation/scikit-learn__scikit-learn-14053-attempt2/semantic-validation.json",
+          "status": "command_completed",
+          "valid_next_action": true,
+          "error": null
+        }
+      ]
+    },
+    {
+      "task": "scikit-learn__scikit-learn-14629",
+      "call": 8,
+      "valid_next_action": true,
+      "full_solution_claim": false,
+      "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-semantic-validation/scikit-learn__scikit-learn-14629-attempt2/semantic-validation.json",
+      "candidate_manifest_sha256": "ad8988c03d454f337f0661bb704cd6644b2e38fc6d6a3286da19b5759ec3eb15",
+      "action_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/scikit-learn__scikit-learn-14629/action_counterfactual.candidate.private.json",
+      "action_case_sha256": "4f59833554b0af7b257288ee13cdba89b3c118e35383c9360d8b1935d08713b6",
+      "scope": "Activate the existing image testbed interpreter and run the original local reproduction, without fetching target source. This is an environment-recovery next action, not a complete solution.",
+      "expectation_correction": null,
+      "attempts": [
+        {
+          "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-semantic-validation/scikit-learn__scikit-learn-14629-attempt1/semantic-validation.json",
+          "status": "validation_error",
+          "valid_next_action": null,
+          "error": "RuntimeError('Command failed: 14')"
+        },
+        {
+          "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-semantic-validation/scikit-learn__scikit-learn-14629-attempt2/semantic-validation.json",
+          "status": "command_completed",
+          "valid_next_action": true,
+          "error": null
+        }
+      ]
+    },
+    {
+      "task": "scikit-learn__scikit-learn-25102",
+      "call": 5,
+      "valid_next_action": true,
+      "full_solution_claim": false,
+      "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-semantic-validation/scikit-learn__scikit-learn-25102-attempt2/semantic-validation.json",
+      "candidate_manifest_sha256": "67ab7fc9ae71c1ab3d14ef6753dfb3d97a6d65f6572ef5e6327c4a56dce5c1db",
+      "action_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/scikit-learn__scikit-learn-25102/action_counterfactual.candidate.private.json",
+      "action_case_sha256": "ac0efa0b76f90a6c5074b9211308237c66c9d2641c6ccf86c9c3948d5c0fb8dc",
+      "scope": "Inspect local target source in existing testbed environment without upgrading target. Next investigation action only; not completed fix. Preserves exact reproduction helper but does not execute its invalid np.dtype(category) statement. Inspects local selector transformation; no prior tracked source edits.",
+      "expectation_correction": null,
+      "attempts": [
+        {
+          "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-semantic-validation/scikit-learn__scikit-learn-25102-attempt1/semantic-validation.json",
+          "status": "validation_error",
+          "valid_next_action": null,
+          "error": "RuntimeError('Command failed: 10')"
+        },
+        {
+          "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-semantic-validation/scikit-learn__scikit-learn-25102-attempt2/semantic-validation.json",
+          "status": "command_completed",
+          "valid_next_action": true,
+          "error": null
+        }
+      ]
+    },
+    {
+      "task": "scikit-learn__scikit-learn-25747",
+      "call": 3,
+      "valid_next_action": true,
+      "full_solution_claim": false,
+      "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-semantic-validation/scikit-learn__scikit-learn-25747-attempt2/semantic-validation.json",
+      "candidate_manifest_sha256": "0cb60376d34236faa736e610b4c47a9f695c0377bce9f5bdc044d7908c6fddda",
+      "action_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/scikit-learn__scikit-learn-25747/action_counterfactual.candidate.private.json",
+      "action_case_sha256": "2bcb65ee9e9bee6d7f42f29234e469c8e9839d29fd7538ae46414f954baac48d",
+      "scope": "Inspect local target source in existing testbed environment without upgrading target. Next investigation action only; not completed fix.",
+      "expectation_correction": null,
+      "attempts": [
+        {
+          "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-semantic-validation/scikit-learn__scikit-learn-25747-attempt1/semantic-validation.json",
+          "status": "validation_error",
+          "valid_next_action": null,
+          "error": "RuntimeError('Command failed: 10')"
+        },
+        {
+          "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-semantic-validation/scikit-learn__scikit-learn-25747-attempt2/semantic-validation.json",
+          "status": "command_completed",
+          "valid_next_action": true,
+          "error": null
+        }
+      ]
+    },
+    {
+      "task": "sphinx-doc__sphinx-10614",
+      "call": 12,
+      "valid_next_action": true,
+      "full_solution_claim": false,
+      "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-semantic-validation/sphinx-doc__sphinx-10614-attempt2/semantic-validation.json",
+      "candidate_manifest_sha256": "ea917614f1218eb110b9b940d9a716c07c28d4afd41d114f33543207eda50ee9",
+      "action_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/sphinx-doc__sphinx-10614/action_counterfactual.candidate.private.json",
+      "action_case_sha256": "73308038ffb6e1153713aefd43055714957c7ff69ca2dfb84c42fa9e76df441f",
+      "scope": "Inspect local target source in existing testbed environment without upgrading target. Next investigation action only; not completed fix. Prior local reproduction files18/20 are not consumed or reconstructed by this action; no prior tracked source edits.",
+      "expectation_correction": null,
+      "attempts": [
+        {
+          "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-semantic-validation/sphinx-doc__sphinx-10614-attempt1/semantic-validation.json",
+          "status": "validation_error",
+          "valid_next_action": null,
+          "error": "RuntimeError('Command failed: 9')"
+        },
+        {
+          "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-semantic-validation/sphinx-doc__sphinx-10614-attempt2/semantic-validation.json",
+          "status": "command_completed",
+          "valid_next_action": true,
+          "error": null
+        }
+      ]
+    },
+    {
+      "task": "sphinx-doc__sphinx-8638",
+      "call": 3,
+      "valid_next_action": true,
+      "full_solution_claim": false,
+      "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-semantic-validation/sphinx-doc__sphinx-8638-attempt2/semantic-validation.json",
+      "candidate_manifest_sha256": "79480672bad112f5aa72dcac6c5cfa88390db970af91610233e31fc8bd8c1ea8",
+      "action_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/sphinx-doc__sphinx-8638/action_counterfactual.candidate.private.json",
+      "action_case_sha256": "a98499f3f71718260984ae51b4bc3487946ebf030920dc7b6530a0480a2b78b2",
+      "scope": "Inspect local target source in existing testbed environment without upgrading target. Next investigation action only; not completed fix. The task-supplied cloned reproducer is not consumed or reconstructed by this action.",
+      "expectation_correction": null,
+      "attempts": [
+        {
+          "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-semantic-validation/sphinx-doc__sphinx-8638-attempt1/semantic-validation.json",
+          "status": "validation_error",
+          "valid_next_action": null,
+          "error": "RuntimeError('Command failed: 9')"
+        },
+        {
+          "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-semantic-validation/sphinx-doc__sphinx-8638-attempt2/semantic-validation.json",
+          "status": "command_completed",
+          "valid_next_action": true,
+          "error": null
+        }
+      ]
+    },
+    {
+      "task": "sympy__sympy-13480",
+      "call": 9,
+      "valid_next_action": true,
+      "full_solution_claim": false,
+      "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-semantic-validation/sympy__sympy-13480-attempt2/semantic-validation.json",
+      "candidate_manifest_sha256": "e781dd43804f1d0c56cadceb192d7e5b0bfa5266bad4c1a23eb5e4ae59a4ca06",
+      "action_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/sympy__sympy-13480/action_counterfactual.candidate.private.json",
+      "action_case_sha256": "7958f1882b3dbbead9e0eb354aef9d1032ca9f93e6fef1cf30f492644aaa181d",
+      "scope": "Inspect local target source in existing testbed environment without upgrading target. Next investigation action only; not completed fix. Preserves literal reproduction helper; reads original hyperbolic implementation. Prior mpmath install in base interpreter not replayed; no prior tracked source edits.",
+      "expectation_correction": null,
+      "attempts": [
+        {
+          "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-semantic-validation/sympy__sympy-13480-attempt1/semantic-validation.json",
+          "status": "validation_error",
+          "valid_next_action": null,
+          "error": "RuntimeError('Command failed: 9')"
+        },
+        {
+          "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-semantic-validation/sympy__sympy-13480-attempt2/semantic-validation.json",
+          "status": "command_completed",
+          "valid_next_action": true,
+          "error": null
+        }
+      ]
+    },
+    {
+      "task": "sympy__sympy-13551",
+      "call": 12,
+      "valid_next_action": true,
+      "full_solution_claim": false,
+      "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-semantic-validation/sympy__sympy-13551-attempt1/semantic-validation.json",
+      "candidate_manifest_sha256": "2a403dc59dc1af6d743e685bb37cdd0ab88248a29e851cf02de61cd56e9090c7",
+      "action_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/sympy__sympy-13551/action_counterfactual.candidate.private.json",
+      "action_case_sha256": "e1f720371d9533b0cc4c14771e80b6e86af2ce47ec5b9791eeef9925fc96dc56",
+      "scope": "Inspect local target source in existing testbed environment without upgrading target. Next investigation action only; not completed fix. Preserves literal reproduction helper; reads original Product implementation. Prior mpmath install in base interpreter not replayed; Native21 basic.py compatibility edit preserved.",
+      "expectation_correction": null,
+      "attempts": [
+        {
+          "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-semantic-validation/sympy__sympy-13551-attempt1/semantic-validation.json",
+          "status": "command_completed",
+          "valid_next_action": true,
+          "error": null
+        }
+      ]
+    },
+    {
+      "task": "sympy__sympy-13878",
+      "call": 29,
+      "valid_next_action": true,
+      "full_solution_claim": false,
+      "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-semantic-validation/sympy__sympy-13878-attempt1/semantic-validation.json",
+      "candidate_manifest_sha256": "562864b641614229eee99b73fc74641126a7c736cad24bffa96b935b8cdc4f64",
+      "action_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/sympy__sympy-13878/action_counterfactual.candidate.private.json",
+      "action_case_sha256": "77c7ca4a7dbdde6ad96477e340b4314724668fcb90a8947dd561d0b0ba30f6c2",
+      "scope": "Inspect local target source in existing testbed environment without upgrading target. Next investigation action only; not completed fix. Preserves literal reproduction helper; reads original continuous-distribution CDF implementation. Prior mpmath install in base interpreter not replayed; Native51 basic.py compatibility edit preserved.",
+      "expectation_correction": null,
+      "attempts": [
+        {
+          "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-semantic-validation/sympy__sympy-13878-attempt1/semantic-validation.json",
+          "status": "command_completed",
+          "valid_next_action": true,
+          "error": null
+        }
+      ]
+    }
+  ],
+  "limitations": "Local pinned image plus recorded tracked edits/helpers, not whole native filesystem/dependency replay. No full solution or scoring claim. Attempt1 infrastructure capdrop/0600 issue preserved; driver adds DAC_OVERRIDE. Two expectations corrected with unchanged action/continuation (MPL26291 bug not reproduced, Xarray4687 baseline lacks keep_attrs).",
+  "TT_executed": false
+}

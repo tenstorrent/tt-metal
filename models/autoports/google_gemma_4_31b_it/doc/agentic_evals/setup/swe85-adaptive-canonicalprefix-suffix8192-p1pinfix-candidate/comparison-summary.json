@@ -1,0 +1,29 @@
+{
+  "status": "passed",
+  "scope": "Host-only matched chosen-token comparison; no score/admission decision.",
+  "rows": [
+    {
+      "name": "anomaly.call91.canonicalprefix.suffix8192.seed42",
+      "chosen_tokens": 64,
+      "top1_agreement": 0.9375,
+      "served_result_sha256": "a2502f2f0e21d1a118e16b51e6a4e351d77e061a85e0d7c076cb2e73ac556726",
+      "full_result_sha256": "9e2522c91cdba316f7fce5881a139718e34added64eaccc41e2f94624003e889"
+    },
+    {
+      "name": "anomaly.call91.canonicalprefix.suffix8192.seed43",
+      "chosen_tokens": 64,
+      "top1_agreement": 0.9375,
+      "served_result_sha256": "724d4df0cbc71b53938da054e4bb4345f4946ae4559ac3dc2e54fedbda1c4123",
+      "full_result_sha256": "10610713eed42214a5faf48fe4c33bd5be7a9041dc5034e762490b951c69b82b"
+    },
+    {
+      "name": "anomaly.call91.canonicalprefix.suffix8192.seed44",
+      "chosen_tokens": 64,
+      "top1_agreement": 0.9375,
+      "served_result_sha256": "e52dce93ecda8e92adc6947f7b654a23aae114e0eaa73b123dce7141c13c01a4",
+      "full_result_sha256": "23852a4086dbbca01a80903bbea374ada27d897e3e31e5aef95044ecefcbedd6"
+    }
+  ],
+  "served_manifest_sha256": "4247057be66e9cc30b5f474001c42043a9f2c945fa8f4866fc97f0375e072c51",
+  "full_manifest_sha256": "59f6d8286bbb9c4de5121404975c007a32a9ae522fa37f14caa814e19d3376cc"
+}

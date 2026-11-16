@@ -1,0 +1,747 @@
+{
+  "status": "incremental_triage_completed_marker_only",
+  "scope": "Six exact-suffix512 caret controls. Semantic triage only; no acceptance or score conclusion. For every completed trial, decoded the full generated continuation and the last150 original prompt token IDs with the pinned tokenizer. Rows are included only when diagnostic_total_wall_s is present.",
+  "tokenizer": {
+    "revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+    "path": "/home/mvasiljevic/.cache/huggingface/hub/models--google--gemma-4-31B-it/snapshots/842da3794eaa0b77d5f08bae87a17459d91ff475/tokenizer.json"
+  },
+  "counts": {
+    "completed_trial_rows": 36,
+    "pending_jobs": 0,
+    "verdicts": {
+      "inconclusive": 3,
+      "native_caret_loop": 15,
+      "normal": 6,
+      "other_anomaly": 12
+    }
+  },
+  "rows": [
+    {
+      "mode": "served",
+      "job": "anomaly.psf__requests-5414.call10.onset.optional-suffix512",
+      "seed": 42,
+      "verdict": "normal",
+      "generated_token_count": 190,
+      "decoded_character_count": 656,
+      "caret_character_count": 0,
+      "evidence_snippet": "urllib3.exceptions.LocationParseError(\n               f\"Invalid URL: {url}\"\n           ),\n           None\n       )\nurllib3.exceptions.Locati … tion as e:\\n    print(f\\\"Caught: {type(e).__name__}: {e}\\\")\\nEOF\\npython3 reproduce_issue.py\\n\"}\n```",
+      "evidence": "Complete exception explanation followed by a reproduction-script command.",
+      "conditioning": {
+        "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-85/anomaly.psf__requests-5414.call10.onset.suffix512.private.json",
+        "last_original_prompt_token_ids_reviewed": 150,
+        "decoded_conditioning_tail": "(\"http://.example.com\")\n  ...\n  File \"/opt/miniconda3/lib/python3.11/site-packages/urllib3/util/connection.py\", line 68, in create_connection\n    return six.raise_from(\n           "
+      },
+      "source_result": "setup/swe85-persistent-short-controls/runs/served/anomaly.psf__requests-5414.call10.onset.optional-suffix512.json",
+      "source_sha256": "763a2bd9fc3e25683f1bb11d8815df74168d5cd9b1c6831c248e92a5b7166664",
+      "diagnostic_total_wall_s": 38.06005517602898
+    },
+    {
+      "mode": "served",
+      "job": "anomaly.psf__requests-5414.call10.onset.optional-suffix512",
+      "seed": 43,
+      "verdict": "other_anomaly",
+      "generated_token_count": 512,
+      "decoded_character_count": 2554,
+      "caret_character_count": 0,
+      "evidence_snippet": "...\n           ...\n           ... (repeats to cap)",
+      "evidence": "Repeated ellipsis-plus-indentation sequence continues through the 512-token cap.",
+      "conditioning": {
+        "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-85/anomaly.psf__requests-5414.call10.onset.suffix512.private.json",
+        "last_original_prompt_token_ids_reviewed": 150,
+        "decoded_conditioning_tail": "(\"http://.example.com\")\n  ...\n  File \"/opt/miniconda3/lib/python3.11/site-packages/urllib3/util/connection.py\", line 68, in create_connection\n    return six.raise_from(\n           "
+      },
+      "source_result": "setup/swe85-persistent-short-controls/runs/served/anomaly.psf__requests-5414.call10.onset.optional-suffix512.json",
+      "source_sha256": "763a2bd9fc3e25683f1bb11d8815df74168d5cd9b1c6831c248e92a5b7166664",
+      "diagnostic_total_wall_s": 38.06005517602898
+    },
+    {
+      "mode": "served",
+      "job": "anomaly.psf__requests-5414.call10.onset.optional-suffix512",
+      "seed": 44,
+      "verdict": "normal",
+      "generated_token_count": 226,
+      "decoded_character_count": 773,
+      "caret_character_count": 0,
+      "evidence_snippet": "urllib3.exceptions.LocationParseError(\n           \"http://.example.com\"),\n           None,\n           None)\nurllib3.exceptions.LocationParse … int(f\\\"Caught expected exception: {type(e).__name__}: {e}\\\")\\nEOF\\npython reproduce_issue.py\\n\"}\n```",
+      "evidence": "Complete exception explanation followed by a reproduction-script command.",
+      "conditioning": {
+        "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-85/anomaly.psf__requests-5414.call10.onset.suffix512.private.json",
+        "last_original_prompt_token_ids_reviewed": 150,
+        "decoded_conditioning_tail": "(\"http://.example.com\")\n  ...\n  File \"/opt/miniconda3/lib/python3.11/site-packages/urllib3/util/connection.py\", line 68, in create_connection\n    return six.raise_from(\n           "
+      },
+      "source_result": "setup/swe85-persistent-short-controls/runs/served/anomaly.psf__requests-5414.call10.onset.optional-suffix512.json",
+      "source_sha256": "763a2bd9fc3e25683f1bb11d8815df74168d5cd9b1c6831c248e92a5b7166664",
+      "diagnostic_total_wall_s": 38.06005517602898
+    },
+    {
+      "mode": "served",
+      "job": "anomaly.psf__requests-5414.call11.onset.optional-suffix512",
+      "seed": 42,
+      "verdict": "other_anomaly",
+      "generated_token_count": 512,
+      "decoded_character_count": 2554,
+      "caret_character_count": 0,
+      "evidence_snippet": "...\n           ...\n           ... (repeats to cap)",
+      "evidence": "Repeated ellipsis-plus-indentation sequence continues through the 512-token cap.",
+      "conditioning": {
+        "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-85/anomaly.psf__requests-5414.call11.onset.suffix512.private.json",
+        "last_original_prompt_token_ids_reviewed": 150,
+        "decoded_conditioning_tail": "(\"http://.example.com\")\n  ...\n  File \"/opt/miniconda3/lib/python3.11/site-packages/urllib3/util/connection.py\", line 68, in create_connection\n    return six.raise_from(\n           "
+      },
+      "source_result": "setup/swe85-persistent-short-controls/runs/served/anomaly.psf__requests-5414.call11.onset.optional-suffix512.json",
+      "source_sha256": "2993aed8c30b645693abe24e681f859b7fef86ee6aa91d8e7b2d8d94cb510283",
+      "diagnostic_total_wall_s": 45.830048865871504
+    },
+    {
+      "mode": "served",
+      "job": "anomaly.psf__requests-5414.call11.onset.optional-suffix512",
+      "seed": 43,
+      "verdict": "other_anomaly",
+      "generated_token_count": 512,
+      "decoded_character_count": 2554,
+      "caret_character_count": 0,
+      "evidence_snippet": "...\n           ...\n           ... (repeats to cap)",
+      "evidence": "Repeated ellipsis-plus-indentation sequence continues through the 512-token cap.",
+      "conditioning": {
+        "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-85/anomaly.psf__requests-5414.call11.onset.suffix512.private.json",
+        "last_original_prompt_token_ids_reviewed": 150,
+        "decoded_conditioning_tail": "(\"http://.example.com\")\n  ...\n  File \"/opt/miniconda3/lib/python3.11/site-packages/urllib3/util/connection.py\", line 68, in create_connection\n    return six.raise_from(\n           "
+      },
+      "source_result": "setup/swe85-persistent-short-controls/runs/served/anomaly.psf__requests-5414.call11.onset.optional-suffix512.json",
+      "source_sha256": "2993aed8c30b645693abe24e681f859b7fef86ee6aa91d8e7b2d8d94cb510283",
+      "diagnostic_total_wall_s": 45.830048865871504
+    },
+    {
+      "mode": "served",
+      "job": "anomaly.psf__requests-5414.call11.onset.optional-suffix512",
+      "seed": 44,
+      "verdict": "other_anomaly",
+      "generated_token_count": 512,
+      "decoded_character_count": 2554,
+      "caret_character_count": 0,
+      "evidence_snippet": "...\n           ...\n           ... (repeats to cap)",
+      "evidence": "Repeated ellipsis-plus-indentation sequence continues through the 512-token cap.",
+      "conditioning": {
+        "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-85/anomaly.psf__requests-5414.call11.onset.suffix512.private.json",
+        "last_original_prompt_token_ids_reviewed": 150,
+        "decoded_conditioning_tail": "(\"http://.example.com\")\n  ...\n  File \"/opt/miniconda3/lib/python3.11/site-packages/urllib3/util/connection.py\", line 68, in create_connection\n    return six.raise_from(\n           "
+      },
+      "source_result": "setup/swe85-persistent-short-controls/runs/served/anomaly.psf__requests-5414.call11.onset.optional-suffix512.json",
+      "source_sha256": "2993aed8c30b645693abe24e681f859b7fef86ee6aa91d8e7b2d8d94cb510283",
+      "diagnostic_total_wall_s": 45.830048865871504
+    },
+    {
+      "mode": "served",
+      "job": "anomaly.psf__requests-5414.call9.onset.optional-suffix512",
+      "seed": 42,
+      "verdict": "native_caret_loop",
+      "generated_token_count": 512,
+      "decoded_character_count": 2048,
+      "caret_character_count": 2048,
+      "evidence_snippet": "^^^^^^^^ (repeated; all decoded output characters are caret characters)",
+      "evidence": "512 generated token IDs decode only to caret characters (2,048 decoded carets).",
+      "conditioning": {
+        "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-85/anomaly.psf__requests-5414.call9.onset.suffix512.private.json",
+        "last_original_prompt_token_ids_reviewed": 150,
+        "decoded_conditioning_tail": "ction.create_connection`.\n\nLet's look at the traceback again.\n```\n  File \"/testbed/requests/sessions.py\", line 645, in send\n    r = adapter.send(request, **send_kwargs)\n           "
+      },
+      "source_result": "setup/swe85-persistent-short-controls/runs/served/anomaly.psf__requests-5414.call9.onset.optional-suffix512.json",
+      "source_sha256": "54599204e155e4393d670f2d376d10a0180ae3b629748b33a0337a9f4efca068",
+      "diagnostic_total_wall_s": 45.75456679589115
+    },
+    {
+      "mode": "served",
+      "job": "anomaly.psf__requests-5414.call9.onset.optional-suffix512",
+      "seed": 43,
+      "verdict": "other_anomaly",
+      "generated_token_count": 512,
+      "decoded_character_count": 1860,
+      "caret_character_count": 0,
+      "evidence_snippet": " own_send_kwargs = send_kwargs\n```\nWait, if `adapter.send` is called and it's a `HTTPAdapter`, then it's calling `_send`.\nAnd `_send` is calling `_send_request`.\nAnd `_send_request … _socket` is raising `requests.exceptions.ConnectionError`.\nAnd `requests.exceptions.ConnectionError` is being caught by `_send_request_socket_connection`.\nAnd `_send_request_socket",
+      "evidence": "Cyclic exception-catching prose repeats across the continuation; it does not make substantive progress.",
+      "conditioning": {
+        "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-85/anomaly.psf__requests-5414.call9.onset.suffix512.private.json",
+        "last_original_prompt_token_ids_reviewed": 150,
+        "decoded_conditioning_tail": "ction.create_connection`.\n\nLet's look at the traceback again.\n```\n  File \"/testbed/requests/sessions.py\", line 645, in send\n    r = adapter.send(request, **send_kwargs)\n           "
+      },
+      "source_result": "setup/swe85-persistent-short-controls/runs/served/anomaly.psf__requests-5414.call9.onset.optional-suffix512.json",
+      "source_sha256": "54599204e155e4393d670f2d376d10a0180ae3b629748b33a0337a9f4efca068",
+      "diagnostic_total_wall_s": 45.75456679589115
+    },
+    {
+      "mode": "served",
+      "job": "anomaly.psf__requests-5414.call9.onset.optional-suffix512",
+      "seed": 44,
+      "verdict": "native_caret_loop",
+      "generated_token_count": 512,
+      "decoded_character_count": 2048,
+      "caret_character_count": 2048,
+      "evidence_snippet": "^^^^^^^^ (repeated; all decoded output characters are caret characters)",
+      "evidence": "512 generated token IDs decode only to caret characters (2,048 decoded carets).",
+      "conditioning": {
+        "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-85/anomaly.psf__requests-5414.call9.onset.suffix512.private.json",
+        "last_original_prompt_token_ids_reviewed": 150,
+        "decoded_conditioning_tail": "ction.create_connection`.\n\nLet's look at the traceback again.\n```\n  File \"/testbed/requests/sessions.py\", line 645, in send\n    r = adapter.send(request, **send_kwargs)\n           "
+      },
+      "source_result": "setup/swe85-persistent-short-controls/runs/served/anomaly.psf__requests-5414.call9.onset.optional-suffix512.json",
+      "source_sha256": "54599204e155e4393d670f2d376d10a0180ae3b629748b33a0337a9f4efca068",
+      "diagnostic_total_wall_s": 45.75456679589115
+    },
+    {
+      "mode": "served",
+      "job": "anomaly.pytest-dev__pytest-7432.call19.onset.optional-suffix512",
+      "seed": 42,
+      "verdict": "inconclusive",
+      "generated_token_count": 512,
+      "decoded_character_count": 1595,
+      "caret_character_count": 0,
+      "evidence_snippet": "# ...\n  File \"/testbed/src/_pytest/assertion/rewrite.py\", line 174, in _rewrite_test\n    source_stat, co = _rewrite_test(fn, self.config)\n   … t's `def exec_module(self, module: types.ModuleType) -> None:`.\nThis means it's a method of a class.",
+      "evidence": "Repeated traceback frames eventually transition to reasoning about exec_module; output is still progressing when the 512-token cap ends.",
+      "conditioning": {
+        "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-85/anomaly.pytest-dev__pytest-7432.call19.onset.suffix512.private.json",
+        "last_original_prompt_token_ids_reviewed": 150,
+        "decoded_conditioning_tail": "line 690, in _load_unlocked\n  File \"/testbed/src/_pytest/assertion/rewrite.py\", line 161, in exec_module\n    source_stat, co = _rewrite_test(fn, self.config)\n                      "
+      },
+      "source_result": "setup/swe85-persistent-short-controls/runs/served/anomaly.pytest-dev__pytest-7432.call19.onset.optional-suffix512.json",
+      "source_sha256": "21b2fb860e3dba265f76605c5807f7b89c32d6c76d2428444e42e95047c97639",
+      "diagnostic_total_wall_s": 35.56910985708237
+    },
+    {
+      "mode": "served",
+      "job": "anomaly.pytest-dev__pytest-7432.call19.onset.optional-suffix512",
+      "seed": 43,
+      "verdict": "normal",
+      "generated_token_count": 201,
+      "decoded_character_count": 623,
+      "caret_character_count": 0,
+      "evidence_snippet": "# a function thatC\n  File \"/test-bed/src/_pytest/assertion/rewrite.py\", line 161, in exec_module\n    source_stat, co = _rewrite_test(fn, sel … look at the class definition.\ncall:bash{command: \"grep -n 'class' src/_pytest/assertion/rewrite.py\"}",
+      "evidence": "Reasoning reaches a concrete grep tool call; no caret collapse. Includes the literal fragment “thatC”.",
+      "conditioning": {
+        "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-85/anomaly.pytest-dev__pytest-7432.call19.onset.suffix512.private.json",
+        "last_original_prompt_token_ids_reviewed": 150,
+        "decoded_conditioning_tail": "line 690, in _load_unlocked\n  File \"/testbed/src/_pytest/assertion/rewrite.py\", line 161, in exec_module\n    source_stat, co = _rewrite_test(fn, self.config)\n                      "
+      },
+      "source_result": "setup/swe85-persistent-short-controls/runs/served/anomaly.pytest-dev__pytest-7432.call19.onset.optional-suffix512.json",
+      "source_sha256": "21b2fb860e3dba265f76605c5807f7b89c32d6c76d2428444e42e95047c97639",
+      "diagnostic_total_wall_s": 35.56910985708237
+    },
+    {
+      "mode": "served",
+      "job": "anomaly.pytest-dev__pytest-7432.call19.onset.optional-suffix512",
+      "seed": 44,
+      "verdict": "normal",
+      "generated_token_count": 464,
+      "decoded_character_count": 1306,
+      "caret_character_count": 0,
+      "evidence_snippet": "...\n  File \"/test-bed/src/_pytest/assertion/rewrite.py\", line 161, in exec_module\n    source_stat, co = _rewrite_test(fn, self.config)\n  Fil … _rewrite_test`.\ncall:bash{command: \"grep -n \\\"def _rewrite_test\\\" src/_pytest/assertion/rewrite.py\"}",
+      "evidence": "Reasoning reaches a concrete grep tool call after discussing repeated frames; no caret collapse.",
+      "conditioning": {
+        "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-85/anomaly.pytest-dev__pytest-7432.call19.onset.suffix512.private.json",
+        "last_original_prompt_token_ids_reviewed": 150,
+        "decoded_conditioning_tail": "line 690, in _load_unlocked\n  File \"/testbed/src/_pytest/assertion/rewrite.py\", line 161, in exec_module\n    source_stat, co = _rewrite_test(fn, self.config)\n                      "
+      },
+      "source_result": "setup/swe85-persistent-short-controls/runs/served/anomaly.pytest-dev__pytest-7432.call19.onset.optional-suffix512.json",
+      "source_sha256": "21b2fb860e3dba265f76605c5807f7b89c32d6c76d2428444e42e95047c97639",
+      "diagnostic_total_wall_s": 35.56910985708237
+    },
+    {
+      "mode": "served",
+      "job": "anomaly.requests2931.call20.canonicalprefix.optional-suffix512",
+      "seed": 42,
+      "verdict": "native_caret_loop",
+      "generated_token_count": 512,
+      "decoded_character_count": 2048,
+      "caret_character_count": 2048,
+      "evidence_snippet": "^^^^^^^^ (repeated; all decoded output characters are caret characters)",
+      "evidence": "512 generated token IDs decode only to caret characters (2,048 decoded carets).",
+      "conditioning": {
+        "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-85/anomaly.requests2931.call20.canonicalprefix.suffix512.private.json",
+        "last_original_prompt_token_ids_reviewed": 150,
+        "decoded_conditioning_tail": "=u\"ööö\".encode(\"utf-8\"))\n  File \"/testbed/requests/api.py\", line 120, in put\n    return request('put', url, data=data, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^"
+      },
+      "source_result": "setup/swe85-persistent-short-controls/runs/served/anomaly.requests2931.call20.canonicalprefix.optional-suffix512.json",
+      "source_sha256": "1150c42e334a9fd9da59a8f6214713eeaa6f1283bb9e17c83c284f83cc5252c8",
+      "diagnostic_total_wall_s": 45.777458609081805
+    },
+    {
+      "mode": "served",
+      "job": "anomaly.requests2931.call20.canonicalprefix.optional-suffix512",
+      "seed": 43,
+      "verdict": "native_caret_loop",
+      "generated_token_count": 512,
+      "decoded_character_count": 2048,
+      "caret_character_count": 2048,
+      "evidence_snippet": "^^^^^^^^ (repeated; all decoded output characters are caret characters)",
+      "evidence": "512 generated token IDs decode only to caret characters (2,048 decoded carets).",
+      "conditioning": {
+        "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-85/anomaly.requests2931.call20.canonicalprefix.suffix512.private.json",
+        "last_original_prompt_token_ids_reviewed": 150,
+        "decoded_conditioning_tail": "=u\"ööö\".encode(\"utf-8\"))\n  File \"/testbed/requests/api.py\", line 120, in put\n    return request('put', url, data=data, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^"
+      },
+      "source_result": "setup/swe85-persistent-short-controls/runs/served/anomaly.requests2931.call20.canonicalprefix.optional-suffix512.json",
+      "source_sha256": "1150c42e334a9fd9da59a8f6214713eeaa6f1283bb9e17c83c284f83cc5252c8",
+      "diagnostic_total_wall_s": 45.777458609081805
+    },
+    {
+      "mode": "served",
+      "job": "anomaly.requests2931.call20.canonicalprefix.optional-suffix512",
+      "seed": 44,
+      "verdict": "native_caret_loop",
+      "generated_token_count": 512,
+      "decoded_character_count": 2048,
+      "caret_character_count": 2048,
+      "evidence_snippet": "^^^^^^^^ (repeated; all decoded output characters are caret characters)",
+      "evidence": "512 generated token IDs decode only to caret characters (2,048 decoded carets).",
+      "conditioning": {
+        "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-85/anomaly.requests2931.call20.canonicalprefix.suffix512.private.json",
+        "last_original_prompt_token_ids_reviewed": 150,
+        "decoded_conditioning_tail": "=u\"ööö\".encode(\"utf-8\"))\n  File \"/testbed/requests/api.py\", line 120, in put\n    return request('put', url, data=data, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^"
+      },
+      "source_result": "setup/swe85-persistent-short-controls/runs/served/anomaly.requests2931.call20.canonicalprefix.optional-suffix512.json",
+      "source_sha256": "1150c42e334a9fd9da59a8f6214713eeaa6f1283bb9e17c83c284f83cc5252c8",
+      "diagnostic_total_wall_s": 45.777458609081805
+    },
+    {
+      "mode": "served",
+      "job": "anomaly.sympy__sympy-14248.call53.onset.optional-suffix512",
+      "seed": 42,
+      "verdict": "native_caret_loop",
+      "generated_token_count": 512,
+      "decoded_character_count": 2048,
+      "caret_character_count": 2048,
+      "evidence_snippet": "^^^^^^^^ (repeated; all decoded output characters are caret characters)",
+      "evidence": "512 generated token IDs decode only to caret characters (2,048 decoded carets).",
+      "conditioning": {
+        "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-85/anomaly.sympy__sympy-14248.call53.onset.suffix512.private.json",
+        "last_original_prompt_token_ids_reviewed": 150,
+        "decoded_conditioning_tail": "oo long.\"\n}}thought\nI caused a `RecursionError`! Let's see why.\n```\n  File \"/testbed/sympy/printing/str.py\", line 315, in _print_MatAdd\n    return self._print_Add(expr)\n           "
+      },
+      "source_result": "setup/swe85-persistent-short-controls/runs/served/anomaly.sympy__sympy-14248.call53.onset.optional-suffix512.json",
+      "source_sha256": "c12bf566c6afeb8f0042b3fa0487f0c2167e92011675e99e62a09c4858d63a10",
+      "diagnostic_total_wall_s": 45.772235760930926
+    },
+    {
+      "mode": "served",
+      "job": "anomaly.sympy__sympy-14248.call53.onset.optional-suffix512",
+      "seed": 43,
+      "verdict": "native_caret_loop",
+      "generated_token_count": 512,
+      "decoded_character_count": 2048,
+      "caret_character_count": 2048,
+      "evidence_snippet": "^^^^^^^^ (repeated; all decoded output characters are caret characters)",
+      "evidence": "512 generated token IDs decode only to caret characters (2,048 decoded carets).",
+      "conditioning": {
+        "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-85/anomaly.sympy__sympy-14248.call53.onset.suffix512.private.json",
+        "last_original_prompt_token_ids_reviewed": 150,
+        "decoded_conditioning_tail": "oo long.\"\n}}thought\nI caused a `RecursionError`! Let's see why.\n```\n  File \"/testbed/sympy/printing/str.py\", line 315, in _print_MatAdd\n    return self._print_Add(expr)\n           "
+      },
+      "source_result": "setup/swe85-persistent-short-controls/runs/served/anomaly.sympy__sympy-14248.call53.onset.optional-suffix512.json",
+      "source_sha256": "c12bf566c6afeb8f0042b3fa0487f0c2167e92011675e99e62a09c4858d63a10",
+      "diagnostic_total_wall_s": 45.772235760930926
+    },
+    {
+      "mode": "served",
+      "job": "anomaly.sympy__sympy-14248.call53.onset.optional-suffix512",
+      "seed": 44,
+      "verdict": "native_caret_loop",
+      "generated_token_count": 512,
+      "decoded_character_count": 2048,
+      "caret_character_count": 2048,
+      "evidence_snippet": "^^^^^^^^ (repeated; all decoded output characters are caret characters)",
+      "evidence": "512 generated token IDs decode only to caret characters (2,048 decoded carets).",
+      "conditioning": {
+        "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-85/anomaly.sympy__sympy-14248.call53.onset.suffix512.private.json",
+        "last_original_prompt_token_ids_reviewed": 150,
+        "decoded_conditioning_tail": "oo long.\"\n}}thought\nI caused a `RecursionError`! Let's see why.\n```\n  File \"/testbed/sympy/printing/str.py\", line 315, in _print_MatAdd\n    return self._print_Add(expr)\n           "
+      },
+      "source_result": "setup/swe85-persistent-short-controls/runs/served/anomaly.sympy__sympy-14248.call53.onset.optional-suffix512.json",
+      "source_sha256": "c12bf566c6afeb8f0042b3fa0487f0c2167e92011675e99e62a09c4858d63a10",
+      "diagnostic_total_wall_s": 45.772235760930926
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.psf__requests-5414.call10.onset.optional-suffix512",
+      "seed": 42,
+      "verdict": "normal",
+      "generated_token_count": 239,
+      "decoded_character_count": 840,
+      "caret_character_count": 0,
+      "evidence_snippet": "socket.create_connection((host, port)),\n           urllib3.exceptions.LocationParseError(f\"Invalid host: {host}\"),\n           )\n  ...\n   own … e:\\n    print(f\\\"Caught exception: {type(e).__name__}: {e}\\\")\\nEOF\\npython3 reproduce_issue.py\"}\n```",
+      "evidence": "Exception explanation followed by a complete reproduction-script command.",
+      "conditioning": {
+        "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-85/anomaly.psf__requests-5414.call10.onset.suffix512.private.json",
+        "last_original_prompt_token_ids_reviewed": 150,
+        "decoded_conditioning_tail": "(\"http://.example.com\")\n  ...\n  File \"/opt/miniconda3/lib/python3.11/site-packages/urllib3/util/connection.py\", line 68, in create_connection\n    return six.raise_from(\n           "
+      },
+      "source_result": "setup/swe85-persistent-short-controls/runs/full/anomaly.psf__requests-5414.call10.onset.optional-suffix512.json",
+      "source_sha256": "78d21a5ed066928895adc25a37c2474ffff6c716d4d261f164162fd7058f2922",
+      "diagnostic_total_wall_s": 74.6674289777875
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.psf__requests-5414.call10.onset.optional-suffix512",
+      "seed": 43,
+      "verdict": "other_anomaly",
+      "generated_token_count": 512,
+      "decoded_character_count": 1128,
+      "caret_character_count": 0,
+      "evidence_snippet": "...\n           ...\n           ... (repeats to cap)",
+      "evidence": "After brief exception explanation, the remaining continuation repeats <tool_code> through the cap.",
+      "conditioning": {
+        "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-85/anomaly.psf__requests-5414.call10.onset.suffix512.private.json",
+        "last_original_prompt_token_ids_reviewed": 150,
+        "decoded_conditioning_tail": "(\"http://.example.com\")\n  ...\n  File \"/opt/miniconda3/lib/python3.11/site-packages/urllib3/util/connection.py\", line 68, in create_connection\n    return six.raise_from(\n           "
+      },
+      "source_result": "setup/swe85-persistent-short-controls/runs/full/anomaly.psf__requests-5414.call10.onset.optional-suffix512.json",
+      "source_sha256": "78d21a5ed066928895adc25a37c2474ffff6c716d4d261f164162fd7058f2922",
+      "diagnostic_total_wall_s": 74.6674289777875
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.psf__requests-5414.call10.onset.optional-suffix512",
+      "seed": 44,
+      "verdict": "normal",
+      "generated_token_count": 250,
+      "decoded_character_count": 861,
+      "caret_character_count": 0,
+      "evidence_snippet": "six.create_connection,\n           connection_kwargs)\n  ...\n  File \"/opt///lib/python3.11/site-packages/urllib3/util/connection.py\", line 68, …  print(f\\\"Caught unexpected exception: {type(e).__name__}: {e}\\\")\\nEOF\\npython3 reproduce_issue.py\"}",
+      "evidence": "Traceback explanation followed by an InvalidURL reproduction-script command.",
+      "conditioning": {
+        "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-85/anomaly.psf__requests-5414.call10.onset.suffix512.private.json",
+        "last_original_prompt_token_ids_reviewed": 150,
+        "decoded_conditioning_tail": "(\"http://.example.com\")\n  ...\n  File \"/opt/miniconda3/lib/python3.11/site-packages/urllib3/util/connection.py\", line 68, in create_connection\n    return six.raise_from(\n           "
+      },
+      "source_result": "setup/swe85-persistent-short-controls/runs/full/anomaly.psf__requests-5414.call10.onset.optional-suffix512.json",
+      "source_sha256": "78d21a5ed066928895adc25a37c2474ffff6c716d4d261f164162fd7058f2922",
+      "diagnostic_total_wall_s": 74.6674289777875
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.psf__requests-5414.call11.onset.optional-suffix512",
+      "seed": 42,
+      "verdict": "other_anomaly",
+      "generated_token_count": 512,
+      "decoded_character_count": 2554,
+      "caret_character_count": 0,
+      "evidence_snippet": "...\\n           ...\\n           ... (repeats to cap)",
+      "evidence": "512-token continuation repeats ellipsis/indent lines through the cap; no caret run.",
+      "conditioning": {
+        "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-85/anomaly.psf__requests-5414.call11.onset.suffix512.private.json",
+        "last_original_prompt_token_ids_reviewed": 150,
+        "decoded_conditioning_tail": "(\"http://.example.com\")\n  ...\n  File \"/opt/miniconda3/lib/python3.11/site-packages/urllib3/util/connection.py\", line 68, in create_connection\n    return six.raise_from(\n           "
+      },
+      "source_result": "setup/swe85-persistent-short-controls/runs/full/anomaly.psf__requests-5414.call11.onset.optional-suffix512.json",
+      "source_sha256": "ef5a245dd5579605de4ff1ece121865078b20c869e9608149ce49742f0512ac3",
+      "diagnostic_total_wall_s": 93.39996206387877
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.psf__requests-5414.call11.onset.optional-suffix512",
+      "seed": 43,
+      "verdict": "inconclusive",
+      "generated_token_count": 512,
+      "decoded_character_count": 1739,
+      "caret_character_count": 0,
+      "evidence_snippet": "Wait, `urllib3.exceptions.LocationParseError` is raised.\\n`requests` usually catches ... [continues with reproduction script to cap]",
+      "evidence": "Progressing explanation of LocationParseError and reproduction script reaches the 512-token cap before its response completes.",
+      "conditioning": {
+        "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-85/anomaly.psf__requests-5414.call11.onset.suffix512.private.json",
+        "last_original_prompt_token_ids_reviewed": 150,
+        "decoded_conditioning_tail": "(\"http://.example.com\")\n  ...\n  File \"/opt/miniconda3/lib/python3.11/site-packages/urllib3/util/connection.py\", line 68, in create_connection\n    return six.raise_from(\n           "
+      },
+      "source_result": "setup/swe85-persistent-short-controls/runs/full/anomaly.psf__requests-5414.call11.onset.optional-suffix512.json",
+      "source_sha256": "ef5a245dd5579605de4ff1ece121865078b20c869e9608149ce49742f0512ac3",
+      "diagnostic_total_wall_s": 93.39996206387877
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.psf__requests-5414.call11.onset.optional-suffix512",
+      "seed": 44,
+      "verdict": "inconclusive",
+      "generated_token_count": 512,
+      "decoded_character_count": 1803,
+      "caret_character_count": 0,
+      "evidence_snippet": "Actually, the validation happens during `prepare_url`.\\n\\nLet’s try to run this: ... [truncated at cap]",
+      "evidence": "Progressing traceback explanation reaches the 512-token cap mid-discussion of Request.prepare(); no repeated caret motif.",
+      "conditioning": {
+        "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-85/anomaly.psf__requests-5414.call11.onset.suffix512.private.json",
+        "last_original_prompt_token_ids_reviewed": 150,
+        "decoded_conditioning_tail": "(\"http://.example.com\")\n  ...\n  File \"/opt/miniconda3/lib/python3.11/site-packages/urllib3/util/connection.py\", line 68, in create_connection\n    return six.raise_from(\n           "
+      },
+      "source_result": "setup/swe85-persistent-short-controls/runs/full/anomaly.psf__requests-5414.call11.onset.optional-suffix512.json",
+      "source_sha256": "ef5a245dd5579605de4ff1ece121865078b20c869e9608149ce49742f0512ac3",
+      "diagnostic_total_wall_s": 93.39996206387877
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.psf__requests-5414.call9.onset.optional-suffix512",
+      "seed": 42,
+      "verdict": "other_anomaly",
+      "generated_token_count": 512,
+      "decoded_character_count": 1519,
+      "caret_character_count": 14,
+      "evidence_snippet": "^\\n  File \"/testbed/requests/adapters.py\", line 645, in send\\n    r = adapter.send(request, **send_kwargs)\\n           ^ (repeats)",
+      "evidence": "Repeated requests.adapters.send traceback frame/indentation dominates continuation; no coherent completed response.",
+      "conditioning": {
+        "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-85/anomaly.psf__requests-5414.call9.onset.suffix512.private.json",
+        "last_token_ids_reviewed": 150,
+        "decoded_tail_excerpt": "ction.create_connection`.\n\nLet's look at the traceback again.\n```\n  File \"/testbed/requests/sessions.py\", line 645, in send\n    r = adapter.send(request, **send_kwargs)\n           "
+      },
+      "source_result": "setup/swe85-persistent-short-controls/runs/full/anomaly.psf__requests-5414.call9.onset.optional-suffix512.json",
+      "source_sha256": "db02b90dccca9c2c8d06838b140605e4dbd527b737e64c27fc81a2cf31b81626",
+      "diagnostic_total_wall_s": 93.44212567387149
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.psf__requests-5414.call9.onset.optional-suffix512",
+      "seed": 43,
+      "verdict": "other_anomaly",
+      "generated_token_count": 512,
+      "decoded_character_count": 1665,
+      "caret_character_count": 9,
+      "evidence_snippet": "^\\n  File \"/testbed/requests/adapters.py\", line 645, in send\\n    r = adapter.send(request, **send_kwargs)\\n           ^ (repeats)",
+      "evidence": "Repeated requests.adapters.send traceback frame/indentation dominates continuation; no coherent completed response.",
+      "conditioning": {
+        "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-85/anomaly.psf__requests-5414.call9.onset.suffix512.private.json",
+        "last_token_ids_reviewed": 150,
+        "decoded_tail_excerpt": "ction.create_connection`.\n\nLet's look at the traceback again.\n```\n  File \"/testbed/requests/sessions.py\", line 645, in send\n    r = adapter.send(request, **send_kwargs)\n           "
+      },
+      "source_result": "setup/swe85-persistent-short-controls/runs/full/anomaly.psf__requests-5414.call9.onset.optional-suffix512.json",
+      "source_sha256": "db02b90dccca9c2c8d06838b140605e4dbd527b737e64c27fc81a2cf31b81626",
+      "diagnostic_total_wall_s": 93.44212567387149
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.psf__requests-5414.call9.onset.optional-suffix512",
+      "seed": 44,
+      "verdict": "other_anomaly",
+      "generated_token_count": 512,
+      "decoded_character_count": 1565,
+      "caret_character_count": 12,
+      "evidence_snippet": "^\\n  File \"/testbed/requests/adapters.py\", line 645, in send\\n    r = adapter.send(request, **send_kwargs)\\n           ^ (repeats)",
+      "evidence": "Repeated requests.adapters.send traceback frame/indentation dominates continuation; no coherent completed response.",
+      "conditioning": {
+        "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-85/anomaly.psf__requests-5414.call9.onset.suffix512.private.json",
+        "last_token_ids_reviewed": 150,
+        "decoded_tail_excerpt": "ction.create_connection`.\n\nLet's look at the traceback again.\n```\n  File \"/testbed/requests/sessions.py\", line 645, in send\n    r = adapter.send(request, **send_kwargs)\n           "
+      },
+      "source_result": "setup/swe85-persistent-short-controls/runs/full/anomaly.psf__requests-5414.call9.onset.optional-suffix512.json",
+      "source_sha256": "db02b90dccca9c2c8d06838b140605e4dbd527b737e64c27fc81a2cf31b81626",
+      "diagnostic_total_wall_s": 93.44212567387149
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.requests2931.call20.canonicalprefix.optional-suffix512",
+      "seed": 42,
+      "verdict": "native_caret_loop",
+      "generated_token_count": 512,
+      "decoded_character_count": 2048,
+      "caret_character_count": 2048,
+      "evidence_snippet": "^^^^^^^^ (repeated; all decoded output characters are caret characters)",
+      "evidence": "All512 generated token IDs decode only to caret characters (2,048 decoded carets).",
+      "conditioning": {
+        "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-85/anomaly.requests2931.call20.canonicalprefix.suffix512.private.json",
+        "last_token_ids_reviewed": 150,
+        "decoded_tail_excerpt": "=u\"ööö\".encode(\"utf-8\"))\n  File \"/testbed/requests/api.py\", line 120, in put\n    return request('put', url, data=data, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^"
+      },
+      "source_result": "setup/swe85-persistent-short-controls/runs/full/anomaly.requests2931.call20.canonicalprefix.optional-suffix512.json",
+      "source_sha256": "14ec7feaac78ac5659f21df7926336c2521648b4c9fb33966d0687610e9dfe98",
+      "diagnostic_total_wall_s": 93.43213608511724
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.requests2931.call20.canonicalprefix.optional-suffix512",
+      "seed": 43,
+      "verdict": "native_caret_loop",
+      "generated_token_count": 512,
+      "decoded_character_count": 2048,
+      "caret_character_count": 2048,
+      "evidence_snippet": "^^^^^^^^ (repeated; all decoded output characters are caret characters)",
+      "evidence": "All512 generated token IDs decode only to caret characters (2,048 decoded carets).",
+      "conditioning": {
+        "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-85/anomaly.requests2931.call20.canonicalprefix.suffix512.private.json",
+        "last_token_ids_reviewed": 150,
+        "decoded_tail_excerpt": "=u\"ööö\".encode(\"utf-8\"))\n  File \"/testbed/requests/api.py\", line 120, in put\n    return request('put', url, data=data, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^"
+      },
+      "source_result": "setup/swe85-persistent-short-controls/runs/full/anomaly.requests2931.call20.canonicalprefix.optional-suffix512.json",
+      "source_sha256": "14ec7feaac78ac5659f21df7926336c2521648b4c9fb33966d0687610e9dfe98",
+      "diagnostic_total_wall_s": 93.43213608511724
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.requests2931.call20.canonicalprefix.optional-suffix512",
+      "seed": 44,
+      "verdict": "native_caret_loop",
+      "generated_token_count": 512,
+      "decoded_character_count": 2048,
+      "caret_character_count": 2048,
+      "evidence_snippet": "^^^^^^^^ (repeated; all decoded output characters are caret characters)",
+      "evidence": "All512 generated token IDs decode only to caret characters (2,048 decoded carets).",
+      "conditioning": {
+        "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-85/anomaly.requests2931.call20.canonicalprefix.suffix512.private.json",
+        "last_token_ids_reviewed": 150,
+        "decoded_tail_excerpt": "=u\"ööö\".encode(\"utf-8\"))\n  File \"/testbed/requests/api.py\", line 120, in put\n    return request('put', url, data=data, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^"
+      },
+      "source_result": "setup/swe85-persistent-short-controls/runs/full/anomaly.requests2931.call20.canonicalprefix.optional-suffix512.json",
+      "source_sha256": "14ec7feaac78ac5659f21df7926336c2521648b4c9fb33966d0687610e9dfe98",
+      "diagnostic_total_wall_s": 93.43213608511724
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.pytest-dev__pytest-7432.call19.onset.optional-suffix512",
+      "seed": 42,
+      "verdict": "other_anomaly",
+      "generated_token_count": 512,
+      "decoded_character_count": 1860,
+      "caret_character_count": 0,
+      "evidence_snippet": " # Error: source_stat, co = _rewrite_test(fn, self.config) (repeats to cap)",
+      "evidence": "512-token output repeats the same _rewrite_test frame prefixed by “# Error:” throughout; no response progress.",
+      "conditioning": {
+        "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-85/anomaly.pytest-dev__pytest-7432.call19.onset.suffix512.private.json",
+        "last_token_ids_reviewed": 150,
+        "decoded_tail_excerpt": "line 690, in _load_unlocked\n  File \"/testbed/src/_pytest/assertion/rewrite.py\", line 161, in exec_module\n    source_stat, co = _rewrite_test(fn, self.config)\n                      "
+      },
+      "source_result": "setup/swe85-persistent-short-controls/runs/full/anomaly.pytest-dev__pytest-7432.call19.onset.optional-suffix512.json",
+      "source_sha256": "ec50a12e48db7b2446435f2e3f64d5fd158f0dc58988d7788a620815b5abcca4",
+      "diagnostic_total_wall_s": 93.46061501884833
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.pytest-dev__pytest-7432.call19.onset.optional-suffix512",
+      "seed": 43,
+      "verdict": "other_anomaly",
+      "generated_token_count": 512,
+      "decoded_character_count": 1591,
+      "caret_character_count": 11,
+      "evidence_snippet": "^\\n File \"/testbed/src/_pytest/assertion/rewrite.py\", line 143, in _rewrite_test ... (repeats)",
+      "evidence": "Repeated _rewrite_test traceback frames continue through the cap; occasional caret at the frame continuation, not a caret-only loop.",
+      "conditioning": {
+        "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-85/anomaly.pytest-dev__pytest-7432.call19.onset.suffix512.private.json",
+        "last_token_ids_reviewed": 150,
+        "decoded_tail_excerpt": "line 690, in _load_unlocked\n  File \"/testbed/src/_pytest/assertion/rewrite.py\", line 161, in exec_module\n    source_stat, co = _rewrite_test(fn, self.config)\n                      "
+      },
+      "source_result": "setup/swe85-persistent-short-controls/runs/full/anomaly.pytest-dev__pytest-7432.call19.onset.optional-suffix512.json",
+      "source_sha256": "ec50a12e48db7b2446435f2e3f64d5fd158f0dc58988d7788a620815b5abcca4",
+      "diagnostic_total_wall_s": 93.46061501884833
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.pytest-dev__pytest-7432.call19.onset.optional-suffix512",
+      "seed": 44,
+      "verdict": "native_caret_loop",
+      "generated_token_count": 512,
+      "decoded_character_count": 2048,
+      "caret_character_count": 2048,
+      "evidence_snippet": "^^^^^^^^ (repeated; all decoded output characters are caret characters)",
+      "evidence": "All512 generated token IDs decode only to caret characters (2,048 decoded carets).",
+      "conditioning": {
+        "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-85/anomaly.pytest-dev__pytest-7432.call19.onset.suffix512.private.json",
+        "last_token_ids_reviewed": 150,
+        "decoded_tail_excerpt": "line 690, in _load_unlocked\n  File \"/testbed/src/_pytest/assertion/rewrite.py\", line 161, in exec_module\n    source_stat, co = _rewrite_test(fn, self.config)\n                      "
+      },
+      "source_result": "setup/swe85-persistent-short-controls/runs/full/anomaly.pytest-dev__pytest-7432.call19.onset.optional-suffix512.json",
+      "source_sha256": "ec50a12e48db7b2446435f2e3f64d5fd158f0dc58988d7788a620815b5abcca4",
+      "diagnostic_total_wall_s": 93.46061501884833
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.sympy__sympy-14248.call53.onset.optional-suffix512",
+      "seed": 42,
+      "verdict": "native_caret_loop",
+      "generated_token_count": 512,
+      "decoded_character_count": 2048,
+      "caret_character_count": 2048,
+      "evidence_snippet": "^^^^^^^^ (repeated; all decoded output characters are caret characters)",
+      "evidence": "All512 generated token IDs decode only to caret characters (2,048 decoded carets).",
+      "conditioning": {
+        "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-85/anomaly.sympy__sympy-14248.call53.onset.suffix512.private.json",
+        "last_token_ids_reviewed": 150,
+        "decoded_tail_excerpt": "oo long.\"\n}}thought\nI caused a `RecursionError`! Let's see why.\n```\n  File \"/testbed/sympy/printing/str.py\", line 315, in _print_MatAdd\n    return self._print_Add(expr)\n           "
+      },
+      "source_result": "setup/swe85-persistent-short-controls/runs/full/anomaly.sympy__sympy-14248.call53.onset.optional-suffix512.json",
+      "source_sha256": "c2f99685050adea2459487a86fffcf009129abb1698ca848ef402a1514d219d7",
+      "diagnostic_total_wall_s": 93.40238630608656
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.sympy__sympy-14248.call53.onset.optional-suffix512",
+      "seed": 43,
+      "verdict": "native_caret_loop",
+      "generated_token_count": 512,
+      "decoded_character_count": 2048,
+      "caret_character_count": 2048,
+      "evidence_snippet": "^^^^^^^^ (repeated; all decoded output characters are caret characters)",
+      "evidence": "All512 generated token IDs decode only to caret characters (2,048 decoded carets).",
+      "conditioning": {
+        "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-85/anomaly.sympy__sympy-14248.call53.onset.suffix512.private.json",
+        "last_token_ids_reviewed": 150,
+        "decoded_tail_excerpt": "oo long.\"\n}}thought\nI caused a `RecursionError`! Let's see why.\n```\n  File \"/testbed/sympy/printing/str.py\", line 315, in _print_MatAdd\n    return self._print_Add(expr)\n           "
+      },
+      "source_result": "setup/swe85-persistent-short-controls/runs/full/anomaly.sympy__sympy-14248.call53.onset.optional-suffix512.json",
+      "source_sha256": "c2f99685050adea2459487a86fffcf009129abb1698ca848ef402a1514d219d7",
+      "diagnostic_total_wall_s": 93.40238630608656
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.sympy__sympy-14248.call53.onset.optional-suffix512",
+      "seed": 44,
+      "verdict": "native_caret_loop",
+      "generated_token_count": 512,
+      "decoded_character_count": 2048,
+      "caret_character_count": 2048,
+      "evidence_snippet": "^^^^^^^^ (repeated; all decoded output characters are caret characters)",
+      "evidence": "All512 generated token IDs decode only to caret characters (2,048 decoded carets).",
+      "conditioning": {
+        "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-85/anomaly.sympy__sympy-14248.call53.onset.suffix512.private.json",
+        "last_token_ids_reviewed": 150,
+        "decoded_tail_excerpt": "oo long.\"\n}}thought\nI caused a `RecursionError`! Let's see why.\n```\n  File \"/testbed/sympy/printing/str.py\", line 315, in _print_MatAdd\n    return self._print_Add(expr)\n           "
+      },
+      "source_result": "setup/swe85-persistent-short-controls/runs/full/anomaly.sympy__sympy-14248.call53.onset.optional-suffix512.json",
+      "source_sha256": "c2f99685050adea2459487a86fffcf009129abb1698ca848ef402a1514d219d7",
+      "diagnostic_total_wall_s": 93.40238630608656
+    }
+  ],
+  "pending": [],
+  "conditioning_prefix_audit": {
+    "served/anomaly.psf__requests-5414.call10.onset.optional-suffix512.json": {
+      "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-85/anomaly.psf__requests-5414.call10.onset.suffix512.private.json",
+      "last_original_prompt_token_ids_reviewed": 150,
+      "decoded_conditioning_tail": "(\"http://.example.com\")\n  ...\n  File \"/opt/miniconda3/lib/python3.11/site-packages/urllib3/util/connection.py\", line 68, in create_connection\n    return six.raise_from(\n           "
+    },
+    "served/anomaly.psf__requests-5414.call11.onset.optional-suffix512.json": {
+      "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-85/anomaly.psf__requests-5414.call11.onset.suffix512.private.json",
+      "last_original_prompt_token_ids_reviewed": 150,
+      "decoded_conditioning_tail": "(\"http://.example.com\")\n  ...\n  File \"/opt/miniconda3/lib/python3.11/site-packages/urllib3/util/connection.py\", line 68, in create_connection\n    return six.raise_from(\n           "
+    },
+    "served/anomaly.psf__requests-5414.call9.onset.optional-suffix512.json": {
+      "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-85/anomaly.psf__requests-5414.call9.onset.suffix512.private.json",
+      "last_original_prompt_token_ids_reviewed": 150,
+      "decoded_conditioning_tail": "ction.create_connection`.\n\nLet's look at the traceback again.\n```\n  File \"/testbed/requests/sessions.py\", line 645, in send\n    r = adapter.send(request, **send_kwargs)\n           "
+    },
+    "served/anomaly.pytest-dev__pytest-7432.call19.onset.optional-suffix512.json": {
+      "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-85/anomaly.pytest-dev__pytest-7432.call19.onset.suffix512.private.json",
+      "last_original_prompt_token_ids_reviewed": 150,
+      "decoded_conditioning_tail": "line 690, in _load_unlocked\n  File \"/testbed/src/_pytest/assertion/rewrite.py\", line 161, in exec_module\n    source_stat, co = _rewrite_test(fn, self.config)\n                      "
+    },
+    "served/anomaly.requests2931.call20.canonicalprefix.optional-suffix512.json": {
+      "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-85/anomaly.requests2931.call20.canonicalprefix.suffix512.private.json",
+      "last_original_prompt_token_ids_reviewed": 150,
+      "decoded_conditioning_tail": "=u\"ööö\".encode(\"utf-8\"))\n  File \"/testbed/requests/api.py\", line 120, in put\n    return request('put', url, data=data, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^"
+    },
+    "served/anomaly.sympy__sympy-14248.call53.onset.optional-suffix512.json": {
+      "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-85/anomaly.sympy__sympy-14248.call53.onset.suffix512.private.json",
+      "last_original_prompt_token_ids_reviewed": 150,
+      "decoded_conditioning_tail": "oo long.\"\n}}thought\nI caused a `RecursionError`! Let's see why.\n```\n  File \"/testbed/sympy/printing/str.py\", line 315, in _print_MatAdd\n    return self._print_Add(expr)\n           "
+    },
+    "full/anomaly.psf__requests-5414.call10.onset.optional-suffix512.json": {
+      "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-85/anomaly.psf__requests-5414.call10.onset.suffix512.private.json",
+      "last_original_prompt_token_ids_reviewed": 150,
+      "decoded_conditioning_tail": "(\"http://.example.com\")\n  ...\n  File \"/opt/miniconda3/lib/python3.11/site-packages/urllib3/util/connection.py\", line 68, in create_connection\n    return six.raise_from(\n           "
+    },
+    "full/anomaly.psf__requests-5414.call11.onset.optional-suffix512.json": {
+      "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-85/anomaly.psf__requests-5414.call11.onset.suffix512.private.json",
+      "last_original_prompt_token_ids_reviewed": 150,
+      "decoded_conditioning_tail": "(\"http://.example.com\")\n  ...\n  File \"/opt/miniconda3/lib/python3.11/site-packages/urllib3/util/connection.py\", line 68, in create_connection\n    return six.raise_from(\n           "
+    }
+  }
+}

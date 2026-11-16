@@ -1,0 +1,81 @@
+{
+  "task": "127",
+  "artifact": "first-wave-served/task127.onset.suffix512.json",
+  "scope": "Host-only semantic review of all three stored free-running texts. The separate chosen teacher-forced continuation was not assessed here.",
+  "range_convention": "Character ranges are zero-based and half-open.",
+  "context": {
+    "source_packet": "current/gpqa-extended198-head-bfp8/digest/analysis.private/127-f469c1ffa95d32cc.json",
+    "original_triage": "current/gpqa-extended198-head-bfp8/digest/127.triage.json",
+    "prior_verdict": "looping_actions",
+    "prior_confidence": "high",
+    "prior_status": "provisional; not official score evidence",
+    "onset": "The private onset context identifies a renewed protein-motif check followed by repeated mistranscription and retranslation after character 11,500. The selected onset is a semantic-cycle estimate, not a uniquely attributed first error.",
+    "prompt_limit": "The diagnostic uses the exact 512-token suffix of reconstructed IDs, with 6,944 earlier tokens removed and a changed position origin. It is not the original native prompt.",
+    "reconstruction_limit": "The native raw token IDs are unavailable. Matching token counts do not establish identity with the native sampled sequence."
+  },
+  "pattern_comparison": {
+    "common_pattern": "All seeds fixate on the same A/B DNA segment and the same GCC-versus-GTC codon interpretation. They repeatedly reread and restate the unchanged strings, translate the same nearby codons, and return to the same difference without developing a stable frame or advancing to a supported answer.",
+    "relation_to_original": "This reproduces the broad semantic-cycle signature in the original triage: repeated examination and incompatible interpretation of the TGGATT... region without new evidence. The suffix continuations start directly inside that selected onset area, so their agreement is evidence of a repeated local behavior under this diagnostic prompt, not an independent reproduction of the full native answer path.",
+    "between_seeds": "Seed 42 alternates between the longer sequence comparison and repeated codon translation. Seed 43 quickly collapses into near-identical reread prompts and repeated copies of the same pair, with one visibly corrupted sequence excerpt. Seed 44 repeats a longer cycle of sequence comparison, codon translation, and the same difference claim."
+  },
+  "seeds": [
+    {
+      "seed": 42,
+      "semantic_anomaly": true,
+      "mechanical_flag": false,
+      "observed_malformed_text": false,
+      "text_chars": 2055,
+      "semantic_ranges": [
+        {
+          "chars": [0, 2055],
+          "paraphrase": "Across the output, the model repeatedly compares the same A/B sequence excerpt, translates the same GCC/A and GTC/V codons and neighboring codons, and asks whether the one-base difference is the only difference. It reaches the same local observation multiple times without moving to a resolved sequence analysis."
+        }
+      ],
+      "text_ending": "The stored text ends mid-comparison during another repeated codon translation; this is consistent with the diagnostic output limit, not by itself malformed text.",
+      "basis": "Sustained semantic cycling on an unchanged local comparison, independently visible in this free-running continuation."
+    },
+    {
+      "seed": 43,
+      "semantic_anomaly": true,
+      "mechanical_flag": false,
+      "observed_malformed_text": true,
+      "malformed_ranges": [
+        {
+          "chars": [2348, 2366],
+          "paraphrase": "One repeated A-sequence excerpt contains an unexpected L inserted into the displayed nucleotide string."
+        }
+      ],
+      "text_chars": 2456,
+      "semantic_ranges": [
+        {
+          "chars": [0, 2456],
+          "paraphrase": "The response repeatedly says it will reread the same pair of sequence excerpts. The same GCC/GTC difference is restated, with no new comparison or answer. Near the end it emits the malformed excerpt, then resumes the same reread cycle."
+        }
+      ],
+      "text_ending": "The text stops after another reread prompt, consistent with the diagnostic output limit.",
+      "basis": "The strongest within-sample repetition: repeated reread wording and duplicated unchanged sequence comparisons, plus the separately recorded malformed excerpt."
+    },
+    {
+      "seed": 44,
+      "semantic_anomaly": true,
+      "mechanical_flag": false,
+      "observed_malformed_text": false,
+      "text_chars": 2150,
+      "semantic_ranges": [
+        {
+          "chars": [0, 2150],
+          "paraphrase": "The output repeats a cycle of asking whether the same GCC/GTC difference is the only one, reproducing both long sequence excerpts, retranslating the same codons, and arriving at the same local difference. It makes no progress toward a settled analysis."
+        }
+      ],
+      "text_ending": "The stored text ends mid-comparison during another repetition; this is consistent with the diagnostic output limit, not by itself malformed text.",
+      "basis": "Sustained repeated comparison and retranslation of the same unchanged local material."
+    }
+  ],
+  "limits": [
+    "The stored mechanical digest flag is false for each seed and is reported unchanged; the semantic judgments are separate host review labels.",
+    "These are three diagnostic free-running continuations capped at 1,024 tokens each, not scored task responses or population estimates.",
+    "The diagnostic is a traced teacher-forced setup with host logit readbacks and is not serving-performance evidence.",
+    "The selected onset and suffix prompt cannot establish when the original native response first went wrong, prove a precision cause, or recover the original sampled token path.",
+    "No correctness judgment about the GPQA answer is made from these truncated local continuations."
+  ]
+}

@@ -1,0 +1,1005 @@
+{
+  "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/progress-summary165.json",
+  "source_sha256": "2286db4f91fee0c89fc6a64aba0a8bce797f62ae5278407f13edb7e77541829c",
+  "source_note": "Source summary is mutable; completed output hashes bind each paired row.",
+  "scope": "Each branch is compared across precisions on identical forced tokens. Chosen and correct branches may differ in length, shell wrapper, and preceding reasoning consistency; their sequence sums or mean log probabilities do not establish task-level preference. These controls retain original reasoning and do not rule out precision effects on earlier decisions. No score, anomaly verdict, or precision acceptance is inferred.",
+  "counts": {
+    "paired": 18,
+    "pending": 43
+  },
+  "unique_tasks": 59,
+  "actions": [
+    {
+      "name": "action.astropy__astropy-13398.call17",
+      "task": "astropy__astropy-13398",
+      "call": 17,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/astropy__astropy-13398/action_counterfactual.candidate.private.json",
+      "case_sha256": "cf257559635633305e61cdd43ee580830d26040857d3a664e1e8291c8492d030",
+      "status": "paired",
+      "branches": {
+        "chosen": {
+          "tokens": 775,
+          "served_full_top1_agreement": 1.0,
+          "served_sequence_log_probability": -0.30582069028081804,
+          "full_sequence_log_probability": -0.06743714942647472,
+          "full_minus_served_mean_token_log_probability": 0.00030759166561850754
+        },
+        "correct": {
+          "tokens": 4330,
+          "served_full_top1_agreement": 0.9528868360277136,
+          "served_sequence_log_probability": -5180.46432715039,
+          "full_sequence_log_probability": -4835.553702335906,
+          "full_minus_served_mean_token_log_probability": 0.07965603344445368
+        }
+      },
+      "evidence": {
+        "served": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/action.astropy__astropy-13398.call17.json",
+          "sha256": "ff094fef873a466cb2709334d603378f04899ed032975a0a8610ea9e3c324c68",
+          "runtime_config_id": "stage12_head_bfp8_lofi"
+        },
+        "full": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/action.astropy__astropy-13398.call17.json",
+          "sha256": "2beba7e6688e2af0bc251251efc4415196237713c431ec7052a62adc26a806f0",
+          "runtime_config_id": "stage12_bf16_hifi4_diagnostic"
+        }
+      }
+    },
+    {
+      "name": "action.astropy__astropy-14096.call23",
+      "task": "astropy__astropy-14096",
+      "call": 23,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/astropy__astropy-14096/action_counterfactual.candidate.private.json",
+      "case_sha256": "5feeb353e8d4dc4a956d0ff4fd4c9cb54ebaf173e8c8306bb4e8b242a3c970d9",
+      "status": "paired",
+      "branches": {
+        "chosen": {
+          "tokens": 39,
+          "served_full_top1_agreement": 1.0,
+          "served_sequence_log_probability": -4.027311286634131,
+          "full_sequence_log_probability": -11.689687971465602,
+          "full_minus_served_mean_token_log_probability": -0.1964711970469608
+        },
+        "correct": {
+          "tokens": 211,
+          "served_full_top1_agreement": 0.990521327014218,
+          "served_sequence_log_probability": -265.9481030165428,
+          "full_sequence_log_probability": -260.4110590756307,
+          "full_minus_served_mean_token_log_probability": 0.02624191441190568
+        }
+      },
+      "evidence": {
+        "served": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/action.astropy__astropy-14096.call23.json",
+          "sha256": "a5c172151a0ee50022ba68fa386d2da284653e9f2816127045c5a64ccaec7de9",
+          "runtime_config_id": "stage12_head_bfp8_lofi"
+        },
+        "full": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/action.astropy__astropy-14096.call23.json",
+          "sha256": "8cbc8e800a374da890d3b7220718e02bfc2130a7baafddab4f5b4ba5f61b30df",
+          "runtime_config_id": "stage12_bf16_hifi4_diagnostic"
+        }
+      }
+    },
+    {
+      "name": "action.astropy__astropy-14598.call33",
+      "task": "astropy__astropy-14598",
+      "call": 33,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/astropy__astropy-14598/action_counterfactual.candidate.private.json",
+      "case_sha256": "ce76fb1ce580b1ddae47e94c6b2d78c92418e4da1be822ab2b7e505462ab9c3d",
+      "status": "paired",
+      "branches": {
+        "chosen": {
+          "tokens": 57,
+          "served_full_top1_agreement": 0.9824561403508771,
+          "served_sequence_log_probability": -3.1880912211534422,
+          "full_sequence_log_probability": -0.7529266009754139,
+          "full_minus_served_mean_token_log_probability": 0.04272218631891278
+        },
+        "correct": {
+          "tokens": 339,
+          "served_full_top1_agreement": 0.9321533923303835,
+          "served_sequence_log_probability": -550.4427496712372,
+          "full_sequence_log_probability": -505.93993369139326,
+          "full_minus_served_mean_token_log_probability": 0.1312767433033743
+        }
+      },
+      "evidence": {
+        "served": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/action.astropy__astropy-14598.call33.json",
+          "sha256": "a6476558a0bf9ccbe6ec6ab383d77fd8edeb07c44c399c77a12da17ed8278c6f",
+          "runtime_config_id": "stage12_head_bfp8_lofi"
+        },
+        "full": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/action.astropy__astropy-14598.call33.json",
+          "sha256": "10fb69ddbd8424e1ac9682635d58aea8a8de19ca22a67233e0d7103ba2f7ec2f",
+          "runtime_config_id": "stage12_bf16_hifi4_diagnostic"
+        }
+      }
+    },
+    {
+      "name": "action.django__django-14007.call31",
+      "task": "django__django-14007",
+      "call": 31,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/django__django-14007/action_counterfactual.candidate.private.json",
+      "case_sha256": "1afac21fa317e6099c8d74ffe523dbae743de534bb7b2fe2637cc92ad923000b",
+      "status": "paired",
+      "branches": {
+        "chosen": {
+          "tokens": 85,
+          "served_full_top1_agreement": 0.9882352941176471,
+          "served_sequence_log_probability": -0.6976676209656247,
+          "full_sequence_log_probability": -2.712582627016552,
+          "full_minus_served_mean_token_log_probability": -0.023704882424128555
+        },
+        "correct": {
+          "tokens": 576,
+          "served_full_top1_agreement": 0.9791666666666666,
+          "served_sequence_log_probability": -428.2412945431939,
+          "full_sequence_log_probability": -417.72973486479674,
+          "full_minus_served_mean_token_log_probability": 0.018249235552772802
+        }
+      },
+      "evidence": {
+        "served": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/action.django__django-14007.call31.json",
+          "sha256": "64973490f2a534a9b03124f316b308cd1d4e9b8a71ab40dff08790335808417b",
+          "runtime_config_id": "stage12_head_bfp8_lofi"
+        },
+        "full": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/action.django__django-14007.call31.json",
+          "sha256": "13bbe495b6082e142252cf3f48d40c529e0b116ca719062861d571a65cc225dc",
+          "runtime_config_id": "stage12_bf16_hifi4_diagnostic"
+        }
+      }
+    },
+    {
+      "name": "action.django__django-14011.call33",
+      "task": "django__django-14011",
+      "call": 33,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/django__django-14011/action_counterfactual.candidate.private.json",
+      "case_sha256": "2656153fba29079165b1bcbb49ac7ddfd6bbf1dfe378285d680816f607639341",
+      "status": "paired",
+      "branches": {
+        "chosen": {
+          "tokens": 414,
+          "served_full_top1_agreement": 0.9734299516908212,
+          "served_sequence_log_probability": -21.786257902501738,
+          "full_sequence_log_probability": -41.97244506841717,
+          "full_minus_served_mean_token_log_probability": -0.04875890619786337
+        },
+        "correct": {
+          "tokens": 589,
+          "served_full_top1_agreement": 0.9575551782682513,
+          "served_sequence_log_probability": -863.1944507472977,
+          "full_sequence_log_probability": -810.6952292493567,
+          "full_minus_served_mean_token_log_probability": 0.08913280390142783
+        }
+      },
+      "evidence": {
+        "served": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/action.django__django-14011.call33.json",
+          "sha256": "f57b04f6c23ba8d5d7e2256dc4e461fee6434cc07866ad1ee875edc77cc5ab77",
+          "runtime_config_id": "stage12_head_bfp8_lofi"
+        },
+        "full": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/action.django__django-14011.call33.json",
+          "sha256": "adbf0167e619f3308df6450e20bbc7ca6e00e03ccf2920f1f2f6d8a667d8fb2f",
+          "runtime_config_id": "stage12_bf16_hifi4_diagnostic"
+        }
+      }
+    },
+    {
+      "name": "action.django__django-15037.call19",
+      "task": "django__django-15037",
+      "call": 19,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/django__django-15037/action_counterfactual.candidate.private.json",
+      "case_sha256": "f40ae4b27d642a43e5a31e278d4f709afa52c973d5edf5acb57230b7b0a064d2",
+      "status": "paired",
+      "branches": {
+        "chosen": {
+          "tokens": 51,
+          "served_full_top1_agreement": 1.0,
+          "served_sequence_log_probability": -1.3103160505651061,
+          "full_sequence_log_probability": -0.36692882180335573,
+          "full_minus_served_mean_token_log_probability": 0.018497788799250008
+        },
+        "correct": {
+          "tokens": 349,
+          "served_full_top1_agreement": 0.9627507163323782,
+          "served_sequence_log_probability": -295.36476330381055,
+          "full_sequence_log_probability": -258.05547914987403,
+          "full_minus_served_mean_token_log_probability": 0.1069033929912221
+        }
+      },
+      "evidence": {
+        "served": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/action.django__django-15037.call19.json",
+          "sha256": "427e0fbcdd3a7db6429aa01d72e75fd05b50da388a9d444774f6635bf0d5ecc2",
+          "runtime_config_id": "stage12_head_bfp8_lofi"
+        },
+        "full": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/action.django__django-15037.call19.json",
+          "sha256": "5c5701884d3d17a4fe8748e593cf18daf89ca1ebc6195512118a1180e228e969",
+          "runtime_config_id": "stage12_bf16_hifi4_diagnostic"
+        }
+      }
+    },
+    {
+      "name": "action.django__django-16950.call80",
+      "task": "django__django-16950",
+      "call": 80,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/django__django-16950/action_counterfactual.candidate.private.json",
+      "case_sha256": "03cd0cc1a00bdfef7d263043f6e738d111760fd8d2481dcd450145deb30a6ebd",
+      "status": "paired",
+      "branches": {
+        "chosen": {
+          "tokens": 40,
+          "served_full_top1_agreement": 0.925,
+          "served_sequence_log_probability": -9.182887865674154,
+          "full_sequence_log_probability": -10.543232569324928,
+          "full_minus_served_mean_token_log_probability": -0.034008617591269365
+        },
+        "correct": {
+          "tokens": 258,
+          "served_full_top1_agreement": 0.9302325581395349,
+          "served_sequence_log_probability": -615.8861654677519,
+          "full_sequence_log_probability": -569.6383391171416,
+          "full_minus_served_mean_token_log_probability": 0.17925514089383815
+        }
+      },
+      "evidence": {
+        "served": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/action.django__django-16950.call80.json",
+          "sha256": "55b3ba06c2e51c44f07632847325d3bbe8ccade1435b4397e33d7fe3970ead64",
+          "runtime_config_id": "stage12_head_bfp8_lofi"
+        },
+        "full": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/action.django__django-16950.call80.json",
+          "sha256": "495a6a2cc0d7ce74db28b6c16af6a99146eb022e7dad57610757f0a7f4da8177",
+          "runtime_config_id": "stage12_bf16_hifi4_diagnostic"
+        }
+      }
+    },
+    {
+      "name": "action.matplotlib__matplotlib-25479.call34",
+      "task": "matplotlib__matplotlib-25479",
+      "call": 34,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/matplotlib__matplotlib-25479/action_counterfactual.candidate.private.json",
+      "case_sha256": "725d37edcc62b651707cc77079508353478c8a16fc09810fe13b17f005a44d8a",
+      "status": "paired",
+      "branches": {
+        "chosen": {
+          "tokens": 124,
+          "served_full_top1_agreement": 0.9838709677419355,
+          "served_sequence_log_probability": -4.44602437009253,
+          "full_sequence_log_probability": -8.49558938415101,
+          "full_minus_served_mean_token_log_probability": -0.032657782371439355
+        },
+        "correct": {
+          "tokens": 321,
+          "served_full_top1_agreement": 0.9314641744548287,
+          "served_sequence_log_probability": -644.3834503113854,
+          "full_sequence_log_probability": -571.8460666367491,
+          "full_minus_served_mean_token_log_probability": 0.22597315786491065
+        }
+      },
+      "evidence": {
+        "served": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/action.matplotlib__matplotlib-25479.call34.json",
+          "sha256": "e5bc46772d5b9df996b49b3d12337f09d5f2c518fde6a848060f005d8f6230f0",
+          "runtime_config_id": "stage12_head_bfp8_lofi"
+        },
+        "full": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/action.matplotlib__matplotlib-25479.call34.json",
+          "sha256": "3c2a01118a682e25762ec80f9967c328c921d38f85e57169b916d54ff5654d6e",
+          "runtime_config_id": "stage12_bf16_hifi4_diagnostic"
+        }
+      }
+    },
+    {
+      "name": "action.mwaskom__seaborn-3069.call50",
+      "task": "mwaskom__seaborn-3069",
+      "call": 50,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/mwaskom__seaborn-3069/action_counterfactual.candidate.private.json",
+      "case_sha256": "ee0491294d6b63d3641001708a0b4077d59f705590c1634a4abba00356f80d5f",
+      "status": "paired",
+      "branches": {
+        "chosen": {
+          "tokens": 659,
+          "served_full_top1_agreement": 0.9423368740515933,
+          "served_sequence_log_probability": -122.40816111436675,
+          "full_sequence_log_probability": -152.46139964158084,
+          "full_minus_served_mean_token_log_probability": -0.045604307325059316
+        },
+        "correct": {
+          "tokens": 624,
+          "served_full_top1_agreement": 0.9727564102564102,
+          "served_sequence_log_probability": -517.4203702289851,
+          "full_sequence_log_probability": -498.8735694766831,
+          "full_minus_served_mean_token_log_probability": 0.02972243710304813
+        }
+      },
+      "evidence": {
+        "served": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/action.mwaskom__seaborn-3069.call50.json",
+          "sha256": "a4220b6cdca473daa2b4fe95893355205ee9194dd7c6ce1adf3573e03183cfad",
+          "runtime_config_id": "stage12_head_bfp8_lofi"
+        },
+        "full": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/action.mwaskom__seaborn-3069.call50.json",
+          "sha256": "94b7cd7acd23dd3a3ed575f9071f4a22dcfc023235c326a47e44fbc85d3925de",
+          "runtime_config_id": "stage12_bf16_hifi4_diagnostic"
+        }
+      }
+    },
+    {
+      "name": "action.mwaskom__seaborn-3187.call64",
+      "task": "mwaskom__seaborn-3187",
+      "call": 64,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/mwaskom__seaborn-3187/action_counterfactual.candidate.private.json",
+      "case_sha256": "3393ba3aed8149c9f030418bc6ec79682d8da8009cfce2d44cf7367626383281",
+      "status": "paired",
+      "branches": {
+        "chosen": {
+          "tokens": 18,
+          "served_full_top1_agreement": 1.0,
+          "served_sequence_log_probability": -9.536732790138558e-06,
+          "full_sequence_log_probability": -1.5497201673042582e-06,
+          "full_minus_served_mean_token_log_probability": 4.437229234907944e-07
+        },
+        "correct": {
+          "tokens": 502,
+          "served_full_top1_agreement": 0.9661354581673307,
+          "served_sequence_log_probability": -540.7058098639025,
+          "full_sequence_log_probability": -478.80760831598184,
+          "full_minus_served_mean_token_log_probability": 0.12330319033450322
+        }
+      },
+      "evidence": {
+        "served": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/action.mwaskom__seaborn-3187.call64.json",
+          "sha256": "1cb73b1ce8ca1b6eb0fb920489fa608eb9b100d247d7a0305c942107dd67bf9c",
+          "runtime_config_id": "stage12_head_bfp8_lofi"
+        },
+        "full": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/action.mwaskom__seaborn-3187.call64.json",
+          "sha256": "6bd1f23f09bbd7c7d9c80759fb0bbc9b1a1d452b9aad97458081949184dc8dc0",
+          "runtime_config_id": "stage12_bf16_hifi4_diagnostic"
+        }
+      }
+    },
+    {
+      "name": "action.psf__requests-1142.call31",
+      "task": "psf__requests-1142",
+      "call": 31,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/psf__requests-1142/action_counterfactual.candidate.private.json",
+      "case_sha256": "d72283f1152735c027dfe9f7581115fcc9d769b295d3f28abd5e3775534191fe",
+      "status": "paired",
+      "branches": {
+        "chosen": {
+          "tokens": 61,
+          "served_full_top1_agreement": 0.9836065573770492,
+          "served_sequence_log_probability": -3.0895901815151845,
+          "full_sequence_log_probability": -0.24538415020474247,
+          "full_minus_served_mean_token_log_probability": 0.04662632838213839
+        },
+        "correct": {
+          "tokens": 245,
+          "served_full_top1_agreement": 0.9836734693877551,
+          "served_sequence_log_probability": -171.22846111579938,
+          "full_sequence_log_probability": -160.39846137237262,
+          "full_minus_served_mean_token_log_probability": 0.04420408058541532
+        }
+      },
+      "evidence": {
+        "served": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/action.psf__requests-1142.call31.json",
+          "sha256": "c913575450221512ce5531403f0ac7442ea76f722ced5834091c2b7c08250e04",
+          "runtime_config_id": "stage12_head_bfp8_lofi"
+        },
+        "full": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/action.psf__requests-1142.call31.json",
+          "sha256": "fcf1c65fa0cf6e6396e6981e25d10ac42c25290ec9aeeaa72718c5af4bdd99d0",
+          "runtime_config_id": "stage12_bf16_hifi4_diagnostic"
+        }
+      }
+    },
+    {
+      "name": "action.psf__requests-1921.call34",
+      "task": "psf__requests-1921",
+      "call": 34,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/psf__requests-1921/action_counterfactual.candidate.private.json",
+      "case_sha256": "2b44f72ac3567dfd855d23947762405695b9428e384d400fe84bdb350254e6a1",
+      "status": "paired",
+      "branches": {
+        "chosen": {
+          "tokens": 39,
+          "served_full_top1_agreement": 1.0,
+          "served_sequence_log_probability": -0.4304914225672789,
+          "full_sequence_log_probability": -0.04311871720147309,
+          "full_minus_served_mean_token_log_probability": 0.009932633470918098
+        },
+        "correct": {
+          "tokens": 196,
+          "served_full_top1_agreement": 0.9438775510204082,
+          "served_sequence_log_probability": -228.03631600117677,
+          "full_sequence_log_probability": -204.7775556228919,
+          "full_minus_served_mean_token_log_probability": 0.11866714478716774
+        }
+      },
+      "evidence": {
+        "served": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/action.psf__requests-1921.call34.json",
+          "sha256": "c2da1faf7427f2404bdedf11dd2c04ee1a6aae989de9028e63389c7b0d1e87df",
+          "runtime_config_id": "stage12_head_bfp8_lofi"
+        },
+        "full": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/action.psf__requests-1921.call34.json",
+          "sha256": "0c3b0527ea1b0cb2969d5a1d877df42f9dc476f503261d5bd595f25eccc72ba8",
+          "runtime_config_id": "stage12_bf16_hifi4_diagnostic"
+        }
+      }
+    },
+    {
+      "name": "action.pydata__xarray-3993.call18",
+      "task": "pydata__xarray-3993",
+      "call": 18,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/pydata__xarray-3993/action_counterfactual.candidate.private.json",
+      "case_sha256": "fadf8f42ef467f8af698e8009afdeaa2541fdff1e38ed6e7c9b00900e31d8d0b",
+      "status": "paired",
+      "branches": {
+        "chosen": {
+          "tokens": 108,
+          "served_full_top1_agreement": 1.0,
+          "served_sequence_log_probability": -0.12713815661274452,
+          "full_sequence_log_probability": -0.1882190257755596,
+          "full_minus_served_mean_token_log_probability": -0.0005655636033593988
+        },
+        "correct": {
+          "tokens": 1146,
+          "served_full_top1_agreement": 0.9738219895287958,
+          "served_sequence_log_probability": -850.534056978441,
+          "full_sequence_log_probability": -771.662553411775,
+          "full_minus_served_mean_token_log_probability": 0.06882330154159334
+        }
+      },
+      "evidence": {
+        "served": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/action.pydata__xarray-3993.call18.json",
+          "sha256": "2839cb947df0fa56de1e972159cf15dc598ee3da3a28679ea8f8baaa2ff89c2e",
+          "runtime_config_id": "stage12_head_bfp8_lofi"
+        },
+        "full": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/action.pydata__xarray-3993.call18.json",
+          "sha256": "46af55e7e0b155a727267073449377d2a95386fa3d0885f9dd0716486c14b2fb",
+          "runtime_config_id": "stage12_bf16_hifi4_diagnostic"
+        }
+      }
+    },
+    {
+      "name": "action.pydata__xarray-6992.call16",
+      "task": "pydata__xarray-6992",
+      "call": 16,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/pydata__xarray-6992/action_counterfactual.candidate.private.json",
+      "case_sha256": "d3008b5e8c62baaa0dfd9fd1f747ba2bb0034518172a6e834dfb694e77b8b9d4",
+      "status": "paired",
+      "branches": {
+        "chosen": {
+          "tokens": 71,
+          "served_full_top1_agreement": 0.9859154929577465,
+          "served_sequence_log_probability": -1.3447589860387197,
+          "full_sequence_log_probability": -0.10110783558054237,
+          "full_minus_served_mean_token_log_probability": 0.017516213386734893
+        },
+        "correct": {
+          "tokens": 2461,
+          "served_full_top1_agreement": 0.9321414059325478,
+          "served_sequence_log_probability": -3278.3858006222804,
+          "full_sequence_log_probability": -2992.945313027585,
+          "full_minus_served_mean_token_log_probability": 0.11598556992876687
+        }
+      },
+      "evidence": {
+        "served": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/action.pydata__xarray-6992.call16.json",
+          "sha256": "b10dae781967222a1819ef0ce8eee6ab68dce2b88e82a9270b22d4caabe8bcbc",
+          "runtime_config_id": "stage12_head_bfp8_lofi"
+        },
+        "full": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/action.pydata__xarray-6992.call16.json",
+          "sha256": "0304be5ee102c1d70c5dde304bd05e6e18e3c75bd92918bd38fa825de1c0bfc3",
+          "runtime_config_id": "stage12_bf16_hifi4_diagnostic"
+        }
+      }
+    },
+    {
+      "name": "action.pylint-dev__pylint-4551.call35",
+      "task": "pylint-dev__pylint-4551",
+      "call": 35,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/pylint-dev__pylint-4551/action_counterfactual.candidate.private.json",
+      "case_sha256": "9ed48e522513c9cf83d72d72cbb74b1b88083f9562e56d8352af1570a6f48a22",
+      "status": "paired",
+      "branches": {
+        "chosen": {
+          "tokens": 658,
+          "served_full_top1_agreement": 0.9817629179331308,
+          "served_sequence_log_probability": -19.674293570949764,
+          "full_sequence_log_probability": -41.42054874971992,
+          "full_minus_served_mean_token_log_probability": -0.033049020028526076
+        },
+        "correct": {
+          "tokens": 1953,
+          "served_full_top1_agreement": 0.953405017921147,
+          "served_sequence_log_probability": -2133.274493798951,
+          "full_sequence_log_probability": -1930.3104012313272,
+          "full_minus_served_mean_token_log_probability": 0.10392426654768241
+        }
+      },
+      "evidence": {
+        "served": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/action.pylint-dev__pylint-4551.call35.json",
+          "sha256": "ae09e706308bdc96bebe4cfb39abfa968958783772fac653bc1221a18a5a7dde",
+          "runtime_config_id": "stage12_head_bfp8_lofi"
+        },
+        "full": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/action.pylint-dev__pylint-4551.call35.json",
+          "sha256": "5d986fa15ad591cf5fad84c6c3baef1a6a034eac833e66195909c32407def319",
+          "runtime_config_id": "stage12_bf16_hifi4_diagnostic"
+        }
+      }
+    },
+    {
+      "name": "action.pylint-dev__pylint-4661.call19",
+      "task": "pylint-dev__pylint-4661",
+      "call": 19,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/pylint-dev__pylint-4661/action_counterfactual.candidate.private.json",
+      "case_sha256": "713e87789d9c8ed6cb7e77c4dfca39e69e706132ac5d48476e807d3cc569b206",
+      "status": "paired",
+      "branches": {
+        "chosen": {
+          "tokens": 1688,
+          "served_full_top1_agreement": 0.9994075829383886,
+          "served_sequence_log_probability": -2.6944345361890427,
+          "full_sequence_log_probability": -23.527198720018262,
+          "full_minus_served_mean_token_log_probability": -0.012341684943026789
+        },
+        "correct": {
+          "tokens": 656,
+          "served_full_top1_agreement": 0.9222560975609756,
+          "served_sequence_log_probability": -1058.1090473500474,
+          "full_sequence_log_probability": -938.6249870683455,
+          "full_minus_served_mean_token_log_probability": 0.18214033579527728
+        }
+      },
+      "evidence": {
+        "served": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/action.pylint-dev__pylint-4661.call19.json",
+          "sha256": "166dea1d95769b5d6f83b808b61f337c04d51d1c228a76a98e9add91dd161a81",
+          "runtime_config_id": "stage12_head_bfp8_lofi"
+        },
+        "full": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/action.pylint-dev__pylint-4661.call19.json",
+          "sha256": "5cd865f460d2c208fd4238b0831f3e72d6fb4f2be2de22c6def9c037b4cef5a8",
+          "runtime_config_id": "stage12_bf16_hifi4_diagnostic"
+        }
+      }
+    },
+    {
+      "name": "action.pylint-dev__pylint-4970.call51",
+      "task": "pylint-dev__pylint-4970",
+      "call": 51,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/pylint-dev__pylint-4970/action_counterfactual.candidate.private.json",
+      "case_sha256": "394177560f52396863ecde872372081b9c47e0f0467dce9e71a77e89dd950088",
+      "status": "paired",
+      "branches": {
+        "chosen": {
+          "tokens": 98,
+          "served_full_top1_agreement": 0.9795918367346939,
+          "served_sequence_log_probability": -1.1241910503492747,
+          "full_sequence_log_probability": -8.910345547133772,
+          "full_minus_served_mean_token_log_probability": -0.07945055608963773
+        },
+        "correct": {
+          "tokens": 167,
+          "served_full_top1_agreement": 0.9820359281437125,
+          "served_sequence_log_probability": -171.7698150965215,
+          "full_sequence_log_probability": -174.8950320085037,
+          "full_minus_served_mean_token_log_probability": -0.018713873724444267
+        }
+      },
+      "evidence": {
+        "served": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/action.pylint-dev__pylint-4970.call51.json",
+          "sha256": "ae2abeba5a02f31eb20f335dc89aed10080ea73246677e2c7d73093627fa611c",
+          "runtime_config_id": "stage12_head_bfp8_lofi"
+        },
+        "full": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/action.pylint-dev__pylint-4970.call51.json",
+          "sha256": "9fc0e6f82283eb9d7674d8c03f8bba3e66e6340960115ff179207577b3fb4b01",
+          "runtime_config_id": "stage12_bf16_hifi4_diagnostic"
+        }
+      }
+    },
+    {
+      "name": "action.pylint-dev__pylint-4970.call55",
+      "task": "pylint-dev__pylint-4970",
+      "call": 55,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/pylint-dev__pylint-4970-call55/action_counterfactual.candidate.private.json",
+      "case_sha256": "b000bd3e869079d4695a0249bafd5857091060e867d85824ee45a488bcce366d",
+      "status": "paired",
+      "branches": {
+        "chosen": {
+          "tokens": 462,
+          "served_full_top1_agreement": 0.948051948051948,
+          "served_sequence_log_probability": -63.97575678406967,
+          "full_sequence_log_probability": -90.50417949716592,
+          "full_minus_served_mean_token_log_probability": -0.057420828383325226
+        },
+        "correct": {
+          "tokens": 167,
+          "served_full_top1_agreement": 0.9760479041916168,
+          "served_sequence_log_probability": -189.63297692067266,
+          "full_sequence_log_probability": -187.19504188117185,
+          "full_minus_served_mean_token_log_probability": 0.014598413410184518
+        }
+      },
+      "evidence": {
+        "served": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/action.pylint-dev__pylint-4970.call55.json",
+          "sha256": "5fb9ca56c25d91019533cc1fb1df9f96506d1803efd0167a03c3d3917544a0cc",
+          "runtime_config_id": "stage12_head_bfp8_lofi"
+        },
+        "full": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/action.pylint-dev__pylint-4970.call55.json",
+          "sha256": "186d4b7e5a552d56eed653a7ad62298a03ce45c5d40cc2941140f00c9843d71d",
+          "runtime_config_id": "stage12_bf16_hifi4_diagnostic"
+        }
+      }
+    },
+    {
+      "name": "action.pylint-dev__pylint-6386.call33",
+      "task": "pylint-dev__pylint-6386",
+      "call": 33,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/pylint-dev__pylint-6386/action_counterfactual.candidate.private.json",
+      "case_sha256": "da24bf7996ba910e8e8b5261ca5b93c8a30e7078101d0afbc917dddb3b1827ac",
+      "status": "pending"
+    },
+    {
+      "name": "action.pylint-dev__pylint-8898.call44",
+      "task": "pylint-dev__pylint-8898",
+      "call": 44,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/pylint-dev__pylint-8898/action_counterfactual.candidate.private.json",
+      "case_sha256": "56c529515e4a2136eaa8c6463ae036c0f1d42af543f695a717e22de464fcd101",
+      "status": "pending"
+    },
+    {
+      "name": "action.pytest-dev__pytest-10356.call45",
+      "task": "pytest-dev__pytest-10356",
+      "call": 45,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/pytest-dev__pytest-10356/action_counterfactual.candidate.private.json",
+      "case_sha256": "2fc6ff38db5e9f9b6d230ca40de945ef031fdb175818ebb508ecb64eb69faa45",
+      "status": "pending"
+    },
+    {
+      "name": "action.pytest-dev__pytest-5840.call15",
+      "task": "pytest-dev__pytest-5840",
+      "call": 15,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/pytest-dev__pytest-5840/action_counterfactual.candidate.private.json",
+      "case_sha256": "b1c348c89abd193f05ed0e551322fcc3a3369df54a1465f1335ec52ca8659aa9",
+      "status": "pending"
+    },
+    {
+      "name": "action.pytest-dev__pytest-6197.call35",
+      "task": "pytest-dev__pytest-6197",
+      "call": 35,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/pytest-dev__pytest-6197/action_counterfactual.candidate.private.json",
+      "case_sha256": "3464ab28daeb2089a5ae07b152e6be192ee9c3479da14f6160d0960e49363c35",
+      "status": "pending"
+    },
+    {
+      "name": "action.pytest-dev__pytest-7432.call34",
+      "task": "pytest-dev__pytest-7432",
+      "call": 34,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/pytest-dev__pytest-7432/action_counterfactual.candidate.private.json",
+      "case_sha256": "5c8b6bc77b578ff2ff6d0641a0c35fcabdc41a6e204749ba9b18cbb763d95d8d",
+      "status": "pending"
+    },
+    {
+      "name": "action.scikit-learn__scikit-learn-10908.call34",
+      "task": "scikit-learn__scikit-learn-10908",
+      "call": 34,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/scikit-learn__scikit-learn-10908/action_counterfactual.candidate.private.json",
+      "case_sha256": "433e48cae5b80c21f8250a46df39d3ef9536aee07de49b39ae1a6c8e42de05d7",
+      "status": "pending"
+    },
+    {
+      "name": "action.scikit-learn__scikit-learn-14983.call43",
+      "task": "scikit-learn__scikit-learn-14983",
+      "call": 43,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/scikit-learn__scikit-learn-14983/action_counterfactual.candidate.private.json",
+      "case_sha256": "e64458e623cab6438580416cc519688b08a4225ac7218213e0f49cb6839ab993",
+      "status": "pending"
+    },
+    {
+      "name": "action.sphinx-doc__sphinx-10323.call68",
+      "task": "sphinx-doc__sphinx-10323",
+      "call": 68,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/sphinx-doc__sphinx-10323/action_counterfactual.candidate.private.json",
+      "case_sha256": "72789bdb0a798672e2011ee937ca9a10ea8bb6adaf7434ff436a9a4d8d73b385",
+      "status": "pending"
+    },
+    {
+      "name": "action.sphinx-doc__sphinx-7590.call44",
+      "task": "sphinx-doc__sphinx-7590",
+      "call": 44,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/sphinx-doc__sphinx-7590/action_counterfactual.candidate.private.json",
+      "case_sha256": "2c706fc31a48e359fb899074034916ff79531226a2d6684f964b814c74283002",
+      "status": "pending"
+    },
+    {
+      "name": "action.sphinx-doc__sphinx-9461.call76",
+      "task": "sphinx-doc__sphinx-9461",
+      "call": 76,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/sphinx-doc__sphinx-9461/action_counterfactual.candidate.private.json",
+      "case_sha256": "44eb979aed1c5f5691b5a51c4b7cded964764c7d975a631769abe3751a777c3a",
+      "status": "pending"
+    },
+    {
+      "name": "action.sympy__sympy-12489.call34",
+      "task": "sympy__sympy-12489",
+      "call": 34,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/sympy__sympy-12489/action_counterfactual.candidate.private.json",
+      "case_sha256": "e7502eaa3dd07f487b64f62035abaa55bc806121b784ebf78d4c8b8530ba2910",
+      "status": "pending"
+    },
+    {
+      "name": "action.sympy__sympy-13091.call22",
+      "task": "sympy__sympy-13091",
+      "call": 22,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/sympy__sympy-13091/action_counterfactual.candidate.private.json",
+      "case_sha256": "e9de94d13411323de604aea2ce2664fc0cd3b343c66a5ee9a90f0752a2ba424f",
+      "status": "pending"
+    },
+    {
+      "name": "action.sympy__sympy-18763.call20",
+      "task": "sympy__sympy-18763",
+      "call": 20,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/sympy__sympy-18763/action_counterfactual.candidate.private.json",
+      "case_sha256": "8fa0ffe613458817c1bb838dcb1b241353d7f54f7da84911522e9852cac55a0f",
+      "status": "pending"
+    },
+    {
+      "name": "action.sphinx-doc__sphinx-11510.validated-action",
+      "task": "sphinx-doc__sphinx-11510",
+      "call": 24,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/sphinx-doc__sphinx-11510/validated/action_counterfactual.validated.private.json",
+      "case_sha256": "bcb6d7ad7f7d309ba0a6dbdc749e3db3f0529f834df62f7419fcfc53c028260b",
+      "status": "pending"
+    },
+    {
+      "name": "action.psf__requests-5414.call23.validated-pure-url-action",
+      "task": "psf__requests-5414",
+      "call": 23,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/psf__requests-5414/validated-pure-urls/psf__requests-5414.call23.action.private.json",
+      "case_sha256": "1845918122913a020700a8d935e2b1cf6c4481efccee2f4837036e67a2b18f54",
+      "status": "pending"
+    },
+    {
+      "name": "action.psf__requests-5414.call30.validated-pure-url-action",
+      "task": "psf__requests-5414",
+      "call": 30,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/psf__requests-5414/validated-pure-urls/psf__requests-5414.call30.action.private.json",
+      "case_sha256": "c7e7d2302394f49db2043dd5cd688e833266af74be4298976edd15d99f11765d",
+      "status": "pending"
+    },
+    {
+      "name": "action.sympy__sympy-14248.call50.validated-action",
+      "task": "sympy__sympy-14248",
+      "call": 50,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/sympy__sympy-14248/validated/sympy__sympy-14248.call50.action.private.json",
+      "case_sha256": "98bc61fb60e6e98da9fe69149e5d820c39abee89d22e05dd85543410f460aa08",
+      "status": "pending"
+    },
+    {
+      "name": "action.astropy__astropy-13579.fetch-next-action",
+      "task": "astropy__astropy-13579",
+      "call": 3,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/astropy__astropy-13579/action_counterfactual.candidate.private.json",
+      "case_sha256": "818704ce976b75ba3f4fe0139bba86f45e6e51b24de46c979053b8e59b153f4d",
+      "status": "pending"
+    },
+    {
+      "name": "action.astropy__astropy-7336.fetch-next-action",
+      "task": "astropy__astropy-7336",
+      "call": 18,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/astropy__astropy-7336/action_counterfactual.candidate.private.json",
+      "case_sha256": "419a06a00c05c49e4e6b51c9978a1c913ed7c59cf95414bea9d7bc624813aec6",
+      "status": "pending"
+    },
+    {
+      "name": "action.astropy__astropy-8872.fetch-next-action",
+      "task": "astropy__astropy-8872",
+      "call": 8,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/astropy__astropy-8872/action_counterfactual.candidate.private.json",
+      "case_sha256": "c1dca0d99577b5bf1ae854f330af3954f7a84e89f41ea6811fc11b4979e8aba5",
+      "status": "pending"
+    },
+    {
+      "name": "action.matplotlib__matplotlib-25332.fetch-next-action",
+      "task": "matplotlib__matplotlib-25332",
+      "call": 2,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/matplotlib__matplotlib-25332/action_counterfactual.candidate.private.json",
+      "case_sha256": "70957d53e94df9eacd837421afdf66bf7c7b46972a52e341f17c96fd8498a6ff",
+      "status": "pending"
+    },
+    {
+      "name": "action.matplotlib__matplotlib-25960.fetch-next-action",
+      "task": "matplotlib__matplotlib-25960",
+      "call": 3,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/matplotlib__matplotlib-25960/action_counterfactual.candidate.private.json",
+      "case_sha256": "0ff0f74cf765bbba8acad052b164b1d070775ac8492cc4efcb2716cc87f01ad8",
+      "status": "pending"
+    },
+    {
+      "name": "action.matplotlib__matplotlib-26208.fetch-next-action",
+      "task": "matplotlib__matplotlib-26208",
+      "call": 3,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/matplotlib__matplotlib-26208/action_counterfactual.candidate.private.json",
+      "case_sha256": "d60a3730d0c0792a5c836607969e0a89ec8040d7575a655add74fe904d4f19e9",
+      "status": "pending"
+    },
+    {
+      "name": "action.matplotlib__matplotlib-26291.fetch-next-action",
+      "task": "matplotlib__matplotlib-26291",
+      "call": 3,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/matplotlib__matplotlib-26291/action_counterfactual.candidate.private.json",
+      "case_sha256": "6b3b98d4d9369490b1935d1a462105bb4ace2b1432a67c11ad2242329a4fdec7",
+      "status": "pending"
+    },
+    {
+      "name": "action.pydata__xarray-4687.fetch-next-action",
+      "task": "pydata__xarray-4687",
+      "call": 39,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/pydata__xarray-4687/action_counterfactual.candidate.private.json",
+      "case_sha256": "7e0c07030b0bf623c339fe053d59edc4b48d861bbe09a17bfbab1358b3269294",
+      "status": "pending"
+    },
+    {
+      "name": "action.pydata__xarray-7233.fetch-next-action",
+      "task": "pydata__xarray-7233",
+      "call": 4,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/pydata__xarray-7233/action_counterfactual.candidate.private.json",
+      "case_sha256": "30ae1e5e6a2ead902fe27b73cedc09c710f2eab176789d8fbcc3b65203bda684",
+      "status": "pending"
+    },
+    {
+      "name": "action.pylint-dev__pylint-4604.fetch-next-action",
+      "task": "pylint-dev__pylint-4604",
+      "call": 8,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/pylint-dev__pylint-4604/action_counterfactual.candidate.private.json",
+      "case_sha256": "0f01a95975a6c04e528a1d6b939806fc2c73cd50e45f4503051c0df58e5c4a12",
+      "status": "pending"
+    },
+    {
+      "name": "action.pytest-dev__pytest-5787.fetch-next-action",
+      "task": "pytest-dev__pytest-5787",
+      "call": 12,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/pytest-dev__pytest-5787/action_counterfactual.candidate.private.json",
+      "case_sha256": "6bed68e36238b97ebb2fee8fb7db215d095bfc8ed60781e62a5d7adee6bb8586",
+      "status": "pending"
+    },
+    {
+      "name": "action.scikit-learn__scikit-learn-13135.fetch-next-action",
+      "task": "scikit-learn__scikit-learn-13135",
+      "call": 9,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/scikit-learn__scikit-learn-13135/action_counterfactual.candidate.private.json",
+      "case_sha256": "3690a5be8a7e9906ffcc7429684a6bf42523f0fc94b489ec2ba6c6b56da5d5a7",
+      "status": "pending"
+    },
+    {
+      "name": "action.scikit-learn__scikit-learn-13328.fetch-next-action",
+      "task": "scikit-learn__scikit-learn-13328",
+      "call": 3,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/scikit-learn__scikit-learn-13328/action_counterfactual.candidate.private.json",
+      "case_sha256": "52f6614498c828972727e13a1086bb30323983eae756e9989ed4d4e44e6d4cf2",
+      "status": "pending"
+    },
+    {
+      "name": "action.scikit-learn__scikit-learn-14053.fetch-next-action",
+      "task": "scikit-learn__scikit-learn-14053",
+      "call": 13,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/scikit-learn__scikit-learn-14053/action_counterfactual.candidate.private.json",
+      "case_sha256": "0a46e147aeeeecfd9af92f33074485993ede14d196a3d64f8664aca22fd1ce22",
+      "status": "pending"
+    },
+    {
+      "name": "action.scikit-learn__scikit-learn-14629.fetch-next-action",
+      "task": "scikit-learn__scikit-learn-14629",
+      "call": 8,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/scikit-learn__scikit-learn-14629/action_counterfactual.candidate.private.json",
+      "case_sha256": "4f59833554b0af7b257288ee13cdba89b3c118e35383c9360d8b1935d08713b6",
+      "status": "pending"
+    },
+    {
+      "name": "action.scikit-learn__scikit-learn-25102.fetch-next-action",
+      "task": "scikit-learn__scikit-learn-25102",
+      "call": 5,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/scikit-learn__scikit-learn-25102/action_counterfactual.candidate.private.json",
+      "case_sha256": "ac0efa0b76f90a6c5074b9211308237c66c9d2641c6ccf86c9c3948d5c0fb8dc",
+      "status": "pending"
+    },
+    {
+      "name": "action.scikit-learn__scikit-learn-25747.fetch-next-action",
+      "task": "scikit-learn__scikit-learn-25747",
+      "call": 3,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/scikit-learn__scikit-learn-25747/action_counterfactual.candidate.private.json",
+      "case_sha256": "2bcb65ee9e9bee6d7f42f29234e469c8e9839d29fd7538ae46414f954baac48d",
+      "status": "pending"
+    },
+    {
+      "name": "action.sphinx-doc__sphinx-10614.fetch-next-action",
+      "task": "sphinx-doc__sphinx-10614",
+      "call": 12,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/sphinx-doc__sphinx-10614/action_counterfactual.candidate.private.json",
+      "case_sha256": "73308038ffb6e1153713aefd43055714957c7ff69ca2dfb84c42fa9e76df441f",
+      "status": "pending"
+    },
+    {
+      "name": "action.sphinx-doc__sphinx-8638.fetch-next-action",
+      "task": "sphinx-doc__sphinx-8638",
+      "call": 3,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/sphinx-doc__sphinx-8638/action_counterfactual.candidate.private.json",
+      "case_sha256": "a98499f3f71718260984ae51b4bc3487946ebf030920dc7b6530a0480a2b78b2",
+      "status": "pending"
+    },
+    {
+      "name": "action.sympy__sympy-13480.fetch-next-action",
+      "task": "sympy__sympy-13480",
+      "call": 9,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/sympy__sympy-13480/action_counterfactual.candidate.private.json",
+      "case_sha256": "7958f1882b3dbbead9e0eb354aef9d1032ca9f93e6fef1cf30f492644aaa181d",
+      "status": "pending"
+    },
+    {
+      "name": "action.sympy__sympy-13551.fetch-next-action",
+      "task": "sympy__sympy-13551",
+      "call": 12,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/sympy__sympy-13551/action_counterfactual.candidate.private.json",
+      "case_sha256": "e1f720371d9533b0cc4c14771e80b6e86af2ce47ec5b9791eeef9925fc96dc56",
+      "status": "pending"
+    },
+    {
+      "name": "action.sympy__sympy-13878.fetch-next-action",
+      "task": "sympy__sympy-13878",
+      "call": 29,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/sympy__sympy-13878/action_counterfactual.candidate.private.json",
+      "case_sha256": "77c7ca4a7dbdde6ad96477e340b4314724668fcb90a8947dd561d0b0ba30f6c2",
+      "status": "pending"
+    },
+    {
+      "name": "action.matplotlib__matplotlib-20488.call29.validated-action",
+      "task": "matplotlib__matplotlib-20488",
+      "call": 29,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/matplotlib__matplotlib-20488/validated/matplotlib__matplotlib-20488.call29.action.private.json",
+      "case_sha256": "a14c188ceaf5174e740f7ed696253efeb07f5270353086ffa5aaa84cf2ad5dd3",
+      "status": "pending"
+    },
+    {
+      "name": "action.psf__requests-2931.call29.validated-action",
+      "task": "psf__requests-2931",
+      "call": 29,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/psf__requests-2931/validated/psf__requests-2931.call29.action.private.json",
+      "case_sha256": "2e9adb5e6ebc4f10a8fe3f113b00a93b6ef0c07d8a6e853dbb4f32d26cdbee09",
+      "status": "pending"
+    },
+    {
+      "name": "action.pydata__xarray-3095.call48.validated-action",
+      "task": "pydata__xarray-3095",
+      "call": 48,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/pydata__xarray-3095/validated/pydata__xarray-3095.call48.action.private.json",
+      "case_sha256": "7be9b7d14358dae44241c10b6a481b773f0714b7128e3e7ff9f510d2e209f5af",
+      "status": "pending"
+    }
+  ]
+}

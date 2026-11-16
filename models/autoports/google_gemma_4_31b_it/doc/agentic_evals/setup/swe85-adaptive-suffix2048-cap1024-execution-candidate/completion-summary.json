@@ -1,0 +1,102 @@
+{
+  "status": "completed_root_review_parser_and_independent_correction_confirmed",
+  "rows": [
+    {
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-candidate/fixtures/full/anomaly.psf__requests-5414.call10.onset.suffix2048.cap1024.seed43.private.json",
+      "mode": "full",
+      "seed": 43,
+      "tokens": 975,
+      "verdict": "other",
+      "original512_prefix_identical": true,
+      "reason": "Coherent URL/IDNA reasoning ends with fenced bash after channel separator, without canonical call:bash tool opening. Conditioned prefix is thought+traceback, not an open tool call. Missing-tool protocol anomaly; stock parser confirms zero structured tool calls. No sustained native ellipsis motif.",
+      "parser_confirmation": {
+        "result": "missing_tool",
+        "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-execution-candidate/full-requests10-stock-parser-audit-b.json",
+        "sha256": "57b50238af241c598918b8eb427ad9ccd7b7be655c0c41265dca43238e9cedc3"
+      },
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-execution-candidate/runs/full/anomaly.psf__requests-5414.call10.onset.suffix2048.cap1024.seed43.json",
+      "source_sha256": "5c4660236e54304af472b9ae8d1c572d663bfbf0ede40ac9a17cb9551a2f3a0e"
+    },
+    {
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-candidate/fixtures/full/anomaly.psf__requests-5414.call10.onset.suffix2048.cap1024.seed44.private.json",
+      "mode": "full",
+      "seed": 44,
+      "tokens": 626,
+      "verdict": "other",
+      "original512_prefix_identical": true,
+      "reason": "Coherent URL/IDNA reasoning ends with fenced bash after channel separator, without canonical call:bash tool opening. Conditioned prefix is thought+traceback, not an open tool call. Missing-tool protocol anomaly; stock parser confirms zero structured tool calls. No sustained native ellipsis motif.",
+      "parser_confirmation": {
+        "result": "missing_tool",
+        "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-execution-candidate/full-requests10-stock-parser-audit-b.json",
+        "sha256": "57b50238af241c598918b8eb427ad9ccd7b7be655c0c41265dca43238e9cedc3"
+      },
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-execution-candidate/runs/full/anomaly.psf__requests-5414.call10.onset.suffix2048.cap1024.seed44.json",
+      "source_sha256": "123f151deade6d8ceb86ef7103a1c32c4176606b84109368ca2ba80f869be8c6"
+    },
+    {
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-candidate/fixtures/full/anomaly.psf__requests-5414.call11.onset.suffix2048.cap1024.seed42.private.json",
+      "mode": "full",
+      "seed": 42,
+      "tokens": 1024,
+      "verdict": "inconclusive",
+      "original512_prefix_identical": true,
+      "reason": "Pinned prefix ends in existing traceback. Continuation develops ASCII-host validation alternatives, IDNA semantics and proposed diff before reaching a new staticmethod consideration at1024. Repeated code snippets support distinct alternatives; no sustained native ellipsis loop or proven stall. Still progressing without tool completion; extend2048.",
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-execution-candidate/runs/full/anomaly.psf__requests-5414.call11.onset.suffix2048.cap1024.seed42.json",
+      "source_sha256": "bbe10ef469c6473e26d18e3d1be8c9a3dfaa5e1ff64f9bed8eff8e1c5a725867"
+    },
+    {
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-candidate/fixtures/full/anomaly.psf__requests-5414.call11.onset.suffix2048.cap1024.seed43.private.json",
+      "mode": "full",
+      "seed": 43,
+      "tokens": 1024,
+      "verdict": "other",
+      "original512_prefix_identical": true,
+      "reason": "Prefix ends existing traceback return six.raise_from. Generated own immediately before urllib3.exceptions.LocationParseError is an unrelated stray word in traceback text. Later reasoning varies and reaches cap, but the affirmative stray-token anomaly is independent of that cap; no native sustained ellipsis motif. Prior512 root review missed this localized token; immutable source remains, independent correction review requested.",
+      "independent_confirmation": {
+        "result": "agree_localized_stray",
+        "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-execution-candidate/full-requests11-seed43-independent-addendum-b.json",
+        "sha256": "7bd646ee5cbd7115b43a8cf82547f74c72e13c39db6e5e88ce4c2de6ab125eb9"
+      },
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-execution-candidate/runs/full/anomaly.psf__requests-5414.call11.onset.suffix2048.cap1024.seed43.json",
+      "source_sha256": "c149400e2e974fbefcdfae71c8fd2c7179b4c711e44bc6c330eb6ebacf5294d7"
+    },
+    {
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-candidate/fixtures/served/anomaly.psf__requests-5414.call10.onset.suffix2048.cap1024.seed42.private.json",
+      "mode": "served",
+      "seed": 42,
+      "tokens": 1024,
+      "verdict": "inconclusive",
+      "original512_prefix_identical": true,
+      "reason": "Pinned prefix ends existing traceback return six.raise_from; continuation transitions into distinct URL-validation reasoning and prospective patch steps. Last paragraphs repeatedly reconsider invoking bash, but no decisive sustained token loop or stall is established. At1024 it is still composing the thought, with no command close; extend2048. No native sustained ellipsis motif observed.",
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-execution-candidate/runs/served/anomaly.psf__requests-5414.call10.onset.suffix2048.cap1024.seed42.json",
+      "source_sha256": "84168fff11b5ad2c8a1c3fa9ec9d6a76d78f832aa938e674ac43a71a8bbfe421"
+    }
+  ],
+  "coordinator_hashes": {
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-execution-candidate/full-coordinator-requests10.json": "fe3bbe3d2500adb6ce04d22eaba67ab56f0411e01b976fc8a643fd7b4ed512e2",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-execution-candidate/full-coordinator-requests11-seed42.json": "2cd7018e95b78de54850d1127fc540485f1e9eb6722720117676d4690365602a",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-execution-candidate/full-coordinator-requests11-seed43.json": "46acdf845c955e7775326a2428036183d06b0666dff18981c38b2fe89fbb1ecd",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-execution-candidate/served-coordinator-requests10-seed42.json": "6d165ac6e0a247c7351af03f904c8db96932dac394630a0284b6b7c3f81a016a"
+  },
+  "modes": {
+    "served": {
+      "samples": 1,
+      "verdict_counts": {
+        "inconclusive": 1
+      },
+      "measured_hours": 0.05214394721719954,
+      "forecast_range_hit": true
+    },
+    "full": {
+      "samples": 4,
+      "verdict_counts": {
+        "other": 3,
+        "inconclusive": 1
+      },
+      "measured_hours": 0.08641927633020613,
+      "forecast_range_hit": true
+    }
+  },
+  "score_policy_changed": false,
+  "next": "Two progressing samples require2048: servedRequests5414call10seed42 and fullRequests5414call11seed42. Fullcall11seed43 has affirmative localized strayown anomaly independent of its cap."
+}

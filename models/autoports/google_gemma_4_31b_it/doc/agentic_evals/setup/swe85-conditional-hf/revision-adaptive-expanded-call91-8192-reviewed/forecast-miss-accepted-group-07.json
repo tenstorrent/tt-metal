@@ -1,0 +1,15 @@
+{
+  "status": "root_accepted_forecast_miss",
+  "reviewer": "root",
+  "accepted": true,
+  "utc": "2026-11-15T10:17:10.920472+00:00",
+  "completion_sha256": "67edd55881ada416e6e9ebcc37a907228b80d8d438fc2b4bfcc5ac47116e84f3",
+  "measured_seconds": 219.28860688209534,
+  "forecast_range_seconds": [
+    980,
+    3380
+  ],
+  "admission_sha256": "74640276fdf5e463fa968d5d188994622759df96f09d4f408e02712b7d09ae66",
+  "serial_order": 7,
+  "explanation": "Reference naturally stopped at tool-yield EOS50 after56/512 tokens. Free151.396260s, runner214.865446s, group219.288607s. Low miss reflects early natural stop; not a timeout. Semantic triage remains pending; no correctness or scored-task conclusion."
+}

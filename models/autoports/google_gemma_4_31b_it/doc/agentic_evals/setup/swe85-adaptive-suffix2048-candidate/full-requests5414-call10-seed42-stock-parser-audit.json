@@ -1,0 +1,84 @@
+{
+  "status": "completed_cpu_only_stock_nonstreaming_parser_audit",
+  "scope": "Parser interpretation only; no score adjudication. Full assistant prefix uses exact intersection of suffix2048 prompt IDs and source full-reply request boundary.",
+  "tokenizer_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+  "tokenizer_snapshot": "/home/mvasiljevic/.cache/huggingface/hub/models--google--gemma-4-31B-it/snapshots/842da3794eaa0b77d5f08bae87a17459d91ff475",
+  "inputs": {
+    "run": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/runs/full/anomaly.psf__requests-5414.call10.onset.json",
+    "seed": 42,
+    "generated_token_count": 500,
+    "generated_token_ids_sha256": "fd0c145bd40faf05b4d08018675b183eab7e8b6aa6a51cb697b6f6a12674f7e2",
+    "generated_text_sha256": "b926250068cc56bd36f8a4c12c6fb12cd38dc6031b9acc75d297ed9b51ab6f75",
+    "generated_text_head": "...\n  File \"/opt/miniconda3/lib/python3.11/site-packages/urllib3/util/connection.py\", line 68, in create_connection\n    ...\nurllib3.exceptions.LocationParseError: Failed to parse: '.example.com', label empty or too long\n```\nActually, the `urllib3` exception happens during the request. But the goal is to have `requests` catch this during URL preparation and raise `requests.exceptions.InvalidURL`.\n\nLooking at `requests/models.py` (or rather, the mock version I'm editing):\nThe `prepare_url` method ",
+    "generated_text_tail": " not allowed in IDNA/UTS46).\n\nSo, the fix is to always call `_get_idna_encoded_host` (or a similar validation) or ensure that the ASCII check doesn't bypass validation for invalid ASCII hosts.\n\nActually, the most robust way is to always run the host through the IDNA encoder to ensure it's a valid hostname according to the relevant standards.\n\nLet's test this hypothesis with bash.<channel|>```json\n{\"command\": \"python3 -c 'import idna; print(idna.encode(\\\".example.com\\\", uts46=True))'\"}\n```<turn|>",
+    "candidate_fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/fixtures/anomaly.psf__requests-5414.call10.onset.suffix2048.private.json",
+    "candidate_prompt_tokens": 2048,
+    "source_onset_fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-requests5414-caret-controls/psf__requests-5414.call10.onset.private.json",
+    "source_prompt_tokens": 7057,
+    "source_full_reply_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-requests5414-caps/psf__requests-5414.call10.case.private.json",
+    "source_request_prompt_tokens": 6869,
+    "suffix_start_token_index": 5009,
+    "assistant_prefix_start_token_index": 6869,
+    "assistant_prefix_token_count": 188,
+    "assistant_prefix_tail": "le \"/testbed/reproduce_issue.py\", line 5, in <module>\n    requests.get(\"http://.example.com\")\n  ...\n  File \"/opt/miniconda3/lib/python3.11/site-packages/urllib3/util/connection.py\", line 68, in create_connection\n    return six.raise_from(\n           ",
+    "raw_packet": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-requests5414-caps/psf__requests-5414.call10.packet.private.json",
+    "raw_request_body_sha256": "86beab76ef8607b073e13a9376e65d2b9e69b2937a168b78daff7eb9a7bba2c0",
+    "request_tool_schemas": [
+      {
+        "type": "function",
+        "function": {
+          "name": "bash",
+          "description": "Execute a bash command",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "command": {
+                "type": "string",
+                "description": "The bash command to execute"
+              }
+            },
+            "required": [
+              "command"
+            ]
+          }
+        }
+      }
+    ],
+    "sampling": {
+      "temperature": 1.0,
+      "top_p": 0.95,
+      "top_k": 20,
+      "seed": 42
+    },
+    "generated_tool_close_marker_present": false
+  },
+  "parser": {
+    "implementation": "installed vLLM Gemma4Parser; enable_auto_tools=True; model_output_token_ids supplied",
+    "verdict": "missing_tool",
+    "calls": [],
+    "reasoning_chars": 2290,
+    "content_chars": 101,
+    "reasoning_head": "Okay, I've analyzed the issue. The user is reporting that `requests.get(\"http://.example.com\")` raises a `UnicodeError` (actually `urllib3.exceptions.LocationParseError` in the current environment, but the user's report mentioned `UnicodeError` and the goal is to raise `requests.exceptions.InvalidUR",
+    "content_head": "```json\n{\"command\": \"python3 -c 'import idna; print(idna.encode(\\\".example.com\\\", uts46=True))'\"}\n```"
+  },
+  "sha256": {
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/runs/full/anomaly.psf__requests-5414.call10.onset.json": "1f34cd733be27e7e4c655da4dcf0fba30ac7c06fc83cca3753973dbae03263ff",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/fixtures/anomaly.psf__requests-5414.call10.onset.suffix2048.private.json": "4cb0ce0c350d029b506ecd31cd5df6a6f0a02a0c49f56761a478f7a1f6b4c781",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-requests5414-caret-controls/psf__requests-5414.call10.onset.private.json": "38cba2429d022e64133da2c34388d9e88a9b26b82ec58594153692842dccb961",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-requests5414-caps/psf__requests-5414.call10.case.private.json": "3da38a4c4fcb3d3260267e62b1028e61acfd3f782f8f1b3396486170bd79af8a",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-requests5414-caps/psf__requests-5414.call10.packet.private.json": "79dcdd8f52f6cbd15265e96f11bb9b51ac682718ff927a8f28461404748e22c5",
+    "/home/mvasiljevic/.cache/huggingface/hub/models--google--gemma-4-31B-it/snapshots/842da3794eaa0b77d5f08bae87a17459d91ff475/tokenizer.json": "cc8d3a0ce36466ccc1278bf987df5f71db1719b9ca6b4118264f45cb627bfe0f",
+    "/home/mvasiljevic/.cache/huggingface/hub/models--google--gemma-4-31B-it/snapshots/842da3794eaa0b77d5f08bae87a17459d91ff475/tokenizer_config.json": "9f4fec4b1dc6ecddf8f4a92e9caea5971c0e67d81309f3f9066a2bee8c362633",
+    "/home/mvasiljevic/.cache/huggingface/hub/models--google--gemma-4-31B-it/snapshots/842da3794eaa0b77d5f08bae87a17459d91ff475/chat_template.jinja": "ae53464bf3be25802b3a5b37def7fd89667067d7577049b3b2d74c4d8de4c6d4",
+    "python_env/lib/python3.10/site-packages/vllm/parser/gemma4.py": "c974f47dc39ab7276da1e4ae38c4010e3f5411481f75e3879e29f47b2fd08df7",
+    "python_env/lib/python3.10/site-packages/vllm/parser/engine/parser_engine.py": "d1075deeb25b4872e92752d7ef0598a07a747afaf2afc56058ec30c6dc1da89a",
+    "python_env/lib/python3.10/site-packages/vllm/parser/engine/adapters.py": "7a77bcb86e2129762f4199ee726398a4850b9e207893fc4295f2b759bcfeeb36",
+    "python_env/lib/python3.10/site-packages/vllm/tool_parsers/gemma4_engine_tool_parser.py": "02f31bdcc4d8527440daebb4f4e3e74c83a6010eb56cd33fe7522bea8f51bc65",
+    "python_env/lib/python3.10/site-packages/vllm/reasoning/gemma4_engine_reasoning_parser.py": "3e9adef8ae56ee993fbaee43e82aa36216fb71251ee2de14dc9f8b326220a594"
+  },
+  "limitations": [
+    "Current installed non-streaming parser interpretation only; historical server parser/stream equivalence is not established.",
+    "Parser verdict does not score semantic anomaly or native-motif reproduction.",
+    "Scratch-attempt deviation: the first one-off `python - <<'PY' ...` parser command imported `transformers` before installing its TTNN import guard. Transformers triggered a `ttnn` module import (debug output printed its configuration); then the scratch script failed with `FileNotFoundError` while resolving the source fixture because it prepended the agentic-evals directory to an already repo-relative path. That scratch attempt wrote no audit artifact and opened no device; device ownership was not checked, so no ownership assertion is made. The completed audit was rerun with the guard installed before all ML/parser imports and succeeded."
+  ]
+}

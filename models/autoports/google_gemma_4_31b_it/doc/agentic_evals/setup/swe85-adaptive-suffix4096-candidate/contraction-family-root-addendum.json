@@ -1,0 +1,38 @@
+{
+  "status": "root_additive_subtype_correction",
+  "reviewed_unix": 1794721820.3646965,
+  "rule": "Immediate extra apostrophe-ve after completed contraction, or contiguous chain such as and-ve-ve; localized duplication sufficient, ASCII/curly equivalent. Lexical gap remains other. Native originals show this morphology.",
+  "changes": [
+    {
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/runs/served/anomaly.matplotlib__matplotlib-20488.call86.onset.suffix4096.seed43.json",
+      "source_sha256": "0473b2a180e527d9a609a1f28d65cb7770bb3421012c0affa534ac5fa3ef6d56",
+      "previous": "other",
+      "corrected": "native",
+      "reason": "Adjacent duplicated apostrophe-ve family; a single duplicate suffices; ASCII/curly glyph and burst duration do not change family."
+    },
+    {
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/runs/served/anomaly.matplotlib__matplotlib-20488.call86.onset.suffix4096.seed44.json",
+      "source_sha256": "3eedba823b3b3f55be41012a0a7f87ef45ca6e748a876c8842020f903e2d7edd",
+      "previous": "other",
+      "corrected": "native",
+      "reason": "Adjacent duplicated apostrophe-ve family; a single duplicate suffices; ASCII/curly glyph and burst duration do not change family."
+    },
+    {
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/runs/served/anomaly.sphinx-doc__sphinx-10323.call70.onset.suffix4096.seed42.json",
+      "source_sha256": "a6ec360216bf436f7e4c39b04cbde70ca0f4353e9f39bb2b65aef3e83c3ca094",
+      "previous": "other",
+      "corrected": "native",
+      "reason": "Adjacent duplicated apostrophe-ve family; a single duplicate suffices; ASCII/curly glyph and burst duration do not change family."
+    },
+    {
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/runs/served/anomaly.sphinx-doc__sphinx-10323.call70.onset.suffix4096.seed43.json",
+      "source_sha256": "bfbd718661ba70c712a02aebea1f93378570721cf44cec131b8fed91c40b833c",
+      "previous": "other",
+      "corrected": "native",
+      "reason": "Adjacent duplicated apostrophe-ve family; a single duplicate suffices; ASCII/curly glyph and burst duration do not change family."
+    }
+  ],
+  "independent_review": "contraction-family-adjudication-b.json",
+  "caveat": "Native family label does not assert exact native token identity or incidence. Original pilot positives are long prompts, not zero-token short controls.",
+  "scores_changed": false
+}

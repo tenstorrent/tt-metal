@@ -1,0 +1,269 @@
+{
+  "status": "candidate_only_host_prepared_not_admitted_not_run",
+  "scope": "Paired served/full suffix512 TT diagnostic for the original Sklearn13135 call29 onset: seeds42/43/44 each, exact original final512 input token IDs, up to64 chosen teacher-forced positions, and512 free-run tokens. This is a shortened-prefix diagnostic, not evidence about the original17395-token context.",
+  "source": {
+    "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-extra-contraction-controls/scikit-learn__scikit-learn-13135.call29.onset.private.json",
+    "fixture_sha256": "1403d7a48b7ecca8ec2095479c77a871caa3add09bedd7f6830d36315a883bd2",
+    "original_input_tokens": 17395,
+    "original_prompt_ids_sha256": "433e40a88bd54227618ffb028a3d4322df14ebee37ff03a52c0986d5154df69a",
+    "suffix_token_count": 512,
+    "suffix_start_index": 16883,
+    "suffix_end_index_exclusive": 17395,
+    "suffix_ids_sha256": "6cb6161236c625fd131a51c46c0c180f8225366631be9579fb22d1d470a1ab74",
+    "rendered_text_file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/rendered-suffix512.txt",
+    "rendered_text_sha256": "f988cb5ccba9c80884a8df7c99b3ea9035eb57bf3dedb1405a2b245163276b23",
+    "rendered_prefix": "readlines()\n\nfor i in range(len(lines)):\n    if 'centers = km.fit(column[:, None]).cluster_centers_[:, 0]' in lines[i]:\n        lines[i] = lines[i].replace('centers = km.fit(column[:, None]).cluster_centers_[:, 0]', \n                                   'centers = np.sort(km.fit(column[:, None]).cluster_centers_[:, 0])')\n\nwith open(file_path, 'w') as f:\n    f.writelines(lines)\nEOF\npython apply_fix.py\n<|\"|>}<tool_call|><|tool_response>response:bash{value:<|\"|>{\n  \"returncode\": 0,\n  \"output\": \"\"\n}<|\"|>}<tool_response|><|channel>thought\nNow let's check if the fix is applied.\n<channel|><|tool_call>c",
+    "rendered_suffix": "j], init=init, n_init=1)\\n   174\\t                centers = np.sort(km.fit(column[:, None]).cluster_centers_[:, 0])\\n   175\\t                bin_edges[jj] = (centers[1:] + centers[:-1]) * 0.5\\n   176\\t                bin_edges[jj] = np.r_[col_min, bin_edges[jj], col_max]\\n   177\\t\\n   178\\t        self.bin_edges_ = bin_edges\\n   179\\t        self.n_bins_ = n_bins\\n   180\\t\\n\"\n}<|\"|>}<tool_response|><|channel>thought\n<|channel>thought\nPerfect. Now the fix is applied to the source code.\nSince I've",
+    "chosen_positions": 64,
+    "chosen_token_ids_sha256": "8d4c97e7413b5ed9bf57c4a1f8ae56a386fb8c52b5588db4f765eb55f36a7e3e",
+    "tokenizer_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+    "tokenizer_files_sha256": {
+      "tokenizer_json": "cc8d3a0ce36466ccc1278bf987df5f71db1719b9ca6b4118264f45cb627bfe0f",
+      "tokenizer_config": "9f4fec4b1dc6ecddf8f4a92e9caea5971c0e67d81309f3f9066a2bee8c362633",
+      "chat_template": "ae53464bf3be25802b3a5b37def7fd89667067d7577049b3b2d74c4d8de4c6d4"
+    }
+  },
+  "coverage": {
+    "original_full_anomaly": "Localized native doubled contraction “I’ve’ve” in original; later full-mode seed42 missing_tool is a distinct non-native protocol anomaly (coherent summary followed by plain-prose submission).",
+    "full_suffix512_prior": "Existing cap512 records use the full17395-token prompt, not this exact suffix. Full seed42 progressed coherently through512; it does not adjudicate suffix512.",
+    "purpose": "Determine whether served/full shortened-context runs produce missing_tool at exact suffix512. Do not infer task success or native contraction reproduction."
+  },
+  "manifests": {
+    "served": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/served-cases.json",
+      "sha256": "a93796ce41a985492fc2e5075f4463186fa9fc258a2095f9728b5f9eff3b9bdf",
+      "job_count": 3,
+      "seeds": [
+        42,
+        43,
+        44
+      ],
+      "prompt_tokens": 512,
+      "chosen_tokens": 64,
+      "free_run_tokens": 512,
+      "fixture_hashes": {
+        "anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix512.seed42.private.json": "5a7ba37c9bbe628df48ee771eda26ddae50445000e69c9afa32fcd662206767c",
+        "anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix512.seed43.private.json": "cacc24dd02f9bcbc28aad63bc75ca93d1e0cfaccc45eeecc38958db676fa6d4d",
+        "anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix512.seed44.private.json": "4a94d27b233d885c8a874ab5c9070a0b6c57d4633ccd230367490ffa6379148e"
+      }
+    },
+    "full": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/full-cases.json",
+      "sha256": "10f582d0c77b4fa472bef0ab6c17535ddf2a5a288ffb6d3c2af34d89c3264e35",
+      "job_count": 3,
+      "seeds": [
+        42,
+        43,
+        44
+      ],
+      "prompt_tokens": 512,
+      "chosen_tokens": 64,
+      "free_run_tokens": 512,
+      "fixture_hashes": {
+        "anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix512.seed42.private.json": "146c1ded9c3431eb4237ef84a8616b3e82ccad773e5a8cfc9202e34c449a0315",
+        "anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix512.seed43.private.json": "8928fdb36ab1ff489efe48df4fddc51eb2e9efa090f2073ba41cde14c5248889",
+        "anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix512.seed44.private.json": "2606ab1840fd85edc58d68ed0a33c3b6fbd88db86620104c8600acb9602a6ea7"
+      }
+    }
+  },
+  "runner": {
+    "path": "models/autoports/google_gemma_4_31b_it/tools/precision_repro_batch.py",
+    "sha256": "172f5a1dd7a7403847e47b966ae79c306163650a60211418c7c195794ec5c125",
+    "build_kwargs_and_precision_pins": {
+      "served": {
+        "manifest": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/served-cases.json",
+        "manifest_sha256": "a93796ce41a985492fc2e5075f4463186fa9fc258a2095f9728b5f9eff3b9bdf",
+        "runner": "models/autoports/google_gemma_4_31b_it/tools/precision_repro_batch.py",
+        "runner_sha256": "172f5a1dd7a7403847e47b966ae79c306163650a60211418c7c195794ec5c125",
+        "build_kwargs_file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/served_build_kwargs.json",
+        "build_kwargs_sha256": "5fa69bb46bd0ad950e1a720d53e1c89ef87b07d6857a59f85a7d96f36dfff201",
+        "precision_config": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/served_precision_config.json",
+        "precision_config_sha256": "af0969d87723dccb3a1199c01632ae720324f68c0287e8e327566a754be2d410",
+        "output_dir": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/runs/served",
+        "timeout_seconds": 600,
+        "validation_command": [
+          "timeout",
+          "600",
+          "env",
+          "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+          "READINESS_TRACE_REGION_SIZE=134217728",
+          "OMP_NUM_THREADS=16",
+          "MKL_NUM_THREADS=16",
+          "OPENBLAS_NUM_THREADS=16",
+          "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+          "-m",
+          "models.autoports.google_gemma_4_31b_it.tools.precision_repro_batch",
+          "--cases",
+          "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/served-cases.json",
+          "--build-kwargs-file",
+          "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/served_build_kwargs.json",
+          "--output-dir",
+          "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/runs/served",
+          "--validate-only"
+        ],
+        "execution_command": [
+          "timeout",
+          "600",
+          "env",
+          "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+          "READINESS_TRACE_REGION_SIZE=134217728",
+          "OMP_NUM_THREADS=16",
+          "MKL_NUM_THREADS=16",
+          "OPENBLAS_NUM_THREADS=16",
+          "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+          "-m",
+          "models.autoports.google_gemma_4_31b_it.tools.precision_repro_batch",
+          "--cases",
+          "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/served-cases.json",
+          "--build-kwargs-file",
+          "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/served_build_kwargs.json",
+          "--output-dir",
+          "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/runs/served"
+        ]
+      },
+      "full": {
+        "manifest": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/full-cases.json",
+        "manifest_sha256": "10f582d0c77b4fa472bef0ab6c17535ddf2a5a288ffb6d3c2af34d89c3264e35",
+        "runner": "models/autoports/google_gemma_4_31b_it/tools/precision_repro_batch.py",
+        "runner_sha256": "172f5a1dd7a7403847e47b966ae79c306163650a60211418c7c195794ec5c125",
+        "build_kwargs_file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_build_kwargs.json",
+        "build_kwargs_sha256": "ff2b5ed24e0b6a1dee7eb5cd8bd437d17c3df5f8f25567927d239e666f0699f9",
+        "precision_config": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_config.json",
+        "precision_config_sha256": "63ce02f7fa0df993a27daca25eeeb3adca51e15c7c6956d1cef122534ebdc7a9",
+        "output_dir": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/runs/full",
+        "timeout_seconds": 600,
+        "validation_command": [
+          "timeout",
+          "600",
+          "env",
+          "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+          "READINESS_TRACE_REGION_SIZE=134217728",
+          "OMP_NUM_THREADS=16",
+          "MKL_NUM_THREADS=16",
+          "OPENBLAS_NUM_THREADS=16",
+          "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+          "-m",
+          "models.autoports.google_gemma_4_31b_it.tools.precision_repro_batch",
+          "--cases",
+          "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/full-cases.json",
+          "--build-kwargs-file",
+          "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_build_kwargs.json",
+          "--output-dir",
+          "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/runs/full",
+          "--validate-only"
+        ],
+        "execution_command": [
+          "timeout",
+          "600",
+          "env",
+          "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+          "READINESS_TRACE_REGION_SIZE=134217728",
+          "OMP_NUM_THREADS=16",
+          "MKL_NUM_THREADS=16",
+          "OPENBLAS_NUM_THREADS=16",
+          "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+          "-m",
+          "models.autoports.google_gemma_4_31b_it.tools.precision_repro_batch",
+          "--cases",
+          "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/full-cases.json",
+          "--build-kwargs-file",
+          "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_build_kwargs.json",
+          "--output-dir",
+          "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/runs/full"
+        ]
+      }
+    },
+    "validate_only": "both manifests passed precision_repro_batch.py --validate-only; it prints validation without importing TTNN."
+  },
+  "forecast": {
+    "status": "planning_proxy_not_measurement",
+    "basis_source": "setup/swe85-cap-extensions/cost-estimate.json",
+    "basis_sha256": "21bfc3457d46af9d85f0ed3749dd445660c20d1196a228455b17e9126ab5da40",
+    "source_controls": {
+      "served": [
+        {
+          "seed": 42,
+          "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/served/anomaly.scikit-learn__scikit-learn-13135.call29.onset.cap512.seed42.json",
+          "sha256": "64c679d381610abf89aac0e9261c9851dcdbe00d8c328563c512922bf447853c",
+          "generated_tokens": 466,
+          "wall_seconds": 17.722104829968885
+        },
+        {
+          "seed": 44,
+          "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/served/anomaly.scikit-learn__scikit-learn-13135.call29.onset.cap512.seed44.json",
+          "sha256": "a0454e72dfe1cb7ac0bbe65cd201706f7b02b3c45f5a13cadbad9374464d2cb6",
+          "generated_tokens": 400,
+          "wall_seconds": 15.72053666994907
+        }
+      ],
+      "full": [
+        {
+          "seed": 42,
+          "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/full/anomaly.scikit-learn__scikit-learn-13135.call29.onset.cap512.seed42.json",
+          "sha256": "0c8c1b05d5eb308b5101a9cbfaac37905ce80759d1819a68260e364cd4026b60",
+          "generated_tokens": 512,
+          "wall_seconds": 37.39951783209108
+        },
+        {
+          "seed": 43,
+          "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/full/anomaly.scikit-learn__scikit-learn-13135.call29.onset.cap512.seed43.json",
+          "sha256": "3c84da4c1ac6fdca0ba6779fe6c8d9e27b983b4ccaba1fb2d5257975721ca385",
+          "generated_tokens": 333,
+          "wall_seconds": 26.600682797143236
+        }
+      ]
+    },
+    "model_load_basis": {
+      "served": {
+        "seconds": 140.70528853707947,
+        "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/load.json",
+        "sha256": "b5ed68750af790c5531343cda33e373bc6eeeea0b210de1d98e6d2b8a963c5a6"
+      },
+      "full": {
+        "seconds": 75.54386684880592,
+        "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/load.json",
+        "sha256": "6fa1c06ad0cbd8a0b7033d0cd3bef542b62412704c92841b2b8df7b38348dbda"
+      }
+    },
+    "assumptions": {
+      "free_generation": "Use existing original-full-prompt cap512 timing estimates for this job as a proxy; shorter 512-token context may reduce prefill. Three new 512-token generations can vary by seed.",
+      "chosen_teacher_forcing": "Existing cap512 controls used branches=[]; add provisional 3-12 seconds per case for 64 teacher-forced chosen positions. This is unmeasured planning allowance.",
+      "scopes": "One model load per served/full process; three jobs serial per mode; does not include HF follow-up."
+    },
+    "mode_estimates": {
+      "served": {
+        "point_seconds": 219.31,
+        "range_seconds": [
+          194.71,
+          281.71
+        ],
+        "timeout_seconds": 600
+      },
+      "full": {
+        "point_seconds": 209.04,
+        "range_seconds": [
+          159.54,
+          276.54
+        ],
+        "timeout_seconds": 600
+      }
+    },
+    "combined_point_seconds": 428.35,
+    "combined_range_seconds": [
+      354.25,
+      558.25
+    ],
+    "serial_order": [
+      "served",
+      "full"
+    ]
+  },
+  "execution_gate": {
+    "status": "not_admitted_do_not_launch",
+    "predecessor": "P2 head-bf16-hifi4-fixed108 must be terminal successful and its forecast reconciliation reviewed/accepted by root; do not edit P2 files.",
+    "serialization": "Require zero device owners, no active HF/model process, fresh host memory, and explicit root serial-queue authorization.",
+    "stop": "STOP_BEFORE_LAUNCH sentinel is present; only root may clear after review/admission.",
+    "hf_followup": "Do not launch HF for this target unless full-mode suffix512 repeats the missing_tool behavior; otherwise choose the next prefix based on full-mode outcome and prepare a new matched fixture."
+  },
+  "diagnostic_coverage_note": "Nine selected full-mode native-positive cases do not cover all36 source targets. Other diagnostic-induced OTHER observations remain source-specific; no blanket HF/model-cause claim or waiver is implied."
+}

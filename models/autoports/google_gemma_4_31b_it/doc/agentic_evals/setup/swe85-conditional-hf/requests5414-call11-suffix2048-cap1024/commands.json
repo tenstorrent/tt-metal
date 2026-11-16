@@ -1,0 +1,38 @@
+{
+  "status": "candidate_command_not_admitted_not_run",
+  "commands": [
+    {
+      "order": 1,
+      "case_count": 1,
+      "manifest": "manifest.json",
+      "manifest_sha256": "61914c6361a84f8d5c4f43bcbaccdb786c72b2fed57bf1afdb4e356c6f069b74",
+      "output_dir": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/requests5414-call11-suffix2048-cap1024/runs",
+      "seed": 44,
+      "cap": 1024,
+      "timeout_seconds": 3600,
+      "argv": [
+        "timeout",
+        "3600",
+        "env",
+        "HF_HUB_OFFLINE=1",
+        "HF_DATASETS_OFFLINE=1",
+        "OMP_NUM_THREADS=16",
+        "MKL_NUM_THREADS=16",
+        "OPENBLAS_NUM_THREADS=16",
+        "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tools/precision_repro_hf.py",
+        "--cases",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/requests5414-call11-suffix2048-cap1024/manifest.json",
+        "--output",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/requests5414-call11-suffix2048-cap1024/runs",
+        "--tokens",
+        "1024",
+        "--seeds",
+        "44",
+        "--prefill-chunk",
+        "512"
+      ]
+    }
+  ]
+}

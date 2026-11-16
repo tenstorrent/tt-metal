@@ -1,0 +1,13 @@
+{
+  "status": "root_static_driver_review_passed_unadmitted",
+  "reviewer": "root",
+  "utc": "2026-11-15T09:39:14.788928+00:00",
+  "driver_sha256": "2516262e035f942393bb6409052b806847c1ba53fb98163236c2adc6ca569673",
+  "integrity_sha256": "56338600e7d3dee9c7ec2f21ab5a0ec88b4911c1118a2e50d09e06e64fec3a03",
+  "host_validation_sha256": "adb8f842617059b3034dd2ea6452d2f1392c8e1ea5d5418a85799399d90fe2e0",
+  "checks": [
+    "Root read driver and reviewed actual execute child stub mocks. Four terminal paths passed with no model imports or device access.",
+    "Original fixture/command/proposal/forecast pins retained; final HF9 evidence, actual owner/memory checks and deadline required at admission."
+  ],
+  "execution": "not admitted or run"
+}

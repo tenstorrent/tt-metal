@@ -1,0 +1,13 @@
+{
+  "time_unix": 1794729179.5768223,
+  "preflight": {
+    "active_hf_processes": [],
+    "device_owners": [],
+    "mem_available_bytes": 132280557568,
+    "required_mem_available_bytes": 107374182400
+  },
+  "sk1024_admission_sha256": "2e635a1169648396cf6abd95a6a3f3918808a45f0918431702fae2f5ff3ba308",
+  "served_completion_sha256": "b0485e6d7f64bfe2e2905c98f8bc493fd5a2db92e59522f58ac2dd972c32cf26",
+  "full_completion_sha256": "c28b61d76a152ef27c7cc92da987ccd80a36cdcea16eb48ef6933a792ce752b9",
+  "decision": "Root admits HF execution now; no TT work until CPU HF block ends."
+}

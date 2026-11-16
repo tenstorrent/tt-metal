@@ -1,0 +1,207 @@
+{
+  "status": "CPU_stock_parser_test_no_inference",
+  "fixture_sha256": "0ff8f259c62590aaa1fa0b6874d2d5fdb5e1b5f686c5558142fa1e8dbaccc91f",
+  "served_result_sha256": "2ca22a6f873bc19209124c7a5cc9e2931c5c0ea01263efc74d78c4d737ceb361",
+  "packet_sha256": "68cd399ad5ce0abf3e2168129f40fa82020426be96ee02091be3b6088348ca4e",
+  "prefix_token_count": 167,
+  "prefix_tail": "cotm` is used but not defined in the `eval` method of `coth`.\n\nLet's start by reproducing the issue.<channel|>I will start by creating a reproduction script to confirm the issue.\n\n",
+  "prefix_tail_ids": [
+    684,
+    119364,
+    506,
+    4186,
+    236761,
+    101,
+    236777,
+    795,
+    1502,
+    684,
+    7107,
+    496,
+    32029,
+    8948,
+    531,
+    9128,
+    506,
+    4186,
+    236761,
+    108
+  ],
+  "template_sha256": "ae53464bf3be25802b3a5b37def7fd89667067d7577049b3b2d74c4d8de4c6d4",
+  "native_observation": {
+    "structured_tool_count": 0,
+    "content_head": "I will start by creating a reproduction script to confirm the issue.\n\ncall:bash{command:<|\"|>cat <<'",
+    "content_only_parse": {
+      "reasoning_chars": 0,
+      "content_chars": 553,
+      "content_preview": "I will start by creating a reproduction script to confirm the issue.\n\ncall:bash{command:<|\"|>cat <<'",
+      "structured_tools": []
+    }
+  },
+  "trials": [
+    {
+      "seed": 42,
+      "generated_token_count": 157,
+      "generated_head_ids": [
+        101,
+        48,
+        6639,
+        236787,
+        42422,
+        236782,
+        7674,
+        236787,
+        52,
+        9307,
+        2986,
+        236789
+      ],
+      "generated_text_head": "<channel|><|tool_call>call:bash{command:<|\"|>cat <<'EOF' > reproduce_issue.py\nfrom sympy import Symb",
+      "generated_text_tail": "coth_log_tan()\nEOF\npython3 reproduce_issue.py\n<|\"|>}<tool_call|><|tool_response>",
+      "full_reconstructed_assistant_parse": {
+        "reasoning_chars": 516,
+        "content_chars": 68,
+        "content_preview": "I will start by creating a reproduction script to confirm the issue.",
+        "structured_tools": [
+          {
+            "name": "bash",
+            "arguments_valid_json": true,
+            "argument_keys": [
+              "command"
+            ]
+          }
+        ]
+      },
+      "generated_only_parse": {
+        "reasoning_chars": 0,
+        "content_chars": 0,
+        "content_preview": "",
+        "structured_tools": [
+          {
+            "name": "bash",
+            "arguments_valid_json": true,
+            "argument_keys": [
+              "command"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "seed": 43,
+      "generated_token_count": 143,
+      "generated_head_ids": [
+        101,
+        48,
+        6639,
+        236787,
+        42422,
+        236782,
+        7674,
+        236787,
+        52,
+        9307,
+        2986,
+        236789
+      ],
+      "generated_text_head": "<channel|><|tool_call>call:bash{command:<|\"|>cat <<'EOF' > reproduce_issue.py\nfrom sympy import Symb",
+      "generated_text_tail": "   reproduce()\nEOF\npython3 reproduce_issue.py\n<|\"|>}<tool_call|><|tool_response>",
+      "full_reconstructed_assistant_parse": {
+        "reasoning_chars": 516,
+        "content_chars": 68,
+        "content_preview": "I will start by creating a reproduction script to confirm the issue.",
+        "structured_tools": [
+          {
+            "name": "bash",
+            "arguments_valid_json": true,
+            "argument_keys": [
+              "command"
+            ]
+          }
+        ]
+      },
+      "generated_only_parse": {
+        "reasoning_chars": 0,
+        "content_chars": 0,
+        "content_preview": "",
+        "structured_tools": [
+          {
+            "name": "bash",
+            "arguments_valid_json": true,
+            "argument_keys": [
+              "command"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "seed": 44,
+      "generated_token_count": 164,
+      "generated_head_ids": [
+        101,
+        48,
+        6639,
+        236787,
+        42422,
+        236782,
+        7674,
+        236787,
+        52,
+        9307,
+        2986,
+        236789
+      ],
+      "generated_text_head": "<channel|><|tool_call>call:bash{command:<|\"|>cat <<'EOF' > reproduce_issue.py\nfrom sympy import Symb",
+      "generated_text_tail": "  test_issue()\nEOF\npython3 reproduce_issue.py\n<|\"|>}<tool_call|><|tool_response>",
+      "full_reconstructed_assistant_parse": {
+        "reasoning_chars": 516,
+        "content_chars": 68,
+        "content_preview": "I will start by creating a reproduction script to confirm the issue.",
+        "structured_tools": [
+          {
+            "name": "bash",
+            "arguments_valid_json": true,
+            "argument_keys": [
+              "command"
+            ]
+          }
+        ]
+      },
+      "generated_only_parse": {
+        "reasoning_chars": 0,
+        "content_chars": 0,
+        "content_preview": "",
+        "structured_tools": [
+          {
+            "name": "bash",
+            "arguments_valid_json": true,
+            "argument_keys": [
+              "command"
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "sources": {
+    "python_env/lib/python3.10/site-packages/vllm/parser/gemma4.py": "c974f47dc39ab7276da1e4ae38c4010e3f5411481f75e3879e29f47b2fd08df7",
+    "python_env/lib/python3.10/site-packages/vllm/parser/engine/parser_engine.py": "d1075deeb25b4872e92752d7ef0598a07a747afaf2afc56058ec30c6dc1da89a",
+    "python_env/lib/python3.10/site-packages/vllm/tool_parsers/gemma4_engine_tool_parser.py": "02f31bdcc4d8527440daebb4f4e3e74c83a6010eb56cd33fe7522bea8f51bc65",
+    "python_env/lib/python3.10/site-packages/vllm/reasoning/gemma4_engine_reasoning_parser.py": "3e9adef8ae56ee993fbaee43e82aa36216fb71251ee2de14dc9f8b326220a594",
+    "models/autoports/google_gemma_4_31b_it/tools/precision_repro_batch.py": "172f5a1dd7a7403847e47b966ae79c306163650a60211418c7c195794ec5c125"
+  },
+  "limitations": "Current stock non-streaming parser test on canonical reconstructed assistant prefix plus generated token IDs. Native original token IDs and exact serialized stream absent; parser-version/stream equivalence to historical response not proven. Visible protocol delimiters in raw decoder text alone do not prove a protocol anomaly.",
+  "interpretation": {
+    "classification": "native_pseudo_tool_anomaly_not_reproduced_in_three_served_free_trials_under_current_stock_parser",
+    "basis": "All seeds42/43/44 produce actual tool opener token48 and parse to bash(command) with JSON arguments. Native captured content lacks structured tool call and parses as visible content. Additional channel close token101 is redundant at this content-state onset, but parser tolerates it; this alone is not the native missing-tool anomaly.",
+    "raw_decoder_policy": "precision_repro_batch decodes with skip_special_tokens=False; ordinary tool serialization therefore remains visible. tool_response is a turn boundary/stop marker, not an executed or invented response payload.",
+    "triage_rule": [
+      "Reconstruct full assistant prefix plus generated tokens and retain exact channel state; parse with served stock parser and actual tools/request settings.",
+      "Require structured call with allowed function name and schema-valid arguments; raw delimiter appearance alone is insufficient.",
+      "For native missing-tool anomalies, count reproduction only if pseudo-call persists in visible content or no valid structured call is produced; classify malformed names/arguments separately.",
+      "Distinguish intentionally capped incomplete tool calls from completed parse failures, and do not infer tool execution from serialized calls.",
+      "Keep mechanical repetition metrics separate from protocol validity and semantic action correctness; lack of native IDs prevents exact native-equivalence claims."
+    ]
+  }
+}

@@ -1,0 +1,532 @@
+{
+  "status": "partial_completed_outputs_CPU_stock_nonstreaming_parser_only",
+  "created_utc": "2026-11-15T06:22:59.323190+00:00",
+  "manifest_sha256": "431e8ede6f31f118c3418279d964f5cfdf3f42a5d816732f9f4967b059fe3090",
+  "protocol_jobs_selected": 3,
+  "selected_jobs": [
+    "anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.seed42.cap1024",
+    "anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.seed43.cap1024",
+    "anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.seed44.cap1024"
+  ],
+  "completed_case_modes": 3,
+  "completed_trials": 3,
+  "pending": [
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.seed42.cap1024",
+      "mode": "full"
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.seed43.cap1024",
+      "mode": "full"
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.seed44.cap1024",
+      "mode": "full"
+    }
+  ],
+  "errors": [],
+  "sources_sha256": {
+    "python_env/lib/python3.10/site-packages/vllm/parser/gemma4.py": "c974f47dc39ab7276da1e4ae38c4010e3f5411481f75e3879e29f47b2fd08df7",
+    "python_env/lib/python3.10/site-packages/vllm/parser/engine/parser_engine.py": "d1075deeb25b4872e92752d7ef0598a07a747afaf2afc56058ec30c6dc1da89a",
+    "python_env/lib/python3.10/site-packages/vllm/parser/engine/adapters.py": "7a77bcb86e2129762f4199ee726398a4850b9e207893fc4295f2b759bcfeeb36",
+    "python_env/lib/python3.10/site-packages/vllm/tool_parsers/gemma4_engine_tool_parser.py": "02f31bdcc4d8527440daebb4f4e3e74c83a6010eb56cd33fe7522bea8f51bc65",
+    "python_env/lib/python3.10/site-packages/vllm/reasoning/gemma4_engine_reasoning_parser.py": "3e9adef8ae56ee993fbaee43e82aa36216fb71251ee2de14dc9f8b326220a594",
+    "/home/mvasiljevic/.cache/huggingface/hub/models--google--gemma-4-31B-it/snapshots/842da3794eaa0b77d5f08bae87a17459d91ff475/chat_template.jinja": "ae53464bf3be25802b3a5b37def7fd89667067d7577049b3b2d74c4d8de4c6d4",
+    "/home/mvasiljevic/.cache/huggingface/hub/models--google--gemma-4-31B-it/snapshots/842da3794eaa0b77d5f08bae87a17459d91ff475/tokenizer.json": "cc8d3a0ce36466ccc1278bf987df5f71db1719b9ca6b4118264f45cb627bfe0f",
+    "/home/mvasiljevic/.cache/huggingface/hub/models--google--gemma-4-31B-it/snapshots/842da3794eaa0b77d5f08bae87a17459d91ff475/tokenizer_config.json": "9f4fec4b1dc6ecddf8f4a92e9caea5971c0e67d81309f3f9066a2bee8c362633",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/audit_swe85_protocol_outputs.py": "c049003433ff2fa694206e7f5942a9551f8473763d4d3788c0aeeaa1e35417e9"
+  },
+  "rows": [
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.seed42.cap1024",
+      "mode": "served",
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/triage-d/protocol-audit-input-sphinx95/runs/served/anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.seed42.cap1024.json",
+      "result_sha256": "d727c4d76837d8c2e0626d709f0b53f80cfa898dce1eb356ad95f09e906521d9",
+      "fixture_sha256": "1ec793a6242ddcb79a68bfb33e3f6e63dba76ba268365c16550906acda07cf36",
+      "packet_sha256": "49ce8433bbad3afcc08b08f3d184256fa6dd3ddabb125927a58f89e81b0ec6d9",
+      "assistant_prefix_token_count": 1031,
+      "assistant_prefix_tail_ids": [
+        2165,
+        33588,
+        236761,
+        4503,
+        236929,
+        532,
+        506,
+        9980,
+        531,
+        1460,
+        1144,
+        236789,
+        236751,
+        13922,
+        236761,
+        101,
+        48,
+        6639,
+        236787,
+        42422
+      ],
+      "assistant_prefix_tail": " in `Include.run`, it should be called.\n\nLet me add more debug prints to `Include.run` and the extension to see what's happening.<channel|><|tool_call>call:bash",
+      "native": {
+        "response_id": "chatcmpl-a1712a5a1cbbced5",
+        "structured_tool_names": [
+          "bash\n# Modify the extension to print when it's called\ncat <<'EOF' > reproduction/my-extension.py\n#!/usr/bin/env python3\nfrom sphinx.application import Sphinx\n\n__version__ = '1.0'\n\ndef subst_vars_replace"
+        ],
+        "content_only_current_parser": {
+          "structured_tool_count": 0,
+          "missing_tool": true,
+          "malformed_name": false,
+          "invalid_arguments": false,
+          "tools": [],
+          "visible_content_chars": 0,
+          "visible_content_head": "",
+          "reasoning_chars": 0,
+          "visible_GetAll_bash": false,
+          "visible_pseudo_call": false,
+          "reasoning_literal_thought_tail": false
+        },
+        "canonical_full_reply_current_parser": {
+          "structured_tool_count": 1,
+          "missing_tool": false,
+          "malformed_name": true,
+          "invalid_arguments": true,
+          "tools": [
+            {
+              "name": "bash\n# Modify the extension to print when it's called\ncat <<'EOF' > reproduction/my-extension.py\n#!/usr/bin/env python3\nfrom sphinx.application import Sphinx\n\n__version__ = '1.0'\n\ndef subst_vars_replace",
+              "expected_bash": false,
+              "valid_json": true,
+              "valid_command_schema": false,
+              "argument_keys": [
+                "'r') as f",
+                "'r', encoding='utf-8') as f",
+                ")\")\n        self.arguments[0] = filename\n        self.env.note_included(filename)\n\n        import os\n        try",
+                "]",
+                "] = [replacement + '\\n']\n    with open(path, 'w') as f",
+                "<|\"|>,] = tmp_path\n                return super().run()\n            finally",
+                "].startswith('    ') or not lines[j].strip()",
+                "].startswith('<') and \\\n           self.arguments[0].endswith('>')",
+                "app",
+                "docname, source)",
+                "docname, source)\n            content = source[0]\n\n            import tempfile\n            with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', delete=False) as tmp",
+                "filename = self.env.relfn2path(self.arguments[0])\n        print(f\"Include",
+                "len(lines))",
+                "line in enumerate(lines)",
+                "subst_vars_replace)\n    return dict(\n        version=__version__,\n        parallel_read_safe=True,\n        parallel_write_safe=True\n    )\nEOF\n\n# Modify Include.run to print more debug info\ncat <<'EOF' > replacement_include.py\n    def run(self) -> List[Node]",
+                "} (path",
+                "}\")\n            \n            source = [content]\n            if self.env.app",
+                "}\")\n            return super().run()\nEOF\n\npython3 -c \"\nimport sys\npath = '/opt/miniconda3/lib/python3.11/site-packages/sphinx/directives/other.py'\nwith open(path, 'r') as f",
+                "}\")\n    result = source[0]\n    result = result.replace(\"&REPLACE_ME;\", \"REPLACED\")\n    source[0] = result\n\ndef setup(app"
+              ]
+            }
+          ],
+          "visible_content_chars": 0,
+          "visible_content_head": "",
+          "reasoning_chars": 3320,
+          "visible_GetAll_bash": false,
+          "visible_pseudo_call": false,
+          "reasoning_literal_thought_tail": false
+        }
+      },
+      "trials": [
+        {
+          "seed": 42,
+          "tokens": 829,
+          "at_requested_token_cap": false,
+          "generated_has_tool_close_token": true,
+          "generated_last_id": 50,
+          "generated_head_ids": [
+            236782,
+            7674,
+            236787,
+            52,
+            9307,
+            2986,
+            236789,
+            98395,
+            236789,
+            1890,
+            14268,
+            236779
+          ],
+          "generated_text_head": "{command:<|\"|>cat <<'EOF' > replacement_include.py\n    def run(self) -> List[Node]:\n        if self.",
+          "generated_text_tail": "n && sphinx-build . build\n<|\"|>}<tool_call|><|tool_response>",
+          "conditioning_plus_generated": {
+            "structured_tool_count": 1,
+            "missing_tool": false,
+            "malformed_name": false,
+            "invalid_arguments": false,
+            "tools": [
+              {
+                "name": "bash",
+                "expected_bash": true,
+                "valid_json": true,
+                "valid_command_schema": true,
+                "argument_keys": [
+                  "command"
+                ]
+              }
+            ],
+            "visible_content_chars": 0,
+            "visible_content_head": "",
+            "reasoning_chars": 3320,
+            "visible_GetAll_bash": false,
+            "visible_pseudo_call": false,
+            "reasoning_literal_thought_tail": false
+          },
+          "generated_only": {
+            "structured_tool_count": 0,
+            "missing_tool": true,
+            "malformed_name": false,
+            "invalid_arguments": false,
+            "tools": [],
+            "visible_content_chars": 2843,
+            "visible_content_head": "{command:<|\"|>cat <<'EOF' > replacement_include.py\n    def run(self) -> List[Node]:\n        if self.arguments[0].startsw",
+            "reasoning_chars": 0,
+            "visible_GetAll_bash": false,
+            "visible_pseudo_call": false,
+            "reasoning_literal_thought_tail": false
+          },
+          "mechanical_flag_from_runner": false,
+          "mechanical_repetition_not_adjudicated_by_parser": true
+        }
+      ]
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.seed43.cap1024",
+      "mode": "served",
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/triage-d/protocol-audit-input-sphinx95/runs/served/anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.seed43.cap1024.json",
+      "result_sha256": "7affff2a9d0acb5286252bf46921d04004664d014d8fb41997029e22262a141f",
+      "fixture_sha256": "c186544e1b085f76357b2c53fb9c5794409b13f7a700777fc7aeb02b3bd30b28",
+      "packet_sha256": "49ce8433bbad3afcc08b08f3d184256fa6dd3ddabb125927a58f89e81b0ec6d9",
+      "assistant_prefix_token_count": 1031,
+      "assistant_prefix_tail_ids": [
+        2165,
+        33588,
+        236761,
+        4503,
+        236929,
+        532,
+        506,
+        9980,
+        531,
+        1460,
+        1144,
+        236789,
+        236751,
+        13922,
+        236761,
+        101,
+        48,
+        6639,
+        236787,
+        42422
+      ],
+      "assistant_prefix_tail": " in `Include.run`, it should be called.\n\nLet me add more debug prints to `Include.run` and the extension to see what's happening.<channel|><|tool_call>call:bash",
+      "native": {
+        "response_id": "chatcmpl-a1712a5a1cbbced5",
+        "structured_tool_names": [
+          "bash\n# Modify the extension to print when it's called\ncat <<'EOF' > reproduction/my-extension.py\n#!/usr/bin/env python3\nfrom sphinx.application import Sphinx\n\n__version__ = '1.0'\n\ndef subst_vars_replace"
+        ],
+        "content_only_current_parser": {
+          "structured_tool_count": 0,
+          "missing_tool": true,
+          "malformed_name": false,
+          "invalid_arguments": false,
+          "tools": [],
+          "visible_content_chars": 0,
+          "visible_content_head": "",
+          "reasoning_chars": 0,
+          "visible_GetAll_bash": false,
+          "visible_pseudo_call": false,
+          "reasoning_literal_thought_tail": false
+        },
+        "canonical_full_reply_current_parser": {
+          "structured_tool_count": 1,
+          "missing_tool": false,
+          "malformed_name": true,
+          "invalid_arguments": true,
+          "tools": [
+            {
+              "name": "bash\n# Modify the extension to print when it's called\ncat <<'EOF' > reproduction/my-extension.py\n#!/usr/bin/env python3\nfrom sphinx.application import Sphinx\n\n__version__ = '1.0'\n\ndef subst_vars_replace",
+              "expected_bash": false,
+              "valid_json": true,
+              "valid_command_schema": false,
+              "argument_keys": [
+                "'r') as f",
+                "'r', encoding='utf-8') as f",
+                ")\")\n        self.arguments[0] = filename\n        self.env.note_included(filename)\n\n        import os\n        try",
+                "]",
+                "] = [replacement + '\\n']\n    with open(path, 'w') as f",
+                "<|\"|>,] = tmp_path\n                return super().run()\n            finally",
+                "].startswith('    ') or not lines[j].strip()",
+                "].startswith('<') and \\\n           self.arguments[0].endswith('>')",
+                "app",
+                "docname, source)",
+                "docname, source)\n            content = source[0]\n\n            import tempfile\n            with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', delete=False) as tmp",
+                "filename = self.env.relfn2path(self.arguments[0])\n        print(f\"Include",
+                "len(lines))",
+                "line in enumerate(lines)",
+                "subst_vars_replace)\n    return dict(\n        version=__version__,\n        parallel_read_safe=True,\n        parallel_write_safe=True\n    )\nEOF\n\n# Modify Include.run to print more debug info\ncat <<'EOF' > replacement_include.py\n    def run(self) -> List[Node]",
+                "} (path",
+                "}\")\n            \n            source = [content]\n            if self.env.app",
+                "}\")\n            return super().run()\nEOF\n\npython3 -c \"\nimport sys\npath = '/opt/miniconda3/lib/python3.11/site-packages/sphinx/directives/other.py'\nwith open(path, 'r') as f",
+                "}\")\n    result = source[0]\n    result = result.replace(\"&REPLACE_ME;\", \"REPLACED\")\n    source[0] = result\n\ndef setup(app"
+              ]
+            }
+          ],
+          "visible_content_chars": 0,
+          "visible_content_head": "",
+          "reasoning_chars": 3320,
+          "visible_GetAll_bash": false,
+          "visible_pseudo_call": false,
+          "reasoning_literal_thought_tail": false
+        }
+      },
+      "trials": [
+        {
+          "seed": 43,
+          "tokens": 867,
+          "at_requested_token_cap": false,
+          "generated_has_tool_close_token": true,
+          "generated_last_id": 50,
+          "generated_head_ids": [
+            236782,
+            7674,
+            236787,
+            52,
+            9307,
+            2986,
+            236789,
+            98395,
+            236789,
+            1890,
+            14268,
+            236779
+          ],
+          "generated_text_head": "{command:<|\"|>cat <<'EOF' > replacement_include.py\n    def run(self) -> List[Node]:\n        if self.",
+          "generated_text_tail": "n && sphinx-build . build\n<|\"|>}<tool_call|><|tool_response>",
+          "conditioning_plus_generated": {
+            "structured_tool_count": 1,
+            "missing_tool": false,
+            "malformed_name": false,
+            "invalid_arguments": false,
+            "tools": [
+              {
+                "name": "bash",
+                "expected_bash": true,
+                "valid_json": true,
+                "valid_command_schema": true,
+                "argument_keys": [
+                  "command"
+                ]
+              }
+            ],
+            "visible_content_chars": 0,
+            "visible_content_head": "",
+            "reasoning_chars": 3320,
+            "visible_GetAll_bash": false,
+            "visible_pseudo_call": false,
+            "reasoning_literal_thought_tail": false
+          },
+          "generated_only": {
+            "structured_tool_count": 0,
+            "missing_tool": true,
+            "malformed_name": false,
+            "invalid_arguments": false,
+            "tools": [],
+            "visible_content_chars": 2967,
+            "visible_content_head": "{command:<|\"|>cat <<'EOF' > replacement_include.py\n    def run(self) -> List[Node]:\n        if self.arguments[0].startsw",
+            "reasoning_chars": 0,
+            "visible_GetAll_bash": false,
+            "visible_pseudo_call": false,
+            "reasoning_literal_thought_tail": false
+          },
+          "mechanical_flag_from_runner": false,
+          "mechanical_repetition_not_adjudicated_by_parser": true
+        }
+      ]
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.seed44.cap1024",
+      "mode": "served",
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/triage-d/protocol-audit-input-sphinx95/runs/served/anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.seed44.cap1024.json",
+      "result_sha256": "72b91f6f650454960b3e8e85afca0af148412e3c782b4e6fe92b6ee45b87de62",
+      "fixture_sha256": "1983cb0cec009541460d10e207452f945bb0b5c35cbb9271b4779678599f06e8",
+      "packet_sha256": "49ce8433bbad3afcc08b08f3d184256fa6dd3ddabb125927a58f89e81b0ec6d9",
+      "assistant_prefix_token_count": 1031,
+      "assistant_prefix_tail_ids": [
+        2165,
+        33588,
+        236761,
+        4503,
+        236929,
+        532,
+        506,
+        9980,
+        531,
+        1460,
+        1144,
+        236789,
+        236751,
+        13922,
+        236761,
+        101,
+        48,
+        6639,
+        236787,
+        42422
+      ],
+      "assistant_prefix_tail": " in `Include.run`, it should be called.\n\nLet me add more debug prints to `Include.run` and the extension to see what's happening.<channel|><|tool_call>call:bash",
+      "native": {
+        "response_id": "chatcmpl-a1712a5a1cbbced5",
+        "structured_tool_names": [
+          "bash\n# Modify the extension to print when it's called\ncat <<'EOF' > reproduction/my-extension.py\n#!/usr/bin/env python3\nfrom sphinx.application import Sphinx\n\n__version__ = '1.0'\n\ndef subst_vars_replace"
+        ],
+        "content_only_current_parser": {
+          "structured_tool_count": 0,
+          "missing_tool": true,
+          "malformed_name": false,
+          "invalid_arguments": false,
+          "tools": [],
+          "visible_content_chars": 0,
+          "visible_content_head": "",
+          "reasoning_chars": 0,
+          "visible_GetAll_bash": false,
+          "visible_pseudo_call": false,
+          "reasoning_literal_thought_tail": false
+        },
+        "canonical_full_reply_current_parser": {
+          "structured_tool_count": 1,
+          "missing_tool": false,
+          "malformed_name": true,
+          "invalid_arguments": true,
+          "tools": [
+            {
+              "name": "bash\n# Modify the extension to print when it's called\ncat <<'EOF' > reproduction/my-extension.py\n#!/usr/bin/env python3\nfrom sphinx.application import Sphinx\n\n__version__ = '1.0'\n\ndef subst_vars_replace",
+              "expected_bash": false,
+              "valid_json": true,
+              "valid_command_schema": false,
+              "argument_keys": [
+                "'r') as f",
+                "'r', encoding='utf-8') as f",
+                ")\")\n        self.arguments[0] = filename\n        self.env.note_included(filename)\n\n        import os\n        try",
+                "]",
+                "] = [replacement + '\\n']\n    with open(path, 'w') as f",
+                "<|\"|>,] = tmp_path\n                return super().run()\n            finally",
+                "].startswith('    ') or not lines[j].strip()",
+                "].startswith('<') and \\\n           self.arguments[0].endswith('>')",
+                "app",
+                "docname, source)",
+                "docname, source)\n            content = source[0]\n\n            import tempfile\n            with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', delete=False) as tmp",
+                "filename = self.env.relfn2path(self.arguments[0])\n        print(f\"Include",
+                "len(lines))",
+                "line in enumerate(lines)",
+                "subst_vars_replace)\n    return dict(\n        version=__version__,\n        parallel_read_safe=True,\n        parallel_write_safe=True\n    )\nEOF\n\n# Modify Include.run to print more debug info\ncat <<'EOF' > replacement_include.py\n    def run(self) -> List[Node]",
+                "} (path",
+                "}\")\n            \n            source = [content]\n            if self.env.app",
+                "}\")\n            return super().run()\nEOF\n\npython3 -c \"\nimport sys\npath = '/opt/miniconda3/lib/python3.11/site-packages/sphinx/directives/other.py'\nwith open(path, 'r') as f",
+                "}\")\n    result = source[0]\n    result = result.replace(\"&REPLACE_ME;\", \"REPLACED\")\n    source[0] = result\n\ndef setup(app"
+              ]
+            }
+          ],
+          "visible_content_chars": 0,
+          "visible_content_head": "",
+          "reasoning_chars": 3320,
+          "visible_GetAll_bash": false,
+          "visible_pseudo_call": false,
+          "reasoning_literal_thought_tail": false
+        }
+      },
+      "trials": [
+        {
+          "seed": 44,
+          "tokens": 842,
+          "at_requested_token_cap": false,
+          "generated_has_tool_close_token": true,
+          "generated_last_id": 50,
+          "generated_head_ids": [
+            236782,
+            7674,
+            236787,
+            52,
+            9307,
+            2986,
+            236789,
+            98395,
+            236789,
+            1890,
+            14268,
+            236779
+          ],
+          "generated_text_head": "{command:<|\"|>cat <<'EOF' > replacement_include.py\n    def run(self) -> List[Node]:\n        if self.",
+          "generated_text_tail": "n && sphinx-build . build\n<|\"|>}<tool_call|><|tool_response>",
+          "conditioning_plus_generated": {
+            "structured_tool_count": 1,
+            "missing_tool": false,
+            "malformed_name": false,
+            "invalid_arguments": false,
+            "tools": [
+              {
+                "name": "bash",
+                "expected_bash": true,
+                "valid_json": true,
+                "valid_command_schema": true,
+                "argument_keys": [
+                  "command"
+                ]
+              }
+            ],
+            "visible_content_chars": 0,
+            "visible_content_head": "",
+            "reasoning_chars": 3320,
+            "visible_GetAll_bash": false,
+            "visible_pseudo_call": false,
+            "reasoning_literal_thought_tail": false
+          },
+          "generated_only": {
+            "structured_tool_count": 0,
+            "missing_tool": true,
+            "malformed_name": false,
+            "invalid_arguments": false,
+            "tools": [],
+            "visible_content_chars": 2917,
+            "visible_content_head": "{command:<|\"|>cat <<'EOF' > replacement_include.py\n    def run(self) -> List[Node]:\n        if self.arguments[0].startsw",
+            "reasoning_chars": 0,
+            "visible_GetAll_bash": false,
+            "visible_pseudo_call": false,
+            "reasoning_literal_thought_tail": false
+          },
+          "mechanical_flag_from_runner": false,
+          "mechanical_repetition_not_adjudicated_by_parser": true
+        }
+      ]
+    }
+  ],
+  "rules": [
+    "Expected structured tool is bash with JSON mapping containing string command. Missing tool, malformed function name and invalid arguments are separate outcomes.",
+    "Missing tool at token cap may be incomplete; inspect completion/stop and channel context before declaring reproduction.",
+    "Valid structured call does not excuse visible GetAll-bash, stray thought, repetition, wrong actions or other semantic anomalies. Mechanical repetition is not assessed by this parser.",
+    "Raw special-marker display alone is not reproduction: runner decodes skip_special_tokens=False. Compare actual channel-aware structured results with native response body.",
+    "Native token IDs and exact historical stream absent. Canonical reconstruction/current nonstreaming parse is not proof of historical stream/parser equivalence or full-model correctness.",
+    "Full-prefix findings may include fixed inherited anomalous text. Compare generated-only findings and exact prefix before attributing anomaly to new sampling. A capped parser-extracted call is not necessarily complete/executable; tool-close-token presence is recorded separately."
+  ],
+  "partial_counts": {
+    "served": {
+      "case_modes": 3,
+      "trials": 3,
+      "missing_tool": 0,
+      "malformed_name": 0,
+      "invalid_arguments": 0,
+      "capped_trials": 0
+    },
+    "full": {
+      "case_modes": 0,
+      "trials": 0,
+      "missing_tool": 0,
+      "malformed_name": 0,
+      "invalid_arguments": 0,
+      "capped_trials": 0
+    }
+  }
+}

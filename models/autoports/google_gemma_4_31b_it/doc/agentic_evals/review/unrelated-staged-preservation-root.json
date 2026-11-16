@@ -1,0 +1,8 @@
+{
+  "recorded_unix": 1794786005.6875875,
+  "excluded_paths_and_staged_blob_ids": {
+    "models/autoports/google_gemma_4_31b_it/doc/benchmark/run/REPORT.md": "3f8bff3255e7c639da7e26cbe66175fefa6ba313",
+    "models/autoports/google_gemma_4_31b_it/doc/benchmark/stage_usage.json": "e1b67ab6f59e89a5227d47c89a4670d5862adc68"
+  },
+  "commit_method": "Use git commit --only with the curated stage-owned pathspec; leave these staged blobs untouched."
+}

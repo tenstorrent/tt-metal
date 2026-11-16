@@ -1,0 +1,62 @@
+{
+  "rows": [
+    {
+      "id": "b32-c1-i131072-gpqa",
+      "issues": [],
+      "seed_equal": true,
+      "decode_ratio": 0.9965565324303114,
+      "prefill_ratio": 0.9991055402182322
+    },
+    {
+      "id": "b32-c1-i22420-gpqa",
+      "issues": [],
+      "seed_equal": true,
+      "decode_ratio": 0.9914682996870724,
+      "prefill_ratio": 0.9986816218309523
+    },
+    {
+      "id": "b32-c1-i262016-gpqa",
+      "issues": [],
+      "seed_equal": true,
+      "decode_ratio": 0.9968129539167012,
+      "prefill_ratio": 0.9998462451413341
+    },
+    {
+      "id": "b32-c1-i28672-gpqa",
+      "issues": [],
+      "seed_equal": true,
+      "decode_ratio": 0.9929154653768572,
+      "prefill_ratio": 1.0001552961837334
+    },
+    {
+      "id": "b32-c1-i4096-gpqa",
+      "issues": [],
+      "seed_equal": true,
+      "decode_ratio": 0.9870122145046957,
+      "prefill_ratio": 0.9994330512319228
+    },
+    {
+      "id": "b32-c32-i22420-gpqa",
+      "issues": [],
+      "seed_equal": true,
+      "decode_ratio": 0.9993642661390294,
+      "prefill_ratio": 0.9990220709684179
+    },
+    {
+      "id": "b32-c32-i28672-gpqa",
+      "issues": [],
+      "seed_equal": true,
+      "decode_ratio": 0.9998690929325036,
+      "prefill_ratio": 1.0000211934367218
+    },
+    {
+      "id": "b32-c32-i4096-swe",
+      "issues": [],
+      "seed_equal": true,
+      "decode_ratio": 0.9978587321757032,
+      "prefill_ratio": 0.9940343123213903
+    }
+  ],
+  "running_rows_excluded": true,
+  "measurement_files_mutated": false
+}

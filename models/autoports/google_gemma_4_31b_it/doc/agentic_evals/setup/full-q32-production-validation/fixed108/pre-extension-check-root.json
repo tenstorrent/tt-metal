@@ -1,0 +1,19 @@
+{
+  "checked_epoch": 1794782905.7638435,
+  "pins": 146,
+  "mismatches": [],
+  "device_owners": {
+    "argv": [
+      "fuser",
+      "/dev/tenstorrent/3",
+      "/dev/tenstorrent/2",
+      "/dev/tenstorrent/1",
+      "/dev/tenstorrent/0"
+    ],
+    "exit_code": 1,
+    "stdout": "",
+    "stderr": ""
+  },
+  "active_model_processes": [],
+  "scope": "Terminal original panel source identity and pre-extension owner check; admission still requires complete semantic review."
+}

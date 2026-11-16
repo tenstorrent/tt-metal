@@ -1,0 +1,45 @@
+{
+  "status": "candidate_only_not_admitted_not_run",
+  "cases": [
+    {
+      "name": "anomaly.requests2931.call20.canonicalprefix.seed42.cap512-extended-to1024",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-precision/requests2931-call20/canonicalprefix/case.private.json",
+      "branches": [],
+      "free_run_tokens": 1024,
+      "free_run_trials": 1,
+      "source_onset": "anomaly.requests2931.call20.canonicalprefix",
+      "seed": 42,
+      "cap_source": "full_q32_fixed108_cap512_extension",
+      "required_prefix_tokens": 512,
+      "required_prefix_ids_sha256": "4503fe1913f6fbfc7b4a04db24109e6efa244124c6c1da0a182d72f5d7e9a3d0",
+      "prior_output": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full-q32-production-validation/fixed108/cap-extensions-root/runs/anomaly.requests2931.call20.canonicalprefix.seed42.cap256-extended-to512.json",
+      "prior_output_sha256": "1e4bb0714f7fab91acf414b42548a98e8f5a80a4b78a315f60d9bbae39196949",
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 42
+      }
+    },
+    {
+      "name": "anomaly.requests2931.call20.canonicalprefix.seed44.cap512-extended-to1024",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.requests2931.call20.canonicalprefix.seed44.private.json",
+      "branches": [],
+      "free_run_tokens": 1024,
+      "free_run_trials": 1,
+      "source_onset": "anomaly.requests2931.call20.canonicalprefix",
+      "seed": 44,
+      "cap_source": "full_q32_fixed108_cap512_extension",
+      "required_prefix_tokens": 512,
+      "required_prefix_ids_sha256": "79d2961b5f3ecdc4acdaf48a0ebd1338c44f1de30aec936558bf3ece47e8dd33",
+      "prior_output": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full-q32-production-validation/fixed108/cap-extensions-root/runs/anomaly.requests2931.call20.canonicalprefix.seed44.cap256-extended-to512.json",
+      "prior_output_sha256": "e229f0e76fe7b7cf8cd6505756ee657f7a0a3b92a4322210d8a90b656dd0ea74",
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 44
+      }
+    }
+  ]
+}

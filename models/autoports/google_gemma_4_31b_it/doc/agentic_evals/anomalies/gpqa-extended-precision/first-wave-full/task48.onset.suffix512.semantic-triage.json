@@ -1,0 +1,66 @@
+{
+  "task": "48",
+  "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task48.onset.suffix512.private.json",
+  "precision": "stage12_bf16_hifi4_diagnostic",
+  "review_scope": "Host-only semantic review of all three recorded free-running texts; no execution or scoring.",
+  "reviewed_continuations": [
+    {
+      "seed": 42,
+      "semantic_anomaly": true,
+      "mechanical_flag": true,
+      "observed_malformed_text": {
+        "observed": true,
+        "stray_language": false,
+        "description": "Repeated phrase loop (“Wait, I think”); no stray language observed."
+      },
+      "evidence": "The continuation repeatedly emits “Wait, I think” without adding reasoning, for essentially the entire 1,024-token sample. The detector flag is true. This is a semantic degeneration independent of the diagnostic token cap.",
+      "scope_limits": [
+        "Exact 512-token suffix reproduction with changed position origin, not the original native prompt.",
+        "The recorded diagnostic sample is 1,024 generated tokens; reaching its sample length alone is not counted as an anomaly.",
+        "No conclusion about precision causality, native-prompt incidence, or the full original response."
+      ]
+    },
+    {
+      "seed": 43,
+      "semantic_anomaly": true,
+      "mechanical_flag": false,
+      "observed_malformed_text": {
+        "observed": true,
+        "stray_language": false,
+        "description": "Repeated three-statement semantic loop; final sentence is cut mid-phrase. The cut alone is not the anomaly."
+      },
+      "evidence": "The continuation cycles through the same three statements: a claimed [3,3] shift product, the named diyne product, and a check for another reaction. The same incompatible divinylcyclobutane/diethylidenecyclobutane descriptions recur without a new check or resolution, then the text ends mid-sentence. Semantic cycling is evident despite the detector flag being false.",
+      "scope_limits": [
+        "Exact 512-token suffix reproduction with changed position origin, not the original native prompt.",
+        "The recorded diagnostic sample is 1,024 generated tokens; reaching its sample length alone is not counted as an anomaly.",
+        "No conclusion about precision causality, native-prompt incidence, or the full original response."
+      ]
+    },
+    {
+      "seed": 44,
+      "semantic_anomaly": true,
+      "mechanical_flag": true,
+      "observed_malformed_text": {
+        "observed": true,
+        "stray_language": false,
+        "description": "Repeated phrase loop (“Wait, I think”); no stray language observed."
+      },
+      "evidence": "The continuation repeatedly emits “Wait, I think” without adding reasoning, for essentially the entire 1,024-token sample. The detector flag is true. This is a semantic degeneration independent of the diagnostic token cap.",
+      "scope_limits": [
+        "Exact 512-token suffix reproduction with changed position origin, not the original native prompt.",
+        "The recorded diagnostic sample is 1,024 generated tokens; reaching its sample length alone is not counted as an anomaly.",
+        "No conclusion about precision causality, native-prompt incidence, or the full original response."
+      ]
+    }
+  ],
+  "teacher_forced_continuation": {
+    "chosen_exists": true,
+    "assessment": "not assessed, per review scope"
+  },
+  "overall": "All three free-running continuations show semantic degeneration: two phrase loops and one repeated no-progress chemistry cycle. Mechanical detector flags are retained verbatim and do not determine semantic judgments.",
+  "limits": [
+    "The suffix prompt is reconstructed and position-shifted; it is not the original native prompt.",
+    "The parent onset packet reports no raw native token IDs and limits teacher-forced comparison to 64 positions at a selected onset. This review makes no precision-causality claim.",
+    "No official score or population-level claim is made."
+  ]
+}

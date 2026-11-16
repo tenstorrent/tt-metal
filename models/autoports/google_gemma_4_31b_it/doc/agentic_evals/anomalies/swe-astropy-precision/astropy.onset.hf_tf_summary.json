@@ -1,0 +1,16 @@
+{
+  "case": "astropy.onset.hf.private.json",
+  "status": "partial",
+  "sample_count": 0,
+  "tf_positions": 64,
+  "hf_chosen_top1_fraction": 0.953125,
+  "hf_mean_chosen_probability": 0.9504548751283437,
+  "served": {
+    "top1_agreement": 1.0,
+    "mean_logprob_hf_minus_tt": 0.017530921269887756
+  },
+  "full": {
+    "top1_agreement": 1.0,
+    "mean_logprob_hf_minus_tt": 0.0031211013434884194
+  }
+}

@@ -1,0 +1,83 @@
+{
+  "status": "prepared_CPU_only_not_executed",
+  "tasks": [
+    "sympy__sympy-14248"
+  ],
+  "cases": [
+    {
+      "task": "sympy__sympy-14248",
+      "call": 53,
+      "response_id": "chatcmpl-87fb873da8be7f29",
+      "private_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-sympy14248-caret-controls/sympy__sympy-14248.call53.onset.private.json",
+      "private_case_sha256": "b088288cd811300e8ff36818cdc1b685bdb0f5569866a0f6fbb69b739f610f1a",
+      "raw_packet": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-sympy14248-caps/sympy__sympy-14248.call53.packet.private.json",
+      "raw_packet_sha256": "6ca7a60715e7f17480d18aaf657deef151f5c83fa9b6ce01c0a9a53fdabdb55e",
+      "native_prompt_tokens": 32604,
+      "reconstructed_request_prompt_tokens": 32603,
+      "native_reply_tokens": 32768,
+      "reconstructed_reply_tokens": 32768,
+      "conditioning_tokens": 32660,
+      "onset_positions": 64,
+      "onset_token_index": 57,
+      "motif": "^^^^",
+      "evidence": "Start of pathological caret repetition inside fabricated traceback reasoning; native reply reaches32768-token length cap. All preceding request/reply context retained; no whole32768-token TF scheduled.",
+      "limitations": "Exact request body with historical JSON tool arguments deserialized for pinned template. Reply reconstructed as canonical thought header, complete saved reasoning, channel boundary, complete visible content, canonical tool-call macros from pinned template, native stop ID when present; length-capped replies have no appended synthetic stop. No native token IDs: generated whitespace/order/protocol spelling cannot be recovered uniquely; counts and hashes are evidence, not identity proof. Canonicalization of malformed tool names is not proof of exact malformed native bytes.",
+      "native_message_indices": [],
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "native_seed": null,
+      "diagnostic_seeds": [
+        42,
+        43,
+        44
+      ]
+    }
+  ],
+  "cpu_validation": [
+    {
+      "mode": "served",
+      "config": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/head_bfp8_build_kwargs.json",
+      "config_sha256": "2e583fa8bd7aff7c5f8be110835df751924d167243c5a44a68aa5b3d70c6845f",
+      "exit_code": 0,
+      "stdout": "Validated 1 jobs without importing TTNN"
+    },
+    {
+      "mode": "full",
+      "config": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_build_kwargs.json",
+      "config_sha256": "ff2b5ed24e0b6a1dee7eb5cd8bd437d17c3df5f8f25567927d239e666f0699f9",
+      "exit_code": 0,
+      "stdout": "Validated 1 jobs without importing TTNN"
+    }
+  ],
+  "commands_staged_only": {
+    "served": [
+      "python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tools.precision_repro_batch",
+      "--cases",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-sympy14248-caret-controls/cases.json",
+      "--build-kwargs-file",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/head_bfp8_build_kwargs.json",
+      "--output-dir",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-sympy14248-caret-controls/served"
+    ],
+    "full": [
+      "python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tools.precision_repro_batch",
+      "--cases",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-sympy14248-caret-controls/cases.json",
+      "--build-kwargs-file",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_build_kwargs.json",
+      "--output-dir",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-sympy14248-caret-controls/full",
+      "--compare-dir",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-sympy14248-caret-controls/served"
+    ]
+  },
+  "no_inference": true,
+  "phase_scope": "Anomaly controls independent of later wrong-action controls; no score or corrected answer claim."
+}

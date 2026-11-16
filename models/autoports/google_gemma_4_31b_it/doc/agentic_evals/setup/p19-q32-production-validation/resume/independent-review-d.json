@@ -1,0 +1,146 @@
+{
+  "status": "independent production-geometry resume review passed; broad acceptance/fixed108 pending",
+  "scope": "Read-only host inspection of the admitted production geometry run. No device action or source change.",
+  "admission": {
+    "path": "admission.json",
+    "sha256": "892f9c04d1112d96ba70b697650432d3f9885d92e7bde12c4b129112de8b22cc",
+    "status": "admitted",
+    "module": "readiness_check.run_prefill_resume_check",
+    "runtime_override_wrapper_absent": true,
+    "trace_allocation_tracking": "TT_METAL_TRACE_ALLOC_TRACKING=1"
+  },
+  "completion": {
+    "path": "completion.json",
+    "sha256": "1ba953fe8da5df7cde21fe7828b5ce99c2af7c104966299d268472cace273d44",
+    "exit_code": 0,
+    "wall_seconds": 272.7324209213257
+  },
+  "result": {
+    "path": "prefill_resume.json",
+    "sha256": "fcd80767bec79343663d0ae56621b659ad8bab0246aa7d30c77fde920ef867bc",
+    "status": "pass",
+    "case_count": 14,
+    "pass_count": 14,
+    "thresholds": {
+      "pcc_mean_min": 0.99,
+      "pcc_min_min": 0.98,
+      "top1_min": 0.98,
+      "control_min_window": 64
+    },
+    "minimum_pcc_mean": 1.0000011046921726,
+    "minimum_pcc_min": 0.9998981511531875,
+    "minimum_top1_agreement": 1.0,
+    "exact_case_identities": [
+      {
+        "length": 2560,
+        "start": 32,
+        "kind": "block_aligned"
+      },
+      {
+        "length": 2560,
+        "start": 64,
+        "kind": "lcm_aligned"
+      },
+      {
+        "length": 2560,
+        "start": 132,
+        "kind": "tile_unaligned"
+      },
+      {
+        "length": 2560,
+        "start": 1024,
+        "kind": "window_start"
+      },
+      {
+        "length": 2560,
+        "start": 1029,
+        "kind": "window_plus_unaligned"
+      },
+      {
+        "length": 2560,
+        "start": 2496,
+        "kind": "prefix_cache_hit"
+      },
+      {
+        "length": 2560,
+        "start": 2559,
+        "kind": "last_token"
+      },
+      {
+        "length": 16384,
+        "start": 32,
+        "kind": "block_aligned"
+      },
+      {
+        "length": 16384,
+        "start": 64,
+        "kind": "lcm_aligned"
+      },
+      {
+        "length": 16384,
+        "start": 132,
+        "kind": "tile_unaligned"
+      },
+      {
+        "length": 16384,
+        "start": 1024,
+        "kind": "window_start"
+      },
+      {
+        "length": 16384,
+        "start": 1029,
+        "kind": "window_plus_unaligned"
+      },
+      {
+        "length": 16384,
+        "start": 16320,
+        "kind": "prefix_cache_hit"
+      },
+      {
+        "length": 16384,
+        "start": 16383,
+        "kind": "last_token"
+      }
+    ]
+  },
+  "negative_controls": {
+    "no_history": {
+      "cases": 12,
+      "failed_as_expected": 12,
+      "pcc_mean_range": [
+        0.07994169584974815,
+        0.7436152055621197
+      ],
+      "top1_range": [
+        0.015625,
+        0.5408560037612915
+      ]
+    },
+    "fresh_suffix": {
+      "cases": 12,
+      "failed_as_expected": 12,
+      "pcc_mean_range": [
+        0.4410769052423562,
+        0.7787348457175811
+      ],
+      "top1_range": [
+        0.09375,
+        0.575875461101532
+      ]
+    }
+  },
+  "source_binding": {
+    "admission_pins_match": true,
+    "pinned_file_count": 35,
+    "production_decoder_sha256": "878c61052aee1ddd6f4afc78c4e4bbcda2c894a5a5878d01531f860e97006d99",
+    "p19_precision_sha256": "540760ea34cea22459c9248b4ce8c90ad1b34e000b18e82b70552e45fd766fad",
+    "diagnostic_override_field_present": false,
+    "output_matches_prior_runtime-override-diagnostic_metrics": true
+  },
+  "trace_allocation_review": {
+    "environment_enabled": true,
+    "log_error_or_allocation_failure_matches": 0,
+    "assessment": "No traceback, assertion failure, or allocation-failure marker was found in the complete run log. This is absence-of-error evidence under trace tracking, not a claim that all possible signatures are allocation-free."
+  },
+  "not_yet_reviewed": "Fresh-path broad P19 accuracy/qualitative/context acceptance and post-Q32 fixed108 anomaly regression remain pending; old Q128 results do not transfer."
+}

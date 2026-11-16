@@ -1,0 +1,276 @@
+{
+  "type": "additive_triage_crosswalk",
+  "status": "proposed_read_only_reconciliation",
+  "source_triage_sha256": "ec923e0acd04ce948c905eabd1d96d8535078be4f6da0d99a5bbc294fe902471",
+  "P1_completion_sha256": "fa70e146164d0b1b948f3bb969fff7e56b44b8d6cc85912f2dfb814c941675d9",
+  "P2_completion_sha256": "47896893e57257757d1153dd3ae4df6b05985cd97b0fbb9993739e30145b2880",
+  "scope": "Crosswalk for rows0–35 only. P1 and P2 each define the same 15 originally served-anomalous/full-normal target pairs; six intersect the reviewed first36 P3 rows. P3 uses these original full prompt fixtures; it is not an HF CPU test.",
+  "target_pair_intersections": [
+    {
+      "manifest_index": 3,
+      "job": "anomaly.call91.canonicalprefix",
+      "seed": 42,
+      "requested_cap": 256,
+      "P3": {
+        "verdict": "normal",
+        "result_sha256": "66a026e975146f2da324cc448a4ee1a2f9d857efc69e621100d2d23c70f20d56",
+        "fixture_sha256": "3d32de201c14cf805635d3e38fafc2ff220202aded67b71861e16df4fbdf9180",
+        "fixture_prompt_ids": 48411
+      },
+      "P1": {
+        "verdict": "native",
+        "result_sha256": "18b7c39682925541ed823ac2c5293a7d3959a0aee204906b60ca2ddab2ef1e6b",
+        "baseline_served": "reproduced_native_motif",
+        "baseline_full": "normal"
+      },
+      "P2": {
+        "verdict": "native",
+        "result_sha256": "2158529b3687ed77581aa5ed62dc676e4906a34b83ca61658359831dd12ec33f",
+        "baseline_served": "reproduced_native_motif",
+        "baseline_full": "normal"
+      }
+    },
+    {
+      "manifest_index": 13,
+      "job": "anomaly.psf__requests-1921.call1.onset",
+      "seed": 43,
+      "requested_cap": 256,
+      "P3": {
+        "verdict": "normal",
+        "result_sha256": "0a16521d316aa20fc5972782d1590ff71c35a70c40243faab7aa7b32ec2f1660",
+        "fixture_sha256": "e33ee2dff8a9566639c27d8cf1854ddc51177bb8687f8f99ed9b16e57ad69934",
+        "fixture_prompt_ids": 1235
+      },
+      "P1": {
+        "verdict": "other",
+        "result_sha256": "fa0adc50f7f61caf1fe98e424609ca2eb249bf46e8f8bab1fcdd3ead474387e9",
+        "baseline_served": "other_anomaly",
+        "baseline_full": "normal"
+      },
+      "P2": {
+        "verdict": "other",
+        "result_sha256": "fb4d63f8cf7170b94c33c106ffcc726f637defa1de429400b2dad724eda9408b",
+        "baseline_served": "other_anomaly",
+        "baseline_full": "normal"
+      }
+    },
+    {
+      "manifest_index": 14,
+      "job": "anomaly.psf__requests-1921.call1.onset",
+      "seed": 44,
+      "requested_cap": 256,
+      "P3": {
+        "verdict": "normal",
+        "result_sha256": "96cb2fb4fb695bef7e9cbb443d4d524721a485c9b63ef9a475f4b947c5499db6",
+        "fixture_sha256": "69e875974441db70e3bd37396b33c4cff19cbdd26906b90ddf2c315ead13c9eb",
+        "fixture_prompt_ids": 1235
+      },
+      "P1": {
+        "verdict": "other",
+        "result_sha256": "1b67c852af9ce1f13515b3df1be6e59994266c427d194c20633e6d26e9c5f9e0",
+        "baseline_served": "other_anomaly",
+        "baseline_full": "normal"
+      },
+      "P2": {
+        "verdict": "other",
+        "result_sha256": "a5cfd9d12e39cd4095d099d072b37d6cbd8dc7597e31201a4991d267f9ee2822",
+        "baseline_served": "other_anomaly",
+        "baseline_full": "normal"
+      }
+    },
+    {
+      "manifest_index": 24,
+      "job": "anomaly.pylint-dev__pylint-4551.call1.onset",
+      "seed": 42,
+      "requested_cap": 256,
+      "P3": {
+        "verdict": "normal",
+        "result_sha256": "9944d0ad40ea262fcf4e5e44fa44493942aeae7342db9f6372b363e0bab15dde",
+        "fixture_sha256": "34ad0af91e9d911cc9ac0e1bcb97d6adf7e3754df831a45af074c3bdba1fa369",
+        "fixture_prompt_ids": 1263
+      },
+      "P1": {
+        "verdict": "other",
+        "result_sha256": "d6751fb75938d98df1b790bc362554d8d03992241905265b5870eec993d51655",
+        "baseline_served": "other_anomaly",
+        "baseline_full": "normal"
+      },
+      "P2": {
+        "verdict": "other",
+        "result_sha256": "9b1a8f0efb9edd3b602bde5f3cdfbf36bc15714b7b68ad5e05b017d050929ab1",
+        "baseline_served": "other_anomaly",
+        "baseline_full": "normal"
+      }
+    },
+    {
+      "manifest_index": 25,
+      "job": "anomaly.pylint-dev__pylint-4551.call1.onset",
+      "seed": 43,
+      "requested_cap": 256,
+      "P3": {
+        "verdict": "normal",
+        "result_sha256": "46ee77e67f6501f73961dc6cac7d992ed57aa32c41b4ddd18409db710be44b0d",
+        "fixture_sha256": "385791f4b799ff9f68124e0e49e9e8d3a13f895183ed312a8b61a4e53395e2e8",
+        "fixture_prompt_ids": 1263
+      },
+      "P1": {
+        "verdict": "normal",
+        "result_sha256": "723c55d57801df33fe4723104d7e576e32e2c02e01bad4bc05ec28e2179d0be0",
+        "baseline_served": "other_anomaly",
+        "baseline_full": "normal"
+      },
+      "P2": {
+        "verdict": "normal",
+        "result_sha256": "beee33e6d5d82308e847b60eeb236e208747b95ddfa66b76d62733eb4d05f5d7",
+        "baseline_served": "other_anomaly",
+        "baseline_full": "normal"
+      }
+    },
+    {
+      "manifest_index": 26,
+      "job": "anomaly.pylint-dev__pylint-4551.call1.onset",
+      "seed": 44,
+      "requested_cap": 256,
+      "P3": {
+        "verdict": "normal",
+        "result_sha256": "772f66090a06d1e558f84c56d18828d08db08e0c752a0dcaa96a9f34f888bd1c",
+        "fixture_sha256": "076399426476d5f79e11d8f2afa3e815e4c7785bc62f0690d374b681b5fa69fd",
+        "fixture_prompt_ids": 1263
+      },
+      "P1": {
+        "verdict": "other",
+        "result_sha256": "7c6bb94084be19364b905a2269f3b09cdcb58528e7fee113eab147cde571c805",
+        "baseline_served": "other_anomaly",
+        "baseline_full": "normal"
+      },
+      "P2": {
+        "verdict": "other",
+        "result_sha256": "328bfc66d58ea2348de95f5446686b2b821d1ec208f58465fb66ea43e134a829",
+        "baseline_served": "other_anomaly",
+        "baseline_full": "normal"
+      }
+    }
+  ],
+  "remaining_P3_native_caret_rows": [
+    {
+      "manifest_index": 16,
+      "job": "anomaly.psf__requests-5414.call10.onset",
+      "seed": 43,
+      "requested_cap": 256,
+      "P3_verdict": "reproduced_native_motif",
+      "P3_result_sha256": "f46d86e3d90fd75a8bf54a3e8c19da58a34591cec30a9a828ca51c767b4fda84",
+      "P3_fixture_sha256": "f18f6505069f89e97e8201405745872884ef869f9f2e42229467a91d686e6141",
+      "P3_fixture_prompt_ids": 7057,
+      "P1_full_precision_verdict": "reproduced_native_motif",
+      "P2_full_precision_verdict": "reproduced_native_motif"
+    },
+    {
+      "manifest_index": 17,
+      "job": "anomaly.psf__requests-5414.call10.onset",
+      "seed": 44,
+      "requested_cap": 256,
+      "P3_verdict": "reproduced_native_motif",
+      "P3_result_sha256": "5f6af6bab0a52a7f0317ca48b3b2200cc44d131548c1b22df6af4412873c19c2",
+      "P3_fixture_sha256": "9500b42b72b910e36e1a6639224bdb2d90e51129bdd953d97886af4794b33b01",
+      "P3_fixture_prompt_ids": 7057,
+      "P1_full_precision_verdict": "reproduced_native_motif",
+      "P2_full_precision_verdict": "reproduced_native_motif"
+    },
+    {
+      "manifest_index": 19,
+      "job": "anomaly.psf__requests-5414.call11.onset",
+      "seed": 43,
+      "requested_cap": 256,
+      "P3_verdict": "reproduced_native_motif",
+      "P3_result_sha256": "2d0f0479ba8e9633d808c43701b29699380e13336391d8d2458401288d1b602c",
+      "P3_fixture_sha256": "b36c62f89d475d3bb0caf1b656f7016b2c9ddfed4411a21a4f3249014c188d76",
+      "P3_fixture_prompt_ids": 7226,
+      "P1_full_precision_verdict": "reproduced_native_motif",
+      "P2_full_precision_verdict": "reproduced_native_motif"
+    },
+    {
+      "manifest_index": 20,
+      "job": "anomaly.psf__requests-5414.call11.onset",
+      "seed": 44,
+      "requested_cap": 256,
+      "P3_verdict": "reproduced_native_motif",
+      "P3_result_sha256": "baf29a3adb7cd8947a4f969c5d3875c343bc42ae137fbf5d38f58597017c7aeb",
+      "P3_fixture_sha256": "d5d34c7fd8cf7cc824b02db3a6e40a3d930e661e33ee42f92c59def25a22efa5",
+      "P3_fixture_prompt_ids": 7226,
+      "P1_full_precision_verdict": "reproduced_native_motif",
+      "P2_full_precision_verdict": "reproduced_native_motif"
+    },
+    {
+      "manifest_index": 21,
+      "job": "anomaly.psf__requests-5414.call9.onset",
+      "seed": 42,
+      "requested_cap": 256,
+      "P3_verdict": "reproduced_native_motif",
+      "P3_result_sha256": "50c0a4a5d3b319140fb280e4835442e9dd66fe934eedd7cc6f46a42f6acdcf95",
+      "P3_fixture_sha256": "5024622915942584d71a4eebe667180b660a2f3c45955bddb72de8e019ad7181",
+      "P3_fixture_prompt_ids": 8383,
+      "P1_full_precision_verdict": "reproduced_native_motif",
+      "P2_full_precision_verdict": "reproduced_native_motif"
+    },
+    {
+      "manifest_index": 22,
+      "job": "anomaly.psf__requests-5414.call9.onset",
+      "seed": 43,
+      "requested_cap": 256,
+      "P3_verdict": "reproduced_native_motif",
+      "P3_result_sha256": "1a33a0b0c0e1cad7bf705db08f40b3dff05c215f9dd069ac96e6644b4d9cc18a",
+      "P3_fixture_sha256": "40e1269b089e2d50a537949711597d228ebc1a6833d8cd3eb22f39e4db6a31c9",
+      "P3_fixture_prompt_ids": 8383,
+      "P1_full_precision_verdict": "reproduced_native_motif",
+      "P2_full_precision_verdict": "reproduced_native_motif"
+    },
+    {
+      "manifest_index": 23,
+      "job": "anomaly.psf__requests-5414.call9.onset",
+      "seed": 44,
+      "requested_cap": 256,
+      "P3_verdict": "reproduced_native_motif",
+      "P3_result_sha256": "c1b1191bc1f4e3eacf009b64c77fe4cee4654626ec6b32f30ea4272614fb79ba",
+      "P3_fixture_sha256": "480226dd76039d70aa5aae4cfdf5122f6ee8c86237910ccbb15c60caa3255f0c",
+      "P3_fixture_prompt_ids": 8383,
+      "P1_full_precision_verdict": "reproduced_native_motif",
+      "P2_full_precision_verdict": "reproduced_native_motif"
+    }
+  ],
+  "shortened_HF_reference_checks": [
+    {
+      "job": "anomaly.psf__requests-5414.call9.onset",
+      "seed": 44,
+      "verdict": "reproduced_native_motif",
+      "result_sha256": "4f1a6497eeb57b8754ce74bea702170078d7ce7e93fef610357f785044b2b045",
+      "fixture_sha256": "9e19aaa5b7f11f026931ef8a8ca1e49bb070a338805b3568cc89dd5065e41e7c",
+      "suffix_prompt_ids": 1024,
+      "exact_source_slice": "source prompt_token_ids[7359:8383]",
+      "scope_caveat": "This diagnostic conditions on only the exact final 1024 IDs of the reconstructed source prompt, not the full native context. Native prompt/output IDs and native seed are unavailable; this is not exact native replay.",
+      "relevance": "call9 seed44 reproduces all-caret motif; call10 seed42 reproduces 512 carets on shortened suffix but P3 same-seed full-prompt row is progressing/non-caret; call11 seed44 remains progressing coherent IDNA text while matched TT repeats ellipsis/newline/indentation."
+    },
+    {
+      "job": "anomaly.psf__requests-5414.call10.onset",
+      "seed": 42,
+      "verdict": "reproduced_native_motif",
+      "result_sha256": "c4409f7bea3f5af2a80a4f5ee8162e0e282a265ae4b0abb5a5731adff64d275b",
+      "fixture_sha256": "3d9d27b333ad2e1c1db496e1f2e2d27e7aa721a6b8b5425bd15a3374339f2986",
+      "suffix_prompt_ids": 4096,
+      "exact_source_slice": "source prompt_token_ids[2961:7057]",
+      "scope_caveat": "This tests only the exact last4096 IDs of the reconstructed source context, not the original full native context. Native IDs and native seed are unavailable; diagnostic seed42 is not a native RNG replay.",
+      "relevance": "call9 seed44 reproduces all-caret motif; call10 seed42 reproduces 512 carets on shortened suffix but P3 same-seed full-prompt row is progressing/non-caret; call11 seed44 remains progressing coherent IDNA text while matched TT repeats ellipsis/newline/indentation."
+    },
+    {
+      "job": "anomaly.psf__requests-5414.call11.onset",
+      "seed": 44,
+      "verdict": "inconclusive",
+      "result_sha256": "ea3eb180de1ef8898c2565dcb5ffd7700f3e792ccfce8bc279efef80c6dfe9a4",
+      "fixture_sha256": "fbe984e026dbe8ef2b9d8a4288056617cbfde5235d1efd4a3bd14038a2db5ad7",
+      "suffix_prompt_ids": 2048,
+      "exact_source_slice": "source prompt_token_ids[5178:7226]",
+      "scope_caveat": "This uses only the final 2048 IDs of reconstructed source context, not full native context. Native prompt/output IDs and native seed are unavailable; this is a shortened diagnostic, not exact native replay.",
+      "relevance": "call9 seed44 reproduces all-caret motif; call10 seed42 reproduces 512 carets on shortened suffix but P3 same-seed full-prompt row is progressing/non-caret; call11 seed44 remains progressing coherent IDNA text while matched TT repeats ellipsis/newline/indentation."
+    }
+  ],
+  "interpretation": "The seven P3 caret positives are full-original-prompt TT reproductions of the caret family; P1 and P2 panel outputs also reproduce the motif for all nine corresponding call9/10/11 seed rows. HF CPU has same-source-slice shortened-context reference reproduction for call9 seed44 and call10 seed42, but neither is an exact full-prompt replay; call10 seed42 P3 itself is inconclusive and the positive P3 call10 seeds43/44 differ from HF seed42. Call11 seed44 HF does not reproduce the caret or matched-TT ellipsis loop at 512, while its same-seed P3 full-prompt output is caret-positive: retain that mismatch and shortened-context/RNG caveat. Native seed and original prompt/output token IDs were unavailable in these HF diagnostics."
+}

@@ -1,0 +1,331 @@
+{
+  "job": "anomaly.matplotlib__matplotlib-20488.call91.canonicalprefix.seed43",
+  "mode": "HF bfloat16 reference",
+  "seed": 43,
+  "verdict": "reproduced_native_motif",
+  "confidence": "high for localized reproduction at prompt/generation boundary; high that no sustained loop follows",
+  "evidence": {
+    "hf_result": {
+      "path": "setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/results/call91-cap8192-seed43/anomaly.call91.canonicalprefix.suffix8192.seed43.hf.private.json",
+      "sha256": "c42dc1b3206ca95431c91d0468bca2b71dc3386221bc28d12951a6b09cdf8fb9",
+      "status": "complete",
+      "case_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-canonicalprefix-suffix8192-candidate/fixtures/anomaly.call91.canonicalprefix.suffix8192.seed43.full.private.json",
+      "case_sha256": "d70cf7ed6d97f32ae539b88484d73d4b9b166af69ce3b5f0defc2a7adc80211f",
+      "revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+      "prompt_tokens": 8192,
+      "seed": 43,
+      "requested_tokens": 512,
+      "generated_tokens": 55,
+      "natural_stop": true
+    },
+    "fixture_identity": {
+      "full_fixture_sha256": "d70cf7ed6d97f32ae539b88484d73d4b9b166af69ce3b5f0defc2a7adc80211f",
+      "served_fixture_sha256": "62f1f3ab56b84f8a73eae176372ef2d26a4b653974bbfe204414f750ee5fa88e",
+      "prompt_id_count": 8192,
+      "full_and_served_prompt_ids_exactly_equal": true,
+      "prompt_ids_sha256_compact_json": "727a222f64571cc1fe89a6b3004bf7f48791bce9dd76ec33789e79baa89bec61",
+      "fixture_source_provenance": {
+        "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-precision/call91/canonicalprefix/case.private.json",
+        "source_case_sha256": "3d32de201c14cf805635d3e38fafc2ff220202aded67b71861e16df4fbdf9180",
+        "source_prompt_token_count": 48411,
+        "source_prompt_ids_sha256": "4bded994a8d9b438be7542ddff5c502d2f507e89a722e08d38d5fd7f7d544002",
+        "suffix_token_count": 8192,
+        "source_prompt_slice": [
+          40219,
+          48411
+        ],
+        "suffix_method": "exact last 8192 original prompt_token_ids; no rendering, decode/re-encode, or synthetic padding",
+        "chosen_token_count": 64,
+        "chosen_tokens_preserved": true,
+        "sampling_preserved_exactly": true,
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20
+        },
+        "base_suffix4096_fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/fixtures/anomaly.call91.canonicalprefix.suffix4096.seed43.full.private.json",
+        "base_suffix4096_fixture_sha256": "e952644afadb00abed9fac52db02976bf0f03f4ccdca9f3039866d53bd512a6b",
+        "base_suffix4096_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/runs/full/anomaly.call91.canonicalprefix.suffix4096.seed43.json",
+        "base_suffix4096_result_sha256": "0e7ea7bee6d85b8e910228abcb95c665ba62b7c50c09ec0ed21be04fa582373d",
+        "base_suffix4096_generated_tokens": 148,
+        "base_suffix4096_decode_replays": 147,
+        "base_suffix4096_teacher_forcing_wall_s": 5.460577924037352,
+        "base_suffix4096_free_wall_s_including_prefill": 10.013813680037856,
+        "base_suffix4096_decode_wall_s": 8.665292656980455,
+        "scope": "Diagnostic exact-prefix follow-up to determine whether a longer canonical prefix restores the native contraction motif; not full-reply reproduction or task-score evidence."
+      }
+    },
+    "matched_tt_seed43": [
+      {
+        "mode": "served head_bfp8",
+        "path": "setup/swe85-adaptive-canonicalprefix-suffix8192-p1pinfix-candidate/runs/served/anomaly.call91.canonicalprefix.suffix8192.seed43.json",
+        "sha256": "724d4df0cbc71b53938da054e4bb4345f4946ae4559ac3dc2e54fedbda1c4123",
+        "case_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-canonicalprefix-suffix8192-candidate/fixtures/anomaly.call91.canonicalprefix.suffix8192.seed43.served.private.json",
+        "prompt_ids_match_hf_fixture": true,
+        "generated_tokens": 68,
+        "first_ids": [
+          236858,
+          560,
+          236858,
+          560,
+          236858,
+          560,
+          236858,
+          560
+        ],
+        "first_decoded_motif": "repeated curly-apostrophe contraction across the first five rendered fragments; then prose",
+        "wall_s_including_prefill": 3.4723495279904455
+      },
+      {
+        "mode": "full BF16 HiFi4",
+        "path": "setup/swe85-adaptive-canonicalprefix-suffix8192-p1pinfix-candidate/runs/full/anomaly.call91.canonicalprefix.suffix8192.seed43.json",
+        "sha256": "10610713eed42214a5faf48fe4c33bd5be7a9041dc5034e762490b951c69b82b",
+        "case_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-canonicalprefix-suffix8192-candidate/fixtures/anomaly.call91.canonicalprefix.suffix8192.seed43.full.private.json",
+        "prompt_ids_match_hf_fixture": true,
+        "generated_tokens": 53,
+        "first_ids": [
+          236858,
+          560,
+          236858,
+          560,
+          1603,
+          496,
+          6232,
+          236764
+        ],
+        "first_decoded_motif": "two adjacent curly-apostrophe contraction fragments, followed by coherent prose",
+        "wall_s_including_prefill": 5.886828745948151
+      }
+    ],
+    "hf_free_run": {
+      "first_ids": [
+        236858,
+        560,
+        1603,
+        496,
+        6232,
+        236764,
+        564,
+        236789
+      ],
+      "first_decoded_motif": "At the prompt/generation boundary the combined continuation is the localized native extra curly-apostrophe suffix; thereafter the sampled reply is coherent and does not sustain a repeated-contraction loop.",
+      "ending": "natural stop at 55 generated tokens; below cap 512, so this observation does not require a cap extension",
+      "selected_reply_not_quoted": true
+    },
+    "first_token_and_forced_distribution": {
+      "shared_sampled_first_two_ids": [
+        236858,
+        560
+      ],
+      "hf_teacher_forced_chosen_positions_0_1": [
+        {
+          "position": 0,
+          "forced_token": 236858,
+          "top1_token": 236858,
+          "forced_probability": 0.26666393876075745,
+          "top1_probability": 0.26666393876075745
+        },
+        {
+          "position": 1,
+          "forced_token": 560,
+          "top1_token": 560,
+          "forced_probability": 0.9993064403533936,
+          "top1_probability": 0.9993064403533936
+        }
+      ],
+      "first_free_run_divergence_after_shared_prefix": {
+        "position": 2,
+        "hf_sampled_token": 1603,
+        "hf_teacher_forced_token": 236858,
+        "hf_teacher_forced_top1": 236858,
+        "hf_teacher_forced_probability": 0.681250274181366,
+        "served_tf_top1": 236858,
+        "served_tf_probability": 0.7162922620773315,
+        "full_tf_top1": 236858,
+        "full_tf_probability": 0.6472594141960144,
+        "interpretation": "At the matched prefix after the first two shared IDs, all three teacher-forced paths rank the repeated contraction token 236858 first, but the HF free sample takes token 1603 instead. This is compatible with stochastic divergence and does not establish a sampling-distribution or precision cause."
+      },
+      "hf_vs_tt_chosen_teacher_forcing": {
+        "served": {
+          "positions": 64,
+          "top1_agreement": 0.921875
+        },
+        "full": {
+          "positions": 64,
+          "top1_agreement": 0.984375
+        }
+      }
+    },
+    "launch": {
+      "path": "setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/launch-group-08.json",
+      "sha256": "9ff71424e76c317cf17c67bc20fd6fc1b78bfd6dc2c4277402541435c910b6e1",
+      "group": 8,
+      "timeout_seconds": 7200
+    },
+    "completion": {
+      "path": "setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/completion-group-08.json",
+      "sha256": "54c14908183b4c1cee5f986e6321f277fc3b5358486e4d810513000d1643182b",
+      "group": {
+        "seed_group": 43,
+        "suffix_source": "exact_saved_suffix8192",
+        "cases": [
+          "anomaly.call91.canonicalprefix.suffix8192.seed43"
+        ],
+        "command": [
+          "timeout",
+          "7200",
+          "env",
+          "HF_HUB_OFFLINE=1",
+          "HF_DATASETS_OFFLINE=1",
+          "OMP_NUM_THREADS=16",
+          "MKL_NUM_THREADS=16",
+          "OPENBLAS_NUM_THREADS=16",
+          "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+          "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+          "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tools/precision_repro_hf.py",
+          "--cases",
+          "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/native-positive-candidates-seed43-suffix8192.json",
+          "--output",
+          "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/results/call91-cap8192-seed43",
+          "--tokens",
+          "512",
+          "--seeds",
+          "43",
+          "--prefill-chunk",
+          "512",
+          "--compare-dir",
+          "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-canonicalprefix-suffix8192-p1pinfix-candidate/runs/served",
+          "--compare-dir",
+          "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-canonicalprefix-suffix8192-p1pinfix-candidate/runs/full"
+        ],
+        "compare_dirs": [
+          "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-canonicalprefix-suffix8192-p1pinfix-candidate/runs/served",
+          "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-canonicalprefix-suffix8192-p1pinfix-candidate/runs/full"
+        ],
+        "output_dir": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/results/call91-cap8192-seed43",
+        "timeout_seconds": 7200,
+        "serial_order": 8,
+        "loads_model_once_for_group": true,
+        "manifest": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/native-positive-candidates-seed43-suffix8192.json",
+        "manifest_sha256": "24f689147e562376c157df2d80613f05525de8b9c174a3bcfd44ad8101277f65",
+        "case_count": 1,
+        "prediction": {
+          "point_seconds": 2336.5067936155738,
+          "range_seconds": [
+            1485.7519224153596,
+            5742.646502322758
+          ],
+          "point_hours": 0.6490296648932149,
+          "range_hours": [
+            0.41270886733759987,
+            1.595179583978544
+          ],
+          "timeout_seconds": 7200,
+          "basis": "call91 exact 8192-prefix sensitivity formula in call91-8192-cost-basis.json; no 8192 HF timing. Range is scenario-only, excludes possible long-context decode slowdown; timeout is hard cap, not an upper forecast bound."
+        }
+      },
+      "exit_code": 0,
+      "elapsed_seconds": 622.6370310783386,
+      "forecast_gate": {
+        "status": "root_acceptance_required_before_next_group",
+        "measured_seconds": 622.6370310783386,
+        "forecast_range_seconds": [
+          1485.7519224153596,
+          5742.646502322758
+        ],
+        "acceptance_record": "forecast-miss-accepted-group-08.json"
+      },
+      "forecast": {
+        "seed_group": 43,
+        "suffix_source": "exact_saved_suffix8192",
+        "case_count": 1,
+        "model_load_margin_s": 180,
+        "point_seconds": 2336.5067936155738,
+        "range_seconds": [
+          1485.7519224153596,
+          5742.646502322758
+        ],
+        "timeout_seconds": 7200,
+        "cases": [
+          "anomaly.call91.canonicalprefix.suffix8192.seed43"
+        ],
+        "matched_baseline": false,
+        "prefill_scaling_scenarios": {
+          "prompt_ratio": 16.0293542074364,
+          "low_exponent": 1.0,
+          "point_exponent": 1.5,
+          "high_exponent": 2.0,
+          "prefill_512_timestamp_seconds": 17.67,
+          "nonprefill_baseline_seconds": 1022.5132335699583
+        },
+        "uncertainty": "No HF timing at this prefix. Linear-to-quadratic prefill scaling scenarios from one observed 512-token prompt prefill timestamp; held decode residual may underpredict longer-context cost. Upper scenario is not a bound; hard stop is 7200 seconds."
+      },
+      "log_sha256": "f296caf15c3cb4584894caa748d77f13606a1da428f36ad6e3143e35f65f044f"
+    }
+  },
+  "cap_notes": "The localized motif is present after joining the prompt tail to the generated prefix. The run naturally stopped after 55 tokens, so no cap extension is needed to adjudicate this sample; a short finite reproduction does not rule out cap-dependent variants elsewhere.",
+  "limits": [
+    "Single seed and one sampled HF continuation; no population-level normality claim.",
+    "Teacher-forced chosen-branch positions beyond the shared sampled prefix do not equal free-running actual-branch logits. Position 2 is aligned because positions 0 and 1 match exactly.",
+    "Root-reported forecast interval was 1485.751922–5742.646502 seconds; this result wall was 622.637031 seconds, below the interval. Treat as a forecast miss and do not reinterpret it as semantic evidence.",
+    "No score change or causal precision conclusion follows from this triage."
+  ],
+  "prior_review_verdict_preserved": "normal",
+  "boundary_correction": {
+    "supersedes": "The initial review classified the generated reply as normal because it inspected only generated text and did not join it to the conditioned prompt suffix.",
+    "method": "Decoded only the final 32 prompt IDs and first 8 generated IDs with the pinned local Tokenizer.from_file tokenizer; no model, inference, device, or network access.",
+    "tokenizer_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+    "tokenizer_path": "/home/mvasiljevic/.cache/huggingface/hub/models--google--gemma-4-31B-it/snapshots/842da3794eaa0b77d5f08bae87a17459d91ff475/tokenizer.json",
+    "fixture_prompt_tail_ids": [
+      236865,
+      32987,
+      506,
+      1851,
+      113027,
+      3494,
+      657,
+      236743,
+      236770,
+      236778,
+      236770,
+      236828,
+      236772,
+      236770,
+      236778,
+      236778,
+      236771,
+      107,
+      236865,
+      532,
+      506,
+      5062,
+      6639,
+      1269,
+      1996,
+      236761,
+      107,
+      236865,
+      5612,
+      564,
+      236789,
+      560
+    ],
+    "generated_head_ids": [
+      236858,
+      560,
+      1603,
+      496,
+      6232,
+      236764,
+      564,
+      236789
+    ],
+    "prompt_tail_decode": "…Since I've",
+    "generated_head_decode": "’ve made a mess, I'…",
+    "joined_boundary_decode": "…Since I've’ve made a mess…",
+    "interpretation": "The prompt already ends with a legitimate ASCII-apostrophe contraction (I + ASCII apostrophe + ve); the first generated curly-apostrophe ve adds the native stray suffix. Thus seed43 reproduces the native contraction anomaly once at the boundary, though it does not continue into a repeated loop. The earlier normal verdict was incorrect.",
+    "native_source_case_sha256": "3d32de201c14cf805635d3e38fafc2ff220202aded67b71861e16df4fbdf9180",
+    "native_source_metadata_repeated_fragment": "I've’ve’ve’ve’ve made a mess",
+    "scope_limit": "Original request has no native seed; seed43 is a diagnostic sample, not native replay. This establishes the motif’s presence in this sampled HF output, not its frequency or cause."
+  }
+}

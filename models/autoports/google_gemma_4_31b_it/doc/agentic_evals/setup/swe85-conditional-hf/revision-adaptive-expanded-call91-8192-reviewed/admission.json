@@ -1,0 +1,16 @@
+{
+  "status": "admitted",
+  "execution_authority": "root_owned_no_execute_until_root_explicitly_admits_this_exact_candidate",
+  "proposal_sha256": "8d558f41bd90ded5451655206c4ed5cf44ce5ee146b346c1bf3230abd7d37d71",
+  "driver_sha256": "53ea7fd1fceef25b77c60a3d314c7712075c1003a50d05e9fdef3d9966f78c8f",
+  "commands_sha256": "ba2e1913383c8a928aef7758890f9db6fad7bf5981d6682711ba81f3d15c45d8",
+  "source_integrity_sha256": "99d313bec65c4db1cf2ad5305e1152c8da94fcd227bd839712e13947000ac4ee",
+  "forecast_sha256": "c9382b55bcc2f54b9f3be6788950fd76487804d6b17b3d49b04887ecd88c3fc0",
+  "runner_sha256": "aafe67c88bb5a1eb38b8718570bbddd5749e2a9ecbb9dd19cdb100a49572c03e",
+  "p_admission_sha256": "91dc764e6a3a6b1e8a1be51e6eee5fc958c19d1dfcfa3d057b989aa325618cdd",
+  "suffix8192_admission_sha256": "300d69403a28112bc5f2a7225df5327bdb9e577ad9ca96cf754ab304f3538205",
+  "p2_admission_sha256": "74bef162c97e23e882612eb85dae365f32c9da1f13ba4b9b8e1e1f8f582ad1be",
+  "note": "Root statically reviewed exact9case8group CPU HF batch. Execution only after active SK1024 TT served/full complete and root reviews; runtime owner/noHF gates required. Prior accidental attempts excluded, preserved separately. Forecast3.47h point/8.17hupper scenario fits remaining stage; no serving-rate measurement.",
+  "reviewer": "root",
+  "admitted_unix": 1794728866.4690757
+}

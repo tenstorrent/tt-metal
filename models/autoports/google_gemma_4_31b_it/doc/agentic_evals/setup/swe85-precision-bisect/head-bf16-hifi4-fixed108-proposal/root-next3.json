@@ -1,0 +1,56 @@
+{
+  "reviewed_unix": 1794725066.8540473,
+  "rows": [
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/runs/head_bf16_hifi4/anomaly.call88.canonicalprefix.seed44.cap1024.json",
+      "sha256": "36654d018b3f6b9e87c4a1e4258b70e39bf62f040e419a1e7b2c411981955f9c",
+      "seed": 44,
+      "tokens": 671,
+      "verdict": "normal",
+      "reason": "Root read whole distinct editing script; grammatical created continuation after completed contraction, canonical close. No anomaly; not correctness claim.",
+      "trace_counters_delta": {
+        "model_replays": 670,
+        "sample_replays": 670,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 670,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/runs/head_bf16_hifi4/anomaly.call91.canonicalprefix.seed42.cap256.json",
+      "sha256": "2158529b3687ed77581aa5ed62dc676e4906a34b83ca61658359831dd12ec33f",
+      "seed": 42,
+      "tokens": 48,
+      "verdict": "native",
+      "reason": "Immediate extra apostrophe-ve burst after completed Ive in exact decoded conditioning prefix.",
+      "trace_counters_delta": {
+        "model_replays": 47,
+        "sample_replays": 47,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 47,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/runs/head_bf16_hifi4/anomaly.call91.canonicalprefix.seed43.cap256.json",
+      "sha256": "83c12ce4f972afff3cc0d6fbe923c5398df6ad40f787f0c6dfaf411132f5c86b",
+      "seed": 43,
+      "tokens": 59,
+      "verdict": "native",
+      "reason": "Immediate five extra curly apostrophe-ve suffixes after completed Ive in exact decoded conditioning prefix.",
+      "trace_counters_delta": {
+        "model_replays": 58,
+        "sample_replays": 58,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 58,
+        "captures": 0
+      }
+    }
+  ]
+}

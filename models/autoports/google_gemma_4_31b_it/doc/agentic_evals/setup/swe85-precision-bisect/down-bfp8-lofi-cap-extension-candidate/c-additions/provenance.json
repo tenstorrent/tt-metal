@@ -1,0 +1,55 @@
+{
+  "status": "candidate_only_not_admitted_not_run",
+  "created_utc": "2026-11-15T11:28:28+00:00",
+  "candidate_case_count": 3,
+  "candidate_cases_sha256": "bf432f18f382750b4164c9efbe554bc2c48409f6e7343c8d1ed869893522c544",
+  "command_sha256": "89b913248e113f1acf6ec356d55abb9acebc43a42cd6bee66c590720576f35e0",
+  "expected_prefixes_sha256": "f990fe01601d61d4b9875e700bd41c86088ee9a8e4e54c5f838945591ea2b6d5",
+  "forecast_sha256": "c62a37840d41d98fa0f987ad30415038fad428c486c88dd31e398a5e7cbd5aca",
+  "other_anomaly_comparison_sha256": "7fb92f35bcbb9e38a094bd93b5ce18699e8e16ea473e6c5db20e293de5746cfe",
+  "source_p3_triage_sha256": "301446a655cfe1a712d6997b219bdd16f85cac62a16b8a652458329f5481fd4b",
+  "source_p3_case_manifest_sha256": "57193e4b91af3a31df00f0c92dbc0f2219fbce011e6533594e5244a93a3021ed",
+  "policy": "same P3 down-bfp8-lofi config, exact fixture/prompt IDs/seed/sampling, one branch-free trial each; requested caps double from 256\u2192512, 512\u21921024, 256\u2192512. No launch/admission/driver.",
+  "cpu_validation": {
+    "status": "passed_host_only",
+    "checks": [
+      "all three fixture prompt token ID lengths and hashes match expected-prefix manifest",
+      "fixture metadata seed and sampling match source P3 seed; branches empty; single trial",
+      "all saved generated prefix lengths and token ID hashes match expected-prefix manifest",
+      "command hashes and forecast inputs resolved; no runner, model, device, or tool execution"
+    ],
+    "cases": [
+      {
+        "job": "p3capext.anomaly.requests2931.call20.canonicalprefix.seed43.cap512",
+        "fixture_prompt_id_count": 8580,
+        "seed_identity": 43,
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20
+        }
+      },
+      {
+        "job": "p3capext.anomaly.sphinx-doc__sphinx-10323.call57.onset.seed42.cap1024",
+        "fixture_prompt_id_count": 58695,
+        "seed_identity": 42,
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20
+        }
+      },
+      {
+        "job": "p3capext.anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset.seed44.cap512",
+        "fixture_prompt_id_count": 59716,
+        "seed_identity": 44,
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20
+        }
+      }
+    ],
+    "validated_at_utc": "2026-11-15T11:37:00Z"
+  }
+}

@@ -1,0 +1,54 @@
+{
+  "status": "proposed only; do not execute without root admission",
+  "working_directory": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline",
+  "served": {
+    "timeout_seconds": 3600,
+    "command": [
+      "timeout",
+      "3600",
+      "env",
+      "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+      "READINESS_TRACE_REGION_SIZE=134217728",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tools.precision_repro_batch",
+      "--cases",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/served-cases.json",
+      "--build-kwargs-file",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/head_bfp8_build_kwargs.json",
+      "--output-dir",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/served"
+    ]
+  },
+  "full": {
+    "timeout_seconds": 3600,
+    "command": [
+      "timeout",
+      "3600",
+      "env",
+      "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+      "READINESS_TRACE_REGION_SIZE=134217728",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tools.precision_repro_batch",
+      "--cases",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/full-cases.json",
+      "--build-kwargs-file",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_build_kwargs.json",
+      "--output-dir",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/full"
+    ]
+  },
+  "compare_dir": "Omitted intentionally because comparison reports require identical conditioning token IDs, while suffix1024 differs from existing suffix512 runs.",
+  "validation": "CPU-only --validate-only commands recorded in cpu-validation.json; they import no TTNN and do not run inference.",
+  "forecast": {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/forecast.json",
+    "sha256": "d5023017973310de7c88848f0f859a19fec4ebdf99bb72d7c3ab63a23df5df82",
+    "formula": "See active forecast.json; corrected literal prefill projection per review-d."
+  },
+  "historical_forecast": {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/forecast-historical-pre-review-d.json",
+    "sha256": "6920a7df50a074776eafa6c2f30bb95c53f5b7dd397fd2cd35bfcc2d54b40290",
+    "note": "Preserved pre-review estimate for audit; superseded by active forecast.json."
+  }
+}

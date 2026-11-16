@@ -1,0 +1,40 @@
+{
+  "status": "prepared_not_executed",
+  "serial_order": [
+    "served",
+    "full"
+  ],
+  "device_controls": {
+    "served": [
+      "env",
+      "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+      "READINESS_TRACE_REGION_SIZE=134217728",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "models/autoports/google_gemma_4_31b_it/tools/precision_repro_batch.py",
+      "--cases",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-precision/call91/fullcontext/cases.json",
+      "--build-kwargs-file",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/head_bfp8_build_kwargs.json",
+      "--output-dir",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-precision/call91/fullcontext/served"
+    ],
+    "full": [
+      "env",
+      "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+      "READINESS_TRACE_REGION_SIZE=134217728",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "models/autoports/google_gemma_4_31b_it/tools/precision_repro_batch.py",
+      "--cases",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-precision/call91/fullcontext/cases.json",
+      "--build-kwargs-file",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_build_kwargs.json",
+      "--output-dir",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-precision/call91/fullcontext/full",
+      "--compare-dir",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-precision/call91/fullcontext/served"
+    ]
+  },
+  "no_execution": "Only CPU --validate-only executed; inference commands staged, not executed.",
+  "diagnostic_scope": "Batch1; full conditioning, chosen64 teacher forcing from first stray apostrophe, 3x256 free continuations with seeds42/43/44. Not performance evidence.",
+  "preferred_variant": "fullcontext"
+}

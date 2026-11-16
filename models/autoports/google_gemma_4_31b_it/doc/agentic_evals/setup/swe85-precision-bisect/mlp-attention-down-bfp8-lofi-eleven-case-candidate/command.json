@@ -1,0 +1,36 @@
+{
+  "status": "inert_candidate_only_not_admitted_not_run",
+  "mode": "full",
+  "case_count": 11,
+  "timeout_seconds": 1800,
+  "model_loads": 1,
+  "argv": [
+    "timeout",
+    "1800",
+    "env",
+    "HF_HUB_OFFLINE=1",
+    "HF_DATASETS_OFFLINE=1",
+    "HF_HUB_DISABLE_TELEMETRY=1",
+    "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+    "READINESS_TRACE_REGION_SIZE=134217728",
+    "OMP_NUM_THREADS=16",
+    "MKL_NUM_THREADS=16",
+    "OPENBLAS_NUM_THREADS=16",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+    "-m",
+    "models.autoports.google_gemma_4_31b_it.tools.precision_repro_batch",
+    "--cases",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/mlp-attention-down-bfp8-lofi-eleven-case-candidate/candidate-cases.json",
+    "--build-kwargs-file",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/mlp-attention-down-bfp8-lofi-eleven-case-candidate/mlp_attention_down_bfp8_lofi_build_kwargs.json",
+    "--output-dir",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/mlp-attention-down-bfp8-lofi-eleven-case-candidate/runs/mlp_attention_down_bfp8_lofi"
+  ],
+  "environment_overrides": {
+    "HF_HUB_OFFLINE": "1",
+    "HF_DATASETS_OFFLINE": "1",
+    "HF_HUB_DISABLE_TELEMETRY": "1"
+  },
+  "scope": "Eleven exact P6 fixed108 fixtures/seeds/caps at manifest indices 0,32,33,58,66,67,68,74,85,93,96. Relative to P6, only MLP gate/up weights change bfp4/LoFi→bfp8_lofi/LoFi; attention/down/head remain bfp8_lofi/LoFi. Other precision/runtime fields stay fixed. Full mode, one model load, no teacher-forcing branches.",
+  "must_not_execute_until": "Separate root review/decision and explicit admission; this directory has no admission artifact."
+}

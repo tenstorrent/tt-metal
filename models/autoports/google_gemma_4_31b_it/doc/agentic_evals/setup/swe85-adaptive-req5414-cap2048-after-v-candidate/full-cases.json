@@ -1,0 +1,9 @@
+[
+  {
+    "name": "anomaly.psf__requests-5414.call11.onset.suffix2048.cap2048.seed42",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-req5414-cap2048-after-v-candidate/fixtures/full/anomaly.psf__requests-5414.call11.onset.suffix2048.cap2048.seed42.private.json",
+    "branches": [],
+    "free_run_tokens": 2048,
+    "free_run_trials": 1
+  }
+]

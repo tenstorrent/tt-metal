@@ -1,0 +1,110 @@
+{
+  "status": "candidate_provenance_only_not_admission",
+  "candidate": "P6 attention bfp8_lofi + down bfp8_lofi, otherwise P3 baseline",
+  "source_P3_policy": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down_bfp8_lofi_precision.json",
+  "source_P3_policy_sha256": "dfa8406fdbd93dd5f2b29e14b458eff3480ccbf651caedaf011f4473d1e87c83",
+  "policy_delta": {
+    "weight_groups.attention": {
+      "from": "bfp4",
+      "to": "bfp8_lofi"
+    },
+    "all_other_values_identical_to_P3": true
+  },
+  "legal_policy_basis": {
+    "precision_source_path": "models/autoports/google_gemma_4_31b_it/tt/precision.py",
+    "precision_source_sha256": "2f223a118fe713677b9ce4fb3beb2f563e26af56ef45a98b2e03fad1e25664a9",
+    "source_fact": "precision.py maps bfp8_lofi to bfloat8_b/LoFi and load_precision checks fidelity agreement.",
+    "model_source_path": "models/autoports/google_gemma_4_31b_it/tt/model.py",
+    "model_source_sha256": "c65ed33bb175f63603946eea561a2623cad0b70521428bdf888bd9445457a01e",
+    "source_fact_2": "Gemma4Model passes selected group values as attention_precision and down_precision.",
+    "decoder_source_path": "models/autoports/google_gemma_4_31b_it/tt/multichip_decoder.py",
+    "decoder_source_sha256": "c7a4cb14edfe46649b904c0fbb6f3fec14e123e194b31950adfa76c224d201f6",
+    "source_fact_3": "MultichipDecoder policy table accepts bfp8_lofi as bfloat8_b/LoFi for attention and down group parameters."
+  },
+  "fixtures": [
+    {
+      "name": "anomaly.pytest-dev__pytest-5787.call65.onset.seed42.p6_attention_down_bfp8_lofi.cap2048",
+      "source_fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bf16-hifi4-seven-case-candidate/fixtures/anomaly.pytest-dev__pytest-5787.call65.onset.cap2048.seed42.private.json",
+      "source_fixture_sha256": "346ea388c2e71b88d415e67331f6f1c5de4ee428e641e5159adccef0af382331",
+      "prompt_token_count": 53684,
+      "prompt_token_ids_sha256": "12d162f275d91cf035d93b6d9f598c1e91195266be1975c75fe93e99b3000938",
+      "seed": 42,
+      "free_run_tokens": 2048,
+      "free_run_trials": 1,
+      "branches": []
+    },
+    {
+      "name": "anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.seed43.p6_attention_down_bfp8_lofi.cap2048",
+      "source_fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bf16-hifi4-seven-case-candidate/fixtures/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.cap2048.seed43.private.json",
+      "source_fixture_sha256": "f09f5493bf5e6d1f1bec5f5ce7e4273d0ec9352de1f85ffe780ef897063dec98",
+      "prompt_token_count": 58982,
+      "prompt_token_ids_sha256": "a4c9e18717ee53ddbf5ced65964c1f28ac089b26e6b489bd9aa52b303e021a45",
+      "seed": 43,
+      "free_run_tokens": 2048,
+      "free_run_trials": 1,
+      "branches": []
+    },
+    {
+      "name": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed42.p6_attention_down_bfp8_lofi.cap1024",
+      "source_fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bf16-hifi4-seven-case-candidate/fixtures/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap1024.seed42.private.json",
+      "source_fixture_sha256": "b4253957ad89651510a0e39ea3aa49373926c9ff2d963a4ee381047b400efac8",
+      "prompt_token_count": 76441,
+      "prompt_token_ids_sha256": "5e8c9025218ae22d2ae1491e4ff24e3aacdf82ad5d2985c6e2792168270c6808",
+      "seed": 42,
+      "free_run_tokens": 1024,
+      "free_run_trials": 1,
+      "branches": []
+    },
+    {
+      "name": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed43.p6_attention_down_bfp8_lofi.cap2048",
+      "source_fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bf16-hifi4-seven-case-candidate/fixtures/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap2048.seed43.private.json",
+      "source_fixture_sha256": "e4c5081386cd785ccc1216dda888b4c54cc165beb80b035e96daf69c2f119718",
+      "prompt_token_count": 76441,
+      "prompt_token_ids_sha256": "5e8c9025218ae22d2ae1491e4ff24e3aacdf82ad5d2985c6e2792168270c6808",
+      "seed": 43,
+      "free_run_tokens": 2048,
+      "free_run_trials": 1,
+      "branches": []
+    },
+    {
+      "name": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed44.p6_attention_down_bfp8_lofi.cap1024",
+      "source_fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bf16-hifi4-seven-case-candidate/fixtures/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap1024.seed44.private.json",
+      "source_fixture_sha256": "7c5da63d138e6afa7b539dfed909ee1e8a937c2e168d587023c4421333688780",
+      "prompt_token_count": 76441,
+      "prompt_token_ids_sha256": "5e8c9025218ae22d2ae1491e4ff24e3aacdf82ad5d2985c6e2792168270c6808",
+      "seed": 44,
+      "free_run_tokens": 1024,
+      "free_run_trials": 1,
+      "branches": []
+    },
+    {
+      "name": "anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.seed44.p6_attention_down_bfp8_lofi.cap1024",
+      "source_fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bf16-hifi4-seven-case-candidate/fixtures/anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.cap1024.seed44.private.json",
+      "source_fixture_sha256": "14b67b9fcb8ad382713dff99ccb47922690bc5be90131e3adc25a195f3e712d3",
+      "prompt_token_count": 47548,
+      "prompt_token_ids_sha256": "7aaf88be1dd4df81aa4880bf0dd1741f94a99b241903c24f0def9fa78423479b",
+      "seed": 44,
+      "free_run_tokens": 1024,
+      "free_run_trials": 1,
+      "branches": []
+    },
+    {
+      "name": "anomaly.sympy__sympy-14711.call1.onset.seed42.p6_attention_down_bfp8_lofi.cap256",
+      "source_fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bf16-hifi4-seven-case-candidate/fixtures/sympy__sympy-14711.call1.onset.private.json",
+      "source_fixture_sha256": "30151a4ad6ba3f457477b50bbb7d8817b24944e8e57242c10b1f494f4697d6e5",
+      "prompt_token_count": 1351,
+      "prompt_token_ids_sha256": "63b8b0d7bffacf896c9173a5d24ffd2d1f07b2ec57def9862e1936f66120b086",
+      "seed": 42,
+      "free_run_tokens": 256,
+      "free_run_trials": 1,
+      "branches": []
+    }
+  ],
+  "p4_timing_evidence": {
+    "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bf16-hifi4-seven-case-candidate/forecast.json",
+    "source_sha256": "26cd68fb0c4c11486638fd4a30ce7407df82f87453ba8f068a0ef43398c21964",
+    "measured_panel_seconds": 454.8605308532715,
+    "forecast_derived_from_p4_only": true
+  },
+  "no_admission_or_execution": true
+}

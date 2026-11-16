@@ -1,0 +1,79 @@
+{
+  "format": "semantic-json-split-v1",
+  "reconstruction": "For each source entry, load its metadata JSON and begin with metadata[\"top_level_metadata\"]. Concatenate the parsed JSON arrays from each listed part in listed order into top_level_metadata[\"cases\"]. The resulting object is parsed-JSON-equal to the original. Original pretty-print bytes/indentation are not reconstructed. Originals remain unchanged.",
+  "part_max_bytes": 500000,
+  "sources": [
+    {
+      "original_path": "completed-summary165.json",
+      "original_sha256": "392e5a4934accb1c19022df1387fbf5e6c823398ed583e7f7466a1b7be4759c3",
+      "original_size_bytes": 840218,
+      "metadata_path": "completed-summary165.metadata.json",
+      "metadata_sha256": "4facb0482d0f10d553a5ab87bbf6e319f909da0be9804af533fd86886546ee40",
+      "case_count": 165,
+      "parts": [
+        {
+          "path": "completed-summary165.cases-000-054.json",
+          "first_case_index": 0,
+          "last_case_index": 54,
+          "case_count": 55,
+          "size_bytes": 331692,
+          "sha256": "9a19f85c6b7544e8c89131970382acb1af87767858e643d4d11b078fa4088f61"
+        },
+        {
+          "path": "completed-summary165.cases-055-109.json",
+          "first_case_index": 55,
+          "last_case_index": 109,
+          "case_count": 55,
+          "size_bytes": 163083,
+          "sha256": "7c2e67080ebfa82cb55ff7f634de7da75cf428f5c761b6d27265cb7329b5caae"
+        },
+        {
+          "path": "completed-summary165.cases-110-164.json",
+          "first_case_index": 110,
+          "last_case_index": 164,
+          "case_count": 55,
+          "size_bytes": 306025,
+          "sha256": "aa86356b04aaeaac4b06535086a71e29c783d55ed367d990bd46b3df0a03ae9d"
+        }
+      ],
+      "parsed_object_equality_verified": true
+    },
+    {
+      "original_path": "progress-summary165.json",
+      "original_sha256": "51a17d35ebf2afa4717b577606eec265ec88b641622d76aed809a795a981adc6",
+      "original_size_bytes": 837272,
+      "metadata_path": "progress-summary165.metadata.json",
+      "metadata_sha256": "aaa0b5449a581d37074b3b66b9ef85c085ecfc02ae506c20708c3226fcd2f544",
+      "case_count": 165,
+      "parts": [
+        {
+          "path": "progress-summary165.cases-000-054.json",
+          "first_case_index": 0,
+          "last_case_index": 54,
+          "case_count": 55,
+          "size_bytes": 331692,
+          "sha256": "9a19f85c6b7544e8c89131970382acb1af87767858e643d4d11b078fa4088f61"
+        },
+        {
+          "path": "progress-summary165.cases-055-109.json",
+          "first_case_index": 55,
+          "last_case_index": 109,
+          "case_count": 55,
+          "size_bytes": 163083,
+          "sha256": "7c2e67080ebfa82cb55ff7f634de7da75cf428f5c761b6d27265cb7329b5caae"
+        },
+        {
+          "path": "progress-summary165.cases-110-164.json",
+          "first_case_index": 110,
+          "last_case_index": 164,
+          "case_count": 55,
+          "size_bytes": 303194,
+          "sha256": "ea9b24cc9e41037e4dc3be15ef8efbd6c1fea1bc0792ac95f49a4843f1cd5fe2"
+        }
+      ],
+      "parsed_object_equality_verified": true
+    }
+  ],
+  "metadata_paths_present_in_metadata_and_index": true,
+  "verified_reconstruction_method": "Read each original JSON and each metadata/part file; assert rebuilt == original as Python JSON values."
+}

@@ -1,0 +1,31 @@
+{
+  "rows": [
+    {
+      "job": "anomaly.pytest-dev__pytest-5787.call65.onset",
+      "mode": "full",
+      "seed": 42,
+      "verdict": "inconclusive",
+      "evidence": "Continues the conditioned _to_json/_from_json repair investigation with a progressing alternative script; no terminal repeated-token degeneration and no native `I will\u2019ll` duplicated-contraction motif occurs in the generated suffix.",
+      "confidence": "high",
+      "cap_notes": "All 3 runs reach 256-token cap while still writing code; cap prevents a completed-normal conclusion."
+    },
+    {
+      "job": "anomaly.pytest-dev__pytest-5787.call65.onset",
+      "mode": "full",
+      "seed": 43,
+      "verdict": "inconclusive",
+      "evidence": "Continues the conditioned _to_json/_from_json repair investigation with a progressing alternative script; no terminal repeated-token degeneration and no native `I will\u2019ll` duplicated-contraction motif occurs in the generated suffix.",
+      "confidence": "high",
+      "cap_notes": "All 3 runs reach 256-token cap while still writing code; cap prevents a completed-normal conclusion."
+    },
+    {
+      "job": "anomaly.pytest-dev__pytest-5787.call65.onset",
+      "mode": "full",
+      "seed": 44,
+      "verdict": "inconclusive",
+      "evidence": "Continues the conditioned _to_json/_from_json repair investigation with a progressing alternative script; no terminal repeated-token degeneration and no native `I will\u2019ll` duplicated-contraction motif occurs in the generated suffix.",
+      "confidence": "high",
+      "cap_notes": "All 3 runs reach 256-token cap while still writing code; cap prevents a completed-normal conclusion."
+    }
+  ]
+}

@@ -1,0 +1,108 @@
+{
+  "status": "candidate_only_not_admitted",
+  "purpose": "Isolate each single-delta arm against the completed full-BF16 Q32 protocol controls. Diagnostic protocol comparison only; no policy selection or task-correctness claim.",
+  "arm": "arm-a-kv-bfp8-only",
+  "base_config": {
+    "config_id": "stage12_bf16_hifi4_diagnostic",
+    "sha256": "63ce02f7fa0df993a27daca25eeeb3adca51e15c7c6956d1cef122534ebdc7a9"
+  },
+  "single_delta": {
+    "field": "kv_cache_dtype",
+    "from": "bfloat16",
+    "to": "bfloat8_b"
+  },
+  "all_other_precision_fields_equal_to_full_bf16": true,
+  "cases_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/p19-q32-production-validation/fixed108/full-q32-protocol-controls/cases.json",
+  "cases_source_sha256": "16042fa5fe4f10a4589e2eaffce787cfe86d44321cbf574378a30a68440a6e32",
+  "cases_sha256": "16042fa5fe4f10a4589e2eaffce787cfe86d44321cbf574378a30a68440a6e32",
+  "cases": [
+    {
+      "source_name": "fullq32.anomaly.sphinx-doc__sphinx-10323.call70.onset.seed42.cap256",
+      "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-extra-contraction-controls/sphinx-doc__sphinx-10323.call70.onset.private.json",
+      "seed": 42,
+      "generated_token_cap": 512,
+      "branches": [],
+      "free_run_trials": 1,
+      "fixture_sha256": "7d39e2c87e91327f35317968bf2647887a402d0086085ec8f95db8ff5fc2ab64"
+    },
+    {
+      "source_name": "fullq32.anomaly.sympy__sympy-13878.call1.onset.seed44.cap256",
+      "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.sympy__sympy-13878.call1.onset.seed44.private.json",
+      "seed": 44,
+      "generated_token_cap": 256,
+      "branches": [],
+      "free_run_trials": 1,
+      "fixture_sha256": "884cc1eebec08f3511e27e1b989fa0a779bf750611494cbbdd7b33937ac54420"
+    }
+  ],
+  "sampling": "Inherited from exact fixture metadata (temperature1.0,top_p0.95,top_k20); one free-run trial per saved seed; no branches.",
+  "forecast_file": "forecast.json",
+  "forecast_sha256": "6602b4afec9c689c855c9a1af7bc88bd4732fefce9e019f79930a58bc7cb8f91",
+  "command_file": "command.json",
+  "command_sha256": "2121a47f8070cd9654b310b95800a153f24ad9b10f6d872cca8bc5d4074bed7b",
+  "build_kwargs_file": "build-kwargs.json",
+  "build_kwargs_sha256": "ad4b6d8063bf44e3b35d13f9f8f51901a63bcc4db22b9a8f46a21301c7c8a185",
+  "precision_file": "precision.json",
+  "precision_sha256": "3817ced344c62765264f60f6baa4ac3badad6592d892e53a81ffda4276f3d814",
+  "source_pins_file": "source-pins.json",
+  "source_pins_sha256": "47e21d7e9e0dc9d3a6f1da548a9b71ba53a04331dbd9149cfed78143461f180f",
+  "source_hashes": {
+    "source_cases": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/p19-q32-production-validation/fixed108/full-q32-protocol-controls/cases.json",
+      "sha256": "16042fa5fe4f10a4589e2eaffce787cfe86d44321cbf574378a30a68440a6e32"
+    },
+    "full_precision_config": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_config.json",
+      "sha256": "63ce02f7fa0df993a27daca25eeeb3adca51e15c7c6956d1cef122534ebdc7a9"
+    },
+    "full_precision_build_kwargs": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_build_kwargs.json",
+      "sha256": "ff2b5ed24e0b6a1dee7eb5cd8bd437d17c3df5f8f25567927d239e666f0699f9"
+    },
+    "full_q32_control_root_review": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/p19-q32-production-validation/fixed108/full-q32-protocol-controls/root-review.json",
+      "sha256": "1d29a120f771a445816ba05780f3d9e3f140f01bc7d4afea3c290aa3729dff71"
+    },
+    "runner": {
+      "path": "models/autoports/google_gemma_4_31b_it/tools/precision_repro_batch.py",
+      "sha256": "172f5a1dd7a7403847e47b966ae79c306163650a60211418c7c195794ec5c125"
+    },
+    "probe": {
+      "path": "models/autoports/google_gemma_4_31b_it/tools/precision_repro_probe.py",
+      "sha256": "2ffc23b9081d7be78f3a0e911da7c50dd51dbf80de07a8716d600579dad1c25f"
+    },
+    "precision": {
+      "path": "models/autoports/google_gemma_4_31b_it/tt/precision.py",
+      "sha256": "2f223a118fe713677b9ce4fb3beb2f563e26af56ef45a98b2e03fad1e25664a9"
+    },
+    "model": {
+      "path": "models/autoports/google_gemma_4_31b_it/tt/model.py",
+      "sha256": "c65ed33bb175f63603946eea561a2623cad0b70521428bdf888bd9445457a01e"
+    },
+    "multichip_decoder": {
+      "path": "models/autoports/google_gemma_4_31b_it/tt/multichip_decoder.py",
+      "sha256": "6e3bbdb61f210dc57564ad28025a563136406d5ee49ba57a8010c505e9185474"
+    },
+    "optimized_decoder": {
+      "path": "models/autoports/google_gemma_4_31b_it/tt/optimized_decoder.py",
+      "sha256": "c0f2e5e1ac4517b435d3943fcce44071ac087f9ec214ea46fd0b06f773d68815"
+    },
+    "fixture_0": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-extra-contraction-controls/sphinx-doc__sphinx-10323.call70.onset.private.json",
+      "sha256": "7d39e2c87e91327f35317968bf2647887a402d0086085ec8f95db8ff5fc2ab64"
+    },
+    "fixture_1": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.sympy__sympy-13878.call1.onset.seed44.private.json",
+      "sha256": "884cc1eebec08f3511e27e1b989fa0a779bf750611494cbbdd7b33937ac54420"
+    }
+  },
+  "candidate_artifact_hashes": {
+    "cases.json": "16042fa5fe4f10a4589e2eaffce787cfe86d44321cbf574378a30a68440a6e32",
+    "precision.json": "3817ced344c62765264f60f6baa4ac3badad6592d892e53a81ffda4276f3d814",
+    "build-kwargs.json": "ad4b6d8063bf44e3b35d13f9f8f51901a63bcc4db22b9a8f46a21301c7c8a185",
+    "command.json": "2121a47f8070cd9654b310b95800a153f24ad9b10f6d872cca8bc5d4074bed7b",
+    "forecast.json": "6602b4afec9c689c855c9a1af7bc88bd4732fefce9e019f79930a58bc7cb8f91",
+    "source-pins.json": "47e21d7e9e0dc9d3a6f1da548a9b71ba53a04331dbd9149cfed78143461f180f"
+  },
+  "no_admission_or_launch": true
+}

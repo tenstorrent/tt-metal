@@ -1,0 +1,295 @@
+{
+  "status": "passed",
+  "rows": [
+    {
+      "mode": "served",
+      "case": "anomaly.call91.canonicalprefix",
+      "seed": 42,
+      "decode_tokens": 57,
+      "passed": true,
+      "source_sha256": "4291808df0b2ba86956bd4924a8b60e7afcdd7809666f321c8b47ea5803da3eb"
+    },
+    {
+      "mode": "served",
+      "case": "anomaly.call91.canonicalprefix",
+      "seed": 43,
+      "decode_tokens": 36,
+      "passed": true,
+      "source_sha256": "4291808df0b2ba86956bd4924a8b60e7afcdd7809666f321c8b47ea5803da3eb"
+    },
+    {
+      "mode": "served",
+      "case": "anomaly.call91.canonicalprefix",
+      "seed": 44,
+      "decode_tokens": 301,
+      "passed": true,
+      "source_sha256": "4291808df0b2ba86956bd4924a8b60e7afcdd7809666f321c8b47ea5803da3eb"
+    },
+    {
+      "mode": "served",
+      "case": "anomaly.matplotlib__matplotlib-20488.call86.onset",
+      "seed": 42,
+      "decode_tokens": 511,
+      "passed": true,
+      "source_sha256": "0aea28389faa2da5325d78a67b05beadd6c6dd2178fab7e4f56e6f34cef9ca34"
+    },
+    {
+      "mode": "served",
+      "case": "anomaly.matplotlib__matplotlib-20488.call86.onset",
+      "seed": 43,
+      "decode_tokens": 511,
+      "passed": true,
+      "source_sha256": "0aea28389faa2da5325d78a67b05beadd6c6dd2178fab7e4f56e6f34cef9ca34"
+    },
+    {
+      "mode": "served",
+      "case": "anomaly.matplotlib__matplotlib-20488.call86.onset",
+      "seed": 44,
+      "decode_tokens": 81,
+      "passed": true,
+      "source_sha256": "0aea28389faa2da5325d78a67b05beadd6c6dd2178fab7e4f56e6f34cef9ca34"
+    },
+    {
+      "mode": "served",
+      "case": "anomaly.psf__requests-5414.call10.onset",
+      "seed": 42,
+      "decode_tokens": 511,
+      "passed": true,
+      "source_sha256": "90e92015185c5b1b89afbbcd5d11660140b2dee258d055d40dd1025fe36b2476"
+    },
+    {
+      "mode": "served",
+      "case": "anomaly.psf__requests-5414.call10.onset",
+      "seed": 43,
+      "decode_tokens": 511,
+      "passed": true,
+      "source_sha256": "90e92015185c5b1b89afbbcd5d11660140b2dee258d055d40dd1025fe36b2476"
+    },
+    {
+      "mode": "served",
+      "case": "anomaly.psf__requests-5414.call10.onset",
+      "seed": 44,
+      "decode_tokens": 192,
+      "passed": true,
+      "source_sha256": "90e92015185c5b1b89afbbcd5d11660140b2dee258d055d40dd1025fe36b2476"
+    },
+    {
+      "mode": "served",
+      "case": "anomaly.psf__requests-5414.call11.onset",
+      "seed": 42,
+      "decode_tokens": 511,
+      "passed": true,
+      "source_sha256": "1a7ec3c160f707145b3d285fd349339348b36cad70dfd5e653c1bf2d0c345c67"
+    },
+    {
+      "mode": "served",
+      "case": "anomaly.psf__requests-5414.call11.onset",
+      "seed": 43,
+      "decode_tokens": 511,
+      "passed": true,
+      "source_sha256": "1a7ec3c160f707145b3d285fd349339348b36cad70dfd5e653c1bf2d0c345c67"
+    },
+    {
+      "mode": "served",
+      "case": "anomaly.psf__requests-5414.call11.onset",
+      "seed": 44,
+      "decode_tokens": 511,
+      "passed": true,
+      "source_sha256": "1a7ec3c160f707145b3d285fd349339348b36cad70dfd5e653c1bf2d0c345c67"
+    },
+    {
+      "mode": "served",
+      "case": "anomaly.psf__requests-5414.call9.onset",
+      "seed": 42,
+      "decode_tokens": 511,
+      "passed": true,
+      "source_sha256": "ab28180a1cce9bb9eec291201f38527c99ec0fac41b22ae84abca5774091d969"
+    },
+    {
+      "mode": "served",
+      "case": "anomaly.psf__requests-5414.call9.onset",
+      "seed": 43,
+      "decode_tokens": 511,
+      "passed": true,
+      "source_sha256": "ab28180a1cce9bb9eec291201f38527c99ec0fac41b22ae84abca5774091d969"
+    },
+    {
+      "mode": "served",
+      "case": "anomaly.psf__requests-5414.call9.onset",
+      "seed": 44,
+      "decode_tokens": 511,
+      "passed": true,
+      "source_sha256": "ab28180a1cce9bb9eec291201f38527c99ec0fac41b22ae84abca5774091d969"
+    },
+    {
+      "mode": "served",
+      "case": "anomaly.sphinx-doc__sphinx-10323.call70.onset",
+      "seed": 42,
+      "decode_tokens": 121,
+      "passed": true,
+      "source_sha256": "ce633f522c58657f78738d741d04aaca2e58704a8ea0aac93fa8b71440cb2187"
+    },
+    {
+      "mode": "served",
+      "case": "anomaly.sphinx-doc__sphinx-10323.call70.onset",
+      "seed": 43,
+      "decode_tokens": 153,
+      "passed": true,
+      "source_sha256": "ce633f522c58657f78738d741d04aaca2e58704a8ea0aac93fa8b71440cb2187"
+    },
+    {
+      "mode": "served",
+      "case": "anomaly.sphinx-doc__sphinx-10323.call70.onset",
+      "seed": 44,
+      "decode_tokens": 511,
+      "passed": true,
+      "source_sha256": "ce633f522c58657f78738d741d04aaca2e58704a8ea0aac93fa8b71440cb2187"
+    },
+    {
+      "mode": "full",
+      "case": "anomaly.call91.canonicalprefix",
+      "seed": 42,
+      "decode_tokens": 26,
+      "passed": true,
+      "source_sha256": "9ca5ad50c2d6a88f9d777afd8c2e0f9e01b5ab9b6e66f021dc0fe60871e60cc8"
+    },
+    {
+      "mode": "full",
+      "case": "anomaly.call91.canonicalprefix",
+      "seed": 43,
+      "decode_tokens": 37,
+      "passed": true,
+      "source_sha256": "9ca5ad50c2d6a88f9d777afd8c2e0f9e01b5ab9b6e66f021dc0fe60871e60cc8"
+    },
+    {
+      "mode": "full",
+      "case": "anomaly.call91.canonicalprefix",
+      "seed": 44,
+      "decode_tokens": 71,
+      "passed": true,
+      "source_sha256": "9ca5ad50c2d6a88f9d777afd8c2e0f9e01b5ab9b6e66f021dc0fe60871e60cc8"
+    },
+    {
+      "mode": "full",
+      "case": "anomaly.matplotlib__matplotlib-20488.call86.onset",
+      "seed": 42,
+      "decode_tokens": 511,
+      "passed": true,
+      "source_sha256": "a2dc3012fc83468f00dd3dfc66c82c940c093b5b2c6c72c4a7a1bfd09631e7a9"
+    },
+    {
+      "mode": "full",
+      "case": "anomaly.matplotlib__matplotlib-20488.call86.onset",
+      "seed": 43,
+      "decode_tokens": 511,
+      "passed": true,
+      "source_sha256": "a2dc3012fc83468f00dd3dfc66c82c940c093b5b2c6c72c4a7a1bfd09631e7a9"
+    },
+    {
+      "mode": "full",
+      "case": "anomaly.matplotlib__matplotlib-20488.call86.onset",
+      "seed": 44,
+      "decode_tokens": 511,
+      "passed": true,
+      "source_sha256": "a2dc3012fc83468f00dd3dfc66c82c940c093b5b2c6c72c4a7a1bfd09631e7a9"
+    },
+    {
+      "mode": "full",
+      "case": "anomaly.psf__requests-5414.call10.onset",
+      "seed": 42,
+      "decode_tokens": 511,
+      "passed": true,
+      "source_sha256": "09a4a0cf9159ccdafa8913902f0b53f63c337f33720ea559228c51877a4f90dd"
+    },
+    {
+      "mode": "full",
+      "case": "anomaly.psf__requests-5414.call10.onset",
+      "seed": 43,
+      "decode_tokens": 511,
+      "passed": true,
+      "source_sha256": "09a4a0cf9159ccdafa8913902f0b53f63c337f33720ea559228c51877a4f90dd"
+    },
+    {
+      "mode": "full",
+      "case": "anomaly.psf__requests-5414.call10.onset",
+      "seed": 44,
+      "decode_tokens": 327,
+      "passed": true,
+      "source_sha256": "09a4a0cf9159ccdafa8913902f0b53f63c337f33720ea559228c51877a4f90dd"
+    },
+    {
+      "mode": "full",
+      "case": "anomaly.psf__requests-5414.call11.onset",
+      "seed": 42,
+      "decode_tokens": 511,
+      "passed": true,
+      "source_sha256": "6a22257dbe5b30dec221560fc555e6331e83891872d9e274b89be6b293718b82"
+    },
+    {
+      "mode": "full",
+      "case": "anomaly.psf__requests-5414.call11.onset",
+      "seed": 43,
+      "decode_tokens": 123,
+      "passed": true,
+      "source_sha256": "6a22257dbe5b30dec221560fc555e6331e83891872d9e274b89be6b293718b82"
+    },
+    {
+      "mode": "full",
+      "case": "anomaly.psf__requests-5414.call11.onset",
+      "seed": 44,
+      "decode_tokens": 511,
+      "passed": true,
+      "source_sha256": "6a22257dbe5b30dec221560fc555e6331e83891872d9e274b89be6b293718b82"
+    },
+    {
+      "mode": "full",
+      "case": "anomaly.psf__requests-5414.call9.onset",
+      "seed": 42,
+      "decode_tokens": 511,
+      "passed": true,
+      "source_sha256": "dec3d27c4021946b317f76a9bac5049e6ecadbd2f5dcc60fd9d67fd95951be71"
+    },
+    {
+      "mode": "full",
+      "case": "anomaly.psf__requests-5414.call9.onset",
+      "seed": 43,
+      "decode_tokens": 511,
+      "passed": true,
+      "source_sha256": "dec3d27c4021946b317f76a9bac5049e6ecadbd2f5dcc60fd9d67fd95951be71"
+    },
+    {
+      "mode": "full",
+      "case": "anomaly.psf__requests-5414.call9.onset",
+      "seed": 44,
+      "decode_tokens": 511,
+      "passed": true,
+      "source_sha256": "dec3d27c4021946b317f76a9bac5049e6ecadbd2f5dcc60fd9d67fd95951be71"
+    },
+    {
+      "mode": "full",
+      "case": "anomaly.sphinx-doc__sphinx-10323.call70.onset",
+      "seed": 42,
+      "decode_tokens": 199,
+      "passed": true,
+      "source_sha256": "a441ba44ab8294f359c1ea864d045cc4e6fb5d123930684db4b02ee3c1749f77"
+    },
+    {
+      "mode": "full",
+      "case": "anomaly.sphinx-doc__sphinx-10323.call70.onset",
+      "seed": 43,
+      "decode_tokens": 206,
+      "passed": true,
+      "source_sha256": "a441ba44ab8294f359c1ea864d045cc4e6fb5d123930684db4b02ee3c1749f77"
+    },
+    {
+      "mode": "full",
+      "case": "anomaly.sphinx-doc__sphinx-10323.call70.onset",
+      "seed": 44,
+      "decode_tokens": 190,
+      "passed": true,
+      "source_sha256": "a441ba44ab8294f359c1ea864d045cc4e6fb5d123930684db4b02ee3c1749f77"
+    }
+  ],
+  "errors": [],
+  "scope": "Replay counter consistency, not numerical accuracy or serving performance."
+}

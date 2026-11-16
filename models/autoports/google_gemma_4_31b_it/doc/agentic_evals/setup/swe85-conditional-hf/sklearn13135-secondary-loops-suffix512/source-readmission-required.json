@@ -1,0 +1,11 @@
+{
+  "status": "not_runnable_until_root_readmission",
+  "reason": "Identity guard changed precision_repro_hf.py. The runner now verifies exact TT conditioning prompt identity and forced-token window alignment before publishing comparison rows. Generation algorithm, sampling and case inputs are unchanged; source hashes were refreshed. The original admission is stale and explicitly does not authorize current execution.",
+  "new_hf_runner_sha256": "dc604d7f6c7e71785f163c5bf85dbb1cae07fa35a05787428a53670e83259e47",
+  "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-loop-branch-investigation/identity-guard-applied.json",
+  "prior_admission_sha256": "4fc2b351911c051a6d40e2911f9dea35639444ff8b510157d1cd040d292ca089",
+  "prior_admission_path": "before-identity-guard-repin/admission.json",
+  "candidate_proposal_sha256": "15763a149c580625a2072ca21e9bb207adf2d45c3dbbc7bc9ba0544fa2232cea",
+  "candidate_commands_sha256": "da56b1dc1b49e51d5d51a19a293b164f884e251132f17669b2d9cfc38413834d",
+  "candidate_source_integrity_sha256": "c18763ca1f32802cd63e7654f85f15ee24f44aa39008a0eba06971d7b9f178ec"
+}

@@ -1,0 +1,67 @@
+{
+  "status": "prepared_not_executed_reconstruction_caveat",
+  "native_response_id": "chatcmpl-9d9f50568802ad41",
+  "first_adjacent_complete_motif_char": 29011,
+  "motif_characters": 57,
+  "motif_exact_repetitions_from_onset": 1245,
+  "prefix_tokens": 19223,
+  "short_tf_tokens": 64,
+  "free_trials": 3,
+  "free_tokens_each": 1024,
+  "fallback": "one_cycle_cases.json preserves one prior loop iteration; run only if initial short case does not reproduce. Do not claim reproduction until observed.",
+  "correct_branch": null,
+  "validation": {
+    "status": "host_preparation",
+    "native_prompt_tokens": 11361,
+    "rendered_prompt_tokens": 11360,
+    "prompt_count_matches": false,
+    "native_completion_tokens": 32768,
+    "content_retokenized_tokens": 32763,
+    "native_reasoning_tokens": 2,
+    "native_seed": null,
+    "diagnostic_seeds": [
+      42,
+      43,
+      44
+    ],
+    "sampling": {
+      "temperature": 1.0,
+      "top_p": 0.95,
+      "top_k": 20
+    },
+    "revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+    "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-phase2-ready/astropy-new-responses/chatcmpl-9d9f50568802ad41.private.json"
+  },
+  "reconstructed_completion_with_empty_channel_tokens": 32768,
+  "hf_reference": "Not generated; pinned HF/GPU comparison remains required if full precision also degenerates.",
+  "estimated_cost": "One load per configuration, two~18\u201319k prefills forTF and six1024free trials. Prior shorter-prefix speeds imply~3min served/~6min full decode lowerbounds; budget20\u201340min/config includingload/prefill, unmeasured longprefix cost.",
+  "device_execution": false,
+  "cases": [
+    {
+      "name": "astropy.onset",
+      "native_response_id": "chatcmpl-9d9f50568802ad41",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe-astropy-precision/astropy.onset.private.json",
+      "first_anomaly_preserved_sha256": "4eeb77b8e5a94966a2a54a60f60fc617d425e6e7982f4f719b4e46b45e651b24",
+      "prefix_tokens": 19223,
+      "onset_content_char": 29011
+    },
+    {
+      "name": "astropy.second.onset",
+      "native_response_id": "chatcmpl-bdff2676d029ceb6",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe-astropy-precision/second-call/astropy.onset.private.json",
+      "prefix_tokens": 17601,
+      "onset_content_char": 23157,
+      "native_prompt_tokens": 11495,
+      "reconstructed_prompt_tokens": 11494,
+      "native_completion_tokens": 32768,
+      "reconstructed_completion_tokens": 32769,
+      "onset_basis": "First occurrence of fresh-triage repeated bash-tool phrase; later repeated2049times. First occurrence precedes fully stable exact repetition.",
+      "reconstruction": "One fewer prompt token and one extra reconstructed reply token. Empty canonical thinking-channel boundary is inferred, not saved native IDs. Do not equate count matching with exactness.",
+      "correct_branch": null
+    }
+  ],
+  "scope": "Two distinct anomalous native calls require separate served/full controls. Shared cause is not assumed.",
+  "total_short_tf_positions_per_config": 128,
+  "total_free_continuations_per_config": 6,
+  "total_generated_tokens_cap_per_config": 6144
+}

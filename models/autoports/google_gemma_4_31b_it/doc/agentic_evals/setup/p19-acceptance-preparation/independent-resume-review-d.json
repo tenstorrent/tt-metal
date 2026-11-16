@@ -1,0 +1,597 @@
+{
+  "review": "Independent host-only review of P19 resumed-prefill acceptance and B8 probe prerequisites",
+  "reviewed_date": "2026-11-15",
+  "scope": "Read existing output and implementation source only. No model, TTNN, hardware, or device commands; no source or selection changes.",
+  "resume_run": {
+    "status": "nonzero_exit",
+    "process_exit_code": 1,
+    "elapsed_seconds": 338.6101539134979,
+    "command_sha256": "3828149f51286d114ae17e4bae96de8522363dd085f2d9dba34471c46e87a832",
+    "output_sha256": "18954ec0d724fe962f23f0d1094a22ef2699b1a3648d3f9c3162298528147f45",
+    "config": {
+      "lengths": [
+        2560,
+        16384
+      ],
+      "block_sizes": [
+        32,
+        64
+      ],
+      "sliding_window": 1024,
+      "window": 256,
+      "tile": 32,
+      "controls": [
+        "no_history",
+        "fresh_suffix"
+      ]
+    },
+    "thresholds": {
+      "pcc_mean_min": 0.99,
+      "pcc_min_min": 0.98,
+      "top1_min": 0.98,
+      "control_min_window": 64
+    },
+    "case_count": 14,
+    "passed_case_count": 4,
+    "failed_case_count": 10,
+    "case_rows": [
+      {
+        "length": 2560,
+        "start": 32,
+        "kind": "block_aligned",
+        "positions": 257,
+        "pcc_mean": 0.9314420310576806,
+        "pcc_min": 0.545735034209753,
+        "top1_agreement": 0.8249027132987976,
+        "last_top1_equal": true,
+        "pass": false,
+        "reasons": [
+          "pcc_mean 0.9314 < 0.99",
+          "pcc_min 0.5457 < 0.98",
+          "top1_agreement 0.8249 < 0.98"
+        ],
+        "controls": {
+          "no_history": {
+            "positions": 257,
+            "pcc_mean": 0.7640285428035418,
+            "pcc_min": 0.22038941928470712,
+            "top1_agreement": 0.5525291562080383,
+            "last_top1_equal": false,
+            "failed_as_expected": true
+          },
+          "fresh_suffix": {
+            "positions": 257,
+            "pcc_mean": 0.7622242731006486,
+            "pcc_min": 0.5280864356554675,
+            "top1_agreement": 0.5252918004989624,
+            "last_top1_equal": false,
+            "failed_as_expected": true
+          }
+        }
+      },
+      {
+        "length": 2560,
+        "start": 64,
+        "kind": "lcm_aligned",
+        "positions": 257,
+        "pcc_mean": 0.9648002235660474,
+        "pcc_min": 0.4404175325990273,
+        "top1_agreement": 0.8560311198234558,
+        "last_top1_equal": true,
+        "pass": false,
+        "reasons": [
+          "pcc_mean 0.9648 < 0.99",
+          "pcc_min 0.4404 < 0.98",
+          "top1_agreement 0.8560 < 0.98"
+        ],
+        "controls": {
+          "no_history": {
+            "positions": 257,
+            "pcc_mean": 0.7133176750277839,
+            "pcc_min": 0.06927566819135887,
+            "top1_agreement": 0.548638105392456,
+            "last_top1_equal": false,
+            "failed_as_expected": true
+          },
+          "fresh_suffix": {
+            "positions": 257,
+            "pcc_mean": 0.7670534875197489,
+            "pcc_min": 0.4650671598005786,
+            "top1_agreement": 0.5291828513145447,
+            "last_top1_equal": false,
+            "failed_as_expected": true
+          }
+        }
+      },
+      {
+        "length": 2560,
+        "start": 132,
+        "kind": "tile_unaligned",
+        "positions": 257,
+        "pcc_mean": 0.9939209862455194,
+        "pcc_min": 0.7146739078845068,
+        "top1_agreement": 0.9805447459220886,
+        "last_top1_equal": true,
+        "pass": false,
+        "reasons": [
+          "pcc_min 0.7147 < 0.98"
+        ],
+        "controls": {
+          "no_history": {
+            "positions": 257,
+            "pcc_mean": 0.6485968033952246,
+            "pcc_min": 0.13290683487476632,
+            "top1_agreement": 0.4124513566493988,
+            "last_top1_equal": false,
+            "failed_as_expected": true
+          },
+          "fresh_suffix": {
+            "positions": 257,
+            "pcc_mean": 0.7433777958911635,
+            "pcc_min": 0.468798399561541,
+            "top1_agreement": 0.5836575627326965,
+            "last_top1_equal": false,
+            "failed_as_expected": true
+          }
+        }
+      },
+      {
+        "length": 2560,
+        "start": 1024,
+        "kind": "window_start",
+        "positions": 257,
+        "pcc_mean": 1.000002403800841,
+        "pcc_min": 0.9999654200027003,
+        "top1_agreement": 1.0,
+        "last_top1_equal": true,
+        "pass": true,
+        "reasons": [],
+        "controls": {
+          "no_history": {
+            "positions": 257,
+            "pcc_mean": 0.3549783793860961,
+            "pcc_min": -0.04457365076593087,
+            "top1_agreement": 0.1284046620130539,
+            "last_top1_equal": false,
+            "failed_as_expected": true
+          },
+          "fresh_suffix": {
+            "positions": 257,
+            "pcc_mean": 0.5330941735259638,
+            "pcc_min": 0.20576690086773297,
+            "top1_agreement": 0.18287937343120575,
+            "last_top1_equal": false,
+            "failed_as_expected": true
+          }
+        }
+      },
+      {
+        "length": 2560,
+        "start": 1029,
+        "kind": "window_plus_unaligned",
+        "positions": 257,
+        "pcc_mean": 0.9877395121094794,
+        "pcc_min": 0.5660654815650257,
+        "top1_agreement": 0.9416342377662659,
+        "last_top1_equal": true,
+        "pass": false,
+        "reasons": [
+          "pcc_mean 0.9877 < 0.99",
+          "pcc_min 0.5661 < 0.98",
+          "top1_agreement 0.9416 < 0.98"
+        ],
+        "controls": {
+          "no_history": {
+            "positions": 257,
+            "pcc_mean": 0.3865725618943981,
+            "pcc_min": -0.06290613401105552,
+            "top1_agreement": 0.14007781445980072,
+            "last_top1_equal": false,
+            "failed_as_expected": true
+          },
+          "fresh_suffix": {
+            "positions": 257,
+            "pcc_mean": 0.5624087128093465,
+            "pcc_min": 0.15831234399995367,
+            "top1_agreement": 0.1906614750623703,
+            "last_top1_equal": false,
+            "failed_as_expected": true
+          }
+        }
+      },
+      {
+        "length": 2560,
+        "start": 2496,
+        "kind": "prefix_cache_hit",
+        "positions": 64,
+        "pcc_mean": 0.9982861483183403,
+        "pcc_min": 0.9328852047871776,
+        "top1_agreement": 0.953125,
+        "last_top1_equal": true,
+        "pass": false,
+        "reasons": [
+          "pcc_min 0.9329 < 0.98",
+          "top1_agreement 0.9531 < 0.98"
+        ],
+        "controls": {
+          "no_history": {
+            "positions": 64,
+            "pcc_mean": 0.18270020255374564,
+            "pcc_min": -0.07272313134809483,
+            "top1_agreement": 0.140625,
+            "last_top1_equal": false,
+            "failed_as_expected": true
+          },
+          "fresh_suffix": {
+            "positions": 64,
+            "pcc_mean": 0.47029555673825457,
+            "pcc_min": 0.23170820157242739,
+            "top1_agreement": 0.125,
+            "last_top1_equal": false,
+            "failed_as_expected": true
+          }
+        }
+      },
+      {
+        "length": 2560,
+        "start": 2559,
+        "kind": "last_token",
+        "positions": 1,
+        "pcc_mean": 0.9996085077123981,
+        "pcc_min": 0.9996085077123981,
+        "top1_agreement": 1.0,
+        "last_top1_equal": true,
+        "pass": true,
+        "reasons": [],
+        "controls": {}
+      },
+      {
+        "length": 16384,
+        "start": 32,
+        "kind": "block_aligned",
+        "positions": 257,
+        "pcc_mean": 0.9314516893668603,
+        "pcc_min": 0.545735034209753,
+        "top1_agreement": 0.8249027132987976,
+        "last_top1_equal": true,
+        "pass": false,
+        "reasons": [
+          "pcc_mean 0.9315 < 0.99",
+          "pcc_min 0.5457 < 0.98",
+          "top1_agreement 0.8249 < 0.98"
+        ],
+        "controls": {
+          "no_history": {
+            "positions": 257,
+            "pcc_mean": 0.7649072563846739,
+            "pcc_min": 0.22038941928470712,
+            "top1_agreement": 0.5525291562080383,
+            "last_top1_equal": false,
+            "failed_as_expected": true
+          },
+          "fresh_suffix": {
+            "positions": 257,
+            "pcc_mean": 0.7629955385380097,
+            "pcc_min": 0.5280864356554675,
+            "top1_agreement": 0.5252918004989624,
+            "last_top1_equal": false,
+            "failed_as_expected": true
+          }
+        }
+      },
+      {
+        "length": 16384,
+        "start": 64,
+        "kind": "lcm_aligned",
+        "positions": 257,
+        "pcc_mean": 0.9648112214797356,
+        "pcc_min": 0.4404175325990273,
+        "top1_agreement": 0.8560311198234558,
+        "last_top1_equal": true,
+        "pass": false,
+        "reasons": [
+          "pcc_mean 0.9648 < 0.99",
+          "pcc_min 0.4404 < 0.98",
+          "top1_agreement 0.8560 < 0.98"
+        ],
+        "controls": {
+          "no_history": {
+            "positions": 257,
+            "pcc_mean": 0.7144382265377411,
+            "pcc_min": 0.06927566819135887,
+            "top1_agreement": 0.548638105392456,
+            "last_top1_equal": false,
+            "failed_as_expected": true
+          },
+          "fresh_suffix": {
+            "positions": 257,
+            "pcc_mean": 0.7674289408689153,
+            "pcc_min": 0.4650671598005786,
+            "top1_agreement": 0.533073902130127,
+            "last_top1_equal": true,
+            "failed_as_expected": true
+          }
+        }
+      },
+      {
+        "length": 16384,
+        "start": 132,
+        "kind": "tile_unaligned",
+        "positions": 257,
+        "pcc_mean": 0.9939460111653561,
+        "pcc_min": 0.7146739078845068,
+        "top1_agreement": 0.9805447459220886,
+        "last_top1_equal": true,
+        "pass": false,
+        "reasons": [
+          "pcc_min 0.7147 < 0.98"
+        ],
+        "controls": {
+          "no_history": {
+            "positions": 257,
+            "pcc_mean": 0.6495144515096029,
+            "pcc_min": 0.13290683487476632,
+            "top1_agreement": 0.4124513566493988,
+            "last_top1_equal": false,
+            "failed_as_expected": true
+          },
+          "fresh_suffix": {
+            "positions": 257,
+            "pcc_mean": 0.7445078965311388,
+            "pcc_min": 0.468798399561541,
+            "top1_agreement": 0.5836575627326965,
+            "last_top1_equal": false,
+            "failed_as_expected": true
+          }
+        }
+      },
+      {
+        "length": 16384,
+        "start": 1024,
+        "kind": "window_start",
+        "positions": 257,
+        "pcc_mean": 1.0000024325752543,
+        "pcc_min": 0.9999654200027003,
+        "top1_agreement": 1.0,
+        "last_top1_equal": true,
+        "pass": true,
+        "reasons": [],
+        "controls": {
+          "no_history": {
+            "positions": 257,
+            "pcc_mean": 0.3558774500472518,
+            "pcc_min": -0.04457365076593087,
+            "top1_agreement": 0.1284046620130539,
+            "last_top1_equal": false,
+            "failed_as_expected": true
+          },
+          "fresh_suffix": {
+            "positions": 257,
+            "pcc_mean": 0.5341226229222074,
+            "pcc_min": 0.20576690086773297,
+            "top1_agreement": 0.18677042424678802,
+            "last_top1_equal": true,
+            "failed_as_expected": true
+          }
+        }
+      },
+      {
+        "length": 16384,
+        "start": 1029,
+        "kind": "window_plus_unaligned",
+        "positions": 257,
+        "pcc_mean": 0.9877389277798896,
+        "pcc_min": 0.5660654815650257,
+        "top1_agreement": 0.9416342377662659,
+        "last_top1_equal": true,
+        "pass": false,
+        "reasons": [
+          "pcc_mean 0.9877 < 0.99",
+          "pcc_min 0.5661 < 0.98",
+          "top1_agreement 0.9416 < 0.98"
+        ],
+        "controls": {
+          "no_history": {
+            "positions": 257,
+            "pcc_mean": 0.3874012966503401,
+            "pcc_min": -0.06290613401105552,
+            "top1_agreement": 0.14007781445980072,
+            "last_top1_equal": false,
+            "failed_as_expected": true
+          },
+          "fresh_suffix": {
+            "positions": 257,
+            "pcc_mean": 0.5633565867622691,
+            "pcc_min": 0.15831234399995367,
+            "top1_agreement": 0.19455252587795258,
+            "last_top1_equal": true,
+            "failed_as_expected": true
+          }
+        }
+      },
+      {
+        "length": 16384,
+        "start": 16320,
+        "kind": "prefix_cache_hit",
+        "positions": 64,
+        "pcc_mean": 0.9882682273859029,
+        "pcc_min": 0.7408908241664022,
+        "top1_agreement": 0.90625,
+        "last_top1_equal": true,
+        "pass": false,
+        "reasons": [
+          "pcc_mean 0.9883 < 0.99",
+          "pcc_min 0.7409 < 0.98",
+          "top1_agreement 0.9062 < 0.98"
+        ],
+        "controls": {
+          "no_history": {
+            "positions": 64,
+            "pcc_mean": 0.057429353442471257,
+            "pcc_min": -0.1398955160082583,
+            "top1_agreement": 0.046875,
+            "last_top1_equal": false,
+            "failed_as_expected": true
+          },
+          "fresh_suffix": {
+            "positions": 64,
+            "pcc_mean": 0.44011732055718195,
+            "pcc_min": 0.26914864252122966,
+            "top1_agreement": 0.078125,
+            "last_top1_equal": false,
+            "failed_as_expected": true
+          }
+        }
+      },
+      {
+        "length": 16384,
+        "start": 16383,
+        "kind": "last_token",
+        "positions": 1,
+        "pcc_mean": 0.9996767132265567,
+        "pcc_min": 0.9996767132265567,
+        "top1_agreement": 1.0,
+        "last_top1_equal": true,
+        "pass": true,
+        "reasons": [],
+        "controls": {}
+      }
+    ],
+    "assessment": "Resume-vs-fresh comparison fails its recorded gates: 10/14 cases fail, 4 pass. Starts 32/64 show large PCC and top-1 discrepancies replicated at lengths 2560 and 16384. Starts 132, 1029, and prefix-cache hits also fail at least one metric. Starts 1024 and last-token pass. Negative controls fail their gates in every case where the >=64-position control window applies, demonstrating check sensitivity. This establishes a candidate resumed-prefill equivalence failure; it does not attribute cause to cache logic versus precision/chunk-shape numerical effects.",
+    "source_semantics": "Installed runner compares logits from full prefill (start=0) with prefix tokens[:start] followed by suffix continuation at the same absolute start, on the same generator-owned cache/page table, over positions [start,start+256) plus final position. no_history skips prefix fill; fresh_suffix re-prefills tokens[start:] at position 0. Candidate uses exact same text tokens and runtime configuration. Source path and thresholds inspected in the pinned installed run_prefill_resume_check.py; generator.prefill_logits_continuation resets, reserves the full request, fills the prefix then calls the same chunked prefill driver on suffix.",
+    "interpretation_limit": "The JSON stores aggregate PCC/min/top1 only, not per-position logits or token-logit margin vectors; this artifact cannot establish whether mismatches are near-margin flips. A margin probe would need separate evidence and is not inferred here.",
+    "selection": "P19 cannot clear the resumed-prefill prerequisite from this run. It remains unselected; do not attribute or resolve the failure without a distinct root adjudication."
+  },
+  "b8_probe_review": {
+    "artifact": "setup/candidate-serving-prep/p19-b8-initial-serving-memory-probe.json",
+    "status": "prepared_host_only_not_run_not_admitted",
+    "candidate_policy_sha256": "540760ea34cea22459c9248b4ce8c90ad1b34e000b18e82b70552e45fd766fad",
+    "currently_selected_policy_sha256": "aa0e651fb3fdd7afc285293645c5ca309b2da246619e6e7fb6da86c5d2f28853",
+    "selected_policy_is_candidate": false,
+    "source_pin_count": 16,
+    "source_pin_mismatch_count": 0,
+    "command_assessment": "Prepared wrapper launches the local autoport through tests/run_serving.sh, requests B8, preserves max-model-len 262144, chunked prefill, prefix caching, response logging and operator top_k=32 override; benchmark_server validates exact autoport registration and full expected precision when observing server. GEMMA4_KV_POOL_IDS=20480 is parsed as a fixed pool and the candidate minimum/context guard is retained. Configuration/command design is internally consistent as a future memory probe, but it is not a measured fit or capacity result.",
+    "required_gate": "Do not launch until P19 is selected explicitly and tt/selected_precision_config.json matches the candidate bytes, resumed-prefill issue is adjudicated/required gate passes, and root performs fresh owner/port/path/deadline admission. No memory capacity claim follows from current B1 inventory or the proposed 20480 IDs.",
+    "source_pins": {
+      "models/autoports/google_gemma_4_31b_it/tools/benchmark_server.py": {
+        "expected": "edf1461896dca830bf850a50deca6440850505332ee6945708e0b0790039e172",
+        "actual": "edf1461896dca830bf850a50deca6440850505332ee6945708e0b0790039e172",
+        "matches": true
+      },
+      "models/autoports/google_gemma_4_31b_it/tests/run_serving.sh": {
+        "expected": "d28591498e846f54b63723bff8669640959af40e6c4a318d88e4e1c0153c174d",
+        "actual": "d28591498e846f54b63723bff8669640959af40e6c4a318d88e4e1c0153c174d",
+        "matches": true
+      },
+      "models/autoports/google_gemma_4_31b_it/tools/serving_paths.py": {
+        "expected": "f9f21213dd7e999fcde94dddd5eb0f7cc4359854c7433073455efeb11990a848",
+        "actual": "f9f21213dd7e999fcde94dddd5eb0f7cc4359854c7433073455efeb11990a848",
+        "matches": true
+      },
+      "models/autoports/google_gemma_4_31b_it/tt/precision.py": {
+        "expected": "2f223a118fe713677b9ce4fb3beb2f563e26af56ef45a98b2e03fad1e25664a9",
+        "actual": "2f223a118fe713677b9ce4fb3beb2f563e26af56ef45a98b2e03fad1e25664a9",
+        "matches": true
+      },
+      "models/autoports/google_gemma_4_31b_it/tt/selected_precision_config.json": {
+        "expected": "aa0e651fb3fdd7afc285293645c5ca309b2da246619e6e7fb6da86c5d2f28853",
+        "actual": "aa0e651fb3fdd7afc285293645c5ca309b2da246619e6e7fb6da86c5d2f28853",
+        "matches": true
+      },
+      "models/autoports/google_gemma_4_31b_it/tt/generator_vllm.py": {
+        "expected": "5a19558b9b28b6a5586cc985bedebdd88671ba07b453ced2890935552937b734",
+        "actual": "5a19558b9b28b6a5586cc985bedebdd88671ba07b453ced2890935552937b734",
+        "matches": true
+      },
+      "models/autoports/google_gemma_4_31b_it/tt/kv_pool_budget.py": {
+        "expected": "67739175d88efe9e02cdbd5b5b559b4bac047ab7e57d7dc24ac47cff888ba081",
+        "actual": "67739175d88efe9e02cdbd5b5b559b4bac047ab7e57d7dc24ac47cff888ba081",
+        "matches": true
+      },
+      "models/autoports/google_gemma_4_31b_it/tt/serving_memory.py": {
+        "expected": "cfe9191dbb8f57fa8390388576bb1a6d4163bf0e319dc287dd4ddde0af81171d",
+        "actual": "cfe9191dbb8f57fa8390388576bb1a6d4163bf0e319dc287dd4ddde0af81171d",
+        "matches": true
+      },
+      "models/autoports/google_gemma_4_31b_it/tt/response_logging.py": {
+        "expected": "825fa2d47bcac886724fd9186f1162b468c8f275602c2cd48cbdd443887eb7e8",
+        "actual": "825fa2d47bcac886724fd9186f1162b468c8f275602c2cd48cbdd443887eb7e8",
+        "matches": true
+      },
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/bf16-hifi4-kv-down-bfp8-accuracy-p19/precision.json": {
+        "expected": "540760ea34cea22459c9248b4ce8c90ad1b34e000b18e82b70552e45fd766fad",
+        "actual": "540760ea34cea22459c9248b4ce8c90ad1b34e000b18e82b70552e45fd766fad",
+        "matches": true
+      },
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/bf16-hifi4-kv-down-bfp8-accuracy-p19/root-terminal-review.json": {
+        "expected": "d38dc9792a73c407e52bbbdf425118c26b24f39b4d42b294ac4dca93be8c080f",
+        "actual": "d38dc9792a73c407e52bbbdf425118c26b24f39b4d42b294ac4dca93be8c080f",
+        "matches": true
+      },
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/bf16-hifi4-kv-down-bfp8-accuracy-p19/completion.json": {
+        "expected": "3a70eeb650ec14284c5eab5d0afb73c62e9a322ff67912de6d87d2cddcd6ef42",
+        "actual": "3a70eeb650ec14284c5eab5d0afb73c62e9a322ff67912de6d87d2cddcd6ef42",
+        "matches": true
+      },
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/candidate-serving-prep/p19-memory-planning.json": {
+        "expected": "6ce2099d9d00c1fcc71718bc45de6316fa322a57e75622251bbba8cfcd02b334",
+        "actual": "6ce2099d9d00c1fcc71718bc45de6316fa322a57e75622251bbba8cfcd02b334",
+        "matches": true
+      },
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe_server_size.json": {
+        "expected": "9143219361974fb09492f66219ef32cdf52b6701917797e851bd585275ca6666",
+        "actual": "9143219361974fb09492f66219ef32cdf52b6701917797e851bd585275ca6666",
+        "matches": true
+      },
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/headline-head-bfp8-b1/configuration-b1.json": {
+        "expected": "b7bb32c0bf4dc1a2660d3ea2ca088e94220f0407087a1ab80718eb2bbaf0904f",
+        "actual": "b7bb32c0bf4dc1a2660d3ea2ca088e94220f0407087a1ab80718eb2bbaf0904f",
+        "matches": true
+      },
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/headline-head-bfp8-b1/launch.json": {
+        "expected": "28f74bf7eda744e9e4729c5a8a548567f3b69944a7df381c4960820a9d1b3e6c",
+        "actual": "28f74bf7eda744e9e4729c5a8a548567f3b69944a7df381c4960820a9d1b3e6c",
+        "matches": true
+      }
+    }
+  },
+  "evidence_hashes": {
+    "resume_completion_sha256": "572bd3e79ae085d9500cdf3df42453fce13c92c3c9db1251b55d29b40b47e793",
+    "resume_launch_sha256": "57f0cc81d6c9f1a2e0bc9e94639f2e24b8fe0f65ddec12b0cc82ed81b479600a",
+    "resume_build_kwargs_sha256": "b253ec0c3cd010e97498129b95810aa9d5834ae2a215b31c220805fd5e4e8835",
+    "p19_acceptance_root_review_sha256": "f91e3e9a05e8e8b5c989cfdb0fc609a8b138f6a9539218db899eb6fdd56074d4",
+    "resume_runner_sha256": "745e881d5065f8388bea0fd057fccad86367d1dc1dfa85c371c48af51f6a4833",
+    "candidate_generator_sha256": "3276fd7427898077ab25e139f89a7b03d2a968cd9bafb79e9aa08bb975016f22"
+  },
+  "ccl_probe_review": {
+    "existing_probe": "models/autoports/google_gemma_4_31b_it/tests/probe_resume_ccl.py",
+    "findings": [
+      "The existing probe omits precision_config, so it does not pin the P19 policy.",
+      "Its capture hook explicitly typecasts local projection rows to bfloat8_b, which changes the P19 BF16 CCL input and cannot test the P19 reduction path.",
+      "The production model sets prefill_ccl_bfp8 from ccl_dtype.prefill == bfloat8_b. P19 explicitly has BF16 prefill and decode CCL; therefore the absolute phase correction predicate is false for P19.",
+      "P19 resume failure is measured end-to-end and does not establish the CCL hypothesis. A same-tensor local reduction comparison is a discriminating mechanism test only."
+    ],
+    "candidate_probe": "models/autoports/google_gemma_4_31b_it/tests/probe_resume_ccl_p19_bf16.py",
+    "candidate_sha256": "45fa791ca0c31727ae48770cfacd313b06181c67f406efe3b0d0a46a2ae45c64",
+    "candidate_scope": "Explicit P19 precision file; layer0/5 reduced stack; captures identical real BF16 layer0 self_attn.o_proj and mlp.down_proj tensors, compares full reduction against suffix slices at starts 32/64/128/256, with direct and leading/tail padding variants. Does not run and does not change model code.",
+    "validation": "python -m py_compile passed only; no module import, TTNN import, hardware access, or inference run.",
+    "exact_policy": {
+      "config_id": "stage12_bf16_hifi4_kv_down_bfp8_p19",
+      "ccl_dtype": {
+        "prefill": "bfloat16",
+        "decode": "bfloat16"
+      },
+      "activation_dtype": "bfloat16",
+      "kv_cache_dtype": "bfloat8_b",
+      "sdpa_compute_fidelity": "HiFi4"
+    },
+    "source_sha256": {
+      "tests/probe_resume_ccl.py": "db0c3f1befe721a912df3f090eb12a0b1d0224f86d7e89592128556df6961988",
+      "tests/probe_resume_ccl_p19_bf16.py": "45fa791ca0c31727ae48770cfacd313b06181c67f406efe3b0d0a46a2ae45c64",
+      "tt/generator.py": "3276fd7427898077ab25e139f89a7b03d2a968cd9bafb79e9aa08bb975016f22",
+      "tt/model.py": "c65ed33bb175f63603946eea561a2623cad0b70521428bdf888bd9445457a01e",
+      "tt/multichip_decoder.py": "c7a4cb14edfe46649b904c0fbb6f3fec14e123e194b31950adfa76c224d201f6",
+      "precision.json": "540760ea34cea22459c9248b4ce8c90ad1b34e000b18e82b70552e45fd766fad"
+    }
+  }
+}

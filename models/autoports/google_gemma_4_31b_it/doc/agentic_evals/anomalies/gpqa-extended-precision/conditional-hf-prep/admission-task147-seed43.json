@@ -1,0 +1,12 @@
+{
+  "status": "admitted_not_launched",
+  "admitted_unix": 1794664682.7095373,
+  "cases": [
+    "task147.onset.suffix512"
+  ],
+  "seed": 43,
+  "tokens": 512,
+  "basis": "Predeclared matching seed43 served and full TT both reproduce unchanged repeated prompts. Root read entirefull43 and accepts fresh independent review. Full42 also anomalous but served42 inconclusive; retain predeclared43.",
+  "required_before_launch": "Eight-case CPU HF batch finishes; no other HF model; MemAvailable>=100GB.",
+  "manifest_sha256": "682e7ebe2fed606a6a8261093934784c0bfba064c40d8d32d9ab84a92eff41a6"
+}

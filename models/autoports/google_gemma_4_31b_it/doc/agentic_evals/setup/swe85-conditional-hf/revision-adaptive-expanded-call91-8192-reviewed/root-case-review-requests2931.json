@@ -1,0 +1,35 @@
+{
+  "status": "completed_root_and_independent_triage_reconciled",
+  "reviewer": "root",
+  "at_utc": "2026-11-15T08:12:16.183354+00:00",
+  "admission_sha256": "74640276fdf5e463fa968d5d188994622759df96f09d4f408e02712b7d09ae66",
+  "launch_sha256": "72d715ddf08a150cbfda72949bc8e0713e5037ff245ee97d4cdcb7c0ed35276f",
+  "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/results/seed42-suffix512/anomaly.requests2931.call20.canonicalprefix.optional-suffix512.hf.private.json",
+  "result_sha256": "a91e0aff64f340594679d595122c256f280e66e650a512ce34a85d52ed432156",
+  "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-85/anomaly.requests2931.call20.canonicalprefix.suffix512.private.json",
+  "case_sha256": "5017461630f07f8232f054ddf6c2b979c4e3bb14370431de6799ca8c4d1d7804",
+  "prompt_tokens": 512,
+  "seed": 42,
+  "generated_tokens": 512,
+  "verdict": "native",
+  "cause": "caret-only repetition",
+  "evidence": "All512 generated IDs are172109; all2048 decoded characters are carets. Mechanical flag=true. This is a demonstrated loop, not progressing at cap.",
+  "trial_wall_seconds": 1032.3833539891057,
+  "tt_forced_top1_agreement": {
+    "served": {
+      "positions": 64,
+      "agreement": 1.0
+    },
+    "full": {
+      "positions": 64,
+      "agreement": 1.0
+    }
+  },
+  "interpretation": "Pinned HF reproduces the caret anomaly on the exact saved shortened diagnostic input used by served/full TT. No exact native-prompt or native-ID-stream equivalence, incidence or score claim.",
+  "group_status": "second case still running; no group completion or forecast adjudication yet",
+  "independent_review": {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/reviewed/triage-b-requests2931.json",
+    "sha256": "d9159f7af30adab648c7d9197dff4bc7f232d562aee50ab4171aedc3a843b4fa"
+  },
+  "runner_cumulative_wall_seconds": 1051.8399178220425
+}

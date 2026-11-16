@@ -1,0 +1,175 @@
+{
+  "status": "admitted_not_yet_executed",
+  "admitted_utc": "2026-11-14T23:48:01.241869+00:00",
+  "jobs": 6,
+  "manifest_sha256": "41b7db2aec3de94bee0a104994317227644b1f3801310cc02fd3c81ed72774bd",
+  "fixtures": [
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-85/anomaly.psf__requests-5414.call10.onset.suffix512.private.json",
+      "sha256": "2b07ede0d19c5a988848558b162c2dcb609ff4a82d5a749217fd18f0dd0c34b2",
+      "source_job": "anomaly.psf__requests-5414.call10.onset",
+      "source_tokens": 7057
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-85/anomaly.psf__requests-5414.call11.onset.suffix512.private.json",
+      "sha256": "705c84003084ef0866174aa7d7840b54ca8287a4daa5f3a0b98c5a7dbc88aa74",
+      "source_job": "anomaly.psf__requests-5414.call11.onset",
+      "source_tokens": 7226
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-85/anomaly.psf__requests-5414.call9.onset.suffix512.private.json",
+      "sha256": "65bee8810c20fad26b0f11ed779396f5a1c35b4111072cd5ae61ad2da0049517",
+      "source_job": "anomaly.psf__requests-5414.call9.onset",
+      "source_tokens": 8383
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-85/anomaly.requests2931.call20.canonicalprefix.suffix512.private.json",
+      "sha256": "5017461630f07f8232f054ddf6c2b979c4e3bb14370431de6799ca8c4d1d7804",
+      "source_job": "anomaly.requests2931.call20.canonicalprefix",
+      "source_tokens": 8580
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-85/anomaly.pytest-dev__pytest-7432.call19.onset.suffix512.private.json",
+      "sha256": "7ca8039708a12c24acd3c2cfb1c2c51b8946e99df118576545605efad6225bf4",
+      "source_job": "anomaly.pytest-dev__pytest-7432.call19.onset",
+      "source_tokens": 11095
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-85/anomaly.sympy__sympy-14248.call53.onset.suffix512.private.json",
+      "sha256": "91359efd10ca926d39011351f97d53948db58fc4fedd961705ad4c0a462dbad1",
+      "source_job": "anomaly.sympy__sympy-14248.call53.onset",
+      "source_tokens": 32660
+    }
+  ],
+  "review": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/review/swe85-optional-short-fixtures-review.json",
+  "review_sha256": "de65d7329b7131c7165b9ff17e2922129338907d25aa1f3d9576a77532b77152",
+  "coordinator_evidence": [
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-b.json",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-c.json",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-d.json"
+  ],
+  "gate": "All6full canonical-prefix cases reproduce native caret degeneration at seeds42/43/44. Fixture-preparation agent mechanical review and root suffix/hash checks passed; not independent stage signoff. Root admits same512suffix served/full comparison.",
+  "shortening_limit": "Exactly last512saved IDs, no added BOS/template. Drops original context; clean short output cannot explain native anomaly.",
+  "HF_gate": "Only short inputs with coordinator-confirmed fullTT anomaly may go to pinned HF. No HF launch by this queue.",
+  "commands": {
+    "served": [
+      "timeout",
+      "3600",
+      "env",
+      "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+      "READINESS_TRACE_REGION_SIZE=134217728",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tools.precision_repro_batch",
+      "--cases",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/admitted-cases.json",
+      "--build-kwargs-file",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/head_bfp8_build_kwargs.json",
+      "--output-dir",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/served"
+    ],
+    "full": [
+      "timeout",
+      "3600",
+      "env",
+      "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+      "READINESS_TRACE_REGION_SIZE=134217728",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tools.precision_repro_batch",
+      "--cases",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/admitted-cases.json",
+      "--build-kwargs-file",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_build_kwargs.json",
+      "--output-dir",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/full",
+      "--compare-dir",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/served"
+    ]
+  },
+  "prediction": {
+    "served": {
+      "predicted_hours": 0.12441910075764288,
+      "range_hours": [
+        0.06220955037882144,
+        0.2115124712879929
+      ],
+      "load_seconds_basis": 140.70528853707947,
+      "rows": [
+        {
+          "job": "anomaly.psf__requests-5414.call10.onset.optional-suffix512",
+          "estimated_seconds": 48.941089391727246,
+          "source_TF_wall_seconds_unscaled_conservative": 3.5079115401022136
+        },
+        {
+          "job": "anomaly.psf__requests-5414.call11.onset.optional-suffix512",
+          "estimated_seconds": 49.14634393622795,
+          "source_TF_wall_seconds_unscaled_conservative": 3.624947164906189
+        },
+        {
+          "job": "anomaly.psf__requests-5414.call9.onset.optional-suffix512",
+          "estimated_seconds": 49.537570093645,
+          "source_TF_wall_seconds_unscaled_conservative": 3.866806205827743
+        },
+        {
+          "job": "anomaly.requests2931.call20.canonicalprefix.optional-suffix512",
+          "estimated_seconds": 49.601511819560415,
+          "source_TF_wall_seconds_unscaled_conservative": 3.9085013221483678
+        },
+        {
+          "job": "anomaly.pytest-dev__pytest-7432.call19.onset.optional-suffix512",
+          "estimated_seconds": 50.403989618354515,
+          "source_TF_wall_seconds_unscaled_conservative": 4.401300270110369
+        },
+        {
+          "job": "anomaly.sympy__sympy-14248.call53.onset.optional-suffix512",
+          "estimated_seconds": 59.57296933091982,
+          "source_TF_wall_seconds_unscaled_conservative": 10.343938844976947
+        }
+      ]
+    },
+    "full": {
+      "predicted_hours": 0.18977351677142082,
+      "range_hours": [
+        0.09488675838571041,
+        0.32261497851141535
+      ],
+      "load_seconds_basis": 75.54386684880592,
+      "rows": [
+        {
+          "job": "anomaly.psf__requests-5414.call10.onset.optional-suffix512",
+          "estimated_seconds": 97.89975867596709,
+          "source_TF_wall_seconds_unscaled_conservative": 6.532483668066561
+        },
+        {
+          "job": "anomaly.psf__requests-5414.call11.onset.optional-suffix512",
+          "estimated_seconds": 98.0800401013466,
+          "source_TF_wall_seconds_unscaled_conservative": 6.700830840971321
+        },
+        {
+          "job": "anomaly.psf__requests-5414.call9.onset.optional-suffix512",
+          "estimated_seconds": 98.65022657046978,
+          "source_TF_wall_seconds_unscaled_conservative": 7.117571000941098
+        },
+        {
+          "job": "anomaly.requests2931.call20.canonicalprefix.optional-suffix512",
+          "estimated_seconds": 98.86346338698363,
+          "source_TF_wall_seconds_unscaled_conservative": 7.256983602885157
+        },
+        {
+          "job": "anomaly.pytest-dev__pytest-7432.call19.onset.optional-suffix512",
+          "estimated_seconds": 100.1437275736926,
+          "source_TF_wall_seconds_unscaled_conservative": 8.087744676042348
+        },
+        {
+          "job": "anomaly.sympy__sympy-14248.call53.onset.optional-suffix512",
+          "estimated_seconds": 114.00357721984932,
+          "source_TF_wall_seconds_unscaled_conservative": 18.448180149076506
+        }
+      ]
+    }
+  },
+  "prediction_basis": "Observed same-case decode readback wall scaled to511replays; prefix overhead scaled by512/source_tokens; observed chosen-TF wall kept conservatively unchanged; one observed model load. Wide0.5\u20131.7interval for short-prefix/warmup variation. Host diagnostic only, not serving ranking.",
+  "timeout_each_seconds": 3600,
+  "launch_rule": "After supplemental full completion exit0 and empty device owners; served then full serially. Refuse duplicate launch."
+}

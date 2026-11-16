@@ -1,0 +1,63 @@
+{
+  "status": "admitted",
+  "start_unix": 1794778199.1387768,
+  "deadline_unix": 1794791725,
+  "command": [
+    "timeout",
+    "900",
+    "env",
+    "HF_HUB_OFFLINE=1",
+    "HF_DATASETS_OFFLINE=1",
+    "HF_HUB_DISABLE_TELEMETRY=1",
+    "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+    "READINESS_TRACE_REGION_SIZE=134217728",
+    "OMP_NUM_THREADS=16",
+    "MKL_NUM_THREADS=16",
+    "OPENBLAS_NUM_THREADS=16",
+    "TT_METAL_TRACE_ALLOC_TRACKING=1",
+    "TT_METAL_DEVICE_PROFILER=0",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+    "-m",
+    "models.autoports.google_gemma_4_31b_it.tools.precision_repro_batch",
+    "--cases",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/p19-q32-production-validation/fixed108/full-q32-protocol-controls/cases.json",
+    "--build-kwargs-file",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_build_kwargs.json",
+    "--output-dir",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/p19-q32-production-validation/fixed108/full-q32-protocol-controls/runs"
+  ],
+  "source_sha256": {
+    "models/autoports/google_gemma_4_31b_it/tools/precision_repro_batch.py": "172f5a1dd7a7403847e47b966ae79c306163650a60211418c7c195794ec5c125",
+    "models/autoports/google_gemma_4_31b_it/tools/precision_repro_probe.py": "2ffc23b9081d7be78f3a0e911da7c50dd51dbf80de07a8716d600579dad1c25f",
+    "models/autoports/google_gemma_4_31b_it/tt/precision.py": "2f223a118fe713677b9ce4fb3beb2f563e26af56ef45a98b2e03fad1e25664a9",
+    "models/autoports/google_gemma_4_31b_it/tt/model.py": "c65ed33bb175f63603946eea561a2623cad0b70521428bdf888bd9445457a01e",
+    "models/autoports/google_gemma_4_31b_it/tt/multichip_decoder.py": "6e3bbdb61f210dc57564ad28025a563136406d5ee49ba57a8010c505e9185474",
+    "models/autoports/google_gemma_4_31b_it/tt/optimized_decoder.py": "c0f2e5e1ac4517b435d3943fcce44071ac087f9ec214ea46fd0b06f773d68815",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/p19-q32-production-validation/fixed108/full-q32-protocol-controls/cases.json": "16042fa5fe4f10a4589e2eaffce787cfe86d44321cbf574378a30a68440a6e32",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/p19-q32-production-validation/fixed108/full-q32-protocol-controls/command.json": "7e220eabd6506f413b497f06bcd964108475561c03a092e1acadf77bae7f7ed6",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/p19-q32-production-validation/fixed108/full-q32-protocol-controls/forecast.json": "243fb2d18f46926936c9a243056b57c2ccd3ddf4b12d62bd1ad82706bcef69c2",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_build_kwargs.json": "ff2b5ed24e0b6a1dee7eb5cd8bd437d17c3df5f8f25567927d239e666f0699f9",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_config.json": "63ce02f7fa0df993a27daca25eeeb3adca51e15c7c6956d1cef122534ebdc7a9",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-extra-contraction-controls/sphinx-doc__sphinx-10323.call70.onset.private.json": "7d39e2c87e91327f35317968bf2647887a402d0086085ec8f95db8ff5fc2ab64",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.sympy__sympy-13878.call1.onset.seed44.private.json": "884cc1eebec08f3511e27e1b989fa0a779bf750611494cbbdd7b33937ac54420"
+  },
+  "forecast": {
+    "forecast_seconds": {
+      "low": 170,
+      "point": 260,
+      "high": 450
+    },
+    "timeout_seconds": 900,
+    "basis": "One full-model load anchored to measured P19 Q32 load107.582s, plus one65,779-token prefill and <=512decode and one1,968-token prefill and<=256decode. Existing P19 extension3cases took344.573s; this two-case full-BF16 control allows extra load/cache/decode time. Distinct precision, not a speed claim.",
+    "question": "Do full BF16 weights/down/KV HiFi4 restore valid tool protocol on exact Q32 cases54and89?",
+    "scope": "Two diagnostic controls, not evaluation or selection. Exact same saved prompts/seeds/sampling; full policy restores down BF16/HiFi4 and KV BF16."
+  },
+  "owner_check": {
+    "returncode": 1,
+    "stdout": "",
+    "stderr": ""
+  },
+  "active_model_processes": [],
+  "closure_reserve_seconds": 3600,
+  "remaining_hours": 3.757183673116896
+}

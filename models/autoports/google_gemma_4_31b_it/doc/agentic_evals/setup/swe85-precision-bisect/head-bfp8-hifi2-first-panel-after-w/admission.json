@@ -1,0 +1,8 @@
+{
+  "status": "admitted",
+  "proposal_sha256": "c95ae189a8a4cd37159f106b5da1d5bfc9c2a84d3dc6009ff52b86101e6ed550",
+  "driver_sha256": "74fe8a4db31949824f4e59cce087da5eecfc272d5e14fb962119b8b1f9f24100",
+  "note": "Execution is blocked until root explicitly admits. Driver waits for W terminal success, verifies V success, then checks empty TT device ownership and no active HF runner before launch.",
+  "admitted_unix": 1794722012.362709,
+  "coordinator_review": "Root read driver/proposal and selected HiFi2 policy; independent C fixed108/15 panel review accepted. V forecast misses explained; W terminalzero with both progressing controls adjudicated as other anomalies. All source hashes checked. No HF overlap, serial owner checks, timeout7200. This is a diagnostic arm, not selected precision or score change."
+}

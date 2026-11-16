@@ -1,0 +1,142 @@
+{
+  "status": "audit_only_root_adjudication_pending_no_policy_selection",
+  "scope": "CPU-only review of precision-bisect launch acceptance criteria. No inference, fixture mutation, admission, or policy selection.",
+  "checklist": [
+    {
+      "item": "Fixed panel integrity",
+      "assessment": "satisfied in proposal-c snapshot",
+      "evidence": "108 rows = 36 onset cases x seeds42/43/44; one row per onset+seed; current cap counts 72 at256 and36 at512. Every candidate arm must retain this panel; no favorable subset and no additional counted jobs.",
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-c/candidate-cases.json",
+      "sha256": "6300ef8d51a63fd600fa8b963e6b4b516d9f262301ef034e6f51bd47dc78fef2"
+    },
+    {
+      "item": "Reference-behavior positives kept separate",
+      "assessment": "staged but not yet executed in HF",
+      "evidence": "Three short full-TT native-positive cases are candidates for conditional HF; each corresponding initial-onset case/seed is in the fixed108 panel and full TT is coordinator-labeled reproduced_native_motif. These are reference-behavior controls, not served-only precision failures. HF is not yet run; this is not HF confirmation.",
+      "cases": [
+        {
+          "case": "anomaly.requests2931.call20.canonicalprefix",
+          "seed": 42,
+          "short_full_tt_motif": "caret-only512tokens",
+          "initial_panel_served_verdict": "reproduced_native_motif",
+          "initial_panel_full_verdict": "reproduced_native_motif",
+          "hf_status": "candidate only; HF not run",
+          "fixture_sha256": "5017461630f07f8232f054ddf6c2b979c4e3bb14370431de6799ca8c4d1d7804",
+          "full_short_output_sha256": "14ec7feaac78ac5659f21df7926336c2521648b4c9fb33966d0687610e9dfe98"
+        },
+        {
+          "case": "anomaly.sympy__sympy-14248.call53.onset",
+          "seed": 42,
+          "short_full_tt_motif": "caret-only512tokens",
+          "initial_panel_served_verdict": "reproduced_native_motif",
+          "initial_panel_full_verdict": "reproduced_native_motif",
+          "hf_status": "candidate only; HF not run",
+          "fixture_sha256": "91359efd10ca926d39011351f97d53948db58fc4fedd961705ad4c0a462dbad1",
+          "full_short_output_sha256": "c2f99685050adea2459487a86fffcf009129abb1698ca848ef402a1514d219d7"
+        },
+        {
+          "case": "anomaly.pytest-dev__pytest-7432.call19.onset",
+          "seed": 44,
+          "short_full_tt_motif": "caret-only512tokens",
+          "initial_panel_served_verdict": "reproduced_native_motif",
+          "initial_panel_full_verdict": "reproduced_native_motif",
+          "hf_status": "candidate only; HF not run",
+          "fixture_sha256": "7ca8039708a12c24acd3c2cfb1c2c51b8946e99df118576545605efad6225bf4",
+          "full_short_output_sha256": "ec50a12e48db7b2446435f2e3f64d5fd158f0dc58988d7788a620815b5abcca4"
+        }
+      ]
+    },
+    {
+      "item": "Precision-sensitive direction split",
+      "assessment": "ambiguous in current wording",
+      "evidence": "The current completed onset coordinators show 4 served native-motif\u2192full normal rows and 11 served other-anomaly\u2192full normal rows, totaling 15. The plan's 'served anomaly\u2192full normal' count combines distinct labels. It should not imply all15 are exact native-motif transitions; root must decide whether acceptance targets the four native-motif cases, all15 anomalies under separate labels, or another scope.",
+      "fresh_pair_counts": {
+        "inconclusive__to__inconclusive": 22,
+        "inconclusive__to__normal": 3,
+        "normal__to__inconclusive": 5,
+        "normal__to__normal": 36,
+        "normal__to__reproduced_native_motif": 1,
+        "other_anomaly__to__inconclusive": 5,
+        "other_anomaly__to__normal": 11,
+        "reproduced_native_motif__to__inconclusive": 1,
+        "reproduced_native_motif__to__normal": 4,
+        "reproduced_native_motif__to__reproduced_native_motif": 20
+      }
+    },
+    {
+      "item": "Opposite transition retained",
+      "assessment": "satisfied in panel; require explicit reporting",
+      "evidence": "1 served-normal\u2192full-native-motif row remains in the 108-case panel (Matplotlib call86 seed43). It is a regression/control case and must not be dropped when evaluating a precision arm."
+    },
+    {
+      "item": "Cap fairness",
+      "assessment": "partially specified; final panel cap schedule must be refreshed",
+      "evidence": "Proposal C uses matched per-case/seed caps (72x256, 36x512) and exact prompt/sampling inputs. Earlier plan requires progressing cap outputs to remain inconclusive until extended >=2x. Current second-cap preparation includes 14 served candidate 512\u21921024 rows; full cap reviews are not complete. Before launch freeze a common cap assignment by onset+seed from completed semantic reviews and use the same case IDs, seeds, and cap for every candidate arm; if a progressing pair is extended, carry that cap update across arms. Do not count a cap-truncated output as normal or a pass. If still progressing at next cap, keep inconclusive and decide extension before acceptance."
+    },
+    {
+      "item": "Outdated paired-transition artifact",
+      "assessment": "refresh required before using as launch evidence",
+      "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/onset-paired-transitions.json cites a partial-summary source and predates full coordinator d. Current coordinator a-d and served all36 cover 108 matching onset+seed rows. Regenerate the paired matrix and update plan counts/hashes before admission; current fresh split is 4 native-motif\u2192normal + 11 other-anomaly\u2192normal, and 1 reverse transition."
+    },
+    {
+      "item": "Acceptance meaning of \u201cclears\u201d",
+      "assessment": "root decision needed; avoid adding a numeric threshold",
+      "evidence": "The plan does not say whether \u201cclears the fixed panel\u201d means all rows normal, removal of the served-only/native motif only, preserving full-TT/HF native-positive behavior while removing precision-sensitive symptoms, or a row-by-row semantic match. It also does not say how inconclusive rows affect a candidate decision. Root should define these semantics without an arbitrary aggregate percentage."
+    },
+    {
+      "item": "Per-arm comparability and operational checks",
+      "assessment": "mostly specified",
+      "evidence": "Plan/proposal require same inputs/seeds, runtime precision/context validation, trace deltas and serial diagnostic rates. Keep each arm one-factor-only, compare to same saved panel, record cap/early-stop/inconclusive semantics, and do not rank on mixed rates or scores."
+    }
+  ],
+  "fresh_paired_counts": {
+    "source_served_coordinator": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/served-semantic-coordinator-all36.json",
+    "source_served_sha256": "31d1c06b0c807333de5d5b2d4efd0c702ea44bb2b967191279f8916954142adb",
+    "source_full_coordinators": [
+      {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-a.json",
+        "sha256": "754dd3de5a26646612853077795fdfc9ad59945225856193bfd51e32cee670b3",
+        "rows": 15
+      },
+      {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-b.json",
+        "sha256": "c219e598a61cfbd2468426d77ee5a8b9b21e6468fa5742034c3c9526aae5f2e5",
+        "rows": 27
+      },
+      {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-c.json",
+        "sha256": "bb65b32065839673923930bfa09dea753b33da3780e71f00e1c8b8cd9ab2f59d",
+        "rows": 12
+      },
+      {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-d.json",
+        "sha256": "0dc377723f797b8be5ee26f570b876601cf680401f90917871ef916478aecd3f",
+        "rows": 54
+      }
+    ],
+    "unique_pairs": 108,
+    "cross_mode_keys_match": true,
+    "transition_counts": {
+      "inconclusive__to__inconclusive": 22,
+      "inconclusive__to__normal": 3,
+      "normal__to__inconclusive": 5,
+      "normal__to__normal": 36,
+      "normal__to__reproduced_native_motif": 1,
+      "other_anomaly__to__inconclusive": 5,
+      "other_anomaly__to__normal": 11,
+      "reproduced_native_motif__to__inconclusive": 1,
+      "reproduced_native_motif__to__normal": 4,
+      "reproduced_native_motif__to__reproduced_native_motif": 20
+    },
+    "reference_positive_counts": {
+      "full_native_motif_total": 21,
+      "served_and_full_native_motif": 20,
+      "full_native_motif_with_served_normal": 1,
+      "current_short_hf_positive_candidates": 3,
+      "hf_evidence_status": "not run; these three cases are short full-TT native-motif positives and their matching initial-panel seeds are also full-TT native-motif positives."
+    }
+  },
+  "current_plan_sha256": "0f1a046a58dea01f79425c3f9b6716f13636de61e8524aeec39c1d76c0e4a77a",
+  "proposal_readme_sha256": "cc4f906da78a482995a6d7d2463264e1722d0da19aa0e099a454208c0db5b815",
+  "pending_status": "Candidate remains not admitted/not run. Root must adjudicate acceptance semantics and refresh the pairing/cap schedule after remaining cap reviews."
+}

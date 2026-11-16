@@ -1,0 +1,83 @@
+{
+  "status": "host_only_source_inventory_candidate",
+  "model": "google/gemma-4-31B-it",
+  "hf_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+  "runner": {
+    "path": "models/autoports/google_gemma_4_31b_it/tools/precision_repro_hf.py",
+    "sha256": "dc604d7f6c7e71785f163c5bf85dbb1cae07fa35a05787428a53670e83259e47"
+  },
+  "candidate_manifests": {
+    "secondary-loop-seed42.json": "e9ef583e1c26d77bd0366884bea508151df2f13498e9bc7e41fd378a571f8621",
+    "secondary-loop-seed43.json": "aa1e3a75676a80f0754db46a90e3e4d8f05c8589f156496108ff9551b742e85b"
+  },
+  "external_files": {
+    "/home/mvasiljevic/.cache/huggingface/hub/blobs/c6/c62336ad134cad6f154d84eb0e5a5fa9ca17cd665ef3ba5ac4fd02b1486760b4": "cc8d3a0ce36466ccc1278bf987df5f71db1719b9ca6b4118264f45cb627bfe0f",
+    "/home/mvasiljevic/.cache/huggingface/hub/models--google--gemma-4-31B-it/snapshots/842da3794eaa0b77d5f08bae87a17459d91ff475/tokenizer.json": "cc8d3a0ce36466ccc1278bf987df5f71db1719b9ca6b4118264f45cb627bfe0f",
+    "bringup/run_contract.json": "64003208ab7d8feefbcbb2c5ea8fe4cb99f9d172f26800529489f23a0055b43e",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/results-seed42/task110.onset.suffix512.hf.private.json": "e9630f725bc6e06f245581df73d1052b33f38f1d112a34292259fe2174c19955",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/results-seed42/task127.onset.suffix512.hf.private.json": "c81992e3fb7933d925f67f4c663bd5a028181cbf04c4bf8a47ac7e49c4775883",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/results-seed42/task129.onset.suffix512.hf.private.json": "4168f23a08c1401a98ef8d431748295865f64efd8dfc44140316b2634d17f323",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/results-seed42/task130.onset.suffix512.hf.private.json": "a83843523f4809386a714c82b03850719a1b6a6a476efbd778463fbbc5d206a7",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/results-seed42/task139.onset.suffix512.hf.private.json": "c608b5079b6a5dff81b735f2561ac58ed7f58686439705b8f277b8f56cdc7753",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/results-seed42/task145.onset.suffix512.hf.private.json": "4b5e45439b42749e9e8ace2f7ffb3ce0ff6b8f92b0654c2c1160b76c43de19db",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/results-seed42/task30.onset.suffix512.hf.private.json": "5ead39af38b766849020368ebde875cabb634ff2ddb37e417182f1bc66d7435e",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/results-seed42/task48.onset.suffix512.hf.private.json": "87752935495b37993d04288a5b362bc85ddd96c23fa97c329d96049ca407a868",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-extra-contraction-controls/scikit-learn__scikit-learn-13135.call29.onset.private.json": "1403d7a48b7ecca8ec2095479c77a871caa3add09bedd7f6830d36315a883bd2",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_build_kwargs.json": "ff2b5ed24e0b6a1dee7eb5cd8bd437d17c3df5f8f25567927d239e666f0699f9",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_config.json": "63ce02f7fa0df993a27daca25eeeb3adca51e15c7c6956d1cef122534ebdc7a9",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/head_bfp8_build_kwargs.json": "2e583fa8bd7aff7c5f8be110835df751924d167243c5a44a68aa5b3d70c6845f",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/head_bfp8_precision_config.json": "aa0e651fb3fdd7afc285293645c5ca309b2da246619e6e7fb6da86c5d2f28853",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/cost-basis.json": "dc16b01ffe4dc12f0148cad0cb6b7fade4f1fce2a00688f964413f4ab3e685c5",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/completion-summary.json": "9ff7139d71c3ee2163624f8f41324896bcc74a2127ee2d5c16774fab054bbb21",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/fixtures/full/anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix512.seed42.private.json": "146c1ded9c3431eb4237ef84a8616b3e82ccad773e5a8cfc9202e34c449a0315",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/fixtures/full/anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix512.seed43.private.json": "8928fdb36ab1ff489efe48df4fddc51eb2e9efa090f2073ba41cde14c5248889",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/fixtures/full/anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix512.seed44.private.json": "2606ab1840fd85edc58d68ed0a33c3b6fbd88db86620104c8600acb9602a6ea7",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/fixtures/served/anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix512.seed42.private.json": "5a7ba37c9bbe628df48ee771eda26ddae50445000e69c9afa32fcd662206767c",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/fixtures/served/anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix512.seed43.private.json": "cacc24dd02f9bcbc28aad63bc75ca93d1e0cfaccc45eeecc38958db676fa6d4d",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/fixtures/served/anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix512.seed44.private.json": "4a94d27b233d885c8a874ab5c9070a0b6c57d4633ccd230367490ffa6379148e",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/root-full-review.json": "50073a981e1dcfb8446d10bc1c1c7e012cbfa53a8700cca79b952cb12f549fbd",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/root-served-review.json": "4f9e333a9c4d6c94009c9718dfbf0c279d4185f8e2f151636274645ec154654d",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/runs/full/anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix512.seed42.json": "81cf6fe18b20cfa30b0ddca5b839b9b8ebf57daf2a899708a84d91b3b1523d2b",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/runs/full/anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix512.seed43.json": "548b687b902b17b31e874b20054976ea4ca45c0b3c8ecf2ca989885ff8f2f516",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/runs/full/anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix512.seed44.json": "bc216e065f572ac48d7dc800a72bb73cdcd037e73c7eb50ed88857d2fd4026d5",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/source-hashes.json": "3fc390e6f34b8805f75628d841e5827a2a5401e91923a2cd7c77830001f22922",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/triage-d.json": "ef7d0994f7067d540f7fbd986e8e9769d9440f470e00a8c57125a7458517f7a2",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-suffix512-head-bfp8-correction/admission.json": "3135aac12cbe11d97803b166dc3173def8f9bc03a6e8bb786fe015ce3f24bf08",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-suffix512-head-bfp8-correction/completion.json": "1be9414e4447a6600ea163967ec4fc0601ae9ffbbd47e44ab5e407a1c3ee453e",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-suffix512-head-bfp8-correction/configuration-correction.json": "fafb0a25253b6591f52efa0361b4413d7aea829ef048f84b21329505a8c5095e",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-suffix512-head-bfp8-correction/launch.json": "7b03f46fc2c6385a191e014fca68f0e82f2891d118a9d30d49a893f471d88613",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-suffix512-head-bfp8-correction/root-review.json": "777d1a61090d8b827c76fc905b1a884b58270613d976c5eed73d8a41c2319151",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-suffix512-head-bfp8-correction/runs/anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix512.seed42.json": "cdba56f4ef6f96c94ca131c312f23ebcd615b72704f81353fbaee6ae93d48a49",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-suffix512-head-bfp8-correction/runs/anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix512.seed43.json": "00cc018a2764f67350ba8503451209a16c4f42ad3010af0b4cb17bf392c93de4",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-suffix512-head-bfp8-correction/runs/anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix512.seed44.json": "192beeb384d47ca8fad1dfd801ae8f6beb8884f70255d9dad7fa20b8d8c7a1c4",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-suffix512-head-bfp8-correction/runs/load.json": "bc5cd7140abd359cb771dac497f8fc8d6981b4fd1c9979c55d4be19b9426e18a",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-suffix512-head-bfp8-correction/validation.json": "713a9551dc77c33e4802719121786152458d6105325acdcba27547e86f040cf7",
+    "models/autoports/google_gemma_4_31b_it/tools/precision_repro_hf.py": "dc604d7f6c7e71785f163c5bf85dbb1cae07fa35a05787428a53670e83259e47"
+  },
+  "fixture_identity_check": {
+    "seeds": [
+      42,
+      43
+    ],
+    "prompt_token_count": 512,
+    "prompt_token_ids_equal_between_served_and_full": true,
+    "chosen_teacher_forcing_token_count": 64,
+    "chosen_ids_equal_between_served_and_full": true,
+    "manifest_uses_exact_full_mode_fixture_ids": true
+  },
+  "scope_note": "No input token was decoded/re-encoded or edited. Fixtures are referenced in place; exact saved 512 IDs and chosen 64 IDs are preserved.",
+  "corrected_served_arm": {
+    "directory": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-suffix512-head-bfp8-correction",
+    "admission_sha256": "3135aac12cbe11d97803b166dc3173def8f9bc03a6e8bb786fe015ce3f24bf08",
+    "root_review_sha256": "777d1a61090d8b827c76fc905b1a884b58270613d976c5eed73d8a41c2319151",
+    "completion_sha256": "1be9414e4447a6600ea163967ec4fc0601ae9ffbbd47e44ab5e407a1c3ee453e",
+    "config_id": "stage12_head_bfp8_lofi",
+    "results_dir": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-suffix512-head-bfp8-correction/runs"
+  },
+  "execution_driver": {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-secondary-loops-suffix512/run_secondary_hf.py",
+    "sha256": "ae085eb32cb96a9e5b6f96ea4f41c284968a6999a7f59af46e97208e00d706d9",
+    "purpose": "Root-gated, one-group-at-a-time HF runner; static validation is inert."
+  },
+  "note": "Corrected served comparison arm is selected stage12_head_bfp8_lofi; prior candidate proposal/commands are archived as stale. Driver requires root admission, checks owner/HF/MemAvailable gates at launch, and executes one group per invocation."
+}

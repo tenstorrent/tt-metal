@@ -1,0 +1,23 @@
+{
+  "status": "all_children_exited",
+  "observation_started_unix": 1794785751.5771017,
+  "rows": [
+    {
+      "pid": 591919,
+      "exit_observed_unix": 1794786272.6901937,
+      "pidfd_event": 1,
+      "exit_code": null,
+      "raw_wait_status": null,
+      "status_missing_reason": "FileNotFoundError: process already reaped or unavailable"
+    },
+    {
+      "pid": 591918,
+      "exit_observed_unix": 1794786272.6905105,
+      "pidfd_event": 17,
+      "exit_code": null,
+      "raw_wait_status": null,
+      "status_missing_reason": "FileNotFoundError: process already reaped or unavailable"
+    }
+  ],
+  "remaining_pids": []
+}

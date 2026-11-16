@@ -1,0 +1,201 @@
+{
+  "status": "planning_forecast_candidate_only_no_execution",
+  "as_of_utc": "2026-11-15T08:23:44Z",
+  "scope": "14 unique full-mode sampled other result files; exact saved prompt IDs, selected actual source seed and original cap, one new HF trial each.",
+  "formula": "Per group point cap-length scenario = n*(cap*1032.3833539891057/512) + 19.45656383293751*(sum(prompt_tokens)/512) +180s. 19.4566s is measured512-input total-minus-free wall, bundled prefill+64-position TF and not isolated. Sensitivity interval applies 0.75x/2.5x to decode and 0.75x/3x to bundled prompt+chosen component; +180s fresh process/load per group. Factors are explicit scenario sensitivities, not confidence intervals or measured context scaling.",
+  "measured_reference": {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/results/seed42-suffix512/anomaly.requests2931.call20.canonicalprefix.optional-suffix512.hf.private.json",
+    "sha256": "a91e0aff64f340594679d595122c256f280e66e650a512ce34a85d52ed432156",
+    "status": "complete",
+    "revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+    "device": "cpu",
+    "dtype": "bfloat16",
+    "prompt_tokens": 512,
+    "chosen_positions": 64,
+    "seed": 42,
+    "generated_tokens": 512,
+    "requested_tokens": 512,
+    "free_generation_wall_s": 1032.3833539891057,
+    "total_case_wall_s": 1051.8399178220425,
+    "prefill_plus_chosen_bundle_wall_s": 19.45656383293681,
+    "seconds_per_generated_token": 2.016373738259972
+  },
+  "prior_hf9_basis": {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/cost-basis.json",
+    "sha256": "dc16b01ffe4dc12f0148cad0cb6b7fade4f1fce2a00688f964413f4ab3e685c5",
+    "median_incremental_case_s": 1040.1832335699582,
+    "range_per_case_s": [
+      800,
+      1600
+    ],
+    "scope": "512-token prompt,512-token initial HF free continuation,chosen64 teacher forcing. Prior runner total_wall_s is cumulative from shared model load; differences used, never sums of cumulative times.",
+    "role": "Earlier eight-case512-input/512-generation baseline; latest measured Requests2931 rate is primary."
+  },
+  "natural_stop_behavior": "Unknown. Cap-length scenario assumes every case reaches cap; it is not a prediction. Early EOS can materially reduce decode work, but no matched natural-stop distribution is available.",
+  "group_forecasts": [
+    {
+      "serial_order": 1,
+      "seed": 42,
+      "cap_tokens": 512,
+      "case_count": 4,
+      "prompt_tokens_total": 8192,
+      "point_cap_length_scenario_seconds": 4620.838437283412,
+      "sensitivity_range_seconds": [
+        3510.6288279625587,
+        11437.748603872024
+      ],
+      "timeout_seconds": 18000,
+      "components_s": {
+        "free_decode": 4129.533415956423,
+        "bundled_prefill_plus_chosen_proxy": 311.30502132698894,
+        "fresh_process_load_margin": 180.0
+      },
+      "natural_stop": "Unknown. Cap-length scenario assumes all cases reach cap; shorter natural stops can reduce free-generation time materially."
+    },
+    {
+      "serial_order": 2,
+      "seed": 42,
+      "cap_tokens": 1024,
+      "case_count": 1,
+      "prompt_tokens_total": 1024,
+      "point_cap_length_scenario_seconds": 2283.679835644085,
+      "sensitivity_range_seconds": [
+        1757.7598767330637,
+        5458.656152943149
+      ],
+      "timeout_seconds": 18000,
+      "components_s": {
+        "free_decode": 2064.7667079782113,
+        "bundled_prefill_plus_chosen_proxy": 38.91312766587362,
+        "fresh_process_load_margin": 180.0
+      },
+      "natural_stop": "Unknown. Cap-length scenario assumes all cases reach cap; shorter natural stops can reduce free-generation time materially."
+    },
+    {
+      "serial_order": 3,
+      "seed": 42,
+      "cap_tokens": 2048,
+      "case_count": 1,
+      "prompt_tokens_total": 2048,
+      "point_cap_length_scenario_seconds": 4387.35967128817,
+      "sensitivity_range_seconds": [
+        3335.5197534661274,
+        10737.312305886298
+      ],
+      "timeout_seconds": 18000,
+      "components_s": {
+        "free_decode": 4129.533415956423,
+        "bundled_prefill_plus_chosen_proxy": 77.82625533174723,
+        "fresh_process_load_margin": 180.0
+      },
+      "natural_stop": "Unknown. Cap-length scenario assumes all cases reach cap; shorter natural stops can reduce free-generation time materially."
+    },
+    {
+      "serial_order": 4,
+      "seed": 43,
+      "cap_tokens": 512,
+      "case_count": 1,
+      "prompt_tokens_total": 1024,
+      "point_cap_length_scenario_seconds": 1251.2964816549793,
+      "sensitivity_range_seconds": [
+        983.4723612412345,
+        2877.697767970385
+      ],
+      "timeout_seconds": 18000,
+      "components_s": {
+        "free_decode": 1032.3833539891057,
+        "bundled_prefill_plus_chosen_proxy": 38.91312766587362,
+        "fresh_process_load_margin": 180.0
+      },
+      "natural_stop": "Unknown. Cap-length scenario assumes all cases reach cap; shorter natural stops can reduce free-generation time materially."
+    },
+    {
+      "serial_order": 5,
+      "seed": 43,
+      "cap_tokens": 1024,
+      "case_count": 3,
+      "prompt_tokens_total": 4608,
+      "point_cap_length_scenario_seconds": 6549.409198431065,
+      "sensitivity_range_seconds": [
+        4957.056898823299,
+        16191.077533325879
+      ],
+      "timeout_seconds": 18000,
+      "components_s": {
+        "free_decode": 6194.300123934634,
+        "bundled_prefill_plus_chosen_proxy": 175.10907449643128,
+        "fresh_process_load_margin": 180.0
+      },
+      "natural_stop": "Unknown. Cap-length scenario assumes all cases reach cap; shorter natural stops can reduce free-generation time materially."
+    },
+    {
+      "serial_order": 6,
+      "seed": 44,
+      "cap_tokens": 512,
+      "case_count": 2,
+      "prompt_tokens_total": 5120,
+      "point_cap_length_scenario_seconds": 2439.3323463075794,
+      "sensitivity_range_seconds": [
+        1874.4992597306846,
+        5925.613684933633
+      ],
+      "timeout_seconds": 18000,
+      "components_s": {
+        "free_decode": 2064.7667079782113,
+        "bundled_prefill_plus_chosen_proxy": 194.56563832936808,
+        "fresh_process_load_margin": 180.0
+      },
+      "natural_stop": "Unknown. Cap-length scenario assumes all cases reach cap; shorter natural stops can reduce free-generation time materially."
+    },
+    {
+      "serial_order": 7,
+      "seed": 44,
+      "cap_tokens": 1024,
+      "case_count": 1,
+      "prompt_tokens_total": 2048,
+      "point_cap_length_scenario_seconds": 2322.5929633099586,
+      "sensitivity_range_seconds": [
+        1786.944722482469,
+        5575.39553594077
+      ],
+      "timeout_seconds": 18000,
+      "components_s": {
+        "free_decode": 2064.7667079782113,
+        "bundled_prefill_plus_chosen_proxy": 77.82625533174723,
+        "fresh_process_load_margin": 180.0
+      },
+      "natural_stop": "Unknown. Cap-length scenario assumes all cases reach cap; shorter natural stops can reduce free-generation time materially."
+    },
+    {
+      "serial_order": 8,
+      "seed": 44,
+      "cap_tokens": 2048,
+      "case_count": 1,
+      "prompt_tokens_total": 512,
+      "point_cap_length_scenario_seconds": 4328.9899797893595,
+      "sensitivity_range_seconds": [
+        3291.7424848420196,
+        10562.203231389867
+      ],
+      "timeout_seconds": 18000,
+      "components_s": {
+        "free_decode": 4129.533415956423,
+        "bundled_prefill_plus_chosen_proxy": 19.45656383293681,
+        "fresh_process_load_margin": 180.0
+      },
+      "natural_stop": "Unknown. Cap-length scenario assumes all cases reach cap; shorter natural stops can reduce free-generation time materially."
+    }
+  ],
+  "total_point_cap_length_scenario_seconds": 28183.49891370861,
+  "total_point_cap_length_scenario_hours": 7.828749698252391,
+  "total_sensitivity_range_seconds": [
+    21497.624185281456,
+    68765.704816262
+  ],
+  "total_sensitivity_range_hours": [
+    5.971562273689293,
+    19.10158467118389
+  ],
+  "deadline_note": "Upper sensitivity exceeds approximately16.9 hours remaining at preparation, before pending HF9, SKHF and P3 work. Root must decide whether to defer or select groups; subset execution would not cover all14.",
+  "timeout_is_hard_stop_not_forecast_bound": true
+}

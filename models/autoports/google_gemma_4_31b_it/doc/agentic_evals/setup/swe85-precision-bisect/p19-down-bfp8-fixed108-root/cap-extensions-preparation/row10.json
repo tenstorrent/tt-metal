@@ -1,0 +1,18 @@
+{
+  "status": "prepared_not_admitted_not_run",
+  "source_index": 10,
+  "case": {
+    "name": "anomaly.matplotlib__matplotlib-20488.call86.onset.seed43.cap512",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.matplotlib__matplotlib-20488.call86.onset.seed43.private.json",
+    "branches": [],
+    "free_run_tokens": 512,
+    "free_run_trials": 1,
+    "source_onset": "anomaly.matplotlib__matplotlib-20488.call86.onset",
+    "seed": 43,
+    "cap_source": "P19 coherent256 diagnostic cap; double to512"
+  },
+  "original_output": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.matplotlib__matplotlib-20488.call86.onset.seed43.cap256.json",
+  "original_output_sha256": "84b2492b334ddfffe11df139d707e35fbb06dcabd6048ed6fe8c5ab5238e9dd4",
+  "reason": "Root observed coherent distinct shell command progression up to cap256, ending before tool-response stop. No task score changes; short diagnostic continuation remains inconclusive pending extension. Independent slice review pending.",
+  "created_unix": 1794758175.0816205
+}

@@ -1,0 +1,61 @@
+{
+  "status": "static_audit_complete_candidate_commands_inert",
+  "review_date_utc": "2026-11-15",
+  "protocol_control_independent_review": {
+    "path": "setup/p19-q32-production-validation/fixed108/full-q32-protocol-controls/independent-review-c.json",
+    "sha256": "694c07824c525c23e8eb8143ef90c52138945345d9c970e041ddedfd29a9246b",
+    "conclusion": "Exact-fixture index54/seed42 and index89/seed44 full-BF16 Q32 controls both restore canonical bash protocol; scope is only two continuations."
+  },
+  "resume_candidate": {
+    "path": "setup/full-q32-production-validation/full-bf16-resume-candidate",
+    "proposal_sha256": "9e0fae4f2d2c4ea6f46d99bd0c939cdc26d58455f1ff0e3ced00826c72d0aa62",
+    "command_sha256": "ba551c6f3e62194eba134973c2067b44303bae71146ee6e0fcf4259d073303f6",
+    "source_pins_sha256": "82b9b7e29567e57174bd4305aaa7eb9a143bafea45fe17e4ba5ba1dbda0acc6e",
+    "pins": 166,
+    "command_invoked": false,
+    "status": "candidate_only_not_admitted_not_run"
+  },
+  "broad_acceptance_candidate": {
+    "path": "setup/full-q32-production-validation/full-bf16-broad-acceptance-candidate",
+    "proposal_sha256": "df7c43a4edf8d3ae71edccadee4ef09f84e444382021245c752886b27a16774e",
+    "command_sha256": "c9b6cff124a75ff438f2d1fa5b897cd9e67e34007d4ce3c21f7d17d1a4121767",
+    "source_pins_sha256": "0c52972b7531ad6091228da6d41fa54b5d36b2f67f481b4d1524ed032fbc2552",
+    "pins": 165,
+    "command_invoked": false,
+    "status": "candidate_only_not_admitted_not_run"
+  },
+  "timing_and_gate_notes": {
+    "resume_prior_q32_p19_seconds": 272.7324209213257,
+    "resume_candidate_forecast_seconds": [
+      200,
+      350,
+      700
+    ],
+    "resume_timeout_seconds": 900,
+    "broad_prior_q32_p19_seconds": 965.3065712451935,
+    "broad_candidate_forecast_seconds": [
+      800,
+      1500,
+      3000
+    ],
+    "broad_timeout_seconds": 3600,
+    "older_full_bf16_accuracy_only_seconds": 140.54156017303467,
+    "older_full_bf16_limit": "Pre-Q32 and accuracy-only; not broad acceptance or resumed-prefill evidence.",
+    "remaining_time_gate": "Root admission must only occur if the full-BF16 fixed108 panel and preceding check(s) pass, source pins and owners are clean, and forecast/timeout plus closure reserve fit the remaining deadline."
+  },
+  "current_root_panel": {
+    "path": "setup/full-q32-production-validation/fixed108",
+    "status": "active_when_packages_prepared",
+    "forecast_seconds": [
+      3500,
+      4316.73,
+      6000
+    ],
+    "timeout_seconds": 6600
+  },
+  "limitations": [
+    "No device/model/runner command was executed.",
+    "P19 commands and outputs remain P19-specific and were not reused as full-BF16 outputs.",
+    "The current full-BF16 panel and the two targeted protocol controls do not by themselves establish broad acceptance, serving rates, evaluated-list success, or policy selection."
+  ]
+}

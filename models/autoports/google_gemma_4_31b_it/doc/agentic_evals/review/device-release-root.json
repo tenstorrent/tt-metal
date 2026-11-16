@@ -1,0 +1,8 @@
+{
+  "recorded_unix": 1794786905.9577425,
+  "command": "fuser /dev/tenstorrent/0 /dev/tenstorrent/1 /dev/tenstorrent/2 /dev/tenstorrent/3",
+  "exit_code": 1,
+  "output": "",
+  "meaning": "No process owners reported for any of the four devices; no reset performed.",
+  "last_model_job": "setup/full-q32-production-validation/full-bf16-broad-acceptance-candidate/completion.json"
+}

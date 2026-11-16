@@ -1,0 +1,19 @@
+{
+  "status": "candidate_executor_integrity_unadmitted",
+  "files": {
+    "README.md": "66fb6a01dcc87efbe1222397ad3a15a5f7b407a7e883fc14cca70b1290e89706",
+    "commands.json": "ef38d66c41bcf2be8309d79352d8e2339ca0586283eb68392ebb521bae858679",
+    "forecast.json": "65c0c7a7325e58379b8b5f89f8546074422e949c4e2fc6c5ca6d60d52132a2fb",
+    "host-validation.json": "1b2de24a4a0cc1232f21d868c5ade38c2a32ca4706c6cd3b7bc635101bcf2fd9",
+    "manifest.json": "61914c6361a84f8d5c4f43bcbaccdb786c72b2fed57bf1afdb4e356c6f069b74",
+    "proposal.json": "62d0a479ff9d5d8192e38deaf6dc7a3b61ef5ebf19658f10b89989befddbcbee",
+    "semantic-context.json": "8a27f34ab15541d4b75d6e6cb92cc62f489c1e82631aa39de91084eb3bd40c19",
+    "source-integrity.json": "a1879479576f6cc9728d64b8396f285cebae3a895242c11289645c924a5d215d",
+    "test_run_candidate.py": "8a03de261eb5e2bd790bcf55f56fc28d734e97e684fe64d4d9ca14746f67bebb"
+  },
+  "driver_sha256": "b874df0314d95bcea18ee4c7569de46f3e4e0617c6ea2db2779983c18dd75a4a",
+  "tests_sha256": "8a03de261eb5e2bd790bcf55f56fc28d734e97e684fe64d4d9ca14746f67bebb",
+  "source_integrity_sha256": "a1879479576f6cc9728d64b8396f285cebae3a895242c11289645c924a5d215d",
+  "runner_sha256": "aafe67c88bb5a1eb38b8718570bbddd5749e2a9ecbb9dd19cdb100a49572c03e",
+  "scope": "Candidate executor and frozen candidate bytes only; no root admission, launch, completion, output, or model run."
+}

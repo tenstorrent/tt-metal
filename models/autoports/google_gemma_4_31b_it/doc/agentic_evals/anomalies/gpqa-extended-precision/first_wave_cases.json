@@ -1,0 +1,83 @@
+[
+  {
+    "name": "task30.onset.suffix512",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task30.onset.suffix512.private.json",
+    "branches": [
+      "chosen"
+    ],
+    "free_run_tokens": 1024,
+    "free_run_trials": 3
+  },
+  {
+    "name": "task48.onset.suffix512",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task48.onset.suffix512.private.json",
+    "branches": [
+      "chosen"
+    ],
+    "free_run_tokens": 1024,
+    "free_run_trials": 3
+  },
+  {
+    "name": "task110.onset.suffix512",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task110.onset.suffix512.private.json",
+    "branches": [
+      "chosen"
+    ],
+    "free_run_tokens": 1024,
+    "free_run_trials": 3
+  },
+  {
+    "name": "task127.onset.suffix512",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task127.onset.suffix512.private.json",
+    "branches": [
+      "chosen"
+    ],
+    "free_run_tokens": 1024,
+    "free_run_trials": 3
+  },
+  {
+    "name": "task129.onset.suffix512",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task129.onset.suffix512.private.json",
+    "branches": [
+      "chosen"
+    ],
+    "free_run_tokens": 1024,
+    "free_run_trials": 3
+  },
+  {
+    "name": "task130.onset.suffix512",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task130.onset.suffix512.private.json",
+    "branches": [
+      "chosen"
+    ],
+    "free_run_tokens": 1024,
+    "free_run_trials": 3
+  },
+  {
+    "name": "task139.onset.suffix512",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task139.onset.suffix512.private.json",
+    "branches": [
+      "chosen"
+    ],
+    "free_run_tokens": 1024,
+    "free_run_trials": 3
+  },
+  {
+    "name": "task145.onset.suffix512",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task145.onset.suffix512.private.json",
+    "branches": [
+      "chosen"
+    ],
+    "free_run_tokens": 1024,
+    "free_run_trials": 3
+  },
+  {
+    "name": "task147.onset.suffix512",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task147.onset.suffix512.private.json",
+    "branches": [
+      "chosen"
+    ],
+    "free_run_tokens": 1024,
+    "free_run_trials": 3
+  }
+]

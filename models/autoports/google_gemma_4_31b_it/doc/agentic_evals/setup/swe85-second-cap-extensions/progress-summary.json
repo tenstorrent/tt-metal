@@ -1,0 +1,37 @@
+{
+  "status": "served_complete_full_running",
+  "served": {
+    "counts": {
+      "normal": 12,
+      "inconclusive": 2
+    },
+    "reviewed": 14,
+    "all_original512_prefix_identical": true,
+    "completion": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/served-completion.json",
+    "forecast_analysis": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/served-forecast-analysis.json"
+  },
+  "full": "running; not yet reviewed",
+  "score_change": false,
+  "full_root_review_snapshot": {
+    "reviewed": 16,
+    "expected": 24,
+    "counts": {
+      "other": 1,
+      "normal": 9,
+      "inconclusive": 6
+    },
+    "status": "partial_full_still_running",
+    "sources": [
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/full-coordinator-sklearn13135.json",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/full-coordinator-sphinx119-first.json",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/full-coordinator-pytest-second.json",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/full-coordinator-sphinx101.json",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/full-coordinator-sphinx28-first2.json",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/full-coordinator-sphinx119-third.json",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/full-coordinator-first4.json",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/full-coordinator-pytest-third.json",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/full-coordinator-sphinx119-second.json",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/full-coordinator-pytest-first.json"
+    ]
+  }
+}

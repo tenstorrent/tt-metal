@@ -1,0 +1,64 @@
+{
+  "status": "prepared_not_executed_correct_branches_pending",
+  "snapshot_utc": "2026-11-14T20:52:26.305270+00:00",
+  "reviewed_coordinators": 1,
+  "failed_tasks": 1,
+  "prepared_cases": 1,
+  "excluded_unresolved_infrastructure": [],
+  "gaps": [],
+  "cases": [
+    {
+      "task": "sphinx-doc__sphinx-9461",
+      "call": 76,
+      "response_id": "chatcmpl-892ef7d242fab3b6",
+      "coordinator": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-extended85-head-bfp8/live-tasks/sphinx-doc__sphinx-9461-first/coordinator.json",
+      "coordinator_sha256": "e514cd46a8319d935f713120d43c22fcdc9c941013e0c4e1952db20e55b1165e",
+      "triage": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-extended85-head-bfp8/live-tasks/sphinx-doc__sphinx-9461-first/digest/sphinx-doc__sphinx-9461.triage.json",
+      "cause": "wrong",
+      "native_trajectory": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe-jobs/swe-extended85-head-bfp8/sphinx-doc__sphinx-9461__gnASZXN/agent/mini-swe-agent.trajectory.json",
+      "native_message_indices": [
+        152
+      ],
+      "request_source": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/post-gpqa-controls-head-bfp8/server/server-b32/server.log",
+      "response_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-extended85-head-bfp8/live-tasks/sphinx-doc__sphinx-9461-first/responses.private.log",
+      "native_prompt_tokens": 27854,
+      "native_completion_tokens": 114,
+      "action_excerpt": "tool bash {\"command\": \"sed -i \\\"s/return inspect.isproperty(member) and isinstance(parent, ClassDocumenter)/        if not isinstance(parent, ClassDocumenter):\\",
+      "anomaly": false,
+      "request_line": 108221,
+      "response_line": 76,
+      "request_sha256": "71ad3b126b02c1ccfd7faae79232214868e19a96e04eac593a3aaf9e16f8828e",
+      "native_response_sha256": "8b57acf85fc4fa7d68b7320762974d1f0c81990b74b72fe5679a68a0c751658d",
+      "hf_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+      "template_sha256": "ae53464bf3be25802b3a5b37def7fd89667067d7577049b3b2d74c4d8de4c6d4",
+      "reconstructed_prompt_tokens": 27853,
+      "reconstructed_completion_tokens": 116,
+      "prompt_token_count_gap": -1,
+      "completion_token_count_gap": 2,
+      "native_prompt_ids_available": false,
+      "native_output_ids_available": false,
+      "correct_branch": "pending validated pre-call state; not constructed",
+      "scope": "Full original reply reconstruction, no truncation. Agreement only, not completed precision attempt.",
+      "reconstruction": "Exact request body with historical JSON tool arguments deserialized for pinned template. Reply reconstructed as canonical thought header, complete saved reasoning, channel boundary, complete visible content, canonical tool-call macros from pinned template, native stop ID. No native token IDs: generated whitespace/order/protocol spelling cannot be recovered uniquely; counts and hashes are evidence, not identity proof. Canonicalization of malformed tool names is not proof of exact malformed native bytes.",
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "native_seed": null,
+      "executed": false,
+      "private_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-update15/sphinx-doc__sphinx-9461.call76.case.private.json",
+      "private_case_sha256": "a672eb1fc419c438455e4ce05f6b814c41c0e54723905115d09ee9087eb0a25b",
+      "private_packet": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-update15/sphinx-doc__sphinx-9461.call76.packet.private.json",
+      "private_packet_sha256": "be2cb1f15c313a8c141f8b178eedc2c8b2b27ea91f48d342035742ca7f546d61"
+    }
+  ],
+  "mapping_qualifications": {
+    "pylint-dev__pylint-4970": "Both call51 initial attempt and call55 actual insertion prepared; root identifies55 as actual edit. Do not label51 executed insertion.",
+    "pytest-dev__pytest-5840": "Call15 writes replacement script,16 executes it; both saved for decision/execution comparison.",
+    "matplotlib__matplotlib-20488": "Call29 earliest destructive rewrite identified by triage;88/91 separate anomalous repetitions. Root must ratify29 semantic first-bad status.",
+    "pydata__xarray-3095": "Recovered malformed53 native ID omitted; triage maps to message106 FormatError. First semantic wrong-edit call still unresolved.",
+    "pytest-dev__pytest-10356": "Recovered malformed14; semantic wrong-action identification requires separate adjudication.",
+    "pydata__xarray-7233": "Call1 protocol anomaly,4 fetched-release scoring violation; both preserved."
+  }
+}

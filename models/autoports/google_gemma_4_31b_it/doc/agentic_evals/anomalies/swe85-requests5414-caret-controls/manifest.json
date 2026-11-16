@@ -1,0 +1,145 @@
+{
+  "status": "prepared_CPU_only_not_executed",
+  "tasks": [
+    "psf__requests-5414"
+  ],
+  "cases": [
+    {
+      "task": "psf__requests-5414",
+      "call": 9,
+      "response_id": "chatcmpl-91c75e62ddd62388",
+      "private_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-requests5414-caret-controls/psf__requests-5414.call9.onset.private.json",
+      "private_case_sha256": "5024622915942584d71a4eebe667180b660a2f3c45955bddb72de8e019ad7181",
+      "raw_packet": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-requests5414-caps/psf__requests-5414.call9.packet.private.json",
+      "raw_packet_sha256": "5b5c0ec93dfb30b9486ea4fb484f93dcb9e8b6de049579196d90f29e89774397",
+      "native_prompt_tokens": 8168,
+      "reconstructed_request_prompt_tokens": 8167,
+      "native_reply_tokens": 32768,
+      "reconstructed_reply_tokens": 32768,
+      "conditioning_tokens": 8383,
+      "onset_positions": 64,
+      "onset_token_index": 216,
+      "motif": "^^^^",
+      "evidence": "Start of pathological caret repetition inside fabricated traceback reasoning; native reply reaches32768-token length cap. All preceding request/reply context retained; no whole32768-token TF scheduled.",
+      "limitations": "Exact request body with historical JSON tool arguments deserialized for pinned template. Reply reconstructed as canonical thought header, complete saved reasoning, channel boundary, complete visible content, canonical tool-call macros from pinned template, native stop ID when present; length-capped replies have no appended synthetic stop. No native token IDs: generated whitespace/order/protocol spelling cannot be recovered uniquely; counts and hashes are evidence, not identity proof. Canonicalization of malformed tool names is not proof of exact malformed native bytes.",
+      "native_message_indices": [],
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "native_seed": null,
+      "diagnostic_seeds": [
+        42,
+        43,
+        44
+      ]
+    },
+    {
+      "task": "psf__requests-5414",
+      "call": 10,
+      "response_id": "chatcmpl-824ab2369457908e",
+      "private_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-requests5414-caret-controls/psf__requests-5414.call10.onset.private.json",
+      "private_case_sha256": "38cba2429d022e64133da2c34388d9e88a9b26b82ec58594153692842dccb961",
+      "raw_packet": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-requests5414-caps/psf__requests-5414.call10.packet.private.json",
+      "raw_packet_sha256": "79dcdd8f52f6cbd15265e96f11bb9b51ac682718ff927a8f28461404748e22c5",
+      "native_prompt_tokens": 6870,
+      "reconstructed_request_prompt_tokens": 6869,
+      "native_reply_tokens": 32768,
+      "reconstructed_reply_tokens": 32769,
+      "conditioning_tokens": 7057,
+      "onset_positions": 64,
+      "onset_token_index": 188,
+      "motif": "^^^^",
+      "evidence": "Start of pathological caret repetition inside fabricated traceback reasoning; native reply reaches32768-token length cap. All preceding request/reply context retained; no whole32768-token TF scheduled.",
+      "limitations": "Exact request body with historical JSON tool arguments deserialized for pinned template. Reply reconstructed as canonical thought header, complete saved reasoning, channel boundary, complete visible content, canonical tool-call macros from pinned template, native stop ID when present; length-capped replies have no appended synthetic stop. No native token IDs: generated whitespace/order/protocol spelling cannot be recovered uniquely; counts and hashes are evidence, not identity proof. Canonicalization of malformed tool names is not proof of exact malformed native bytes.",
+      "native_message_indices": [],
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "native_seed": null,
+      "diagnostic_seeds": [
+        42,
+        43,
+        44
+      ]
+    },
+    {
+      "task": "psf__requests-5414",
+      "call": 11,
+      "response_id": "chatcmpl-a21872dffd22e1db",
+      "private_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-requests5414-caret-controls/psf__requests-5414.call11.onset.private.json",
+      "private_case_sha256": "50cbd0eb4e62c843a1ec8ac800a580135c3abc5dc2154d6be0a7e39d0c37ed6f",
+      "raw_packet": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-requests5414-caps/psf__requests-5414.call11.packet.private.json",
+      "raw_packet_sha256": "86ac061588351e26715c75a959acdb7e2a17593821991317a6d14a11e4ad9b78",
+      "native_prompt_tokens": 7004,
+      "reconstructed_request_prompt_tokens": 7003,
+      "native_reply_tokens": 32768,
+      "reconstructed_reply_tokens": 32769,
+      "conditioning_tokens": 7226,
+      "onset_positions": 64,
+      "onset_token_index": 223,
+      "motif": "^^^^",
+      "evidence": "Start of pathological caret repetition inside fabricated traceback reasoning; native reply reaches32768-token length cap. All preceding request/reply context retained; no whole32768-token TF scheduled.",
+      "limitations": "Exact request body with historical JSON tool arguments deserialized for pinned template. Reply reconstructed as canonical thought header, complete saved reasoning, channel boundary, complete visible content, canonical tool-call macros from pinned template, native stop ID when present; length-capped replies have no appended synthetic stop. No native token IDs: generated whitespace/order/protocol spelling cannot be recovered uniquely; counts and hashes are evidence, not identity proof. Canonicalization of malformed tool names is not proof of exact malformed native bytes.",
+      "native_message_indices": [],
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "native_seed": null,
+      "diagnostic_seeds": [
+        42,
+        43,
+        44
+      ]
+    }
+  ],
+  "cpu_validation": [
+    {
+      "mode": "served",
+      "config": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/head_bfp8_build_kwargs.json",
+      "config_sha256": "2e583fa8bd7aff7c5f8be110835df751924d167243c5a44a68aa5b3d70c6845f",
+      "exit_code": 0,
+      "stdout": "Validated 3 jobs without importing TTNN"
+    },
+    {
+      "mode": "full",
+      "config": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_build_kwargs.json",
+      "config_sha256": "ff2b5ed24e0b6a1dee7eb5cd8bd437d17c3df5f8f25567927d239e666f0699f9",
+      "exit_code": 0,
+      "stdout": "Validated 3 jobs without importing TTNN"
+    }
+  ],
+  "commands_staged_only": {
+    "served": [
+      "python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tools.precision_repro_batch",
+      "--cases",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-requests5414-caret-controls/cases.json",
+      "--build-kwargs-file",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/head_bfp8_build_kwargs.json",
+      "--output-dir",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-requests5414-caret-controls/served"
+    ],
+    "full": [
+      "python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tools.precision_repro_batch",
+      "--cases",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-requests5414-caret-controls/cases.json",
+      "--build-kwargs-file",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_build_kwargs.json",
+      "--output-dir",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-requests5414-caret-controls/full",
+      "--compare-dir",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-requests5414-caret-controls/served"
+    ]
+  },
+  "no_inference": true,
+  "phase_scope": "Anomaly controls independent of later wrong-action controls; no score or corrected answer claim."
+}

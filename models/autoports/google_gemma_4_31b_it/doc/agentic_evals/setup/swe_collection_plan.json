@@ -1,0 +1,61 @@
+{
+  "collector": "models/autoports/google_gemma_4_31b_it/tools/agentic_collect_swe.py",
+  "argv_recipe": [
+    "python",
+    "models/autoports/google_gemma_4_31b_it/tools/agentic_collect_swe.py",
+    "--server-log",
+    "<current-native-server-log>",
+    "--job-dir",
+    "<Harbor job root>",
+    "--task-list",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe10_tasks.json",
+    "--task-dir",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe-tasks",
+    "--agents",
+    "10",
+    "--server-batch",
+    "32",
+    "--run-start",
+    "<eval_runs start Unix seconds>",
+    "--run-end",
+    "<completed eval_runs end Unix seconds>",
+    "--out",
+    "<run collection directory>",
+    "--rates",
+    "models/autoports/google_gemma_4_31b_it/doc/benchmark/serving_rates.json"
+  ],
+  "schema_sources": {
+    "Harbor": "bringup/artifacts/parser-protocol-harbor/src/harbor/models/trial/result.py",
+    "mini_swe": "bringup/artifacts/parser-protocol-mini-swe/src/minisweagent/models/litellm_model.py",
+    "installed_Harbor_converter": "bringup/artifacts/parser-protocol-harbor/src/harbor/agents/installed/mini_swe_agent.py"
+  },
+  "outputs": {
+    "collected.json": "First attempt fixed denominator score/95% Wilson interval; all attempts; native limits, exceptions, phase timestamps and accounting issues. No patch verdict beyond verifier binary reward.",
+    "calls.json": "First-attempt task lifecycle, outside_s, native response IDs and token/cache counts; schema for explain_hours. Only price when accounting_complete=true; missing cache never imputed.",
+    "digest_accounting.json": "All attempts response ID task mapping including native replies absent from trajectory; feed reply_digest --accounting.",
+    "explained.json": "Installed skill task replay plus separately measured global overhead added once; preserves task_replay_hours and global_outside_trials_s."
+  },
+  "verification": [
+    "Six synthetic host tests cover discarded reply recovery, first-attempt-only scoring, ambiguous statement rejection, missing cache unknown, explicit ID/statement conflict, real-schema-shaped result/limits/exception loading.",
+    "Registry task names matched only exact explicit official IDs or main adapter full task names.",
+    "Statements loaded from generated instruction.md (the exact dedented official issue statement); ID join preferred, contradictory identity rejected.",
+    "Request response bodies and raw text remain original native logs; collector records hashes and metadata only."
+  ],
+  "pending_live_checks": [
+    "Confirm actual Harbor result.json and native trajectory paths on first completed trial; fail visibly if changed.",
+    "Ensure native log interval covers entire job and no other task traffic shares that interval; unknown IDs remain issues.",
+    "Before report, investigate every incomplete reward/accounting record rather than converting to failures or zeros.",
+    "No-network solution-fetch audit remains pending human/coordinator trajectory analysis; no-network alone does not establish clean trajectory.",
+    "Overall eval_runs supervisor duration includes overhead outside task lifecycle; compare against Harbor trial span and explicitly report any gap."
+  ],
+  "tests": "8 synthetic host tests pass, including concurrent global overhead accounting and invalid lifecycle rejection.",
+  "prior_results_reused": false,
+  "device_or_eval_actions": false,
+  "live_readiness": {
+    "gateway_health_http_status": 200,
+    "probe_image": "swebench/sweb.eval.x86_64.psf_1776_requests-1142:latest",
+    "harbor_task_objects_validated": 10,
+    "native_trajectory_path_confirmed": "<trial_dir>/agent/mini-swe-agent.trajectory.json",
+    "sandbox_dependency_setup": "Completed:10 offline-preseeded per-task images; unchanged main installer commands verified network=none; see swe_runtime_preseed.json."
+  }
+}

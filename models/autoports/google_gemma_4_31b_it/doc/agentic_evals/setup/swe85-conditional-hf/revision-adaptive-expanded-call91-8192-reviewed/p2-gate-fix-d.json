@@ -1,0 +1,47 @@
+{
+  "status": "candidate_only_host_preflight_repair_no_HF_launch",
+  "preflight_failure_preserved": {
+    "artifact": "p2-gate-refresh-c.json",
+    "failure": "P2 terminal reached; previous check raised KeyError for proposal[forecast_source_sha256]. The admitted proposal stores the runtime-estimate digest at candidate_hashes.runtime-estimate.json."
+  },
+  "repair": {
+    "driver_change": "Read and verify P2 forecast hash from candidate_hashes.runtime-estimate.json; cross-check against frozen HF source-integrity pin. Pin P2 terminal queue/completion/launch hashes in source-integrity and verify them.",
+    "refreshed_hashes": {
+      "driver_sha256": "53ea7fd1fceef25b77c60a3d314c7712075c1003a50d05e9fdef3d9966f78c8f",
+      "source_integrity_sha256": "99d313bec65c4db1cf2ad5305e1152c8da94fcd227bd839712e13947000ac4ee",
+      "proposal_sha256": "8d558f41bd90ded5451655206c4ed5cf44ce5ee146b346c1bf3230abd7d37d71",
+      "commands_sha256": "ba2e1913383c8a928aef7758890f9db6fad7bf5981d6682711ba81f3d15c45d8",
+      "admission_placeholder_sha256": "7067deb49fc47d17a17d41b263e7651dbc83c49a6f6e9479a80a0522b191db5e"
+    }
+  },
+  "p2_observed": {
+    "admission_sha256": "74bef162c97e23e882612eb85dae365f32c9da1f13ba4b9b8e1e1f8f582ad1be",
+    "proposal_sha256": "ddaaa015f62bd731afc6f9f19f37056a0f74d2071023338938420a3a080181a7",
+    "runtime_estimate_sha256": "55e6d1800078e1d5a10660db196a3075d7892fac6a8efe5c7626198264837f81",
+    "queue_sha256": "a3e38a94d97c827735d1f16a868b721dc669984ae26ef0ee42d0c5de2a847e86",
+    "completion_sha256": "47896893e57257757d1153dd3ae4df6b05985cd97b0fbb9993739e30145b2880",
+    "launch_sha256": "fd34812c8d86ace46b6abbd162be21e39a447d79691b48201d1dfd3f479202ef",
+    "elapsed_seconds": 2469.2918775081635,
+    "forecast_range_seconds": [
+      2018.038988828659,
+      5910.468657604884
+    ],
+    "forecast_gate": "forecast_range_hit"
+  },
+  "execution_state": "candidate_only_not_admitted",
+  "no_HF_runner_invocation": true,
+  "host_validation": {
+    "status": "passed",
+    "checks": [
+      "driver --self-test",
+      "driver --validate-only",
+      "verify_inventory()",
+      "wait_for_predecessors() with all P/P2/X terminal",
+      "verify_predecessors(*returned_pins)"
+    ],
+    "scope": "Host-only file/schema/hash validation. No HF runner invocation, model import/load/inference, TTNN import, owner/device query, or device access.",
+    "p2_forecast_gate": "forecast_range_hit",
+    "p2_queue_exit_code": 0,
+    "p2_completion_exit_code": 0
+  }
+}

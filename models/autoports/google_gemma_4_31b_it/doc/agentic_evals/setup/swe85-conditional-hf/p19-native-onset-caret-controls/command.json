@@ -1,0 +1,71 @@
+{
+  "status": "prepared_not_admitted_not_run",
+  "created_unix": 1794759217.3197722,
+  "argv": [
+    "timeout",
+    "5400",
+    "env",
+    "HF_HUB_OFFLINE=1",
+    "HF_DATASETS_OFFLINE=1",
+    "HF_HUB_DISABLE_TELEMETRY=1",
+    "OMP_NUM_THREADS=16",
+    "MKL_NUM_THREADS=16",
+    "OPENBLAS_NUM_THREADS=16",
+    "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+    "-m",
+    "models.autoports.google_gemma_4_31b_it.tools.precision_repro_hf",
+    "--cases",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/p19-native-onset-caret-controls/cases.json",
+    "--output",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/p19-native-onset-caret-controls/results",
+    "--tokens",
+    "256",
+    "--seeds",
+    "42",
+    "--prefill-chunk",
+    "512"
+  ],
+  "timeout_seconds": 5400,
+  "forecast_seconds": {
+    "low": 3100,
+    "point": 3650,
+    "high": 4500
+  },
+  "forecast_basis": "Rebased from saved CPU HF measurements with prompt prefill and generated-token decode estimated separately. At 512/1024/2048/4096-token prompts, 512-token generate wall was 1032.38/1167.48/1377.34/1917.06 s (2.016/2.280/2.690/3.744 s per generated token); at 8192 prompt, 55-token natural-stop run was 303.50 s (5.518 s/token; short sample). Prefill logs measured 16.45 s/512 tokens and 60.07/2047,126.82/4095,305.63/8191. For 7226 and 11095 tokens, forecast prompt work is respectively 220\u2013360/340\u2013600 s (points260/430), and decode respectively 960\u20131413/1413\u20131843 s (points1178/1587), using context-bracketed rates; add180\u2013240 s for one process/load/other overhead. Aggregate 3100\u20134500 s, point3650. High is an uncertainty scenario, not a guaranteed bound. One shared model load, chosen64 teacher forcing per case, CPU BF16, pinned revision, no rerender. Timeout5400 s leaves900 s beyond high estimate; admission must recheck remaining stage deadline and reserve. No inference is authorized by this forecast edit.",
+  "cases": [
+    {
+      "panel_index": 18,
+      "name": "anomaly.psf__requests-5414.call11.onset.seed42.cap256",
+      "prompt_tokens": 7226,
+      "seed": 42,
+      "tokens": 256,
+      "matching_P19_result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.psf__requests-5414.call11.onset.seed42.cap256.json"
+    },
+    {
+      "panel_index": 36,
+      "name": "anomaly.pytest-dev__pytest-7432.call19.onset.seed42.cap256",
+      "prompt_tokens": 11095,
+      "seed": 42,
+      "tokens": 256,
+      "matching_P19_result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.pytest-dev__pytest-7432.call19.onset.seed42.cap256.json"
+    }
+  ],
+  "question": "Does pinned BF16 CPUHF reproduce caret collapse on the exact full reconstructed onset prompts used by served/fullTT/P19 controls, without shortening or forcing an extra firstcaret?",
+  "scope": "Saved reconstructed prompt-token identity, not unavailable native token-ID/RNG replay. Seed42 diagnostic differsHF/TT RNG. Cap256 is for immediate caret-collapse detection; any progressing cap stays inconclusive. Does not replaceorvoid earlierHFcontrols.",
+  "requires": [
+    "Terminal P19 deviceprocess and noowners/modeljobs",
+    "Fresh memory/deadline admission withclosure reserve",
+    "Root reviewof matchingfullTTcontrolidentity",
+    "No reuseofoutputdirectory",
+    "Reconcile forecast missbefore newexperiment"
+  ],
+  "source_sha256": {
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/p19-native-onset-caret-controls/cases.json": "104453e1c9927cd5eb014ff052b6d4311f68cc6b6d59823c29ad30b1b3f58d3a",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tools/precision_repro_hf.py": "dc604d7f6c7e71785f163c5bf85dbb1cae07fa35a05787428a53670e83259e47",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/generate_full_reference.py": "30f69ad0db3ce951aa1a6dc8deb1900ea33d5cdd578f8aff36cefc33056e5d7d",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/weights.py": "bca69b111c9c9cbf9bc620c3dc6bee873abdecdd75f08d5b8b93638e881868cd",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-requests5414-caret-controls/psf__requests-5414.call11.onset.private.json": "50cbd0eb4e62c843a1ec8ac800a580135c3abc5dc2154d6be0a7e39d0c37ed6f",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-18763-7432-controls/pytest-dev__pytest-7432.call19.onset.private.json": "436bf8f06cebc27f9ac206ab4c85c655b2c707145be67b8341f14288370807f5"
+  }
+}

@@ -1,0 +1,53 @@
+{
+  "checked_utc": "2026-11-14T17:16:26.647179+00:00",
+  "scope": "Host-only prelaunch artifact check; no measurement or hardware admission. HF147 remains live.",
+  "head": "d1e4c8a50935c0f084d7becfec656f3351fc0e3c",
+  "head_matches_plan": true,
+  "evidence_checks": [
+    {
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/benchmark/run/perf-b1.json",
+      "expected": "b747161363509ad3e812ae100cf31337041fccf8db4d42bb33d36280fbfe151f",
+      "actual": "b747161363509ad3e812ae100cf31337041fccf8db4d42bb33d36280fbfe151f",
+      "match": true
+    },
+    {
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/benchmark/run/perf-b1.json.command.json",
+      "expected": "837b1c5add0cdc0914598ef08ba24350970563527b20656c8fe47bea555792c1",
+      "actual": "837b1c5add0cdc0914598ef08ba24350970563527b20656c8fe47bea555792c1",
+      "match": true
+    },
+    {
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/benchmark/run/perf-b1-warmup.json.command.json",
+      "expected": "204e77c2cf386e40dd95121b0247e50a2e065cd768b5615ea70af1c06489cd0c",
+      "actual": "204e77c2cf386e40dd95121b0247e50a2e065cd768b5615ea70af1c06489cd0c",
+      "match": true
+    },
+    {
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/benchmark/run/perf-b1-server.json",
+      "expected": "8b7ac9e35f4e83c1743b60444d78fb67bc40bcb4f0c241da726ef2b43ad2347d",
+      "actual": "8b7ac9e35f4e83c1743b60444d78fb67bc40bcb4f0c241da726ef2b43ad2347d",
+      "match": true
+    },
+    {
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/benchmark/serving_rates-stage11-head_bfp4.json",
+      "expected": "d69d30aa6186e399e699f59b7300403d74d6f71dcddce54004d970cc9781af1e",
+      "actual": "d69d30aa6186e399e699f59b7300403d74d6f71dcddce54004d970cc9781af1e",
+      "match": true
+    },
+    {
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/head_bfp8_precision_config.json",
+      "expected": "aa0e651fb3fdd7afc285293645c5ca309b2da246619e6e7fb6da86c5d2f28853",
+      "actual": "aa0e651fb3fdd7afc285293645c5ca309b2da246619e6e7fb6da86c5d2f28853",
+      "match": true
+    }
+  ],
+  "measurement_commands_existing": {
+    "launch": true,
+    "phase_readiness_check": true,
+    "warmup": true,
+    "measured": true,
+    "phase_collect": true,
+    "stop_owned_idle_server": true
+  },
+  "pass": true
+}

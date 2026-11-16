@@ -1,0 +1,230 @@
+{
+  "status": "completed_independent_terminal_review_both_conditional_windows",
+  "scope": "Two exact saved-history, 64-position teacher-forcing HF windows compared with corresponding saved full-TT teacher-forced rows. Both inputs are reconstructed, and TT controls are historical pre-Q32 full-BF16/HiFi4 diagnostics. This is not native prompt/token/RNG identity, continuous 665-token HF replay, free-running behavior beyond one sampled token per window, semantic/task correctness, or score adjudication.",
+  "execution": {
+    "admission": "setup/swe85-conditional-hf/sklearn13135-full-missingtool-conditional-history-b/hf-refresh-c-after-tt-review/hf-root-admission.json",
+    "admission_sha256": "7f7836c3e271ced18761dd42b02314f4a1bf2a69492956270f5e639146d04b6a",
+    "source_pins": "setup/swe85-conditional-hf/sklearn13135-full-missingtool-conditional-history-b/hf-refresh-c-after-tt-review/source-pins.json",
+    "source_pins_sha256": "416b698cd322d41b2390b9f516478956d39151a64e65dcd25b76beffa57ed685",
+    "completion": "setup/swe85-conditional-hf/sklearn13135-full-missingtool-conditional-history-b/hf-refresh-c-after-tt-review/hf-completion.json",
+    "completion_sha256": "0cde8b0c64f98531533a7e9baf9c2b5c8da2e0d9bcad6957dc973577b6c1e338",
+    "exit_code": 0,
+    "wall_seconds": 1946.8444530963898,
+    "forecast_seconds": {
+      "schema": "sklearn13135-hf-refresh-forecast-v1",
+      "status": "host_planning_only_candidate_no_admission_no_run",
+      "cases": 2,
+      "conditioning_tokens": [
+        17585,
+        17996
+      ],
+      "chosen_tokens_per_case": 64,
+      "runtime": "HF CPU BF16, pinned revision, one shared model load, exact actual TT histories, same chosen64 windows",
+      "point_seconds": 2100,
+      "range_seconds": [
+        1800,
+        3000
+      ],
+      "hard_timeout_seconds": 3600,
+      "basis": "Preserve the prior long-context HF estimate, calibrated from HF2 prefill anchors. TT conditional completion 113.85s is not used as an HF speed proxy. HF2 result wall includes free generation and is not used as isolated prefill timing. Long-context prefill variance dominates; the point is a planning estimate, not a guarantee.",
+      "gates": [
+        "Root must separately admit exact refreshed pins before HF launch.",
+        "Verify no existing outputs/overwrite, no HF or TT owner, RAM and remaining deadline before launch.",
+        "Use offline pinned HF and 16-thread environment as specified by the saved command.",
+        "Review result conditioning IDs, source prefixes, seed, revision, and compared TT case identity before interpretation."
+      ],
+      "limitations": [
+        "Prompt token IDs are the saved reconstructed 17,395-token source prompt plus actual generated history, not native prompt IDs.",
+        "Conditional probability does not establish free-running incidence or RNG/sampler equivalence.",
+        "The two windows do not score the unobserved interval between them."
+      ]
+    },
+    "forecast_class": "within_range",
+    "hf_current_decoder_sha256": "878c61052aee1ddd6f4afc78c4e4bbcda2c894a5a5878d01531f860e97006d99",
+    "paired_tt_decoder_lineage": "historical pre-Q32; TT2 remains saved stage12_bf16_hifi4_diagnostic evidence and is not relabeled after the source change."
+  },
+  "source_full_tt_output": {
+    "path": "setup/swe85-second-cap-extensions/runs/full/anomaly.scikit-learn__scikit-learn-13135.call29.onset.cap1024.seed42.json",
+    "sha256": "08c859a53455468846ed0cd87dfe56233ebc9496ee3c0cfbfb464e88368c422f",
+    "case_sha256": "310716fee5157983973aa6183e55fb529fd26179d182398b847ecb142b644b79",
+    "generated_tokens": 665,
+    "seed": 42,
+    "base_prompt_tokens": 17395,
+    "revision": "842da3794eaa0b77d5f08bae87a17459d91ff475"
+  },
+  "windows": [
+    {
+      "name": "protocol_switch",
+      "hf_file": "setup/swe85-conditional-hf/sklearn13135-full-missingtool-conditional-history-b/hf-refresh-c-after-tt-review/results/hf/sklearn13135-original17k-missingtool-protocol-switch-seed42.hf.private.json",
+      "hf_sha256": "f2e867ed03fdc856d6fe517b5c9d59354ca49470b6e828c7ea5e8e1d184e8239",
+      "fixture": "setup/swe85-conditional-hf/sklearn13135-full-missingtool-conditional-history-b/fixtures/sklearn13135-original17k-missingtool-protocol-switch-seed42.private.json",
+      "fixture_sha256": "3625877066b53d6eb1fb375ace2b3e70e650f836957e6cc4971fdf3c522e73e0",
+      "paired_tt_file": "setup/swe85-conditional-hf/sklearn13135-full-missingtool-conditional-history-b/results/tt/sklearn13135-original17k-missingtool-protocol-switch-seed42.json",
+      "paired_tt_sha256": "5096a5c15dbb1af5a95a4b3f9be3b322a525405f2094c4d76212b0f50d352cc4",
+      "prompt_tokens": 17585,
+      "source_output_history_range": [
+        0,
+        190
+      ],
+      "source_output_forced_range": [
+        190,
+        254
+      ],
+      "exact_source_prefix_identity": true,
+      "hf_tt_case_prompt_identity": true,
+      "hf_tt_forced_ids_and_positions_exact": true,
+      "decoded_forced_text": "<channel|>I have analyzed the issue and identified the cause. In `KBinsDiscretizer` with `strategy='kmeans'`, the bin edges are calculated as the midpoints between the cluster centers returned by `KMeans`. However, `KMeans` does not guarantee that the centers are returned in sorted order. When the",
+      "single_free_sample": {
+        "seed": 42,
+        "generated_tokens": 1,
+        "text": " `",
+        "flag": false,
+        "interpretation": "Single first-token sample is not an observation of the forced 64-token branch."
+      },
+      "top1_agreements": 63,
+      "positions": 64,
+      "top1_agreement_fraction": 0.984375,
+      "mean_abs_forced_logprob_delta_hf_minus_tt": 0.020737349316616638,
+      "mean_signed_forced_logprob_delta_hf_minus_tt": -0.009642823213145024,
+      "max_abs_forced_logprob_delta": 0.2070220708847046,
+      "max_abs_delta_position": 38,
+      "top1_disagreements": [
+        {
+          "position": 38,
+          "forced_token_id": 8323,
+          "hf_top1_token_id": 236761,
+          "tt_top1_token_id": 8323,
+          "hf_forced_probability": 0.27806028723716736,
+          "tt_forced_probability": 0.3420168459415436,
+          "hf_forced_logprob": -1.2799173593521118,
+          "tt_forced_logprob": -1.0728952884674072
+        }
+      ],
+      "first_position": {
+        "forced_token_id": 101,
+        "decoded": "<channel|>",
+        "hf_top1_id": 107,
+        "hf_top1_probability": 0.32455316185951233,
+        "hf_forced_probability": 0.1352938860654831,
+        "tt_top1_id": 107,
+        "tt_top1_probability": 0.38771188259124756,
+        "tt_forced_probability": 0.16162234544754028
+      },
+      "last_position": {
+        "forced_token_id": 506,
+        "decoded": " the",
+        "hf_top1_id": 506,
+        "hf_top1_probability": 0.8816303610801697,
+        "hf_forced_probability": 0.8816303610801697,
+        "tt_top1_id": 506,
+        "tt_top1_probability": 0.9008239507675171,
+        "tt_forced_probability": 0.9008239507675171
+      },
+      "runtime": {
+        "tt_config_id": "stage12_bf16_hifi4_diagnostic",
+        "tt_regime": "diagnostic traced TF with host logit readbacks; not serving performance",
+        "probabilities": "untempered full-vocabulary softmax",
+        "hf_precision": "bfloat16",
+        "hf_chunk": 512,
+        "hf_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475"
+      }
+    },
+    {
+      "name": "terminal_turn",
+      "hf_file": "setup/swe85-conditional-hf/sklearn13135-full-missingtool-conditional-history-b/hf-refresh-c-after-tt-review/results/hf/sklearn13135-original17k-missingtool-terminal-turn-seed42.hf.private.json",
+      "hf_sha256": "4d7ff8a43a3d1a16d3d941d48d48286105a142c6e9ae902e808a23a020878674",
+      "fixture": "setup/swe85-conditional-hf/sklearn13135-full-missingtool-conditional-history-b/fixtures/sklearn13135-original17k-missingtool-terminal-turn-seed42.private.json",
+      "fixture_sha256": "73c1581a300361930011bb206048cdeb27b3b599399e9c26af9f22d6dee9c047",
+      "paired_tt_file": "setup/swe85-conditional-hf/sklearn13135-full-missingtool-conditional-history-b/results/tt/sklearn13135-original17k-missingtool-terminal-turn-seed42.json",
+      "paired_tt_sha256": "5e2cc400fa292efbdefd3c4293d8ddd0a245e1b25e97611ae5058001e8651058",
+      "prompt_tokens": 17996,
+      "source_output_history_range": [
+        0,
+        601
+      ],
+      "source_output_forced_range": [
+        601,
+        665
+      ],
+      "exact_source_prefix_identity": true,
+      "hf_tt_case_prompt_identity": true,
+      "hf_tt_forced_ids_and_positions_exact": true,
+      "decoded_forced_text": "25, 2.5, 6. , 9.5, 10. ] # sorted -> Works!\n```\n\nThe change was applied to `/testbed/sklearn/preprocessing/_discretization.py`.\n\necho COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT<turn|>",
+      "single_free_sample": {
+        "seed": 42,
+        "generated_tokens": 1,
+        "text": "2",
+        "flag": false,
+        "interpretation": "Single first-token sample is not an observation of the forced 64-token branch."
+      },
+      "top1_agreements": 63,
+      "positions": 64,
+      "top1_agreement_fraction": 0.984375,
+      "mean_abs_forced_logprob_delta_hf_minus_tt": 0.009870368635624072,
+      "mean_signed_forced_logprob_delta_hf_minus_tt": 0.0001807318289963611,
+      "max_abs_forced_logprob_delta": 0.31572580337524414,
+      "max_abs_delta_position": 30,
+      "top1_disagreements": [
+        {
+          "position": 30,
+          "forced_token_id": 818,
+          "hf_top1_token_id": 818,
+          "tt_top1_token_id": 17454,
+          "hf_forced_probability": 0.5508720874786377,
+          "tt_forced_probability": 0.40172863006591797,
+          "hf_forced_logprob": -0.5962526798248291,
+          "tt_forced_logprob": -0.9119784832000732
+        }
+      ],
+      "first_position": {
+        "forced_token_id": 236778,
+        "decoded": "2",
+        "hf_top1_id": 236778,
+        "hf_top1_probability": 0.9999995231628418,
+        "hf_forced_probability": 0.9999995231628418,
+        "tt_top1_id": 236778,
+        "tt_top1_probability": 0.9999995231628418,
+        "tt_forced_probability": 0.9999995231628418
+      },
+      "last_position": {
+        "forced_token_id": 106,
+        "decoded": "<turn|>",
+        "hf_top1_id": 106,
+        "hf_top1_probability": 0.9999991655349731,
+        "hf_forced_probability": 0.9999991655349731,
+        "tt_top1_id": 106,
+        "tt_top1_probability": 0.9999992847442627,
+        "tt_forced_probability": 0.9999992847442627
+      },
+      "runtime": {
+        "tt_config_id": "stage12_bf16_hifi4_diagnostic",
+        "tt_regime": "diagnostic traced TF with host logit readbacks; not serving performance",
+        "probabilities": "untempered full-vocabulary softmax",
+        "hf_precision": "bfloat16",
+        "hf_chunk": 512,
+        "hf_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475"
+      }
+    }
+  ],
+  "full_output_protocol_evidence": {
+    "path": "setup/swe85-remainder-execution85/full-sklearn13135-seed42-stock-parser-audit-e.json",
+    "sha256": "dabab80a6d483271e69611faa05c32c69ee059eb5d9a5005ab7f2cec934e7595",
+    "parser_verdict": "missing_tool",
+    "generated_tool_call_opener": false,
+    "generated_tool_call_opener_token_count": 0,
+    "structured_tool_calls": [],
+    "scope": "Parser audit is for the complete reconstructed 665-token full-TT seed42 output; it found missing_tool. It does not turn the two forced HF excerpts into free-run reproduction."
+  },
+  "interpretation": {
+    "protocol_switch": "At source output token190, the actual first selected ID is channel marker101 (<channel|>), immediately following source token189 period236761. It is inside the first forced window, not already in its conditioning prefix. It is not top1 in either HF or TT at this position: HF p=.135294 and TT p=.161622; both top1 is token107 newline. Exact rank beyond at least2 is not recoverable from saved rows. The 64-token continuation remains coherent prose through \u201cWhen the\u201d; no claim about the later missing-tool terminal behavior follows from this window alone.",
+    "terminal": "The second exact window forces source IDs601:665, including final OUTPUT token then <turn|> at position63. The final <turn|> is top1 in both models with p=.99999917 HF and .99999928 TT. The forced tail includes plain-text `echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT<turn|>` and no tool-call wrapper; this is conditional likelihood at the preexisting reconstructed tail, not spontaneous HF generation.",
+    "overall": "Both windows have 63/64 top1 agreement, with localized one-position differences (initial branch position38, terminal branch position30). Agreement in these two disjoint edge windows supports similar HF/full-TT conditional distributions at those forced histories; the 347-token middle is untested; positions537 total lie outside the two excerpts (190 preceding plus347 between them), free-run branch frequency is unmeasured, and pre-Q32 TT provenance limits any current-source precision attribution."
+  },
+  "limitations": [
+    "Forced chosen probabilities are untempered full-vocabulary softmax; they are not post-top-k/top-p sampler probabilities.",
+    "Neither HF free sample (first window: one token, space plus backtick; terminal: one token \u201c2\u201d) continues the forced 64-position history.",
+    "Native output token IDs and native seed are unavailable.",
+    "Two windows cover only source positions190:254 and601:665, not the intervening history.",
+    "No task score or policy disposition changed."
+  ]
+}

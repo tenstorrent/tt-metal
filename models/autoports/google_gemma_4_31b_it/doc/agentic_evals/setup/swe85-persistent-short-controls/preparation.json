@@ -1,0 +1,51 @@
+{
+  "created_utc": "2026-11-14T23:37:53.887167+00:00",
+  "status": "prepared_pending_complete_onset_adjudication_not_admitted_or_queued",
+  "candidate_manifest": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/candidate-cases.json",
+  "manifest_sha256": "5119644ef1f81e4e855676d343f7f60c3cfa8aecab553567548b3f6339fe0273",
+  "fixture_review": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/review/swe85-optional-short-fixtures-review.json",
+  "reason": "Four completed full controls show persistent caret loops; prepare matched short served/full test before HF escalation. Remaining full onset cases may add candidates before admission.",
+  "cases": [
+    {
+      "job": "anomaly.psf__requests-5414.call10.onset.optional-suffix512",
+      "fixture_sha256": "2b07ede0d19c5a988848558b162c2dcb609ff4a82d5a749217fd18f0dd0c34b2",
+      "source_job": "anomaly.psf__requests-5414.call10.onset",
+      "source_prompt_tokens": 7057,
+      "short_prompt_tokens": 512,
+      "tf_positions": 64,
+      "free_token_cap_total": 1536
+    },
+    {
+      "job": "anomaly.psf__requests-5414.call11.onset.optional-suffix512",
+      "fixture_sha256": "705c84003084ef0866174aa7d7840b54ca8287a4daa5f3a0b98c5a7dbc88aa74",
+      "source_job": "anomaly.psf__requests-5414.call11.onset",
+      "source_prompt_tokens": 7226,
+      "short_prompt_tokens": 512,
+      "tf_positions": 64,
+      "free_token_cap_total": 1536
+    },
+    {
+      "job": "anomaly.psf__requests-5414.call9.onset.optional-suffix512",
+      "fixture_sha256": "65bee8810c20fad26b0f11ed779396f5a1c35b4111072cd5ae61ad2da0049517",
+      "source_job": "anomaly.psf__requests-5414.call9.onset",
+      "source_prompt_tokens": 8383,
+      "short_prompt_tokens": 512,
+      "tf_positions": 64,
+      "free_token_cap_total": 1536
+    },
+    {
+      "job": "anomaly.requests2931.call20.canonicalprefix.optional-suffix512",
+      "fixture_sha256": "5017461630f07f8232f054ddf6c2b979c4e3bb14370431de6799ca8c4d1d7804",
+      "source_job": "anomaly.requests2931.call20.canonicalprefix",
+      "source_prompt_tokens": 8580,
+      "short_prompt_tokens": 512,
+      "tf_positions": 64,
+      "free_token_cap_total": 1536
+    }
+  ],
+  "total_tf_positions_each_mode": 256,
+  "max_free_tokens_each_mode": 6144,
+  "required_order": "Current full160; semantic supplement served/full; then admitted matched short served/full, no overlap.",
+  "HF_gate": "Only identical short inputs with confirmed full TT anomaly reproduction may be escalated to pinned HF; no equivalence to native long prefix claimed.",
+  "performance": "Diagnostic only; prediction and timeout required at actual admission. No target serving measurements."
+}

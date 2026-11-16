@@ -1,0 +1,73 @@
+{
+  "reviewed_unix": 1794725800.4794407,
+  "rows": [
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/runs/head_bf16_hifi4/anomaly.pytest10356-call14.canonicalprefix.seed44.cap256.json",
+      "sha256": "0a98a9e984096d6a1ce755df0f71a3388e87a9826e548ba9aefdd8152fefda77",
+      "seed": 44,
+      "tokens": 30,
+      "verdict": "native",
+      "reason": "Root full raw/prefix review: Prefix ends call:, output starts string delimiter without bash{command: fields. Native malformed-tool motif.",
+      "trace_counters_delta": {
+        "model_replays": 29,
+        "sample_replays": 29,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 29,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/runs/head_bf16_hifi4/anomaly.requests2931.call20.canonicalprefix.seed42.cap256.json",
+      "sha256": "94ba3370862323d8cd383e9bf0cc0bc0b075baca74eba335d06ae529e8d8a306",
+      "seed": 42,
+      "tokens": 256,
+      "verdict": "native",
+      "reason": "Root full raw/prefix review: Pure carets continue traceback through cap; affirmative degenerate loop.",
+      "trace_counters_delta": {
+        "model_replays": 255,
+        "sample_replays": 255,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 255,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/runs/head_bf16_hifi4/anomaly.requests2931.call20.canonicalprefix.seed43.cap256.json",
+      "sha256": "dd6183ace96e480c794a84119d1a1964dbbdaa97dcbb22bf42a53c19177baaef",
+      "seed": 43,
+      "tokens": 256,
+      "verdict": "native",
+      "reason": "Root full raw/prefix review: Pure carets continue traceback through cap; affirmative degenerate loop.",
+      "trace_counters_delta": {
+        "model_replays": 255,
+        "sample_replays": 255,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 255,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/runs/head_bf16_hifi4/anomaly.requests2931.call20.canonicalprefix.seed44.cap256.json",
+      "sha256": "d4c72cd8d42d19b5c38001ffeaa03dc799e17f3bef48596c17570a170d8407c1",
+      "seed": 44,
+      "tokens": 256,
+      "verdict": "native",
+      "reason": "Root full raw/prefix review: Pure carets continue traceback through cap; affirmative degenerate loop.",
+      "trace_counters_delta": {
+        "model_replays": 255,
+        "sample_replays": 255,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 255,
+        "captures": 0
+      }
+    }
+  ]
+}

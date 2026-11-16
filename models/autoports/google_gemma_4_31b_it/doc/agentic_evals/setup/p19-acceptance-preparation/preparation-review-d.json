@@ -1,0 +1,279 @@
+{
+  "title": "Host-only review of prepared P19 acceptance and resume commands",
+  "disposition": "Core CLI/workload design is coherent; refresh prelaunch source pins and complete prerequisite reviews before root admission. No command was executed and no files were changed outside this review.",
+  "scope": "Prepared P19 acceptance command, separate resumed-prefill command, runner source, installed datatype-sweep requirements. No model/device execution, admission, HF, or TTNN imports.",
+  "skill": {
+    "path": "/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/skills/datatype-sweep/SKILL.md",
+    "sha256": "0bd2030e0f1c3add0aad6d21d87c336ca1b6690b60adf1ad13b22a4388902558",
+    "installed_version": "tt-model-bringup 0.1.27"
+  },
+  "artifacts": {
+    "acceptance_command": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/p19-acceptance-preparation/command.json",
+      "sha256": "ff52b9c0c4105d62becfa564ef3d56ef6b3e4180aa81c6197c9ffd2d5cf68c5d",
+      "status": "prepared_not_admitted_not_run",
+      "output_dir": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/p19-acceptance-preparation/run",
+      "output_dir_absent": true
+    },
+    "resume_command": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/p19-acceptance-preparation/resume-command.json",
+      "sha256": "3828149f51286d114ae17e4bae96de8522363dd085f2d9dba34471c46e87a832",
+      "status": "prepared_not_admitted_not_run",
+      "output_absent": true
+    },
+    "resume_build_kwargs": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/p19-acceptance-preparation/resume-build-kwargs.json",
+      "sha256": "b253ec0c3cd010e97498129b95810aa9d5834ae2a215b31c220805fd5e4e8835",
+      "value": {
+        "batch_size": 1,
+        "precision_config": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/bf16-hifi4-kv-down-bfp8-accuracy-p19/precision.json",
+        "max_seq_len": 16384
+      }
+    },
+    "candidate_precision": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/bf16-hifi4-kv-down-bfp8-accuracy-p19/precision.json",
+      "sha256": "540760ea34cea22459c9248b4ce8c90ad1b34e000b18e82b70552e45fd766fad",
+      "all_fields": {
+        "config_id": "stage12_bf16_hifi4_kv_down_bfp8_p19",
+        "weight_groups": {
+          "attention": "bf16",
+          "mlp": "bf16",
+          "down": "bfp8_lofi",
+          "lm_head": "bf16"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "HiFi4",
+          "mlp": "HiFi4",
+          "down": "LoFi",
+          "lm_head": "HiFi4"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat8_b",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144,
+        "sdpa_compute_fidelity": "HiFi4"
+      }
+    }
+  },
+  "confirmed": [
+    {
+      "item": "Candidate policy",
+      "evidence": "P19 is BF16/HiFi4 attention, MLP and head; down is BFP8/LoFi; activations/residual/CCL, logits/sampling, embedding/norm are BF16; KV is BFP8; max_seq_len=262144; no exceptions. `--config` points to this exact file and command pin matches current SHA."
+    },
+    {
+      "item": "Revision and accuracy references",
+      "evidence": "Reference provenance records google/gemma-4-31B-it and tokenizer at revision 842da3794eaa0b77d5f08bae87a17459d91ff475; optimized reference metadata independently pins the same revision and 100 generated AIME tokens. AIME ref is chat-templated, 161 prompt tokens and 100 scored positions; natural ref is 512 prefix + 512 contiguous book positions at offset4096. Both `.refpt` hashes in the command match."
+    },
+    {
+      "item": "Accuracy repetitions and bar",
+      "evidence": "`run_datatype_candidate.py` performs one prefill evaluation and three teacher-forcing decode runs for AIME, plus one natural-text run. `--require-accuracy` enforces top1>=0.90, top5>=0.98 and top100==1.0 on prefill, decode and natural, and verifies replay counts/no new captures. Three decode rows are retained for root inspection; the threshold directly evaluates the first decode result, so verify all three retained score rows clear the bar."
+    },
+    {
+      "item": "Acceptance workload",
+      "evidence": "Batch=1 default and `--acceptance` path execute fixed4096-input/128-generated autoregression; the optimized-generation harness compares streaming/buffered output and takes three timing repeats with 127 model replays each. It also runs a 32k retained-notes/128-token long-prefix task, six pinned HF qualitative controls, and physical/context probes at prompt lengths262143 and262144. The boundary test checks the final in-range decode position and exact-capacity prefill; it is not a quality test."
+    },
+    {
+      "item": "Qualitative behavior",
+      "evidence": "The suite has 6 chat prompts. The HF prompt-format artifact pins the same revision (842da3794eaa0b77d5f08bae87a17459d91ff475) and stop IDs. TT `generate()` defaults to greedy temperature0/top_k1/top_p1 and the runner records complete TT/HF text plus first divergence; it does not decide quality. The command explicitly requires later human inspection."
+    },
+    {
+      "item": "Resumed prefill",
+      "evidence": "Separate B1 run uses natural text, lengths2560/16384, block sizes32/64, sliding window1024, default window256, and the default no_history/fresh_suffix negative controls. The installed helper includes unaligned resume starts132 and1029 plus window start1024, block-aligned32/64, prefix-cache and last-token starts at each length. max_seq_len16384 is expressly diagnostic allocation only; 262144 boundary coverage is in the acceptance command."
+    },
+    {
+      "item": "Pin freshness and output state",
+      "evidence": "Every source hash currently listed in both command JSON files matches its file. The acceptance run directory and resume output are absent; both commands remain prepared_not_admitted_not_run."
+    },
+    {
+      "item": "Forecasts",
+      "evidence": "Acceptance forecast600/1500/3000s under3600s hard timeout; resume forecast750/1200/2100s under2700s. Both retain600s over their stated high estimates. Acceptance forecast explicitly notes P19 full-context prefill has not been timed. Recompute deadline and owner gates at admission."
+    }
+  ],
+  "findings_before_launch": [
+    {
+      "severity": "material_provenance_gap",
+      "finding": "The acceptance command pins runner/helper files, P19 config/review and two `.refpt` files but omits read-time input and runtime hashes: `reference_metadata.json`, `aime24_prompt.json` (copied and used for 4096 workload), `qualitative_hf.json` and `qualitative_prompt_format.json` (copied/compared), `references.json` (HF/model/token provenance), plus model `tt/*.py` runtime including `weights.py` (HF revision) and `generator.py` (sampling defaults). run_datatype_candidate writes a retrospective `source_manifest.json` for `tt/*.py` after it starts; that is not an expected prelaunch pin. Add these pins to frozen command/proposal/admission. Also pin the installed readiness modules used by accuracy and resume paths; current hashes are listed in `currently_unpinned_inputs`."
+    },
+    {
+      "severity": "prerequisite_review",
+      "finding": "Both commands remain inert and make P19 full-panel and cap-extension closure a prerequisite. The five-row cap-extension batch has terminal evidence and independent triage, but root adjudication/review should be pinned in the eventual admission; prose `requires` is not an executable gate."
+    },
+    {
+      "severity": "review_note",
+      "finding": "Three decode score rows are preserved but the CLI score assertion reads the first decode measurement. Verify all retained repeat scores in the terminal review; do not infer quality or acceptance from process exit alone."
+    }
+  ],
+  "forecast_and_cli_issues": {
+    "known_cli_defects": [],
+    "timeout_assessment": "No demonstrated timeout defect; configured timeouts exceed forecast highs by600s. Recompute remaining deadline and device/HF ownership at root admission.",
+    "manual_qualitative_review_required": true,
+    "candidate_remains_unselected": true
+  },
+  "pinned_sources_current_hashes": {
+    "models/autoports/google_gemma_4_31b_it/tests/run_datatype_candidate.py": {
+      "expected_sha256": "1390350c91b27b4f8563ffa8bd38224f6b06543668ca2a627c2c3ecea756a287",
+      "exists": true,
+      "current_sha256": "1390350c91b27b4f8563ffa8bd38224f6b06543668ca2a627c2c3ecea756a287",
+      "matches": true,
+      "pinned_by": "acceptance"
+    },
+    "models/autoports/google_gemma_4_31b_it/tests/optimized_generation_evidence.py": {
+      "expected_sha256": "cc28cd7d48dad476223d3fd954a945236d5f9e818db1fbe14a10140f7dce3384",
+      "exists": true,
+      "current_sha256": "cc28cd7d48dad476223d3fd954a945236d5f9e818db1fbe14a10140f7dce3384",
+      "matches": true,
+      "pinned_by": "acceptance"
+    },
+    "models/autoports/google_gemma_4_31b_it/tests/datatype_long_prefix.py": {
+      "expected_sha256": "611f1c60188acd29e93a1977391c40e01631be1835604324f975072edd4ce25b",
+      "exists": true,
+      "current_sha256": "611f1c60188acd29e93a1977391c40e01631be1835604324f975072edd4ce25b",
+      "matches": true,
+      "pinned_by": "acceptance"
+    },
+    "models/autoports/google_gemma_4_31b_it/tests/full_generation_evidence.py": {
+      "expected_sha256": "d8da3206fbb5df5be77d1ff6b71694bbcd86ec994058762e111a6c33aba4e8d6",
+      "exists": true,
+      "current_sha256": "d8da3206fbb5df5be77d1ff6b71694bbcd86ec994058762e111a6c33aba4e8d6",
+      "matches": true,
+      "pinned_by": "acceptance"
+    },
+    "models/autoports/google_gemma_4_31b_it/tests/run_optimized_full_readiness.py": {
+      "expected_sha256": "29a5cced5c28b93fadcbb62b789675fc541cbf0a669e65ee849078fd0834e27e",
+      "exists": true,
+      "current_sha256": "29a5cced5c28b93fadcbb62b789675fc541cbf0a669e65ee849078fd0834e27e",
+      "matches": true,
+      "pinned_by": "acceptance"
+    },
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/bf16-hifi4-kv-down-bfp8-accuracy-p19/precision.json": {
+      "expected_sha256": "540760ea34cea22459c9248b4ce8c90ad1b34e000b18e82b70552e45fd766fad",
+      "exists": true,
+      "current_sha256": "540760ea34cea22459c9248b4ce8c90ad1b34e000b18e82b70552e45fd766fad",
+      "matches": true,
+      "pinned_by": "acceptance"
+    },
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/bf16-hifi4-kv-down-bfp8-accuracy-p19/root-terminal-review.json": {
+      "expected_sha256": "d38dc9792a73c407e52bbbdf425118c26b24f39b4d42b294ac4dca93be8c080f",
+      "exists": true,
+      "current_sha256": "d38dc9792a73c407e52bbbdf425118c26b24f39b4d42b294ac4dca93be8c080f",
+      "matches": true,
+      "pinned_by": "acceptance"
+    },
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/attention-down-acceptance/references/aime24.refpt": {
+      "expected_sha256": "1c1a90cada967dc89159edf6e61eb51f2638955ab9defe1cc51939587e99ab45",
+      "exists": true,
+      "current_sha256": "1c1a90cada967dc89159edf6e61eb51f2638955ab9defe1cc51939587e99ab45",
+      "matches": true,
+      "pinned_by": "acceptance"
+    },
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/attention-down-acceptance/references/natural.refpt": {
+      "expected_sha256": "861f29370af0ba7e13c77f548e688cceff429846d20a9283697ae77b8b069584",
+      "exists": true,
+      "current_sha256": "861f29370af0ba7e13c77f548e688cceff429846d20a9283697ae77b8b069584",
+      "matches": true,
+      "pinned_by": "acceptance"
+    },
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/p19-acceptance-preparation/resume-build-kwargs.json": {
+      "expected_sha256": "b253ec0c3cd010e97498129b95810aa9d5834ae2a215b31c220805fd5e4e8835",
+      "exists": true,
+      "current_sha256": "b253ec0c3cd010e97498129b95810aa9d5834ae2a215b31c220805fd5e4e8835",
+      "matches": true,
+      "pinned_by": "resume"
+    },
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/bf16-hifi4-kv-down-bfp8-accuracy-p19/precision.json": {
+      "expected_sha256": "540760ea34cea22459c9248b4ce8c90ad1b34e000b18e82b70552e45fd766fad",
+      "exists": true,
+      "current_sha256": "540760ea34cea22459c9248b4ce8c90ad1b34e000b18e82b70552e45fd766fad",
+      "matches": true,
+      "pinned_by": "resume"
+    },
+    "/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime/readiness_check/run_prefill_resume_check.py": {
+      "expected_sha256": "745e881d5065f8388bea0fd057fccad86367d1dc1dfa85c371c48af51f6a4833",
+      "exists": true,
+      "current_sha256": "745e881d5065f8388bea0fd057fccad86367d1dc1dfa85c371c48af51f6a4833",
+      "matches": true,
+      "pinned_by": "resume"
+    }
+  },
+  "currently_unpinned_inputs": {
+    "models/autoports/google_gemma_4_31b_it/tt/weights.py": {
+      "exists": true,
+      "current_sha256": "bca69b111c9c9cbf9bc620c3dc6bee873abdecdd75f08d5b8b93638e881868cd"
+    },
+    "models/autoports/google_gemma_4_31b_it/tt/generator.py": {
+      "exists": true,
+      "current_sha256": "3276fd7427898077ab25e139f89a7b03d2a968cd9bafb79e9aa08bb975016f22"
+    },
+    "models/autoports/google_gemma_4_31b_it/tt/precision.py": {
+      "exists": true,
+      "current_sha256": "2f223a118fe713677b9ce4fb3beb2f563e26af56ef45a98b2e03fad1e25664a9"
+    },
+    "models/autoports/google_gemma_4_31b_it/doc/optimized_full_model/reference_metadata.json": {
+      "exists": true,
+      "current_sha256": "20bb9d9af0468ee55fa90b08392137945c3deaf6812f0834e1f0ff8baf9d9f3d"
+    },
+    "models/autoports/google_gemma_4_31b_it/doc/optimized_full_model/aime24_prompt.json": {
+      "exists": true,
+      "current_sha256": "578790e2d9e5d7fad6d187bc6d733699c3514218ea5a42ca2bf9d25d7afdd4dd"
+    },
+    "models/autoports/google_gemma_4_31b_it/doc/optimized_full_model/qualitative_hf.json": {
+      "exists": true,
+      "current_sha256": "05c2ac233052909c2e785b9d36f819c52e95cecfcfd299eff81a6b1de3a174d6"
+    },
+    "models/autoports/google_gemma_4_31b_it/doc/optimized_full_model/qualitative_prompt_format.json": {
+      "exists": true,
+      "current_sha256": "16e4bfd8857e67ee9ca39297c8521b30e8ceacf0c848783e83b1192ef331cb9c"
+    },
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/attention-down-acceptance/references/references.json": {
+      "exists": true,
+      "current_sha256": "f665053108019dfc020e8c7a4fa654288281e79b2c6504f089f25e834df951df"
+    },
+    "/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime/readiness_check/run_teacher_forcing.py": {
+      "exists": true,
+      "current_sha256": "9f1e5894ad15bbd630f93c835247a25470c604eb4a6bede570d4964fd011ecb5"
+    },
+    "/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime/readiness_check/run_prefill_check.py": {
+      "exists": true,
+      "current_sha256": "85c5b108396e9eef05d9619551143a68ff640064cdd051753761497c96f26a2a"
+    },
+    "/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime/readiness_check/teacher_forcing.py": {
+      "exists": true,
+      "current_sha256": "0dcf67aafd71eed04b435dcdda98e64ec4d35f9d8e13dc66d7464bbe071790c1"
+    },
+    "/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime/readiness_check/build_kwargs.py": {
+      "exists": true,
+      "current_sha256": "4ab1307690d0a2417c96a8e55f23ed4bf56cd8237a876250ab88c94c7694fc48"
+    }
+  },
+  "resume_non_aligned_starts": {
+    "length2560": [
+      32,
+      64,
+      132,
+      1024,
+      1029,
+      2496,
+      2559
+    ],
+    "length16384": [
+      32,
+      64,
+      132,
+      1024,
+      1029,
+      16320,
+      16383
+    ],
+    "basis": "Static calculation from installed resume_points() geometry for blocks32/64, tile32, sliding window1024; not a test execution."
+  },
+  "no_execution_performed": true
+}

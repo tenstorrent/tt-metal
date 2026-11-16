@@ -1,0 +1,76 @@
+{
+  "observed_unix": 1794725959.8333127,
+  "status": "unexpected_live_HF_without_validate_only",
+  "processes": [
+    {
+      "pid": 479586,
+      "argv": [
+        "timeout",
+        "3600",
+        "env",
+        "HF_HUB_OFFLINE=1",
+        "HF_DATASETS_OFFLINE=1",
+        "OMP_NUM_THREADS=16",
+        "MKL_NUM_THREADS=16",
+        "OPENBLAS_NUM_THREADS=16",
+        "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tools/precision_repro_hf.py",
+        "--cases",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/native-positive-candidates-seed42-suffix512.json",
+        "--output",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/results/seed42-suffix512",
+        "--tokens",
+        "512",
+        "--seeds",
+        "42",
+        "--prefill-chunk",
+        "512",
+        "--compare-dir",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/served",
+        "--compare-dir",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/full"
+      ],
+      "stat": "479586 (timeout) S 479585 479586 479584 0 -1 4194304 78 0 0 0 0 0 0 0 20 0 1 0 166915513 3305472 405 18446744073709551615 99540332179456 99540332195985 140732820375456 0 0 0 0 3145728 90119 1 0 0 17 11 0 0 0 0 0 99540332210800 99540332212824 99540811116544 140732820378415 140732820379708 140732820379708 140732820381671 0\n",
+      "status": "Name:\ttimeout\nUmask:\t0022\nState:\tS (sleeping)\nTgid:\t479586\nNgid:\t0\nPid:\t479586\nPPid:\t479585\nTracerPid:\t0\nUid:\t6002\t6002\t6002\t6002\nGid:\t6002\t6002\t6002\t6002\nFDSize:\t64\nGroups:\t6002 7500 \nNStgid:\t479586\nNSpid:\t479586\nNSpgid:\t479586\nNSsid:\t479584\nKthread:\t0\nVmPeak:\t    3228 kB\nVmSize:\t    3228 kB\nVmLck:\t       0 kB\nVmPin:\t       0 kB\nVmHWM:\t    1844 kB\nVmRSS:\t    1844 kB\nRssAnon:\t     108 kB\nRssFile:\t    1736 kB\nRssShmem:\t       0 kB\nVmData:\t     224 kB\nVmStk:\t     132 kB\nVmExe:\t      20 kB\nVmLib:\t    1796 kB\nVmPTE:\t      48 kB\nVmSwap:\t       0 kB\nHugetlbPages:\t       0 kB\nCoreDumping:\t0\nTHP_enabled:\t1\nuntag_mask:\t0xffffffffffffffff\nThreads:\t1\nSigQ:\t2/1019103\nSigPnd:\t0000000000000000\nShdPnd:\t0000000000000000\nSigBlk:\t0000000000000000\nSigIgn:\t0000000000300000\nSigCgt:\t0000000000016007\nCapInh:\t0000000000000000\nCapPrm:\t0000000000000000\nCapEff:\t0000000000000000\nCapBnd:\t00000000a80425fb\nCapAmb:\t0000000000000000\nNoNewPrivs:\t0\nSeccomp:\t2\nSeccomp_filters:\t1\nSpeculation_Store_Bypass:\tthread vulnerable\nSpeculationIndirectBranch:\tconditional enabled\nCpus_allowed:\tffff\nCpus_allowed_list:\t0-15\nMems_allowed:\t00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000001\nMems_allowed_list:\t0\nvoluntary_ctxt_switches:\t1\nnonvoluntary_ctxt_switches:\t1\nx86_Thread_features:\t\nx86_Thread_features_locked:\t\n",
+      "stdout_target": "pipe:[291886180]",
+      "stderr_target": "pipe:[291886181]"
+    },
+    {
+      "pid": 479587,
+      "argv": [
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tools/precision_repro_hf.py",
+        "--cases",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/native-positive-candidates-seed42-suffix512.json",
+        "--output",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/results/seed42-suffix512",
+        "--tokens",
+        "512",
+        "--seeds",
+        "42",
+        "--prefill-chunk",
+        "512",
+        "--compare-dir",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/served",
+        "--compare-dir",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/full"
+      ],
+      "stat": "479587 (python) R 479586 479586 479584 0 -1 4194560 2787495 0 0 0 538500 1627 0 0 20 0 62 0 166915514 2799936520192 15593257 18446744073709551615 106941597884416 106941607520921 140724277213904 0 0 0 0 16781312 2 0 0 0 17 15 0 0 0 0 0 106941640384512 106941640439008 106942627434496 140724277216280 140724277217292 140724277217292 140724277219251 0\n",
+      "status": "Name:\tpython\nUmask:\t0022\nState:\tR (running)\nTgid:\t479587\nNgid:\t0\nPid:\t479587\nPPid:\t479586\nTracerPid:\t0\nUid:\t6002\t6002\t6002\t6002\nGid:\t6002\t6002\t6002\t6002\nFDSize:\t64\nGroups:\t6002 7500 \nNStgid:\t479587\nNSpid:\t479587\nNSpgid:\t479586\nNSsid:\t479584\nKthread:\t0\nVmPeak:\t2780354128 kB\nVmSize:\t2734313008 kB\nVmLck:\t       0 kB\nVmPin:\t       0 kB\nVmHWM:\t62373860 kB\nVmRSS:\t62373860 kB\nRssAnon:\t 2161012 kB\nRssFile:\t60212848 kB\nRssShmem:\t       0 kB\nVmData:\t2732484044 kB\nVmStk:\t     260 kB\nVmExe:\t    9412 kB\nVmLib:\t  645936 kB\nVmPTE:\t   94724 kB\nVmSwap:\t       0 kB\nHugetlbPages:\t       0 kB\nCoreDumping:\t0\nTHP_enabled:\t1\nuntag_mask:\t0xffffffffffffffff\nThreads:\t62\nSigQ:\t2/1019103\nSigPnd:\t0000000000000000\nShdPnd:\t0000000000000000\nSigBlk:\t0000000000000000\nSigIgn:\t0000000001001000\nSigCgt:\t0000000100000002\nCapInh:\t0000000000000000\nCapPrm:\t0000000000000000\nCapEff:\t0000000000000000\nCapBnd:\t00000000a80425fb\nCapAmb:\t0000000000000000\nNoNewPrivs:\t0\nSeccomp:\t2\nSeccomp_filters:\t1\nSpeculation_Store_Bypass:\tthread vulnerable\nSpeculationIndirectBranch:\tconditional enabled\nCpus_allowed:\tffff\nCpus_allowed_list:\t0-15\nMems_allowed:\t00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000001\nMems_allowed_list:\t0\nvoluntary_ctxt_switches:\t6820\nnonvoluntary_ctxt_switches:\t578438\nx86_Thread_features:\t\nx86_Thread_features_locked:\t\n",
+      "stdout_target": "pipe:[291886180]",
+      "stderr_target": "pipe:[291886181]"
+    }
+  ],
+  "action": "Root SIGTERM CPU-only HF process and timeout wrapper after recording identity; TT P2 untouched.",
+  "verified_no_remaining_pids_unix": 1794726016.1099207,
+  "process_start_unix": 1794725432.14,
+  "observed_end_lower_bound_unix": 1794725959.8333127,
+  "observed_overlap_seconds": 527.6933126449585,
+  "reference_result": {
+    "status": "partial",
+    "free_samples": 0,
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/results/seed42-suffix512/anomaly.requests2931.call20.canonicalprefix.optional-suffix512.hf.private.json"
+  },
+  "timing_consequence": "P2 diagnostic wall overlaps HF CPU weight load/inference. Not an idle-host serial speed comparison; do not rank policies using this wall. TT correctness outputs retained; no evaluation scores changed."
+}

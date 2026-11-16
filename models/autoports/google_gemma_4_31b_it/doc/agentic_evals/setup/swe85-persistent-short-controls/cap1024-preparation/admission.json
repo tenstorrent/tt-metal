@@ -1,0 +1,129 @@
+{
+  "status": "admitted",
+  "question": "Finish three short diagnostic continuations that were progressing at512tokens.",
+  "jobs": [
+    {
+      "name": "served",
+      "command": [
+        "timeout",
+        "3600",
+        "env",
+        "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+        "READINESS_TRACE_REGION_SIZE=134217728",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+        "-m",
+        "models.autoports.google_gemma_4_31b_it.tools.precision_repro_batch",
+        "--cases",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/cap1024-preparation/served-candidate-cases.json",
+        "--build-kwargs-file",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/head_bfp8_build_kwargs.json",
+        "--output-dir",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/cap1024-preparation/runs/served"
+      ],
+      "prediction": {
+        "status": "prelaunch_forecast",
+        "cases": 1,
+        "predicted_hours": 0.05167561106966004,
+        "range_hours": [
+          0.04926803367975024,
+          0.055688240052843035
+        ],
+        "basis": "Sameprompt/seed,1023decode replays scaled from existing511 plus observedprefill; branchless noTFrepeat; same-mode observedload. Diagnostic only.",
+        "first_call_preparation_allowance_s": 11.784051147056744,
+        "allowance_basis": "Conservative entire first chosen64 TF branch of prior same-mode suffix512 batch; that branch prepared traces before the sampled continuations used by base forecast. NoTFbranch runs here."
+      },
+      "hashes": [
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/cap1024-preparation/served-candidate-cases.json",
+          "sha256": "33d93f355ff768860f4136e6adbd66749b594ba8793ccd7ced1c76c7422dd2e1"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/head_bfp8_build_kwargs.json",
+          "sha256": "2e583fa8bd7aff7c5f8be110835df751924d167243c5a44a68aa5b3d70c6845f"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/head_bfp8_precision_config.json",
+          "sha256": "aa0e651fb3fdd7afc285293645c5ca309b2da246619e6e7fb6da86c5d2f28853"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/cap1024-preparation/review-d.json",
+          "sha256": "a5b52b8e29543b68de18e1ff6042808eb2916110ab000743d65d6dc28db8e491"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/tools/precision_repro_batch.py",
+          "sha256": "172f5a1dd7a7403847e47b966ae79c306163650a60211418c7c195794ec5c125"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/cap1024-preparation/fixtures/served/anomaly.pytest-dev__pytest-7432.call19.onset.optional-suffix512.cap1024.seed42.private.json",
+          "sha256": "feebd5a9da150a6cf6ec67de02822a2a11338e84b8ab77a171e593d30a5adf4f"
+        }
+      ]
+    },
+    {
+      "name": "full",
+      "command": [
+        "timeout",
+        "3600",
+        "env",
+        "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+        "READINESS_TRACE_REGION_SIZE=134217728",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+        "-m",
+        "models.autoports.google_gemma_4_31b_it.tools.precision_repro_batch",
+        "--cases",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/cap1024-preparation/full-candidate-cases.json",
+        "--build-kwargs-file",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_build_kwargs.json",
+        "--output-dir",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/cap1024-preparation/runs/full"
+      ],
+      "prediction": {
+        "status": "prelaunch_forecast",
+        "cases": 2,
+        "predicted_hours": 0.05934949532112328,
+        "range_hours": [
+          0.04946160399729401,
+          0.07582931419417206
+        ],
+        "basis": "Sameprompt/seed,1023decode replays scaled from existing511 plus observedprefill; branchless noTFrepeat; same-mode observedload. Diagnostic only.",
+        "first_call_preparation_allowance_s": 16.380446143914014,
+        "allowance_basis": "Conservative entire first chosen64 TF branch of prior same-mode suffix512 batch; that branch prepared traces before the sampled continuations used by base forecast. NoTFbranch runs here."
+      },
+      "hashes": [
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/cap1024-preparation/full-candidate-cases.json",
+          "sha256": "a2099458e1dfe4e50597cadc1c5a7664916af48280f5421654452966dc614b34"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_build_kwargs.json",
+          "sha256": "ff2b5ed24e0b6a1dee7eb5cd8bd437d17c3df5f8f25567927d239e666f0699f9"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_config.json",
+          "sha256": "63ce02f7fa0df993a27daca25eeeb3adca51e15c7c6956d1cef122534ebdc7a9"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/cap1024-preparation/review-d.json",
+          "sha256": "a5b52b8e29543b68de18e1ff6042808eb2916110ab000743d65d6dc28db8e491"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/tools/precision_repro_batch.py",
+          "sha256": "172f5a1dd7a7403847e47b966ae79c306163650a60211418c7c195794ec5c125"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/cap1024-preparation/fixtures/full/anomaly.psf__requests-5414.call11.onset.optional-suffix512.cap1024.seed43.private.json",
+          "sha256": "1850ce0f5b3b322ac4b147aacefc1c1a6fe342a9d7440354dda7c659a96c07c2"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/cap1024-preparation/fixtures/full/anomaly.psf__requests-5414.call11.onset.optional-suffix512.cap1024.seed44.private.json",
+          "sha256": "2327d31bd7c4aef5ff2156ddbafc71dbaa39b4dcd9e74c1705e4937eb154b929"
+        }
+      ]
+    }
+  ],
+  "review": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/cap1024-preparation/review-d.json",
+  "host_validation": "precision_repro_batch --validate-only accepted1served/2full jobs without TTNN import.",
+  "ordering": "Wait for existing followup cap-full completion exit0, then ownerzero,served,full; nooverlap.",
+  "forecast_adjustment": "Root adds conservative observed firstTFbranch wall as preparation allowance because branchless extension does not inherit warmed traces. Reviewed base forecasts preserved.",
+  "score_policy_change": false
+}

@@ -1,0 +1,90 @@
+{
+  "reviewed_unix": 1794722366.9490705,
+  "rows": [
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.call88.canonicalprefix.seed44.cap1024.json",
+      "sha256": "ece4d95c92789fff723b5b192bfec99b0f9bd624a5fe3f95dfbfb55f8bad2d05",
+      "seed": 44,
+      "tokens": 590,
+      "verdict": "normal",
+      "reason": "Grammatical continuation of pinned contraction, distinct code/reasoning and valid canonical command close. No anomaly observed; not patch correctness or execution claim.",
+      "trace_counters_delta": {
+        "model_replays": 589,
+        "sample_replays": 589,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 589,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.call91.canonicalprefix.seed42.cap256.json",
+      "sha256": "18b7c39682925541ed823ac2c5293a7d3959a0aee204906b60ca2ddab2ef1e6b",
+      "seed": 42,
+      "tokens": 42,
+      "verdict": "native",
+      "reason": "Adjacent extra apostrophe-ve units directly after pinned Since Ive prefix; same native duplicated-contraction family.",
+      "trace_counters_delta": {
+        "model_replays": 41,
+        "sample_replays": 41,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 41,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.call91.canonicalprefix.seed43.cap256.json",
+      "sha256": "95adcf8b8a03b845435874097576f66cefe402fcc9e01632413e1a90976b00a1",
+      "seed": 43,
+      "tokens": 59,
+      "verdict": "native",
+      "reason": "Adjacent extra apostrophe-ve units directly after pinned Since Ive prefix; same native duplicated-contraction family.",
+      "trace_counters_delta": {
+        "model_replays": 58,
+        "sample_replays": 58,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 58,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.call91.canonicalprefix.seed44.cap1024.json",
+      "sha256": "60715e43fd6d9c902831b97ee9412ba219463c7540ebf84e4235e46d077bec44",
+      "seed": 44,
+      "tokens": 117,
+      "verdict": "native",
+      "reason": "Adjacent extra apostrophe-ve units directly after pinned Since Ive prefix; same native duplicated-contraction family.",
+      "trace_counters_delta": {
+        "model_replays": 116,
+        "sample_replays": 116,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 116,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.matplotlib__matplotlib-20488.call82.onset.seed42.cap512.json",
+      "sha256": "c22d834b2d4e923319fa4e32683ec5d2b8609f927a8413f5deda203abb6ee8c9",
+      "seed": 42,
+      "tokens": 72,
+      "verdict": "normal",
+      "reason": "Grammatical continuation of pinned contraction, distinct code/reasoning and valid canonical command close. No anomaly observed; not patch correctness or execution claim.",
+      "trace_counters_delta": {
+        "model_replays": 71,
+        "sample_replays": 71,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 71,
+        "captures": 0
+      }
+    }
+  ]
+}

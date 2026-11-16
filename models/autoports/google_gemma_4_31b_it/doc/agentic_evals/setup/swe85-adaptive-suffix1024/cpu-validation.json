@@ -1,0 +1,19 @@
+{
+  "checks": [
+    {
+      "mode": "served",
+      "returncode": 0,
+      "stdout": "Validated 6 jobs without importing TTNN",
+      "stderr": "",
+      "command": "python -m ... precision_repro_batch --validate-only; no TTNN import or device action"
+    },
+    {
+      "mode": "full",
+      "returncode": 0,
+      "stdout": "Validated 6 jobs without importing TTNN",
+      "stderr": "",
+      "command": "python -m ... precision_repro_batch --validate-only; no TTNN import or device action"
+    }
+  ],
+  "status": "passed"
+}

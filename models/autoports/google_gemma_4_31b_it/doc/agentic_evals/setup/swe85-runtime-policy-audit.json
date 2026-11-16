@@ -1,0 +1,127 @@
+{
+  "status": "runtime_record_inventory",
+  "created_unix": 1794728715.1815743,
+  "rows": [
+    {
+      "folder": "swe85-adaptive-canonicalprefix-suffix8192-p1pinfix-candidate",
+      "runtime_records_by_policy": {
+        "stage12_bf16_hifi4_diagnostic": 3,
+        "stage12_head_bfp8_lofi": 3
+      }
+    },
+    {
+      "folder": "swe85-adaptive-req5414-cap2048-after-v-candidate",
+      "runtime_records_by_policy": {
+        "stage12_bf16_hifi4_diagnostic": 1,
+        "stage12_head_bfp8_lofi": 1
+      }
+    },
+    {
+      "folder": "swe85-adaptive-suffix1024",
+      "runtime_records_by_policy": {
+        "stage12_bf16_hifi4_diagnostic": 6,
+        "stage12_head_bfp8_lofi": 6
+      }
+    },
+    {
+      "folder": "swe85-adaptive-suffix1024-progressing-candidate",
+      "runtime_records_by_policy": {
+        "stage12_bf16_hifi4_diagnostic": 2
+      }
+    },
+    {
+      "folder": "swe85-adaptive-suffix2048-candidate",
+      "runtime_records_by_policy": {
+        "stage12_bf16_hifi4_diagnostic": 5,
+        "stage12_head_bfp8_lofi": 5
+      }
+    },
+    {
+      "folder": "swe85-adaptive-suffix2048-cap1024-execution-candidate",
+      "runtime_records_by_policy": {
+        "stage12_bf16_hifi4_diagnostic": 4,
+        "stage12_head_bfp8_lofi": 1
+      }
+    },
+    {
+      "folder": "swe85-adaptive-suffix4096-candidate",
+      "runtime_records_by_policy": {
+        "stage12_bf16_hifi4_diagnostic": 13,
+        "stage12_head_bfp8_lofi": 12
+      }
+    },
+    {
+      "folder": "swe85-cap-extensions",
+      "runtime_records_by_policy": {
+        "stage12_bf16_hifi4_diagnostic": 33,
+        "stage12_head_bfp8_lofi": 25
+      }
+    },
+    {
+      "folder": "swe85-conditional-hf",
+      "runtime_records_by_policy": {
+        "stage12_bf16_hifi4_diagnostic": 3,
+        "head_bfp4": 3,
+        "stage12_head_bfp8_lofi": 3
+      }
+    },
+    {
+      "folder": "swe85-contraction-short-controls",
+      "runtime_records_by_policy": {
+        "stage12_bf16_hifi4_diagnostic": 3,
+        "stage12_head_bfp8_lofi": 3
+      }
+    },
+    {
+      "folder": "swe85-persistent-short-controls",
+      "runtime_records_by_policy": {
+        "stage12_bf16_hifi4_diagnostic": 9,
+        "stage12_head_bfp8_lofi": 7
+      }
+    },
+    {
+      "folder": "swe85-pilot-split83",
+      "runtime_records_by_policy": {
+        "stage12_bf16_hifi4_diagnostic": 1,
+        "stage12_head_bfp8_lofi": 1
+      }
+    },
+    {
+      "folder": "swe85-pilot-split85",
+      "runtime_records_by_policy": {
+        "stage12_bf16_hifi4_diagnostic": 160,
+        "stage12_head_bfp8_lofi": 160
+      }
+    },
+    {
+      "folder": "swe85-precision-bisect",
+      "runtime_records_by_policy": {
+        "stage12_swe85_head_bfp8_hifi2": 153,
+        "stage12_swe85_head_bf16_hifi4": 113
+      }
+    },
+    {
+      "folder": "swe85-second-cap-extensions",
+      "runtime_records_by_policy": {
+        "stage12_bf16_hifi4_diagnostic": 24,
+        "stage12_head_bfp8_lofi": 14
+      }
+    },
+    {
+      "folder": "swe85-semantic-supplement",
+      "runtime_records_by_policy": {
+        "stage12_bf16_hifi4_diagnostic": 4,
+        "stage12_head_bfp8_lofi": 4
+      }
+    },
+    {
+      "folder": "swe85-third-cap-extensions",
+      "runtime_records_by_policy": {
+        "stage12_bf16_hifi4_diagnostic": 6,
+        "stage12_head_bfp8_lofi": 2
+      }
+    }
+  ],
+  "scope": "JSON artifacts <=3MB carrying runtime_precision; includes preflight/summary copies, counts are records rather than unique trials. Original SK512 old BFP4 comparison explicitly retained; corrected BFP8 arm completed.",
+  "action": "Execution admission must bind actual build kwargs/config and result runtime policy."
+}

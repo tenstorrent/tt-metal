@@ -1,0 +1,36 @@
+{
+  "status": "partial_completed_outputs_CPU_stock_nonstreaming_parser_only",
+  "created_utc": "2026-11-15T00:29:56.526622+00:00",
+  "protocol_jobs_selected": 17,
+  "completed_case_modes": 34,
+  "completed_trials": 102,
+  "partial_counts": {
+    "served": {
+      "case_modes": 17,
+      "trials": 51,
+      "missing_tool": 8,
+      "malformed_name": 8,
+      "invalid_arguments": 8,
+      "capped_trials": 16
+    },
+    "full": {
+      "case_modes": 17,
+      "trials": 51,
+      "missing_tool": 0,
+      "malformed_name": 0,
+      "invalid_arguments": 0,
+      "capped_trials": 16
+    }
+  },
+  "pending": [],
+  "errors": [],
+  "rules": [
+    "Expected structured tool is bash with JSON mapping containing string command. Missing tool, malformed function name and invalid arguments are separate outcomes.",
+    "Missing tool at token cap may be incomplete; inspect completion/stop and channel context before declaring reproduction.",
+    "Valid structured call does not excuse visible GetAll-bash, stray thought, repetition, wrong actions or other semantic anomalies. Mechanical repetition is not assessed by this parser.",
+    "Raw special-marker display alone is not reproduction: runner decodes skip_special_tokens=False. Compare actual channel-aware structured results with native response body.",
+    "Native token IDs and exact historical stream absent. Canonical reconstruction/current nonstreaming parse is not proof of historical stream/parser equivalence or full-model correctness.",
+    "Full-prefix findings may include fixed inherited anomalous text. Compare generated-only findings and exact prefix before attributing anomaly to new sampling. A capped parser-extracted call is not necessarily complete/executable; tool-close-token presence is recorded separately."
+  ],
+  "detailed_audit_sha256": "a0fc81dbea56aa132d75c5dc36fa99b3f229e6f5435e62502c0780ba99675a25"
+}

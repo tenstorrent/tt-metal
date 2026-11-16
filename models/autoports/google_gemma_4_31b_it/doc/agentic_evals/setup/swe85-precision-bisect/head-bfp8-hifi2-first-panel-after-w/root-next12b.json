@@ -1,0 +1,221 @@
+{
+  "reviewed_unix": 1794722858.761495,
+  "rows": [
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.pytest-dev__pytest-7432.call19.onset.seed42.cap256.json",
+      "sha256": "08d522f128fdbfb291bfa2bfb63acfa810cfe2242f4002ceedfb7d7ce01ed2cb",
+      "seed": 42,
+      "tokens": 256,
+      "verdict": "native",
+      "reason": "Long caret burst affirmativecollapse, notcapfailure; fullrawtext/charactercensus and pinnedtraceback boundary reviewed.",
+      "longest_caret_run": 796,
+      "trace_counters_delta": {
+        "model_replays": 255,
+        "sample_replays": 255,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 255,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.pytest-dev__pytest-7432.call19.onset.seed43.cap256.json",
+      "sha256": "96851ace5ad4a3ad9e0def1707ba99644618257fbd1464b542180bb6412ecabf",
+      "seed": 43,
+      "tokens": 256,
+      "verdict": "native",
+      "reason": "Long caret burst affirmativecollapse, notcapfailure; fullrawtext/charactercensus and pinnedtraceback boundary reviewed.",
+      "longest_caret_run": 1024,
+      "trace_counters_delta": {
+        "model_replays": 255,
+        "sample_replays": 255,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 255,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.pytest-dev__pytest-7432.call19.onset.seed44.cap256.json",
+      "sha256": "9088df51ab9332f4dbaff5bd86374a601e79d174b8e2cd62612445a82b95bd74",
+      "seed": 44,
+      "tokens": 256,
+      "verdict": "native",
+      "reason": "Long caret burst affirmativecollapse, notcapfailure; fullrawtext/charactercensus and pinnedtraceback boundary reviewed.",
+      "longest_caret_run": 1024,
+      "trace_counters_delta": {
+        "model_replays": 255,
+        "sample_replays": 255,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 255,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.pytest10356-call14.canonicalprefix.seed42.cap256.json",
+      "sha256": "e2bd9cbff5011cfad96609a6c4554a59c3ea06a328808a7e6999b921864c90f3",
+      "seed": 42,
+      "tokens": 30,
+      "verdict": "native",
+      "reason": "Pinned prefix ends open call:; generated quote+shellcommand omits bash name and command argument object, same native malformed call family. Parser audit pending.",
+      "longest_caret_run": 0,
+      "trace_counters_delta": {
+        "model_replays": 29,
+        "sample_replays": 29,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 29,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.pytest10356-call14.canonicalprefix.seed43.cap256.json",
+      "sha256": "2d1e0f928244a37ebe87a419548ebced485a7ff890e2805574373ceeb924e0d9",
+      "seed": 43,
+      "tokens": 27,
+      "verdict": "native",
+      "reason": "Pinned prefix ends open call:; generated quote+shellcommand omits bash name and command argument object, same native malformed call family. Parser audit pending.",
+      "longest_caret_run": 0,
+      "trace_counters_delta": {
+        "model_replays": 26,
+        "sample_replays": 26,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 26,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.pytest10356-call14.canonicalprefix.seed44.cap256.json",
+      "sha256": "58d52fae8a2fdc2fd1d4dcb76d7db13fc970cf74278aa23dfb8e8376b02088b4",
+      "seed": 44,
+      "tokens": 26,
+      "verdict": "native",
+      "reason": "Pinned prefix ends open call:; generated quote+shellcommand omits bash name and command argument object, same native malformed call family. Parser audit pending.",
+      "longest_caret_run": 0,
+      "trace_counters_delta": {
+        "model_replays": 25,
+        "sample_replays": 25,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 25,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.requests2931.call20.canonicalprefix.seed42.cap256.json",
+      "sha256": "1f097385e228d711a52e2f83fb38feacce8ced91c2efff08e760ca017e22b775",
+      "seed": 42,
+      "tokens": 256,
+      "verdict": "native",
+      "reason": "Long caret burst affirmativecollapse, notcapfailure; fullrawtext/charactercensus and pinnedtraceback boundary reviewed.",
+      "longest_caret_run": 1024,
+      "trace_counters_delta": {
+        "model_replays": 255,
+        "sample_replays": 255,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 255,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.requests2931.call20.canonicalprefix.seed43.cap256.json",
+      "sha256": "56a49b72345c31f3fbf015b58e0c2d770fd2481f60ac6f8215aab81f96457a2f",
+      "seed": 43,
+      "tokens": 256,
+      "verdict": "native",
+      "reason": "Long caret burst affirmativecollapse, notcapfailure; fullrawtext/charactercensus and pinnedtraceback boundary reviewed.",
+      "longest_caret_run": 1024,
+      "trace_counters_delta": {
+        "model_replays": 255,
+        "sample_replays": 255,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 255,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.requests2931.call20.canonicalprefix.seed44.cap256.json",
+      "sha256": "72accf6a4c8f7d7da2396b861794dfd3af00a8cf83317cf6e40e6209781f1408",
+      "seed": 44,
+      "tokens": 256,
+      "verdict": "native",
+      "reason": "Long caret burst affirmativecollapse, notcapfailure; fullrawtext/charactercensus and pinnedtraceback boundary reviewed.",
+      "longest_caret_run": 1024,
+      "trace_counters_delta": {
+        "model_replays": 255,
+        "sample_replays": 255,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 255,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.scikit-learn__scikit-learn-13135.call29.onset.seed42.cap1024.json",
+      "sha256": "764232bd68718a2ce5769313c02e29f72e2b232e1d2855b1270817edff0ad70a",
+      "seed": 42,
+      "tokens": 116,
+      "verdict": "normal",
+      "reason": "Grammatical continuation and distinct action with canonical tool boundary; notproof of claimed verification or correctpatch.",
+      "longest_caret_run": 0,
+      "trace_counters_delta": {
+        "model_replays": 115,
+        "sample_replays": 115,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 115,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.scikit-learn__scikit-learn-13135.call29.onset.seed43.cap512.json",
+      "sha256": "1f477c0d4e8b34261c9a161e048f500f99853bd6dd4b7577915fc18126064b4a",
+      "seed": 43,
+      "tokens": 106,
+      "verdict": "other",
+      "reason": "Localized malformed and-ve contraction after lexical gap, notadjacentduplicate; rawtextotherwisecoherent. No score change.",
+      "longest_caret_run": 0,
+      "trace_counters_delta": {
+        "model_replays": 105,
+        "sample_replays": 105,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 105,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.scikit-learn__scikit-learn-13135.call29.onset.seed44.cap512.json",
+      "sha256": "75b7fc00b2cd20e48d2fb9fe3dfd95f13e5d96c6b7123f698f439ac9786e67d2",
+      "seed": 44,
+      "tokens": 415,
+      "verdict": "normal",
+      "reason": "Grammatical continuation and distinct action with canonical tool boundary; notproof of claimed verification or correctpatch.",
+      "longest_caret_run": 0,
+      "trace_counters_delta": {
+        "model_replays": 414,
+        "sample_replays": 414,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 414,
+        "captures": 0
+      }
+    }
+  ]
+}

@@ -1,0 +1,128 @@
+{
+  "task": "139",
+  "diagnostic": "Full-precision suffix512 first-wave free-running semantic review",
+  "source": "anomalies/gpqa-extended-precision/first-wave-full/task139.onset.suffix512.json",
+  "comparison_context": {
+    "suffix_packet": "anomalies/gpqa-extended-precision/task139.onset.suffix512.private.json",
+    "original_triage": "current/gpqa-extended198-head-bfp8/digest/139.triage.json",
+    "coordinator_context": "current/gpqa-extended198-head-bfp8/digest/coordinator.json",
+    "learned_context": "learned.json",
+    "original_finding": "The original native reply was judged anomalous for repeated NaBH4/NaBD4 candidate reconsideration while acknowledging unresolved gas and precipitate/decomposition clues; later D2O insight was partial and followed by renewed cycling. Its mechanical detector was not flagged and it stopped normally. This review compares semantic patterns only.",
+    "selected_onset": "The saved onset is a selected point before renewed candidate/reaction reconsideration, not a uniquely established first error.",
+    "prompt_suffix": "Each diagnostic starts from the exact retained suffix of 512 reconstructed prompt IDs, with 4,673 earlier IDs removed and the position origin changed. It is not the original native prompt.",
+    "reconstruction_limit": "Raw native sampled token IDs are unavailable; matching completion counts do not prove token identity.",
+    "review_scope": "All three saved ENTIRE3 free-running texts were read. The separate chosen teacher-forced continuation was executed and is not assessed here; official scoring is complete."
+  },
+  "pattern_comparison": {
+    "shared_pattern": "All three continuations repeatedly return to borohydride analogy and isotope facts rather than identifying a candidate that accounts for the reaction, released gas, and precipitate clues. The repetition is semantic even though every saved mechanical flag is false.",
+    "between_seeds": "Seed 42 cycles tightly through the same NaBH4/NaBH3CN analogy and NaBD4 isotope statements. Seed 43 repeats the corresponding deuterated NaBD4/NaBD3CN assertions. Seed 44 starts with distinct NaBH4 and LiAlH4 product checks; those are progress, but the same candidate, oxygen-count, and analogy sequence then restarts repeatedly without a new discriminator.",
+    "relation_to_original": "The short suffix-conditioned outputs are consistent with the original coordinator finding of repeated candidate/gas/precipitate mismatch cycles. They do not reproduce the native prompt path, establish the original onset cause, or show precision causality.",
+    "progress_and_cutoff": "Initial distinct candidate checks in seed 44 count as progress. Later sustained unchanged cycles support the anomaly labels; terminal mid-phrase or incomplete-formula endings at the cap are not malformed-text evidence. No doubled-slash malformed fragment or stray-language text was observed."
+  },
+  "seeds": [
+    {
+      "index": 0,
+      "seed": 42,
+      "text_chars": 2986,
+      "semantic_anomaly": true,
+      "mechanical_flag": false,
+      "observed_malformed_text": {
+        "observed": false,
+        "stray_language": false,
+        "actual_bad_fragments": false,
+        "description": "No stray language or actual malformed fragment is visible. The unfinished formula or mid-phrase ending occurs at the diagnostic output boundary and is a terminal cutoff, not malformed text."
+      },
+      "evidence": [
+        {
+          "char_range": [
+            0,
+            2986
+          ],
+          "paraphrase": "The continuation repeatedly says to revisit the close-analog clue, names NaBH4 as analogous to NaBH3CN, notes the reductive-amination use, asks whether the reagent carries a heavier isotope, and answers that NaBD4 does. The same four-step analogy/use/isotope loop recurs without testing another candidate against the stated gas or precipitate clues."
+        },
+        {
+          "char_range": [
+            2186,
+            2986
+          ],
+          "paraphrase": "The same loop remains in place through the end; the last line stops while reopening the NaBH4/NaBH3CN question and an unfinished formula."
+        }
+      ],
+      "text_ending": "The saved text ends inside an unfinished chemical formula at the 1,024-token diagnostic boundary; this terminal cutoff is not treated as malformed text.",
+      "basis": "The repeated loop occupies essentially the whole continuation and returns to the same analog and isotope premise without a new discriminating check. The normal-looking topical prose and cap ending are not the basis for the anomaly label."
+    },
+    {
+      "index": 1,
+      "seed": 43,
+      "text_chars": 3081,
+      "semantic_anomaly": true,
+      "mechanical_flag": false,
+      "observed_malformed_text": {
+        "observed": false,
+        "stray_language": false,
+        "actual_bad_fragments": false,
+        "description": "No stray language or actual malformed fragment is visible. The unfinished formula or mid-phrase ending occurs at the diagnostic output boundary and is a terminal cutoff, not malformed text."
+      },
+      "evidence": [
+        {
+          "char_range": [
+            0,
+            3081
+          ],
+          "paraphrase": "The response repeatedly asserts that NaBD4 is analogous to NaBD3CN, that the latter is used in reductive amination, and that NaBD4 contains a heavier isotope. It replays this short sequence many times without bringing in a new candidate, region, or check of the reaction and precipitate clues."
+        },
+        {
+          "char_range": [
+            2281,
+            3081
+          ],
+          "paraphrase": "The same three-part assertion cycle continues to the boundary; the final question starts another copy and ends before its formula is complete."
+        }
+      ],
+      "text_ending": "The saved text ends inside a new formula after another repeated question at the diagnostic boundary. The incomplete terminal phrase is a cap cutoff, not malformed text.",
+      "basis": "Many unchanged repetitions make this a sustained semantic loop; it is not a judgment based on the incomplete final formula. The wording shifts from NaBH4 to NaBD4, but supplies no new discriminating reasoning."
+    },
+    {
+      "index": 2,
+      "seed": 44,
+      "text_chars": 2944,
+      "semantic_anomaly": true,
+      "mechanical_flag": false,
+      "observed_malformed_text": {
+        "observed": false,
+        "stray_language": false,
+        "actual_bad_fragments": false,
+        "description": "No stray language or actual malformed fragment is visible. The unfinished formula or mid-phrase ending occurs at the diagnostic output boundary and is a terminal cutoff, not malformed text."
+      },
+      "evidence": [
+        {
+          "char_range": [
+            0,
+            1050
+          ],
+          "paraphrase": "The text initially revisits the two-oxygen product clue, sketches reductions by NaBH4 and LiAlH4, then connects NaBH4/NaBH3CN to reductive amination and asks about a deuterated isotope. This contains candidate checks, but does not resolve the stated gas/precipitate identification."
+        },
+        {
+          "char_range": [
+            1050,
+            2944
+          ],
+          "paraphrase": "It repeatedly restarts that same sequence: two-oxygen keto-acid product, NaBH4 or LiAlH4 alternatives, reductive-amination analogy, and NaBD4 as the isotope-bearing reagent. No new candidate region or discriminating check emerges across the restarts."
+        }
+      ],
+      "text_ending": "The final line stops after “giving” while continuing the repeated LiAlH4 product discussion. That mid-phrase diagnostic-cap cutoff is not malformed text.",
+      "basis": "The first candidate/reaction checks are credited as progress. The ensuing repeated full sequence is sustained across most of the continuation and returns to the same unresolved candidate/precipitate mismatch, so the anomaly judgment does not rely on the cap ending."
+    }
+  ],
+  "limits": [
+    "Mechanical flags are copied exactly from the three saved records and remain separate from semantic judgments.",
+    "These are three suffix-truncated diagnostic continuations, not population estimates or original native-path reproductions.",
+    "No answer-correctness, score, or score-population claim is made.",
+    "The executed TFchosen continuation is outside this review; official scoring is complete.",
+    "No precision-causality conclusion is drawn."
+  ],
+  "assessment_status": {
+    "TFchosen": "executed but not assessed in this artifact",
+    "scoring": "completed; no pending claim"
+  }
+}

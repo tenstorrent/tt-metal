@@ -1,0 +1,7 @@
+{
+  "reviewer": "root",
+  "accepted": true,
+  "status": "matched_TT_next_then_conditional_HF",
+  "hf_followup": "deferred_until_matched_TT",
+  "reason": "No HF launch admitted. Matched short TT test determines whether HF followup is needed; device/HF process preflight remains enforced."
+}

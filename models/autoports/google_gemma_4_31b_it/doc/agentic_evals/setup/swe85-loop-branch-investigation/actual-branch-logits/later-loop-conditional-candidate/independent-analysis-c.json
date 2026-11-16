@@ -1,0 +1,229 @@
+{
+  "status": "independent_host_analysis_complete",
+  "scope": "Conditional comparison of logits under one exact forced 30-token history; not free-running incidence, sampling outcome, task correctness, or causal attribution.",
+  "source_hashes": {
+    "hf_report_sha256": "3cf9cbaf254f3e200ca3bc88b95cc02d3da646fa84d51ecd1fa2e8f67966a816",
+    "tt_full_report_sha256": "c4c373df75e39d50c528e8f80bd4c122202cdbdaac4f8eb49de2cc4f39f2f812",
+    "comparison_sha256": "ae1f1ecc8f1d7fd0d5e6200baa3c55a86e4a0eba884a8997ada29a9247e175e8",
+    "case_sha256": "fbe984e026dbe8ef2b9d8a4288056617cbfde5235d1efd4a3bd14038a2db5ad7",
+    "prompt_token_ids_sha256": "55fea04ac956c00e84884f04bf7e287a85e9d1a2b90794040070751161c968f0",
+    "branch_sha256": "00f64871f5b8343e86bef9af8d75cc8f111c45dc5314759bd7a69ad3b2b7c99a",
+    "hf_logits_sha256": "4aa59a5b2003215e2bca0f391b4b8a507914cb2ed744b137433434c3b972445e",
+    "tt_full_logits_sha256": "59e1fad8376aff955680f3dc03cd8f062fade1da5fc71c703bbca8db6cf36197",
+    "tt_precision_config_sha256": "63ce02f7fa0df993a27daca25eeeb3adca51e15c7c6956d1cef122534ebdc7a9",
+    "tt_build_kwargs_sha256": "ff2b5ed24e0b6a1dee7eb5cd8bd437d17c3df5f8f25567927d239e666f0699f9"
+  },
+  "identity_and_alignment": {
+    "model_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+    "prompt_tokens": 2048,
+    "forced_history": [
+      1390,
+      107,
+      147,
+      1390,
+      107,
+      147,
+      1390,
+      107,
+      147,
+      1390,
+      107,
+      147,
+      1390,
+      107,
+      147,
+      1390,
+      107,
+      147,
+      1390,
+      107,
+      147,
+      1390,
+      107,
+      147,
+      1390,
+      107,
+      147,
+      1390,
+      107,
+      147
+    ],
+    "aligned_logit_rows_per_backend": 31,
+    "first_30_rows_expected_token_argmax_agreement": 30,
+    "post_history_row30_argmax_token_ids": {
+      "hf": 1390,
+      "tt-full": 1390
+    },
+    "hf_prefill": "512-token chunks, per HF candidate summary",
+    "tt_prefill": "2048-token prompt in full-TT path",
+    "full_tt_config_id": "stage12_bf16_hifi4_diagnostic",
+    "full_tt_weights": "all BF16; HiFi4 attention/down/MLP/LM head"
+  },
+  "distribution_metrics": {
+    "all31_rows": {
+      "pcc": {
+        "min": 0.9757246438577464,
+        "mean": 0.9924936375294607,
+        "max": 0.9949604870764558
+      },
+      "raw_full_softmax_tv": {
+        "min": 7.5190183161271145e-06,
+        "mean": 0.0093861243161913,
+        "max": 0.13127126814230552
+      },
+      "strict_top20_intersection_count": {
+        "min": 16,
+        "mean": 18.322580645161292,
+        "max": 20
+      }
+    },
+    "first_three_loop_tokens_rows0_2": {
+      "pcc": {
+        "min": 0.9757246438577464,
+        "mean": 0.9862970051710983,
+        "max": 0.9927293743798541
+      },
+      "raw_full_softmax_tv": {
+        "min": 0.00023801138816248837,
+        "mean": 0.047127017307872776,
+        "max": 0.13127126814230552
+      },
+      "strict_top20_intersection_count": {
+        "min": 18,
+        "mean": 18.666666666666668,
+        "max": 19
+      }
+    },
+    "late_cycle_rows24_29": {
+      "pcc": {
+        "min": 0.9929221918079004,
+        "mean": 0.9937332877353832,
+        "max": 0.9945702646877115
+      },
+      "raw_full_softmax_tv": {
+        "min": 7.5190183161271145e-06,
+        "mean": 0.00024352187523263977,
+        "max": 0.0007604929389569615
+      },
+      "strict_top20_intersection_count": {
+        "min": 17,
+        "mean": 18.166666666666668,
+        "max": 19
+      }
+    },
+    "selected_rows": [
+      {
+        "row_index": 0,
+        "pcc": 0.9757246438577464,
+        "raw_full_softmax_tv": 0.009871772393150319,
+        "top_k20_distribution_tv": 0.009749369797736671,
+        "top_p095_nominal_distribution_tv": 0.0,
+        "top20_intersection_count": 18
+      },
+      {
+        "row_index": 1,
+        "pcc": 0.9927293743798541,
+        "raw_full_softmax_tv": 0.00023801138816248837,
+        "top_k20_distribution_tv": 0.00023318656964002596,
+        "top_p095_nominal_distribution_tv": 0.0,
+        "top20_intersection_count": 19
+      },
+      {
+        "row_index": 2,
+        "pcc": 0.9904369972756946,
+        "raw_full_softmax_tv": 0.13127126814230552,
+        "top_k20_distribution_tv": 0.13126885846060413,
+        "top_p095_nominal_distribution_tv": 0.13608730177813522,
+        "top20_intersection_count": 19
+      },
+      {
+        "row_index": 3,
+        "pcc": 0.9926348298594809,
+        "raw_full_softmax_tv": 0.0362853253621903,
+        "top_k20_distribution_tv": 0.03626606562155748,
+        "top_p095_nominal_distribution_tv": 0.0343783257746669,
+        "top20_intersection_count": 19
+      },
+      {
+        "row_index": 4,
+        "pcc": 0.9940401442158686,
+        "raw_full_softmax_tv": 6.208642481868799e-05,
+        "top_k20_distribution_tv": 6.221017470946989e-05,
+        "top_p095_nominal_distribution_tv": 0.0,
+        "top20_intersection_count": 18
+      },
+      {
+        "row_index": 5,
+        "pcc": 0.992249476046177,
+        "raw_full_softmax_tv": 0.06202213815856953,
+        "top_k20_distribution_tv": 0.061975350925825526,
+        "top_p095_nominal_distribution_tv": 0.05774460363568969,
+        "top20_intersection_count": 19
+      },
+      {
+        "row_index": 8,
+        "pcc": 0.9928076854947622,
+        "raw_full_softmax_tv": 0.02610408665783818,
+        "top_k20_distribution_tv": 0.02605832732156208,
+        "top_p095_nominal_distribution_tv": 0.04742587317756676,
+        "top20_intersection_count": 18
+      },
+      {
+        "row_index": 11,
+        "pcc": 0.9930426513503035,
+        "raw_full_softmax_tv": 0.007292858769954172,
+        "top_k20_distribution_tv": 0.00726970008554721,
+        "top_p095_nominal_distribution_tv": 0.0,
+        "top20_intersection_count": 18
+      },
+      {
+        "row_index": 29,
+        "pcc": 0.9929251773458201,
+        "raw_full_softmax_tv": 0.0006207233383439724,
+        "top_k20_distribution_tv": 0.0006078316365231103,
+        "top_p095_nominal_distribution_tv": 0.0,
+        "top20_intersection_count": 18
+      },
+      {
+        "row_index": 30,
+        "pcc": 0.9926637870539593,
+        "raw_full_softmax_tv": 2.163770156899293e-05,
+        "top_k20_distribution_tv": 2.0965839528470383e-05,
+        "top_p095_nominal_distribution_tv": 0.0,
+        "top20_intersection_count": 17
+      }
+    ]
+  },
+  "loop_token_observation": {
+    "token_147": {
+      "first_two_occurrences_rows2_5": "rank 2 in both backends; neither is argmax (argmax token 138 at row2, 556 at row5)",
+      "from_third_occurrence_row8_through_row29": "rank 1 and argmax in both backends"
+    },
+    "later_rows": "Under the imposed history, all expected tokens from row8 onward are argmax/rank1 on both systems; the conditional branch becomes strongly self-reinforcing. This does not estimate how often an unconstrained run enters the branch."
+  },
+  "interpretation": {
+    "main": "The first loop cycle contains the clearest backend probability differences, concentrated at token 147: both place it second at the first two occurrences, with raw HF-vs-TT full-softmax TV 0.1313 at row2 and 0.0620 at row5. From row8 onward, the forced loop tokens are top-ranked in both; rows24-29 have PCC 0.99266\u20130.99457 and raw TV 0.0000075\u20130.0007605. Thus the later-cycle history is supported as locally self-reinforcing in both distributions, while an early-cycle distribution gap remains, especially for token 147.",
+    "not_established": [
+      "unconditional chance of entering/repeating this loop",
+      "whether precision caused the original generated output",
+      "whether sampling, prompt/prefill implementation, or another mechanism explains a free-running difference"
+    ]
+  },
+  "metric_limits": {
+    "primary": "Raw saved-logit ranks and full-vocabulary softmax comparisons.",
+    "proxy": "Top-k20 and top-p fields are host reconstructions with strict top-20 handling/tie break; they are not exact HF TopKLogitsWarper or device-sampler support/probabilities. HF can retain all ties at the kth threshold; the device distribution is not captured here.",
+    "conditioning": "The HF run used chunked 512-token prefill while TT full prefilled the exact 2048-token prompt, so first-row/prefill-path differences are not isolated from precision."
+  },
+  "runtime": {
+    "hf_seconds": 169.53297638893127,
+    "tt_full_seconds": 100.64954400062561,
+    "compare_seconds": 10.530614614486694,
+    "combined_seconds": 280.7131350040436,
+    "forecast_seconds": [
+      260.548,
+      865.393
+    ],
+    "forecast_hit": true,
+    "source": "serial-runs/*completion.json and root-terminal-review.json"
+  }
+}

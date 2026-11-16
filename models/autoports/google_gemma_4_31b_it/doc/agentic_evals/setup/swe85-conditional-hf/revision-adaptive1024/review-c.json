@@ -1,0 +1,383 @@
+{
+  "status": "independent_host_review_candidate_only_no_admission",
+  "scope": "Review the four-case/three-process revision-adaptive1024 conditional HF candidate; static file/hash/token checks only. No HF model/tokenizer load, network, device, admission, or launch.",
+  "disposition": "candidate_semantics_and_commands_valid; prelaunch gate is explicit but not yet satisfied; 1024-prompt cost estimate remains an unmeasured extrapolation.",
+  "case_source_identity": {
+    "cases": [
+      {
+        "job": "anomaly.requests2931.call20.canonicalprefix.optional-suffix512",
+        "seed_group": 42,
+        "prompt_tokens": 512,
+        "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-85/anomaly.requests2931.call20.canonicalprefix.suffix512.private.json",
+        "fixture_sha256": "5017461630f07f8232f054ddf6c2b979c4e3bb14370431de6799ca8c4d1d7804",
+        "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-precision/requests2931-call20/canonicalprefix/case.private.json",
+        "source_case_sha256": "7f527603e08f61f5516745fc2fab496c6ae7020985372c8f71fd0459895c10f0",
+        "source_metadata_identity_valid": true,
+        "full_tt_positive_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/full/anomaly.requests2931.call20.canonicalprefix.optional-suffix512.json",
+        "full_tt_positive_sha256": "14ec7feaac78ac5659f21df7926336c2521648b4c9fb33966d0687610e9dfe98",
+        "outputs": [
+          {
+            "mode": "served",
+            "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/served/anomaly.requests2931.call20.canonicalprefix.optional-suffix512.json",
+            "sha256": "1150c42e334a9fd9da59a8f6214713eeaa6f1283bb9e17c83c284f83cc5252c8",
+            "chosen_positions": 64,
+            "chosen_forced_ids_match_fixture": true,
+            "native_positive_seed_evidence": null
+          },
+          {
+            "mode": "full",
+            "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/full/anomaly.requests2931.call20.canonicalprefix.optional-suffix512.json",
+            "sha256": "14ec7feaac78ac5659f21df7926336c2521648b4c9fb33966d0687610e9dfe98",
+            "chosen_positions": 64,
+            "chosen_forced_ids_match_fixture": true,
+            "native_positive_seed_evidence": null
+          }
+        ]
+      },
+      {
+        "job": "anomaly.sympy__sympy-14248.call53.onset.optional-suffix512",
+        "seed_group": 42,
+        "prompt_tokens": 512,
+        "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-85/anomaly.sympy__sympy-14248.call53.onset.suffix512.private.json",
+        "fixture_sha256": "91359efd10ca926d39011351f97d53948db58fc4fedd961705ad4c0a462dbad1",
+        "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-sympy14248-caret-controls/sympy__sympy-14248.call53.onset.private.json",
+        "source_case_sha256": "b088288cd811300e8ff36818cdc1b685bdb0f5569866a0f6fbb69b739f610f1a",
+        "source_metadata_identity_valid": true,
+        "full_tt_positive_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/full/anomaly.sympy__sympy-14248.call53.onset.optional-suffix512.json",
+        "full_tt_positive_sha256": "c2f99685050adea2459487a86fffcf009129abb1698ca848ef402a1514d219d7",
+        "outputs": [
+          {
+            "mode": "served",
+            "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/served/anomaly.sympy__sympy-14248.call53.onset.optional-suffix512.json",
+            "sha256": "c12bf566c6afeb8f0042b3fa0487f0c2167e92011675e99e62a09c4858d63a10",
+            "chosen_positions": 64,
+            "chosen_forced_ids_match_fixture": true,
+            "native_positive_seed_evidence": null
+          },
+          {
+            "mode": "full",
+            "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/full/anomaly.sympy__sympy-14248.call53.onset.optional-suffix512.json",
+            "sha256": "c2f99685050adea2459487a86fffcf009129abb1698ca848ef402a1514d219d7",
+            "chosen_positions": 64,
+            "chosen_forced_ids_match_fixture": true,
+            "native_positive_seed_evidence": null
+          }
+        ]
+      },
+      {
+        "job": "anomaly.pytest-dev__pytest-7432.call19.onset.optional-suffix512",
+        "seed_group": 44,
+        "prompt_tokens": 512,
+        "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-85/anomaly.pytest-dev__pytest-7432.call19.onset.suffix512.private.json",
+        "fixture_sha256": "7ca8039708a12c24acd3c2cfb1c2c51b8946e99df118576545605efad6225bf4",
+        "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-18763-7432-controls/pytest-dev__pytest-7432.call19.onset.private.json",
+        "source_case_sha256": "436bf8f06cebc27f9ac206ab4c85c655b2c707145be67b8341f14288370807f5",
+        "source_metadata_identity_valid": true,
+        "full_tt_positive_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/full/anomaly.pytest-dev__pytest-7432.call19.onset.optional-suffix512.json",
+        "full_tt_positive_sha256": "ec50a12e48db7b2446435f2e3f64d5fd158f0dc58988d7788a620815b5abcca4",
+        "outputs": [
+          {
+            "mode": "served",
+            "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/served/anomaly.pytest-dev__pytest-7432.call19.onset.optional-suffix512.json",
+            "sha256": "21b2fb860e3dba265f76605c5807f7b89c32d6c76d2428444e42e95047c97639",
+            "chosen_positions": 64,
+            "chosen_forced_ids_match_fixture": true,
+            "native_positive_seed_evidence": null
+          },
+          {
+            "mode": "full",
+            "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/full/anomaly.pytest-dev__pytest-7432.call19.onset.optional-suffix512.json",
+            "sha256": "ec50a12e48db7b2446435f2e3f64d5fd158f0dc58988d7788a620815b5abcca4",
+            "chosen_positions": 64,
+            "chosen_forced_ids_match_fixture": true,
+            "native_positive_seed_evidence": null
+          }
+        ]
+      },
+      {
+        "job": "anomaly.psf__requests-5414.call9.onset",
+        "seed_group": 44,
+        "prompt_tokens": 1024,
+        "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/fixtures/anomaly.psf__requests-5414.call9.onset.suffix1024.private.json",
+        "fixture_sha256": "9e19aaa5b7f11f026931ef8a8ca1e49bb070a338805b3568cc89dd5065e41e7c",
+        "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-requests5414-caret-controls/psf__requests-5414.call9.onset.private.json",
+        "source_case_sha256": "5024622915942584d71a4eebe667180b660a2f3c45955bddb72de8e019ad7181",
+        "source_metadata_identity_valid": true,
+        "full_tt_positive_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/full/anomaly.psf__requests-5414.call9.onset.json",
+        "full_tt_positive_sha256": "dec3d27c4021946b317f76a9bac5049e6ecadbd2f5dcc60fd9d67fd95951be71",
+        "outputs": [
+          {
+            "mode": "served",
+            "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/served/anomaly.psf__requests-5414.call9.onset.json",
+            "sha256": "ab28180a1cce9bb9eec291201f38527c99ec0fac41b22ae84abca5774091d969",
+            "chosen_positions": 64,
+            "chosen_forced_ids_match_fixture": true,
+            "native_positive_seed_evidence": {
+              "seed": 44,
+              "generated_tokens": 512,
+              "unique_ids": [
+                172109
+              ],
+              "all_token_id_172109": true,
+              "root_review": "setup/swe85-adaptive-suffix1024/served-coordinator-first7.json"
+            }
+          },
+          {
+            "mode": "full",
+            "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/full/anomaly.psf__requests-5414.call9.onset.json",
+            "sha256": "dec3d27c4021946b317f76a9bac5049e6ecadbd2f5dcc60fd9d67fd95951be71",
+            "chosen_positions": 64,
+            "chosen_forced_ids_match_fixture": true,
+            "native_positive_seed_evidence": {
+              "seed": 44,
+              "generated_tokens": 512,
+              "unique_ids": [
+                172109
+              ],
+              "all_token_id_172109": true,
+              "root_review": "setup/swe85-adaptive-suffix1024/full-coordinator-first3.json"
+            }
+          }
+        ]
+      }
+    ],
+    "all_fixture_source_chosen_sampling_checks_pass": true,
+    "source_integrity_hash_mismatches": [],
+    "native_positive_scope": "The positive label denotes matched shortened full-TT behavior only. It does not establish native token identity, frequency, HF reproduction, or precision causality."
+  },
+  "forced_token_comparison": {
+    "runner_behavior": "precision_repro_hf writes each manifest job as <job>.hf.private.json, loads saved prompt IDs directly, teacher-forces saved chosen IDs, and compares the first len(HF positions) against each compare-dir <job>.json. It raises if forced token IDs differ.",
+    "result": "All four job names have matching served/full result files in their exact suffix-family directories; all four have 64 forced positions matching the saved fixture chosen IDs in both modes.",
+    "checks": [
+      {
+        "job": "anomaly.requests2931.call20.canonicalprefix.optional-suffix512",
+        "modes": [
+          {
+            "mode": "served",
+            "positions": 64,
+            "forced_ids_match": true
+          },
+          {
+            "mode": "full",
+            "positions": 64,
+            "forced_ids_match": true
+          }
+        ]
+      },
+      {
+        "job": "anomaly.sympy__sympy-14248.call53.onset.optional-suffix512",
+        "modes": [
+          {
+            "mode": "served",
+            "positions": 64,
+            "forced_ids_match": true
+          },
+          {
+            "mode": "full",
+            "positions": 64,
+            "forced_ids_match": true
+          }
+        ]
+      },
+      {
+        "job": "anomaly.pytest-dev__pytest-7432.call19.onset.optional-suffix512",
+        "modes": [
+          {
+            "mode": "served",
+            "positions": 64,
+            "forced_ids_match": true
+          },
+          {
+            "mode": "full",
+            "positions": 64,
+            "forced_ids_match": true
+          }
+        ]
+      },
+      {
+        "job": "anomaly.psf__requests-5414.call9.onset",
+        "modes": [
+          {
+            "mode": "served",
+            "positions": 64,
+            "forced_ids_match": true
+          },
+          {
+            "mode": "full",
+            "positions": 64,
+            "forced_ids_match": true
+          }
+        ]
+      }
+    ],
+    "partition_rule": "512-suffix jobs compare only with persistent-short-controls outputs; Requests5414 call9 compares only with adaptive-suffix1024 outputs. This prevents same-name files from a different conditioning suffix being compared."
+  },
+  "pinned_offline_cpu": {
+    "revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+    "revision_pinned_in_weights": true,
+    "tokenizer_local_files_only": true,
+    "offline_env_per_command": true,
+    "torch_intraop_16": true,
+    "blas_omp_thread_env_16": true,
+    "thread_limit_scope": "Intra-op and OMP/MKL/OpenBLAS are explicitly 16; PyTorch inter-op thread pool is not explicitly set. Clarify scope or pin it if a strict 16-total-thread bound is intended.",
+    "process_groups": [
+      {
+        "serial_order": 1,
+        "cases": [
+          "anomaly.requests2931.call20.canonicalprefix.optional-suffix512",
+          "anomaly.sympy__sympy-14248.call53.onset.optional-suffix512"
+        ],
+        "case_count": 2,
+        "seed_arg": "42",
+        "offline_vars": true,
+        "blas_thread_env": true,
+        "comparison_directories": [
+          "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/served",
+          "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/full"
+        ],
+        "all_comparison_files_present": true,
+        "manifest_sha256_matches": true,
+        "timeout_seconds": 3600
+      },
+      {
+        "serial_order": 2,
+        "cases": [
+          "anomaly.pytest-dev__pytest-7432.call19.onset.optional-suffix512"
+        ],
+        "case_count": 1,
+        "seed_arg": "44",
+        "offline_vars": true,
+        "blas_thread_env": true,
+        "comparison_directories": [
+          "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/served",
+          "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/full"
+        ],
+        "all_comparison_files_present": true,
+        "manifest_sha256_matches": true,
+        "timeout_seconds": 3600
+      },
+      {
+        "serial_order": 3,
+        "cases": [
+          "anomaly.psf__requests-5414.call9.onset"
+        ],
+        "case_count": 1,
+        "seed_arg": "44",
+        "offline_vars": true,
+        "blas_thread_env": true,
+        "comparison_directories": [
+          "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/served",
+          "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/full"
+        ],
+        "all_comparison_files_present": true,
+        "manifest_sha256_matches": true,
+        "timeout_seconds": 3600
+      }
+    ],
+    "serial_order_explicit": "Three separate serial CPU processes are intentional: seed42/suffix512 two cases, seed44/suffix512 one case, seed44/suffix1024 one case. Never overlap; each process pays one reference/model-load margin.",
+    "cpu_validate_only_status": "passed_validate_only_no_model_load",
+    "cpu_validation_model_loaded": false,
+    "network_or_model_launch_performed": false
+  },
+  "cost_review": {
+    "point_formula": "median of 8 historical incremental 512-prompt/512-generation HF case walls × cases in process +180 s per process",
+    "recomputed_groups": [
+      {
+        "seed_group": 42,
+        "suffix_source": "exact_saved_suffix512",
+        "point_matches": true,
+        "range_matches": true,
+        "point_seconds": 2260.3664671399165,
+        "range_seconds": [
+          1780,
+          3380
+        ],
+        "timeout_seconds": 3600,
+        "upper_fits_timeout": true
+      },
+      {
+        "seed_group": 44,
+        "suffix_source": "exact_saved_suffix512",
+        "point_matches": true,
+        "range_matches": true,
+        "point_seconds": 1220.1832335699582,
+        "range_seconds": [
+          980,
+          1780
+        ],
+        "timeout_seconds": 3600,
+        "upper_fits_timeout": true
+      },
+      {
+        "seed_group": 44,
+        "suffix_source": "exact_saved_suffix1024",
+        "point_matches": true,
+        "range_matches": true,
+        "point_seconds": 1220.1832335699582,
+        "range_seconds": [
+          980,
+          1780
+        ],
+        "timeout_seconds": 3600,
+        "upper_fits_timeout": true
+      }
+    ],
+    "total_point_seconds_recomputed": 4700.732934279833,
+    "total_range_seconds_recomputed": [
+      3740,
+      6940
+    ],
+    "stored_total_point_seconds": 4700.732934279833,
+    "stored_total_range_seconds": [
+      3740,
+      6940
+    ],
+    "totals_match": true,
+    "matched_1024_prompt_baseline": false,
+    "limitation": "The added 1024-token prompt is assigned the 512-prompt case point (1040.18 s) and range (800–1600 s). The cost basis contains process-total incremental walls for 512 prompt/512 generation; it does not separately report prefill time or demonstrate decode-dominance. The forecast labels the 1024 case as an assumption, but that rationale is not independently supported by the saved timing decomposition. Group upper bounds fit 3600 s; this is a planning estimate only.",
+    "recommendation": "Keep the 1024 case and total explicitly provisional; before any time-critical admission, add a sensitivity/contingency for longer prefill or document a matched CPU prefill timing basis. Do not call the current point a measured or validated cost."
+  },
+  "prelaunch_gates": {
+    "documented": {
+      "root_freezes_native_positive_set_after_cap2048_probe": true,
+      "all_tt_queues_complete": true,
+      "zero_tt_device_owners": true,
+      "fresh_memavailable_at_least_100gb": true,
+      "no_hf_or_model_process": true,
+      "hash_recheck": true
+    },
+    "live_evidence_present": false,
+    "interpretation": "The revised proposal and commands explicitly document all requested serial gates. There is intentionally no live process/memory/device evidence because the candidate is unadmitted. Recheck immediately before any admission/process and wait until the pending suffix2048/other adaptive TT queues finish."
+  },
+  "findings": [
+    {
+      "severity": "limitation",
+      "finding": "The 1024-token prefix has no matched HF cost baseline. Forecast copies the 512-prefix point/range, and saved timing does not establish decode-dominance because it lacks a separate prefill component. Keep estimate provisional; the timeout envelope itself has headroom."
+    },
+    {
+      "severity": "minor_clarification",
+      "finding": "Thread limits cover PyTorch intra-op (16) and OMP/MKL/OpenBLAS (16), but do not explicitly set PyTorch inter-op threads. If “16 threads” is intended as a total CPU thread ceiling, set or document the inter-op limit."
+    },
+    {
+      "severity": "prelaunch_blocker_until_gate",
+      "finding": "No admission or launch is appropriate before root freezes positives after the pending cap2048 probe and records fresh all-queue-complete, zero-owner, MemAvailable>=100GB, no-HF-process, and hash evidence. These are clearly documented but not live-satisfied."
+    }
+  ],
+  "not_findings": [
+    "Four candidate fixtures have verified source identity and unchanged chosen IDs/sampling; new Requests5414 call9 suffix1024 is exact last1024 source IDs and has matched served/full 512-caret positives at seed44.",
+    "Forced-token comparison jobs resolve to the exact source-suffix output directories; all chosen64 token IDs align in served/full results.",
+    "Pinned revision, local tokenizer, offline environment, per-group serial order, and CPU validate-only evidence are present."
+  ],
+  "source_hashes": {
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive1024/proposal.json": "9ee2a308636b4490e9ba6c4b8b966471a9c2ad756e02f180ac971a96480b2e61",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive1024/preparation.json": "b8a8017a326835aae64d9b326fd3e52943b367c531c6696d7e374eb60f6a679b",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive1024/commands.json": "633d97cc5019d83d55e6c8d38cc9ec8f61e0833f020f094ca502c9deeddc8f13",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive1024/forecast.json": "db82a438ff1679eb8c2916a20864e45a6a18b7d763bf7c82d5d8a0c7657eb094",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive1024/source-integrity.json": "999da659e3c06ce4e03be78e9006e98697853680b88d32d30fbce258b4125f53",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive1024/cpu-validation.json": "9b226b55dab2eefb5e04829b9c3222e20db01b5934232d03d31095166603f42f",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/cost-basis.json": "dc16b01ffe4dc12f0148cad0cb6b7fade4f1fce2a00688f964413f4ab3e685c5",
+    "models/autoports/google_gemma_4_31b_it/tools/precision_repro_hf.py": "aafe67c88bb5a1eb38b8718570bbddd5749e2a9ecbb9dd19cdb100a49572c03e",
+    "models/autoports/google_gemma_4_31b_it/tests/generate_full_reference.py": "30f69ad0db3ce951aa1a6dc8deb1900ea33d5cdd578f8aff36cefc33056e5d7d",
+    "models/autoports/google_gemma_4_31b_it/tt/weights.py": "bca69b111c9c9cbf9bc620c3dc6bee873abdecdd75f08d5b8b93638e881868cd"
+  }
+}

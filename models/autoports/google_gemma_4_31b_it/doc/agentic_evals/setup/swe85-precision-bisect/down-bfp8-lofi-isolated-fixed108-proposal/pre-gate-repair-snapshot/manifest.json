@@ -1,0 +1,33 @@
+{
+  "status": "pre_repair_snapshot",
+  "files": {
+    "run_serial_candidate.py": {
+      "snapshot": "pre-gate-repair-snapshot/run_serial_candidate.py",
+      "sha256": "2ab86beb5c9e04369fb8d8d8a775f6ebc9083603c05f2c2669579f2ed8f2825b"
+    },
+    "proposal.json": {
+      "snapshot": "pre-gate-repair-snapshot/proposal.json",
+      "sha256": "eaaa904d4a64c144d4a7e539f9646b0bd32a86aee48f7de700a4caf239ee7939"
+    },
+    "source-hashes.json": {
+      "snapshot": "pre-gate-repair-snapshot/source-hashes.json",
+      "sha256": "39e7ce4ec6470f280ce0ff9aa7fff86312e652b3509e6718fe489b557ebfc9f8"
+    },
+    "artifact-hashes.json": {
+      "snapshot": "pre-gate-repair-snapshot/artifact-hashes.json",
+      "sha256": "8f536e765f479ecec49d996db6a631dae96cde9674cd11e40a91567b27a8d8d0"
+    },
+    "admission.template.json": {
+      "snapshot": "pre-gate-repair-snapshot/admission.template.json",
+      "sha256": "bae3768ab5a9da5d3e646c0e1915e9c9bc0b6b92f77d20f4b1ffd0f45b8deeab"
+    },
+    "README.md": {
+      "snapshot": "pre-gate-repair-snapshot/README.md",
+      "sha256": "c49d798e5177546c70196e49c83fc69d94cc5079bcb1d2e12f01b16d97d813bb"
+    },
+    "predecessors/sklearn-serial-review.template.json": {
+      "snapshot": "pre-gate-repair-snapshot/predecessors__sklearn-serial-review.template.json",
+      "sha256": "4c70920712bf520f354c8765d0e27c911f84222c1cc560a0d522e063285829c2"
+    }
+  }
+}

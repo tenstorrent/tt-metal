@@ -1,0 +1,15 @@
+{
+  "status": "pending_root_decision",
+  "reviewer": "root",
+  "accepted": false,
+  "decision": "pending",
+  "sk_evidence_sha256": {},
+  "completed_requirements": {
+    "hf_evidence_package": "path+sha256; package binds exact SK evidence, admitted HF candidate, every successful completion, every complete output, and accepted root output review"
+  },
+  "not_required_requirements": {
+    "reason": "nonempty evidence-based reason",
+    "not_required_basis_sha256": "exact sk_evidence_sha256 map"
+  },
+  "note": "This is a template only. The driver does not accept pending."
+}

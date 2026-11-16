@@ -1,0 +1,86 @@
+{
+  "status": "candidate_only_not_admitted_not_run",
+  "purpose": "Extend the already completed HF9 full-mode Requests5414 call11 exact-2048-suffix seed44 trial from cap512 to cap1024. This is a diagnostic continuation, not a failure label: the cap512 output ended in coherent IDNA reasoning.",
+  "lineage": {
+    "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/results/seed44-suffix2048/anomaly.psf__requests-5414.call11.onset.hf.private.json",
+    "source_result_sha256": "ea3eb180de1ef8898c2565dcb5ffd7700f3e792ccfce8bc279efef80c6dfe9a4",
+    "source_manifest": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/native-positive-candidates-seed44-suffix2048.json",
+    "source_manifest_sha256": "8be05cbc74c014acefe3372df69386534f31330b7276bdac0bed35e154fbd5c2",
+    "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/fixtures/anomaly.psf__requests-5414.call11.onset.suffix2048.private.json",
+    "fixture_sha256": "fbe984e026dbe8ef2b9d8a4288056617cbfde5235d1efd4a3bd14038a2db5ad7",
+    "prior_group_completion_sha256": "d39b7440fd10612ecd8e51d84c02db9ea68c8742325c4a2f4597e3df86c3c967",
+    "prior_group_wall_s": 1442.443281173706
+  },
+  "identity": {
+    "case_name": "anomaly.psf__requests-5414.call11.onset.suffix2048.cap1024.seed44",
+    "fixture_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/fixtures/anomaly.psf__requests-5414.call11.onset.suffix2048.private.json",
+    "fixture_sha256": "fbe984e026dbe8ef2b9d8a4288056617cbfde5235d1efd4a3bd14038a2db5ad7",
+    "prompt_token_ids_sha256": "55fea04ac956c00e84884f04bf7e287a85e9d1a2b90794040070751161c968f0",
+    "prompt_tokens": 2048,
+    "chosen_tokens": 64,
+    "chosen_sha256": "15001e212845ba0bcba68540367d36e76d1a6c148a0d47ce345637d7fee696c1",
+    "seed": 44,
+    "temperature": 1.0,
+    "top_p": 0.95,
+    "top_k": 20,
+    "cap_prior": 512,
+    "cap_candidate": 1024,
+    "revision": "842da3794eaa0b77d5f08bae87a17459d91ff475"
+  },
+  "commands": {
+    "path": "commands.json",
+    "sha256": "ef38d66c41bcf2be8309d79352d8e2339ca0586283eb68392ebb521bae858679"
+  },
+  "manifest": {
+    "path": "manifest.json",
+    "sha256": "61914c6361a84f8d5c4f43bcbaccdb786c72b2fed57bf1afdb4e356c6f069b74"
+  },
+  "forecast": {
+    "path": "forecast.json",
+    "sha256": "65c0c7a7325e58379b8b5f89f8546074422e949c4e2fc6c5ca6d60d52132a2fb"
+  },
+  "source_integrity": {
+    "path": "source-integrity.json",
+    "sha256": "a1879479576f6cc9728d64b8396f285cebae3a895242c11289645c924a5d215d"
+  },
+  "output_dir": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/requests5414-call11-suffix2048-cap1024/runs",
+  "command": [
+    "timeout",
+    "3600",
+    "env",
+    "HF_HUB_OFFLINE=1",
+    "HF_DATASETS_OFFLINE=1",
+    "OMP_NUM_THREADS=16",
+    "MKL_NUM_THREADS=16",
+    "OPENBLAS_NUM_THREADS=16",
+    "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tools/precision_repro_hf.py",
+    "--cases",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/requests5414-call11-suffix2048-cap1024/manifest.json",
+    "--output",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/requests5414-call11-suffix2048-cap1024/runs",
+    "--tokens",
+    "1024",
+    "--seeds",
+    "44",
+    "--prefill-chunk",
+    "512"
+  ],
+  "validation_requirements": [
+    "Keep prior result untouched.",
+    "On completion verify exact case path/hash, revision, prompt IDs/count, CPU, dtype, seed44, cap1024, prefill chunk512, and one result.",
+    "Before interpreting extension, assert new generated_token_ids[:512] exactly equal the prior 512 generated_token_ids; report an explicit prefix mismatch if not.",
+    "Compare only the matching 64 chosen-token positions as an auxiliary diagnostic; they do not represent the actual ellipsis onset branch.",
+    "Keep coherent HF IDNA reasoning at cap512 distinct from native TT served/full ellipsis-newline-indentation loops."
+  ],
+  "interpretation_limits": [
+    "The saved chosen64 continuation is the original caret branch, not the generated ellipsis branch.",
+    "No native seed is known; seed44 is a diagnostic sample.",
+    "No causal or model-level conclusion follows from this one cap-extension trial."
+  ],
+  "semantic_context": {
+    "path": "semantic-context.json",
+    "sha256": "8a27f34ab15541d4b75d6e6cb92cc62f489c1e82631aa39de91084eb3bd40c19"
+  }
+}

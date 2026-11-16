@@ -1,0 +1,17 @@
+{
+  "driver_sha256": "2516262e035f942393bb6409052b806847c1ba53fb98163236c2adc6ca569673",
+  "files": {
+    "README.md": "e9be6c17917509c3b16fc7df68b2cbbe00162550d57e2b21c4deb9d5a5d149fb",
+    "candidate-cases.json": "2a6435b88ab24f780db9a26207989e0a511ad54dca5ddb35e26384aa914c6f32",
+    "command.json": "2cfe6313cfa53445e243191711045702c54b807838f7fc4ac316e2ff4677d444",
+    "forecast.json": "19e3a080e40713f303e7d91de342039abd8cc7d63543c920c191b7b373570dd4",
+    "host-validation.json": "ec8d8922ba0c633cc888a9879d12a27e0f14c7bd46d71ae5e6b05d8f4991f0c6",
+    "preparation.json": "580eb182ce9d345c1b48e6b15094c204eea1a1bc16ca4e39a9377303ca44d0bc",
+    "proposal.json": "4173746c27097acc3eaf778ce82bc3657e098b09ac6d561c0a7c3cc7e208388a",
+    "pytest7432-post-first-fulltt-token.private.json": "acfe5c87d2b16de1f566b55b295f632beac9db6269121545a105882a9b67f24e",
+    "root-static-review.json": "5f8d48277f24af01ee49d95eae75bf3625aa3fa0a87aa69d141be1d10831105a",
+    "source-hashes.json": "429977f500e321d3fe56c3981b513fed994373c8ed368c3999a1ebd0a5f76638"
+  },
+  "scope": "Binds candidate-specific prepared bytes and root static review; admission must separately bind this integrity file and driver.",
+  "status": "candidate_driver_integrity"
+}

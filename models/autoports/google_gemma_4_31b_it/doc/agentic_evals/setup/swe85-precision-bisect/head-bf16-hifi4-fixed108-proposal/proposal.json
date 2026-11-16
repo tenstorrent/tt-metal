@@ -1,0 +1,118 @@
+{
+  "status": "candidate_only_not_admitted_not_run",
+  "scope": "Fixed 108-trial precision diagnostic reproduction on the frozen P common-cap4096 panel, changing lm_head weight/fidelity only relative to head_bfp8_hifi2.",
+  "panel": {
+    "manifest": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-with-cap4096-pending-v-closure/candidate-cases.json",
+    "sha256": "57193e4b91af3a31df00f0c92dbc0f2219fbce011e6533594e5244a93a3021ed",
+    "trials": 108,
+    "seeds": {
+      "42": 36,
+      "43": 36,
+      "44": 36
+    },
+    "caps": {
+      "256": 72,
+      "512": 7,
+      "1024": 22,
+      "2048": 6,
+      "4096": 1
+    },
+    "target_pairs": 15
+  },
+  "precision": {
+    "baseline": "stage12_swe85_head_bfp8_hifi2",
+    "candidate": "stage12_swe85_head_bf16_hifi4",
+    "candidate_config": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/head_bf16_hifi4_precision.json",
+    "candidate_config_sha256": "12fa7be99e88bb9661b41e464a9d56d8160b2aefe2fb05a5d3b439dbcedfe6ee",
+    "build_kwargs": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/head_bf16_hifi4_build_kwargs.json",
+    "build_kwargs_sha256": "51bf8f746e4a892676d6565acc5734a723b2553d1f0ca01eab4951734daaef09",
+    "only_semantic_deltas": {
+      "weight_groups.lm_head": [
+        "bfp8",
+        "bf16"
+      ],
+      "compute_fidelities.lm_head": [
+        "HiFi2",
+        "HiFi4"
+      ]
+    },
+    "all_other_precision_groups_and_runtime_dtypes_unchanged": true
+  },
+  "runtime_plumbing_audit": {
+    "policy_registry": "tt/precision.py POLICIES maps bf16 to (bfloat16,HiFi4); loader enforces weight/fidelity pair coherence.",
+    "lm_head_construction": "tt/model.py uploads lm_head using POLICIES[weight_groups.lm_head] dtype and invokes MathFidelity[compute_fidelities.lm_head].",
+    "runner": "tools/precision_repro_batch.py accepts --build-kwargs-file, passes kwargs to build_generator; validate-only ran without TTNN import.",
+    "selected_default_unchanged": true
+  },
+  "validation": {
+    "status": "passed_host_only",
+    "cli": "precision_repro_batch --validate-only",
+    "jobs": 108,
+    "unique_names": 108,
+    "precision_schema_policy_check": "passed host structural check mirroring load_precision constraints",
+    "device_or_TTNN_imported": false
+  },
+  "forecast": "runtime-estimate.json; hybrid current HiFi2 panel + frozen original full-diagnostic projections, then wide explicit BF16/HiFi4 multipliers. Planning proxy only; not measured candidate performance or memory fit.",
+  "execution": {
+    "command": "command.json",
+    "admission": "none",
+    "launch": "none",
+    "score_change": false,
+    "timeout_seconds": 7200,
+    "gate": "No admission is present. If separately admitted, driver waits for P1 and X terminal success, validates P1 forecast hit or root miss acceptance, verifies no HF process and zero device owners, checks STOP_BEFORE_LAUNCH and duplicate-launch guard, then runs exactly one fixed108 command bounded by timeout7200.",
+    "driver": "run_after_p1_x.py",
+    "driver_sha256": "2bcfdcc1f018f2398212de0cd94119030dfe54b5dcc9f1578478b1771ecb1836",
+    "serial_gate": "After separate root admission only: verify complete source inventory and actual P1/X admission/proposal/driver bytes; require P1 and X terminal zero, all per-mode forecasts hit or root-accepted misses, exact X command pins, STOP absent, no active HF process and device owners zero, duplicate-launch guard, output directory empty, then one bounded7200 command.",
+    "forecast_source_sha256": "55e6d1800078e1d5a10660db196a3075d7892fac6a8efe5c7626198264837f81",
+    "forecast_seconds": {
+      "low": 2018.038988828659,
+      "central": 3024.428668656503,
+      "high": 5910.468657604884
+    }
+  },
+  "current_panel_observation": {
+    "status": "running_at_snapshot",
+    "completed_rows": 47,
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2",
+    "hybrid_base_variable_seconds": 2679.8952756728977,
+    "no_wait_or_device_action": true
+  },
+  "predecessor_gates": {
+    "P1": {
+      "directory": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w",
+      "admission_sha256": "91dc764e6a3a6b1e8a1be51e6eee5fc958c19d1dfcfa3d057b989aa325618cdd",
+      "required_queue_status": "completed",
+      "required_exit_code": 0,
+      "required_completion_exit_code": 0,
+      "forecast_gate": "P1 measured elapsed must be within its frozen launch forecast range or root must author forecast-miss-accepted.json bound to exact completion SHA, elapsed seconds, forecast range, and P1 admission SHA.",
+      "actual_admission_bytes_and_proposal_driver_hashes_required": true
+    },
+    "X": {
+      "directory": "setup/swe85-adaptive-canonicalprefix-suffix8192-p1pinfix-candidate",
+      "admission_sha256": "300d69403a28112bc5f2a7225df5327bdb9e577ad9ca96cf754ab304f3538205",
+      "required_queue_status": "all_suffix8192_modes_completed",
+      "required_exit_code": 0,
+      "served_and_full_exit_code": 0,
+      "require_x_p1_completion_sha_match": true,
+      "served_full_forecast_gate": "Each X mode elapsed must lie inside its own frozen forecast.json modes[mode].range_s; otherwise require root-authored forecast-miss-accepted-{mode}.json binding exact completion SHA, measured seconds, range, and X admission SHA.",
+      "actual_command_and_admission_match_required": true,
+      "stale_candidate_not_used": {
+        "directory": "setup/swe85-adaptive-canonicalprefix-suffix8192-candidate",
+        "status": "superseded_before_launch",
+        "admission_sha256": "f71ac674ff37bedd8304b92762cf98528f70d687afe14ebbf7416fe5860a06ec"
+      }
+    }
+  },
+  "driver": "run_after_p1_x.py",
+  "driver_sha256": "2bcfdcc1f018f2398212de0cd94119030dfe54b5dcc9f1578478b1771ecb1836",
+  "source_inventory": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/source-hashes.json",
+  "source_inventory_sha256": "d8d039fa8fefb072264bc902bc798dd260e00371151eda74b204a5c74a5418ad",
+  "candidate_hashes": {
+    "head_bf16_hifi4_precision.json": "12fa7be99e88bb9661b41e464a9d56d8160b2aefe2fb05a5d3b439dbcedfe6ee",
+    "head_bf16_hifi4_build_kwargs.json": "51bf8f746e4a892676d6565acc5734a723b2553d1f0ca01eab4951734daaef09",
+    "command.json": "9926c0937eca719bac79fc4fba48135fab9d2209f4f5f6d310c843f74d5b561e",
+    "runtime-estimate.json": "55e6d1800078e1d5a10660db196a3075d7892fac6a8efe5c7626198264837f81",
+    "host-validation.json": "6021d3a0dac4adf29fc337ff31b6babdeee821cdc5ffefd709c960ef92798c10",
+    "README.md": "75a5ae9cc2ad201dc11cc6982e5be9f12b8071c34d24991a91aa0a31637f31fc"
+  }
+}

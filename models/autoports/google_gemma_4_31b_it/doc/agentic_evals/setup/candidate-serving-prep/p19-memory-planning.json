@@ -1,0 +1,21 @@
+{
+  "created_unix": 1794757929.9884863,
+  "status": "planning_only_not_launch_measurement",
+  "candidate": "stage12_bf16_hifi4_kv_down_bfp8_p19",
+  "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/bf16-hifi4-kv-down-bfp8-accuracy-p19/run/memory.json",
+  "sha256": "ab34f913c3766d5c469f9e89fbdb821848c6e97cf5185e26d174e93122648e1b",
+  "actual_B1_allocator_total_bytes": 34044513280,
+  "actual_B1_prepared_allocated_bytes": 19351777280,
+  "actual_B1_owned_kv_bytes": 3074949120,
+  "hypothetical_free_after_removing_B1_owned_KV_bytes": 17767685120,
+  "analytical_B8_serving_reserve_bytes": 968507904,
+  "hypothetical_pool_upper_ids_floor": 24125,
+  "pool_bytes_per_ID_BFP8": 696320,
+  "ids_per_agent_working131072": 2854,
+  "warning": "B1 model runner allocator is not a B8 vLLM launch measurement. Page maps, prepared buffers and allocation fragmentation differ. No pool/agent choice is authorized by this arithmetic. Launch validation and collector remain required.",
+  "initial_probe_proposal": {
+    "batch": 8,
+    "pool_ids": 20480,
+    "purpose": "Context-preserving initial launch to measure free and contiguous memory under the candidate; then maximize pool from this evidence and restart if needed. This is not a scored eval launch."
+  }
+}

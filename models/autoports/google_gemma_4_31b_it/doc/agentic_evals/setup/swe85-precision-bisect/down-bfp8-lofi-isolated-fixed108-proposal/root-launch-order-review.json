@@ -1,0 +1,18 @@
+{
+  "reviewer": "root",
+  "accepted": true,
+  "status": "serial_launch_order_adjustment",
+  "reason": "MATextension completed and ABrepair remains host-only; run P3 now to avoid device idle and prioritize potential precision fix. ABselected/full retries follow P3. No source or policy delta beyond frozen candidate.",
+  "stage_deadline_unix": 1794791725.0,
+  "remaining_seconds": 51625.50084257126,
+  "required_timeout_seconds": 9010,
+  "outstanding": [
+    "ABrepairedselected/full comparisons",
+    "RequestsHF1024extension",
+    "PytestconditionalHF",
+    "SKsecondaryHF",
+    "SK2048controls",
+    "HF20",
+    "finalstage-review/commit"
+  ]
+}

@@ -1,0 +1,677 @@
+{
+  "status": "progressive_cpu_semantic_triage",
+  "updated_utc": "2026-11-15T07:23:25.099203+00:00",
+  "complete_trials": 108,
+  "expected_trials": 108,
+  "pending_trials": 0,
+  "counts": {
+    "normal": 60,
+    "reproduced_native_motif": 35,
+    "other_anomaly": 13,
+    "inconclusive": 0
+  },
+  "latest_chunk": "chunk-019.json",
+  "p1_match_policy": "Exact full job identifier and seed; full prompt token IDs must match before comparing generated text. Per-row P1 raw result path/hash and adjudication retained.",
+  "parser_audits": [
+    {
+      "artifact": "protocol-parser-audit.json",
+      "completed_trials": 6,
+      "errors": []
+    },
+    {
+      "artifact": "protocol-parser-audit-pytest10356.json",
+      "completed_trials": 3,
+      "errors": []
+    }
+  ],
+  "rows_seen": [
+    {
+      "job": "anomaly.call88.canonicalprefix",
+      "seed": 42,
+      "verdict": "normal",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.call88.canonicalprefix",
+      "seed": 43,
+      "verdict": "normal",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.call88.canonicalprefix",
+      "seed": 44,
+      "verdict": "normal",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.call91.canonicalprefix",
+      "seed": 42,
+      "verdict": "reproduced_native_motif",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.call91.canonicalprefix",
+      "seed": 43,
+      "verdict": "reproduced_native_motif",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.call91.canonicalprefix",
+      "seed": 44,
+      "verdict": "reproduced_native_motif",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.matplotlib__matplotlib-20488.call82.onset",
+      "seed": 42,
+      "verdict": "normal",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.matplotlib__matplotlib-20488.call82.onset",
+      "seed": 43,
+      "verdict": "normal",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.matplotlib__matplotlib-20488.call82.onset",
+      "seed": 44,
+      "verdict": "reproduced_native_motif",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.matplotlib__matplotlib-20488.call86.onset",
+      "seed": 42,
+      "verdict": "normal",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.matplotlib__matplotlib-20488.call86.onset",
+      "seed": 43,
+      "verdict": "reproduced_native_motif",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.matplotlib__matplotlib-20488.call86.onset",
+      "seed": 44,
+      "verdict": "normal",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.psf__requests-1921.call1.onset",
+      "seed": 42,
+      "verdict": "normal",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.psf__requests-1921.call1.onset",
+      "seed": 43,
+      "verdict": "other_anomaly",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.psf__requests-1921.call1.onset",
+      "seed": 44,
+      "verdict": "other_anomaly",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.psf__requests-5414.call10.onset",
+      "seed": 42,
+      "verdict": "reproduced_native_motif",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.psf__requests-5414.call10.onset",
+      "seed": 43,
+      "verdict": "reproduced_native_motif",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.psf__requests-5414.call10.onset",
+      "seed": 44,
+      "verdict": "reproduced_native_motif",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.psf__requests-5414.call11.onset",
+      "seed": 42,
+      "verdict": "reproduced_native_motif",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.psf__requests-5414.call11.onset",
+      "seed": 43,
+      "verdict": "reproduced_native_motif",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.psf__requests-5414.call11.onset",
+      "seed": 44,
+      "verdict": "reproduced_native_motif",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.psf__requests-5414.call9.onset",
+      "seed": 42,
+      "verdict": "reproduced_native_motif",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.psf__requests-5414.call9.onset",
+      "seed": 43,
+      "verdict": "reproduced_native_motif",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.psf__requests-5414.call9.onset",
+      "seed": 44,
+      "verdict": "reproduced_native_motif",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.pylint-dev__pylint-4551.call1.onset",
+      "seed": 42,
+      "verdict": "other_anomaly",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.pylint-dev__pylint-4551.call1.onset",
+      "seed": 43,
+      "verdict": "normal",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.pylint-dev__pylint-4551.call1.onset",
+      "seed": 44,
+      "verdict": "other_anomaly",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.pylint-dev__pylint-4604.call45.onset",
+      "seed": 42,
+      "verdict": "normal",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.pylint-dev__pylint-4604.call45.onset",
+      "seed": 43,
+      "verdict": "normal",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.pylint-dev__pylint-4604.call45.onset",
+      "seed": 44,
+      "verdict": "normal",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.pytest-dev__pytest-5787.call1.onset",
+      "seed": 42,
+      "verdict": "normal",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.pytest-dev__pytest-5787.call1.onset",
+      "seed": 43,
+      "verdict": "normal",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.pytest-dev__pytest-5787.call1.onset",
+      "seed": 44,
+      "verdict": "normal",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.pytest-dev__pytest-5787.call65.onset",
+      "seed": 42,
+      "verdict": "normal",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.pytest-dev__pytest-5787.call65.onset",
+      "seed": 43,
+      "verdict": "other_anomaly",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.pytest-dev__pytest-5787.call65.onset",
+      "seed": 44,
+      "verdict": "normal",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.pytest-dev__pytest-7432.call19.onset",
+      "seed": 42,
+      "verdict": "reproduced_native_motif",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.pytest-dev__pytest-7432.call19.onset",
+      "seed": 43,
+      "verdict": "reproduced_native_motif",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.pytest-dev__pytest-7432.call19.onset",
+      "seed": 44,
+      "verdict": "reproduced_native_motif",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.pytest10356-call14.canonicalprefix",
+      "seed": 42,
+      "verdict": "reproduced_native_motif",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.pytest10356-call14.canonicalprefix",
+      "seed": 43,
+      "verdict": "reproduced_native_motif",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.pytest10356-call14.canonicalprefix",
+      "seed": 44,
+      "verdict": "reproduced_native_motif",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.requests2931.call20.canonicalprefix",
+      "seed": 42,
+      "verdict": "reproduced_native_motif",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.requests2931.call20.canonicalprefix",
+      "seed": 43,
+      "verdict": "reproduced_native_motif",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.requests2931.call20.canonicalprefix",
+      "seed": 44,
+      "verdict": "reproduced_native_motif",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.scikit-learn__scikit-learn-13135.call29.onset",
+      "seed": 42,
+      "verdict": "normal",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.scikit-learn__scikit-learn-13135.call29.onset",
+      "seed": 43,
+      "verdict": "other_anomaly",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.scikit-learn__scikit-learn-13135.call29.onset",
+      "seed": 44,
+      "verdict": "normal",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-10323.call57.onset",
+      "seed": 42,
+      "verdict": "normal",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-10323.call57.onset",
+      "seed": 43,
+      "verdict": "normal",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-10323.call57.onset",
+      "seed": 44,
+      "verdict": "other_anomaly",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-10323.call68.onset",
+      "seed": 42,
+      "verdict": "normal",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-10323.call68.onset",
+      "seed": 43,
+      "verdict": "reproduced_native_motif",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-10323.call68.onset",
+      "seed": 44,
+      "verdict": "normal",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-10323.call70.onset",
+      "seed": 42,
+      "verdict": "normal",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-10323.call70.onset",
+      "seed": 43,
+      "verdict": "reproduced_native_motif",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-10323.call70.onset",
+      "seed": 44,
+      "verdict": "normal",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset",
+      "seed": 42,
+      "verdict": "normal",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset",
+      "seed": 43,
+      "verdict": "normal",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset",
+      "seed": 44,
+      "verdict": "normal",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset",
+      "seed": 42,
+      "verdict": "normal",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset",
+      "seed": 43,
+      "verdict": "reproduced_native_motif",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset",
+      "seed": 44,
+      "verdict": "normal",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call108.onset",
+      "seed": 42,
+      "verdict": "normal",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call108.onset",
+      "seed": 43,
+      "verdict": "normal",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call108.onset",
+      "seed": 44,
+      "verdict": "normal",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset",
+      "seed": 42,
+      "verdict": "normal",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset",
+      "seed": 43,
+      "verdict": "reproduced_native_motif",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset",
+      "seed": 44,
+      "verdict": "normal",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call28.onset",
+      "seed": 42,
+      "verdict": "normal",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call28.onset",
+      "seed": 43,
+      "verdict": "normal",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call28.onset",
+      "seed": 44,
+      "verdict": "normal",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset",
+      "seed": 42,
+      "verdict": "reproduced_native_motif",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset",
+      "seed": 43,
+      "verdict": "reproduced_native_motif",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset",
+      "seed": 44,
+      "verdict": "reproduced_native_motif",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset",
+      "seed": 42,
+      "verdict": "normal",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset",
+      "seed": 43,
+      "verdict": "normal",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset",
+      "seed": 44,
+      "verdict": "normal",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-9461.call184.onset",
+      "seed": 42,
+      "verdict": "normal",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-9461.call184.onset",
+      "seed": 43,
+      "verdict": "normal",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-9461.call184.onset",
+      "seed": 44,
+      "verdict": "normal",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.sympy__sympy-13480.call1.onset",
+      "seed": 42,
+      "verdict": "normal",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.sympy__sympy-13480.call1.onset",
+      "seed": 43,
+      "verdict": "normal",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.sympy__sympy-13480.call1.onset",
+      "seed": 44,
+      "verdict": "normal",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.sympy__sympy-13551.call1.onset",
+      "seed": 42,
+      "verdict": "reproduced_native_motif",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.sympy__sympy-13551.call1.onset",
+      "seed": 43,
+      "verdict": "other_anomaly",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.sympy__sympy-13551.call1.onset",
+      "seed": 44,
+      "verdict": "normal",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.sympy__sympy-13878.call1.onset",
+      "seed": 42,
+      "verdict": "normal",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.sympy__sympy-13878.call1.onset",
+      "seed": 43,
+      "verdict": "normal",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.sympy__sympy-13878.call1.onset",
+      "seed": 44,
+      "verdict": "normal",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.sympy__sympy-14248.call53.onset",
+      "seed": 42,
+      "verdict": "reproduced_native_motif",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.sympy__sympy-14248.call53.onset",
+      "seed": 43,
+      "verdict": "reproduced_native_motif",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.sympy__sympy-14248.call53.onset",
+      "seed": 44,
+      "verdict": "reproduced_native_motif",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.sympy__sympy-14711.call1.onset",
+      "seed": 42,
+      "verdict": "normal",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.sympy__sympy-14711.call1.onset",
+      "seed": 43,
+      "verdict": "other_anomaly",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.sympy__sympy-14711.call1.onset",
+      "seed": 44,
+      "verdict": "other_anomaly",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.sympy__sympy-18763.call1.onset",
+      "seed": 42,
+      "verdict": "normal",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.sympy__sympy-18763.call1.onset",
+      "seed": 43,
+      "verdict": "reproduced_native_motif",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.sympy__sympy-18763.call1.onset",
+      "seed": 44,
+      "verdict": "normal",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.sympy__sympy-18763.call10.onset",
+      "seed": 42,
+      "verdict": "normal",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.sympy__sympy-18763.call10.onset",
+      "seed": 43,
+      "verdict": "normal",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.sympy__sympy-18763.call10.onset",
+      "seed": 44,
+      "verdict": "normal",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.xarray3095-call53.canonicalprefix",
+      "seed": 42,
+      "verdict": "normal",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.xarray3095-call53.canonicalprefix",
+      "seed": 43,
+      "verdict": "normal",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.xarray3095-call53.canonicalprefix",
+      "seed": 44,
+      "verdict": "normal",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.xarray7233-call1.canonicalprefix",
+      "seed": 42,
+      "verdict": "other_anomaly",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.xarray7233-call1.canonicalprefix",
+      "seed": 43,
+      "verdict": "other_anomaly",
+      "mode": "head_bf16_hifi4"
+    },
+    {
+      "job": "anomaly.xarray7233-call1.canonicalprefix",
+      "seed": 44,
+      "verdict": "other_anomaly",
+      "mode": "head_bf16_hifi4"
+    }
+  ]
+}

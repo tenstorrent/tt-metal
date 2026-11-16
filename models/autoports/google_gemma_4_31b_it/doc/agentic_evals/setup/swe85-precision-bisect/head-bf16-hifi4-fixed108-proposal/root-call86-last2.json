@@ -1,0 +1,39 @@
+{
+  "reviewed_unix": 1794726753.807376,
+  "rows": [
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/runs/head_bf16_hifi4/anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.seed43.cap1024.json",
+      "sha256": "1ad00b17f649a38d5541d1d1079f8859531a7af315d81e2391f3161b5a3f9b4a",
+      "seed": 43,
+      "tokens": 841,
+      "verdict": "native",
+      "reason": "Full raw/pinned-prefix review: call:bash followed by newline and shell script without command argument opener. Native malformed tool name begins before cap; seed44 progressing script at1024 does not make this a cap-based failure.",
+      "trace_counters_delta": {
+        "model_replays": 840,
+        "sample_replays": 840,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 840,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/runs/head_bf16_hifi4/anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.seed44.cap1024.json",
+      "sha256": "56004347a26a8cae46d5db152dca5daf7b2e1c4c1b73ae18b746cc4df180f2b5",
+      "seed": 44,
+      "tokens": 1024,
+      "verdict": "native",
+      "reason": "Full raw/pinned-prefix review: call:bash followed by newline and shell script without command argument opener. Native malformed tool name begins before cap; seed44 progressing script at1024 does not make this a cap-based failure.",
+      "trace_counters_delta": {
+        "model_replays": 1023,
+        "sample_replays": 1023,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 1023,
+        "captures": 0
+      }
+    }
+  ]
+}

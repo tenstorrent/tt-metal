@@ -1,0 +1,18 @@
+{
+  "status": "candidate prelaunch forecast",
+  "basis": "Sameprompt seed44, observed1024 decode scaled to2047replays, observedprefill, same-mode load; explicit prior full first-TF preparation allowance, not measured2048warmup. Range applies 0.7x\u20131.7x uncertainty multipliers to variable case work only; load and first-preparation allowance remain fixed.",
+  "load_seconds": 77.28491996508092,
+  "prefill_seconds": 0.2017050909344107,
+  "projected_decode_seconds": 119.22703354292867,
+  "first_preparation_allowance_seconds": 16.380446143914014,
+  "estimated_total_seconds": 213.094104742858,
+  "range_seconds": [
+    177.26548315269906,
+    296.69422178656214
+  ],
+  "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/cap1024-preparation/runs/full/anomaly.psf__requests-5414.call11.onset.optional-suffix512.cap1024.seed44.json",
+  "range_variable_component_multipliers": [
+    0.7,
+    1.7
+  ]
+}

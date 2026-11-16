@@ -1,0 +1,62 @@
+{
+  "status": "host_offline_validation_passed",
+  "cases": 10,
+  "matched_official": 10,
+  "unknown": 0,
+  "incorrect_tasks": [
+    "93",
+    "167"
+  ],
+  "validation": [
+    "Completed fixed10 native requests/replies matched official sample decisions10/10",
+    "Reversed manifest rerun also10/10 after sorting IDs to match pinned doc_iterator dataset ordering",
+    "All native request hashes match collected calls",
+    "Private packets0600, containing exact choices/reply; public index restricted to IDs/classification/paths, no gated question, choices, answer text or reply"
+  ],
+  "source_fix": "Sort requested IDs; reject duplicate IDs. Actual request choice ordering retained unchanged.",
+  "official_scores_modified": false,
+  "network_or_model_execution": false,
+  "source_collected_sha256": "83312f6710238cf76517f97edd3fb66b51c6696f49376e143da4477574d5f869",
+  "rows": [
+    {
+      "task": "0",
+      "matches_official": true
+    },
+    {
+      "task": "1",
+      "matches_official": true
+    },
+    {
+      "task": "158",
+      "matches_official": true
+    },
+    {
+      "task": "167",
+      "matches_official": true
+    },
+    {
+      "task": "195",
+      "matches_official": true
+    },
+    {
+      "task": "197",
+      "matches_official": true
+    },
+    {
+      "task": "67",
+      "matches_official": true
+    },
+    {
+      "task": "7",
+      "matches_official": true
+    },
+    {
+      "task": "87",
+      "matches_official": true
+    },
+    {
+      "task": "93",
+      "matches_official": true
+    }
+  ]
+}

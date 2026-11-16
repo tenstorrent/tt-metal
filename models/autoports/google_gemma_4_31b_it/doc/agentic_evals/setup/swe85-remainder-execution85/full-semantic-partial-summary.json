@@ -1,0 +1,789 @@
+{
+  "created_utc": "2026-11-15T00:24:14.854034+00:00",
+  "status": "all36_semantically_reviewed",
+  "cases": 36,
+  "trials": 108,
+  "counts": {
+    "normal": 54,
+    "inconclusive": 33,
+    "reproduced_native_motif": 21
+  },
+  "rows": [
+    {
+      "job": "anomaly.sympy__sympy-13480.call1.onset",
+      "seed": 42,
+      "full_verdict": "normal",
+      "served_verdict": "normal",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-a.json"
+    },
+    {
+      "job": "anomaly.sympy__sympy-13480.call1.onset",
+      "seed": 43,
+      "full_verdict": "normal",
+      "served_verdict": "normal",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-a.json"
+    },
+    {
+      "job": "anomaly.sympy__sympy-13480.call1.onset",
+      "seed": 44,
+      "full_verdict": "normal",
+      "served_verdict": "normal",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-a.json"
+    },
+    {
+      "job": "anomaly.sympy__sympy-13551.call1.onset",
+      "seed": 42,
+      "full_verdict": "normal",
+      "served_verdict": "reproduced_native_motif",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-a.json"
+    },
+    {
+      "job": "anomaly.sympy__sympy-13551.call1.onset",
+      "seed": 43,
+      "full_verdict": "inconclusive",
+      "served_verdict": "normal",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-a.json"
+    },
+    {
+      "job": "anomaly.sympy__sympy-13551.call1.onset",
+      "seed": 44,
+      "full_verdict": "normal",
+      "served_verdict": "normal",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-a.json"
+    },
+    {
+      "job": "anomaly.psf__requests-1921.call1.onset",
+      "seed": 42,
+      "full_verdict": "normal",
+      "served_verdict": "normal",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-a.json"
+    },
+    {
+      "job": "anomaly.psf__requests-1921.call1.onset",
+      "seed": 43,
+      "full_verdict": "normal",
+      "served_verdict": "other_anomaly",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-a.json"
+    },
+    {
+      "job": "anomaly.psf__requests-1921.call1.onset",
+      "seed": 44,
+      "full_verdict": "normal",
+      "served_verdict": "other_anomaly",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-a.json"
+    },
+    {
+      "job": "anomaly.sympy__sympy-18763.call1.onset",
+      "seed": 42,
+      "full_verdict": "normal",
+      "served_verdict": "normal",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-a.json"
+    },
+    {
+      "job": "anomaly.sympy__sympy-18763.call1.onset",
+      "seed": 43,
+      "full_verdict": "normal",
+      "served_verdict": "reproduced_native_motif",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-a.json"
+    },
+    {
+      "job": "anomaly.sympy__sympy-18763.call1.onset",
+      "seed": 44,
+      "full_verdict": "normal",
+      "served_verdict": "normal",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-a.json"
+    },
+    {
+      "job": "anomaly.pylint-dev__pylint-4551.call1.onset",
+      "seed": 42,
+      "full_verdict": "normal",
+      "served_verdict": "other_anomaly",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-a.json"
+    },
+    {
+      "job": "anomaly.pylint-dev__pylint-4551.call1.onset",
+      "seed": 43,
+      "full_verdict": "normal",
+      "served_verdict": "other_anomaly",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-a.json"
+    },
+    {
+      "job": "anomaly.pylint-dev__pylint-4551.call1.onset",
+      "seed": 44,
+      "full_verdict": "normal",
+      "served_verdict": "other_anomaly",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-a.json"
+    },
+    {
+      "job": "anomaly.sympy__sympy-14711.call1.onset",
+      "seed": 42,
+      "full_verdict": "normal",
+      "served_verdict": "normal",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-b.json"
+    },
+    {
+      "job": "anomaly.sympy__sympy-14711.call1.onset",
+      "seed": 43,
+      "full_verdict": "normal",
+      "served_verdict": "other_anomaly",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-b.json"
+    },
+    {
+      "job": "anomaly.sympy__sympy-14711.call1.onset",
+      "seed": 44,
+      "full_verdict": "normal",
+      "served_verdict": "other_anomaly",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-b.json"
+    },
+    {
+      "job": "anomaly.xarray7233-call1.canonicalprefix",
+      "seed": 42,
+      "full_verdict": "inconclusive",
+      "served_verdict": "inconclusive",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-b.json"
+    },
+    {
+      "job": "anomaly.xarray7233-call1.canonicalprefix",
+      "seed": 43,
+      "full_verdict": "inconclusive",
+      "served_verdict": "inconclusive",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-b.json"
+    },
+    {
+      "job": "anomaly.xarray7233-call1.canonicalprefix",
+      "seed": 44,
+      "full_verdict": "inconclusive",
+      "served_verdict": "inconclusive",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-b.json"
+    },
+    {
+      "job": "anomaly.sympy__sympy-13878.call1.onset",
+      "seed": 42,
+      "full_verdict": "normal",
+      "served_verdict": "normal",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-b.json"
+    },
+    {
+      "job": "anomaly.sympy__sympy-13878.call1.onset",
+      "seed": 43,
+      "full_verdict": "normal",
+      "served_verdict": "normal",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-b.json"
+    },
+    {
+      "job": "anomaly.sympy__sympy-13878.call1.onset",
+      "seed": 44,
+      "full_verdict": "normal",
+      "served_verdict": "normal",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-b.json"
+    },
+    {
+      "job": "anomaly.sympy__sympy-18763.call10.onset",
+      "seed": 42,
+      "full_verdict": "normal",
+      "served_verdict": "normal",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-b.json"
+    },
+    {
+      "job": "anomaly.sympy__sympy-18763.call10.onset",
+      "seed": 43,
+      "full_verdict": "normal",
+      "served_verdict": "normal",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-b.json"
+    },
+    {
+      "job": "anomaly.sympy__sympy-18763.call10.onset",
+      "seed": 44,
+      "full_verdict": "normal",
+      "served_verdict": "normal",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-b.json"
+    },
+    {
+      "job": "anomaly.psf__requests-5414.call10.onset",
+      "seed": 42,
+      "full_verdict": "reproduced_native_motif",
+      "served_verdict": "reproduced_native_motif",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-b.json"
+    },
+    {
+      "job": "anomaly.psf__requests-5414.call10.onset",
+      "seed": 43,
+      "full_verdict": "reproduced_native_motif",
+      "served_verdict": "reproduced_native_motif",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-b.json"
+    },
+    {
+      "job": "anomaly.psf__requests-5414.call10.onset",
+      "seed": 44,
+      "full_verdict": "reproduced_native_motif",
+      "served_verdict": "reproduced_native_motif",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-b.json"
+    },
+    {
+      "job": "anomaly.psf__requests-5414.call11.onset",
+      "seed": 42,
+      "full_verdict": "reproduced_native_motif",
+      "served_verdict": "reproduced_native_motif",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-b.json"
+    },
+    {
+      "job": "anomaly.psf__requests-5414.call11.onset",
+      "seed": 43,
+      "full_verdict": "reproduced_native_motif",
+      "served_verdict": "reproduced_native_motif",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-b.json"
+    },
+    {
+      "job": "anomaly.psf__requests-5414.call11.onset",
+      "seed": 44,
+      "full_verdict": "reproduced_native_motif",
+      "served_verdict": "reproduced_native_motif",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-b.json"
+    },
+    {
+      "job": "anomaly.psf__requests-5414.call9.onset",
+      "seed": 42,
+      "full_verdict": "reproduced_native_motif",
+      "served_verdict": "reproduced_native_motif",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-b.json"
+    },
+    {
+      "job": "anomaly.psf__requests-5414.call9.onset",
+      "seed": 43,
+      "full_verdict": "reproduced_native_motif",
+      "served_verdict": "reproduced_native_motif",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-b.json"
+    },
+    {
+      "job": "anomaly.psf__requests-5414.call9.onset",
+      "seed": 44,
+      "full_verdict": "reproduced_native_motif",
+      "served_verdict": "reproduced_native_motif",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-b.json"
+    },
+    {
+      "job": "anomaly.requests2931.call20.canonicalprefix",
+      "seed": 42,
+      "full_verdict": "reproduced_native_motif",
+      "served_verdict": "reproduced_native_motif",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-b.json"
+    },
+    {
+      "job": "anomaly.requests2931.call20.canonicalprefix",
+      "seed": 43,
+      "full_verdict": "reproduced_native_motif",
+      "served_verdict": "reproduced_native_motif",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-b.json"
+    },
+    {
+      "job": "anomaly.requests2931.call20.canonicalprefix",
+      "seed": 44,
+      "full_verdict": "reproduced_native_motif",
+      "served_verdict": "reproduced_native_motif",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-b.json"
+    },
+    {
+      "job": "anomaly.pytest-dev__pytest-5787.call1.onset",
+      "seed": 42,
+      "full_verdict": "normal",
+      "served_verdict": "normal",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-b.json"
+    },
+    {
+      "job": "anomaly.pytest-dev__pytest-5787.call1.onset",
+      "seed": 43,
+      "full_verdict": "normal",
+      "served_verdict": "normal",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-b.json"
+    },
+    {
+      "job": "anomaly.pytest-dev__pytest-5787.call1.onset",
+      "seed": 44,
+      "full_verdict": "normal",
+      "served_verdict": "normal",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-b.json"
+    },
+    {
+      "job": "anomaly.pytest-dev__pytest-7432.call19.onset",
+      "seed": 42,
+      "full_verdict": "reproduced_native_motif",
+      "served_verdict": "reproduced_native_motif",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-c.json"
+    },
+    {
+      "job": "anomaly.pytest-dev__pytest-7432.call19.onset",
+      "seed": 43,
+      "full_verdict": "reproduced_native_motif",
+      "served_verdict": "reproduced_native_motif",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-c.json"
+    },
+    {
+      "job": "anomaly.pytest-dev__pytest-7432.call19.onset",
+      "seed": 44,
+      "full_verdict": "reproduced_native_motif",
+      "served_verdict": "reproduced_native_motif",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-c.json"
+    },
+    {
+      "job": "anomaly.pytest10356-call14.canonicalprefix",
+      "seed": 42,
+      "full_verdict": "normal",
+      "served_verdict": "other_anomaly",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-c.json"
+    },
+    {
+      "job": "anomaly.pytest10356-call14.canonicalprefix",
+      "seed": 43,
+      "full_verdict": "normal",
+      "served_verdict": "other_anomaly",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-c.json"
+    },
+    {
+      "job": "anomaly.pytest10356-call14.canonicalprefix",
+      "seed": 44,
+      "full_verdict": "normal",
+      "served_verdict": "other_anomaly",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-c.json"
+    },
+    {
+      "job": "anomaly.scikit-learn__scikit-learn-13135.call29.onset",
+      "seed": 42,
+      "full_verdict": "inconclusive",
+      "served_verdict": "inconclusive",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-c.json"
+    },
+    {
+      "job": "anomaly.scikit-learn__scikit-learn-13135.call29.onset",
+      "seed": 43,
+      "full_verdict": "inconclusive",
+      "served_verdict": "normal",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-c.json"
+    },
+    {
+      "job": "anomaly.scikit-learn__scikit-learn-13135.call29.onset",
+      "seed": 44,
+      "full_verdict": "normal",
+      "served_verdict": "inconclusive",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-c.json"
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call28.onset",
+      "seed": 42,
+      "full_verdict": "inconclusive",
+      "served_verdict": "inconclusive",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-c.json"
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call28.onset",
+      "seed": 43,
+      "full_verdict": "inconclusive",
+      "served_verdict": "inconclusive",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-c.json"
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call28.onset",
+      "seed": 44,
+      "full_verdict": "inconclusive",
+      "served_verdict": "inconclusive",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-c.json"
+    },
+    {
+      "job": "anomaly.sympy__sympy-14248.call53.onset",
+      "seed": 42,
+      "full_verdict": "reproduced_native_motif",
+      "served_verdict": "reproduced_native_motif",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-d.json"
+    },
+    {
+      "job": "anomaly.sympy__sympy-14248.call53.onset",
+      "seed": 43,
+      "full_verdict": "reproduced_native_motif",
+      "served_verdict": "reproduced_native_motif",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-d.json"
+    },
+    {
+      "job": "anomaly.sympy__sympy-14248.call53.onset",
+      "seed": 44,
+      "full_verdict": "reproduced_native_motif",
+      "served_verdict": "reproduced_native_motif",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-d.json"
+    },
+    {
+      "job": "anomaly.xarray3095-call53.canonicalprefix",
+      "seed": 42,
+      "full_verdict": "normal",
+      "served_verdict": "normal",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-d.json"
+    },
+    {
+      "job": "anomaly.xarray3095-call53.canonicalprefix",
+      "seed": 43,
+      "full_verdict": "normal",
+      "served_verdict": "normal",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-d.json"
+    },
+    {
+      "job": "anomaly.xarray3095-call53.canonicalprefix",
+      "seed": 44,
+      "full_verdict": "normal",
+      "served_verdict": "normal",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-d.json"
+    },
+    {
+      "job": "anomaly.pylint-dev__pylint-4604.call45.onset",
+      "seed": 42,
+      "full_verdict": "normal",
+      "served_verdict": "normal",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-d.json"
+    },
+    {
+      "job": "anomaly.pylint-dev__pylint-4604.call45.onset",
+      "seed": 43,
+      "full_verdict": "normal",
+      "served_verdict": "normal",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-d.json"
+    },
+    {
+      "job": "anomaly.pylint-dev__pylint-4604.call45.onset",
+      "seed": 44,
+      "full_verdict": "normal",
+      "served_verdict": "normal",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-d.json"
+    },
+    {
+      "job": "anomaly.matplotlib__matplotlib-20488.call82.onset",
+      "seed": 42,
+      "full_verdict": "normal",
+      "served_verdict": "inconclusive",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-d.json"
+    },
+    {
+      "job": "anomaly.matplotlib__matplotlib-20488.call82.onset",
+      "seed": 43,
+      "full_verdict": "normal",
+      "served_verdict": "normal",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-d.json"
+    },
+    {
+      "job": "anomaly.matplotlib__matplotlib-20488.call82.onset",
+      "seed": 44,
+      "full_verdict": "normal",
+      "served_verdict": "normal",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-d.json"
+    },
+    {
+      "job": "anomaly.matplotlib__matplotlib-20488.call86.onset",
+      "seed": 42,
+      "full_verdict": "normal",
+      "served_verdict": "normal",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-d.json"
+    },
+    {
+      "job": "anomaly.matplotlib__matplotlib-20488.call86.onset",
+      "seed": 43,
+      "full_verdict": "reproduced_native_motif",
+      "served_verdict": "normal",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-d.json"
+    },
+    {
+      "job": "anomaly.matplotlib__matplotlib-20488.call86.onset",
+      "seed": 44,
+      "full_verdict": "normal",
+      "served_verdict": "inconclusive",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-d.json"
+    },
+    {
+      "job": "anomaly.call88.canonicalprefix",
+      "seed": 42,
+      "full_verdict": "inconclusive",
+      "served_verdict": "inconclusive",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-d.json"
+    },
+    {
+      "job": "anomaly.call88.canonicalprefix",
+      "seed": 43,
+      "full_verdict": "inconclusive",
+      "served_verdict": "inconclusive",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-d.json"
+    },
+    {
+      "job": "anomaly.call88.canonicalprefix",
+      "seed": 44,
+      "full_verdict": "inconclusive",
+      "served_verdict": "inconclusive",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-d.json"
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset",
+      "seed": 42,
+      "full_verdict": "inconclusive",
+      "served_verdict": "other_anomaly",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-d.json"
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset",
+      "seed": 43,
+      "full_verdict": "inconclusive",
+      "served_verdict": "other_anomaly",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-d.json"
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset",
+      "seed": 44,
+      "full_verdict": "inconclusive",
+      "served_verdict": "other_anomaly",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-d.json"
+    },
+    {
+      "job": "anomaly.call91.canonicalprefix",
+      "seed": 42,
+      "full_verdict": "normal",
+      "served_verdict": "reproduced_native_motif",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-d.json"
+    },
+    {
+      "job": "anomaly.call91.canonicalprefix",
+      "seed": 43,
+      "full_verdict": "reproduced_native_motif",
+      "served_verdict": "reproduced_native_motif",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-d.json"
+    },
+    {
+      "job": "anomaly.call91.canonicalprefix",
+      "seed": 44,
+      "full_verdict": "inconclusive",
+      "served_verdict": "reproduced_native_motif",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-d.json"
+    },
+    {
+      "job": "anomaly.pytest-dev__pytest-5787.call65.onset",
+      "seed": 42,
+      "full_verdict": "inconclusive",
+      "served_verdict": "inconclusive",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-d.json"
+    },
+    {
+      "job": "anomaly.pytest-dev__pytest-5787.call65.onset",
+      "seed": 43,
+      "full_verdict": "inconclusive",
+      "served_verdict": "inconclusive",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-d.json"
+    },
+    {
+      "job": "anomaly.pytest-dev__pytest-5787.call65.onset",
+      "seed": 44,
+      "full_verdict": "inconclusive",
+      "served_verdict": "normal",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-d.json"
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset",
+      "seed": 42,
+      "full_verdict": "inconclusive",
+      "served_verdict": "inconclusive",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-d.json"
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset",
+      "seed": 43,
+      "full_verdict": "inconclusive",
+      "served_verdict": "inconclusive",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-d.json"
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset",
+      "seed": 44,
+      "full_verdict": "inconclusive",
+      "served_verdict": "inconclusive",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-d.json"
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-10323.call57.onset",
+      "seed": 42,
+      "full_verdict": "inconclusive",
+      "served_verdict": "inconclusive",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-d.json"
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-10323.call57.onset",
+      "seed": 43,
+      "full_verdict": "normal",
+      "served_verdict": "normal",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-d.json"
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-10323.call57.onset",
+      "seed": 44,
+      "full_verdict": "inconclusive",
+      "served_verdict": "other_anomaly",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-d.json"
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset",
+      "seed": 42,
+      "full_verdict": "inconclusive",
+      "served_verdict": "normal",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-d.json"
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset",
+      "seed": 43,
+      "full_verdict": "inconclusive",
+      "served_verdict": "normal",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-d.json"
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset",
+      "seed": 44,
+      "full_verdict": "inconclusive",
+      "served_verdict": "inconclusive",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-d.json"
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset",
+      "seed": 42,
+      "full_verdict": "normal",
+      "served_verdict": "normal",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-d.json"
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset",
+      "seed": 43,
+      "full_verdict": "normal",
+      "served_verdict": "other_anomaly",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-d.json"
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset",
+      "seed": 44,
+      "full_verdict": "normal",
+      "served_verdict": "normal",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-d.json"
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call108.onset",
+      "seed": 42,
+      "full_verdict": "normal",
+      "served_verdict": "normal",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-d.json"
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call108.onset",
+      "seed": 43,
+      "full_verdict": "normal",
+      "served_verdict": "normal",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-d.json"
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call108.onset",
+      "seed": 44,
+      "full_verdict": "normal",
+      "served_verdict": "normal",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-d.json"
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-10323.call68.onset",
+      "seed": 42,
+      "full_verdict": "normal",
+      "served_verdict": "normal",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-d.json"
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-10323.call68.onset",
+      "seed": 43,
+      "full_verdict": "normal",
+      "served_verdict": "reproduced_native_motif",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-d.json"
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-10323.call68.onset",
+      "seed": 44,
+      "full_verdict": "normal",
+      "served_verdict": "normal",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-d.json"
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-10323.call70.onset",
+      "seed": 42,
+      "full_verdict": "normal",
+      "served_verdict": "normal",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-d.json"
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-10323.call70.onset",
+      "seed": 43,
+      "full_verdict": "reproduced_native_motif",
+      "served_verdict": "reproduced_native_motif",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-d.json"
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-10323.call70.onset",
+      "seed": 44,
+      "full_verdict": "normal",
+      "served_verdict": "normal",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-d.json"
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-9461.call184.onset",
+      "seed": 42,
+      "full_verdict": "inconclusive",
+      "served_verdict": "inconclusive",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-d.json"
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-9461.call184.onset",
+      "seed": 43,
+      "full_verdict": "inconclusive",
+      "served_verdict": "inconclusive",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-d.json"
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-9461.call184.onset",
+      "seed": 44,
+      "full_verdict": "inconclusive",
+      "served_verdict": "inconclusive",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-d.json"
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset",
+      "seed": 42,
+      "full_verdict": "inconclusive",
+      "served_verdict": "inconclusive",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-d.json"
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset",
+      "seed": 43,
+      "full_verdict": "inconclusive",
+      "served_verdict": "other_anomaly",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-d.json"
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset",
+      "seed": 44,
+      "full_verdict": "inconclusive",
+      "served_verdict": "inconclusive",
+      "coordinator_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-d.json"
+    }
+  ],
+  "pending": [],
+  "sources": [
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-a.json",
+      "sha256": "754dd3de5a26646612853077795fdfc9ad59945225856193bfd51e32cee670b3"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-b.json",
+      "sha256": "c219e598a61cfbd2468426d77ee5a8b9b21e6468fa5742034c3c9526aae5f2e5"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-c.json",
+      "sha256": "bb65b32065839673923930bfa09dea753b33da3780e71f00e1c8b8cd9ab2f59d"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-coordinator-d.json",
+      "sha256": "0dc377723f797b8be5ee26f570b876601cf680401f90917871ef916478aecd3f"
+    }
+  ],
+  "limitations": "No overall policy pass. Capped progress remains inconclusive. Canonical reconstructed input, not exact native stream. Full review does not itself select a precision policy or change task scores."
+}

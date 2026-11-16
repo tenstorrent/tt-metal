@@ -1,0 +1,82 @@
+{
+  "candidate_admission_sha256": "1e7d2c4f6c6879ad8c63d4e2fdb1092546633a7c0e566581b083309a747044d4",
+  "child_exit_codes": [
+    {
+      "command": "tt-full",
+      "exit_code": 0
+    }
+  ],
+  "driver_exit_code": 0,
+  "elapsed_seconds": 97.29416108131409,
+  "finished_unix": 1794742615.3792956,
+  "forecast_gate": {
+    "measured_seconds": 97.29416108131409,
+    "range_seconds": [
+      200,
+      430
+    ],
+    "root_acceptance_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-loop-branch-investigation/actual-branch-logits/serial-runs/forecast-miss-accepted-tt-full.json",
+    "status": "root_acceptance_required_before_next_model_arm"
+  },
+  "h9_terminal_evidence": {
+    "admission_sha256": "74640276fdf5e463fa968d5d188994622759df96f09d4f408e02712b7d09ae66",
+    "group_count": 8,
+    "progress_sha256": "4a9363429f50949031da53c13f3156c2bd399f756d227f353babaafd065ec773",
+    "root_reviews": {
+      "01": "0c6e547db4f93a2c7bfb8e0278deba56ac643a79c633ade638db045bdc436803",
+      "02": "27fb72254a1ee6149b04d013174a471bcaeab60e69bf982e4fe357c901a0d85a",
+      "03": "7f119e66e90420977079dec6a9d65c09b00b851ba8c7e9ae786ee6188635e071",
+      "04": "c88541915f789412656370cd353ba50dfa62e68e5624c33d4b348901d9227503",
+      "05": "244884fec49742320618150b86258143478976547e05c2196b6a368f9146a3c5",
+      "06": "4f2f0dd6941f59a507139aee30b6013f789bca0a9769d15ba65f696fd8de5a5c",
+      "07": "44e493ccda9f00b75e8ae562c79880fd7da2d5d7beb3262a135a4d56bcae8127",
+      "08": "3261fbdcd51ce4584887196549fb347419bc705d19cee2b2af075f5494b91ffd"
+    },
+    "root_terminal_review_sha256": "e7109b54dafdd7f8507703b7f0c31795ee2678b56f9a543a1ef2d0b4f6f36cd5"
+  },
+  "launch_sha256": "135b3b57ee8b51f80891d9c1abba9360a691afe5b7afaa4cd8212d33708f8ab2",
+  "logs": [
+    {
+      "command": "tt-full",
+      "stderr_sha256": "c42c741e4c8a10d394b11afe60cb58becc4dd60b1e3fa9dda6c9ed9ba5eb5efa",
+      "stdout_sha256": "e86182449a34f1213bd3cc40fba5a28e0691ec7af9e94fbfedb60d6abd650814"
+    }
+  ],
+  "mode": "tt-full",
+  "output_validation": {
+    "capture": {
+      "branch_names": [
+        "tt_seed44_loop_history",
+        "hf_seed44_ellipsis_history"
+      ],
+      "report_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-loop-branch-investigation/actual-branch-logits/outputs/tt-full.report.json",
+      "report_sha256": "bd09e59dd1052f03d990d530475bbb68e1b1a6640f87d5747e618bcbebb4b519",
+      "rows_per_branch": 7,
+      "tensor_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-loop-branch-investigation/actual-branch-logits/outputs/tt-full.logits.pt",
+      "tensor_sha256": "081e5f1987e3bc8f1a06e7dbcd74d8dade17d78dc9826624a41bce10f0097453"
+    },
+    "status": "capture_tensor_and_branch_identity_validated"
+  },
+  "prior_forecast_gates": {
+    "hf": {
+      "accepted_miss": null,
+      "completion_sha256": "dff38a2ba09fe83b85ec13a7d2663e01d22cd783b16de3c550dadb3892bf0e85"
+    },
+    "tt-selected": {
+      "accepted_miss_sha256": "c98d71e8eb7647af27bde8968dac19aba112bf197f005d5b49f27d5255922da8",
+      "completion_sha256": "048166b9584f831631c37dfde278b7085680daebf0169ba727bf8f4a299505af"
+    }
+  },
+  "resource_preflight": {
+    "active_hf_or_probe_processes": [],
+    "fuser": {
+      "active": false,
+      "output": ""
+    },
+    "mem_available_bytes": null,
+    "proc_device_owners": [],
+    "required_mem_available_bytes_for_hf": null
+  },
+  "started_unix": 1794742518.0851345,
+  "status": "completed"
+}

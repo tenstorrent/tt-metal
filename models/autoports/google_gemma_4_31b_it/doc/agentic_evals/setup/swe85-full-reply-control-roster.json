@@ -1,0 +1,559 @@
+{
+  "status": "CPU prepared only, native token identity unproven; no inference or completed fix claim",
+  "snapshot_utc": "2026-11-14T21:42:47.146154+00:00",
+  "task_count": 59,
+  "case_count": 67,
+  "cases": [
+    {
+      "task": "sphinx-doc__sphinx-10323",
+      "call": 68,
+      "response_id": "chatcmpl-a0698c272139110b",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-update10/sphinx-doc__sphinx-10323.call68.case.private.json",
+      "chosen_tokens": 480,
+      "native_reply_tokens": 478
+    },
+    {
+      "task": "pydata__xarray-7233",
+      "call": 1,
+      "response_id": "chatcmpl-8727bcddaddfa6d9",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/pydata__xarray-7233.call1.case.private.json",
+      "chosen_tokens": 366,
+      "native_reply_tokens": 369
+    },
+    {
+      "task": "matplotlib__matplotlib-25332",
+      "call": 2,
+      "response_id": "chatcmpl-a27ab4d712f27a51",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/matplotlib__matplotlib-25332.call2.case.private.json",
+      "chosen_tokens": 97,
+      "native_reply_tokens": 95
+    },
+    {
+      "task": "matplotlib__matplotlib-25960",
+      "call": 3,
+      "response_id": "chatcmpl-b34a17510c202bb2",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/matplotlib__matplotlib-25960.call3.case.private.json",
+      "chosen_tokens": 87,
+      "native_reply_tokens": 85
+    },
+    {
+      "task": "sphinx-doc__sphinx-8638",
+      "call": 3,
+      "response_id": "chatcmpl-9cc55a42f34f15c7",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-update4/sphinx-doc__sphinx-8638.call3.case.private.json",
+      "chosen_tokens": 36,
+      "native_reply_tokens": 34
+    },
+    {
+      "task": "matplotlib__matplotlib-26291",
+      "call": 3,
+      "response_id": "chatcmpl-b9418c27c436b5dd",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/matplotlib__matplotlib-26291.call3.case.private.json",
+      "chosen_tokens": 61,
+      "native_reply_tokens": 59
+    },
+    {
+      "task": "pydata__xarray-7233",
+      "call": 4,
+      "response_id": "chatcmpl-ac741201be498ade",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/pydata__xarray-7233.call4.case.private.json",
+      "chosen_tokens": 162,
+      "native_reply_tokens": 160
+    },
+    {
+      "task": "matplotlib__matplotlib-26208",
+      "call": 3,
+      "response_id": "chatcmpl-b7a55bc1f493d816",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/matplotlib__matplotlib-26208.call3.case.private.json",
+      "chosen_tokens": 45,
+      "native_reply_tokens": 43
+    },
+    {
+      "task": "scikit-learn__scikit-learn-13328",
+      "call": 3,
+      "response_id": "chatcmpl-9bbd864a5efc3f6f",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-update/scikit-learn__scikit-learn-13328.call3.case.private.json",
+      "chosen_tokens": 50,
+      "native_reply_tokens": 48
+    },
+    {
+      "task": "astropy__astropy-13579",
+      "call": 3,
+      "response_id": "chatcmpl-abbc294f911fdff8",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/astropy__astropy-13579.call3.case.private.json",
+      "chosen_tokens": 49,
+      "native_reply_tokens": 47
+    },
+    {
+      "task": "scikit-learn__scikit-learn-25747",
+      "call": 3,
+      "response_id": "chatcmpl-a1c038581962b0a4",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-update6/scikit-learn__scikit-learn-25747.call3.case.private.json",
+      "chosen_tokens": 46,
+      "native_reply_tokens": 44
+    },
+    {
+      "task": "sympy__sympy-13480",
+      "call": 9,
+      "response_id": "chatcmpl-83c3a8f8e2a5b14b",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-update8/sympy__sympy-13480.call9.case.private.json",
+      "chosen_tokens": 130,
+      "native_reply_tokens": 128
+    },
+    {
+      "task": "sympy__sympy-13551",
+      "call": 12,
+      "response_id": "chatcmpl-a5834949d8a5986b",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-update13/sympy__sympy-13551.call12.case.private.json",
+      "chosen_tokens": 77,
+      "native_reply_tokens": 75
+    },
+    {
+      "task": "scikit-learn__scikit-learn-14629",
+      "call": 8,
+      "response_id": "chatcmpl-b5c9630ccf3e1a22",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-update2/scikit-learn__scikit-learn-14629.call8.case.private.json",
+      "chosen_tokens": 55,
+      "native_reply_tokens": 53
+    },
+    {
+      "task": "scikit-learn__scikit-learn-25102",
+      "call": 5,
+      "response_id": "chatcmpl-bc75f77e7c79c763",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-update9/scikit-learn__scikit-learn-25102.call5.case.private.json",
+      "chosen_tokens": 145,
+      "native_reply_tokens": 143
+    },
+    {
+      "task": "scikit-learn__scikit-learn-13135",
+      "call": 9,
+      "response_id": "chatcmpl-b381b6e73ae2b53b",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-update/scikit-learn__scikit-learn-13135.call9.case.private.json",
+      "chosen_tokens": 218,
+      "native_reply_tokens": 216
+    },
+    {
+      "task": "pylint-dev__pylint-4604",
+      "call": 8,
+      "response_id": "chatcmpl-b4ea0d6ab8a7cf1d",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/pylint-dev__pylint-4604.call8.case.private.json",
+      "chosen_tokens": 103,
+      "native_reply_tokens": 101
+    },
+    {
+      "task": "sympy__sympy-13091",
+      "call": 22,
+      "response_id": "chatcmpl-824371ec2dae936d",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-update11/sympy__sympy-13091.call22.case.private.json",
+      "chosen_tokens": 524,
+      "native_reply_tokens": 522
+    },
+    {
+      "task": "astropy__astropy-8872",
+      "call": 8,
+      "response_id": "chatcmpl-8009f24b9e1bdf8d",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/astropy__astropy-8872.call8.case.private.json",
+      "chosen_tokens": 118,
+      "native_reply_tokens": 116
+    },
+    {
+      "task": "pydata__xarray-3993",
+      "call": 18,
+      "response_id": "chatcmpl-81a2a5f976ea0733",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/pydata__xarray-3993.call18.case.private.json",
+      "chosen_tokens": 623,
+      "native_reply_tokens": 621
+    },
+    {
+      "task": "astropy__astropy-7336",
+      "call": 18,
+      "response_id": "chatcmpl-91bec7f77b2a77d7",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/astropy__astropy-7336.call18.case.private.json",
+      "chosen_tokens": 479,
+      "native_reply_tokens": 477
+    },
+    {
+      "task": "sympy__sympy-13878",
+      "call": 29,
+      "response_id": "chatcmpl-b0845a13cd5a07b4",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-update16/sympy__sympy-13878.call29.case.private.json",
+      "chosen_tokens": 41,
+      "native_reply_tokens": 39
+    },
+    {
+      "task": "astropy__astropy-14096",
+      "call": 23,
+      "response_id": "chatcmpl-b91da465afc21a0a",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/astropy__astropy-14096.call23.case.private.json",
+      "chosen_tokens": 725,
+      "native_reply_tokens": 723
+    },
+    {
+      "task": "pydata__xarray-6992",
+      "call": 16,
+      "response_id": "chatcmpl-b26efe8df19466de",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/pydata__xarray-6992.call16.case.private.json",
+      "chosen_tokens": 897,
+      "native_reply_tokens": 895
+    },
+    {
+      "task": "pytest-dev__pytest-5787",
+      "call": 12,
+      "response_id": "chatcmpl-b130eadeaefb6e76",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-update2/pytest-dev__pytest-5787.call12.case.private.json",
+      "chosen_tokens": 160,
+      "native_reply_tokens": 158
+    },
+    {
+      "task": "pytest-dev__pytest-10356",
+      "call": 14,
+      "response_id": "chatcmpl-88c533ef94013b4b",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/pytest-dev__pytest-10356.call14.case.private.json",
+      "chosen_tokens": 56,
+      "native_reply_tokens": 54
+    },
+    {
+      "task": "astropy__astropy-13398",
+      "call": 17,
+      "response_id": "chatcmpl-8c82594ed4b1eba5",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/astropy__astropy-13398.call17.case.private.json",
+      "chosen_tokens": 928,
+      "native_reply_tokens": 926
+    },
+    {
+      "task": "sympy__sympy-18763",
+      "call": 20,
+      "response_id": "chatcmpl-9452ae3e26cda5b8",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-update14/sympy__sympy-18763.call20.case.private.json",
+      "chosen_tokens": 81,
+      "native_reply_tokens": 79
+    },
+    {
+      "task": "scikit-learn__scikit-learn-14053",
+      "call": 13,
+      "response_id": "chatcmpl-9bce7f55db766d6d",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-update/scikit-learn__scikit-learn-14053.call13.case.private.json",
+      "chosen_tokens": 197,
+      "native_reply_tokens": 195
+    },
+    {
+      "task": "psf__requests-2931",
+      "call": 29,
+      "response_id": "chatcmpl-b4cd10b26a8e898f",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/requests2931-semantic-full-reply/psf__requests-2931.call29.case.private.json",
+      "chosen_tokens": 159,
+      "native_reply_tokens": 157
+    },
+    {
+      "task": "django__django-15037",
+      "call": 19,
+      "response_id": "chatcmpl-8669d8268c93256e",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/django__django-15037.call19.case.private.json",
+      "chosen_tokens": 1038,
+      "native_reply_tokens": 1036
+    },
+    {
+      "task": "psf__requests-1921",
+      "call": 34,
+      "response_id": "chatcmpl-b57c6fdeb6d6a204",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/psf__requests-1921.call34.case.private.json",
+      "chosen_tokens": 140,
+      "native_reply_tokens": 138
+    },
+    {
+      "task": "sympy__sympy-12489",
+      "call": 34,
+      "response_id": "chatcmpl-af14d595a288d112",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-update12/sympy__sympy-12489.call34.case.private.json",
+      "chosen_tokens": 204,
+      "native_reply_tokens": 202
+    },
+    {
+      "task": "matplotlib__matplotlib-20488",
+      "call": 29,
+      "response_id": "chatcmpl-8f88b38106c1bc96",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/matplotlib__matplotlib-20488.call29.case.private.json",
+      "chosen_tokens": 759,
+      "native_reply_tokens": 757
+    },
+    {
+      "task": "scikit-learn__scikit-learn-10908",
+      "call": 34,
+      "response_id": "chatcmpl-b1b42f50412ef36d",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-update/scikit-learn__scikit-learn-10908.call34.case.private.json",
+      "chosen_tokens": 224,
+      "native_reply_tokens": 222
+    },
+    {
+      "task": "astropy__astropy-14598",
+      "call": 33,
+      "response_id": "chatcmpl-9175c175dd033798",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/astropy__astropy-14598.call33.case.private.json",
+      "chosen_tokens": 1354,
+      "native_reply_tokens": 1353
+    },
+    {
+      "task": "psf__requests-1142",
+      "call": 31,
+      "response_id": "chatcmpl-8aa0917a2def83f0",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/psf__requests-1142.call31.case.private.json",
+      "chosen_tokens": 353,
+      "native_reply_tokens": 351
+    },
+    {
+      "task": "django__django-14007",
+      "call": 31,
+      "response_id": "chatcmpl-b6633743ab07fc9a",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/django__django-14007.call31.case.private.json",
+      "chosen_tokens": 272,
+      "native_reply_tokens": 270
+    },
+    {
+      "task": "pylint-dev__pylint-8898",
+      "call": 44,
+      "response_id": "chatcmpl-9d63233ddf60b7ed",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/pylint-dev__pylint-8898.call44.case.private.json",
+      "chosen_tokens": 591,
+      "native_reply_tokens": 590
+    },
+    {
+      "task": "sphinx-doc__sphinx-10614",
+      "call": 12,
+      "response_id": "chatcmpl-9ddfb082335dd72f",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-update7/sphinx-doc__sphinx-10614.call12.case.private.json",
+      "chosen_tokens": 25,
+      "native_reply_tokens": 23
+    },
+    {
+      "task": "pylint-dev__pylint-4661",
+      "call": 19,
+      "response_id": "chatcmpl-8d36f83edcf1e086",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-update10/pylint-dev__pylint-4661.call19.case.private.json",
+      "chosen_tokens": 1961,
+      "native_reply_tokens": 1959
+    },
+    {
+      "task": "sphinx-doc__sphinx-7590",
+      "call": 44,
+      "response_id": "chatcmpl-a87f99a16854f649",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-update5/sphinx-doc__sphinx-7590.call44.case.private.json",
+      "chosen_tokens": 252,
+      "native_reply_tokens": 250
+    },
+    {
+      "task": "pytest-dev__pytest-10356",
+      "call": 45,
+      "response_id": "chatcmpl-bcdf65b4908286d3",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/semantic-full-replies/pytest-dev__pytest-10356.call45.case.private.json",
+      "chosen_tokens": 961,
+      "native_reply_tokens": 959
+    },
+    {
+      "task": "sphinx-doc__sphinx-11510",
+      "call": 24,
+      "response_id": "chatcmpl-80a175e4f4c12f83",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-sphinx11510/sphinx-doc__sphinx-11510.call24.case.private.json",
+      "chosen_tokens": 1021,
+      "native_reply_tokens": 1018
+    },
+    {
+      "task": "pytest-dev__pytest-5840",
+      "call": 15,
+      "response_id": "chatcmpl-a200421200d46e44",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/pytest-dev__pytest-5840.call15.case.private.json",
+      "chosen_tokens": 2247,
+      "native_reply_tokens": 2244
+    },
+    {
+      "task": "matplotlib__matplotlib-25479",
+      "call": 34,
+      "response_id": "chatcmpl-991b4fc7b9ff3107",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/matplotlib__matplotlib-25479.call34.case.private.json",
+      "chosen_tokens": 299,
+      "native_reply_tokens": 297
+    },
+    {
+      "task": "pytest-dev__pytest-7432",
+      "call": 34,
+      "response_id": "chatcmpl-97022d240f92e753",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-update14/pytest-dev__pytest-7432.call34.case.private.json",
+      "chosen_tokens": 61,
+      "native_reply_tokens": 59
+    },
+    {
+      "task": "django__django-14011",
+      "call": 33,
+      "response_id": "chatcmpl-b923f2c16bab316d",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/django__django-14011.call33.case.private.json",
+      "chosen_tokens": 436,
+      "native_reply_tokens": 434
+    },
+    {
+      "task": "mwaskom__seaborn-3069",
+      "call": 50,
+      "response_id": "chatcmpl-8177c951e8215bbd",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/mwaskom__seaborn-3069.call50.case.private.json",
+      "chosen_tokens": 805,
+      "native_reply_tokens": 804
+    },
+    {
+      "task": "scikit-learn__scikit-learn-14983",
+      "call": 43,
+      "response_id": "chatcmpl-8769e686aaa83c94",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-update3/scikit-learn__scikit-learn-14983.call43.case.private.json",
+      "chosen_tokens": 879,
+      "native_reply_tokens": 877
+    },
+    {
+      "task": "pytest-dev__pytest-5840",
+      "call": 16,
+      "response_id": "chatcmpl-a750581531467c91",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/pytest-dev__pytest-5840.call16.case.private.json",
+      "chosen_tokens": 122,
+      "native_reply_tokens": 120
+    },
+    {
+      "task": "sphinx-doc__sphinx-9461",
+      "call": 76,
+      "response_id": "chatcmpl-892ef7d242fab3b6",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-update15/sphinx-doc__sphinx-9461.call76.case.private.json",
+      "chosen_tokens": 116,
+      "native_reply_tokens": 114
+    },
+    {
+      "task": "pydata__xarray-4687",
+      "call": 39,
+      "response_id": "chatcmpl-8d57d6d4d90d7361",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/pydata__xarray-4687.call39.case.private.json",
+      "chosen_tokens": 95,
+      "native_reply_tokens": 93
+    },
+    {
+      "task": "mwaskom__seaborn-3187",
+      "call": 64,
+      "response_id": "chatcmpl-9d1ff745dac3c4b2",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/mwaskom__seaborn-3187.call64.case.private.json",
+      "chosen_tokens": 27,
+      "native_reply_tokens": 25
+    },
+    {
+      "task": "pytest-dev__pytest-6197",
+      "call": 35,
+      "response_id": "chatcmpl-a07735f98d303f28",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/pytest-dev__pytest-6197.call35.case.private.json",
+      "chosen_tokens": 131,
+      "native_reply_tokens": 128
+    },
+    {
+      "task": "pydata__xarray-3095",
+      "call": 53,
+      "response_id": "chatcmpl-b862e6b97b80b0ee",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/pydata__xarray-3095.call53.case.private.json",
+      "chosen_tokens": 850,
+      "native_reply_tokens": 848
+    },
+    {
+      "task": "pylint-dev__pylint-4970",
+      "call": 51,
+      "response_id": "chatcmpl-917993d057113952",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/pylint-dev__pylint-4970.call51.case.private.json",
+      "chosen_tokens": 628,
+      "native_reply_tokens": 626
+    },
+    {
+      "task": "pylint-dev__pylint-4970",
+      "call": 55,
+      "response_id": "chatcmpl-87f23b28f7c98357",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/pylint-dev__pylint-4970.call55.case.private.json",
+      "chosen_tokens": 600,
+      "native_reply_tokens": 598
+    },
+    {
+      "task": "pylint-dev__pylint-4551",
+      "call": 35,
+      "response_id": "chatcmpl-b0f22e13dcb5d244",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/pylint-dev__pylint-4551.call35.case.private.json",
+      "chosen_tokens": 1201,
+      "native_reply_tokens": 1199
+    },
+    {
+      "task": "matplotlib__matplotlib-20488",
+      "call": 88,
+      "response_id": "chatcmpl-b94619e0f18340df",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/matplotlib__matplotlib-20488.call88.case.private.json",
+      "chosen_tokens": 794,
+      "native_reply_tokens": 792
+    },
+    {
+      "task": "matplotlib__matplotlib-20488",
+      "call": 91,
+      "response_id": "chatcmpl-ace39fa0a8684d0d",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/matplotlib__matplotlib-20488.call91.case.private.json",
+      "chosen_tokens": 265,
+      "native_reply_tokens": 263
+    },
+    {
+      "task": "pylint-dev__pylint-6386",
+      "call": 33,
+      "response_id": "chatcmpl-839713eeed5af6be",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/pylint-dev__pylint-6386.call33.case.private.json",
+      "chosen_tokens": 305,
+      "native_reply_tokens": 303
+    },
+    {
+      "task": "django__django-16950",
+      "call": 80,
+      "response_id": "chatcmpl-a62b5f5f09a632ab",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/django__django-16950.call80.case.private.json",
+      "chosen_tokens": 68,
+      "native_reply_tokens": 66
+    },
+    {
+      "task": "psf__requests-5414",
+      "call": 23,
+      "response_id": "chatcmpl-b21146d26511b106",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-requests5414/psf__requests-5414.call23.case.private.json",
+      "chosen_tokens": 643,
+      "native_reply_tokens": 641
+    },
+    {
+      "task": "psf__requests-5414",
+      "call": 30,
+      "response_id": "chatcmpl-97e7a658758973a8",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-requests5414/psf__requests-5414.call30.case.private.json",
+      "chosen_tokens": 441,
+      "native_reply_tokens": 439
+    },
+    {
+      "task": "sympy__sympy-14248",
+      "call": 50,
+      "response_id": "chatcmpl-be865d8ced574c9c",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-sympy14248/sympy__sympy-14248.call50.case.private.json",
+      "chosen_tokens": 245,
+      "native_reply_tokens": 243
+    },
+    {
+      "task": "sympy__sympy-14248",
+      "call": 79,
+      "response_id": "chatcmpl-979264b12dbadf63",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-sympy14248/sympy__sympy-14248.call79.case.private.json",
+      "chosen_tokens": 190,
+      "native_reply_tokens": 188
+    }
+  ],
+  "CPU_validation": [
+    {
+      "mode": "served",
+      "exit_code": 0,
+      "stdout": "Validated 67 jobs without importing TTNN"
+    },
+    {
+      "mode": "full",
+      "exit_code": 0,
+      "stdout": "Validated 67 jobs without importing TTNN"
+    }
+  ],
+  "definitive_failures_without_full_case": [],
+  "excluded_loop": "Requests2931 capped32768 anomaly reply excluded; semantic29 separate. Pytest5787 anomalyfull1/65 archival only; onset jobs separate.",
+  "correct_actions_status": "Pending candidates and fetch/action/protocol controls have separate semantic validation requirements."
+}

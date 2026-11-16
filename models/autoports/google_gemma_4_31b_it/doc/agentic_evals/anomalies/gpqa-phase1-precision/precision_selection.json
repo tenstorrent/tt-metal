@@ -1,0 +1,74 @@
+{
+  "configs_tried": [
+    {
+      "config": "served",
+      "config_id": "head_bfp4",
+      "pass": false,
+      "collapsed": 1,
+      "trials": 3,
+      "decode_tok_s_user": 34.75174285968196,
+      "samples": [
+        34.75174285968196,
+        34.75870123854985,
+        34.747009577600636
+      ],
+      "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-phase1-precision/timed-onset-served/task195.onset.json"
+    },
+    {
+      "config": "head_bfp4_hifi2",
+      "config_id": "stage12_head_bfp4_hifi2",
+      "pass": false,
+      "collapsed": 1,
+      "trials": 3,
+      "decode_tok_s_user": 34.565256569442234,
+      "samples": [
+        34.54085955406446,
+        34.565256569442234,
+        34.58874534000428
+      ],
+      "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-phase1-precision/timed-onset-head_bfp4_hifi2/task195.onset.json"
+    },
+    {
+      "config": "head_bfp8",
+      "config_id": "stage12_head_bfp8_lofi",
+      "pass": true,
+      "collapsed": 0,
+      "trials": 3,
+      "decode_tok_s_user": 34.24475045849697,
+      "samples": [
+        34.24475045849697,
+        34.248712574883896,
+        34.24306507159651
+      ],
+      "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-phase1-precision/timed-onset-head_bfp8/task195.onset.json"
+    },
+    {
+      "config": "full_precision",
+      "config_id": "stage12_bf16_hifi4_diagnostic",
+      "pass": true,
+      "collapsed": 0,
+      "trials": 3,
+      "decode_tok_s_user": 16.954363282211524,
+      "samples": [
+        16.951197702372777,
+        16.956622215008814,
+        16.954363282211524
+      ],
+      "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-phase1-precision/timed-onset-full_precision/task195.onset.json"
+    }
+  ],
+  "chosen": "head_bfp8",
+  "criterion": "Zero degenerate tails across fixed seeds42,43,44,1024tokens from reconstructed onset; retain full-list rerun requirement. Small panel is not proof of zero population anomaly rate.",
+  "precision_change": "Only lm_head bfp4/LoFi ->bfp8_lofi/LoFi",
+  "diagnostic_speed_basis": "Batch1 canonical traced tokenout hostwall decode excludingprefill, noaddeddevice sync; not vLLM performance.",
+  "faster_tried_fail": [
+    "served",
+    "head_bfp4_hifi2"
+  ],
+  "resume_status": "pass",
+  "resume_evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-phase1-precision/head_bfp8_acceptance/prefill_resume.json",
+  "qualitative_status": "pass_matched_greedy128",
+  "chosen_final": true,
+  "qualitative_evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-phase1-precision/head_bfp8_acceptance/qualitative128/verdict.json",
+  "selection_scope": "Fastest tested policy passing three-seed onset reproduction and acceptance checks; whole-list rerun pending."
+}

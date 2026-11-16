@@ -1,0 +1,39 @@
+{
+  "status": "requirements_for_candidate_run",
+  "runtime_precision_assertions": {
+    "config_id": "stage12_swe85_head_bfp8_hifi2",
+    "weight_groups": {
+      "attention": "bfp4",
+      "mlp": "bfp4",
+      "down": "bfp4",
+      "lm_head": "bfp8"
+    },
+    "compute_fidelities": {
+      "attention": "LoFi",
+      "mlp": "LoFi",
+      "down": "LoFi",
+      "lm_head": "HiFi2"
+    },
+    "max_seq_len": 262144
+  },
+  "where_to_check": "Every output JSON runtime_precision must equal the candidate precision config before interpreting text. Inspect representative and all-row values; any mismatch invalidates the candidate run.",
+  "per_seed_trace_counter_assertions": {
+    "decode_tokens": "equals number of completed _replay calls",
+    "trace_counters_delta.model_replays": "equals decode_tokens",
+    "trace_counters_delta.sample_replays": "equals decode_tokens",
+    "trace_counters_delta.readbacks": "equals decode_tokens",
+    "trace_counters_delta.captures": 0,
+    "note": "Counters are recorded by timed_free_generate around existing synchronous token-out readbacks; no added synchronization or profiler. Confirm captures do not increase during decode."
+  },
+  "post_run_records": [
+    "measured model-load wall time",
+    "measured total serial wall time",
+    "per-case per-seed prefill-inclusive wall",
+    "decode_tokens/decode_wall_s/decode_tok_s_user",
+    "runtime_precision per output",
+    "trace counter deltas per output",
+    "semantic verdict per source_onset+seed",
+    "cap outcomes: completed vs still progressing/inconclusive"
+  ],
+  "precision_scope": "Only lm_head compute fidelity changes from LoFi to HiFi2. The raw weight-group label changes bfp8_lofi to bfp8, but both use bfloat8_b storage; all other precision fields and max_seq_len262144 stay fixed."
+}

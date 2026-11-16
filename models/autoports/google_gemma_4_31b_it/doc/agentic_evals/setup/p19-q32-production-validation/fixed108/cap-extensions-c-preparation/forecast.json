@@ -1,0 +1,45 @@
+{
+  "status": "host-planning-estimate-not-measurement",
+  "basis": "For each fresh capped diagnostic, start from its matched P19 same-seed trial wall and add the extra cap tokens divided by that trial\u2019s measured decode throughput. Add one measured P19 model-load wall. The upper/lower bounds are planning uncertainty multipliers, not confidence intervals. Natural stop shortens decode; prefill, long-context behavior, and shared load can change wall time.",
+  "load_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/p19-q32-production-validation/fixed108/runs/p19_q32/load.json",
+  "load_sha256": "ff7d9b0857d91b76dd519e2080c6d7e439d1f4d81cb07e7363389695d1f55c91",
+  "load_wall_s": 107.58205729094334,
+  "per_case": [
+    {
+      "candidate_job_name": "p19capext.anomaly.sphinx-doc__sphinx-10323.call70.onset.seed42.cap512",
+      "source_result_sha256": "8dfb04e0d290f13dee822128b41d12de1944fc7834ea601f840c61fbd0c3d529",
+      "prior_cap": 256,
+      "new_cap": 512,
+      "measured_prior_trial_wall_s": 55.093617673031986,
+      "measured_prior_decode_tokens": 255,
+      "measured_prior_decode_wall_s": 15.422120749019086,
+      "measured_prior_decode_tok_s_user": 16.534690925449997,
+      "added_tokens_if_reaches_new_cap": 256,
+      "incremental_decode_estimate_s_if_full_extension": 15.4825996539172,
+      "estimated_trial_wall_s_if_cap_filled": 70.57621732694919,
+      "uncertainty": "Assumes the observed same-trial per-token decode rate continues. Natural stopping can shorten the run; long-context throughput/prefill and contention can vary."
+    },
+    {
+      "candidate_job_name": "p19capext.anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed44.cap2048",
+      "source_result_sha256": "9ddbe31160890bbea94ccb463d6c97e035933cb7c40d8d66ac4b34d29c79587b",
+      "prior_cap": 1024,
+      "new_cap": 2048,
+      "measured_prior_trial_wall_s": 107.17813577014022,
+      "measured_prior_decode_tokens": 1023,
+      "measured_prior_decode_wall_s": 63.046971084782854,
+      "measured_prior_decode_tok_s_user": 16.225997576066163,
+      "added_tokens_if_reaches_new_cap": 1024,
+      "incremental_decode_estimate_s_if_full_extension": 63.10860057753435,
+      "estimated_trial_wall_s_if_cap_filled": 170.28673634767455,
+      "uncertainty": "Assumes the observed same-trial per-token decode rate continues. Natural stopping can shorten the run; long-context throughput/prefill and contention can vary."
+    }
+  ],
+  "point_total_wall_s": 348.445,
+  "range_seconds": {
+    "low": 271.787,
+    "point": 348.445,
+    "high": 522.668
+  },
+  "timeout_seconds": 1800,
+  "scope": "Only these two extensions; no extension forecast for other slice rows."
+}

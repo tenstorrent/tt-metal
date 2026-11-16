@@ -1,0 +1,51 @@
+{
+  "status": "panel_semantics_reviewed_cap_extensions_and_reference_controls_pending",
+  "reviewed_unix": 1794761225.8528273,
+  "counts": {
+    "normal": 83,
+    "reproduced_native_motif": 21,
+    "other_anomaly": 0,
+    "inconclusive": 4
+  },
+  "case_count": 108,
+  "onset_count": 36,
+  "seeds": [
+    42,
+    43,
+    44
+  ],
+  "cap_extension_indices": [
+    10,
+    49,
+    66,
+    74,
+    106
+  ],
+  "cap_extension_note": "Four primary inconclusive rows plus row10 localized duplicated contraction with progressing capped remainder. No positive accuracy or task-score claim.",
+  "source_reviews": [
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/triage-b.json",
+      "sha256": "42a30d3e9adc3ae5d0e48f03463ffa4349e1276cb3287c48b2977b3d68606d69"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/reviewed/triage-c-partial-36-58.json",
+      "sha256": "9a8632b17fec80a9bc8d61d42c803f448dc7261083136d162b3529231b5fd79b"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/reviewed/triage-c-additive-59-71.json",
+      "sha256": "639ff30ced8537c45625c21acd0e7a7b6d76ec5f5590a789084ef3c1b3f1c776"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/triage-slice72-107-d.json",
+      "sha256": "f743098dc5d4504d20394510361ee35a83ec42ad409054b486c733c0b866beae"
+    }
+  ],
+  "full_control_scope": "Full means all projection groups/head BF16 HiFi4 and BF16 state/KV. Matching prompt IDs and seeds checked separately from cap. D slice has21/36 exact prompt+seed matches,9 cap matches,4 different caps,8 legacy caps unknown,15 no exactseed match; normal finite outputs need no novel-anomaly diagnosis. Motif classifications do not establish exactnative RNG replay or HF expectedness.",
+  "next_work": [
+    "Complete five cap extensions, compare unchanged original token prefixes, classify final text.",
+    "Run prepared full-reconstructed-onset HF Requests5414call11 and Pytest7432call19 controls at seed42; reconcile with existing scoped HF evidence.",
+    "Review remaining anomaly/reference obligations before candidate acceptance."
+  ],
+  "candidate_selected": false,
+  "score_changed": false
+}

@@ -1,0 +1,12 @@
+{
+  "status": "not_admitted",
+  "candidate": "Sklearn13135 suffix2048 served/full matched diagnostic",
+  "proposal_sha256": "3d36987501f198eb3fb443a3ba6c2d4a2c23d4dce5159fca7d2deb3ae33f8ad0",
+  "driver_sha256": "1e2f4759ee16febc57d2da36687d89c2de2664eb83d91f7b79c024be8cc78afe",
+  "commands_sha256": "c37f0e6c296d32556f9885bed0b5f0c54380d6cd5fa8b10b9ca0b32ba6fc847a",
+  "source_inventory_sha256": "fed9aad30dd955c3564bb63d832085c111ecf2e86ead3d94bfdc41185e6d1186",
+  "forecast_sha256": "3494916de4019dc42b4e4d44185fdc84842e3d965a236ba23107b1004216f7af",
+  "artifact_hashes_sha256": "b780842673610f43457a7b301f77c593efd1946b4fc53a384967764883e9c0c1",
+  "stop_file_required_until_explicit_root_admission": true,
+  "note": "Candidate-only. Root must review, refresh any dynamic serial-HF clearance pins, create admission.json, and explicitly launch one mode. No command run."
+}

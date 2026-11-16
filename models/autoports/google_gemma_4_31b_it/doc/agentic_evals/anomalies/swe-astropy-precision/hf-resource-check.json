@@ -1,0 +1,13 @@
+{
+  "unix": 1794647552.7889552,
+  "status": "HF first sample pending; CPU control only",
+  "pid": 165428,
+  "cgroup": {
+    "memory.max": "max",
+    "memory.current": "93567950848",
+    "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 7",
+    "cpu.max": "max 100000",
+    "cpu.stat": "usage_usec 223454495774\nuser_usec 200732660544\nsystem_usec 22721835229\nnice_usec 0\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0"
+  },
+  "note": "No cgroup CPU quota/throttling or memory cap/OOM observed; no completed sample or performance conclusion inferred."
+}

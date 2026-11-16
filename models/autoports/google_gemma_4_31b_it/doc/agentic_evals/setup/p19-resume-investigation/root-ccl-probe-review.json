@@ -1,0 +1,23 @@
+{
+  "status": "local_bf16_ring_phase_mechanism_confirmed_full_model_sufficiency_pending",
+  "probe_sha256": "29ffa7208ae5766b566a0b8296bcc6c4436497e814d29cd17cb60df41bf9ccab",
+  "completion": {
+    "status": "completed",
+    "start_unix": 1794767520.2028818,
+    "end_unix": 1794767602.0164158,
+    "elapsed_seconds": 81.81353402137756,
+    "process_exit_code": 0
+  },
+  "forecast": "HIT81.81s within60\u2013600s",
+  "comparisons": 40,
+  "input_slice_identity_all": true,
+  "leading_padding_exact_all": true,
+  "direct_nonzero_phase_mismatches": 6,
+  "phase256_control_exact_all": true,
+  "max_direct_abs_difference": {
+    "self_attn.o_proj": 0.5,
+    "mlp.down_proj": 0.125
+  },
+  "scope": "Two real layer0 P19 BF16 local projection tensors reduced onTP4. This proves local phase mechanism, notfullmodel sufficiency. No performance metric.",
+  "trace_warning_classification": "Diagnostic creates temporary reduction tensors after prepare_decode captured traces; this probe never replays those traces thereafter and releases them at teardown. No production trace-lifetime claim. Follow-up full resume rerun enables trace allocation tracking."
+}

@@ -1,0 +1,13 @@
+{
+  "written_unix": 1794643842.34746,
+  "question": "Does pinned HF also generate a degenerate continuation from each saved onset?",
+  "decision": "After a completed HF continuation flags, stop redundant remaining seeds for that case and move to the other case. A coherent first sample does not settle the question; retain additional seeds.",
+  "reason": "Full TT reproduces both. One completed positive HF reproduction establishes that the same phenomenon exists in reference behavior; no population anomaly-rate equivalence is claimed. CPU reference has no accessible GPU and longprefix conditioning is costly.",
+  "limits": "Preserve all completed samples, partial planned-batch status and exact exit reason. Never terminate TT work. Only own CPU reference process may be stopped after completed saved evidence. Subsequent case keeps same1024cap, seed42, T1/p.95/k20 and same savedIDs.",
+  "cost": "One model reload and second prefix prefill versus two extra1024-token CPU trials after a positive reproduction.",
+  "qualitative_clarification": {
+    "unix": 1794647717.8251276,
+    "criterion": "A completed HF sample either flags mechanically or is independently inspected and confirmed to contain repeated-token/phrase cycles without actions. Unflagged does not mean coherent. Preserve detector values and human classification separately.",
+    "basis": "All six unflagged TT controls visibly repeat multi-phrase cycles; zlib threshold misses these longer cycles. Supplemental task triage requested before HF result exists."
+  }
+}

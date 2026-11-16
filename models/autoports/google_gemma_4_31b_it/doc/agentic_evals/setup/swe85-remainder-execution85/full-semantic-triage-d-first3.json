@@ -1,0 +1,85 @@
+{
+  "rows": [
+    {
+      "job": "anomaly.sympy__sympy-14248.call53.onset",
+      "mode": "full",
+      "seed": 42,
+      "verdict": "reproduced_native_motif",
+      "evidence": "Entire 256-token free run is 256 repeated caret tokens (decoded as 1024 carets), with no progression; native conditioned continuation begins a fabricated SymPy traceback and caret degeneration. Same result for seeds42,43,44.",
+      "confidence": "high",
+      "cap_notes": "Repetition starts immediately and fills cap; unambiguous anomaly."
+    },
+    {
+      "job": "anomaly.sympy__sympy-14248.call53.onset",
+      "mode": "full",
+      "seed": 43,
+      "verdict": "reproduced_native_motif",
+      "evidence": "Entire 256-token free run is 256 repeated caret tokens (decoded as 1024 carets), with no progression; native conditioned continuation begins a fabricated SymPy traceback and caret degeneration. Same result for seeds42,43,44.",
+      "confidence": "high",
+      "cap_notes": "Repetition starts immediately and fills cap; unambiguous anomaly."
+    },
+    {
+      "job": "anomaly.sympy__sympy-14248.call53.onset",
+      "mode": "full",
+      "seed": 44,
+      "verdict": "reproduced_native_motif",
+      "evidence": "Entire 256-token free run is 256 repeated caret tokens (decoded as 1024 carets), with no progression; native conditioned continuation begins a fabricated SymPy traceback and caret degeneration. Same result for seeds42,43,44.",
+      "confidence": "high",
+      "cap_notes": "Repetition starts immediately and fills cap; unambiguous anomaly."
+    },
+    {
+      "job": "anomaly.xarray3095-call53.canonicalprefix",
+      "mode": "full",
+      "seed": 42,
+      "verdict": "normal",
+      "evidence": "All 3 seeds complete the conditioned open call:bash prefix as the same valid command `nl -ba xarray/core/variable.py | sed -n '180,186p'`, with closing tool delimiters. Native symptom was malformed tool name/prose with exposed delimiter, not reproduced in these conditioned continuations.",
+      "confidence": "high",
+      "cap_notes": "Short complete protocol continuation; valid command."
+    },
+    {
+      "job": "anomaly.xarray3095-call53.canonicalprefix",
+      "mode": "full",
+      "seed": 43,
+      "verdict": "normal",
+      "evidence": "All 3 seeds complete the conditioned open call:bash prefix as the same valid command `nl -ba xarray/core/variable.py | sed -n '180,186p'`, with closing tool delimiters. Native symptom was malformed tool name/prose with exposed delimiter, not reproduced in these conditioned continuations.",
+      "confidence": "high",
+      "cap_notes": "Short complete protocol continuation; valid command."
+    },
+    {
+      "job": "anomaly.xarray3095-call53.canonicalprefix",
+      "mode": "full",
+      "seed": 44,
+      "verdict": "normal",
+      "evidence": "All 3 seeds complete the conditioned open call:bash prefix as the same valid command `nl -ba xarray/core/variable.py | sed -n '180,186p'`, with closing tool delimiters. Native symptom was malformed tool name/prose with exposed delimiter, not reproduced in these conditioned continuations.",
+      "confidence": "high",
+      "cap_notes": "Short complete protocol continuation; valid command."
+    },
+    {
+      "job": "anomaly.pylint-dev__pylint-4604.call45.onset",
+      "mode": "full",
+      "seed": 42,
+      "verdict": "normal",
+      "evidence": "All 3 seeds continue the conditioned reasoning coherently, identify astroid.nodes.Try / ExceptHandler, then issue valid structured bash checks (`astroid.Try`, `astroid.nodes.ExceptHandler`, or prior dir query). No repeated token loop or terminal degeneration.",
+      "confidence": "high",
+      "cap_notes": "Short continuation completing the conditioned investigation; no evidence of a capped incomplete reply."
+    },
+    {
+      "job": "anomaly.pylint-dev__pylint-4604.call45.onset",
+      "mode": "full",
+      "seed": 43,
+      "verdict": "normal",
+      "evidence": "All 3 seeds continue the conditioned reasoning coherently, identify astroid.nodes.Try / ExceptHandler, then issue valid structured bash checks (`astroid.Try`, `astroid.nodes.ExceptHandler`, or prior dir query). No repeated token loop or terminal degeneration.",
+      "confidence": "high",
+      "cap_notes": "Short continuation completing the conditioned investigation; no evidence of a capped incomplete reply."
+    },
+    {
+      "job": "anomaly.pylint-dev__pylint-4604.call45.onset",
+      "mode": "full",
+      "seed": 44,
+      "verdict": "normal",
+      "evidence": "All 3 seeds continue the conditioned reasoning coherently, identify astroid.nodes.Try / ExceptHandler, then issue valid structured bash checks (`astroid.Try`, `astroid.nodes.ExceptHandler`, or prior dir query). No repeated token loop or terminal degeneration.",
+      "confidence": "high",
+      "cap_notes": "Short continuation completing the conditioned investigation; no evidence of a capped incomplete reply."
+    }
+  ]
+}

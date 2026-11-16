@@ -1,0 +1,75 @@
+{
+  "job_name": "swe-next20-CANDIDATE-NOT-ADMITTED",
+  "jobs_dir": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe-jobs",
+  "n_attempts": 1,
+  "n_concurrent_trials": 12,
+  "quiet": false,
+  "environment": {
+    "type": "docker"
+  },
+  "agents": [
+    {
+      "model_name": "openai/google/gemma-4-31B-it",
+      "override_timeout_sec": 21600,
+      "kwargs": {
+        "version": "2.2.8",
+        "max_tokens": 32768,
+        "config": {
+          "model": {
+            "model_kwargs": {
+              "temperature": 1.0,
+              "top_p": 0.95,
+              "extra_body": {
+                "top_k": 20,
+                "chat_template_kwargs": {
+                  "enable_thinking": true
+                }
+              },
+              "drop_params": true,
+              "timeout": 3600
+            },
+            "cost_tracking": "ignore_errors"
+          }
+        }
+      },
+      "name": "mini-swe-agent",
+      "env": {
+        "OPENAI_BASE_URL": "http://172.17.0.1:8000/v1",
+        "OPENAI_API_BASE": "http://172.17.0.1:8000/v1",
+        "OPENAI_API_KEY": "local-no-auth-placeholder",
+        "LITELLM_LOCAL_MODEL_COST_MAP": "True"
+      },
+      "extra_allowed_hosts": [
+        "172.17.0.1"
+      ]
+    }
+  ],
+  "datasets": [
+    {
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-candidate/tasks-offline-verifier",
+      "task_names": [
+        "pytest-dev__pytest-7432",
+        "pylint-dev__pylint-7277",
+        "scikit-learn__scikit-learn-14983",
+        "django__django-11790",
+        "pydata__xarray-4094",
+        "astropy__astropy-8872",
+        "matplotlib__matplotlib-25960",
+        "psf__requests-1766",
+        "pytest-dev__pytest-10051",
+        "sympy__sympy-13480",
+        "pylint-dev__pylint-6386",
+        "django__django-13363",
+        "pydata__xarray-4687",
+        "astropy__astropy-7336",
+        "sphinx-doc__sphinx-10614",
+        "scikit-learn__scikit-learn-14053",
+        "matplotlib__matplotlib-24149",
+        "psf__requests-5414",
+        "pytest-dev__pytest-5787",
+        "sympy__sympy-23262"
+      ]
+    }
+  ],
+  "agent_timeout_multiplier": 1.0
+}

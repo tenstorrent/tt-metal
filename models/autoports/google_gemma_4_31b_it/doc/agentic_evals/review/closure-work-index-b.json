@@ -1,0 +1,227 @@
+{
+  "status": "closure_index_only_not_stage_review_verdict",
+  "created_utc": "2026-11-15T19:07:18.731703+00:00",
+  "purpose": "Map interim stage-review findings and the final-review entrypoint to current evidence, identify current gaps and work possible without additional model runs. This is not a fresh independent stage review and does not issue clean-pass/more-work-needed.",
+  "review_basis": [
+    {
+      "path": "review/interim-stage12-completed-evidence.md",
+      "sha256": "4884a28caa2466661fbc223b0d8f97e7d6e4a23619abe351028a1d6df9fefea9",
+      "scope": "Interim more-work-needed review; its evidence/status snapshots precede newest Q32 and HF conditional work."
+    },
+    {
+      "path": "review/final-stage-review-entrypoint-20261115.md",
+      "sha256": "adacfe18b17e309e10a04988a269122ce19c2adf0f97d44b9001b2bd21937f73",
+      "scope": "Navigation/status snapshot; its refresh time predates the Q32 full-resume diagnostic and HF22 launch."
+    },
+    {
+      "path": "REPORT.md",
+      "sha256": "91e15a5646119687281c400fbb91caa8698cbc698d6b2d6338a138c8d9bdb587",
+      "scope": "Active report; currently omits the latest Q32 diagnostic result and HF22 active status."
+    }
+  ],
+  "addressed_or_evidence_complete_with_scope_limits": [
+    {
+      "item": "Extended GPQA correction and fixed phases",
+      "evidence": [
+        "REPORT.md",
+        "anomalies/gpqa-extended-precision/conditional-hf-prep/final_summary.json"
+      ],
+      "status": "completed per active report; corrected GPQA 157/198 with shortened-input controls; phase1 8/10 and phase2 4/10 retained."
+    },
+    {
+      "item": "Full SWE85 initial collection/accounting",
+      "evidence": [
+        "current/swe-extended85-head-bfp8/collected-final/final-score-with-adjudication.json"
+      ],
+      "sha256": "18bde7bf9874448a75ba34f56611c1e4fe1e9fbfd6a1f5778d7ff4683febe7fa",
+      "status": "all 85 retained and 4,427 calls accounted; 23 confirmed successes, 59 definitive unsuccessful, 3 unknown verifier results. Not a passing score."
+    },
+    {
+      "item": "P19 pre-Q32 fixed108 panel and cap extensions",
+      "evidence": [
+        "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/root-post-extension-review.json"
+      ],
+      "sha256": "50ef582358a1188217c1c37756efb3611c2292b89ed32b946cd0050a7a8a77ae",
+      "status": "completed 108 trials and five continuations. Post-extension counts 87 normal / 21 native motifs / 0 other / 0 inconclusive; reference disposition remained open. This is strictly pre-Q32 geometry evidence and is not validation of Q32."
+    },
+    {
+      "item": "Primary HF9 and two reconstructed full-prompt seed42 caret controls",
+      "evidence": [
+        "setup/swe85-hf-current-disposition-c.json",
+        "setup/swe85-conditional-hf/p19-native-onset-caret-controls/root-terminal-review.json"
+      ],
+      "status": "completed/root-reviewed within shortened or reconstructed prompt scope; no native seed/RNG replay or score inference."
+    },
+    {
+      "item": "Full-prompt Q32 resume diagnostic",
+      "evidence": [
+        "setup/p19-resume-investigation/q32-resume-completion.json",
+        "setup/p19-resume-investigation/root-q32-resume-review.json"
+      ],
+      "completion_sha256": "be99686a886ac8fea262c998b75298fe4cc822054158829186b464f54dbcf249",
+      "review_sha256": "4ca974165595d4809c9383bb53c3daf7a433aa441590ba97fe5b90bb8f878d83",
+      "status": "diagnostic_full_model_q32_pass; production validation pending",
+      "details": {
+        "exit_code": 0,
+        "wall_seconds": 269.9703812599182,
+        "all14_pass": true,
+        "all_top1_one": true
+      },
+      "scope": "Diagnostic Q32 override only. It is evidence for resumed-prefill behavior under that diagnostic geometry, not a production rollout, fresh-prefill acceptance, precision-panel validation, performance or score update."
+    }
+  ],
+  "open_required_work": [
+    {
+      "priority": "high",
+      "item": "Finish and review HF22 conditional history batch",
+      "status": "active",
+      "admission_path": "setup/swe85-conditional-hf/full-other-conditional-history-proposal-b/hf-root-admission.json",
+      "admission_sha256": "7e1c215cfb490d316d6c3596576d720b46bc667b84e0878e1c9c210b10086eb2",
+      "started_unix": 1794769306.604741,
+      "progress_evidence": "hf-run.log has completed the first case and progressed into the second 2,047-token conditioning window; whole batch has no terminal completion/review yet.",
+      "scope": "22 forced-history windows over the completed full-TT conditional results; this conditions exact observed histories, not free-running anomaly incidence or correctness."
+    },
+    {
+      "priority": "high",
+      "item": "Run/review separate original-prompt Sklearn HF conditional controls if still authorized by current queue",
+      "status": "pending; no HF launch",
+      "evidence": [
+        "setup/swe85-conditional-hf/sklearn13135-full-missingtool-conditional-history-b/tt-root-review.json",
+        "setup/swe85-conditional-hf/sklearn13135-full-missingtool-conditional-history-b/root-admission-attempt.json"
+      ],
+      "details": {
+        "full_TT_controls": "both full-TT conditional windows collected; HF pending (see tt-root-review.json).",
+        "TT_admission_attempt": "not_launched",
+        "TT_attempt_blocker": "The TT admission attempt found an existing empty results/tt directory from host validation; it did not start a model process. TT full controls were subsequently completed and root-reviewed.",
+        "HF_status": "No HF admission or launch is recorded yet; HF remains pending."
+      },
+      "scope": "Full reconstructed 17,395-token onset/terminal histories; prior suffix512/1024 controls did not retain original missing-tool switch."
+    },
+    {
+      "priority": "high",
+      "item": "Resolve Q32 diagnostic to production disposition",
+      "status": "production validation pending",
+      "evidence": "setup/p19-resume-investigation/root-q32-resume-review.json",
+      "details": "The old P19/Q128 resume suite failed 10/14. The later Q32 diagnostic passes all14, but its admission explicitly says diagnostic-only and no production Q change. If production Q32 is chosen, rerun exact-policy fresh-prefill accuracy, qualitative comparison, fixed108 anomaly panel, and relevant performance/serving validation; the existing P19 fixed108 and accuracy results used pre-Q32 geometry. Alternatively, implement/validate the Q128-preserving padded alignment design if selected. Do not call diagnosis/acceptance complete from the diagnostic alone. Q32 here means query chunk geometry, distinct from operator-authorized generation top_k=32."
+    },
+    {
+      "priority": "high",
+      "item": "Preserve unknown original verifier outcomes and pending operator decision",
+      "status": "pending operator response",
+      "evidence": "setup/requests-verifier-operator-question.json",
+      "evidence_sha256": "1436cd4232fb845dceec8b2694c45e23147f4f29eeab3aa9ed3f8e47784271c9",
+      "tasks": [
+        "psf__requests-1724",
+        "psf__requests-1766",
+        "psf__requests-2317"
+      ],
+      "score": {
+        "confirmed": 23,
+        "n": 85,
+        "point": null,
+        "bounds": [
+          0.27058823529411763,
+          0.3058823529411765
+        ],
+        "all_unknown_pass_still_below_band": true,
+        "wilson_95_envelope_bounds": [
+          0.18759616662487055,
+          0.4104579512215583
+        ],
+        "reference_floor": 0.648,
+        "all_unknown_pass_note": "Even 26/85 = 30.59%; the Wilson 95% envelope upper bound is 0.41046, below the 0.648 reference floor."
+      },
+      "required": "Keep point score null; retain denominator 85. No inferred zero/success or dropped tasks."
+    },
+    {
+      "priority": "high",
+      "item": "No feasible scored 85-task rerun inside remaining stage window under honest duration assumptions",
+      "status": "planning constraint; no admission",
+      "deadline_utc": "2026-11-16T01:15:25+00:00",
+      "remaining_hours": 6.135,
+      "reserved_hours": 3.417,
+      "reserves": {
+        "hf22_timeout_s": 5400,
+        "hf_sklearn_timeout_s": 3600,
+        "closure_reserve_s": 1800,
+        "minimum_candidate_validation_s": 1500
+      },
+      "execution_hours_after_reserves": 2.718,
+      "basis": "Original measured SWE85 wall is 3.523h at 12 agents; frozen 4,427-call task-order rescheduling at observed service durations is 4.948h at 8 agents and 5.509h at 7 agents. The separate planning sensitivity documents that shorter-call multipliers were hypothetical; no P19 B8 SWE rate is measured. Even the original 3.523h is longer than the remaining execution allowance before closeout. Do not promise or launch an 85 rerun on the basis of the AR/vLLM rate ratio."
+    }
+  ],
+  "non_model_run_closure_work": [
+    {
+      "item": "Refresh the current HF disposition index after HF22 and Sklearn outcomes",
+      "reason": "Current swe85-hf-current-disposition-c.json still records the 22-window proposal as unadmitted/unrun; HF22 now has admission and an active log. The separate Sklearn exact-prompt TT conditional controls have completed, but its TT admission-attempt record documents no TT launch because of the existing empty results/tt directory; no HF admission/launch is recorded."
+    },
+    {
+      "item": "Update REPORT.md, results.json, work_log.md, learned.json and final-review entrypoint from final records",
+      "reason": "Current report/entrypoint still state Q32 root diagnosis pending and describe HF22 as unadmitted. Add the Q32 diagnostic result with explicit scope, active/pending HF status, current score unknowns, and pre-Q32 fixed108 caveat; leave selection/score unchanged."
+    },
+    {
+      "item": "Reconcile remaining stale prose/compact records",
+      "reason": "Interim review identifies a contradictory “No caps…no observed anomalies” sentence in the SymPy14711 coordinator immediately before a localized protocol anomaly. Correct as bookkeeping. Refresh the compact inventory after active evidence and this closure index are final; current inventory snapshot predates nine git-status entries."
+    },
+    {
+      "item": "Refresh stage usage/telemetry provenance and prepare final independent review/commit boundary",
+      "reason": "Use only current run records and packet contract; exclude unrelated benchmark status and root debug artifacts. A fresh reviewer and isolated local stage-owned commits come after all active evidence is reconciled. No push."
+    }
+  ],
+  "stale_status_claims_to_reconcile": [
+    {
+      "path": "REPORT.md",
+      "claim": "P19 16K resume diagnosis is simply pending after the original 10/14 Q128 failure.",
+      "current_evidence": "A separate Q32 diagnostic passed14/14; production validation and candidate disposition remain pending."
+    },
+    {
+      "path": "REPORT.md",
+      "claim": "22-observation HF proposal is unadmitted/unrun.",
+      "current_evidence": "TT conditional controls completed; HF admission launched and run log is progressing, no terminal result yet."
+    },
+    {
+      "path": "setup/swe85-hf-current-disposition-c.json",
+      "claim": "22-observation full-other/Sklearn proposal remains unadmitted/unrun; Sklearn TT status not complete.",
+      "current_evidence": "HF22 currently has an admission and active log; the separate Sklearn full-TT conditional controls completed, while its TT admission attempt did not launch and a separate HF attempt is not recorded."
+    },
+    {
+      "path": "review/final-stage-review-entrypoint-20261115.md",
+      "claim": "P19 diagnosis pending and all current HF gaps as of earlier snapshot.",
+      "current_evidence": "Refresh with Q32 diagnostic, live HF22, Sklearn pending, and current feasibility/score status before inviting fresh final stage review."
+    }
+  ],
+  "explicit_nonclaims": [
+    "No stage review verdict.",
+    "No Q32 production selection.",
+    "No score change or point score for the three unknown SWE outcomes.",
+    "No claim that conditional HF controls establish free-running incidence/native RNG replay.",
+    "No promise of an 85-task rerun in the remaining time."
+  ],
+  "source_hashes": {
+    "results_json": "3075059d98631e526ba3238fffca2aaf55b86daebfa1abd6855692b2236560cf",
+    "hf_disposition": "3c711163eb5a53af8481758fdab539759f828662dbc4bdaf3048eb341b3c969b",
+    "final_score": "18bde7bf9874448a75ba34f56611c1e4fe1e9fbfd6a1f5778d7ff4683febe7fa",
+    "q32_review": "4ca974165595d4809c9383bb53c3daf7a433aa441590ba97fe5b90bb8f878d83",
+    "hf22_tt_review": "fa3494e6f0f67c86696fbe0cb5a1cb9b57e8f44d956456728dd3a23a00e4c4f7",
+    "interim_review": "4884a28caa2466661fbc223b0d8f97e7d6e4a23619abe351028a1d6df9fefea9",
+    "final_entrypoint": "adacfe18b17e309e10a04988a269122ce19c2adf0f97d44b9001b2bd21937f73",
+    "sympy14711_coordinator": "631b91b19a07d7950e88857333e5088c9f5818e1bfcfac2f2c9a9af8c1cb06e0",
+    "sympy14711_reply_audit83": "eaadc80f79d7a1f097002d8f9a3a60a2cc19e328c839bbf3fc7aa90aeb5271e2"
+  },
+  "corrections": {
+    "unknown_score_bound_boolean": {
+      "before": false,
+      "after": true,
+      "calculation": "Band-pass predicate is false; all three unknowns passing yields at most26/85=0.30588, with Wilson envelope upper0.41046 < reference floor0.648."
+    },
+    "sklearn_conditional_status_labels": "Clarified that root-admission-attempt.json is a blocked TT attempt, not an HF attempt. TT full conditional windows later completed; no HF admission/launch is recorded.",
+    "coordinator_bookkeeping": {
+      "summary_path": "review/closure-index-corrections-b.json",
+      "summary_sha256": "02a04f4e22c1a8e719c1b5789e16865d8b694794c7c2e43ec84f0c3e3cfc1f1e",
+      "coordinator_path": "current/swe-extended85-head-bfp8/live-tasks/sympy__sympy-14711-first/coordinator.json",
+      "before_sha256": "77b2cfd2944ec815a28107d35739831d8857d474e5e36908e2a343e1efba841a",
+      "after_sha256": "631b91b19a07d7950e88857333e5088c9f5818e1bfcfac2f2c9a9af8c1cb06e0",
+      "score_or_classification_changed": false
+    }
+  }
+}

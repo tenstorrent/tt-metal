@@ -1,0 +1,103 @@
+{
+  "created_unix": 1794757859.977819,
+  "status": "sensitivity_planning_not_admission_not_measurement",
+  "candidate": "stage12_bf16_hifi4_kv_down_bfp8_p19",
+  "scope": "Unchanged85-task list; observed request lengths and outside-server task time. Hypothetical changed-policy rates and7/8agents.",
+  "basis": "P19 natural traced teacher-forcing18.81tokens/s is not a serving measurement. Ratios0.45/0.6/0.8 are broad judgmental scenarios around heavier BF16 weights and the observed diagnostic slowdown; not fitted rate estimates. Agent counts are preliminary until candidate launch memory is measured. Old in-flight counts clamped to B8 by installed replay, not rescheduled request-level arrivals.",
+  "rows": [
+    {
+      "agents": 7,
+      "rate_ratio_assumption": 0.45,
+      "projected_hours": 22.3223,
+      "approximate": true,
+      "reasons": [
+        "contexts above the longest measured row (28672 at batch 8) are extrapolated"
+      ]
+    },
+    {
+      "agents": 7,
+      "rate_ratio_assumption": 0.6,
+      "projected_hours": 16.7926,
+      "approximate": true,
+      "reasons": [
+        "contexts above the longest measured row (28672 at batch 8) are extrapolated"
+      ]
+    },
+    {
+      "agents": 7,
+      "rate_ratio_assumption": 0.8,
+      "projected_hours": 12.6268,
+      "approximate": true,
+      "reasons": [
+        "contexts above the longest measured row (28672 at batch 8) are extrapolated"
+      ]
+    },
+    {
+      "agents": 8,
+      "rate_ratio_assumption": 0.45,
+      "projected_hours": 19.9245,
+      "approximate": true,
+      "reasons": [
+        "contexts above the longest measured row (28672 at batch 8) are extrapolated"
+      ]
+    },
+    {
+      "agents": 8,
+      "rate_ratio_assumption": 0.6,
+      "projected_hours": 14.9697,
+      "approximate": true,
+      "reasons": [
+        "contexts above the longest measured row (28672 at batch 8) are extrapolated"
+      ]
+    },
+    {
+      "agents": 8,
+      "rate_ratio_assumption": 0.8,
+      "projected_hours": 11.251,
+      "approximate": true,
+      "reasons": [
+        "contexts above the longest measured row (28672 at batch 8) are extrapolated"
+      ]
+    }
+  ],
+  "inputs": {
+    "models/autoports/google_gemma_4_31b_it/doc/benchmark/serving_rates-stage11-head_bfp4.json": "d69d30aa6186e399e699f59b7300403d74d6f71dcddce54004d970cc9781af1e",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-extended85-head-bfp8/collected-final/calls.json": "2d3016eb651e188bd88758782b5b3df6b4e16868e3039868717144a9fb956dda"
+  },
+  "deadline_unix": 1794791725,
+  "remaining_hours_at_write": 9.406950084898208,
+  "admission": "Requires measured candidate rates and pool sizing, remaining closure/analysis margin, completed anomaly/acceptance gates. Do not start a list using this sensitivity table.",
+  "observed_task_span_sensitivity": [
+    {
+      "agents": 7,
+      "measured_server_span_multiplier_assumption": 1.25,
+      "projected_hours": 6.8395267477962705
+    },
+    {
+      "agents": 7,
+      "measured_server_span_multiplier_assumption": 1.7,
+      "projected_hours": 9.213435867998335
+    },
+    {
+      "agents": 7,
+      "measured_server_span_multiplier_assumption": 2.2,
+      "projected_hours": 11.855173316783377
+    },
+    {
+      "agents": 8,
+      "measured_server_span_multiplier_assumption": 1.25,
+      "projected_hours": 6.139288245770667
+    },
+    {
+      "agents": 8,
+      "measured_server_span_multiplier_assumption": 1.7,
+      "projected_hours": 8.290711185461944
+    },
+    {
+      "agents": 8,
+      "measured_server_span_multiplier_assumption": 2.2,
+      "projected_hours": 10.683088185416329
+    }
+  ],
+  "observed_task_span_basis": "Task spans and measured call time from original run, multiplied by hypothetical1.25/1.7/2.2 server slowdown and scheduled in observed task order at7/8agents. Avoids synthetic-rate pessimism but includes old scheduling delays in server time; changed output lengths/anomaly removal could change work. Not measured candidate performance or admission."
+}

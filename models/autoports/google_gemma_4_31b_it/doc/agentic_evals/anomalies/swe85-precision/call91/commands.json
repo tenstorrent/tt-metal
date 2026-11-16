@@ -1,0 +1,39 @@
+{
+  "status": "prepared_not_executed",
+  "serial_order": [
+    "served",
+    "full"
+  ],
+  "device_controls": {
+    "served": [
+      "env",
+      "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+      "READINESS_TRACE_REGION_SIZE=134217728",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "models/autoports/google_gemma_4_31b_it/tools/precision_repro_batch.py",
+      "--cases",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-precision/call91/cases.json",
+      "--build-kwargs-file",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/head_bfp8_build_kwargs.json",
+      "--output-dir",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-precision/call91/served"
+    ],
+    "full": [
+      "env",
+      "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+      "READINESS_TRACE_REGION_SIZE=134217728",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "models/autoports/google_gemma_4_31b_it/tools/precision_repro_batch.py",
+      "--cases",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-precision/call91/cases.json",
+      "--build-kwargs-file",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_build_kwargs.json",
+      "--output-dir",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-precision/call91/full",
+      "--compare-dir",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-precision/call91/served"
+    ]
+  },
+  "no_execution": "Commands are staged for the parent to run after device release; none were executed by preparation.",
+  "diagnostic_scope": "Batch1; teacher-force saved 64-token command fragment and sample 3x256 tokens. Not performance evidence. Each call candidate is independent and must not be dropped."
+}

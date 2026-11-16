@@ -1,0 +1,422 @@
+{
+  "created_utc": "2026-11-15T00:24:16.158916+00:00",
+  "status": "candidate_only_not_admitted_or_queued",
+  "counts": {
+    "served": 25,
+    "full": 33
+  },
+  "cases": [
+    {
+      "mode": "served",
+      "job": "anomaly.xarray7233-call1.canonicalprefix.cap512.seed42",
+      "fixture_sha256": "c79a321984fb8753808628da793a3363cc21b315c74b61005bac4c40fdb8dd60",
+      "source_job": "anomaly.xarray7233-call1.canonicalprefix",
+      "source_result_sha256": "3e977c6323d2b6f6bfb8a300a42c7d7ab5e472fa77cac7acb4a02ad0996a5be3"
+    },
+    {
+      "mode": "served",
+      "job": "anomaly.xarray7233-call1.canonicalprefix.cap512.seed43",
+      "fixture_sha256": "ad22334fd7d9a2c377e56c98c3f60802abe2ae354985a9e32cd645fd4543540c",
+      "source_job": "anomaly.xarray7233-call1.canonicalprefix",
+      "source_result_sha256": "3e977c6323d2b6f6bfb8a300a42c7d7ab5e472fa77cac7acb4a02ad0996a5be3"
+    },
+    {
+      "mode": "served",
+      "job": "anomaly.xarray7233-call1.canonicalprefix.cap512.seed44",
+      "fixture_sha256": "8b82a867e7d3caff96ec056a6558e25da1289e6a39cf0ab599d65f81352367bc",
+      "source_job": "anomaly.xarray7233-call1.canonicalprefix",
+      "source_result_sha256": "3e977c6323d2b6f6bfb8a300a42c7d7ab5e472fa77cac7acb4a02ad0996a5be3"
+    },
+    {
+      "mode": "served",
+      "job": "anomaly.scikit-learn__scikit-learn-13135.call29.onset.cap512.seed42",
+      "fixture_sha256": "81a7a3e9ed29c693244311ba748a2afe72be7ef3200c2eee5005c799e2fd2bdf",
+      "source_job": "anomaly.scikit-learn__scikit-learn-13135.call29.onset",
+      "source_result_sha256": "76846bb9c09e8da5a5e4433d247fb8d4eb81a2f273d473890b829809befd446e"
+    },
+    {
+      "mode": "served",
+      "job": "anomaly.scikit-learn__scikit-learn-13135.call29.onset.cap512.seed44",
+      "fixture_sha256": "dc59c14755d834d03e13b1b9d60981c10a93e68d68375db6198fdea1df67bc78",
+      "source_job": "anomaly.scikit-learn__scikit-learn-13135.call29.onset",
+      "source_result_sha256": "76846bb9c09e8da5a5e4433d247fb8d4eb81a2f273d473890b829809befd446e"
+    },
+    {
+      "mode": "served",
+      "job": "anomaly.sphinx-doc__sphinx-11510.call28.onset.cap512.seed42",
+      "fixture_sha256": "6017230c7ee442868efa812d6942eb053a8596458217c4083fcbdc9c5b495416",
+      "source_job": "anomaly.sphinx-doc__sphinx-11510.call28.onset",
+      "source_result_sha256": "3d87b6ef11258fe86af43cc23e17eea3769c8b98f93272a244e2d9d58432b145"
+    },
+    {
+      "mode": "served",
+      "job": "anomaly.sphinx-doc__sphinx-11510.call28.onset.cap512.seed43",
+      "fixture_sha256": "0b221b8bed1e3a2badd1cb44ce5a6b392e6b133e7992ce0c31ee3d5ac6601fa6",
+      "source_job": "anomaly.sphinx-doc__sphinx-11510.call28.onset",
+      "source_result_sha256": "3d87b6ef11258fe86af43cc23e17eea3769c8b98f93272a244e2d9d58432b145"
+    },
+    {
+      "mode": "served",
+      "job": "anomaly.sphinx-doc__sphinx-11510.call28.onset.cap512.seed44",
+      "fixture_sha256": "918809423bd081602ac0731f9f1162118cdaf7a3f02e4df612ca10f301c7458b",
+      "source_job": "anomaly.sphinx-doc__sphinx-11510.call28.onset",
+      "source_result_sha256": "3d87b6ef11258fe86af43cc23e17eea3769c8b98f93272a244e2d9d58432b145"
+    },
+    {
+      "mode": "served",
+      "job": "anomaly.matplotlib__matplotlib-20488.call82.onset.cap512.seed42",
+      "fixture_sha256": "d37f66c61164152541887d1a42514cc881424c7c422cfeaaef2128f9d2ce8291",
+      "source_job": "anomaly.matplotlib__matplotlib-20488.call82.onset",
+      "source_result_sha256": "9849eda0369dbfb9ba505d87841df922ba12db57541f5fb020fec2b819cd538b"
+    },
+    {
+      "mode": "served",
+      "job": "anomaly.matplotlib__matplotlib-20488.call86.onset.cap512.seed44",
+      "fixture_sha256": "ccfb039b31e80e67e5ca2151d5591354ff379f083c8b8b65a87b058977ec73bd",
+      "source_job": "anomaly.matplotlib__matplotlib-20488.call86.onset",
+      "source_result_sha256": "96237c2a5fe032bc59aedef81c6282d530a8be471b4f8929774fea64222bff21"
+    },
+    {
+      "mode": "served",
+      "job": "anomaly.call88.canonicalprefix.cap512.seed42",
+      "fixture_sha256": "8b465b284f467e4164b522e09c49279b38a02a3a49a4290f1da82d7d0395b3c7",
+      "source_job": "anomaly.call88.canonicalprefix",
+      "source_result_sha256": "1c1780f56751a82900c9462eab1c3d48de9c435757ead347c40193bf4faac99c"
+    },
+    {
+      "mode": "served",
+      "job": "anomaly.call88.canonicalprefix.cap512.seed43",
+      "fixture_sha256": "08f609909410411dde6ddbcc4bac2d743bc171cb7b3b115a46bd9f0b8afa0cd2",
+      "source_job": "anomaly.call88.canonicalprefix",
+      "source_result_sha256": "1c1780f56751a82900c9462eab1c3d48de9c435757ead347c40193bf4faac99c"
+    },
+    {
+      "mode": "served",
+      "job": "anomaly.call88.canonicalprefix.cap512.seed44",
+      "fixture_sha256": "2cb5e4d976b3894e578b4d20a5a889baa70b0731884b59f7b661c8e98011b170",
+      "source_job": "anomaly.call88.canonicalprefix",
+      "source_result_sha256": "1c1780f56751a82900c9462eab1c3d48de9c435757ead347c40193bf4faac99c"
+    },
+    {
+      "mode": "served",
+      "job": "anomaly.pytest-dev__pytest-5787.call65.onset.cap512.seed42",
+      "fixture_sha256": "a55b6e0c8096dbe7b9a61a684d9abc21d9417df1bbdaeab2efb834270981a4df",
+      "source_job": "anomaly.pytest-dev__pytest-5787.call65.onset",
+      "source_result_sha256": "7676b72093b5a1808b96c6003946463838652efa1b932fb0246646615a9d0d47"
+    },
+    {
+      "mode": "served",
+      "job": "anomaly.pytest-dev__pytest-5787.call65.onset.cap512.seed43",
+      "fixture_sha256": "9853315f1cb7ecd482253689f4b45394c39a6a82349a3ad068ce962b69ce1442",
+      "source_job": "anomaly.pytest-dev__pytest-5787.call65.onset",
+      "source_result_sha256": "7676b72093b5a1808b96c6003946463838652efa1b932fb0246646615a9d0d47"
+    },
+    {
+      "mode": "served",
+      "job": "anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.cap512.seed42",
+      "fixture_sha256": "4d985d26a8864659a0cbe57f724dde11834bed5ee2e6fe3bbda27e5a736113dd",
+      "source_job": "anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset",
+      "source_result_sha256": "3e74085be0857abad5333a7f95820703b2702ba5bb49a94aedeb5798c75fa0c4"
+    },
+    {
+      "mode": "served",
+      "job": "anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.cap512.seed43",
+      "fixture_sha256": "d1f7df716beaf44b78b8307a763c955bf1c08f35bc36e7a7c328c8da744870a2",
+      "source_job": "anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset",
+      "source_result_sha256": "3e74085be0857abad5333a7f95820703b2702ba5bb49a94aedeb5798c75fa0c4"
+    },
+    {
+      "mode": "served",
+      "job": "anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.cap512.seed44",
+      "fixture_sha256": "194bff883b064fcad56e4e2034186035fc3774872107cb6f87aca44c00fcc634",
+      "source_job": "anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset",
+      "source_result_sha256": "3e74085be0857abad5333a7f95820703b2702ba5bb49a94aedeb5798c75fa0c4"
+    },
+    {
+      "mode": "served",
+      "job": "anomaly.sphinx-doc__sphinx-10323.call57.onset.cap512.seed42",
+      "fixture_sha256": "b9e91247affb3da0b3ca7a91c085fb287acf2b75df7bc6cb9346ad671676be7c",
+      "source_job": "anomaly.sphinx-doc__sphinx-10323.call57.onset",
+      "source_result_sha256": "9527afa682779a299e3ea7fc93b6e6d503a2eebbdbe4f0c5463715070722151c"
+    },
+    {
+      "mode": "served",
+      "job": "anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.cap512.seed44",
+      "fixture_sha256": "53535158288c9dccfbe98075a666f280e9fea4fd2fefb7c1c82a0b5e9e099a0c",
+      "source_job": "anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset",
+      "source_result_sha256": "c6262742bf0c1ff9c4f745f6ce38e66059a4b591f62c031883b6325c594cea7a"
+    },
+    {
+      "mode": "served",
+      "job": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap512.seed42",
+      "fixture_sha256": "99ad630f1cbd10ef4b4054839ae1566dcb4a5b2a05fafa390e44c16f27967e78",
+      "source_job": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset",
+      "source_result_sha256": "d85844356870a2090f0abb5f33f02e1aa24957f71e138319a86a449ae186b5f0"
+    },
+    {
+      "mode": "served",
+      "job": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap512.seed44",
+      "fixture_sha256": "cb6e63049cd3628e219b9dfcdcd843abd3ee43f9cd20c8fafe9f57e1eb6bf4de",
+      "source_job": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset",
+      "source_result_sha256": "d85844356870a2090f0abb5f33f02e1aa24957f71e138319a86a449ae186b5f0"
+    },
+    {
+      "mode": "served",
+      "job": "anomaly.sphinx-doc__sphinx-9461.call184.onset.cap512.seed42",
+      "fixture_sha256": "aba5c44c35fe091c9a32a3bb8e57574b750313242f486ae0752410bb7d72de25",
+      "source_job": "anomaly.sphinx-doc__sphinx-9461.call184.onset",
+      "source_result_sha256": "088d8222143af4931f659a112043d1faa8309d51d0b63f7711eb4fe93f28e2ba"
+    },
+    {
+      "mode": "served",
+      "job": "anomaly.sphinx-doc__sphinx-9461.call184.onset.cap512.seed43",
+      "fixture_sha256": "afba488745332c545674ef1a2a0a694337bb102ad9fc90bad38d26d09525b2b5",
+      "source_job": "anomaly.sphinx-doc__sphinx-9461.call184.onset",
+      "source_result_sha256": "088d8222143af4931f659a112043d1faa8309d51d0b63f7711eb4fe93f28e2ba"
+    },
+    {
+      "mode": "served",
+      "job": "anomaly.sphinx-doc__sphinx-9461.call184.onset.cap512.seed44",
+      "fixture_sha256": "c5ae27fbf4158feb881ce8d18c75d4d30dfae4e66869ed988e64da1c8cc43ef2",
+      "source_job": "anomaly.sphinx-doc__sphinx-9461.call184.onset",
+      "source_result_sha256": "088d8222143af4931f659a112043d1faa8309d51d0b63f7711eb4fe93f28e2ba"
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.sympy__sympy-13551.call1.onset.cap512.seed43",
+      "fixture_sha256": "c24b4e24ae4091674d614870cd826c09be6cde322415f347ac1c6cfafac0f1c7",
+      "source_job": "anomaly.sympy__sympy-13551.call1.onset",
+      "source_result_sha256": "87f57332b2867fff90c9c96972a28cc8f2d7f556000b22cca553de52e3de8149"
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.xarray7233-call1.canonicalprefix.cap512.seed42",
+      "fixture_sha256": "a4695dca2751f502acea68e96a49e857575139e522bcc356f3942ee047d9557f",
+      "source_job": "anomaly.xarray7233-call1.canonicalprefix",
+      "source_result_sha256": "966a6a8a5e3bef732cebcf570026e5ad022e1e49b32e8084f1c48f893e58c258"
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.xarray7233-call1.canonicalprefix.cap512.seed43",
+      "fixture_sha256": "847864ddb35e8c689e48bd11c6aa9f4f68f3b3f4ffaf9a99b1915ea0b753c307",
+      "source_job": "anomaly.xarray7233-call1.canonicalprefix",
+      "source_result_sha256": "966a6a8a5e3bef732cebcf570026e5ad022e1e49b32e8084f1c48f893e58c258"
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.xarray7233-call1.canonicalprefix.cap512.seed44",
+      "fixture_sha256": "bec9399830c76ef74c1026aea69c4bece3308208d8e40271ac42069704815ce1",
+      "source_job": "anomaly.xarray7233-call1.canonicalprefix",
+      "source_result_sha256": "966a6a8a5e3bef732cebcf570026e5ad022e1e49b32e8084f1c48f893e58c258"
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.scikit-learn__scikit-learn-13135.call29.onset.cap512.seed42",
+      "fixture_sha256": "b2bc1faecef939654bf2a604c330cceff4a8ea7d2858fb422e9acff931f1dabe",
+      "source_job": "anomaly.scikit-learn__scikit-learn-13135.call29.onset",
+      "source_result_sha256": "4a8b768621690557bd8c07c6568923b2c2c0265a18153d82490b1ea9328c1275"
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.scikit-learn__scikit-learn-13135.call29.onset.cap512.seed43",
+      "fixture_sha256": "68419746ea6b9dbfcf4a871f7caa486dcfff6991cec45c0d511aab69876adeb2",
+      "source_job": "anomaly.scikit-learn__scikit-learn-13135.call29.onset",
+      "source_result_sha256": "4a8b768621690557bd8c07c6568923b2c2c0265a18153d82490b1ea9328c1275"
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.sphinx-doc__sphinx-11510.call28.onset.cap512.seed42",
+      "fixture_sha256": "c46fa4ffad14851a3136b7205e4c4e25c3cb793ea8e0c265392f891c4c42da2e",
+      "source_job": "anomaly.sphinx-doc__sphinx-11510.call28.onset",
+      "source_result_sha256": "c1fb8adc8ada9b5b12dbb083ca24fb318af2b99c445f9030170a78fbe717cf3d"
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.sphinx-doc__sphinx-11510.call28.onset.cap512.seed43",
+      "fixture_sha256": "621365487b0a1f532c7710e6d2264f2b79bcbf44f910ba8710df948675f242a6",
+      "source_job": "anomaly.sphinx-doc__sphinx-11510.call28.onset",
+      "source_result_sha256": "c1fb8adc8ada9b5b12dbb083ca24fb318af2b99c445f9030170a78fbe717cf3d"
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.sphinx-doc__sphinx-11510.call28.onset.cap512.seed44",
+      "fixture_sha256": "1a8a971385d274bea8e848da05a1d39307df81e720e7b3b4df5e3ea221e7c467",
+      "source_job": "anomaly.sphinx-doc__sphinx-11510.call28.onset",
+      "source_result_sha256": "c1fb8adc8ada9b5b12dbb083ca24fb318af2b99c445f9030170a78fbe717cf3d"
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.call88.canonicalprefix.cap512.seed42",
+      "fixture_sha256": "53779e454626343faca396163f372ed18ec36b14458b65b1795d9b80fd36432e",
+      "source_job": "anomaly.call88.canonicalprefix",
+      "source_result_sha256": "6ec82d6186a79070f2a07ee96b0050a78f26ab4a7e3c9b23401a8e79cdd5ad27"
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.call88.canonicalprefix.cap512.seed43",
+      "fixture_sha256": "3eb151a6be67b90215c06f39cc8acf210d99109ed816bd4884ba6f0f3a29fd91",
+      "source_job": "anomaly.call88.canonicalprefix",
+      "source_result_sha256": "6ec82d6186a79070f2a07ee96b0050a78f26ab4a7e3c9b23401a8e79cdd5ad27"
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.call88.canonicalprefix.cap512.seed44",
+      "fixture_sha256": "54af7712a08f4919da80bb3248a6313dec9a4f4a021f8c7cd7555c281835cc42",
+      "source_job": "anomaly.call88.canonicalprefix",
+      "source_result_sha256": "6ec82d6186a79070f2a07ee96b0050a78f26ab4a7e3c9b23401a8e79cdd5ad27"
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.cap512.seed42",
+      "fixture_sha256": "f24115f027a19f574e3df1665d7d2c3b272c0f85d9199ab1926f6dedaa90c356",
+      "source_job": "anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset",
+      "source_result_sha256": "96c1df3e4f8b4e260e05863cf37af912259bd8cb346d1762fa18115e8034c5cf"
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.cap512.seed43",
+      "fixture_sha256": "8c8a6586a1c173dc971f16232f33f15936bde672840bffa81333101e8918afe6",
+      "source_job": "anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset",
+      "source_result_sha256": "96c1df3e4f8b4e260e05863cf37af912259bd8cb346d1762fa18115e8034c5cf"
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.cap512.seed44",
+      "fixture_sha256": "9d453e9ff53238cba6d68b71332b435066b1cb4cb5959302e7c9852a9fcd7d4f",
+      "source_job": "anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset",
+      "source_result_sha256": "96c1df3e4f8b4e260e05863cf37af912259bd8cb346d1762fa18115e8034c5cf"
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.call91.canonicalprefix.cap512.seed44",
+      "fixture_sha256": "c25fd57d2dae1374a4c4b240579caedfceb3e7ed12ab834d2eade010c2068fcd",
+      "source_job": "anomaly.call91.canonicalprefix",
+      "source_result_sha256": "f02685d64d3567dd6f357c5ac5a0e40cb44e4db2cb60eeaa77c7889904cc876e"
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.pytest-dev__pytest-5787.call65.onset.cap512.seed42",
+      "fixture_sha256": "a2e4a2d0a9c30344afd41894a321846686982ff507ed3f1b9d5dd9d480d539e6",
+      "source_job": "anomaly.pytest-dev__pytest-5787.call65.onset",
+      "source_result_sha256": "e4b21dbb6fc1fa53b8fc69276b79020796eb640747052ccd429652ea32f41f24"
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.pytest-dev__pytest-5787.call65.onset.cap512.seed43",
+      "fixture_sha256": "cdd5b1da74112bcd8d1ff91c71eb71185332b5a42f2ca5af15fda1247b428d34",
+      "source_job": "anomaly.pytest-dev__pytest-5787.call65.onset",
+      "source_result_sha256": "e4b21dbb6fc1fa53b8fc69276b79020796eb640747052ccd429652ea32f41f24"
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.pytest-dev__pytest-5787.call65.onset.cap512.seed44",
+      "fixture_sha256": "b3513f3bd6d270d9d4b65d7b62e7b487ad041eeb0c1e112da2ee7778b30de8f5",
+      "source_job": "anomaly.pytest-dev__pytest-5787.call65.onset",
+      "source_result_sha256": "e4b21dbb6fc1fa53b8fc69276b79020796eb640747052ccd429652ea32f41f24"
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.cap512.seed42",
+      "fixture_sha256": "bfe185462a4f605a37f6c54fe05cb1465ef4f5a429b522a7578e593347db4888",
+      "source_job": "anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset",
+      "source_result_sha256": "25456a1ebc3019768fc53c5b2ab9895fd389c4aa3201d68041162588154847f1"
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.cap512.seed43",
+      "fixture_sha256": "523ef5cb9d5e24a13f55ca6a5dd5f94b0901b7a31c52f005deaa07a364913222",
+      "source_job": "anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset",
+      "source_result_sha256": "25456a1ebc3019768fc53c5b2ab9895fd389c4aa3201d68041162588154847f1"
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.cap512.seed44",
+      "fixture_sha256": "c19de56c40b03597a1cb4925d2db2ed2484c20ef9fdd0f9bc6b652ac5e427193",
+      "source_job": "anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset",
+      "source_result_sha256": "25456a1ebc3019768fc53c5b2ab9895fd389c4aa3201d68041162588154847f1"
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.sphinx-doc__sphinx-10323.call57.onset.cap512.seed42",
+      "fixture_sha256": "73900395540b408c3bdb3689ef5561eed2d4d9a1976a6a1b19ec1545e6d0eb2a",
+      "source_job": "anomaly.sphinx-doc__sphinx-10323.call57.onset",
+      "source_result_sha256": "1063260ce5a9bb63b7209fc68fa8677bfa2383e5eb8d2898b05b1e2ee1db962c"
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.sphinx-doc__sphinx-10323.call57.onset.cap512.seed44",
+      "fixture_sha256": "09926a71feec07d7cde94dd30e60a80e65d0b7a14a973fdf18f8fbcefb20c357",
+      "source_job": "anomaly.sphinx-doc__sphinx-10323.call57.onset",
+      "source_result_sha256": "1063260ce5a9bb63b7209fc68fa8677bfa2383e5eb8d2898b05b1e2ee1db962c"
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.cap512.seed42",
+      "fixture_sha256": "5db1e4b3cbed93ccc61555607e56bc504f02406efd9d73a0f3e19108ff6230c4",
+      "source_job": "anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset",
+      "source_result_sha256": "56ca8669e2f71df9240ee9d5f1f70efede8407541dd67e236ea80a4e782862e0"
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.cap512.seed43",
+      "fixture_sha256": "385f43eba61bad6418fdcf358fafe36b4d0a8914723fc27e6246c34e3f8566f2",
+      "source_job": "anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset",
+      "source_result_sha256": "56ca8669e2f71df9240ee9d5f1f70efede8407541dd67e236ea80a4e782862e0"
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.cap512.seed44",
+      "fixture_sha256": "79c8915ea3528eafc8f357dc0d32956296a5543ad27d990d4fddbc9d86d1fc2e",
+      "source_job": "anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset",
+      "source_result_sha256": "56ca8669e2f71df9240ee9d5f1f70efede8407541dd67e236ea80a4e782862e0"
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.sphinx-doc__sphinx-9461.call184.onset.cap512.seed42",
+      "fixture_sha256": "898a754e2b6e835d5f1cea02a502e80d0e51fc12dbce0e805439bc6e9f9b037a",
+      "source_job": "anomaly.sphinx-doc__sphinx-9461.call184.onset",
+      "source_result_sha256": "df30cdd4892f66a691aa57e9921b71f60ce1509e424b4854dd61ba2e834c053e"
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.sphinx-doc__sphinx-9461.call184.onset.cap512.seed43",
+      "fixture_sha256": "f45ec2fe64ae121be564c1f22dc055ff2f1ee635cb45c1c5df66682120e24a96",
+      "source_job": "anomaly.sphinx-doc__sphinx-9461.call184.onset",
+      "source_result_sha256": "df30cdd4892f66a691aa57e9921b71f60ce1509e424b4854dd61ba2e834c053e"
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.sphinx-doc__sphinx-9461.call184.onset.cap512.seed44",
+      "fixture_sha256": "95d3e225ab0c9e832d12619923aa29ebfe34417f5bf988dde60d333a1ca88012",
+      "source_job": "anomaly.sphinx-doc__sphinx-9461.call184.onset",
+      "source_result_sha256": "df30cdd4892f66a691aa57e9921b71f60ce1509e424b4854dd61ba2e834c053e"
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap512.seed42",
+      "fixture_sha256": "3a6b0c57f83a1ba0897b504e1e7cb570559126c40e4ad12a148b8080c50682b8",
+      "source_job": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset",
+      "source_result_sha256": "a37b39be0e17b017557ae8b583a2172f4b1ce0aa1cd5e292af02024d7f8053cc"
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap512.seed43",
+      "fixture_sha256": "4fee21f0bb1623ca61a52629e30ac0beae3f77581213970d77cdcbf9eff421b7",
+      "source_job": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset",
+      "source_result_sha256": "a37b39be0e17b017557ae8b583a2172f4b1ce0aa1cd5e292af02024d7f8053cc"
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap512.seed44",
+      "fixture_sha256": "14d9b8ff9cf911edba111eccd2156f1a1dca13861e2164c65fe554056749b6eb",
+      "source_job": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset",
+      "source_result_sha256": "a37b39be0e17b017557ae8b583a2172f4b1ce0aa1cd5e292af02024d7f8053cc"
+    }
+  ],
+  "review_coverage": "Current coordinator-adjudicated cases only; refresh after remaining full review.",
+  "gates": [
+    "Finish active device queue; no overlap.",
+    "Independent fixture review and cost gate before admission.",
+    "Read extended outputs; any still-progressing cap remains inconclusive and needs further extension."
+  ]
+}

@@ -1,0 +1,38 @@
+{
+  "status": "root_raw_text_and_pinned_prefix_review_pending_parser",
+  "rows": [
+    {
+      "case": "anomaly.sphinx-doc__sphinx-10323.call70.onset",
+      "mode": "full",
+      "seed": 42,
+      "tokens": 200,
+      "verdict": "pending_parser",
+      "exact_native_motif": false,
+      "reason": "Coherent abandonment summary without visible tool call; stock parser check pending, no contraction loop.",
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/full/anomaly.sphinx-doc__sphinx-10323.call70.onset.json",
+      "source_sha256": "a441ba44ab8294f359c1ea864d045cc4e6fb5d123930684db4b02ee3c1749f77"
+    },
+    {
+      "case": "anomaly.sphinx-doc__sphinx-10323.call70.onset",
+      "mode": "full",
+      "seed": 43,
+      "tokens": 207,
+      "verdict": "pending_parser",
+      "exact_native_motif": false,
+      "reason": "Coherent abandonment summary without visible tool call; stock parser check pending, no contraction loop.",
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/full/anomaly.sphinx-doc__sphinx-10323.call70.onset.json",
+      "source_sha256": "a441ba44ab8294f359c1ea864d045cc4e6fb5d123930684db4b02ee3c1749f77"
+    },
+    {
+      "case": "anomaly.sphinx-doc__sphinx-10323.call70.onset",
+      "mode": "full",
+      "seed": 44,
+      "tokens": 191,
+      "verdict": "pending_parser",
+      "exact_native_motif": false,
+      "reason": "Coherent abandonment summary without visible tool call; stock parser check pending, no contraction loop.",
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/full/anomaly.sphinx-doc__sphinx-10323.call70.onset.json",
+      "source_sha256": "a441ba44ab8294f359c1ea864d045cc4e6fb5d123930684db4b02ee3c1749f77"
+    }
+  ]
+}

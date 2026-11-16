@@ -1,0 +1,22 @@
+{
+  "status": "production_resume_pass_root_reviewed",
+  "at_unix": 1794772944.4008267,
+  "cases": 14,
+  "passed": 14,
+  "all_top1_agreement": 1.0,
+  "minimum_pcc": 0.9998981511531875,
+  "thresholds_unchanged": true,
+  "applicable_negative_controls": 24,
+  "negative_controls_failed_as_expected": 24,
+  "trace_allocation_tracking": 1,
+  "error_signatures": [],
+  "completion": {
+    "start_unix": 1794772608.4067268,
+    "end_unix": 1794772881.1391478,
+    "exit_code": 0,
+    "wall_seconds": 272.7324209213257
+  },
+  "source_sha256": "878c61052aee1ddd6f4afc78c4e4bbcda2c894a5a5878d01531f860e97006d99",
+  "result_sha256": "fcd80767bec79343663d0ae56621b659ad8bab0246aa7d30c77fde920ef867bc",
+  "scope": "Unmodified readiness module and normal production geometry, no post-construction override. P19 candidate remains unselected pending fresh-path acceptance/anomaly/serving disposition."
+}

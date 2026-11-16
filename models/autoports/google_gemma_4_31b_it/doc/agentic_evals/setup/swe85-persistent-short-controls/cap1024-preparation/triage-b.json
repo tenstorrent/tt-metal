@@ -1,0 +1,68 @@
+{
+  "status": "incremental_cap1024_semantic_triage",
+  "rows": [
+    {
+      "job": "anomaly.pytest-dev__pytest-7432.call19.onset.optional-suffix512.cap1024.seed42",
+      "mode": "served",
+      "seed": 42,
+      "verdict": "other_anomaly",
+      "token_count": 1024,
+      "original_first512_token_ids_match": true,
+      "evidence": {
+        "generated_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/cap1024-preparation/runs/served/anomaly.pytest-dev__pytest-7432.call19.onset.optional-suffix512.cap1024.seed42.json",
+        "generated_text_field": "$.free_running[0].text",
+        "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/cap1024-preparation/fixtures/served/anomaly.pytest-dev__pytest-7432.call19.onset.optional-suffix512.cap1024.seed42.private.json",
+        "conditioning_field": "$.prompt_token_ids",
+        "conditioning_decoded_tail": "}<tool_response|><|channel>thought\nWait, if `exec_module` is not called at the module level, why is it failing during `__import__`?\nLet's look at the traceback again.\n```\n  File \"/testbed/src/_pytest/config/__init__.py\", line 689, in import_plugin\n    __import__(importspec)\n  File \"<frozen importlib._bootstrap>\", line 1176, in _find_and_load\n  File \"<frozen importlib._bootstrap>\", line 1147, in _find_and_load_unlocked\n  File \"<frozen importlib._bootstrap>\", line 690, in _load_unlocked\n  File \"/testbed/src/_pytest/assertion/rewrite.py\", line 161, in exec_module\n    source_stat, co = _rewrite_test(fn, self.config)\n                      ",
+        "native_chosen_field": "$.continuations.chosen",
+        "native_chosen_decoded_head": "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^",
+        "native_motif": "long caret run (`^` characters) in reconstructed native reply",
+        "generated_repeated_motif": "After traceback and an interval of reasoning, the generated reply repeats “Wait, if the function `exec_module` is being called, it’s because it’s being called as a function. But in the source code, it’s a method.” many times. The long native caret run is absent; this is a distinct semantic loop."
+      },
+      "confidence": 0.95,
+      "cap_notes": "Exactly1024 generated tokens. Repetition is already clear at cap, so this is a repeated-loop anomaly rather than an unfinished coherent response; do not treat it as reproduction of the caret motif."
+    },
+    {
+      "job": "anomaly.psf__requests-5414.call11.onset.optional-suffix512.cap1024.seed43",
+      "mode": "full",
+      "seed": 43,
+      "verdict": "other_anomaly",
+      "token_count": 1024,
+      "original_first512_token_ids_match": true,
+      "evidence": {
+        "generated_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/cap1024-preparation/runs/full/anomaly.psf__requests-5414.call11.onset.optional-suffix512.cap1024.seed43.json",
+        "generated_text_field": "$.free_running[0].text",
+        "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/cap1024-preparation/fixtures/full/anomaly.psf__requests-5414.call11.onset.optional-suffix512.cap1024.seed43.private.json",
+        "conditioning_field": "$.prompt_token_ids",
+        "conditioning_decoded_tail": " `UnicodeError` (specifically `urllib3.exceptions.LocationParseError` which seems to wrap it or be related) instead of `requests.exceptions.InvalidURL`.\n\nWait, in my reproduction script:\n```python\nimport requests\nimport traceback\n\ntry:\n    requests.get(\"http://.example.com\")\nexcept Exception:\n    traceback.print_exc()\n```\nThe output was:\n```\nTraceback (most recent call last):\n  File \"/testbed/reproduce_issue.py\", line 5, in <module>\n    requests.get(\"http://.example.com\")\n  ...\n  File \"/opt/miniconda3/lib/python3.11/site-packages/urllib3/util/connection.py\", line 68, in create_connection\n    return six.raise_from(\n           ",
+        "native_chosen_field": "$.continuations.chosen",
+        "native_chosen_decoded_head": "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^",
+        "native_motif": "long caret run (`^` characters) in reconstructed native reply",
+        "generated_motif": "Generated plain-text ` ```bash` / ` ```output` transcript claims `pip show requests urllib3` returned specific versions and then presents a second invented traceback. These are not canonical tool calls/responses and are not grounded in any executed command. The native caret-run motif is absent. The reply later continues to a second reproduction script and traceback, but the fabricated transcript is an independent semantic/protocol anomaly."
+      },
+      "confidence": 0.94,
+      "cap_notes": "Exactly1024 tokens and ends mid-traceback, so task completion remains unresolved; classify the already-visible fabricated command/output exchange as other_anomaly, not native-motif reproduction. No generated commands were executed."
+    },
+    {
+      "job": "anomaly.psf__requests-5414.call11.onset.optional-suffix512.cap1024.seed44",
+      "mode": "full",
+      "seed": 44,
+      "verdict": "other_anomaly",
+      "token_count": 1024,
+      "original_first512_token_ids_match": true,
+      "evidence": {
+        "generated_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/cap1024-preparation/runs/full/anomaly.psf__requests-5414.call11.onset.optional-suffix512.cap1024.seed44.json",
+        "generated_text_field": "$.free_running[0].text",
+        "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/cap1024-preparation/fixtures/full/anomaly.psf__requests-5414.call11.onset.optional-suffix512.cap1024.seed44.private.json",
+        "conditioning_field": "$.prompt_token_ids",
+        "conditioning_decoded_tail": " `UnicodeError` (specifically `urllib3.exceptions.LocationParseError` which seems to wrap it or be related) instead of `requests.exceptions.InvalidURL`.\n\nWait, in my reproduction script:\n```python\nimport requests\nimport traceback\n\ntry:\n    requests.get(\"http://.example.com\")\nexcept Exception:\n    traceback.print_exc()\n```\nThe output was:\n```\nTraceback (most recent call last):\n  File \"/testbed/reproduce_issue.py\", line 5, in <module>\n    requests.get(\"http://.example.com\")\n  ...\n  File \"/opt/miniconda3/lib/python3.11/site-packages/urllib3/util/connection.py\", line 68, in create_connection\n    return six.raise_from(\n           ",
+        "native_chosen_field": "$.continuations.chosen",
+        "native_chosen_decoded_head": "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^",
+        "native_motif": "long caret run (`^` characters) in reconstructed native reply",
+        "generated_motif": "The reply completes the prefix traceback, later emits another full traceback as an asserted result of running a script, without any canonical tool call or tool response. It includes prose explicitly claiming “The output was” and fabricated exception/output contents. This repeats supplied traceback material but is distinct from the native caret burst; commands were not executed."
+      },
+      "confidence": 0.9,
+      "cap_notes": "Exactly1024 tokens; reply is still advancing through diagnosis and ends mid-sentence. The invented tool/output transcript is already a distinct semantic/protocol anomaly; task completion remains unresolved. No generated code or commands were executed."
+    }
+  ]
+}

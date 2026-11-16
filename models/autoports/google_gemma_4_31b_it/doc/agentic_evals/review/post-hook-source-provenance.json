@@ -1,0 +1,2339 @@
+{
+  "created_unix": 1794778448.5367088,
+  "status": "post_format_source_provenance_verified",
+  "snapshot_manifest": "review/pre-hook-source-snapshot.json",
+  "scope": "Exact pre-hook bytes retained locally; historical run pins are not rewritten. Formatting and import sorting/unused-import removal occurred after fixed108 and extensions closed. Current full-BF16 Q32 controls separately pinned formatted producer sources. Copied task source files restored exactly and excluded from commit.",
+  "counts": {
+    "files": 290,
+    "exact_bytes_unchanged": 50,
+    "exact_ast_equal": 110,
+    "all_non_import_ast_equal": true,
+    "copied_task_sources_restored": 45
+  },
+  "import_diff": "review/post-hook-import-diff.json",
+  "import_review": "No added import targets. All six changed non-document Python ASTs differ only by import ordering; no removed imports there. Removed unused imports are confined to diagnostic preparation scripts: standard library and one unused swebench.harness.grading import. Old scripts and measured execution bytes retained in snapshot.",
+  "test_annotation": "Explicit hook-supported allow-pytest.raises comments explain CPU-only --noconftest tests without device error fixture; no assertions changed.",
+  "validation": "review/post-format-host-tests.json:62passed plus60subtests, no failures; tinyCPUmodel serialized after TT controls.",
+  "files": [
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/admit_swe85_precision_actions.py",
+      "original_sha256": "cc4bcb9c38f01937b7c7d65ed54888698a137a8f8a9ce7d92af3e38cb4da9d41",
+      "current_sha256": "40f64e2823f6aa797c5a017ac40dc5a4766c3d40deff01db70d8d3555f6e025c",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/audit_swe85_protocol_outputs.py",
+      "original_sha256": "c049003433ff2fa694206e7f5942a9551f8473763d4d3788c0aeeaa1e35417e9",
+      "current_sha256": "da15bcc85146e97046191306de076e48d9a5239931acbda8d93e9ca82ffda502",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/audit_swe85_reply_protocol.py",
+      "original_sha256": "c6e0e1467eaf4b18ad0ab3c9c1c7b85cdc0dabce27bc136532837901c6ada3f6",
+      "current_sha256": "b6d9d99e14735aeb2c5c73fa2f9520a97ad22806b07b3f3539bd2421a7eb431d",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/check_extended_gpqa_response_logging.py",
+      "original_sha256": "f57bb0fb6ebcba63534859b0c1dca9361ea306ab4a6152de7a4920a0fa98dbbd",
+      "current_sha256": "00eba90f740891dfd80e318fda7670e29478948a7d35e10965253429d9a4d7ba",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/check_head_bfp8_response_logging.py",
+      "original_sha256": "b79362e424f899968829f07ff33d74382e3568e26b1b957ad3e6113209187e45",
+      "current_sha256": "6d732669dbd2afd0f904eab784ae32096f8d603ea3d52a9800e3cab93929086c",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/check_headline_head_bfp8_response_logging.py",
+      "original_sha256": "cf8f965ef1aa6fd8b5e3a1f6fa4c073a98df020c6fdade9bda149ce2c0414c93",
+      "current_sha256": "8c95e0d8a6424e1cf0bea918d47d4f3ff31b03d1365d5d29fd4234a14f31c27c",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/check_swe85_post_gpqa_controls_response_logging.py",
+      "original_sha256": "6fb27d51faea0f745a52d283e95647d14f7288719f85039eec9f73abb62de435",
+      "current_sha256": "7e7ebb1be2221d55bf7a1646ee6e071e5aad50e017e4ea1094d23c9f21eb8a0c",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/check_swe_extended85_response_logging.py",
+      "original_sha256": "0b6c871d5d29837d02087ca2fcef397c0250ac6a898d58adceb947b6503ba766",
+      "current_sha256": "4940a3afc7ed4d9f1132fbaf6bda7fa37be2aa5c793c189b254a7fc97ce031b3",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/check_swe_ready_response_logging.py",
+      "original_sha256": "d0df949434910d5a8105237e2460692287fce218a296ef386be763592aaed354",
+      "current_sha256": "1cdda17307f7dd8ed618f3d0018b16569cff9ffc904772caabf12f16ec182f57",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/check_swe_response_logging.py",
+      "original_sha256": "61f5f0c8e38022eb9e958d058cbba8eae81c7c656c9bd90e32fd5871bed45920",
+      "current_sha256": "154eada681a755accae16407e009a94efb50ddd676e8e45f46601b8bb3a0e6e7",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/collect_swe85_workload.py",
+      "original_sha256": "10f35dd0a84ab4385c10a2c113786fdf16004cc18cccf02944844f8e12e3b7a8",
+      "current_sha256": "447d06169b2c020d4b24a1e84040e7ab60979e6c8bef12644d1ef878e4f5bb1a",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/estimate_swe85_controls.py",
+      "original_sha256": "f91ca01018a9683b83a9ba58cb267b50991cbdd2124da69aebea084ebf5f64e3",
+      "current_sha256": "0ad7f908d52ecd432c5bc414ab4461afda28ab80a631465cf18e4a1590f6dcbe",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/extract_swe85_correct_action_sources.py",
+      "original_sha256": "39f9f91c7b4dc2da76285c35ef69c4d840364eb5159a526ca81eb7647b4be97b",
+      "current_sha256": "9c6ef38f1df8f502d4b5c42f4401551ce8c42fdda26662ddef6a18b09e865439",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/finalize_swe85_xarray3095_supplement.py",
+      "original_sha256": "07544385ad8a05b51decbabdce428eda74fecc0acfdb9160d16a320b9d72fb0d",
+      "current_sha256": "bac92fb96bedaab33f63198915dae8b25815a27f31180c7e2284df8f86248c5c",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/generate_gpqa_recipe.py",
+      "original_sha256": "204fb0c1a4fad6a1403835bbd372fd531f28ab6ce218d7b3f418573291658f4f",
+      "current_sha256": "7ab018160ac6a41bb59e818ba8c3bf6775c1078614e937a9d06e28286e10242e",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/generate_swe_recipe.py",
+      "original_sha256": "62d4c4e83c6e35946f3a3d6b771b1d815beb30a3106d57b2cd03521e8e74cf30",
+      "current_sha256": "1836a475b2801944e0f167fe5bef240b3fb14577e53f5dfb3a7e6ccbf637b1cb",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/gpqa-bracket-fix/check_response_logging.py",
+      "original_sha256": "986f239109648de3d6a984ba178e6f0bc460afee4f6b1a02589a5289de68892a",
+      "current_sha256": "c6563c9976643cc1baf86940831227d1f16b56f0dffb533d45dabb550ddc3fce",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/gpqa_host_preflight.py",
+      "original_sha256": "c5420043f705f0679612754920156d2a17d36ad4bea638c6bc1467a6343d76f5",
+      "current_sha256": "117d2e04506a9f93e6a2f17088b7963726bbbfb1629835b5df5fef748ecfad09",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/index_swe85_completed_anomalies.py",
+      "original_sha256": "9278fcb894b04f76c77d983c9b03c59e1d9a3e56025adc8aa81b86f79ffd9c08",
+      "current_sha256": "2b2f90b7494b6cf341c05f343a266c185298f9a6b2f82d99edd8f80678de6726",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/inspect_swe85_sympy13480_protocol.py",
+      "original_sha256": "5c8261aee4b97b86e8710caaf13164cb50051d4548c3cdae85f78103987d971a",
+      "current_sha256": "d8a0624d66f38bfea0a8792f9f6730cc74672643fc708091d90a307cdf845b6f",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/offline-verifier-build/parser.py",
+      "original_sha256": "0dcf7dd8028ff329ce430a28c78e82e93528db17d26b468bb0f10c1a9b083e7c",
+      "current_sha256": "65b3e98749b0de4ddd285182759fe2faee16d71a30e66c69fef1893ddb229c73",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/offline-verifier-build/relocate.py",
+      "original_sha256": "79f5359746105a515da6c38d9d5f7c9341a56e8a744e4be21fbb67d8593a0d3f",
+      "current_sha256": "a486f87ddc5950987b2b4e3e37766a408dddc56d4bf51b4bfd7776674848bbf2",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/p19-resume-investigation/run_resume_q32_with_positions.py",
+      "original_sha256": "9a4c6b6384b258d001b0f1c62e5fb185a5e4ee6f1d2d4b49c3ec42da53bbd7fc",
+      "current_sha256": "81d4e161b93ee1e9a97cae00f93663284eccc3623ec1fa6ff3900dbd10f197bc",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/p19-resume-investigation/run_resume_with_positions.py",
+      "original_sha256": "449f2e5f754569a875a4bd8ddce7fcf3dfa10f408ec2ae498e5c1b111d46b763",
+      "current_sha256": "18bdd08fa2d9b2410d91aec3a7134c9174a291c7d19728cb4600bc4d6262b902",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/precision-pareto/plot_stage12_pareto.py",
+      "original_sha256": "b6739141ae6dd7574dae86f56da420f7ff0f672196a92df84358648bce4401a7",
+      "current_sha256": "4f8d08d8e6d17db192052fc5c54db43c79ae068d4f042865eb19668811bc43c6",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/prepare_fixed10_offline.py",
+      "original_sha256": "1967905385be2f1cf9003ec6dfca45c471e517a77e3ab540ad5cb384defbba21",
+      "current_sha256": "9f0b70405609f3bd55416e4f8f8ca5e272b0160f6815ff9700826e455c794207",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/prepare_requests2931_control.py",
+      "original_sha256": "4e962d577188b5b9a116979ee128d0011d3941debc97ecd53e1c695ddc968785",
+      "current_sha256": "77f8e43a8cce3cace3a21e5e3f4165db32f3c67b5b0c3c54c9773301f6ddfdf1",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/prepare_swe65_candidate.py",
+      "original_sha256": "50f044c05d574e597cb49c060e7bbc94b6773dfa1e02b0904225792d95e1e9c3",
+      "current_sha256": "261f3ef66c68b01a1fbb8ed37185199f41f01130126632cd5e6154386b9eeb5f",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/prepare_swe85_adaptive_suffix2048_cap1024.py",
+      "original_sha256": "999295ee64882eaeb806f41bb6afb8666d95d501d5200aaddeafcaee3d8aea4a",
+      "current_sha256": "edd8e3c74c952c736dadac7e09b6e46986580e0ed853cca01ce6dbdb78e59437",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/prepare_swe85_cap_extensions.py",
+      "original_sha256": "c20f6827b7b9e8a03ca67f54b96ed84cb807ff99b154d62ba61de95c6d6c5e0b",
+      "current_sha256": "c628719b54be6b2627f18b122f0ac52bdf24a2a1b2ec53eff362ca6fd0f43baf",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/prepare_swe85_correct_action_candidates.py",
+      "original_sha256": "81a39828e6d49c4d3d9c7f5358d87ebd949c6a75e1103675e910239420bd9264",
+      "current_sha256": "b5db5961f7c9556f59f5b55f95ca81c328a946df5e96fb0085cdf43c8bbb97b6",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/prepare_swe85_fetch_controls.py",
+      "original_sha256": "af1c8907ba52c096a45f43635826c02ca3e39550a286d4d7177b76e97ac18677",
+      "current_sha256": "77499ca4d8be00385a50ade36810bd8461aa688c229b4d3eb21da8d334b38566",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/prepare_swe85_final_rosters.py",
+      "original_sha256": "be6e584a97d3c846346fac6df55a95ecac1a2c89f3aaffe09c4c8eb0e27ea846",
+      "current_sha256": "1ff83b3ed8c12fd0efd038b3eb83d6493c08d0f0d9fd96e6ae3494e3a70f0972",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/prepare_swe85_full_replies.py",
+      "original_sha256": "abd6a148be173d9af9b81b7fbb8140c8a220e44074b1e96df6c1a631d26eed5e",
+      "current_sha256": "1bc88d67c9d3300fa874818cd83c449a9027f55055adc48be67eba510e13e5e0",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/prepare_swe85_gap_correct_candidates.py",
+      "original_sha256": "0e705096def3a77b66e2556ce15c7ad3f37531d4a23badef02dcd455269d1386",
+      "current_sha256": "9eb64870decad7cd9d6ac61297fd8489b134a10a407e13fcb9b8546e9d7101ab",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/prepare_swe85_getall_call1_onsets.py",
+      "original_sha256": "802affcd5046f41222454af21656dcb4becd3b478f2fd664b13e195c80540928",
+      "current_sha256": "4686b4b55efb9df11b6b29e1c4c840f90c3325cfadd5a26e09d06a41b98cca79",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/prepare_swe85_optional_suffix512.py",
+      "original_sha256": "3265ef22814b9a61a8c385dd274928fdcb37e464da3f7bb3facee64a8b186ec9",
+      "current_sha256": "54c411d04e1c3e34c7efdf01b80a3958f74d685ee944f787e00a25ccd905c35b",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/prepare_swe85_prior_repair_candidates.py",
+      "original_sha256": "39ac2c37da8e32a7c961fe618e06d1a2cd229f1968b014259e97135bfecfc4aa",
+      "current_sha256": "3e07207a42b5cd23d8779170924edffc80c493cc5b8678d3f3893973c449f0c5",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/prepare_swe85_pylint4970_call55_candidate.py",
+      "original_sha256": "82ebbf0a58bed85a4d3a781fb8c6ce5eb0edb5081c18f23cb8f76ed8bb73d3a5",
+      "current_sha256": "f0d98f8e9ff4a1e7cfeeb61814df29a6d9b385f1777f10a06aabe6c629710ae0",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/prepare_swe85_pytest5787_onsets.py",
+      "original_sha256": "de4bc6d47085b202131b8dc42bf242d46dcf695557d1226d2a7279562d0c0bb1",
+      "current_sha256": "645f4a38aadfe23742e258f6facac099493b8aaa92a6465f7f26b1d0c4cb2cb0",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/prepare_swe85_remaining_correct_candidates.py",
+      "original_sha256": "d22ff43dfc3a49d8552ea052417b2318be136fd9e82dffeef6983d80f7ddd868",
+      "current_sha256": "dc58fddc00d838891fe29886d7326e9fd21c7e485a1d5f0627bd252e1eb2e046",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/prepare_swe85_second_cap_extensions.py",
+      "original_sha256": "a6a855fdef35026c4711af86bf03a217ff0dcbb6b95c1a8af41d4109ffd66e67",
+      "current_sha256": "cc303e67728ecfa08fb9e39b5eb0449c9580750f62f94182a8590991cbea3217",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/prepare_swe85_sklearn10908_correct_candidate.py",
+      "original_sha256": "5eef5fd65f345dd3ce959139d499f13b055f613edf734ef56476b62e6a191a97",
+      "current_sha256": "bff44d1e17398193b120eff6e1d352e222c5d9e3b2a72c3b9b525ba5b0029c0e",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/prepare_swe85_sklearn14983_correct_candidate.py",
+      "original_sha256": "29bb3d74a1f5aa6884c6ab4d33491fcd520773f4a94dbb00fcbaf94cb2eaa900",
+      "current_sha256": "0cc591760490fb6d58d53adcfe0a7b3f195ebe7b65c64979149db9fb965f9f1c",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/prepare_swe85_third_cap_extensions.py",
+      "original_sha256": "7e5b3bd0c4f2f7fdc4ea0b20b5d4ec9322b497172d72fef53cfc9436c9cd514e",
+      "current_sha256": "c375abf29a37adc978fd452819fedc1ab9c2fecd7d952c11cc19ae14cd43b89a",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/prepare_swe85_tt_execution_plan.py",
+      "original_sha256": "7d4f60fc34ad1910d6a294461d64e1c657ad07a62a93ae77889e8de285ea702e",
+      "current_sha256": "fda03be93cb2e820d31d84cbbdd70f136dda70d431f3b11df2b0bf073baf98f2",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/prepare_swe85_xarray3095_chosen_state.py",
+      "original_sha256": "8de84f86166fdc81a745067fb58258c1409cc4e91a8037e31a8973de5a12ce0b",
+      "current_sha256": "5630b69cab7ac39c9b54249098de4998c3373daf014c1b4fb1082950d0b53c9d",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/prepare_swe85_xarray3095_correct_candidate.py",
+      "original_sha256": "503320bced2c0422f8de6a3e5ec849f365a76a4bec7113710c487a94c5951911",
+      "current_sha256": "3a39f6c4ba014ba46691aa14b95a1018ef07e20b44149b1bb39382161443217b",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/prepare_swe85_xarray3095_semantic_full.py",
+      "original_sha256": "49295d29b19d7b8070eef8d2df5afaf6e022cabb20a7ac8d231b63c66d231ca9",
+      "current_sha256": "30f72c24b989a1b1174c28a3c8ebaa3807cb7542ae0cf236f72cf2ed89316649",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/reconstruct_gap_states.py",
+      "original_sha256": "aaef16c2af5347c9cf152c95bf11bd8467ec758fef693bbceb890210641fc87f",
+      "current_sha256": "3bb17aa756c278adfda4c6212743ba4362acca36ea1ebf9198e8329c711bac36",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/recover_pylint4661_verifier.py",
+      "original_sha256": "4860dc2722832793f155784197649d91f8c1fb8b7d352e288c573dee77a88091",
+      "current_sha256": "61f0dd81a3342cd9581f6bfa5856fad9f0b777cfbef813f3481ec6bc1eb8a1db",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/recover_requests_verifier.py",
+      "original_sha256": "1dd0c41a9494f7ce08ea4988e8f1b51e716a5b3004f5dc5abd3961ca132749c7",
+      "current_sha256": "d498ac2798d208c76b70918367212e6c8f61a1ed4b0668ec4452d94e51a82ea6",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/recover_swe_verifier_offline.py",
+      "original_sha256": "0d41ff463ea9ee956aad2c954357d49ac673ce3f4f2b381ebd37025932fed6e7",
+      "current_sha256": "47b4c1fd98a3fc626aac421b819715305d9f0a85179ab77819c0dba81eaa9040",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/recover_swe_verifier_parser.py",
+      "original_sha256": "553258600549be99b3d66a234d0c332a1f83b2145857cec2135096fc5c79279d",
+      "current_sha256": "b1d6f42c93398efb5c82f3afe97428692714c448299c7be30a65b906fc00e8ba",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/requests-recovery-source/1724/base/requests/models.py",
+      "original_sha256": "b42782878e5e032739173057a1b7c50731156bea7ee76c288ca6a053df9c7a03",
+      "current_sha256": "b42782878e5e032739173057a1b7c50731156bea7ee76c288ca6a053df9c7a03",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/requests-recovery-source/1724/submitted/requests/models.py",
+      "original_sha256": "df9df5429898fb36c538605c4986228ea90d33f38024bc6acad54d97dee0cc17",
+      "current_sha256": "df9df5429898fb36c538605c4986228ea90d33f38024bc6acad54d97dee0cc17",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/requests-recovery-source/1766/base/requests/auth.py",
+      "original_sha256": "e9ac12db8dfb81a4abe59e5e3b1764e01fe1f04dbdc5f57dc7deb7a47695087c",
+      "current_sha256": "e9ac12db8dfb81a4abe59e5e3b1764e01fe1f04dbdc5f57dc7deb7a47695087c",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/requests-recovery-source/1766/base/requests/cookies.py",
+      "original_sha256": "f44b754ede117755b4c58465ca94c7b38f64c1b1ce159208029b4bfd7466431e",
+      "current_sha256": "f44b754ede117755b4c58465ca94c7b38f64c1b1ce159208029b4bfd7466431e",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/requests-recovery-source/1766/base/requests/packages/urllib3/_collections.py",
+      "original_sha256": "611616dfcaacea619583d2b0ff2fdeb4fd278784911ab2ccea4be922b5f73f0a",
+      "current_sha256": "611616dfcaacea619583d2b0ff2fdeb4fd278784911ab2ccea4be922b5f73f0a",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/requests-recovery-source/1766/base/requests/sessions.py",
+      "original_sha256": "7519189c53263cb28b294dc79e42e6a0a9ce9290fc4c538b544e640867866b0e",
+      "current_sha256": "7519189c53263cb28b294dc79e42e6a0a9ce9290fc4c538b544e640867866b0e",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/requests-recovery-source/1766/base/requests/structures.py",
+      "original_sha256": "9fb92004e5099d05d64c9a518744b36b892e5a1b963249f7593678236e7f0119",
+      "current_sha256": "9fb92004e5099d05d64c9a518744b36b892e5a1b963249f7593678236e7f0119",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/requests-recovery-source/1766/submitted/reproduce_issue.py",
+      "original_sha256": "6eb3c655896535d9eb7a78f4b578be80a8d8f7a938662682a685d58b29a85ee9",
+      "current_sha256": "6eb3c655896535d9eb7a78f4b578be80a8d8f7a938662682a685d58b29a85ee9",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/requests-recovery-source/1766/submitted/requests/auth.py",
+      "original_sha256": "5d9bb8f15aa90a8f347428edf6192240fd4bf00653feb3ee0b7e08b5ad78368c",
+      "current_sha256": "5d9bb8f15aa90a8f347428edf6192240fd4bf00653feb3ee0b7e08b5ad78368c",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/requests-recovery-source/1766/submitted/requests/cookies.py",
+      "original_sha256": "823a5bc78000e519d9ae9c8b68b03973a4dc2e966ba2f767001a748b8618bfe1",
+      "current_sha256": "823a5bc78000e519d9ae9c8b68b03973a4dc2e966ba2f767001a748b8618bfe1",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/requests-recovery-source/1766/submitted/requests/packages/urllib3/_collections.py",
+      "original_sha256": "477c70707f09efef302869e41f16b652f4398caef9b56376bfd0d6ed96bdc533",
+      "current_sha256": "477c70707f09efef302869e41f16b652f4398caef9b56376bfd0d6ed96bdc533",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/requests-recovery-source/1766/submitted/requests/sessions.py",
+      "original_sha256": "94478b351677c37c05d017ccc8a220b76fd2e0274cc78577c27f74993d1678a6",
+      "current_sha256": "94478b351677c37c05d017ccc8a220b76fd2e0274cc78577c27f74993d1678a6",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/requests-recovery-source/1766/submitted/requests/structures.py",
+      "original_sha256": "5069b57dc916df65b39104e9a395aad01253203c09ce61193e4e3b60e256a6dd",
+      "current_sha256": "5069b57dc916df65b39104e9a395aad01253203c09ce61193e4e3b60e256a6dd",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/requests-recovery-source/2317/base/requests/cookies.py",
+      "original_sha256": "06330ab6b23c4d7403e68415793a18b64441175e3d788f395215ac046c2c25a7",
+      "current_sha256": "06330ab6b23c4d7403e68415793a18b64441175e3d788f395215ac046c2c25a7",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/requests-recovery-source/2317/base/requests/models.py",
+      "original_sha256": "9a559842d47f990877594687cc2e36d592d6510c3bbb20ffcbc0e4d09197aa96",
+      "current_sha256": "9a559842d47f990877594687cc2e36d592d6510c3bbb20ffcbc0e4d09197aa96",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/requests-recovery-source/2317/base/requests/packages/urllib3/_collections.py",
+      "original_sha256": "f4b35119a5ee4e699007711ae208dab9f426d9f47f3a1cfeb1c63e32b08ca7eb",
+      "current_sha256": "f4b35119a5ee4e699007711ae208dab9f426d9f47f3a1cfeb1c63e32b08ca7eb",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/requests-recovery-source/2317/base/requests/sessions.py",
+      "original_sha256": "968b595aa5367cec2dc5e519511da8ce2c7d1f6d7c28a9712effa64ae372e104",
+      "current_sha256": "968b595aa5367cec2dc5e519511da8ce2c7d1f6d7c28a9712effa64ae372e104",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/requests-recovery-source/2317/base/requests/structures.py",
+      "original_sha256": "8b7c8c69a0db978fe034929d70ade40e67922e8a34af9f571085a873faad372a",
+      "current_sha256": "8b7c8c69a0db978fe034929d70ade40e67922e8a34af9f571085a873faad372a",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/requests-recovery-source/2317/base/requests/utils.py",
+      "original_sha256": "873b3ca5e33fee4a5bc9c01b135835a7ee1c01667eee7e84d7b5ada531ba5460",
+      "current_sha256": "873b3ca5e33fee4a5bc9c01b135835a7ee1c01667eee7e84d7b5ada531ba5460",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/requests-recovery-source/2317/submitted/reproduce_issue.py",
+      "original_sha256": "fb0eb35576c599661b84315e46cdbb6be78ff3549d41fc975742c90e85902819",
+      "current_sha256": "fb0eb35576c599661b84315e46cdbb6be78ff3549d41fc975742c90e85902819",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/requests-recovery-source/2317/submitted/requests/cookies.py",
+      "original_sha256": "fb30cbb5ccd4aff042d113592ca72a1edf63620d9a89de30519a30234e4b473f",
+      "current_sha256": "fb30cbb5ccd4aff042d113592ca72a1edf63620d9a89de30519a30234e4b473f",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/requests-recovery-source/2317/submitted/requests/models.py",
+      "original_sha256": "7f6f03f7b74acdcdd046556272fe691c9cdba8918d1da0daa601f5f0c0f25a55",
+      "current_sha256": "7f6f03f7b74acdcdd046556272fe691c9cdba8918d1da0daa601f5f0c0f25a55",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/requests-recovery-source/2317/submitted/requests/packages/urllib3/_collections.py",
+      "original_sha256": "df5f41dead6a840ac729cbc39b458ec12480c04270821e54017055ea143fe8ae",
+      "current_sha256": "df5f41dead6a840ac729cbc39b458ec12480c04270821e54017055ea143fe8ae",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/requests-recovery-source/2317/submitted/requests/sessions.py",
+      "original_sha256": "9235f41ffa4fef2d50757505c50febf94f1db807391c6027df8cb454b4934d66",
+      "current_sha256": "9235f41ffa4fef2d50757505c50febf94f1db807391c6027df8cb454b4934d66",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/requests-recovery-source/2317/submitted/requests/structures.py",
+      "original_sha256": "a699c17bf3334d190b37a07f719e9244634537f4378c30b66e2445224effc528",
+      "current_sha256": "a699c17bf3334d190b37a07f719e9244634537f4378c30b66e2445224effc528",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/requests-recovery-source/2317/submitted/requests/utils.py",
+      "original_sha256": "74de6d99cd3844868a3bf57edf7f39f9956098499e8f3196d06baccce11c91ae",
+      "current_sha256": "74de6d99cd3844868a3bf57edf7f39f9956098499e8f3196d06baccce11c91ae",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/requests-recovery-source/2317/submitted/test_logic.py",
+      "original_sha256": "99ad90714b6c4f62aef75c00e9c2a059fd6d5970a26584dee72c34da9b67862c",
+      "current_sha256": "99ad90714b6c4f62aef75c00e9c2a059fd6d5970a26584dee72c34da9b67862c",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/requests-recovery-source/ca-diagnosis/1724-source/requests/adapters.py",
+      "original_sha256": "cf41eaeb58cc166821fee0db362ddc6ab11ed1aa97b99cf6f1a78f0490a20611",
+      "current_sha256": "cf41eaeb58cc166821fee0db362ddc6ab11ed1aa97b99cf6f1a78f0490a20611",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/requests-recovery-source/ca-diagnosis/1724-source/requests/certs.py",
+      "original_sha256": "c126aa8523680748a0a7a0dafa15b0d23b5720229705b2fc692f6cc2d865b79d",
+      "current_sha256": "c126aa8523680748a0a7a0dafa15b0d23b5720229705b2fc692f6cc2d865b79d",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/requests-recovery-source/ca-diagnosis/1724-source/requests/sessions.py",
+      "original_sha256": "496c60a2f0708be5aa4192acd0daa753006c436faad6cde398fbc845d15badff",
+      "current_sha256": "496c60a2f0708be5aa4192acd0daa753006c436faad6cde398fbc845d15badff",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/requests-recovery-source/ca-diagnosis/1724-source/requests/utils.py",
+      "original_sha256": "05074b3de586a44fa1c267a8aa2b177a1e3a724bdb1b7d5c6e490fe54fbc9d35",
+      "current_sha256": "05074b3de586a44fa1c267a8aa2b177a1e3a724bdb1b7d5c6e490fe54fbc9d35",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/requests-recovery-source/ca-diagnosis/1724-source/test_requests.py",
+      "original_sha256": "8a109d27d174463a5fa1330bf5384cf388864f00599cfd0e930c5056b9816c76",
+      "current_sha256": "8a109d27d174463a5fa1330bf5384cf388864f00599cfd0e930c5056b9816c76",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/requests-recovery-source/ca-diagnosis/1766-source/requests/adapters.py",
+      "original_sha256": "f6348ede237af5cd8a92092d3120cc9d5dec66a6f939cf4f7c96d9b8ee510ced",
+      "current_sha256": "f6348ede237af5cd8a92092d3120cc9d5dec66a6f939cf4f7c96d9b8ee510ced",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/requests-recovery-source/ca-diagnosis/1766-source/requests/certs.py",
+      "original_sha256": "c126aa8523680748a0a7a0dafa15b0d23b5720229705b2fc692f6cc2d865b79d",
+      "current_sha256": "c126aa8523680748a0a7a0dafa15b0d23b5720229705b2fc692f6cc2d865b79d",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/requests-recovery-source/ca-diagnosis/1766-source/requests/sessions.py",
+      "original_sha256": "7519189c53263cb28b294dc79e42e6a0a9ce9290fc4c538b544e640867866b0e",
+      "current_sha256": "7519189c53263cb28b294dc79e42e6a0a9ce9290fc4c538b544e640867866b0e",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/requests-recovery-source/ca-diagnosis/1766-source/requests/utils.py",
+      "original_sha256": "05074b3de586a44fa1c267a8aa2b177a1e3a724bdb1b7d5c6e490fe54fbc9d35",
+      "current_sha256": "05074b3de586a44fa1c267a8aa2b177a1e3a724bdb1b7d5c6e490fe54fbc9d35",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/requests-recovery-source/ca-diagnosis/1766-source/test_requests.py",
+      "original_sha256": "2c482f0ad0b1c5e7465a95bcf19cab5834c3dca3c4c8b755c2dd990bdaac34cd",
+      "current_sha256": "2c482f0ad0b1c5e7465a95bcf19cab5834c3dca3c4c8b755c2dd990bdaac34cd",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/requests-recovery-source/ca-diagnosis/2317-source/requests/adapters.py",
+      "original_sha256": "c7b044ef018b139d271e1c8a89df2f8ff65877977aec93789c41f9f8b327c06d",
+      "current_sha256": "c7b044ef018b139d271e1c8a89df2f8ff65877977aec93789c41f9f8b327c06d",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/requests-recovery-source/ca-diagnosis/2317-source/requests/certs.py",
+      "original_sha256": "457e47d5c4a2079d876e387faafdde316f21a87105febe108afff80307f38ae5",
+      "current_sha256": "457e47d5c4a2079d876e387faafdde316f21a87105febe108afff80307f38ae5",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/requests-recovery-source/ca-diagnosis/2317-source/requests/sessions.py",
+      "original_sha256": "968b595aa5367cec2dc5e519511da8ce2c7d1f6d7c28a9712effa64ae372e104",
+      "current_sha256": "968b595aa5367cec2dc5e519511da8ce2c7d1f6d7c28a9712effa64ae372e104",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/requests-recovery-source/ca-diagnosis/2317-source/requests/utils.py",
+      "original_sha256": "873b3ca5e33fee4a5bc9c01b135835a7ee1c01667eee7e84d7b5ada531ba5460",
+      "current_sha256": "873b3ca5e33fee4a5bc9c01b135835a7ee1c01667eee7e84d7b5ada531ba5460",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/requests-recovery-source/ca-diagnosis/2317-source/test_requests.py",
+      "original_sha256": "e0f10cee274f0a40816209cbb01aef2d146b39ad78f38502402e95c4c0b4287a",
+      "current_sha256": "e0f10cee274f0a40816209cbb01aef2d146b39ad78f38502402e95c4c0b4287a",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/requests-recovery-source/ca-diagnosis/probe.py",
+      "original_sha256": "95fe451e7690b9b5a31a85d2ee386408d192f3487ac2ab4bc9aff48134036672",
+      "current_sha256": "95fe451e7690b9b5a31a85d2ee386408d192f3487ac2ab4bc9aff48134036672",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/requests-recovery-source/packaging-repair/1766-setuptools-core-metadata.py",
+      "original_sha256": "ef1794b0ba1c692650960450f35f87551316516157332149a55ca30832605d2d",
+      "current_sha256": "ef1794b0ba1c692650960450f35f87551316516157332149a55ca30832605d2d",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/requests-recovery-source/packaging-repair/2317-setuptools-core-metadata.py",
+      "original_sha256": "ef1794b0ba1c692650960450f35f87551316516157332149a55ca30832605d2d",
+      "current_sha256": "ef1794b0ba1c692650960450f35f87551316516157332149a55ca30832605d2d",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/run_admitted_correct_action_validations.py",
+      "original_sha256": "05525f2a74be4ec9401271ac769f22436038a29738a81c82f05bf9e68d8dfbb3",
+      "current_sha256": "e3b370110f347ccda59db92461fcd0f0e92ac3faf7ef5857b3634745defa8dbd",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/run_admitted_fetch_validations.py",
+      "original_sha256": "bb9ce9c1004f42fad6fdcb164bcbceeaa6453b294a82ff086a79d828da0a9c5a",
+      "current_sha256": "08827b9ffcea4f681271d659b1306967e04e4170c39611c56e53d62ab3a137e9",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/run_pylint_recovery_when_slot_free.py",
+      "original_sha256": "5ae823d12619d4dbf8b57fd79191544bed574bbdc1c05b87f288d8df9723b826",
+      "current_sha256": "eb7dad2d08efb0edfabfa52127ce97c49d9aaa195503f518e1d71abeadf2eb3d",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/run_swe85_adaptive1024_after_shortcap.py",
+      "original_sha256": "6108ba561d8111bb614aa89ea2d7b37602c67345dbe1e8f85e2ee4d8b82d95df",
+      "current_sha256": "8ca5550052bfe996139e65f7b5c6271093ed47d8a49c7a3c20f3c995e4d2213f",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/run_swe85_followups_after_short.py",
+      "original_sha256": "7a93e6e1e1052b8f1acd8700b78d0c7178faca8cb85e06cfe937ba796af77af9",
+      "current_sha256": "10c07c082ed4eaaa018e6b1aa13b2a7ef07e08d49652db62d6f48b8f1839dc89",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/run_swe85_full_after_served.py",
+      "original_sha256": "1fb2fadf00928595153fe86144aca4ee6a602225c0a3d2bf8e8c0475ea622a69",
+      "current_sha256": "2011f6b4a1c96ebac738ff706fb3c5d68b8ade8206f6ecf211534b0867171122",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/run_swe85_secondcap_after_adaptive.py",
+      "original_sha256": "a39b3296d9b885cdc2c2e7e42aaf7edbbce57e67453da90ce5f4d74f0aa9e386",
+      "current_sha256": "9e268219a5b26a5aaf3ed729ddef243027cfd27c52d92a3f631bd751924c04f9",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/run_swe85_short2048_after_secondcap.py",
+      "original_sha256": "dee2fde62f5e6bd4c7ae08741f79af9a3d003d5ed04b3f72501d025576c445e3",
+      "current_sha256": "3b4c412cdefaf3df83ff157f10c2e2d80cf59c6300522b142fc71ff82da9754a",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/run_swe85_short_after_supplement.py",
+      "original_sha256": "1d6ec847a195fd8524e4a8e982da2635f31804b1c79b1496376694f9af891ff4",
+      "current_sha256": "030e6b1362cd424d04beb184431c2c39a2266da7dd157238367e69beb2de8fc0",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/run_swe85_short_cap1024_after_followups.py",
+      "original_sha256": "5b4da8d07858e0b49591bbeba0ae51d44940724e32d522fd707c9f6d3de69cbb",
+      "current_sha256": "19d12b7f598fafe91ec07e78a0e9ab1ed1006e96cf59da8347e2204f281321f6",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/run_swe85_supplement_after_remainder.py",
+      "original_sha256": "6bfe074108ffb677419bc829fe99116413804910b0867d31de43c1e284528242",
+      "current_sha256": "e0f25a72188e79ffe4fdef38538a668fd51257405279119ea75d029476e510a4",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/split_swe85_control_pilot.py",
+      "original_sha256": "b35ee9ff3371ea3c497a369129d0cb1107e61e013401be346020493a3b3d18e6",
+      "current_sha256": "5f01cb42dd7532420f5b72c2f6c425880423eb71675c799894194aa9c7d055dc",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/summarize_swe85_action_comparisons.py",
+      "original_sha256": "c156ccf674d7e92e58ca8a70ab6ab4fb3e461c4dce6a3d9ee5dc5d5b273f132d",
+      "current_sha256": "85fcf45f3901578524b44e6a194b6d4090323998d846c9cc41e0e5fc47d64c5b",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/summarize_swe85_action_sequences.py",
+      "original_sha256": "13bf29b3cdbe62d77defc0970ff09efbf98d783b3210b48c656de1a1a7e1dc25",
+      "current_sha256": "0140724e1744abb035423b1f922263af02c4d8bd99eb5f9c55a5e34c37b78cca",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/summarize_swe85_final_cost.py",
+      "original_sha256": "7cbc68c83ff6b5ee7709eddf305f99463daad9e9c496ff77155d065e83796988",
+      "current_sha256": "48eab0d550c022800a7915f262df9e439b63936b92b23960602faad97791167e",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/summarize_swe85_second_cap_extensions.py",
+      "original_sha256": "32a703e60035b946c1ac43817fc576b287661a5a491e2c53855b4692b93f652d",
+      "current_sha256": "31b85f33523745257b15788cbe89464ace5f1b5e0d5e81a56072d1a6764e5347",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/summarize_swe85_semantic_controls.py",
+      "original_sha256": "143f9124d828062a05bb27905dacee35ac2d7bb4276e622e37fcd16f3747d30a",
+      "current_sha256": "b42a14cf6a7267a3c5dda8bf802aef0390567cc68c4f7c303f9029310f50a7ef",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/summarize_swe85_semantic_validations.py",
+      "original_sha256": "9dc8775a30c752cdaf4d97e42741cb8244eb70594ec16316be0967fd39a13c2f",
+      "current_sha256": "7ef90534e3f4720e51facfd96119d9375be6f78c97336d7e7d267dfe42c77e7c",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/summarize_swe85_tt_controls.py",
+      "original_sha256": "97030fb5a9d70e586bc6a19b629f57d0fa4f49fe12eead80b6b6ca3083fb3d80",
+      "current_sha256": "f42926007a26cf06418e1c423ee3b72c170ab76dc4e4a121a96100cfccadf4c4",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/pull_official_images.py",
+      "original_sha256": "a9638a7003c059f8f57bd078e882770c6cd4af2a85c1f55bcecd0b7fdf69453e",
+      "current_sha256": "974c81b2e88dc5b915950975f9cd3c824c565f2e57fe1f7252d82cea8485df2b",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/pull_retry_20261114T0958Z.py",
+      "original_sha256": "ec6f298caa7a5402dfc9c54c175c1eb7c57faac2cbccf66df27b241b13449086",
+      "current_sha256": "7ff291da3a5418d3f0ccd426089732ee21b7f90cf0dd45a773907a7b0e6fef03",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-canonicalprefix-suffix8192-candidate/run_after_p.py",
+      "original_sha256": "61996590520ae8cc49358e80f03b57dcf40fa15fc08d41d0acbda87ba08a4097",
+      "current_sha256": "5b51bc542790441cfbba76872a632bebb37e3dac6e23f0496eccde137c065327",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-canonicalprefix-suffix8192-p1pinfix-candidate/run_after_p.py",
+      "original_sha256": "ccf6e0e36654b16603347450756f9748f2fd4c9f2dbf9bbd942adf787aecee2d",
+      "current_sha256": "eece809c32b1539e00557febc8a0d456ce03118a06388ccdb23205e52ffdb47c",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-followups-execution/run_swe85_adaptive_followups.py",
+      "original_sha256": "5b162593fe8651a74e8d1b61fe53d40ac6c3bb1f5afa20a2ed4074c7d76d0ec1",
+      "current_sha256": "f2fc710074e21419a2850bc08737fcb78394be7104991dff9aab6fd998139760",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-req5414-cap2048-after-v-candidate/run_after_v.py",
+      "original_sha256": "2da27ecc371f7861e506ae7b468c9b4249bedb50a6ef8f07c6aabeaebc4b2de6",
+      "current_sha256": "321295a2db3227be2d32849a518c7e071faa9d899fdc5c010b09388d74785e04",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-execution-candidate/run_cap1024_after_t.py",
+      "original_sha256": "7af4936bc65a3d69a72b02e48ecf398c43e1fc7912415dae7ff13a88d513e363",
+      "current_sha256": "fc39e8864b19e57bc01604f9194d25c53603ae2ee3e48d4d96401503da9d1b66",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/compare_suffix4096_outputs.py",
+      "original_sha256": "44dbee2286624a560c5167bc4f3c704d12fe126c5e90f2d55e41ef0a4d7926b3",
+      "current_sha256": "daa70961a8c15fb7ce97081675a23e4f56b7b57856f591c8b65a8afb4875822b",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/run_suffix4096_after_u.py",
+      "original_sha256": "8da393d33526d96b22ebe5221781df3448d0d1c49e409adb783ea6f1db85f9fc",
+      "current_sha256": "8456de937b6a0d8982656cf9961de7969f85567e523c29f77f4819d14a0cfc8f",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-candidate/migrate_batch.py",
+      "original_sha256": "0c5137595710b8af9959f7c9b3abae6c211a8d0cb8c8ae68cf698713dd88beeb",
+      "current_sha256": "b8caa1be873db46f4dabd005b61c6e77ffb6ed1b8698ce14137bcbc460011661",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-candidate/migrate_final4.py",
+      "original_sha256": "cc81b2d6858e22ec673e9e07e38d99bd0423f83d630373f2e2b890a44b95b6cb",
+      "current_sha256": "88b484e30a023d783c7da9c5515ac40cf04267d6eebf4e8e4b9e6ccde628779d",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-candidate/migrate_flask_pilot.py",
+      "original_sha256": "f6e17dc74bcf04da9fc3329abc0c283adb0158c9f7829fc8f644852250f5d14e",
+      "current_sha256": "fb615f4dc18cbfe91fbfc0e4be116f7623180efedbced39d9ca18f59c0091d17",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-candidate/migrate_sklearn13135.py",
+      "original_sha256": "632ea1de8514b5244d4fa6103978aa797718e848a677939c790b73313d0a1eb1",
+      "current_sha256": "1b091a177ec6a86ce8fd6fbc0b991eca33afcd7ee8c781ad5b24e106b96f878e",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-candidate/pilot_linked_mode_restored.py",
+      "original_sha256": "8fd815494ab7495eb99a92a672a7f1258b8816de557b2c2b5458ea7348aa452a",
+      "current_sha256": "a91e1e58e50aab06e3daef035145cadd14a3e26cc156e305b0344e30af78a7cc",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-candidate/prepare_linked_next20.py",
+      "original_sha256": "bc265f3b782a1f71e7c8d7b6fb0ba17501a450253bab631bf06a025d01886fc5",
+      "current_sha256": "60539ff2f80d8ea7bff38a68f2d377a81fbd50b5ba5ac80d8a109fb91050da0e",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-candidate/prepare_next20.py",
+      "original_sha256": "5d724fe3f2d3747fbb57c8b508006005190b78b151c3dc82373aeeb4fb0504b4",
+      "current_sha256": "1b4489fa65a91439b18019a4e62d79e0e03233558d44c1a1964aa2da21ebf96c",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-candidate/prepare_remaining3.py",
+      "original_sha256": "c3923a9ea605c74e5de5f5c784131c1f53970519b6a29280fe008d055f452e81",
+      "current_sha256": "03eee6459dcede695fe6e74605ec74a24eab95869c66138561e1b79c50568d44",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-candidate/prepare_remaining5.py",
+      "original_sha256": "fbcafe3b17ae7c92c7f6bb35921d91490b0fa711a5139ee649b641bc278694c2",
+      "current_sha256": "050aad672bdcfd63afcdd0508c43b91bff8ffc6fe49f4ea3b716b76249417c1b",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-candidate/prune_final4_cache.py",
+      "original_sha256": "6a892b974fad05d3756e16b133808386fc8d36251e31bbf03d06ebc08a6b7655",
+      "current_sha256": "52a12c0ce47e90d353402a11dd2ddab27f9619281530de61cd62e3119235b522",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-candidate/prune_removed_image_cache.py",
+      "original_sha256": "da49fa95cb41ddf53f0d5f3df2817dcda1a9fc61ee8d6248579181482f568356",
+      "current_sha256": "dbce9d06bc2808a56ffcdf721a0732d10bb49e1a5ec23be6d2b0972f1b97adb3",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-candidate/prune_sklearn_cache.py",
+      "original_sha256": "0c0c882e8e39a30805716dcc104abb01fef3e6186f5d01215bd394fbe3eb67ac",
+      "current_sha256": "78c15ad3b20df33f45fba58e4a984ec3140a2d21e6c9c7a12eaef3659ac71c89",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-candidate/reclaim_exact_cache.py",
+      "original_sha256": "9d3c752300bc5d63356631f1c0f18dfd0e78ae3e88d31daa982dd65263f8d100",
+      "current_sha256": "d67056d4f1625dcab9ceded0952323de760495eca7f0b5eb434c67d580ac1939",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-candidate/reclaim_obsolete.py",
+      "original_sha256": "a9618e2abd42f1d6f96b69c29180522f25680618d68aec70ab570eccb0efb212",
+      "current_sha256": "2abab4ca91e7e58b152c718983df2813ee5838778e3736f983220ff8ca42da79",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/full-other-diagnostic-20/history/review-c-before-forecast-completion-timeout-fix/run_group.py",
+      "original_sha256": "50ea9788fbd8fd02ef4105973dc23781f051799950542e91a03e776ae1c421d8",
+      "current_sha256": "bea33e85aaeb050b719b0eb080ba1cbc302793ef95954c6b38dec76a01fed7bc",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/full-other-diagnostic-20/history/review-c-before-forecast-completion-timeout-fix/test_run_group.py",
+      "original_sha256": "550f6c64f60e2c9878272ebaba599b3d77cc43e151dc595d77d9b5198d64f16a",
+      "current_sha256": "926b447b3fff307368d99f35b3e8c3e3ea16c78539db5318740192ef7dd4a2f6",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/full-other-diagnostic-20/run_group.py",
+      "original_sha256": "7ac8788a510d75ab459a2e481b9b3f887a967aaec458f30df5e6c6385efc3601",
+      "current_sha256": "f00352bf7bfe9cbfe029447b36747d9ca2de1df1d3edaad7594bc122447ff5ca",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/full-other-diagnostic-20/test_run_group.py",
+      "original_sha256": "dedde3ba279b3754b638a460daaf8dcbcef50e4e99631f7a2ee169a9621db095",
+      "current_sha256": "a179f9f7cabdbb9156e2c493477c1b0c3d74ae1f32951775e63379f01719dd5e",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/pytest7432-first-caret-conditional/run_candidate.py",
+      "original_sha256": "2516262e035f942393bb6409052b806847c1ba53fb98163236c2adc6ca569673",
+      "current_sha256": "7764d1315feb6463e788f23320504f803d853fdea6d0a2f76d231566f040042a",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/requests5414-call11-suffix2048-cap1024/run_candidate.py",
+      "original_sha256": "b874df0314d95bcea18ee4c7569de46f3e4e0617c6ea2db2779983c18dd75a4a",
+      "current_sha256": "f8eb10117ebe27c8a57156719f1b6c8ff38314e8227c1a71119a90f29452f76a",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/requests5414-call11-suffix2048-cap1024/test_run_candidate.py",
+      "original_sha256": "8a03de261eb5e2bd790bcf55f56fc28d734e97e684fe64d4d9ca14746f67bebb",
+      "current_sha256": "846483d6b2c115cf569b336df269fe1ae7c1d6ad6e660a69e9ead39eb7971011",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-candidate/run_expanded_after_predecessors.py",
+      "original_sha256": "9511250e40fb64627e2273a6b8c209b7cfab0cdf11c3530ed7f703f8542dc34a",
+      "current_sha256": "d7d246caa0246f1c2c5d486017a205adc8584354f4bacdd99a9c4a7d9d0de599",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/run_expanded_after_predecessors.py",
+      "original_sha256": "53ea7fd1fceef25b77c60a3d314c7712075c1003a50d05e9fdef3d9966f78c8f",
+      "current_sha256": "10095579d721fe096f0dc832e214572f4995c559b97017244d165ff3ef63e50e",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded/run_expanded_after_predecessors.py",
+      "original_sha256": "da05e12d28c27927267843530cfc0c467a4a7d22cd3f376f5ec4e64ee06af91a",
+      "current_sha256": "fa838fb48b4098e2a421f155d7ffa19073f67b0802fc81d8cb962ba4f61aff14",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix1024/run_serial_candidate.py",
+      "original_sha256": "cb3dd0a84aa4261f196d262265985450c0ea9df5e4abe416d3ffe8cb5dd57ddd",
+      "current_sha256": "7199cf6636ef98d7049693a37957fb89ddbae66df1f9e6b220bada2102220358",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix2048/pre-repair-snapshot/run_serial_candidate.py",
+      "original_sha256": "1e2f4759ee16febc57d2da36687d89c2de2664eb83d91f7b79c024be8cc78afe",
+      "current_sha256": "7e53135538a46ca3461eaf82120e2eeaa73c2fca6b856e7263809b5364579fcc",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix2048/run_serial_candidate.py",
+      "original_sha256": "6e09de7054bbddc489118e8b802f2e651b9a7a556a28ceaecebc0f4bf2c7d0ff",
+      "current_sha256": "fbf1add36addf005e7746a604abf6ac49077bc1402a87f0870f03afa098887de",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix2048/test_output_guard_mocks.py",
+      "original_sha256": "900332149075114c4a5817d6611841b8ac6bedcf9596cae6ea0f862c7a31d96a",
+      "current_sha256": "317a54211c024240b3e73c9301f122eae2228bef57d2eee935cf15457df70316",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/run_serial_candidate.py",
+      "original_sha256": "e221a7fef9a593fc835413131b242561b799eca0d91748eaa7c36564d66ac332",
+      "current_sha256": "915e685a7d5430e7a33ffda00b5b6457e0ae95e160f2f8be01663b2d2cfbaeb1",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-secondary-loops-suffix512/run_secondary_hf.py",
+      "original_sha256": "ae085eb32cb96a9e5b6f96ea4f41c284968a6999a7f59af46e97208e00d706d9",
+      "current_sha256": "6bd3dea6e488c729268129c7bb43fdf5a99d5733fc94e1c44f0740774db06bfb",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-suffix512-head-bfp8-correction/run_root.py",
+      "original_sha256": "ab5b723ae436bcf3224ff11903932a5d08a22aa7716930809ee24d06455f1c9c",
+      "current_sha256": "f39249be11e00a8fb552bf84e1b07bb896e4741ffaeee65cddaf8ed8100342ec",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-loop-branch-investigation/actual-branch-logits/completed-original-tool.py",
+      "original_sha256": "fa2eaf9f66a6a36c57385351a0b3e838edeabac4644c77c98aa81a817e3e3d5e",
+      "current_sha256": "89293318232bce41be7383dff0a3b1e2dacba583b3de3d38a23e468d492f94cc",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-loop-branch-investigation/actual-branch-logits/run_serial_probe.py",
+      "original_sha256": "1066e245c478a21f0d8f1749ddd1ba6eae2a62be27f3d2e29ec59b952e316789",
+      "current_sha256": "51fe9abc3e5e036305ea04258773fb47a9cd709813616d190afd851dbe8a87af",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-matplotlib86-full-suffix4096-cap1024-extension-candidate/run_cap1024.py",
+      "original_sha256": "7660cddfc15f6dbfeb7a33dbd377d80a57c71ec1a0f32cbe80918b6826ab39ac",
+      "current_sha256": "245ecd75df326341b5b45b5b714f17cad427feea5c67334e9e42bf5c97bad868",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-matplotlib86-full-suffix4096-cap1024-extension-candidate/test_run_cap1024.py",
+      "original_sha256": "e12aa590ec4bf4f245109c5fd19650b4c59d5c5a8f61065fd934842bd3ff4b7f",
+      "current_sha256": "0e51133e2d84e941505030ce4e665d35a561af5d1a9b5ce6105062dbb3c8d28a",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/candidate-serving-prep/test_benchmark_work_precision_groups.py",
+      "original_sha256": "55438108324ef5bfb11e69f23b06e505ce7d159014943c66e5a6f34f9ff6a47a",
+      "current_sha256": "3ef9408df26194b12b50943ea70fa6f7e3c4e57d1742f0c1bd2b0e732fcd9bfc",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/candidate-serving-prep/test_kv_pool_ids_override.py",
+      "original_sha256": "147b144113fb9d0b2680ebac9689c2ecd65f9f9015d45c951aa3d76ce5d985fa",
+      "current_sha256": "31b3fbdf472b954c1b3952f25dc5d515a2863584802228e7c2f89cdf5d37c4be",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bf16-hifi4-seven-case-candidate/audit_p5_gemma4_parser.py",
+      "original_sha256": "6b717191dccdab9594c09543acb747bd353f743f8f332d2942a3a03d3a49c02f",
+      "current_sha256": "937d8aab9967555f44f6f1f2a021b798d3816af60e8970aae2bf66ee7378e095",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/pre-gate-repair-snapshot/run_serial_candidate.py",
+      "original_sha256": "2ab86beb5c9e04369fb8d8d8a775f6ebc9083603c05f2c2669579f2ed8f2825b",
+      "current_sha256": "d25f03872c29092cc134291e0599bf2704a170a1f4319a530f0d1d58763f9c12",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/run_serial_candidate.py",
+      "original_sha256": "b813686bfbb4a5c18326d404999f1ff71c33ce560d9a07011e992b26c27c85b2",
+      "current_sha256": "be9cfd70158b0e10c12b1f916d6579141d29f04134a313a2cca29f440aa7449c",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/root_runtime_check.py",
+      "original_sha256": "eb7e19bb9c2cda03fc58e2ed15de872ca43ef83c12a5e3ee53363c3334211095",
+      "current_sha256": "a8798e1239301abcd52d0c8e1f127a7b505035398093b81f6d7cedf508168ecb",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/run_after_p1_x.py",
+      "original_sha256": "2bcfdcc1f018f2398212de0cd94119030dfe54b5dcc9f1578478b1771ecb1836",
+      "current_sha256": "3d5dce09912ce02b012700acb7c5cf2796f3d0200a8148142150ba0304f492b0",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/run_panel_after_w.py",
+      "original_sha256": "74fe8a4db31949824f4e59cce087da5eecfc272d5e14fb962119b8b1f9f24100",
+      "current_sha256": "12b9bddb39e5ca7a6e4ad187701d4f615b6f79232ccfe7cbdfca948a2e187a07",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-with-cap2048-pending-t-closure/prepare_candidate.py",
+      "original_sha256": "33d09120b4b0065cc148a94a9e8f6bb2771dc6109033a10658d0889d0264aeef",
+      "current_sha256": "30d0bb4e484538c94891be616e4f884ffc8e5441362cd44d9e2b7e60ac0ffe0c",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/extract_10323_4661.py",
+      "original_sha256": "35a40297d32aa59eadad53bd5f808929dbc9bd1f90db03be9fb874e74f42cc54",
+      "current_sha256": "c687799e9c9f1e3f339d1c592819ff82c15277c7b4a0c8c5a5405931895f0454",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/extract_18763_7432.py",
+      "original_sha256": "2046187181f6f92c3284eca7adf5e1cb4cb8f917f35217be225d1f6102c0d595",
+      "current_sha256": "5b969b10f9808dd6c2123adb7f6cce5a63026bfc3e69c15610ce30bf7aafc239",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/extract_gap_sources.py",
+      "original_sha256": "0c37d9d6e2057d5852ce843b4d0bc8cc71b6cd54034bdebbdacafa781fa0dc87",
+      "current_sha256": "0cbad5b74c1a9ad85acd3c83d733a8f24a695725b5b1fe15393eaf745097b62b",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/extract_new_fetch.py",
+      "original_sha256": "81d2d71b82f1f82e13b433857a45c5a1c7299ec8576b44f1f539b31cab0f04f8",
+      "current_sha256": "c1a3b14dbb9e50d5bafc848512f5a3db82344224ba7bd6cf5d4385f2758ad209",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/extract_remaining_swe.py",
+      "original_sha256": "d0843a9a8cf71601e2aad35b2b40abb7d0cd1cd9b1cc43334275b38083f472bc",
+      "current_sha256": "7bb1f8783bb610b169db3e00b37fda96172a5417d45d4c2e9153d42c9fd0c71a",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/extract_requests5414.py",
+      "original_sha256": "39bdf4fdc4b6f81e235ab540de9961e92b87bc6d0f242f6090e1c8ad10b07946",
+      "current_sha256": "e9d6f4d69b5ae8dbc45ef3d2a19a65fe3ce8f6d7a4cd7e78bd3fe9580c59b023",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/extract_sklearn14983.py",
+      "original_sha256": "77ba18568e53bf534475738610e65c0e1555a75b5affd704fe9ff84d9c76e619",
+      "current_sha256": "9c20b58ba0525ed557bcefd65784a07ab81286986a0a0500411aff0d5867d97c",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/extract_sklearn25102.py",
+      "original_sha256": "4c5e87f6088511cd44dfdd298928876c87da689a79705e8fca0bbd11b9170233",
+      "current_sha256": "137f0a31d49e3572022af92ad650b32a6f18368d621593cffec58f7502e86f7d",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/extract_sklearn25747_pipeline.py",
+      "original_sha256": "a76604624ba82d61a4b016d450e326979a960d1c66a8fc6e2bbb9f00504cf054",
+      "current_sha256": "af1b07bbfc33760ed28a9c0ad8f3a94965399c6531759c7dc3ae52b8355c454c",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/extract_sphinx10614.py",
+      "original_sha256": "35802465430fd7880ded178899f17e017b51b3f80bdee55826056bd94a3bbad0",
+      "current_sha256": "f4aca9be350da496fdb5a3862561fe07fb0e026d0ff17764d16b2713eed1b0ff",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/extract_sphinx11510.py",
+      "original_sha256": "b17127ba691e9b4abdeaeca1ab52911af2f7810204e10e5939d067f884f4f650",
+      "current_sha256": "c1e2f8d2f3938f9bd5d212cfafb7a931a10b7de4177cb3ab6e5eea8ab8ece9cb",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/extract_sphinx7590.py",
+      "original_sha256": "6fdb92737c913618229b03e865670ca53123168027f8effd3ece520669deff5f",
+      "current_sha256": "fa042359b3d35629015ca0d62d113e6c07924a1c175b501946a46b548422ef67",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/extract_sphinx9461.py",
+      "original_sha256": "c58aaedfc4f5b16e47a73d2d85658168df87d455ee72330d4a5eb1535ce09339",
+      "current_sha256": "5b79541e9c85dcb9f5abaa25b94da680b339e4b5a47bf04d5a7091f004b57200",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/extract_swe_correct_sources.py",
+      "original_sha256": "39f9f91c7b4dc2da76285c35ef69c4d840364eb5159a526ca81eb7647b4be97b",
+      "current_sha256": "9c6ef38f1df8f502d4b5c42f4401551ce8c42fdda26662ddef6a18b09e865439",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/extract_sympy12489.py",
+      "original_sha256": "2107155e5882b1f7d82b35ebc55c8930df48d478e3a1fd35daa4f479e6c05a1b",
+      "current_sha256": "df8574fe4790d969bb2bfa6ebe4e397496e8269ca2efd24e4b2bf4e2a78f8731",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/extract_sympy13091.py",
+      "original_sha256": "bafecbe3bcc9412fcd42de46f277157b2feadb27d98047c68d9d1d6479955a73",
+      "current_sha256": "002d93c1da46fa69f20b6e896049e3eab52c10d797a12cc69d2d851a7d2755ea",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/extract_sympy13480.py",
+      "original_sha256": "efade27274d51825d9e0b163b39a840170f26d2ab75afe47a1d37963915483dd",
+      "current_sha256": "e851150ec91b1db7d646fb1497752dc07940dedcaa71f361fd3f7fe8efdadaa8",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/extract_sympy13551.py",
+      "original_sha256": "ee40db860a2bf86f97f338ee6fa12b8935be76ce43fcfd7e1cf31a06235b3d24",
+      "current_sha256": "e32d847172a103845528b98ed59d0e7c15856735396dd94bcbf33358574bd0b9",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/extract_sympy13878.py",
+      "original_sha256": "e3bebef9d771987b02f76d4fa75e97be8cb02081293bd85836aa81e2543f379c",
+      "current_sha256": "c582bf8a522d940dadec25b2e460378ea2a7649e2ee6999f2c44cdae22e4c14e",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/extract_sympy14248.py",
+      "original_sha256": "e6e1f18f081060c79e0586e14744568e6cc18e5006a372120d6efa861c858c6e",
+      "current_sha256": "0104796fe8300fdcecdb01705de49537638aba1d6a0df67f516a85ff77adb0c5",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/finalize_missing_semantic_actions.py",
+      "original_sha256": "9ec2d187f44f88dc1d0e33c0748935fb52c80e6a34651311ba6d0c1a1cf1fdd0",
+      "current_sha256": "fd713dacdda137ae5cd81ad87c1b1d15604de0009f1873a73674d037463ebc34",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/finalize_requests5414.py",
+      "original_sha256": "5f5c82681452d28c83a783541e1dcc881ff281be7de8907a19c7671333a0253c",
+      "current_sha256": "c28d348838c68dc45a5d2c3c13328f11cea63e231dfb1e39a2a47537135458a6",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/finalize_sphinx11510.py",
+      "original_sha256": "8384363e0978c6e2bbedd3d3e3a36b97268410f0da4464af7da1023ebbeae9a2",
+      "current_sha256": "1c027f0c6203afc1ebc58c1c98a9b135e84e9d79646af6ae889e61919796db88",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/finalize_swe_candidates.py",
+      "original_sha256": "8c730c828236bd0b707fca4c5188873b2af28c200108856f816a98f98f3038dc",
+      "current_sha256": "9399b2994ca12789877cd0a618e7e36dfb3b34c31cbec119f8226f51bd6a37f6",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/finalize_sympy13878.py",
+      "original_sha256": "496487296dfa68efe0392bc6d2f9eeb4173a5133f684d7b019ff0f7bdc673444",
+      "current_sha256": "f295be55e98379bdf3a7cf6f340de800d1e553e1c73b7df3fd26c65e502296bc",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/finalize_sympy14248.py",
+      "original_sha256": "5be00c0a0851e976b9182736791dbf5213b9fdc93fd1ffbc95c03e10a9de32a0",
+      "current_sha256": "44be4dfa2134ed6a41fde2f7f13cf187650ee3f594963a8de7bb9ef666ddd991",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/make_10323_4661_builder.py",
+      "original_sha256": "9fb6d9b23a349d53ccdec0a966cbca0b63f4fcf902e32aa21678657cd28f1952",
+      "current_sha256": "dc056a7fbd4fe9be0c5f5a3f3e40f96a99ce456bdd436eb946585e83a95a906a",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_10323_4661_full.py",
+      "original_sha256": "7734595dab821553f6def2d972c5b3e0e9dc9422828bcc6160b4c620c1320dcf",
+      "current_sha256": "f37344bff9095e36b6e8c3baba9eab96120cd4d5fbd0cd7925ec886f8c76999e",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_18763_7432_full.py",
+      "original_sha256": "9dd2d2aaa91d5500a673cfb1f445547aecf7a169b7b27431db39c995c87f5679",
+      "current_sha256": "2150c6664b7f602d028f735a7d6b7b431dad1c0e37977d6a8acf767db4703b7c",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_18763_7432_onsets.py",
+      "original_sha256": "4b5875c99f57478efc85bd9e6363eee8ddd5a2e2c4220f768bc82646b2fe6b20",
+      "current_sha256": "d2ad71b7128b12a87bec6ce854072e9803803729877a938015ff207291330827",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_extra_contractions_full.py",
+      "original_sha256": "73bb2c45b04b08e58895f59f3e6dd3e1e1f9d2353e5e072afbbc030a2f0262f2",
+      "current_sha256": "5b880581810e183634586f8e84bc101a7b7eee96b60bc86526c628de381183ba",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_extra_contractions_onsets.py",
+      "original_sha256": "9f80fde420226a8c588459b5534bda8374a3756323f6273631b567ef0da09a07",
+      "current_sha256": "e897f6ad570c9d2e94da6279f984780d379e26da58a2913ef1807f9324399b26",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_getall_onsets.py",
+      "original_sha256": "802affcd5046f41222454af21656dcb4becd3b478f2fd664b13e195c80540928",
+      "current_sha256": "4686b4b55efb9df11b6b29e1c4c840f90c3325cfadd5a26e09d06a41b98cca79",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_missing_semantic_states.py",
+      "original_sha256": "7bababc7a26be8129a41c258dd96d237c4bf152e537e3225c94a2438d6e32b57",
+      "current_sha256": "2dea2d261c270d9639a39363172aa037fa60d45151cecb0ce90a5bf33690abd1",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_more_full.py",
+      "original_sha256": "f37e87cdeadec0aa8ed5cc5b68677545a0a4f4f688e456857c23114f888108e4",
+      "current_sha256": "ae4bd0ed7ee858fba22c4e2b598389dcc82b894ab4e93f4b7e80db4a07152cf0",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_new_fetch_full.py",
+      "original_sha256": "4b1840db4b25090961a618656254617da79b6fd7362b085a2c20c786aa0d442a",
+      "current_sha256": "f3a038dcd31b71efe0186c1040bf89525262a7c4ecf7df32d4910aa1ef330f3c",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_protocol83_full.py",
+      "original_sha256": "3d7cf1f3571d1b291350fad93cd7c5214b2df7812f621b85db3912d5668fc204",
+      "current_sha256": "866c95130250a39c091b309a88b8a5c523be66c5dc98ad66c6cf8c0dc4e71df9",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_protocol83_onsets.py",
+      "original_sha256": "bd83d63e63b1fe97599e1d73353e24f026666b42cf5998a1bb5fe002d7e9302e",
+      "current_sha256": "5b2c22b76d4cb4fb1258c9b68743303b1043ef128706613851be8c83002a7985",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_protocol_call1.py",
+      "original_sha256": "e5caa30c723ef2169eaeb6a920c677a4e9a2a190a75d94b73d4614cabf11575a",
+      "current_sha256": "8beb9260b9580af3aaf703fa654b42c634d5135970787eca06951c380f3e16d5",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_pytest5787_onsets.py",
+      "original_sha256": "de4bc6d47085b202131b8dc42bf242d46dcf695557d1226d2a7279562d0c0bb1",
+      "current_sha256": "645f4a38aadfe23742e258f6facac099493b8aaa92a6465f7f26b1d0c4cb2cb0",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_requests2931_semantic_full.py",
+      "original_sha256": "d67e74e948a90ca91f86f628e3fff3d3107cca109b606843ae0aead37cf2bf7b",
+      "current_sha256": "3dcfb46c039fa812131049f6e2733223a9c608a35258389f4460a38c1af1a7f8",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_requests5414_caps_full.py",
+      "original_sha256": "df45f2b6dd27026c00da34e2250f601f3a08f920d6f7554044db5f203efb116c",
+      "current_sha256": "7941b7cfaa24d70cb7ee852a02b0f15ff30d63c9b37b5cd7ef14a36cf8b371d4",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_requests5414_caret_onsets.py",
+      "original_sha256": "77f10520130c19e2431a8fed6146f9711c873989d37c450b980959ebf418a3ea",
+      "current_sha256": "0834efaaee7a27a0d5a27ced63bf283907b93b2f462ede6d80e9471c32c71626",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_requests5414_full.py",
+      "original_sha256": "fd846694343c22cbab88aa5bea29cc243bac472fa16f6417bd5115afc3c8554e",
+      "current_sha256": "a102253c17018c9b1f04861690b9cd549805d1c155f7e05597c3cba68a32016f",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_semantic_full.py",
+      "original_sha256": "51b79bd76de3cebfbe489e72afbb03da4c321ed8f9014c968a2d33623f21ca74",
+      "current_sha256": "d9f7a0a1cbae98254ef1a04aa1b3d34b2773c04f3cb04c34393d70d6f350ea61",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_sklearn14983_full.py",
+      "original_sha256": "15286d4b37e44041b32259bb0b6787305bfb0a388039cc2885d1d0a8af06913a",
+      "current_sha256": "fbcf9eb08870ec4844b500fe3ec7df6a5d0bd62cb5ff02ab7676783462da75f1",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_sklearn25102_full.py",
+      "original_sha256": "c244eb69639010f044b597560a058bb2949e2cb9090e6180aa455c160ee7a749",
+      "current_sha256": "c0857eaeeaae0b1b319f683b1d9fcbf4725e0810e931f4c97444f236331df07a",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_sklearn25747_full.py",
+      "original_sha256": "fa546cca627909c330b1b9604550d4558262da62bd2973fb6c48c80fb131822f",
+      "current_sha256": "bf60bcd07fb8538607a549d444db596c0b58db0ffb4671024fb6adbeadaa7cb0",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_sphinx10323_onset.py",
+      "original_sha256": "91f72b07108d56c619420963575d07892dfbe6402c49b9db66e3ed9f8c1ede7f",
+      "current_sha256": "ddcca2a67b77afc787b06ee5b0fae8701737d8521b6d18bf0bc4d851e570566c",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_sphinx10614_full.py",
+      "original_sha256": "6618960c02fbb23a6ee7f977b4138bc74776d686c27ab90e3d6070d5689fd09b",
+      "current_sha256": "c6cec363623405b19b6e761d903d8512c32910fcc0a873050d5bd24d29d5982e",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_sphinx11510_contraction101_onset.py",
+      "original_sha256": "c27f88803a9e2ff0b27285dac2c1612b26bf1e8da96f25f36e25a21af18c2f92",
+      "current_sha256": "5bd5e4e1f5253b05615075820f90676163410039c6bec0ced0565fc934d6ef57",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_sphinx11510_full.py",
+      "original_sha256": "fe51ca44a7bc43177aaa1353f279ee3a1a9df7a46af92e0447bdee56eda9e58b",
+      "current_sha256": "df0686b41da162d87a183e3b03da01dae82124a7a2d83e9d9f874a5fe0ae7785",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_sphinx11510_onsets.py",
+      "original_sha256": "e9263f8d7da6a5957ce75c5495f34542cc54aee1b370be7fc36cf07d97862d26",
+      "current_sha256": "73475f07359e9335237cba6c0240d82d8e94ff2ee397f60b5b48d10897b9f503",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_sphinx11510_protocol_full.py",
+      "original_sha256": "b741e0bdade9a54223a02f596bc82e16418a7ed2196aa767fa144ddf2604d0ee",
+      "current_sha256": "dd05238e85ff72c902a0680f9eb9294b68058aebc8109d53951cc0abc2ac3e1d",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_sphinx11510_protocol_onsets.py",
+      "original_sha256": "fcb34f323230169d66344d83ea15965019ca6e7547e907abcc6a7454fa1577a7",
+      "current_sha256": "5297094f1f02c8dc817d76365b9fab7ed116e569308cd16e5b1770639b9a9df7",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_sphinx7590_full.py",
+      "original_sha256": "515d09510013b9db16c4c608748f88920fd6e1685dc1d746705c5b4f2ccbcb02",
+      "current_sha256": "311e44c900cf402be5f36a5d3278d999ec56ae817ef937174b99d751a73e3642",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_sphinx8638_full.py",
+      "original_sha256": "9242d5885c9cccb9f1c83d9c207149b667613d423c702ac0266df11866b83a11",
+      "current_sha256": "3aa2d5a9215338133a5b6278b35c259d74b5a9ae15eaa0525a431945ac27c3c7",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_sphinx9461_full.py",
+      "original_sha256": "3137e027cbbe9994f353785d63a53e6e42c20ad43743210ac20c7fa3134d2383",
+      "current_sha256": "fad8023ef9c395dbceca3d17127172c8de8e9b5983a60299aa17db071c7e3d31",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_swe85_full_replies.py",
+      "original_sha256": "abd6a148be173d9af9b81b7fbb8140c8a220e44074b1e96df6c1a631d26eed5e",
+      "current_sha256": "1bc88d67c9d3300fa874818cd83c449a9027f55055adc48be67eba510e13e5e0",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_sympy12489_full.py",
+      "original_sha256": "b9dc5e5059f6bb5a214d83613a2bbe2220a2fb4f4040cee2fc4c9f5d2d276181",
+      "current_sha256": "9a372ab8fcf7b7c79e2980d0e7c7cf9fa694a83eb9a2dbb585a91335708da25f",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_sympy13091_full.py",
+      "original_sha256": "6f3116864db75f4b117b72c74e257167bd6f2430719008ce3221ee4784ecb052",
+      "current_sha256": "3288d516c2a5b94cd9808c75d043c22aac388422abf71412a46c895880e49a64",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_sympy13480_full.py",
+      "original_sha256": "5a67f00e228b1337f94bfc742bca9d91610516d9ea73a2e2cd79d71cb5af658b",
+      "current_sha256": "79c0cdd351f4ed54938b64800977a23b790a029e87049d87fdf6dd6f43cca9d0",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_sympy13480_onset.py",
+      "original_sha256": "89c9807e62824e8f6923469acce558731fd57da6a667faa40662b0181a77526f",
+      "current_sha256": "4713ad0bdb1ac516fec17d7dabc46bda5e259f695420fd7403990476cd41e4f8",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_sympy13551_full.py",
+      "original_sha256": "7d1c7cddf56d1575a40314bbc85552098098c64e7627edf5734f8f4aba40e33a",
+      "current_sha256": "37101cf8da030a2c35c48a6db13f1c20f2f5ae1da79585b1985e11d04ba256a1",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_sympy13551_onset.py",
+      "original_sha256": "b7e5e07be9c20dd8a106eedf27ad8afbe4dc3b693f2de355222a8d529b4fbd82",
+      "current_sha256": "7ff458a6399a4b5a1c0118f1c85af5c7d81f47ca8e0cec60044de041a50ea6b2",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_sympy13878_full.py",
+      "original_sha256": "d51fe74dfe9aefd2b06d3772789d6c841da7b0dec7a81c09f602b9b66c1e77d1",
+      "current_sha256": "12d59ab44e11c0d6bbf563547c79ae75c5547b7b9b1221ab2a032fc493a4dc27",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_sympy13878_onset.py",
+      "original_sha256": "0208ae9cc9c250ee40238c939b4d0cd7bc189ec89846e2a13a2c1e8de582b4f1",
+      "current_sha256": "a4a7b1bbe583ece10c4cb918977b35f2293ca0d2bd876ab05bf74bcf045d579f",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_sympy14248_caps_full.py",
+      "original_sha256": "c817524c4d990f5ccd26a8c3f847440c893584d3267cc68b5282aae34db09447",
+      "current_sha256": "b4af9f3ffa48f64df62453c31b0bc336a7c98bcc8e33de5dcf7d9a5879fd19a9",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_sympy14248_caret_onsets.py",
+      "original_sha256": "7589d2ee2faef50446f2f3bccd8cc36c6064c245502c990d7581a23846156871",
+      "current_sha256": "735b112dc1b0c5c41dd7a0376d1f9ee13790582419144c8aacb31114d2a18509",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_sympy14248_full.py",
+      "original_sha256": "7cf69073d9b048ba0ae8e63ba010ceb1037c3e283e0c7ac88fb66956b40134c6",
+      "current_sha256": "f4116df4927e324eb491d2a1644aed4871d8f97da7db9b4f108763e16d22ee65",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/refresh_swe_full_roster.py",
+      "original_sha256": "06fffc401f5355292833c327f21768dd6169b9ce06b0cd99d7da2cacf23aa636",
+      "current_sha256": "6bd3d26e4c83b1c7745546147599b18c2ba83542cba40ef064d3cb42196a2ad1",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/validate_missing_semantic_states.py",
+      "original_sha256": "961bbc84fbbed8ee2aafab9e6fe18a60a81de9c7e06b48df8bc741317be89786",
+      "current_sha256": "f470a259b0c7eff8ba04ba0da2e106554e7df1cbb87992702da9d6c0de4591ff",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/validate_requests5414_pure_urls.py",
+      "original_sha256": "34ba5301a4d42204d91dca5587d34c9f0228aeb3f8cd0df7c4eae0558c81215f",
+      "current_sha256": "5a7eefbc55c18c26a33876797ea733ef05724f9faf98c96ecdf96c56e24b1d3b",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/validate_sympy14248_states.py",
+      "original_sha256": "073d73ba99e2a95296e5a21eabf9986034de226542e83e5c39ffc1ed7c38fe4a",
+      "current_sha256": "2570796bbfadd018eaa4970e44eac0da4f179c4e502949ea8dd4188545a65450",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-execution/run_swe85_third_cap.py",
+      "original_sha256": "582c703e7a1bf2e26380dd615de6b146ed67afd98901c475120fe5b4db4011df",
+      "current_sha256": "72420fd1570e97555646af862b9dd00b8b2ea15341515dd645431aa327a2f689",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85_build_10323_4661.py",
+      "original_sha256": "36474895b112042c938ac31597f2a0ad260389d8a59a751334308b688846198a",
+      "current_sha256": "f88d77588f04443fa402015438f32b3b7a4fa85bcd42046ca64ba4c4bfa2e318",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85_build_sklearn25102_fetch.py",
+      "original_sha256": "cf112180d67797f6383d74ad57cdab0c366603fe1ff7d6f1e3ff9f3401cb580e",
+      "current_sha256": "68f4e55dbcf4df4e7082a6aab83a22fd148fb78ac121836009e94064543b395a",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85_build_sympy12489.py",
+      "original_sha256": "5526bb34b71185755d5b9b05815c4312d41a476000801db294c833197ee03458",
+      "current_sha256": "c8f9d4fe47cb3cf1c12a69d2b60c5007c69ebd96887d427ed7be8accf5f9c854",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85_build_sympy13091.py",
+      "original_sha256": "bc4d99ca3a71c6d837755321f2b220264b8154d725d5b2032f8ade60c5b32782",
+      "current_sha256": "52d8e3ca7c1b12593f0fd0fe843d4f8bc85e409e845c11ba4a288e8767012070",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85_build_sympy13480_fetch.py",
+      "original_sha256": "fb23672244e70503169d7c0449d21c2bb21d77abf008c1df69b2452eab45338f",
+      "current_sha256": "1fb2e9775962daef09956fe9620112f42e7d4708ec207ca30d5e5f191d89d749",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85_prepare_10323_4661_full.py",
+      "original_sha256": "7734595dab821553f6def2d972c5b3e0e9dc9422828bcc6160b4c620c1320dcf",
+      "current_sha256": "f37344bff9095e36b6e8c3baba9eab96120cd4d5fbd0cd7925ec886f8c76999e",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85_prepare_extra_contractions_full.py",
+      "original_sha256": "73bb2c45b04b08e58895f59f3e6dd3e1e1f9d2353e5e072afbbc030a2f0262f2",
+      "current_sha256": "5b880581810e183634586f8e84bc101a7b7eee96b60bc86526c628de381183ba",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85_prepare_extra_contractions_onsets.py",
+      "original_sha256": "9f80fde420226a8c588459b5534bda8374a3756323f6273631b567ef0da09a07",
+      "current_sha256": "e897f6ad570c9d2e94da6279f984780d379e26da58a2913ef1807f9324399b26",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85_prepare_sklearn25102_full.py",
+      "original_sha256": "c244eb69639010f044b597560a058bb2949e2cb9090e6180aa455c160ee7a749",
+      "current_sha256": "c0857eaeeaae0b1b319f683b1d9fcbf4725e0810e931f4c97444f236331df07a",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85_prepare_sphinx10323_onset.py",
+      "original_sha256": "91f72b07108d56c619420963575d07892dfbe6402c49b9db66e3ed9f8c1ede7f",
+      "current_sha256": "ddcca2a67b77afc787b06ee5b0fae8701737d8521b6d18bf0bc4d851e570566c",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85_prepare_sympy12489_full.py",
+      "original_sha256": "b9dc5e5059f6bb5a214d83613a2bbe2220a2fb4f4040cee2fc4c9f5d2d276181",
+      "current_sha256": "9a372ab8fcf7b7c79e2980d0e7c7cf9fa694a83eb9a2dbb585a91335708da25f",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85_prepare_sympy13091_full.py",
+      "original_sha256": "6f3116864db75f4b117b72c74e257167bd6f2430719008ce3221ee4784ecb052",
+      "current_sha256": "3288d516c2a5b94cd9808c75d043c22aac388422abf71412a46c895880e49a64",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85_prepare_sympy13480_full.py",
+      "original_sha256": "5a67f00e228b1337f94bfc742bca9d91610516d9ea73a2e2cd79d71cb5af658b",
+      "current_sha256": "79c0cdd351f4ed54938b64800977a23b790a029e87049d87fdf6dd6f43cca9d0",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85_prepare_sympy13480_onset.py",
+      "original_sha256": "89c9807e62824e8f6923469acce558731fd57da6a667faa40662b0181a77526f",
+      "current_sha256": "4713ad0bdb1ac516fec17d7dabc46bda5e259f695420fd7403990476cd41e4f8",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/sync_swe85_live.py",
+      "original_sha256": "370d4b082660d4e8cf6d11675ed650c25512285a2620712367a48ba3256027dc",
+      "current_sha256": "0573e7a572d2c02c85cc3b5c01ac74d50cb3b02a821fcfd50f9e67d9d2f9e725",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/validate_correct_action_semantics.py",
+      "original_sha256": "e3d2d5c7d8901984dc62af235d3cd109dd3a0efbc12b8061571f6e18ece76d7a",
+      "current_sha256": "c5dd6b6a8619552317174e8be9982d033822700ca2cd30d24b5c29a39424db09",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/validate_fetch_next_action.py",
+      "original_sha256": "9f8e11635a780328cebbdd3611c1f662a750e7d2c9120abca112aeef9c03ea97",
+      "current_sha256": "8b1616ccac53e158497fc895eadb16ed495cf0eafce3c53bb0434572a032d2c5",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/validate_requests1921_auth_regression.py",
+      "original_sha256": "394dd0985292941ec6b7fac0fc0cfbf65b37c607402bc15b6321606ff935713b",
+      "current_sha256": "8541c97c3c93467b43dbff10377875094476f8379aadea52fbc76e22244d6e72",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/validate_swe85_cap_extensions.py",
+      "original_sha256": "2fd1ab4af2a2d7297042abb932fa922f9b93590003324fc85bfc0b8cef837043",
+      "current_sha256": "8604be27033b003567857c770f0d43c96206d5050da84a8b94417a1523296447",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/verify_swe_image_provenance.py",
+      "original_sha256": "3d5fa909b59efcf9c241b8cf7b3cbadf0e93d6966363a8038ff58090f6ac08b3",
+      "current_sha256": "8dbf4e51278fb508c54f36b9833d328a1cc4d884089d9c98bbaa73eb7ae70294",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/tests/probe_attention_partition.py",
+      "original_sha256": "bd3f46c130bac684a567f4738588dc8124e8b42cd4f39914865cce110db23dfc",
+      "current_sha256": "5a893ee68acd28087b885a8d64856ae3e079f511652647f189ac882d19be5697",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/tests/probe_attention_partition_qpad.py",
+      "original_sha256": "514e1c2efd397d76959ceb95d66bd7f9705fbe7b131874f68699983dbcd479f3",
+      "current_sha256": "eb352805894296bcacf83fca500a275e2c49e9d28252cd67a4c36ef268b83733",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/tests/probe_resume_ccl_p19_bf16.py",
+      "original_sha256": "45fa791ca0c31727ae48770cfacd313b06181c67f406efe3b0d0a46a2ae45c64",
+      "current_sha256": "e0cfab0d806a00bec5e062175e50770e84b411a2edd136206e63704002c61713",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/tests/probe_resume_stages_p19.py",
+      "original_sha256": "fd572803a97f064bdf984b85031c352d2024806c202b316949470be9075a4b8f",
+      "current_sha256": "aeaeb50c55f41c40f86ad43972bec68e3b48d6e51623e811de26c41e0fcb1c39",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/tests/run_datatype_candidate.py",
+      "original_sha256": "1390350c91b27b4f8563ffa8bd38224f6b06543668ca2a627c2c3ecea756a287",
+      "current_sha256": "321d484221ca8b598dff9bbfebd6f9845031f7a979cd61385a281eec375b9371",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/tests/test_benchmark_work.py",
+      "original_sha256": "b02300d256f47f048d304c769ef79064ae123299606c1078a883bbe7a474aefa",
+      "current_sha256": "d095981564aed13d691d89d028881037d497046b06dedb477b13f28a23603c43",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/tests/test_collect_candidate_sizing.py",
+      "original_sha256": "b4540448228f58567ea45add9d93e19f9a6463217cec4cc687f6e8e7a91b5c56",
+      "current_sha256": "560793bf45f9d64a14a25913d6ecdc44e77fe539cf175daa62c0c0cf7dd8ce49",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/tests/test_kv_pool_budget.py",
+      "original_sha256": "f8d3225d54007035b9436e0297ae8500af758d1af39a06ebe5c964e2b85df2fe",
+      "current_sha256": "7f0ec012ed87a56ac6c934283b82a905f9e65b4f17ab0d13daf7edfafd60d482",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/tests/test_precision_comparison_cli.py",
+      "original_sha256": "8672e4e390c5c6d169260c6362c525e6b48fb5df5e42e6aac326b919eadfd234",
+      "current_sha256": "bff8091b58428db8663ea2e0e50e0bb2cf8c74f454764739b740c7656c507eed",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/tests/test_precision_repro_hf.py",
+      "original_sha256": "523333d7fcf3eb31e9ec6b1f0b1f783d099ab83456c13c07f1ec4d141653b5e2",
+      "current_sha256": "b6c47e0cdcacd90fec881d02a6b4a1a645ff0e480b58f7be2d3d5ac791164cb1",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/tests/test_prefill_ccl_phase_policy.py",
+      "original_sha256": "51acda7c984f44232823511dda35e1b20880b6fc2d38812adab7abf00acddf7e",
+      "current_sha256": "52f049fd2ab6a6d9a141d0a71967ba922c0eaae8d8a24055f98c32f7812aeb52",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/tests/test_prefill_mlp_bf16_block_selection.py",
+      "original_sha256": "7c1b2a4bb1b4fb987a91a517b43ef23b31fedae6a8b5671d0fbaffdd29988225",
+      "current_sha256": "4e291f8d9f5a93f20a1f98108063d21408d4b2e7e4f0de1d8449c3bbfbe07778",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/tests/test_prefill_q_partition_policy.py",
+      "original_sha256": "826a9319e0e0f83147ae9a1184ec83420c712f79d490f83cbbf1599d39a2e2ae",
+      "current_sha256": "e6537653760943201b4f3591e3bec10205704d55f3e85c1de6ff128962b025c1",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/tests/test_remeasure_agentic_rates.py",
+      "original_sha256": "0d1802eb453d33af6cf889a9238f4c4af00585b0bb8121efcca9eebefa1f1585",
+      "current_sha256": "f6d7f02feb3a2adc1dd959690c2c9ddbf5065b0826fcfa04f9d0a09bbe87ce71",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/tools/actual_branch_logits.py",
+      "original_sha256": "3a9ad550813ee01d3a6fa701b2fe9b614bd7e2d694b7771bdd05a6636a8a6380",
+      "current_sha256": "7e7d2e664337fec6b1864024e6c0cb7b160910817257033da2c53487be83c120",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/tools/benchmark_work.py",
+      "original_sha256": "0fd668dcba7e9b7bc036f2cfa89186f2032d683e414059a5028a6b3ab9a92650",
+      "current_sha256": "0fd668dcba7e9b7bc036f2cfa89186f2032d683e414059a5028a6b3ab9a92650",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/tools/collect_candidate_sizing.py",
+      "original_sha256": "220f89b5d21ef9115763fbda0224082fe31ff679f0ef6584136975284f011c7d",
+      "current_sha256": "c031db242f6244a098d825caf653952b087762e3b5cb200e0b5ebe8962804f9e",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/tools/precision_repro_hf.py",
+      "original_sha256": "dc604d7f6c7e71785f163c5bf85dbb1cae07fa35a05787428a53670e83259e47",
+      "current_sha256": "dc604d7f6c7e71785f163c5bf85dbb1cae07fa35a05787428a53670e83259e47",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/tools/remeasure_agentic_rates.py",
+      "original_sha256": "88a8231c07276198004bd297237c05841d75d501e46b7b9cc350c8356db091f3",
+      "current_sha256": "88a8231c07276198004bd297237c05841d75d501e46b7b9cc350c8356db091f3",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/tools/stage12_accuracy_references.py",
+      "original_sha256": "ae13604faa957e6f4cfa0b7f1fce0b07e93071f26c37deb8abbbad710d42c5eb",
+      "current_sha256": "ad5290c1bb978cb7b3cc4dff16c1a526b105fd78f0bb8396d262aa607ed2b1df",
+      "ast_equal": false,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/tt/generator_vllm.py",
+      "original_sha256": "5a19558b9b28b6a5586cc985bedebdd88671ba07b453ced2890935552937b734",
+      "current_sha256": "5a19558b9b28b6a5586cc985bedebdd88671ba07b453ced2890935552937b734",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/tt/kv_pool_budget.py",
+      "original_sha256": "67739175d88efe9e02cdbd5b5b559b4bac047ab7e57d7dc24ac47cff888ba081",
+      "current_sha256": "67739175d88efe9e02cdbd5b5b559b4bac047ab7e57d7dc24ac47cff888ba081",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/tt/multichip_decoder.py",
+      "original_sha256": "878c61052aee1ddd6f4afc78c4e4bbcda2c894a5a5878d01531f860e97006d99",
+      "current_sha256": "6e3bbdb61f210dc57564ad28025a563136406d5ee49ba57a8010c505e9185474",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/tt/optimized_decoder.py",
+      "original_sha256": "24f52653e82392144e880b0677b52cb01f7432a70a966cdd901592cee933e53d",
+      "current_sha256": "c0f2e5e1ac4517b435d3943fcce44071ac087f9ec214ea46fd0b06f773d68815",
+      "ast_equal": true,
+      "non_import_ast_equal": true,
+      "excluded_copied_task_source": false
+    }
+  ]
+}

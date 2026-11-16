@@ -263,8 +263,15 @@ class OptimizedDecoder(LightweightModule):
             config = ttnn.MinimalMatmulConfig(
                 M_block_size=4,
                 K_block_size=8,
-                # BF16 weights and FP32 intermediates need smaller L1 blocks.
-                N_block_size=8 if weight.dtype == ttnn.bfloat16 or kernel.fp32_dest_acc_en else 16,
+                # BF16 MLP activations also enlarge the live tensors and dataflow buffers.
+                N_block_size=8
+                if weight.dtype == ttnn.bfloat16
+                or kernel.fp32_dest_acc_en
+                or (
+                    name.startswith("mlp.")
+                    and getattr(self, "prefill_activation_dtype", ttnn.bfloat8_b) == ttnn.bfloat16
+                )
+                else 16,
                 subblock_h=1,
                 # FP32 accumulation halves the destination tile capacity.
                 subblock_w=4 if kernel.fp32_dest_acc_en else 8,

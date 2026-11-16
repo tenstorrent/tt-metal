@@ -1,0 +1,36 @@
+{
+  "status": "launched",
+  "start_unix": 1794746612.5979285,
+  "command": [
+    "timeout",
+    "1800",
+    "env",
+    "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+    "READINESS_TRACE_REGION_SIZE=134217728",
+    "OMP_NUM_THREADS=16",
+    "MKL_NUM_THREADS=16",
+    "OPENBLAS_NUM_THREADS=16",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+    "-m",
+    "models.autoports.google_gemma_4_31b_it.tools.precision_repro_batch",
+    "--cases",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-hifi2-fourcase-followup-candidate/candidate-cases.json",
+    "--build-kwargs-file",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-hifi2-fourcase-followup-candidate/down_bfp8_hifi2_build_kwargs.json",
+    "--output-dir",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-hifi2-fourcase-followup-candidate/runs/down_bfp8_hifi2"
+  ],
+  "root_review_sha256": "73951aa1ebe1a584df1ef97a3ae3d64d4961ccca174a21e59cc498ba2898566c",
+  "device_owner_check": {
+    "returncode": 1,
+    "stdout": "",
+    "stderr": ""
+  },
+  "previous_hf_completion_sha256": "2f8f1c9a1baebd195b63a4b9822e7bf186f18f6d8cddb9b2740993bb9c1d2759",
+  "configuration_scope": "Only down BFP8/HiFi2; headBFP8/LoFi and remaining decoderBFP4/LoFi. Metadata mode full is a panel label, not full BF16 precision.",
+  "environment_overrides": {
+    "HF_HUB_OFFLINE": "1",
+    "HF_DATASETS_OFFLINE": "1",
+    "HF_HUB_DISABLE_TELEMETRY": "1"
+  }
+}

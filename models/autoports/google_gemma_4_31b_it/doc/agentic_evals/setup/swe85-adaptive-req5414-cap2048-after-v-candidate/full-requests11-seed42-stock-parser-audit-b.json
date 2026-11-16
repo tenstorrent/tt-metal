@@ -1,0 +1,67 @@
+{
+  "status": "completed_cpu_only_stock_nonstreaming_parser_audit",
+  "scope": "Exact pinned assistant prefix plus generated continuation interpreted by installed stock vLLM Gemma4Parser; parser result is protocol evidence only. No shell/code execution, TTNN/device import or model load.",
+  "tokenizer_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+  "inputs": {
+    "run": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-req5414-cap2048-after-v-candidate/runs/full/anomaly.psf__requests-5414.call11.onset.suffix2048.cap2048.seed42.json",
+    "run_sha256": "1ab58b7bb92a7ffdab0bede6798bdac95e0b2e309bbb923653e930cf89c4b466",
+    "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-req5414-cap2048-after-v-candidate/fixtures/full/anomaly.psf__requests-5414.call11.onset.suffix2048.cap2048.seed42.private.json",
+    "fixture_sha256": "64c16cb0741ab60771f71f2d4900bd8acc0e12c5259d6aa7d4ec6e6041bd76b5",
+    "seed": 42,
+    "generated_token_count": 1632,
+    "generated_token_ids_sha256": "bb161695750d544ef2871651592f301c8d86a49adaee99678915c0146d7302ff",
+    "generated_text_sha256": "77453177066020c8c1e5b705131778d81d7291281b52ffbf3cadb5b424f8c399",
+    "generated_text_head": "...\n           ...\nurllib3.exceptions.LocationParseError: Failed to parse: '.example.com', label empty or too long\n```\n\nWait, `LocationParseError` is coming from `urllib3`. `requests` should handle the URL validation bef",
+    "generated_text_tail": "n `LocationParseError`).\nBy raising `InvalidURL` in `prepare_url`, `requests` will return the correct exception.\n\nI will now submit the final output.<channel|>```bash\necho COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT\n```<turn|>",
+    "assistant_prefix_token_count": 223,
+    "assistant_prefix_token_ids_sha256": "be76bb5706bd4718dc96017c06e4d5819794c5471b3a6364cbd2e16deae519e4",
+    "assistant_prefix_tail": "y\", line 5, in <module>\n    requests.get(\"http://.example.com\")\n  ...\n  File \"/opt/miniconda3/lib/python3.11/site-packages/urllib3/util/connection.py\", line 68, in create_connection\n    return six.raise_from(\n           ",
+    "assistant_prefix_method": "Source prompt full-reply case has reconstructed prompt length 7003, exact suffix slice begins at original index 5178; canonical assistant prefix starts at local index 7003-5178=1825 within the 2048-token fixture.",
+    "raw_packet": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-requests5414-caps/psf__requests-5414.call11.packet.private.json",
+    "raw_packet_sha256": "86ac061588351e26715c75a959acdb7e2a17593821991317a6d14a11e4ad9b78",
+    "raw_request_body_sha256": "624051096bf3db6b310e56a09cad02de40132ac46c7ab7d59cb065fd434b29b0",
+    "tools_schema": [
+      {
+        "type": "function",
+        "function": {
+          "name": "bash",
+          "description": "Execute a bash command",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "command": {
+                "type": "string",
+                "description": "The bash command to execute"
+              }
+            },
+            "required": [
+              "command"
+            ]
+          }
+        }
+      }
+    ],
+    "request_tool_names": [
+      "bash"
+    ]
+  },
+  "parser": {
+    "implementation": "vLLM installed Gemma4Parser; enable_auto_tools=True; model_output_token_ids supplied",
+    "verdict": "missing_tool",
+    "structured_tool_count": 0,
+    "calls": [],
+    "reasoning_chars": 6462,
+    "content_chars": 54,
+    "content_head": "```bash\necho COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT\n```",
+    "content_tail": "```bash\necho COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT\n```"
+  },
+  "parser_sources_sha256": {
+    "python_env/lib/python3.10/site-packages/vllm/parser/gemma4.py": "c974f47dc39ab7276da1e4ae38c4010e3f5411481f75e3879e29f47b2fd08df7",
+    "python_env/lib/python3.10/site-packages/vllm/parser/engine/parser_engine.py": "d1075deeb25b4872e92752d7ef0598a07a747afaf2afc56058ec30c6dc1da89a",
+    "python_env/lib/python3.10/site-packages/vllm/parser/engine/adapters.py": "7a77bcb86e2129762f4199ee726398a4850b9e207893fc4295f2b759bcfeeb36",
+    "python_env/lib/python3.10/site-packages/vllm/tool_parsers/gemma4_engine_tool_parser.py": "02f31bdcc4d8527440daebb4f4e3e74c83a6010eb56cd33fe7522bea8f51bc65",
+    "python_env/lib/python3.10/site-packages/vllm/reasoning/gemma4_engine_reasoning_parser.py": "3e9adef8ae56ee993fbaee43e82aa36216fb71251ee2de14dc9f8b326220a594"
+  },
+  "guard": "MetaPathFinder installed before transformers and vLLM imports; raises on ttnn or tt_lib.",
+  "interpretation": "The model reaches a natural end marker after a final fenced bash snippet, but the current stock non-streaming parser returns no structured tool calls. The fence is assistant visible content, not an executed command."
+}

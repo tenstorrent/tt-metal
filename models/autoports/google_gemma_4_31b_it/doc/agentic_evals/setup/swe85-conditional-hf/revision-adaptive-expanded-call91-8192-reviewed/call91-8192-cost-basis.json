@@ -1,0 +1,38 @@
+{
+  "status": "planning_sensitivity_no_hf_measurement_no_admission",
+  "prompt_tokens": 8192,
+  "prefill_chunk": 512,
+  "free_generation_tokens": 512,
+  "chosen_teacher_forcing_tokens": 64,
+  "source_baseline": {
+    "cost_basis_path": "setup/swe85-conditional-hf/cost-basis.json",
+    "cost_basis_sha256": "dc16b01ffe4dc12f0148cad0cb6b7fade4f1fce2a00688f964413f4ab3e685c5",
+    "historical_median_incremental_512_prompt_case_s": 1040.1832335699582,
+    "measured_first_512_prompt_prefill_timestamp_s": 17.67,
+    "prefill_log_path": "anomalies/gpqa-extended-precision/conditional-hf-prep/results-seed42/run.log",
+    "prefill_log_sha256": "d04c62c2d601915d3ad16e48da2195ec59df6cf1af6b8d794d99089bb3c89eae",
+    "source_case_result_path": "anomalies/gpqa-extended-precision/conditional-hf-prep/results-seed42/task110.onset.suffix512.hf.private.json",
+    "source_case_result_sha256": "e9630f725bc6e06f245581df73d1052b33f38f1d112a34292259fe2174c19955",
+    "model_load_margin_s_per_process": 180
+  },
+  "formula": {
+    "prompt_ratio": "(8192-1)/(512-1) = 8191/511",
+    "nonprefill_component_s": "historical median incremental wall minus observed first 512-prefix prefill timestamp",
+    "low_s": "nonprefill + prefill_512 * prompt_ratio^1 + load_margin",
+    "point_s": "nonprefill + prefill_512 * prompt_ratio^1.5 + load_margin",
+    "high_s": "nonprefill + prefill_512 * prompt_ratio^2 + load_margin"
+  },
+  "scenarios": {
+    "low_seconds": 1485.7519224153596,
+    "point_seconds": 2336.5067936155738,
+    "high_seconds": 5742.646502322758,
+    "hard_process_timeout_seconds": 7200
+  },
+  "limitations": [
+    "No 8192-token HF timing exists. Scaling from one 512-token prefill timestamp is a scenario, not a measured speed or guaranteed bound.",
+    "The scaling exponent spans linear to quadratic prompt-length behavior; 1.5 is an interpolation only.",
+    "The non-prefill decode/teacher-forcing cost is held at the historical 512-prefix median residual; longer-context decode may be slower and exceed the high scenario.",
+    "The 7200-second timeout is a hard process limit, not a forecast bound; timeout means stop and do not continue the HF queue.",
+    "X TT wall time is not used as an HF speed proxy. No HF model load or run was performed."
+  ]
+}

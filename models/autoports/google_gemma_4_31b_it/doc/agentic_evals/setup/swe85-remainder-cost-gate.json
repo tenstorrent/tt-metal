@@ -1,0 +1,59 @@
+{
+  "status": "existing160_controls_admitted_cost_and_fixture_review",
+  "at_unix": 1794692974.7675502,
+  "pilot": "setup/swe85-pilot-split83/pilot.json",
+  "remainder": "setup/swe85-pilot-split85/rest.json",
+  "counts_per_precision": {
+    "jobs": 160,
+    "teacher_forcing_positions": 78687,
+    "free_run_token_cap": 27648,
+    "prefill_calls_proxy": 326,
+    "prefill_input_tokens_proxy": 7620272
+  },
+  "prediction": {
+    "served": {
+      "pilot_load_s": 147.5788567981217,
+      "pilot_branch_wall_s": 50.053973163012415,
+      "pilot_progress256_s": 40.76,
+      "estimated_tf_seconds_per_token": 0.041490951620591146,
+      "estimated_prefill_residual_s": 30.138316385128665,
+      "remaining_load_s": 147.5788567981217,
+      "remaining_prefill_s": 3580.6945614483725,
+      "remaining_tf_s": 3264.7985101694553,
+      "remaining_free_s": 788.366124893071,
+      "predicted_hours": 2.161510570363617,
+      "planning_interval_hours": [
+        1.5130573992545318,
+        3.242265855545425
+      ],
+      "timeout_s": 14400
+    },
+    "full": {
+      "pilot_load_s": 78.37866061693057,
+      "pilot_branch_wall_s": 81.06037211208604,
+      "pilot_progress256_s": 64.98,
+      "estimated_tf_seconds_per_token": 0.0717873755003841,
+      "estimated_prefill_residual_s": 46.60243187190168,
+      "remaining_load_s": 78.37866061693057,
+      "remaining_prefill_s": 5536.774922049923,
+      "remaining_tf_s": 5648.733215998724,
+      "remaining_free_s": 1610.2504368083867,
+      "predicted_hours": 3.576149232076101,
+      "planning_interval_hours": [
+        2.5033044624532703,
+        5.364223848114151
+      ],
+      "timeout_s": 21600
+    }
+  },
+  "basis": "Serial measured prefix64139 with480 TF positions. TF slope estimated from256-position progress to completion; remaining branch wall is prefill/warmup residual scaled by input token count. Free generation uses prior short matched TT diagnostic35.07/17.17 tokens/s. Not serving rates.",
+  "limitations": [
+    "Single prefix and rounded progress timestamp; prefill nonlinearity and short-input overhead uncertain.",
+    "No profiler or added synchronization; ordinary host logit/token readbacks included.",
+    "Longest anomaly prefix76697 modestly extrapolates pilot. 50% upper margin; inspect completed jobs against prediction.",
+    "Three semantic coverage gaps require supplemental controls outside frozen161 manifest."
+  ],
+  "full_timeout_override_reason": "Predicted upper bound exceeds4h;6h timeout admits measured cost without truncating progressing diagnostics, below12h per-run limit and remaining stage budget.",
+  "decision": "Run existing reviewed case families while final scoped delta review and three supplemental semantic fixtures proceed. Missing cases do not invalidate existing independent controls.",
+  "scoped_review": "review/swe85-fixtures-review.md final85 delta: existing161 valid;3semantic coverage supplements required, independent of existing controls"
+}

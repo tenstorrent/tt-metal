@@ -1,0 +1,10 @@
+{
+  "reviewer": "root",
+  "accepted": true,
+  "admission_sha256": "1e7d2c4f6c6879ad8c63d4e2fdb1092546633a7c0e566581b083309a747044d4",
+  "prior_artifact_directory": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-loop-branch-investigation/actual-branch-logits/attempt1-failure-snapshot",
+  "source_only_review_sha256": "d87f404d5ae44008fc0cb3820c604f2998a9009b15d5cce6c9a896d54df6e640",
+  "failed_records_preserved": true,
+  "hf_capture_reused": true,
+  "execution_status": "pendingP3termination"
+}

@@ -91,11 +91,13 @@ def main():
             report["tt_comparisons"] = {}
             for directory in args.compare_dir:
                 tt_path = directory / (job["name"] + ".json")
-                tt_rows = json.loads(tt_path.read_text())["continuations"]["chosen"]["positions"][: len(hf_rows)]
+                tt_report = json.loads(tt_path.read_text())
+                tt_rows, identity = validate_tt_comparison_identity(case_path, case, report, tt_report, hf_rows)
                 if [r["forced_token"] for r in tt_rows] != [r["forced_token"] for r in hf_rows]:
                     raise ValueError("HF/TT teacher forcing tokens differ")
                 report["tt_comparisons"][str(directory)] = {
                     "positions": len(hf_rows),
+                    "identity": identity,
                     "top1_agreement": sum(a["top1_token"] == b["top1_token"] for a, b in zip(hf_rows, tt_rows))
                     / len(hf_rows),
                     "chosen_logprob_delta_hf_minus_tt": [
@@ -103,6 +105,88 @@ def main():
                     ],
                 }
             write_report(output_path, report)
+
+
+def validate_tt_comparison_identity(case_path, case, hf_report, tt_report, hf_rows):
+    """Require identical conditioning and scored window before comparing logits.
+
+    Older TT reports need not contain case hashes or an explicit window object:
+    their saved case path, conditioning_token_ids, and per-row positions are
+    sufficient. Optional identity fields are checked when they exist.
+    """
+    expected_prompt = case.get("prompt_token_ids")
+    if not isinstance(expected_prompt, list) or not expected_prompt:
+        raise ValueError("HF comparison case lacks prompt_token_ids")
+    expected_case_sha = hf_report.get("case_sha256") or hashlib.sha256(Path(case_path).read_bytes()).hexdigest()
+
+    tt_case_sha = tt_report.get("case_sha256")
+    if tt_case_sha is not None and tt_case_sha != expected_case_sha:
+        raise ValueError("HF/TT case hashes differ")
+
+    case_prompt_verified = False
+    case_ref = tt_report.get("case")
+    if case_ref:
+        candidate = Path(case_ref)
+        if candidate.is_file():
+            tt_case = json.loads(candidate.read_text())
+            tt_prompt = tt_case.get("prompt_token_ids")
+            if not isinstance(tt_prompt, list):
+                raise ValueError("TT report case file lacks prompt_token_ids")
+            if tt_prompt != expected_prompt:
+                raise ValueError("HF/TT case prompt token IDs differ")
+            case_prompt_verified = True
+            hf_meta = case.get("metadata", {})
+            tt_meta = tt_case.get("metadata", {})
+            for key in ("task", "call"):
+                if key in hf_meta and key in tt_meta and hf_meta[key] != tt_meta[key]:
+                    raise ValueError(f"HF/TT case metadata differs for {key}")
+            hf_response = hf_meta.get("native_response_id", hf_meta.get("response_id"))
+            tt_response = tt_meta.get("native_response_id", tt_meta.get("response_id"))
+            if hf_response is not None and tt_response is not None and hf_response != tt_response:
+                raise ValueError("HF/TT case response IDs differ")
+
+    continuations = tt_report.get("continuations")
+    tt_continuation = continuations.get("chosen") if isinstance(continuations, dict) else None
+    if not isinstance(tt_continuation, dict):
+        raise ValueError("TT report lacks chosen continuation")
+    conditioning = tt_continuation.get("conditioning_token_ids")
+    conditioning_verified = False
+    if conditioning is not None:
+        if conditioning != expected_prompt:
+            raise ValueError("HF/TT conditioning prompt token IDs differ")
+        conditioning_verified = True
+    elif not case_prompt_verified:
+        raise ValueError("Cannot verify TT conditioning: no saved conditioning IDs or readable case prompt")
+
+    tt_window = tt_continuation.get("positions")
+    if not isinstance(tt_window, list) or len(tt_window) < len(hf_rows):
+        raise ValueError("TT comparison window is shorter than HF window")
+    tt_rows = tt_window[: len(hf_rows)]
+    hf_identity = [(row.get("position", i), row["forced_token"]) for i, row in enumerate(hf_rows)]
+    tt_identity = [(row.get("position", i), row["forced_token"]) for i, row in enumerate(tt_rows)]
+    if hf_identity != tt_identity:
+        raise ValueError("HF/TT continuation positions or forced-token window differ")
+
+    # Some future/alternate report versions provide explicit window metadata.
+    # Historical reports do not; row positions above establish their window.
+    explicit_window = tt_report.get("window", tt_continuation.get("window"))
+    if isinstance(explicit_window, dict):
+        start = explicit_window.get("start_token")
+        max_tokens = explicit_window.get("max_tokens")
+        if start is not None and start != 0:
+            raise ValueError("TT window starts at a different continuation position")
+        if max_tokens is not None and max_tokens < len(hf_rows):
+            raise ValueError("TT explicit window does not cover HF comparison rows")
+
+    return tt_rows, {
+        "hf_case_sha256": expected_case_sha,
+        "tt_case_sha256": tt_case_sha,
+        "tt_case_path": case_ref,
+        "case_prompt_ids_verified": case_prompt_verified,
+        "conditioning_token_ids_verified": conditioning_verified,
+        "position_window": [hf_identity[0][0], hf_identity[-1][0]] if hf_identity else [],
+        "explicit_window_checked": isinstance(explicit_window, dict),
+    }
 
 
 def write_report(path, report):

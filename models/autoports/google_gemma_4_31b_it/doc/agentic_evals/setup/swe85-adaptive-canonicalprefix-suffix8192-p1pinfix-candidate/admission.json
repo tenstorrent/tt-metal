@@ -1,0 +1,10 @@
+{
+  "status": "admitted",
+  "proposal_sha256": "e506154d52a4fb969d5f142cd9574cbb46db891c56d34d14f0387a28c493848a",
+  "driver_sha256": "ccf6e0e36654b16603347450756f9748f2fd4c9f2dbf9bbd942adf787aecee2d",
+  "expected_p_admission_sha256": "91dc764e6a3a6b1e8a1be51e6eee5fc958c19d1dfcfa3d057b989aa325618cdd",
+  "p_source_hashes_sha256": "e1254ae95f87360bc214b01757062a8910b5fed95f6e6cfd13244b024cce01ad",
+  "p_admission_inventory_placeholder_sha256": "428bea328fae8fa6e4f6fe21802f3763985d6b5ee819f5beac6c6df3ff1f2b97",
+  "note": "Root reviewed explicit stale P placeholder exception; exact inventory and final admission pins enforced, all other pins unchanged. Prior X attempts stopped before device launch. Six fixtures/commands and forecast unchanged apart from output destination. Root forecast miss accepted before this launch.",
+  "admitted_unix": 1794724426.0765584
+}

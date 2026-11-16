@@ -1,0 +1,146 @@
+{
+  "status": "independent_U_cap1024_raw_text_pinned_prefix_triage",
+  "scope": "Five completed U suffix2048 cap1024 outputs. Exact generated token IDs decoded using pinned tokenizer; assistant prefix reconstructed as candidate suffix IDs after the original raw-request prompt boundary. No score adjudication; generated commands were not run.",
+  "tokenizer_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+  "rows": [
+    {
+      "job": "anomaly.psf__requests-5414.call10.onset",
+      "mode": "served",
+      "seed": 42,
+      "verdict": "inconclusive",
+      "generated_tokens": 1024,
+      "requested_cap_tokens": 1024,
+      "result_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-execution-candidate/runs/served/anomaly.psf__requests-5414.call10.onset.suffix2048.cap1024.seed42.json",
+      "result_sha256": "84168fff11b5ad2c8a1c3fa9ec9d6a76d78f832aa938e674ac43a71a8bbfe421",
+      "fixture_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-candidate/fixtures/served/anomaly.psf__requests-5414.call10.onset.suffix2048.cap1024.seed42.private.json",
+      "fixture_sha256": "6e4c48b0c32701a0e95f6bccd463129418012c02d48d0c426fe1b14f6ec4bea2",
+      "source_onset_fixture_sha256": "38cba2429d022e64133da2c34388d9e88a9b26b82ec58594153692842dccb961",
+      "assistant_prefix": {
+        "token_count": 188,
+        "ids_sha256": "f9f90e7273c96002d73a1b661eff983afc92209ffeeee833eb0f817e934d87f3",
+        "tail": "(\"http://.example.com\")\n  ...\n  File \"/opt/miniconda3/lib/python3.11/site-packages/urllib3/util/connection.py\", line 68, in create_connection\n    return six.raise_from(\n           "
+      },
+      "generated_text": {
+        "sha256": "116e14ecc8c68942c6772a738697d549983a2b6c78952d68a9cc30f135213a14",
+        "head": "...\n  File \"/opt/miniconda3/lib/python3.11/site-packages/urllib3/util/connection.py\", line 68, in create_connection\n    ...\n  ...\nurllib3.exceptions.LocationParseError: Failed to parse: 'http://.example.com'\n```\nThis is happening in `urllib",
+        "tail": "ns.InvalidURL`.\n\nWait, I'll just use `sed` to add the check to `requests/models.py`.\n\nWait, I'll first check where to add the check. In `prepare_url`, after `host` is obtained and validated to be ASCII.\n\nWait, I'll just use `bash` to modify"
+      },
+      "original512_generated_ids_match": true,
+      "stock_parser_verdict_for_call10_full": "not separately audited",
+      "evidence": "Distinct URL/IDNA analysis and proposed code continue without a proven unchanged loop or completed tool call at the 1024-token cap. No native sustained ellipsis/caret motif.",
+      "confidence": "medium"
+    },
+    {
+      "job": "anomaly.psf__requests-5414.call10.onset",
+      "mode": "full",
+      "seed": 43,
+      "verdict": "other_anomaly",
+      "generated_tokens": 975,
+      "requested_cap_tokens": 1024,
+      "result_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-execution-candidate/runs/full/anomaly.psf__requests-5414.call10.onset.suffix2048.cap1024.seed43.json",
+      "result_sha256": "5c4660236e54304af472b9ae8d1c572d663bfbf0ede40ac9a17cb9551a2f3a0e",
+      "fixture_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-candidate/fixtures/full/anomaly.psf__requests-5414.call10.onset.suffix2048.cap1024.seed43.private.json",
+      "fixture_sha256": "3c0862e806b31c9059065202c03fc559279a036957d53e853c4cf5460ba19dee",
+      "source_onset_fixture_sha256": "38cba2429d022e64133da2c34388d9e88a9b26b82ec58594153692842dccb961",
+      "assistant_prefix": {
+        "token_count": 188,
+        "ids_sha256": "f9f90e7273c96002d73a1b661eff983afc92209ffeeee833eb0f817e934d87f3",
+        "tail": "(\"http://.example.com\")\n  ...\n  File \"/opt/miniconda3/lib/python3.11/site-packages/urllib3/util/connection.py\", line 68, in create_connection\n    return six.raise_from(\n           "
+      },
+      "generated_text": {
+        "sha256": "bb9a2f72831292dfd931d70462bc722bf5a227e5bcb3b7de16423bc2579eabcb",
+        "head": "...\nurllib3.exceptions.LocationParseError: Failed to parse: '.example.com', label empty or too long\n```\n\nThe goal is to make this raise `requests.exceptions.InvalidURL`.\n\nLooking at the source code in `requests/models.py` ( lines 350-420):\n",
+        "tail": "w implement the fix.<channel|>```bash\ncat << 'EOF' > fix_issue.py\nimport idna\ntry:\n    idna.encode(\".example.com\", uts46=True)\n    print(\"Failed to catch\")\nexcept Exception as e:\n    print(f\"Caught: {e}\")\nEOF\npython3 fix_issue.py\n```<turn|>"
+      },
+      "original512_generated_ids_match": true,
+      "stock_parser_verdict_for_call10_full": "missing_tool",
+      "evidence": "The assistant prefix is thought plus traceback, not an open tool call. Generated continuation presents a fenced bash command without the canonical tool-call opener; pinned stock parser produces no structured tool call. No sustained native ellipsis/caret motif.",
+      "confidence": "high"
+    },
+    {
+      "job": "anomaly.psf__requests-5414.call10.onset",
+      "mode": "full",
+      "seed": 44,
+      "verdict": "other_anomaly",
+      "generated_tokens": 626,
+      "requested_cap_tokens": 1024,
+      "result_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-execution-candidate/runs/full/anomaly.psf__requests-5414.call10.onset.suffix2048.cap1024.seed44.json",
+      "result_sha256": "123f151deade6d8ceb86ef7103a1c32c4176606b84109368ca2ba80f869be8c6",
+      "fixture_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-candidate/fixtures/full/anomaly.psf__requests-5414.call10.onset.suffix2048.cap1024.seed44.private.json",
+      "fixture_sha256": "2115c3bdecbfc57e014b8c779edca64f4601a0470b0e68d8c516a5e9e28490cf",
+      "source_onset_fixture_sha256": "38cba2429d022e64133da2c34388d9e88a9b26b82ec58594153692842dccb961",
+      "assistant_prefix": {
+        "token_count": 188,
+        "ids_sha256": "f9f90e7273c96002d73a1b661eff983afc92209ffeeee833eb0f817e934d87f3",
+        "tail": "(\"http://.example.com\")\n  ...\n  File \"/opt/miniconda3/lib/python3.11/site-packages/urllib3/util/connection.py\", line 68, in create_connection\n    return six.raise_from(\n           "
+      },
+      "generated_text": {
+        "sha256": "7ce83f205f2cfa625ab4287156ca8992742011e66609b9fed6c3b1114f7f2fe3",
+        "head": "...\n  File \"/opt/miniconda3/lib/python3.11/site-packages/urllib3/util/connection.py\", line 68, in create_connection\n    return six.raise_from(\n           ...\nurllib3.exceptions.LocationParseError: Failed to parse: '.example.com', label empt",
+        "tail": ":\n    print(f\"Caught: {type(e).__name__}: {e}\")\n\ntry:\n    requests.get(\"http://example.com.\")\n    print(\"Success\")\nexcept Exception as e:\n    print(f\"Caught: {type(e).__name__}: {e}\")\nEOF\npython3 test_dots.py\n```<tool_call|><|tool_response>"
+      },
+      "original512_generated_ids_match": true,
+      "stock_parser_verdict_for_call10_full": "missing_tool",
+      "evidence": "The assistant prefix is thought plus traceback, not an open tool call. Generated continuation presents a fenced bash command without the canonical tool-call opener; pinned stock parser produces no structured tool call. No sustained native ellipsis/caret motif.",
+      "confidence": "high"
+    },
+    {
+      "job": "anomaly.psf__requests-5414.call11.onset",
+      "mode": "full",
+      "seed": 42,
+      "verdict": "inconclusive",
+      "generated_tokens": 1024,
+      "requested_cap_tokens": 1024,
+      "result_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-execution-candidate/runs/full/anomaly.psf__requests-5414.call11.onset.suffix2048.cap1024.seed42.json",
+      "result_sha256": "bbe10ef469c6473e26d18e3d1be8c9a3dfaa5e1ff64f9bed8eff8e1c5a725867",
+      "fixture_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-candidate/fixtures/full/anomaly.psf__requests-5414.call11.onset.suffix2048.cap1024.seed42.private.json",
+      "fixture_sha256": "906674f12d643a2d5825f6f6d0747ba70cdfd8b7e7764b3ac7ff267ff82db53f",
+      "source_onset_fixture_sha256": "50cbd0eb4e62c843a1ec8ac800a580135c3abc5dc2154d6be0a7e39d0c37ed6f",
+      "assistant_prefix": {
+        "token_count": 223,
+        "ids_sha256": "be76bb5706bd4718dc96017c06e4d5819794c5471b3a6364cbd2e16deae519e4",
+        "tail": "(\"http://.example.com\")\n  ...\n  File \"/opt/miniconda3/lib/python3.11/site-packages/urllib3/util/connection.py\", line 68, in create_connection\n    return six.raise_from(\n           "
+      },
+      "generated_text": {
+        "sha256": "2b54247ffe9283bd1b34034d97c4e7f311e544a691dd490f04bde89e0eb51589",
+        "head": "...\n           ...\nurllib3.exceptions.LocationParseError: Failed to parse: '.example.com', label empty or too long\n```\n\nWait, `LocationParseError` is coming from `urllib3`. `requests` should handle the URL validation before passing it to `u",
+        "tail": "hen `.example.com` (ASCII) will be passed to `_get_idna_encoded_host`, `idna.encode` will raise `IDNAError`, it will raise `UnicodeError`, and `prepare_url` will raise `InvalidURL`.\n\nBut wait, `_get_idna_encoded_host` is a `@staticmethod` ("
+      },
+      "original512_generated_ids_match": true,
+      "stock_parser_verdict_for_call10_full": "not separately audited",
+      "evidence": "Distinct URL/IDNA analysis and proposed code continue without a proven unchanged loop or completed tool call at the 1024-token cap. No native sustained ellipsis/caret motif.",
+      "confidence": "medium"
+    },
+    {
+      "job": "anomaly.psf__requests-5414.call11.onset",
+      "mode": "full",
+      "seed": 43,
+      "verdict": "other_anomaly",
+      "generated_tokens": 1024,
+      "requested_cap_tokens": 1024,
+      "result_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-execution-candidate/runs/full/anomaly.psf__requests-5414.call11.onset.suffix2048.cap1024.seed43.json",
+      "result_sha256": "c149400e2e974fbefcdfae71c8fd2c7179b4c711e44bc6c330eb6ebacf5294d7",
+      "fixture_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-candidate/fixtures/full/anomaly.psf__requests-5414.call11.onset.suffix2048.cap1024.seed43.private.json",
+      "fixture_sha256": "d2f703cc3d29b89d2edbabfe9036ed36c070c095b362b0d5808b106997a40cef",
+      "source_onset_fixture_sha256": "50cbd0eb4e62c843a1ec8ac800a580135c3abc5dc2154d6be0a7e39d0c37ed6f",
+      "assistant_prefix": {
+        "token_count": 223,
+        "ids_sha256": "be76bb5706bd4718dc96017c06e4d5819794c5471b3a6364cbd2e16deae519e4",
+        "tail": "(\"http://.example.com\")\n  ...\n  File \"/opt/miniconda3/lib/python3.11/site-packages/urllib3/util/connection.py\", line 68, in create_connection\n    return six.raise_from(\n           "
+      },
+      "generated_text": {
+        "sha256": "433c9dc28840feeafa1763b6ca44c1a1b299b4e81183fb1439654a659436d463",
+        "head": "...\n   own urllib3.exceptions.LocationParseError: Failed to parse: '.example.com', label empty or too long\n```\nWait, `LocationParseError` is coming from `urllib3`.\nActually, if I look at the `requests` source code provided (specifically `re",
+        "tail": ".\nYes, it's usually imported.\n\nWait, I'll just try to reproduce it and see if I can catch it.\nI'll try to modify `requests/sessions.py`.\n\nActually, I'll just try to implement the fix by catching `LocationParseError`.\n\nWait, I'll first check"
+      },
+      "original512_generated_ids_match": true,
+      "stock_parser_verdict_for_call10_full": "not separately audited",
+      "evidence": "The generated traceback inserts unrelated `own` immediately before urllib3.exceptions.LocationParseError after the inherited traceback prefix; localized malformed text is an affirmative anomaly even though later reasoning progresses to cap. No native sustained ellipsis motif.",
+      "confidence": "high"
+    }
+  ],
+  "counts": {
+    "inconclusive": 2,
+    "other_anomaly": 3
+  }
+}

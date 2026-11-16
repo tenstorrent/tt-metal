@@ -1,0 +1,42 @@
+{
+  "status": "passed",
+  "scope": "CPU-only --validate-only; no TTNN import/device work",
+  "checks": [
+    {
+      "mode": "served",
+      "command": [
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+        "-m",
+        "models.autoports.google_gemma_4_31b_it.tools.precision_repro_batch",
+        "--cases",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/served-candidate-cases.json",
+        "--build-kwargs-file",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/head_bfp8_build_kwargs.json",
+        "--output-dir",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/unused",
+        "--validate-only"
+      ],
+      "returncode": 0,
+      "stdout": "Validated 14 jobs without importing TTNN",
+      "stderr": ""
+    },
+    {
+      "mode": "full",
+      "command": [
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+        "-m",
+        "models.autoports.google_gemma_4_31b_it.tools.precision_repro_batch",
+        "--cases",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/full-candidate-cases.json",
+        "--build-kwargs-file",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_build_kwargs.json",
+        "--output-dir",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/unused",
+        "--validate-only"
+      ],
+      "returncode": 0,
+      "stdout": "Validated 24 jobs without importing TTNN",
+      "stderr": ""
+    }
+  ]
+}

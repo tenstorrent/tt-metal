@@ -1,0 +1,94 @@
+{
+  "status": "prepared_not_executed",
+  "commands": [
+    {
+      "task": 7,
+      "mode": "decisive",
+      "precision": "served",
+      "command": "env PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime READINESS_TRACE_REGION_SIZE=134217728 /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python models/autoports/google_gemma_4_31b_it/tools/precision_repro_probe.py --case models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-phase1-precision/task7.decisive.private.json --build-kwargs-file models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/served_build_kwargs.json --output models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-phase1-precision/task7.decisive.served.private.json"
+    },
+    {
+      "task": 7,
+      "mode": "decisive",
+      "precision": "full_precision",
+      "command": "env PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime READINESS_TRACE_REGION_SIZE=134217728 /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python models/autoports/google_gemma_4_31b_it/tools/precision_repro_probe.py --case models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-phase1-precision/task7.decisive.private.json --build-kwargs-file models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_build_kwargs.json --output models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-phase1-precision/task7.decisive.full_precision.private.json --compare-report models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-phase1-precision/task7.decisive.served.private.json"
+    },
+    {
+      "task": 7,
+      "mode": "full_reply",
+      "precision": "served",
+      "command": "env PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime READINESS_TRACE_REGION_SIZE=134217728 /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python models/autoports/google_gemma_4_31b_it/tools/precision_repro_probe.py --case models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-phase1-precision/task7.full_reply.private.json --build-kwargs-file models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/served_build_kwargs.json --output models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-phase1-precision/task7.full_reply.served.private.json"
+    },
+    {
+      "task": 7,
+      "mode": "full_reply",
+      "precision": "full_precision",
+      "command": "env PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime READINESS_TRACE_REGION_SIZE=134217728 /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python models/autoports/google_gemma_4_31b_it/tools/precision_repro_probe.py --case models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-phase1-precision/task7.full_reply.private.json --build-kwargs-file models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_build_kwargs.json --output models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-phase1-precision/task7.full_reply.full_precision.private.json --compare-report models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-phase1-precision/task7.full_reply.served.private.json"
+    },
+    {
+      "task": 93,
+      "mode": "decisive",
+      "precision": "served",
+      "command": "env PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime READINESS_TRACE_REGION_SIZE=134217728 /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python models/autoports/google_gemma_4_31b_it/tools/precision_repro_probe.py --case models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-phase1-precision/task93.decisive.private.json --build-kwargs-file models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/served_build_kwargs.json --output models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-phase1-precision/task93.decisive.served.private.json"
+    },
+    {
+      "task": 93,
+      "mode": "decisive",
+      "precision": "full_precision",
+      "command": "env PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime READINESS_TRACE_REGION_SIZE=134217728 /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python models/autoports/google_gemma_4_31b_it/tools/precision_repro_probe.py --case models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-phase1-precision/task93.decisive.private.json --build-kwargs-file models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_build_kwargs.json --output models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-phase1-precision/task93.decisive.full_precision.private.json --compare-report models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-phase1-precision/task93.decisive.served.private.json"
+    },
+    {
+      "task": 93,
+      "mode": "full_reply",
+      "precision": "served",
+      "command": "env PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime READINESS_TRACE_REGION_SIZE=134217728 /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python models/autoports/google_gemma_4_31b_it/tools/precision_repro_probe.py --case models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-phase1-precision/task93.full_reply.private.json --build-kwargs-file models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/served_build_kwargs.json --output models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-phase1-precision/task93.full_reply.served.private.json"
+    },
+    {
+      "task": 93,
+      "mode": "full_reply",
+      "precision": "full_precision",
+      "command": "env PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime READINESS_TRACE_REGION_SIZE=134217728 /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python models/autoports/google_gemma_4_31b_it/tools/precision_repro_probe.py --case models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-phase1-precision/task93.full_reply.private.json --build-kwargs-file models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_build_kwargs.json --output models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-phase1-precision/task93.full_reply.full_precision.private.json --compare-report models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-phase1-precision/task93.full_reply.served.private.json"
+    },
+    {
+      "task": 167,
+      "mode": "decisive",
+      "precision": "served",
+      "command": "env PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime READINESS_TRACE_REGION_SIZE=134217728 /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python models/autoports/google_gemma_4_31b_it/tools/precision_repro_probe.py --case models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-phase1-precision/task167.decisive.private.json --build-kwargs-file models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/served_build_kwargs.json --output models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-phase1-precision/task167.decisive.served.private.json"
+    },
+    {
+      "task": 167,
+      "mode": "decisive",
+      "precision": "full_precision",
+      "command": "env PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime READINESS_TRACE_REGION_SIZE=134217728 /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python models/autoports/google_gemma_4_31b_it/tools/precision_repro_probe.py --case models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-phase1-precision/task167.decisive.private.json --build-kwargs-file models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_build_kwargs.json --output models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-phase1-precision/task167.decisive.full_precision.private.json --compare-report models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-phase1-precision/task167.decisive.served.private.json"
+    },
+    {
+      "task": 167,
+      "mode": "full_reply",
+      "precision": "served",
+      "command": "env PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime READINESS_TRACE_REGION_SIZE=134217728 /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python models/autoports/google_gemma_4_31b_it/tools/precision_repro_probe.py --case models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-phase1-precision/task167.full_reply.private.json --build-kwargs-file models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/served_build_kwargs.json --output models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-phase1-precision/task167.full_reply.served.private.json"
+    },
+    {
+      "task": 167,
+      "mode": "full_reply",
+      "precision": "full_precision",
+      "command": "env PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime READINESS_TRACE_REGION_SIZE=134217728 /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python models/autoports/google_gemma_4_31b_it/tools/precision_repro_probe.py --case models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-phase1-precision/task167.full_reply.private.json --build-kwargs-file models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_build_kwargs.json --output models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-phase1-precision/task167.full_reply.full_precision.private.json --compare-report models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-phase1-precision/task167.full_reply.served.private.json"
+    },
+    {
+      "task": 195,
+      "mode": "onset_TF_plus_free_running",
+      "precision": "served",
+      "command": "env PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime READINESS_TRACE_REGION_SIZE=134217728 /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python models/autoports/google_gemma_4_31b_it/tools/precision_repro_probe.py --case models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-phase1-precision/task195.onset.private.json --build-kwargs-file models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/served_build_kwargs.json --output models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-phase1-precision/task195.onset.served.private.json --free-run-tokens 1024 --free-run-trials 3"
+    },
+    {
+      "task": 195,
+      "mode": "onset_TF_plus_free_running",
+      "precision": "full_precision",
+      "command": "env PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime READINESS_TRACE_REGION_SIZE=134217728 /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python models/autoports/google_gemma_4_31b_it/tools/precision_repro_probe.py --case models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-phase1-precision/task195.onset.private.json --build-kwargs-file models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_build_kwargs.json --output models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-phase1-precision/task195.onset.full_precision.private.json --compare-report models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-phase1-precision/task195.onset.served.private.json --free-run-tokens 1024 --free-run-trials 3"
+    }
+  ],
+  "budget": "Preferred batch commands load each precision once. Per precision: task195 onset43 TFpositions +3x1024 free-running; 3decisivecases18 TFpositions; full chosen replies21795 TFpositions. Diagnostic full-logit readbacks and first-load time unmeasured; reserve30-60minutes per policy initially and inspect actual progress, not serving-rate extrapolation. All cases retain original reconstructed prefixes. No devices run by setup.",
+  "batch_commands": {
+    "served": "env PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime READINESS_TRACE_REGION_SIZE=134217728 /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python models/autoports/google_gemma_4_31b_it/tools/precision_repro_batch.py --cases models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-phase1-precision/batch_cases.json --build-kwargs-file models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/served_build_kwargs.json --output-dir models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-phase1-precision/batch-served",
+    "full_precision": "env PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime READINESS_TRACE_REGION_SIZE=134217728 /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python models/autoports/google_gemma_4_31b_it/tools/precision_repro_batch.py --cases models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-phase1-precision/batch_cases.json --build-kwargs-file models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_build_kwargs.json --output-dir models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-phase1-precision/batch-full_precision --compare-dir models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-phase1-precision/batch-served"
+  }
+}

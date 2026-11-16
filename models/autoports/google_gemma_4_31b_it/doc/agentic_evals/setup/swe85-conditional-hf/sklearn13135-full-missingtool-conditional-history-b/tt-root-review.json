@@ -1,0 +1,31 @@
+{
+  "status": "both full-TT conditional windows collected; HF pending",
+  "cases": [
+    {
+      "case": "sklearn13135-original17k-missingtool-protocol-switch-seed42",
+      "conditioning_tokens": 17585,
+      "chosen_tokens": 64,
+      "conditioning_ids_exact": true,
+      "forced_ids_exact": true,
+      "full_runtime_policy_exact": true,
+      "result_sha256": "5096a5c15dbb1af5a95a4b3f9be3b322a525405f2094c4d76212b0f50d352cc4",
+      "top1_fraction": 0.890625
+    },
+    {
+      "case": "sklearn13135-original17k-missingtool-terminal-turn-seed42",
+      "conditioning_tokens": 17996,
+      "chosen_tokens": 64,
+      "conditioning_ids_exact": true,
+      "forced_ids_exact": true,
+      "full_runtime_policy_exact": true,
+      "result_sha256": "5e2cc400fa292efbdefd3c4293d8ddd0a245e1b25e97611ae5058001e8651058",
+      "top1_fraction": 0.9375
+    }
+  ],
+  "wall_seconds": 113.8532383441925,
+  "forecast_miss": "Slightly faster than130\u2013300second range; both windows complete, no accuracy or speed inference from timing.",
+  "limitations": [
+    "Exact reconstructed saved history, not native prompt equivalence.",
+    "Conditional probabilities do not establish free-running incidence or semantic correctness."
+  ]
+}

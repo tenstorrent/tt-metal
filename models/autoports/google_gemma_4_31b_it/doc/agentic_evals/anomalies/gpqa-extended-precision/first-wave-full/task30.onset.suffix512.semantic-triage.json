@@ -1,0 +1,134 @@
+{
+  "task": "30",
+  "diagnostic": "full precision suffix512 first-wave free-running continuations",
+  "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first-wave-full/task30.onset.suffix512.json",
+  "source_packet": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/gpqa-extended198-head-bfp8/digest/analysis.private/30-ca3c2d538e5e19f3.json",
+  "comparison_context": {
+    "original_triage": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/gpqa-extended198-head-bfp8/digest/30.triage.json",
+    "coordinator_context": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/gpqa-extended198-head-bfp8/digest/coordinator.json",
+    "learned_context": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/learned.json",
+    "original_finding": "The full native reply was judged anomalous for recurring product and symmetry hypotheses, especially across later reasoning spans; its answer repeats the speculative alternatives and settles on Cs without new support. The three full-precision suffix continuations show a related repeated symmetry/product cycle, but do not establish a precision cause.",
+    "prompt_suffix_context": "The exact retained 512-token suffix comes from reconstructed reply IDs at the selected onset; 4557 earlier reply tokens were removed and none added. It ends after the prior reasoning rejected 1,4-dinitrobenzene as a product of the stated toluene-to-nitrotoluene-to-nitrobenzoic-acid route. Continuations are conditioned on this truncated reasoning context, not on the original full prompt.",
+    "ranges": "Character ranges are zero-based, half-open offsets in each saved free_running[].text string. Evidence is paraphrased."
+  },
+  "seeds": [
+    {
+      "index": 0,
+      "seed": 42,
+      "text_chars": 3314,
+      "semantic_anomaly": true,
+      "mechanical_flag": false,
+      "observed_malformed_text": false,
+      "evidence": [
+        {
+          "char_range": [
+            0,
+            860
+          ],
+          "paraphrase": "Reopens the product question, speculates about D2h aromatic candidates, focuses on 1,4-dinitrobenzene, and checks it against the reaction sequence before rejecting it."
+        },
+        {
+          "char_range": [
+            860,
+            1720
+          ],
+          "paraphrase": "Repeats essentially the same candidate set, nitro-group symmetry argument, route test, and rejection without adding a new chemical premise or check."
+        },
+        {
+          "char_range": [
+            1720,
+            2580
+          ],
+          "paraphrase": "Repeats the same cycle a third time, again ending with the route rejection."
+        },
+        {
+          "char_range": [
+            2580,
+            3314
+          ],
+          "paraphrase": "Starts the same cycle again and is truncated during the reaction sequence. The cut-off is consistent with the diagnostic length and is not counted as malformed text."
+        }
+      ],
+      "basis": "Multiple near-identical full hypothesis-and-rejection cycles occur in one reply with no substantive progression."
+    },
+    {
+      "index": 1,
+      "seed": 43,
+      "text_chars": 3324,
+      "semantic_anomaly": true,
+      "mechanical_flag": false,
+      "observed_malformed_text": false,
+      "evidence": [
+        {
+          "char_range": [
+            0,
+            1069
+          ],
+          "paraphrase": "Lists familiar D2h molecules, then repeats the claim that the product must be highly symmetric, revisits nitro-group symmetry, proposes dinitrobenzene, and rejects it against the supplied route."
+        },
+        {
+          "char_range": [
+            1069,
+            2138
+          ],
+          "paraphrase": "Restarts the same aromatic-candidate list and repeats the same symmetry argument and route rejection, with only minor wording variation."
+        },
+        {
+          "char_range": [
+            2138,
+            3207
+          ],
+          "paraphrase": "Repeats the same list and reasoning cycle a third time without a distinct pathway or discriminating check."
+        },
+        {
+          "char_range": [
+            3207,
+            3324
+          ],
+          "paraphrase": "Begins another restart and ends mid-question at the diagnostic boundary; this alone is not malformed text."
+        }
+      ],
+      "basis": "Three successive cycles repeat the same candidates, symmetry premise, dinitrobenzene alternative, and route rejection. Minor phrasing changes do not advance the analysis."
+    },
+    {
+      "index": 2,
+      "seed": 44,
+      "text_chars": 3209,
+      "semantic_anomaly": true,
+      "mechanical_flag": false,
+      "observed_malformed_text": false,
+      "evidence": [
+        {
+          "char_range": [
+            0,
+            1073
+          ],
+          "paraphrase": "Names several D2h aromatic examples, including repeated p-phenylenediamine entries, then returns to the same highly symmetric product framing and the nitro-group argument."
+        },
+        {
+          "char_range": [
+            1073,
+            2152
+          ],
+          "paraphrase": "Restarts the same symmetry question, candidate list, nitro-group argument, dinitrobenzene speculation, and route rejection."
+        },
+        {
+          "char_range": [
+            2152,
+            3209
+          ],
+          "paraphrase": "Repeats that cycle again and reaches the same route rejection; the final sentence is cut off at the diagnostic boundary. No stray-language token or other malformed fragment is observed."
+        }
+      ],
+      "basis": "The repeated candidate list and repeated route argument recur without a new premise or resolving check. The unfinished ending is treated as length truncation, not malformed text."
+    }
+  ],
+  "pattern_comparison": "All three seeds semantically repeat the same unresolved symmetry/product speculation, with repeated D2h candidates and the rejected 1,4-dinitrobenzene route. This resembles the broad late-reasoning pattern in the original full-reply triage. The seeds differ in their opening list and wording, but none develops a new chemical check after returning to the cycle. This establishes the observed behavior of these three diagnostic continuations only; it is not an incidence estimate or evidence that precision caused the original anomaly.",
+  "limits": [
+    "Host-only semantic assessment of three diagnostic continuations generated from an exact 512-token suffix of reconstructed IDs. The removed prefix changes position origin and context; this is not an original-prompt reproduction.",
+    "The original reconstructed completion token count is close to the native completion count, but native sampled token IDs were unavailable. No token identity or full-reply teacher-forced equivalence is claimed.",
+    "The saved chosen teacher-forced continuation exists and was executed. This semantic review does not assess its results. The official task score is completed and has no pending score claim; this diagnostic does not change scoring.",
+    "No precision-causation, population, or general model-behavior conclusion follows from these three strings. Mechanical flags are preserved exactly as saved and are not semantic judgments.",
+    "The only incomplete text occurs at diagnostic output boundaries and is not counted as malformed; no stray-language tokens were observed."
+  ]
+}

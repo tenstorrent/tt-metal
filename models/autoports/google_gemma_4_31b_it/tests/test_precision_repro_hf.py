@@ -5,11 +5,12 @@ import json
 import time
 from types import SimpleNamespace
 
+import pytest
 import torch
 from transformers.models.gemma4.configuration_gemma4 import Gemma4TextConfig
 from transformers.models.gemma4.modeling_gemma4 import Gemma4ForCausalLM
 
-from models.autoports.google_gemma_4_31b_it.tools.precision_repro_hf import run_case
+from models.autoports.google_gemma_4_31b_it.tools.precision_repro_hf import run_case, validate_tt_comparison_identity
 
 
 def test_chunked_hybrid_cache_preserves_tf_and_seeded_generation(tmp_path):
@@ -80,3 +81,82 @@ def test_token_streamer_skips_prompt_and_reports_only_counts(capsys):
     assert streamer.generated_count == 256
     assert streamer.ended
     assert capsys.readouterr().out.splitlines() == ["HF_GENERATION_PROGRESS 42 128", "HF_GENERATION_PROGRESS 42 256"]
+
+
+def _comparison_fixtures(tmp_path):
+    case = {"prompt_token_ids": [10, 11], "metadata": {"task": "task-a", "call": 7}}
+    case_path = tmp_path / "case.json"
+    case_path.write_text(json.dumps(case))
+    hf_rows = [{"position": i, "forced_token": 42} for i in range(4)]
+    tt_case_path = tmp_path / "tt-case.json"
+    tt_case_path.write_text(json.dumps(case))
+    tt_report = {
+        "case": str(tt_case_path),
+        "metadata": {"task": "task-a", "call": 7},
+        "continuations": {
+            "chosen": {
+                "positions": [{"position": i, "forced_token": 42} for i in range(4)],
+                "tokens": 4,
+                "conditioning_token_ids": [10, 11],
+            }
+        },
+    }
+    hf_report = {"case_sha256": __import__("hashlib").sha256(case_path.read_bytes()).hexdigest()}
+    return case_path, case, hf_report, tt_report, hf_rows
+
+
+def test_comparison_identity_accepts_historical_schema_without_optional_hash_or_window(tmp_path):
+    case_path, case, hf_report, tt_report, hf_rows = _comparison_fixtures(tmp_path)
+    rows, identity = validate_tt_comparison_identity(case_path, case, hf_report, tt_report, hf_rows)
+    assert len(rows) == 4
+    assert identity["conditioning_token_ids_verified"] is True
+    assert identity["explicit_window_checked"] is False
+
+
+def test_comparison_identity_can_verify_legacy_prompt_from_saved_case_file(tmp_path):
+    case_path, case, hf_report, tt_report, hf_rows = _comparison_fixtures(tmp_path)
+    tt_report["continuations"]["chosen"].pop("conditioning_token_ids")
+    rows, identity = validate_tt_comparison_identity(case_path, case, hf_report, tt_report, hf_rows)
+    assert len(rows) == 4
+    assert identity["case_prompt_ids_verified"] is True
+    assert identity["conditioning_token_ids_verified"] is False
+
+
+def test_comparison_identity_rejects_unrelated_conditioning_even_when_targets_match(tmp_path):
+    case_path, case, hf_report, tt_report, hf_rows = _comparison_fixtures(tmp_path)
+    tt_report["continuations"]["chosen"]["conditioning_token_ids"] = [10, 12]
+    with pytest.raises(  # allow-pytest.raises: host-only --noconftest check
+        ValueError, match="conditioning prompt token IDs differ"
+    ):
+        validate_tt_comparison_identity(case_path, case, hf_report, tt_report, hf_rows)
+
+
+def test_comparison_identity_rejects_unrelated_case_file_even_when_report_conditioning_claims_match(tmp_path):
+    case_path, case, hf_report, tt_report, hf_rows = _comparison_fixtures(tmp_path)
+    other = tmp_path / "other-case.json"
+    other.write_text(json.dumps({"prompt_token_ids": [10, 12], "metadata": {"task": "task-a", "call": 7}}))
+    tt_report["case"] = str(other)
+    with pytest.raises(  # allow-pytest.raises: host-only --noconftest check
+        ValueError, match="case prompt token IDs differ"
+    ):
+        validate_tt_comparison_identity(case_path, case, hf_report, tt_report, hf_rows)
+
+
+def test_comparison_identity_rejects_shifted_window_with_same_repeated_targets(tmp_path):
+    case_path, case, hf_report, tt_report, hf_rows = _comparison_fixtures(tmp_path)
+    tt_report["continuations"]["chosen"]["positions"] = [{"position": i + 1, "forced_token": 42} for i in range(4)]
+    with pytest.raises(  # allow-pytest.raises: host-only --noconftest check
+        ValueError, match="positions or forced-token window differ"
+    ):
+        validate_tt_comparison_identity(case_path, case, hf_report, tt_report, hf_rows)
+
+
+def test_comparison_identity_checks_optional_case_hash_and_explicit_window(tmp_path):
+    case_path, case, hf_report, tt_report, hf_rows = _comparison_fixtures(tmp_path)
+    tt_report["case_sha256"] = "wrong-hash"
+    with pytest.raises(ValueError, match="case hashes differ"):  # allow-pytest.raises: host-only --noconftest check
+        validate_tt_comparison_identity(case_path, case, hf_report, tt_report, hf_rows)
+    tt_report.pop("case_sha256")
+    tt_report["window"] = {"start_token": 1, "max_tokens": 4}
+    with pytest.raises(ValueError, match="window starts"):  # allow-pytest.raises: host-only --noconftest check
+        validate_tt_comparison_identity(case_path, case, hf_report, tt_report, hf_rows)

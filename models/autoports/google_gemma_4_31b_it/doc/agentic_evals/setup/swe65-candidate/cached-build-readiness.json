@@ -1,0 +1,19 @@
+{
+  "status": "60_of65_images_prepared_not_admitted_not_launched",
+  "new_offline_builds": 50,
+  "existing_fixed10_images": 10,
+  "missing_images": [
+    "scikit-learn__scikit-learn-25747",
+    "matplotlib__matplotlib-23412",
+    "psf__requests-1724",
+    "sympy__sympy-12489",
+    "sphinx-doc__sphinx-9461"
+  ],
+  "final_dockerhost_available_bytes": 246970003456,
+  "minimum_free_reserve_bytes": 170000000000,
+  "frozen_candidate_unchanged": true,
+  "build_manifest_sha256": "c30cc371826a3cacc354a78af908affd59ac0a4547d0ae17485113b9cc1c632d",
+  "validation_scope": "Base layer prefix and repository HEAD identity; uv0.7.13 and mini2.2.8; local cost-map flag; no /tests or /solution baked; exact generic parser synthetic cached-dependency smoke in network-none build. No repository tests or model/device work.",
+  "contention": "Serial builds overlapped CPU HF controls; no diagnostic timing claims.",
+  "no_source_runtime_or_dataset_changes": true
+}

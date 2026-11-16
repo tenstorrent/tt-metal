@@ -1,0 +1,23 @@
+[
+  {
+    "name": "psf__requests-5414.call9",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-requests5414-caps/psf__requests-5414.call9.case.private.json",
+    "branches": [
+      "chosen"
+    ]
+  },
+  {
+    "name": "psf__requests-5414.call10",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-requests5414-caps/psf__requests-5414.call10.case.private.json",
+    "branches": [
+      "chosen"
+    ]
+  },
+  {
+    "name": "psf__requests-5414.call11",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-requests5414-caps/psf__requests-5414.call11.case.private.json",
+    "branches": [
+      "chosen"
+    ]
+  }
+]

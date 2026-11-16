@@ -1,0 +1,65 @@
+{
+  "status": "independent_raw_output_review",
+  "scope": "Full-mode Matplotlib call86 suffix4096 seed43 cap1024 continuation only. This is a shortened-prefix diagnostic for the native anomaly family, not task-answer or patch correctness evidence.",
+  "verdict": "reproduced_native_motif",
+  "native_motif_evidence": {
+    "source_onset_description": "Native case metadata motif is \"I've\u2019ve\" (extra contraction suffix family).",
+    "generated_text_opening": "\u2019ve\u2019ve made a complete mess of `lib/matplotlib/colors.py`.\nI'll just use a version of the file and f",
+    "generated_ids_prefix4": [
+      236858,
+      560,
+      236858,
+      560
+    ],
+    "comparison": "The generated free run begins with two repeated contraction suffix fragments (IDs 236858,560 twice); it then moves into distinct prose and a finite code-writing bash call. A later localized \"I've've already messed up\" occurrence also matches the extra-contraction family."
+  },
+  "not_sustained_loop": true,
+  "loop_evidence": "After the repeated onset fragments, the output proceeds through distinct sentences and a finite code-writing tool-call body; it does not repeat the same line or paragraph to the cap.",
+  "tool_execution_claim": false,
+  "tool_note": "The assistant generated a bash tool call ending at its handoff/EOS boundary. No tool output or command execution is inferred from this saved generation.",
+  "completion": {
+    "free_tokens": 930,
+    "requested_cap": 1024,
+    "natural_stop": true,
+    "last_token_id": 50,
+    "flag": false,
+    "completion_elapsed_seconds": 156.01967024803162,
+    "forecast_gate": "range_hit"
+  },
+  "identity": {
+    "seed": 43,
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/fixtures/anomaly.matplotlib__matplotlib-20488.call86.onset.suffix4096.seed43.full.private.json",
+    "prompt_tokens": 4096,
+    "chosen_tokens": 64,
+    "conditioning_ids_equal_fixture": true,
+    "prior_generated_tokens": 512,
+    "generated_ids_prefix_identity_tokens": 512,
+    "prefix_exact": true,
+    "sampling": {
+      "temperature": 1.0,
+      "top_p": 0.95,
+      "top_k": 20,
+      "seed": 43
+    },
+    "runtime_precision_equal_prior_and_expected": true,
+    "runtime_config_id": "stage12_bf16_hifi4_diagnostic"
+  },
+  "hashes": {
+    "result_sha256": "b755bcb874a29740452873df8ab052a8d318ebd3ae980c67134c562449913a02",
+    "completion_sha256": "92702f7c0035367cc1b927c5524459e1070b11e74a0fe7bb20936eee43c84044",
+    "load_sha256": "3b64c0537cf6c81983352a563273f0b06bc5da8e36d064cc402e0b01bdc1695f",
+    "prior_full512_result_sha256": "2fc88476353a38633134bcb85d1fbf8624f99d8e55bb8273e42fca2898bc594d",
+    "fixture_sha256": "7e8ee5bb1a24cca6e4e58651929198f7a4c4de279ca54495cedae74f3678193d",
+    "runtime_pins_sha256": "0be338833ced4dd17c7fbd4354bb461fd5d0359058b4513cba4d0dfa7b54857d",
+    "precision_config_file_sha256": "63ce02f7fa0df993a27daca25eeeb3adca51e15c7c6956d1cef122534ebdc7a9",
+    "runtime_policy_canonical_sha256": "92895d431970ff8a90e45a339161bfedff8298c39be1475d092ac478ffeefff4",
+    "generated_first512_ids_canonical_sha256": "eedaff3d6d686ab657ad73d707d31505f40b97c423145d877ea2b85f48478f68",
+    "prior_first512_ids_canonical_sha256": "eedaff3d6d686ab657ad73d707d31505f40b97c423145d877ea2b85f48478f68",
+    "admission_sha256": "3e06c4314219729fc2758c7f55b99787e7bf09d8119a4f96c767563a7471ccbf"
+  },
+  "limits": [
+    "Native output token IDs are unavailable; this is family-level morphology, not exact native token equivalence.",
+    "Seed43 is the diagnostic seed, not an asserted native seed replay.",
+    "No inference rerun, device action, task-container run, or task-correctness evaluation performed by this reviewer."
+  ]
+}

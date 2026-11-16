@@ -1,0 +1,37 @@
+{
+  "status": "root_reviewed_two_progressing_caps_require_extension",
+  "reviewed_unix": 1794783813.9466588,
+  "independent_review": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full-q32-production-validation/fixed108/cap-extensions-root/terminal-review-d.json",
+  "independent_sha256": "870cbd38f847a8132795c648b0d5718390b741a408ce2f442c60bbf19b80ad33",
+  "completion": {
+    "start_unix": 1794783029.477178,
+    "end_unix": 1794783583.4730752,
+    "exit_code": 0,
+    "wall_seconds": 553.9958970546722
+  },
+  "six_exact_prior_token_prefixes": true,
+  "all_151_source_pins_match": true,
+  "natural_stop_cases": {
+    "37": 327,
+    "48": 633,
+    "68": 1834,
+    "74": 1084
+  },
+  "progressing_cases": [
+    {
+      "index": 42,
+      "seed": 42,
+      "cap": 512,
+      "next_cap": 1024
+    },
+    {
+      "index": 44,
+      "seed": 44,
+      "cap": 512,
+      "next_cap": 1024
+    }
+  ],
+  "decision": "Extend both still-progressing Requests2931 continuations before further diagnostic acceptance. Existing scores and selected policy unchanged.",
+  "policy_acceptance": false,
+  "serving_result": false
+}

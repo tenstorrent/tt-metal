@@ -1,0 +1,11 @@
+# Sklearn 13135 call29 suffix-512 served/full probe
+
+Prepared host-side only. This candidate uses the exact last512 saved prompt IDs from the original 17,395-token fixture, without decoding and re-encoding. It runs seeds42/43/44 with the same64-token chosen branch and one512-token free run under both served and full diagnostic precision. The manifests are separate; each paired mode/seed uses identical prompt and chosen IDs.
+
+The target is whether the later full-mode seed42 `missing_tool` protocol anomaly persists at this shortened context. Existing `cap512` outputs use the full17,395-token prompt and are not matched-prefix outcomes. Original native `I’ve’ve` and the later missing-tool protocol observation are distinct. This candidate does not imply task correctness or a native contraction reproduction.
+
+Forecasts are planning proxies from prior same-job cap512 TT timing/load evidence. Prior cap runs omitted chosen teacher forcing; its 3–12-second per-case allowance and shorter-prefill uncertainty are assumptions. `forecast.json` separates per-mode and combined ranges.
+
+Both manifests pass `precision_repro_batch.py --validate-only` without importing TTNN. No device/model run or admission occurred. `STOP_BEFORE_LAUNCH` is present. Root must review the candidate, wait for P2 terminal success and forecast reconciliation, verify no device owners and no active HF/model process, check fresh memory, and explicitly admit before serial served then full execution. HF may be explicitly deferred until the matched TT result determines whether a follow-up is necessary; the wrapper rejects active HF processes at either launch. P2 overlapped an unintended HF CPU process; root's forecast reconciliation must disclose that contention, bind the measured range and elapsed time, and exclude P2 wall time from policy speed rankings. Do not start HF follow-up unless the full-mode suffix512 run shows the target missing_tool behavior; if absent, choose a new prefix based on the observed output.
+
+The broader audit tracks nine selected full-mode native-positive families and other diagnostic-induced OTHER observations separately; it still has untested source targets and does not support a blanket model-cause or waiver claim.

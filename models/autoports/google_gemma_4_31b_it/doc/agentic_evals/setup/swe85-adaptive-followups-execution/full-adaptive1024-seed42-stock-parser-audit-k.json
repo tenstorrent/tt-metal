@@ -1,0 +1,181 @@
+{
+  "status": "completed_cpu_only_stock_gemma4_parser_audit_no_score_adjudication",
+  "created_utc": "2026-11-15T04:47:48.950409+00:00",
+  "scope": "Focused parser audit of completed full-mode adaptive suffix1024 seed42 outputs. Uses only the exact intersection of each saved suffix with its original assistant continuation; user/request portion is supplied only as ChatCompletionRequest and tool schema. No score decision.",
+  "tokenizer": {
+    "revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+    "snapshot": "/home/mvasiljevic/.cache/huggingface/hub/models--google--gemma-4-31B-it/snapshots/842da3794eaa0b77d5f08bae87a17459d91ff475",
+    "tokenizer_json_sha256": "cc8d3a0ce36466ccc1278bf987df5f71db1719b9ca6b4118264f45cb627bfe0f",
+    "tokenizer_config_sha256": "9f4fec4b1dc6ecddf8f4a92e9caea5971c0e67d81309f3f9066a2bee8c362633",
+    "chat_template_sha256": "ae53464bf3be25802b3a5b37def7fd89667067d7577049b3b2d74c4d8de4c6d4"
+  },
+  "parser_implementation_sha256": {
+    "python_env/lib/python3.10/site-packages/vllm/parser/gemma4.py": "c974f47dc39ab7276da1e4ae38c4010e3f5411481f75e3879e29f47b2fd08df7",
+    "python_env/lib/python3.10/site-packages/vllm/parser/engine/parser_engine.py": "d1075deeb25b4872e92752d7ef0598a07a747afaf2afc56058ec30c6dc1da89a",
+    "python_env/lib/python3.10/site-packages/vllm/parser/engine/adapters.py": "7a77bcb86e2129762f4199ee726398a4850b9e207893fc4295f2b759bcfeeb36",
+    "python_env/lib/python3.10/site-packages/vllm/tool_parsers/gemma4_engine_tool_parser.py": "02f31bdcc4d8527440daebb4f4e3e74c83a6010eb56cd33fe7522bea8f51bc65",
+    "python_env/lib/python3.10/site-packages/vllm/reasoning/gemma4_engine_reasoning_parser.py": "3e9adef8ae56ee993fbaee43e82aa36216fb71251ee2de14dc9f8b326220a594"
+  },
+  "rows": [
+    {
+      "job": "anomaly.psf__requests-5414.call11.onset.suffix1024.cap1024.seed42",
+      "mode": "full",
+      "seed": 42,
+      "result_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024-progressing-candidate/runs/full/anomaly.psf__requests-5414.call11.onset.suffix1024.cap1024.seed42.json",
+      "result_sha256": "e68faadf21170a73cde0c3fa445ba88efc216fd76be711ccb2ab5d9050680409",
+      "candidate_fixture_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024-progressing-candidate/fixtures/anomaly.psf__requests-5414.call11.onset.suffix1024.cap1024.seed42.private.json",
+      "candidate_fixture_sha256": "7ea1fe684ccda8d471948d9decc4350fb2efa70d3257eba5a63d0f124313369a",
+      "source_onset_fixture_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-requests5414-caret-controls/psf__requests-5414.call11.onset.private.json",
+      "source_onset_fixture_sha256": "50cbd0eb4e62c843a1ec8ac800a580135c3abc5dc2154d6be0a7e39d0c37ed6f",
+      "source_full_reply_case_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-requests5414-caps/psf__requests-5414.call11.case.private.json",
+      "source_full_reply_case_sha256": "b6944878a9f1746dc765815a00c3564382889269d6ab081c10728dc1c0e081c0",
+      "raw_packet_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-requests5414-caps/psf__requests-5414.call11.packet.private.json",
+      "raw_packet_sha256": "86ac061588351e26715c75a959acdb7e2a17593821991317a6d14a11e4ad9b78",
+      "raw_request_body_sha256": "624051096bf3db6b310e56a09cad02de40132ac46c7ab7d59cb065fd434b29b0",
+      "assistant_context": {
+        "candidate_suffix_length": 1024,
+        "source_onset_prompt_tokens": 7226,
+        "original_request_prompt_tokens": 7003,
+        "suffix_start_source_index": 6202,
+        "assistant_prefix_start_source_index": 7003,
+        "assistant_prefix_ids": 223,
+        "assistant_prefix_ids_sha256": "be76bb5706bd4718dc96017c06e4d5819794c5471b3a6364cbd2e16deae519e4",
+        "assistant_prefix_tail": "t was:\n```\nTraceback (most recent call last):\n  File \"/testbed/reproduce_issue.py\", line 5, in <module>\n    requests.get(\"http://.example.com\")\n  ...\n  File \"/opt/miniconda3/lib/python3.11/site-packages/urllib3/util/connection.py\", line 68, in create_connection\n    return six.raise_from(\n           "
+      },
+      "trial": {
+        "generated_tokens": 733,
+        "generated_ids_sha256": "2b51bb815740fc94ee370d3bba05acedb9a38c5e25705acc2bd900bfdf850b91",
+        "generated_text_sha256": "e2dd984e884a7bd92655da599f0dbbe31cc3e3308729d43925e8bd21892e82c9",
+        "generated_text_head": "...\n  File \"/opt/miniconda3/lib/python3.11/site-packages/urllib3/util/connection.py\", line 68, in create_connection\n    ...\nurllib3.exceptions.LocationParseError: ...\n```\nActually, looking at the traceback again, it seems it's failing at the connection stage, not the parsing stage.\n\nWait, if I use a URL that is clearly invalid for parsing, like `requests.get(\"http://.example.com\")`, why does it get to the connection stage? Because `http://.example.com` *is* a syntactically valid URL according to",
+        "generated_text_tail": "y to reproduce this specifically.\n\nI will start by using the `bash` tool to explore the environment and run a proper reproduction script.<channel|><|tool_call>call:bash:{\"command\":\"cat << 'EOF' > reproduce_issue.py\\nimport requests\\nimport traceback\\nimport sys\\n\\ntry:\\n    print(\\\"Attempting requests.get('http://.example.com')...\\\")\\n    requests.get(\\\"http://.example.com\\\", timeout=1)\\nexcept Exception:\\n    traceback.print_exc()\\nEOF\\npython3 reproduce_issue.py\\n\"}<tool_call|><|tool_response>",
+        "generated_contains_tool_call_opener_token": true,
+        "generated_tool_call_opener_count": 1,
+        "terminal_id": 50
+      },
+      "request_tool_schemas": [
+        {
+          "name": "bash",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "command": {
+                "type": "string",
+                "description": "The bash command to execute"
+              }
+            },
+            "required": [
+              "command"
+            ]
+          }
+        }
+      ],
+      "stock_parser": {
+        "verdict": "invalid_tool_name",
+        "structured_tool_calls": [
+          {
+            "tool_name": "bash:",
+            "tool_allowed_by_request": false,
+            "arguments_valid_json": true,
+            "arguments_type": "dict",
+            "argument_keys": [
+              "\"command\"",
+              "timeout=1)\\nexcept Exception"
+            ],
+            "command_is_string": false
+          }
+        ],
+        "reasoning_chars": 2951,
+        "content_chars": 0,
+        "content_head": "",
+        "parser_error": null
+      },
+      "source_timing": {
+        "diagnostic_total_wall_s": 55.48836414492689,
+        "decode_wall_s": 42.92383006308228,
+        "decode_tokens": 732
+      }
+    },
+    {
+      "job": "anomaly.matplotlib__matplotlib-20488.call86.onset.suffix1024.cap1024.seed42",
+      "mode": "full",
+      "seed": 42,
+      "result_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024-progressing-candidate/runs/full/anomaly.matplotlib__matplotlib-20488.call86.onset.suffix1024.cap1024.seed42.json",
+      "result_sha256": "5e6a1a65b56c9c4481225990ad2dc357ff418ef9a32baf9221455d29d8c1d3b0",
+      "candidate_fixture_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024-progressing-candidate/fixtures/anomaly.matplotlib__matplotlib-20488.call86.onset.suffix1024.cap1024.seed42.private.json",
+      "candidate_fixture_sha256": "c34417c0f01d6e78eb4135f3f679c0d706bf9677ee65e3fab121e9ff9ec84192",
+      "source_onset_fixture_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-protocol-scan83-controls/matplotlib__matplotlib-20488.call86.onset.private.json",
+      "source_onset_fixture_sha256": "c11bb5890af7b0166bbbb61c44a3200e58aa3eb4b509403759fbb162ae58d179",
+      "source_full_reply_case_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/protocol-scan83-archive/matplotlib__matplotlib-20488.call86.case.private.json",
+      "source_full_reply_case_sha256": "4a75ac4eb6b90458a6320fc967e5dd011677932e5852ce58e9e293708dc599f3",
+      "raw_packet_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/protocol-scan83-archive/matplotlib__matplotlib-20488.call86.packet.private.json",
+      "raw_packet_sha256": "674e39f234ccb1c10a265def5263f22152fb5e11ad5c29c6843866e37e29c6d5",
+      "raw_request_body_sha256": "2428f438be64fd4de7d2dc60ac2240acd0e914ef31de8595743231b1f6d05bd7",
+      "assistant_context": {
+        "candidate_suffix_length": 1024,
+        "source_onset_prompt_tokens": 46118,
+        "original_request_prompt_tokens": 46112,
+        "suffix_start_source_index": 45094,
+        "assistant_prefix_start_source_index": 46112,
+        "assistant_prefix_ids": 6,
+        "assistant_prefix_ids_sha256": "e11882ab0000b4ac9e7e4322ceaf79f289446b2b8e6dc08a00b21d05c9d2e412",
+        "assistant_prefix_tail": "<|channel>thought\nI've"
+      },
+      "trial": {
+        "generated_tokens": 637,
+        "generated_ids_sha256": "cfd7292ee61156179fe3fd8c462bf328be862d1dc5bcd8695d995eff7b602255",
+        "generated_text_sha256": "4bc4212f3f8c30e9579977f3b5379482395f633b774e8da9ef395376417078f9",
+        "generated_text_head": " tried to replace the `__call__` method but keep the `ValueError`.\n<channel|><|tool_call>call:bash{command:<|\"|>cat <<'EOF' > fix_call_final.py\nimport sys\n\nwith open('lib/matplotlib/colors.py', 'r') as f:\n    lines = f.readlines()\n\nnew_lines = []\ni = 0\nwhile i < len(lines):\n    if 'def __call__(self, value, clip=None):' in lines[i]:\n        # Replace the entire method\n        new_lines.append(lines[i])\n        new_lines.append('            value, is_scalar = self.process_value(value)\\n')\n       ",
+        "generated_text_tail": ")\\n')\n        new_lines.append('            return t_value[0] if is_scalar else t_value\\n')\n        \n        # Skip the original method body\n        while i + 1 < len(lines) and (lines[i+1].startswith('            ') or lines[i+1].startswith('        ') or lines[i+1].strip() == ''):\n            i += 1\n    else:\n        new_lines.append(lines[i])\n    i += 1\n\nwith open('lib/matplotlib/colors.py', 'w') as f:\n    f.writelines(new_lines)\nEOF\npython3 fix_call_final.py<|\"|>}<tool_call|><|tool_response>",
+        "generated_contains_tool_call_opener_token": true,
+        "generated_tool_call_opener_count": 1,
+        "terminal_id": 50
+      },
+      "request_tool_schemas": [
+        {
+          "name": "bash",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "command": {
+                "type": "string",
+                "description": "The bash command to execute"
+              }
+            },
+            "required": [
+              "command"
+            ]
+          }
+        }
+      ],
+      "stock_parser": {
+        "verdict": "valid_bash_command",
+        "structured_tool_calls": [
+          {
+            "tool_name": "bash",
+            "tool_allowed_by_request": true,
+            "arguments_valid_json": true,
+            "arguments_type": "dict",
+            "argument_keys": [
+              "command"
+            ],
+            "command_is_string": true
+          }
+        ],
+        "reasoning_chars": 70,
+        "content_chars": 0,
+        "content_head": "",
+        "parser_error": null
+      },
+      "source_timing": {
+        "diagnostic_total_wall_s": 37.62669117585756,
+        "decode_wall_s": 37.297444191994146,
+        "decode_tokens": 636
+      }
+    }
+  ],
+  "limitations": [
+    "Current installed non-streaming Gemma4Parser interpretation; historical serving stream/parser equivalence is not established.",
+    "Native token IDs are unavailable; this does not prove exact native token identity.",
+    "Parser verdicts are not task-correctness, score, or stage adjudication."
+  ]
+}

@@ -1,0 +1,40 @@
+{
+  "status": "candidate_only_not_admitted_not_run",
+  "name": "canonicalprefix exact suffix8192 paired mode diagnostic",
+  "purpose": "Check whether more original prompt context restores the native duplicated-ve contraction pattern absent in full V 512-token continuations at suffix lengths 512,1024,2048,4096.",
+  "scope": "3 seeds x 2 precision modes; 6 jobs total. Diagnostic continuation only, not exact native replay or full reply rerun.",
+  "candidate_hashes": {
+    "served-cases.json": "4247057be66e9cc30b5f474001c42043a9f2c945fa8f4866fc97f0375e072c51",
+    "full-cases.json": "59f6d8286bbb9c4de5121404975c007a32a9ae522fa37f14caa814e19d3376cc",
+    "command.json": "9d81f8ee8876d6b064836e4ae6386c6da4393c2ab24f7b6a2f1db92dec8a3a02",
+    "forecast.json": "5c1a66e9dbc267492f9e27d3e555c08b1d50d0e21a5ba50faac3f60ab69834d9",
+    "provenance.json": "4bd987a7637961aedb32c2716c848bde2be71e31c25e0d7088ef59d5833a0f99",
+    "cpu-validation.json": "5d1d1ed766c2348dd6e7fff8c428f1f4ec5875e8b96d06947b569ec781239127",
+    "README.md": "2ef7b65acdb411b43f0ddfc8ef1d0e3f9213303e0e1af4c51afda5e013b3f0f4",
+    "run_after_p.py": "61996590520ae8cc49358e80f03b57dcf40fa15fc08d41d0acbda87ba08a4097"
+  },
+  "commands": "command.json",
+  "forecast": "forecast.json",
+  "provenance": "provenance.json",
+  "required_gate": "Root admission after independent review; run_after_p.py waits for exact P admission and terminal success. P elapsed runtime must hit its frozen forecast range or root must explicitly accept an exact hash-bound forecast-miss record. Before each mode, candidate/P pins are rechecked, HF process absence and zero device owners are required, and each serial mode is timeout-bounded at 1800 seconds.",
+  "predecessor_gate": {
+    "name": "P head_bfp8_hifi2 first fixed108 panel after W",
+    "directory": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w",
+    "admission_sha256": "91dc764e6a3a6b1e8a1be51e6eee5fc958c19d1dfcfa3d057b989aa325618cdd",
+    "required_queue_status": "completed",
+    "required_queue_exit_code": 0,
+    "required_completion_exit_code": 0,
+    "forecast_gate": "Measured P elapsed_seconds must be inside P launch forecast_range_seconds inclusively OR a root-authored forecast-miss-accepted.json in P directory must bind the exact P completion hash, measured seconds, forecast range, and admission hash. If missed without that record, stop and do not execute either suffix8192 mode.",
+    "requirements": [
+      "P queue status completed and exit_code 0",
+      "P completion exit_code 0 with command matching frozen proposal",
+      "P admission file SHA-256 exactly 91dc764e6a3a6b1e8a1be51e6eee5fc958c19d1dfcfa3d057b989aa325618cdd",
+      "Before each mode, recheck P admission/proposal/driver/source inventory and terminal queue/completion/launch hashes",
+      "P completion elapsed_seconds inside P launch frozen forecast range; if outside, require P/forecast-miss-accepted.json authored by root and bound to completion SHA, elapsed value, exact range, and P admission SHA",
+      "Before each mode require no active precision_repro_hf.py process and device_owners() empty",
+      "Timeout 1800 seconds for each serial mode; stop after failure and do not automatically retry"
+    ]
+  },
+  "driver": "run_after_p.py",
+  "driver_sha256": "61996590520ae8cc49358e80f03b57dcf40fa15fc08d41d0acbda87ba08a4097"
+}

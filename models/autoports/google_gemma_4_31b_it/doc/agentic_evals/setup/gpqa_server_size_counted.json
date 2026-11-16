@@ -1,0 +1,69 @@
+{
+  "free_gb": [
+    27.624686592,
+    27.624686592,
+    27.624686592,
+    27.624686592
+  ],
+  "pool_gb": [
+    25.69142272,
+    25.69142272,
+    25.69142272,
+    25.69142272
+  ],
+  "working_set_tokens": 131072,
+  "reason": "Stock plugin fixes its pool before loading weights; this launch validates its existing pool against measured shared-mesh allocator free space, not adaptive sizing. Pool uses93% of measured free; residual space covers recorded preparation/page-map/transient reserves and fragmentation.",
+  "measurement": {
+    "event": "serving_pool_launch_validation",
+    "pool_sizing": "fixed",
+    "pool_sizing_reason": "Stock plugin fixes its pool before loading weights; this launch validates its existing pool against measured shared-mesh allocator free space, not adaptive sizing.",
+    "measurement_basis": "One shared mesh allocator measurement applied uniformly to participating devices; these are not independent physical allocator samples. KV uses replicated ttnn.zeros on the mesh with equal shape/dtype on every device.",
+    "per_device": [
+      {
+        "device_id": 0,
+        "free_bytes": 27624686592,
+        "contiguous_free_bytes": 27455085568,
+        "pool_bytes": 25691422720,
+        "reserve_bytes": 1015693824
+      },
+      {
+        "device_id": 1,
+        "free_bytes": 27624686592,
+        "contiguous_free_bytes": 27455085568,
+        "pool_bytes": 25691422720,
+        "reserve_bytes": 1015693824
+      },
+      {
+        "device_id": 2,
+        "free_bytes": 27624686592,
+        "contiguous_free_bytes": 27455085568,
+        "pool_bytes": 25691422720,
+        "reserve_bytes": 1015693824
+      },
+      {
+        "device_id": 3,
+        "free_bytes": 27624686592,
+        "contiguous_free_bytes": 27455085568,
+        "pool_bytes": 25691422720,
+        "reserve_bytes": 1015693824
+      }
+    ],
+    "page_map_bytes": 62914560,
+    "prepared_reserve_bytes": 147472896,
+    "transient_reserve_bytes": 805306368,
+    "reserve_evidence": "doc/agentic_serving.json ledger; doc/optimized_vllm/memory_comparison.json; transient reserve is analytical, not a full-stack measured peak",
+    "trace_reserve_already_excluded": true,
+    "fits": true,
+    "remaining_bytes_after_reserves": 747969024
+  },
+  "pool_ids": 36896,
+  "ids_per_agent": 2854,
+  "capacity_agents": 12,
+  "pool_tokens": 1572864,
+  "pool_tokens_basis": "Conservative usable capacity at the GPQA working set including hybrid sliding groups, output allowance and null ID; not raw synthetic plugin tokens.",
+  "agents": 10,
+  "batch": 32,
+  "max_num_seqs": 32,
+  "selection": "Ten tasks fit measured capacity and host; B32 smallest validated batch holding10;1/8/32 validated per stage11.",
+  "launch_evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/server-phase1-counted/server-b32/server.log"
+}

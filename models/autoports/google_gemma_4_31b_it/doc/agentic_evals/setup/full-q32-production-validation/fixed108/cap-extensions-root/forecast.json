@@ -1,0 +1,8 @@
+{
+  "low_seconds": 423.365904258861,
+  "point_seconds": 651.3321603982477,
+  "high_seconds": 976.9982405973715,
+  "timeout_seconds": 1400,
+  "basis": "80s measured-load estimate; same-policy observed nondecode plus doubled caps at per-case measured diagnostic rates. Natural stops may shorten it.",
+  "not_vllm_performance": true
+}

@@ -1,0 +1,101 @@
+{
+  "status": "candidate_only_not_admitted_not_run",
+  "created_utc": "2026-11-15T11:37:27.842854+00:00",
+  "candidate_case_count": 3,
+  "candidate_cases_sha256": "698b2585327470096763a6847888fc777d229894147146be1bae6cd7750e7fb0",
+  "command_sha256": "f159e0f0fa3b20ff845a3e3f7422fc6b416755a577274873d24c2d847eba8707",
+  "expected_prefixes_sha256": "f52893684f6ba28f3bad8ce19c111c2e80327c8b101eb464e29c7baa3d793119",
+  "forecast_sha256": "ab56cd917f57e8ace644f840406d58bbb73ecad866552e210138e7d7989bc77f",
+  "source_p3_triage_sha256": "f4088f67f3c479734086e1de4e4850ddcc68bf4376322001cb6eaa60be0340bd",
+  "source_p3_case_manifest_sha256": "57193e4b91af3a31df00f0c92dbc0f2219fbce011e6533594e5244a93a3021ed",
+  "policy": "Exact same source fixture/prompt IDs/continuations/sampling/seed; empty branches; one free-running trial; double prior cap. Only progressing inconclusive rows included. No driver, launch, or admission.",
+  "cpu_validation": {
+    "status": "host_only_provenance_checks_pending_root_review",
+    "checks": [
+      "source fixture bytes unchanged and hash-pinned",
+      "prompt IDs/sampling/seed/cap provenance recorded",
+      "prior generated token prefix hash recorded",
+      "forecast uses observed P3 decode rate and prefill/first-token overhead plus actual model load"
+    ]
+  },
+  "rows": [
+    {
+      "manifest_index": 72,
+      "job": "anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset",
+      "source_case_name": "anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.seed42.cap1024",
+      "seed": 42,
+      "old_cap": 1024,
+      "new_cap": 2048,
+      "fixture_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.cap1024.seed42.private.json",
+      "fixture_sha256": "ca3ccbea7cb65f7fb929521189cde459f36391aa461d248ed5cf3d57f3eff981",
+      "prompt_token_ids_count": 47548,
+      "prompt_token_ids_sha256": "7aaf88be1dd4df81aa4880bf0dd1741f94a99b241903c24f0def9fa78423479b",
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 42
+      },
+      "branches": [],
+      "free_run_trials": 1,
+      "prior_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.seed42.cap1024.json",
+      "prior_result_sha256": "a34bb5917d044becd97f00389f4374f850a3992394acdbb6e569ba317b512bc9",
+      "prior_generated_token_count": 1024,
+      "prior_generated_token_ids_sha256": "33942f93cf5b0b9db7d2d06def9c8a2789dfc28fb39a53d109adc09e3f9206e5",
+      "expected_prefix_check": "new trial must start from the exact same fixture/prompt/continuations/sampling/seed and its generated token IDs must match the saved prior IDs through prior_generated_token_count before interpreting any additional tokens",
+      "classification": "inconclusive_progressing_cap"
+    },
+    {
+      "manifest_index": 73,
+      "job": "anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset",
+      "source_case_name": "anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.seed43.cap1024",
+      "seed": 43,
+      "old_cap": 1024,
+      "new_cap": 2048,
+      "fixture_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.cap1024.seed43.private.json",
+      "fixture_sha256": "24e925807caaf57dbd0eb481fbd956901db36a766ab8e0552039253d0e63bebc",
+      "prompt_token_ids_count": 47548,
+      "prompt_token_ids_sha256": "7aaf88be1dd4df81aa4880bf0dd1741f94a99b241903c24f0def9fa78423479b",
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 43
+      },
+      "branches": [],
+      "free_run_trials": 1,
+      "prior_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.seed43.cap1024.json",
+      "prior_result_sha256": "e9abaa2456f9f7868cd6501cd156c9d6bb3825a65ee292ecb58c8cd253687dd3",
+      "prior_generated_token_count": 1024,
+      "prior_generated_token_ids_sha256": "f8af067e74b653ca27806809dcb379a817106d48e1abcf289d46aac15eb726d5",
+      "expected_prefix_check": "new trial must start from the exact same fixture/prompt/continuations/sampling/seed and its generated token IDs must match the saved prior IDs through prior_generated_token_count before interpreting any additional tokens",
+      "classification": "inconclusive_progressing_cap"
+    },
+    {
+      "manifest_index": 82,
+      "job": "anomaly.sympy__sympy-13480.call1.onset",
+      "source_case_name": "anomaly.sympy__sympy-13480.call1.onset.seed43.cap256",
+      "seed": 43,
+      "old_cap": 256,
+      "new_cap": 512,
+      "fixture_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.sympy__sympy-13480.call1.onset.seed43.private.json",
+      "fixture_sha256": "b49edc6f6717909718addf7ed6cc8065e8b588db9be07b4c66cea0f3b3951b78",
+      "prompt_token_ids_count": 1175,
+      "prompt_token_ids_sha256": "ba6427cb210ec1569c0ff6a700ab10ec4dac2add229725082fbafb15034749b8",
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 43
+      },
+      "branches": [],
+      "free_run_trials": 1,
+      "prior_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sympy__sympy-13480.call1.onset.seed43.cap256.json",
+      "prior_result_sha256": "14a5765dc95d40e392482687e95b4a9230d0c31f1c0567c6865b499446abc81b",
+      "prior_generated_token_count": 256,
+      "prior_generated_token_ids_sha256": "21feb8fa8a8be04b7d4a4782f629f224d1b9906dedeb82e193609e1a64e9c534",
+      "expected_prefix_check": "new trial must start from the exact same fixture/prompt/continuations/sampling/seed and its generated token IDs must match the saved prior IDs through prior_generated_token_count before interpreting any additional tokens",
+      "classification": "inconclusive_progressing_cap"
+    }
+  ]
+}

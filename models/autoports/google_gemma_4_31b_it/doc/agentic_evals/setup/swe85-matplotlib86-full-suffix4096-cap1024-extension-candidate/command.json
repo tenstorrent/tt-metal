@@ -1,0 +1,48 @@
+{
+  "status": "inert command specification only; not admitted or run",
+  "cwd": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline",
+  "argv": [
+    "env",
+    "HF_HUB_OFFLINE=1",
+    "HF_DATASETS_OFFLINE=1",
+    "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+    "READINESS_TRACE_REGION_SIZE=134217728",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+    "-m",
+    "models.autoports.google_gemma_4_31b_it.tools.precision_repro_batch",
+    "--cases",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-matplotlib86-full-suffix4096-cap1024-extension-candidate/cases.json",
+    "--build-kwargs-file",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_build_kwargs.json",
+    "--output-dir",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-matplotlib86-full-suffix4096-cap1024-extension-candidate/runs/full"
+  ],
+  "expected_output": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-matplotlib86-full-suffix4096-cap1024-extension-candidate/runs/full/anomaly.matplotlib__matplotlib-20488.call86.onset.suffix4096.cap1024.seed43.json",
+  "prelaunch_checks_required_if_later_admitted": [
+    "explicit root authorization",
+    "device owner list empty",
+    "no conflicting HF run",
+    "no preexisting runs/full/load.json or result output",
+    "verify source hash pins",
+    "confirm full_precision_build_kwargs.json resolves to full_precision_config.json",
+    "keep served/full modes serialized"
+  ],
+  "postrun_checks": [
+    "child process exit code 0 and validated completion record",
+    "entire result runtime_precision equals the pinned full BF16/HiFi4 runtime policy",
+    "seed43 and requested free-run cap1024 match the pinned fixture and case manifest",
+    "generated token count is at least512 and the entire first512 IDs exactly equal the prior full seed43 result",
+    "record whether generation naturally stopped before the cap"
+  ],
+  "prelaunch_requirements": [
+    "explicit root admission",
+    "H9 terminal status and all root reviews/forecast misses accepted",
+    "no active HF reference process",
+    "no TT device owner",
+    "at least 1260 seconds remain before 2026-11-16T01:15:25Z",
+    "no existing run output directory or launch/completion files"
+  ],
+  "postrun_identity_requirement": "generated token_ids length must be >=512 and entire first512 token IDs must exactly match prior full seed43 output; compare all512, never min(512,n).",
+  "execution_timeout_seconds": 1200,
+  "timeout_semantics": "Driver subprocess.run timeout is 1200s so the supervising Python process remains alive to write completion.json on timeout."
+}

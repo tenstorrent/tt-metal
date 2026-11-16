@@ -1,0 +1,177 @@
+{
+  "status": "completed_root_full_raw_review",
+  "scope": "Diagnostic cap extensions; no task score or precision-policy change",
+  "coordinator_hashes": {
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/full-coordinator-pytest5787-seed42.json": "ce487f95aab68cc845a38ba6845fca9a3279a29eed23d10c59bfb53833d7d9db",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/full-coordinator-pytest5787-seed43.json": "c10aa45484519667c9e1e30c90db9601c7734e07d1ce69ffc5520b0c59fa1033",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/full-coordinator-pytest5787-seed44.json": "a8d6fb7194cd3a67af96e9ab810f53af5b318349b8f45871951353e4ee434377",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/full-coordinator-sphinx101-seed42.json": "c18db04cdaf5937d43552837827009efbd76251e34715dc949b213d844779fd1",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/full-coordinator-sphinx101-seed43.json": "3f8855616b2b30cd3dc9f03635198ef68d393e99c3bfa5f44e0763f3fe20b753",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/full-coordinator-sphinx119-seed43.json": "73dfceaed9a1d506eba6603f8e6c19c417ef4c0d6e6e8e0c8cf09647ae219b04",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/served-coordinator-pytest5787.json": "6ee8cbae7af469bc2b49d7502ff2cce035addadbe251855cafb0ff8ee09c5009",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/served-coordinator-sphinx9461.json": "9ee93ffba78d718a3d18781b8bc72f78b445425456f2b14967b14c34ca0d2342"
+  },
+  "rows": [
+    {
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/fixtures/full/anomaly.pytest-dev__pytest-5787.call65.onset.cap2048.seed42.private.json",
+      "mode": "full",
+      "seed": 42,
+      "tokens": 1539,
+      "verdict": "normal",
+      "original1024_prefix_identical": true,
+      "reason": "Prefix ends # I will; continuation grammatical search for the start and end of the methods. Distinct serialization/deserialization implementation finishes canonical tool close at1539 tokens, without native contraction motif. Diagnostic completion does not establish patch correctness.",
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/runs/full/anomaly.pytest-dev__pytest-5787.call65.onset.cap2048.seed42.json",
+      "source_sha256": "4d755afb515d134674717403c534ec44ee2dce55bda3fe532c78581888ae57bf"
+    },
+    {
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/fixtures/full/anomaly.pytest-dev__pytest-5787.call65.onset.cap2048.seed43.private.json",
+      "mode": "full",
+      "seed": 43,
+      "tokens": 1629,
+      "verdict": "normal",
+      "original1024_prefix_identical": true,
+      "reason": "Conditioned # I will + replace is grammatical; distinct serializer/deserializer script completes canonical tool close. No stray Deloitte insertion or sustained contraction motif. This is anomaly adjudication, not patch correctness.",
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/runs/full/anomaly.pytest-dev__pytest-5787.call65.onset.cap2048.seed43.json",
+      "source_sha256": "dae5cab4165b4231a9f31a9f0b300c1651a5a499b45d2b408a77ab39cd2bdbdf"
+    },
+    {
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/fixtures/full/anomaly.pytest-dev__pytest-5787.call65.onset.cap2048.seed44.private.json",
+      "mode": "full",
+      "seed": 44,
+      "tokens": 2048,
+      "verdict": "inconclusive",
+      "original1024_prefix_identical": true,
+      "reason": "Prefix # I will + use is grammatical. Advances through distinct serialized lines for _to_json then _from_json; repeated string-list syntax contains distinct code, not a semantic loop. Cut off mid-list at2048 before command close; needs4096. No native contraction motif observed.",
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/runs/full/anomaly.pytest-dev__pytest-5787.call65.onset.cap2048.seed44.json",
+      "source_sha256": "8d87356ff1f0e6cb835889f799cd9bb4340db6f72b250a8a31e3423c7e497c55"
+    },
+    {
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.cap2048.seed42.private.json",
+      "mode": "full",
+      "seed": 42,
+      "tokens": 1805,
+      "verdict": "normal",
+      "original1024_prefix_identical": true,
+      "reason": "Pinned prefix ends if it; generated apostrophe-s is grammatical. Distinct Include registration hypotheses proceed to a complete canonical bash patch/repro command. No sustained contraction or degenerate token loop. This verdict does not certify patch correctness (the proposed monkey patch may recurse).",
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/runs/full/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.cap2048.seed42.json",
+      "source_sha256": "1d5c688fb8d2a45e392b1e3c4ebbe939a3e22539d44ac424f484e0f01ccff413"
+    },
+    {
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.cap2048.seed43.private.json",
+      "mode": "full",
+      "seed": 43,
+      "tokens": 1059,
+      "verdict": "normal",
+      "original1024_prefix_identical": true,
+      "reason": "Same pinned prefix as seed42 ends if it; apostrophe-s is grammatical. Distinct Include dispatch reasoning advances to complete canonical bash patch/repro command. No sustained contraction motif; repeated new_lines.append calls construct distinct code. Patch correctness is not certified.",
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/runs/full/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.cap2048.seed43.json",
+      "source_sha256": "d483cc0c1cabe7de4e479814b456cd783a3545bbca21d07447cc7bd9c23cab1f"
+    },
+    {
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap2048.seed43.private.json",
+      "mode": "full",
+      "seed": 43,
+      "tokens": 1884,
+      "verdict": "normal",
+      "original1024_prefix_identical": true,
+      "reason": "Pinned prefix ends call:bash, so generated command field is expected. Distinct patch-script alternatives finish canonical tool close at1884. Script has code-quality issues and unfinished intended repair, but no degenerate token loop/native missing-tool protocol anomaly; this does not certify task correctness.",
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/runs/full/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap2048.seed43.json",
+      "source_sha256": "8a3b8c0bb10a1c8426f071f7ee19af6815fe976fafc4645b9126b319b61999e9"
+    },
+    {
+      "case": "anomaly.pytest-dev__pytest-5787.call65.onset.cap2048.seed43",
+      "mode": "served",
+      "seed": 43,
+      "tokens": 1568,
+      "verdict": "other",
+      "original1024_prefix_identical": true,
+      "reason": "Completes distinct serialization/deserialization script and canonical tool close, but inserts unrelated token Deloitte in for section in long Deloitte-longrepr_data.get(...), producing invalid code. Localized stray-token anomaly; no native sustained contraction motif. Preserve in common-cap precision-panel regression review.",
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/runs/served/anomaly.pytest-dev__pytest-5787.call65.onset.cap2048.seed43.json",
+      "source_sha256": "7641a036466de1cf4b1c038bd84060bb779f230710de6e1b51be41fdfa40fd87"
+    },
+    {
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/fixtures/served/anomaly.sphinx-doc__sphinx-9461.call184.onset.cap2048.seed43.private.json",
+      "mode": "served",
+      "seed": 43,
+      "tokens": 1087,
+      "verdict": "normal",
+      "original1024_prefix_identical": true,
+      "reason": "Distinct MRO inspection and replacement script closes with canonical tool delimiters at1087 tokens; prefix ends call:bash and continuation supplies command. No sustained motif or stray-token anomaly observed. This diagnostic does not establish patch correctness.",
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/runs/served/anomaly.sphinx-doc__sphinx-9461.call184.onset.cap2048.seed43.json",
+      "source_sha256": "f820d67a3f45338d86e645792509f26c87bcdf201b425828e77821e336325595"
+    }
+  ],
+  "modes": {
+    "served": {
+      "samples": 2,
+      "verdict_counts": {
+        "other": 1,
+        "normal": 1
+      },
+      "measured_hours": 0.08086509439680312,
+      "prediction_range_hit": true,
+      "completion": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-execution/served-completion.json"
+    },
+    "full": {
+      "samples": 6,
+      "verdict_counts": {
+        "normal": 5,
+        "inconclusive": 1
+      },
+      "measured_hours": 0.25680260009235806,
+      "prediction_range_hit": true,
+      "completion": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-execution/full-completion.json"
+    }
+  },
+  "next": "One full Pytest5787 call65 seed44 progressing2048 needs4096; served same-seed commoncap must follow in precision panel. Served seed43 localized Deloitte anomaly remains a target.",
+  "trace_counter_audit": [
+    {
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/runs/full/anomaly.pytest-dev__pytest-5787.call65.onset.cap2048.seed42.json",
+      "replays": 1538,
+      "captures": 0,
+      "pass": true
+    },
+    {
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/runs/full/anomaly.pytest-dev__pytest-5787.call65.onset.cap2048.seed43.json",
+      "replays": 1628,
+      "captures": 0,
+      "pass": true
+    },
+    {
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/runs/full/anomaly.pytest-dev__pytest-5787.call65.onset.cap2048.seed44.json",
+      "replays": 2047,
+      "captures": 0,
+      "pass": true
+    },
+    {
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/runs/full/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.cap2048.seed42.json",
+      "replays": 1804,
+      "captures": 0,
+      "pass": true
+    },
+    {
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/runs/full/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.cap2048.seed43.json",
+      "replays": 1058,
+      "captures": 0,
+      "pass": true
+    },
+    {
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/runs/full/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap2048.seed43.json",
+      "replays": 1883,
+      "captures": 0,
+      "pass": true
+    },
+    {
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/runs/served/anomaly.pytest-dev__pytest-5787.call65.onset.cap2048.seed43.json",
+      "replays": 1567,
+      "captures": 0,
+      "pass": true
+    },
+    {
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/runs/served/anomaly.sphinx-doc__sphinx-9461.call184.onset.cap2048.seed43.json",
+      "replays": 1086,
+      "captures": 0,
+      "pass": true
+    }
+  ]
+}

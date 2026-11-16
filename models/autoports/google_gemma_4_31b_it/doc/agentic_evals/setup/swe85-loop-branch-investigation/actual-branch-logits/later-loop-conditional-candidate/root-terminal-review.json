@@ -1,0 +1,19 @@
+{
+  "status": "completed_aligned31rows_identity_and_forecast_validated",
+  "wall_seconds": {
+    "hf": 169.53297638893127,
+    "tt-full": 100.64954400062561,
+    "compare": 10.530614614486694
+  },
+  "sum_seconds": 280.7131350040436,
+  "forecast_seconds": [
+    260.548,
+    865.393
+  ],
+  "forecast_hit": true,
+  "runtime_full_precision_exact": true,
+  "independent_analysis_pending": false,
+  "scope": "Forced branch logits only, not unconditional reference incidence or serving performance",
+  "independent_analysis_sha256": "cd0de57f60e46ac495a66a3259e5bd821dcd5d69f43a89fabf225b2edd342c9d",
+  "root_conclusion": "On this forced history, both references favor alternatives at first two 147 occurrences then strongly favor loop from third occurrence. Later-cycle persistence is reference-compatible conditional behavior, not evidence of constant-seed or sampler defect. Initial reduced-precision branch drift remains. No unconditional incidence or native equivalence claim."
+}

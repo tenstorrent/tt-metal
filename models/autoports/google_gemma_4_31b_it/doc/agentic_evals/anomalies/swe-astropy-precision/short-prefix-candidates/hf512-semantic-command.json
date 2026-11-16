@@ -1,0 +1,39 @@
+{
+  "status": "prepared_optional_not_launched",
+  "argv": [
+    "env",
+    "HF_HUB_OFFLINE=1",
+    "HF_DATASETS_OFFLINE=1",
+    "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+    "models/autoports/google_gemma_4_31b_it/tools/precision_repro_hf.py",
+    "--cases",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe-astropy-precision/short-prefix-candidates/reproduced_cases.json",
+    "--output",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe-astropy-precision/short-prefix-candidates/hf_cpu512_semantic_control",
+    "--tokens",
+    "512",
+    "--seeds",
+    "42",
+    "43",
+    "44",
+    "--prefill-chunk",
+    "512",
+    "--compare-dir",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe-astropy-precision/short-prefix-candidates/served",
+    "--compare-dir",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe-astropy-precision/short-prefix-candidates/full"
+  ],
+  "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe-astropy-precision/short-prefix-candidates/first512-control-check.json",
+  "interpretation": {
+    "same_semantic_phenomenon_visible": true,
+    "all_six_first512_show_repeated_phrases": true,
+    "first512_detector_flags": 0,
+    "original1024_detector_flags": 6,
+    "supports512_HF_semantic_probe": true,
+    "supports512_same_detector_pass_fail": false,
+    "criterion": "Inspect the512-token continuation for sustained repeated sentences/action intentions matching the TT loop. A negative detector flag is not a pass. If512tokens are inconclusive, extend1024 before any anomaly closure. This is diagnostic cap adaptation only, not scored-run change or population-rate comparison."
+  },
+  "original1024_TT_artifacts_unchanged": true,
+  "gate": "Parent admission and reproduced_cases.json required. Preserve short512 observations separately; no claim of HF result or estimated completion time."
+}

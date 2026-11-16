@@ -1,0 +1,757 @@
+{
+  "rows": [
+    {
+      "task": "astropy__astropy-14995",
+      "old_inspect": {
+        "Id": "sha256:6bd76b1787a6241dff69557f05037cace2924ea2e13a974b3782a02d56d22893",
+        "RepoTags": [
+          "v5-swe-offline-verifier:astropy__astropy-14995"
+        ],
+        "RepoDigests": [
+          "v5-swe-offline-verifier@sha256:6bd76b1787a6241dff69557f05037cace2924ea2e13a974b3782a02d56d22893"
+        ],
+        "Comment": "buildkit.dockerfile.v0",
+        "Created": "2026-11-14T09:28:15.244928905Z",
+        "Config": {
+          "Env": [
+            "PATH=/opt/miniconda3/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+            "TZ=Etc/UTC",
+            "UV_OFFLINE=1",
+            "UV_PYTHON_DOWNLOADS=never",
+            "LITELLM_LOCAL_MODEL_COST_MAP=True"
+          ],
+          "Cmd": [
+            "/bin/bash"
+          ],
+          "WorkingDir": "/testbed",
+          "Labels": {
+            "org.opencontainers.image.version": "22.04"
+          }
+        },
+        "Architecture": "amd64",
+        "Os": "linux",
+        "Size": 1487528146,
+        "RootFS": {
+          "Type": "layers",
+          "Layers": [
+            "sha256:beb59027b96ddbf30ac9c80b527668fe7011f4f553fe83f5e59199e9a84fb5ca",
+            "sha256:8b070dae4fd6562cc7272d3392d3e5d0eb54aebbabe7992ea47407c02a7e4ab5",
+            "sha256:e41dda3ddff433b42bc5c7db367e9a89b90e42702b2204ac3748eff0661fed5d",
+            "sha256:77dfb20914dd629938c812a6dbd69d5523e3eca3798e570ceee0b09b0e9f8eeb",
+            "sha256:73f1203e53826763f5480b23ca857212005fd21f7fbfb1df5f40641c278d0802",
+            "sha256:9f91f535caf3186b2a7f093b2f8bc4e3a6605e119e563b7e49fb81415185125d",
+            "sha256:d375fd795e4141dd3ad97d483bfa3e104cdac73eed1a68645442c89b6a3cd1b4",
+            "sha256:d03c9c2b653e9742cf62d63cad9deb085232f2d4d019277da3a16034228e86e8",
+            "sha256:003c732f796727f55b3af6227b881c15be06c8b0af08e18def02b3617e3321d5",
+            "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef",
+            "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef",
+            "sha256:9d68941df0e09fdfe9f61cce694e21b6b9b98f28196bc1402d10669f63617be7",
+            "sha256:2c885c266a1098af08a07cf99db712d2f20a767479f8e98bdb8df4c9ecfdbec6",
+            "sha256:9c23c4b2744c71f581377ec80350b69195de385c25706115cc8fd874f36944e8",
+            "sha256:27fcc4c2d694445cb17093cd7f4773b22af641e4aa6cff6fc3c84812b2747025",
+            "sha256:bbe4d23ac71c9eb5a324c357400fee212536b72e04bccf47e82e0a17a59c9757"
+          ]
+        },
+        "Metadata": {
+          "LastTagTime": "2026-11-14T09:28:36.419083257Z"
+        },
+        "Descriptor": {
+          "mediaType": "application/vnd.oci.image.index.v1+json",
+          "digest": "sha256:6bd76b1787a6241dff69557f05037cace2924ea2e13a974b3782a02d56d22893",
+          "size": 856
+        }
+      },
+      "official_base": "sha256:e1c746371f8f7132c29768bea9cc1380871c87f6e4404a2282d8d3c582786874",
+      "official_repo_digests": [
+        "swebench/sweb.eval.x86_64.astropy_1776_astropy-14995@sha256:e1c746371f8f7132c29768bea9cc1380871c87f6e4404a2282d8d3c582786874"
+      ],
+      "free_before": 173641547776,
+      "status": "migrated",
+      "base_root_mode": "700",
+      "build_command": [
+        "docker",
+        "build",
+        "--network",
+        "none",
+        "--pull=false",
+        "--build-arg",
+        "OFFICIAL_IMAGE=swebench/sweb.eval.x86_64.astropy_1776_astropy-14995:latest",
+        "--build-arg",
+        "BASE_ROOT_MODE=700",
+        "-f",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-candidate/Dockerfile.offline-linked",
+        "-t",
+        "v5-swe-offline-linked:astropy__astropy-14995-mode-restored",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts"
+      ],
+      "new_inspect": {
+        "Id": "sha256:08980109eebaf0075501f097f7376ee296ae5fd068dbdc98a161b5df971481aa",
+        "RepoTags": [
+          "v5-swe-offline-linked:astropy__astropy-14995-mode-restored"
+        ],
+        "RepoDigests": [
+          "v5-swe-offline-linked@sha256:08980109eebaf0075501f097f7376ee296ae5fd068dbdc98a161b5df971481aa"
+        ],
+        "Comment": "buildkit.dockerfile.v0",
+        "Created": "2026-11-14T11:28:03.023101119Z",
+        "Config": {
+          "Env": [
+            "PATH=/opt/miniconda3/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+            "TZ=Etc/UTC",
+            "UV_OFFLINE=1",
+            "UV_PYTHON_DOWNLOADS=never",
+            "LITELLM_LOCAL_MODEL_COST_MAP=True"
+          ],
+          "Cmd": [
+            "/bin/bash"
+          ],
+          "WorkingDir": "/testbed",
+          "Labels": {
+            "org.opencontainers.image.version": "22.04"
+          }
+        },
+        "Architecture": "amd64",
+        "Os": "linux",
+        "Size": 1487528461,
+        "RootFS": {
+          "Type": "layers",
+          "Layers": [
+            "sha256:beb59027b96ddbf30ac9c80b527668fe7011f4f553fe83f5e59199e9a84fb5ca",
+            "sha256:8b070dae4fd6562cc7272d3392d3e5d0eb54aebbabe7992ea47407c02a7e4ab5",
+            "sha256:e41dda3ddff433b42bc5c7db367e9a89b90e42702b2204ac3748eff0661fed5d",
+            "sha256:77dfb20914dd629938c812a6dbd69d5523e3eca3798e570ceee0b09b0e9f8eeb",
+            "sha256:73f1203e53826763f5480b23ca857212005fd21f7fbfb1df5f40641c278d0802",
+            "sha256:9f91f535caf3186b2a7f093b2f8bc4e3a6605e119e563b7e49fb81415185125d",
+            "sha256:d375fd795e4141dd3ad97d483bfa3e104cdac73eed1a68645442c89b6a3cd1b4",
+            "sha256:d03c9c2b653e9742cf62d63cad9deb085232f2d4d019277da3a16034228e86e8",
+            "sha256:003c732f796727f55b3af6227b881c15be06c8b0af08e18def02b3617e3321d5",
+            "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef",
+            "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef",
+            "sha256:c682a77ed46204b87c4c54ddd272f77c97aa55ad3082e1e76372e935bec26ae1",
+            "sha256:ef0bd88c2e4faf035fa1551bef6ac48649d0b44439e7b66796b8e55d8d43fd61",
+            "sha256:3a7669f78c063e1a58c2d65b8e8f9e714078e24d67f33730e406451763f09c5d",
+            "sha256:5792fc143b8527c5f60d2bd31c99687abdbb37e84ced7864dd3b53e42563cbf3",
+            "sha256:9414836d87068f9de346e527dfa1329e5227368055db5de8f3cc85a86794e397"
+          ]
+        },
+        "Metadata": {
+          "LastTagTime": "2026-11-14T11:28:03.096575969Z"
+        },
+        "Descriptor": {
+          "mediaType": "application/vnd.oci.image.index.v1+json",
+          "digest": "sha256:08980109eebaf0075501f097f7376ee296ae5fd068dbdc98a161b5df971481aa",
+          "size": 856
+        }
+      },
+      "validation": "700 0 0 /root\n755 0 0 /root/.local\n755 0 0 /root/.cache\n755 0 0 /root/.cache/uv\n755 0 0 /root/.cache/uv/environments-v2\n755 0 0 /root/.cache/uv/environments-v2/parser-466021493977ef71\n1777 0 0 /tmp\n9afd2dd503b90f8b392bcb98f4e031dc16ee5f38\nuv 0.7.13\nmini-swe-agent v2.2.8\n- mini\n- mini-e\n- mini-extra\n- mini-swe-agent\n{'swebench': '4.0.3', 'datasets': '2.16.1', 'fastcore': '1.10.5'}\ndb0731f109108eb8f7381cc530c65fa30cbfe6af32ffe54d23fa8051f7dfe8aa  -\n",
+      "commands": [
+        {
+          "argv": [
+            "docker",
+            "tag",
+            "sha256:08980109eebaf0075501f097f7376ee296ae5fd068dbdc98a161b5df971481aa",
+            "v5-swe-offline-verifier:astropy__astropy-14995"
+          ],
+          "returncode": 0,
+          "stdout": "",
+          "stderr": ""
+        },
+        {
+          "argv": [
+            "docker",
+            "image",
+            "rm",
+            "sha256:6bd76b1787a6241dff69557f05037cace2924ea2e13a974b3782a02d56d22893"
+          ],
+          "returncode": 0,
+          "stdout": "Deleted: sha256:6bd76b1787a6241dff69557f05037cace2924ea2e13a974b3782a02d56d22893\n",
+          "stderr": ""
+        }
+      ],
+      "free_after": 173622886400,
+      "actual_gain_bytes": -18661376
+    },
+    {
+      "task": "sphinx-doc__sphinx-9281",
+      "old_inspect": {
+        "Id": "sha256:890944df40a62da9bcba632d508dcd099c84881af22845cb672ddb341bbc2283",
+        "RepoTags": [
+          "v5-swe-offline-verifier:sphinx-doc__sphinx-9281"
+        ],
+        "RepoDigests": [
+          "v5-swe-offline-verifier@sha256:890944df40a62da9bcba632d508dcd099c84881af22845cb672ddb341bbc2283"
+        ],
+        "Comment": "buildkit.dockerfile.v0",
+        "Created": "2026-11-14T09:28:55.918568539Z",
+        "Config": {
+          "Env": [
+            "PATH=/opt/miniconda3/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+            "TZ=Etc/UTC",
+            "UV_OFFLINE=1",
+            "UV_PYTHON_DOWNLOADS=never",
+            "LITELLM_LOCAL_MODEL_COST_MAP=True"
+          ],
+          "Cmd": [
+            "/bin/bash"
+          ],
+          "WorkingDir": "/testbed",
+          "Labels": {
+            "org.opencontainers.image.version": "22.04"
+          }
+        },
+        "Architecture": "amd64",
+        "Os": "linux",
+        "Size": 1447980034,
+        "RootFS": {
+          "Type": "layers",
+          "Layers": [
+            "sha256:beb59027b96ddbf30ac9c80b527668fe7011f4f553fe83f5e59199e9a84fb5ca",
+            "sha256:24df650e8ccc41451cf4f7113e09420f7ec00ca9ae41e8be09c60bc467cdf4fe",
+            "sha256:098cb03ec50e1bd1637b7db5e2696a4d1dc3f1c3811adbbe444f43f631f2e7fd",
+            "sha256:fc3a8fa12509a555b3cea8d1f7457c0837ab8360be78e7a380294e09f96fe2f2",
+            "sha256:a3540f5c375c231bc054e7472d0de5a6d8fe5c96b92948f7655914860647fb54",
+            "sha256:f3684f1a85d5159913e2c41a55a86947882302421241b14b57583633bfc31873",
+            "sha256:3469b42ce1ac55c209bfd25927c21eb684548d55c4628155e7730e67aa976250",
+            "sha256:229dd92b8b9bd5e33383abbdedbf0e121bec9801ce9c7af17dd51e75e81b6658",
+            "sha256:5c20663a978e1becbe3f8eb638605d28208c8ee4b44f55e6f3ce660ba54b179d",
+            "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef",
+            "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef",
+            "sha256:e43755c969a893f5883e63aa860ab5e285220d4afb8882d4d15752d69268bf40",
+            "sha256:57e0b3ff3520a51287313b2fe0c4cd90f6b3ad8ce004d7fd6e781eb616531107",
+            "sha256:11c23c6f5e02fb26fb4f35d351262cf6c09ab8bb7004ed1d3b79c40bec246831",
+            "sha256:d679ffd9edd5d3a47a871f0815169004554f92cf2f46673b74d39bff2966c714",
+            "sha256:3b92a911870a1b7dbba217a66ad864ddabd903beff119eccfa2913fd1ddf7d37"
+          ]
+        },
+        "Metadata": {
+          "LastTagTime": "2026-11-14T09:29:17.162045676Z"
+        },
+        "Descriptor": {
+          "mediaType": "application/vnd.oci.image.index.v1+json",
+          "digest": "sha256:890944df40a62da9bcba632d508dcd099c84881af22845cb672ddb341bbc2283",
+          "size": 856
+        }
+      },
+      "official_base": "sha256:08c9e293bbc73d548670319b2d37ef8eef6bf528b995959f361159c505355f2d",
+      "official_repo_digests": [
+        "swebench/sweb.eval.x86_64.sphinx-doc_1776_sphinx-9281@sha256:08c9e293bbc73d548670319b2d37ef8eef6bf528b995959f361159c505355f2d"
+      ],
+      "free_before": 173622878208,
+      "status": "migrated",
+      "base_root_mode": "700",
+      "build_command": [
+        "docker",
+        "build",
+        "--network",
+        "none",
+        "--pull=false",
+        "--build-arg",
+        "OFFICIAL_IMAGE=swebench/sweb.eval.x86_64.sphinx-doc_1776_sphinx-9281:latest",
+        "--build-arg",
+        "BASE_ROOT_MODE=700",
+        "-f",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-candidate/Dockerfile.offline-linked",
+        "-t",
+        "v5-swe-offline-linked:sphinx-doc__sphinx-9281-mode-restored",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts"
+      ],
+      "new_inspect": {
+        "Id": "sha256:5ba132864b1f534e0091f61fbd9d4eef2ec435ca43f04d1098663405c33e1d9f",
+        "RepoTags": [
+          "v5-swe-offline-linked:sphinx-doc__sphinx-9281-mode-restored"
+        ],
+        "RepoDigests": [
+          "v5-swe-offline-linked@sha256:5ba132864b1f534e0091f61fbd9d4eef2ec435ca43f04d1098663405c33e1d9f"
+        ],
+        "Comment": "buildkit.dockerfile.v0",
+        "Created": "2026-11-14T11:28:19.747416041Z",
+        "Config": {
+          "Env": [
+            "PATH=/opt/miniconda3/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+            "TZ=Etc/UTC",
+            "UV_OFFLINE=1",
+            "UV_PYTHON_DOWNLOADS=never",
+            "LITELLM_LOCAL_MODEL_COST_MAP=True"
+          ],
+          "Cmd": [
+            "/bin/bash"
+          ],
+          "WorkingDir": "/testbed",
+          "Labels": {
+            "org.opencontainers.image.version": "22.04"
+          }
+        },
+        "Architecture": "amd64",
+        "Os": "linux",
+        "Size": 1447980336,
+        "RootFS": {
+          "Type": "layers",
+          "Layers": [
+            "sha256:beb59027b96ddbf30ac9c80b527668fe7011f4f553fe83f5e59199e9a84fb5ca",
+            "sha256:24df650e8ccc41451cf4f7113e09420f7ec00ca9ae41e8be09c60bc467cdf4fe",
+            "sha256:098cb03ec50e1bd1637b7db5e2696a4d1dc3f1c3811adbbe444f43f631f2e7fd",
+            "sha256:fc3a8fa12509a555b3cea8d1f7457c0837ab8360be78e7a380294e09f96fe2f2",
+            "sha256:a3540f5c375c231bc054e7472d0de5a6d8fe5c96b92948f7655914860647fb54",
+            "sha256:f3684f1a85d5159913e2c41a55a86947882302421241b14b57583633bfc31873",
+            "sha256:3469b42ce1ac55c209bfd25927c21eb684548d55c4628155e7730e67aa976250",
+            "sha256:229dd92b8b9bd5e33383abbdedbf0e121bec9801ce9c7af17dd51e75e81b6658",
+            "sha256:5c20663a978e1becbe3f8eb638605d28208c8ee4b44f55e6f3ce660ba54b179d",
+            "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef",
+            "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef",
+            "sha256:c682a77ed46204b87c4c54ddd272f77c97aa55ad3082e1e76372e935bec26ae1",
+            "sha256:ef0bd88c2e4faf035fa1551bef6ac48649d0b44439e7b66796b8e55d8d43fd61",
+            "sha256:4344c60541ff2de0b96bf42146d4999c0c81de5a8b241601ef018554c73d5112",
+            "sha256:bd2dcd1f320782d90435e6c3ce779c0381e3dc63bc193c2729ab91bb7bf0dd0b",
+            "sha256:7c8e5f6f10c71dfe487c962c81b004f604b054f200cd1405ca2235963c55b687"
+          ]
+        },
+        "Metadata": {
+          "LastTagTime": "2026-11-14T11:28:19.818011292Z"
+        },
+        "Descriptor": {
+          "mediaType": "application/vnd.oci.image.index.v1+json",
+          "digest": "sha256:5ba132864b1f534e0091f61fbd9d4eef2ec435ca43f04d1098663405c33e1d9f",
+          "size": 856
+        }
+      },
+      "validation": "700 0 0 /root\n755 0 0 /root/.local\n755 0 0 /root/.cache\n755 0 0 /root/.cache/uv\n755 0 0 /root/.cache/uv/environments-v2\n755 0 0 /root/.cache/uv/environments-v2/parser-466021493977ef71\n1777 0 0 /tmp\nc41dd636cec66e7b36713a9c4ce2d82f3dcab32c\nuv 0.7.13\nmini-swe-agent v2.2.8\n- mini\n- mini-e\n- mini-extra\n- mini-swe-agent\n{'swebench': '4.0.3', 'datasets': '2.16.1', 'fastcore': '1.10.5'}\ndb0731f109108eb8f7381cc530c65fa30cbfe6af32ffe54d23fa8051f7dfe8aa  -\n",
+      "commands": [
+        {
+          "argv": [
+            "docker",
+            "tag",
+            "sha256:5ba132864b1f534e0091f61fbd9d4eef2ec435ca43f04d1098663405c33e1d9f",
+            "v5-swe-offline-verifier:sphinx-doc__sphinx-9281"
+          ],
+          "returncode": 0,
+          "stdout": "",
+          "stderr": ""
+        },
+        {
+          "argv": [
+            "docker",
+            "image",
+            "rm",
+            "sha256:890944df40a62da9bcba632d508dcd099c84881af22845cb672ddb341bbc2283"
+          ],
+          "returncode": 0,
+          "stdout": "Deleted: sha256:890944df40a62da9bcba632d508dcd099c84881af22845cb672ddb341bbc2283\n",
+          "stderr": ""
+        }
+      ],
+      "free_after": 173604646912,
+      "actual_gain_bytes": -18231296
+    },
+    {
+      "task": "mwaskom__seaborn-3069",
+      "old_inspect": {
+        "Id": "sha256:d54d74002722aee4b93275ab131565e7ead9fb64ebd275084f30d957af16c6aa",
+        "RepoTags": [
+          "v5-swe-offline-verifier:mwaskom__seaborn-3069"
+        ],
+        "RepoDigests": [
+          "v5-swe-offline-verifier@sha256:d54d74002722aee4b93275ab131565e7ead9fb64ebd275084f30d957af16c6aa"
+        ],
+        "Comment": "buildkit.dockerfile.v0",
+        "Created": "2026-11-14T09:29:36.649920448Z",
+        "Config": {
+          "Env": [
+            "PATH=/opt/miniconda3/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+            "TZ=Etc/UTC",
+            "UV_OFFLINE=1",
+            "UV_PYTHON_DOWNLOADS=never",
+            "LITELLM_LOCAL_MODEL_COST_MAP=True"
+          ],
+          "Cmd": [
+            "/bin/bash"
+          ],
+          "WorkingDir": "/testbed",
+          "Labels": {
+            "org.opencontainers.image.version": "22.04"
+          }
+        },
+        "Architecture": "amd64",
+        "Os": "linux",
+        "Size": 1639879852,
+        "RootFS": {
+          "Type": "layers",
+          "Layers": [
+            "sha256:beb59027b96ddbf30ac9c80b527668fe7011f4f553fe83f5e59199e9a84fb5ca",
+            "sha256:24df650e8ccc41451cf4f7113e09420f7ec00ca9ae41e8be09c60bc467cdf4fe",
+            "sha256:098cb03ec50e1bd1637b7db5e2696a4d1dc3f1c3811adbbe444f43f631f2e7fd",
+            "sha256:fc3a8fa12509a555b3cea8d1f7457c0837ab8360be78e7a380294e09f96fe2f2",
+            "sha256:a3540f5c375c231bc054e7472d0de5a6d8fe5c96b92948f7655914860647fb54",
+            "sha256:f3684f1a85d5159913e2c41a55a86947882302421241b14b57583633bfc31873",
+            "sha256:21c6f44b95dffd065643dbfe9124bfbe0add82215ed84226e80fb5b4712704a0",
+            "sha256:b3528e19d47cf7e2814ca9c32b77fc17e22970b01e2903dcf1adeed37bdaa434",
+            "sha256:e82e637690472857dbfc71579f4363cac3b7c6b6f56b220c63977b0f68ceb95e",
+            "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef",
+            "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef",
+            "sha256:d367cea3bd734b79156050bddf5c09fe3b066f10c1a98f95b2e792b07d66ae0e",
+            "sha256:d5b784855350bf6e5ff8b96f2e52a3a5a28a5936c5004a0710a8afe9ecd4698e",
+            "sha256:1f56b813a60603d7b3076896d22c0d0565a452b3a3a2f93173c0030751bdff68",
+            "sha256:73b1641ffe10cb2237a34e8462eaa48acde22e3030eeb69df37003d86dccd49a",
+            "sha256:fb67b0580c6e5e0831da14ce7e2b05a5038ff84772ba0e0ef8d8d413446d261d"
+          ]
+        },
+        "Metadata": {
+          "LastTagTime": "2026-11-14T09:29:57.192606142Z"
+        },
+        "Descriptor": {
+          "mediaType": "application/vnd.oci.image.index.v1+json",
+          "digest": "sha256:d54d74002722aee4b93275ab131565e7ead9fb64ebd275084f30d957af16c6aa",
+          "size": 856
+        }
+      },
+      "official_base": "sha256:10f78850ebb5de5a4bdb70099159131fa819601dc885955d7be6f1009b23b4ea",
+      "official_repo_digests": [
+        "swebench/sweb.eval.x86_64.mwaskom_1776_seaborn-3069@sha256:10f78850ebb5de5a4bdb70099159131fa819601dc885955d7be6f1009b23b4ea"
+      ],
+      "free_before": 173604638720,
+      "status": "migrated",
+      "base_root_mode": "700",
+      "build_command": [
+        "docker",
+        "build",
+        "--network",
+        "none",
+        "--pull=false",
+        "--build-arg",
+        "OFFICIAL_IMAGE=swebench/sweb.eval.x86_64.mwaskom_1776_seaborn-3069:latest",
+        "--build-arg",
+        "BASE_ROOT_MODE=700",
+        "-f",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-candidate/Dockerfile.offline-linked",
+        "-t",
+        "v5-swe-offline-linked:mwaskom__seaborn-3069-mode-restored",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts"
+      ],
+      "new_inspect": {
+        "Id": "sha256:64e8c71caf97dd8c4d9671449d565748e2529a24830cb733c66d857df0711723",
+        "RepoTags": [
+          "v5-swe-offline-linked:mwaskom__seaborn-3069-mode-restored"
+        ],
+        "RepoDigests": [
+          "v5-swe-offline-linked@sha256:64e8c71caf97dd8c4d9671449d565748e2529a24830cb733c66d857df0711723"
+        ],
+        "Comment": "buildkit.dockerfile.v0",
+        "Created": "2026-11-14T11:28:35.928791656Z",
+        "Config": {
+          "Env": [
+            "PATH=/opt/miniconda3/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+            "TZ=Etc/UTC",
+            "UV_OFFLINE=1",
+            "UV_PYTHON_DOWNLOADS=never",
+            "LITELLM_LOCAL_MODEL_COST_MAP=True"
+          ],
+          "Cmd": [
+            "/bin/bash"
+          ],
+          "WorkingDir": "/testbed",
+          "Labels": {
+            "org.opencontainers.image.version": "22.04"
+          }
+        },
+        "Architecture": "amd64",
+        "Os": "linux",
+        "Size": 1639880159,
+        "RootFS": {
+          "Type": "layers",
+          "Layers": [
+            "sha256:beb59027b96ddbf30ac9c80b527668fe7011f4f553fe83f5e59199e9a84fb5ca",
+            "sha256:24df650e8ccc41451cf4f7113e09420f7ec00ca9ae41e8be09c60bc467cdf4fe",
+            "sha256:098cb03ec50e1bd1637b7db5e2696a4d1dc3f1c3811adbbe444f43f631f2e7fd",
+            "sha256:fc3a8fa12509a555b3cea8d1f7457c0837ab8360be78e7a380294e09f96fe2f2",
+            "sha256:a3540f5c375c231bc054e7472d0de5a6d8fe5c96b92948f7655914860647fb54",
+            "sha256:f3684f1a85d5159913e2c41a55a86947882302421241b14b57583633bfc31873",
+            "sha256:21c6f44b95dffd065643dbfe9124bfbe0add82215ed84226e80fb5b4712704a0",
+            "sha256:b3528e19d47cf7e2814ca9c32b77fc17e22970b01e2903dcf1adeed37bdaa434",
+            "sha256:e82e637690472857dbfc71579f4363cac3b7c6b6f56b220c63977b0f68ceb95e",
+            "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef",
+            "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef",
+            "sha256:c682a77ed46204b87c4c54ddd272f77c97aa55ad3082e1e76372e935bec26ae1",
+            "sha256:ef0bd88c2e4faf035fa1551bef6ac48649d0b44439e7b66796b8e55d8d43fd61",
+            "sha256:64d08583e209ce80abe3c3bf51e2cab133da972d27c6d17a388415c8e25ed7af",
+            "sha256:73a2ad36d686a8c752465974b42d766616a78bf4f2090158a501a5a5f5138ddb",
+            "sha256:d14fe4915a1aaed9bdea1e5103866edd83bc388c9a28c0f7ccbd19e87f88016a"
+          ]
+        },
+        "Metadata": {
+          "LastTagTime": "2026-11-14T11:28:35.995956517Z"
+        },
+        "Descriptor": {
+          "mediaType": "application/vnd.oci.image.index.v1+json",
+          "digest": "sha256:64e8c71caf97dd8c4d9671449d565748e2529a24830cb733c66d857df0711723",
+          "size": 856
+        }
+      },
+      "validation": "700 0 0 /root\n755 0 0 /root/.local\n755 0 0 /root/.cache\n755 0 0 /root/.cache/uv\n755 0 0 /root/.cache/uv/environments-v2\n755 0 0 /root/.cache/uv/environments-v2/parser-466021493977ef71\n1777 0 0 /tmp\ne7dc19c10f40a5daf8e0cf67a7e025aa426ce86a\nuv 0.7.13\nmini-swe-agent v2.2.8\n- mini\n- mini-e\n- mini-extra\n- mini-swe-agent\n{'swebench': '4.0.3', 'datasets': '2.16.1', 'fastcore': '1.10.5'}\ndb0731f109108eb8f7381cc530c65fa30cbfe6af32ffe54d23fa8051f7dfe8aa  -\n",
+      "commands": [
+        {
+          "argv": [
+            "docker",
+            "tag",
+            "sha256:64e8c71caf97dd8c4d9671449d565748e2529a24830cb733c66d857df0711723",
+            "v5-swe-offline-verifier:mwaskom__seaborn-3069"
+          ],
+          "returncode": 0,
+          "stdout": "",
+          "stderr": ""
+        },
+        {
+          "argv": [
+            "docker",
+            "image",
+            "rm",
+            "sha256:d54d74002722aee4b93275ab131565e7ead9fb64ebd275084f30d957af16c6aa"
+          ],
+          "returncode": 0,
+          "stdout": "Deleted: sha256:d54d74002722aee4b93275ab131565e7ead9fb64ebd275084f30d957af16c6aa\n",
+          "stderr": ""
+        }
+      ],
+      "free_after": 173586251776,
+      "actual_gain_bytes": -18386944
+    },
+    {
+      "task": "pytest-dev__pytest-6197",
+      "old_inspect": {
+        "Id": "sha256:48c77d6f1524f50c3fa9e31baf260e121d3176ac76d3c61cb91d3718614a7eff",
+        "RepoTags": [
+          "v5-swe-offline-verifier:pytest-dev__pytest-6197"
+        ],
+        "RepoDigests": [
+          "v5-swe-offline-verifier@sha256:48c77d6f1524f50c3fa9e31baf260e121d3176ac76d3c61cb91d3718614a7eff"
+        ],
+        "Comment": "buildkit.dockerfile.v0",
+        "Created": "2026-11-14T09:30:18.50831331Z",
+        "Config": {
+          "Env": [
+            "PATH=/opt/miniconda3/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+            "TZ=Etc/UTC",
+            "UV_OFFLINE=1",
+            "UV_PYTHON_DOWNLOADS=never",
+            "LITELLM_LOCAL_MODEL_COST_MAP=True"
+          ],
+          "Cmd": [
+            "/bin/bash"
+          ],
+          "WorkingDir": "/testbed",
+          "Labels": {
+            "org.opencontainers.image.version": "22.04"
+          }
+        },
+        "Architecture": "amd64",
+        "Os": "linux",
+        "Size": 1372815390,
+        "RootFS": {
+          "Type": "layers",
+          "Layers": [
+            "sha256:beb59027b96ddbf30ac9c80b527668fe7011f4f553fe83f5e59199e9a84fb5ca",
+            "sha256:24df650e8ccc41451cf4f7113e09420f7ec00ca9ae41e8be09c60bc467cdf4fe",
+            "sha256:098cb03ec50e1bd1637b7db5e2696a4d1dc3f1c3811adbbe444f43f631f2e7fd",
+            "sha256:fc3a8fa12509a555b3cea8d1f7457c0837ab8360be78e7a380294e09f96fe2f2",
+            "sha256:a3540f5c375c231bc054e7472d0de5a6d8fe5c96b92948f7655914860647fb54",
+            "sha256:f3684f1a85d5159913e2c41a55a86947882302421241b14b57583633bfc31873",
+            "sha256:40cdfad1eaa85c9debcd7fb2ace54f1f16bef3c29201e922dd71c350368cdf50",
+            "sha256:3458ff98034ec573fa2c7fc21cfc72a85db308dc32a4f24648f52a9c824c5858",
+            "sha256:dab023771a73e52ca25af72e6be4375b3d89af4692e6528fb34577290d5eb857",
+            "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef",
+            "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef",
+            "sha256:3f34ffc7afa91fb5e4817c4f4ed018d95446e7608e98e7aea8b26135ac5ff0e4",
+            "sha256:d845289a9207423d0a426df01828bf9bc7acf9b46300b4040624834c8a663bd6",
+            "sha256:d1a6c087a3f42bc1070515bbb82bd74ff146eb1862b408342acb36876554d303",
+            "sha256:f364085a4efe559909359e898c2a75366d8bb58a2b70316aeff1c2c91704f1a7",
+            "sha256:f809dba7141b25369085a5bb2db36775cb84bf1c262d3e3866208785bdb62229"
+          ]
+        },
+        "Metadata": {
+          "LastTagTime": "2026-11-14T09:30:39.218535774Z"
+        },
+        "Descriptor": {
+          "mediaType": "application/vnd.oci.image.index.v1+json",
+          "digest": "sha256:48c77d6f1524f50c3fa9e31baf260e121d3176ac76d3c61cb91d3718614a7eff",
+          "size": 856
+        }
+      },
+      "official_base": "sha256:5dbfbcf23210a5a0ccdc4dbf1a55c894255b28fe6c56c13c9a4724d6c13bab4e",
+      "official_repo_digests": [
+        "swebench/sweb.eval.x86_64.pytest-dev_1776_pytest-6197@sha256:5dbfbcf23210a5a0ccdc4dbf1a55c894255b28fe6c56c13c9a4724d6c13bab4e"
+      ],
+      "free_before": 173586247680,
+      "status": "migrated",
+      "base_root_mode": "700",
+      "build_command": [
+        "docker",
+        "build",
+        "--network",
+        "none",
+        "--pull=false",
+        "--build-arg",
+        "OFFICIAL_IMAGE=swebench/sweb.eval.x86_64.pytest-dev_1776_pytest-6197:latest",
+        "--build-arg",
+        "BASE_ROOT_MODE=700",
+        "-f",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-candidate/Dockerfile.offline-linked",
+        "-t",
+        "v5-swe-offline-linked:pytest-dev__pytest-6197-mode-restored",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts"
+      ],
+      "new_inspect": {
+        "Id": "sha256:c6651b3ab487eafebf3a89e71e97d8ea3f14e9065c787208461940c47a5a3dd5",
+        "RepoTags": [
+          "v5-swe-offline-linked:pytest-dev__pytest-6197-mode-restored"
+        ],
+        "RepoDigests": [
+          "v5-swe-offline-linked@sha256:c6651b3ab487eafebf3a89e71e97d8ea3f14e9065c787208461940c47a5a3dd5"
+        ],
+        "Comment": "buildkit.dockerfile.v0",
+        "Created": "2026-11-14T11:28:52.592517496Z",
+        "Config": {
+          "Env": [
+            "PATH=/opt/miniconda3/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+            "TZ=Etc/UTC",
+            "UV_OFFLINE=1",
+            "UV_PYTHON_DOWNLOADS=never",
+            "LITELLM_LOCAL_MODEL_COST_MAP=True"
+          ],
+          "Cmd": [
+            "/bin/bash"
+          ],
+          "WorkingDir": "/testbed",
+          "Labels": {
+            "org.opencontainers.image.version": "22.04"
+          }
+        },
+        "Architecture": "amd64",
+        "Os": "linux",
+        "Size": 1372815661,
+        "RootFS": {
+          "Type": "layers",
+          "Layers": [
+            "sha256:beb59027b96ddbf30ac9c80b527668fe7011f4f553fe83f5e59199e9a84fb5ca",
+            "sha256:24df650e8ccc41451cf4f7113e09420f7ec00ca9ae41e8be09c60bc467cdf4fe",
+            "sha256:098cb03ec50e1bd1637b7db5e2696a4d1dc3f1c3811adbbe444f43f631f2e7fd",
+            "sha256:fc3a8fa12509a555b3cea8d1f7457c0837ab8360be78e7a380294e09f96fe2f2",
+            "sha256:a3540f5c375c231bc054e7472d0de5a6d8fe5c96b92948f7655914860647fb54",
+            "sha256:f3684f1a85d5159913e2c41a55a86947882302421241b14b57583633bfc31873",
+            "sha256:40cdfad1eaa85c9debcd7fb2ace54f1f16bef3c29201e922dd71c350368cdf50",
+            "sha256:3458ff98034ec573fa2c7fc21cfc72a85db308dc32a4f24648f52a9c824c5858",
+            "sha256:dab023771a73e52ca25af72e6be4375b3d89af4692e6528fb34577290d5eb857",
+            "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef",
+            "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef",
+            "sha256:c682a77ed46204b87c4c54ddd272f77c97aa55ad3082e1e76372e935bec26ae1",
+            "sha256:ef0bd88c2e4faf035fa1551bef6ac48649d0b44439e7b66796b8e55d8d43fd61",
+            "sha256:c544f7c8f945bda334153d8ccf1ec47ed6a927fd48d5eab667e9b4edf6e53c48",
+            "sha256:de0532f5037610d992a0be3ab30f9f01990a3869bf4e0032938808862c9034b0",
+            "sha256:1b3a9c5540d860ea7fd34349fe3d7a0f3e8a96e194114e495f785cce79827920"
+          ]
+        },
+        "Metadata": {
+          "LastTagTime": "2026-11-14T11:28:52.664196423Z"
+        },
+        "Descriptor": {
+          "mediaType": "application/vnd.oci.image.index.v1+json",
+          "digest": "sha256:c6651b3ab487eafebf3a89e71e97d8ea3f14e9065c787208461940c47a5a3dd5",
+          "size": 856
+        }
+      },
+      "validation": "700 0 0 /root\n755 0 0 /root/.local\n755 0 0 /root/.cache\n755 0 0 /root/.cache/uv\n755 0 0 /root/.cache/uv/environments-v2\n755 0 0 /root/.cache/uv/environments-v2/parser-466021493977ef71\n1777 0 0 /tmp\n4eecc51564648be4823fcc5f6f7ef208a4f84a8c\nuv 0.7.13\nmini-swe-agent v2.2.8\n- mini\n- mini-e\n- mini-extra\n- mini-swe-agent\n{'swebench': '4.0.3', 'datasets': '2.16.1', 'fastcore': '1.10.5'}\ndb0731f109108eb8f7381cc530c65fa30cbfe6af32ffe54d23fa8051f7dfe8aa  -\n",
+      "commands": [
+        {
+          "argv": [
+            "docker",
+            "tag",
+            "sha256:c6651b3ab487eafebf3a89e71e97d8ea3f14e9065c787208461940c47a5a3dd5",
+            "v5-swe-offline-verifier:pytest-dev__pytest-6197"
+          ],
+          "returncode": 0,
+          "stdout": "",
+          "stderr": ""
+        },
+        {
+          "argv": [
+            "docker",
+            "image",
+            "rm",
+            "sha256:48c77d6f1524f50c3fa9e31baf260e121d3176ac76d3c61cb91d3718614a7eff"
+          ],
+          "returncode": 0,
+          "stdout": "Deleted: sha256:48c77d6f1524f50c3fa9e31baf260e121d3176ac76d3c61cb91d3718614a7eff\n",
+          "stderr": ""
+        }
+      ],
+      "free_after": 173567598592,
+      "actual_gain_bytes": -18649088
+    }
+  ],
+  "status": "finished",
+  "coverage65_current": {
+    "django__django-11299": "sha256:34223f250036ce3ffc011d04790a764a34634e23761909f4433d743ce60cf3e6",
+    "astropy__astropy-14096": "sha256:6fea304dab0bbed00a166c16f9fd4723221b3f14388c04e7b8a48a535acd8a40",
+    "matplotlib__matplotlib-25332": "sha256:5f8a452c2defaf4e2186d3f7d4684c45574e27fb801411b05c3de822670a325f",
+    "sympy__sympy-13551": "sha256:1ea55458bc0423e8f7d8860b7b052342f0690e36189909e2cc08e98a0d323892",
+    "scikit-learn__scikit-learn-14629": "sha256:ba87f549294c243fc71fac2b567e0b34e956345b5726b747238232e542c54e4b",
+    "pydata__xarray-3993": "sha256:e868669fdedfd49c5a29ab3516d4a1683a3c4130a178c7439d77614d5c0c2a82",
+    "sphinx-doc__sphinx-9673": "sha256:d459d87f49b1475745209a2fe6f9fcadfa510036a452dc9531be139bf49cf3e4",
+    "pytest-dev__pytest-5840": "sha256:6a1b5dc8652d2021d19a962489d167ef7bbbd289776837d3ada56d399692d10b",
+    "pylint-dev__pylint-6903": "sha256:14c09d6d33ec92fea84292db59916827341001db0226f9a45f2d5332b7b98696",
+    "psf__requests-1142": "sha256:391046591ac2a53ad294e2e11172ea77abd4cd368729bd3375b72d3db17ba507",
+    "pallets__flask-5014": "sha256:15bce39c0234aeb9b0181dd05e9ec4e033aa7c5434e918b33f4c2980755fac28",
+    "mwaskom__seaborn-3187": "sha256:f414ddc12830efba7096bcaeb62e575e589937911ca26f108cb0a7e3d03fc2d5",
+    "pytest-dev__pytest-7982": "sha256:0dd14318f70a6467725e82573847fd7d7466d251b7172c83748c4afe4435f477",
+    "sympy__sympy-14711": "sha256:20bdd190b9c9be39480e8bc97668432a3bc1b459da2f44072afd65091191f8bc",
+    "pylint-dev__pylint-8898": "sha256:4a81aa8cbb00da18e14906ef23e111cb1da5863fdbe17e815e62960d03bd6bda",
+    "scikit-learn__scikit-learn-13135": "sha256:67994d453fce04b638a4513c3ef78307259a63c9f5b89751d946c683d1a87258",
+    "psf__requests-2931": "sha256:fa787fe2698bf4f26a172bc04eabe93fc90b7bbb1ad98bcc59c4cf5bdc5b15be",
+    "django__django-15037": "sha256:4fd0b1c5b239f223361881efa1f0f96a76b3cfda54f8d00d8154d6cbccf92f55",
+    "matplotlib__matplotlib-20488": "sha256:d3a84eea2faaee9a05e26f8c8e44af7e48663559e2276b94c1347f732cce87e3",
+    "pydata__xarray-4629": "sha256:977888dbab7aa1f71428060a8b6dbb53c6ff3088a2059ec3359aaf3961d0adaf",
+    "astropy__astropy-14995": "sha256:08980109eebaf0075501f097f7376ee296ae5fd068dbdc98a161b5df971481aa",
+    "sphinx-doc__sphinx-9281": "sha256:5ba132864b1f534e0091f61fbd9d4eef2ec435ca43f04d1098663405c33e1d9f",
+    "mwaskom__seaborn-3069": "sha256:64e8c71caf97dd8c4d9671449d565748e2529a24830cb733c66d857df0711723",
+    "pytest-dev__pytest-6197": "sha256:c6651b3ab487eafebf3a89e71e97d8ea3f14e9065c787208461940c47a5a3dd5",
+    "sympy__sympy-14248": "sha256:d50a733c1e035639be5b4e9bf109db2a5097c80e583be456b6362f37f3423dde",
+    "pylint-dev__pylint-4604": "sha256:b393308b8b17368ae65034b7f6a76f95f615ea0d5506ce24edbb898f2ef4ff05",
+    "scikit-learn__scikit-learn-25102": "sha256:24690061f0364793bfe9ac462854c69935c05c9c9ae666a23f0bbe4a0f95a9d4",
+    "django__django-14011": "sha256:9eb217833a7da1b02dd0f16177ea0f47e37022b85d7cf3e9144517061c3b63a3",
+    "pydata__xarray-3095": "sha256:8ef7ffb0408f0f4d06156bcd12a943be6e26a0d9354c9d594622763865338a2f",
+    "astropy__astropy-13579": "sha256:6989371a19030b99bed7989e7fd4ccc224c7538623e177da3f6324708cca1f3e",
+    "sphinx-doc__sphinx-11510": "sha256:7166f3a281a2c3898023b925017f088b585df835e348aa493013619fec771932",
+    "psf__requests-6028": "sha256:ab0a218b8dd0b6a2dce7d18024e3bd10e33bf18984e3e5b18f0e5d0a43ea77ed",
+    "matplotlib__matplotlib-25479": "sha256:8193c4899134a21d6f903ca9f349a361cd49e5c4fda4bab869e3a78ef05a0c9d",
+    "sympy__sympy-13878": "sha256:9443f52f955f8b51b2ec1931d8f01da3e93a3361edc71a6c65a3c22a1f1efa9a",
+    "pydata__xarray-6992": "sha256:4eb0b735ce9360a3ffd9f34294bfe89ac74433c8142d4146224a8490d0e4b8d3",
+    "sphinx-doc__sphinx-7590": "sha256:7cc45cdbd82e6bae796efb1efcec70d289073e11eee92ca397daa648a9288d11",
+    "pytest-dev__pytest-7521": "sha256:7e93cf9c1f54c2dd0a5a77a69c54ae740b7ce88dc7a56c4995528c6d885b4619",
+    "pylint-dev__pylint-4551": "sha256:6bab98104f4faab0cfcc73a86623f77e5070da331d8a1a5df7e589e68dbc790d",
+    "scikit-learn__scikit-learn-10908": "sha256:d95e8a410edeecd8e204e4e500f21c616bb024e38674e68a16d96756a763c4cf",
+    "psf__requests-2317": "sha256:fad9862511f08ec40fd997daffee73aed03f0ded928f145c03bc6903c11d86bc",
+    "django__django-16950": "sha256:10ad8b16f84b64fbc76adbd15733a7d51860ce9d11181be81d9c4d38a778ff14",
+    "matplotlib__matplotlib-26291": "sha256:e86f52fc5c0560c9daf2c1e0a9596f284bd7fa001c15bf24473877d5ca2e910e",
+    "astropy__astropy-14598": "sha256:c432995f8ac5ee07aaad3215025847880002951ba78d814e8b929847cf62c60d",
+    "pytest-dev__pytest-7571": "sha256:a0aad4b3256308bd5f8228536d715b6258c564df987d6a19a230cf3dfcfa3c00",
+    "sympy__sympy-18763": "sha256:c89948d8fcd88ffb20eb95ce4bcab4165873ca3cc4a0a7f1da18e559fa883283",
+    "pylint-dev__pylint-4970": "sha256:4a49faa2c3629ec4cbb433b45854a080d5ed567bd0e5f692a388ed7223e1eec3",
+    "scikit-learn__scikit-learn-13328": "sha256:aa9070f44f7a42363e3f90826b7aec9edf6fce6487e9a223e97089f2654dd429",
+    "django__django-14999": "sha256:135b39deb6297d59e8c4f0350f2f4ea84d9973351c1466943a523f1f9f3d74b0",
+    "pydata__xarray-6461": "sha256:fd4d1900005195ed6ab226a1368c1266704d3cdcfc558dcc9ed6ff68bae1af1d",
+    "astropy__astropy-14309": "sha256:c00d856264d5108e7a355e0f3fd4593de9f8909542e345f55607868144d250f5",
+    "sphinx-doc__sphinx-8638": "sha256:9c3f3f43bbd3e0479076a092c0981ceb191952feb43602f93b50ee93771afb76",
+    "psf__requests-1921": "sha256:ecff777daff9d6defc8388deea3294a52c967d6533e53e7b93f3dd9486a73d38",
+    "matplotlib__matplotlib-26208": "sha256:791082aed15d6ca6877fc014bcd05360ce2f9ca94efb06f48dadc2b3f0933859",
+    "pytest-dev__pytest-10356": "sha256:90cc60acea6dd24b07e3374a3ebab78ab40fb5525899589cf6ef4e666fb13fe9",
+    "sympy__sympy-13091": "sha256:93e334f89ca3d977f656e49b717a1d94617be6e8116c520c232d455c61fbf7f0",
+    "pylint-dev__pylint-4661": "sha256:4d262a52059cbedba0e511bf5672f591bee1487d48e6ec1a7b1934619dd11ac0",
+    "django__django-14007": "sha256:487b13a9620effd3bb9ba393ee638115ed846e73278025077fff66a77fa3a12a",
+    "pydata__xarray-7233": "sha256:a8f79e009b4c128c05393bc59eeb6800cdcb4661b4d0a6800ad03c7b4a98bcdb",
+    "astropy__astropy-13398": "sha256:6277ae5f93c1bc48dd412c48568ca8b3956226481997ea13dc9db5f27406d0a3",
+    "sphinx-doc__sphinx-10323": "sha256:19519ac7eb3cd5d16c11db6a9e4c22917da08d5d3544767ce11c9aa386fec148",
+    "scikit-learn__scikit-learn-25747": "sha256:465fc4178fb900ec68c2b65dfbe098629a9f9752d9184df04532c4ffb2abc82a",
+    "matplotlib__matplotlib-23412": "sha256:4ef11fe8ae4f11016e29c549bc002b80b27776329c44381aafef7842eb4142cb",
+    "psf__requests-1724": "sha256:04538eebb26b299f4b967fe5e8e3b1ef6eb11c96cc6f0e245835c69597eccd10",
+    "sympy__sympy-12489": "sha256:225fb9c407c1469d68ff5e664db0e58dd5d929421352e050ba972aa9f0702d23",
+    "sphinx-doc__sphinx-9461": "sha256:3928bb247ae013383994c99aa590bcd404ce6c8c8a388f0ba001c4f26e3af538"
+  },
+  "final_free_bytes": 173567582208
+}

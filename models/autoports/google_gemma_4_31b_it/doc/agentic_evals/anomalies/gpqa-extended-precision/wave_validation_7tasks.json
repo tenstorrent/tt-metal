@@ -1,0 +1,12 @@
+[
+  {
+    "wave": "full14",
+    "exit": 0,
+    "stdout": "Validated 14 jobs without importing TTNN\n"
+  },
+  {
+    "wave": "first7",
+    "exit": 0,
+    "stdout": "Validated 7 jobs without importing TTNN\n"
+  }
+]

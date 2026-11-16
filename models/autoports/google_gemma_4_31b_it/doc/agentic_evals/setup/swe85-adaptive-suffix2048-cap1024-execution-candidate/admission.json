@@ -1,0 +1,9 @@
+{
+  "status": "admitted",
+  "proposal_sha256": "f87ed6e30d561e193ba778c60b4a3cb42a2376bb064eaf7764060fde229a7712",
+  "driver_sha256": "7af4936bc65a3d69a72b02e48ecf398c43e1fc7912415dae7ff13a88d513e363",
+  "note": "Root reviewed driver, fixtures, mode forecasts, exact launched manifest checks and strict successful T predecessor. Serial served1/full4 at1024; diagnostic only, no score change.",
+  "admitted_utc": "2026-11-15T05:09:44.922372+00:00",
+  "review": "review-d.json",
+  "review_sha256": "603dc85f1869fa98a215903324f263f57adb7fd9dbac7a5a0cc63a4c717bc4ad"
+}

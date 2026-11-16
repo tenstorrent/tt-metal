@@ -1,0 +1,82 @@
+{
+  "basis": [
+    {
+      "estimate": "reuse one CPU BF16 model load; prefill P[:-1] twice (once per branch) and perform 14 one-token decode forwards; no 512-token free generation",
+      "mode": "hf",
+      "observed_512_token_free_generation_seconds": 1377.3435386877973,
+      "observed_non_free_remainder_seconds": 60.96823633019805,
+      "observed_total_wall_seconds": 1438.3117750179954,
+      "proxy_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/results/seed44-suffix2048/anomaly.psf__requests-5414.call11.onset.hf.private.json",
+      "proxy_sha256": "ea3eb180de1ef8898c2565dcb5ffd7700f3e792ccfce8bc279efef80c6dfe9a4"
+    },
+    {
+      "estimate": "one existing head_bfp8 config build/trace preparation and two repeated 2048-token prefills with seven full-logit rows per branch",
+      "mode": "tt-selected",
+      "observed_diagnostic_wall_seconds": 48.077223278116435,
+      "observed_load_wall_seconds": 143.9548370661214,
+      "proxy_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/runs/served/anomaly.psf__requests-5414.call11.onset.json",
+      "proxy_sha256": "fe2ed3734685fbc806bc3ce821a77e21f9b390cb838fc223daf8d6090cc8d039"
+    },
+    {
+      "estimate": "one existing full_precision config build/trace preparation and two repeated 2048-token prefills with seven full-logit rows per branch",
+      "mode": "tt-full",
+      "observed_diagnostic_wall_seconds": 96.79209432587959,
+      "observed_load_wall_seconds": 77.36976773384959,
+      "proxy_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/runs/full/anomaly.psf__requests-5414.call11.onset.json",
+      "proxy_sha256": "a967659d1f4edd7b726a36c976168ae767957b9821ffc4a2a31640d594e7a885"
+    }
+  ],
+  "limitations": [
+    "Forecast is for serial commands and does not measure serving performance.",
+    "TT each branch uses the existing generator path; forced-history logits are synchronously read to host. The canonical device sampler is not traced as a full-vocabulary probability oracle.",
+    "The current generator prefill path performs its existing device sampling operation before host_sampling consumes logits; that sampled token is discarded by the explicit next_input callback. Decode replays in host_sampling mode read model logits and skip the sampled draw.",
+    "Repeated branch prefills preserve per-mode standard prefill/decode execution but cost more than a shared-cache branch split."
+  ],
+  "per_command_seconds": {
+    "hf": {
+      "point": 140,
+      "range": [
+        90,
+        300
+      ],
+      "reason": "observed 60.97s model/prefill/64-position remainder plus 14 single-token forwards and a second unchanged prefill; broad allowance for CPU variance",
+      "timeout": 2400
+    },
+    "three_comparisons": {
+      "point": 20,
+      "range": [
+        10,
+        60
+      ],
+      "reason": "host comparison of saved full-vocabulary logits only",
+      "timeout_each": 90
+    },
+    "tt-full": {
+      "point": 270,
+      "range": [
+        200,
+        430
+      ],
+      "reason": "observed 77.37s load/preparation plus two short branch prefills/readbacks, bounded from the 96.79s full diagnostic proxy",
+      "timeout": 1800
+    },
+    "tt-selected": {
+      "point": 240,
+      "range": [
+        190,
+        360
+      ],
+      "reason": "observed 143.95s load/preparation plus two short branch prefills/readbacks, bounded from the 48.08s 64-position selected diagnostic proxy",
+      "timeout": 1800
+    }
+  },
+  "serial_total_seconds": {
+    "point": 670,
+    "range": [
+      490,
+      1150
+    ],
+    "timeout_budget_seconds": 6270
+  },
+  "status": "planning_forecast_candidate_only_not_measured"
+}

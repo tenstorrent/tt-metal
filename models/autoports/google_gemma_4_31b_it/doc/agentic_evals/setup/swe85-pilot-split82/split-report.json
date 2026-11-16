@@ -1,0 +1,2726 @@
+{
+  "status": "CPU_split_only_no_execution_no_new_admission",
+  "input_manifest": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-admitted-controls82/combined-cases.json",
+  "input_sha256": "fe8b003c6c765071450166631cd4e38e63b3d2a3de800d96a7eeeacb650d049d",
+  "output_manifests": {
+    "pilot": {
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split82/pilot.json",
+      "sha256": "060371ac9d52f49fe77dbf93d2110510ada63887f20c675aa92d69979af072a7"
+    },
+    "rest": {
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split82/rest.json",
+      "sha256": "d530090bc8b3b74eabcb069b0a8e31a4e99c5507d8fa04aa516ecc0a947feb9f"
+    }
+  },
+  "selection": {
+    "rule": "Maximum fullreply conditioning-token count; ties by maximum context then earliest input index. Full chosen reply remains untruncated.",
+    "pilot": {
+      "input_index": 0,
+      "name": "fullreply.sphinx-doc__sphinx-10323.call68",
+      "group": "fullreply",
+      "job_sha256": "b08e3352ba71d0848cb991908a2143bb5fd192e03b31c9610abb0048d8aae1e7",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-update10/sphinx-doc__sphinx-10323.call68.case.private.json",
+      "case_sha256": "d2926b96f9684f47384458d31fec325704b2e3becebee5f944d8a475ba69c654",
+      "prompt_tokens": 64139,
+      "branches": {
+        "chosen": 480
+      },
+      "teacher_forcing_positions": 480,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 1,
+      "prefill_input_tokens_proxy": 64139,
+      "max_context_tokens": 64619
+    }
+  },
+  "coverage": {
+    "exact_job_equality": true,
+    "no_duplicates": true,
+    "no_omissions": true,
+    "input_order_preserved_in_remainder": true,
+    "source_and_case_hashes_unchanged": true
+  },
+  "counts_per_precision": {
+    "pilot": {
+      "groups": {
+        "fullreply": {
+          "jobs": 1,
+          "teacher_forcing_positions": 480,
+          "free_run_token_cap": 0,
+          "prefill_calls_proxy": 1,
+          "prefill_input_tokens_proxy": 64139
+        }
+      },
+      "total": {
+        "jobs": 1,
+        "teacher_forcing_positions": 480,
+        "free_run_token_cap": 0,
+        "prefill_calls_proxy": 1,
+        "prefill_input_tokens_proxy": 64139
+      }
+    },
+    "rest": {
+      "groups": {
+        "anomaly": {
+          "jobs": 21,
+          "teacher_forcing_positions": 1059,
+          "free_run_token_cap": 16128,
+          "prefill_calls_proxy": 84,
+          "prefill_input_tokens_proxy": 1927708
+        },
+        "fullreply": {
+          "jobs": 61,
+          "teacher_forcing_positions": 24778,
+          "free_run_token_cap": 0,
+          "prefill_calls_proxy": 61,
+          "prefill_input_tokens_proxy": 1075368
+        },
+        "action": {
+          "jobs": 54,
+          "teacher_forcing_positions": 45640,
+          "free_run_token_cap": 0,
+          "prefill_calls_proxy": 108,
+          "prefill_input_tokens_proxy": 1909648
+        }
+      },
+      "total": {
+        "jobs": 136,
+        "teacher_forcing_positions": 71477,
+        "free_run_token_cap": 16128,
+        "prefill_calls_proxy": 253,
+        "prefill_input_tokens_proxy": 4912724
+      }
+    },
+    "input": {
+      "groups": {
+        "fullreply": {
+          "jobs": 62,
+          "teacher_forcing_positions": 25258,
+          "free_run_token_cap": 0,
+          "prefill_calls_proxy": 62,
+          "prefill_input_tokens_proxy": 1139507
+        },
+        "anomaly": {
+          "jobs": 21,
+          "teacher_forcing_positions": 1059,
+          "free_run_token_cap": 16128,
+          "prefill_calls_proxy": 84,
+          "prefill_input_tokens_proxy": 1927708
+        },
+        "action": {
+          "jobs": 54,
+          "teacher_forcing_positions": 45640,
+          "free_run_token_cap": 0,
+          "prefill_calls_proxy": 108,
+          "prefill_input_tokens_proxy": 1909648
+        }
+      },
+      "total": {
+        "jobs": 137,
+        "teacher_forcing_positions": 71957,
+        "free_run_token_cap": 16128,
+        "prefill_calls_proxy": 254,
+        "prefill_input_tokens_proxy": 4976863
+      }
+    }
+  },
+  "case_records": [
+    {
+      "input_index": 0,
+      "name": "fullreply.sphinx-doc__sphinx-10323.call68",
+      "group": "fullreply",
+      "job_sha256": "b08e3352ba71d0848cb991908a2143bb5fd192e03b31c9610abb0048d8aae1e7",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-update10/sphinx-doc__sphinx-10323.call68.case.private.json",
+      "case_sha256": "d2926b96f9684f47384458d31fec325704b2e3becebee5f944d8a475ba69c654",
+      "prompt_tokens": 64139,
+      "branches": {
+        "chosen": 480
+      },
+      "teacher_forcing_positions": 480,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 1,
+      "prefill_input_tokens_proxy": 64139,
+      "max_context_tokens": 64619
+    },
+    {
+      "input_index": 1,
+      "name": "anomaly.sympy__sympy-13480.call1.onset",
+      "group": "anomaly",
+      "job_sha256": "fe055b3f51f1e3c023b79a5558a7b05a2df27b36f78d403a52f43007a2f7dec0",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-sympy13480-controls/sympy__sympy-13480.call1.onset.private.json",
+      "case_sha256": "0ff8f259c62590aaa1fa0b6874d2d5fdb5e1b5f686c5558142fa1e8dbaccc91f",
+      "prompt_tokens": 1175,
+      "branches": {
+        "chosen": 64
+      },
+      "teacher_forcing_positions": 64,
+      "free_run_trials": 3,
+      "free_run_token_cap": 768,
+      "prefill_calls_proxy": 4,
+      "prefill_input_tokens_proxy": 4700,
+      "max_context_tokens": 1431
+    },
+    {
+      "input_index": 2,
+      "name": "anomaly.sympy__sympy-13551.call1.onset",
+      "group": "anomaly",
+      "job_sha256": "7408caa6884b75357e6f5c166168b6c89d76654fbd16299c5ff8f67c5aeccbbc",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-sympy13551-controls/sympy__sympy-13551.call1.onset.private.json",
+      "case_sha256": "f2806c4d025cc3a6da053df45a4bfcd6c3dba23bf2c31d7e892b78a957ae767b",
+      "prompt_tokens": 1217,
+      "branches": {
+        "chosen": 64
+      },
+      "teacher_forcing_positions": 64,
+      "free_run_trials": 3,
+      "free_run_token_cap": 768,
+      "prefill_calls_proxy": 4,
+      "prefill_input_tokens_proxy": 4868,
+      "max_context_tokens": 1473
+    },
+    {
+      "input_index": 3,
+      "name": "anomaly.psf__requests-1921.call1.onset",
+      "group": "anomaly",
+      "job_sha256": "a3444775cd9a46ab6740bc86e8d6858864e219af167ed669b7dd8a393c411a5f",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-getall-call1-controls/psf__requests-1921.call1.onset.private.json",
+      "case_sha256": "ba91bfa87c059b14b4385dcf00dd1e20390c87e320990104fd328ccb18f4d863",
+      "prompt_tokens": 1235,
+      "branches": {
+        "chosen": 18
+      },
+      "teacher_forcing_positions": 18,
+      "free_run_trials": 3,
+      "free_run_token_cap": 768,
+      "prefill_calls_proxy": 4,
+      "prefill_input_tokens_proxy": 4940,
+      "max_context_tokens": 1491
+    },
+    {
+      "input_index": 4,
+      "name": "anomaly.sympy__sympy-18763.call1.onset",
+      "group": "anomaly",
+      "job_sha256": "99e6068c87d74a43ccfa98b5df14daac5fdf623b2aa9efda3acc535fb2d90438",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-18763-7432-controls/sympy__sympy-18763.call1.onset.private.json",
+      "case_sha256": "103660810451ddcc930c5b818de9eed1e054d0df02f3b6601b0fb142e6aed3f3",
+      "prompt_tokens": 1254,
+      "branches": {
+        "chosen": 64
+      },
+      "teacher_forcing_positions": 64,
+      "free_run_trials": 3,
+      "free_run_token_cap": 768,
+      "prefill_calls_proxy": 4,
+      "prefill_input_tokens_proxy": 5016,
+      "max_context_tokens": 1510
+    },
+    {
+      "input_index": 5,
+      "name": "anomaly.pylint-dev__pylint-4551.call1.onset",
+      "group": "anomaly",
+      "job_sha256": "3d2a599652504c027fea12474825bc637dd5e5a435fb3d2938a56e6e8715f0b0",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-getall-call1-controls/pylint-dev__pylint-4551.call1.onset.private.json",
+      "case_sha256": "34ad0af91e9d911cc9ac0e1bcb97d6adf7e3754df831a45af074c3bdba1fa369",
+      "prompt_tokens": 1263,
+      "branches": {
+        "chosen": 18
+      },
+      "teacher_forcing_positions": 18,
+      "free_run_trials": 3,
+      "free_run_token_cap": 768,
+      "prefill_calls_proxy": 4,
+      "prefill_input_tokens_proxy": 5052,
+      "max_context_tokens": 1519
+    },
+    {
+      "input_index": 6,
+      "name": "anomaly.xarray7233-call1.canonicalprefix",
+      "group": "anomaly",
+      "job_sha256": "89c1a7f99dd29c1a8a90a28fcbc0c5b12b9086d48070935a110c7ae7d3cc11fe",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-precision/xarray7233-call1/canonicalprefix/case.private.json",
+      "case_sha256": "62b1bda540651c48e254900037080c96f8b179b3412ac1b8b962d3dd5c0c3661",
+      "prompt_tokens": 1578,
+      "branches": {
+        "chosen": 64
+      },
+      "teacher_forcing_positions": 64,
+      "free_run_trials": 3,
+      "free_run_token_cap": 768,
+      "prefill_calls_proxy": 4,
+      "prefill_input_tokens_proxy": 6312,
+      "max_context_tokens": 1834
+    },
+    {
+      "input_index": 7,
+      "name": "anomaly.sympy__sympy-13878.call1.onset",
+      "group": "anomaly",
+      "job_sha256": "fc7784805ac0b35623fc73d42e98d5e1f61e9aabd5e279a0e56e63f209975bbf",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-sympy13878-controls/sympy__sympy-13878.call1.onset.private.json",
+      "case_sha256": "8e2cae61d60bb364c79e2e651b3d3ffd992c094e14923ae258c9810d12da0439",
+      "prompt_tokens": 1968,
+      "branches": {
+        "chosen": 16
+      },
+      "teacher_forcing_positions": 16,
+      "free_run_trials": 3,
+      "free_run_token_cap": 768,
+      "prefill_calls_proxy": 4,
+      "prefill_input_tokens_proxy": 7872,
+      "max_context_tokens": 2224
+    },
+    {
+      "input_index": 8,
+      "name": "anomaly.sympy__sympy-18763.call10.onset",
+      "group": "anomaly",
+      "job_sha256": "70733ce30f9d16dc6b5d6f9051eb48993ecff69399335132a250c77fc0567bb0",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-18763-7432-controls/sympy__sympy-18763.call10.onset.private.json",
+      "case_sha256": "c4f9cd2d30fa59235eb8207fc7d6675e8c8cd95b17b544458a44aaa0921f43a6",
+      "prompt_tokens": 5846,
+      "branches": {
+        "chosen": 34
+      },
+      "teacher_forcing_positions": 34,
+      "free_run_trials": 3,
+      "free_run_token_cap": 768,
+      "prefill_calls_proxy": 4,
+      "prefill_input_tokens_proxy": 23384,
+      "max_context_tokens": 6102
+    },
+    {
+      "input_index": 9,
+      "name": "anomaly.requests2931.call20.canonicalprefix",
+      "group": "anomaly",
+      "job_sha256": "cd7ddb29ab4e26ac30a9586b5732ba03e59cced4121f0979757950c6a0b48094",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-precision/requests2931-call20/canonicalprefix/case.private.json",
+      "case_sha256": "7f527603e08f61f5516745fc2fab496c6ae7020985372c8f71fd0459895c10f0",
+      "prompt_tokens": 8580,
+      "branches": {
+        "chosen": 64
+      },
+      "teacher_forcing_positions": 64,
+      "free_run_trials": 3,
+      "free_run_token_cap": 768,
+      "prefill_calls_proxy": 4,
+      "prefill_input_tokens_proxy": 34320,
+      "max_context_tokens": 8836
+    },
+    {
+      "input_index": 10,
+      "name": "anomaly.pytest-dev__pytest-5787.call1.onset",
+      "group": "anomaly",
+      "job_sha256": "70c87c385188f9052890c7a2de82e98a83b87d8023b2e30348683b8f244639fc",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-pytest5787-controls/pytest-dev__pytest-5787.call1.onset.private.json",
+      "case_sha256": "198ec73ad83296c21c93e0484d12b52717c6803b9ae7ea0131dcfac76f6ae3af",
+      "prompt_tokens": 9606,
+      "branches": {
+        "chosen": 64
+      },
+      "teacher_forcing_positions": 64,
+      "free_run_trials": 3,
+      "free_run_token_cap": 768,
+      "prefill_calls_proxy": 4,
+      "prefill_input_tokens_proxy": 38424,
+      "max_context_tokens": 9862
+    },
+    {
+      "input_index": 11,
+      "name": "anomaly.pytest-dev__pytest-7432.call19.onset",
+      "group": "anomaly",
+      "job_sha256": "255385c49d47bcb37f1f4cab683ee8b97570af3ccaadd204d47315fc96f6c731",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-18763-7432-controls/pytest-dev__pytest-7432.call19.onset.private.json",
+      "case_sha256": "436bf8f06cebc27f9ac206ab4c85c655b2c707145be67b8341f14288370807f5",
+      "prompt_tokens": 11095,
+      "branches": {
+        "chosen": 64
+      },
+      "teacher_forcing_positions": 64,
+      "free_run_trials": 3,
+      "free_run_token_cap": 768,
+      "prefill_calls_proxy": 4,
+      "prefill_input_tokens_proxy": 44380,
+      "max_context_tokens": 11351
+    },
+    {
+      "input_index": 12,
+      "name": "anomaly.pytest10356-call14.canonicalprefix",
+      "group": "anomaly",
+      "job_sha256": "58d842082ca908157216957cc63dac804ba52fee27eb700cdb0f22c8452d48e1",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-precision/pytest10356-call14/canonicalprefix/case.private.json",
+      "case_sha256": "07b45f8cd1bf0b42a6b7114dbf180eb5a1b0e4a31a80c1d3817660b24d50f71e",
+      "prompt_tokens": 11309,
+      "branches": {
+        "chosen": 28
+      },
+      "teacher_forcing_positions": 28,
+      "free_run_trials": 3,
+      "free_run_token_cap": 768,
+      "prefill_calls_proxy": 4,
+      "prefill_input_tokens_proxy": 45236,
+      "max_context_tokens": 11565
+    },
+    {
+      "input_index": 13,
+      "name": "anomaly.scikit-learn__scikit-learn-13135.call29.onset",
+      "group": "anomaly",
+      "job_sha256": "1b01a2eac72af781a229e9f1d89a785d7725c01d4b28a106e1d3d911b207c9a3",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-extra-contraction-controls/scikit-learn__scikit-learn-13135.call29.onset.private.json",
+      "case_sha256": "1403d7a48b7ecca8ec2095479c77a871caa3add09bedd7f6830d36315a883bd2",
+      "prompt_tokens": 17395,
+      "branches": {
+        "chosen": 64
+      },
+      "teacher_forcing_positions": 64,
+      "free_run_trials": 3,
+      "free_run_token_cap": 768,
+      "prefill_calls_proxy": 4,
+      "prefill_input_tokens_proxy": 69580,
+      "max_context_tokens": 17651
+    },
+    {
+      "input_index": 14,
+      "name": "anomaly.xarray3095-call53.canonicalprefix",
+      "group": "anomaly",
+      "job_sha256": "e76b203552967ecd2306403f03c48beccfb178401db314b5a32b1acbb94e513a",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-precision/xarray3095-call53/canonicalprefix/case.private.json",
+      "case_sha256": "5d0644f31e453280e572402aed27346ca307323d7763d5762b7d9ab74f10a723",
+      "prompt_tokens": 33233,
+      "branches": {
+        "chosen": 22
+      },
+      "teacher_forcing_positions": 22,
+      "free_run_trials": 3,
+      "free_run_token_cap": 768,
+      "prefill_calls_proxy": 4,
+      "prefill_input_tokens_proxy": 132932,
+      "max_context_tokens": 33489
+    },
+    {
+      "input_index": 15,
+      "name": "anomaly.pylint-dev__pylint-4604.call45.onset",
+      "group": "anomaly",
+      "job_sha256": "76925a541b06cb10498f09cf34158d190972fd6bfe3a3eccb588eb28ae932db7",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-extra-contraction-controls/pylint-dev__pylint-4604.call45.onset.private.json",
+      "case_sha256": "ce0cbc8b5fd000b397c01d2e62b16764bccf0bfd113b7e7ce884b992f2a8a42b",
+      "prompt_tokens": 37057,
+      "branches": {
+        "chosen": 54
+      },
+      "teacher_forcing_positions": 54,
+      "free_run_trials": 3,
+      "free_run_token_cap": 768,
+      "prefill_calls_proxy": 4,
+      "prefill_input_tokens_proxy": 148228,
+      "max_context_tokens": 37313
+    },
+    {
+      "input_index": 16,
+      "name": "anomaly.call88.canonicalprefix",
+      "group": "anomaly",
+      "job_sha256": "dbdc43b0f0d1d944822e861216ade3a9791e0ef4fd3da400f8f1812648e0976a",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-precision/call88/canonicalprefix/case.private.json",
+      "case_sha256": "72f3e9c534720245f42e4002c624360e57e1b5c147d96c30ffe52fe948e1fc7d",
+      "prompt_tokens": 47038,
+      "branches": {
+        "chosen": 64
+      },
+      "teacher_forcing_positions": 64,
+      "free_run_trials": 3,
+      "free_run_token_cap": 768,
+      "prefill_calls_proxy": 4,
+      "prefill_input_tokens_proxy": 188152,
+      "max_context_tokens": 47294
+    },
+    {
+      "input_index": 17,
+      "name": "anomaly.call91.canonicalprefix",
+      "group": "anomaly",
+      "job_sha256": "f2e2f33b74785f9ab744119d633e6252b3fa97dcbad4b33dfdff075f7bce7e5d",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-precision/call91/canonicalprefix/case.private.json",
+      "case_sha256": "3d32de201c14cf805635d3e38fafc2ff220202aded67b71861e16df4fbdf9180",
+      "prompt_tokens": 48411,
+      "branches": {
+        "chosen": 64
+      },
+      "teacher_forcing_positions": 64,
+      "free_run_trials": 3,
+      "free_run_token_cap": 768,
+      "prefill_calls_proxy": 4,
+      "prefill_input_tokens_proxy": 193644,
+      "max_context_tokens": 48667
+    },
+    {
+      "input_index": 18,
+      "name": "anomaly.pytest-dev__pytest-5787.call65.onset",
+      "group": "anomaly",
+      "job_sha256": "6f7ce3dae64a126ce5424c8da5dbd9f20a4ff42877d509bfea540d0314e368bf",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-pytest5787-controls/pytest-dev__pytest-5787.call65.onset.private.json",
+      "case_sha256": "d4470a4dd919a2e81683e8d17339d2a237ab7399409b70ed45e8bf5c9127a2e6",
+      "prompt_tokens": 53684,
+      "branches": {
+        "chosen": 64
+      },
+      "teacher_forcing_positions": 64,
+      "free_run_trials": 3,
+      "free_run_token_cap": 768,
+      "prefill_calls_proxy": 4,
+      "prefill_input_tokens_proxy": 214736,
+      "max_context_tokens": 53940
+    },
+    {
+      "input_index": 19,
+      "name": "anomaly.sphinx-doc__sphinx-10323.call57.onset",
+      "group": "anomaly",
+      "job_sha256": "6c469ca4596986d6712168a46322eadf75e61f08c807edc5bdcc9ff4c6c797a2",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-extra-contraction-controls/sphinx-doc__sphinx-10323.call57.onset.private.json",
+      "case_sha256": "9870b7562fa8d43d828bf29c4da37d7bfd294a39809044e442a628e7d418d404",
+      "prompt_tokens": 58695,
+      "branches": {
+        "chosen": 64
+      },
+      "teacher_forcing_positions": 64,
+      "free_run_trials": 3,
+      "free_run_token_cap": 768,
+      "prefill_calls_proxy": 4,
+      "prefill_input_tokens_proxy": 234780,
+      "max_context_tokens": 58951
+    },
+    {
+      "input_index": 20,
+      "name": "anomaly.sphinx-doc__sphinx-10323.call68.onset",
+      "group": "anomaly",
+      "job_sha256": "adaa466bb39c9378722875d84326cf71a7f5921b3f6e39056dccce133b91551c",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-sphinx10323-controls/sphinx-doc__sphinx-10323.call68.onset.private.json",
+      "case_sha256": "2d726d2a43b0678df8fb3d931ffda87277954bf9599424c4140394c669cfa103",
+      "prompt_tokens": 64509,
+      "branches": {
+        "chosen": 64
+      },
+      "teacher_forcing_positions": 64,
+      "free_run_trials": 3,
+      "free_run_token_cap": 768,
+      "prefill_calls_proxy": 4,
+      "prefill_input_tokens_proxy": 258036,
+      "max_context_tokens": 64765
+    },
+    {
+      "input_index": 21,
+      "name": "anomaly.sphinx-doc__sphinx-10323.call70.onset",
+      "group": "anomaly",
+      "job_sha256": "f8644e07836b03cfb522172c83e51bbaeb3c3505d4d5cff645672a9399b5dfc0",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-extra-contraction-controls/sphinx-doc__sphinx-10323.call70.onset.private.json",
+      "case_sha256": "7d39e2c87e91327f35317968bf2647887a402d0086085ec8f95db8ff5fc2ab64",
+      "prompt_tokens": 65779,
+      "branches": {
+        "chosen": 37
+      },
+      "teacher_forcing_positions": 37,
+      "free_run_trials": 3,
+      "free_run_token_cap": 768,
+      "prefill_calls_proxy": 4,
+      "prefill_input_tokens_proxy": 263116,
+      "max_context_tokens": 66035
+    },
+    {
+      "input_index": 22,
+      "name": "fullreply.pydata__xarray-7233.call1",
+      "group": "fullreply",
+      "job_sha256": "ce80bc4eaaa05c5e2bfffbfaccd68e13eec7d24d1c0b65d590b76900329b96da",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/pydata__xarray-7233.call1.case.private.json",
+      "case_sha256": "334eb1af41ea36bb7cab64436f3daea5d053c5a5a694be99c0952b6582bd197d",
+      "prompt_tokens": 1484,
+      "branches": {
+        "chosen": 366
+      },
+      "teacher_forcing_positions": 366,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 1,
+      "prefill_input_tokens_proxy": 1484,
+      "max_context_tokens": 1850
+    },
+    {
+      "input_index": 23,
+      "name": "fullreply.matplotlib__matplotlib-25332.call2",
+      "group": "fullreply",
+      "job_sha256": "9272cae23c6485a46e34029f93a4e4d8cf39f9a34becfe79a7886fb78f03b0cf",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/matplotlib__matplotlib-25332.call2.case.private.json",
+      "case_sha256": "d9840e6e4b4b5f818bcc27b1ccb37a95d084ae15812de36666dc41637b1e0cd1",
+      "prompt_tokens": 1566,
+      "branches": {
+        "chosen": 97
+      },
+      "teacher_forcing_positions": 97,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 1,
+      "prefill_input_tokens_proxy": 1566,
+      "max_context_tokens": 1663
+    },
+    {
+      "input_index": 24,
+      "name": "fullreply.matplotlib__matplotlib-25960.call3",
+      "group": "fullreply",
+      "job_sha256": "36dabf5b05bdeaa890a08fe02fec8ac88f15c09adabf83b10d873d857672ee9d",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/matplotlib__matplotlib-25960.call3.case.private.json",
+      "case_sha256": "5c2c6ecc79c0e675cd3ce5784f4081e71e4fac7592da000565aac20742da4d0d",
+      "prompt_tokens": 1730,
+      "branches": {
+        "chosen": 87
+      },
+      "teacher_forcing_positions": 87,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 1,
+      "prefill_input_tokens_proxy": 1730,
+      "max_context_tokens": 1817
+    },
+    {
+      "input_index": 25,
+      "name": "fullreply.sphinx-doc__sphinx-8638.call3",
+      "group": "fullreply",
+      "job_sha256": "b193ee6ddce18947fa57b84917200719b8695483b7b361633e0b73cee36417a0",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-update4/sphinx-doc__sphinx-8638.call3.case.private.json",
+      "case_sha256": "7967f6a303b542d9ba19d628c7e2ccb69c6135ad70beb7009eeee917836c01e2",
+      "prompt_tokens": 2159,
+      "branches": {
+        "chosen": 36
+      },
+      "teacher_forcing_positions": 36,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 1,
+      "prefill_input_tokens_proxy": 2159,
+      "max_context_tokens": 2195
+    },
+    {
+      "input_index": 26,
+      "name": "fullreply.matplotlib__matplotlib-26291.call3",
+      "group": "fullreply",
+      "job_sha256": "41df47041739b1a3a8c4eaa8d64c89f558b213d3f18f8aa7ef10aedfc9c6b61b",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/matplotlib__matplotlib-26291.call3.case.private.json",
+      "case_sha256": "373ff202b24c77784009c738e7f3ac41108076c2fdd8e9e54e10dc34334795f2",
+      "prompt_tokens": 2579,
+      "branches": {
+        "chosen": 61
+      },
+      "teacher_forcing_positions": 61,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 1,
+      "prefill_input_tokens_proxy": 2579,
+      "max_context_tokens": 2640
+    },
+    {
+      "input_index": 27,
+      "name": "fullreply.pydata__xarray-7233.call4",
+      "group": "fullreply",
+      "job_sha256": "2ec6a8bf3bd81c5c4a517fea5b907855b238349caa766659a4f78cc0e7da0b5f",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/pydata__xarray-7233.call4.case.private.json",
+      "case_sha256": "0e3a91ece2ee9b5144ca8775cd9537146769c3f3db10ceaa65d2198e63c24771",
+      "prompt_tokens": 2784,
+      "branches": {
+        "chosen": 162
+      },
+      "teacher_forcing_positions": 162,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 1,
+      "prefill_input_tokens_proxy": 2784,
+      "max_context_tokens": 2946
+    },
+    {
+      "input_index": 28,
+      "name": "fullreply.matplotlib__matplotlib-26208.call3",
+      "group": "fullreply",
+      "job_sha256": "400810de31c8829b8b930b4d475ddc98dcca7d3bb948948cd60e86aec8f132f3",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/matplotlib__matplotlib-26208.call3.case.private.json",
+      "case_sha256": "f74486505b083dc4de7c84357b427651a2cd08f601bbb50e01d2abe1867a9014",
+      "prompt_tokens": 2992,
+      "branches": {
+        "chosen": 45
+      },
+      "teacher_forcing_positions": 45,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 1,
+      "prefill_input_tokens_proxy": 2992,
+      "max_context_tokens": 3037
+    },
+    {
+      "input_index": 29,
+      "name": "fullreply.scikit-learn__scikit-learn-13328.call3",
+      "group": "fullreply",
+      "job_sha256": "a272b4ca76a01c8aa18f3608d550b23c5ce44cd867973f6da33d6acdf441f98d",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-update/scikit-learn__scikit-learn-13328.call3.case.private.json",
+      "case_sha256": "8a5b9cef528aa9b00753f8234fd9d6b05015013d341955c93a984661734447e8",
+      "prompt_tokens": 3747,
+      "branches": {
+        "chosen": 50
+      },
+      "teacher_forcing_positions": 50,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 1,
+      "prefill_input_tokens_proxy": 3747,
+      "max_context_tokens": 3797
+    },
+    {
+      "input_index": 30,
+      "name": "fullreply.astropy__astropy-13579.call3",
+      "group": "fullreply",
+      "job_sha256": "ce510cd2f9f62991ea8c82814c20369d500c387717d17aa33fe2192fdeb76646",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/astropy__astropy-13579.call3.case.private.json",
+      "case_sha256": "15deadcd6d9c2ef3dcab9898083e5bb4540646924f5a7d5047de3bfc93882c54",
+      "prompt_tokens": 3964,
+      "branches": {
+        "chosen": 49
+      },
+      "teacher_forcing_positions": 49,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 1,
+      "prefill_input_tokens_proxy": 3964,
+      "max_context_tokens": 4013
+    },
+    {
+      "input_index": 31,
+      "name": "fullreply.scikit-learn__scikit-learn-25747.call3",
+      "group": "fullreply",
+      "job_sha256": "30f85bdb214366ceda8919eddb4c927841308ebaef8e735c31595be35f6453fb",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-update6/scikit-learn__scikit-learn-25747.call3.case.private.json",
+      "case_sha256": "cfb6af0cbea4d97c2729db1265e3c2b5c1500081a3a18f67b0f1750bb72fa121",
+      "prompt_tokens": 3969,
+      "branches": {
+        "chosen": 46
+      },
+      "teacher_forcing_positions": 46,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 1,
+      "prefill_input_tokens_proxy": 3969,
+      "max_context_tokens": 4015
+    },
+    {
+      "input_index": 32,
+      "name": "fullreply.sympy__sympy-13480.call9",
+      "group": "fullreply",
+      "job_sha256": "a6787d90817e8b51ff707547f13f789a1b73b429e7ec4b591a2e34348d502b7d",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-update8/sympy__sympy-13480.call9.case.private.json",
+      "case_sha256": "0b082e188ab4e74e9ee023069ae7fed94047bb7af52bcb72a43691881f5b8739",
+      "prompt_tokens": 4067,
+      "branches": {
+        "chosen": 130
+      },
+      "teacher_forcing_positions": 130,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 1,
+      "prefill_input_tokens_proxy": 4067,
+      "max_context_tokens": 4197
+    },
+    {
+      "input_index": 33,
+      "name": "fullreply.sympy__sympy-13551.call12",
+      "group": "fullreply",
+      "job_sha256": "c31a9e2b94c35e84e4da7b093caef35f729d24b588741a9e756873cf15f4c531",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-update13/sympy__sympy-13551.call12.case.private.json",
+      "case_sha256": "dcaab5e1ddd8dd661b9a57e412bd4691f7f2021c05e76c668f96b5ab98b13c57",
+      "prompt_tokens": 4424,
+      "branches": {
+        "chosen": 77
+      },
+      "teacher_forcing_positions": 77,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 1,
+      "prefill_input_tokens_proxy": 4424,
+      "max_context_tokens": 4501
+    },
+    {
+      "input_index": 34,
+      "name": "fullreply.scikit-learn__scikit-learn-14629.call8",
+      "group": "fullreply",
+      "job_sha256": "e8029aa980261d71cf2a786aa951473ec6305a64b74dd6bc7b952fb112596edc",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-update2/scikit-learn__scikit-learn-14629.call8.case.private.json",
+      "case_sha256": "843751344d41422d346cacb05f00bbc870a610751e8c2a778eb2f760e50b5056",
+      "prompt_tokens": 5887,
+      "branches": {
+        "chosen": 55
+      },
+      "teacher_forcing_positions": 55,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 1,
+      "prefill_input_tokens_proxy": 5887,
+      "max_context_tokens": 5942
+    },
+    {
+      "input_index": 35,
+      "name": "fullreply.scikit-learn__scikit-learn-25102.call5",
+      "group": "fullreply",
+      "job_sha256": "1897a97b0839d03d83084def3e9afe1284358657c989d159678f9ca34e976f75",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-update9/scikit-learn__scikit-learn-25102.call5.case.private.json",
+      "case_sha256": "2e35ff5a63ff08b4fd5d5b391c1f4d9ac021303d38520e17073107b2b1c87c8e",
+      "prompt_tokens": 6096,
+      "branches": {
+        "chosen": 145
+      },
+      "teacher_forcing_positions": 145,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 1,
+      "prefill_input_tokens_proxy": 6096,
+      "max_context_tokens": 6241
+    },
+    {
+      "input_index": 36,
+      "name": "fullreply.scikit-learn__scikit-learn-13135.call9",
+      "group": "fullreply",
+      "job_sha256": "cb8fe3250c740691a01873aa6fbb29fda8c15aed720e662b0ab0dd6829f2470e",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-update/scikit-learn__scikit-learn-13135.call9.case.private.json",
+      "case_sha256": "03deb91ce1434f6c8677466d5d3fda625749a0b7f7c58ea254fcdffef5bde95d",
+      "prompt_tokens": 6740,
+      "branches": {
+        "chosen": 218
+      },
+      "teacher_forcing_positions": 218,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 1,
+      "prefill_input_tokens_proxy": 6740,
+      "max_context_tokens": 6958
+    },
+    {
+      "input_index": 37,
+      "name": "fullreply.pylint-dev__pylint-4604.call8",
+      "group": "fullreply",
+      "job_sha256": "54ea3b073a1fbfea590ec81b0851369bc2786b6f0e7ac7323a86b0d1f86ac416",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/pylint-dev__pylint-4604.call8.case.private.json",
+      "case_sha256": "30890fefb010ca4e6ec573bf28a88206b3d64b0297648862cbc36b100e0b0a1a",
+      "prompt_tokens": 7392,
+      "branches": {
+        "chosen": 103
+      },
+      "teacher_forcing_positions": 103,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 1,
+      "prefill_input_tokens_proxy": 7392,
+      "max_context_tokens": 7495
+    },
+    {
+      "input_index": 38,
+      "name": "fullreply.sympy__sympy-13091.call22",
+      "group": "fullreply",
+      "job_sha256": "3d9f870bb28047c47670b1f6520bbb500b0e2364852e3814636716bbefe99fa1",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-update11/sympy__sympy-13091.call22.case.private.json",
+      "case_sha256": "78ebcc7f7f303d098cfcca5c86ce83a149c9e723a60d2a9e7ac724cd387002f1",
+      "prompt_tokens": 7394,
+      "branches": {
+        "chosen": 524
+      },
+      "teacher_forcing_positions": 524,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 1,
+      "prefill_input_tokens_proxy": 7394,
+      "max_context_tokens": 7918
+    },
+    {
+      "input_index": 39,
+      "name": "fullreply.astropy__astropy-8872.call8",
+      "group": "fullreply",
+      "job_sha256": "d671032fd347860b97b11d5364d796579561cd3b7eae374b0872f13df9046c6a",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/astropy__astropy-8872.call8.case.private.json",
+      "case_sha256": "fb7660a7969561337729493f3f964015a63cda775d85c62ba1d0366f5eb668f6",
+      "prompt_tokens": 7458,
+      "branches": {
+        "chosen": 118
+      },
+      "teacher_forcing_positions": 118,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 1,
+      "prefill_input_tokens_proxy": 7458,
+      "max_context_tokens": 7576
+    },
+    {
+      "input_index": 40,
+      "name": "fullreply.pydata__xarray-3993.call18",
+      "group": "fullreply",
+      "job_sha256": "c439c8a5a4b9f4fbbdf0101ece2c274b85feddb5225ce9dd22d16a503650bc67",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/pydata__xarray-3993.call18.case.private.json",
+      "case_sha256": "fc12eef0076484c50c4c00c7659365df34b4e6c91e3a87433750db7b9f57d3cc",
+      "prompt_tokens": 8224,
+      "branches": {
+        "chosen": 623
+      },
+      "teacher_forcing_positions": 623,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 1,
+      "prefill_input_tokens_proxy": 8224,
+      "max_context_tokens": 8847
+    },
+    {
+      "input_index": 41,
+      "name": "fullreply.astropy__astropy-7336.call18",
+      "group": "fullreply",
+      "job_sha256": "a23681ccef2fed92c93d220eeea5130aac0e05b405bf2920dfdeac7179a805da",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/astropy__astropy-7336.call18.case.private.json",
+      "case_sha256": "1054cc464c0237ed62d48564788d77e703e638a53babbd1a1503f9df4b728371",
+      "prompt_tokens": 8614,
+      "branches": {
+        "chosen": 479
+      },
+      "teacher_forcing_positions": 479,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 1,
+      "prefill_input_tokens_proxy": 8614,
+      "max_context_tokens": 9093
+    },
+    {
+      "input_index": 42,
+      "name": "fullreply.sympy__sympy-13878.call29",
+      "group": "fullreply",
+      "job_sha256": "c6d0470156207a8774d2d045fd1b167fa9689d239a51698be0216e851fa7ba16",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-update16/sympy__sympy-13878.call29.case.private.json",
+      "case_sha256": "81381621f069f56a0f25c560deea4d019f0ec2e2d52b8e3101e89113635ea2a4",
+      "prompt_tokens": 9525,
+      "branches": {
+        "chosen": 41
+      },
+      "teacher_forcing_positions": 41,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 1,
+      "prefill_input_tokens_proxy": 9525,
+      "max_context_tokens": 9566
+    },
+    {
+      "input_index": 43,
+      "name": "fullreply.astropy__astropy-14096.call23",
+      "group": "fullreply",
+      "job_sha256": "7ed1ff2de61f976682bdc1b4ce56c0e63b79b71b2141ef1c123849a96566b12b",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/astropy__astropy-14096.call23.case.private.json",
+      "case_sha256": "d14048b5af9a857c576641112f5708343871913db9c8be8fcc73e2522bd0314f",
+      "prompt_tokens": 9917,
+      "branches": {
+        "chosen": 725
+      },
+      "teacher_forcing_positions": 725,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 1,
+      "prefill_input_tokens_proxy": 9917,
+      "max_context_tokens": 10642
+    },
+    {
+      "input_index": 44,
+      "name": "fullreply.pydata__xarray-6992.call16",
+      "group": "fullreply",
+      "job_sha256": "02f88d2ebfb568b67102c47ac9c1983b48294405ca048a23a362b4883efca253",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/pydata__xarray-6992.call16.case.private.json",
+      "case_sha256": "d4e14b0c4b07b0a53b78addf31aff853a849a2afab5115e88e7fc0122d150665",
+      "prompt_tokens": 10008,
+      "branches": {
+        "chosen": 897
+      },
+      "teacher_forcing_positions": 897,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 1,
+      "prefill_input_tokens_proxy": 10008,
+      "max_context_tokens": 10905
+    },
+    {
+      "input_index": 45,
+      "name": "fullreply.pytest-dev__pytest-5787.call12",
+      "group": "fullreply",
+      "job_sha256": "7bd23ad92be85c255ef63161d0fce27ed734dde57730af9a336249d71e13d360",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-update2/pytest-dev__pytest-5787.call12.case.private.json",
+      "case_sha256": "ff0dcfd58e6f6d0d679d8cef7fc0858cf2e86c1c34540cc89d93959a3d051c13",
+      "prompt_tokens": 11110,
+      "branches": {
+        "chosen": 160
+      },
+      "teacher_forcing_positions": 160,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 1,
+      "prefill_input_tokens_proxy": 11110,
+      "max_context_tokens": 11270
+    },
+    {
+      "input_index": 46,
+      "name": "fullreply.pytest-dev__pytest-10356.call14",
+      "group": "fullreply",
+      "job_sha256": "f9c16646645a02116520247f341b7c6ceca90c93ddd103141c8ca89c3dd587b0",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/pytest-dev__pytest-10356.call14.case.private.json",
+      "case_sha256": "8d17dc747ee414221522e0ce87c20f6eb364984d1c88646501fe742a0fe1d4a6",
+      "prompt_tokens": 11285,
+      "branches": {
+        "chosen": 56
+      },
+      "teacher_forcing_positions": 56,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 1,
+      "prefill_input_tokens_proxy": 11285,
+      "max_context_tokens": 11341
+    },
+    {
+      "input_index": 47,
+      "name": "fullreply.astropy__astropy-13398.call17",
+      "group": "fullreply",
+      "job_sha256": "f1e17a8b365ac64ff57c97803e4668e5b4a4f814b9e24faa8e80309d06fa095e",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/astropy__astropy-13398.call17.case.private.json",
+      "case_sha256": "86349f14e7463b534dc8892a717c22842cf57d041935375cdb23b765d0b911a4",
+      "prompt_tokens": 11680,
+      "branches": {
+        "chosen": 928
+      },
+      "teacher_forcing_positions": 928,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 1,
+      "prefill_input_tokens_proxy": 11680,
+      "max_context_tokens": 12608
+    },
+    {
+      "input_index": 48,
+      "name": "fullreply.sympy__sympy-18763.call20",
+      "group": "fullreply",
+      "job_sha256": "21888b261e8d1096dba805eedf6731b5ace811d19b088b8b70cf32a993d27167",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-update14/sympy__sympy-18763.call20.case.private.json",
+      "case_sha256": "fcbe5be0b9d8a938cc982190b75779802fc09fee9e407e74b1e76431d002b6e1",
+      "prompt_tokens": 12888,
+      "branches": {
+        "chosen": 81
+      },
+      "teacher_forcing_positions": 81,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 1,
+      "prefill_input_tokens_proxy": 12888,
+      "max_context_tokens": 12969
+    },
+    {
+      "input_index": 49,
+      "name": "fullreply.scikit-learn__scikit-learn-14053.call13",
+      "group": "fullreply",
+      "job_sha256": "8b8dddd7741f3c5eacd06b3ff29aa9674e7989ea3637f37610396e2a7142a878",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-update/scikit-learn__scikit-learn-14053.call13.case.private.json",
+      "case_sha256": "d6ce273fd15f0b5300d967144e9c392cd26322665e41312a22d3d488bd01eda3",
+      "prompt_tokens": 13051,
+      "branches": {
+        "chosen": 197
+      },
+      "teacher_forcing_positions": 197,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 1,
+      "prefill_input_tokens_proxy": 13051,
+      "max_context_tokens": 13248
+    },
+    {
+      "input_index": 50,
+      "name": "fullreply.psf__requests-2931.call29",
+      "group": "fullreply",
+      "job_sha256": "d5042181220fa9763d5ae4dd8a6b37cc0ff0613fac7fa89ee72260245d0aa761",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/requests2931-semantic-full-reply/psf__requests-2931.call29.case.private.json",
+      "case_sha256": "dd1ea48276e896332173d8548986db103cbbf54316f2b500b8e6375ac3494fde",
+      "prompt_tokens": 14367,
+      "branches": {
+        "chosen": 159
+      },
+      "teacher_forcing_positions": 159,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 1,
+      "prefill_input_tokens_proxy": 14367,
+      "max_context_tokens": 14526
+    },
+    {
+      "input_index": 51,
+      "name": "fullreply.django__django-15037.call19",
+      "group": "fullreply",
+      "job_sha256": "015304fe8b2444d501e9707e777287dadab5049f5b029a7e83ca5c4a4b2f39f9",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/django__django-15037.call19.case.private.json",
+      "case_sha256": "d6ea38fc8bdfe01394cfc55bb1338969bb9213f3d9ad0cdebe7e4c6a50482eef",
+      "prompt_tokens": 15374,
+      "branches": {
+        "chosen": 1038
+      },
+      "teacher_forcing_positions": 1038,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 1,
+      "prefill_input_tokens_proxy": 15374,
+      "max_context_tokens": 16412
+    },
+    {
+      "input_index": 52,
+      "name": "fullreply.psf__requests-1921.call34",
+      "group": "fullreply",
+      "job_sha256": "d539ee29ad55f2d0537b365f8481d0cc82a2a78d5437a97ae86768108242378f",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/psf__requests-1921.call34.case.private.json",
+      "case_sha256": "a3e836f06719d78ff9365231e40c9ca06cf571a9f4658805a96e20685add9c17",
+      "prompt_tokens": 15607,
+      "branches": {
+        "chosen": 140
+      },
+      "teacher_forcing_positions": 140,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 1,
+      "prefill_input_tokens_proxy": 15607,
+      "max_context_tokens": 15747
+    },
+    {
+      "input_index": 53,
+      "name": "fullreply.sympy__sympy-12489.call34",
+      "group": "fullreply",
+      "job_sha256": "56507e666ec40d9e028233e3009b69e0dcfb093453d332214ebc1f8cf5b598f1",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-update12/sympy__sympy-12489.call34.case.private.json",
+      "case_sha256": "96d4abbd8bf09a643cd4a11de9041879286bd4d9623f93e8b1d8341b2b80b0bd",
+      "prompt_tokens": 15867,
+      "branches": {
+        "chosen": 204
+      },
+      "teacher_forcing_positions": 204,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 1,
+      "prefill_input_tokens_proxy": 15867,
+      "max_context_tokens": 16071
+    },
+    {
+      "input_index": 54,
+      "name": "fullreply.matplotlib__matplotlib-20488.call29",
+      "group": "fullreply",
+      "job_sha256": "263a5bd8e780097841d322cf07887ba74a4752dc8bd094ef0a682a4e5e8fd35f",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/matplotlib__matplotlib-20488.call29.case.private.json",
+      "case_sha256": "e9fb08017dc56414fe1b3d37bcf919ada778e18727ca6669c00c789258f9717d",
+      "prompt_tokens": 16552,
+      "branches": {
+        "chosen": 759
+      },
+      "teacher_forcing_positions": 759,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 1,
+      "prefill_input_tokens_proxy": 16552,
+      "max_context_tokens": 17311
+    },
+    {
+      "input_index": 55,
+      "name": "fullreply.scikit-learn__scikit-learn-10908.call34",
+      "group": "fullreply",
+      "job_sha256": "748cb463d8b4b2feb13460180842761d62752fb6175a3a1ee09b66510988fbdb",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-update/scikit-learn__scikit-learn-10908.call34.case.private.json",
+      "case_sha256": "96f9a6466d9c0306ae8d936faa84abc1c885cc33a6cfb0fb5e96dc8ed693fc43",
+      "prompt_tokens": 16793,
+      "branches": {
+        "chosen": 224
+      },
+      "teacher_forcing_positions": 224,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 1,
+      "prefill_input_tokens_proxy": 16793,
+      "max_context_tokens": 17017
+    },
+    {
+      "input_index": 56,
+      "name": "fullreply.astropy__astropy-14598.call33",
+      "group": "fullreply",
+      "job_sha256": "76a6a647095337cf83fa5c9776e2e873911dc01c90f55186d5f7399eaf2297c0",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/astropy__astropy-14598.call33.case.private.json",
+      "case_sha256": "1fcccd2c81aa39196618287abc61b59eccc0f6cf2fa6624c6c6e1fe70081f496",
+      "prompt_tokens": 17281,
+      "branches": {
+        "chosen": 1354
+      },
+      "teacher_forcing_positions": 1354,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 1,
+      "prefill_input_tokens_proxy": 17281,
+      "max_context_tokens": 18635
+    },
+    {
+      "input_index": 57,
+      "name": "fullreply.psf__requests-1142.call31",
+      "group": "fullreply",
+      "job_sha256": "206378a33135ffe4c0a4af26dcb6625c22ba284c6929eb5283076886f05654e9",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/psf__requests-1142.call31.case.private.json",
+      "case_sha256": "69fa9eb2bb5d09ce7c1c4854d00750f202213499c7ffb63244eedfbc0c46e3dd",
+      "prompt_tokens": 17283,
+      "branches": {
+        "chosen": 353
+      },
+      "teacher_forcing_positions": 353,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 1,
+      "prefill_input_tokens_proxy": 17283,
+      "max_context_tokens": 17636
+    },
+    {
+      "input_index": 58,
+      "name": "fullreply.django__django-14007.call31",
+      "group": "fullreply",
+      "job_sha256": "cc72cd2b24c5cf7639a1511e3b0b72d0050b883de8f149554024501ebd2adeb8",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/django__django-14007.call31.case.private.json",
+      "case_sha256": "7b15b6ec309f10c52ed79ec37177ce80a671c9ab2a2ba3554f3a545d744c3ca3",
+      "prompt_tokens": 19396,
+      "branches": {
+        "chosen": 272
+      },
+      "teacher_forcing_positions": 272,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 1,
+      "prefill_input_tokens_proxy": 19396,
+      "max_context_tokens": 19668
+    },
+    {
+      "input_index": 59,
+      "name": "fullreply.pylint-dev__pylint-8898.call44",
+      "group": "fullreply",
+      "job_sha256": "9495794f26e4b14b9f9abac779e86b04e7b6bcfe14cd07b316bd0d66e2d974f8",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/pylint-dev__pylint-8898.call44.case.private.json",
+      "case_sha256": "dab875c767a6a05d28c64800b6aeabef6f960f28aa1b2c7eed95813c218ab1a5",
+      "prompt_tokens": 19404,
+      "branches": {
+        "chosen": 591
+      },
+      "teacher_forcing_positions": 591,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 1,
+      "prefill_input_tokens_proxy": 19404,
+      "max_context_tokens": 19995
+    },
+    {
+      "input_index": 60,
+      "name": "fullreply.sphinx-doc__sphinx-10614.call12",
+      "group": "fullreply",
+      "job_sha256": "dceaac31909197e1a844f57c2d1c32fc7384652c74779f455995865ea4f790b4",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-update7/sphinx-doc__sphinx-10614.call12.case.private.json",
+      "case_sha256": "5d8bf88e5368b8aba3e47d2b43ac32b0b39623c77978eb1145fc84fbc45d7846",
+      "prompt_tokens": 21030,
+      "branches": {
+        "chosen": 25
+      },
+      "teacher_forcing_positions": 25,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 1,
+      "prefill_input_tokens_proxy": 21030,
+      "max_context_tokens": 21055
+    },
+    {
+      "input_index": 61,
+      "name": "fullreply.pylint-dev__pylint-4661.call19",
+      "group": "fullreply",
+      "job_sha256": "1dbc6467873900492594351a1c95adbb5c133d360a2472ec12e1b29f7d53d575",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-update10/pylint-dev__pylint-4661.call19.case.private.json",
+      "case_sha256": "41a4eddee9319c32d181e058305504f13ff65a801b6f4c5147fb8b9f0b881dac",
+      "prompt_tokens": 21990,
+      "branches": {
+        "chosen": 1961
+      },
+      "teacher_forcing_positions": 1961,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 1,
+      "prefill_input_tokens_proxy": 21990,
+      "max_context_tokens": 23951
+    },
+    {
+      "input_index": 62,
+      "name": "fullreply.sphinx-doc__sphinx-7590.call44",
+      "group": "fullreply",
+      "job_sha256": "7ca56a7713c1464c9c03d166d1521bbecb5ef8ccb554f8cc59ae95d84afb7971",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-update5/sphinx-doc__sphinx-7590.call44.case.private.json",
+      "case_sha256": "b6e860df4802afee4a152a0d2eae7dc36c033042a455b83d896813eb77b1f552",
+      "prompt_tokens": 22030,
+      "branches": {
+        "chosen": 252
+      },
+      "teacher_forcing_positions": 252,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 1,
+      "prefill_input_tokens_proxy": 22030,
+      "max_context_tokens": 22282
+    },
+    {
+      "input_index": 63,
+      "name": "fullreply.pytest-dev__pytest-10356.call45",
+      "group": "fullreply",
+      "job_sha256": "f379f0b4f861249bd9d94547273ced3d0240a388daee67c7486b868d0a9daafd",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/semantic-full-replies/pytest-dev__pytest-10356.call45.case.private.json",
+      "case_sha256": "71b4198bd82e5035cd242d09b9fa150160085b9717ac34508ba928bca7a9fd05",
+      "prompt_tokens": 22236,
+      "branches": {
+        "chosen": 961
+      },
+      "teacher_forcing_positions": 961,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 1,
+      "prefill_input_tokens_proxy": 22236,
+      "max_context_tokens": 23197
+    },
+    {
+      "input_index": 64,
+      "name": "fullreply.pytest-dev__pytest-5840.call15",
+      "group": "fullreply",
+      "job_sha256": "85edfacfb1efe9b4b875e03261915ab1e54df0c8a929a33c7f914ff5bfc7327d",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/pytest-dev__pytest-5840.call15.case.private.json",
+      "case_sha256": "b02374d8dff1ae43754183de37661c20bcaef735f86e33e18f93d00ddf68c3ed",
+      "prompt_tokens": 23607,
+      "branches": {
+        "chosen": 2247
+      },
+      "teacher_forcing_positions": 2247,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 1,
+      "prefill_input_tokens_proxy": 23607,
+      "max_context_tokens": 25854
+    },
+    {
+      "input_index": 65,
+      "name": "fullreply.matplotlib__matplotlib-25479.call34",
+      "group": "fullreply",
+      "job_sha256": "45d001b1717b1b8ee556297baaf2f362ded5ea5a64332b23679f39e38c976821",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/matplotlib__matplotlib-25479.call34.case.private.json",
+      "case_sha256": "8e63c3c452fc1db1b2b843a3f443c1bc05ef6b674d9d7172da9911b364c6396f",
+      "prompt_tokens": 23754,
+      "branches": {
+        "chosen": 299
+      },
+      "teacher_forcing_positions": 299,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 1,
+      "prefill_input_tokens_proxy": 23754,
+      "max_context_tokens": 24053
+    },
+    {
+      "input_index": 66,
+      "name": "fullreply.pytest-dev__pytest-7432.call34",
+      "group": "fullreply",
+      "job_sha256": "bae3f95805d44c15bcd3ff2e9570b8a5c0ea62c001d1ed1a90c7909c53b079fc",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-update14/pytest-dev__pytest-7432.call34.case.private.json",
+      "case_sha256": "c3455293de10aa65856920d3c44cf0bf37963a6723562015be9b3f9d64916ec5",
+      "prompt_tokens": 25162,
+      "branches": {
+        "chosen": 61
+      },
+      "teacher_forcing_positions": 61,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 1,
+      "prefill_input_tokens_proxy": 25162,
+      "max_context_tokens": 25223
+    },
+    {
+      "input_index": 67,
+      "name": "fullreply.django__django-14011.call33",
+      "group": "fullreply",
+      "job_sha256": "b7240b18bba924104236808f38dc6de6656ebc3e1c0adfcabe0bceff65fe352d",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/django__django-14011.call33.case.private.json",
+      "case_sha256": "4c11588c48f52dd6692f7f5c50f55d75145b75796601a8e1b8b93a0b34bad2b4",
+      "prompt_tokens": 25183,
+      "branches": {
+        "chosen": 436
+      },
+      "teacher_forcing_positions": 436,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 1,
+      "prefill_input_tokens_proxy": 25183,
+      "max_context_tokens": 25619
+    },
+    {
+      "input_index": 68,
+      "name": "fullreply.mwaskom__seaborn-3069.call50",
+      "group": "fullreply",
+      "job_sha256": "16f8d1af584bd74a3390fa4a623bbcdd88f04c0632f1ce9f8d97f27be2575cb3",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/mwaskom__seaborn-3069.call50.case.private.json",
+      "case_sha256": "9d7c73bd086c2ccd28c6a62990d32262488a599486958ef9d1bd3568550449ff",
+      "prompt_tokens": 25226,
+      "branches": {
+        "chosen": 805
+      },
+      "teacher_forcing_positions": 805,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 1,
+      "prefill_input_tokens_proxy": 25226,
+      "max_context_tokens": 26031
+    },
+    {
+      "input_index": 69,
+      "name": "fullreply.scikit-learn__scikit-learn-14983.call43",
+      "group": "fullreply",
+      "job_sha256": "17b32eb541cd723a954045def0a535fcea33fdb04c668161035b57a7b3ff5196",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-update3/scikit-learn__scikit-learn-14983.call43.case.private.json",
+      "case_sha256": "13aff76658e545f0534c23c2b39b0f5496106d05ad15878b0080a2d20b0653f5",
+      "prompt_tokens": 25702,
+      "branches": {
+        "chosen": 879
+      },
+      "teacher_forcing_positions": 879,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 1,
+      "prefill_input_tokens_proxy": 25702,
+      "max_context_tokens": 26581
+    },
+    {
+      "input_index": 70,
+      "name": "fullreply.pytest-dev__pytest-5840.call16",
+      "group": "fullreply",
+      "job_sha256": "38f3fa2216d9751c182fee6c27d35c22ef56dbcad41d7e05765aba14290030b0",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/pytest-dev__pytest-5840.call16.case.private.json",
+      "case_sha256": "8b3be62cfb797a1d3e7f007b44751ef8cc9114dc7dbc2bbac789af89e811c6e4",
+      "prompt_tokens": 26013,
+      "branches": {
+        "chosen": 122
+      },
+      "teacher_forcing_positions": 122,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 1,
+      "prefill_input_tokens_proxy": 26013,
+      "max_context_tokens": 26135
+    },
+    {
+      "input_index": 71,
+      "name": "fullreply.sphinx-doc__sphinx-9461.call76",
+      "group": "fullreply",
+      "job_sha256": "fa0932a8153d99524070a5cd437e1f20572690d67e403d6ef56a9b7783e66699",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-update15/sphinx-doc__sphinx-9461.call76.case.private.json",
+      "case_sha256": "a672eb1fc419c438455e4ce05f6b814c41c0e54723905115d09ee9087eb0a25b",
+      "prompt_tokens": 27853,
+      "branches": {
+        "chosen": 116
+      },
+      "teacher_forcing_positions": 116,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 1,
+      "prefill_input_tokens_proxy": 27853,
+      "max_context_tokens": 27969
+    },
+    {
+      "input_index": 72,
+      "name": "fullreply.pydata__xarray-4687.call39",
+      "group": "fullreply",
+      "job_sha256": "669f0ceb09b317e66f21d872021d9ed1c66aaee0ba9b282d233e28e5ab67c8ce",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/pydata__xarray-4687.call39.case.private.json",
+      "case_sha256": "aef7ccecbbef4c9a09cdd1317613f93e9cf431e32b1a67dc3d507d7a3e6e84a3",
+      "prompt_tokens": 28807,
+      "branches": {
+        "chosen": 95
+      },
+      "teacher_forcing_positions": 95,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 1,
+      "prefill_input_tokens_proxy": 28807,
+      "max_context_tokens": 28902
+    },
+    {
+      "input_index": 73,
+      "name": "fullreply.mwaskom__seaborn-3187.call64",
+      "group": "fullreply",
+      "job_sha256": "b74b9874388f93f4c9efc2e33272e59ace1cec261c699a70c0286c937e49a954",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/mwaskom__seaborn-3187.call64.case.private.json",
+      "case_sha256": "194876dcf2e5141e51023d4901cb8063ce9db22aafed60849c836fe09d2e5d42",
+      "prompt_tokens": 29825,
+      "branches": {
+        "chosen": 27
+      },
+      "teacher_forcing_positions": 27,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 1,
+      "prefill_input_tokens_proxy": 29825,
+      "max_context_tokens": 29852
+    },
+    {
+      "input_index": 74,
+      "name": "fullreply.pytest-dev__pytest-6197.call35",
+      "group": "fullreply",
+      "job_sha256": "9f7fb35c9f62eaa453fa9af39e7377aacf8e4512fe5bcc2cd68bd60fa0278336",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/pytest-dev__pytest-6197.call35.case.private.json",
+      "case_sha256": "67799b495a43b73671dca02af3da7d741b8dbcc8059294f6ccae8138bc2021a9",
+      "prompt_tokens": 30002,
+      "branches": {
+        "chosen": 131
+      },
+      "teacher_forcing_positions": 131,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 1,
+      "prefill_input_tokens_proxy": 30002,
+      "max_context_tokens": 30133
+    },
+    {
+      "input_index": 75,
+      "name": "fullreply.pydata__xarray-3095.call53",
+      "group": "fullreply",
+      "job_sha256": "583ca1af6677c0d13e564e98a22420d61db34787ab09b79339b9a6ba2c136a58",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/pydata__xarray-3095.call53.case.private.json",
+      "case_sha256": "cdefa2d1ceb55ca29bbad1dda5c9502104bbce256969081381bad9fbfe0bfdd4",
+      "prompt_tokens": 32409,
+      "branches": {
+        "chosen": 850
+      },
+      "teacher_forcing_positions": 850,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 1,
+      "prefill_input_tokens_proxy": 32409,
+      "max_context_tokens": 33259
+    },
+    {
+      "input_index": 76,
+      "name": "fullreply.pylint-dev__pylint-4970.call51",
+      "group": "fullreply",
+      "job_sha256": "73b1b1adcf5c4568f90525677b1a52a37146f60e5821e73c49d62095e7b5f0ac",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/pylint-dev__pylint-4970.call51.case.private.json",
+      "case_sha256": "7a07421ab539c96fa4cf99f340a83a789a6c97fcf78773e9238d98dfcc4003bb",
+      "prompt_tokens": 34308,
+      "branches": {
+        "chosen": 628
+      },
+      "teacher_forcing_positions": 628,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 1,
+      "prefill_input_tokens_proxy": 34308,
+      "max_context_tokens": 34936
+    },
+    {
+      "input_index": 77,
+      "name": "fullreply.pylint-dev__pylint-4970.call55",
+      "group": "fullreply",
+      "job_sha256": "01691dee0bf51fdccae3542fb1b2568e50ef4855f4c660a138bfcf6302419315",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/pylint-dev__pylint-4970.call55.case.private.json",
+      "case_sha256": "87af55c486f6660e4f149d66a13170383424a31a002fdd5cd730aa100be130d1",
+      "prompt_tokens": 35710,
+      "branches": {
+        "chosen": 600
+      },
+      "teacher_forcing_positions": 600,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 1,
+      "prefill_input_tokens_proxy": 35710,
+      "max_context_tokens": 36310
+    },
+    {
+      "input_index": 78,
+      "name": "fullreply.pylint-dev__pylint-4551.call35",
+      "group": "fullreply",
+      "job_sha256": "f775ba9480c76b8fdb9e7f9799eaebd6aa38c376118a6ac67def1056dc7e5050",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/pylint-dev__pylint-4551.call35.case.private.json",
+      "case_sha256": "2ac9e9aa4e07b399a38a79dc7424ced5a2926fd2e3bde5beaa129813b6ea7918",
+      "prompt_tokens": 36440,
+      "branches": {
+        "chosen": 1201
+      },
+      "teacher_forcing_positions": 1201,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 1,
+      "prefill_input_tokens_proxy": 36440,
+      "max_context_tokens": 37641
+    },
+    {
+      "input_index": 79,
+      "name": "fullreply.matplotlib__matplotlib-20488.call88",
+      "group": "fullreply",
+      "job_sha256": "597c4d5b912e62606c3edf43bd3c678c3f064931a8f75a45f6da20f1322e7669",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/matplotlib__matplotlib-20488.call88.case.private.json",
+      "case_sha256": "d47a568ee9098cfac1284de4d061a77ff02e614de8b17b464bf63483d80d3fc6",
+      "prompt_tokens": 46899,
+      "branches": {
+        "chosen": 794
+      },
+      "teacher_forcing_positions": 794,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 1,
+      "prefill_input_tokens_proxy": 46899,
+      "max_context_tokens": 47693
+    },
+    {
+      "input_index": 80,
+      "name": "fullreply.matplotlib__matplotlib-20488.call91",
+      "group": "fullreply",
+      "job_sha256": "3fdfb7458d2a88e911cccfd9fd9701d7d32031d446b0cfad41c8149a35ba8b84",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/matplotlib__matplotlib-20488.call91.case.private.json",
+      "case_sha256": "62e3bcae8970a06f16fd33b9e6053e3201126cd1349758f6060036b4df6a100e",
+      "prompt_tokens": 48233,
+      "branches": {
+        "chosen": 265
+      },
+      "teacher_forcing_positions": 265,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 1,
+      "prefill_input_tokens_proxy": 48233,
+      "max_context_tokens": 48498
+    },
+    {
+      "input_index": 81,
+      "name": "fullreply.pylint-dev__pylint-6386.call33",
+      "group": "fullreply",
+      "job_sha256": "191196c853ed6ef8f3028d9bf45f94ca999b57900f711acecb5b9219f35609af",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/pylint-dev__pylint-6386.call33.case.private.json",
+      "case_sha256": "a82a21f6a3819b53a5ec63996d9394d929c7b61db604d7e6d766a4e62c71d284",
+      "prompt_tokens": 51358,
+      "branches": {
+        "chosen": 305
+      },
+      "teacher_forcing_positions": 305,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 1,
+      "prefill_input_tokens_proxy": 51358,
+      "max_context_tokens": 51663
+    },
+    {
+      "input_index": 82,
+      "name": "fullreply.django__django-16950.call80",
+      "group": "fullreply",
+      "job_sha256": "439f4eb02ce10f4d1a63fb71029314c5351e74179a05f9d1145c6751bea76cea",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/django__django-16950.call80.case.private.json",
+      "case_sha256": "8905c521fec5033aa7ad06de897038849f8189a2eac9d4087bcea04e1f5d6587",
+      "prompt_tokens": 60933,
+      "branches": {
+        "chosen": 68
+      },
+      "teacher_forcing_positions": 68,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 1,
+      "prefill_input_tokens_proxy": 60933,
+      "max_context_tokens": 61001
+    },
+    {
+      "input_index": 83,
+      "name": "action.astropy__astropy-13398.call17",
+      "group": "action",
+      "job_sha256": "e34be0831866bd971c1f5b30e8b90f3437eef7a56cc5bc56dc7f3120bce2f2e2",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/astropy__astropy-13398/action_counterfactual.candidate.private.json",
+      "case_sha256": "cf257559635633305e61cdd43ee580830d26040857d3a664e1e8291c8492d030",
+      "prompt_tokens": 11833,
+      "branches": {
+        "chosen": 775,
+        "correct": 4330
+      },
+      "teacher_forcing_positions": 5105,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 2,
+      "prefill_input_tokens_proxy": 23666,
+      "max_context_tokens": 16163
+    },
+    {
+      "input_index": 84,
+      "name": "action.astropy__astropy-14096.call23",
+      "group": "action",
+      "job_sha256": "eaab328f7b78737dfed38e251ba5216aa9f30dd49138e5045bc4952386f08b23",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/astropy__astropy-14096/action_counterfactual.candidate.private.json",
+      "case_sha256": "5feeb353e8d4dc4a956d0ff4fd4c9cb54ebaf173e8c8306bb4e8b242a3c970d9",
+      "prompt_tokens": 10603,
+      "branches": {
+        "chosen": 39,
+        "correct": 211
+      },
+      "teacher_forcing_positions": 250,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 2,
+      "prefill_input_tokens_proxy": 21206,
+      "max_context_tokens": 10814
+    },
+    {
+      "input_index": 85,
+      "name": "action.astropy__astropy-14598.call33",
+      "group": "action",
+      "job_sha256": "5585553efa886f975e25a8643385716735b219af60ed014077f903f5d3025fd0",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/astropy__astropy-14598/action_counterfactual.candidate.private.json",
+      "case_sha256": "ce76fb1ce580b1ddae47e94c6b2d78c92418e4da1be822ab2b7e505462ab9c3d",
+      "prompt_tokens": 18578,
+      "branches": {
+        "chosen": 57,
+        "correct": 339
+      },
+      "teacher_forcing_positions": 396,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 2,
+      "prefill_input_tokens_proxy": 37156,
+      "max_context_tokens": 18917
+    },
+    {
+      "input_index": 86,
+      "name": "action.django__django-14007.call31",
+      "group": "action",
+      "job_sha256": "951605c064eba40b76b0e11e196366593933e45a1daca8154e716f2be83dc480",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/django__django-14007/action_counterfactual.candidate.private.json",
+      "case_sha256": "1afac21fa317e6099c8d74ffe523dbae743de534bb7b2fe2637cc92ad923000b",
+      "prompt_tokens": 19583,
+      "branches": {
+        "chosen": 85,
+        "correct": 576
+      },
+      "teacher_forcing_positions": 661,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 2,
+      "prefill_input_tokens_proxy": 39166,
+      "max_context_tokens": 20159
+    },
+    {
+      "input_index": 87,
+      "name": "action.django__django-14011.call33",
+      "group": "action",
+      "job_sha256": "dbd36cb8ff74e7b56076ad119f835058b4b669b12cea00b12b11c600488e926e",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/django__django-14011/action_counterfactual.candidate.private.json",
+      "case_sha256": "2656153fba29079165b1bcbb49ac7ddfd6bbf1dfe378285d680816f607639341",
+      "prompt_tokens": 25205,
+      "branches": {
+        "chosen": 414,
+        "correct": 589
+      },
+      "teacher_forcing_positions": 1003,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 2,
+      "prefill_input_tokens_proxy": 50410,
+      "max_context_tokens": 25794
+    },
+    {
+      "input_index": 88,
+      "name": "action.django__django-15037.call19",
+      "group": "action",
+      "job_sha256": "32347f618ae41d71a898be5b7fb93dfb79a3fa24199bdcb105a1c660dec913f5",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/django__django-15037/action_counterfactual.candidate.private.json",
+      "case_sha256": "f40ae4b27d642a43e5a31e278d4f709afa52c973d5edf5acb57230b7b0a064d2",
+      "prompt_tokens": 16361,
+      "branches": {
+        "chosen": 51,
+        "correct": 349
+      },
+      "teacher_forcing_positions": 400,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 2,
+      "prefill_input_tokens_proxy": 32722,
+      "max_context_tokens": 16710
+    },
+    {
+      "input_index": 89,
+      "name": "action.django__django-16950.call80",
+      "group": "action",
+      "job_sha256": "9046b60e94dc6c1324df25ff2759c7bdafdf54e007331d150c31648538345bc2",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/django__django-16950/action_counterfactual.candidate.private.json",
+      "case_sha256": "03cd0cc1a00bdfef7d263043f6e738d111760fd8d2481dcd450145deb30a6ebd",
+      "prompt_tokens": 60961,
+      "branches": {
+        "chosen": 40,
+        "correct": 258
+      },
+      "teacher_forcing_positions": 298,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 2,
+      "prefill_input_tokens_proxy": 121922,
+      "max_context_tokens": 61219
+    },
+    {
+      "input_index": 90,
+      "name": "action.matplotlib__matplotlib-25479.call34",
+      "group": "action",
+      "job_sha256": "994d4e2453c13de4feebbbe7a0564d9db019bbab08b4423d964047c7daeb111f",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/matplotlib__matplotlib-25479/action_counterfactual.candidate.private.json",
+      "case_sha256": "725d37edcc62b651707cc77079508353478c8a16fc09810fe13b17f005a44d8a",
+      "prompt_tokens": 23929,
+      "branches": {
+        "chosen": 124,
+        "correct": 321
+      },
+      "teacher_forcing_positions": 445,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 2,
+      "prefill_input_tokens_proxy": 47858,
+      "max_context_tokens": 24250
+    },
+    {
+      "input_index": 91,
+      "name": "action.mwaskom__seaborn-3069.call50",
+      "group": "action",
+      "job_sha256": "a27053a471ea35f7962352a65c5070a5c5422bd59dfb4d8c18522eef289e8c00",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/mwaskom__seaborn-3069/action_counterfactual.candidate.private.json",
+      "case_sha256": "ee0491294d6b63d3641001708a0b4077d59f705590c1634a4abba00356f80d5f",
+      "prompt_tokens": 25372,
+      "branches": {
+        "chosen": 659,
+        "correct": 624
+      },
+      "teacher_forcing_positions": 1283,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 2,
+      "prefill_input_tokens_proxy": 50744,
+      "max_context_tokens": 26031
+    },
+    {
+      "input_index": 92,
+      "name": "action.mwaskom__seaborn-3187.call64",
+      "group": "action",
+      "job_sha256": "9ee9e4a9a55a140dfd7990bb9e372833ba108fcd4381c0d7ad63ef76633e1381",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/mwaskom__seaborn-3187/action_counterfactual.candidate.private.json",
+      "case_sha256": "3393ba3aed8149c9f030418bc6ec79682d8da8009cfce2d44cf7367626383281",
+      "prompt_tokens": 29834,
+      "branches": {
+        "chosen": 18,
+        "correct": 502
+      },
+      "teacher_forcing_positions": 520,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 2,
+      "prefill_input_tokens_proxy": 59668,
+      "max_context_tokens": 30336
+    },
+    {
+      "input_index": 93,
+      "name": "action.psf__requests-1142.call31",
+      "group": "action",
+      "job_sha256": "b816b48b941940bb6cb047a470011e123636693b233c791ad5a62bf8502e540a",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/psf__requests-1142/action_counterfactual.candidate.private.json",
+      "case_sha256": "d72283f1152735c027dfe9f7581115fcc9d769b295d3f28abd5e3775534191fe",
+      "prompt_tokens": 17575,
+      "branches": {
+        "chosen": 61,
+        "correct": 245
+      },
+      "teacher_forcing_positions": 306,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 2,
+      "prefill_input_tokens_proxy": 35150,
+      "max_context_tokens": 17820
+    },
+    {
+      "input_index": 94,
+      "name": "action.psf__requests-1921.call34",
+      "group": "action",
+      "job_sha256": "8e3eec46543d76c77f82090e460dae894749b7facad959c09004b886e0272e0b",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/psf__requests-1921/action_counterfactual.candidate.private.json",
+      "case_sha256": "2b44f72ac3567dfd855d23947762405695b9428e384d400fe84bdb350254e6a1",
+      "prompt_tokens": 15708,
+      "branches": {
+        "chosen": 39,
+        "correct": 196
+      },
+      "teacher_forcing_positions": 235,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 2,
+      "prefill_input_tokens_proxy": 31416,
+      "max_context_tokens": 15904
+    },
+    {
+      "input_index": 95,
+      "name": "action.pydata__xarray-3993.call18",
+      "group": "action",
+      "job_sha256": "3924c1b1f7667679fdbb4c779f568455fd1306fa72d8f3d065a607cab6e9f05f",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/pydata__xarray-3993/action_counterfactual.candidate.private.json",
+      "case_sha256": "fadf8f42ef467f8af698e8009afdeaa2541fdff1e38ed6e7c9b00900e31d8d0b",
+      "prompt_tokens": 8739,
+      "branches": {
+        "chosen": 108,
+        "correct": 1146
+      },
+      "teacher_forcing_positions": 1254,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 2,
+      "prefill_input_tokens_proxy": 17478,
+      "max_context_tokens": 9885
+    },
+    {
+      "input_index": 96,
+      "name": "action.pydata__xarray-6992.call16",
+      "group": "action",
+      "job_sha256": "59a7b070d146cec496f57f4bc7438a515689fe62a0159ac5080ca7b4cd408b55",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/pydata__xarray-6992/action_counterfactual.candidate.private.json",
+      "case_sha256": "d3008b5e8c62baaa0dfd9fd1f747ba2bb0034518172a6e834dfb694e77b8b9d4",
+      "prompt_tokens": 10834,
+      "branches": {
+        "chosen": 71,
+        "correct": 2461
+      },
+      "teacher_forcing_positions": 2532,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 2,
+      "prefill_input_tokens_proxy": 21668,
+      "max_context_tokens": 13295
+    },
+    {
+      "input_index": 97,
+      "name": "action.pylint-dev__pylint-4551.call35",
+      "group": "action",
+      "job_sha256": "1f0d15462cd431a749a14bc5bf5f9338afaa5e745c3837f5371b13a86f74c4eb",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/pylint-dev__pylint-4551/action_counterfactual.candidate.private.json",
+      "case_sha256": "9ed48e522513c9cf83d72d72cbb74b1b88083f9562e56d8352af1570a6f48a22",
+      "prompt_tokens": 36983,
+      "branches": {
+        "chosen": 658,
+        "correct": 1953
+      },
+      "teacher_forcing_positions": 2611,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 2,
+      "prefill_input_tokens_proxy": 73966,
+      "max_context_tokens": 38936
+    },
+    {
+      "input_index": 98,
+      "name": "action.pylint-dev__pylint-4661.call19",
+      "group": "action",
+      "job_sha256": "73c5d1d873fb9d20313a85597a1bbda3521ca112c3e627b3d4ce4785c198d175",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/pylint-dev__pylint-4661/action_counterfactual.candidate.private.json",
+      "case_sha256": "713e87789d9c8ed6cb7e77c4dfca39e69e706132ac5d48476e807d3cc569b206",
+      "prompt_tokens": 22263,
+      "branches": {
+        "chosen": 1688,
+        "correct": 656
+      },
+      "teacher_forcing_positions": 2344,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 2,
+      "prefill_input_tokens_proxy": 44526,
+      "max_context_tokens": 23951
+    },
+    {
+      "input_index": 99,
+      "name": "action.pylint-dev__pylint-4970.call51",
+      "group": "action",
+      "job_sha256": "7c00596d47d06d64a8f609124fc3eec557786bbd47954f4c6eb5d379da8805f8",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/pylint-dev__pylint-4970/action_counterfactual.candidate.private.json",
+      "case_sha256": "394177560f52396863ecde872372081b9c47e0f0467dce9e71a77e89dd950088",
+      "prompt_tokens": 34838,
+      "branches": {
+        "chosen": 98,
+        "correct": 167
+      },
+      "teacher_forcing_positions": 265,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 2,
+      "prefill_input_tokens_proxy": 69676,
+      "max_context_tokens": 35005
+    },
+    {
+      "input_index": 100,
+      "name": "action.pylint-dev__pylint-4970.call55",
+      "group": "action",
+      "job_sha256": "01ddeb0745acce6b772f95aaab414e345db300e778d8eece3747eb08cdb0a742",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/pylint-dev__pylint-4970-call55/action_counterfactual.candidate.private.json",
+      "case_sha256": "b000bd3e869079d4695a0249bafd5857091060e867d85824ee45a488bcce366d",
+      "prompt_tokens": 35848,
+      "branches": {
+        "chosen": 462,
+        "correct": 167
+      },
+      "teacher_forcing_positions": 629,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 2,
+      "prefill_input_tokens_proxy": 71696,
+      "max_context_tokens": 36310
+    },
+    {
+      "input_index": 101,
+      "name": "action.pylint-dev__pylint-6386.call33",
+      "group": "action",
+      "job_sha256": "f536f1e085099db67386ff27b00d2cf300493039bbdae1fa11259ad2691f2efb",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/pylint-dev__pylint-6386/action_counterfactual.candidate.private.json",
+      "case_sha256": "da24bf7996ba910e8e8b5261ca5b93c8a30e7078101d0afbc917dddb3b1827ac",
+      "prompt_tokens": 51583,
+      "branches": {
+        "chosen": 80,
+        "correct": 807
+      },
+      "teacher_forcing_positions": 887,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 2,
+      "prefill_input_tokens_proxy": 103166,
+      "max_context_tokens": 52390
+    },
+    {
+      "input_index": 102,
+      "name": "action.pylint-dev__pylint-8898.call44",
+      "group": "action",
+      "job_sha256": "81ecb116297040ea4db2018812715941301e8c3f38769ac4d86116230488a29e",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/pylint-dev__pylint-8898/action_counterfactual.candidate.private.json",
+      "case_sha256": "56c529515e4a2136eaa8c6463ae036c0f1d42af543f695a717e22de464fcd101",
+      "prompt_tokens": 19459,
+      "branches": {
+        "chosen": 536,
+        "correct": 776
+      },
+      "teacher_forcing_positions": 1312,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 2,
+      "prefill_input_tokens_proxy": 38918,
+      "max_context_tokens": 20235
+    },
+    {
+      "input_index": 103,
+      "name": "action.pytest-dev__pytest-10356.call45",
+      "group": "action",
+      "job_sha256": "21de7651e4bc553827454cc5b510a2e5af63f15ae1e22ad63830324948dee14f",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/pytest-dev__pytest-10356/action_counterfactual.candidate.private.json",
+      "case_sha256": "2fc6ff38db5e9f9b6d230ca40de945ef031fdb175818ebb508ecb64eb69faa45",
+      "prompt_tokens": 22987,
+      "branches": {
+        "chosen": 210,
+        "correct": 640
+      },
+      "teacher_forcing_positions": 850,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 2,
+      "prefill_input_tokens_proxy": 45974,
+      "max_context_tokens": 23627
+    },
+    {
+      "input_index": 104,
+      "name": "action.pytest-dev__pytest-5840.call15",
+      "group": "action",
+      "job_sha256": "19e00e83b1b302e66d36544057146f33f6375b20b14c4e812e9fb0f31297b990",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/pytest-dev__pytest-5840/action_counterfactual.candidate.private.json",
+      "case_sha256": "b1c348c89abd193f05ed0e551322fcc3a3369df54a1465f1335ec52ca8659aa9",
+      "prompt_tokens": 24532,
+      "branches": {
+        "chosen": 1322,
+        "correct": 976
+      },
+      "teacher_forcing_positions": 2298,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 2,
+      "prefill_input_tokens_proxy": 49064,
+      "max_context_tokens": 25854
+    },
+    {
+      "input_index": 105,
+      "name": "action.pytest-dev__pytest-6197.call35",
+      "group": "action",
+      "job_sha256": "5cbd722f1e99c1fd8417fd2c0a74de4fc4ae06c787567a1a14fdca7ad8dce23a",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/pytest-dev__pytest-6197/action_counterfactual.candidate.private.json",
+      "case_sha256": "3464ab28daeb2089a5ae07b152e6be192ee9c3479da14f6160d0960e49363c35",
+      "prompt_tokens": 30073,
+      "branches": {
+        "chosen": 60,
+        "correct": 573
+      },
+      "teacher_forcing_positions": 633,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 2,
+      "prefill_input_tokens_proxy": 60146,
+      "max_context_tokens": 30646
+    },
+    {
+      "input_index": 106,
+      "name": "action.pytest-dev__pytest-7432.call34",
+      "group": "action",
+      "job_sha256": "a1842a295a4a7b87c6ba046018622918905106d7a397f5f2ac89c975446312ee",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/pytest-dev__pytest-7432/action_counterfactual.candidate.private.json",
+      "case_sha256": "5c8b6bc77b578ff2ff6d0641a0c35fcabdc41a6e204749ba9b18cbb763d95d8d",
+      "prompt_tokens": 25192,
+      "branches": {
+        "chosen": 31,
+        "correct": 534
+      },
+      "teacher_forcing_positions": 565,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 2,
+      "prefill_input_tokens_proxy": 50384,
+      "max_context_tokens": 25726
+    },
+    {
+      "input_index": 107,
+      "name": "action.scikit-learn__scikit-learn-10908.call34",
+      "group": "action",
+      "job_sha256": "6adca35db45d92ec7b7771f133a9f9bf3a917048b0deda1ddf34f25b7ff79573",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/scikit-learn__scikit-learn-10908/action_counterfactual.candidate.private.json",
+      "case_sha256": "433e48cae5b80c21f8250a46df39d3ef9536aee07de49b39ae1a6c8e42de05d7",
+      "prompt_tokens": 16920,
+      "branches": {
+        "chosen": 97,
+        "correct": 513
+      },
+      "teacher_forcing_positions": 610,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 2,
+      "prefill_input_tokens_proxy": 33840,
+      "max_context_tokens": 17433
+    },
+    {
+      "input_index": 108,
+      "name": "action.scikit-learn__scikit-learn-14983.call43",
+      "group": "action",
+      "job_sha256": "08fdd0111b28f1cea1bfb247dd39555548842da9b71ca4c7313937f1af3a5ed7",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/scikit-learn__scikit-learn-14983/action_counterfactual.candidate.private.json",
+      "case_sha256": "e64458e623cab6438580416cc519688b08a4225ac7218213e0f49cb6839ab993",
+      "prompt_tokens": 26160,
+      "branches": {
+        "chosen": 421,
+        "correct": 283
+      },
+      "teacher_forcing_positions": 704,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 2,
+      "prefill_input_tokens_proxy": 52320,
+      "max_context_tokens": 26581
+    },
+    {
+      "input_index": 109,
+      "name": "action.sphinx-doc__sphinx-10323.call68",
+      "group": "action",
+      "job_sha256": "61040025ecce8be4b230391c43c6885473fa3b957e6fd104da63cf8ac7070742",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/sphinx-doc__sphinx-10323/action_counterfactual.candidate.private.json",
+      "case_sha256": "72789bdb0a798672e2011ee937ca9a10ea8bb6adaf7434ff436a9a4d8d73b385",
+      "prompt_tokens": 64527,
+      "branches": {
+        "chosen": 92,
+        "correct": 205
+      },
+      "teacher_forcing_positions": 297,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 2,
+      "prefill_input_tokens_proxy": 129054,
+      "max_context_tokens": 64732
+    },
+    {
+      "input_index": 110,
+      "name": "action.sphinx-doc__sphinx-7590.call44",
+      "group": "action",
+      "job_sha256": "b04e285ce9f6530be4e2fe3637375cc31470c37ae8fe9e1e4ee82cd4a43fc317",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/sphinx-doc__sphinx-7590/action_counterfactual.candidate.private.json",
+      "case_sha256": "2c706fc31a48e359fb899074034916ff79531226a2d6684f964b814c74283002",
+      "prompt_tokens": 22185,
+      "branches": {
+        "chosen": 97,
+        "correct": 2940
+      },
+      "teacher_forcing_positions": 3037,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 2,
+      "prefill_input_tokens_proxy": 44370,
+      "max_context_tokens": 25125
+    },
+    {
+      "input_index": 111,
+      "name": "action.sphinx-doc__sphinx-9461.call76",
+      "group": "action",
+      "job_sha256": "744518f4beb56594813c4361c57d85b64b65389d271f671ea25df0baaf13cc3f",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/sphinx-doc__sphinx-9461/action_counterfactual.candidate.private.json",
+      "case_sha256": "44eb979aed1c5f5691b5a51c4b7cded964764c7d975a631769abe3751a777c3a",
+      "prompt_tokens": 27865,
+      "branches": {
+        "chosen": 104,
+        "correct": 1277
+      },
+      "teacher_forcing_positions": 1381,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 2,
+      "prefill_input_tokens_proxy": 55730,
+      "max_context_tokens": 29142
+    },
+    {
+      "input_index": 112,
+      "name": "action.sympy__sympy-12489.call34",
+      "group": "action",
+      "job_sha256": "9380be42a5d9e785b758a5fa0bb9a20071b5ba4e3de1b332816dd67893ced42a",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/sympy__sympy-12489/action_counterfactual.candidate.private.json",
+      "case_sha256": "e7502eaa3dd07f487b64f62035abaa55bc806121b784ebf78d4c8b8530ba2910",
+      "prompt_tokens": 15998,
+      "branches": {
+        "chosen": 73,
+        "correct": 3113
+      },
+      "teacher_forcing_positions": 3186,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 2,
+      "prefill_input_tokens_proxy": 31996,
+      "max_context_tokens": 19111
+    },
+    {
+      "input_index": 113,
+      "name": "action.sympy__sympy-13091.call22",
+      "group": "action",
+      "job_sha256": "01a9aecedf53970bed4ac9501c113784e107a928027fb52cf170a805d964a0ed",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/sympy__sympy-13091/action_counterfactual.candidate.private.json",
+      "case_sha256": "e9de94d13411323de604aea2ce2664fc0cd3b343c66a5ee9a90f0752a2ba424f",
+      "prompt_tokens": 7602,
+      "branches": {
+        "chosen": 316,
+        "correct": 4958
+      },
+      "teacher_forcing_positions": 5274,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 2,
+      "prefill_input_tokens_proxy": 15204,
+      "max_context_tokens": 12560
+    },
+    {
+      "input_index": 114,
+      "name": "action.sympy__sympy-18763.call20",
+      "group": "action",
+      "job_sha256": "d66691cd0b93b22d2bb477cf71607ea024d1b25dbe9c7677c70570fca6a1cc40",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/sympy__sympy-18763/action_counterfactual.candidate.private.json",
+      "case_sha256": "8fa0ffe613458817c1bb838dcb1b241353d7f54f7da84911522e9852cac55a0f",
+      "prompt_tokens": 12911,
+      "branches": {
+        "chosen": 58,
+        "correct": 184
+      },
+      "teacher_forcing_positions": 242,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 2,
+      "prefill_input_tokens_proxy": 25822,
+      "max_context_tokens": 13095
+    },
+    {
+      "input_index": 115,
+      "name": "action.astropy__astropy-13579.fetch-next-action",
+      "group": "action",
+      "job_sha256": "f72fcebb0684625386de8300dc2866ff2a72af49763fbc049bbab378b0739e6a",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/astropy__astropy-13579/action_counterfactual.candidate.private.json",
+      "case_sha256": "818704ce976b75ba3f4fe0139bba86f45e6e51b24de46c979053b8e59b153f4d",
+      "prompt_tokens": 3995,
+      "branches": {
+        "chosen": 18,
+        "correct": 198
+      },
+      "teacher_forcing_positions": 216,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 2,
+      "prefill_input_tokens_proxy": 7990,
+      "max_context_tokens": 4193
+    },
+    {
+      "input_index": 116,
+      "name": "action.astropy__astropy-7336.fetch-next-action",
+      "group": "action",
+      "job_sha256": "9a2312d5a099dff051643cd1c26fa1c50a84bd496d9670f96f42c0441afdc7b2",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/astropy__astropy-7336/action_counterfactual.candidate.private.json",
+      "case_sha256": "419a06a00c05c49e4e6b51c9978a1c913ed7c59cf95414bea9d7bc624813aec6",
+      "prompt_tokens": 9076,
+      "branches": {
+        "chosen": 17,
+        "correct": 131
+      },
+      "teacher_forcing_positions": 148,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 2,
+      "prefill_input_tokens_proxy": 18152,
+      "max_context_tokens": 9207
+    },
+    {
+      "input_index": 117,
+      "name": "action.astropy__astropy-8872.fetch-next-action",
+      "group": "action",
+      "job_sha256": "e55d187674f2ea6b5f65120a3e055bcece6750e7db28cb625640fed1d5a0c5d9",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/astropy__astropy-8872/action_counterfactual.candidate.private.json",
+      "case_sha256": "c1dca0d99577b5bf1ae854f330af3954f7a84e89f41ea6811fc11b4979e8aba5",
+      "prompt_tokens": 7559,
+      "branches": {
+        "chosen": 17,
+        "correct": 133
+      },
+      "teacher_forcing_positions": 150,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 2,
+      "prefill_input_tokens_proxy": 15118,
+      "max_context_tokens": 7692
+    },
+    {
+      "input_index": 118,
+      "name": "action.matplotlib__matplotlib-25332.fetch-next-action",
+      "group": "action",
+      "job_sha256": "642d276d9d9015505fffc649546704d0cef855bc58bbb845431ceda5f18d8a49",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/matplotlib__matplotlib-25332/action_counterfactual.candidate.private.json",
+      "case_sha256": "70957d53e94df9eacd837421afdf66bf7c7b46972a52e341f17c96fd8498a6ff",
+      "prompt_tokens": 1647,
+      "branches": {
+        "chosen": 16,
+        "correct": 130
+      },
+      "teacher_forcing_positions": 146,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 2,
+      "prefill_input_tokens_proxy": 3294,
+      "max_context_tokens": 1777
+    },
+    {
+      "input_index": 119,
+      "name": "action.matplotlib__matplotlib-25960.fetch-next-action",
+      "group": "action",
+      "job_sha256": "2f5f784c036b6402c5b328fadde571e88c1d4b4601a21cf00275f22f713b6a75",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/matplotlib__matplotlib-25960/action_counterfactual.candidate.private.json",
+      "case_sha256": "0ff0f74cf765bbba8acad052b164b1d070775ac8492cc4efcb2716cc87f01ad8",
+      "prompt_tokens": 1801,
+      "branches": {
+        "chosen": 16,
+        "correct": 172
+      },
+      "teacher_forcing_positions": 188,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 2,
+      "prefill_input_tokens_proxy": 3602,
+      "max_context_tokens": 1973
+    },
+    {
+      "input_index": 120,
+      "name": "action.matplotlib__matplotlib-26208.fetch-next-action",
+      "group": "action",
+      "job_sha256": "6e7f55640418378faebafa0a9d175921ef6df7000bc200dc40471452ed2843d6",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/matplotlib__matplotlib-26208/action_counterfactual.candidate.private.json",
+      "case_sha256": "d60a3730d0c0792a5c836607969e0a89ec8040d7575a655add74fe904d4f19e9",
+      "prompt_tokens": 3021,
+      "branches": {
+        "chosen": 16,
+        "correct": 130
+      },
+      "teacher_forcing_positions": 146,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 2,
+      "prefill_input_tokens_proxy": 6042,
+      "max_context_tokens": 3151
+    },
+    {
+      "input_index": 121,
+      "name": "action.matplotlib__matplotlib-26291.fetch-next-action",
+      "group": "action",
+      "job_sha256": "b4d8cadc497fe419f37674292eb96494423c4cffe964ac47c03ac669077c6182",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/matplotlib__matplotlib-26291/action_counterfactual.candidate.private.json",
+      "case_sha256": "6b3b98d4d9369490b1935d1a462105bb4ace2b1432a67c11ad2242329a4fdec7",
+      "prompt_tokens": 2624,
+      "branches": {
+        "chosen": 16,
+        "correct": 130
+      },
+      "teacher_forcing_positions": 146,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 2,
+      "prefill_input_tokens_proxy": 5248,
+      "max_context_tokens": 2754
+    },
+    {
+      "input_index": 122,
+      "name": "action.pydata__xarray-4687.fetch-next-action",
+      "group": "action",
+      "job_sha256": "cb9a2c445bd535abed7817cd5867a6b02ac20b3a08f3eb1fa59d4bd8dbe411b8",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/pydata__xarray-4687/action_counterfactual.candidate.private.json",
+      "case_sha256": "7e0c07030b0bf623c339fe053d59edc4b48d861bbe09a17bfbab1358b3269294",
+      "prompt_tokens": 28885,
+      "branches": {
+        "chosen": 17,
+        "correct": 204
+      },
+      "teacher_forcing_positions": 221,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 2,
+      "prefill_input_tokens_proxy": 57770,
+      "max_context_tokens": 29089
+    },
+    {
+      "input_index": 123,
+      "name": "action.pydata__xarray-7233.fetch-next-action",
+      "group": "action",
+      "job_sha256": "7940fdb6afa2fefc5c64b3095db1582114f56f5438fc37d76ca552cb192a9ead",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/pydata__xarray-7233/action_counterfactual.candidate.private.json",
+      "case_sha256": "30ae1e5e6a2ead902fe27b73cedc09c710f2eab176789d8fbcc3b65203bda684",
+      "prompt_tokens": 2928,
+      "branches": {
+        "chosen": 18,
+        "correct": 133
+      },
+      "teacher_forcing_positions": 151,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 2,
+      "prefill_input_tokens_proxy": 5856,
+      "max_context_tokens": 3061
+    },
+    {
+      "input_index": 124,
+      "name": "action.pylint-dev__pylint-4604.fetch-next-action",
+      "group": "action",
+      "job_sha256": "0e3670eb062d1c657f3298902307a7c96ddbb0de58259ef4b61e02e186859d72",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/pylint-dev__pylint-4604/action_counterfactual.candidate.private.json",
+      "case_sha256": "0f01a95975a6c04e528a1d6b939806fc2c73cd50e45f4503051c0df58e5c4a12",
+      "prompt_tokens": 7474,
+      "branches": {
+        "chosen": 21,
+        "correct": 139
+      },
+      "teacher_forcing_positions": 160,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 2,
+      "prefill_input_tokens_proxy": 14948,
+      "max_context_tokens": 7613
+    },
+    {
+      "input_index": 125,
+      "name": "action.pytest-dev__pytest-5787.fetch-next-action",
+      "group": "action",
+      "job_sha256": "9782580c65888053be3888af5297864fce1ee299f0692cab86e5bb27746ed949",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/pytest-dev__pytest-5787/action_counterfactual.candidate.private.json",
+      "case_sha256": "6bed68e36238b97ebb2fee8fb7db215d095bfc8ed60781e62a5d7adee6bb8586",
+      "prompt_tokens": 11252,
+      "branches": {
+        "chosen": 18,
+        "correct": 177
+      },
+      "teacher_forcing_positions": 195,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 2,
+      "prefill_input_tokens_proxy": 22504,
+      "max_context_tokens": 11429
+    },
+    {
+      "input_index": 126,
+      "name": "action.scikit-learn__scikit-learn-13135.fetch-next-action",
+      "group": "action",
+      "job_sha256": "5eb373b35e727718414636b0887aa2f3571bfcc5d8ff59db0d3df8add63d7885",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/scikit-learn__scikit-learn-13135/action_counterfactual.candidate.private.json",
+      "case_sha256": "3690a5be8a7e9906ffcc7429684a6bf42523f0fc94b489ec2ba6c6b56da5d5a7",
+      "prompt_tokens": 6939,
+      "branches": {
+        "chosen": 19,
+        "correct": 130
+      },
+      "teacher_forcing_positions": 149,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 2,
+      "prefill_input_tokens_proxy": 13878,
+      "max_context_tokens": 7069
+    },
+    {
+      "input_index": 127,
+      "name": "action.scikit-learn__scikit-learn-13328.fetch-next-action",
+      "group": "action",
+      "job_sha256": "e3c93c58fd8dcc893288012c68abd811526c58d28abb549b43c928dc04eee819",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/scikit-learn__scikit-learn-13328/action_counterfactual.candidate.private.json",
+      "case_sha256": "52f6614498c828972727e13a1086bb30323983eae756e9989ed4d4e44e6d4cf2",
+      "prompt_tokens": 3777,
+      "branches": {
+        "chosen": 20,
+        "correct": 130
+      },
+      "teacher_forcing_positions": 150,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 2,
+      "prefill_input_tokens_proxy": 7554,
+      "max_context_tokens": 3907
+    },
+    {
+      "input_index": 128,
+      "name": "action.scikit-learn__scikit-learn-14053.fetch-next-action",
+      "group": "action",
+      "job_sha256": "d2ecd1ec6d3e00cbef842d5a0f846e4355b4851baa7f04a8ad1aac9da3695394",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/scikit-learn__scikit-learn-14053/action_counterfactual.candidate.private.json",
+      "case_sha256": "0a46e147aeeeecfd9af92f33074485993ede14d196a3d64f8664aca22fd1ce22",
+      "prompt_tokens": 13229,
+      "branches": {
+        "chosen": 19,
+        "correct": 130
+      },
+      "teacher_forcing_positions": 149,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 2,
+      "prefill_input_tokens_proxy": 26458,
+      "max_context_tokens": 13359
+    },
+    {
+      "input_index": 129,
+      "name": "action.scikit-learn__scikit-learn-14629.fetch-next-action",
+      "group": "action",
+      "job_sha256": "6f631adc4a3304b9b7cc0b967bacb08f94e40d7562c217e27a96321c3c6ff17d",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/scikit-learn__scikit-learn-14629/action_counterfactual.candidate.private.json",
+      "case_sha256": "4f59833554b0af7b257288ee13cdba89b3c118e35383c9360d8b1935d08713b6",
+      "prompt_tokens": 5923,
+      "branches": {
+        "chosen": 19,
+        "correct": 130
+      },
+      "teacher_forcing_positions": 149,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 2,
+      "prefill_input_tokens_proxy": 11846,
+      "max_context_tokens": 6053
+    },
+    {
+      "input_index": 130,
+      "name": "action.scikit-learn__scikit-learn-25102.fetch-next-action",
+      "group": "action",
+      "job_sha256": "349d2d96b171026ff4125513045636b711dec195c49de936ad39fd9d572df512",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/scikit-learn__scikit-learn-25102/action_counterfactual.candidate.private.json",
+      "case_sha256": "ac0efa0b76f90a6c5074b9211308237c66c9d2641c6ccf86c9c3948d5c0fb8dc",
+      "prompt_tokens": 6221,
+      "branches": {
+        "chosen": 20,
+        "correct": 179
+      },
+      "teacher_forcing_positions": 199,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 2,
+      "prefill_input_tokens_proxy": 12442,
+      "max_context_tokens": 6400
+    },
+    {
+      "input_index": 131,
+      "name": "action.scikit-learn__scikit-learn-25747.fetch-next-action",
+      "group": "action",
+      "job_sha256": "7477ba3f1f6dd984095f60a3d24b1a9461f289b90caaccd27eb45907766a4e7b",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/scikit-learn__scikit-learn-25747/action_counterfactual.candidate.private.json",
+      "case_sha256": "2bcb65ee9e9bee6d7f42f29234e469c8e9839d29fd7538ae46414f954baac48d",
+      "prompt_tokens": 3995,
+      "branches": {
+        "chosen": 20,
+        "correct": 175
+      },
+      "teacher_forcing_positions": 195,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 2,
+      "prefill_input_tokens_proxy": 7990,
+      "max_context_tokens": 4170
+    },
+    {
+      "input_index": 132,
+      "name": "action.sphinx-doc__sphinx-10614.fetch-next-action",
+      "group": "action",
+      "job_sha256": "f2233b92537f0e31d425478bab4b7a9f142138d642a14e358953af5f4c9dc5f0",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/sphinx-doc__sphinx-10614/action_counterfactual.candidate.private.json",
+      "case_sha256": "73308038ffb6e1153713aefd43055714957c7ff69ca2dfb84c42fa9e76df441f",
+      "prompt_tokens": 21040,
+      "branches": {
+        "chosen": 15,
+        "correct": 178
+      },
+      "teacher_forcing_positions": 193,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 2,
+      "prefill_input_tokens_proxy": 42080,
+      "max_context_tokens": 21218
+    },
+    {
+      "input_index": 133,
+      "name": "action.sphinx-doc__sphinx-8638.fetch-next-action",
+      "group": "action",
+      "job_sha256": "e98bbd349e649b27e3deb6402e40ac2ccbbf0bf30881be3213d18bc1619abe28",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/sphinx-doc__sphinx-8638/action_counterfactual.candidate.private.json",
+      "case_sha256": "a98499f3f71718260984ae51b4bc3487946ebf030920dc7b6530a0480a2b78b2",
+      "prompt_tokens": 2180,
+      "branches": {
+        "chosen": 15,
+        "correct": 177
+      },
+      "teacher_forcing_positions": 192,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 2,
+      "prefill_input_tokens_proxy": 4360,
+      "max_context_tokens": 2357
+    },
+    {
+      "input_index": 134,
+      "name": "action.sympy__sympy-13480.fetch-next-action",
+      "group": "action",
+      "job_sha256": "f6988295723f07f06fc39b0e1f36b88377532f3850a3fce1dabd3a1f1bbfe58a",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/sympy__sympy-13480/action_counterfactual.candidate.private.json",
+      "case_sha256": "7958f1882b3dbbead9e0eb354aef9d1032ca9f93e6fef1cf30f492644aaa181d",
+      "prompt_tokens": 4181,
+      "branches": {
+        "chosen": 16,
+        "correct": 180
+      },
+      "teacher_forcing_positions": 196,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 2,
+      "prefill_input_tokens_proxy": 8362,
+      "max_context_tokens": 4361
+    },
+    {
+      "input_index": 135,
+      "name": "action.sympy__sympy-13551.fetch-next-action",
+      "group": "action",
+      "job_sha256": "1095967c4538914e0ed52ffcbdf5479aa0ed1c2730262617085e410dbb50c9f0",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/sympy__sympy-13551/action_counterfactual.candidate.private.json",
+      "case_sha256": "e1f720371d9533b0cc4c14771e80b6e86af2ce47ec5b9791eeef9925fc96dc56",
+      "prompt_tokens": 4485,
+      "branches": {
+        "chosen": 16,
+        "correct": 177
+      },
+      "teacher_forcing_positions": 193,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 2,
+      "prefill_input_tokens_proxy": 8970,
+      "max_context_tokens": 4662
+    },
+    {
+      "input_index": 136,
+      "name": "action.sympy__sympy-13878.fetch-next-action",
+      "group": "action",
+      "job_sha256": "bcab8a8cc0889122a3ea7014ed8cea2e09c28231c27539208a94a5398cd9cae2",
+      "case": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/sympy__sympy-13878/action_counterfactual.candidate.private.json",
+      "case_sha256": "77c7ca4a7dbdde6ad96477e340b4314724668fcb90a8947dd561d0b0ba30f6c2",
+      "prompt_tokens": 9551,
+      "branches": {
+        "chosen": 15,
+        "correct": 180
+      },
+      "teacher_forcing_positions": 195,
+      "free_run_trials": 0,
+      "free_run_token_cap": 0,
+      "prefill_calls_proxy": 2,
+      "prefill_input_tokens_proxy": 19102,
+      "max_context_tokens": 9731
+    }
+  ],
+  "staged_commands_not_executed": {
+    "pilot": {
+      "served": {
+        "cwd": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline",
+        "argv": [
+          "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+          "-m",
+          "models.autoports.google_gemma_4_31b_it.tools.precision_repro_batch",
+          "--cases",
+          "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split82/pilot.json",
+          "--build-kwargs-file",
+          "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/head_bfp8_build_kwargs.json",
+          "--output-dir",
+          "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split82/runs/pilot/served"
+        ],
+        "build_kwargs_sha256": "2e583fa8bd7aff7c5f8be110835df751924d167243c5a44a68aa5b3d70c6845f"
+      },
+      "full": {
+        "cwd": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline",
+        "argv": [
+          "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+          "-m",
+          "models.autoports.google_gemma_4_31b_it.tools.precision_repro_batch",
+          "--cases",
+          "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split82/pilot.json",
+          "--build-kwargs-file",
+          "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_build_kwargs.json",
+          "--output-dir",
+          "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split82/runs/pilot/full",
+          "--compare-dir",
+          "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split82/runs/pilot/served"
+        ],
+        "build_kwargs_sha256": "ff2b5ed24e0b6a1dee7eb5cd8bd437d17c3df5f8f25567927d239e666f0699f9"
+      }
+    },
+    "rest": {
+      "served": {
+        "cwd": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline",
+        "argv": [
+          "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+          "-m",
+          "models.autoports.google_gemma_4_31b_it.tools.precision_repro_batch",
+          "--cases",
+          "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split82/rest.json",
+          "--build-kwargs-file",
+          "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/head_bfp8_build_kwargs.json",
+          "--output-dir",
+          "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split82/runs/rest/served"
+        ],
+        "build_kwargs_sha256": "2e583fa8bd7aff7c5f8be110835df751924d167243c5a44a68aa5b3d70c6845f"
+      },
+      "full": {
+        "cwd": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline",
+        "argv": [
+          "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+          "-m",
+          "models.autoports.google_gemma_4_31b_it.tools.precision_repro_batch",
+          "--cases",
+          "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split82/rest.json",
+          "--build-kwargs-file",
+          "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_build_kwargs.json",
+          "--output-dir",
+          "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split82/runs/rest/full",
+          "--compare-dir",
+          "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split82/runs/rest/served"
+        ],
+        "build_kwargs_sha256": "ff2b5ed24e0b6a1dee7eb5cd8bd437d17c3df5f8f25567927d239e666f0699f9"
+      }
+    }
+  },
+  "execution_gate": "Root reviews measured pilot served/full wall times and load/prefill/TF accounting before admitting remainder execution. Original input admission is not permission to skip this cost gate.",
+  "cost_limits": "Token-count proxies only, not time estimates. One prefill per forced branch and per free trial. Two parts incur two loads per precision (four loads if served+full both run), one additional reload per precision versus unsplit execution. Outputs are disjoint; full comparisons use only matching served part. No optional suffix512 jobs added.",
+  "learned_basis": {
+    "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/learned.json",
+    "sha256": "4ca1a702a5f83e08fc8f71672b8dfec7108793d615cda0ae37b2f9813bf8e954",
+    "applied": "Historical long-prefix controls timed out; shortened controls do not establish native equivalence. Measure longest original prefix before extrapolating remainder costs."
+  }
+}

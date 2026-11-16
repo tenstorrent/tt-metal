@@ -1,0 +1,471 @@
+{
+  "status": "independent_host_only_branch_conditional_interpretation",
+  "created_utc": "2026-11-15T11:43:37+00:00",
+  "scope": {
+    "source": "Actual saved outputs/comparisons only; no model run, TTNN import, or file changes except this analysis JSON.",
+    "case_sha256": "fbe984e026dbe8ef2b9d8a4288056617cbfde5235d1efd4a3bd14038a2db5ad7",
+    "prompt_token_ids_sha256": "55fea04ac956c00e84884f04bf7e287a85e9d1a2b90794040070751161c968f0",
+    "pinned_hf_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+    "branch_provenance_sha256": "fcd8f39e4e607655d404eb820800cfd4f83cb8f1c5be2e5f52cb6211e9703691",
+    "branches_sha256": "532e3f0ff8deec26cc89feb967d68fa18b6ec0221a2521de02c7dcc71c209ebc",
+    "all_modes_rows_per_branch": 7,
+    "actual_branch_ids": {
+      "tt_seed44_loop_history": [
+        1390,
+        107,
+        147,
+        1390,
+        107,
+        147
+      ],
+      "hf_seed44_ellipsis_history": [
+        1390,
+        107,
+        138,
+        556,
+        58982,
+        236800
+      ]
+    }
+  },
+  "precision_configs": {
+    "hf": {
+      "reference": "pinned Hugging Face CPU bfloat16"
+    },
+    "tt-selected": {
+      "activation_dtype": "bfloat8_b",
+      "ccl_dtype": {
+        "decode": "bfloat16",
+        "prefill": "bfloat8_b"
+      },
+      "compute_fidelities": {
+        "attention": "LoFi",
+        "down": "LoFi",
+        "lm_head": "LoFi",
+        "mlp": "LoFi"
+      },
+      "config_id": "stage12_head_bfp8_lofi",
+      "embedding_dtype": "bfloat16",
+      "kv_cache_dtype": "bfloat8_b",
+      "layer_exceptions": {},
+      "logits_dtype": "bfloat16",
+      "max_seq_len": 262144,
+      "norm_dtype": "bfloat16",
+      "residual_dtype": "bfloat16",
+      "sampling_dtype": "bfloat16",
+      "weight_groups": {
+        "attention": "bfp4",
+        "down": "bfp4",
+        "lm_head": "bfp8_lofi",
+        "mlp": "bfp4"
+      }
+    },
+    "tt-full": {
+      "activation_dtype": "bfloat16",
+      "ccl_dtype": {
+        "decode": "bfloat16",
+        "prefill": "bfloat16"
+      },
+      "compute_fidelities": {
+        "attention": "HiFi4",
+        "down": "HiFi4",
+        "lm_head": "HiFi4",
+        "mlp": "HiFi4"
+      },
+      "config_id": "stage12_bf16_hifi4_diagnostic",
+      "embedding_dtype": "bfloat16",
+      "kv_cache_dtype": "bfloat16",
+      "layer_exceptions": {},
+      "logits_dtype": "bfloat16",
+      "max_seq_len": 262144,
+      "norm_dtype": "bfloat16",
+      "residual_dtype": "bfloat16",
+      "sampling_dtype": "bfloat16",
+      "sdpa_compute_fidelity": "HiFi4",
+      "weight_groups": {
+        "attention": "bf16",
+        "down": "bf16",
+        "lm_head": "bf16",
+        "mlp": "bf16"
+      }
+    }
+  },
+  "first_divergence_after_shared_1390_107": {
+    "hf": {
+      "context_after_shared_tokens": [
+        1390,
+        107
+      ],
+      "chosen_ellipsis_token_138": {
+        "logit": 28.0,
+        "rank": 1,
+        "raw_softmax_probability": 0.5796330654345438,
+        "top_k20_probability": 0.5798021637843224,
+        "top_p095_nominal_probability": 0.6074815620620585,
+        "top_p095_bf16_probability": 0.6074815620620585
+      },
+      "observed_loop_token_147": {
+        "logit": 27.25,
+        "rank": 2,
+        "raw_softmax_probability": 0.27379927297402246,
+        "top_k20_probability": 0.27387914937858154,
+        "top_p095_nominal_probability": 0.28695397132498135,
+        "top_p095_bf16_probability": 0.28695397132498135
+      },
+      "logit_margin_138_minus_147": 0.75
+    },
+    "tt-selected": {
+      "context_after_shared_tokens": [
+        1390,
+        107
+      ],
+      "chosen_ellipsis_token_138": {
+        "logit": 25.125,
+        "rank": 2,
+        "raw_softmax_probability": 0.06544671289339525,
+        "top_k20_probability": 0.06549513807952512,
+        "top_p095_nominal_probability": 0.06754669113962909,
+        "top_p095_bf16_probability": 0.06754669113962909
+      },
+      "observed_loop_token_147": {
+        "logit": 27.75,
+        "rank": 1,
+        "raw_softmax_probability": 0.9034640033711085,
+        "top_k20_probability": 0.9041324924455125,
+        "top_p095_nominal_probability": 0.9324533088603709,
+        "top_p095_bf16_probability": 0.9324533088603709
+      },
+      "logit_margin_138_minus_147": -2.625
+    },
+    "tt-full": {
+      "context_after_shared_tokens": [
+        1390,
+        107
+      ],
+      "chosen_ellipsis_token_138": {
+        "logit": 28.25,
+        "rank": 1,
+        "raw_softmax_probability": 0.6598597347711842,
+        "top_k20_probability": 0.6600996277758957,
+        "top_p095_nominal_probability": 0.6761375039864048,
+        "top_p095_bf16_probability": 0.6761375039864048
+      },
+      "observed_loop_token_147": {
+        "logit": 26.75,
+        "rank": 2,
+        "raw_softmax_probability": 0.14723460829499474,
+        "top_k20_probability": 0.14728813565955454,
+        "top_p095_nominal_probability": 0.15086666954684613,
+        "top_p095_bf16_probability": 0.15086666954684613
+      },
+      "logit_margin_138_minus_147": 1.5
+    }
+  },
+  "pcc_and_distribution_drift": {
+    "compare-hf-full": {
+      "hf_seed44_ellipsis_history": {
+        "rows": 7,
+        "pcc_min": 0.8483717206584639,
+        "pcc_median": 0.9904369972756946,
+        "pcc_max": 0.9934954157941759,
+        "row2": {
+          "pcc": 0.9904369972756946,
+          "raw_full_softmax_tv": 0.13127126814230552,
+          "top20_intersection_count": 19,
+          "top20_support_jaccard": 0.9047619047619048,
+          "top_k20_distribution_tv": 0.13126885846060413,
+          "top_p095_nominal_distribution_tv": 0.13608730177813522,
+          "top_p095_bf16_distribution_tv": 0.13608730177813522
+        }
+      },
+      "tt_seed44_loop_history": {
+        "rows": 7,
+        "pcc_min": 0.9757246438577464,
+        "pcc_median": 0.992249476046177,
+        "pcc_max": 0.9940401442158686,
+        "row2": {
+          "pcc": 0.9904369972756946,
+          "raw_full_softmax_tv": 0.13127126814230552,
+          "top20_intersection_count": 19,
+          "top20_support_jaccard": 0.9047619047619048,
+          "top_k20_distribution_tv": 0.13126885846060413,
+          "top_p095_nominal_distribution_tv": 0.13608730177813522,
+          "top_p095_bf16_distribution_tv": 0.13608730177813522
+        }
+      }
+    },
+    "compare-hf-selected": {
+      "hf_seed44_ellipsis_history": {
+        "rows": 7,
+        "pcc_min": 0.782446498703271,
+        "pcc_median": 0.8924403582140583,
+        "pcc_max": 0.9336976973167197,
+        "row2": {
+          "pcc": 0.8924403582140583,
+          "raw_full_softmax_tv": 0.6451465777895625,
+          "top20_intersection_count": 14,
+          "top20_support_jaccard": 0.5384615384615384,
+          "top_k20_distribution_tv": 0.6453170818620206,
+          "top_p095_nominal_distribution_tv": 0.6454993375353896,
+          "top_p095_bf16_distribution_tv": 0.6454993375353896
+        }
+      },
+      "tt_seed44_loop_history": {
+        "rows": 7,
+        "pcc_min": 0.8554169920326681,
+        "pcc_median": 0.8844869813073963,
+        "pcc_max": 0.9022504759480058,
+        "row2": {
+          "pcc": 0.8924403582140583,
+          "raw_full_softmax_tv": 0.6451465777895625,
+          "top20_intersection_count": 14,
+          "top20_support_jaccard": 0.5384615384615384,
+          "top_k20_distribution_tv": 0.6453170818620206,
+          "top_p095_nominal_distribution_tv": 0.6454993375353896,
+          "top_p095_bf16_distribution_tv": 0.6454993375353896
+        }
+      }
+    },
+    "compare-selected-full": {
+      "hf_seed44_ellipsis_history": {
+        "rows": 7,
+        "pcc_min": 0.8460712594476985,
+        "pcc_median": 0.8940706673527153,
+        "pcc_max": 0.9306639246910449,
+        "row2": {
+          "pcc": 0.8818995847894702,
+          "raw_full_softmax_tv": 0.7739256765391263,
+          "top20_intersection_count": 13,
+          "top20_support_jaccard": 0.48148148148148145,
+          "top_k20_distribution_tv": 0.7742189535811543,
+          "top_p095_nominal_distribution_tv": 0.7815866393135248,
+          "top_p095_bf16_distribution_tv": 0.7815866393135248
+        }
+      },
+      "tt_seed44_loop_history": {
+        "rows": 7,
+        "pcc_min": 0.8460712594476985,
+        "pcc_median": 0.8754799633944024,
+        "pcc_max": 0.8940706673527153,
+        "row2": {
+          "pcc": 0.8818995847894702,
+          "raw_full_softmax_tv": 0.7739256765391263,
+          "top20_intersection_count": 13,
+          "top20_support_jaccard": 0.48148148148148145,
+          "top_k20_distribution_tv": 0.7742189535811543,
+          "top_p095_nominal_distribution_tv": 0.7815866393135248,
+          "top_p095_bf16_distribution_tv": 0.7815866393135248
+        }
+      }
+    }
+  },
+  "forced_tt_loop_history_probability": [
+    {
+      "mode": "hf",
+      "branch": "tt_seed44_loop_history",
+      "token_ids": [
+        1390,
+        107,
+        147,
+        1390,
+        107,
+        147
+      ],
+      "conditional_probabilities": {
+        "raw_softmax_probability": {
+          "conditional_step_probabilities": [
+            0.9941202852784284,
+            0.999515784717513,
+            0.27379927297402246,
+            0.8039966232955255,
+            0.999575553761012,
+            0.19514717500830142
+          ],
+          "six_token_product": 0.042667087956510044
+        },
+        "top_k20_probability": {
+          "conditional_step_probabilities": [
+            0.9942610408828401,
+            0.999531832954729,
+            0.27387914937858154,
+            0.8042100799423252,
+            0.9995862817537188,
+            0.19521148549756995
+          ],
+          "six_token_product": 0.042712125954526
+        },
+        "top_p095_nominal_probability": {
+          "conditional_step_probabilities": [
+            1.0,
+            1.0,
+            0.28695397132498135,
+            0.8175744761936437,
+            1.0,
+            0.19898104251690577
+          ],
+          "six_token_product": 0.046682194772862146
+        },
+        "top_p095_bf16_probability": {
+          "conditional_step_probabilities": [
+            1.0,
+            1.0,
+            0.28695397132498135,
+            0.8175744761936437,
+            1.0,
+            0.19898104251690577
+          ],
+          "six_token_product": 0.046682194772862146
+        }
+      },
+      "row6_argmax_next_token_id": 1390,
+      "row6_argmax_raw_softmax_probability": 0.9939966319390608
+    },
+    {
+      "mode": "tt-selected",
+      "branch": "tt_seed44_loop_history",
+      "token_ids": [
+        1390,
+        107,
+        147,
+        1390,
+        107,
+        147
+      ],
+      "conditional_probabilities": {
+        "raw_softmax_probability": {
+          "conditional_step_probabilities": [
+            0.9661008304005687,
+            0.9995681403568419,
+            0.9034640033711085,
+            0.948544141684877,
+            0.9997865837629641,
+            0.8866411107126352
+          ],
+          "six_token_product": 0.7335984910261393
+        },
+        "top_k20_probability": {
+          "conditional_step_probabilities": [
+            0.9666625454726681,
+            0.9995990499762805,
+            0.9041324924455125,
+            0.9488908930576606,
+            0.9998061022544115,
+            0.8885203585054727
+          ],
+          "six_token_product": 0.7364313161126615
+        },
+        "top_p095_nominal_probability": {
+          "conditional_step_probabilities": [
+            1.0,
+            1.0,
+            0.9324533088603709,
+            0.9796676466573412,
+            1.0,
+            0.9280325463467016
+          ],
+          "six_token_product": 0.8477524772254935
+        },
+        "top_p095_bf16_probability": {
+          "conditional_step_probabilities": [
+            1.0,
+            1.0,
+            0.9324533088603709,
+            0.9796676466573412,
+            1.0,
+            0.9280325463467016
+          ],
+          "six_token_product": 0.8477524772254935
+        }
+      },
+      "row6_argmax_next_token_id": 1390,
+      "row6_argmax_raw_softmax_probability": 0.9742302341253237
+    },
+    {
+      "mode": "tt-full",
+      "branch": "tt_seed44_loop_history",
+      "token_ids": [
+        1390,
+        107,
+        147,
+        1390,
+        107,
+        147
+      ],
+      "conditional_probabilities": {
+        "raw_softmax_probability": {
+          "conditional_step_probabilities": [
+            0.9842840703318897,
+            0.9993618892099903,
+            0.14723460829499474,
+            0.8385694438776439,
+            0.9995488162011572,
+            0.1826401946344599
+          ],
+          "six_token_product": 0.022171370998753118
+        },
+        "top_k20_probability": {
+          "conditional_step_probabilities": [
+            0.9845531720238703,
+            0.9993829015554233,
+            0.14728813565955454,
+            0.8388270734460622,
+            0.9995596601971684,
+            0.18271498591807797
+          ],
+          "six_token_product": 0.022202106629433272
+        },
+        "top_p095_nominal_probability": {
+          "conditional_step_probabilities": [
+            1.0,
+            1.0,
+            0.15086666954684613,
+            0.8519528019683106,
+            1.0,
+            0.18612131127082523
+          ],
+          "six_token_product": 0.023922410716136974
+        },
+        "top_p095_bf16_probability": {
+          "conditional_step_probabilities": [
+            1.0,
+            1.0,
+            0.15086666954684613,
+            0.8519528019683106,
+            1.0,
+            0.18612131127082523
+          ],
+          "six_token_product": 0.023922410716136974
+        }
+      },
+      "row6_argmax_next_token_id": 1390,
+      "row6_argmax_raw_softmax_probability": 0.9879576861159786
+    }
+  ],
+  "interpretation": {
+    "supported_precision_drift": "At the first differing next-token step after the exact shared [1390,107], HF CPU BF16 and TT BF16/HiFi4 both favor token138 (rank1; raw-softmax p=.580/.660) over loop token147 (rank2; p=.274/.147). Selected TT head-BFP8/LoFi flips the preference: token147 is rank1 at p=.903 and token138 rank2 at p=.065. This is direct branch-conditioned evidence that the selected reduced-precision/config path makes the observed loop branch much more likely at its earliest divergence; it is not an implementation-bug attribution.",
+    "first_two_tokens": "All three configurations put the common initial tokens 1390 then107 at rank1 with high raw-softmax probabilities (HF .9941/.9995, selected .9661/.9996, full .9843/.9994). Drift is concentrated at the branch split, not the initial shared pair.",
+    "loop_history_likelihood": "For the exact six-token forced loop history [1390,107,147,1390,107,147], unfiltered raw-softmax products are HF .04267, selected TT .73360, full BF16/HiFi4 TT .02217. Strict top-k20 host-proxy products are .04271/.73643/.02220; host top-p=.95 products are .04668/.84775/.02392. Thus the selected path strongly favors the observed short loop. HF and full assign non-zero but substantially smaller probability to it. The sequence products are conditional calculations from captured logits, not a replay of actual sampler RNG/probability quantization.",
+    "self_reinforcement_after_two_cycles": "After forcing all six loop IDs, row6 argmax is token1390 under HF (raw .9940), selected (.9742), and full (.9880). So once the loop state is imposed for two cycles, the immediate next cycle begins with high probability under every tested configuration. This is consistent with autoregressive history-dependent reinforcement and prevents attributing long persistence solely to the initial precision-sensitive branch split.",
+    "need_for_later_rows": "Seven rows expose the earliest split, two repeated cycles, and one next-token distribution; they do not account for a long full-TT loop trajectory. Later loop-conditioned rows from the exact saved long full-TT trajectory (with aligned HF/full prefixes) would be needed to determine whether the full-precision loop remains self-reinforcing beyond the initial two cycles or where it would break.",
+    "pcc_caveat": "At the split, PCC stays .892 for HF↔selected despite raw-softmax TV .645 and top20 Jaccard .538; HF↔full PCC is .990 with TV .131 and Jaccard .905; selected↔full PCC .882 with TV .774 and Jaccard .481. High vocabulary-wide PCC alone masks a substantial top-candidate reorder at the branch split; ranks, selected-token probabilities, and TV are more diagnostic here.",
+    "uncertainty_and_limits": [
+      "TT captures used forced callbacks with host_sampling compatibility and greedy host settings, not native stochastic sampling; branch ids came from observed seed44 HF/full outputs.",
+      "Top-k/top-p filtered probabilities are strict-top20 host reconstructions; HF top-k tie retention can exceed20 and device sampler support/quantization/PRNG draw are not captured. Raw logits/ranks are the primary evidence.",
+      "HF CPU BF16, selected TT head-BFP8/LoFi, and full TT BF16/HiFi4 differ across multiple precision/config axes; this does not isolate one dtype, kernel, or component.",
+      "Only one case, one seed-derived pair of short branches, and six forced tokens per branch are covered; native incidence rates and long-loop causal explanation remain unmeasured."
+    ]
+  },
+  "source_artifacts": {
+    "outputs/hf.report.json": "697927aac05966b7360ef0db488c4264dfdc012d08db08c7e8a7be1b538ddd6b",
+    "outputs/tt-selected.report.json": "1742af94b4101a2b679cef524790b9f27373cdf77e31dd665961b3ace7fd07a2",
+    "outputs/tt-full.report.json": "bd09e59dd1052f03d990d530475bbb68e1b1a6640f87d5747e618bcbebb4b519",
+    "outputs/compare-hf-selected.json": "304b1222af284f8ed148ba869692c44cfba259378a5383157db43eb37f16a300",
+    "outputs/compare-hf-full.json": "f487da7236a7d599ac5c3a6ffa2443b9563524e1ada9eabf373966ab0fb56230",
+    "outputs/compare-selected-full.json": "dfb151e36da2d64bf7a3fcd3e24357025d7f806ddd6ddbf230a04c4cf1125c55",
+    "branches.json": "532e3f0ff8deec26cc89feb967d68fa18b6ec0221a2521de02c7dcc71c209ebc",
+    "branch-provenance.json": "fcd8f39e4e607655d404eb820800cfd4f83cb8f1c5be2e5f52cb6211e9703691",
+    "proposal.json": "0247e216bc3187e1375e2b1939937a4848b62e2a470cf37c2cf6aa22ef1d802b",
+    "root-admission.json": "1e7d2c4f6c6879ad8c63d4e2fdb1092546633a7c0e566581b083309a747044d4"
+  },
+  "output_file": "analysis-host-c.json"
+}

@@ -1,0 +1,46 @@
+{
+  "source_directory": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate",
+  "coordinator_snapshots": [
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/full-coordinator-last12.json",
+      "sha256": "b8c68301fbc84a35d66c8cd8bdbe3415ef46577c10ba4848ce66914d74620e17"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/full-coordinator-requests10.json",
+      "sha256": "25a3064e04e21172b9cb7bf19cc85e45599ba7ab31054148d9ffdba92f2840f5"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/served-coordinator-last6.json",
+      "sha256": "1a65b3ae14084d421d3fccf1d40ecd6523853a6355fa905d7aef7ef7c33698a4"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/served-coordinator-mpl86.json",
+      "sha256": "e19bf6f19ad9d33fdff188542581e5efc93927a02fff529dadd978867de396de"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/served-coordinator-requests.json",
+      "sha256": "3daffcc0e435016e8c3a671ae853ccc6f6e82f3572c1839108a86b0316e0542f"
+    }
+  ],
+  "coordinator_rows_seen_by_mode": {
+    "served": 15,
+    "full": 15
+  },
+  "finalized_rows_by_mode": {
+    "served": 15,
+    "full": 15
+  },
+  "selected_inconclusive_512_by_mode": {
+    "served": 1,
+    "full": 4
+  },
+  "pending_root_review_by_mode": {
+    "served": [],
+    "full": []
+  },
+  "pending_counts_by_mode": {
+    "served": 0,
+    "full": 0
+  },
+  "note": "Only explicit root coordinator rows are considered reviewed. Unlisted full rows remain pending; they are not inferred normal or complete."
+}

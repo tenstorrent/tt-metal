@@ -1,0 +1,83 @@
+{
+  "status": "planning_proxy_not_measurement",
+  "basis_source": "setup/swe85-cap-extensions/cost-estimate.json",
+  "basis_sha256": "21bfc3457d46af9d85f0ed3749dd445660c20d1196a228455b17e9126ab5da40",
+  "source_controls": {
+    "served": [
+      {
+        "seed": 42,
+        "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/served/anomaly.scikit-learn__scikit-learn-13135.call29.onset.cap512.seed42.json",
+        "sha256": "64c679d381610abf89aac0e9261c9851dcdbe00d8c328563c512922bf447853c",
+        "generated_tokens": 466,
+        "wall_seconds": 17.722104829968885
+      },
+      {
+        "seed": 44,
+        "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/served/anomaly.scikit-learn__scikit-learn-13135.call29.onset.cap512.seed44.json",
+        "sha256": "a0454e72dfe1cb7ac0bbe65cd201706f7b02b3c45f5a13cadbad9374464d2cb6",
+        "generated_tokens": 400,
+        "wall_seconds": 15.72053666994907
+      }
+    ],
+    "full": [
+      {
+        "seed": 42,
+        "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/full/anomaly.scikit-learn__scikit-learn-13135.call29.onset.cap512.seed42.json",
+        "sha256": "0c8c1b05d5eb308b5101a9cbfaac37905ce80759d1819a68260e364cd4026b60",
+        "generated_tokens": 512,
+        "wall_seconds": 37.39951783209108
+      },
+      {
+        "seed": 43,
+        "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/full/anomaly.scikit-learn__scikit-learn-13135.call29.onset.cap512.seed43.json",
+        "sha256": "3c84da4c1ac6fdca0ba6779fe6c8d9e27b983b4ccaba1fb2d5257975721ca385",
+        "generated_tokens": 333,
+        "wall_seconds": 26.600682797143236
+      }
+    ]
+  },
+  "model_load_basis": {
+    "served": {
+      "seconds": 140.70528853707947,
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/load.json",
+      "sha256": "b5ed68750af790c5531343cda33e373bc6eeeea0b210de1d98e6d2b8a963c5a6"
+    },
+    "full": {
+      "seconds": 75.54386684880592,
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/load.json",
+      "sha256": "6fa1c06ad0cbd8a0b7033d0cd3bef542b62412704c92841b2b8df7b38348dbda"
+    }
+  },
+  "assumptions": {
+    "free_generation": "Use existing original-full-prompt cap512 timing estimates for this job as a proxy; shorter 512-token context may reduce prefill. Three new 512-token generations can vary by seed.",
+    "chosen_teacher_forcing": "Existing cap512 controls used branches=[]; add provisional 3-12 seconds per case for 64 teacher-forced chosen positions. This is unmeasured planning allowance.",
+    "scopes": "One model load per served/full process; three jobs serial per mode; does not include HF follow-up."
+  },
+  "mode_estimates": {
+    "served": {
+      "point_seconds": 219.31,
+      "range_seconds": [
+        194.71,
+        281.71
+      ],
+      "timeout_seconds": 600
+    },
+    "full": {
+      "point_seconds": 209.04,
+      "range_seconds": [
+        159.54,
+        276.54
+      ],
+      "timeout_seconds": 600
+    }
+  },
+  "combined_point_seconds": 428.35,
+  "combined_range_seconds": [
+    354.25,
+    558.25
+  ],
+  "serial_order": [
+    "served",
+    "full"
+  ]
+}

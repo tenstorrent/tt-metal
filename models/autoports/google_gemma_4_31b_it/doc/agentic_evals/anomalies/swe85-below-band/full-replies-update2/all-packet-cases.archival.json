@@ -1,0 +1,30 @@
+[
+  {
+    "name": "pytest-dev__pytest-5787.call1",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-update2/pytest-dev__pytest-5787.call1.case.private.json",
+    "branches": [
+      "chosen"
+    ]
+  },
+  {
+    "name": "pytest-dev__pytest-5787.call12",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-update2/pytest-dev__pytest-5787.call12.case.private.json",
+    "branches": [
+      "chosen"
+    ]
+  },
+  {
+    "name": "pytest-dev__pytest-5787.call65",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-update2/pytest-dev__pytest-5787.call65.case.private.json",
+    "branches": [
+      "chosen"
+    ]
+  },
+  {
+    "name": "scikit-learn__scikit-learn-14629.call8",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-update2/scikit-learn__scikit-learn-14629.call8.case.private.json",
+    "branches": [
+      "chosen"
+    ]
+  }
+]

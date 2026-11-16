@@ -1,0 +1,39 @@
+{
+  "status": "candidate_only_not_admitted_not_run",
+  "mode": "full",
+  "case_count": 2,
+  "model_loads": 1,
+  "timeout_seconds": 1800,
+  "argv": [
+    "timeout",
+    "1800",
+    "env",
+    "HF_HUB_OFFLINE=1",
+    "HF_DATASETS_OFFLINE=1",
+    "HF_HUB_DISABLE_TELEMETRY=1",
+    "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+    "READINESS_TRACE_REGION_SIZE=134217728",
+    "OMP_NUM_THREADS=16",
+    "MKL_NUM_THREADS=16",
+    "OPENBLAS_NUM_THREADS=16",
+    "TT_METAL_DEVICE_PROFILER=0",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+    "-m",
+    "models.autoports.google_gemma_4_31b_it.tools.precision_repro_batch",
+    "--cases",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/p19-q32-production-validation/fixed108/cap-extensions-c-preparation/candidate-cases.json",
+    "--build-kwargs-file",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/build_kwargs.json",
+    "--output-dir",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/p19-q32-production-validation/fixed108/cap-extensions-c-preparation/runs"
+  ],
+  "output_directory": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/p19-q32-production-validation/fixed108/cap-extensions-c-preparation/runs",
+  "output_directory_must_be_absent_at_launch": true,
+  "gates": [
+    "P19 fixed108 panel terminal exit0 and root semantic review complete; candidate prep remains unadmitted until root combines with all required cap rows.",
+    "Fresh root authorization, owner-zero and no HF activity; current shared host/device state checked at admission.",
+    "Confirm candidate output directory absent and no overwrite.",
+    "After run, verify exact fixture prompt hash, seed/sampling, revision/runtime policy and exact old generated-token prefix before interpreting added suffix."
+  ],
+  "scope": "Two rows from C assigned indices36\u201371 only. Same exact fixtures/prompt IDs, seed, temperature/top_p/top_k, one free-running trial, P19 runtime policy. Caps double from256\u2192512 and1024\u21922048. No branches, source fixture edits, selection, score, or launch."
+}

@@ -1,0 +1,28 @@
+{
+  "status": "candidate_only_not_admitted_not_run",
+  "question": "After conditioning on the first caret token actually emitted by full-TT seed44, does pinned HF continue the same repeated caret trajectory for the next63 forced positions and/or its seed44 free sample?",
+  "scope": "One targeted conditional HF CPU case, suffix512 plus the first full-TT token; prompt IDs copied exactly and one observed token appended. One seed44, free cap512, chosen continuation shifted from64 to63.",
+  "source_conditioning_claim": "Exact original shortened suffix512 input plus one actual full-TT generated token; no native full-prompt replay claim.",
+  "branch_hypothesis": "The prior HF free sample selected a different first token (236884) than the full-TT caret loop (172109), while teacher forcing gives the TT first token probability0.10442692 and later caret continuation top1 at all63 subsequent positions. This probe conditions on that observed token; it does not prove or estimate native incidence.",
+  "candidate_files": {
+    "case_sha256": "acfe5c87d2b16de1f566b55b295f632beac9db6269121545a105882a9b67f24e",
+    "manifest_sha256": "2a6435b88ab24f780db9a26207989e0a511ad54dca5ddb35e26384aa914c6f32",
+    "command_sha256": "2cfe6313cfa53445e243191711045702c54b807838f7fc4ac316e2ff4677d444",
+    "forecast_sha256": "19e3a080e40713f303e7d91de342039abd8cc7d63543c920c191b7b373570dd4",
+    "source_hashes_sha256": "c63953d24ed33f9b7217b3478e05f830e6067648795bdd9f5f1ff08f21d2c0f5",
+    "runner_sha256": "aafe67c88bb5a1eb38b8718570bbddd5749e2a9ecbb9dd19cdb100a49572c03e",
+    "preparation_sha256": "580eb182ce9d345c1b48e6b15094c204eea1a1bc16ca4e39a9377303ca44d0bc",
+    "host_validation_sha256": "ec8d8922ba0c633cc888a9879d12a27e0f14c7bd46d71ae5e6b05d8f4991f0c6",
+    "readme_sha256": "e9be6c17917509c3b16fc7df68b2cbbe00162550d57e2b21c4deb9d5a5d149fb"
+  },
+  "requirements": [
+    "Root review of fixture transformation, exact source IDs, command, and forecast before any admission.",
+    "Keep the prior H9 HF output and all TT outputs unchanged.",
+    "Record any later result as conditional continuation evidence only; do not replace prior HF sampling evidence or alter score/policy."
+  ],
+  "no_claims": [
+    "No same-input or native incidence equivalence.",
+    "No stack-bug confirmation from this test alone.",
+    "No result or generated tokens exist yet."
+  ]
+}

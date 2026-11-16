@@ -1,0 +1,19 @@
+{
+  "epoch": 1794750756.2060425,
+  "status": "static_validation_only_not_admitted",
+  "source_hashes_verified": 34,
+  "case_indices": [
+    0,
+    32,
+    33,
+    58,
+    66,
+    67,
+    68,
+    74,
+    93
+  ],
+  "all_fields_except_name_exactly_equal_fixed108": true,
+  "only_policy_change": "attention bfp8_lofi/LoFi to bfp8/HiFi2; config_id changed",
+  "requires": "P6 terminal, remaining triage and source/owner check before model launch"
+}

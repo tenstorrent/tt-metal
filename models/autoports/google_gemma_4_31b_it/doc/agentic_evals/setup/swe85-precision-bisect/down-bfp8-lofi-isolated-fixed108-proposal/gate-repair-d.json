@@ -1,0 +1,50 @@
+{
+  "status": "candidate_gate_repair_host_review_complete_unadmitted",
+  "scope": "Only the unadmitted down-BFP8 LoFi fixed108 proposal directory was edited. No inference, TTNN import, device query, admission, or launch.",
+  "changes": [
+    "Bind corrected selected-BFP8 served suffix512, original full-BF16 suffix512, and matched selected-BFP8 served/full suffix1024 admissions, commands, manifests, launches, successful completions, outputs, root output reviews, independent triage, and complete runtime_precision objects.",
+    "Support both observed source inventory encodings while hash-verifying all source rows; refreshed the candidate inventory with 39 exact reviewed SK evidence files and results.",
+    "Replace the prior HF follow-up status gate with a separate root decision path+SHA. completed requires a hash-bound admitted HF candidate, successful admission-bound completions, complete output files, and accepted root output review. not_required requires an explicit reason bound to exact SK evidence.",
+    "Require a root H9 terminal record bound to current SK evidence, actual admitted H9 progress, eight frozen serial command groups, each launched command, successful completion, and every output hash.",
+    "Preserve the fixed108 manifest, selected BFP8 head baseline, down-only candidate delta, P1/P2 pins, STOP_BEFORE_LAUNCH, and unadmitted status; kept pre-repair snapshots."
+  ],
+  "validation": {
+    "admission_present": false,
+    "caps": {
+      "1024": 22,
+      "2048": 6,
+      "256": 72,
+      "4096": 1,
+      "512": 7
+    },
+    "jobs": 108,
+    "seeds": [
+      42,
+      43,
+      44
+    ],
+    "source_count": 59,
+    "status": "host_static_validation_passed_no_ttnn_import",
+    "stop_present": true,
+    "unique_cases": 36
+  },
+  "tests": {
+    "py_compile": "passed",
+    "self_test": "down candidate host-gate self-test passed; no TTNN import or device query",
+    "validate_only": "host_static_validation_passed_no_ttnn_import",
+    "check_sk_serial": "passed through all three SK arms and failed closed as expected because candidate-local root SK serial decision record is absent",
+    "ttnn_imported": false,
+    "device_queried": false
+  },
+  "current_hashes": {
+    "driver_sha256": "29eec464eb0d8375d7d2584a3a107aa759111261549d8d9bdaa91020f8c05214",
+    "proposal_sha256": "7838be4b984dee7a3f7a2b0f0343d4a9c0ab9334b87847c6589f0681ef29b2cd",
+    "source_inventory_sha256": "2c6199d5f2f501f13b9b4f8f419e95df6b62a278a77a46a2fb2f452d0d5c2ecf",
+    "fixed_manifest_sha256": "57193e4b91af3a31df00f0c92dbc0f2219fbce011e6533594e5244a93a3021ed"
+  },
+  "status_guards": {
+    "stop_present": true,
+    "admission_json_present": false,
+    "launch_json_present": false
+  }
+}

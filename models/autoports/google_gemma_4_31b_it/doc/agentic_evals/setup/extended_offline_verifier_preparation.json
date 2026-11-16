@@ -1,0 +1,20 @@
+{
+  "status": "one_existing_image_derived_and_network_none_validated_no_extended_selection",
+  "future_agent_env": {
+    "LITELLM_LOCAL_MODEL_COST_MAP": "True"
+  },
+  "future_verifier": {
+    "harbor_original_sha": "e76c762fca5267dfb36e1f900f0a7724ed72e735",
+    "generic_parser_fix_sha": "e98973d132ec705baa4f59ca62680587ef5281a9",
+    "dependency_pins": [
+      "swebench==4.0.3",
+      "datasets==2.16.1",
+      "fastcore==1.10.5"
+    ],
+    "dependency_environment": "bringup/artifacts/swe-verifier-recovery-env",
+    "resolved_dependencies": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-phase2-ready/verifier-recovery-offline/requirements-resolved.txt",
+    "requirement": "Copy the pinned installed environment to the exact uv0.7.13 /parser.py cache environment and relocate interpreter/shebangs per tested recipe. Validate uv run /parser.py synthetic pass+fail network none; no adjacent-env assumption."
+  },
+  "projection_gate": "One local existing-image derived validation authorized and complete. No additional image build/fetch or extended selection until parent decision.",
+  "validated_recipe": "setup/offline-verifier-build/evidence.json"
+}

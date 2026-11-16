@@ -1,0 +1,166 @@
+{
+  "status": "independent_host_only_review_pass_with_one_driver_robustness_note",
+  "scope": "Fixture/manifest/provenance/forecast/serial-driver review; no admission or execution.",
+  "reviewed_utc": "2026-11-15T05:38:09.654094+00:00",
+  "checks": [
+    {
+      "check": "source_hash_inventory",
+      "count": 26,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "check": "candidate_fixture_and_manifest_exactness",
+      "passed": true,
+      "modes": [
+        {
+          "mode": "served",
+          "passed": true,
+          "manifest_sha256": "12ae2e2c6d28d0a0dbac0e2a0c631c798d1e91e29c00036a3993909962b1a414",
+          "fixture_sha256": "a86dde9a348404fbdd4d8f321a82f504288372ecc7d82f3cbd5fbdcfb5abec34",
+          "prompt_token_count": 2048,
+          "seed": 42,
+          "sampling": {
+            "temperature": 1.0,
+            "top_p": 0.95,
+            "top_k": 20
+          },
+          "prompt_continuation_sampling_seed_exact": true
+        },
+        {
+          "mode": "full",
+          "passed": true,
+          "manifest_sha256": "3188e4af5b8a80eb192e9adea43765f0c7a18f50a2ff7295146b1755d5ceac60",
+          "fixture_sha256": "64c16cb0741ab60771f71f2d4900bd8acc0e12c5259d6aa7d4ec6e6041bd76b5",
+          "prompt_token_count": 2048,
+          "seed": 42,
+          "sampling": {
+            "temperature": 1.0,
+            "top_p": 0.95,
+            "top_k": 20
+          },
+          "prompt_continuation_sampling_seed_exact": true
+        }
+      ]
+    },
+    {
+      "check": "selection_is_limited_to_two_root_inconclusive_cases",
+      "passed": true,
+      "rows": [
+        {
+          "name": "anomaly.psf__requests-5414.call10.onset.suffix2048.cap2048.seed42",
+          "mode": "served",
+          "seed": 42,
+          "previous_cap": 1024,
+          "candidate_cap": 2048,
+          "root_verdict": "inconclusive",
+          "source_result_sha256": "84168fff11b5ad2c8a1c3fa9ec9d6a76d78f832aa938e674ac43a71a8bbfe421",
+          "source_coordinator_sha256": "6d165ac6e0a247c7351af03f904c8db96932dac394630a0284b6b7c3f81a016a",
+          "prompt_ids_equal_to_original_suffix2048": true,
+          "chosen_continuation_preserved": true,
+          "sampling_preserved": true
+        },
+        {
+          "name": "anomaly.psf__requests-5414.call11.onset.suffix2048.cap2048.seed42",
+          "mode": "full",
+          "seed": 42,
+          "previous_cap": 1024,
+          "candidate_cap": 2048,
+          "root_verdict": "inconclusive",
+          "source_result_sha256": "bbe10ef469c6473e26d18e3d1be8c9a3dfaa5e1ff64f9bed8eff8e1c5a725867",
+          "source_coordinator_sha256": "2cd7018e95b78de54850d1127fc540485f1e9eb6722720117676d4690365602a",
+          "prompt_ids_equal_to_original_suffix2048": true,
+          "chosen_continuation_preserved": true,
+          "sampling_preserved": true
+        }
+      ],
+      "excluded_rows": [
+        {
+          "case": "full Requests call11 seed43",
+          "verdict": "other",
+          "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/full-call11-seed43-adjudication-correction.json",
+          "evidence_sha256": "6f75679d6c13213bbf1c0bd2096630a53fe04b0c1be01b20c8754ab81c2615e5",
+          "reason": "Localized stray own in malformed traceback; the correction supersedes the earlier inconclusive classification for current interpretation. Original pinned record remains immutable."
+        },
+        {
+          "case": "full Requests call10 seed43",
+          "verdict": "other",
+          "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-execution-candidate/full-requests10-stock-parser-audit-b.json",
+          "evidence_sha256": "57b50238af241c598918b8eb427ad9ccd7b7be655c0c41265dca43238e9cedc3",
+          "reason": "Stock parser confirms missing structured tool call after fenced bash; not an inconclusive progressing cap."
+        },
+        {
+          "case": "full Requests call10 seed44",
+          "verdict": "other",
+          "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-execution-candidate/full-requests10-stock-parser-audit-b.json",
+          "evidence_sha256": "57b50238af241c598918b8eb427ad9ccd7b7be655c0c41265dca43238e9cedc3",
+          "reason": "Stock parser confirms missing structured tool call after fenced bash; not an inconclusive progressing cap."
+        }
+      ]
+    },
+    {
+      "check": "forecast_arithmetic",
+      "passed": true,
+      "modes": [
+        {
+          "mode": "served",
+          "passed": true,
+          "context_ratio": 2.4013294079852336,
+          "point_and_bounds_s": [
+            234.19967018702647,
+            209.7909537725815,
+            291.1533418207314
+          ],
+          "stored_point_and_bounds_s": [
+            234.19967018702647,
+            209.7909537725815,
+            291.1533418207314
+          ]
+        },
+        {
+          "mode": "full",
+          "passed": true,
+          "context_ratio": 2.4013294079852336,
+          "point_and_bounds_s": [
+            234.44379896362304,
+            190.93514277658699,
+            335.96399673337385
+          ],
+          "stored_point_and_bounds_s": [
+            234.44379896362304,
+            190.93514277658699,
+            335.96399673337385
+          ]
+        }
+      ],
+      "aggregate_recomputed_s": [
+        468.6434691506495,
+        400.72609654916846,
+        627.1173385541052
+      ],
+      "aggregate_recorded_s": [
+        468.6434691506495,
+        400.72609654916846,
+        627.1173385541052
+      ]
+    },
+    {
+      "check": "serial_driver_gates",
+      "passed": true,
+      "gate_checks": {
+        "pins_V_admission_hash": true,
+        "requires_V_full_exit0": true,
+        "requires_terminal_queue_success": true,
+        "checks_source_and_manifest_hashes_before_each_mode": true,
+        "checks_device_owners_before_each_mode": true,
+        "3600s_timeout_each_mode": true
+      },
+      "python_compile": true,
+      "completion_queue_hashes_rechecked_before_each_mode": false,
+      "note": "V full completion and terminal queue are verified after wait and their hashes are recorded. The driver rechecks V admission, source hashes, candidate manifest hashes and device owners before each mode, but does not recheck V completion/queue hashes before the second mode. The 3600-second timeout is enforced by the hash-pinned command vector.",
+      "timeout_enforced_by": "Hash-pinned proposal commands begin with timeout 3600; subprocess.run awaits that wrapper before next mode."
+    }
+  ],
+  "disposition": "Fixtures, manifests, provenance, source hashes, CPU validation and forecast arithmetic pass. The hash-pinned proposal commands enforce 3600 seconds per mode. Consider rechecking the captured V completion and terminal queue hashes immediately before each mode (especially full after served), or explicitly rely on the frozen serialized queue interval. No fixture/manifest changes are needed.",
+  "no_TTNN_or_device_work": true
+}

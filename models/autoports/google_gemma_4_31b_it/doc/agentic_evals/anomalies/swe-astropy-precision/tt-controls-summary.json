@@ -1,0 +1,231 @@
+{
+  "served": {
+    "astropy.onset": [
+      {
+        "seed": 42,
+        "flag": true,
+        "tail_ratio": 0.04699738903394256,
+        "decode_tok_s_user": 32.62672349352466,
+        "mechanical_flag": true,
+        "semantic_classification": "degenerate",
+        "semantic_evidence": "Degenerate within-response cycle with no executed tool action: \u201cActually, I'll just do it.\u201d (24x); \u201cWait, I'll use the python script.\u201d (23x); \u201cLet's go.\u201d (23x). These are repeated intentions or mutually cycling edit plans, not coherent repeated task steps.",
+        "executed_tool_actions": 0
+      },
+      {
+        "seed": 43,
+        "flag": false,
+        "tail_ratio": 0.06125528062764032,
+        "decode_tok_s_user": 32.63536278909647,
+        "mechanical_flag": false,
+        "semantic_classification": "degenerate",
+        "semantic_evidence": "Degenerate within-response cycle with no executed tool action: \u201cActually, I'll just do it.\u201d (16x); \u201cWait, I'll use `sed` to replace the lines instead of inserting.\u201d (16x); \u201cNo, inserting is fine.\u201d (16x). These are repeated intentions or mutually cycling edit plans, not coherent repeated task steps.",
+        "executed_tool_actions": 0
+      },
+      {
+        "seed": 44,
+        "flag": false,
+        "tail_ratio": 0.09724473257698542,
+        "decode_tok_s_user": 32.61224029985982,
+        "mechanical_flag": false,
+        "semantic_classification": "degenerate",
+        "semantic_evidence": "Degenerate within-response cycle with no executed tool action: \u201cWait, I'll use `sed -i '898i\\        if hasattr(self.__class__, attr):\\n            raise AttributeError(attr)\\n' astropy/coordinates/sky_coordinate.p\u201d (10x); \u201cWait, I'll use `sed` to replace the lines.\u201d (10x); \u201cNo, I'll use the python script.\u201d (10x). These are repeated intentions or mutually cycling edit plans, not coherent repeated task steps.",
+        "executed_tool_actions": 0
+      }
+    ],
+    "astropy.second.onset": [
+      {
+        "seed": 42,
+        "flag": true,
+        "tail_ratio": 0.024390243902439025,
+        "decode_tok_s_user": 32.78926644865393,
+        "mechanical_flag": true,
+        "semantic_classification": "degenerate",
+        "semantic_evidence": "Degenerate within-response repetition: \u201c[Wait, I'll just use the bash tool.]\u201d occurs 78 times in 2993 characters, with no progression to an actual tool action.",
+        "executed_tool_actions": 0
+      },
+      {
+        "seed": 43,
+        "flag": false,
+        "tail_ratio": 0.06893652795292139,
+        "decode_tok_s_user": 32.79545361971161,
+        "mechanical_flag": false,
+        "semantic_classification": "degenerate",
+        "semantic_evidence": "Degenerate within-response cycle with no executed tool action: \u201c[Let's go.]\u201d (21x); \u201c[Wait, I'll just do it.]\u201d (20x); \u201c[I'll use the bash tool now.]\u201d (20x). These are repeated intentions or mutually cycling edit plans, not coherent repeated task steps.",
+        "executed_tool_actions": 0
+      },
+      {
+        "seed": 44,
+        "flag": false,
+        "tail_ratio": 0.05472263868065967,
+        "decode_tok_s_user": 32.773089858423134,
+        "mechanical_flag": false,
+        "semantic_classification": "degenerate",
+        "semantic_evidence": "Degenerate within-response cycle with no executed tool action: \u201c[Wait, I'll just do it.]\u201d (32x); \u201c[I'll use the bash tool.]\u201d (31x); \u201c[Actually, I'll just do it.]\u201d (30x). These are repeated intentions or mutually cycling edit plans, not coherent repeated task steps.",
+        "executed_tool_actions": 0
+      }
+    ]
+  },
+  "full": {
+    "astropy.onset": [
+      {
+        "seed": 42,
+        "flag": true,
+        "tail_ratio": 0.03304904051172708,
+        "decode_tok_s_user": 16.524213841251978,
+        "mechanical_flag": true,
+        "semantic_classification": "degenerate",
+        "semantic_evidence": "Degenerate within-response cycle with no executed tool action: \u201cActually, I'll just do it.\u201d (43x); \u201cWait, I'll use `sed` and then check.\u201d (42x). These are repeated intentions or mutually cycling edit plans, not coherent repeated task steps.",
+        "executed_tool_actions": 0
+      },
+      {
+        "seed": 43,
+        "flag": false,
+        "tail_ratio": 0.11742059672762271,
+        "decode_tok_s_user": 16.514352954158547,
+        "mechanical_flag": false,
+        "semantic_classification": "degenerate",
+        "semantic_evidence": "Degenerate within-response cycle with no executed tool action: \u201cWait, I'll first check the lines.\u201d (20x); \u201cActually, I'll just do it.\u201d (20x); \u201cWait, I'll use `sed`.\u201d (19x). These are repeated intentions or mutually cycling edit plans, not coherent repeated task steps.",
+        "executed_tool_actions": 0
+      },
+      {
+        "seed": 44,
+        "flag": true,
+        "tail_ratio": 0.040726817042606514,
+        "decode_tok_s_user": 16.514795425961815,
+        "mechanical_flag": true,
+        "semantic_classification": "degenerate",
+        "semantic_evidence": "Degenerate within-response cycle with no executed tool action: \u201cActually, I'll just do it.\u201d (22x); \u201cWait, I'll use `sed` to insert the lines.\u201d (21x); \u201cActually, I'll just use the python script.\u201d (21x). These are repeated intentions or mutually cycling edit plans, not coherent repeated task steps.",
+        "executed_tool_actions": 0
+      }
+    ],
+    "astropy.second.onset": [
+      {
+        "seed": 42,
+        "flag": true,
+        "tail_ratio": 0.030682156687518617,
+        "decode_tok_s_user": 16.563665308052762,
+        "mechanical_flag": true,
+        "semantic_classification": "degenerate",
+        "semantic_evidence": "Degenerate within-response cycle with no executed tool action: \u201c[Wait, I'll just use `super().__getattribute__(attr)`.]\u201d (29x); \u201c[Actually, I'll just use `super().__getattribute__(attr)`.]\u201d (27x). These are repeated intentions or mutually cycling edit plans, not coherent repeated task steps.",
+        "executed_tool_actions": 0
+      },
+      {
+        "seed": 43,
+        "flag": false,
+        "tail_ratio": 0.19624084103217584,
+        "decode_tok_s_user": 16.558769105092683,
+        "mechanical_flag": false,
+        "semantic_classification": "degenerate",
+        "semantic_evidence": "Degenerate within-response cycle with no executed tool action: \u201c[I'll use the bash tool now.]\u201d (20x); \u201c[I'll run the following script.]\u201d (16x); \u201c[Wait, I'll just do it.]\u201d (14x). These are repeated intentions or mutually cycling edit plans, not coherent repeated task steps.",
+        "executed_tool_actions": 0
+      },
+      {
+        "seed": 44,
+        "flag": true,
+        "tail_ratio": 0.04933759707629054,
+        "decode_tok_s_user": 16.561831413300354,
+        "mechanical_flag": true,
+        "semantic_classification": "degenerate",
+        "semantic_evidence": "Degenerate within-response cycle with no executed tool action: \u201c[I'll do it now.]\u201d (108x); \u201c[Wait, I'll just do it.]\u201d (3x). These are repeated intentions or mutually cycling edit plans, not coherent repeated task steps.",
+        "executed_tool_actions": 0
+      }
+    ]
+  },
+  "qualitative_interpretation": {
+    "method": "Manual semantic review of every free-running output; digest flags remain mechanical tail heuristics only.",
+    "served": {
+      "astropy.onset": "3/3 semantically degenerate; 1/3 mechanically flagged.",
+      "astropy.second.onset": "3/3 semantically degenerate; 1/3 mechanically flagged."
+    },
+    "full": {
+      "astropy.onset": "3/3 semantically degenerate; 2/3 mechanically flagged.",
+      "astropy.second.onset": "3/3 semantically degenerate; 2/3 mechanically flagged."
+    },
+    "caveat": "Do not report the mechanical flag fractions as semantic anomaly rates. None of the repeated proposed commands in these continuations was executed."
+  },
+  "short_prefix_tt_semantics": {
+    "cases": {
+      "astropy.first.suffix512": {
+        "served": "3/3 semantically degenerate; detector flags 1/3.",
+        "full": "3/3 semantically degenerate; detector flags 0/3.",
+        "evidence": [
+          "first-short-prefix-candidates/served_summary.json",
+          "first-short-prefix-candidates/full_summary.json"
+        ]
+      },
+      "astropy.second.suffix512": {
+        "served": "3/3 semantically degenerate; detector flags 3/3.",
+        "full": "3/3 semantically degenerate; detector flags 3/3.",
+        "evidence": [
+          "short-prefix-candidates/served_summary.json",
+          "short-prefix-candidates/full_summary.json"
+        ]
+      }
+    },
+    "timing": "TT short controls are accuracy-only diagnostics collected under CPU-HF/Docker preparation contention; measured timings are not usable for performance ranking."
+  },
+  "hf_reference_status": {
+    "long_prefix": {
+      "status": "timed_out_no_completed_free_sample",
+      "timeout_seconds": 10800,
+      "exit_code": 124,
+      "completed_teacher_forced_positions": 64,
+      "completed_free_samples": 0,
+      "tf_comparison": "The 64 teacher-forced positions had top1 agreement 1.0 with both served and full TT controls.",
+      "evidence": [
+        "hf-longprefix-timeout.json",
+        "hf.exit",
+        "astropy.onset.hf_tf_summary.json"
+      ]
+    },
+    "short_prefix_batch": {
+      "status": "complete_positive_semantic_reproduction_both_cases",
+      "started_utc": "2026-11-14T10:35:36Z",
+      "ended_utc": "2026-11-14T11:16:14Z",
+      "elapsed_wall_s_diagnostic_only": 2438.390525341034,
+      "cases": {
+        "astropy.first.suffix512": {
+          "result": "Positive semantic anomaly; repeated within-response editing/line-inspection planning, no executed tool action.",
+          "generated_tokens": 512,
+          "seed": 42,
+          "mechanical_flag": false,
+          "triage_verdict": "anomaly_by_coordinator",
+          "evidence": [
+            "short-hf-batch/astropy.first.suffix512.coordinator.json",
+            "short-hf-batch/astropy.first.suffix512.hf.triage.json",
+            "short-hf-batch/results/astropy.first.suffix512.hf.private.json"
+          ]
+        },
+        "astropy.second.suffix512": {
+          "result": "Positive semantic anomaly; repeated phrase cycle, 20 identical repetitions; cap truncates cycle rather than coherent progress.",
+          "generated_tokens": 512,
+          "seed": 42,
+          "mechanical_flag": false,
+          "triage_verdict": "repeating_tokens",
+          "evidence": [
+            "short-hf-batch/astropy.second.suffix512.coordinator.json",
+            "short-hf-batch/astropy.second.suffix512.hf.triage.json",
+            "short-hf-batch/results/astropy.second.suffix512.hf.private.json"
+          ]
+        }
+      },
+      "progress_instrumentation": "TokenCountStreamer emitted generated-token progress every128 tokens, excluding prompt tokens.",
+      "limits": "These are one seeded512-token continuation per shortened suffix512 diagnostic input. They establish that this model behavior exists in the pinned HF reference under these inputs; they do not establish equal incidence or exact native-prompt behavior. Saved suffix prompts are reconstructed diagnostic truncations, not exact native requests. HF and TT RNG streams differ.",
+      "evidence": [
+        "short-hf-batch/tf_comparison_summary.json",
+        "short-hf-batch/launch.json",
+        "short-hf-batch/hf.exit"
+      ]
+    }
+  },
+  "extended_candidate_status": {
+    "status": "extended_not_started_new85_selection_and_combined_manifest_readiness_underway",
+    "prior_65_image_candidate": "65/65 verifier images are ready; that candidate remains not admitted.",
+    "current_85_candidate": "85-task combined candidate is not admitted; selection audit and combined-manifest readiness are underway.",
+    "evidence": [
+      "../../setup/swe65-candidate/all65-build-readiness.json",
+      "../../setup/swe85-candidate/selection-corrected-margin.json",
+      "../../setup/swe85-candidate/combined85-tasks.json"
+    ]
+  }
+}

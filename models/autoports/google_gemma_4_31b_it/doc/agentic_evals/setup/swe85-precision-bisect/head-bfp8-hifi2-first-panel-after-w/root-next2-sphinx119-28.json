@@ -1,0 +1,39 @@
+{
+  "reviewed_unix": 1794723413.7355864,
+  "rows": [
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed44.cap1024.json",
+      "sha256": "affbd94205ef351f3a3b0d64c9771746cc5ac96d76fa8aa2a11c9cfc2aa94496",
+      "seed": 44,
+      "tokens": 506,
+      "verdict": "normal",
+      "reason": "Full raw continuation and inherited prefix checked; canonical tool argument syntax and distinct script. Proposed edits outside checkout not endorsed; normal refers only to anomaly morphology.",
+      "trace_counters_delta": {
+        "model_replays": 505,
+        "sample_replays": 505,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 505,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.sphinx-doc__sphinx-11510.call28.onset.seed42.cap1024.json",
+      "sha256": "1128924aaa8c50ca9a27bf9a6743e3669b15b02d413427f615e6e494ebcfc2ba",
+      "seed": 42,
+      "tokens": 469,
+      "verdict": "normal",
+      "reason": "Full raw continuation and inherited prefix checked; canonical tool argument syntax and distinct script. Proposed edits outside checkout not endorsed; normal refers only to anomaly morphology.",
+      "trace_counters_delta": {
+        "model_replays": 468,
+        "sample_replays": 468,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 468,
+        "captures": 0
+      }
+    }
+  ]
+}

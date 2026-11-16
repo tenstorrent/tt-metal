@@ -1,0 +1,32 @@
+{
+  "status": "candidate_only_not_admitted_not_run",
+  "source_manifest": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/full-cases.json",
+  "source_manifest_sha256": "9c784d920761e6b4bf33d441d4ec2c79e1bf42c2298cbc9903bc97354054703b",
+  "selection": "Only full-mode adaptive suffix1024 seed42 outputs adjudicated inconclusive/progressing at exactly512 tokens, from root coordinator rows.",
+  "rows": [
+    {
+      "job": "anomaly.psf__requests-5414.call11.onset.suffix1024.cap1024.seed42",
+      "source_fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/fixtures/anomaly.psf__requests-5414.call11.onset.suffix1024.private.json",
+      "source_fixture_sha256": "069a6794c0474028161f64153453577e07bc1cbde4690d0e77cef0286214ab65",
+      "candidate_fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024-progressing-candidate/fixtures/anomaly.psf__requests-5414.call11.onset.suffix1024.cap1024.seed42.private.json",
+      "candidate_fixture_sha256": "7ea1fe684ccda8d471948d9decc4350fb2efa70d3257eba5a63d0f124313369a",
+      "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/full/anomaly.psf__requests-5414.call11.onset.json",
+      "source_result_sha256": "6a22257dbe5b30dec221560fc555e6331e83891872d9e274b89be6b293718b82",
+      "seed": 42,
+      "prompt_suffix_tokens": 1024,
+      "chosen_tokens": 64
+    },
+    {
+      "job": "anomaly.matplotlib__matplotlib-20488.call86.onset.suffix1024.cap1024.seed42",
+      "source_fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/fixtures/anomaly.matplotlib__matplotlib-20488.call86.onset.suffix1024.private.json",
+      "source_fixture_sha256": "56a0d881cd7c275743511dd2ac716c2755c913cbc014e7c9c1dd0713ce46a283",
+      "candidate_fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024-progressing-candidate/fixtures/anomaly.matplotlib__matplotlib-20488.call86.onset.suffix1024.cap1024.seed42.private.json",
+      "candidate_fixture_sha256": "c34417c0f01d6e78eb4135f3f679c0d706bf9677ee65e3fab121e9ff9ec84192",
+      "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/full/anomaly.matplotlib__matplotlib-20488.call86.onset.json",
+      "source_result_sha256": "a2dc3012fc83468f00dd3dfc66c82c940c093b5b2c6c72c4a7a1bfd09631e7a9",
+      "seed": 42,
+      "prompt_suffix_tokens": 1024,
+      "chosen_tokens": 64
+    }
+  ]
+}

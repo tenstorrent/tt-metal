@@ -1,0 +1,150 @@
+{
+  "status": "candidate_only_not_admitted",
+  "source_directory": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate",
+  "selection": "Fresh coordinator glob; only verdict=inconclusive and tokens=512 rows selected.",
+  "deduplication": "mode+source job+seed; identical duplicate rows are deduplicated; conflicting adjudications fail closed.",
+  "preservation": "Exact saved suffix2048 prompt IDs, chosen continuation, and sampling preserved; only metadata seed and new cap provenance are added. Candidate branches are empty and one free trial is requested.",
+  "no_launch": true,
+  "cases": [
+    {
+      "mode": "full",
+      "job": "anomaly.psf__requests-5414.call11.onset.suffix2048.cap1024.seed42",
+      "source_job": "anomaly.psf__requests-5414.call11.onset",
+      "seed": 42,
+      "verdict": "inconclusive",
+      "reason": "Distinct URL validation/IDNA analysis progresses toward patch or reproduction at512; no established unchanged cycle, extend1024.",
+      "coordinator_snapshots": [
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/full-coordinator-last12.json",
+          "sha256": "b8c68301fbc84a35d66c8cd8bdbe3415ef46577c10ba4848ce66914d74620e17"
+        }
+      ],
+      "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/runs/full/anomaly.psf__requests-5414.call11.onset.json",
+      "source_result_sha256": "a967659d1f4edd7b726a36c976168ae767957b9821ffc4a2a31640d594e7a885",
+      "source_fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/fixtures/anomaly.psf__requests-5414.call11.onset.suffix2048.private.json",
+      "source_fixture_sha256": "fbe984e026dbe8ef2b9d8a4288056617cbfde5235d1efd4a3bd14038a2db5ad7",
+      "candidate_fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-candidate/fixtures/full/anomaly.psf__requests-5414.call11.onset.suffix2048.cap1024.seed42.private.json",
+      "candidate_fixture_sha256": "906674f12d643a2d5825f6f6d0747ba70cdfd8b7e7764b3ac7ff267ff82db53f",
+      "prompt_tokens": 2048,
+      "chosen_continuation_tokens": 64,
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "original_fixture_seed": 42
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.psf__requests-5414.call11.onset.suffix2048.cap1024.seed43",
+      "source_job": "anomaly.psf__requests-5414.call11.onset",
+      "seed": 43,
+      "verdict": "inconclusive",
+      "reason": "Distinct URL validation/IDNA analysis progresses toward patch or reproduction at512; no established unchanged cycle, extend1024.",
+      "coordinator_snapshots": [
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/full-coordinator-last12.json",
+          "sha256": "b8c68301fbc84a35d66c8cd8bdbe3415ef46577c10ba4848ce66914d74620e17"
+        }
+      ],
+      "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/runs/full/anomaly.psf__requests-5414.call11.onset.json",
+      "source_result_sha256": "a967659d1f4edd7b726a36c976168ae767957b9821ffc4a2a31640d594e7a885",
+      "source_fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/fixtures/anomaly.psf__requests-5414.call11.onset.suffix2048.private.json",
+      "source_fixture_sha256": "fbe984e026dbe8ef2b9d8a4288056617cbfde5235d1efd4a3bd14038a2db5ad7",
+      "candidate_fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-candidate/fixtures/full/anomaly.psf__requests-5414.call11.onset.suffix2048.cap1024.seed43.private.json",
+      "candidate_fixture_sha256": "d2f703cc3d29b89d2edbabfe9036ed36c070c095b362b0d5808b106997a40cef",
+      "prompt_tokens": 2048,
+      "chosen_continuation_tokens": 64,
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "original_fixture_seed": 42
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.psf__requests-5414.call10.onset.suffix2048.cap1024.seed43",
+      "source_job": "anomaly.psf__requests-5414.call10.onset",
+      "seed": 43,
+      "verdict": "inconclusive",
+      "reason": "Distinct URL/IDNA validation analysis moves into replacement code or test script but cuts off at512; extend1024. No native ellipsis loop.",
+      "coordinator_snapshots": [
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/full-coordinator-requests10.json",
+          "sha256": "25a3064e04e21172b9cb7bf19cc85e45599ba7ab31054148d9ffdba92f2840f5"
+        }
+      ],
+      "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/runs/full/anomaly.psf__requests-5414.call10.onset.json",
+      "source_result_sha256": "1f34cd733be27e7e4c655da4dcf0fba30ac7c06fc83cca3753973dbae03263ff",
+      "source_fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/fixtures/anomaly.psf__requests-5414.call10.onset.suffix2048.private.json",
+      "source_fixture_sha256": "4cb0ce0c350d029b506ecd31cd5df6a6f0a02a0c49f56761a478f7a1f6b4c781",
+      "candidate_fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-candidate/fixtures/full/anomaly.psf__requests-5414.call10.onset.suffix2048.cap1024.seed43.private.json",
+      "candidate_fixture_sha256": "3c0862e806b31c9059065202c03fc559279a036957d53e853c4cf5460ba19dee",
+      "prompt_tokens": 2048,
+      "chosen_continuation_tokens": 64,
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "original_fixture_seed": 42
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.psf__requests-5414.call10.onset.suffix2048.cap1024.seed44",
+      "source_job": "anomaly.psf__requests-5414.call10.onset",
+      "seed": 44,
+      "verdict": "inconclusive",
+      "reason": "Distinct URL/IDNA validation analysis moves into replacement code or test script but cuts off at512; extend1024. No native ellipsis loop.",
+      "coordinator_snapshots": [
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/full-coordinator-requests10.json",
+          "sha256": "25a3064e04e21172b9cb7bf19cc85e45599ba7ab31054148d9ffdba92f2840f5"
+        }
+      ],
+      "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/runs/full/anomaly.psf__requests-5414.call10.onset.json",
+      "source_result_sha256": "1f34cd733be27e7e4c655da4dcf0fba30ac7c06fc83cca3753973dbae03263ff",
+      "source_fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/fixtures/anomaly.psf__requests-5414.call10.onset.suffix2048.private.json",
+      "source_fixture_sha256": "4cb0ce0c350d029b506ecd31cd5df6a6f0a02a0c49f56761a478f7a1f6b4c781",
+      "candidate_fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-candidate/fixtures/full/anomaly.psf__requests-5414.call10.onset.suffix2048.cap1024.seed44.private.json",
+      "candidate_fixture_sha256": "2115c3bdecbfc57e014b8c779edca64f4601a0470b0e68d8c516a5e9e28490cf",
+      "prompt_tokens": 2048,
+      "chosen_continuation_tokens": 64,
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "original_fixture_seed": 42
+    },
+    {
+      "mode": "served",
+      "job": "anomaly.psf__requests-5414.call10.onset.suffix2048.cap1024.seed42",
+      "source_job": "anomaly.psf__requests-5414.call10.onset",
+      "seed": 42,
+      "verdict": "inconclusive",
+      "reason": "After saved traceback prefix, advances distinct prepare_url/host validation analysis then cuts off at512; extend1024.",
+      "coordinator_snapshots": [
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/served-coordinator-requests.json",
+          "sha256": "3daffcc0e435016e8c3a671ae853ccc6f6e82f3572c1839108a86b0316e0542f"
+        }
+      ],
+      "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/runs/served/anomaly.psf__requests-5414.call10.onset.json",
+      "source_result_sha256": "db7de934dddf4587a779c855e99a37bebdf23e8d9a48806d6269217ea24a2b42",
+      "source_fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/fixtures/anomaly.psf__requests-5414.call10.onset.suffix2048.private.json",
+      "source_fixture_sha256": "4cb0ce0c350d029b506ecd31cd5df6a6f0a02a0c49f56761a478f7a1f6b4c781",
+      "candidate_fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-candidate/fixtures/served/anomaly.psf__requests-5414.call10.onset.suffix2048.cap1024.seed42.private.json",
+      "candidate_fixture_sha256": "6e4c48b0c32701a0e95f6bccd463129418012c02d48d0c426fe1b14f6ec4bea2",
+      "prompt_tokens": 2048,
+      "chosen_continuation_tokens": 64,
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "original_fixture_seed": 42
+    }
+  ]
+}

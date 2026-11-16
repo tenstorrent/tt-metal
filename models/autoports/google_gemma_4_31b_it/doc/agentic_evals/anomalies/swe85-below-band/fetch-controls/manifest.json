@@ -1,0 +1,161 @@
+{
+  "schema": "swe85-fetch-next-action-v1",
+  "status": "Candidate roster; runtime validation outcomes maintained separately",
+  "tasks": [
+    {
+      "task": "astropy__astropy-13579",
+      "call": 3,
+      "manifest": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/astropy__astropy-13579/manifest.json",
+      "status": "candidate prepared; semantic results in separate validation artifacts",
+      "scope": "Original solar-frame reproduction needs extra coordinate-frame support. Import local Astropy and inspect sliced world-to-pixel implementation to continue local investigation; no reproduction-pass claim."
+    },
+    {
+      "task": "astropy__astropy-7336",
+      "call": 18,
+      "manifest": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/astropy__astropy-7336/manifest.json",
+      "status": "candidate prepared; semantic results in separate validation artifacts",
+      "scope": "Activate the existing image testbed interpreter and run the original local reproduction, without fetching target source. This is an environment-recovery next action, not a complete solution."
+    },
+    {
+      "task": "astropy__astropy-8872",
+      "call": 8,
+      "manifest": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/astropy__astropy-8872/manifest.json",
+      "status": "candidate prepared; semantic results in separate validation artifacts",
+      "scope": "Activate the existing image testbed interpreter and run the original local reproduction, without fetching target source. This is an environment-recovery next action, not a complete solution."
+    },
+    {
+      "task": "matplotlib__matplotlib-25332",
+      "call": 2,
+      "manifest": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/matplotlib__matplotlib-25332/manifest.json",
+      "status": "candidate prepared; semantic results in separate validation artifacts",
+      "scope": "Activate the existing image testbed interpreter and run the original local reproduction, without fetching target source. This is an environment-recovery next action, not a complete solution."
+    },
+    {
+      "task": "matplotlib__matplotlib-25960",
+      "call": 3,
+      "manifest": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/matplotlib__matplotlib-25960/manifest.json",
+      "status": "candidate prepared; semantic results in separate validation artifacts",
+      "scope": "Original reproduction calls nonexistent SubFigure.get_position. Import local checkout and inspect Figure.subfigures spacing implementation before repairing reproduction; no false successful-reproduction claim."
+    },
+    {
+      "task": "matplotlib__matplotlib-26208",
+      "call": 3,
+      "manifest": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/matplotlib__matplotlib-26208/manifest.json",
+      "status": "candidate prepared; semantic results in separate validation artifacts",
+      "scope": "Activate the existing image testbed interpreter and run the original local reproduction, without fetching target source. This is an environment-recovery next action, not a complete solution."
+    },
+    {
+      "task": "matplotlib__matplotlib-26291",
+      "call": 3,
+      "manifest": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/matplotlib__matplotlib-26291/manifest.json",
+      "status": "candidate prepared; semantic results in separate validation artifacts",
+      "scope": "Activate the existing image testbed interpreter and run the original local reproduction, without fetching target source. This is an environment-recovery next action, not a complete solution."
+    },
+    {
+      "task": "pydata__xarray-4687",
+      "call": 39,
+      "manifest": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/pydata__xarray-4687/manifest.json",
+      "status": "candidate prepared; semantic results in separate validation artifacts",
+      "scope": "Call37 destroyed computation.py with truncated malformed text (TYPE_ Pence). Restore only this file from local image HEAD then inspect local where, preserving other state. Repairs self-inflicted truncation; not target bug fix."
+    },
+    {
+      "task": "pydata__xarray-7233",
+      "call": 4,
+      "manifest": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/pydata__xarray-7233/manifest.json",
+      "status": "candidate prepared; semantic results in separate validation artifacts",
+      "scope": "Activate the existing image testbed interpreter and run the original local reproduction, without fetching target source. This is an environment-recovery next action, not a complete solution."
+    },
+    {
+      "task": "pylint-dev__pylint-4604",
+      "call": 8,
+      "manifest": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/pylint-dev__pylint-4604/manifest.json",
+      "status": "candidate prepared; semantic results in separate validation artifacts",
+      "scope": "Use existing testbed interpreter and local Pylint instead of upgrading target to overcome base-environment wrapt conflict. Original reproduction should show unused-import bug; nonzero lint code expected."
+    },
+    {
+      "task": "pytest-dev__pytest-5787",
+      "call": 12,
+      "manifest": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/pytest-dev__pytest-5787/manifest.json",
+      "status": "candidate prepared; semantic results in separate validation artifacts",
+      "scope": "Inspect local pytest report serialization, which owns chained exception encoding used by xdist. No xdist install or target pytest upgrade; this is a local investigation next step, not a completed fix."
+    },
+    {
+      "task": "scikit-learn__scikit-learn-13135",
+      "call": 9,
+      "manifest": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/scikit-learn__scikit-learn-13135/manifest.json",
+      "status": "candidate prepared; semantic results in separate validation artifacts",
+      "scope": "Activate the existing image testbed interpreter and run the original local reproduction, without fetching target source. This is an environment-recovery next action, not a complete solution."
+    },
+    {
+      "task": "scikit-learn__scikit-learn-13328",
+      "call": 3,
+      "manifest": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/scikit-learn__scikit-learn-13328/manifest.json",
+      "status": "candidate prepared; semantic results in separate validation artifacts",
+      "scope": "Activate the existing image testbed interpreter and run the original local reproduction, without fetching target source. This is an environment-recovery next action, not a complete solution."
+    },
+    {
+      "task": "scikit-learn__scikit-learn-14053",
+      "call": 13,
+      "manifest": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/scikit-learn__scikit-learn-14053/manifest.json",
+      "status": "candidate prepared; semantic results in separate validation artifacts",
+      "scope": "Activate the existing image testbed interpreter and run the original local reproduction, without fetching target source. This is an environment-recovery next action, not a complete solution."
+    },
+    {
+      "task": "scikit-learn__scikit-learn-14629",
+      "call": 8,
+      "manifest": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/scikit-learn__scikit-learn-14629/manifest.json",
+      "status": "candidate prepared; semantic results in separate validation artifacts",
+      "scope": "Activate the existing image testbed interpreter and run the original local reproduction, without fetching target source. This is an environment-recovery next action, not a complete solution."
+    },
+    {
+      "task": "scikit-learn__scikit-learn-25102",
+      "call": 5,
+      "manifest": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/scikit-learn__scikit-learn-25102/manifest.json",
+      "status": "candidate prepared; semantic results in separate validation artifacts",
+      "scope": "Inspect local target source in existing testbed environment without upgrading target. Next investigation action only; not completed fix. Preserves exact reproduction helper but does not execute its invalid np.dtype(category) statement. Inspects local selector transformation; no prior tracked source edits."
+    },
+    {
+      "task": "scikit-learn__scikit-learn-25747",
+      "call": 3,
+      "manifest": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/scikit-learn__scikit-learn-25747/manifest.json",
+      "status": "candidate prepared; semantic results in separate validation artifacts",
+      "scope": "Inspect local target source in existing testbed environment without upgrading target. Next investigation action only; not completed fix."
+    },
+    {
+      "task": "sphinx-doc__sphinx-10614",
+      "call": 12,
+      "manifest": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/sphinx-doc__sphinx-10614/manifest.json",
+      "status": "candidate prepared; semantic results in separate validation artifacts",
+      "scope": "Inspect local target source in existing testbed environment without upgrading target. Next investigation action only; not completed fix. Prior local reproduction files18/20 are not consumed or reconstructed by this action; no prior tracked source edits."
+    },
+    {
+      "task": "sphinx-doc__sphinx-8638",
+      "call": 3,
+      "manifest": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/sphinx-doc__sphinx-8638/manifest.json",
+      "status": "candidate prepared; semantic results in separate validation artifacts",
+      "scope": "Inspect local target source in existing testbed environment without upgrading target. Next investigation action only; not completed fix. The task-supplied cloned reproducer is not consumed or reconstructed by this action."
+    },
+    {
+      "task": "sympy__sympy-13480",
+      "call": 9,
+      "manifest": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/sympy__sympy-13480/manifest.json",
+      "status": "candidate prepared; semantic results in separate validation artifacts",
+      "scope": "Inspect local target source in existing testbed environment without upgrading target. Next investigation action only; not completed fix. Preserves literal reproduction helper; reads original hyperbolic implementation. Prior mpmath install in base interpreter not replayed; no prior tracked source edits."
+    },
+    {
+      "task": "sympy__sympy-13551",
+      "call": 12,
+      "manifest": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/sympy__sympy-13551/manifest.json",
+      "status": "candidate prepared; semantic results in separate validation artifacts",
+      "scope": "Inspect local target source in existing testbed environment without upgrading target. Next investigation action only; not completed fix. Preserves literal reproduction helper; reads original Product implementation. Prior mpmath install in base interpreter not replayed; Native21 basic.py compatibility edit preserved."
+    },
+    {
+      "task": "sympy__sympy-13878",
+      "call": 29,
+      "manifest": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/sympy__sympy-13878/manifest.json",
+      "status": "candidate prepared; semantic results in separate validation artifacts",
+      "scope": "Inspect local target source in existing testbed environment without upgrading target. Next investigation action only; not completed fix. Preserves literal reproduction helper; reads original continuous-distribution CDF implementation. Prior mpmath install in base interpreter not replayed; Native51 basic.py compatibility edit preserved."
+    }
+  ],
+  "n": 22
+}

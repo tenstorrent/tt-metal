@@ -1,0 +1,112 @@
+{
+  "status": "independent_host_only_review",
+  "created_utc": "2026-11-15T21:22:00Z",
+  "verdict": "other_anomaly",
+  "confidence": "high_for_protocol_divergence_medium_for_task_effect",
+  "scope": "Exact reconstructed onset fixture and seed42 P19 Q32 free run; this addresses output behavior, not task correctness, native RNG replay, or production incidence.",
+  "extension_result": {
+    "path": "setup/p19-q32-production-validation/fixed108/cap-extensions-root/runs/q32capext.anomaly.sphinx-doc__sphinx-10323.call70.onset.seed42.cap256.to512.json",
+    "sha256": "49a96a0d79c15f627485f57d43a660994ea26cb6337b5b1e8ee15c81dc705212",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-extra-contraction-controls/sphinx-doc__sphinx-10323.call70.onset.private.json",
+    "case_matches_original_fixture": true,
+    "fixture_sha256": "7d39e2c87e91327f35317968bf2647887a402d0086085ec8f95db8ff5fc2ab64",
+    "prior_cap_result": "setup/p19-q32-production-validation/fixed108/runs/p19_q32/anomaly.sphinx-doc__sphinx-10323.call70.onset.seed42.cap256.json",
+    "prior_result_sha256": "8dfb04e0d290f13dee822128b41d12de1944fc7834ea601f840c61fbd0c3d529",
+    "same_seed_sampling": true,
+    "same_runtime_config": true,
+    "generated_tokens": 337,
+    "prior_generated_tokens": 256,
+    "prior_prefix_exact": true,
+    "flag": false,
+    "tail": "ser within the `LiteralInclude` directive, which would be a significant and complex undertaking.\n\nAs a result, this is a limitation of the underlying `docutils` library.\n\necho COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT<turn|>",
+    "tail_has_tool_call_envelope": false,
+    "tail_has_turn_end": true
+  },
+  "original_motif": {
+    "source_metadata": {
+      "task": "sphinx-doc__sphinx-10323",
+      "call": 70,
+      "response_id": "chatcmpl-91332654bd9d56a6",
+      "coordinator": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-extended85-head-bfp8/live-tasks/sphinx-doc__sphinx-10323-first/coordinator.json",
+      "coordinator_sha256": "0dea691490b2f0b5879f0a60da9ea72546723a24de94be377097835ba1c194d5",
+      "triage": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-extended85-head-bfp8/live-tasks/sphinx-doc__sphinx-10323-first/digest/sphinx-doc__sphinx-10323.triage.json",
+      "cause": "anomaly",
+      "native_trajectory": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe-jobs/swe-extended85-head-bfp8/sphinx-doc__sphinx-10323__pxhNySY/agent/mini-swe-agent.trajectory.json",
+      "native_message_indices": [
+        140
+      ],
+      "request_source": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/post-gpqa-controls-head-bfp8/server/server-b32/server.log",
+      "response_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-extended85-head-bfp8/live-tasks/sphinx-doc__sphinx-10323-first/responses.private.log",
+      "native_prompt_tokens": 65616,
+      "native_completion_tokens": 199,
+      "action_excerpt": "tool bash {\"command\": \"echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT\"}",
+      "anomaly": true,
+      "request_line": 119587,
+      "response_line": 70,
+      "request_sha256": "a6cbed1ca3e50e8b8b8dd10dab4ea50c741fa34788bc89d6adc8e0ae6288c45e",
+      "native_response_sha256": "88736b32bf2a636f14b10baa25d0c4dbf5c2618c94ace86245446be6b5e31c94",
+      "hf_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+      "template_sha256": "ae53464bf3be25802b3a5b37def7fd89667067d7577049b3b2d74c4d8de4c6d4",
+      "reconstructed_prompt_tokens": 65615,
+      "reconstructed_completion_tokens": 201,
+      "prompt_token_count_gap": -1,
+      "completion_token_count_gap": 2,
+      "native_prompt_ids_available": false,
+      "native_output_ids_available": false,
+      "correct_branch": "pending validated pre-call state; not constructed",
+      "scope": "Full reconstructed native request plus complete canonical reply prefix to onset; up to64 chosen positions, stopping at native stop ID. Supplementary anomaly onset test, not full-reply agreement or completed reproduction.",
+      "reconstruction": "Exact request body with historical JSON tool arguments deserialized for pinned template. Reply reconstructed as canonical thought header, complete saved reasoning, channel boundary, complete visible content, canonical tool-call macros from pinned template, native stop ID. No native token IDs: generated whitespace/order/protocol spelling cannot be recovered uniquely; counts and hashes are evidence, not identity proof. Canonicalization of malformed tool names is not proof of exact malformed native bytes.",
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "native_seed": null,
+      "executed": false,
+      "onset_char_offset": 645,
+      "onset_token_index": 164,
+      "motif": "I've've",
+      "onset_evidence": "Localized duplicated contraction in reasoning: repeated apostrophe and suffix. Supplementary localized anomaly; no causal claim about task failure. Exact response-ID/native-index mapping retained; native token IDs unavailable.",
+      "seed": 42,
+      "seed_caveat": "Native seed absent unless recorded; diagnostic42/43/44 are new trials, not exact native replay.",
+      "source_full_reply_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/double-contraction-archive/sphinx-doc__sphinx-10323.call70.case.private.json",
+      "raw_packet": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/double-contraction-archive/sphinx-doc__sphinx-10323.call70.packet.private.json",
+      "raw_packet_sha256": "68db34d2fbd2afa478014fb2a2da1d07d87d58d86ebcc4d5bc49cb9aff54676d",
+      "correct_continuation_status": "not constructed; no invented model answer"
+    },
+    "prompt_tokens": 65779,
+    "prompt_ends_with": "I've",
+    "native_motif": "I've've in original reconstructed native continuation; that contraction does not appear in the free-running generated continuation, which starts \" already tried that...\""
+  },
+  "explicit_completion_instruction": "The exact reconstructed prompt instructs: issue `echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT` as the final command, do not combine it with another command, and do not continue after it. In this sample the command text appears bare in the assistant final response and terminates with <turn|>; it is not enclosed in a canonical call:bash tool envelope and was not executed. This supports a distinct missing-tool/protocol anomaly, rather than ordinary completion of the explicit instruction.",
+  "controls": {
+    "all_group_full_bf16_hifi4": {
+      "path": "setup/swe85-pilot-split85/runs/rest/full/anomaly.sphinx-doc__sphinx-10323.call70.onset.json",
+      "sha256": "581abc9eafc039e5507b874dabba86b859204f29b1a9a14e45a28dd8d7efa995",
+      "seed": 42,
+      "generated_tokens": 64,
+      "prefix_common_with_extension": 23,
+      "ending": "same required echo is serialized as call:bash{command:...}<tool_call|><tool_response|>"
+    },
+    "p19_q128": {
+      "path": "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-10323.call70.onset.seed42.cap256.json",
+      "sha256": "5675101bf0ae32fb7de58cc05c94ed042a51735e12e3a57a6a14275487841993",
+      "seed": 42,
+      "generated_tokens": 40,
+      "prefix_common_with_extension": 2,
+      "ending": "same required echo is serialized as call:bash tool call"
+    },
+    "conditional_hf_related_context_only": {
+      "path": "setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/results/sphinx70-cap2048-seed43/anomaly.sphinx-doc__sphinx-10323.call70.onset.hf.private.json",
+      "sha256": "2472008d4ab3ca68d5803944ccf3410c53e603940e62529f062df2e8fdf199a2",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/fixtures/anomaly.sphinx-doc__sphinx-10323.call70.onset.suffix2048.private.json",
+      "case_sha256": "3267a7e718c71d0fa067a781f948b1c3d07d335891a90057b4c21435c146f0b1",
+      "prompt_tokens": 2048,
+      "seed": 43,
+      "generated_tokens": 56,
+      "ending_excerpt": "ocutils.parsers.rst.directives.parse_options`.\n\nI'll just finish the task.\n<channel|><|tool_call>call:bash{command:<|\"|># No more changes needed.\n<|\"|>}<tool_call|><|tool_response>",
+      "scope_limit": "Seed43 and exact last-2048-token suffix, not the full 65,779-token prompt or same-seed replay; supports only that this related branch produced canonical bash serialization."
+    }
+  },
+  "interpretation": "The exact 256-token prior cap is preserved, and the extension resolves the earlier cap uncertainty for seed42. It does not reproduce the native localized Ive-ve contraction: generated continuation starts with coherent prose. However it introduces/retains a separate protocol divergence: the prompt explicitly requires a terminal echo command, while the sample emits it as plain answer text without call:bash and ends the turn. Since all-group full BF16 and same-seed P19 Q128 serialize that exact action as a bash tool call, classify as other_anomaly for tool-protocol behavior, not normal and not reproduction of the native contraction. This does not establish task correctness or production impact."
+}

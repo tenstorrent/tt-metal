@@ -1,0 +1,118 @@
+{
+  "review": "Independent host-only review of emitted P19 acceptance artifacts",
+  "reviewed_utc": "2026-11-15",
+  "scope": "Read-only review of completed outputs, output provenance, runtime policy JSON, and test source semantics. No TTNN/model/device commands were run by this reviewer. This records evidence, not policy selection.",
+  "run": {
+    "status": "completed",
+    "process_exit_code": 0,
+    "elapsed_seconds": 1056.0353870391846,
+    "forecast_seconds": {
+      "low": 600,
+      "point": 1500,
+      "high": 3000
+    },
+    "command_sha256": "ff52b9c0c4105d62becfa564ef3d56ef6b3e4180aa81c6197c9ffd2d5cf68c5d",
+    "admission_sha256": "a85430f00aace69c9219f6bf9e56245e1a15c3a9ee5e7009a95aa21aaf4325eb",
+    "selection_status": "P19 remains unselected; review does not select or accept a serving default"
+  },
+  "accuracy": {
+    "scope": "full60layers",
+    "revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+    "gate": "top1 >= 0.90, top5 >= 0.98, top100 == 1.0",
+    "prefill": {
+      "top1": 0.99,
+      "top5": 1.0,
+      "top100": 1.0,
+      "matches": [99, 100, 100],
+      "total": 100
+    },
+    "teacher_forcing_decode_repeats": [
+      {"top1": 0.98, "top5": 1.0, "top100": 1.0, "matches": [98, 100, 100], "total": 100},
+      {"top1": 0.98, "top5": 1.0, "top100": 1.0, "matches": [98, 100, 100], "total": 100},
+      {"top1": 0.98, "top5": 1.0, "top100": 1.0, "matches": [98, 100, 100], "total": 100}
+    ],
+    "natural": {
+      "top1": 0.908203125,
+      "top5": 0.990234375,
+      "top100": 1.0,
+      "matches": [465, 507, 512],
+      "total": 512
+    },
+    "observed_trace_counters": {
+      "prefill": {"model_replays": 0, "sample_replays": 0, "page_refreshes": 60, "readbacks": 1, "captures": 0},
+      "decode_all_3_repeats": {"model_replays": 297, "sample_replays": 300, "token_refreshes": 300, "position_refreshes": 3, "readbacks": 300, "captures": 0},
+      "natural": {"model_replays": 511, "sample_replays": 512, "token_refreshes": 512, "position_refreshes": 1, "readbacks": 512, "captures": 0}
+    },
+    "assessment": "All emitted prefill, three decode-repeat rows, and natural-reference rows clear the recorded numerical gate. Exit 0 agrees with the CLI assertion."
+  },
+  "runtime_policy": {
+    "config_id": "stage12_bf16_hifi4_kv_down_bfp8_p19",
+    "layers_checked": 60,
+    "layer_exceptions": 0,
+    "attention_mlp_lm_head": "BF16 weights with HiFi4 kernels",
+    "down_projection": "BFP8_B weights with LoFi kernel",
+    "activation_residual_ccl_logits_sampling_embedding_norm": "BF16",
+    "kv_cache": "BFP8_B on every layer",
+    "max_seq_len": 262144,
+    "validation": "All 60 runtime-policy layer records match the candidate group policy; source_manifest.json has 17 source entries and every current file hash matched."
+  },
+  "performance": {
+    "source": "autoregressive",
+    "input_tokens": 4096,
+    "generated_tokens": 128,
+    "batch_size": 1,
+    "concurrent_requests": 1,
+    "repeats": 3,
+    "ttft_ms_median": 1229.6536539215595,
+    "decode_tps_median": 18.505836278014602,
+    "replay_counts_each_repeat": {"model_replays": 127, "sample_replays": 128, "readbacks": 2, "captures": 0},
+    "scope_note": "Host end-to-end AR timing, matching the requested B1/C1 4096/128 workload. It is not a device-time roofline measurement."
+  },
+  "context_and_memory": {
+    "declared_context": 262144,
+    "boundary_prefills": [262143, 262144],
+    "last_decode_input_position": 262143,
+    "positions_after_last_decode": [262144],
+    "host_sampling_compatibility_equal": true,
+    "host_sampling_logit_reads": 8,
+    "source_semantics_review": "Test code pre-fills the 262144-token exact-capacity input; for length 262143 it generates one token then decodes at position 262143 and checks the next position is 262144. It also compares eight greedy host-sampled tokens against the device path. The boundary inputs repeat the pinned AIME token sequence to the requested lengths; they test capacity/indexing, not long-context semantic quality.",
+    "memory_note": "B1 memory inventory reports 19,306,540,544 owned bytes versus 19,307,376,640 allocator bytes, leaving 836,096 unattributed bytes; no mismatch was found in the recorded accounting."
+  },
+  "qualitative": {
+    "control_count": 6,
+    "comparison_scope": "Same six pinned chat prompts and HF greedy completions, each bounded at 128 generated tokens. These are continuation comparisons, not complete-answer evaluation.",
+    "observations": [
+      {"id": "shared_0", "observation": "TT and HF haiku texts match exactly; both stop at 19 tokens."},
+      {"id": "shared_1", "observation": "Both continue coherently to the 128-token cap; first divergence at token 21 is a connective change ('and' versus 'while'). Both answers are incomplete at the cap."},
+      {"id": "shared_2", "observation": "TT/HF texts match through the 128-token cap; both story continuations are incomplete."},
+      {"id": "shared_3", "observation": "Both begin with a coherent thermodynamics explanation; divergence at token 83 changes an example/explanation; both stop at the 128-token cap before completing the answer."},
+      {"id": "shared_4", "observation": "TT and HF French-translation responses match exactly and stop naturally at 104 tokens."},
+      {"id": "shared_5", "observation": "Both provide coherent Fibonacci implementation explanations; divergence at token 65 and both are truncated at 128 tokens during code."}
+    ],
+    "long_prefix": {
+      "prompt_tokens": 32083,
+      "expected_label_found": true,
+      "expected_label": "ORCHID-742",
+      "format_caveat": "The requested JSON-key response is returned inside a Markdown JSON code fence and includes the decoded turn-end marker; the label is correct but this is not strict JSON-only output.",
+      "scope_note": "One retrieval/control prompt; not a broad long-context quality test."
+    },
+    "conclusion": "No malformed protocol or degenerate continuation was seen in the six bounded shared-control outputs. Token-limited answers and the long-prefix formatting caveat remain explicit; this is not a general qualitative-quality claim."
+  },
+  "files": {
+    "run/readiness_accuracy.json": "f1e304ba411f3ae9bb5a25fab87c40e2444a3ca795ae166d3568c4fab627c1d6",
+    "run/runtime_policy.json": "db381061657ecdbecaab977c428f47e9b12ab55ec73b8d4afb633db744050b76",
+    "run/performance_b1.json": "5d46877af53b03399b39c829c75220e212d5973d52b55bbb4b7a080ea6cc7ed8",
+    "run/full_context_post_barrier.json": "7cef036492930fa5857a0c42a99af57ee56fd4e3d442b03f0dac6d9715aa1610",
+    "run/qualitative_tt.json": "9bdb443b02571f78c62df59c8fc06a56e635c7e41b7245d4e05a358b9f8cbcc2",
+    "run/qualitative_hf.json": "05c2ac233052909c2e785b9d36f819c52e95cecfcfd299eff81a6b1de3a174d6",
+    "run/qualitative_prompt_format.json": "16e4bfd8857e67ee9ca39297c8521b30e8ceacf0c848783e83b1192ef331cb9c",
+    "run/long_prefix.json": "c2b410c7c772d9c30027f3f9cbe5faf59b5cc51696d9a233364bb3a6893a719c",
+    "run/source_manifest.json": "ca05d794510008fe62b5144e607996c3c2b993b49222775f99c334b9b4644dfd",
+    "completion.json": "4d49796265aa91368455a495b0e67da2293972adb760ac6dd7095e5cc740fe57"
+  },
+  "limits": [
+    "P19 remains unselected pending root policy decision and the separate resume/serving acceptance work.",
+    "One 32,083-token retrieval control and repeated-token boundary probes do not establish broad semantic quality at the advertised context length.",
+    "Qualitative comparisons are exact-prefix, deterministic, and capped at 128 tokens; they do not compare complete answers when both sides reach the cap."
+  ]
+}

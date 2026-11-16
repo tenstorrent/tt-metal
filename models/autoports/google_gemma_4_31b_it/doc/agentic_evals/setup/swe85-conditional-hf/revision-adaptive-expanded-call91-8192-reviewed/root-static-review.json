@@ -1,0 +1,100 @@
+{
+  "status": "root_static_and_terminal_preflight_passed",
+  "time_unix": 1794728214.6379592,
+  "driver_sha256": "53ea7fd1fceef25b77c60a3d314c7712075c1003a50d05e9fdef3d9966f78c8f",
+  "proposal_sha256": "8d558f41bd90ded5451655206c4ed5cf44ce5ee146b346c1bf3230abd7d37d71",
+  "source_integrity_sha256": "99d313bec65c4db1cf2ad5305e1152c8da94fcd227bd839712e13947000ac4ee",
+  "terminal_pins": [
+    {
+      "queue_sha256": "90eb8cc2ee230f3ed331c93213e8ee316491db73d7dcd80568af597b51c08adc",
+      "completion_sha256": "fa70e146164d0b1b948f3bb969fff7e56b44b8d6cc85912f2dfb814c941675d9",
+      "launch_sha256": "de1e30cac8ce26b64272a88cf95392aed520ad80400df0d61590c789d5e3a4f0",
+      "admission_sha256": "91dc764e6a3a6b1e8a1be51e6eee5fc958c19d1dfcfa3d057b989aa325618cdd",
+      "proposal_sha256": "c95ae189a8a4cd37159f106b5da1d5bfc9c2a84d3dc6009ff52b86101e6ed550",
+      "driver_sha256": "74fe8a4db31949824f4e59cce087da5eecfc272d5e14fb962119b8b1f9f24100",
+      "source_hashes_sha256": "e1254ae95f87360bc214b01757062a8910b5fed95f6e6cfd13244b024cce01ad",
+      "admission_inventory_exception": {
+        "row_key": "admission",
+        "stale_placeholder_sha256": "428bea328fae8fa6e4f6fe21802f3763985d6b5ee819f5beac6c6df3ff1f2b97",
+        "verified_current_admission_sha256": "91dc764e6a3a6b1e8a1be51e6eee5fc958c19d1dfcfa3d057b989aa325618cdd"
+      },
+      "forecast_gates": {
+        "P": {
+          "status": "root_accepted_forecast_miss",
+          "measured_seconds": 2018.038988828659,
+          "forecast_range_seconds": [
+            2515.762556969247,
+            5878.864391854309
+          ],
+          "acceptance_record_sha256": "b33ebae3a3366738541d2983238c18f57cc3841bc539afcc021a85d86fd7c18b"
+        },
+        "suffix8192": {
+          "served": {
+            "status": "forecast_range_hit",
+            "measured_seconds": 186.30404543876648,
+            "forecast_range_seconds": [
+              169.2564974653069,
+              263.7882613848427
+            ]
+          },
+          "full": {
+            "status": "forecast_range_hit",
+            "measured_seconds": 139.90180444717407,
+            "forecast_range_seconds": [
+              136.5467805271037,
+              311.3167601771691
+            ]
+          }
+        }
+      }
+    },
+    {
+      "queue_sha256": "61ec254baf1a1bac9b57f4e0a97ed3824c96ad3c8ef8ac74ee7ef6f4604b8981",
+      "served_completion_sha256": "71f6df1a3cc42ba92004afeccb23027e92e2072e4cc5011ddac34f43f3514943",
+      "full_completion_sha256": "93c1cd7540048e8c62689cd4bf2b5fc57fa8760ffa8a24db092892fb0c54e6af",
+      "served_launch_sha256": "b97955a79eb06e543fe7c2101638a5a9f75463b9a08bd167f688db3564d84861",
+      "full_launch_sha256": "0365580d55af188fe4b00203843c72a4f44964d713dc7dc13fc0613f298be38a",
+      "comparison_sha256": "8d098576fdd58a554e8bf5d1e58d27e0d821b3a753dade3b7900d4496f2a8668",
+      "admission_sha256": "300d69403a28112bc5f2a7225df5327bdb9e577ad9ca96cf754ab304f3538205",
+      "proposal_sha256": "e506154d52a4fb969d5f142cd9574cbb46db891c56d34d14f0387a28c493848a",
+      "driver_sha256": "ccf6e0e36654b16603347450756f9748f2fd4c9f2dbf9bbd942adf787aecee2d",
+      "forecast_gates": {
+        "served": {
+          "status": "forecast_range_hit",
+          "measured_seconds": 186.30404543876648,
+          "forecast_range_seconds": [
+            169.2564974653069,
+            263.7882613848427
+          ]
+        },
+        "full": {
+          "status": "forecast_range_hit",
+          "measured_seconds": 139.90180444717407,
+          "forecast_range_seconds": [
+            136.5467805271037,
+            311.3167601771691
+          ]
+        }
+      }
+    },
+    {
+      "queue_sha256": "a3e38a94d97c827735d1f16a868b721dc669984ae26ef0ee42d0c5de2a847e86",
+      "completion_sha256": "47896893e57257757d1153dd3ae4df6b05985cd97b0fbb9993739e30145b2880",
+      "launch_sha256": "fd34812c8d86ace46b6abbd162be21e39a447d79691b48201d1dfd3f479202ef",
+      "admission_sha256": "74bef162c97e23e882612eb85dae365f32c9da1f13ba4b9b8e1e1f8f582ad1be",
+      "proposal_sha256": "ddaaa015f62bd731afc6f9f19f37056a0f74d2071023338938420a3a080181a7",
+      "driver_sha256": "2bcfdcc1f018f2398212de0cd94119030dfe54b5dcc9f1578478b1771ecb1836",
+      "source_inventory_sha256": "d8d039fa8fefb072264bc902bc798dd260e00371151eda74b204a5c74a5418ad",
+      "forecast_sha256": "55e6d1800078e1d5a10660db196a3075d7892fac6a8efe5c7626198264837f81",
+      "forecast_gate": {
+        "status": "forecast_range_hit",
+        "measured_seconds": 2469.2918775081635,
+        "forecast_range_seconds": [
+          2018.038988828659,
+          5910.468657604884
+        ]
+      }
+    }
+  ],
+  "execution": "not admitted; no model or device access; finish SK serial TT controls first"
+}

@@ -1,0 +1,735 @@
+{
+  "status": "prepared_mapping_waiting_for_root_availability_not_a_triage",
+  "source_case_manifest": "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/candidate-cases.json",
+  "source_case_manifest_sha256": "57193e4b91af3a31df00f0c92dbc0f2219fbce011e6533594e5244a93a3021ed",
+  "assigned_indices": [
+    36,
+    71
+  ],
+  "rows": [
+    {
+      "index": 36,
+      "case_name": "anomaly.pytest-dev__pytest-7432.call19.onset.seed42.cap256",
+      "fixture_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-18763-7432-controls/pytest-dev__pytest-7432.call19.onset.private.json",
+      "fixture_sha256": "436bf8f06cebc27f9ac206ab4c85c655b2c707145be67b8341f14288370807f5",
+      "prompt_tokens": 11095,
+      "prompt_token_ids_sha256": "d736c0dcaf372d481d9b7b7fc80e458e49ab4167af9c9e98f6b6148577c29f28",
+      "seed": 42,
+      "configured_cap": 256,
+      "free_run_trials": 1,
+      "branches": [],
+      "chosen_prefix_token_count": 64,
+      "chosen_prefix_token_ids_sha256": "15001e212845ba0bcba68540367d36e76d1a6c148a0d47ce345637d7fee696c1",
+      "matched_p19_result_paths": [
+        "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.pytest-dev__pytest-7432.call19.onset.seed42.cap256.json"
+      ],
+      "expected_current_fullbf16_result_stem": "anomaly.pytest-dev__pytest-7432.call19.onset.seed42.cap256",
+      "current_output_present": false,
+      "current_output_paths": []
+    },
+    {
+      "index": 37,
+      "case_name": "anomaly.pytest-dev__pytest-7432.call19.onset.seed43.cap256",
+      "fixture_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.pytest-dev__pytest-7432.call19.onset.seed43.private.json",
+      "fixture_sha256": "2eaad18936f926fc558cc1f2361399238e80897e4cf3b1b849fc28fa620edc2a",
+      "prompt_tokens": 11095,
+      "prompt_token_ids_sha256": "d736c0dcaf372d481d9b7b7fc80e458e49ab4167af9c9e98f6b6148577c29f28",
+      "seed": 43,
+      "configured_cap": 256,
+      "free_run_trials": 1,
+      "branches": [],
+      "chosen_prefix_token_count": 64,
+      "chosen_prefix_token_ids_sha256": "15001e212845ba0bcba68540367d36e76d1a6c148a0d47ce345637d7fee696c1",
+      "matched_p19_result_paths": [
+        "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.pytest-dev__pytest-7432.call19.onset.seed43.cap256.json"
+      ],
+      "expected_current_fullbf16_result_stem": "anomaly.pytest-dev__pytest-7432.call19.onset.seed43.cap256",
+      "current_output_present": false,
+      "current_output_paths": []
+    },
+    {
+      "index": 38,
+      "case_name": "anomaly.pytest-dev__pytest-7432.call19.onset.seed44.cap256",
+      "fixture_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.pytest-dev__pytest-7432.call19.onset.seed44.private.json",
+      "fixture_sha256": "5dbb2f59dbc730651a720f58734568c2dc6a5839aef74be2be5d66b99c6f8eb5",
+      "prompt_tokens": 11095,
+      "prompt_token_ids_sha256": "d736c0dcaf372d481d9b7b7fc80e458e49ab4167af9c9e98f6b6148577c29f28",
+      "seed": 44,
+      "configured_cap": 256,
+      "free_run_trials": 1,
+      "branches": [],
+      "chosen_prefix_token_count": 64,
+      "chosen_prefix_token_ids_sha256": "15001e212845ba0bcba68540367d36e76d1a6c148a0d47ce345637d7fee696c1",
+      "matched_p19_result_paths": [
+        "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.pytest-dev__pytest-7432.call19.onset.seed44.cap256.json"
+      ],
+      "expected_current_fullbf16_result_stem": "anomaly.pytest-dev__pytest-7432.call19.onset.seed44.cap256",
+      "current_output_present": false,
+      "current_output_paths": []
+    },
+    {
+      "index": 39,
+      "case_name": "anomaly.pytest10356-call14.canonicalprefix.seed42.cap256",
+      "fixture_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-precision/pytest10356-call14/canonicalprefix/case.private.json",
+      "fixture_sha256": "07b45f8cd1bf0b42a6b7114dbf180eb5a1b0e4a31a80c1d3817660b24d50f71e",
+      "prompt_tokens": 11309,
+      "prompt_token_ids_sha256": "d8aa6f71f66f8504032ff30c08eb19b34f1419719df8de946b36123b626a1d92",
+      "seed": 42,
+      "configured_cap": 256,
+      "free_run_trials": 1,
+      "branches": [],
+      "chosen_prefix_token_count": 28,
+      "chosen_prefix_token_ids_sha256": "13e7353816d78a594e3c4d7a37664d7cde2197da0db1646e84cdce3391dd1da6",
+      "matched_p19_result_paths": [
+        "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.pytest10356-call14.canonicalprefix.seed42.cap256.json"
+      ],
+      "expected_current_fullbf16_result_stem": "anomaly.pytest10356-call14.canonicalprefix.seed42.cap256",
+      "current_output_present": false,
+      "current_output_paths": []
+    },
+    {
+      "index": 40,
+      "case_name": "anomaly.pytest10356-call14.canonicalprefix.seed43.cap256",
+      "fixture_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.pytest10356-call14.canonicalprefix.seed43.private.json",
+      "fixture_sha256": "7016a37129adb51c3d72523a404fa16afa1df64ccda3d55409db8c9d2cf13572",
+      "prompt_tokens": 11309,
+      "prompt_token_ids_sha256": "d8aa6f71f66f8504032ff30c08eb19b34f1419719df8de946b36123b626a1d92",
+      "seed": 43,
+      "configured_cap": 256,
+      "free_run_trials": 1,
+      "branches": [],
+      "chosen_prefix_token_count": 28,
+      "chosen_prefix_token_ids_sha256": "13e7353816d78a594e3c4d7a37664d7cde2197da0db1646e84cdce3391dd1da6",
+      "matched_p19_result_paths": [
+        "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.pytest10356-call14.canonicalprefix.seed43.cap256.json"
+      ],
+      "expected_current_fullbf16_result_stem": "anomaly.pytest10356-call14.canonicalprefix.seed43.cap256",
+      "current_output_present": false,
+      "current_output_paths": []
+    },
+    {
+      "index": 41,
+      "case_name": "anomaly.pytest10356-call14.canonicalprefix.seed44.cap256",
+      "fixture_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.pytest10356-call14.canonicalprefix.seed44.private.json",
+      "fixture_sha256": "c987819b73937b9fedd8c6198958b49b41f87c9c3720881bf1cf5f14d46dc50c",
+      "prompt_tokens": 11309,
+      "prompt_token_ids_sha256": "d8aa6f71f66f8504032ff30c08eb19b34f1419719df8de946b36123b626a1d92",
+      "seed": 44,
+      "configured_cap": 256,
+      "free_run_trials": 1,
+      "branches": [],
+      "chosen_prefix_token_count": 28,
+      "chosen_prefix_token_ids_sha256": "13e7353816d78a594e3c4d7a37664d7cde2197da0db1646e84cdce3391dd1da6",
+      "matched_p19_result_paths": [
+        "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.pytest10356-call14.canonicalprefix.seed44.cap256.json"
+      ],
+      "expected_current_fullbf16_result_stem": "anomaly.pytest10356-call14.canonicalprefix.seed44.cap256",
+      "current_output_present": false,
+      "current_output_paths": []
+    },
+    {
+      "index": 42,
+      "case_name": "anomaly.requests2931.call20.canonicalprefix.seed42.cap256",
+      "fixture_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-precision/requests2931-call20/canonicalprefix/case.private.json",
+      "fixture_sha256": "7f527603e08f61f5516745fc2fab496c6ae7020985372c8f71fd0459895c10f0",
+      "prompt_tokens": 8580,
+      "prompt_token_ids_sha256": "6b3e77fefce6aad9e93dbe6ec7cad68337025a9a70a4479c0c353b2f95260771",
+      "seed": 42,
+      "configured_cap": 256,
+      "free_run_trials": 1,
+      "branches": [],
+      "chosen_prefix_token_count": 64,
+      "chosen_prefix_token_ids_sha256": "15001e212845ba0bcba68540367d36e76d1a6c148a0d47ce345637d7fee696c1",
+      "matched_p19_result_paths": [
+        "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.requests2931.call20.canonicalprefix.seed42.cap256.json"
+      ],
+      "expected_current_fullbf16_result_stem": "anomaly.requests2931.call20.canonicalprefix.seed42.cap256",
+      "current_output_present": false,
+      "current_output_paths": []
+    },
+    {
+      "index": 43,
+      "case_name": "anomaly.requests2931.call20.canonicalprefix.seed43.cap256",
+      "fixture_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.requests2931.call20.canonicalprefix.seed43.private.json",
+      "fixture_sha256": "46c8f0e924d5231eb779bab85611942cdc2aa1add396842d50c7559f64ddd359",
+      "prompt_tokens": 8580,
+      "prompt_token_ids_sha256": "6b3e77fefce6aad9e93dbe6ec7cad68337025a9a70a4479c0c353b2f95260771",
+      "seed": 43,
+      "configured_cap": 256,
+      "free_run_trials": 1,
+      "branches": [],
+      "chosen_prefix_token_count": 64,
+      "chosen_prefix_token_ids_sha256": "15001e212845ba0bcba68540367d36e76d1a6c148a0d47ce345637d7fee696c1",
+      "matched_p19_result_paths": [
+        "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.requests2931.call20.canonicalprefix.seed43.cap256.json"
+      ],
+      "expected_current_fullbf16_result_stem": "anomaly.requests2931.call20.canonicalprefix.seed43.cap256",
+      "current_output_present": false,
+      "current_output_paths": []
+    },
+    {
+      "index": 44,
+      "case_name": "anomaly.requests2931.call20.canonicalprefix.seed44.cap256",
+      "fixture_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.requests2931.call20.canonicalprefix.seed44.private.json",
+      "fixture_sha256": "971939b876f462ed4002ba8757826708e6e3d19a20d9496298f61c49af698d40",
+      "prompt_tokens": 8580,
+      "prompt_token_ids_sha256": "6b3e77fefce6aad9e93dbe6ec7cad68337025a9a70a4479c0c353b2f95260771",
+      "seed": 44,
+      "configured_cap": 256,
+      "free_run_trials": 1,
+      "branches": [],
+      "chosen_prefix_token_count": 64,
+      "chosen_prefix_token_ids_sha256": "15001e212845ba0bcba68540367d36e76d1a6c148a0d47ce345637d7fee696c1",
+      "matched_p19_result_paths": [
+        "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.requests2931.call20.canonicalprefix.seed44.cap256.json"
+      ],
+      "expected_current_fullbf16_result_stem": "anomaly.requests2931.call20.canonicalprefix.seed44.cap256",
+      "current_output_present": false,
+      "current_output_paths": []
+    },
+    {
+      "index": 45,
+      "case_name": "anomaly.scikit-learn__scikit-learn-13135.call29.onset.seed42.cap1024",
+      "fixture_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.scikit-learn__scikit-learn-13135.call29.onset.cap1024.seed42.private.json",
+      "fixture_sha256": "310716fee5157983973aa6183e55fb529fd26179d182398b847ecb142b644b79",
+      "prompt_tokens": 17395,
+      "prompt_token_ids_sha256": "433e40a88bd54227618ffb028a3d4322df14ebee37ff03a52c0986d5154df69a",
+      "seed": 42,
+      "configured_cap": 1024,
+      "free_run_trials": 1,
+      "branches": [],
+      "chosen_prefix_token_count": 64,
+      "chosen_prefix_token_ids_sha256": "8d4c97e7413b5ed9bf57c4a1f8ae56a386fb8c52b5588db4f765eb55f36a7e3e",
+      "matched_p19_result_paths": [
+        "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.scikit-learn__scikit-learn-13135.call29.onset.seed42.cap1024.json"
+      ],
+      "expected_current_fullbf16_result_stem": "anomaly.scikit-learn__scikit-learn-13135.call29.onset.seed42.cap1024",
+      "current_output_present": false,
+      "current_output_paths": []
+    },
+    {
+      "index": 46,
+      "case_name": "anomaly.scikit-learn__scikit-learn-13135.call29.onset.seed43.cap512",
+      "fixture_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/fixtures/full/anomaly.scikit-learn__scikit-learn-13135.call29.onset.cap512.seed43.private.json",
+      "fixture_sha256": "68419746ea6b9dbfcf4a871f7caa486dcfff6991cec45c0d511aab69876adeb2",
+      "prompt_tokens": 17395,
+      "prompt_token_ids_sha256": "433e40a88bd54227618ffb028a3d4322df14ebee37ff03a52c0986d5154df69a",
+      "seed": 43,
+      "configured_cap": 512,
+      "free_run_trials": 1,
+      "branches": [],
+      "chosen_prefix_token_count": 64,
+      "chosen_prefix_token_ids_sha256": "8d4c97e7413b5ed9bf57c4a1f8ae56a386fb8c52b5588db4f765eb55f36a7e3e",
+      "matched_p19_result_paths": [
+        "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.scikit-learn__scikit-learn-13135.call29.onset.seed43.cap512.json"
+      ],
+      "expected_current_fullbf16_result_stem": "anomaly.scikit-learn__scikit-learn-13135.call29.onset.seed43.cap512",
+      "current_output_present": false,
+      "current_output_paths": []
+    },
+    {
+      "index": 47,
+      "case_name": "anomaly.scikit-learn__scikit-learn-13135.call29.onset.seed44.cap512",
+      "fixture_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/fixtures/served/anomaly.scikit-learn__scikit-learn-13135.call29.onset.cap512.seed44.private.json",
+      "fixture_sha256": "dc59c14755d834d03e13b1b9d60981c10a93e68d68375db6198fdea1df67bc78",
+      "prompt_tokens": 17395,
+      "prompt_token_ids_sha256": "433e40a88bd54227618ffb028a3d4322df14ebee37ff03a52c0986d5154df69a",
+      "seed": 44,
+      "configured_cap": 512,
+      "free_run_trials": 1,
+      "branches": [],
+      "chosen_prefix_token_count": 64,
+      "chosen_prefix_token_ids_sha256": "8d4c97e7413b5ed9bf57c4a1f8ae56a386fb8c52b5588db4f765eb55f36a7e3e",
+      "matched_p19_result_paths": [
+        "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.scikit-learn__scikit-learn-13135.call29.onset.seed44.cap512.json"
+      ],
+      "expected_current_fullbf16_result_stem": "anomaly.scikit-learn__scikit-learn-13135.call29.onset.seed44.cap512",
+      "current_output_present": false,
+      "current_output_paths": []
+    },
+    {
+      "index": 48,
+      "case_name": "anomaly.sphinx-doc__sphinx-10323.call57.onset.seed42.cap512",
+      "fixture_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-10323.call57.onset.cap512.seed42.private.json",
+      "fixture_sha256": "73900395540b408c3bdb3689ef5561eed2d4d9a1976a6a1b19ec1545e6d0eb2a",
+      "prompt_tokens": 58695,
+      "prompt_token_ids_sha256": "b717f8d15d30f0bd3b445deef9213defb8a6c36f4bc1bc86a7f889289270c2fb",
+      "seed": 42,
+      "configured_cap": 512,
+      "free_run_trials": 1,
+      "branches": [],
+      "chosen_prefix_token_count": 64,
+      "chosen_prefix_token_ids_sha256": "11a6dc9aea47520ffb680156b8708e728dbfe7a93e8bd6da389e6b2636f5fe51",
+      "matched_p19_result_paths": [
+        "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-10323.call57.onset.seed42.cap512.json"
+      ],
+      "expected_current_fullbf16_result_stem": "anomaly.sphinx-doc__sphinx-10323.call57.onset.seed42.cap512",
+      "current_output_present": false,
+      "current_output_paths": []
+    },
+    {
+      "index": 49,
+      "case_name": "anomaly.sphinx-doc__sphinx-10323.call57.onset.seed43.cap256",
+      "fixture_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.sphinx-doc__sphinx-10323.call57.onset.seed43.private.json",
+      "fixture_sha256": "f92ea14c2024b7c89722784a2f1d8e8551e470f4cd281f974e3b9e691f6a8523",
+      "prompt_tokens": 58695,
+      "prompt_token_ids_sha256": "b717f8d15d30f0bd3b445deef9213defb8a6c36f4bc1bc86a7f889289270c2fb",
+      "seed": 43,
+      "configured_cap": 256,
+      "free_run_trials": 1,
+      "branches": [],
+      "chosen_prefix_token_count": 64,
+      "chosen_prefix_token_ids_sha256": "11a6dc9aea47520ffb680156b8708e728dbfe7a93e8bd6da389e6b2636f5fe51",
+      "matched_p19_result_paths": [
+        "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-10323.call57.onset.seed43.cap256.json"
+      ],
+      "expected_current_fullbf16_result_stem": "anomaly.sphinx-doc__sphinx-10323.call57.onset.seed43.cap256",
+      "current_output_present": false,
+      "current_output_paths": []
+    },
+    {
+      "index": 50,
+      "case_name": "anomaly.sphinx-doc__sphinx-10323.call57.onset.seed44.cap512",
+      "fixture_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-10323.call57.onset.cap512.seed44.private.json",
+      "fixture_sha256": "09926a71feec07d7cde94dd30e60a80e65d0b7a14a973fdf18f8fbcefb20c357",
+      "prompt_tokens": 58695,
+      "prompt_token_ids_sha256": "b717f8d15d30f0bd3b445deef9213defb8a6c36f4bc1bc86a7f889289270c2fb",
+      "seed": 44,
+      "configured_cap": 512,
+      "free_run_trials": 1,
+      "branches": [],
+      "chosen_prefix_token_count": 64,
+      "chosen_prefix_token_ids_sha256": "11a6dc9aea47520ffb680156b8708e728dbfe7a93e8bd6da389e6b2636f5fe51",
+      "matched_p19_result_paths": [
+        "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-10323.call57.onset.seed44.cap512.json"
+      ],
+      "expected_current_fullbf16_result_stem": "anomaly.sphinx-doc__sphinx-10323.call57.onset.seed44.cap512",
+      "current_output_present": false,
+      "current_output_paths": []
+    },
+    {
+      "index": 51,
+      "case_name": "anomaly.sphinx-doc__sphinx-10323.call68.onset.seed42.cap256",
+      "fixture_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-sphinx10323-controls/sphinx-doc__sphinx-10323.call68.onset.private.json",
+      "fixture_sha256": "2d726d2a43b0678df8fb3d931ffda87277954bf9599424c4140394c669cfa103",
+      "prompt_tokens": 64509,
+      "prompt_token_ids_sha256": "eb1a464aa0e934d3eb4dc3ea1908c4046b04fb3c9fbb076354d87bf2a8ba0468",
+      "seed": 42,
+      "configured_cap": 256,
+      "free_run_trials": 1,
+      "branches": [],
+      "chosen_prefix_token_count": 64,
+      "chosen_prefix_token_ids_sha256": "0b82eeeea1fd84d347a8619bd2ef4635577678d2ea196242d55b08700dd61289",
+      "matched_p19_result_paths": [
+        "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-10323.call68.onset.seed42.cap256.json"
+      ],
+      "expected_current_fullbf16_result_stem": "anomaly.sphinx-doc__sphinx-10323.call68.onset.seed42.cap256",
+      "current_output_present": false,
+      "current_output_paths": []
+    },
+    {
+      "index": 52,
+      "case_name": "anomaly.sphinx-doc__sphinx-10323.call68.onset.seed43.cap256",
+      "fixture_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.sphinx-doc__sphinx-10323.call68.onset.seed43.private.json",
+      "fixture_sha256": "268ebac1198fcc7951fda3d5c9760ced4b941c45b4fde336cafea68ca187eb51",
+      "prompt_tokens": 64509,
+      "prompt_token_ids_sha256": "eb1a464aa0e934d3eb4dc3ea1908c4046b04fb3c9fbb076354d87bf2a8ba0468",
+      "seed": 43,
+      "configured_cap": 256,
+      "free_run_trials": 1,
+      "branches": [],
+      "chosen_prefix_token_count": 64,
+      "chosen_prefix_token_ids_sha256": "0b82eeeea1fd84d347a8619bd2ef4635577678d2ea196242d55b08700dd61289",
+      "matched_p19_result_paths": [
+        "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-10323.call68.onset.seed43.cap256.json"
+      ],
+      "expected_current_fullbf16_result_stem": "anomaly.sphinx-doc__sphinx-10323.call68.onset.seed43.cap256",
+      "current_output_present": false,
+      "current_output_paths": []
+    },
+    {
+      "index": 53,
+      "case_name": "anomaly.sphinx-doc__sphinx-10323.call68.onset.seed44.cap256",
+      "fixture_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.sphinx-doc__sphinx-10323.call68.onset.seed44.private.json",
+      "fixture_sha256": "a4cbaf72f69ca7e7b5fc0a5d3150a75e6211fc46992d8bc044ff89db3bb60251",
+      "prompt_tokens": 64509,
+      "prompt_token_ids_sha256": "eb1a464aa0e934d3eb4dc3ea1908c4046b04fb3c9fbb076354d87bf2a8ba0468",
+      "seed": 44,
+      "configured_cap": 256,
+      "free_run_trials": 1,
+      "branches": [],
+      "chosen_prefix_token_count": 64,
+      "chosen_prefix_token_ids_sha256": "0b82eeeea1fd84d347a8619bd2ef4635577678d2ea196242d55b08700dd61289",
+      "matched_p19_result_paths": [
+        "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-10323.call68.onset.seed44.cap256.json"
+      ],
+      "expected_current_fullbf16_result_stem": "anomaly.sphinx-doc__sphinx-10323.call68.onset.seed44.cap256",
+      "current_output_present": false,
+      "current_output_paths": []
+    },
+    {
+      "index": 54,
+      "case_name": "anomaly.sphinx-doc__sphinx-10323.call70.onset.seed42.cap256",
+      "fixture_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-extra-contraction-controls/sphinx-doc__sphinx-10323.call70.onset.private.json",
+      "fixture_sha256": "7d39e2c87e91327f35317968bf2647887a402d0086085ec8f95db8ff5fc2ab64",
+      "prompt_tokens": 65779,
+      "prompt_token_ids_sha256": "fd24fbb8d469895d6b7bc344aa036fc844a4c80a754f06708be6ed35daa7d032",
+      "seed": 42,
+      "configured_cap": 256,
+      "free_run_trials": 1,
+      "branches": [],
+      "chosen_prefix_token_count": 37,
+      "chosen_prefix_token_ids_sha256": "9a484b518a7291f7f9e27b7081047408061903e732598bc810b123dbd0418771",
+      "matched_p19_result_paths": [
+        "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-10323.call70.onset.seed42.cap256.json"
+      ],
+      "expected_current_fullbf16_result_stem": "anomaly.sphinx-doc__sphinx-10323.call70.onset.seed42.cap256",
+      "current_output_present": false,
+      "current_output_paths": []
+    },
+    {
+      "index": 55,
+      "case_name": "anomaly.sphinx-doc__sphinx-10323.call70.onset.seed43.cap256",
+      "fixture_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.sphinx-doc__sphinx-10323.call70.onset.seed43.private.json",
+      "fixture_sha256": "52f78b1aa3daba1691172b565090fd48487e2a5a9290b2811c3d4e16cd4a0526",
+      "prompt_tokens": 65779,
+      "prompt_token_ids_sha256": "fd24fbb8d469895d6b7bc344aa036fc844a4c80a754f06708be6ed35daa7d032",
+      "seed": 43,
+      "configured_cap": 256,
+      "free_run_trials": 1,
+      "branches": [],
+      "chosen_prefix_token_count": 37,
+      "chosen_prefix_token_ids_sha256": "9a484b518a7291f7f9e27b7081047408061903e732598bc810b123dbd0418771",
+      "matched_p19_result_paths": [
+        "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-10323.call70.onset.seed43.cap256.json"
+      ],
+      "expected_current_fullbf16_result_stem": "anomaly.sphinx-doc__sphinx-10323.call70.onset.seed43.cap256",
+      "current_output_present": false,
+      "current_output_paths": []
+    },
+    {
+      "index": 56,
+      "case_name": "anomaly.sphinx-doc__sphinx-10323.call70.onset.seed44.cap256",
+      "fixture_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.sphinx-doc__sphinx-10323.call70.onset.seed44.private.json",
+      "fixture_sha256": "e6905c26f7b592712e8e7c536babe496e7410b2bd5914677ad89e2c3ff699763",
+      "prompt_tokens": 65779,
+      "prompt_token_ids_sha256": "fd24fbb8d469895d6b7bc344aa036fc844a4c80a754f06708be6ed35daa7d032",
+      "seed": 44,
+      "configured_cap": 256,
+      "free_run_trials": 1,
+      "branches": [],
+      "chosen_prefix_token_count": 37,
+      "chosen_prefix_token_ids_sha256": "9a484b518a7291f7f9e27b7081047408061903e732598bc810b123dbd0418771",
+      "matched_p19_result_paths": [
+        "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-10323.call70.onset.seed44.cap256.json"
+      ],
+      "expected_current_fullbf16_result_stem": "anomaly.sphinx-doc__sphinx-10323.call70.onset.seed44.cap256",
+      "current_output_present": false,
+      "current_output_paths": []
+    },
+    {
+      "index": 57,
+      "case_name": "anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.seed42.cap2048",
+      "fixture_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.cap2048.seed42.private.json",
+      "fixture_sha256": "020694b001269c7998c8e36753d830f23a5d6700a1842526dc098bd459c3ca64",
+      "prompt_tokens": 58982,
+      "prompt_token_ids_sha256": "a4c9e18717ee53ddbf5ced65964c1f28ac089b26e6b489bd9aa52b303e021a45",
+      "seed": 42,
+      "configured_cap": 2048,
+      "free_run_trials": 1,
+      "branches": [],
+      "chosen_prefix_token_count": 64,
+      "chosen_prefix_token_ids_sha256": "734855cc854aa394d90e448a9bd39f1512f06f9cec5a3f97af3ac4b2ad5f6910",
+      "matched_p19_result_paths": [
+        "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.seed42.cap2048.json"
+      ],
+      "expected_current_fullbf16_result_stem": "anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.seed42.cap2048",
+      "current_output_present": false,
+      "current_output_paths": []
+    },
+    {
+      "index": 58,
+      "case_name": "anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.seed43.cap2048",
+      "fixture_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.cap2048.seed43.private.json",
+      "fixture_sha256": "f09f5493bf5e6d1f1bec5f5ce7e4273d0ec9352de1f85ffe780ef897063dec98",
+      "prompt_tokens": 58982,
+      "prompt_token_ids_sha256": "a4c9e18717ee53ddbf5ced65964c1f28ac089b26e6b489bd9aa52b303e021a45",
+      "seed": 43,
+      "configured_cap": 2048,
+      "free_run_trials": 1,
+      "branches": [],
+      "chosen_prefix_token_count": 64,
+      "chosen_prefix_token_ids_sha256": "734855cc854aa394d90e448a9bd39f1512f06f9cec5a3f97af3ac4b2ad5f6910",
+      "matched_p19_result_paths": [
+        "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.seed43.cap2048.json"
+      ],
+      "expected_current_fullbf16_result_stem": "anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.seed43.cap2048",
+      "current_output_present": false,
+      "current_output_paths": []
+    },
+    {
+      "index": 59,
+      "case_name": "anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.seed44.cap1024",
+      "fixture_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.cap1024.seed44.private.json",
+      "fixture_sha256": "6be948416b6cefc2796d256824f3fd6f7c7e46ea001063de32ae75e63d343b09",
+      "prompt_tokens": 58982,
+      "prompt_token_ids_sha256": "a4c9e18717ee53ddbf5ced65964c1f28ac089b26e6b489bd9aa52b303e021a45",
+      "seed": 44,
+      "configured_cap": 1024,
+      "free_run_trials": 1,
+      "branches": [],
+      "chosen_prefix_token_count": 64,
+      "chosen_prefix_token_ids_sha256": "734855cc854aa394d90e448a9bd39f1512f06f9cec5a3f97af3ac4b2ad5f6910",
+      "matched_p19_result_paths": [
+        "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.seed44.cap1024.json"
+      ],
+      "expected_current_fullbf16_result_stem": "anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.seed44.cap1024",
+      "current_output_present": false,
+      "current_output_paths": []
+    },
+    {
+      "index": 60,
+      "case_name": "anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset.seed42.cap256",
+      "fixture_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-sphinx11510-protocol-controls/sphinx-doc__sphinx-11510.call101.onset.private.json",
+      "fixture_sha256": "e940e736fad1b9ac133cd217d6163ea3ba1cdb01380471e0a9b77a35afb9f1c2",
+      "prompt_tokens": 59716,
+      "prompt_token_ids_sha256": "77ed0c1832712e30b11f78fd3e44e8b63720ff4002c62e91ba0f3efec205db29",
+      "seed": 42,
+      "configured_cap": 256,
+      "free_run_trials": 1,
+      "branches": [],
+      "chosen_prefix_token_count": 64,
+      "chosen_prefix_token_ids_sha256": "17b80b0316e9d6f6d8c488aad16eefef8e593d23842db7432cb4660e1aa1ce62",
+      "matched_p19_result_paths": [
+        "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset.seed42.cap256.json"
+      ],
+      "expected_current_fullbf16_result_stem": "anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset.seed42.cap256",
+      "current_output_present": false,
+      "current_output_paths": []
+    },
+    {
+      "index": 61,
+      "case_name": "anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset.seed43.cap256",
+      "fixture_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset.seed43.private.json",
+      "fixture_sha256": "73525af6b566b8589b8960fc3c511484ec1e652068be470efbc9ac943c45fdab",
+      "prompt_tokens": 59716,
+      "prompt_token_ids_sha256": "77ed0c1832712e30b11f78fd3e44e8b63720ff4002c62e91ba0f3efec205db29",
+      "seed": 43,
+      "configured_cap": 256,
+      "free_run_trials": 1,
+      "branches": [],
+      "chosen_prefix_token_count": 64,
+      "chosen_prefix_token_ids_sha256": "17b80b0316e9d6f6d8c488aad16eefef8e593d23842db7432cb4660e1aa1ce62",
+      "matched_p19_result_paths": [
+        "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset.seed43.cap256.json"
+      ],
+      "expected_current_fullbf16_result_stem": "anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset.seed43.cap256",
+      "current_output_present": false,
+      "current_output_paths": []
+    },
+    {
+      "index": 62,
+      "case_name": "anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset.seed44.cap256",
+      "fixture_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset.seed44.private.json",
+      "fixture_sha256": "11dc81f7659740d2f14dfefbdd68af8dd5b2ded451e79a07775cdc180674f269",
+      "prompt_tokens": 59716,
+      "prompt_token_ids_sha256": "77ed0c1832712e30b11f78fd3e44e8b63720ff4002c62e91ba0f3efec205db29",
+      "seed": 44,
+      "configured_cap": 256,
+      "free_run_trials": 1,
+      "branches": [],
+      "chosen_prefix_token_count": 64,
+      "chosen_prefix_token_ids_sha256": "17b80b0316e9d6f6d8c488aad16eefef8e593d23842db7432cb4660e1aa1ce62",
+      "matched_p19_result_paths": [
+        "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset.seed44.cap256.json"
+      ],
+      "expected_current_fullbf16_result_stem": "anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset.seed44.cap256",
+      "current_output_present": false,
+      "current_output_paths": []
+    },
+    {
+      "index": 63,
+      "case_name": "anomaly.sphinx-doc__sphinx-11510.call108.onset.seed42.cap256",
+      "fixture_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-sphinx11510-controls/sphinx-doc__sphinx-11510.call108.onset.private.json",
+      "fixture_sha256": "6efd3333b509e5dc6fe9c28b96829c345056cb2dc88538f0324b5fbce8ecb724",
+      "prompt_tokens": 62453,
+      "prompt_token_ids_sha256": "096357987ce47be0008a8297e3ea9150ca9210909e2f3e0e2708140c2925e2f2",
+      "seed": 42,
+      "configured_cap": 256,
+      "free_run_trials": 1,
+      "branches": [],
+      "chosen_prefix_token_count": 64,
+      "chosen_prefix_token_ids_sha256": "92fd24d890603fb4387f6e8f63aa1589ff5efa5c3c991cb86a0ff865782e9b2d",
+      "matched_p19_result_paths": [
+        "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-11510.call108.onset.seed42.cap256.json"
+      ],
+      "expected_current_fullbf16_result_stem": "anomaly.sphinx-doc__sphinx-11510.call108.onset.seed42.cap256",
+      "current_output_present": false,
+      "current_output_paths": []
+    },
+    {
+      "index": 64,
+      "case_name": "anomaly.sphinx-doc__sphinx-11510.call108.onset.seed43.cap256",
+      "fixture_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.sphinx-doc__sphinx-11510.call108.onset.seed43.private.json",
+      "fixture_sha256": "b7bb67776073a6a6e7a14dc735af6f9398354e0d99bab7eb8c3d899a7c5da519",
+      "prompt_tokens": 62453,
+      "prompt_token_ids_sha256": "096357987ce47be0008a8297e3ea9150ca9210909e2f3e0e2708140c2925e2f2",
+      "seed": 43,
+      "configured_cap": 256,
+      "free_run_trials": 1,
+      "branches": [],
+      "chosen_prefix_token_count": 64,
+      "chosen_prefix_token_ids_sha256": "92fd24d890603fb4387f6e8f63aa1589ff5efa5c3c991cb86a0ff865782e9b2d",
+      "matched_p19_result_paths": [
+        "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-11510.call108.onset.seed43.cap256.json"
+      ],
+      "expected_current_fullbf16_result_stem": "anomaly.sphinx-doc__sphinx-11510.call108.onset.seed43.cap256",
+      "current_output_present": false,
+      "current_output_paths": []
+    },
+    {
+      "index": 65,
+      "case_name": "anomaly.sphinx-doc__sphinx-11510.call108.onset.seed44.cap256",
+      "fixture_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.sphinx-doc__sphinx-11510.call108.onset.seed44.private.json",
+      "fixture_sha256": "cab7d7acbcc4e910cbdef7993f8c39c0cfebfaa367030191b6c0b5e0519d8e24",
+      "prompt_tokens": 62453,
+      "prompt_token_ids_sha256": "096357987ce47be0008a8297e3ea9150ca9210909e2f3e0e2708140c2925e2f2",
+      "seed": 44,
+      "configured_cap": 256,
+      "free_run_trials": 1,
+      "branches": [],
+      "chosen_prefix_token_count": 64,
+      "chosen_prefix_token_ids_sha256": "92fd24d890603fb4387f6e8f63aa1589ff5efa5c3c991cb86a0ff865782e9b2d",
+      "matched_p19_result_paths": [
+        "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-11510.call108.onset.seed44.cap256.json"
+      ],
+      "expected_current_fullbf16_result_stem": "anomaly.sphinx-doc__sphinx-11510.call108.onset.seed44.cap256",
+      "current_output_present": false,
+      "current_output_paths": []
+    },
+    {
+      "index": 66,
+      "case_name": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed42.cap1024",
+      "fixture_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap1024.seed42.private.json",
+      "fixture_sha256": "b4253957ad89651510a0e39ea3aa49373926c9ff2d963a4ee381047b400efac8",
+      "prompt_tokens": 76441,
+      "prompt_token_ids_sha256": "5e8c9025218ae22d2ae1491e4ff24e3aacdf82ad5d2985c6e2792168270c6808",
+      "seed": 42,
+      "configured_cap": 1024,
+      "free_run_trials": 1,
+      "branches": [],
+      "chosen_prefix_token_count": 64,
+      "chosen_prefix_token_ids_sha256": "4e99a2112f13018274c89acd582606501593fdedd404168ade4d7fe17091de52",
+      "matched_p19_result_paths": [
+        "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed42.cap1024.json"
+      ],
+      "expected_current_fullbf16_result_stem": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed42.cap1024",
+      "current_output_present": false,
+      "current_output_paths": []
+    },
+    {
+      "index": 67,
+      "case_name": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed43.cap2048",
+      "fixture_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap2048.seed43.private.json",
+      "fixture_sha256": "e4c5081386cd785ccc1216dda888b4c54cc165beb80b035e96daf69c2f119718",
+      "prompt_tokens": 76441,
+      "prompt_token_ids_sha256": "5e8c9025218ae22d2ae1491e4ff24e3aacdf82ad5d2985c6e2792168270c6808",
+      "seed": 43,
+      "configured_cap": 2048,
+      "free_run_trials": 1,
+      "branches": [],
+      "chosen_prefix_token_count": 64,
+      "chosen_prefix_token_ids_sha256": "4e99a2112f13018274c89acd582606501593fdedd404168ade4d7fe17091de52",
+      "matched_p19_result_paths": [
+        "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed43.cap2048.json"
+      ],
+      "expected_current_fullbf16_result_stem": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed43.cap2048",
+      "current_output_present": false,
+      "current_output_paths": []
+    },
+    {
+      "index": 68,
+      "case_name": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed44.cap1024",
+      "fixture_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap1024.seed44.private.json",
+      "fixture_sha256": "7c5da63d138e6afa7b539dfed909ee1e8a937c2e168d587023c4421333688780",
+      "prompt_tokens": 76441,
+      "prompt_token_ids_sha256": "5e8c9025218ae22d2ae1491e4ff24e3aacdf82ad5d2985c6e2792168270c6808",
+      "seed": 44,
+      "configured_cap": 1024,
+      "free_run_trials": 1,
+      "branches": [],
+      "chosen_prefix_token_count": 64,
+      "chosen_prefix_token_ids_sha256": "4e99a2112f13018274c89acd582606501593fdedd404168ade4d7fe17091de52",
+      "matched_p19_result_paths": [
+        "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed44.cap1024.json"
+      ],
+      "expected_current_fullbf16_result_stem": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed44.cap1024",
+      "current_output_present": false,
+      "current_output_paths": []
+    },
+    {
+      "index": 69,
+      "case_name": "anomaly.sphinx-doc__sphinx-11510.call28.onset.seed42.cap1024",
+      "fixture_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call28.onset.cap1024.seed42.private.json",
+      "fixture_sha256": "2dfeb0e5b696b9997f100a3ef3eac57ab8db33df3cc0bae4369e292f34711cdb",
+      "prompt_tokens": 25118,
+      "prompt_token_ids_sha256": "412acd54240cc00f68b798921203e4af4314418b6c2d58c09b4e85064c4a73b5",
+      "seed": 42,
+      "configured_cap": 1024,
+      "free_run_trials": 1,
+      "branches": [],
+      "chosen_prefix_token_count": 64,
+      "chosen_prefix_token_ids_sha256": "f5ec1208a19b1692fa6f4163be979cedaae4abc56ba1f848f31f433e1067008b",
+      "matched_p19_result_paths": [
+        "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-11510.call28.onset.seed42.cap1024.json"
+      ],
+      "expected_current_fullbf16_result_stem": "anomaly.sphinx-doc__sphinx-11510.call28.onset.seed42.cap1024",
+      "current_output_present": false,
+      "current_output_paths": []
+    },
+    {
+      "index": 70,
+      "case_name": "anomaly.sphinx-doc__sphinx-11510.call28.onset.seed43.cap1024",
+      "fixture_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call28.onset.cap1024.seed43.private.json",
+      "fixture_sha256": "ea91bd0ca464c508824ec6106ab987d91d30452dfdbd86d56ea557fb91dd8455",
+      "prompt_tokens": 25118,
+      "prompt_token_ids_sha256": "412acd54240cc00f68b798921203e4af4314418b6c2d58c09b4e85064c4a73b5",
+      "seed": 43,
+      "configured_cap": 1024,
+      "free_run_trials": 1,
+      "branches": [],
+      "chosen_prefix_token_count": 64,
+      "chosen_prefix_token_ids_sha256": "f5ec1208a19b1692fa6f4163be979cedaae4abc56ba1f848f31f433e1067008b",
+      "matched_p19_result_paths": [
+        "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-11510.call28.onset.seed43.cap1024.json"
+      ],
+      "expected_current_fullbf16_result_stem": "anomaly.sphinx-doc__sphinx-11510.call28.onset.seed43.cap1024",
+      "current_output_present": false,
+      "current_output_paths": []
+    },
+    {
+      "index": 71,
+      "case_name": "anomaly.sphinx-doc__sphinx-11510.call28.onset.seed44.cap1024",
+      "fixture_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/served/anomaly.sphinx-doc__sphinx-11510.call28.onset.cap1024.seed44.private.json",
+      "fixture_sha256": "d8f30f1f675502566ec61966931a4faac361a1441829d070c4e3a143de397809",
+      "prompt_tokens": 25118,
+      "prompt_token_ids_sha256": "412acd54240cc00f68b798921203e4af4314418b6c2d58c09b4e85064c4a73b5",
+      "seed": 44,
+      "configured_cap": 1024,
+      "free_run_trials": 1,
+      "branches": [],
+      "chosen_prefix_token_count": 64,
+      "chosen_prefix_token_ids_sha256": "f5ec1208a19b1692fa6f4163be979cedaae4abc56ba1f848f31f433e1067008b",
+      "matched_p19_result_paths": [
+        "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-11510.call28.onset.seed44.cap1024.json"
+      ],
+      "expected_current_fullbf16_result_stem": "anomaly.sphinx-doc__sphinx-11510.call28.onset.seed44.cap1024",
+      "current_output_present": false,
+      "current_output_paths": []
+    }
+  ],
+  "limits": [
+    "No classifications issued before current full-BF16 outputs are present and read.",
+    "Old P19 rows are identity comparators only, not substitutes for full-BF16 behavior."
+  ]
+}

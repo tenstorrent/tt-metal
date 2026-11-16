@@ -1,0 +1,31 @@
+{
+  "rows": [
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset",
+      "mode": "full",
+      "seed": 42,
+      "verdict": "inconclusive",
+      "evidence": "Completes the conditioned open call:bash prefix with valid command arguments and progresses while drafting a patch_docutils script; no malformed native call:bash-newline/prose motif or repeated-token degeneration appears.",
+      "confidence": "high",
+      "cap_notes": "All runs hit the 256-token cap mid-script while progressing; cap prevents completed-normal conclusion."
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset",
+      "mode": "full",
+      "seed": 43,
+      "verdict": "inconclusive",
+      "evidence": "Completes the conditioned open call:bash prefix with valid command arguments and progresses while drafting a patch_docutils script; no malformed native call:bash-newline/prose motif or repeated-token degeneration appears.",
+      "confidence": "high",
+      "cap_notes": "All runs hit the 256-token cap mid-script while progressing; cap prevents completed-normal conclusion."
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset",
+      "mode": "full",
+      "seed": 44,
+      "verdict": "inconclusive",
+      "evidence": "Completes the conditioned open call:bash prefix with valid command arguments and progresses while drafting a patch_docutils script; no malformed native call:bash-newline/prose motif or repeated-token degeneration appears.",
+      "confidence": "high",
+      "cap_notes": "All runs hit the 256-token cap mid-script while progressing; cap prevents completed-normal conclusion."
+    }
+  ]
+}

@@ -1,0 +1,491 @@
+{
+  "rows": [
+    {
+      "job": "anomaly.sympy__sympy-14248.call53.onset",
+      "mode": "full",
+      "seed": 42,
+      "verdict": "reproduced_native_motif",
+      "evidence": "Entire 256-token free run is 256 repeated caret tokens (decoded as 1024 carets), with no progression; native conditioned continuation begins a fabricated SymPy traceback and caret degeneration. Same result for seeds42,43,44.",
+      "confidence": "high",
+      "cap_notes": "Repetition starts immediately and fills cap; unambiguous anomaly."
+    },
+    {
+      "job": "anomaly.sympy__sympy-14248.call53.onset",
+      "mode": "full",
+      "seed": 43,
+      "verdict": "reproduced_native_motif",
+      "evidence": "Entire 256-token free run is 256 repeated caret tokens (decoded as 1024 carets), with no progression; native conditioned continuation begins a fabricated SymPy traceback and caret degeneration. Same result for seeds42,43,44.",
+      "confidence": "high",
+      "cap_notes": "Repetition starts immediately and fills cap; unambiguous anomaly."
+    },
+    {
+      "job": "anomaly.sympy__sympy-14248.call53.onset",
+      "mode": "full",
+      "seed": 44,
+      "verdict": "reproduced_native_motif",
+      "evidence": "Entire 256-token free run is 256 repeated caret tokens (decoded as 1024 carets), with no progression; native conditioned continuation begins a fabricated SymPy traceback and caret degeneration. Same result for seeds42,43,44.",
+      "confidence": "high",
+      "cap_notes": "Repetition starts immediately and fills cap; unambiguous anomaly."
+    },
+    {
+      "job": "anomaly.xarray3095-call53.canonicalprefix",
+      "mode": "full",
+      "seed": 42,
+      "verdict": "normal",
+      "evidence": "All 3 seeds complete the conditioned open call:bash prefix as the same valid command `nl -ba xarray/core/variable.py | sed -n '180,186p'`, with closing tool delimiters. Native symptom was malformed tool name/prose with exposed delimiter, not reproduced in these conditioned continuations.",
+      "confidence": "high",
+      "cap_notes": "Short complete protocol continuation; valid command."
+    },
+    {
+      "job": "anomaly.xarray3095-call53.canonicalprefix",
+      "mode": "full",
+      "seed": 43,
+      "verdict": "normal",
+      "evidence": "All 3 seeds complete the conditioned open call:bash prefix as the same valid command `nl -ba xarray/core/variable.py | sed -n '180,186p'`, with closing tool delimiters. Native symptom was malformed tool name/prose with exposed delimiter, not reproduced in these conditioned continuations.",
+      "confidence": "high",
+      "cap_notes": "Short complete protocol continuation; valid command."
+    },
+    {
+      "job": "anomaly.xarray3095-call53.canonicalprefix",
+      "mode": "full",
+      "seed": 44,
+      "verdict": "normal",
+      "evidence": "All 3 seeds complete the conditioned open call:bash prefix as the same valid command `nl -ba xarray/core/variable.py | sed -n '180,186p'`, with closing tool delimiters. Native symptom was malformed tool name/prose with exposed delimiter, not reproduced in these conditioned continuations.",
+      "confidence": "high",
+      "cap_notes": "Short complete protocol continuation; valid command."
+    },
+    {
+      "job": "anomaly.pylint-dev__pylint-4604.call45.onset",
+      "mode": "full",
+      "seed": 42,
+      "verdict": "normal",
+      "evidence": "All 3 seeds continue the conditioned reasoning coherently, identify astroid.nodes.Try / ExceptHandler, then issue valid structured bash checks (`astroid.Try`, `astroid.nodes.ExceptHandler`, or prior dir query). No repeated token loop or terminal degeneration.",
+      "confidence": "high",
+      "cap_notes": "Short continuation completing the conditioned investigation; no evidence of a capped incomplete reply."
+    },
+    {
+      "job": "anomaly.pylint-dev__pylint-4604.call45.onset",
+      "mode": "full",
+      "seed": 43,
+      "verdict": "normal",
+      "evidence": "All 3 seeds continue the conditioned reasoning coherently, identify astroid.nodes.Try / ExceptHandler, then issue valid structured bash checks (`astroid.Try`, `astroid.nodes.ExceptHandler`, or prior dir query). No repeated token loop or terminal degeneration.",
+      "confidence": "high",
+      "cap_notes": "Short continuation completing the conditioned investigation; no evidence of a capped incomplete reply."
+    },
+    {
+      "job": "anomaly.pylint-dev__pylint-4604.call45.onset",
+      "mode": "full",
+      "seed": 44,
+      "verdict": "normal",
+      "evidence": "All 3 seeds continue the conditioned reasoning coherently, identify astroid.nodes.Try / ExceptHandler, then issue valid structured bash checks (`astroid.Try`, `astroid.nodes.ExceptHandler`, or prior dir query). No repeated token loop or terminal degeneration.",
+      "confidence": "high",
+      "cap_notes": "Short continuation completing the conditioned investigation; no evidence of a capped incomplete reply."
+    },
+    {
+      "job": "anomaly.matplotlib__matplotlib-20488.call82.onset",
+      "mode": "full",
+      "seed": 42,
+      "verdict": "normal",
+      "evidence": "Continues the conditioned repair investigation coherently, then issues a valid structured bash query (grep for the Norm __call__, class definition, or source lines). No repeated-token degeneration; not capped.",
+      "confidence": "high",
+      "cap_notes": "Complete short continuation ending at a valid tool boundary."
+    },
+    {
+      "job": "anomaly.matplotlib__matplotlib-20488.call82.onset",
+      "mode": "full",
+      "seed": 43,
+      "verdict": "normal",
+      "evidence": "Continues the conditioned repair investigation coherently, then issues a valid structured bash query (grep for the Norm __call__, class definition, or source lines). No repeated-token degeneration; not capped.",
+      "confidence": "high",
+      "cap_notes": "Complete short continuation ending at a valid tool boundary."
+    },
+    {
+      "job": "anomaly.matplotlib__matplotlib-20488.call82.onset",
+      "mode": "full",
+      "seed": 44,
+      "verdict": "normal",
+      "evidence": "Continues the conditioned repair investigation coherently, then issues a valid structured bash query (grep for the Norm __call__, class definition, or source lines). No repeated-token degeneration; not capped.",
+      "confidence": "high",
+      "cap_notes": "Complete short continuation ending at a valid tool boundary."
+    },
+    {
+      "job": "anomaly.matplotlib__matplotlib-20488.call86.onset",
+      "mode": "full",
+      "seed": 42,
+      "verdict": "normal",
+      "evidence": "Continues coherently from the malformed-file diagnosis into a targeted grep/nl bash check; no duplicated contraction or token-loop degeneration.",
+      "confidence": "high",
+      "cap_notes": "Short continuation ending at valid tool boundary; not capped."
+    },
+    {
+      "job": "anomaly.matplotlib__matplotlib-20488.call86.onset",
+      "mode": "full",
+      "seed": 43,
+      "verdict": "reproduced_native_motif",
+      "evidence": "Continues into coherent reasoning and a valid structured bash check, but begins with duplicated contraction suffix `\u2019ve\u2019ve`, matching the native localized duplicated-contraction motif in fixture metadata.",
+      "confidence": "high",
+      "cap_notes": "Short continuation ending at valid tool boundary; not capped."
+    },
+    {
+      "job": "anomaly.matplotlib__matplotlib-20488.call86.onset",
+      "mode": "full",
+      "seed": 44,
+      "verdict": "normal",
+      "evidence": "Continues coherently from the malformed-file diagnosis into a targeted grep/nl bash check; no duplicated contraction or token-loop degeneration.",
+      "confidence": "high",
+      "cap_notes": "Short continuation ending at valid tool boundary; not capped."
+    },
+    {
+      "job": "anomaly.call88.canonicalprefix",
+      "mode": "full",
+      "seed": 42,
+      "verdict": "inconclusive",
+      "evidence": "Conditioned code-writing continuation makes coherent progress through the proposed replacement script; no repeated-token degeneration or repeated native contraction motif is produced in the generated suffix.",
+      "confidence": "high",
+      "cap_notes": "All 3 free runs reach the 256-token cap mid-script; progressing cap cannot establish completed normal behavior."
+    },
+    {
+      "job": "anomaly.call88.canonicalprefix",
+      "mode": "full",
+      "seed": 43,
+      "verdict": "inconclusive",
+      "evidence": "Conditioned code-writing continuation makes coherent progress through the proposed replacement script; no repeated-token degeneration or repeated native contraction motif is produced in the generated suffix.",
+      "confidence": "high",
+      "cap_notes": "All 3 free runs reach the 256-token cap mid-script; progressing cap cannot establish completed normal behavior."
+    },
+    {
+      "job": "anomaly.call88.canonicalprefix",
+      "mode": "full",
+      "seed": 44,
+      "verdict": "inconclusive",
+      "evidence": "Conditioned code-writing continuation makes coherent progress through the proposed replacement script; no repeated-token degeneration or repeated native contraction motif is produced in the generated suffix.",
+      "confidence": "high",
+      "cap_notes": "All 3 free runs reach the 256-token cap mid-script; progressing cap cannot establish completed normal behavior."
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset",
+      "mode": "full",
+      "seed": 42,
+      "verdict": "inconclusive",
+      "evidence": "Continues the conditioned proposal to replace Docutils Include.run and emit source-read; all visible continuations are progressing code/prose with no repeated-token loop or malformed-name repetition observed. Native malformed call:bash-with-newline/prose motif is not reproduced in these generated continuations.",
+      "confidence": "high",
+      "cap_notes": "All 3 runs reach the 256-token cap mid-replacement script; progressing cap remains inconclusive."
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset",
+      "mode": "full",
+      "seed": 43,
+      "verdict": "inconclusive",
+      "evidence": "Continues the conditioned proposal to replace Docutils Include.run and emit source-read; all visible continuations are progressing code/prose with no repeated-token loop or malformed-name repetition observed. Native malformed call:bash-with-newline/prose motif is not reproduced in these generated continuations.",
+      "confidence": "high",
+      "cap_notes": "All 3 runs reach the 256-token cap mid-replacement script; progressing cap remains inconclusive."
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset",
+      "mode": "full",
+      "seed": 44,
+      "verdict": "inconclusive",
+      "evidence": "Continues the conditioned proposal to replace Docutils Include.run and emit source-read; all visible continuations are progressing code/prose with no repeated-token loop or malformed-name repetition observed. Native malformed call:bash-with-newline/prose motif is not reproduced in these generated continuations.",
+      "confidence": "high",
+      "cap_notes": "All 3 runs reach the 256-token cap mid-replacement script; progressing cap remains inconclusive."
+    },
+    {
+      "job": "anomaly.call91.canonicalprefix",
+      "mode": "full",
+      "seed": 42,
+      "verdict": "normal",
+      "evidence": "Continues from the conditioned malformed-file repair into a Python script that fixes indentation and writes the file; no native duplicated-contraction motif appears in full conditioned text.",
+      "confidence": "high",
+      "cap_notes": "Ends at a valid tool-response boundary before requested cap."
+    },
+    {
+      "job": "anomaly.call91.canonicalprefix",
+      "mode": "full",
+      "seed": 43,
+      "verdict": "reproduced_native_motif",
+      "evidence": "Generated continuation starts with `\u2019ve\u2019ve messed up the file`, reproducing the fixture native duplicated-contraction motif (fixture: `I\u2019ve\u2019ve\u2019ve\u2019ve\u2019ve made a mess`), then proceeds into a valid script and tool boundary.",
+      "confidence": "high",
+      "cap_notes": "Short completed continuation ending at tool-response boundary."
+    },
+    {
+      "job": "anomaly.call91.canonicalprefix",
+      "mode": "full",
+      "seed": 44,
+      "verdict": "inconclusive",
+      "evidence": "Continues coherently into a new Python script to repair indentation; generated text does not repeat the native contraction motif.",
+      "confidence": "high",
+      "cap_notes": "Reaches 256-token cap mid-script while progressing; cap cannot establish normal completion."
+    },
+    {
+      "job": "anomaly.pytest-dev__pytest-5787.call65.onset",
+      "mode": "full",
+      "seed": 42,
+      "verdict": "inconclusive",
+      "evidence": "Continues the conditioned _to_json/_from_json repair investigation with a progressing alternative script; no terminal repeated-token degeneration and no native `I will\u2019ll` duplicated-contraction motif occurs in the generated suffix.",
+      "confidence": "high",
+      "cap_notes": "All 3 runs reach 256-token cap while still writing code; cap prevents a completed-normal conclusion."
+    },
+    {
+      "job": "anomaly.pytest-dev__pytest-5787.call65.onset",
+      "mode": "full",
+      "seed": 43,
+      "verdict": "inconclusive",
+      "evidence": "Continues the conditioned _to_json/_from_json repair investigation with a progressing alternative script; no terminal repeated-token degeneration and no native `I will\u2019ll` duplicated-contraction motif occurs in the generated suffix.",
+      "confidence": "high",
+      "cap_notes": "All 3 runs reach 256-token cap while still writing code; cap prevents a completed-normal conclusion."
+    },
+    {
+      "job": "anomaly.pytest-dev__pytest-5787.call65.onset",
+      "mode": "full",
+      "seed": 44,
+      "verdict": "inconclusive",
+      "evidence": "Continues the conditioned _to_json/_from_json repair investigation with a progressing alternative script; no terminal repeated-token degeneration and no native `I will\u2019ll` duplicated-contraction motif occurs in the generated suffix.",
+      "confidence": "high",
+      "cap_notes": "All 3 runs reach 256-token cap while still writing code; cap prevents a completed-normal conclusion."
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset",
+      "mode": "full",
+      "seed": 42,
+      "verdict": "inconclusive",
+      "evidence": "Continues the conditioned Sphinx include/source-read investigation by writing extension/replacement code; no malformed call:bash-newline/prose motif is reproduced.",
+      "confidence": "high",
+      "cap_notes": "All 3 continuations reach 256-token cap while still writing code; cap prevents completed-normal conclusion."
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset",
+      "mode": "full",
+      "seed": 43,
+      "verdict": "inconclusive",
+      "evidence": "Continues the conditioned Sphinx include/source-read investigation by writing extension/replacement code; no malformed call:bash-newline/prose motif is reproduced.",
+      "confidence": "high",
+      "cap_notes": "All 3 continuations reach 256-token cap while still writing code; cap prevents completed-normal conclusion."
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset",
+      "mode": "full",
+      "seed": 44,
+      "verdict": "inconclusive",
+      "evidence": "Continues the conditioned Sphinx include/source-read investigation by writing extension/replacement code; no malformed call:bash-newline/prose motif is reproduced.",
+      "confidence": "high",
+      "cap_notes": "All 3 continuations reach 256-token cap while still writing code; cap prevents completed-normal conclusion."
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-10323.call57.onset",
+      "mode": "full",
+      "seed": 42,
+      "verdict": "inconclusive",
+      "evidence": "Continues the conditioned LiteralIncludeReader filter reasoning and code inspection; no duplicated-contraction motif appears.",
+      "confidence": "high",
+      "cap_notes": "Reaches 256-token cap while progressing."
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-10323.call57.onset",
+      "mode": "full",
+      "seed": 43,
+      "verdict": "normal",
+      "evidence": "Continues the conditioned investigation and issues valid structured bash query `nl -ba sphinx/directives/code.py | sed -n '220,235p'`; no duplicated-contraction motif.",
+      "confidence": "high",
+      "cap_notes": "Short continuation ends at a valid tool-response boundary before cap."
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-10323.call57.onset",
+      "mode": "full",
+      "seed": 44,
+      "verdict": "inconclusive",
+      "evidence": "Continues the conditioned filter-order reasoning; no duplicated-contraction motif or token-loop degeneration.",
+      "confidence": "high",
+      "cap_notes": "Reaches 256-token cap while progressing."
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset",
+      "mode": "full",
+      "seed": 42,
+      "verdict": "inconclusive",
+      "evidence": "Continues the conditioned Sphinx include-directive investigation coherently; generated suffix does not reproduce the native doubled-contraction motif (`'s\u2019s`).",
+      "confidence": "high",
+      "cap_notes": "All 3 seeds reach the 256-token cap while progressing; no completed-normal conclusion."
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset",
+      "mode": "full",
+      "seed": 43,
+      "verdict": "inconclusive",
+      "evidence": "Continues the conditioned Sphinx include-directive investigation coherently; generated suffix does not reproduce the native doubled-contraction motif (`'s\u2019s`).",
+      "confidence": "high",
+      "cap_notes": "All 3 seeds reach the 256-token cap while progressing; no completed-normal conclusion."
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset",
+      "mode": "full",
+      "seed": 44,
+      "verdict": "inconclusive",
+      "evidence": "Continues the conditioned Sphinx include-directive investigation coherently; generated suffix does not reproduce the native doubled-contraction motif (`'s\u2019s`).",
+      "confidence": "high",
+      "cap_notes": "All 3 seeds reach the 256-token cap while progressing; no completed-normal conclusion."
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset",
+      "mode": "full",
+      "seed": 42,
+      "verdict": "normal",
+      "evidence": "Completes the conditioned question with a valid structured Python inspection command; no malformed call:bash-newline/prose tool-name motif is reproduced.",
+      "confidence": "high",
+      "cap_notes": "Each short continuation ends at a valid tool-response boundary before cap."
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset",
+      "mode": "full",
+      "seed": 43,
+      "verdict": "normal",
+      "evidence": "Completes the conditioned question with a valid structured Python inspection command; no malformed call:bash-newline/prose tool-name motif is reproduced.",
+      "confidence": "high",
+      "cap_notes": "Each short continuation ends at a valid tool-response boundary before cap."
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset",
+      "mode": "full",
+      "seed": 44,
+      "verdict": "normal",
+      "evidence": "Completes the conditioned question with a valid structured Python inspection command; no malformed call:bash-newline/prose tool-name motif is reproduced.",
+      "confidence": "high",
+      "cap_notes": "Each short continuation ends at a valid tool-response boundary before cap."
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call108.onset",
+      "mode": "full",
+      "seed": 42,
+      "verdict": "normal",
+      "evidence": "Completes the partial path as a valid site-packages path and cleanly issues `rm -rf reproduction/build` followed by `cd reproduction && sphinx-build . build`; no native stray `singkat` token appears.",
+      "confidence": "high",
+      "cap_notes": "Short complete tool continuation; no cap."
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call108.onset",
+      "mode": "full",
+      "seed": 43,
+      "verdict": "normal",
+      "evidence": "Completes the partial path as a valid site-packages path and cleanly issues `rm -rf reproduction/build` followed by `cd reproduction && sphinx-build . build`; no native stray `singkat` token appears.",
+      "confidence": "high",
+      "cap_notes": "Short complete tool continuation; no cap."
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call108.onset",
+      "mode": "full",
+      "seed": 44,
+      "verdict": "normal",
+      "evidence": "Completes the partial path as a valid site-packages path and cleanly issues `rm -rf reproduction/build` followed by `cd reproduction && sphinx-build . build`; no native stray `singkat` token appears.",
+      "confidence": "high",
+      "cap_notes": "Short complete tool continuation; no cap."
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-10323.call68.onset",
+      "mode": "full",
+      "seed": 42,
+      "verdict": "normal",
+      "evidence": "Conditioned prompt ends with `I've`; continuation forms coherent prose with no repeated contraction, then issues a valid `git checkout sphinx/directives/code.py` tool call. Seed43 adds brief coherent reasoning before the same valid call.",
+      "confidence": "high",
+      "cap_notes": "Short complete continuation ends at valid tool-response boundary before cap."
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-10323.call68.onset",
+      "mode": "full",
+      "seed": 43,
+      "verdict": "normal",
+      "evidence": "Conditioned prompt ends with `I've`; continuation forms coherent prose with no repeated contraction, then issues a valid `git checkout sphinx/directives/code.py` tool call. Seed43 adds brief coherent reasoning before the same valid call.",
+      "confidence": "high",
+      "cap_notes": "Short complete continuation ends at valid tool-response boundary before cap."
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-10323.call68.onset",
+      "mode": "full",
+      "seed": 44,
+      "verdict": "normal",
+      "evidence": "Conditioned prompt ends with `I've`; continuation forms coherent prose with no repeated contraction, then issues a valid `git checkout sphinx/directives/code.py` tool call. Seed43 adds brief coherent reasoning before the same valid call.",
+      "confidence": "high",
+      "cap_notes": "Short complete continuation ends at valid tool-response boundary before cap."
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-10323.call70.onset",
+      "mode": "full",
+      "seed": 42,
+      "verdict": "normal",
+      "evidence": "Conditioned prompt ends `I've`. Generated suffix begins `already tried`, yielding coherent `I've already...` reasoning and a valid structured submit tool call; no duplicated contraction.",
+      "confidence": "high",
+      "cap_notes": "Short complete continuation ends at valid tool-response boundary before cap."
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-10323.call70.onset",
+      "mode": "full",
+      "seed": 43,
+      "verdict": "reproduced_native_motif",
+      "evidence": "Conditioned prompt ends `I've`. Generated suffix begins `\u2019ve tried`, yielding duplicated `I've\u2019ve` and matching fixture native contraction motif; it then submits via valid structured tool call.",
+      "confidence": "high",
+      "cap_notes": "Short complete continuation ends at valid tool-response boundary before cap."
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-10323.call70.onset",
+      "mode": "full",
+      "seed": 44,
+      "verdict": "normal",
+      "evidence": "Conditioned prompt ends `I've`. Generated suffix begins `already tried`, yielding coherent `I've already...` reasoning and a valid structured submit tool call; no duplicated contraction.",
+      "confidence": "high",
+      "cap_notes": "Short complete continuation ends at valid tool-response boundary before cap."
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-9461.call184.onset",
+      "mode": "full",
+      "seed": 42,
+      "verdict": "inconclusive",
+      "evidence": "Completes the conditioned open call:bash prefix with valid command arguments and progresses while writing fix_importer_final.py; no native malformed `bash,command:` tool-name motif or repeated-token degeneration appears.",
+      "confidence": "high",
+      "cap_notes": "All runs hit 256-token cap mid-script while progressing; cap prevents completed-normal conclusion."
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-9461.call184.onset",
+      "mode": "full",
+      "seed": 43,
+      "verdict": "inconclusive",
+      "evidence": "Completes the conditioned open call:bash prefix with valid command arguments and progresses while writing fix_importer_final.py; no native malformed `bash,command:` tool-name motif or repeated-token degeneration appears.",
+      "confidence": "high",
+      "cap_notes": "All runs hit 256-token cap mid-script while progressing; cap prevents completed-normal conclusion."
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-9461.call184.onset",
+      "mode": "full",
+      "seed": 44,
+      "verdict": "inconclusive",
+      "evidence": "Completes the conditioned open call:bash prefix with valid command arguments and progresses while writing fix_importer_final.py; no native malformed `bash,command:` tool-name motif or repeated-token degeneration appears.",
+      "confidence": "high",
+      "cap_notes": "All runs hit 256-token cap mid-script while progressing; cap prevents completed-normal conclusion."
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset",
+      "mode": "full",
+      "seed": 42,
+      "verdict": "inconclusive",
+      "evidence": "Completes the conditioned open call:bash prefix with valid command arguments and progresses while drafting a patch_docutils script; no malformed native call:bash-newline/prose motif or repeated-token degeneration appears.",
+      "confidence": "high",
+      "cap_notes": "All runs hit the 256-token cap mid-script while progressing; cap prevents completed-normal conclusion."
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset",
+      "mode": "full",
+      "seed": 43,
+      "verdict": "inconclusive",
+      "evidence": "Completes the conditioned open call:bash prefix with valid command arguments and progresses while drafting a patch_docutils script; no malformed native call:bash-newline/prose motif or repeated-token degeneration appears.",
+      "confidence": "high",
+      "cap_notes": "All runs hit the 256-token cap mid-script while progressing; cap prevents completed-normal conclusion."
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset",
+      "mode": "full",
+      "seed": 44,
+      "verdict": "inconclusive",
+      "evidence": "Completes the conditioned open call:bash prefix with valid command arguments and progresses while drafting a patch_docutils script; no malformed native call:bash-newline/prose motif or repeated-token degeneration appears.",
+      "confidence": "high",
+      "cap_notes": "All runs hit the 256-token cap mid-script while progressing; cap prevents completed-normal conclusion."
+    }
+  ],
+  "pending": []
+}

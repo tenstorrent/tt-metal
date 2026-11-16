@@ -1,0 +1,52 @@
+{
+  "task": "matplotlib__matplotlib-20488.call86",
+  "mode": "hf_full_precision_bf16",
+  "seed": 43,
+  "verdict": "normal",
+  "confidence": "medium",
+  "evidence": [
+    "HF result SHA-256 7544c2c7a570e573fa29b8743a75ef5edba01e55de629d35741cc8cb4c59f520; case SHA-256 7e8ee5bb1a24cca6e4e58651929198f7a4c4de279ca54495cedae74f3678193d; pinned revision 842da3794eaa0b77d5f08bae87a17459d91ff475.",
+    "Fixture SHA-256 7e8ee5bb1a24cca6e4e58651929198f7a4c4de279ca54495cedae74f3678193d has exactly 4096 prompt IDs and equals the final 4096 IDs of source onset fixture SHA-256 c11bb5890af7b0166bbbb61c44a3200e58aa3eb4b509403759fbb162ae58d179 (source has 46118 IDs; slice identity verified). The rendered conditioned prefix ends with the onset text “I've”; native token IDs and native seed are unavailable, so this is a shortened reconstructed conditioning, not exact native replay.",
+    "HF free run sampled first token 11207 (not repeated-suffix token 236858); generated 68/512 requested tokens and naturally stopped with flag=false. Text proceeds “ broken the file again. The IndentationError is at line 1219. I need to fix it.” then a syntactically canonical bash tool handoff to `nl -ba lib/matplotlib/colors.py | sed -n '1210,1230p'`, ending at expected <tool_response> yield/EOS. No tool execution is inferred.",
+    "Matched seed43 served BFP8-LoFi TT SHA-256 0473b2a180e527d9a609a1f28d65cb7770bb3421012c0affa534ac5fa3ef6d56 and full BF16/HiFi4 TT SHA-256 2fc88476353a38633134bcb85d1fbf8624f99d8e55bb8273e42fca2898bc594d both start token IDs [236858,560,236858,560], i.e. after prefix “I've” they add two ’ve suffixes (“I've’ve’ve”), then continue coherent prose. This is a localized duplicated-contraction family, not a sustained loop in these outputs.",
+    "HF forced-choice distribution at pos0 assigns TT first token 236858 probability 0.26557466 (and top1); actual HF free sample selected 11207. If the TT first token is forced, pos1 token 560 has probability 0.99503618. At pos2, the second repeated-suffix token 236858 has probability 0.25568610 while top1 token 1603 has probability 0.28973034. This supports branch divergence under sampling, not a precision/stack causal conclusion.",
+    "HF same-seed sampled path does not reproduce the TT/native contraction motif and completes a coherent tool handoff. The native record marks a repeated-contraction onset (visible motif “I've’ve”, onset token index 6), but its native seed/output IDs are absent; diagnostic seed43 is not a native-seed replay. A targeted conditional continuation after forcing the TT first two suffix tokens could add branch-specific evidence, but the saved probabilities already show the repeat at pos2 is plausible and not dominant."
+  ],
+  "scope": {
+    "conditioning": "exact last 4096 original prompt IDs; chosen continuation 64; free generation requested 512",
+    "hf_free_tokens": 68,
+    "natural_stop": "<tool_response> EOS/yield token; no cap-extension need for this HF sample",
+    "matched_tt_seed": 43,
+    "tt_served_tokens": 238,
+    "tt_full_tokens": 512,
+    "native_replay": "not exact: native seed and native token IDs unavailable; reconstructed prefix differs from native prompt length by one token per metadata",
+    "timing_s": {
+      "free_trial": 246.87441841117106,
+      "runner_cumulative": 379.375428,
+      "group_wall": 383.641317,
+      "forecast_s": [
+        1380,
+        4980
+      ],
+      "note": "early natural EOS explains shorter-than-forecast group wall; no forecast claim inferred"
+    }
+  },
+  "source_hashes": {
+    "hf_result": "7544c2c7a570e573fa29b8743a75ef5edba01e55de629d35741cc8cb4c59f520",
+    "hf_fixture": "7e8ee5bb1a24cca6e4e58651929198f7a4c4de279ca54495cedae74f3678193d",
+    "source_onset": "c11bb5890af7b0166bbbb61c44a3200e58aa3eb4b509403759fbb162ae58d179",
+    "tt_served": "0473b2a180e527d9a609a1f28d65cb7770bb3421012c0affa534ac5fa3ef6d56",
+    "tt_full": "2fc88476353a38633134bcb85d1fbf8624f99d8e55bb8273e42fca2898bc594d"
+  },
+  "sampling": {
+    "temperature": 1.0,
+    "top_p": 0.95,
+    "top_k": 20,
+    "seed": 43
+  },
+  "runtime_precision": {
+    "HF": "BF16 CPU reference",
+    "served_TT": "stage12_head_bfp8_lofi",
+    "full_TT": "stage12_bf16_hifi4_diagnostic"
+  }
+}

@@ -1,0 +1,183 @@
+{
+  "run_id": "swe-phase2",
+  "status": "prepared_not_launched",
+  "created_utc": "2026-11-14T05:45:10.355234+00:00",
+  "preconditions": [
+    "GPQA fixed10 collected, band passed and required analysis complete",
+    "Same candidate PID alive, precision/pool unchanged; verify running/waiting0 before probe",
+    "Execute probe then require current/swe-phase2/logging_check.json pass before start"
+  ],
+  "logging_check_argv": [
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/check_swe_response_logging.py"
+  ],
+  "logging_check_shell": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/check_swe_response_logging.py",
+  "eval_runs_start_argv": [
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+    "/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/scripts/eval_runs.py",
+    "start",
+    "--model-dir",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it",
+    "--id",
+    "swe-phase2",
+    "--log",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-phase2/run.log",
+    "--cwd",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline",
+    "--note",
+    "Fixed10 SWE; same warmed stage12_head_bfp8_lofi B32/10agents; main limits21600/3600/32768; fresh logging check required",
+    "--",
+    "timeout",
+    "43200",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/agentic-v5-swe-env/bin/harbor",
+    "run",
+    "--config",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe-jobs/swe-phase2_harbor_config.json"
+  ],
+  "eval_runs_start_shell": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python /home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/scripts/eval_runs.py start --model-dir /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it --id swe-phase2 --log /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-phase2/run.log --cwd /home/mvasiljevic/tt-metal-gemma4-31b-pipeline --note 'Fixed10 SWE; same warmed stage12_head_bfp8_lofi B32/10agents; main limits21600/3600/32768; fresh logging check required' -- timeout 43200 /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/agentic-v5-swe-env/bin/harbor run --config /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe-jobs/swe-phase2_harbor_config.json",
+  "server_identity": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/head-bfp8-rates/server/perf-b32-server.json",
+  "server_pid": 141696,
+  "launch_implementation_commit": "fdac20baa579586be87b906938be843fd1ddeb03",
+  "precision": {
+    "config_id": "stage12_head_bfp8_lofi",
+    "weight_groups": {
+      "attention": "bfp4",
+      "mlp": "bfp4",
+      "down": "bfp4",
+      "lm_head": "bfp8_lofi"
+    },
+    "layer_exceptions": {},
+    "compute_fidelities": {
+      "attention": "LoFi",
+      "mlp": "LoFi",
+      "down": "LoFi",
+      "lm_head": "LoFi"
+    },
+    "activation_dtype": "bfloat8_b",
+    "residual_dtype": "bfloat16",
+    "ccl_dtype": {
+      "prefill": "bfloat8_b",
+      "decode": "bfloat16"
+    },
+    "kv_cache_dtype": "bfloat8_b",
+    "logits_dtype": "bfloat16",
+    "sampling_dtype": "bfloat16",
+    "embedding_dtype": "bfloat16",
+    "norm_dtype": "bfloat16",
+    "max_seq_len": 262144
+  },
+  "server_size_evidence": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe_server_size_head_bfp8.json",
+  "server_size_reuse": "Actual measurement from same warmed running candidate; valid only while PID/precision/pool unchanged. No restart needed.",
+  "agents": 10,
+  "batch": 32,
+  "context": 262144,
+  "limits": {
+    "agent_timeout_sec": 21600,
+    "llm_timeout_sec": 3600,
+    "output_cap_tokens": 32768
+  },
+  "outer_timeout_seconds": 43200,
+  "endpoint": "http://172.17.0.1:8000/v1",
+  "job_config": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe-jobs/swe-phase2_harbor_config.json",
+  "job_config_sha256": "b552c22c199ebf045843d922c791cd19b47e768ec03076c125f975c2c7344de2",
+  "harness_refs": {
+    "main": "7a51c2f20f51e7508d8ea365d09092d00bbd5fcb",
+    "harbor": "e76c762fca5267dfb36e1f900f0a7724ed72e735"
+  },
+  "host_memory_snapshot": "               total        used        free      shared  buff/cache   available\nMem:     267699728384 117571420160 17599737856   396414976 132528570368 146522615808\nSwap:     8589930496  1318617088  7271313408\n",
+  "host_disk_snapshot": "Filesystem         1B-blocks          Used    Available Use% Mounted on\n/dev/nvme0n1p2 3935709487104 3250874957824 484834910208  88% /home/mvasiljevic/tt-metal-gemma4-31b-pipeline\n",
+  "tasks": [
+    {
+      "task": "django__django-11299",
+      "image": "sha256:57208d2966fe65f0a2729736bcad730d81af0b4184e481019d3668e2ef4f19fb",
+      "task_config_sha256": "4acd89783982099be046552fb4f36e27117ebf7e8f22651a2ef94c4115543300",
+      "agent_network_mode": "no-network",
+      "cpus": 1,
+      "memory_mb": 4096,
+      "storage_mb": 10240
+    },
+    {
+      "task": "astropy__astropy-14096",
+      "image": "sha256:156c52d79b25539d55b90e0b9d757a149dc16865e8591f2bf5859baf85d57ee2",
+      "task_config_sha256": "20cf0939a4cf3897e5db94d61427e8c3bdd410799eec487e09c1dde3d0fe9aaf",
+      "agent_network_mode": "no-network",
+      "cpus": 1,
+      "memory_mb": 4096,
+      "storage_mb": 10240
+    },
+    {
+      "task": "matplotlib__matplotlib-25332",
+      "image": "sha256:c33c15f22332e0a3852efa9c124fce73c4a3dee16ebd6a2d22baa40eb8526046",
+      "task_config_sha256": "edc5ae05cb7057e57e26e6f095e0e47dd0c7cefd3a09cfa08e5ab36d858c29a1",
+      "agent_network_mode": "no-network",
+      "cpus": 1,
+      "memory_mb": 4096,
+      "storage_mb": 10240
+    },
+    {
+      "task": "sympy__sympy-13551",
+      "image": "sha256:d47a01a5b36f42c29a6d3be83218545f7152722936b9adabdb10feeedc4ee1ef",
+      "task_config_sha256": "ec6c1e0363a239eb4d059acea3936e694bb8209eaffca0eb110f789ea155ced0",
+      "agent_network_mode": "no-network",
+      "cpus": 1,
+      "memory_mb": 4096,
+      "storage_mb": 10240
+    },
+    {
+      "task": "scikit-learn__scikit-learn-14629",
+      "image": "sha256:4b516c93ebc371bba47e07b050151b2ca0dd47341556a506ecbf3232e44b76ed",
+      "task_config_sha256": "f4aba5e73252e267c5ddf83f6737d3ea677c99b9cf3d804aa2731e47d655ca54",
+      "agent_network_mode": "no-network",
+      "cpus": 1,
+      "memory_mb": 4096,
+      "storage_mb": 10240
+    },
+    {
+      "task": "pydata__xarray-3993",
+      "image": "sha256:85ca6917fdfae0e57506f0e0ef650748aeb56b05e4e0c57258ccc23d70464c5b",
+      "task_config_sha256": "b2662e3ee9a1ecf5c6791ce9b4a51fc0787c01ca46386107332ef6b4a7256b70",
+      "agent_network_mode": "no-network",
+      "cpus": 1,
+      "memory_mb": 4096,
+      "storage_mb": 10240
+    },
+    {
+      "task": "sphinx-doc__sphinx-9673",
+      "image": "sha256:5868630bb068d6e76c6918164d83654afc4d12fda1db06736e683fdadb72b306",
+      "task_config_sha256": "d3f1dc077aa135b1e36ef9e8035b17fe7ce5436a539459954ac4d050bbb423a0",
+      "agent_network_mode": "no-network",
+      "cpus": 1,
+      "memory_mb": 4096,
+      "storage_mb": 10240
+    },
+    {
+      "task": "pytest-dev__pytest-5840",
+      "image": "sha256:262159bbf03c475a84b8b372b42fa46c26ea2c94bc1d9dc2836c8f71f8a20d81",
+      "task_config_sha256": "c5e8c415395e1f21e278ca634746e86e99e8e4bd5d0991e021ff99f1d63c6d23",
+      "agent_network_mode": "no-network",
+      "cpus": 1,
+      "memory_mb": 4096,
+      "storage_mb": 10240
+    },
+    {
+      "task": "pylint-dev__pylint-6903",
+      "image": "sha256:d7b4f17f5197b88bdcc7e3ef6ac6e1e443ccf3bd90677be2bda282b0d1e652ba",
+      "task_config_sha256": "4ebb451ad0dac3b1ff9248431fcbfb452fda19f95b94197d5a39d1785930ad1a",
+      "agent_network_mode": "no-network",
+      "cpus": 1,
+      "memory_mb": 4096,
+      "storage_mb": 10240
+    },
+    {
+      "task": "psf__requests-1142",
+      "image": "sha256:5d7142584ab7e6cc27265d12d149db3d207ab1f8a36d3a792d81ba4d9badcef6",
+      "task_config_sha256": "785cf0d7f603ce0e7c4e36e9c967e397443d89cac4093e015e8a49bc84df9510",
+      "agent_network_mode": "no-network",
+      "cpus": 1,
+      "memory_mb": 4096,
+      "storage_mb": 10240
+    }
+  ],
+  "validation_scope": "Local parsing, git status/rev-parse and docker image inspect only. No network, container/model request, eval or hardware action.",
+  "logging_script_change": "Exact generic head-BFP8 logging-check copy; outputpath only changed to current/swe-phase2."
+}

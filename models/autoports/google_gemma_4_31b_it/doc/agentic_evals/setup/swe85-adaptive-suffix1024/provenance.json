@@ -1,0 +1,602 @@
+{
+  "status": "candidate only; not admitted and not run",
+  "purpose": "Test whether exact last 1024 saved prompt IDs restore the original native caret/contraction motif after suffix512 changed the symptom.",
+  "source_manifest": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-admitted-controls85/combined-cases.json",
+  "source_manifest_sha256": "f2aeb0bfe40bce8c102ceba564c41ca164a138d90d9fd25adc5993b6c3d8eb81",
+  "transform": "Copy admitted source fixture and replace prompt_token_ids with the exact last 1024 existing IDs. No template rendering, decoding/re-encoding, truncation of chosen continuation, or change to sampling.",
+  "prefix_policy": "Exact last 1024 existing chosen token IDs.",
+  "sampling_policy": "Preserve source sampling exactly (temperature=1.0, top_p=0.95, top_k=20); free trials use seed 42, 43, 44 from source metadata seed 42.",
+  "chosen_branch_policy": "Use all available chosen tokens exactly (64 for five fixtures; preserve 37 for Sphinx call70).",
+  "sphinx_exception": "Sphinx call70 source fixture contains 37 chosen IDs, not 64. Preserve all 37; do not extend or fabricate tokens. This is an explicit source-length exception.",
+  "execution_policy": "Host-only preparation and CPU validation; no TT device launch or admission.",
+  "cases": [
+    {
+      "name": "anomaly.psf__requests-5414.call9.onset",
+      "source_fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-requests5414-caret-controls/psf__requests-5414.call9.onset.private.json",
+      "source_fixture_sha256": "5024622915942584d71a4eebe667180b660a2f3c45955bddb72de8e019ad7181",
+      "candidate_fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/fixtures/anomaly.psf__requests-5414.call9.onset.suffix1024.private.json",
+      "candidate_fixture_sha256": "9e19aaa5b7f11f026931ef8a8ca1e49bb070a338805b3568cc89dd5065e41e7c",
+      "source_prompt_tokens": 8383,
+      "candidate_prompt_tokens": 1024,
+      "suffix_start_offset": 7359,
+      "source_chosen_tokens": 64,
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "source_seed": 42,
+      "free_trial_seeds": [
+        42,
+        43,
+        44
+      ],
+      "mode_evidence": {
+        "served": {
+          "suffix512_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/served/anomaly.psf__requests-5414.call9.onset.optional-suffix512.json",
+          "suffix512_sha256": "54599204e155e4393d670f2d376d10a0180ae3b629748b33a0337a9f4efca068",
+          "original_long_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/anomaly.psf__requests-5414.call9.onset.json",
+          "original_long_sha256": "b3d177a3cce03befa18c82aca5cc4d3c83b8ba7a1df955ae9dc90027c6d5440f"
+        },
+        "full": {
+          "suffix512_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/full/anomaly.psf__requests-5414.call9.onset.optional-suffix512.json",
+          "suffix512_sha256": "db02b90dccca9c2c8d06838b140605e4dbd527b737e64c27fc81a2cf31b81626",
+          "original_long_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/anomaly.psf__requests-5414.call9.onset.json",
+          "original_long_sha256": "e6ffa906e00bb58b572c161172039d18bddce192359b53aea592ba17f59c5fb7"
+        }
+      },
+      "suffix512_semantic_review": {
+        "served": {
+          "coordinator": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/served-coordinator.json",
+          "coordinator_sha256": "6f16edcfbf5e3e21a20171e71fe61cca4a0bdcbd6322165cb4a54d96f9afea71",
+          "rows": [
+            {
+              "seed": 42,
+              "verdict": "native_anomaly",
+              "reason": "Only caret characters for 512 tokens.",
+              "tokens": 512,
+              "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/served/anomaly.psf__requests-5414.call9.onset.optional-suffix512.json",
+              "source_sha256": "54599204e155e4393d670f2d376d10a0180ae3b629748b33a0337a9f4efca068"
+            },
+            {
+              "seed": 43,
+              "verdict": "other_anomaly",
+              "reason": "Repeated cyclic exception-catching prose without advancing.",
+              "tokens": 512,
+              "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/served/anomaly.psf__requests-5414.call9.onset.optional-suffix512.json",
+              "source_sha256": "54599204e155e4393d670f2d376d10a0180ae3b629748b33a0337a9f4efca068"
+            },
+            {
+              "seed": 44,
+              "verdict": "native_anomaly",
+              "reason": "Only caret characters for 512 tokens.",
+              "tokens": 512,
+              "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/served/anomaly.psf__requests-5414.call9.onset.optional-suffix512.json",
+              "source_sha256": "54599204e155e4393d670f2d376d10a0180ae3b629748b33a0337a9f4efca068"
+            }
+          ]
+        },
+        "full": {
+          "coordinator": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/full-coordinator.json",
+          "coordinator_sha256": "09dc87b7c8dc060a340766c0f149adf3fc6d2a42817900f212dce43e12eb9cc9",
+          "rows": [
+            {
+              "seed": 42,
+              "verdict": "other_anomaly",
+              "reason": "Same traceback frame repeats through512 without advancing.",
+              "tokens": 512,
+              "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/full/anomaly.psf__requests-5414.call9.onset.optional-suffix512.json",
+              "source_sha256": "db02b90dccca9c2c8d06838b140605e4dbd527b737e64c27fc81a2cf31b81626"
+            },
+            {
+              "seed": 43,
+              "verdict": "other_anomaly",
+              "reason": "Cycles the same traceback and catching-exception reasoning block repeatedly.",
+              "tokens": 512,
+              "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/full/anomaly.psf__requests-5414.call9.onset.optional-suffix512.json",
+              "source_sha256": "db02b90dccca9c2c8d06838b140605e4dbd527b737e64c27fc81a2cf31b81626"
+            },
+            {
+              "seed": 44,
+              "verdict": "other_anomaly",
+              "reason": "Cycles traceback and the sentence Wait,the traceback is very repetitive repeatedly.",
+              "tokens": 512,
+              "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/full/anomaly.psf__requests-5414.call9.onset.optional-suffix512.json",
+              "source_sha256": "db02b90dccca9c2c8d06838b140605e4dbd527b737e64c27fc81a2cf31b81626"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "anomaly.psf__requests-5414.call10.onset",
+      "source_fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-requests5414-caret-controls/psf__requests-5414.call10.onset.private.json",
+      "source_fixture_sha256": "38cba2429d022e64133da2c34388d9e88a9b26b82ec58594153692842dccb961",
+      "candidate_fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/fixtures/anomaly.psf__requests-5414.call10.onset.suffix1024.private.json",
+      "candidate_fixture_sha256": "2d8bee7e1640381dcb31e7213e9f3d4ae020303e3e8c1bdb0f750f1714f5e3a2",
+      "source_prompt_tokens": 7057,
+      "candidate_prompt_tokens": 1024,
+      "suffix_start_offset": 6033,
+      "source_chosen_tokens": 64,
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "source_seed": 42,
+      "free_trial_seeds": [
+        42,
+        43,
+        44
+      ],
+      "mode_evidence": {
+        "served": {
+          "suffix512_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/served/anomaly.psf__requests-5414.call10.onset.optional-suffix512.json",
+          "suffix512_sha256": "763a2bd9fc3e25683f1bb11d8815df74168d5cd9b1c6831c248e92a5b7166664",
+          "original_long_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/anomaly.psf__requests-5414.call10.onset.json",
+          "original_long_sha256": "d5addb2dd7d704476bd817ba387c09ee51155e5208ada53e94d086fa9f262c4f"
+        },
+        "full": {
+          "suffix512_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/full/anomaly.psf__requests-5414.call10.onset.optional-suffix512.json",
+          "suffix512_sha256": "78d21a5ed066928895adc25a37c2474ffff6c716d4d261f164162fd7058f2922",
+          "original_long_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/anomaly.psf__requests-5414.call10.onset.json",
+          "original_long_sha256": "46425f7bda72d2200c4a66b6f57d18fce8e9fa42986cc143cb92d1ddd3be993c"
+        }
+      },
+      "suffix512_semantic_review": {
+        "served": {
+          "coordinator": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/served-coordinator.json",
+          "coordinator_sha256": "6f16edcfbf5e3e21a20171e71fe61cca4a0bdcbd6322165cb4a54d96f9afea71",
+          "rows": [
+            {
+              "seed": 42,
+              "verdict": "normal",
+              "reason": "Completes traceback, explains intended URL exception, ends with a reproduction-script command.",
+              "tokens": 190,
+              "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/served/anomaly.psf__requests-5414.call10.onset.optional-suffix512.json",
+              "source_sha256": "763a2bd9fc3e25683f1bb11d8815df74168d5cd9b1c6831c248e92a5b7166664"
+            },
+            {
+              "seed": 43,
+              "verdict": "other_anomaly",
+              "reason": "Unbounded ellipsis-line repetition.",
+              "tokens": 512,
+              "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/served/anomaly.psf__requests-5414.call10.onset.optional-suffix512.json",
+              "source_sha256": "763a2bd9fc3e25683f1bb11d8815df74168d5cd9b1c6831c248e92a5b7166664"
+            },
+            {
+              "seed": 44,
+              "verdict": "normal",
+              "reason": "Completes traceback, explains intended URL exception, ends with a reproduction-script command.",
+              "tokens": 226,
+              "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/served/anomaly.psf__requests-5414.call10.onset.optional-suffix512.json",
+              "source_sha256": "763a2bd9fc3e25683f1bb11d8815df74168d5cd9b1c6831c248e92a5b7166664"
+            }
+          ]
+        },
+        "full": {
+          "coordinator": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/full-coordinator.json",
+          "coordinator_sha256": "09dc87b7c8dc060a340766c0f149adf3fc6d2a42817900f212dce43e12eb9cc9",
+          "rows": [
+            {
+              "seed": 42,
+              "verdict": "normal",
+              "reason": "Completes traceback explanation and emits reproduction-script action.",
+              "tokens": 239,
+              "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/full/anomaly.psf__requests-5414.call10.onset.optional-suffix512.json",
+              "source_sha256": "78d21a5ed066928895adc25a37c2474ffff6c716d4d261f164162fd7058f2922"
+            },
+            {
+              "seed": 43,
+              "verdict": "other_anomaly",
+              "reason": "After coherent start repeats tool_code marker through cap.",
+              "tokens": 512,
+              "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/full/anomaly.psf__requests-5414.call10.onset.optional-suffix512.json",
+              "source_sha256": "78d21a5ed066928895adc25a37c2474ffff6c716d4d261f164162fd7058f2922"
+            },
+            {
+              "seed": 44,
+              "verdict": "normal",
+              "reason": "Completes traceback explanation and emits reproduction-script action.",
+              "tokens": 250,
+              "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/full/anomaly.psf__requests-5414.call10.onset.optional-suffix512.json",
+              "source_sha256": "78d21a5ed066928895adc25a37c2474ffff6c716d4d261f164162fd7058f2922"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "anomaly.psf__requests-5414.call11.onset",
+      "source_fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-requests5414-caret-controls/psf__requests-5414.call11.onset.private.json",
+      "source_fixture_sha256": "50cbd0eb4e62c843a1ec8ac800a580135c3abc5dc2154d6be0a7e39d0c37ed6f",
+      "candidate_fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/fixtures/anomaly.psf__requests-5414.call11.onset.suffix1024.private.json",
+      "candidate_fixture_sha256": "069a6794c0474028161f64153453577e07bc1cbde4690d0e77cef0286214ab65",
+      "source_prompt_tokens": 7226,
+      "candidate_prompt_tokens": 1024,
+      "suffix_start_offset": 6202,
+      "source_chosen_tokens": 64,
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "source_seed": 42,
+      "free_trial_seeds": [
+        42,
+        43,
+        44
+      ],
+      "mode_evidence": {
+        "served": {
+          "suffix512_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/served/anomaly.psf__requests-5414.call11.onset.optional-suffix512.json",
+          "suffix512_sha256": "2993aed8c30b645693abe24e681f859b7fef86ee6aa91d8e7b2d8d94cb510283",
+          "original_long_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/anomaly.psf__requests-5414.call11.onset.json",
+          "original_long_sha256": "ec5c355faaee8aa0d1f2d67ca4500426f48ab0dd5400757302525fd043fa34e0"
+        },
+        "full": {
+          "suffix512_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/full/anomaly.psf__requests-5414.call11.onset.optional-suffix512.json",
+          "suffix512_sha256": "ef5a245dd5579605de4ff1ece121865078b20c869e9608149ce49742f0512ac3",
+          "original_long_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/anomaly.psf__requests-5414.call11.onset.json",
+          "original_long_sha256": "f02de92f04d37c6202ac72b60baebcc4b393610a63f13ad6425ba0d6fa109fd6"
+        }
+      },
+      "suffix512_semantic_review": {
+        "served": {
+          "coordinator": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/served-coordinator.json",
+          "coordinator_sha256": "6f16edcfbf5e3e21a20171e71fe61cca4a0bdcbd6322165cb4a54d96f9afea71",
+          "rows": [
+            {
+              "seed": 42,
+              "verdict": "other_anomaly",
+              "reason": "Ellipsis and indentation repeat for the entire 512-token continuation.",
+              "tokens": 512,
+              "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/served/anomaly.psf__requests-5414.call11.onset.optional-suffix512.json",
+              "source_sha256": "2993aed8c30b645693abe24e681f859b7fef86ee6aa91d8e7b2d8d94cb510283"
+            },
+            {
+              "seed": 43,
+              "verdict": "other_anomaly",
+              "reason": "Ellipsis and indentation repeat for the entire 512-token continuation.",
+              "tokens": 512,
+              "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/served/anomaly.psf__requests-5414.call11.onset.optional-suffix512.json",
+              "source_sha256": "2993aed8c30b645693abe24e681f859b7fef86ee6aa91d8e7b2d8d94cb510283"
+            },
+            {
+              "seed": 44,
+              "verdict": "other_anomaly",
+              "reason": "Ellipsis and indentation repeat for the entire 512-token continuation.",
+              "tokens": 512,
+              "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/served/anomaly.psf__requests-5414.call11.onset.optional-suffix512.json",
+              "source_sha256": "2993aed8c30b645693abe24e681f859b7fef86ee6aa91d8e7b2d8d94cb510283"
+            }
+          ]
+        },
+        "full": {
+          "coordinator": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/full-coordinator.json",
+          "coordinator_sha256": "09dc87b7c8dc060a340766c0f149adf3fc6d2a42817900f212dce43e12eb9cc9",
+          "rows": [
+            {
+              "seed": 42,
+              "verdict": "other_anomaly",
+              "reason": "Only ellipsis and indentation repeat through cap.",
+              "tokens": 512,
+              "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/full/anomaly.psf__requests-5414.call11.onset.optional-suffix512.json",
+              "source_sha256": "ef5a245dd5579605de4ff1ece121865078b20c869e9608149ce49742f0512ac3"
+            },
+            {
+              "seed": 43,
+              "verdict": "inconclusive",
+              "reason": "Invents shell/output blocks but advances to a second reproduction command; truncated at512, needs1024 rather than cap failure.",
+              "tokens": 512,
+              "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/full/anomaly.psf__requests-5414.call11.onset.optional-suffix512.json",
+              "source_sha256": "ef5a245dd5579605de4ff1ece121865078b20c869e9608149ce49742f0512ac3"
+            },
+            {
+              "seed": 44,
+              "verdict": "inconclusive",
+              "reason": "Changes reasoning hypotheses and starts code; truncated at512, needs1024.",
+              "tokens": 512,
+              "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/full/anomaly.psf__requests-5414.call11.onset.optional-suffix512.json",
+              "source_sha256": "ef5a245dd5579605de4ff1ece121865078b20c869e9608149ce49742f0512ac3"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "anomaly.matplotlib__matplotlib-20488.call86.onset",
+      "source_fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-protocol-scan83-controls/matplotlib__matplotlib-20488.call86.onset.private.json",
+      "source_fixture_sha256": "c11bb5890af7b0166bbbb61c44a3200e58aa3eb4b509403759fbb162ae58d179",
+      "candidate_fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/fixtures/anomaly.matplotlib__matplotlib-20488.call86.onset.suffix1024.private.json",
+      "candidate_fixture_sha256": "56a0d881cd7c275743511dd2ac716c2755c913cbc014e7c9c1dd0713ce46a283",
+      "source_prompt_tokens": 46118,
+      "candidate_prompt_tokens": 1024,
+      "suffix_start_offset": 45094,
+      "source_chosen_tokens": 64,
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "source_seed": 42,
+      "free_trial_seeds": [
+        42,
+        43,
+        44
+      ],
+      "mode_evidence": {
+        "served": {
+          "suffix512_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-contraction-short-controls/runs/served/anomaly.matplotlib__matplotlib-20488.call86.onset.optional-suffix512.json",
+          "suffix512_sha256": "6411d47db161375cc80be6ef1dbf189656bb7287eb1c4ce0736fff3c9da3cfb1",
+          "original_long_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/anomaly.matplotlib__matplotlib-20488.call86.onset.json",
+          "original_long_sha256": "96237c2a5fe032bc59aedef81c6282d530a8be471b4f8929774fea64222bff21"
+        },
+        "full": {
+          "suffix512_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-contraction-short-controls/runs/full/anomaly.matplotlib__matplotlib-20488.call86.onset.optional-suffix512.json",
+          "suffix512_sha256": "b024eb7dec3058fd8494d5ed200c9d7547c1708bd54e0f96d0fe983738ca3391",
+          "original_long_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/anomaly.matplotlib__matplotlib-20488.call86.onset.json",
+          "original_long_sha256": "c2361a7834aba8825214064e048ad8a859b01b72300d6a143be31cba754ee9dc"
+        }
+      },
+      "suffix512_semantic_review": {
+        "served": {
+          "coordinator": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-contraction-short-controls/served-coordinator.json",
+          "coordinator_sha256": "573688677e4f9bd0eeb0ec6e3ad2b0b3d5af69227215fd158899c20ec90b9be2",
+          "rows": [
+            {
+              "seed": 42,
+              "verdict": "other_anomaly",
+              "reason": "Repeats Iamseeingthat for virtually whole512tokens.",
+              "tokens": 512,
+              "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-contraction-short-controls/runs/served/anomaly.matplotlib__matplotlib-20488.call86.onset.optional-suffix512.json",
+              "source_sha256": "6411d47db161375cc80be6ef1dbf189656bb7287eb1c4ce0736fff3c9da3cfb1"
+            },
+            {
+              "seed": 43,
+              "verdict": "other_anomaly",
+              "reason": "Repeats analyzingtheproblem manytimes; eventual newreasoning doesnoterase establishedloop.",
+              "tokens": 512,
+              "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-contraction-short-controls/runs/served/anomaly.matplotlib__matplotlib-20488.call86.onset.optional-suffix512.json",
+              "source_sha256": "6411d47db161375cc80be6ef1dbf189656bb7287eb1c4ce0736fff3c9da3cfb1"
+            },
+            {
+              "seed": 44,
+              "verdict": "other_anomaly",
+              "reason": "After conditioned Ihave, entire512tokens repeat curlyapostrophe+d; malformedcontraction family, not exact native apostrophe+ve.",
+              "tokens": 512,
+              "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-contraction-short-controls/runs/served/anomaly.matplotlib__matplotlib-20488.call86.onset.optional-suffix512.json",
+              "source_sha256": "6411d47db161375cc80be6ef1dbf189656bb7287eb1c4ce0736fff3c9da3cfb1"
+            }
+          ]
+        },
+        "full": {
+          "coordinator": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-contraction-short-controls/full-coordinator.json",
+          "coordinator_sha256": "ad89d011aad77f910b1876e336e7e713f156dc28c04c8b96930112b309fa7ba9",
+          "rows": [
+            {
+              "seed": 42,
+              "verdict": "other_anomaly",
+              "reason": "Repeats realization that ifstatement is missingbody through512tokens.",
+              "tokens": 512,
+              "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-contraction-short-controls/runs/full/anomaly.matplotlib__matplotlib-20488.call86.onset.optional-suffix512.json",
+              "source_sha256": "b024eb7dec3058fd8494d5ed200c9d7547c1708bd54e0f96d0fe983738ca3391"
+            },
+            {
+              "seed": 43,
+              "verdict": "normal",
+              "reason": "Completes conditioned thought/comment and emits a concrete toolcall; no stray contraction observed.",
+              "tokens": 36,
+              "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-contraction-short-controls/runs/full/anomaly.matplotlib__matplotlib-20488.call86.onset.optional-suffix512.json",
+              "source_sha256": "b024eb7dec3058fd8494d5ed200c9d7547c1708bd54e0f96d0fe983738ca3391"
+            },
+            {
+              "seed": 44,
+              "verdict": "normal",
+              "reason": "Completes conditioned thought/comment and emits a concrete toolcall; no stray contraction observed.",
+              "tokens": 41,
+              "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-contraction-short-controls/runs/full/anomaly.matplotlib__matplotlib-20488.call86.onset.optional-suffix512.json",
+              "source_sha256": "b024eb7dec3058fd8494d5ed200c9d7547c1708bd54e0f96d0fe983738ca3391"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "anomaly.call91.canonicalprefix",
+      "source_fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-precision/call91/canonicalprefix/case.private.json",
+      "source_fixture_sha256": "3d32de201c14cf805635d3e38fafc2ff220202aded67b71861e16df4fbdf9180",
+      "candidate_fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/fixtures/anomaly.call91.canonicalprefix.suffix1024.private.json",
+      "candidate_fixture_sha256": "02f743ca2733228f18d81f9c91f50309bbe248648a93a137e7681ebd2e1ad589",
+      "source_prompt_tokens": 48411,
+      "candidate_prompt_tokens": 1024,
+      "suffix_start_offset": 47387,
+      "source_chosen_tokens": 64,
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "source_seed": 42,
+      "free_trial_seeds": [
+        42,
+        43,
+        44
+      ],
+      "mode_evidence": {
+        "served": {
+          "suffix512_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-contraction-short-controls/runs/served/anomaly.call91.canonicalprefix.optional-suffix512.json",
+          "suffix512_sha256": "d0ee015633846dfe3b40ab130a1134112fab4045e9d09140487693cfea6cae2c",
+          "original_long_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/anomaly.call91.canonicalprefix.json",
+          "original_long_sha256": "c347b571e82f88404a144ab239414112c6ced5897563c04d80bf99fa1016db80"
+        },
+        "full": {
+          "suffix512_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-contraction-short-controls/runs/full/anomaly.call91.canonicalprefix.optional-suffix512.json",
+          "suffix512_sha256": "160854af31e14c008e4332084d0dadf97e5743fe433f4e27a3128c924a715cfd",
+          "original_long_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/anomaly.call91.canonicalprefix.json",
+          "original_long_sha256": "f02685d64d3567dd6f357c5ac5a0e40cb44e4db2cb60eeaa77c7889904cc876e"
+        }
+      },
+      "suffix512_semantic_review": {
+        "served": {
+          "coordinator": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-contraction-short-controls/served-coordinator.json",
+          "coordinator_sha256": "573688677e4f9bd0eeb0ec6e3ad2b0b3d5af69227215fd158899c20ec90b9be2",
+          "rows": [
+            {
+              "seed": 42,
+              "verdict": "normal",
+              "reason": "Continues conditioned SinceIhave comment coherently; closes EOF and runs fix_colors.py toolcall. Multiple similar comments in44 end; no stray contraction.",
+              "tokens": 24,
+              "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-contraction-short-controls/runs/served/anomaly.call91.canonicalprefix.optional-suffix512.json",
+              "source_sha256": "d0ee015633846dfe3b40ab130a1134112fab4045e9d09140487693cfea6cae2c"
+            },
+            {
+              "seed": 43,
+              "verdict": "normal",
+              "reason": "Continues conditioned SinceIhave comment coherently; closes EOF and runs fix_colors.py toolcall. Multiple similar comments in44 end; no stray contraction.",
+              "tokens": 35,
+              "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-contraction-short-controls/runs/served/anomaly.call91.canonicalprefix.optional-suffix512.json",
+              "source_sha256": "d0ee015633846dfe3b40ab130a1134112fab4045e9d09140487693cfea6cae2c"
+            },
+            {
+              "seed": 44,
+              "verdict": "normal",
+              "reason": "Continues conditioned SinceIhave comment coherently; closes EOF and runs fix_colors.py toolcall. Multiple similar comments in44 end; no stray contraction.",
+              "tokens": 62,
+              "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-contraction-short-controls/runs/served/anomaly.call91.canonicalprefix.optional-suffix512.json",
+              "source_sha256": "d0ee015633846dfe3b40ab130a1134112fab4045e9d09140487693cfea6cae2c"
+            }
+          ]
+        },
+        "full": {
+          "coordinator": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-contraction-short-controls/full-coordinator.json",
+          "coordinator_sha256": "ad89d011aad77f910b1876e336e7e713f156dc28c04c8b96930112b309fa7ba9",
+          "rows": [
+            {
+              "seed": 42,
+              "verdict": "normal",
+              "reason": "Completes conditioned thought/comment and emits a concrete toolcall; no stray contraction observed.",
+              "tokens": 24,
+              "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-contraction-short-controls/runs/full/anomaly.call91.canonicalprefix.optional-suffix512.json",
+              "source_sha256": "160854af31e14c008e4332084d0dadf97e5743fe433f4e27a3128c924a715cfd"
+            },
+            {
+              "seed": 43,
+              "verdict": "normal",
+              "reason": "Completes conditioned thought/comment and emits a concrete toolcall; no stray contraction observed.",
+              "tokens": 129,
+              "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-contraction-short-controls/runs/full/anomaly.call91.canonicalprefix.optional-suffix512.json",
+              "source_sha256": "160854af31e14c008e4332084d0dadf97e5743fe433f4e27a3128c924a715cfd"
+            },
+            {
+              "seed": 44,
+              "verdict": "normal",
+              "reason": "Completes conditioned thought/comment and emits a concrete toolcall; no stray contraction observed.",
+              "tokens": 46,
+              "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-contraction-short-controls/runs/full/anomaly.call91.canonicalprefix.optional-suffix512.json",
+              "source_sha256": "160854af31e14c008e4332084d0dadf97e5743fe433f4e27a3128c924a715cfd"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "anomaly.sphinx-doc__sphinx-10323.call70.onset",
+      "source_fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-extra-contraction-controls/sphinx-doc__sphinx-10323.call70.onset.private.json",
+      "source_fixture_sha256": "7d39e2c87e91327f35317968bf2647887a402d0086085ec8f95db8ff5fc2ab64",
+      "candidate_fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/fixtures/anomaly.sphinx-doc__sphinx-10323.call70.onset.suffix1024.private.json",
+      "candidate_fixture_sha256": "8d6aaf26c98664977dad85a0771fceb905582caa5b5700f1d2cd0f66f755f051",
+      "source_prompt_tokens": 65779,
+      "candidate_prompt_tokens": 1024,
+      "suffix_start_offset": 64755,
+      "source_chosen_tokens": 37,
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "source_seed": 42,
+      "free_trial_seeds": [
+        42,
+        43,
+        44
+      ],
+      "mode_evidence": {
+        "served": {
+          "suffix512_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-contraction-short-controls/runs/served/anomaly.sphinx-doc__sphinx-10323.call70.onset.optional-suffix512.json",
+          "suffix512_sha256": "2d6e042cb8978595b0852e2e59b85e6dc98cd9a1dd85d641952ec7beaf70abfb",
+          "original_long_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/anomaly.sphinx-doc__sphinx-10323.call70.onset.json",
+          "original_long_sha256": "5a16350133e301c6bb38a038dda9caff880d1ecbe441d5a427a5e63e96105f9e"
+        },
+        "full": {
+          "suffix512_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-contraction-short-controls/runs/full/anomaly.sphinx-doc__sphinx-10323.call70.onset.optional-suffix512.json",
+          "suffix512_sha256": "2ce3cdc547d055d4bd2663e1c3c383109b7bad006ad71c0adeff4758f99264a5",
+          "original_long_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/anomaly.sphinx-doc__sphinx-10323.call70.onset.json",
+          "original_long_sha256": "581abc9eafc039e5507b874dabba86b859204f29b1a9a14e45a28dd8d7efa995"
+        }
+      },
+      "suffix512_semantic_review": {
+        "served": {
+          "coordinator": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-contraction-short-controls/served-coordinator.json",
+          "coordinator_sha256": "573688677e4f9bd0eeb0ec6e3ad2b0b3d5af69227215fd158899c20ec90b9be2",
+          "rows": [
+            {
+              "seed": 42,
+              "verdict": "other_anomaly",
+              "reason": "Only curlyapostrophes through512tokens, not exact native apostrophe+ve.",
+              "tokens": 512,
+              "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-contraction-short-controls/runs/served/anomaly.sphinx-doc__sphinx-10323.call70.onset.optional-suffix512.json",
+              "source_sha256": "2d6e042cb8978595b0852e2e59b85e6dc98cd9a1dd85d641952ec7beaf70abfb"
+            },
+            {
+              "seed": 43,
+              "verdict": "other_anomaly",
+              "reason": "Same dedent/prepend reasoning paragraphs cycle through512tokens without advancing.",
+              "tokens": 512,
+              "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-contraction-short-controls/runs/served/anomaly.sphinx-doc__sphinx-10323.call70.onset.optional-suffix512.json",
+              "source_sha256": "2d6e042cb8978595b0852e2e59b85e6dc98cd9a1dd85d641952ec7beaf70abfb"
+            },
+            {
+              "seed": 44,
+              "verdict": "other_anomaly",
+              "reason": "Same dedent/prepend reasoning paragraphs cycle through512tokens without advancing.",
+              "tokens": 512,
+              "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-contraction-short-controls/runs/served/anomaly.sphinx-doc__sphinx-10323.call70.onset.optional-suffix512.json",
+              "source_sha256": "2d6e042cb8978595b0852e2e59b85e6dc98cd9a1dd85d641952ec7beaf70abfb"
+            }
+          ]
+        },
+        "full": {
+          "coordinator": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-contraction-short-controls/full-coordinator.json",
+          "coordinator_sha256": "ad89d011aad77f910b1876e336e7e713f156dc28c04c8b96930112b309fa7ba9",
+          "rows": [
+            {
+              "seed": 42,
+              "verdict": "other_anomaly",
+              "reason": "Cycles same dedent/prepend discussion and intentiontosubmit through512tokens without advancing.",
+              "tokens": 512,
+              "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-contraction-short-controls/runs/full/anomaly.sphinx-doc__sphinx-10323.call70.onset.optional-suffix512.json",
+              "source_sha256": "2ce3cdc547d055d4bd2663e1c3c383109b7bad006ad71c0adeff4758f99264a5"
+            },
+            {
+              "seed": 43,
+              "verdict": "other_anomaly",
+              "reason": "Cycles same dedent/prepend discussion and intentiontosubmit through512tokens without advancing.",
+              "tokens": 512,
+              "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-contraction-short-controls/runs/full/anomaly.sphinx-doc__sphinx-10323.call70.onset.optional-suffix512.json",
+              "source_sha256": "2ce3cdc547d055d4bd2663e1c3c383109b7bad006ad71c0adeff4758f99264a5"
+            },
+            {
+              "seed": 44,
+              "verdict": "other_anomaly",
+              "reason": "Cycles same dedent/prepend discussion and intentiontosubmit through512tokens without advancing.",
+              "tokens": 512,
+              "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-contraction-short-controls/runs/full/anomaly.sphinx-doc__sphinx-10323.call70.onset.optional-suffix512.json",
+              "source_sha256": "2ce3cdc547d055d4bd2663e1c3c383109b7bad006ad71c0adeff4758f99264a5"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

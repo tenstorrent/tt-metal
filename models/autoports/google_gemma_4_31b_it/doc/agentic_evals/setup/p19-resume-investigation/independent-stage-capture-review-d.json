@@ -1,0 +1,212 @@
+{
+  "review": "Independent host-only review of P19 resumed-prefill stage capture",
+  "date": "2026-11-15",
+  "scope": "Read-only review of completed stage report and source manifests. No TTNN import, device action, or production edit.",
+  "probe": {
+    "path": "p19-resume-stages.json",
+    "sha256": "20b023c203cfa4a35bf0223a63eb60f929a25132c28d3286683e3161e200b439",
+    "completion_path": "stages-probe-completion.json",
+    "completion_sha256": "7bea4edee11873527afba1c0527db6216840c418bacfa63b1e577168c01d2334",
+    "candidate_path": "tests/probe_resume_stages_p19.py",
+    "candidate_sha256": "fd572803a97f064bdf984b85031c352d2024806c202b316949470be9075a4b8f",
+    "status": "completed_exit0",
+    "elapsed_seconds": 27.125,
+    "comparisons": 108,
+    "prompt_tokens": 1280,
+    "fresh_chunk": [
+      0,
+      1024
+    ],
+    "resume_chunks": {
+      "32": [
+        32,
+        1056
+      ],
+      "64": [
+        64,
+        1088
+      ],
+      "256": [
+        256,
+        1280
+      ]
+    },
+    "range_per_case": 256,
+    "band_rows": 32,
+    "runtime_policy": "stage12_bf16_hifi4_kv_down_bfp8_p19"
+  },
+  "findings": [
+    {
+      "start": 32,
+      "first_nonexact_stage": "finish.attention_input",
+      "selected_stage_metrics": {
+        "layer.input": {
+          "exact_equal": true,
+          "pcc_mean": 0.9999999999999978,
+          "pcc_min": 0.999999999999925
+        },
+        "qkv.q": {
+          "exact_equal": true,
+          "pcc_mean": 1.0000000000000002,
+          "pcc_min": 0.9999999999999429
+        },
+        "qkv.k": {
+          "exact_equal": true,
+          "pcc_mean": 1.0,
+          "pcc_min": 0.9999999999999999
+        },
+        "qkv.v": {
+          "exact_equal": true,
+          "pcc_mean": 1.0,
+          "pcc_min": 0.9999999999999998
+        },
+        "finish.residual_input": {
+          "exact_equal": true,
+          "pcc_mean": 0.9999999999999978,
+          "pcc_min": 0.999999999999925
+        },
+        "finish.attention_input": {
+          "exact_equal": false,
+          "pcc_mean": 0.9999997249403035,
+          "pcc_min": 0.9999985430539314
+        },
+        "linear[self_attn.o_proj].before_ccl": {
+          "exact_equal": false,
+          "pcc_mean": 0.9999995858798952,
+          "pcc_min": 0.9999981908880216
+        },
+        "linear[self_attn.o_proj].output": {
+          "exact_equal": false,
+          "pcc_mean": 0.9999994776505665,
+          "pcc_min": 0.9999976186827768
+        },
+        "layer.output": {
+          "exact_equal": false,
+          "pcc_mean": 0.9999983148526902,
+          "pcc_min": 0.9999824957085961
+        }
+      }
+    },
+    {
+      "start": 64,
+      "first_nonexact_stage": "finish.attention_input",
+      "selected_stage_metrics": {
+        "layer.input": {
+          "exact_equal": true,
+          "pcc_mean": 0.999999999999998,
+          "pcc_min": 0.999999999999929
+        },
+        "qkv.q": {
+          "exact_equal": true,
+          "pcc_mean": 1.000000000000002,
+          "pcc_min": 0.9999999999999429
+        },
+        "qkv.k": {
+          "exact_equal": true,
+          "pcc_mean": 1.0,
+          "pcc_min": 0.9999999999999999
+        },
+        "qkv.v": {
+          "exact_equal": true,
+          "pcc_mean": 1.0,
+          "pcc_min": 0.9999999999999998
+        },
+        "finish.residual_input": {
+          "exact_equal": true,
+          "pcc_mean": 0.999999999999998,
+          "pcc_min": 0.999999999999929
+        },
+        "finish.attention_input": {
+          "exact_equal": false,
+          "pcc_mean": 0.9999997306589434,
+          "pcc_min": 0.9999987594545918
+        },
+        "linear[self_attn.o_proj].before_ccl": {
+          "exact_equal": false,
+          "pcc_mean": 0.9999995925546092,
+          "pcc_min": 0.9999981908880216
+        },
+        "linear[self_attn.o_proj].output": {
+          "exact_equal": false,
+          "pcc_mean": 0.9999994850840612,
+          "pcc_min": 0.9999971312576014
+        },
+        "layer.output": {
+          "exact_equal": false,
+          "pcc_mean": 0.9999983494606661,
+          "pcc_min": 0.9999824957085961
+        }
+      }
+    },
+    {
+      "start": 256,
+      "first_nonexact_stage": null,
+      "selected_stage_metrics": {
+        "layer.input": {
+          "exact_equal": true,
+          "pcc_mean": 0.9999999999999973,
+          "pcc_min": 0.9999999999999364
+        },
+        "qkv.q": {
+          "exact_equal": true,
+          "pcc_mean": 0.9999999999999986,
+          "pcc_min": 0.9999999999999432
+        },
+        "qkv.k": {
+          "exact_equal": true,
+          "pcc_mean": 1.0,
+          "pcc_min": 0.9999999999999999
+        },
+        "qkv.v": {
+          "exact_equal": true,
+          "pcc_mean": 1.0,
+          "pcc_min": 0.9999999999999998
+        },
+        "finish.residual_input": {
+          "exact_equal": true,
+          "pcc_mean": 0.9999999999999973,
+          "pcc_min": 0.9999999999999364
+        },
+        "finish.attention_input": {
+          "exact_equal": true,
+          "pcc_mean": 1.0000000000000002,
+          "pcc_min": 0.999999999999955
+        },
+        "linear[self_attn.o_proj].before_ccl": {
+          "exact_equal": true,
+          "pcc_mean": 0.9999999999999993,
+          "pcc_min": 0.9999999999998609
+        },
+        "linear[self_attn.o_proj].output": {
+          "exact_equal": true,
+          "pcc_mean": 0.9999999999999991,
+          "pcc_min": 0.9999999999999075
+        },
+        "layer.output": {
+          "exact_equal": true,
+          "pcc_mean": 1.0,
+          "pcc_min": 0.9999999999999238
+        }
+      }
+    }
+  ],
+  "earliest_stage_assessment": {
+    "starts_32_64": "Inputs, norms, qkv projection, q_norm/k_norm, Q/K/V (captured pre-cache), and residual input before attention are exact. The first non-exact capture is finish.attention_input, before self_attn.o_proj and its CCL. The differences are tiny by PCC (aggregate about 0.9999997) but not bitwise exact.",
+    "start_256": "All36 captured stages are bitwise exact across the full compared 256-row band.",
+    "scope": "This local layer0 run locates the earliest captured numerical mismatch at the attention output for offsets32/64 and shows exact aligned control256. It supports investigating Q-block geometry, but does not prove an SDPA defect or explain the full model resume-gate magnitude. Q/K/V are pre-cache and stored cache contents are not compared."
+  },
+  "linked_full_gate": {
+    "completion": "resume-after-completion.json",
+    "completion_sha256": "b3803a7d2a0b44811694060c742f6e115f7efb03df2619d8a71e390ac76e2560",
+    "result": "prefill_resume_after_bf16_ccl.json",
+    "result_sha256": "d43678813b235acfddf113790f38f70c254679b7583f15fe6d838d7968bb4724",
+    "pass_cases": 5,
+    "total_cases": 14,
+    "status": "failed unchanged gate; phase correction improved earliest rows but was insufficient"
+  },
+  "next_diagnostic_candidate": {
+    "path": "run_resume_q32_with_positions.py",
+    "sha256": "9a4c6b6384b258d001b0f1c62e5fb185a5e4ee6f1d2d4b49c3ec42da53bbd7fc",
+    "scope": "Full-model diagnostic wrapper overrides only every constructed layer geometry prefill_q from128 to32 before cases; keeps P19 policy and source K32. AST-verified pinned source literal. No run was performed by this reviewer."
+  }
+}

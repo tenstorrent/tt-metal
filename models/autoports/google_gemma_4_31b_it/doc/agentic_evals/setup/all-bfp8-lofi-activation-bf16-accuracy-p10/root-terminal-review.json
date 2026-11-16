@@ -1,0 +1,16 @@
+{
+  "epoch": 1794754374.9834542,
+  "status": "runtime_allocation_error_accuracy_unavailable",
+  "elapsed_seconds": 166.8076229095459,
+  "forecast_seconds": [
+    150,
+    400
+  ],
+  "forecast_hit": true,
+  "exit_code": 1,
+  "error": "Staticdataflowbuffers end914560 collidewith L1buffer at912128 duringgate/up minimalmatmul inprepare_decode",
+  "accuracy": null,
+  "device_close_clean": true,
+  "autodebug": "debug/launcher-retry.log",
+  "next": "Diagnose/adapt minimalmatmulgeometry then rerun; no numericalrejection"
+}

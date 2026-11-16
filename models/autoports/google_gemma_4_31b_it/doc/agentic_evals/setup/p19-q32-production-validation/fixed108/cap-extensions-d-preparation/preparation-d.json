@@ -1,0 +1,34 @@
+{
+  "status": "prepared_not_admitted_not_launched",
+  "scope": "One host-prepared cap extension candidate from assigned Q32 fixed108 indices 0\u201335. No runtime executed.",
+  "manifest_index": 4,
+  "source_identity": "anomaly.call91.canonicalprefix.seed43.cap256",
+  "source_fixture": "setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.call91.canonicalprefix.seed43.private.json",
+  "source_fixture_sha256": "aee3a45967a31c23ea4600517108deb26c0180dbb7f712f09add1aa9bf1cf49c",
+  "source_result": "setup/p19-q32-production-validation/fixed108/runs/p19_q32/anomaly.call91.canonicalprefix.seed43.cap256.json",
+  "source_result_sha256": "ed4c5d5900f1bd5c89112030c6cd929f604b184bd3a507daaec78b37626aa735",
+  "new_fixture": "setup/p19-q32-production-validation/fixed108/cap-extensions-d-preparation/fixtures/anomaly.matplotlib-call91-seed43.cap512.private.json",
+  "new_fixture_sha256": "f302332009447d0c8cefc5a2a4ad474f73926b0ca6eba8b58fb9a9ad6d0c04dc",
+  "candidate_cases": "setup/p19-q32-production-validation/fixed108/cap-extensions-d-preparation/cases.json",
+  "candidate_cases_sha256": "e53d225a6f2a2bc42c11e89bbd4a0de6d839e8dd39eb4e53956908fee12f7782",
+  "exact_preservation": {
+    "prompt_token_ids": true,
+    "continuations": true,
+    "sampling": true,
+    "seed": true,
+    "branches": [],
+    "trials": 1,
+    "cap": 512
+  },
+  "observed": {
+    "prior_cap": 256,
+    "generated_tokens": 256,
+    "terminal_token_id": 236779,
+    "natural_stop": false,
+    "text_start": " messed it up so much, I'll just try to find a way to restore it.\n# I can't restore it. I'll just fix the current file.\n\nnew_lines = []\nfor line in lines:\n    # Fix the autoscale_None indentation\n    if 'if self.vmin is None and A.size:' in line:\n        new_lines.append('        if self.vmin is Non",
+    "text_end": "elf.vmax is None and A.size:\\n')\n        new_lines.append('            self.vmax = A.max()\\n')\n        continue\n    new_lines.append(line)\n\n# Now I'll fix the __call__ method.\n# I'll do it in a second pass.\nwith open('lib/matplotlib/colors.py', 'w') as f:\n    f.writelines(new_lines)\nEOF\npython3 fix_",
+    "runtime_config_id": "stage12_bf16_hifi4_kv_down_bfp8_p19"
+  },
+  "reason": "Script-writing continuation progressed to the cap and ended mid-command; extension is diagnostically justified.",
+  "limits": "Candidate only; root must combine with other assigned slices and apply its own admission, forecast, serialization, and source-pin review. Not a selection or anomaly disposition."
+}

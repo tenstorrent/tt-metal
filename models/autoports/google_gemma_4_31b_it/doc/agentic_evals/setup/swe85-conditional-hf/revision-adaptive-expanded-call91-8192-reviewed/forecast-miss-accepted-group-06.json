@@ -1,0 +1,15 @@
+{
+  "status": "root_accepted_forecast_miss",
+  "reviewer": "root",
+  "accepted": true,
+  "utc": "2026-11-15T10:09:37.699311+00:00",
+  "completion_sha256": "ad828e22fcc086bfac514723cff621d9b1d7cef84ba1de833351e85e5c2f22a5",
+  "measured_seconds": 383.641316652298,
+  "forecast_range_seconds": [
+    1380,
+    4980
+  ],
+  "admission_sha256": "74640276fdf5e463fa968d5d188994622759df96f09d4f408e02712b7d09ae66",
+  "serial_order": 6,
+  "explanation": "Reference naturally stopped after68/512 tokens at normal tool-yield EOS50. Free246.874418s, runner379.375428s, outside4.265889s. Original point/range priced512 tokens; this low miss is explained by fewer generated tokens, no under-measured phase or hidden timeout. Semantic independent triage remains in progress; next independent group can proceed."
+}

@@ -1,0 +1,24 @@
+{
+  "status": "candidate_only_unadmitted_no_HF_launch",
+  "p2": {
+    "directory": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal",
+    "admission_sha256": "74bef162c97e23e882612eb85dae365f32c9da1f13ba4b9b8e1e1f8f582ad1be",
+    "proposal_sha256": "ddaaa015f62bd731afc6f9f19f37056a0f74d2071023338938420a3a080181a7",
+    "driver_sha256": "2bcfdcc1f018f2398212de0cd94119030dfe54b5dcc9f1578478b1771ecb1836",
+    "source_inventory_sha256": "d8d039fa8fefb072264bc902bc798dd260e00371151eda74b204a5c74a5418ad",
+    "forecast_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/runtime-estimate.json",
+    "forecast_sha256": "55e6d1800078e1d5a10660db196a3075d7892fac6a8efe5c7626198264837f81",
+    "required_queue_status": "completed",
+    "required_completion_exit_code": 0,
+    "forecast_miss_record": "forecast-miss-accepted.json"
+  },
+  "refreshed_files": {
+    "run_expanded_after_predecessors.py": "da05e12d28c27927267843530cfc0c467a4a7d22cd3f376f5ec4e64ee06af91a",
+    "source-integrity.json": "e5257335bbb076f5b46d4acf8403acdc65972f3062e1e1f3e1b9ff46680c97aa",
+    "proposal.json": "c8def963564db7c0d2b3d21a1ffb940b7a839b2f2ea104d526e9e3420e5f992e",
+    "commands.json": "90a3cddcc0bda1dd99c64eafd325c5a0b1537fcf5e6291b8399501e3056192a2",
+    "admission.json": "4902a19547914942f6f80da0959cf3e9b9d4ae51e238fc7ddde4af37b2adf216",
+    "p2-gate-validation-c.json": "ee5c7712d679cc154686771199a7ad2cfd229ae10e29a88020d16d2109626324"
+  },
+  "no_launch": true
+}

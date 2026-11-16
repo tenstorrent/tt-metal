@@ -1,0 +1,146 @@
+{
+  "status": "completed_phase_projection_draft_not_admitted_or_selected",
+  "created_utc": "2026-11-14T07:17:38.028591+00:00",
+  "supersedes_for_SWE_projection": "setup/extended_projection_draft.json (preserved unchanged)",
+  "phase_actual_hours": 1.403611356,
+  "phase_calls": 434,
+  "phase_task_count": 10,
+  "source_calls": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-phase2-ready/collected/calls.json",
+  "accounting_caveat": "Raw accounting_complete false reflects known logging probe excluded as harness_setup; task434 native calls used without modifying raw evidence.",
+  "rates": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/head-bfp8-rates/measurement/serving_rates-swe.json",
+  "method": "Cycle ten freshly measured complete task trajectories in existing fixed-list order onto12 earliest-free slots. Direct rate model assumes12 concurrent on all calls, includes measured outside_s; rate-scaled model multiplies measured task time by predicted12/10 ratio. Repeats are projection archetypes, not selected task identities. Unknown new-task tail variation/setup remains.",
+  "server": {
+    "agents": 12,
+    "batch": 32,
+    "pool_ids": 36896,
+    "working_set_tokens": 131072,
+    "capacity_agents": 12,
+    "context": 262144,
+    "evidence": "setup/swe_server_size_head_bfp8.json"
+  },
+  "per_task": [
+    {
+      "task": "django__django-11299",
+      "calls": 71,
+      "output_tokens": 11561,
+      "observed_hours": 0.2483122177918752,
+      "candidate12_rate_hours": 0.7094466402321691,
+      "rate_reasons": [
+        "contexts above the longest measured row (28672 at batch 32) are extrapolated"
+      ]
+    },
+    {
+      "task": "astropy__astropy-14096",
+      "calls": 50,
+      "output_tokens": 84522,
+      "observed_hours": 1.4028529383076562,
+      "candidate12_rate_hours": 7.316494522529505,
+      "rate_reasons": []
+    },
+    {
+      "task": "matplotlib__matplotlib-25332",
+      "calls": 36,
+      "output_tokens": 9085,
+      "observed_hours": 0.2107377224498325,
+      "candidate12_rate_hours": 0.722416783009559,
+      "rate_reasons": [
+        "contexts above the longest measured row (28672 at batch 32) are extrapolated"
+      ]
+    },
+    {
+      "task": "sympy__sympy-13551",
+      "calls": 55,
+      "output_tokens": 10407,
+      "observed_hours": 0.2284893478287591,
+      "candidate12_rate_hours": 0.7886649640651684,
+      "rate_reasons": [
+        "contexts above the longest measured row (28672 at batch 32) are extrapolated"
+      ]
+    },
+    {
+      "task": "scikit-learn__scikit-learn-14629",
+      "calls": 39,
+      "output_tokens": 9369,
+      "observed_hours": 0.20855053219530317,
+      "candidate12_rate_hours": 0.6267338892746612,
+      "rate_reasons": []
+    },
+    {
+      "task": "pydata__xarray-3993",
+      "calls": 38,
+      "output_tokens": 5889,
+      "observed_hours": 0.14797588778866663,
+      "candidate12_rate_hours": 0.322467578874718,
+      "rate_reasons": []
+    },
+    {
+      "task": "sphinx-doc__sphinx-9673",
+      "calls": 52,
+      "output_tokens": 14022,
+      "observed_hours": 0.2906814046700795,
+      "candidate12_rate_hours": 1.1760973180758723,
+      "rate_reasons": [
+        "contexts above the longest measured row (28672 at batch 32) are extrapolated"
+      ]
+    },
+    {
+      "task": "pytest-dev__pytest-5840",
+      "calls": 36,
+      "output_tokens": 8878,
+      "observed_hours": 0.18855298863516914,
+      "candidate12_rate_hours": 0.555277415901396,
+      "rate_reasons": []
+    },
+    {
+      "task": "pylint-dev__pylint-6903",
+      "calls": 17,
+      "output_tokens": 5663,
+      "observed_hours": 0.12465702447626326,
+      "candidate12_rate_hours": 0.29463296514880705,
+      "rate_reasons": []
+    },
+    {
+      "task": "psf__requests-1142",
+      "calls": 40,
+      "output_tokens": 8940,
+      "observed_hours": 0.19650989168220095,
+      "candidate12_rate_hours": 0.4213780994325127,
+      "rate_reasons": []
+    }
+  ],
+  "observed_duration_projection": {
+    "full500_hours": 14.384510301550229,
+    "largest_count_under10h": 331,
+    "hours_at_count": 9.788149136900902,
+    "mean_task_hours": 0.3247319955825806,
+    "max_task_hours": 1.4028529383076562
+  },
+  "observed_duration_scaled10to12": {
+    "full500_hours": 16.789900697256332,
+    "largest_count_under10h": 281,
+    "hours_at_count": 9.846099680554172,
+    "mean_task_hours": 0.37897545394354,
+    "max_task_hours": 1.6496965170071103
+  },
+  "candidate12_rate_projection": {
+    "full500_hours": 58.21270320086316,
+    "largest_count_under10h": 51,
+    "hours_at_count": 9.674603145781434,
+    "mean_task_hours": 1.2933610176544368,
+    "max_task_hours": 7.316494522529505
+  },
+  "selected_list": null,
+  "admission": "Do not admit while phase2 anomaly controls active; root must resolve pass/analysis then select largest nested list within projected10h and12h timeout including setup.",
+  "setup_constraints": {
+    "metadata": "setup/extended_official_image_availability.json",
+    "official_tasks": 500,
+    "cached_task_images": 10,
+    "uncached_task_images": 490,
+    "available_disk_bytes_now": 474119790592,
+    "available_disk_gib": 441.55846405029297,
+    "twelve_current_sandbox_storage_gib": 120,
+    "usable_image_growth_after_sandbox_storage_gib": 321.55846405029297,
+    "caveat": "Missing image sizes/shared-layer dedup and acquisition/preseed throughput unmeasured. Current4GiBRAM/10GiBdisk task resources must be checked per added task. No fetch/build/network performed; setup time not included in inference projections."
+  },
+  "GPQA_projection": "Prior full198 current-candidate projection remains in preserved draft; no GPQA rerun or new result used."
+}

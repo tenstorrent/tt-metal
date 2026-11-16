@@ -1,0 +1,49 @@
+{
+  "status": "prepared_not_admitted_not_run",
+  "argv": [
+    "timeout",
+    "3600",
+    "env",
+    "HF_HUB_OFFLINE=1",
+    "HF_DATASETS_OFFLINE=1",
+    "HF_HUB_DISABLE_TELEMETRY=1",
+    "OMP_NUM_THREADS=16",
+    "MKL_NUM_THREADS=16",
+    "OPENBLAS_NUM_THREADS=16",
+    "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+    "READINESS_TRACE_REGION_SIZE=134217728",
+    "TT_METAL_TRACE_ALLOC_TRACKING=1",
+    "TT_METAL_DEVICE_PROFILER=0",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+    "-m",
+    "models.autoports.google_gemma_4_31b_it.tests.run_datatype_candidate",
+    "--config",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/bf16-hifi4-kv-down-bfp8-accuracy-p19/precision.json",
+    "--id",
+    "stage12_p19_q32_production_acceptance",
+    "--output-dir",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/p19-q32-production-validation/acceptance/run",
+    "--reference",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/attention-down-acceptance/references/aime24.refpt",
+    "--natural-reference",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/attention-down-acceptance/references/natural.refpt",
+    "--require-accuracy",
+    "--acceptance"
+  ],
+  "output_dir": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/p19-q32-production-validation/acceptance/run",
+  "timeout_seconds": 3600,
+  "forecast_seconds": {
+    "low": 800,
+    "point": 1500,
+    "high": 3000
+  },
+  "forecast_basis": "Same P19 60-layer/broad acceptance historically took1056.035s with Q128 geometry and TT_METAL_TRACE_ALLOC_TRACKING=0. This candidate uses tracking=1 to collect representative replay allocation evidence; timing is not directly comparable. The14-case Q32 resume diagnostic took269.970s, but Q32 fresh-prefill cost and tracking overhead are unmeasured; retain a broad 3600s cap. Forecast is planning only, not a performance estimate.",
+  "scope": "Same P19 policy, accuracy repeats, natural-token comparison, AR4096/128 B1, retained-note prompt, six qualitative controls, full-context boundaries, and runtime-policy inventory. Output path is new; prior Q128 acceptance is historical only.",
+  "requires": [
+    "Root admission after HF22 terminal and all HF/TT owners zero",
+    "Run only after updated production resume gate passes",
+    "Root/independent review of all qualitative outputs and exact runtime policy",
+    "Fresh source pin/deadline/owner checks immediately before launch"
+  ],
+  "trace_allocation_tracking": "Enabled (1) for representative replay allocation evidence; historical1056.035s acceptance used0, so compare only correctness/outputs unless timing is normalized."
+}

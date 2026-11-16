@@ -1,0 +1,122 @@
+{
+  "status": "independent_host_only_review_complete",
+  "scope": "Two exact Requests2931 call20 cap512→1024 continuation checks after the first six cap extensions. No task-correctness or native RNG equivalence claim.",
+  "completion": {
+    "start_unix": 1794783912.2044315,
+    "end_unix": 1794784091.0436556,
+    "exit_code": 0,
+    "wall_seconds": 178.83922410011292
+  },
+  "admission_sha256": "dc52b9a18e2899a8681924f0184c6fc5226953f72044cb4585c8956b898c6ce1",
+  "source_pin_count": 164,
+  "source_pins_all_match": true,
+  "cases": [
+    {
+      "seed": 42,
+      "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-precision/requests2931-call20/canonicalprefix/case.private.json",
+      "fixture_sha256": "7f527603e08f61f5516745fc2fab496c6ae7020985372c8f71fd0459895c10f0",
+      "prompt_token_count": 8580,
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 42
+      },
+      "runtime_precision": {
+        "config_id": "stage12_bf16_hifi4_diagnostic",
+        "weight_groups": {
+          "attention": "bf16",
+          "mlp": "bf16",
+          "down": "bf16",
+          "lm_head": "bf16"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "HiFi4",
+          "mlp": "HiFi4",
+          "down": "HiFi4",
+          "lm_head": "HiFi4"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat16",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144,
+        "sdpa_compute_fidelity": "HiFi4"
+      },
+      "prior_output": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full-q32-production-validation/fixed108/cap-extensions-root/runs/anomaly.requests2931.call20.canonicalprefix.seed42.cap256-extended-to512.json",
+      "prior_output_sha256": "1e4bb0714f7fab91acf414b42548a98e8f5a80a4b78a315f60d9bbae39196949",
+      "prior_generated_ids": 512,
+      "prior_generated_ids_sha256": "4503fe1913f6fbfc7b4a04db24109e6efa244124c6c1da0a182d72f5d7e9a3d0",
+      "extended_output": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full-q32-production-validation/fixed108/cap-extensions-next-requests2931/retry-root/runs/anomaly.requests2931.call20.canonicalprefix.seed42.cap512-extended-to1024.json",
+      "extended_output_sha256": "38a3a353a6e102cc30d7bb8a9597e10bc3b306c0e495b8c82de853410c6c3387",
+      "extended_generated_ids": 532,
+      "first512_ids_exact": true,
+      "diagnostic_wall_s": 47.45458039804362,
+      "decode_wall_s": 31.555399982025847,
+      "terminal_behavior": "Natural stop below1024 after coherent continuation and closed bash tool call; no sustained caret tail.",
+      "verdict": "normal"
+    },
+    {
+      "seed": 44,
+      "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.requests2931.call20.canonicalprefix.seed44.private.json",
+      "fixture_sha256": "971939b876f462ed4002ba8757826708e6e3d19a20d9496298f61c49af698d40",
+      "prompt_token_count": 8580,
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 44
+      },
+      "runtime_precision": {
+        "config_id": "stage12_bf16_hifi4_diagnostic",
+        "weight_groups": {
+          "attention": "bf16",
+          "mlp": "bf16",
+          "down": "bf16",
+          "lm_head": "bf16"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "HiFi4",
+          "mlp": "HiFi4",
+          "down": "HiFi4",
+          "lm_head": "HiFi4"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat16",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144,
+        "sdpa_compute_fidelity": "HiFi4"
+      },
+      "prior_output": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full-q32-production-validation/fixed108/cap-extensions-root/runs/anomaly.requests2931.call20.canonicalprefix.seed44.cap256-extended-to512.json",
+      "prior_output_sha256": "e229f0e76fe7b7cf8cd6505756ee657f7a0a3b92a4322210d8a90b656dd0ea74",
+      "prior_generated_ids": 512,
+      "prior_generated_ids_sha256": "79d2961b5f3ecdc4acdaf48a0ebd1338c44f1de30aec936558bf3ece47e8dd33",
+      "extended_output": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full-q32-production-validation/fixed108/cap-extensions-next-requests2931/retry-root/runs/anomaly.requests2931.call20.canonicalprefix.seed44.cap512-extended-to1024.json",
+      "extended_output_sha256": "e094a80a0af23c99b2c03d23f0ddcb855a4c7772962f21123aa89e1efc1a7f41",
+      "extended_generated_ids": 773,
+      "first512_ids_exact": true,
+      "diagnostic_wall_s": 49.10465334705077,
+      "decode_wall_s": 45.868577998131514,
+      "terminal_behavior": "Natural stop below1024 after coherent continuation and closed bash tool call; no sustained caret tail.",
+      "verdict": "normal"
+    }
+  ],
+  "verdict": "Both exact fixture/seed continuations preserve the first512 generated IDs, then stop naturally at532/773 IDs with coherent traceback reasoning and closed tool calls. They contain no sustained caret tail; normal for this diagnostic case."
+}

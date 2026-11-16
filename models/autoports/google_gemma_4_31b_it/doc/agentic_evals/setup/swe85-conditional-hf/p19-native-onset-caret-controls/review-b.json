@@ -1,0 +1,55 @@
+{
+  "review_status": "prepared_candidate_reviewed_not_admitted_not_run",
+  "reviewed_utc": "2026-11-15T16:20:33Z",
+  "candidate_hashes": {
+    "cases.json": "104453e1c9927cd5eb014ff052b6d4311f68cc6b6d59823c29ad30b1b3f58d3a",
+    "command.json": "fd3a5ff2dadf0ca2afbd6358dafbba029d20d3e9173a569b04805a6dd35356e2"
+  },
+  "identity_review": {
+    "embedded_source_sha256": "all six command.json pins recomputed and matched (cases manifest, precision_repro_hf.py, generate_full_reference.py, tt/weights.py, and two onset fixtures)",
+    "separate_source_hashes_file": "absent; embedded source_sha256 map is valid. Candidate directory contains only cases.json, command.json, and this review; no output directory exists.",
+    "cases": [
+      {
+        "name": "anomaly.psf__requests-5414.call11.onset.seed42.cap256",
+        "fixture_sha256": "50cbd0eb4e62c843a1ec8ac800a580135c3abc5dc2154d6be0a7e39d0c37ed6f",
+        "reconstructed_prompt_tokens": 7226,
+        "exact_id_comparison": "fixture.prompt_token_ids match P19 result case path and original full-TT result case path (both reference this exact fixture); P19 free-running seed42 row has 256/256 token IDs 172109 (caret), flag true.",
+        "p19_result_sha256": "fc8ad8eb441d45761864f6ed0dc2192afd13367976cfab171ce216b785bc9dd8",
+        "full_tt_result_sha256": "f02de92f04d37c6202ac72b60baebcc4b393610a63f13ad6425ba0d6fa109fd6",
+        "full_tt_policy": "all weight groups BF16, all HiFi4, KV BF16; seed42 and seeds43/44 each 256 carets, anomaly flag true.",
+        "p19_policy": "BF16 attention/MLP/head HiFi4, down BFP8 LoFi, KV BFP8; seed42, 256 carets."
+      },
+      {
+        "name": "anomaly.pytest-dev__pytest-7432.call19.onset.seed42.cap256",
+        "fixture_sha256": "436bf8f06cebc27f9ac206ab4c85c655b2c707145be67b8341f14288370807f5",
+        "reconstructed_prompt_tokens": 11095,
+        "exact_id_comparison": "fixture.prompt_token_ids match P19 result case path and original full-TT result case path (both reference this exact fixture); P19 free-running seed42 row has 256 tokens: six initial caret IDs, traceback/code, then caret tail; mechanical flag false.",
+        "p19_result_sha256": "ec7088f6b0b9405fdeb20193f0247390757b18c620261ff5bf8a0fce70a4b706",
+        "full_tt_result_sha256": "62dc8a7a0d36eaadf188803d4e1d08372a099dccb41aaa09ca7119710dfe2f07",
+        "full_tt_policy": "all weight groups BF16, all HiFi4, KV BF16; seed42/43/44 each have the same six-caret plus traceback/code and caret-tail form (256 tokens); anomaly flag false.",
+        "p19_policy": "BF16 attention/MLP/head HiFi4, down BFP8 LoFi, KV BFP8; seed42 output matches the described caret/traceback/caret-tail morphology."
+      }
+    ],
+    "scope_caveat": "Both are exact saved reconstructed onset prompt token-ID inputs and matched seed42 full-TT/P19 fixtures, not native ID/RNG replays: fixture metadata says native_prompt_ids_available=false and native_seed=null. Candidate asks HF CPU free-run seed42 at 256 tokens, no extra forced caret and no suffix shortening; this is appropriately bounded evidence, not an exact native execution."
+  },
+  "runtime_and_cli": {
+    "validate_only": "independent exact candidate CLI with --validate-only exited 0: Validated 2 saved-token cases; no model loaded.",
+    "planned_run": "offline environment, explicit repo+skill-runtime PYTHONPATH, python_env interpreter, pinned runner; --tokens 256 --seeds 42 --prefill-chunk 512; unique absent results directory; timeout 4200s.",
+    "runner_revision": "precision_repro_hf imports HF_MODEL/HF_REVISION from tt/weights.py; pinned revision is 842da3794eaa0b77d5f08bae87a17459d91ff475; runner uses local_files_only, CPU BF16 reference, and fixed T=1/top_p=.95/top_k=20.",
+    "runtime_note": "validate-only returns before torch/transformers/reference-model imports; no model was loaded and no inference was run."
+  },
+  "forecast_review": {
+    "declared_seconds": {
+      "low": 1000,
+      "point": 1900,
+      "high": 3600
+    },
+    "assessment": "Broad range is stated but point/low are weakly supported: they extrapolate ~2.016 s/token short-context HF timing to 512 generated tokens, then add ~700s prompt allowance from 512-token bundles. Prior HF long-context observations show per-token decode cost rising with context (about 3.744 s/token at 4096 prompt and 5.518 s/token at 8192 prompt); these 7226/11095-token prompts can make the 1900s point optimistic. Rebase or explicitly model context-dependent decode/prefill at admission; timeout 4200 may be tight if long-context decode approaches those rates. This is planning uncertainty, not a request to run a benchmark."
+  },
+  "preflight_blockers_and_conditions": {
+    "p19": "Not terminal at review: launch.json status remains running and runs/p19 contains 68 output JSONs of 108. Requirement for terminal P19 and no active device/model owner is unmet; no launch now.",
+    "admission": "No admission, fresh memory snapshot, owner check, or latest-start/deadline record is present in this candidate. command.json requires these and closure reserve; calculate against deadline epoch 1794791725 at final admission. At review time 2026-11-15 16:20:33 UTC, nominal time remaining was 8h54m52s; recheck at launch.",
+    "source_and_controls": "Embedded source pins are correct; before admission also bind the exact full-TT control result hashes and P19 completion/terminal review, and record forecast reconciliation. No output directory currently exists, satisfying no-reuse condition."
+  },
+  "disposition": "Static host validation and identity checks pass. Candidate is a useful full reconstructed-prompt HF control; retain as prepared only until P19 terminal, fresh memory/deadline/owner admission, forecast review, and full-TT control hashes are explicitly bound. No runtime or canonical files changed."
+}

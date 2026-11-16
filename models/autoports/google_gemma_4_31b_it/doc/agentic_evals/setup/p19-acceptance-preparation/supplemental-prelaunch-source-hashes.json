@@ -1,0 +1,250 @@
+{
+  "title": "Supplemental prelaunch source and adjudication hashes for P19 acceptance",
+  "status": "host_only_source_inventory_not_admitted",
+  "scope": "Supplement to command.json and resume-command.json. Hashes only; no runtime/source/command edits, execution or device work.",
+  "acceptance_command_binding": {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/p19-acceptance-preparation/command.json",
+    "sha256": "ff52b9c0c4105d62becfa564ef3d56ef6b3e4180aa81c6197c9ffd2d5cf68c5d"
+  },
+  "resume_command_binding": {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/p19-acceptance-preparation/resume-command.json",
+    "sha256": "3828149f51286d114ae17e4bae96de8522363dd085f2d9dba34471c46e87a832"
+  },
+  "resume_build_kwargs_binding": {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/p19-acceptance-preparation/resume-build-kwargs.json",
+    "sha256": "b253ec0c3cd010e97498129b95810aa9d5834ae2a215b31c220805fd5e4e8835"
+  },
+  "prior_review_binding": {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/p19-acceptance-preparation/preparation-review-d.json",
+    "sha256": "7ad02e2fac95a6fc14786ed522cf1a5c375068986f808652654aa316124c74b7"
+  },
+  "additional_prelaunch_source_hashes": [
+    {
+      "category": "autoport_tt_runtime_prelaunch_hashes",
+      "path": "models/autoports/google_gemma_4_31b_it/tt/batched_prefill.py",
+      "sha256": "ab99ab9c8c54f206d16a56df1dc02bc3c4da14db003ea52d6e45d7f679af8df8",
+      "exists": true
+    },
+    {
+      "category": "autoport_tt_runtime_prelaunch_hashes",
+      "path": "models/autoports/google_gemma_4_31b_it/tt/benchmark_phases.py",
+      "sha256": "659d7a4aa043f30dc1313a0cfedd68265a3d17b03db7a2a2bf9b5be253f46f9e",
+      "exists": true
+    },
+    {
+      "category": "autoport_tt_runtime_prelaunch_hashes",
+      "path": "models/autoports/google_gemma_4_31b_it/tt/functional_decoder.py",
+      "sha256": "a9d4f4d8ba3c710fb7508e0f0804e499a1312a847484f4d4e6668bd6b4334731",
+      "exists": true
+    },
+    {
+      "category": "autoport_tt_runtime_prelaunch_hashes",
+      "path": "models/autoports/google_gemma_4_31b_it/tt/fused_decoder.py",
+      "sha256": "cc1b358f90a2fadab24cbb3dd9826ffe32015fab46ccefac25c0c6c11c658149",
+      "exists": true
+    },
+    {
+      "category": "autoport_tt_runtime_prelaunch_hashes",
+      "path": "models/autoports/google_gemma_4_31b_it/tt/generator.py",
+      "sha256": "3276fd7427898077ab25e139f89a7b03d2a968cd9bafb79e9aa08bb975016f22",
+      "exists": true
+    },
+    {
+      "category": "autoport_tt_runtime_prelaunch_hashes",
+      "path": "models/autoports/google_gemma_4_31b_it/tt/generator_contract.py",
+      "sha256": "b5af096ae1b99d19a48786c089a790778faf1c228a45b4a8933a447dfba95f24",
+      "exists": true
+    },
+    {
+      "category": "autoport_tt_runtime_prelaunch_hashes",
+      "path": "models/autoports/google_gemma_4_31b_it/tt/generator_vllm.py",
+      "sha256": "5a19558b9b28b6a5586cc985bedebdd88671ba07b453ced2890935552937b734",
+      "exists": true
+    },
+    {
+      "category": "autoport_tt_runtime_prelaunch_hashes",
+      "path": "models/autoports/google_gemma_4_31b_it/tt/kv_pool_budget.py",
+      "sha256": "67739175d88efe9e02cdbd5b5b559b4bac047ab7e57d7dc24ac47cff888ba081",
+      "exists": true
+    },
+    {
+      "category": "autoport_tt_runtime_prelaunch_hashes",
+      "path": "models/autoports/google_gemma_4_31b_it/tt/model.py",
+      "sha256": "c65ed33bb175f63603946eea561a2623cad0b70521428bdf888bd9445457a01e",
+      "exists": true
+    },
+    {
+      "category": "autoport_tt_runtime_prelaunch_hashes",
+      "path": "models/autoports/google_gemma_4_31b_it/tt/multichip_decoder.py",
+      "sha256": "c7a4cb14edfe46649b904c0fbb6f3fec14e123e194b31950adfa76c224d201f6",
+      "exists": true
+    },
+    {
+      "category": "autoport_tt_runtime_prelaunch_hashes",
+      "path": "models/autoports/google_gemma_4_31b_it/tt/native_log_formatter.py",
+      "sha256": "b3fab5ef1cbf13d2907378e2d58e98dedd716fe8d8932b3a9513387b5cb37c13",
+      "exists": true
+    },
+    {
+      "category": "autoport_tt_runtime_prelaunch_hashes",
+      "path": "models/autoports/google_gemma_4_31b_it/tt/optimized_decoder.py",
+      "sha256": "24f52653e82392144e880b0677b52cb01f7432a70a966cdd901592cee933e53d",
+      "exists": true
+    },
+    {
+      "category": "autoport_tt_runtime_prelaunch_hashes",
+      "path": "models/autoports/google_gemma_4_31b_it/tt/precision.py",
+      "sha256": "2f223a118fe713677b9ce4fb3beb2f563e26af56ef45a98b2e03fad1e25664a9",
+      "exists": true
+    },
+    {
+      "category": "autoport_tt_runtime_prelaunch_hashes",
+      "path": "models/autoports/google_gemma_4_31b_it/tt/prefill.py",
+      "sha256": "4208b8362e997db1845fd98043df9b183e8e17ed789ff5b5ea839739cd0b1f91",
+      "exists": true
+    },
+    {
+      "category": "autoport_tt_runtime_prelaunch_hashes",
+      "path": "models/autoports/google_gemma_4_31b_it/tt/response_logging.py",
+      "sha256": "825fa2d47bcac886724fd9186f1162b468c8f275602c2cd48cbdd443887eb7e8",
+      "exists": true
+    },
+    {
+      "category": "autoport_tt_runtime_prelaunch_hashes",
+      "path": "models/autoports/google_gemma_4_31b_it/tt/serving_memory.py",
+      "sha256": "cfe9191dbb8f57fa8390388576bb1a6d4163bf0e319dc287dd4ddde0af81171d",
+      "exists": true
+    },
+    {
+      "category": "autoport_tt_runtime_prelaunch_hashes",
+      "path": "models/autoports/google_gemma_4_31b_it/tt/weights.py",
+      "sha256": "bca69b111c9c9cbf9bc620c3dc6bee873abdecdd75f08d5b8b93638e881868cd",
+      "exists": true
+    },
+    {
+      "category": "installed_readiness_runtime_prelaunch_hashes",
+      "path": "/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime/readiness_check/run_teacher_forcing.py",
+      "sha256": "9f1e5894ad15bbd630f93c835247a25470c604eb4a6bede570d4964fd011ecb5",
+      "exists": true
+    },
+    {
+      "category": "installed_readiness_runtime_prelaunch_hashes",
+      "path": "/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime/readiness_check/run_prefill_check.py",
+      "sha256": "85c5b108396e9eef05d9619551143a68ff640064cdd051753761497c96f26a2a",
+      "exists": true
+    },
+    {
+      "category": "installed_readiness_runtime_prelaunch_hashes",
+      "path": "/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime/readiness_check/teacher_forcing.py",
+      "sha256": "0dcf67aafd71eed04b435dcdda98e64ec4d35f9d8e13dc66d7464bbe071790c1",
+      "exists": true
+    },
+    {
+      "category": "installed_readiness_runtime_prelaunch_hashes",
+      "path": "/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime/readiness_check/build_kwargs.py",
+      "sha256": "4ab1307690d0a2417c96a8e55f23ed4bf56cd8237a876250ab88c94c7694fc48",
+      "exists": true
+    },
+    {
+      "category": "installed_readiness_runtime_prelaunch_hashes",
+      "path": "/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime/readiness_check/contract.py",
+      "sha256": "42417eab48a87b6e9c31dee15ef68bac5c67970e487a295f78ee7f968ef93358",
+      "exists": true
+    },
+    {
+      "category": "installed_readiness_runtime_prelaunch_hashes",
+      "path": "/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime/readiness_check/mesh_device.py",
+      "sha256": "9346770796bcf9228ff130effefc19de7aad961636b955d5f6965c2342e90247",
+      "exists": true
+    },
+    {
+      "category": "installed_readiness_runtime_prelaunch_hashes",
+      "path": "/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime/readiness_check/schema.py",
+      "sha256": "1d3e0a89b8718fafafc12ce05d458e011072f77a51ec3fb4a1c7f67bd7b68617",
+      "exists": true
+    },
+    {
+      "category": "additional_model_owned_helper_prelaunch_hashes",
+      "path": "models/autoports/google_gemma_4_31b_it/tests/run_full_batch.py",
+      "sha256": "c86e0e67b1605b599ea80511b06244e6afc53fabce41fcf5f088be5b5e7de4bc",
+      "exists": true
+    },
+    {
+      "category": "read_by_acceptance_runner_inputs",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/optimized_full_model/reference_metadata.json",
+      "sha256": "20bb9d9af0468ee55fa90b08392137945c3deaf6812f0834e1f0ff8baf9d9f3d",
+      "exists": true
+    },
+    {
+      "category": "read_by_acceptance_runner_inputs",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/optimized_full_model/aime24_prompt.json",
+      "sha256": "578790e2d9e5d7fad6d187bc6d733699c3514218ea5a42ca2bf9d25d7afdd4dd",
+      "exists": true
+    },
+    {
+      "category": "read_by_acceptance_runner_inputs",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/optimized_full_model/qualitative_hf.json",
+      "sha256": "05c2ac233052909c2e785b9d36f819c52e95cecfcfd299eff81a6b1de3a174d6",
+      "exists": true
+    },
+    {
+      "category": "read_by_acceptance_runner_inputs",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/optimized_full_model/qualitative_prompt_format.json",
+      "sha256": "16e4bfd8857e67ee9ca39297c8521b30e8ceacf0c848783e83b1192ef331cb9c",
+      "exists": true
+    },
+    {
+      "category": "read_by_acceptance_runner_inputs",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/attention-down-acceptance/references/references.json",
+      "sha256": "f665053108019dfc020e8c7a4fa654288281e79b2c6504f089f25e834df951df",
+      "exists": true
+    }
+  ],
+  "current_p19_adjudication_hashes": [
+    {
+      "category": "current_p19_root_post_extension_review",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/root-post-extension-review.json",
+      "sha256": "50ef582358a1188217c1c37756efb3611c2292b89ed32b946cd0050a7a8a77ae",
+      "exists": true
+    },
+    {
+      "category": "independent_host_semantic_cap_extension_triage",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/cap-extensions-preparation/batch/triage-d.json",
+      "sha256": "2c79a11c3fd7ca27f9baf07deed670a11d7ef8b53e99370b4f6893ce321ac79c",
+      "exists": true
+    },
+    {
+      "category": "cap_extension_batch_completion",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/cap-extensions-preparation/batch/completion.json",
+      "sha256": "68db369b2c08db120c49dfbb990fcb18ba0bc5f2c39c91533a4cc7e561e3b289",
+      "exists": true
+    },
+    {
+      "category": "p19_fixed108_root_terminal_review",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/bf16-hifi4-kv-down-bfp8-accuracy-p19/root-terminal-review.json",
+      "sha256": "d38dc9792a73c407e52bbbdf425118c26b24f39b4d42b294ac4dca93be8c080f",
+      "exists": true
+    },
+    {
+      "category": "independent_triage_slice72_107",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/triage-slice72-107-d.json",
+      "sha256": "f743098dc5d4504d20394510361ee35a83ec42ad409054b486c733c0b866beae",
+      "exists": true
+    }
+  ],
+  "adjudication_status_note": "The root post-extension review records panel_and_cap_continuations_collected_reference_disposition_pending; the D artifact is independent triage, not score selection or root disposition. Root must make the fresh admission decision.",
+  "postrun_acceptance_review_requirements": {
+    "accuracy_repeats": "The runner preserves all three AIME teacher-forcing decode rows, but its --require-accuracy assertion evaluates decode rows copied from repeat 1 only. Root post-run review must explicitly verify every row in readiness_accuracy.json.teacher_forcing_repeats clears top1>=0.90, top5>=0.98 and top100==1.0; confirm repeat agreement or investigate any difference before calling the candidate accepted.",
+    "qualitative": "Read all six complete TT/HF output pairs and prompt metadata; process exit 0 and first-divergence fields do not establish acceptable text quality.",
+    "context_and_resume": "Review exact-boundary outputs and all resume candidate/control cases; classify mismatches against per-position evidence before acceptance.",
+    "non_selection": "This acceptance candidate remains unselected; this manifest is not a precision selection or stage signoff."
+  },
+  "counts": {
+    "autoport_tt_runtime_files": 17,
+    "installed_readiness_runtime_files": 7,
+    "additional_model_helpers": 1,
+    "read_by_acceptance_inputs": 5,
+    "adjudication_records": 5
+  },
+  "hash_algorithm": "SHA-256 over exact file bytes"
+}

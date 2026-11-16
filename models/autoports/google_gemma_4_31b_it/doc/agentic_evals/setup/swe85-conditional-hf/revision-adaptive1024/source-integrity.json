@@ -1,0 +1,60 @@
+{
+  "status": "prepared_host_only_no_admission",
+  "runner_sha256": "aafe67c88bb5a1eb38b8718570bbddd5749e2a9ecbb9dd19cdb100a49572c03e",
+  "revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+  "manifests": {
+    "native-positive-candidates-seed42-suffix512.json": "16b10f6da567a27cff6f7ef0bfb40be6acbbe4487dddff68f0b684baed77e842",
+    "native-positive-candidates-seed44-suffix512.json": "db7fd3763b4b0606edb4773ef53d0217a6723d1cc06df824842020b25c8a262e",
+    "native-positive-candidates-seed44-suffix1024.json": "d5cff440b07e98ac652ffc8890929717f2318b9d0f5e6453a449251c2d303224"
+  },
+  "fixtures": {
+    "anomaly.requests2931.call20.canonicalprefix.optional-suffix512": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-85/anomaly.requests2931.call20.canonicalprefix.suffix512.private.json",
+      "sha256": "5017461630f07f8232f054ddf6c2b979c4e3bb14370431de6799ca8c4d1d7804"
+    },
+    "anomaly.sympy__sympy-14248.call53.onset.optional-suffix512": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-85/anomaly.sympy__sympy-14248.call53.onset.suffix512.private.json",
+      "sha256": "91359efd10ca926d39011351f97d53948db58fc4fedd961705ad4c0a462dbad1"
+    },
+    "anomaly.pytest-dev__pytest-7432.call19.onset.optional-suffix512": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-85/anomaly.pytest-dev__pytest-7432.call19.onset.suffix512.private.json",
+      "sha256": "7ca8039708a12c24acd3c2cfb1c2c51b8946e99df118576545605efad6225bf4"
+    },
+    "anomaly.psf__requests-5414.call9.onset": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/fixtures/anomaly.psf__requests-5414.call9.onset.suffix1024.private.json",
+      "sha256": "9e19aaa5b7f11f026931ef8a8ca1e49bb070a338805b3568cc89dd5065e41e7c"
+    }
+  },
+  "tt_outputs": {
+    "anomaly.requests2931.call20.canonicalprefix.optional-suffix512:full_output": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/full/anomaly.requests2931.call20.canonicalprefix.optional-suffix512.json",
+      "sha256": "14ec7feaac78ac5659f21df7926336c2521648b4c9fb33966d0687610e9dfe98"
+    },
+    "anomaly.sympy__sympy-14248.call53.onset.optional-suffix512:full_output": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/full/anomaly.sympy__sympy-14248.call53.onset.optional-suffix512.json",
+      "sha256": "c2f99685050adea2459487a86fffcf009129abb1698ca848ef402a1514d219d7"
+    },
+    "anomaly.pytest-dev__pytest-7432.call19.onset.optional-suffix512:full_output": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/full/anomaly.pytest-dev__pytest-7432.call19.onset.optional-suffix512.json",
+      "sha256": "ec50a12e48db7b2446435f2e3f64d5fd158f0dc58988d7788a620815b5abcca4"
+    },
+    "anomaly.psf__requests-5414.call9.onset:full_output": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/full/anomaly.psf__requests-5414.call9.onset.json",
+      "sha256": "dec3d27c4021946b317f76a9bac5049e6ecadbd2f5dcc60fd9d67fd95951be71"
+    },
+    "anomaly.psf__requests-5414.call9.onset:served_output": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/served/anomaly.psf__requests-5414.call9.onset.json",
+      "sha256": "ab28180a1cce9bb9eec291201f38527c99ec0fac41b22ae84abca5774091d969"
+    }
+  },
+  "root_reviews": {
+    "full": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/full-coordinator-first3.json",
+      "sha256": "773f403ccb759806b35c94eedd4abdb4cd0ee40b2cee258538f890a9910ac11f"
+    },
+    "served": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/served-coordinator-first7.json",
+      "sha256": "21ed7822c2ed8528327ffb01d03bf603624ee8ca06b1eabf99c7224b915f02e8"
+    }
+  }
+}

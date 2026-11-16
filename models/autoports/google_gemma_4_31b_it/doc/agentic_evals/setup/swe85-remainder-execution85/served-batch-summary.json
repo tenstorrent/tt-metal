@@ -1,0 +1,30 @@
+{
+  "status": "served_original161_complete_full160_started",
+  "observed_utc": "2026-11-14T23:25:18.577696+00:00",
+  "served_batch_jobs": 160,
+  "reused_pilot_jobs": 1,
+  "supplement_jobs_pending": 4,
+  "validated_completed_counts": {
+    "anomaly": 36,
+    "fullreply": 67,
+    "action": 58
+  },
+  "exit_code": 0,
+  "batch_wall_hours": 1.561905965871281,
+  "prediction_hours": 2.161510570363617,
+  "planning_interval_hours": [
+    1.5130573992545318,
+    3.242265855545425
+  ],
+  "prediction_range_hit": true,
+  "full_started_after_served_exit_s": 4.353883504867554,
+  "device_release_evidence": "served.log ends with Closing devices in cluster completed; full-launch.json records empty device-owner preflight.",
+  "scope": "Diagnostic host-wall accounting for160 batch jobs including model load; reused pilot separate. Not serving performance, device time, a precision ranking, or investigation closure.",
+  "evidence": {
+    "completion": "setup/swe85-remainder-execution85/served-completion.json",
+    "full_launch": "setup/swe85-remainder-execution85/full-launch.json",
+    "summary": "setup/swe85-remainder-execution85/progress-summary165.json",
+    "summary_sha256": "af3480ac28866a0a10fe78b153cf9832d068116ee9c9ecb1ab2499ad0addc544",
+    "semantic_review": "setup/swe85-remainder-execution85/served-semantic-coordinator-all36.json"
+  }
+}

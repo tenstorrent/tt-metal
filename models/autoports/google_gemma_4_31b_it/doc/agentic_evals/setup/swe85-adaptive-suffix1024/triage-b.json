@@ -1,0 +1,797 @@
+{
+  "status": "incremental_adaptive_suffix1024_triage",
+  "rows": [
+    {
+      "job": "anomaly.call91.canonicalprefix",
+      "mode": "served",
+      "seed": 42,
+      "verdict": "normal",
+      "token_count": 58,
+      "evidence": {
+        "generated_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/served/anomaly.call91.canonicalprefix.json",
+        "raw_file_sha256": "4291808df0b2ba86956bd4924a8b60e7afcdd7809666f321c8b47ea5803da3eb",
+        "generated_text_field": "$.free_running[0].text",
+        "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/fixtures/anomaly.call91.canonicalprefix.suffix1024.private.json",
+        "conditioning_field": "$.prompt_token_ids",
+        "conditioning_decoded_tail": "ent based on common patterns.\n# But that's too dangerous.\n\n# Let's just fix the specific lines that are causing problems.\n# Line 1218-1219 are the ones.\n# I'll just read the file and fix those lines manually.\nEOF\npython3 fix_indentation.py<|\"|>}<tool_call|><|tool_response>response:bash{value:<|\"|>{\n  \"returncode\": 0,\n  \"output\": \"\"\n}<|\"|>}<tool_response|><|channel>thought\nI'll just use `sed` to fix the indentation of those specific lines.\n<channel|><|tool_call>call:bash{command:<|\"|>sed -i '1218,1220s/^/        /' lib/matplotlib/colors.py\nsed -i '1219,1221s/^/            /' lib/matplotlib/colors.py\n# No, this is not working.\n# I'll just use a simple python script to rewrite the file and fix the indentation.\ncat <<'EOF' > fix_colors.py\nwith open('lib/matplotlib/colors.py', 'r') as f:\n    lines = f.readlines()\n\n# Fix the IndentationError at 1218-1220\n# and the __call__ method.\n# Since I've",
+        "native_chosen_field": "$.continuations.chosen",
+        "native_chosen_decoded_head": "’ve’ve’ve’ve made a mess, I'll just use a known good version of those methods.\n\n# I will just overwrite the file with a version that I know is correct.\n# But I don't have one.\n# I'll just try to fix the a few",
+        "native_motif": "I've’ve’ve’ve’ve made a mess",
+        "observation": "Canonical prefix ends after “Since I’ve”; generated starts “already modified...” and closes the bash tool response. Native malformed contraction absent."
+      },
+      "confidence": 0.87,
+      "cap_notes": "58 generated tokens (<512), ending at a coherent final/tool-response boundary."
+    },
+    {
+      "job": "anomaly.call91.canonicalprefix",
+      "mode": "served",
+      "seed": 43,
+      "verdict": "normal",
+      "token_count": 37,
+      "evidence": {
+        "generated_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/served/anomaly.call91.canonicalprefix.json",
+        "raw_file_sha256": "4291808df0b2ba86956bd4924a8b60e7afcdd7809666f321c8b47ea5803da3eb",
+        "generated_text_field": "$.free_running[1].text",
+        "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/fixtures/anomaly.call91.canonicalprefix.suffix1024.private.json",
+        "conditioning_field": "$.prompt_token_ids",
+        "conditioning_decoded_tail": "ent based on common patterns.\n# But that's too dangerous.\n\n# Let's just fix the specific lines that are causing problems.\n# Line 1218-1219 are the ones.\n# I'll just read the file and fix those lines manually.\nEOF\npython3 fix_indentation.py<|\"|>}<tool_call|><|tool_response>response:bash{value:<|\"|>{\n  \"returncode\": 0,\n  \"output\": \"\"\n}<|\"|>}<tool_response|><|channel>thought\nI'll just use `sed` to fix the indentation of those specific lines.\n<channel|><|tool_call>call:bash{command:<|\"|>sed -i '1218,1220s/^/        /' lib/matplotlib/colors.py\nsed -i '1219,1221s/^/            /' lib/matplotlib/colors.py\n# No, this is not working.\n# I'll just use a simple python script to rewrite the file and fix the indentation.\ncat <<'EOF' > fix_colors.py\nwith open('lib/matplotlib/colors.py', 'r') as f:\n    lines = f.readlines()\n\n# Fix the IndentationError at 1218-1220\n# and the __call__ method.\n# Since I've",
+        "native_chosen_field": "$.continuations.chosen",
+        "native_chosen_decoded_head": "’ve’ve’ve’ve made a mess, I'll just use a known good version of those methods.\n\n# I will just overwrite the file with a version that I know is correct.\n# But I don't have one.\n# I'll just try to fix the a few",
+        "native_motif": "I've’ve’ve’ve’ve made a mess",
+        "observation": "Canonical prefix ends after “Since I’ve”; generated starts “already corrupted...” and closes the bash tool response. Native malformed contraction absent."
+      },
+      "confidence": 0.87,
+      "cap_notes": "37 generated tokens (<512), ending at a coherent final/tool-response boundary."
+    },
+    {
+      "job": "anomaly.call91.canonicalprefix",
+      "mode": "served",
+      "seed": 44,
+      "verdict": "normal",
+      "token_count": 302,
+      "evidence": {
+        "generated_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/served/anomaly.call91.canonicalprefix.json",
+        "raw_file_sha256": "4291808df0b2ba86956bd4924a8b60e7afcdd7809666f321c8b47ea5803da3eb",
+        "generated_text_field": "$.free_running[2].text",
+        "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/fixtures/anomaly.call91.canonicalprefix.suffix1024.private.json",
+        "conditioning_field": "$.prompt_token_ids",
+        "conditioning_decoded_tail": "ent based on common patterns.\n# But that's too dangerous.\n\n# Let's just fix the specific lines that are causing problems.\n# Line 1218-1219 are the ones.\n# I'll just read the file and fix those lines manually.\nEOF\npython3 fix_indentation.py<|\"|>}<tool_call|><|tool_response>response:bash{value:<|\"|>{\n  \"returncode\": 0,\n  \"output\": \"\"\n}<|\"|>}<tool_response|><|channel>thought\nI'll just use `sed` to fix the indentation of those specific lines.\n<channel|><|tool_call>call:bash{command:<|\"|>sed -i '1218,1220s/^/        /' lib/matplotlib/colors.py\nsed -i '1219,1221s/^/            /' lib/matplotlib/colors.py\n# No, this is not working.\n# I'll just use a simple python script to rewrite the file and fix the indentation.\ncat <<'EOF' > fix_colors.py\nwith open('lib/matplotlib/colors.py', 'r') as f:\n    lines = f.readlines()\n\n# Fix the IndentationError at 1218-1220\n# and the __call__ method.\n# Since I've",
+        "native_chosen_field": "$.continuations.chosen",
+        "native_chosen_decoded_head": "’ve’ve’ve’ve made a mess, I'll just use a known good version of those methods.\n\n# I will just overwrite the file with a version that I know is correct.\n# But I don't have one.\n# I'll just try to fix the a few",
+        "native_motif": "I've’ve’ve’ve’ve made a mess",
+        "observation": "Canonical prefix ends after “Since I’ve”; generated begins “already modified...”, writes a coherent script and closes the bash tool response. Native malformed contraction absent."
+      },
+      "confidence": 0.87,
+      "cap_notes": "302 generated tokens (<512), ending at a coherent final/tool-response boundary."
+    },
+    {
+      "job": "anomaly.matplotlib__matplotlib-20488.call86.onset",
+      "mode": "served",
+      "seed": 42,
+      "verdict": "other_anomaly",
+      "token_count": 512,
+      "evidence": {
+        "generated_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/served/anomaly.matplotlib__matplotlib-20488.call86.onset.json",
+        "raw_file_sha256": "0aea28389faa2da5325d78a67b05beadd6c6dd2178fab7e4f56e6f34cef9ca34",
+        "generated_text_field": "$.free_running[0].text",
+        "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/fixtures/anomaly.matplotlib__matplotlib-20488.call86.onset.suffix1024.private.json",
+        "conditioning_field": "$.prompt_token_ids",
+        "conditioning_decoded_tail": " let's verify with `reproduce_issue.py` one last time.\n<channel|><|tool_call>call:bash{command:<|\"|>python3 reproduce_issue.py<|\"|>}<tool_call|><|tool_response>response:bash{value:<|\"|>{\n  \"returncode\": 1,\n  \"output\": \"Traceback (most recent call last):\\n  File \\\"/testbed/reproduce_issue.py\\\", line 2, in \\u003cmodule\\u003e\\n    import matplotlib.pyplot as plt\\n  File \\\"/testbed/lib/matplotlib/__init__.py\\\", line 109, in \\u003cmodule\\u003e\\n    from . import _api, _version, cbook, docstring, rcsetup\\n  File \\\"/testbed/lib/matplotlib/rcsetup.py\\\", line 27, in \\u003cmodule\\u003e\\n    from matplotlib.colors import Colormap, is_color_like\\n  File \\\"/testbed/lib/matplotlib/colors.py\\\", line 1219\\n    if self.vmax is None and A.size:\\n    ^\\nIndentationError: expected an indented block after \\u0027if\\u0027 statement on line 1218\\n\"\n}<|\"|>}<tool_response|><|channel>thought\n<|channel>thought\nI've",
+        "native_chosen_field": "$.continuations.chosen",
+        "native_chosen_decoded_head": "’ve’ve’ve’ve really messed up the `lib/matplotlib/colors.py` file.\nI'll just use the `sed` commands to fix the indentation and the missing lines.\nActually, the best thing is to use the original file.\nWait, I can't.",
+        "native_motif": "I've’ve",
+        "observation": "Generated script repeats a comment pair containing “I’ve’ introduced an IndentationError” many times. This is a repeated-comment loop; it does not match the native contiguous four curly `’ve` suffix in exact context."
+      },
+      "confidence": 0.95,
+      "cap_notes": "Exactly512 generated tokens; classify the visible anomaly independently, while task completion remains unresolved."
+    },
+    {
+      "job": "anomaly.matplotlib__matplotlib-20488.call86.onset",
+      "mode": "served",
+      "seed": 43,
+      "verdict": "other_anomaly",
+      "token_count": 512,
+      "evidence": {
+        "generated_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/served/anomaly.matplotlib__matplotlib-20488.call86.onset.json",
+        "raw_file_sha256": "0aea28389faa2da5325d78a67b05beadd6c6dd2178fab7e4f56e6f34cef9ca34",
+        "generated_text_field": "$.free_running[1].text",
+        "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/fixtures/anomaly.matplotlib__matplotlib-20488.call86.onset.suffix1024.private.json",
+        "conditioning_field": "$.prompt_token_ids",
+        "conditioning_decoded_tail": " let's verify with `reproduce_issue.py` one last time.\n<channel|><|tool_call>call:bash{command:<|\"|>python3 reproduce_issue.py<|\"|>}<tool_call|><|tool_response>response:bash{value:<|\"|>{\n  \"returncode\": 1,\n  \"output\": \"Traceback (most recent call last):\\n  File \\\"/testbed/reproduce_issue.py\\\", line 2, in \\u003cmodule\\u003e\\n    import matplotlib.pyplot as plt\\n  File \\\"/testbed/lib/matplotlib/__init__.py\\\", line 109, in \\u003cmodule\\u003e\\n    from . import _api, _version, cbook, docstring, rcsetup\\n  File \\\"/testbed/lib/matplotlib/rcsetup.py\\\", line 27, in \\u003cmodule\\u003e\\n    from matplotlib.colors import Colormap, is_color_like\\n  File \\\"/testbed/lib/matplotlib/colors.py\\\", line 1219\\n    if self.vmax is None and A.size:\\n    ^\\nIndentationError: expected an indented block after \\u0027if\\u0027 statement on line 1218\\n\"\n}<|\"|>}<tool_response|><|channel>thought\n<|channel>thought\nI've",
+        "native_chosen_field": "$.continuations.chosen",
+        "native_chosen_decoded_head": "’ve’ve’ve’ve really messed up the `lib/matplotlib/colors.py` file.\nI'll just use the `sed` commands to fix the indentation and the missing lines.\nActually, the best thing is to use the original file.\nWait, I can't.",
+        "native_motif": "I've’ve",
+        "observation": "Generated response repeats the same duplicated-if explanation and `if ...: pass` block. Repetition anomaly; native curly contraction sequence absent."
+      },
+      "confidence": 0.95,
+      "cap_notes": "Exactly512 generated tokens; classify the visible anomaly independently, while task completion remains unresolved."
+    },
+    {
+      "job": "anomaly.matplotlib__matplotlib-20488.call86.onset",
+      "mode": "served",
+      "seed": 44,
+      "verdict": "normal",
+      "token_count": 82,
+      "evidence": {
+        "generated_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/served/anomaly.matplotlib__matplotlib-20488.call86.onset.json",
+        "raw_file_sha256": "0aea28389faa2da5325d78a67b05beadd6c6dd2178fab7e4f56e6f34cef9ca34",
+        "generated_text_field": "$.free_running[2].text",
+        "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/fixtures/anomaly.matplotlib__matplotlib-20488.call86.onset.suffix1024.private.json",
+        "conditioning_field": "$.prompt_token_ids",
+        "conditioning_decoded_tail": " let's verify with `reproduce_issue.py` one last time.\n<channel|><|tool_call>call:bash{command:<|\"|>python3 reproduce_issue.py<|\"|>}<tool_call|><|tool_response>response:bash{value:<|\"|>{\n  \"returncode\": 1,\n  \"output\": \"Traceback (most recent call last):\\n  File \\\"/testbed/reproduce_issue.py\\\", line 2, in \\u003cmodule\\u003e\\n    import matplotlib.pyplot as plt\\n  File \\\"/testbed/lib/matplotlib/__init__.py\\\", line 109, in \\u003cmodule\\u003e\\n    from . import _api, _version, cbook, docstring, rcsetup\\n  File \\\"/testbed/lib/matplotlib/rcsetup.py\\\", line 27, in \\u003cmodule\\u003e\\n    from matplotlib.colors import Colormap, is_color_like\\n  File \\\"/testbed/lib/matplotlib/colors.py\\\", line 1219\\n    if self.vmax is None and A.size:\\n    ^\\nIndentationError: expected an indented block after \\u0027if\\u0027 statement on line 1218\\n\"\n}<|\"|>}<tool_response|><|channel>thought\n<|channel>thought\nI've",
+        "native_chosen_field": "$.continuations.chosen",
+        "native_chosen_decoded_head": "’ve’ve’ve’ve really messed up the `lib/matplotlib/colors.py` file.\nI'll just use the `sed` commands to fix the indentation and the missing lines.\nActually, the best thing is to use the original file.\nWait, I can't.",
+        "native_motif": "I've’ve",
+        "observation": "Prefix ends in “I’ve”; generated continues “tried to fix...” and makes a valid canonical grep bash tool call, closing at tool response. Native repeated-curly contraction absent."
+      },
+      "confidence": 0.87,
+      "cap_notes": "82 generated tokens (<512), ending at a coherent final/tool-response boundary."
+    },
+    {
+      "job": "anomaly.psf__requests-5414.call10.onset",
+      "mode": "served",
+      "seed": 42,
+      "verdict": "other_anomaly",
+      "token_count": 512,
+      "evidence": {
+        "generated_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/served/anomaly.psf__requests-5414.call10.onset.json",
+        "raw_file_sha256": "90e92015185c5b1b89afbbcd5d11660140b2dee258d055d40dd1025fe36b2476",
+        "generated_text_field": "$.free_running[0].text",
+        "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/fixtures/anomaly.psf__requests-5414.call10.onset.suffix1024.private.json",
+        "conditioning_field": "$.prompt_token_ids",
+        "conditioning_decoded_tail": "h your command as the argument:\n- Tool: bash\n- Arguments: {\"command\": \"your_command_here\"}\n\nIf you want to end the task, please issue the following command: `echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT`\nwithout any other command.<turn|>\n<|turn>model\n<|channel>thought\nOkay, I've analyzed the issue. The user is reporting that `requests.get(\"http://.example.com\")` raises a `UnicodeError` (actually `urllib3.exceptions.LocationParseError` in the current environment, but the user's report mentioned `UnicodeError` and the goal is to raise `requests.exceptions.InvalidURL`).\n\nWait, looking at my reproduction:\n```\nTraceback (most recent call last):\n  File \"/testbed/reproduce_issue.py\", line 5, in <module>\n    requests.get(\"http://.example.com\")\n  ...\n  File \"/opt/miniconda3/lib/python3.11/site-packages/urllib3/util/connection.py\", line 68, in create_connection\n    return six.raise_from(\n           ",
+        "native_chosen_field": "$.continuations.chosen",
+        "native_chosen_decoded_head": "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^",
+        "native_motif": "^^^^",
+        "observation": "After reasoning, output contains `<channel|> thoseC-8-1-...` malformed text sequence, not canonical call syntax. Native caret burst absent."
+      },
+      "confidence": 0.95,
+      "cap_notes": "Exactly512 generated tokens; classify the visible anomaly independently, while task completion remains unresolved."
+    },
+    {
+      "job": "anomaly.psf__requests-5414.call10.onset",
+      "mode": "served",
+      "seed": 43,
+      "verdict": "other_anomaly",
+      "token_count": 512,
+      "evidence": {
+        "generated_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/served/anomaly.psf__requests-5414.call10.onset.json",
+        "raw_file_sha256": "90e92015185c5b1b89afbbcd5d11660140b2dee258d055d40dd1025fe36b2476",
+        "generated_text_field": "$.free_running[1].text",
+        "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/fixtures/anomaly.psf__requests-5414.call10.onset.suffix1024.private.json",
+        "conditioning_field": "$.prompt_token_ids",
+        "conditioning_decoded_tail": "h your command as the argument:\n- Tool: bash\n- Arguments: {\"command\": \"your_command_here\"}\n\nIf you want to end the task, please issue the following command: `echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT`\nwithout any other command.<turn|>\n<|turn>model\n<|channel>thought\nOkay, I've analyzed the issue. The user is reporting that `requests.get(\"http://.example.com\")` raises a `UnicodeError` (actually `urllib3.exceptions.LocationParseError` in the current environment, but the user's report mentioned `UnicodeError` and the goal is to raise `requests.exceptions.InvalidURL`).\n\nWait, looking at my reproduction:\n```\nTraceback (most recent call last):\n  File \"/testbed/reproduce_issue.py\", line 5, in <module>\n    requests.get(\"http://.example.com\")\n  ...\n  File \"/opt/miniconda3/lib/python3.11/site-packages/urllib3/util/connection.py\", line 68, in create_connection\n    return six.raise_from(\n           ",
+        "native_chosen_field": "$.continuations.chosen",
+        "native_chosen_decoded_head": "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^",
+        "native_motif": "^^^^",
+        "observation": "After repeated traceback filler, continuation becomes a long hyphen run following `those`; repeated-text anomaly, native caret burst absent."
+      },
+      "confidence": 0.95,
+      "cap_notes": "Exactly512 generated tokens; classify the visible anomaly independently, while task completion remains unresolved."
+    },
+    {
+      "job": "anomaly.psf__requests-5414.call10.onset",
+      "mode": "served",
+      "seed": 44,
+      "verdict": "other_anomaly",
+      "token_count": 193,
+      "evidence": {
+        "generated_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/served/anomaly.psf__requests-5414.call10.onset.json",
+        "raw_file_sha256": "90e92015185c5b1b89afbbcd5d11660140b2dee258d055d40dd1025fe36b2476",
+        "generated_text_field": "$.free_running[2].text",
+        "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/fixtures/anomaly.psf__requests-5414.call10.onset.suffix1024.private.json",
+        "conditioning_field": "$.prompt_token_ids",
+        "conditioning_decoded_tail": "h your command as the argument:\n- Tool: bash\n- Arguments: {\"command\": \"your_command_here\"}\n\nIf you want to end the task, please issue the following command: `echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT`\nwithout any other command.<turn|>\n<|turn>model\n<|channel>thought\nOkay, I've analyzed the issue. The user is reporting that `requests.get(\"http://.example.com\")` raises a `UnicodeError` (actually `urllib3.exceptions.LocationParseError` in the current environment, but the user's report mentioned `UnicodeError` and the goal is to raise `requests.exceptions.InvalidURL`).\n\nWait, looking at my reproduction:\n```\nTraceback (most recent call last):\n  File \"/testbed/reproduce_issue.py\", line 5, in <module>\n    requests.get(\"http://.example.com\")\n  ...\n  File \"/opt/miniconda3/lib/python3.11/site-packages/urllib3/util/connection.py\", line 68, in create_connection\n    return six.raise_from(\n           ",
+        "native_chosen_field": "$.continuations.chosen",
+        "native_chosen_decoded_head": "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^",
+        "native_motif": "^^^^",
+        "observation": "Output is a fenced `bash` block containing a JSON command object, then closes as a user turn. It is not a canonical structured tool call/response; native caret burst absent."
+      },
+      "confidence": 0.95,
+      "cap_notes": "193 generated tokens (<512), ending at a coherent final/tool-response boundary."
+    },
+    {
+      "job": "anomaly.psf__requests-5414.call11.onset",
+      "mode": "served",
+      "seed": 42,
+      "verdict": "other_anomaly",
+      "token_count": 512,
+      "evidence": {
+        "generated_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/served/anomaly.psf__requests-5414.call11.onset.json",
+        "raw_file_sha256": "1a7ec3c160f707145b3d285fd349339348b36cad70dfd5e653c1bf2d0c345c67",
+        "generated_text_field": "$.free_running[0].text",
+        "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/fixtures/anomaly.psf__requests-5414.call11.onset.suffix1024.private.json",
+        "conditioning_field": "$.prompt_token_ids",
+        "conditioning_decoded_tail": "to end the task, please issue the following command: `echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT`\nwithout any other command.<turn|>\n<|turn>model\n<|channel>thought\nOkay, I've analyzed the issue.\nThe user is reporting that `requests.get(\"http://.example.com\")` raises a `UnicodeError` (specifically `urllib3.exceptions.LocationParseError` which seems to wrap it or be related) instead of `requests.exceptions.InvalidURL`.\n\nWait, in my reproduction script:\n```python\nimport requests\nimport traceback\n\ntry:\n    requests.get(\"http://.example.com\")\nexcept Exception:\n    traceback.print_exc()\n```\nThe output was:\n```\nTraceback (most recent call last):\n  File \"/testbed/reproduce_issue.py\", line 5, in <module>\n    requests.get(\"http://.example.com\")\n  ...\n  File \"/opt/miniconda3/lib/python3.11/site-packages/urllib3/util/connection.py\", line 68, in create_connection\n    return six.raise_from(\n           ",
+        "native_chosen_field": "$.continuations.chosen",
+        "native_chosen_decoded_head": "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^",
+        "native_motif": "^^^^",
+        "observation": "Continuation is repeated `...` filler at the cap, not the native caret burst."
+      },
+      "confidence": 0.95,
+      "cap_notes": "Exactly512 generated tokens; classify the visible anomaly independently, while task completion remains unresolved."
+    },
+    {
+      "job": "anomaly.psf__requests-5414.call11.onset",
+      "mode": "served",
+      "seed": 43,
+      "verdict": "other_anomaly",
+      "token_count": 512,
+      "evidence": {
+        "generated_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/served/anomaly.psf__requests-5414.call11.onset.json",
+        "raw_file_sha256": "1a7ec3c160f707145b3d285fd349339348b36cad70dfd5e653c1bf2d0c345c67",
+        "generated_text_field": "$.free_running[1].text",
+        "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/fixtures/anomaly.psf__requests-5414.call11.onset.suffix1024.private.json",
+        "conditioning_field": "$.prompt_token_ids",
+        "conditioning_decoded_tail": "to end the task, please issue the following command: `echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT`\nwithout any other command.<turn|>\n<|turn>model\n<|channel>thought\nOkay, I've analyzed the issue.\nThe user is reporting that `requests.get(\"http://.example.com\")` raises a `UnicodeError` (specifically `urllib3.exceptions.LocationParseError` which seems to wrap it or be related) instead of `requests.exceptions.InvalidURL`.\n\nWait, in my reproduction script:\n```python\nimport requests\nimport traceback\n\ntry:\n    requests.get(\"http://.example.com\")\nexcept Exception:\n    traceback.print_exc()\n```\nThe output was:\n```\nTraceback (most recent call last):\n  File \"/testbed/reproduce_issue.py\", line 5, in <module>\n    requests.get(\"http://.example.com\")\n  ...\n  File \"/opt/miniconda3/lib/python3.11/site-packages/urllib3/util/connection.py\", line 68, in create_connection\n    return six.raise_from(\n           ",
+        "native_chosen_field": "$.continuations.chosen",
+        "native_chosen_decoded_head": "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^",
+        "native_motif": "^^^^",
+        "observation": "Continuation is repeated `...` filler at the cap, not the native caret burst."
+      },
+      "confidence": 0.95,
+      "cap_notes": "Exactly512 generated tokens; classify the visible anomaly independently, while task completion remains unresolved."
+    },
+    {
+      "job": "anomaly.psf__requests-5414.call11.onset",
+      "mode": "served",
+      "seed": 44,
+      "verdict": "other_anomaly",
+      "token_count": 512,
+      "evidence": {
+        "generated_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/served/anomaly.psf__requests-5414.call11.onset.json",
+        "raw_file_sha256": "1a7ec3c160f707145b3d285fd349339348b36cad70dfd5e653c1bf2d0c345c67",
+        "generated_text_field": "$.free_running[2].text",
+        "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/fixtures/anomaly.psf__requests-5414.call11.onset.suffix1024.private.json",
+        "conditioning_field": "$.prompt_token_ids",
+        "conditioning_decoded_tail": "to end the task, please issue the following command: `echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT`\nwithout any other command.<turn|>\n<|turn>model\n<|channel>thought\nOkay, I've analyzed the issue.\nThe user is reporting that `requests.get(\"http://.example.com\")` raises a `UnicodeError` (specifically `urllib3.exceptions.LocationParseError` which seems to wrap it or be related) instead of `requests.exceptions.InvalidURL`.\n\nWait, in my reproduction script:\n```python\nimport requests\nimport traceback\n\ntry:\n    requests.get(\"http://.example.com\")\nexcept Exception:\n    traceback.print_exc()\n```\nThe output was:\n```\nTraceback (most recent call last):\n  File \"/testbed/reproduce_issue.py\", line 5, in <module>\n    requests.get(\"http://.example.com\")\n  ...\n  File \"/opt/miniconda3/lib/python3.11/site-packages/urllib3/util/connection.py\", line 68, in create_connection\n    return six.raise_from(\n           ",
+        "native_chosen_field": "$.continuations.chosen",
+        "native_chosen_decoded_head": "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^",
+        "native_motif": "^^^^",
+        "observation": "Continuation is repeated `...` filler at the cap, not the native caret burst."
+      },
+      "confidence": 0.95,
+      "cap_notes": "Exactly512 generated tokens; classify the visible anomaly independently, while task completion remains unresolved."
+    },
+    {
+      "job": "anomaly.psf__requests-5414.call9.onset",
+      "mode": "served",
+      "seed": 42,
+      "verdict": "other_anomaly",
+      "token_count": 512,
+      "evidence": {
+        "generated_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/served/anomaly.psf__requests-5414.call9.onset.json",
+        "raw_file_sha256": "ab28180a1cce9bb9eec291201f38527c99ec0fac41b22ae84abca5774091d969",
+        "generated_text_field": "$.free_running[0].text",
+        "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/fixtures/anomaly.psf__requests-5414.call9.onset.suffix1024.private.json",
+        "conditioning_field": "$.prompt_token_ids",
+        "conditioning_decoded_tail": "\\n   417\\t        # Bare domains aren\\u0027t valid URLs.\\n   418\\t        if not path:\\n   419\\t            path = \\u0027/\\u0027\\n   420\\t\\n\"\n}<|\"|>}<tool_response|><|channel>thought\nWait, I missed something.\n```python\n   384\\t            scheme, auth, host, port, path, query, fragment = parse_url(url)\n   385\\t        except LocationParseError as e:\n   386\\t            raise InvalidURL(*e.args)\n```\n`parse_url` is called and if it raises `LocationParseError`, it's caught and `InvalidURL` is raised.\nWhere is `parse_url` defined? It's likely in `requests.utils`.\nWait, if `parse_url` raises `LocationParseError`, then `requests` should be catching it.\nBut in my reproduction, the error happened in `urllib3.util.connection.create_connection`.\n\nLet's look at the traceback again.\n```\n  File \"/testbed/requests/sessions.py\", line 645, in send\n    r = adapter.send(request, **send_kwargs)\n           ",
+        "native_chosen_field": "$.continuations.chosen",
+        "native_chosen_decoded_head": "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^",
+        "native_motif": "^^^^",
+        "observation": "Continuation repeats `own_send_kwargs.update(send_kwargs)` dozens of times, including malformed `own_send_-kwargs`; native caret burst absent."
+      },
+      "confidence": 0.95,
+      "cap_notes": "Exactly512 generated tokens; classify the visible anomaly independently, while task completion remains unresolved."
+    },
+    {
+      "job": "anomaly.psf__requests-5414.call9.onset",
+      "mode": "served",
+      "seed": 43,
+      "verdict": "other_anomaly",
+      "token_count": 512,
+      "evidence": {
+        "generated_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/served/anomaly.psf__requests-5414.call9.onset.json",
+        "raw_file_sha256": "ab28180a1cce9bb9eec291201f38527c99ec0fac41b22ae84abca5774091d969",
+        "generated_text_field": "$.free_running[1].text",
+        "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/fixtures/anomaly.psf__requests-5414.call9.onset.suffix1024.private.json",
+        "conditioning_field": "$.prompt_token_ids",
+        "conditioning_decoded_tail": "\\n   417\\t        # Bare domains aren\\u0027t valid URLs.\\n   418\\t        if not path:\\n   419\\t            path = \\u0027/\\u0027\\n   420\\t\\n\"\n}<|\"|>}<tool_response|><|channel>thought\nWait, I missed something.\n```python\n   384\\t            scheme, auth, host, port, path, query, fragment = parse_url(url)\n   385\\t        except LocationParseError as e:\n   386\\t            raise InvalidURL(*e.args)\n```\n`parse_url` is called and if it raises `LocationParseError`, it's caught and `InvalidURL` is raised.\nWhere is `parse_url` defined? It's likely in `requests.utils`.\nWait, if `parse_url` raises `LocationParseError`, then `requests` should be catching it.\nBut in my reproduction, the error happened in `urllib3.util.connection.create_connection`.\n\nLet's look at the traceback again.\n```\n  File \"/testbed/requests/sessions.py\", line 645, in send\n    r = adapter.send(request, **send_kwargs)\n           ",
+        "native_chosen_field": "$.continuations.chosen",
+        "native_chosen_decoded_head": "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^",
+        "native_motif": "^^^^",
+        "observation": "Continuation repeats an incoherent adapter.send traceback loop; native caret burst absent."
+      },
+      "confidence": 0.95,
+      "cap_notes": "Exactly512 generated tokens; classify the visible anomaly independently, while task completion remains unresolved."
+    },
+    {
+      "job": "anomaly.psf__requests-5414.call9.onset",
+      "mode": "served",
+      "seed": 44,
+      "verdict": "reproduced_native_motif",
+      "token_count": 512,
+      "evidence": {
+        "generated_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/served/anomaly.psf__requests-5414.call9.onset.json",
+        "raw_file_sha256": "ab28180a1cce9bb9eec291201f38527c99ec0fac41b22ae84abca5774091d969",
+        "generated_text_field": "$.free_running[2].text",
+        "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/fixtures/anomaly.psf__requests-5414.call9.onset.suffix1024.private.json",
+        "conditioning_field": "$.prompt_token_ids",
+        "conditioning_decoded_tail": "\\n   417\\t        # Bare domains aren\\u0027t valid URLs.\\n   418\\t        if not path:\\n   419\\t            path = \\u0027/\\u0027\\n   420\\t\\n\"\n}<|\"|>}<tool_response|><|channel>thought\nWait, I missed something.\n```python\n   384\\t            scheme, auth, host, port, path, query, fragment = parse_url(url)\n   385\\t        except LocationParseError as e:\n   386\\t            raise InvalidURL(*e.args)\n```\n`parse_url` is called and if it raises `LocationParseError`, it's caught and `InvalidURL` is raised.\nWhere is `parse_url` defined? It's likely in `requests.utils`.\nWait, if `parse_url` raises `LocationParseError`, then `requests` should be catching it.\nBut in my reproduction, the error happened in `urllib3.util.connection.create_connection`.\n\nLet's look at the traceback again.\n```\n  File \"/testbed/requests/sessions.py\", line 645, in send\n    r = adapter.send(request, **send_kwargs)\n           ",
+        "native_chosen_field": "$.continuations.chosen",
+        "native_chosen_decoded_head": "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^",
+        "native_motif": "^^^^",
+        "observation": "Generated continuation is an uninterrupted caret run matching the native caret-burst motif."
+      },
+      "confidence": 0.95,
+      "cap_notes": "Exactly512 generated tokens; classify the visible anomaly independently, while task completion remains unresolved."
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-10323.call70.onset",
+      "mode": "served",
+      "seed": 42,
+      "verdict": "other_anomaly",
+      "token_count": 122,
+      "evidence": {
+        "generated_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/served/anomaly.sphinx-doc__sphinx-10323.call70.onset.json",
+        "raw_file_sha256": "ce633f522c58657f78738d741d04aaca2e58704a8ea0aac93fa8b71440cb2187",
+        "generated_text_field": "$.free_running[0].text",
+        "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/fixtures/anomaly.sphinx-doc__sphinx-10323.call70.onset.suffix1024.private.json",
+        "conditioning_field": "$.prompt_token_ids",
+        "conditioning_decoded_tail": "7, \\u0027sys\\u0027, \\u0027unchanged\\u0027, \\u0027unchanged_required\\u0027, \\u0027unescape\\u0027, \\u0027unichr\\u0027, \\u0027unicode_code\\u0027, \\u0027unicode_pattern\\u0027, \\u0027uri\\u0027, \\u0027value_or\\u0027]\\n\"\n}<|\"|>}<tool_response|><|channel>thought\n<|channel>thought\nI don't see anything that looks like it would preserve leading whitespace.\n\nGiven the constraints, I will conclude that the issue is a limitation of `docutils` and not something that can be fixed within `LiteralInclude` without a major rewrite of how options are handled.\n\nHowever, I'll just leave the code as it was and submit. Wait, I'll double check if I can use `dedent` to solve the problem.\n\nIf I use `:dedent: 4`, and the `prepend` is `<plugin>`, the result is `<plugin>` (no indentation).\nIf the user wants `    <plugin>`, they'll have to use something like `:prepend:     <plugin>` and we'd need to not strip it.\n\nI've",
+        "native_chosen_field": "$.continuations.chosen",
+        "native_chosen_decoded_head": "'ve tried everything. I'll just submit.<channel|><|tool_call>call:bash{command:<|\"|>echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT<|\"|>}<tool_call|><|tool_response>",
+        "native_motif": "I've've",
+        "observation": "Generated text completes prefix “I’ve” with “spent enough time...”; returns a coherent final summary and turn end.",
+        "semantic_observation": "The generated summary is coherent and describes the observed limitation.",
+        "protocol_observation": "The exact native chosen continuation proceeds to a canonical bash echo submission call; generated reply instead ends as final prose with no corresponding structured tool call, so I classify this as a protocol anomaly."
+      },
+      "confidence": 0.9,
+      "cap_notes": "Completed below512; coherent prose, but required canonical tool action is missing."
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-10323.call70.onset",
+      "mode": "served",
+      "seed": 43,
+      "verdict": "other_anomaly",
+      "token_count": 154,
+      "evidence": {
+        "generated_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/served/anomaly.sphinx-doc__sphinx-10323.call70.onset.json",
+        "raw_file_sha256": "ce633f522c58657f78738d741d04aaca2e58704a8ea0aac93fa8b71440cb2187",
+        "generated_text_field": "$.free_running[1].text",
+        "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/fixtures/anomaly.sphinx-doc__sphinx-10323.call70.onset.suffix1024.private.json",
+        "conditioning_field": "$.prompt_token_ids",
+        "conditioning_decoded_tail": "7, \\u0027sys\\u0027, \\u0027unchanged\\u0027, \\u0027unchanged_required\\u0027, \\u0027unescape\\u0027, \\u0027unichr\\u0027, \\u0027unicode_code\\u0027, \\u0027unicode_pattern\\u0027, \\u0027uri\\u0027, \\u0027value_or\\u0027]\\n\"\n}<|\"|>}<tool_response|><|channel>thought\n<|channel>thought\nI don't see anything that looks like it would preserve leading whitespace.\n\nGiven the constraints, I will conclude that the issue is a limitation of `docutils` and not something that can be fixed within `LiteralInclude` without a major rewrite of how options are handled.\n\nHowever, I'll just leave the code as it was and submit. Wait, I'll double check if I can use `dedent` to solve the problem.\n\nIf I use `:dedent: 4`, and the `prepend` is `<plugin>`, the result is `<plugin>` (no indentation).\nIf the user wants `    <plugin>`, they'll have to use something like `:prepend:     <plugin>` and we'd need to not strip it.\n\nI've",
+        "native_chosen_field": "$.continuations.chosen",
+        "native_chosen_decoded_head": "'ve tried everything. I'll just submit.<channel|><|tool_call>call:bash{command:<|\"|>echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT<|\"|>}<tool_call|><|tool_response>",
+        "native_motif": "I've've",
+        "observation": "Generated text completes prefix “I’ve” with “already checked...”; returns a coherent final explanation and turn end.",
+        "semantic_observation": "The generated summary is coherent and describes the observed limitation.",
+        "protocol_observation": "The exact native chosen continuation proceeds to a canonical bash echo submission call; generated reply instead ends as final prose with no corresponding structured tool call, so I classify this as a protocol anomaly."
+      },
+      "confidence": 0.9,
+      "cap_notes": "Completed below512; coherent prose, but required canonical tool action is missing."
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-10323.call70.onset",
+      "mode": "served",
+      "seed": 44,
+      "verdict": "reproduced_native_motif",
+      "token_count": 512,
+      "evidence": {
+        "generated_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/served/anomaly.sphinx-doc__sphinx-10323.call70.onset.json",
+        "raw_file_sha256": "ce633f522c58657f78738d741d04aaca2e58704a8ea0aac93fa8b71440cb2187",
+        "generated_text_field": "$.free_running[2].text",
+        "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/fixtures/anomaly.sphinx-doc__sphinx-10323.call70.onset.suffix1024.private.json",
+        "conditioning_field": "$.prompt_token_ids",
+        "conditioning_decoded_tail": "7, \\u0027sys\\u0027, \\u0027unchanged\\u0027, \\u0027unchanged_required\\u0027, \\u0027unescape\\u0027, \\u0027unichr\\u0027, \\u0027unicode_code\\u0027, \\u0027unicode_pattern\\u0027, \\u0027uri\\u0027, \\u0027value_or\\u0027]\\n\"\n}<|\"|>}<tool_response|><|channel>thought\n<|channel>thought\nI don't see anything that looks like it would preserve leading whitespace.\n\nGiven the constraints, I will conclude that the issue is a limitation of `docutils` and not something that can be fixed within `LiteralInclude` without a major rewrite of how options are handled.\n\nHowever, I'll just leave the code as it was and submit. Wait, I'll double check if I can use `dedent` to solve the problem.\n\nIf I use `:dedent: 4`, and the `prepend` is `<plugin>`, the result is `<plugin>` (no indentation).\nIf the user wants `    <plugin>`, they'll have to use something like `:prepend:     <plugin>` and we'd need to not strip it.\n\nI've",
+        "native_chosen_field": "$.continuations.chosen",
+        "native_chosen_decoded_head": "'ve tried everything. I'll just submit.<channel|><|tool_call>call:bash{command:<|\"|>echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT<|\"|>}<tool_call|><|tool_response>",
+        "native_motif": "Metadata motif is `I've've`; exact prompt ends ASCII `I've`, and native chosen starts ASCII `'ve`. Generated continuation begins curly U+2019 `’ve` then repeats ASCII `'ve` 255 times. First suffix punctuation differs, but repeated-contraction mechanism is reproduced in exact conditioning context.",
+        "observation": "Generated continuation begins with mixed curly/straight repeated contraction suffixes for all512 tokens. Compared in context to native prefix ending `I've` plus chosen continuation `'ve tried...`; initial quote glyph differs (curly vs ASCII), but the same duplicated/repeated suffix mechanism continues extensively."
+      },
+      "confidence": 0.9,
+      "cap_notes": "Exactly512 tokens and still repeating the contraction suffix; completion inconclusive."
+    },
+    {
+      "job": "anomaly.call91.canonicalprefix",
+      "mode": "full",
+      "seed": 42,
+      "verdict": "normal",
+      "token_count": 27,
+      "evidence": {
+        "generated_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/full/anomaly.call91.canonicalprefix.json",
+        "raw_file_sha256": "9ca5ad50c2d6a88f9d777afd8c2e0f9e01b5ab9b6e66f021dc0fe60871e60cc8",
+        "generated_text_field": "$.free_running[0].text",
+        "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/fixtures/anomaly.call91.canonicalprefix.suffix1024.private.json",
+        "conditioning_field": "$.prompt_token_ids",
+        "conditioning_decoded_tail": "ent based on common patterns.\n# But that's too dangerous.\n\n# Let's just fix the specific lines that are causing problems.\n# Line 1218-1219 are the ones.\n# I'll just read the file and fix those lines manually.\nEOF\npython3 fix_indentation.py<|\"|>}<tool_call|><|tool_response>response:bash{value:<|\"|>{\n  \"returncode\": 0,\n  \"output\": \"\"\n}<|\"|>}<tool_response|><|channel>thought\nI'll just use `sed` to fix the indentation of those specific lines.\n<channel|><|tool_call>call:bash{command:<|\"|>sed -i '1218,1220s/^/        /' lib/matplotlib/colors.py\nsed -i '1219,1221s/^/            /' lib/matplotlib/colors.py\n# No, this is not working.\n# I'll just use a simple python script to rewrite the file and fix the indentation.\ncat <<'EOF' > fix_colors.py\nwith open('lib/matplotlib/colors.py', 'r') as f:\n    lines = f.readlines()\n\n# Fix the IndentationError at 1218-1220\n# and the __call__ method.\n# Since I've",
+        "native_chosen_field": "$.continuations.chosen",
+        "native_chosen_decoded_head": "’ve’ve’ve’ve made a mess, I'll just use a known good version of those methods.\n\n# I will just overwrite the file with a version that I know is correct.\n# But I don't have one.\n# I'll just try to fix the a few",
+        "native_motif": "I've’ve’ve’ve’ve made a mess",
+        "observation": "The canonical bash command prefix completes to a coherent correction script and closes at tool response below512; native duplicated contraction absent."
+      },
+      "confidence": 0.86,
+      "cap_notes": "27 generated tokens (<512); output ends at canonical tool-response boundary."
+    },
+    {
+      "job": "anomaly.call91.canonicalprefix",
+      "mode": "full",
+      "seed": 43,
+      "verdict": "normal",
+      "token_count": 38,
+      "evidence": {
+        "generated_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/full/anomaly.call91.canonicalprefix.json",
+        "raw_file_sha256": "9ca5ad50c2d6a88f9d777afd8c2e0f9e01b5ab9b6e66f021dc0fe60871e60cc8",
+        "generated_text_field": "$.free_running[1].text",
+        "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/fixtures/anomaly.call91.canonicalprefix.suffix1024.private.json",
+        "conditioning_field": "$.prompt_token_ids",
+        "conditioning_decoded_tail": "ent based on common patterns.\n# But that's too dangerous.\n\n# Let's just fix the specific lines that are causing problems.\n# Line 1218-1219 are the ones.\n# I'll just read the file and fix those lines manually.\nEOF\npython3 fix_indentation.py<|\"|>}<tool_call|><|tool_response>response:bash{value:<|\"|>{\n  \"returncode\": 0,\n  \"output\": \"\"\n}<|\"|>}<tool_response|><|channel>thought\nI'll just use `sed` to fix the indentation of those specific lines.\n<channel|><|tool_call>call:bash{command:<|\"|>sed -i '1218,1220s/^/        /' lib/matplotlib/colors.py\nsed -i '1219,1221s/^/            /' lib/matplotlib/colors.py\n# No, this is not working.\n# I'll just use a simple python script to rewrite the file and fix the indentation.\ncat <<'EOF' > fix_colors.py\nwith open('lib/matplotlib/colors.py', 'r') as f:\n    lines = f.readlines()\n\n# Fix the IndentationError at 1218-1220\n# and the __call__ method.\n# Since I've",
+        "native_chosen_field": "$.continuations.chosen",
+        "native_chosen_decoded_head": "’ve’ve’ve’ve made a mess, I'll just use a known good version of those methods.\n\n# I will just overwrite the file with a version that I know is correct.\n# But I don't have one.\n# I'll just try to fix the a few",
+        "native_motif": "I've’ve’ve’ve’ve made a mess",
+        "observation": "The canonical bash command prefix completes to a coherent correction script and closes at tool response below512; native duplicated contraction absent."
+      },
+      "confidence": 0.86,
+      "cap_notes": "38 generated tokens (<512); output ends at canonical tool-response boundary."
+    },
+    {
+      "job": "anomaly.call91.canonicalprefix",
+      "mode": "full",
+      "seed": 44,
+      "verdict": "normal",
+      "token_count": 72,
+      "evidence": {
+        "generated_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/full/anomaly.call91.canonicalprefix.json",
+        "raw_file_sha256": "9ca5ad50c2d6a88f9d777afd8c2e0f9e01b5ab9b6e66f021dc0fe60871e60cc8",
+        "generated_text_field": "$.free_running[2].text",
+        "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/fixtures/anomaly.call91.canonicalprefix.suffix1024.private.json",
+        "conditioning_field": "$.prompt_token_ids",
+        "conditioning_decoded_tail": "ent based on common patterns.\n# But that's too dangerous.\n\n# Let's just fix the specific lines that are causing problems.\n# Line 1218-1219 are the ones.\n# I'll just read the file and fix those lines manually.\nEOF\npython3 fix_indentation.py<|\"|>}<tool_call|><|tool_response>response:bash{value:<|\"|>{\n  \"returncode\": 0,\n  \"output\": \"\"\n}<|\"|>}<tool_response|><|channel>thought\nI'll just use `sed` to fix the indentation of those specific lines.\n<channel|><|tool_call>call:bash{command:<|\"|>sed -i '1218,1220s/^/        /' lib/matplotlib/colors.py\nsed -i '1219,1221s/^/            /' lib/matplotlib/colors.py\n# No, this is not working.\n# I'll just use a simple python script to rewrite the file and fix the indentation.\ncat <<'EOF' > fix_colors.py\nwith open('lib/matplotlib/colors.py', 'r') as f:\n    lines = f.readlines()\n\n# Fix the IndentationError at 1218-1220\n# and the __call__ method.\n# Since I've",
+        "native_chosen_field": "$.continuations.chosen",
+        "native_chosen_decoded_head": "’ve’ve’ve’ve made a mess, I'll just use a known good version of those methods.\n\n# I will just overwrite the file with a version that I know is correct.\n# But I don't have one.\n# I'll just try to fix the a few",
+        "native_motif": "I've’ve’ve’ve’ve made a mess",
+        "observation": "The canonical bash command prefix completes a coherent correction script and closes at tool response below512. A short repeated sentence is ordinary local restatement, not a sustained loop; native motif absent."
+      },
+      "confidence": 0.86,
+      "cap_notes": "72 generated tokens (<512); output ends at canonical tool-response boundary."
+    },
+    {
+      "job": "anomaly.matplotlib__matplotlib-20488.call86.onset",
+      "mode": "full",
+      "seed": 42,
+      "verdict": "inconclusive",
+      "token_count": 512,
+      "evidence": {
+        "generated_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/full/anomaly.matplotlib__matplotlib-20488.call86.onset.json",
+        "raw_file_sha256": "a2dc3012fc83468f00dd3dfc66c82c940c093b5b2c6c72c4a7a1bfd09631e7a9",
+        "generated_text_field": "$.free_running[0].text",
+        "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/fixtures/anomaly.matplotlib__matplotlib-20488.call86.onset.suffix1024.private.json",
+        "conditioning_field": "$.prompt_token_ids",
+        "conditioning_decoded_tail": " let's verify with `reproduce_issue.py` one last time.\n<channel|><|tool_call>call:bash{command:<|\"|>python3 reproduce_issue.py<|\"|>}<tool_call|><|tool_response>response:bash{value:<|\"|>{\n  \"returncode\": 1,\n  \"output\": \"Traceback (most recent call last):\\n  File \\\"/testbed/reproduce_issue.py\\\", line 2, in \\u003cmodule\\u003e\\n    import matplotlib.pyplot as plt\\n  File \\\"/testbed/lib/matplotlib/__init__.py\\\", line 109, in \\u003cmodule\\u003e\\n    from . import _api, _version, cbook, docstring, rcsetup\\n  File \\\"/testbed/lib/matplotlib/rcsetup.py\\\", line 27, in \\u003cmodule\\u003e\\n    from matplotlib.colors import Colormap, is_color_like\\n  File \\\"/testbed/lib/matplotlib/colors.py\\\", line 1219\\n    if self.vmax is None and A.size:\\n    ^\\nIndentationError: expected an indented block after \\u0027if\\u0027 statement on line 1218\\n\"\n}<|\"|>}<tool_response|><|channel>thought\n<|channel>thought\nI've",
+        "native_chosen_field": "$.continuations.chosen",
+        "native_chosen_decoded_head": "’ve’ve’ve’ve really messed up the `lib/matplotlib/colors.py` file.\nI'll just use the `sed` commands to fix the indentation and the missing lines.\nActually, the best thing is to use the original file.\nWait, I can't.",
+        "native_motif": "I've’ve",
+        "observation": "Continuation is a coherent script replacing `__call__`, preserving the prefix command; it stops mid-script at512. Native repeated curly suffix absent."
+      },
+      "confidence": 0.86,
+      "cap_notes": "Exactly512 generated tokens; progressing rows remain inconclusive, while visible anomaly rows are classified independently; no task-completion claim."
+    },
+    {
+      "job": "anomaly.matplotlib__matplotlib-20488.call86.onset",
+      "mode": "full",
+      "seed": 43,
+      "verdict": "other_anomaly",
+      "token_count": 512,
+      "evidence": {
+        "generated_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/full/anomaly.matplotlib__matplotlib-20488.call86.onset.json",
+        "raw_file_sha256": "a2dc3012fc83468f00dd3dfc66c82c940c093b5b2c6c72c4a7a1bfd09631e7a9",
+        "generated_text_field": "$.free_running[1].text",
+        "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/fixtures/anomaly.matplotlib__matplotlib-20488.call86.onset.suffix1024.private.json",
+        "conditioning_field": "$.prompt_token_ids",
+        "conditioning_decoded_tail": " let's verify with `reproduce_issue.py` one last time.\n<channel|><|tool_call>call:bash{command:<|\"|>python3 reproduce_issue.py<|\"|>}<tool_call|><|tool_response>response:bash{value:<|\"|>{\n  \"returncode\": 1,\n  \"output\": \"Traceback (most recent call last):\\n  File \\\"/testbed/reproduce_issue.py\\\", line 2, in \\u003cmodule\\u003e\\n    import matplotlib.pyplot as plt\\n  File \\\"/testbed/lib/matplotlib/__init__.py\\\", line 109, in \\u003cmodule\\u003e\\n    from . import _api, _version, cbook, docstring, rcsetup\\n  File \\\"/testbed/lib/matplotlib/rcsetup.py\\\", line 27, in \\u003cmodule\\u003e\\n    from matplotlib.colors import Colormap, is_color_like\\n  File \\\"/testbed/lib/matplotlib/colors.py\\\", line 1219\\n    if self.vmax is None and A.size:\\n    ^\\nIndentationError: expected an indented block after \\u0027if\\u0027 statement on line 1218\\n\"\n}<|\"|>}<tool_response|><|channel>thought\n<|channel>thought\nI've",
+        "native_chosen_field": "$.continuations.chosen",
+        "native_chosen_decoded_head": "’ve’ve’ve’ve really messed up the `lib/matplotlib/colors.py` file.\nI'll just use the `sed` commands to fix the indentation and the missing lines.\nActually, the best thing is to use the original file.\nWait, I can't.",
+        "native_motif": "I've’ve",
+        "observation": "The full continuation repeats the identical “Wait, the provided files are `lib/matplotlib/colors.py`. I’ll use a script...” paragraph five times. Native contraction motif absent."
+      },
+      "confidence": 0.95,
+      "cap_notes": "Exactly512 tokens; repeated identical paragraph loop is already clear, though the task reply remains unfinished."
+    },
+    {
+      "job": "anomaly.matplotlib__matplotlib-20488.call86.onset",
+      "mode": "full",
+      "seed": 44,
+      "verdict": "other_anomaly",
+      "token_count": 512,
+      "evidence": {
+        "generated_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/full/anomaly.matplotlib__matplotlib-20488.call86.onset.json",
+        "raw_file_sha256": "a2dc3012fc83468f00dd3dfc66c82c940c093b5b2c6c72c4a7a1bfd09631e7a9",
+        "generated_text_field": "$.free_running[2].text",
+        "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/fixtures/anomaly.matplotlib__matplotlib-20488.call86.onset.suffix1024.private.json",
+        "conditioning_field": "$.prompt_token_ids",
+        "conditioning_decoded_tail": " let's verify with `reproduce_issue.py` one last time.\n<channel|><|tool_call>call:bash{command:<|\"|>python3 reproduce_issue.py<|\"|>}<tool_call|><|tool_response>response:bash{value:<|\"|>{\n  \"returncode\": 1,\n  \"output\": \"Traceback (most recent call last):\\n  File \\\"/testbed/reproduce_issue.py\\\", line 2, in \\u003cmodule\\u003e\\n    import matplotlib.pyplot as plt\\n  File \\\"/testbed/lib/matplotlib/__init__.py\\\", line 109, in \\u003cmodule\\u003e\\n    from . import _api, _version, cbook, docstring, rcsetup\\n  File \\\"/testbed/lib/matplotlib/rcsetup.py\\\", line 27, in \\u003cmodule\\u003e\\n    from matplotlib.colors import Colormap, is_color_like\\n  File \\\"/testbed/lib/matplotlib/colors.py\\\", line 1219\\n    if self.vmax is None and A.size:\\n    ^\\nIndentationError: expected an indented block after \\u0027if\\u0027 statement on line 1218\\n\"\n}<|\"|>}<tool_response|><|channel>thought\n<|channel>thought\nI've",
+        "native_chosen_field": "$.continuations.chosen",
+        "native_chosen_decoded_head": "’ve’ve’ve’ve really messed up the `lib/matplotlib/colors.py` file.\nI'll just use the `sed` commands to fix the indentation and the missing lines.\nActually, the best thing is to use the original file.\nWait, I can't.",
+        "native_motif": "I've’ve",
+        "observation": "The full continuation alternates the same two indentation sentences (“new lines” / “old lines”) many times through the cutoff. This is a distinct repeated-loop anomaly, not native contraction reproduction."
+      },
+      "confidence": 0.95,
+      "cap_notes": "Exactly512 tokens; repeated alternating sentence loop is clear; task completion unresolved."
+    },
+    {
+      "job": "anomaly.psf__requests-5414.call10.onset",
+      "mode": "full",
+      "seed": 42,
+      "verdict": "other_anomaly",
+      "token_count": 512,
+      "evidence": {
+        "generated_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/full/anomaly.psf__requests-5414.call10.onset.json",
+        "raw_file_sha256": "09a4a0cf9159ccdafa8913902f0b53f63c337f33720ea559228c51877a4f90dd",
+        "generated_text_field": "$.free_running[0].text",
+        "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/fixtures/anomaly.psf__requests-5414.call10.onset.suffix1024.private.json",
+        "conditioning_field": "$.prompt_token_ids",
+        "conditioning_decoded_tail": "h your command as the argument:\n- Tool: bash\n- Arguments: {\"command\": \"your_command_here\"}\n\nIf you want to end the task, please issue the following command: `echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT`\nwithout any other command.<turn|>\n<|turn>model\n<|channel>thought\nOkay, I've analyzed the issue. The user is reporting that `requests.get(\"http://.example.com\")` raises a `UnicodeError` (actually `urllib3.exceptions.LocationParseError` in the current environment, but the user's report mentioned `UnicodeError` and the goal is to raise `requests.exceptions.InvalidURL`).\n\nWait, looking at my reproduction:\n```\nTraceback (most recent call last):\n  File \"/testbed/reproduce_issue.py\", line 5, in <module>\n    requests.get(\"http://.example.com\")\n  ...\n  File \"/opt/miniconda3/lib/python3.11/site-packages/urllib3/util/connection.py\", line 68, in create_connection\n    return six.raise_from(\n           ",
+        "native_chosen_field": "$.continuations.chosen",
+        "native_chosen_decoded_head": "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^",
+        "native_motif": "^^^^",
+        "observation": "Thousands of characters of increasingly indented `_create_connection(` repeat through the cap. This is a distinct repeated-code anomaly, not the native caret motif."
+      },
+      "confidence": 0.92,
+      "cap_notes": "Exactly512 generated tokens; progressing rows remain inconclusive, while visible anomaly rows are classified independently; no task-completion claim."
+    },
+    {
+      "job": "anomaly.psf__requests-5414.call10.onset",
+      "mode": "full",
+      "seed": 43,
+      "verdict": "other_anomaly",
+      "token_count": 512,
+      "evidence": {
+        "generated_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/full/anomaly.psf__requests-5414.call10.onset.json",
+        "raw_file_sha256": "09a4a0cf9159ccdafa8913902f0b53f63c337f33720ea559228c51877a4f90dd",
+        "generated_text_field": "$.free_running[1].text",
+        "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/fixtures/anomaly.psf__requests-5414.call10.onset.suffix1024.private.json",
+        "conditioning_field": "$.prompt_token_ids",
+        "conditioning_decoded_tail": "h your command as the argument:\n- Tool: bash\n- Arguments: {\"command\": \"your_command_here\"}\n\nIf you want to end the task, please issue the following command: `echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT`\nwithout any other command.<turn|>\n<|turn>model\n<|channel>thought\nOkay, I've analyzed the issue. The user is reporting that `requests.get(\"http://.example.com\")` raises a `UnicodeError` (actually `urllib3.exceptions.LocationParseError` in the current environment, but the user's report mentioned `UnicodeError` and the goal is to raise `requests.exceptions.InvalidURL`).\n\nWait, looking at my reproduction:\n```\nTraceback (most recent call last):\n  File \"/testbed/reproduce_issue.py\", line 5, in <module>\n    requests.get(\"http://.example.com\")\n  ...\n  File \"/opt/miniconda3/lib/python3.11/site-packages/urllib3/util/connection.py\", line 68, in create_connection\n    return six.raise_from(\n           ",
+        "native_chosen_field": "$.continuations.chosen",
+        "native_chosen_decoded_head": "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^",
+        "native_motif": "^^^^",
+        "observation": "Generated continuation repeatedly prints fenced JSON objects describing bash commands, interspersed with malformed channel/tool markers. This is fabricated noncanonical tool protocol, not native caret motif."
+      },
+      "confidence": 0.92,
+      "cap_notes": "Exactly512 generated tokens; progressing rows remain inconclusive, while visible anomaly rows are classified independently; no task-completion claim."
+    },
+    {
+      "job": "anomaly.psf__requests-5414.call10.onset",
+      "mode": "full",
+      "seed": 44,
+      "verdict": "other_anomaly",
+      "token_count": 328,
+      "evidence": {
+        "generated_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/full/anomaly.psf__requests-5414.call10.onset.json",
+        "raw_file_sha256": "09a4a0cf9159ccdafa8913902f0b53f63c337f33720ea559228c51877a4f90dd",
+        "generated_text_field": "$.free_running[2].text",
+        "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/fixtures/anomaly.psf__requests-5414.call10.onset.suffix1024.private.json",
+        "conditioning_field": "$.prompt_token_ids",
+        "conditioning_decoded_tail": "h your command as the argument:\n- Tool: bash\n- Arguments: {\"command\": \"your_command_here\"}\n\nIf you want to end the task, please issue the following command: `echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT`\nwithout any other command.<turn|>\n<|turn>model\n<|channel>thought\nOkay, I've analyzed the issue. The user is reporting that `requests.get(\"http://.example.com\")` raises a `UnicodeError` (actually `urllib3.exceptions.LocationParseError` in the current environment, but the user's report mentioned `UnicodeError` and the goal is to raise `requests.exceptions.InvalidURL`).\n\nWait, looking at my reproduction:\n```\nTraceback (most recent call last):\n  File \"/testbed/reproduce_issue.py\", line 5, in <module>\n    requests.get(\"http://.example.com\")\n  ...\n  File \"/opt/miniconda3/lib/python3.11/site-packages/urllib3/util/connection.py\", line 68, in create_connection\n    return six.raise_from(\n           ",
+        "native_chosen_field": "$.continuations.chosen",
+        "native_chosen_decoded_head": "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^",
+        "native_motif": "^^^^",
+        "observation": "After a coherent traceback, output invents a fenced JSON `tool_calls` command object and closes as a user turn. Noncanonical fabricated protocol, distinct from native carets."
+      },
+      "confidence": 0.92,
+      "cap_notes": "328 generated tokens (<512); output ends at canonical tool-response boundary."
+    },
+    {
+      "job": "anomaly.psf__requests-5414.call11.onset",
+      "mode": "full",
+      "seed": 42,
+      "verdict": "inconclusive",
+      "token_count": 512,
+      "evidence": {
+        "generated_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/full/anomaly.psf__requests-5414.call11.onset.json",
+        "raw_file_sha256": "6a22257dbe5b30dec221560fc555e6331e83891872d9e274b89be6b293718b82",
+        "generated_text_field": "$.free_running[0].text",
+        "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/fixtures/anomaly.psf__requests-5414.call11.onset.suffix1024.private.json",
+        "conditioning_field": "$.prompt_token_ids",
+        "conditioning_decoded_tail": "to end the task, please issue the following command: `echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT`\nwithout any other command.<turn|>\n<|turn>model\n<|channel>thought\nOkay, I've analyzed the issue.\nThe user is reporting that `requests.get(\"http://.example.com\")` raises a `UnicodeError` (specifically `urllib3.exceptions.LocationParseError` which seems to wrap it or be related) instead of `requests.exceptions.InvalidURL`.\n\nWait, in my reproduction script:\n```python\nimport requests\nimport traceback\n\ntry:\n    requests.get(\"http://.example.com\")\nexcept Exception:\n    traceback.print_exc()\n```\nThe output was:\n```\nTraceback (most recent call last):\n  File \"/testbed/reproduce_issue.py\", line 5, in <module>\n    requests.get(\"http://.example.com\")\n  ...\n  File \"/opt/miniconda3/lib/python3.11/site-packages/urllib3/util/connection.py\", line 68, in create_connection\n    return six.raise_from(\n           ",
+        "native_chosen_field": "$.continuations.chosen",
+        "native_chosen_decoded_head": "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^",
+        "native_motif": "^^^^",
+        "observation": "Continues diagnosis coherently and starts testing IDNA; ends inside the code sample at512. Native caret burst absent."
+      },
+      "confidence": 0.86,
+      "cap_notes": "Exactly512 generated tokens; progressing rows remain inconclusive, while visible anomaly rows are classified independently; no task-completion claim."
+    },
+    {
+      "job": "anomaly.psf__requests-5414.call11.onset",
+      "mode": "full",
+      "seed": 43,
+      "verdict": "other_anomaly",
+      "token_count": 124,
+      "evidence": {
+        "generated_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/full/anomaly.psf__requests-5414.call11.onset.json",
+        "raw_file_sha256": "6a22257dbe5b30dec221560fc555e6331e83891872d9e274b89be6b293718b82",
+        "generated_text_field": "$.free_running[1].text",
+        "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/fixtures/anomaly.psf__requests-5414.call11.onset.suffix1024.private.json",
+        "conditioning_field": "$.prompt_token_ids",
+        "conditioning_decoded_tail": "to end the task, please issue the following command: `echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT`\nwithout any other command.<turn|>\n<|turn>model\n<|channel>thought\nOkay, I've analyzed the issue.\nThe user is reporting that `requests.get(\"http://.example.com\")` raises a `UnicodeError` (specifically `urllib3.exceptions.LocationParseError` which seems to wrap it or be related) instead of `requests.exceptions.InvalidURL`.\n\nWait, in my reproduction script:\n```python\nimport requests\nimport traceback\n\ntry:\n    requests.get(\"http://.example.com\")\nexcept Exception:\n    traceback.print_exc()\n```\nThe output was:\n```\nTraceback (most recent call last):\n  File \"/testbed/reproduce_issue.py\", line 5, in <module>\n    requests.get(\"http://.example.com\")\n  ...\n  File \"/opt/miniconda3/lib/python3.11/site-packages/urllib3/util/connection.py\", line 68, in create_connection\n    return six.raise_from(\n           ",
+        "native_chosen_field": "$.continuations.chosen",
+        "native_chosen_decoded_head": "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^",
+        "native_motif": "^^^^",
+        "observation": "Concise diagnosis followed by noncanonical call:bash:{JSON} visible content. No native caret-burst motif; no command execution inferred.",
+        "protocol_observation": "The generated visible call is `call:bash:{\"command\":...}` followed by tool markers, not the canonical `call:bash{command:...}` form. Parser audit D was still underway, so I do not claim this was a valid tool call; classify as protocol anomaly."
+      },
+      "confidence": 0.88,
+      "cap_notes": "124 tokens; output closes at tool-response marker, but command syntax is noncanonical pending parser audit."
+    },
+    {
+      "job": "anomaly.psf__requests-5414.call11.onset",
+      "mode": "full",
+      "seed": 44,
+      "verdict": "other_anomaly",
+      "token_count": 512,
+      "evidence": {
+        "generated_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/full/anomaly.psf__requests-5414.call11.onset.json",
+        "raw_file_sha256": "6a22257dbe5b30dec221560fc555e6331e83891872d9e274b89be6b293718b82",
+        "generated_text_field": "$.free_running[2].text",
+        "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/fixtures/anomaly.psf__requests-5414.call11.onset.suffix1024.private.json",
+        "conditioning_field": "$.prompt_token_ids",
+        "conditioning_decoded_tail": "to end the task, please issue the following command: `echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT`\nwithout any other command.<turn|>\n<|turn>model\n<|channel>thought\nOkay, I've analyzed the issue.\nThe user is reporting that `requests.get(\"http://.example.com\")` raises a `UnicodeError` (specifically `urllib3.exceptions.LocationParseError` which seems to wrap it or be related) instead of `requests.exceptions.InvalidURL`.\n\nWait, in my reproduction script:\n```python\nimport requests\nimport traceback\n\ntry:\n    requests.get(\"http://.example.com\")\nexcept Exception:\n    traceback.print_exc()\n```\nThe output was:\n```\nTraceback (most recent call last):\n  File \"/testbed/reproduce_issue.py\", line 5, in <module>\n    requests.get(\"http://.example.com\")\n  ...\n  File \"/opt/miniconda3/lib/python3.11/site-packages/urllib3/util/connection.py\", line 68, in create_connection\n    return six.raise_from(\n           ",
+        "native_chosen_field": "$.continuations.chosen",
+        "native_chosen_decoded_head": "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^",
+        "native_motif": "^^^^",
+        "observation": "Repeats `None,` tokens through512 after the connection traceback; repeated-output anomaly distinct from the native caret run."
+      },
+      "confidence": 0.92,
+      "cap_notes": "Exactly512 generated tokens; progressing rows remain inconclusive, while visible anomaly rows are classified independently; no task-completion claim."
+    },
+    {
+      "job": "anomaly.psf__requests-5414.call9.onset",
+      "mode": "full",
+      "seed": 42,
+      "verdict": "reproduced_native_motif",
+      "token_count": 512,
+      "evidence": {
+        "generated_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/full/anomaly.psf__requests-5414.call9.onset.json",
+        "raw_file_sha256": "dec3d27c4021946b317f76a9bac5049e6ecadbd2f5dcc60fd9d67fd95951be71",
+        "generated_text_field": "$.free_running[0].text",
+        "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/fixtures/anomaly.psf__requests-5414.call9.onset.suffix1024.private.json",
+        "conditioning_field": "$.prompt_token_ids",
+        "conditioning_decoded_tail": "\\n   417\\t        # Bare domains aren\\u0027t valid URLs.\\n   418\\t        if not path:\\n   419\\t            path = \\u0027/\\u0027\\n   420\\t\\n\"\n}<|\"|>}<tool_response|><|channel>thought\nWait, I missed something.\n```python\n   384\\t            scheme, auth, host, port, path, query, fragment = parse_url(url)\n   385\\t        except LocationParseError as e:\n   386\\t            raise InvalidURL(*e.args)\n```\n`parse_url` is called and if it raises `LocationParseError`, it's caught and `InvalidURL` is raised.\nWhere is `parse_url` defined? It's likely in `requests.utils`.\nWait, if `parse_url` raises `LocationParseError`, then `requests` should be catching it.\nBut in my reproduction, the error happened in `urllib3.util.connection.create_connection`.\n\nLet's look at the traceback again.\n```\n  File \"/testbed/requests/sessions.py\", line 645, in send\n    r = adapter.send(request, **send_kwargs)\n           ",
+        "native_chosen_field": "$.continuations.chosen",
+        "native_chosen_decoded_head": "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^",
+        "native_motif": "^^^^",
+        "observation": "Continuation is uninterrupted caret run, matching the native caret-burst motif."
+      },
+      "confidence": 0.92,
+      "cap_notes": "Exactly512 generated tokens; progressing rows remain inconclusive, while visible anomaly rows are classified independently; no task-completion claim."
+    },
+    {
+      "job": "anomaly.psf__requests-5414.call9.onset",
+      "mode": "full",
+      "seed": 43,
+      "verdict": "reproduced_native_motif",
+      "token_count": 512,
+      "evidence": {
+        "generated_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/full/anomaly.psf__requests-5414.call9.onset.json",
+        "raw_file_sha256": "dec3d27c4021946b317f76a9bac5049e6ecadbd2f5dcc60fd9d67fd95951be71",
+        "generated_text_field": "$.free_running[1].text",
+        "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/fixtures/anomaly.psf__requests-5414.call9.onset.suffix1024.private.json",
+        "conditioning_field": "$.prompt_token_ids",
+        "conditioning_decoded_tail": "\\n   417\\t        # Bare domains aren\\u0027t valid URLs.\\n   418\\t        if not path:\\n   419\\t            path = \\u0027/\\u0027\\n   420\\t\\n\"\n}<|\"|>}<tool_response|><|channel>thought\nWait, I missed something.\n```python\n   384\\t            scheme, auth, host, port, path, query, fragment = parse_url(url)\n   385\\t        except LocationParseError as e:\n   386\\t            raise InvalidURL(*e.args)\n```\n`parse_url` is called and if it raises `LocationParseError`, it's caught and `InvalidURL` is raised.\nWhere is `parse_url` defined? It's likely in `requests.utils`.\nWait, if `parse_url` raises `LocationParseError`, then `requests` should be catching it.\nBut in my reproduction, the error happened in `urllib3.util.connection.create_connection`.\n\nLet's look at the traceback again.\n```\n  File \"/testbed/requests/sessions.py\", line 645, in send\n    r = adapter.send(request, **send_kwargs)\n           ",
+        "native_chosen_field": "$.continuations.chosen",
+        "native_chosen_decoded_head": "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^",
+        "native_motif": "^^^^",
+        "observation": "Continuation is uninterrupted caret run, matching the native caret-burst motif."
+      },
+      "confidence": 0.92,
+      "cap_notes": "Exactly512 generated tokens; progressing rows remain inconclusive, while visible anomaly rows are classified independently; no task-completion claim."
+    },
+    {
+      "job": "anomaly.psf__requests-5414.call9.onset",
+      "mode": "full",
+      "seed": 44,
+      "verdict": "reproduced_native_motif",
+      "token_count": 512,
+      "evidence": {
+        "generated_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/full/anomaly.psf__requests-5414.call9.onset.json",
+        "raw_file_sha256": "dec3d27c4021946b317f76a9bac5049e6ecadbd2f5dcc60fd9d67fd95951be71",
+        "generated_text_field": "$.free_running[2].text",
+        "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/fixtures/anomaly.psf__requests-5414.call9.onset.suffix1024.private.json",
+        "conditioning_field": "$.prompt_token_ids",
+        "conditioning_decoded_tail": "\\n   417\\t        # Bare domains aren\\u0027t valid URLs.\\n   418\\t        if not path:\\n   419\\t            path = \\u0027/\\u0027\\n   420\\t\\n\"\n}<|\"|>}<tool_response|><|channel>thought\nWait, I missed something.\n```python\n   384\\t            scheme, auth, host, port, path, query, fragment = parse_url(url)\n   385\\t        except LocationParseError as e:\n   386\\t            raise InvalidURL(*e.args)\n```\n`parse_url` is called and if it raises `LocationParseError`, it's caught and `InvalidURL` is raised.\nWhere is `parse_url` defined? It's likely in `requests.utils`.\nWait, if `parse_url` raises `LocationParseError`, then `requests` should be catching it.\nBut in my reproduction, the error happened in `urllib3.util.connection.create_connection`.\n\nLet's look at the traceback again.\n```\n  File \"/testbed/requests/sessions.py\", line 645, in send\n    r = adapter.send(request, **send_kwargs)\n           ",
+        "native_chosen_field": "$.continuations.chosen",
+        "native_chosen_decoded_head": "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^",
+        "native_motif": "^^^^",
+        "observation": "Continuation is uninterrupted caret run, matching the native caret-burst motif."
+      },
+      "confidence": 0.92,
+      "cap_notes": "Exactly512 generated tokens; progressing rows remain inconclusive, while visible anomaly rows are classified independently; no task-completion claim."
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-10323.call70.onset",
+      "mode": "full",
+      "seed": 42,
+      "verdict": "other_anomaly",
+      "token_count": 200,
+      "evidence": {
+        "generated_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/full/anomaly.sphinx-doc__sphinx-10323.call70.onset.json",
+        "raw_file_sha256": "a441ba44ab8294f359c1ea864d045cc4e6fb5d123930684db4b02ee3c1749f77",
+        "generated_text_field": "$.free_running[0].text",
+        "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/fixtures/anomaly.sphinx-doc__sphinx-10323.call70.onset.suffix1024.private.json",
+        "conditioning_field": "$.prompt_token_ids",
+        "conditioning_decoded_tail": "7, \\u0027sys\\u0027, \\u0027unchanged\\u0027, \\u0027unchanged_required\\u0027, \\u0027unescape\\u0027, \\u0027unichr\\u0027, \\u0027unicode_code\\u0027, \\u0027unicode_pattern\\u0027, \\u0027uri\\u0027, \\u0027value_or\\u0027]\\n\"\n}<|\"|>}<tool_response|><|channel>thought\n<|channel>thought\nI don't see anything that looks like it would preserve leading whitespace.\n\nGiven the constraints, I will conclude that the issue is a limitation of `docutils` and not something that can be fixed within `LiteralInclude` without a major rewrite of how options are handled.\n\nHowever, I'll just leave the code as it was and submit. Wait, I'll double check if I can use `dedent` to solve the problem.\n\nIf I use `:dedent: 4`, and the `prepend` is `<plugin>`, the result is `<plugin>` (no indentation).\nIf the user wants `    <plugin>`, they'll have to use something like `:prepend:     <plugin>` and we'd need to not strip it.\n\nI've",
+        "native_chosen_field": "$.continuations.chosen",
+        "native_chosen_decoded_head": "'ve tried everything. I'll just submit.<channel|><|tool_call>call:bash{command:<|\"|>echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT<|\"|>}<tool_call|><|tool_response>",
+        "native_motif": "I've've",
+        "observation": "Semantically coherent final summary, but native continuation proceeds to a canonical bash echo submission call; generated reply instead ends as final prose without that structured tool action. Protocol anomaly."
+      },
+      "confidence": 0.92,
+      "cap_notes": "200 generated tokens (<512); output ends at canonical tool-response boundary."
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-10323.call70.onset",
+      "mode": "full",
+      "seed": 43,
+      "verdict": "other_anomaly",
+      "token_count": 207,
+      "evidence": {
+        "generated_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/full/anomaly.sphinx-doc__sphinx-10323.call70.onset.json",
+        "raw_file_sha256": "a441ba44ab8294f359c1ea864d045cc4e6fb5d123930684db4b02ee3c1749f77",
+        "generated_text_field": "$.free_running[1].text",
+        "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/fixtures/anomaly.sphinx-doc__sphinx-10323.call70.onset.suffix1024.private.json",
+        "conditioning_field": "$.prompt_token_ids",
+        "conditioning_decoded_tail": "7, \\u0027sys\\u0027, \\u0027unchanged\\u0027, \\u0027unchanged_required\\u0027, \\u0027unescape\\u0027, \\u0027unichr\\u0027, \\u0027unicode_code\\u0027, \\u0027unicode_pattern\\u0027, \\u0027uri\\u0027, \\u0027value_or\\u0027]\\n\"\n}<|\"|>}<tool_response|><|channel>thought\n<|channel>thought\nI don't see anything that looks like it would preserve leading whitespace.\n\nGiven the constraints, I will conclude that the issue is a limitation of `docutils` and not something that can be fixed within `LiteralInclude` without a major rewrite of how options are handled.\n\nHowever, I'll just leave the code as it was and submit. Wait, I'll double check if I can use `dedent` to solve the problem.\n\nIf I use `:dedent: 4`, and the `prepend` is `<plugin>`, the result is `<plugin>` (no indentation).\nIf the user wants `    <plugin>`, they'll have to use something like `:prepend:     <plugin>` and we'd need to not strip it.\n\nI've",
+        "native_chosen_field": "$.continuations.chosen",
+        "native_chosen_decoded_head": "'ve tried everything. I'll just submit.<channel|><|tool_call>call:bash{command:<|\"|>echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT<|\"|>}<tool_call|><|tool_response>",
+        "native_motif": "I've've",
+        "observation": "Semantically coherent final summary, but native continuation proceeds to a canonical bash echo submission call; generated reply instead ends as final prose without that structured tool action. Protocol anomaly."
+      },
+      "confidence": 0.92,
+      "cap_notes": "207 generated tokens (<512); output ends at canonical tool-response boundary."
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-10323.call70.onset",
+      "mode": "full",
+      "seed": 44,
+      "verdict": "other_anomaly",
+      "token_count": 191,
+      "evidence": {
+        "generated_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/full/anomaly.sphinx-doc__sphinx-10323.call70.onset.json",
+        "raw_file_sha256": "a441ba44ab8294f359c1ea864d045cc4e6fb5d123930684db4b02ee3c1749f77",
+        "generated_text_field": "$.free_running[2].text",
+        "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/fixtures/anomaly.sphinx-doc__sphinx-10323.call70.onset.suffix1024.private.json",
+        "conditioning_field": "$.prompt_token_ids",
+        "conditioning_decoded_tail": "7, \\u0027sys\\u0027, \\u0027unchanged\\u0027, \\u0027unchanged_required\\u0027, \\u0027unescape\\u0027, \\u0027unichr\\u0027, \\u0027unicode_code\\u0027, \\u0027unicode_pattern\\u0027, \\u0027uri\\u0027, \\u0027value_or\\u0027]\\n\"\n}<|\"|>}<tool_response|><|channel>thought\n<|channel>thought\nI don't see anything that looks like it would preserve leading whitespace.\n\nGiven the constraints, I will conclude that the issue is a limitation of `docutils` and not something that can be fixed within `LiteralInclude` without a major rewrite of how options are handled.\n\nHowever, I'll just leave the code as it was and submit. Wait, I'll double check if I can use `dedent` to solve the problem.\n\nIf I use `:dedent: 4`, and the `prepend` is `<plugin>`, the result is `<plugin>` (no indentation).\nIf the user wants `    <plugin>`, they'll have to use something like `:prepend:     <plugin>` and we'd need to not strip it.\n\nI've",
+        "native_chosen_field": "$.continuations.chosen",
+        "native_chosen_decoded_head": "'ve tried everything. I'll just submit.<channel|><|tool_call>call:bash{command:<|\"|>echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT<|\"|>}<tool_call|><|tool_response>",
+        "native_motif": "I've've",
+        "semantic_observation": "The final summary is coherent and discusses docutils whitespace handling.",
+        "protocol_observation": "Native continuation performs canonical bash echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT; generated reply instead returns prose and ends as a final turn without the structured completion action."
+      },
+      "confidence": 0.92,
+      "cap_notes": "191 tokens (<512), coherent final prose, but required canonical tool action absent."
+    }
+  ],
+  "summary": {
+    "rows": 36,
+    "by_mode": {
+      "full": {
+        "normal": 3,
+        "inconclusive": 2,
+        "other_anomaly": 10,
+        "reproduced_native_motif": 3
+      },
+      "served": {
+        "normal": 4,
+        "other_anomaly": 12,
+        "reproduced_native_motif": 2
+      }
+    },
+    "raw_file_sha256": {
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/served/anomaly.call91.canonicalprefix.json": "4291808df0b2ba86956bd4924a8b60e7afcdd7809666f321c8b47ea5803da3eb",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/served/anomaly.matplotlib__matplotlib-20488.call86.onset.json": "0aea28389faa2da5325d78a67b05beadd6c6dd2178fab7e4f56e6f34cef9ca34",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/served/anomaly.psf__requests-5414.call10.onset.json": "90e92015185c5b1b89afbbcd5d11660140b2dee258d055d40dd1025fe36b2476",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/served/anomaly.psf__requests-5414.call11.onset.json": "1a7ec3c160f707145b3d285fd349339348b36cad70dfd5e653c1bf2d0c345c67",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/served/anomaly.psf__requests-5414.call9.onset.json": "ab28180a1cce9bb9eec291201f38527c99ec0fac41b22ae84abca5774091d969",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/served/anomaly.sphinx-doc__sphinx-10323.call70.onset.json": "ce633f522c58657f78738d741d04aaca2e58704a8ea0aac93fa8b71440cb2187",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/full/anomaly.call91.canonicalprefix.json": "9ca5ad50c2d6a88f9d777afd8c2e0f9e01b5ab9b6e66f021dc0fe60871e60cc8",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/full/anomaly.matplotlib__matplotlib-20488.call86.onset.json": "a2dc3012fc83468f00dd3dfc66c82c940c093b5b2c6c72c4a7a1bfd09631e7a9",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/full/anomaly.psf__requests-5414.call10.onset.json": "09a4a0cf9159ccdafa8913902f0b53f63c337f33720ea559228c51877a4f90dd",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/full/anomaly.psf__requests-5414.call11.onset.json": "6a22257dbe5b30dec221560fc555e6331e83891872d9e274b89be6b293718b82",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/full/anomaly.psf__requests-5414.call9.onset.json": "dec3d27c4021946b317f76a9bac5049e6ecadbd2f5dcc60fd9d67fd95951be71",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/full/anomaly.sphinx-doc__sphinx-10323.call70.onset.json": "a441ba44ab8294f359c1ea864d045cc4e6fb5d123930684db4b02ee3c1749f77"
+    }
+  }
+}

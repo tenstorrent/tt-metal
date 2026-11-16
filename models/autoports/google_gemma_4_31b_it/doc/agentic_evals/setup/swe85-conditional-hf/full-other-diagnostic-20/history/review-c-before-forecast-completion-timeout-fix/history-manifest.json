@@ -1,0 +1,10 @@
+{
+  "status": "preserved_unadmitted_history",
+  "reason": "Snapshot before root review corrections to completion forecast fields and fixed timeout/deadline gate.",
+  "files": {
+    "run_group.py": "50ea9788fbd8fd02ef4105973dc23781f051799950542e91a03e776ae1c421d8",
+    "test_run_group.py": "550f6c64f60e2c9878272ebaba599b3d77cc43e151dc595d77d9b5198d64f16a",
+    "driver-contract.json": "eba41ea2964865ba793626255d7668f341922fd330d29ea9cd9104006286df5d",
+    "driver-integrity.json": "c7f34b4b32ff03969d120c890c2abd5071b78453026acccb4ee11df864bc1ff8"
+  }
+}

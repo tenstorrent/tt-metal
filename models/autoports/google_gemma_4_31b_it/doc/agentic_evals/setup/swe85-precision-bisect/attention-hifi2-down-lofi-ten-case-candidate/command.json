@@ -1,0 +1,36 @@
+{
+  "status": "inert_candidate_only_not_admitted_not_run",
+  "mode": "full",
+  "case_count": 10,
+  "timeout_seconds": 1800,
+  "model_loads": 1,
+  "argv": [
+    "timeout",
+    "1800",
+    "env",
+    "HF_HUB_OFFLINE=1",
+    "HF_DATASETS_OFFLINE=1",
+    "HF_HUB_DISABLE_TELEMETRY=1",
+    "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+    "READINESS_TRACE_REGION_SIZE=134217728",
+    "OMP_NUM_THREADS=16",
+    "MKL_NUM_THREADS=16",
+    "OPENBLAS_NUM_THREADS=16",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+    "-m",
+    "models.autoports.google_gemma_4_31b_it.tools.precision_repro_batch",
+    "--cases",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/attention-hifi2-down-lofi-ten-case-candidate/candidate-cases.json",
+    "--build-kwargs-file",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/attention-hifi2-down-lofi-ten-case-candidate/attention_hifi2_down_lofi_build_kwargs.json",
+    "--output-dir",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/attention-hifi2-down-lofi-ten-case-candidate/runs/attention_hifi2_down_lofi_ten"
+  ],
+  "environment_overrides": {
+    "HF_HUB_OFFLINE": "1",
+    "HF_DATASETS_OFFLINE": "1",
+    "HF_HUB_DISABLE_TELEMETRY": "1"
+  },
+  "scope": "Ten exact fixed108 manifest fixtures/seeds/caps: indices 0,32,33,58,66,67,68,74,85,93. Relative to P6, only attention weight/fidelity policy changes from bfp8_lofi/LoFi to bfp8/HiFi2; attention storage remains bfloat8_b. Down stays bfp8_lofi/LoFi, MLP bfp4/LoFi, head bfp8_lofi/LoFi; all cache, activation, collectives and runtime contract fields remain unchanged. One full-mode model load; no branch teacher forcing.",
+  "must_not_execute_until": "Separate root review/decision and explicit admission; this directory has no admission artifact."
+}

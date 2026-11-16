@@ -1,0 +1,40 @@
+{
+  "scope": "Host-only existing-evidence/schema audit; no measurements or scores changed.",
+  "checker": "installed check_agentic_serving.py --stage agentic-evals",
+  "before": "setup/schema_audit_before.txt",
+  "after": "setup/schema_audit_after.txt",
+  "corrected": [
+    "Candidate GPQA failure cause/evidence aliases",
+    "Scalar minimum per-device launch GB with original per-device arrays retained",
+    "SWE Wilson percent units with original fractions retained",
+    "SWE canonical harness limit keys/reference values",
+    "Canonical selected precision label with original config path retained",
+    "SWE digest model-relative path",
+    "Existing prospective full-suite projections surfaced under estimates, explicitly not prelaunch SWE forecast",
+    "Stale pipeline/rerun/anomaly statuses reconciled with completed TT controls; HF still pending"
+  ],
+  "remaining_critical": [
+    "Extended GPQA scored run absent: intentionally not admitted before phase2 anomaly closure",
+    "Extended SWE scored run absent: intentionally not admitted before phase2 anomaly closure"
+  ],
+  "legitimate_advisories": [
+    "Phase2 numerical gate computes true while pass false: required Astropy HF diagnostic remains unresolved",
+    "Three zero-model-call infrastructure attempts lack reply digests; no native task replies existed",
+    "Fixed KV pool/shared allocator and tied-weight representations remain documented limitations"
+  ],
+  "review_risks": [
+    "No prelaunch full-list SWE hours forecast was saved; post-phase synthetic projection cannot retrospectively supply it. results predicted_reason retains this omission.",
+    "SWE final4/10 includes explicit Sympy adjudication; original missing reward remains null in native collector evidence.",
+    "Explained SWE1.523058417778545h includes extrapolated context/concurrency rates, not a fresh full-suite measurement.",
+    "Future projections conditional on unchanged stage12_head_bfp8_lofi and unknown task/image-setup tails; no list admitted."
+  ],
+  "preserved": {
+    "phase1_pass": true,
+    "phase2_pass": false,
+    "swe_solved": 4,
+    "swe_n": 10,
+    "swe_measured_hours": 1.4036113560862011,
+    "swe_explained_hours": 1.523058417778545
+  },
+  "report": "Parent updated REPORT.md concurrently; this task did not modify REPORT.md or learned.json."
+}

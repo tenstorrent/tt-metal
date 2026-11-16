@@ -1,0 +1,41 @@
+{
+  "status": "prepared_not_executed",
+  "selection": "Start suffix512 only; suffix2048 fallback from unchanged full cases.json only for tasks where512 fails to reproduce. Each task judged independently.",
+  "device_controls": {
+    "served": [
+      "timeout",
+      "2400",
+      "env",
+      "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+      "READINESS_TRACE_REGION_SIZE=134217728",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "models/autoports/google_gemma_4_31b_it/tools/precision_repro_batch.py",
+      "--cases",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first_wave_cases.json",
+      "--build-kwargs-file",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/head_bfp8_build_kwargs.json",
+      "--output-dir",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first-wave-served"
+    ],
+    "full": [
+      "timeout",
+      "2400",
+      "env",
+      "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+      "READINESS_TRACE_REGION_SIZE=134217728",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "models/autoports/google_gemma_4_31b_it/tools/precision_repro_batch.py",
+      "--cases",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first_wave_cases.json",
+      "--build-kwargs-file",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_build_kwargs.json",
+      "--output-dir",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first-wave-full",
+      "--compare-dir",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first-wave-served"
+    ]
+  },
+  "budget": "4tasks x3x1024=12288tokens/config; indicative full17tps gives723s decode plusload/prefill/TF. Provision20\u201330min, timeout2400. No measured throughput claim.",
+  "manifest_sha256": "7d13dc02d80f2bf1ce6d53cece05e76d5222dbcba0a6847f36c61abc0ca01ea1",
+  "full_wave_commands": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/commands.json"
+}

@@ -1,0 +1,57 @@
+{
+  "reviewer": "independent host-only review B",
+  "proposal": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-c",
+  "status": "reviewed_not_admitted_not_run",
+  "coverage": {
+    "onset_cases": 36,
+    "candidate_rows": 108,
+    "unique_case_seed_pairs": 108,
+    "expected_pairs": "all 36 onset cases \u00d7 seeds 42, 43, 44 exactly once",
+    "coverage_check": "pass",
+    "cap_distribution": {
+      "cap256": 72,
+      "cap512": 36
+    },
+    "cap512_extension_pairs": 36,
+    "served_full_duplicate_extension_pairs_deduplicated": 22,
+    "extension_pair_coverage": "pass; selected set equals unique extension source_onset+seed pairs"
+  },
+  "inputs": {
+    "candidate_to_initial_prompt_token_ids": "exact match for all108 rows",
+    "candidate_to_initial_chosen_continuation_ids": "exact match for all108 rows",
+    "cap_extension_prompts_and_chosen_ids": "exact match to source onset for all selected36 pairs",
+    "metadata_seed": "equals row seed for all108 rows",
+    "fixture_hashes_and_manifest_mapping": "all checked hashes match; no missing, duplicate or mismatched candidate rows"
+  },
+  "precision_delta": {
+    "effective_scope": "lm_head compute fidelity LoFi\u2192HiFi2; BFP8 weight dtype remains bfloat8_b; other dtypes, fidelities, and max_seq_len 262144 unchanged",
+    "raw_fields_also_changed": [
+      "config_id",
+      "weight_groups.lm_head label bfp8_lofi\u2192bfp8"
+    ],
+    "semantic_basis": "tt/precision.py maps bfp8_lofi and bfp8 to the same bfloat8_b weight dtype with LoFi and HiFi2 respectively; policy validates the paired fidelity",
+    "check": "pass"
+  },
+  "execution_and_cost": {
+    "command": "single precision_repro_batch invocation; batch_size=1; one model load; serially processes108 rows under21600s timeout",
+    "teacher_forcing": "branches=[] means chosen continuation is stored and provenance-checked but not teacher-forced/replayed",
+    "prefill": "prompt prefill is repeated once for every free-running seed row (108 total); forecast baseline sum includes this prefill-inclusive per-row wall",
+    "forecast_arithmetic": {
+      "baseline_108_prefill_inclusive_seconds": 1482.1850028887857,
+      "extension_decode_seconds_for36": 328.8120068815907,
+      "candidate_model_load_seconds": 140.70528853707947,
+      "projected_total_seconds": 1951.702298307456,
+      "projected_total_hours": 0.5421395273076267,
+      "calculation": "baseline + extension decode deltas + one model load; reproduces proposal arithmetic within rounding"
+    },
+    "scope_note": "The estimate holds candidate load time at the observed served load and applies the stated 0.7\u00d7\u20131.5\u00d7 uncertainty to generation time; candidate HiFi2 load/throughput are not measured."
+  },
+  "runner_review": {
+    "cpu_validate_only_command": "correct cases/build-kwargs/output paths and timeout; --validate-only path exits before readiness mesh or TTNN imports in precision_repro_batch",
+    "device_command": "correct serial diagnostic invocation; should be used only after admission and pending-control gate, as proposal states",
+    "runtime_precision_and_trace_assertions": "present and adequately specify per-output precision, replay/readback/sample counters and zero capture delta",
+    "automatic_compare": "not configured; post-run comparison by source_onset+seed is explicitly required"
+  },
+  "issues": [],
+  "material_scope_note": "No proposal files were changed and no device work or admission action was performed."
+}

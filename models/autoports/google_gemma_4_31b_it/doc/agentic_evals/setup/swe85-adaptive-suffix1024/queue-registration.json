@@ -1,0 +1,6 @@
+{
+  "exec_session_id": 41942,
+  "driver": "setup/run_swe85_adaptive1024_after_shortcap.py",
+  "status": "queued",
+  "waits_for": "setup/swe85-persistent-short-controls/cap1024-preparation/full-completion.json"
+}

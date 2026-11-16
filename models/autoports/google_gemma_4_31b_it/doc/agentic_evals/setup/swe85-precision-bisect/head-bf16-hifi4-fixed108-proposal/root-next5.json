@@ -1,0 +1,90 @@
+{
+  "reviewed_unix": 1794725692.9714355,
+  "rows": [
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/runs/head_bf16_hifi4/anomaly.pytest-dev__pytest-7432.call19.onset.seed42.cap256.json",
+      "sha256": "627ab4b560244a9c1d140819afb4b15fdaea8ce19a412cecf1a148f2659ae99d",
+      "seed": 42,
+      "tokens": 256,
+      "verdict": "native",
+      "reason": "Root read raw output and decoded exact prefix: Repetitive caret continuation in traceback, including long pure-caret tail; affirmative native loop, not progress at cap.",
+      "trace_counters_delta": {
+        "model_replays": 255,
+        "sample_replays": 255,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 255,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/runs/head_bf16_hifi4/anomaly.pytest-dev__pytest-7432.call19.onset.seed43.cap256.json",
+      "sha256": "8a76003155848469c2e41787a5cd5ebf4b6e626ba6ab903e88e119ca79a8b510",
+      "seed": 43,
+      "tokens": 256,
+      "verdict": "native",
+      "reason": "Root read raw output and decoded exact prefix: Repetitive caret continuation in traceback, including long pure-caret tail; affirmative native loop, not progress at cap.",
+      "trace_counters_delta": {
+        "model_replays": 255,
+        "sample_replays": 255,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 255,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/runs/head_bf16_hifi4/anomaly.pytest-dev__pytest-7432.call19.onset.seed44.cap256.json",
+      "sha256": "6f61c046d9e1e217e28f1b731a74c4555719a76d40f9edad7761ba407132b76d",
+      "seed": 44,
+      "tokens": 256,
+      "verdict": "native",
+      "reason": "Root read raw output and decoded exact prefix: Repetitive caret continuation in traceback, including long pure-caret tail; affirmative native loop, not progress at cap.",
+      "trace_counters_delta": {
+        "model_replays": 255,
+        "sample_replays": 255,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 255,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/runs/head_bf16_hifi4/anomaly.pytest10356-call14.canonicalprefix.seed42.cap256.json",
+      "sha256": "527bfb6a26fa89ddf6ee106408ac70d2c3a1e1b51bd7a9247113f3da978964a2",
+      "seed": 42,
+      "tokens": 30,
+      "verdict": "native",
+      "reason": "Root read raw output and decoded exact prefix: Pinned prefix ends call:; generated text immediately starts string delimiter and shell command, omitting bash{command: invocation fields. Native malformed-tool motif.",
+      "trace_counters_delta": {
+        "model_replays": 29,
+        "sample_replays": 29,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 29,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/runs/head_bf16_hifi4/anomaly.pytest10356-call14.canonicalprefix.seed43.cap256.json",
+      "sha256": "94e8e477dff1a4da17526b51316f5eaac9bce437ba31e87735c5c07a042935f2",
+      "seed": 43,
+      "tokens": 27,
+      "verdict": "native",
+      "reason": "Root read raw output and decoded exact prefix: Pinned prefix ends call:; generated text immediately starts string delimiter and shell command, omitting bash{command: invocation fields. Native malformed-tool motif.",
+      "trace_counters_delta": {
+        "model_replays": 26,
+        "sample_replays": 26,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 26,
+        "captures": 0
+      }
+    }
+  ]
+}

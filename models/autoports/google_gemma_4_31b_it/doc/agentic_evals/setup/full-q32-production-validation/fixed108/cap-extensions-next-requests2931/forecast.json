@@ -1,0 +1,9 @@
+{
+  "status": "candidate_forecast",
+  "low_seconds": 130,
+  "point_seconds": 145,
+  "high_seconds": 240,
+  "timeout_seconds": 600,
+  "basis": "Same-policy measurements for the cap512 outputs were33.625s and33.607s including prefill, with decode ~16.83 tokens/s; up to512 extra IDs each adds about30.4s decode per case plus measured nondecode overhead. Same-mode load was77.181s. Range allows early natural stops and load/prefill variation; not serving performance.",
+  "not_vllm_performance": true
+}

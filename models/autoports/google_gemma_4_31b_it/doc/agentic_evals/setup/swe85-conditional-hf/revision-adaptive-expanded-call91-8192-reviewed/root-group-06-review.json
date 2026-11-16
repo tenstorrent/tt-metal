@@ -1,0 +1,31 @@
+{
+  "status": "completed_root_and_independent_triage_reconciled",
+  "reviewer": "root",
+  "accepted": true,
+  "utc": "2026-11-15T10:18:03.909708+00:00",
+  "serial_order": 6,
+  "admission_sha256": "74640276fdf5e463fa968d5d188994622759df96f09d4f408e02712b7d09ae66",
+  "launch_sha256": "38927fc2916e99d60706de300e903b7735fefc230f1216a3b2034769a35f497e",
+  "completion_sha256": "ad828e22fcc086bfac514723cff621d9b1d7cef84ba1de833351e85e5c2f22a5",
+  "result_sha256": "7544c2c7a570e573fa29b8743a75ef5edba01e55de629d35741cc8cb4c59f520",
+  "independent_triage_sha256": "b5061917dcebe731f705b8adc422b586691623534cd858a267012a3c7bedeed0",
+  "verdict": "normal_reference_tool_handoff",
+  "exact_fixture_sha256": "7e8ee5bb1a24cca6e4e58651929198f7a4c4de279ca54495cedae74f3678193d",
+  "source_sha256": "c11bb5890af7b0166bbbb61c44a3200e58aa3eb4b509403759fbb162ae58d179",
+  "source_slice": [
+    42022,
+    46118
+  ],
+  "seed": 43,
+  "generated_tokens": 68,
+  "natural_stop_id": 50,
+  "measured_seconds": 383.641316652298,
+  "forecast_range_seconds": [
+    1380,
+    4980
+  ],
+  "forecast_gate": "root_accepted_low_miss_early_natural_stop",
+  "forecast_acceptance_sha256": "826020c4ae0320e42865337e28278f8e3c117b3cc393d0fad77e4ff029e90ba0",
+  "matched_tt": "Both TT seed43 start two extra contraction suffixes then prose; localized anomaly, not a sustained loop. Full TT512 cap history is separately being audited; HF natural stop needs no extension.",
+  "interpretation": "HF samples a different first token. Forced-history HF also gives substantial probability to repeated suffix. No precision causality or native replay claim; no score/policy change."
+}

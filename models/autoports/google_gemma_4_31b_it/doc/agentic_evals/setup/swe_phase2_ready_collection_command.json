@@ -1,0 +1,38 @@
+{
+  "status": "prepared_not_executed",
+  "job_dir": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe-jobs/swe-phase2-ready",
+  "trial_result_glob": "<job_dir>/<task>__<trial>/result.json",
+  "trajectory_glob": "<job_dir>/<task>__<trial>/agent/mini-swe-agent.trajectory.json",
+  "agent_log_glob": "<job_dir>/<task>__<trial>/agent/mini-swe-agent.txt",
+  "verifier_glob": "<job_dir>/<task>__<trial>/verifier/",
+  "collector_argv": [
+    "python_env/bin/python",
+    "models/autoports/google_gemma_4_31b_it/tools/agentic_collect_swe.py",
+    "--server-log",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/head-bfp8-rates/server/server-b32/server.log",
+    "--job-dir",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe-jobs/swe-phase2-ready",
+    "--task-list",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe10_tasks.json",
+    "--task-dir",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe-tasks",
+    "--out",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-phase2-ready/collected",
+    "--agents",
+    "10",
+    "--server-batch",
+    "32",
+    "--run-start",
+    "1794635377.0",
+    "--run-end",
+    "<actual-final-run-end-unix>",
+    "--rates",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/head-bfp8-rates/measurement/serving_rates-swe.json"
+  ],
+  "notes": [
+    "Partial startup snapshots must use a separate explicitly partial output and observation timestamp, never final run end.",
+    "Harbor keeps ongoing agent logs inside task containers; host artifacts appear after synchronization/finalization.",
+    "No runtime/header/protocol edits; native X-Session-ID is visible in main agent invocation and exact statements supplement native response IDs for attribution.",
+    "Full solution-fetch audit pending; price-map blocked metadata attempt separately recorded."
+  ]
+}

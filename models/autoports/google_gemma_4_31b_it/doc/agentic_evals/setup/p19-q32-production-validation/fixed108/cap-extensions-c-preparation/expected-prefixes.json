@@ -1,0 +1,53 @@
+{
+  "status": "candidate_only_not_admitted_not_run",
+  "source_manifest_sha256": "57193e4b91af3a31df00f0c92dbc0f2219fbce011e6533594e5244a93a3021ed",
+  "source_triage_sha256": "c34878054097390eba6614bb8b86519612c665d43c392bb08d2bea2c1936f823",
+  "rows": [
+    {
+      "candidate_job_name": "p19capext.anomaly.sphinx-doc__sphinx-10323.call70.onset.seed42.cap512",
+      "source_manifest_index": 54,
+      "source_job_name": "anomaly.sphinx-doc__sphinx-10323.call70.onset.seed42.cap256",
+      "seed": 42,
+      "old_cap": 256,
+      "new_cap": 512,
+      "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-extra-contraction-controls/sphinx-doc__sphinx-10323.call70.onset.private.json",
+      "fixture_sha256": "7d39e2c87e91327f35317968bf2647887a402d0086085ec8f95db8ff5fc2ab64",
+      "fixture_prompt_token_ids": 65779,
+      "fixture_prompt_token_ids_sha256": "fd24fbb8d469895d6b7bc344aa036fc844a4c80a754f06708be6ed35daa7d032",
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 42
+      },
+      "prior_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/p19-q32-production-validation/fixed108/runs/p19_q32/anomaly.sphinx-doc__sphinx-10323.call70.onset.seed42.cap256.json",
+      "prior_result_sha256": "8dfb04e0d290f13dee822128b41d12de1944fc7834ea601f840c61fbd0c3d529",
+      "prior_generated_token_count": 256,
+      "prior_generated_token_ids_sha256": "cb997473c906fb0c641fb30369429d80a8ddd79e724b6e36e4eaf51caa9d6933",
+      "prefix_check": "Before claiming any extension, require candidate result fixture/prompt/sampling/revision/runtime identity to match and candidate free_running[0].token_ids[:old_cap] == prior free_running[0].token_ids exactly."
+    },
+    {
+      "candidate_job_name": "p19capext.anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed44.cap2048",
+      "source_manifest_index": 68,
+      "source_job_name": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed44.cap1024",
+      "seed": 44,
+      "old_cap": 1024,
+      "new_cap": 2048,
+      "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap1024.seed44.private.json",
+      "fixture_sha256": "7c5da63d138e6afa7b539dfed909ee1e8a937c2e168d587023c4421333688780",
+      "fixture_prompt_token_ids": 76441,
+      "fixture_prompt_token_ids_sha256": "5e8c9025218ae22d2ae1491e4ff24e3aacdf82ad5d2985c6e2792168270c6808",
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 44
+      },
+      "prior_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/p19-q32-production-validation/fixed108/runs/p19_q32/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed44.cap1024.json",
+      "prior_result_sha256": "9ddbe31160890bbea94ccb463d6c97e035933cb7c40d8d66ac4b34d29c79587b",
+      "prior_generated_token_count": 1024,
+      "prior_generated_token_ids_sha256": "c48612b867327bcf9828b5aed0c62fb85b9de1a25352e82fc7c3c2caf0423e62",
+      "prefix_check": "Before claiming any extension, require candidate result fixture/prompt/sampling/revision/runtime identity to match and candidate free_running[0].token_ids[:old_cap] == prior free_running[0].token_ids exactly."
+    }
+  ]
+}

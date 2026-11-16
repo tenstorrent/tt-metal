@@ -1,0 +1,23 @@
+{
+  "pass": true,
+  "count": 198,
+  "affected_ids": [
+    8,
+    24,
+    27,
+    32,
+    64,
+    76,
+    81,
+    97,
+    118,
+    171,
+    177,
+    185
+  ],
+  "unchanged_rows": 186,
+  "all_choices_preserved": true,
+  "all_gold_indexes_valid": true,
+  "source": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/lm-eval-gpqa-preserve-brackets/lm_eval/tasks/gpqa/zeroshot/utils.py",
+  "main_environment_unchanged": true
+}

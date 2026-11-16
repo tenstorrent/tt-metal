@@ -1,0 +1,25 @@
+{
+  "argv": [
+    "timeout",
+    "3600",
+    "env",
+    "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+    "READINESS_TRACE_REGION_SIZE=134217728",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+    "models/autoports/google_gemma_4_31b_it/tools/precision_repro_batch.py",
+    "--cases",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe-astropy-precision/cases.json",
+    "--build-kwargs-file",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_build_kwargs.json",
+    "--output-dir",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe-astropy-precision/full",
+    "--compare-dir",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe-astropy-precision/served"
+  ],
+  "start_unix": 1794640971.0938368,
+  "commit": "662f278cae997d6f710c46e47282a049cf3ce7f8",
+  "cases_sha256": "3251becf5c5d9fbec7c2cc38d640d1c1ca5e572c9528ae5c548cecdb0107a0dd",
+  "regime": "serial P300x2 TP4; served control exited0; proc fd owner scan empty; fuser unavailable; no profiler",
+  "end_unix": 1794641502.1483684,
+  "exit_code": 0
+}

@@ -1,0 +1,18 @@
+{
+  "command": [
+    "python",
+    "models/autoports/google_gemma_4_31b_it/tools/agentic_overlay_swe_rewards.py",
+    "--collected",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-phase2-ready/collected/collected.json",
+    "--verifier-recovery",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-phase2-ready/verifier-recovery-offline",
+    "--job-dir",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe-jobs/swe-phase2-ready",
+    "--task-dir",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe-tasks",
+    "--out",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-phase2-ready/collected/collected-recovered.json"
+  ],
+  "run_after": "Final raw collector output exists; do not run while Astropy incomplete unless explicitly producing a partial snapshot.",
+  "preservation": "Raw collector results, calls, explained timing and source rewards unchanged. Missing Sympy reward remains null; attach model-failure triage classification separately, never invent verifier reward."
+}

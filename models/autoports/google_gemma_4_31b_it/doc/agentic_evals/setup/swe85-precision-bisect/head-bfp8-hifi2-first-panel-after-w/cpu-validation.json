@@ -1,0 +1,26 @@
+{
+  "status": "passed",
+  "scope": "CPU-only precision_repro_batch --validate-only for the frozen reviewed manifest; no TTNN import, model load, or device work.",
+  "result": "Validated 108 jobs without importing TTNN",
+  "case_count": 108,
+  "ttnn_imported": false,
+  "device_work": false,
+  "driver_python_compile": true,
+  "command": [
+    "timeout",
+    "7200",
+    "env",
+    "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+    "READINESS_TRACE_REGION_SIZE=134217728",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+    "-m",
+    "models.autoports.google_gemma_4_31b_it.tools.precision_repro_batch",
+    "--cases",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-with-cap4096-pending-v-closure/candidate-cases.json",
+    "--build-kwargs-file",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-with-cap4096-pending-v-closure/head_bfp8_hifi2_build_kwargs.json",
+    "--output-dir",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2",
+    "--validate-only"
+  ]
+}

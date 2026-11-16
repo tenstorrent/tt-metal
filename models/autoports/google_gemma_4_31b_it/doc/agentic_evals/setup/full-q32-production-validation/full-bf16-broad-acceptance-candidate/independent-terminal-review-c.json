@@ -1,0 +1,227 @@
+{
+  "status": "independent_terminal_artifact_review_broad_component_checks_pass_exit_status_unknown",
+  "scope": "Read-only review of all broad-acceptance artifacts collected before wrapper interruption. No model/device execution. Current full-BF16 remains diagnostic/unselected; no inference that an unknown child exit code was zero.",
+  "completion": {
+    "status": "process_exit_observed_all_results_collected_exit_status_unknown",
+    "start_unix": 1794784925.965542,
+    "end_unix": 1794786272.6901937,
+    "wall_seconds": 1346.7246515750885,
+    "exit_code": null,
+    "wrapper_exit_code": 143,
+    "missing_reasons": {
+      "exit_code": "Outer wrapper terminated unexpectedly; actual child completed later, but was reaped before /proc exit status could be read. No exit0 is inferred."
+    },
+    "observer": "process-exit-observer.json",
+    "device_release_observed": true
+  },
+  "completion_sha256": "003712fba9c192cc6c82861b9059b5ed1ebaa863b50d09c2637bcfc5f77657ed",
+  "root_review": {
+    "path": "setup/full-q32-production-validation/full-bf16-broad-acceptance-candidate/root-review.json",
+    "sha256": "282231259df438812a9601d964bc672a4f6b0c0d0f2f01d8fa33540940cd9a9a",
+    "pins_verified": 172,
+    "checksums_match_all": true,
+    "per_output_sha256_matches": {
+      "source_manifest.json": true,
+      "qualitative_prompt_format.json": true,
+      "qualitative_tt.json": true,
+      "qualitative_hf.json": true,
+      "readiness_accuracy.json": true,
+      "runtime_policy.json": true,
+      "aime24_prompt.json": true,
+      "full_context_post_barrier.json": true,
+      "performance_b1.json": true,
+      "long_prefix.json": true,
+      "memory.json": true
+    },
+    "status": "recorded_broad_checks_pass_process_exit_status_unknown"
+  },
+  "runtime_policy": {
+    "config_id": "stage12_bf16_hifi4_diagnostic",
+    "weight_groups": {
+      "attention": "bf16",
+      "mlp": "bf16",
+      "down": "bf16",
+      "lm_head": "bf16"
+    },
+    "fidelities": {
+      "attention": "HiFi4",
+      "mlp": "HiFi4",
+      "down": "HiFi4",
+      "lm_head": "HiFi4"
+    },
+    "kv_cache": "bfloat16",
+    "max_seq_len": 262144,
+    "model_class": "models.autoports.google_gemma_4_31b_it.tt.model",
+    "generator_class": "models.autoports.google_gemma_4_31b_it.tt.generator",
+    "assessment": "Full60-layer BF16/HiFi4 with BF16 KV under Q32; recorded runtime policy matches intended candidate."
+  },
+  "accuracy": {
+    "revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+    "aime_prefill": {
+      "top1": [
+        98,
+        100
+      ],
+      "top5": [
+        100,
+        100
+      ],
+      "top100": [
+        100,
+        100
+      ]
+    },
+    "aime_decode_repeats": {
+      "count": 3,
+      "each_top1": [
+        98,
+        100
+      ],
+      "each_top5": [
+        100,
+        100
+      ],
+      "each_top100": [
+        100,
+        100
+      ]
+    },
+    "natural_512": {
+      "top1": [
+        480,
+        512
+      ],
+      "top5": [
+        512,
+        512
+      ],
+      "top100": [
+        512,
+        512
+      ]
+    },
+    "assessment": "Output-level reported accuracy gates pass per root review; this does not turn the interrupted wrapper into an exit-0 run."
+  },
+  "qualitative": {
+    "reference_pairs": 6,
+    "eos_stops": 2,
+    "bounded_128_prefixes": 4,
+    "rows": [
+      {
+        "id": "shared_0",
+        "prompt_identity": "same id; root review/source hashes pin files",
+        "tt_tokens": 19,
+        "tt_terminal_id": 106,
+        "hf_tokens": 19,
+        "hf_terminal_id": 106,
+        "first_divergence": null,
+        "classification": "natural_complete_coherent",
+        "judgment": "Complete haiku; TT/HF exact completion match."
+      },
+      {
+        "id": "shared_1",
+        "prompt_identity": "same id; root review/source hashes pin files",
+        "tt_tokens": 128,
+        "tt_terminal_id": 506,
+        "hf_tokens": 128,
+        "hf_terminal_id": 506,
+        "first_divergence": 21,
+        "classification": "coherent_but_cap_bounded_incomplete",
+        "judgment": "Coherent supervised-learning explanation; capped mid-sentence, not a finished answer."
+      },
+      {
+        "id": "shared_2",
+        "prompt_identity": "same id; root review/source hashes pin files",
+        "tt_tokens": 128,
+        "tt_terminal_id": 506,
+        "hf_tokens": 128,
+        "hf_terminal_id": 506,
+        "first_divergence": 42,
+        "classification": "coherent_but_cap_bounded_incomplete",
+        "judgment": "Coherent story opening; capped mid-story, not a completed story."
+      },
+      {
+        "id": "shared_3",
+        "prompt_identity": "same id; root review/source hashes pin files",
+        "tt_tokens": 128,
+        "tt_terminal_id": 5387,
+        "hf_tokens": 128,
+        "hf_terminal_id": 5387,
+        "first_divergence": null,
+        "classification": "coherent_but_cap_bounded_incomplete",
+        "judgment": "Coherent thermodynamics explanation; capped mid-example, not a complete answer."
+      },
+      {
+        "id": "shared_4",
+        "prompt_identity": "same id; root review/source hashes pin files",
+        "tt_tokens": 104,
+        "tt_terminal_id": 106,
+        "hf_tokens": 104,
+        "hf_terminal_id": 106,
+        "first_divergence": null,
+        "classification": "natural_complete_coherent",
+        "judgment": "Complete French translations; TT/HF exact completion match."
+      },
+      {
+        "id": "shared_5",
+        "prompt_identity": "same id; root review/source hashes pin files",
+        "tt_tokens": 128,
+        "tt_terminal_id": 144,
+        "hf_tokens": 128,
+        "hf_terminal_id": 236743,
+        "first_divergence": 65,
+        "classification": "coherent_but_cap_bounded_incomplete",
+        "judgment": "Coherent Fibonacci explanation/code opening; capped before function is complete."
+      }
+    ],
+    "conclusion": "Two answers stop naturally and are complete/coherent. Four are coherent prefixes cut at128 tokens, and are not completed answer/task checks."
+  },
+  "context": {
+    "full_context_result": {
+      "scope": "full60layers",
+      "context": 262144,
+      "boundaries": [
+        {
+          "prompt_tokens": 262143,
+          "output": [
+            236795
+          ]
+        },
+        {
+          "prompt_tokens": 262144,
+          "output": [
+            35769
+          ]
+        }
+      ],
+      "last_decode_input_position": 262143,
+      "last_decode_output": [
+        35769
+      ],
+      "positions_after": [
+        262144
+      ],
+      "host_sampling_compatibility_equal": true,
+      "host_sampling_logit_reads": 8
+    },
+    "assessment": "Exact boundary execution reaches prompt positions262143 and262144, advances through262144, and host-sampling compatibility matches; this tests execution boundary behavior, not semantic accuracy over a completed 262144-token context."
+  },
+  "long_prefix_retrieval": {
+    "prompt_tokens": 32083,
+    "cap": 128,
+    "expected_label": "ORCHID-742",
+    "found": true,
+    "completion": "```json\n{\n  \"deployment_label\": \"ORCHID-742\"\n}\n```<turn|>",
+    "assessment": "Separate 32,083-token retrieval prompt returns requested label in fenced JSON; not the 262144-context semantic check."
+  },
+  "diagnostic_performance": {
+    "input_tokens": 4096,
+    "output_tokens": 128,
+    "batch_size": 1,
+    "concurrency": 1,
+    "ttft_ms": 1407.5714061036706,
+    "decode_tps": 16.982449546294834,
+    "classification": "Autoregressive batch1 diagnostic only; not vLLM or serving-rate evidence."
+  },
+  "terminal_interpretation": "Broad output artifacts and root-level checks are present, with all172 source pins verified and all listed output hashes matching. The wrapper exited143; actual model/timeout processes ended but their exit statuses were not captured. Preserve child exit code as unknown, not zero. Broad gate output checks are recorded as passing, but no process-exit pass, policy selection, score change, serving-rate claim, or stage-level pass follows. Remaining SWE85 score is 23\u201326/85 with three unresolved verifier outcomes; continuation requires a new authorized window."
+}

@@ -1,0 +1,24 @@
+{
+  "status": "forecast_low_miss_explained",
+  "scope": "Diagnostic host-wall only; not serving performance or selected-policy gain",
+  "measured_seconds": 268.7292113304138,
+  "predicted_seconds": 501.6386460935118,
+  "predicted_range_seconds": [
+    397.4177344002635,
+    963.8267827456933
+  ],
+  "measured_components": {
+    "samples": 12,
+    "generated_tokens": 2415,
+    "teacher_forcing_wall_s": 42.836437264224514,
+    "free_wall_s": 78.76297408086248,
+    "decode_wall_s": 70.17435155739076,
+    "load_s": 142.2290101600811,
+    "unattributed_wall_s": 4.900789825245738
+  },
+  "forecast_source_output_tokens": 4023,
+  "projected_teacher_forcing_wall_s": 117.58904172734596,
+  "projected_decode_observed_stop_s": 221.43558608610667,
+  "explanation": "Nine of12 continuations stop early at the longer prefix; actual output volume differs from source observed-stop forecast. The linear context-cost proxy overpredicts actual teacher-forcing and decode wall. Reusing per-seed source chosen timings also repeats a first-case preparation-sensitive timing across the three new per-seed jobs, while the new batch shares its warm model. These conservative planning assumptions explain the low miss; no throughput gain is inferred. Load/TF/free and residual accounting retained below. Full mode is the already-admitted matched control, not a new optimization change.",
+  "source": "forecast.json;served-completion.json;runs/served/*.json"
+}

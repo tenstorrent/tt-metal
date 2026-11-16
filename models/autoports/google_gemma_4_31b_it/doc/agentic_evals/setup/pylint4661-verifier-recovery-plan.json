@@ -1,0 +1,127 @@
+{
+  "schema_version": "1.0",
+  "task": "pylint-dev__pylint-4661",
+  "status": "recovery_plan_only_not_executed",
+  "evidence": {
+    "trajectory": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe-jobs/swe-extended85-head-bfp8/pylint-dev__pylint-4661__yJ3XBJP/agent/mini-swe-agent.trajectory.json",
+    "verifier_report": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe-jobs/swe-extended85-head-bfp8/pylint-dev__pylint-4661__yJ3XBJP/verifier/report.json",
+    "verifier_stdout": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe-jobs/swe-extended85-head-bfp8/pylint-dev__pylint-4661__yJ3XBJP/verifier/test-stdout.txt",
+    "coordinator": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-extended85-head-bfp8/live-tasks/pylint-dev__pylint-4661-first/coordinator.json",
+    "native_indices": {
+      "full_file_rewrite": {
+        "trajectory_message_index_zero_based": 38,
+        "native_command_ordinal_one_based": 19,
+        "successful_tool_result_message_index_zero_based": 39
+      },
+      "final_help_text_correction": {
+        "trajectory_message_index_zero_based": 54,
+        "native_command_ordinal_one_based": 27,
+        "successful_tool_result_message_index_zero_based": 55
+      },
+      "last_successful_native_smoke_default_xdg": {
+        "command_index_zero_based": 52,
+        "result_index_zero_based": 53
+      },
+      "submission_marker": {
+        "message_index_zero_based": 56,
+        "result_index_zero_based": 57,
+        "status": "not_executed_by_runner"
+      }
+    }
+  },
+  "observed_failure": {
+    "native_verifier_collected": 0,
+    "cause": "tests/lint/unittest_lint.py imports appdirs; the verifier environment lacks appdirs, causing ModuleNotFoundError during collection before test_pylint_home executes.",
+    "native_reward": 0.0,
+    "counted_reward": "pending recovery; do not replace raw result",
+    "prospective_assertion_mismatch": "Native implementation defaults to ~/.local/share/pylint (or $XDG_DATA_HOME/pylint), whereas injected assertion calls appdirs.user_cache_dir(\"pylint\"). This is untested and must not be treated as a recovery outcome."
+  },
+  "submitted_patch_reconstruction": {
+    "method": "Reconstruct the entire submitted pylint/config/__init__.py from successful native full-file write at trajectory message 38, then apply the subsequent successful sed correction at message 54. Do not reduce or rewrite this patch.",
+    "files": {
+      "pylint/config/__init__.py": "# Copyright (c) 2006-2010, 2012-2014 LOGILAB S.A. (Paris, FRANCE) <contact@logilab.fr>\n# Copyright (c) 2008 pyves@crater.logilab.fr <pyves@crater.logilab.fr>\n# Copyright (c) 2013 Google, Inc.\n# Copyright (c) 2013 John McGehee <jmcgehee@altera.com>\n# Copyright (c) 2014-2020 Claudiu Popa <pcmantic@gmail.com>\n# Copyright (c) 2014 Brett Cannon <brett@python.org>\n# Copyright (c) 2014 Arun Persaud <arun@nubati.net>\n# Copyright (c) 2015 Aru Sahni <arusahni@gmail.com>\n# Copyright (c) 2015 John Kirkham <jakirkham@gmail.com>\n# Copyright (c) 2015 Ionel Cristian Maries <contact@ionelmc.ro>\n# Copyright (c) 2016 Erik <erik.eriksson@yahoo.com>\n# Copyright (c) 2016 Alexander Todorov <atodorov@otb.bg>\n# Copyright (c) 2016 Moises Lopez <moylop260@vauxoo.com>\n# Copyright (c) 2017, 2020 hippo91 <guillaume.peillex@gmail.com>\n# Copyright (c) 2017-2019 Ville Skytt<e@iki.fi>\n# Copyright (c) 2017 ahirnish <ahirnish@gmail.com>\n# Copyright (c) 2017 \u0141ukasz Rogalski <rogalski.91@gmail.com>\n# Copyright (c) 2018, 2020 Anthony Sottile <asottile@umich.edu>\n# Copyright (c) 2018 Jim Robertson <jrobertson98atx@gmail.com>\n# Copyright (c) 2018 ssolanki <ssolanki@gmail.com>\n# Copyright (c) 2018 Bryce Guinta <bryce.paul.guinta@gmail.com>\n# Copyright (c) 2018 Sushobhit <31987769+sushobhit27@users.noreply.github.com>\n# Copyright (c) 2018 Gary Tyler McLeod <gmail.com>\n# Copyright (c) 2018 Konstantin <Github@pheanex.de>\n# Copyright (c) 2018 Nick Drozd <nicholasdrozd@gmail.com>\n# Copyright (c) 2019-2021 Pierre Sassoulas <pierre.sassoulas@gmail.com>\n# Copyright (c) 2019 Janne R\u00f6nkk\u00f6 <jannero@users.noreply.github.com>\n# Copyright (c) 2019 Ashley Whetter <ashley@awhetter.co.uk>\n# Copyright (c) 2019 Hugo van Kemenade <hugovk@users.noreply.github.com>\n# Copyright (c) 2021 Marc Mueller <30130371+cdce8p@users.noreply.github.com>\n\n# Licensed under the GPL: https://www.gnu.org/licenses/old-licenses/gpl-2.0.html\n# For details: https://github.com/PyCQA/pylint/blob/main/LICENSE\n\nimport os\nimport pickle\nimport sys\n\nfrom pylint.config.configuration_mixin import ConfigurationMixIn\nfrom pylint.config.find_default_config_files import find_default_config_files\nfrom pylint.config.man_help_formatter import _ManHelpFormatter\nfrom pylint.config.option import Option\nfrom pylint.config.option_manager_mixin import OptionsManagerMixIn\nfrom pylint.config.option_parser import OptionParser\nfrom pylint.config.options_provider_mixin import OptionsProviderMixIn, UnsupportedAction\n\n__all__ = [\n    \"ConfigurationMixIn\",\n    \"find_default_config_files\",\n    \"_ManHelpFormatter\",\n    \"Option\",\n    \"OptionsManagerMixIn\",\n    \"OptionParser\",\n    \"OptionsProviderMixIn\",\n    \"UnsupportedAction\",\n]\n\nUSER_HOME = os.path.expanduser(\"~\")\nif \"PYLINTHOME\" in os.environ:\n    PYLINT_HOME = os.environ[\"PYLINTHOME\"]\nelif \"XDG_DATA_HOME\" in os.environ:\n    PYLINT_HOME = os.path.join(os.environ[\"XDG_DATA_HOME\"], \"pylint\")\nelse:\n    PYLINT_HOME = os.path.join(USER_HOME, \".local\", \"share\", \"pylint\")\n\n\ndef _get_pdata_path(base_name, recurs):\n    base_name = base_name.replace(os.sep, \"_\")\n    return os.path.join(PYLINT_HOME, f\"{base_name}{recurs}.stats\")\n\n\ndef load_results(base):\n    data_file = _get_pdata_path(base, 1)\n    try:\n        with open(data_file, \"rb\") as stream:\n            return pickle.load(stream)\n    except Exception:  # pylint: disable=broad-except\n        return {}\n\n\ndef save_results(results, base):\n    if not os.path.exists(PYLINT_HOME):\n        try:\n            os.makedirs(PYLINT_HOME)\n        except OSError:\n            print(\"Unable to create directory %s\" % PYLINT_HOME, file=sys.stderr)\n    data_file = _get_pdata_path(base, 1)\n    try:\n        with open(data_file, \"wb\") as stream:\n            pickle.dump(results, stream)\n    except OSError as ex:\n        print(f\"Unable to create file {data_file}: {ex}\", file=sys.stderr)\n\n\ndef find_pylintrc():\n    \"\"\"search the pylint rc file and return its path if it find it, else None\"\"\"\n    for config_file in find_default_config_files():\n        if config_file.endswith(\"pylintrc\"):\n            return config_file\n\n    return None\n\n\nPYLINTRC = find_pylintrc()\n\nENV_HELP = (\n    \"\"\"\nThe following environment variables are used:\n    * PYLINTHOME\n    Path to the directory where persistent data for the run will be stored. If\nnot found, it defaults to $XDG_DATA_HOME/pylint or ~/.local/share/pylint.\n    * PYLINTRC\n    Path to the configuration file. See the documentation for the method used\nto search for configuration file.\n\"\"\"\n    % globals()  # type: ignore\n)\n"
+    },
+    "other_submitted_source_edits": [],
+    "native_dependency_setup_not_source_patch": [
+      "trajectory message 20 / command ordinal 10: pip install .",
+      "trajectory message 24 / command ordinal 12: pip install --upgrade wrapt after the legacy environment dependency caused import trouble; this did not fetch pylint source or the task solution"
+    ],
+    "completion_marker": "The marker at message 56 appears in the trajectory but its tool result says action was not executed; regard the task as submitted per runner trajectory status, not as a successful shell command.",
+    "final_file_sha256": "fc3ab232132ef17e1e129780ede4f9cfbc91eb6b6cb6cd1d782a13eaee18b617",
+    "final_file_bytes": 4497,
+    "final_file_hash_basis": "UTF-8 exact full-file heredoc content from trajectory message 38, including terminal newline, followed by successful message 54 substitution configuration idea -> configuration file; verified against embedded reconstruction.",
+    "source_modifying_commands_audit": [
+      {
+        "trajectory_message_index_zero_based": 30,
+        "native_command_ordinal_one_based": 15,
+        "effect": "Temporary DEBUG sed edits to config file; later reverted by message 34 and replaced by full-file rewrites. No net final changes."
+      },
+      {
+        "trajectory_message_index_zero_based": 34,
+        "native_command_ordinal_one_based": 17,
+        "effect": "Reverted temporary DEBUG edits to the original path-setting lines."
+      },
+      {
+        "trajectory_message_index_zero_based": 36,
+        "native_command_ordinal_one_based": 18,
+        "effect": "Full-file config rewrite with original ~/.pylint.d behavior; superseded in full by message 38."
+      },
+      {
+        "trajectory_message_index_zero_based": 38,
+        "native_command_ordinal_one_based": 19,
+        "effect": "Full-file implementation recorded in reconstructed file."
+      },
+      {
+        "trajectory_message_index_zero_based": 54,
+        "native_command_ordinal_one_based": 27,
+        "effect": "Final correction from configuration idea to configuration file, included in reconstruction."
+      }
+    ],
+    "coordinator_validation": "Exact native heredoc bytes plus final sed substitution independently reconstructed; embedded file corrected to include final newline; 4497 bytes and declared SHA256 verified."
+  },
+  "verifier_inputs_to_preserve": {
+    "task_definition": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-candidate/tasks85-offline-verifier/pylint-dev__pylint-4661/task.toml",
+    "test_script": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-candidate/tasks85-offline-verifier/pylint-dev__pylint-4661/tests/test.sh",
+    "test_config": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-candidate/tasks85-offline-verifier/pylint-dev__pylint-4661/tests/config.json",
+    "dockerfile": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-candidate/tasks85-offline-verifier/pylint-dev__pylint-4661/environment/Dockerfile",
+    "rules": [
+      "Run the original complete test.sh and parser unchanged.",
+      "Do not edit the test patch, tests/config.json, parser, or harness.",
+      "Do not read, apply, or use the oracle patch.",
+      "Do not edit assertions, skip tests, or replace/mimic appdirs.",
+      "Supply only the missing real test dependency appdirs to the verifier environment, outside the test harness.",
+      "Preserve the original raw verifier artifacts and result; coordinator reconciles counted status."
+    ]
+  },
+  "environment_and_future_docker_commands": {
+    "docker_image": "v5-swe-offline-verifier:pylint-dev__pylint-4661",
+    "image_digest_from_existing_run_manifest": "sha256:4d262a52059cbedba0e511bf5672f591bee1487d48e6ec1a7b1934619dd11ac0",
+    "image_digest_evidence": "setup/swe85-candidate/final4-cache-prune.json protected_before/protected_after and setup/swe85-candidate/reclamation-result.json; no Docker inspection performed.",
+    "dockerfile_base": "swebench/sweb.eval.x86_64.pylint-dev_1776_pylint-4661:latest",
+    "base_image_digest_from_existing_run_manifest": "sha256:92b83a19cbeaac3d64a0efab6cd73011c68f48e1c720b1b64f75b8bb436bf0ee",
+    "runtime": "Use the already-built named image and its existing digest. The unchanged test.sh activates conda testbed, reinstalls the checkout with python -m pip install -e ., resets/injects tests, runs pytest, then unchanged parser.py.",
+    "dependency": "Install the real appdirs package into conda testbed before test.sh. Do not add source dependencies or alter test files.",
+    "required_sequence": [
+      "On the host, materialize the exact JSON-embedded pylint/config/__init__.py bytes (UTF-8, terminal newline) and verify SHA256 fc3ab232132ef17e1e129780ede4f9cfbc91eb6b6cb6cd1d782a13eaee18b617.",
+      "Start a container from the existing image v5-swe-offline-verifier:pylint-dev__pylint-4661 (expected image ID sha256:4d262a52059cbedba0e511bf5672f591bee1487d48e6ec1a7b1934619dd11ac0).",
+      "Copy the materialized file into the container, for example /tmp/pylint4661-recovery/config/__init__.py, then copy it over /testbed/pylint/config/__init__.py. Verify the in-container file hash matches before tests.",
+      "In the testbed conda environment, install appdirs with python -m pip install appdirs.",
+      "Expose the existing task tests and parser at the same paths used by Harbor (/tests and parser.py), preserve the task config and script bytes, and execute the original unchanged /tests/test.sh from its expected harness context. Retain stdout, LOG_FILE, report, and reward."
+    ],
+    "schematic_commands_not_executable_without_harness_mounts": [
+      "python -c 'import json,pathlib; p=pathlib.Path(\"models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/pylint4661-verifier-recovery-plan.json\"); d=json.load(open(p)); pathlib.Path(\"/tmp/pylint4661-recovery/config\").mkdir(parents=True,exist_ok=True); pathlib.Path(\"/tmp/pylint4661-recovery/config/__init__.py\").write_text(d[\"submitted_patch_reconstruction\"][\"files\"][\"pylint/config/__init__.py\"])' && sha256sum /tmp/pylint4661-recovery/config/__init__.py",
+      "docker create --name pylint4661-recovery v5-swe-offline-verifier:pylint-dev__pylint-4661",
+      "docker cp /tmp/pylint4661-recovery/config/__init__.py pylint4661-recovery:/tmp/pylint4661-recovery/config/__init__.py && docker start pylint4661-recovery",
+      "docker exec pylint4661-recovery /bin/bash -lc 'source /opt/miniconda3/bin/activate && conda activate testbed && cp /tmp/pylint4661-recovery/config/__init__.py /testbed/pylint/config/__init__.py && sha256sum /testbed/pylint/config/__init__.py && python -m pip install appdirs'",
+      "docker exec pylint4661-recovery /bin/bash -lc 'cd /testbed && bash /tests/test.sh'"
+    ],
+    "execution_note": "Sequencing sketch only, not executable until Harbor-compatible mounts, persistent container command and paths are supplied. Source copy and appdirs installation precede the unchanged verifier. pip install -e . consumes this copied checkout; do not insert steps into or modify test.sh/parser. Verify original script/parser/config hashes and preserve raw results."
+  },
+  "caveats": [
+    "No Docker, network, device, or test command was run for this plan.",
+    "The unresolved path expectation may fail after dependency recovery; that result must come from the untouched verifier and is not predicted here.",
+    "Do not alter model-authored code while preparing the rerun; preserve the exact native full-file rewrite and final text correction.",
+    "The plan does not amend shared learned data, task results, or coordinator records.",
+    "The final source reconstruction is hash-pinned; ensure it is copied after test.sh\u2019s python -m pip install -e . step if that reinstall overwrites the working tree. The submitted file has no appdirs import/dependency; appdirs is only needed by the injected verifier test."
+  ]
+}

@@ -1,0 +1,39 @@
+{
+  "reviewed_unix": 1794725030.1080139,
+  "rows": [
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/runs/head_bf16_hifi4/anomaly.call88.canonicalprefix.seed42.cap1024.json",
+      "sha256": "2f56506c61d7848b5a8523ac06188e74bb375995f1963cecc222e87f1fb8721d",
+      "seed": 42,
+      "tokens": 785,
+      "verdict": "normal",
+      "reason": "Root read entire continuation: grammatical continuation of completed contraction, distinct method-body editing script and canonical close. Repeated append scaffolding carries distinct code. No anomaly seen; no executed patch correctness claim.",
+      "trace_counters_delta": {
+        "model_replays": 784,
+        "sample_replays": 784,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 784,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/runs/head_bf16_hifi4/anomaly.call88.canonicalprefix.seed43.cap1024.json",
+      "sha256": "19dc73faa609668d6c9cff635b70eef581fb659fd18ac08c15e21b90e47d0410",
+      "seed": 43,
+      "tokens": 660,
+      "verdict": "normal",
+      "reason": "Root read entire continuation: grammatical continuation of completed contraction, distinct method-body editing script and canonical close. Repeated append scaffolding carries distinct code. No anomaly seen; no executed patch correctness claim.",
+      "trace_counters_delta": {
+        "model_replays": 659,
+        "sample_replays": 659,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 659,
+        "captures": 0
+      }
+    }
+  ]
+}

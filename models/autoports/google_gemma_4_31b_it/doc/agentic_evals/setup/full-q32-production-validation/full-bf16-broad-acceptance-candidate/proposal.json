@@ -1,0 +1,18 @@
+{
+  "status": "candidate_only_not_admitted_not_run",
+  "purpose": "Full BF16/HiFi4 with BF16 KV under current Q32 production geometry",
+  "command": "setup/full-q32-production-validation/full-bf16-broad-acceptance-candidate/command.json",
+  "command_sha256": "c9b6cff124a75ff438f2d1fa5b897cd9e67e34007d4ce3c21f7d17d1a4121767",
+  "source_pins": "setup/full-q32-production-validation/full-bf16-broad-acceptance-candidate/source-pins.json",
+  "source_pins_sha256": "0c52972b7531ad6091228da6d41fa54b5d36b2f67f481b4d1524ed032fbc2552",
+  "required_predecessor": "full-q32-production-validation/fixed108 terminal and root-reviewed pass",
+  "other_gates": [
+    "all model/HF owners zero",
+    "source pins rechecked immediately before admission",
+    "forecast plus command timeout and closure reserve fit the remaining stage deadline"
+  ],
+  "staged_order": "resume diagnostic first; broad acceptance only if resume passes and deadline still fits",
+  "preserved_policy_config": "setup/full_precision_config.json",
+  "outputs": "Fresh candidate-specific paths; no prior result overwrite",
+  "timing": "forecast only; see command.json"
+}

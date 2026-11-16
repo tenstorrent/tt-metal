@@ -1,0 +1,56 @@
+{
+  "status": "planning_proxy_rebased_on_completed_P1_all108_not_BF16_HIFI4_measurement",
+  "source_baseline": {
+    "completed_trials": 108,
+    "diagnostic_case_total_seconds": 1874.3906799475662,
+    "load_seconds": 138.38867970812134,
+    "process_outside_load_cases_seconds": 5.259629172971472,
+    "decode_seconds": 911.1484370483086,
+    "decode_replays": 27884,
+    "completion_sha256": "fa70e146164d0b1b948f3bb969fff7e56b44b8d6cc85912f2dfb814c941675d9",
+    "forecast_miss_acceptance_sha256": "b33ebae3a3366738541d2983238c18f57cc3841bc539afcc021a85d86fd7c18b",
+    "source": "P1 completed BFP8/HiFi2 run, all108 output rows and root forecast-miss accounting",
+    "manifest_sha256": "57193e4b91af3a31df00f0c92dbc0f2219fbce011e6533594e5244a93a3021ed",
+    "chosen_teacher_forcing_branches": 0,
+    "free_run_trials": 108
+  },
+  "scenarios": {
+    "low": {
+      "generation_multiplier": 1.0,
+      "load_multiplier": 1.0,
+      "outside_load_multiplier": 1.0
+    },
+    "central": {
+      "generation_multiplier": 1.5,
+      "load_multiplier": 1.5,
+      "outside_load_multiplier": 1.0
+    },
+    "high": {
+      "generation_multiplier": 3.0,
+      "load_multiplier": 2.0,
+      "outside_load_multiplier": 2.0
+    }
+  },
+  "forecast_seconds": {
+    "low": 2018.038988828659,
+    "central": 3024.428668656503,
+    "high": 5910.468657604884
+  },
+  "forecast_hours": {
+    "low": 0.5605663857857386,
+    "central": 0.8401190746268064,
+    "high": 1.6417968493346902
+  },
+  "timeout_seconds": 7200,
+  "timeout_margin_seconds_vs_high": 1289.5313423951156,
+  "method": "Apply explicit multipliers to the complete P1 measured case-generation wall, model load, and outside-load/preparation wall. Frozen manifest checks confirm all108 P1 jobs have branches=[] and one free-running trial; the baseline excludes chosen teacher-forcing branches.",
+  "uncertainty": [
+    "BF16/HiFi4 has not been run; high 3x case-generation and 2x load/preparation are conservative planning stress multipliers, not statistical bounds.",
+    "Changing logits can alter sampled trajectories and early-stop lengths, so output work may diverge from P1 despite the same caps; factors approximate that uncertainty, they do not bound it.",
+    "No candidate memory-fit/capacity or serving-speed claim follows from this forecast.",
+    "P1 completed wall was2018.039s against prior [2515.763,5878.864]s; root accepted the exact low forecast miss and provided component accounting.",
+    "The P1 workload has no chosen teacher-forcing branch (0 chosen TF tokens); the candidate panel has the same frozen manifest, so the forecast is a free-run reproduction estimate only."
+  ],
+  "score_changed": false,
+  "admission": "absent_intentionally"
+}

@@ -1,0 +1,39 @@
+{
+  "status": "completed_root_and_independent_triage_reconciled",
+  "reviewer": "root",
+  "accepted": true,
+  "utc": "2026-11-15T10:03:19.944389+00:00",
+  "serial_order": 5,
+  "admission_sha256": "74640276fdf5e463fa968d5d188994622759df96f09d4f408e02712b7d09ae66",
+  "launch_sha256": "db1176a031f84f52a9eafed11e1973db3aef2b0184364917e6c3f1236b69bedd",
+  "completion_sha256": "957d8f1e97def011efef8d7e3aa1024b77f73247d7bcc475b78862bd694e6992",
+  "result_sha256": "c4409f7bea3f5af2a80a4f5ee8162e0e282a265ae4b0abb5a5731adff64d275b",
+  "independent_triage_sha256": "133fd3b1a1e2f545221bfadd579c5edc74cb1b1bbbc4d18583cc3ce25acc97f9",
+  "verdict": "reproduced_native_motif",
+  "exact_fixture_sha256": "3d9d27b333ad2e1c1db496e1f2e2d27e7aa721a6b8b5425bd15a3374339f2986",
+  "source_sha256": "38cba2429d022e64133da2c34388d9e88a9b26b82ec58594153692842dccb961",
+  "source_slice": [
+    2961,
+    7057
+  ],
+  "seed": 42,
+  "generated_tokens": 512,
+  "generated_chars": 2048,
+  "unique_generated_ids": [
+    172109
+  ],
+  "forecast_gate": "hit",
+  "measured_seconds": 2051.1129512786865,
+  "forecast_range_seconds": [
+    1380,
+    4980
+  ],
+  "accounting_seconds": {
+    "free_generation": 1917.0624897568487,
+    "runner_total": 2047.0404443230946,
+    "runner_nonfree": 129.9779545662459,
+    "outside_runner": 4.072506955591962
+  },
+  "matched_tt": "Full TT seed42 caret-only512. Selected TT has1808 initial caret characters then IDNA prose; earlier root summary classified the long burst as affirmative anomaly, not a cap-based failure.",
+  "interpretation": "Reference caret-loop behavior on exact shortened suffix, no native full-context/seed or incidence equivalence. No extension needed to establish this observed loop. No score/policy change."
+}

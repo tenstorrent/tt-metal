@@ -1,0 +1,9 @@
+{
+  "status": "pending_root_review",
+  "reviewer": "root",
+  "accepted": false,
+  "hf_followup": "deferred_until_matched_TT",
+  "status": "pending_root_review",
+  "served_completion_sha256": "fill_after_served",
+  "full_completion_sha256": "fill_after_full"
+}

@@ -1,0 +1,21 @@
+{
+  "status": "exact_original_token_suffix_fixture",
+  "source_fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-extra-contraction-controls/scikit-learn__scikit-learn-13135.call29.onset.private.json",
+  "source_fixture_sha256": "1403d7a48b7ecca8ec2095479c77a871caa3add09bedd7f6830d36315a883bd2",
+  "source_full_prompt_tokens": 17395,
+  "source_full_prompt_token_ids_sha256": "433e40a88bd54227618ffb028a3d4322df14ebee37ff03a52c0986d5154df69a",
+  "suffix_tokens": 2048,
+  "suffix_start_index": 15347,
+  "suffix_end_index_exclusive": 17395,
+  "suffix_token_ids_sha256": "5996ad81c092a622ae3305be3e9fd453b7f6ecaba66c80f1e319f28e212fb544",
+  "chosen_tokens": 64,
+  "chosen_token_ids_sha256": "8d4c97e7413b5ed9bf57c4a1f8ae56a386fb8c52b5588db4f765eb55f36a7e3e",
+  "seeds": [
+    42,
+    43,
+    44
+  ],
+  "free_run_cap_tokens": 1024,
+  "rendering": "Exact prompt_token_ids slice from original fixture; no decode/re-encode. Chosen branch copied unchanged.",
+  "onset_context": "The original full missing_tool finding was at generated token665. Suffix1024 full diagnostic outputs stopped naturally at55/58/63, before reaching that onset; this candidate preserves a 1024 free cap but does not guarantee it will reach the onset."
+}

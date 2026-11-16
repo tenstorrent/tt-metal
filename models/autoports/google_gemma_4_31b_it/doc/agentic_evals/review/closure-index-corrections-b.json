@@ -1,0 +1,45 @@
+{
+  "status": "bookkeeping_patch_summary",
+  "scope": "Correct a stale/ambiguous coordinator sentence only. No raw response/result, score, cause, anomaly boolean, task grade, report, results.json or learned.json changed.",
+  "coordinator": {
+    "path": "current/swe-extended85-head-bfp8/live-tasks/sympy__sympy-14711-first/coordinator.json",
+    "before_sha256": "77b2cfd2944ec815a28107d35739831d8857d474e5e36908e2a343e1efba841a",
+    "after_sha256": "631b91b19a07d7950e88857333e5088c9f5818e1bfcfac2f2c9a9af8c1cb06e0",
+    "before_analysis": "Vector addition handles other==0 at call43/native86, fixing sum of vectors with zero. Official verifier passes. Root reviewed all54commands: only mpmath dependency installed; /tmp reproduction alone does not fetch targetcode. Python collections compatibility edits preserved. No caps or discarded responses. A localized semantic anomaly was identified in the supplemental audit below. Raw1/native2/chatcmpl-9e6a10ba411fd15d reasoning ends literal thought and visible GetAll-bash precedes valid toolcall. Localized stray protocol anomaly; final valid patch and official reward1 retained.",
+    "after_analysis": "Vector addition handles other==0 at call43/native86, fixing sum of vectors with zero. Official verifier passes. Root reviewed all54commands: only mpmath dependency installed; /tmp reproduction alone does not fetch targetcode. Python collections compatibility edits preserved. All 54 calls completed without caps or discarded responses. Separately, the supplemental audit identified a localized protocol anomaly in call 1: visible “GetAll-bash” text preceded a valid structured bash tool call. Raw1/native2/chatcmpl-9e6a10ba411fd15d reasoning ends literal thought and visible GetAll-bash precedes valid toolcall. Localized stray protocol anomaly; final valid patch and official reward1 retained.",
+    "preserved_fields": {
+      "native_reward": 1.0,
+      "counted_reward": 1.0,
+      "cause": "pass",
+      "anomaly": true,
+      "anomaly_calls": [
+        1
+      ],
+      "digest": {
+        "calls": 54,
+        "capped": 0,
+        "flagged": 0,
+        "mapping_issues": []
+      }
+    }
+  },
+  "evidence": [
+    {
+      "path": "current/swe-extended85-head-bfp8/reply-audit83.json",
+      "sha256": "eaadc80f79d7a1f097002d8f9a3a60a2cc19e328c839bbf3fc7aa90aeb5271e2",
+      "finding": "Supplemental audit records call1 response chatcmpl-9e6a10ba411fd15d, protocol_text_in_content, visible prefix “I will start by creating a reproduction script to confirm the issue.\\n\\nGetAll-bash”, while structured bash tool is present."
+    },
+    {
+      "path": "setup/swe85-pilot-split85/runs/rest/served/anomaly.sympy__sympy-14711.call1.onset.json",
+      "sha256": "4cda1e070edb96b5b8da8e07720497f61818be33cc41ac0340d05926b48aa9f0",
+      "finding": "Raw control result is unchanged; metadata binds the task/call and generation. This raw artifact is preserved."
+    },
+    {
+      "path": "setup/swe85-remainder-execution85/completed-anomaly-review-index.json",
+      "sha256": "d40481cf719ee4a489dd88c3625b04e4b85023885343373942b9afd424bbd19e",
+      "finding": "Exact job’s three seeds remain separately recorded; parser audit supports that a raw mechanical flag alone is insufficient, and task grade remains pass."
+    }
+  ],
+  "score_and_classification_unchanged": true,
+  "note_on_historical_hash": "The raw result metadata records the coordinator hash observed during its run; it remains untouched as historical provenance. This bookkeeping correction changes only the current coordinator text."
+}

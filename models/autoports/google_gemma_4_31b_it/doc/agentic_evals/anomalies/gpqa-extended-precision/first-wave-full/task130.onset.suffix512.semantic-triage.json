@@ -1,0 +1,95 @@
+{
+  "task": "130",
+  "artifact": "first-wave-full/task130.onset.suffix512.json",
+  "scope": "Fresh host-only semantic review of all three stored free-running texts. The chosen teacher-forced continuation was executed but is outside this review.",
+  "range_convention": "Character ranges are zero-based and half-open.",
+  "context": {
+    "source_packet": "current/gpqa-extended198-head-bfp8/digest/analysis.private/130-405b5966f982f097.json",
+    "suffix_packet": "anomalies/gpqa-extended-precision/task130.onset.suffix512.private.json",
+    "original_triage": "current/gpqa-extended198-head-bfp8/digest/130.triage.json",
+    "coordinator_context": "current/gpqa-extended198-head-bfp8/digest/coordinator.json",
+    "learned_context": "learned.json",
+    "prior_verdict": "anomaly",
+    "prior_confidence": "medium",
+    "prior_basis": "The original full response normally stopped, but its latter-half reasoning repeatedly reconsidered the diene name, symmetry, proton counts, and the same NOESY alternatives. The coordinator judged the sustained diene/symmetry/proton-count cycle anomalous; later alternatives and a normal final answer did not erase that section.",
+    "selected_onset": "The saved onset is a selected semantic window before repeated reconsideration, not a unique first-error attribution.",
+    "prompt_limit": "Each diagnostic conditions on the exact retained suffix of 512 saved reconstructed prompt-token IDs: 4,297 earlier IDs were removed, none added, and the position origin changed. This is not the original native prompt.",
+    "reconstruction_limit": "Raw native sampled token IDs are unavailable. Matching reconstructed and native completion counts do not prove token identity.",
+    "scoring": "Official scoring is complete. This review neither reassesses teacher-forced results nor makes score or answer-correctness claims."
+  },
+  "pattern_comparison": {
+    "common_pattern": "All three continuations become sustained loops around whether the product is symmetric and how the stated 1H doublet fits the proposed proton groupings. Each seed repeats its own compact unresolved cycle rather than adding a distinct check that settles the conflict.",
+    "between_seeds": "The surface loop differs by seed: seed 42 alternates an asymmetry hypothesis with the same 6H-singlet objection; seed 43 alternates the nonsymmetry/1H-doublet claim with the symmetric-product objection and rereading the signal; seed 44 alternates a nonsymmetry question with rereading the same 1H-doublet datum. These are different phrasings of the same local unresolved issue.",
+    "relation_to_original": "This short suffix-conditioned reproduction is consistent with the original triage and coordinator finding of sustained diene-name, symmetry, and proton-count reconsideration. It does not establish the original native prompt path or where the original response first went wrong.",
+    "new_checks_and_progress": "No seed sustains a new discriminating analysis: apparent restarts repeat the same premise or datum and return to the same unresolved contrast. The anomaly judgment rests on the sustained unchanged loops, not on the terminal cutoff or the saved mechanical flag."
+  },
+  "seeds": [
+    {
+      "seed": 42,
+      "semantic_anomaly": true,
+      "mechanical_flag": true,
+      "observed_malformed_text": false,
+      "malformed_text_observation": "No stray language or malformed fragment observed. The final sentence cuts off during the repeated cycle at the diagnostic limit; that cutoff is not malformed text.",
+      "text_chars": 4577,
+      "semantic_ranges": [
+        {
+          "chars": [0, 4577],
+          "paraphrase": "The text repeatedly proposes that the molecule is not symmetric, immediately asks why that would permit a 6H singlet, and restarts the same two-step exchange. No new structural or spectral check appears between repetitions."
+        },
+        {
+          "chars": [4200, 4577],
+          "paraphrase": "The same non-symmetry/6H-singlet exchange continues through the ending, which stops mid-cycle."
+        }
+      ],
+      "text_ending": "Ends mid-cycle after another non-symmetry statement; this is the diagnostic cutoff, not malformed text.",
+      "basis": "Sustained semantic cycling: the same symmetry hypothesis and 6H-singlet objection repeat throughout without a new premise or discriminating analysis."
+    },
+    {
+      "seed": 43,
+      "semantic_anomaly": true,
+      "mechanical_flag": true,
+      "observed_malformed_text": false,
+      "malformed_text_observation": "No stray language or malformed fragment observed. The final sentence cuts off during the repeated cycle at the diagnostic limit; that cutoff is not malformed text.",
+      "text_chars": 3972,
+      "semantic_ranges": [
+        {
+          "chars": [0, 3972],
+          "paraphrase": "A four-part loop repeats: a nonsymmetric molecule would give a 1H doublet; the formed product is symmetric; reread the 1H doublet; the signal does not fit the symmetric molecule. The text does not move to a new test or resolve the contradiction."
+        },
+        {
+          "chars": [3000, 3972],
+          "paraphrase": "The same four-part sequence continues to the final assertion that the product is symmetric, then stops at the limit."
+        }
+      ],
+      "text_ending": "Ends mid-cycle after repeating the nonsymmetry/1H-doublet assertion; this is the diagnostic cutoff, not malformed text.",
+      "basis": "Sustained unchanged semantic loop around the same symmetry and 1H-doublet mismatch, with no intervening check or changed conclusion."
+    },
+    {
+      "seed": 44,
+      "semantic_anomaly": true,
+      "mechanical_flag": true,
+      "observed_malformed_text": false,
+      "malformed_text_observation": "No stray language or malformed fragment observed. The final sentence cuts off during the repeated cycle at the diagnostic limit; that cutoff is not malformed text.",
+      "text_chars": 3415,
+      "semantic_ranges": [
+        {
+          "chars": [0, 3415],
+          "paraphrase": "The text repeatedly asks whether the molecule is not symmetric, then rereads the same quoted 1H-doublet observation. It does not incorporate another signal, test a distinct structural alternative, or resolve the question."
+        },
+        {
+          "chars": [3000, 3415],
+          "paraphrase": "The same question-and-rereading pair continues through the cutoff, ending on another incomplete nonsymmetry question."
+        }
+      ],
+      "text_ending": "Ends mid-question during another repetition; this is the diagnostic cutoff, not malformed text.",
+      "basis": "Sustained semantic cycling on one unchanged signal and symmetry question without a new discriminating check."
+    }
+  ],
+  "limits": [
+    "All three saved mechanical flags are reported exactly as stored and are independent of the semantic judgments.",
+    "These are three diagnostic free-running continuations, each at the saved 1,024-token decode limit; they are not population estimates.",
+    "The suffix truncation changes context and position origin, so the outputs support only a short local reproduction, not equivalence to the original native request or sampled-token path.",
+    "No precision-causality conclusion is drawn. The executed chosen teacher-forced continuation is not assessed.",
+    "No answer correctness or score conclusion is drawn from these continuations."
+  ]
+}

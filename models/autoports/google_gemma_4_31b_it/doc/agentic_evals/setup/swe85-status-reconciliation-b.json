@@ -1,0 +1,568 @@
+{
+  "status": "proposed_only_no_canonical_mutation",
+  "source_results": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/results.json",
+  "source_results_sha256": "9ed24797f3d5a326d8af6c28ee8db87a782331f1aa77f7e977a61117b77e4d00",
+  "reviewed_at_utc": "2026-11-15T07:59:29.899036+00:00",
+  "preserve_historical_per_run_labels": true,
+  "updates": [
+    {
+      "field": "anomalies[3].status",
+      "proposed_value": "original165_and_current_followups_reviewed_hf9_running_sklearn2048_next",
+      "reason": "Historical paired runs and reviewed cap/prefix controls through suffix8192 are complete; P1/P2 precision probes are complete and rejected. The admitted nine-case CPU HF batch is running. Sklearn original-missing-tool suffix2048 is the next requested TT diagnostic after serial HF, so follow-up work is not globally closed.",
+      "evidence": [
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/completion-summary.json",
+          "sha256": "3e235673a01aa0a28ad88d49677ad8099b38dbe6e89d7ce65885365284a8d67f"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/completion-summary.json",
+          "sha256": "254b4f17dd02cbd1d448be1a5a8a940847f689028d0f73843a5a6f80eb626eb4"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/progress.json",
+          "sha256": "6e8d750a3f8a7657f552669b0233a1835e30b0f4ffcb4880477743a397f70bae"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix1024/completion-summary.json",
+          "sha256": "ecbbc26c4f42b9ca977e06f881c9301eecbb3ed59a0336ccfdcfad5bd05e6781"
+        }
+      ]
+    },
+    {
+      "field": "anomalies[3].test",
+      "proposed_value": "Original165 paired controls and recorded cap/prefix followups through suffix8192 are complete. The P1 BFP8/HiFi2 and P2 BF16/HiFi4 fixed108 precision panels are complete and rejected; P2 leaves14/15 target pairs anomalous and its wall is excluded from speed ranking due to HF-incident host contention. The selected-BFP8 Sklearn suffix512 and suffix1024 served/full controls are complete; suffix1024 did not reproduce original full missing_tool. The nine-case/eight-group conditional HF batch is admitted and currently running. A suffix2048 Sklearn control is the next requested diagnostic after the serial HF block. No score or policy change.",
+      "reason": "Replace stale \u201csuffix512 prepared, not run\u201d with completed suffix512/1024 controls and reflect the active HF run.",
+      "evidence": [
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-suffix512-head-bfp8-correction/completion-summary.json",
+          "sha256": "ac1a85eb4a83efdb352fbc5f06d664bf49dc04dae8695b8eef603c191994949d"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix1024/completion-summary.json",
+          "sha256": "ecbbc26c4f42b9ca977e06f881c9301eecbb3ed59a0336ccfdcfad5bd05e6781"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/progress.json",
+          "sha256": "6e8d750a3f8a7657f552669b0233a1835e30b0f4ffcb4880477743a397f70bae"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/completion-summary.json",
+          "sha256": "254b4f17dd02cbd1d448be1a5a8a940847f689028d0f73843a5a6f80eb626eb4"
+        }
+      ]
+    },
+    {
+      "field": "anomalies[3].changed",
+      "proposed_value": "same_as_test",
+      "reason": "The duplicated live summary field has the same stale suffix512 claim; update with test field.",
+      "evidence": [
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix1024/completion-summary.json",
+          "sha256": "ecbbc26c4f42b9ca977e06f881c9301eecbb3ed59a0336ccfdcfad5bd05e6781"
+        }
+      ]
+    },
+    {
+      "field": "anomalies[3].full_precision.result.status",
+      "proposed_value": "all36_initial_onset_cases_reviewed_existing_extensions_complete_next_diagnostics_pending",
+      "reason": "Keep initial108-trial counts and their historical labels unchanged. Existing cap/prefix and P1/P2 followups are complete; active HF9 and requested Sklearn suffix2048 remain as subsequent diagnostics.",
+      "evidence": [
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-semantic-partial-summary.json",
+          "sha256": "a17a8d766d928595efccbde162f353784dc5a670b4c88227f61e083b16715e01"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-canonicalprefix-suffix8192-p1pinfix-candidate/completion-summary.json",
+          "sha256": "113927ea41d64d5bfb476616a9087230a8c97c6aa2a60e66240cfa0aeda8441d"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/completion-summary.json",
+          "sha256": "254b4f17dd02cbd1d448be1a5a8a940847f689028d0f73843a5a6f80eb626eb4"
+        }
+      ]
+    },
+    {
+      "field": "anomalies[3].full_precision.result.interpretation",
+      "proposed_value": "Original full-precision baseline remains historically 21/108 native-motif and does not pass. Existing cap/prefix and P1/P2 precision followups are complete; P2 still has14/15 precision-sensitive target pairs anomalous. Nine shortened diagnostic contexts have been selected for matched pinned CPU HF, one per reviewed full native-positive family; HF9 is currently running. This is not an exact full-native-prompt replay, and it establishes no phase acceptance or policy/score selection.",
+      "reason": "Reflect completed followups and current HF status without replacing original baseline labels.",
+      "evidence": [
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/completion-summary.json",
+          "sha256": "254b4f17dd02cbd1d448be1a5a8a940847f689028d0f73843a5a6f80eb626eb4"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/progress.json",
+          "sha256": "6e8d750a3f8a7657f552669b0233a1835e30b0f4ffcb4880477743a397f70bae"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-canonicalprefix-suffix8192-p1pinfix-candidate/completion-summary.json",
+          "sha256": "113927ea41d64d5bfb476616a9087230a8c97c6aa2a60e66240cfa0aeda8441d"
+        }
+      ]
+    },
+    {
+      "field": "anomalies[3].missing_reasons.measurements",
+      "proposed_value": "A matched pinned CPU HF comparison is admitted and running as a nine-case/eight-group batch at setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed. Its selected fixtures are shortened diagnostic contexts, not exact full-native-prompt or native-ID replays. Earlier accidental attempts remain excluded; their partial CPU BF16 artifact has64 TF positions and zero stored free samples and cannot be treated as a result. Precision selection remains open.",
+      "reason": "Replace no-authorization/unadmitted claim; do not reuse partial incident artifact.",
+      "evidence": [
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/admission.json",
+          "sha256": "74640276fdf5e463fa968d5d188994622759df96f09d4f408e02712b7d09ae66"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/progress.json",
+          "sha256": "6e8d750a3f8a7657f552669b0233a1835e30b0f4ffcb4880477743a397f70bae"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/runner-validation-incident-c.json",
+          "sha256": "54405687018d25d504794afc0743e61222c496f47d22534658d62743c8ac0a6f"
+        }
+      ]
+    },
+    {
+      "field": "anomalies[3].new_sympy14248_controls",
+      "proposed_value": "Frozen and served complete: whole50/79, caret onset53, validated action50. Full batch is also complete: all three seeds42/43/44 reproduced the caret-only motif through the 512-token cap. Preserve original full batch and per-seed labels; no score/policy change.",
+      "reason": "Original says full batch in progress; close status based on raw semantic coordinator.",
+      "evidence": [
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/full-coordinator.json",
+          "sha256": "09dc87b7c8dc060a340766c0f149adf3fc6d2a42817900f212dce43e12eb9cc9"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/completion-summary.json",
+          "sha256": "8e5cf1e41bbd8bd3929ecab334eb94a9b55478458b10a2009bdd5400db7ad794"
+        }
+      ]
+    },
+    {
+      "field": "anomalies[3].conditional_short_controls.status",
+      "proposed_value": "six_caret_cases_served_and_full_complete_semantically_reviewed",
+      "reason": "Both-mode six-case panel is no longer queued; preserve its counts and row labels in its existing artifacts.",
+      "evidence": [
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/completion-summary.json",
+          "sha256": "8e5cf1e41bbd8bd3929ecab334eb94a9b55478458b10a2009bdd5400db7ad794"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/triage-d.json",
+          "sha256": "afca6672f81b58344251c44e2ff06a132bcc66ba6d6fc672de812ff26f6872fe"
+        }
+      ]
+    },
+    {
+      "field": "anomalies[3].additional_followups.status",
+      "proposed_value": "all_four_followup_batches_complete",
+      "reason": "Contraction and cap extensions in both modes have completion records; do not rewrite their historical per-run labels.",
+      "evidence": [
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-followup-execution/contraction-served-completion.json",
+          "sha256": "b4bce6726ef947e0c363e87e40161fba4f58f6bacd09674b752c45c6fd5ca335"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-followup-execution/contraction-full-completion.json",
+          "sha256": "11772de356da46ff952c5daf8f8a0bab47c464d0fc8c938f65b515a9d94b4f01"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-followup-execution/cap-served-completion.json",
+          "sha256": "6caaa02524255fb761dd971d6ebdf7daa59ad661fe30fb3c6256b201df7435c4"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-followup-execution/cap-full-completion.json",
+          "sha256": "02def2290e98ea3c53252775249a802521134f4ace95bd3c7628b6631e142e30"
+        }
+      ]
+    },
+    {
+      "field": "anomalies[3].short_controls_progress.status",
+      "proposed_value": "existing_short_cap_prefix_followups_complete_hf9_running_sklearn2048_requested",
+      "reason": "Existing followup queue is complete, but HF9 is active and one separate Sklearn suffix2048 TT diagnostic is requested after it.",
+      "evidence": [
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions-completion-summary.json",
+          "sha256": "6ce535335c172e3194b0f6a024b5e2133c0eee9245bd6c7db2008bb741184c84"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/completion-summary.json",
+          "sha256": "a2e2727b807fa873595efe1b9e35e59ba9b1374e39711caf94bfe09cb30474b9"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-canonicalprefix-suffix8192-p1pinfix-candidate/completion-summary.json",
+          "sha256": "113927ea41d64d5bfb476616a9087230a8c97c6aa2a60e66240cfa0aeda8441d"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/progress.json",
+          "sha256": "6e8d750a3f8a7657f552669b0233a1835e30b0f4ffcb4880477743a397f70bae"
+        }
+      ]
+    },
+    {
+      "field": "anomalies[3].short_controls_progress.conditional_hf",
+      "proposed_value": "Admitted nine-case/eight-group matched pinned CPU HF batch currently running; no HF result is complete yet. Earlier accidental attempts remain excluded.",
+      "reason": "Replace stale unapproved/unadmitted claim with current admission and progress state.",
+      "evidence": [
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/admission.json",
+          "sha256": "74640276fdf5e463fa968d5d188994622759df96f09d4f408e02712b7d09ae66"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/progress.json",
+          "sha256": "6e8d750a3f8a7657f552669b0233a1835e30b0f4ffcb4880477743a397f70bae"
+        }
+      ]
+    },
+    {
+      "field": "anomalies[3].short_controls_progress.open",
+      "proposed_value": "No existing cap/prefix output remains queued for a 1024/2048/4096/8192 extension. HF9 is running. A separate Sklearn suffix2048/cap1024 diagnostic is requested after the serial HF block because the suffix1024 runs stopped naturally at55\u201363 tokens, short of original missing_tool onset665. The remaining26 original full target families were normal in reviewed full-mode baseline; they are not automatically HF-required. The single original full other family is Sklearn call29; it remains unmatched at onset.",
+      "reason": "Remove completed queue work and identify the remaining concrete next action.",
+      "evidence": [
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/completion-summary.json",
+          "sha256": "a2e2727b807fa873595efe1b9e35e59ba9b1374e39711caf94bfe09cb30474b9"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-canonicalprefix-suffix8192-p1pinfix-candidate/completion-summary.json",
+          "sha256": "113927ea41d64d5bfb476616a9087230a8c97c6aa2a60e66240cfa0aeda8441d"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix1024/completion-summary.json",
+          "sha256": "ecbbc26c4f42b9ca977e06f881c9301eecbb3ed59a0336ccfdcfad5bd05e6781"
+        }
+      ]
+    },
+    {
+      "field": "anomalies[3].short_controls_progress.cap1024_followup.status",
+      "proposed_value": "completed_both_modes_root_reviewed",
+      "reason": "The served pytest and full Requests call11 1024 cap controls were reviewed and later applicable progressions completed.",
+      "evidence": [
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/cap1024-preparation/cap2048-preparation/completion-summary.json",
+          "sha256": "14462eef1907b3559954c541a0c382a3a1acf2b1460d55342772b0323a4fe887"
+        }
+      ]
+    },
+    {
+      "field": "anomalies[3].contraction_short_controls.interpretation",
+      "proposed_value": "The exact suffix512 controls did not uniformly reproduce the original ve-duplication, but longer-prefix positives were found. The family rule accepts an immediately duplicated apostrophe-ve after a completed contraction or contiguous chain, treating ASCII and curly apostrophes equivalently; a single localized duplication can match the family, while a lexical gap or distinct comment/sentence loop is other. See root addenda; this does not establish native token-stream identity or score/policy change.",
+      "reason": "Longer prefix and root morphology addenda finalized the earlier pending subtype audit.",
+      "evidence": [
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/contraction-family-root-addendum.json",
+          "sha256": "ae900ac803e824dbcb49c84571bc095e017f8954e93a0f4d8def8f3eb8e78bfa"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/contraction-family-root-addendum.json",
+          "sha256": "f3fb0ddcb37599e94390de76385dd05401bc2aa3fc89dc7436804f7fcfb8383e"
+        }
+      ]
+    },
+    {
+      "field": "anomalies[3].short_cap1024_controls.remaining",
+      "proposed_value": "No short-cap1024 row remains pending: the full Requests5414 call11 seed44 continuation was extended to2048 and classified other rather than as a native caret motif; the accompanying seed43 fabricated fenced bash/output protocol anomaly remains a distinct historical finding.",
+      "reason": "The 1024\u21922048 continuation completed.",
+      "evidence": [
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/cap1024-preparation/cap2048-preparation/completion-summary.json",
+          "sha256": "14462eef1907b3559954c541a0c382a3a1acf2b1460d55342772b0323a4fe887"
+        }
+      ]
+    },
+    {
+      "field": "anomalies[3].second_cap_controls.next",
+      "proposed_value": "All38 second-cap samples are completed and reviewed. Later adaptive suffix/cap followups are also closed through suffix8192; next pending work is the separate Sklearn original-missing-tool suffix2048 TT diagnostic after HF serial block.",
+      "reason": "Replace stale eight-samples-pending claim.",
+      "evidence": [
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions-completion-summary.json",
+          "sha256": "6ce535335c172e3194b0f6a024b5e2133c0eee9245bd6c7db2008bb741184c84"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-canonicalprefix-suffix8192-p1pinfix-candidate/completion-summary.json",
+          "sha256": "113927ea41d64d5bfb476616a9087230a8c97c6aa2a60e66240cfa0aeda8441d"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix1024/completion-summary.json",
+          "sha256": "ecbbc26c4f42b9ca977e06f881c9301eecbb3ed59a0336ccfdcfad5bd05e6781"
+        }
+      ]
+    },
+    {
+      "field": "anomalies[3].adaptive_suffix2048_controls.changed",
+      "proposed_value": "Call91 denotes the Matplotlib20488 second fullcontext/canonicalprefix source. It has no shorter suffix native-positive through4096; full seed43 is native-family positive at suffix8192 (53 tokens). The selected shortened suffix8192 context is included in the running HF9 batch.",
+      "reason": "Use final suffix8192 positive and remove stale unresolved-call91 language.",
+      "evidence": [
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/completion-summary.json",
+          "sha256": "cb3caa7e237fa6d83ad281a259669490d79a773513e02d315e2e6ce3bf28566c"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-canonicalprefix-suffix8192-p1pinfix-candidate/completion-summary.json",
+          "sha256": "113927ea41d64d5bfb476616a9087230a8c97c6aa2a60e66240cfa0aeda8441d"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/proposal.json",
+          "sha256": "8d558f41bd90ded5451655206c4ed5cf44ce5ee146b346c1bf3230abd7d37d71"
+        }
+      ]
+    },
+    {
+      "field": "anomalies[3].third_cap_controls.next",
+      "proposed_value": "Third-cap extensions are complete. Full Pytest5787 call65 seed44 reached4096 and completed normally after2380 generated tokens; served seed43 has a localized Deloitte other anomaly, not a pending cap continuation.",
+      "reason": "Remove resolved cap and same-seed followup from next field.",
+      "evidence": [
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/completion-summary.json",
+          "sha256": "8149f12cbcb5a8e4a552e02241d0c3ebd7e3ff686a99bde8d46659c09e506e5b"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/full-coordinator-pytest-cap4096.json",
+          "sha256": "d6511e92c8c7ca51771794210c4ec5fd87d9af27b5857427df753b605607c8a2"
+        }
+      ]
+    },
+    {
+      "field": "anomalies[3].adaptive_suffix2048_cap1024_controls.next",
+      "proposed_value": "The two progressing samples were extended to2048 and both resolved as other anomalies (Requests5414 call10 served seed42 and call11 full seed42); full call11 seed43\u2019s localized stray own remains a separate affirmative other anomaly.",
+      "reason": "All listed cap progressions have completed.",
+      "evidence": [
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-req5414-cap2048-after-v-candidate/completion-summary.json",
+          "sha256": "35501c799407e6e9e964236d7cdd2bc32a67585714373a132e98db9e76ca0a55"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-execution-candidate/completion-summary.json",
+          "sha256": "b727f5bb2893b24caddf665f1e0a4ee991abd8b8a2edb08caa8438e9fa9e9eb5"
+        }
+      ]
+    },
+    {
+      "field": "anomalies[3].adaptive_suffix4096_controls.interpretation",
+      "proposed_value": "Several native-family continuations persist in shortened full-precision controls; the contraction subtype audit is complete per root addenda. No score change or native-stream equivalence claim. HF9 is admitted/running.",
+      "reason": "Subtype audit and HF admission are resolved/current.",
+      "evidence": [
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/completion-summary.json",
+          "sha256": "a2e2727b807fa873595efe1b9e35e59ba9b1374e39711caf94bfe09cb30474b9"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/contraction-family-root-addendum.json",
+          "sha256": "f3fb0ddcb37599e94390de76385dd05401bc2aa3fc89dc7436804f7fcfb8383e"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/progress.json",
+          "sha256": "6e8d750a3f8a7657f552669b0233a1835e30b0f4ffcb4880477743a397f70bae"
+        }
+      ]
+    },
+    {
+      "field": "anomalies[3].sklearn_suffix512_controls.configuration_correction.status",
+      "proposed_value": "corrected_selected_bfp8_arm_completed_root_reviewed; previous served BFP4 comparison preserved as historical extra arm",
+      "reason": "The corrected arm has completed; do not mutate the former BFP4 run or its original label.",
+      "evidence": [
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-suffix512-head-bfp8-correction/completion-summary.json",
+          "sha256": "ac1a85eb4a83efdb352fbc5f06d664bf49dc04dae8695b8eef603c191994949d"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-suffix512-head-bfp8-correction/root-review.json",
+          "sha256": "777d1a61090d8b827c76fc905b1a884b58270613d976c5eed73d8a41c2319151"
+        }
+      ]
+    },
+    {
+      "field": "anomalies[3].sklearn_suffix512_controls.next",
+      "proposed_value": "Selected-BFP8 suffix1024 served/full controls are complete: served generated49/54/58 tokens (two normal, one native extra apostrophe-ve); full generated55/58/63 tokens (all normal). Thus the full samples terminated naturally well before the original missing_tool onset at665 and do not establish behavior at that onset. Next requested diagnostic is original prompt-token suffix2048 with chosen64/cap1024 after the serial HF block; it remains a diagnostic and does not imply task failure or model cause.",
+      "reason": "The suffix1024 controls completed, but natural stops did not reach the original onset; preserve this distinction when describing the non-reproduction.",
+      "evidence": [
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix1024/completion-summary.json",
+          "sha256": "ecbbc26c4f42b9ca977e06f881c9301eecbb3ed59a0336ccfdcfad5bd05e6781"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/progress.json",
+          "sha256": "6e8d750a3f8a7657f552669b0233a1835e30b0f4ffcb4880477743a397f70bae"
+        }
+      ]
+    },
+    {
+      "field": "anomalies[3].sklearn_suffix1024_controls.status",
+      "proposed_value": "completed_root_and_independent_triage_reconciled",
+      "reason": "The full mode and independent triage are complete; remove stale independent-review-pending label.",
+      "evidence": [
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix1024/completion-summary.json",
+          "sha256": "ecbbc26c4f42b9ca977e06f881c9301eecbb3ed59a0336ccfdcfad5bd05e6781"
+        }
+      ]
+    }
+  ],
+  "coverage": {
+    "conditional_hf": {
+      "status": "admitted_running",
+      "cases": 9,
+      "groups": 8,
+      "admission": {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/admission.json",
+        "sha256": "74640276fdf5e463fa968d5d188994622759df96f09d4f408e02712b7d09ae66"
+      },
+      "progress": {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/progress.json",
+        "sha256": "6e8d750a3f8a7657f552669b0233a1835e30b0f4ffcb4880477743a397f70bae"
+      },
+      "selected_shortened_diagnostic_controls": [
+        {
+          "case": "psf__requests-5414.call10",
+          "seed": 42,
+          "suffix_tokens": 4096
+        },
+        {
+          "case": "matplotlib__matplotlib-20488.call86",
+          "seed": 43,
+          "suffix_tokens": 4096
+        },
+        {
+          "case": "sphinx-doc__sphinx-10323.call70",
+          "seed": 43,
+          "suffix_tokens": 2048
+        },
+        {
+          "case": "anomaly.call91.canonicalprefix",
+          "seed": 43,
+          "suffix_tokens": 8192,
+          "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-precision/call91/canonicalprefix/case.private.json",
+          "source_case_sha256": "3d32de201c14cf805635d3e38fafc2ff220202aded67b71861e16df4fbdf9180",
+          "task_attribution": "Matplotlib20488, call91 second fullcontext/canonicalprefix; source counterpart is anomalies/swe85-precision/call91/fullcontext/matplotlib.second.fullcontext.private.json",
+          "candidate_manifest_case": "anomaly.call91.canonicalprefix.suffix8192.seed43"
+        },
+        {
+          "case": "psf__requests-2931.call20",
+          "seed": 42,
+          "suffix_tokens": 512
+        },
+        {
+          "case": "sympy__sympy-14248.call53",
+          "seed": 42,
+          "suffix_tokens": 512
+        },
+        {
+          "case": "pytest-dev__pytest-7432.call19",
+          "seed": 44,
+          "suffix_tokens": 512
+        },
+        {
+          "case": "psf__requests-5414.call9",
+          "seed": 44,
+          "suffix_tokens": 1024
+        },
+        {
+          "case": "psf__requests-5414.call11",
+          "seed": 44,
+          "suffix_tokens": 2048
+        }
+      ],
+      "limitation": "These are reconstructed shortened contexts selected from positive diagnostic continuations; they do not reproduce native generated-ID streams or establish exact original full-prompt HF behavior. Earlier accidental attempts and partial artifacts are excluded."
+    },
+    "original_full_precision_anomalies": {
+      "target_case_families": 36,
+      "latest_reviewed_full_baseline_family_counts": {
+        "native_motif_positive": 9,
+        "other_anomaly_positive": 1,
+        "normal_no_native_or_other_finding": 26,
+        "inconclusive_family_count": 0,
+        "basis": "Per-family full_mode_seed_verdicts in the audit, with same-original-prompt same-seed/cap overlays applied where prompt-ID count and hash matched. This classifies observed verdicts; it does not establish task correctness."
+      },
+      "latest_native_positive_families": [
+        "anomaly.call91.canonicalprefix",
+        "anomaly.matplotlib__matplotlib-20488.call86.onset",
+        "anomaly.psf__requests-5414.call10.onset",
+        "anomaly.psf__requests-5414.call11.onset",
+        "anomaly.psf__requests-5414.call9.onset",
+        "anomaly.pytest-dev__pytest-7432.call19.onset",
+        "anomaly.requests2931.call20.canonicalprefix",
+        "anomaly.sphinx-doc__sphinx-10323.call70.onset",
+        "anomaly.sympy__sympy-14248.call53.onset"
+      ],
+      "shortened_hf_controls_selected_for_all_native_positive_families": true,
+      "selected_controls_count": 9,
+      "families_without_selected_hf_control": {
+        "count": 27,
+        "original_full_other_anomaly_families": [
+          "anomaly.scikit-learn__scikit-learn-13135.call29.onset"
+        ],
+        "original_full_normal_families": [
+          "anomaly.call88.canonicalprefix",
+          "anomaly.matplotlib__matplotlib-20488.call82.onset",
+          "anomaly.psf__requests-1921.call1.onset",
+          "anomaly.pylint-dev__pylint-4551.call1.onset",
+          "anomaly.pylint-dev__pylint-4604.call45.onset",
+          "anomaly.pytest-dev__pytest-5787.call1.onset",
+          "anomaly.pytest-dev__pytest-5787.call65.onset",
+          "anomaly.pytest10356-call14.canonicalprefix",
+          "anomaly.sphinx-doc__sphinx-10323.call57.onset",
+          "anomaly.sphinx-doc__sphinx-10323.call68.onset",
+          "anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset",
+          "anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset",
+          "anomaly.sphinx-doc__sphinx-11510.call108.onset",
+          "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset",
+          "anomaly.sphinx-doc__sphinx-11510.call28.onset",
+          "anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset",
+          "anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset",
+          "anomaly.sphinx-doc__sphinx-9461.call184.onset",
+          "anomaly.sympy__sympy-13480.call1.onset",
+          "anomaly.sympy__sympy-13551.call1.onset",
+          "anomaly.sympy__sympy-13878.call1.onset",
+          "anomaly.sympy__sympy-14711.call1.onset",
+          "anomaly.sympy__sympy-18763.call1.onset",
+          "anomaly.sympy__sympy-18763.call10.onset",
+          "anomaly.xarray3095-call53.canonicalprefix",
+          "anomaly.xarray7233-call1.canonicalprefix"
+        ],
+        "interpretation": "These families are not all pending HF requirements. The 26 normal baseline families have no reproduced native motif/other finding in the reviewed full baseline; the one original full other finding is Sklearn call29 and remains a separate protocol diagnostic."
+      },
+      "diagnostic_other_findings": {
+        "scope": "Other anomalies observed in shortened diagnostic controls remain separate from the original native-motif families and from original full task outcomes. Their existence alone does not prove task failure or model causality; any causal HF/stack conclusion must use a matched evidence path for that particular finding.",
+        "historical_audit_inventory_rows": 55,
+        "audit_limitation": "Additional diagnostic other findings are enumerated from reviewed cap, adaptive-prefix and short-control reports; cases/outputs are kept separate from native-motif matches. This is a reviewed-artifact inventory, not a claim every historical diagnostic output across the repository has been re-audited."
+      },
+      "sklearn_call29_status": {
+        "case": "anomaly.scikit-learn__scikit-learn-13135.call29.onset",
+        "original_full_observation": "seed42 classified other/missing_tool at665 generated tokens; seed43/44 normal.",
+        "suffix1024_followup": "served49/54/58 and full55/58/63 generated tokens; full all normal. All full continuations ended naturally before665, so this does not test reaching the original onset.",
+        "next": "Suffix2048/cap1024 selected-BFP8 served/full diagnostic requested after serial HF; no HF or TT result from it exists yet.",
+        "evidence": [
+          {
+            "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix1024/completion-summary.json",
+            "sha256": "ecbbc26c4f42b9ca977e06f881c9301eecbb3ed59a0336ccfdcfad5bd05e6781"
+          },
+          {
+            "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix1024/root-full-review.json",
+            "sha256": "8736f9c042e98cdeea4b4d158b739b48e46c5ab73b369f87091d1a733f6ccc6b"
+          }
+        ]
+      },
+      "prompt_limit": "HF9 contains one exact saved shortened token-suffix/canonical-prefix fixture for each of the nine reviewed full native-positive source families, including Matplotlib20488 call91 canonicalprefix at suffix8192. This is matched on that shortened diagnostic context, not the full native prompt nor native generated-ID stream. Remaining 27 families comprise 26 full-mode normal families and the one distinct full-mode other family (Sklearn call29); they are not automatically all HF-required.",
+      "evidence": [
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/original-full-coverage-audit-b.json",
+          "sha256": "50074a235ad71676c8824e6cc89cdff0aaa6d43b47a1723863909da7844cb356"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/proposal.json",
+          "sha256": "8d558f41bd90ded5451655206c4ed5cf44ce5ee146b346c1bf3230abd7d37d71"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-canonicalprefix-suffix8192-p1pinfix-candidate/completion-summary.json",
+          "sha256": "113927ea41d64d5bfb476616a9087230a8c97c6aa2a60e66240cfa0aeda8441d"
+        }
+      ],
+      "native_source_case_aliases": {
+        "anomaly.call91.canonicalprefix": "Matplotlib20488 call91 canonicalprefix / second fullcontext",
+        "source_metadata": "call number, repeated fragment and native response ID match call91 fixture; audit-local alias does not encode task name."
+      }
+    }
+  },
+  "not_proposed": [
+    "No edits to results.json, learned.json, REPORT, fixture/admission/runner files, or frozen candidate directories.",
+    "No historical per-run verdict, count, source hash, precision result, or evaluation score changes.",
+    "No inference, HF invocation, or device work."
+  ]
+}

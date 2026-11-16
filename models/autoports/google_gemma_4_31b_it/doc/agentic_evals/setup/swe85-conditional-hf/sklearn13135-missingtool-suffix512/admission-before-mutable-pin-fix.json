@@ -1,0 +1,12 @@
+{
+  "status": "admitted",
+  "reviewer": "root",
+  "admitted_unix": 1794726626.7153409,
+  "scope": "Matched Sklearn call29 suffix512 served then full, 3 seeds each; launch requires terminal P2 and root forecast/serialization gates. STOP remains until those gates are met.",
+  "proposal_sha256": "5e08358dcbe06323993f46b5722b0ef89e813b20ea6f324e8ebab06e843cbdae",
+  "driver_sha256": "e221a7fef9a593fc835413131b242561b799eca0d91748eaa7c36564d66ac332",
+  "source_inventory_sha256": "2502eb4b0e4cac763e2a79b0708127ac6178dcf374439f9bf7aad93569eeb3ea",
+  "commands_sha256": "4fc7e9c6d905c721100011a7e6a78a6a481d7cb4c208ac2672f8a336e89fb845",
+  "forecast_sha256": "00c4488365bf25e4c744fe0dc85b957802e22392710b945caae98713a31546eb",
+  "validation": "Root inspected driver and commands; host self-test and validate-only pass before final inventory correction, correction inspected separately; six fixture input IDs match original[-512:] and chosen64 exactly. No inference launched."
+}

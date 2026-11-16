@@ -1,0 +1,9 @@
+{
+  "forecast_seconds": {
+    "low": 120,
+    "point": 220,
+    "high": 450
+  },
+  "timeout_seconds": 600,
+  "basis": "One full model load and both exact Q32 diagnostic fixtures, anchored to completed full-BF16 two-case control wall151.319s and its load77.677s. This arm preserves the same prompts/seeds and 512/256 generation caps; broader high bound covers changed output lengths, repeated traced decode work, and arm-specific load/cache effects. These are diagnostic wall estimates, not serving rates."
+}

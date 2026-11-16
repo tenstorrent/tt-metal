@@ -1,0 +1,151 @@
+{
+  "status": "host_only_decoding_saved_TT_tokens",
+  "tokenizer_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+  "source_case": "astropy.first.suffix512",
+  "rows": [
+    {
+      "mode": "served",
+      "seed": 42,
+      "tokens": 512,
+      "chars": 1323,
+      "tail_zlib_ratio": 0.0982615268329554,
+      "tail_distinct_chars": 34,
+      "flag": false,
+      "repeated_8word_phrases": [
+        {
+          "phrase": "Actually, I'll just do it. Wait, I'll use",
+          "occurrences": 10
+        },
+        {
+          "phrase": "I'll just do it. Wait, I'll use `nl",
+          "occurrences": 10
+        },
+        {
+          "phrase": "just do it. Wait, I'll use `nl -ba",
+          "occurrences": 10
+        }
+      ]
+    },
+    {
+      "mode": "served",
+      "seed": 43,
+      "tokens": 512,
+      "chars": 1290,
+      "tail_zlib_ratio": 0.08372093023255814,
+      "tail_distinct_chars": 32,
+      "flag": false,
+      "repeated_8word_phrases": [
+        {
+          "phrase": "Wait, I'll use `nl -ba astropy/coordinates/sky_coordinate.py | sed",
+          "occurrences": 13
+        },
+        {
+          "phrase": "I'll use `nl -ba astropy/coordinates/sky_coordinate.py | sed -n",
+          "occurrences": 13
+        },
+        {
+          "phrase": "use `nl -ba astropy/coordinates/sky_coordinate.py | sed -n '890,900p'`",
+          "occurrences": 12
+        }
+      ]
+    },
+    {
+      "mode": "served",
+      "seed": 44,
+      "tokens": 512,
+      "chars": 1286,
+      "tail_zlib_ratio": 0.09564541213063764,
+      "tail_distinct_chars": 34,
+      "flag": false,
+      "repeated_8word_phrases": [
+        {
+          "phrase": "Actually, I'll just do it. Wait, I'll use",
+          "occurrences": 11
+        },
+        {
+          "phrase": "I'll just do it. Wait, I'll use `nl",
+          "occurrences": 11
+        },
+        {
+          "phrase": "just do it. Wait, I'll use `nl -ba",
+          "occurrences": 11
+        }
+      ]
+    },
+    {
+      "mode": "full",
+      "seed": 42,
+      "tokens": 512,
+      "chars": 1589,
+      "tail_zlib_ratio": 0.17054751415984895,
+      "tail_distinct_chars": 43,
+      "flag": false,
+      "repeated_8word_phrases": [
+        {
+          "phrase": "script. Wait, I'll check the lines first. Actually,",
+          "occurrences": 6
+        },
+        {
+          "phrase": "Wait, I'll check the lines first. Actually, I'll",
+          "occurrences": 6
+        },
+        {
+          "phrase": "I'll check the lines first. Actually, I'll just",
+          "occurrences": 6
+        }
+      ]
+    },
+    {
+      "mode": "full",
+      "seed": 43,
+      "tokens": 512,
+      "chars": 1504,
+      "tail_zlib_ratio": 0.11369680851063829,
+      "tail_distinct_chars": 36,
+      "flag": false,
+      "repeated_8word_phrases": [
+        {
+          "phrase": "Then I'll run the edit script. Then I'll",
+          "occurrences": 7
+        },
+        {
+          "phrase": "I'll run the edit script. Then I'll run",
+          "occurrences": 7
+        },
+        {
+          "phrase": "run the edit script. Then I'll run the",
+          "occurrences": 7
+        }
+      ]
+    },
+    {
+      "mode": "full",
+      "seed": 44,
+      "tokens": 512,
+      "chars": 1654,
+      "tail_zlib_ratio": 0.23216444981862153,
+      "tail_distinct_chars": 47,
+      "flag": false,
+      "repeated_8word_phrases": [
+        {
+          "phrase": "Then I'll run the edit script. Then I'll",
+          "occurrences": 2
+        },
+        {
+          "phrase": "I'll run the edit script. Then I'll run",
+          "occurrences": 2
+        },
+        {
+          "phrase": "run the edit script. Then I'll run the",
+          "occurrences": 2
+        }
+      ]
+    }
+  ],
+  "scope": "First512 output-token slices of saved1024-token TT runs, not fresh512 runs. Same saved prompt IDs. No HF outcome inferred.",
+  "assessment": {
+    "supports512_HF_semantic_probe": true,
+    "supports512_same_detector_pass_fail": false,
+    "criterion": "Sustained repeated sentences/action intentions or repeated unchanged code/promise cycles are semantic positive. A negative flag is not a pass. Coherent or inconclusive512-token HF output requires extension to1024 and additional seeds before closure; a positive establishes reference reproduction only, not equivalent incidence."
+  }
+}

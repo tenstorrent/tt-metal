@@ -1,0 +1,160 @@
+{
+  "task": "129",
+  "diagnostic": "full precision suffix512 first-wave free-running continuations",
+  "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first-wave-full/task129.onset.suffix512.json",
+  "source_packet": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task129.onset.suffix512.private.json",
+  "comparison_context": {
+    "original_triage": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/gpqa-extended198-head-bfp8/digest/129.triage.json",
+    "coordinator_context": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/gpqa-extended198-head-bfp8/digest/coordinator.json",
+    "learned_context": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/learned.json",
+    "original_finding": "The original full reply was judged anomalous for repeatedly recalculating similar observed-wavelength thresholds and reopening the same 1.9-versus-2.4 choice without resolving the assumed optical cutoff. The coordinator accepted sustained cycling plus stray apostrophe-s fragments despite the normal stop. This review compares behavior only and does not revisit task correctness or scoring.",
+    "prompt_suffix_context": "The diagnostic prompt is the exact retained 512-token suffix of reconstructed reply IDs; 860 earlier prefix tokens were removed, changing context and position origin. It is not the original prompt. The selected onset was placed just before the first stray curly-apostrophe-s fragment in the reconstructed native analysis, but that metadata does not establish the first model error.",
+    "reconstruction_limit": "The native prompt count matches, but reconstructed completion length is four tokens shorter than the native count; raw native sampled IDs are unavailable. Count agreement does not establish token identity or exact native replay.",
+    "ranges": "Character ranges are zero-based, half-open offsets in each saved free_running[].text string. Evidence is paraphrased."
+  },
+  "seeds": [
+    {
+      "index": 0,
+      "seed": 42,
+      "text_chars": 2900,
+      "semantic_anomaly": true,
+      "mechanical_flag": false,
+      "observed_malformed_text": {
+        "observed": false,
+        "stray_language": false,
+        "actual_bad_fragments": false,
+        "description": "No malformed fragment or stray-language text is visible. The text begins with a continuation fragment from its selected suffix context and ends after a repeated sentence with only trailing spaces; neither is treated as malformed."
+      },
+      "evidence": [
+        {
+          "char_range": [
+            0,
+            761
+          ],
+          "paraphrase": "Continues the visible-wavelength discussion, states the 3800–4000 Å threshold, and checks z=2.4 and z=1.9 by applying 1216(1+z). This initial comparison provides some progress."
+        },
+        {
+          "char_range": [
+            761,
+            1836
+          ],
+          "paraphrase": "Repeats the same forest visibility and Lyman-alpha line threshold rationale, then again compares 2.4 with 1.9. The additional option mentions do not supply a new cutoff or discriminating observation."
+        },
+        {
+          "char_range": [
+            1836,
+            2643
+          ],
+          "paraphrase": "Restarts the same threshold explanation and same 2.4/1.9 wavelength arithmetic, now calling 2.4 most plausible. It reaches the same unresolved optical-cutoff inference without a new check."
+        },
+        {
+          "char_range": [
+            2643,
+            2900
+          ],
+          "paraphrase": "Begins the same forest-observability rationale again and ends after its repeated threshold statement. The endpoint is not used as anomaly evidence."
+        }
+      ],
+      "basis": "After the initial useful arithmetic, the same threshold rationale and same two-option comparison recur several times without new evidence or resolution. The sustained semantic cycling, rather than the diagnostic endpoint, supports the label."
+    },
+    {
+      "index": 1,
+      "seed": 43,
+      "text_chars": 2925,
+      "semantic_anomaly": true,
+      "mechanical_flag": false,
+      "observed_malformed_text": {
+        "observed": false,
+        "stray_language": false,
+        "actual_bad_fragments": false,
+        "description": "No malformed fragment or stray-language text is visible. The saved text ends mid-sentence at the diagnostic output boundary; that cutoff alone is not malformed."
+      },
+      "evidence": [
+        {
+          "char_range": [
+            0,
+            996
+          ],
+          "paraphrase": "States the question, identifies the 1216 Å line and 3800–4000 Å optical threshold, derives z≈2.1–2.3, and selects the nearest listed value, 2.4. This first pass is a coherent check."
+        },
+        {
+          "char_range": [
+            996,
+            2289
+          ],
+          "paraphrase": "Repeats the same four-part explanation—forest line shifted into optical range, optical threshold, z≈2.1–2.3, and 2.4 as closest—three more times without adding another candidate check or new premise."
+        },
+        {
+          "char_range": [
+            2289,
+            2925
+          ],
+          "paraphrase": "Repeats the same line/threshold calculation and begins another copy of the optical-range statement, ending mid-sentence at the diagnostic boundary."
+        }
+      ],
+      "basis": "A complete initial rationale is followed by multiple near-identical restarts of the same conclusion with no new check. This is sustained repetition beyond the terminal truncation."
+    },
+    {
+      "index": 2,
+      "seed": 44,
+      "text_chars": 2492,
+      "semantic_anomaly": true,
+      "mechanical_flag": false,
+      "observed_malformed_text": {
+        "observed": false,
+        "stray_language": false,
+        "actual_bad_fragments": false,
+        "description": "No malformed fragment or stray-language text is visible. The final 'Let' is a mid-phrase diagnostic-cap ending and is not itself malformed."
+      },
+      "evidence": [
+        {
+          "char_range": [
+            0,
+            704
+          ],
+          "paraphrase": "Checks z=2.1 and z=2.3 against the optical range, then checks 2.4 and 1.9. These are distinct candidate calculations and count as initial progress, although the visibility criterion remains vague."
+        },
+        {
+          "char_range": [
+            704,
+            1360
+          ],
+          "paraphrase": "Repeats the same z=2.1, 2.3, 2.4, and 1.9 calculations and the same optical-range judgments in the same order."
+        },
+        {
+          "char_range": [
+            1360,
+            2016
+          ],
+          "paraphrase": "Runs the same four-redshift sequence for a third time, with the same arithmetic and conclusions and no new measurement criterion."
+        },
+        {
+          "char_range": [
+            2016,
+            2492
+          ],
+          "paraphrase": "Starts a fourth pass through the identical z=2.1/2.3/2.4/1.9 sequence, then stops at 'Let' while beginning another check. The cap is not counted as malformed or anomalous evidence."
+        }
+      ],
+      "basis": "The initial multi-candidate calculations are credited as progress. Three further unchanged passes through the exact same candidate set and judgments, followed by another restart, establish sustained cycling independently of the cap."
+    }
+  ],
+  "pattern_comparison": "All three diagnostic strings repeat the same unresolved question about when the 1216 Å Lyman-alpha line enters an assumed optical range and repeatedly favor 2.4 over 1.9 (seed 44 also repeatedly checks 2.1 and 2.3). Seed 42 repeats the threshold explanation and two-option arithmetic; seed 43 reproduces a near-verbatim four-statement rationale; seed 44 repeats an identical four-redshift calculation sequence. Their pattern is consistent with the original triage's repeated threshold recalculation and option cycling. The initial distinct calculations in seeds 42 and 44 count as progress; the later sustained unchanged cycles support the anomaly labels. No stray-language or other actual malformed fragment is observed in these three diagnostic texts; the source native reply's reported apostrophe-s fragments are not present here. This establishes only the contents of these three diagnostic strings, not an incidence estimate, exact replay of the native reply, or a precision cause.",
+  "teacher_forced_continuation": {
+    "chosen_exists": true,
+    "executed": true,
+    "assessment": "not assessed in this semantic review"
+  },
+  "official_scoring": {
+    "status": "completed",
+    "assessment": "not assessed or changed by this semantic review"
+  },
+  "limits": [
+    "Host-only review of all three saved free-running texts, each capped at 1,024 generated tokens. The prompt is an exact 512-token suffix of reconstructed IDs with 860 earlier tokens removed; it changes context and position origin and is not an original-prompt reproduction.",
+    "The private onset record reports a four-token discrepancy between reconstructed and native completion counts and says raw native sampled IDs are unavailable. No token identity or exact native replay is claimed.",
+    "The chosen teacher-forced continuation exists and was executed; its result is outside this semantic review.",
+    "The official score is complete. This review makes no score or population claim and does not alter scoring.",
+    "Saved mechanical flags are copied exactly and are reported separately from semantic judgments and observed malformed text.",
+    "No precision-causation or general model-behavior conclusion follows from these three diagnostic continuations. Terminal mid-phrase cutoffs are not counted as malformed text."
+  ]
+}

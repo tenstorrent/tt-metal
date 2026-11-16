@@ -1,0 +1,15 @@
+{
+  "astropy.first.suffix512": {
+    "positions": 64,
+    "hf_chosen_top1": 0.9375,
+    "hf_mean_chosen_probability": 0.9387825844460167,
+    "served": {
+      "top1_agreement": 0.96875,
+      "mean_chosen_logprob_hf_minus_tt": 0.05109360055736811
+    },
+    "full": {
+      "top1_agreement": 1.0,
+      "mean_chosen_logprob_hf_minus_tt": -0.00028715616514229936
+    }
+  }
+}

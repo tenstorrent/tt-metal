@@ -1,0 +1,21 @@
+{
+  "forecast_seconds": {
+    "low": 3600,
+    "point": 4800,
+    "high": 6500
+  },
+  "timeout_seconds": 7200,
+  "anchors": {
+    "old_P19_Q128_fixed108_seconds": 3580.4716444015503,
+    "old_P19_Q128_five_case_extensions_seconds": 507.0161921977997,
+    "Q32_14_case_resume_seconds": 269.9703812599182
+  },
+  "basis": "The matched old P19 fixed108 actual was3580.472s; the old five-case extension batch was507.016s. Q32 changes the fresh attention geometry and tracking is now enabled, so prior walltime is only a baseline; allow additional runtime up to a7200s hard bound. Q32 resume270s is not linearly extrapolated to long free-running outputs. Conditional extension estimate is separate and not included unless outputs still progress at cap.",
+  "measurement_qualification": "TT_METAL_TRACE_ALLOC_TRACKING=1 here; old P19 fixed108 and extension timing had tracking disabled/unset, so wall times are not directly comparable.",
+  "conditional_cap_extension_seconds": {
+    "low": 400,
+    "point": 650,
+    "high": 1000,
+    "basis": "Separate later-only envelope anchored to the measured five-case old P19 extension run507.016s. Q32 geometry and tracking1 may alter time; this amount is not included in the fixed108 forecast and no extension is scheduled."
+  }
+}

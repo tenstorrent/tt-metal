@@ -1,0 +1,121 @@
+{
+  "status": "passed",
+  "scope": "Host-only comparison of matched forced-token chosen branches; no TTNN/device work.",
+  "paired_case_count": 12,
+  "paired_rows": [
+    {
+      "name": "anomaly.call91.canonicalprefix.suffix4096.seed42",
+      "tokens": 64,
+      "top1_agreement": 0.921875,
+      "served_sequence_log_probability": -57.26429671353617,
+      "full_sequence_log_probability": -54.7603179203179,
+      "served_result_sha256": "7f53e3e2e2a091c7128d21ff8cfdcec099fb58e4851ee94ddafc1e7d44843670",
+      "full_result_sha256": "395c749ff59a128749ec3606ada859cca84798e9be3cc73a67bbeac539eee3b4"
+    },
+    {
+      "name": "anomaly.call91.canonicalprefix.suffix4096.seed43",
+      "tokens": 64,
+      "top1_agreement": 0.921875,
+      "served_sequence_log_probability": -57.26429671353617,
+      "full_sequence_log_probability": -54.7603179203179,
+      "served_result_sha256": "27f7fae378ddd5b117501588bce252cf8e68f25accd3b60b7952e747e19afb28",
+      "full_result_sha256": "0e7ea7bee6d85b8e910228abcb95c665ba62b7c50c09ec0ed21be04fa582373d"
+    },
+    {
+      "name": "anomaly.call91.canonicalprefix.suffix4096.seed44",
+      "tokens": 64,
+      "top1_agreement": 0.921875,
+      "served_sequence_log_probability": -57.26429671353617,
+      "full_sequence_log_probability": -54.7603179203179,
+      "served_result_sha256": "35c67dba68959904229453814285f5eb193d3a2e4aa7e39740ddfe6a767ba813",
+      "full_result_sha256": "aea5b2d0e873e71c856b0e3c22802b30dd468b94d2b9bf8290b7dbd71253a183"
+    },
+    {
+      "name": "anomaly.matplotlib__matplotlib-20488.call86.onset.suffix4096.seed42",
+      "tokens": 64,
+      "top1_agreement": 0.890625,
+      "served_sequence_log_probability": -61.94351170380193,
+      "full_sequence_log_probability": -58.79947228604493,
+      "served_result_sha256": "24c228d030db3e9e3d19b2416e6a93a73aee117db65e4628f5352bd211d9f4cf",
+      "full_result_sha256": "bf72f9a8e59294f769dce975da2d917e69fd62a1572d778310ce773b74792595"
+    },
+    {
+      "name": "anomaly.matplotlib__matplotlib-20488.call86.onset.suffix4096.seed43",
+      "tokens": 64,
+      "top1_agreement": 0.890625,
+      "served_sequence_log_probability": -61.94351170380193,
+      "full_sequence_log_probability": -58.79947228604493,
+      "served_result_sha256": "0473b2a180e527d9a609a1f28d65cb7770bb3421012c0affa534ac5fa3ef6d56",
+      "full_result_sha256": "2fc88476353a38633134bcb85d1fbf8624f99d8e55bb8273e42fca2898bc594d"
+    },
+    {
+      "name": "anomaly.matplotlib__matplotlib-20488.call86.onset.suffix4096.seed44",
+      "tokens": 64,
+      "top1_agreement": 0.890625,
+      "served_sequence_log_probability": -61.94351170380193,
+      "full_sequence_log_probability": -58.79947228604493,
+      "served_result_sha256": "3eedba823b3b3f55be41012a0a7f87ef45ca6e748a876c8842020f903e2d7edd",
+      "full_result_sha256": "0cc72d580c11939d9ca44a66580d36ec9aec81d578f59e13c26a17ec480bbe1e"
+    },
+    {
+      "name": "anomaly.psf__requests-5414.call10.onset.suffix4096.seed42",
+      "tokens": 64,
+      "top1_agreement": 1.0,
+      "served_sequence_log_probability": -0.002696480875499674,
+      "full_sequence_log_probability": -0.00046752682186479433,
+      "served_result_sha256": "838d6b3173888be66eec79851c6219bd72c4bdfb79b5d4232963d2b12a380491",
+      "full_result_sha256": "eeda97d1c40d60a68d6d5a390247b0e25a80b7fc2ef62ba61005d2cfe917b6e5"
+    },
+    {
+      "name": "anomaly.psf__requests-5414.call10.onset.suffix4096.seed43",
+      "tokens": 64,
+      "top1_agreement": 1.0,
+      "served_sequence_log_probability": -0.002696480875499674,
+      "full_sequence_log_probability": -0.00046752682186479433,
+      "served_result_sha256": "803a0b9cdefee079a11612afeeaf4983c421e2603095d98a33b6db631102ae31",
+      "full_result_sha256": "016566e474a73a27c48dc2c39b75c72a6d21c840e51de7c94b45d541dbab9542"
+    },
+    {
+      "name": "anomaly.psf__requests-5414.call10.onset.suffix4096.seed44",
+      "tokens": 64,
+      "top1_agreement": 1.0,
+      "served_sequence_log_probability": -0.002696480875499674,
+      "full_sequence_log_probability": -0.00046752682186479433,
+      "served_result_sha256": "b73e821223a7256a7224e2f3e23d300c19e34ea8a05c866fd39a3fbb1638f7d1",
+      "full_result_sha256": "ff2b6dc9e140ecb05880f8bdfc1af709aaddc0160f07514079437094c81b492f"
+    },
+    {
+      "name": "anomaly.sphinx-doc__sphinx-10323.call70.onset.suffix4096.seed42",
+      "tokens": 37,
+      "top1_agreement": 0.8378378378378378,
+      "served_sequence_log_probability": -93.832288351258,
+      "full_sequence_log_probability": -97.17001666622832,
+      "served_result_sha256": "a6ec360216bf436f7e4c39b04cbde70ca0f4353e9f39bb2b65aef3e83c3ca094",
+      "full_result_sha256": "c697bf38a482271dcb854202205ffa7f638da022d5d8eac243c0298b87070f1f"
+    },
+    {
+      "name": "anomaly.sphinx-doc__sphinx-10323.call70.onset.suffix4096.seed43",
+      "tokens": 37,
+      "top1_agreement": 0.8378378378378378,
+      "served_sequence_log_probability": -93.832288351258,
+      "full_sequence_log_probability": -97.17001666622832,
+      "served_result_sha256": "bfbd718661ba70c712a02aebea1f93378570721cf44cec131b8fed91c40b833c",
+      "full_result_sha256": "feebcee326bad1b086bf1ce757049ebe245dbe7adc24e3bc63ed36a517d215eb"
+    },
+    {
+      "name": "anomaly.sphinx-doc__sphinx-10323.call70.onset.suffix4096.seed44",
+      "tokens": 37,
+      "top1_agreement": 0.8378378378378378,
+      "served_sequence_log_probability": -93.832288351258,
+      "full_sequence_log_probability": -97.17001666622832,
+      "served_result_sha256": "953f442e20b071c33de51254d53c88ad0cc86b9418c859ac1845f4de58615fd5",
+      "full_result_sha256": "c193e6752a5481dd12dfc3e5942b8d687e15bd58f4660dddc252ec6dd49aead0"
+    }
+  ],
+  "full_only_cases": [
+    "anomaly.pytest-dev__pytest-5787.call65.onset.cap4096.seed44"
+  ],
+  "full_only_policy": "Pytest cap4096 is a progressing free-run-only extension with no served counterpart; excluded from forced-token comparison.",
+  "served_manifest_sha256": "af4b101a47cd6cbd2f52e48a9b2c50d1ba35afe9c3fc2df4fd1584db5c21e4d5",
+  "full_manifest_sha256": "b734dfb2e5e822b1eff8f01b82d2ead1a785b37cc30db5ce76811341bbb0eca5"
+}

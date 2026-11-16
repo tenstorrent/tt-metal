@@ -1,0 +1,325 @@
+{
+  "scope": "Read-only qualitative triage of 12 free-running control completions (3 seeds per configuration).",
+  "classification_rule": "Mechanical tail flags are retained as measured metadata only. Semantic degeneration is judged from the content itself; repeated proposed command text is not an executed tool action.",
+  "summary": {
+    "served/astropy.onset.json": {
+      "count": 3,
+      "mechanically_flagged": 1,
+      "semantically_degenerate": 3,
+      "semantically_coherent": 0
+    },
+    "served/astropy.second.onset.json": {
+      "count": 3,
+      "mechanically_flagged": 1,
+      "semantically_degenerate": 3,
+      "semantically_coherent": 0
+    },
+    "full/astropy.onset.json": {
+      "count": 3,
+      "mechanically_flagged": 2,
+      "semantically_degenerate": 3,
+      "semantically_coherent": 0
+    },
+    "full/astropy.second.onset.json": {
+      "count": 3,
+      "mechanically_flagged": 2,
+      "semantically_degenerate": 3,
+      "semantically_coherent": 0
+    }
+  },
+  "controls": [
+    {
+      "regime": "served",
+      "prefix_case": "astropy.onset.json",
+      "seed": 42,
+      "chars": 2681,
+      "mechanical_flag": true,
+      "mechanical_tail_zlib_ratio": 0.04699738903394256,
+      "mechanical_tail_distinct_chars": 31,
+      "semantic_classification": "degenerate",
+      "semantic_evidence": "Degenerate within-response cycle with no executed tool action: \u201cActually, I'll just do it.\u201d (24x); \u201cWait, I'll use the python script.\u201d (23x); \u201cLet's go.\u201d (23x). These are repeated intentions or mutually cycling edit plans, not coherent repeated task steps.",
+      "most_repeated_lines": [
+        {
+          "phrase": "Actually, I'll just do it.",
+          "count": 24
+        },
+        {
+          "phrase": "Wait, I'll use the python script.",
+          "count": 23
+        },
+        {
+          "phrase": "Let's go.",
+          "count": 23
+        }
+      ],
+      "executed_tool_actions": 0
+    },
+    {
+      "regime": "served",
+      "prefix_case": "astropy.onset.json",
+      "seed": 43,
+      "chars": 3314,
+      "mechanical_flag": false,
+      "mechanical_tail_zlib_ratio": 0.06125528062764032,
+      "mechanical_tail_distinct_chars": 33,
+      "semantic_classification": "degenerate",
+      "semantic_evidence": "Degenerate within-response cycle with no executed tool action: \u201cActually, I'll just do it.\u201d (16x); \u201cWait, I'll use `sed` to replace the lines instead of inserting.\u201d (16x); \u201cNo, inserting is fine.\u201d (16x). These are repeated intentions or mutually cycling edit plans, not coherent repeated task steps.",
+      "most_repeated_lines": [
+        {
+          "phrase": "Actually, I'll just do it.",
+          "count": 16
+        },
+        {
+          "phrase": "Wait, I'll use `sed` to replace the lines instead of inserting.",
+          "count": 16
+        },
+        {
+          "phrase": "No, inserting is fine.",
+          "count": 16
+        }
+      ],
+      "executed_tool_actions": 0
+    },
+    {
+      "regime": "served",
+      "prefix_case": "astropy.onset.json",
+      "seed": 44,
+      "chars": 3085,
+      "mechanical_flag": false,
+      "mechanical_tail_zlib_ratio": 0.09724473257698542,
+      "mechanical_tail_distinct_chars": 44,
+      "semantic_classification": "degenerate",
+      "semantic_evidence": "Degenerate within-response cycle with no executed tool action: \u201cWait, I'll use `sed -i '898i\\        if hasattr(self.__class__, attr):\\n            raise AttributeError(attr)\\n' astropy/coordinates/sky_coordinate.p\u201d (10x); \u201cWait, I'll use `sed` to replace the lines.\u201d (10x); \u201cNo, I'll use the python script.\u201d (10x). These are repeated intentions or mutually cycling edit plans, not coherent repeated task steps.",
+      "most_repeated_lines": [
+        {
+          "phrase": "Wait, I'll use `sed -i '898i\\        if hasattr(self.__class__, attr):\\n            raise AttributeError(attr)\\n' astropy/coordinates/sky_coordinate.p",
+          "count": 10
+        },
+        {
+          "phrase": "Wait, I'll use `sed` to replace the lines.",
+          "count": 10
+        },
+        {
+          "phrase": "No, I'll use the python script.",
+          "count": 10
+        }
+      ],
+      "executed_tool_actions": 0
+    },
+    {
+      "regime": "served",
+      "prefix_case": "astropy.second.onset.json",
+      "seed": 42,
+      "chars": 2993,
+      "mechanical_flag": true,
+      "mechanical_tail_zlib_ratio": 0.024390243902439025,
+      "mechanical_tail_distinct_chars": 20,
+      "semantic_classification": "degenerate",
+      "semantic_evidence": "Degenerate within-response repetition: \u201c[Wait, I'll just use the bash tool.]\u201d occurs 78 times in 2993 characters, with no progression to an actual tool action.",
+      "most_repeated_lines": [
+        {
+          "phrase": "[Wait, I'll just use the bash tool.]",
+          "count": 78
+        }
+      ],
+      "executed_tool_actions": 0
+    },
+    {
+      "regime": "served",
+      "prefix_case": "astropy.second.onset.json",
+      "seed": 43,
+      "chars": 2379,
+      "mechanical_flag": false,
+      "mechanical_tail_zlib_ratio": 0.06893652795292139,
+      "mechanical_tail_distinct_chars": 35,
+      "semantic_classification": "degenerate",
+      "semantic_evidence": "Degenerate within-response cycle with no executed tool action: \u201c[Let's go.]\u201d (21x); \u201c[Wait, I'll just do it.]\u201d (20x); \u201c[I'll use the bash tool now.]\u201d (20x). These are repeated intentions or mutually cycling edit plans, not coherent repeated task steps.",
+      "most_repeated_lines": [
+        {
+          "phrase": "[Let's go.]",
+          "count": 21
+        },
+        {
+          "phrase": "[Wait, I'll just do it.]",
+          "count": 20
+        },
+        {
+          "phrase": "[I'll use the bash tool now.]",
+          "count": 20
+        }
+      ],
+      "executed_tool_actions": 0
+    },
+    {
+      "regime": "served",
+      "prefix_case": "astropy.second.onset.json",
+      "seed": 44,
+      "chars": 2668,
+      "mechanical_flag": false,
+      "mechanical_tail_zlib_ratio": 0.05472263868065967,
+      "mechanical_tail_distinct_chars": 34,
+      "semantic_classification": "degenerate",
+      "semantic_evidence": "Degenerate within-response cycle with no executed tool action: \u201c[Wait, I'll just do it.]\u201d (32x); \u201c[I'll use the bash tool.]\u201d (31x); \u201c[Actually, I'll just do it.]\u201d (30x). These are repeated intentions or mutually cycling edit plans, not coherent repeated task steps.",
+      "most_repeated_lines": [
+        {
+          "phrase": "[Wait, I'll just do it.]",
+          "count": 32
+        },
+        {
+          "phrase": "[I'll use the bash tool.]",
+          "count": 31
+        },
+        {
+          "phrase": "[Actually, I'll just do it.]",
+          "count": 30
+        }
+      ],
+      "executed_tool_actions": 0
+    },
+    {
+      "regime": "full",
+      "prefix_case": "astropy.onset.json",
+      "seed": 42,
+      "chars": 2814,
+      "mechanical_flag": true,
+      "mechanical_tail_zlib_ratio": 0.03304904051172708,
+      "mechanical_tail_distinct_chars": 24,
+      "semantic_classification": "degenerate",
+      "semantic_evidence": "Degenerate within-response cycle with no executed tool action: \u201cActually, I'll just do it.\u201d (43x); \u201cWait, I'll use `sed` and then check.\u201d (42x). These are repeated intentions or mutually cycling edit plans, not coherent repeated task steps.",
+      "most_repeated_lines": [
+        {
+          "phrase": "Actually, I'll just do it.",
+          "count": 43
+        },
+        {
+          "phrase": "Wait, I'll use `sed` and then check.",
+          "count": 42
+        }
+      ],
+      "executed_tool_actions": 0
+    },
+    {
+      "regime": "full",
+      "prefix_case": "astropy.onset.json",
+      "seed": 43,
+      "chars": 3117,
+      "mechanical_flag": false,
+      "mechanical_tail_zlib_ratio": 0.11742059672762271,
+      "mechanical_tail_distinct_chars": 43,
+      "semantic_classification": "degenerate",
+      "semantic_evidence": "Degenerate within-response cycle with no executed tool action: \u201cWait, I'll first check the lines.\u201d (20x); \u201cActually, I'll just do it.\u201d (20x); \u201cWait, I'll use `sed`.\u201d (19x). These are repeated intentions or mutually cycling edit plans, not coherent repeated task steps.",
+      "most_repeated_lines": [
+        {
+          "phrase": "Wait, I'll first check the lines.",
+          "count": 20
+        },
+        {
+          "phrase": "Actually, I'll just do it.",
+          "count": 20
+        },
+        {
+          "phrase": "Wait, I'll use `sed`.",
+          "count": 19
+        }
+      ],
+      "executed_tool_actions": 0
+    },
+    {
+      "regime": "full",
+      "prefix_case": "astropy.onset.json",
+      "seed": 44,
+      "chars": 3192,
+      "mechanical_flag": true,
+      "mechanical_tail_zlib_ratio": 0.040726817042606514,
+      "mechanical_tail_distinct_chars": 27,
+      "semantic_classification": "degenerate",
+      "semantic_evidence": "Degenerate within-response cycle with no executed tool action: \u201cActually, I'll just do it.\u201d (22x); \u201cWait, I'll use `sed` to insert the lines.\u201d (21x); \u201cActually, I'll just use the python script.\u201d (21x). These are repeated intentions or mutually cycling edit plans, not coherent repeated task steps.",
+      "most_repeated_lines": [
+        {
+          "phrase": "Actually, I'll just do it.",
+          "count": 22
+        },
+        {
+          "phrase": "Wait, I'll use `sed` to insert the lines.",
+          "count": 21
+        },
+        {
+          "phrase": "Actually, I'll just use the python script.",
+          "count": 21
+        }
+      ],
+      "executed_tool_actions": 0
+    },
+    {
+      "regime": "full",
+      "prefix_case": "astropy.second.onset.json",
+      "seed": 42,
+      "chars": 3357,
+      "mechanical_flag": true,
+      "mechanical_tail_zlib_ratio": 0.030682156687518617,
+      "mechanical_tail_distinct_chars": 28,
+      "semantic_classification": "degenerate",
+      "semantic_evidence": "Degenerate within-response cycle with no executed tool action: \u201c[Wait, I'll just use `super().__getattribute__(attr)`.]\u201d (29x); \u201c[Actually, I'll just use `super().__getattribute__(attr)`.]\u201d (27x). These are repeated intentions or mutually cycling edit plans, not coherent repeated task steps.",
+      "most_repeated_lines": [
+        {
+          "phrase": "[Wait, I'll just use `super().__getattribute__(attr)`.]",
+          "count": 29
+        },
+        {
+          "phrase": "[Actually, I'll just use `super().__getattribute__(attr)`.]",
+          "count": 27
+        }
+      ],
+      "executed_tool_actions": 0
+    },
+    {
+      "regime": "full",
+      "prefix_case": "astropy.second.onset.json",
+      "seed": 43,
+      "chars": 3139,
+      "mechanical_flag": false,
+      "mechanical_tail_zlib_ratio": 0.19624084103217584,
+      "mechanical_tail_distinct_chars": 50,
+      "semantic_classification": "degenerate",
+      "semantic_evidence": "Degenerate within-response cycle with no executed tool action: \u201c[I'll use the bash tool now.]\u201d (20x); \u201c[I'll run the following script.]\u201d (16x); \u201c[Wait, I'll just do it.]\u201d (14x). These are repeated intentions or mutually cycling edit plans, not coherent repeated task steps.",
+      "most_repeated_lines": [
+        {
+          "phrase": "[I'll use the bash tool now.]",
+          "count": 20
+        },
+        {
+          "phrase": "[I'll run the following script.]",
+          "count": 16
+        },
+        {
+          "phrase": "[Wait, I'll just do it.]",
+          "count": 14
+        }
+      ],
+      "executed_tool_actions": 0
+    },
+    {
+      "regime": "full",
+      "prefix_case": "astropy.second.onset.json",
+      "seed": 44,
+      "chars": 2189,
+      "mechanical_flag": true,
+      "mechanical_tail_zlib_ratio": 0.04933759707629054,
+      "mechanical_tail_distinct_chars": 28,
+      "semantic_classification": "degenerate",
+      "semantic_evidence": "Degenerate within-response cycle with no executed tool action: \u201c[I'll do it now.]\u201d (108x); \u201c[Wait, I'll just do it.]\u201d (3x). These are repeated intentions or mutually cycling edit plans, not coherent repeated task steps.",
+      "most_repeated_lines": [
+        {
+          "phrase": "[I'll do it now.]",
+          "count": 108
+        },
+        {
+          "phrase": "[Wait, I'll just do it.]",
+          "count": 3
+        }
+      ],
+      "executed_tool_actions": 0
+    }
+  ],
+  "overall_note": "All 12 control completions show semantically degenerate repetition or cyclical action narration. Mechanical flags identify only 1/3 served and 2/3 full per onset set (same counts in second-onset set); these counts must not be reported as semantic anomaly rates."
+}

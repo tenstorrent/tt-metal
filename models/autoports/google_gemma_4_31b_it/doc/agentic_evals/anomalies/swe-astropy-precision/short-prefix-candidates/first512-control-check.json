@@ -1,0 +1,174 @@
+{
+  "status": "host_only_decoding_saved_TT_tokens",
+  "tokenizer_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+  "source_case": "astropy.second.suffix512",
+  "detector": "Same precision_repro_batch tail[-4096:], min1000 chars, zlib ratio<0.05 OR distinct chars<=10",
+  "rows": [
+    {
+      "mode": "served",
+      "seed": 42,
+      "tokens": 512,
+      "chars": 1587,
+      "tail_chars": 1587,
+      "tail_zlib_ratio": 0.057971014492753624,
+      "tail_distinct_chars": 27,
+      "digest_min_chars_met": true,
+      "flag": false,
+      "original1024_flag": true,
+      "repeated_8word_phrases": [
+        {
+          "phrase": "[Wait, I'll just use `super().__getattribute__(attr)`.] [Wait, I'll just",
+          "occurrences": 23
+        },
+        {
+          "phrase": "I'll just use `super().__getattribute__(attr)`.] [Wait, I'll just use",
+          "occurrences": 23
+        },
+        {
+          "phrase": "just use `super().__getattribute__(attr)`.] [Wait, I'll just use `super().__getattribute__(attr)`.]",
+          "occurrences": 23
+        }
+      ]
+    },
+    {
+      "mode": "served",
+      "seed": 43,
+      "tokens": 512,
+      "chars": 950,
+      "tail_chars": 950,
+      "tail_zlib_ratio": 0.034736842105263156,
+      "tail_distinct_chars": 12,
+      "digest_min_chars_met": false,
+      "flag": false,
+      "original1024_flag": true,
+      "repeated_8word_phrases": [
+        {
+          "phrase": "[Let's go.] [Let's go.] [Let's go.] [Let's go.]",
+          "occurrences": 66
+        },
+        {
+          "phrase": "go.] [Let's go.] [Let's go.] [Let's go.] [Let's",
+          "occurrences": 65
+        },
+        {
+          "phrase": "go.] [Let's go.] [Let's go.] [Let's go.] [Let''s",
+          "occurrences": 1
+        }
+      ]
+    },
+    {
+      "mode": "served",
+      "seed": 44,
+      "tokens": 512,
+      "chars": 1586,
+      "tail_chars": 1586,
+      "tail_zlib_ratio": 0.05674653215636822,
+      "tail_distinct_chars": 27,
+      "digest_min_chars_met": true,
+      "flag": false,
+      "original1024_flag": true,
+      "repeated_8word_phrases": [
+        {
+          "phrase": "[Wait, I'll just use `super().__getattribute__(attr)`.] [Wait, I'll just",
+          "occurrences": 22
+        },
+        {
+          "phrase": "I'll just use `super().__getattribute__(attr)`.] [Wait, I'll just use",
+          "occurrences": 22
+        },
+        {
+          "phrase": "just use `super().__getattribute__(attr)`.] [Wait, I'll just use `super().__getattribute__(attr)`.]",
+          "occurrences": 21
+        }
+      ]
+    },
+    {
+      "mode": "full",
+      "seed": 42,
+      "tokens": 512,
+      "chars": 1435,
+      "tail_chars": 1435,
+      "tail_zlib_ratio": 0.06062717770034843,
+      "tail_distinct_chars": 27,
+      "digest_min_chars_met": true,
+      "flag": false,
+      "original1024_flag": true,
+      "repeated_8word_phrases": [
+        {
+          "phrase": "[Wait, I'll just use `super().__getattribute__(attr)`.] [Let's go.] [Wait,",
+          "occurrences": 20
+        },
+        {
+          "phrase": "I'll just use `super().__getattribute__(attr)`.] [Let's go.] [Wait, I'll",
+          "occurrences": 20
+        },
+        {
+          "phrase": "just use `super().__getattribute__(attr)`.] [Let's go.] [Wait, I'll just",
+          "occurrences": 20
+        }
+      ]
+    },
+    {
+      "mode": "full",
+      "seed": 43,
+      "tokens": 512,
+      "chars": 1435,
+      "tail_chars": 1435,
+      "tail_zlib_ratio": 0.06062717770034843,
+      "tail_distinct_chars": 27,
+      "digest_min_chars_met": true,
+      "flag": false,
+      "original1024_flag": true,
+      "repeated_8word_phrases": [
+        {
+          "phrase": "[Wait, I'll just use `super().__getattribute__(attr)`.] [Let's go.] [Wait,",
+          "occurrences": 20
+        },
+        {
+          "phrase": "I'll just use `super().__getattribute__(attr)`.] [Let's go.] [Wait, I'll",
+          "occurrences": 20
+        },
+        {
+          "phrase": "just use `super().__getattribute__(attr)`.] [Let's go.] [Wait, I'll just",
+          "occurrences": 20
+        }
+      ]
+    },
+    {
+      "mode": "full",
+      "seed": 44,
+      "tokens": 512,
+      "chars": 1435,
+      "tail_chars": 1435,
+      "tail_zlib_ratio": 0.06062717770034843,
+      "tail_distinct_chars": 27,
+      "digest_min_chars_met": true,
+      "flag": false,
+      "original1024_flag": true,
+      "repeated_8word_phrases": [
+        {
+          "phrase": "[Wait, I'll just use `super().__getattribute__(attr)`.] [Let's go.] [Wait,",
+          "occurrences": 20
+        },
+        {
+          "phrase": "I'll just use `super().__getattribute__(attr)`.] [Let's go.] [Wait, I'll",
+          "occurrences": 20
+        },
+        {
+          "phrase": "just use `super().__getattribute__(attr)`.] [Let's go.] [Wait, I'll just",
+          "occurrences": 20
+        }
+      ]
+    }
+  ],
+  "scope": "First512 slices of saved1024-token TT runs, not fresh512 runs; no HF outcomes or population-rate equivalence inferred.",
+  "assessment": {
+    "same_semantic_phenomenon_visible": true,
+    "all_six_first512_show_repeated_phrases": true,
+    "first512_detector_flags": 0,
+    "original1024_detector_flags": 6,
+    "supports512_HF_semantic_probe": true,
+    "supports512_same_detector_pass_fail": false,
+    "criterion": "Inspect the512-token continuation for sustained repeated sentences/action intentions matching the TT loop. A negative detector flag is not a pass. If512tokens are inconclusive, extend1024 before any anomaly closure. This is diagnostic cap adaptation only, not scored-run change or population-rate comparison."
+  }
+}

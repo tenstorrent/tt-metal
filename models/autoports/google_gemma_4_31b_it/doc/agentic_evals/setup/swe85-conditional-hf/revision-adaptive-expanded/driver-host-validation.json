@@ -1,0 +1,81 @@
+{
+  "status": "candidate_only_host_preparation_complete_not_admitted_not_launched",
+  "scope": "Semantic evidence pin repair and inert serial HF driver preparation; host-only validation only.",
+  "semantic_evidence_pins": {
+    "requests5414_call10_seed42_full_suffix4096": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/triage-b.json",
+      "sha256": "57bbf5305a4fd0b6eeb6a105fc5a5afdf29ab42381b78fb99e74020f0e7594d0",
+      "purpose": "Served/full suffix4096 semantic triage, including the full seed42 row used for Requests call10."
+    },
+    "matplotlib_call86_and_sphinx_call70_native_family": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/contraction-family-adjudication-b.json",
+      "sha256": "9ff38abb735a5fe240f468405d9bce73a00af007905b53e08fe13c4651ce0721",
+      "purpose": "Native repeated-contraction criterion and full-positive evidence for Matplotlib call86 and Sphinx call70."
+    }
+  },
+  "candidate_pins": {
+    "proposal.json": "1d2fff2ebb652fe20f92240396e22c75d7afc11aad733553743536d3e0ddedef",
+    "driver": "285de701c70b01e973006992bc7659f82e6e832323feee1846197eefe09f7c60",
+    "commands.json": "fd7bf6d4c3abb8af5fcd8330a1a09997a92a0f6363fda9d2e9da1487607bfbc7",
+    "source-integrity.json": "b74be29ac34fdbc5ef2af25d837b64e804dfce7bd732e94a6ebb2ae04325d4d6",
+    "forecast.json": "85f3d46bd51531155a0734bb63ef7481f760b842a91adcb0c7aca8d739ec2358",
+    "admission.json": "068f97f3501e78c5c849726026dd3ebb2cc1fce6d4e00a6bb8440bc22beec18d"
+  },
+  "admission_status": "candidate_only_not_admitted",
+  "predecessor_status_observed": {
+    "P": {
+      "queue": "panel_started",
+      "queue_sha256": "c33b8c164e7bb101e2322191a9d1ae8ed0181cd8cdb7e142be81910fadf0b1f2"
+    },
+    "suffix8192": {
+      "queue": "waiting_for_P_terminal_success_and_forecast_gate",
+      "queue_sha256": "f0aa561ab78f45783e9387e673371b359d7230b3291bf2a641eb67faa83b3324"
+    }
+  },
+  "driver_contract": {
+    "default": "inert; --validate-only or --self-test are host-only; execution requires explicit --execute plus root admission",
+    "predecessors": [
+      "exact P terminal success with admission SHA-256 91dc764e6a3a6b1e8a1be51e6eee5fc958c19d1dfcfa3d057b989aa325618cdd",
+      "exact suffix8192 terminal success with admission SHA-256 300d69403a28112bc5f2a7225df5327bdb9e577ad9ca96cf754ab304f3538205"
+    ],
+    "runtime_gates_each_group": [
+      "device owners empty",
+      "no precision_repro_hf.py process",
+      "MemAvailable >=100 GiB",
+      "candidate and predecessor hashes unchanged"
+    ],
+    "forecast_gates": "P and suffix8192 actual elapsed times must be inside frozen forecast ranges or have exact root hash-bound acceptance records before the first HF group and rechecked before every group. An HF group outside its own range pauses before the next group until its completion-bound root acceptance is present.",
+    "serial_pause_resume": "STOP_BEFORE_LAUNCH/STOP_BETWEEN_GROUPS pause at boundaries; launches/completions/logs/results and progress hashes are recorded; --resume accepts only completed successful group boundaries and never automatically retries an interrupted/failed group.",
+    "recorded_per_group": [
+      "command",
+      "source hashes",
+      "both predecessor terminal hashes",
+      "owner/process/memory preflight",
+      "forecast row/range",
+      "timeout",
+      "launch hash",
+      "completion hash",
+      "log hash",
+      "result hashes"
+    ]
+  },
+  "host_validation": {
+    "py_compile": "passed",
+    "self_test": "passed, including mocked P/E terminal dictionaries and lazy fallback lookup",
+    "validate_only": "passed with current hashes; candidate inventory valid; no predecessor access, model load, network access, device query, or TTNN import",
+    "execute_invoked": false,
+    "hf_outputs_created": false,
+    "device_work": false
+  },
+  "review_notes": [
+    "The semantic evidence pin omission identified in review-c is repaired in source-integrity.json, and proposal/preparation/commands reference the refreshed inventory hash.",
+    "The predecessor queues are still nonterminal in the observed snapshots; the driver cannot pass its gates now.",
+    "The admission file remains a candidate-only placeholder. Root still selects timing and must explicitly admit before execution."
+  ],
+  "p_admission_inventory_exception": {
+    "row_key": "admission",
+    "stale_placeholder_sha256": "428bea328fae8fa6e4f6fe21802f3763985d6b5ee819f5beac6c6df3ff1f2b97",
+    "verified_current_admission_sha256": "91dc764e6a3a6b1e8a1be51e6eee5fc958c19d1dfcfa3d057b989aa325618cdd",
+    "all_other_rows_checked": true
+  }
+}

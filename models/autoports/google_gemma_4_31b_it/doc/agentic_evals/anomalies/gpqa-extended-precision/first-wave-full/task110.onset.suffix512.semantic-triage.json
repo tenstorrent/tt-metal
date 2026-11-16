@@ -1,0 +1,128 @@
+{
+  "task": "110",
+  "diagnostic": "full precision suffix512 first-wave free-running continuations",
+  "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first-wave-full/task110.onset.suffix512.json",
+  "source_packet": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task110.onset.suffix512.private.json",
+  "comparison_context": {
+    "original_triage": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/gpqa-extended198-head-bfp8/digest/110.triage.json",
+    "coordinator_context": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/gpqa-extended198-head-bfp8/digest/coordinator.json",
+    "learned_context": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/learned.json",
+    "original_finding": "The original full reply was judged anomalous because it repeatedly re-parsed options and recounted alpha-site bonds without resolving whether the option encoded the same attachment; it later made progress and completed normally. The coordinator explicitly retained that anomaly despite normal completion. This review compares only observed semantic patterns and makes no cause claim.",
+    "prompt_suffix_context": "The diagnostic uses an exact retained suffix of 512 reconstructed reply tokens, with 1,830 earlier prefix tokens removed and a changed position origin. It is not the original prompt or a full-reply reproduction.",
+    "ranges": "Character ranges are zero-based, half-open offsets in each saved free_running[].text string. Evidence is paraphrased."
+  },
+  "seeds": [
+    {
+      "index": 0,
+      "seed": 42,
+      "text_chars": 12297,
+      "semantic_anomaly": true,
+      "mechanical_flag": true,
+      "observed_malformed_text": {
+        "observed": true,
+        "stray_language": false,
+        "description": "After the chemistry cycle, indentation grows into a long whitespace-only tail, reaching thousands of spaces and 8,732 terminal whitespace characters in the saved text; this is excessive formatting rather than ordinary indentation. No stray-language fragment is visible."
+      },
+      "evidence": [
+        {
+          "char_range": [
+            0,
+            1650
+          ],
+          "paraphrase": "Reconstructs a proposed product by repeatedly recounting C2/C6 substituents, re-reads option A, maps its naming onto the ring, and returns to the same claim that C2 is already quaternary and C6 bears the relevant group."
+        },
+        {
+          "char_range": [
+            1650,
+            3500
+          ],
+          "paraphrase": "Repeats the same option-A parsing and ring renumbering, the same C2-quaternary objection, and the same C6 conclusion with increasingly nested indentation; no distinct premise or discriminating check resolves the mapping."
+        },
+        {
+          "char_range": [
+            3500,
+            12297
+          ],
+          "paraphrase": "After the chemistry cycle, indentation expands into a long whitespace-only tail (8,732 terminal whitespace characters) through the sample boundary. This is malformed formatting, independently observed from the semantic cycle; the cap alone is not counted."
+        }
+      ],
+      "basis": "The same unresolved product/name mapping and alpha-site recount is restarted within one continuation, followed by a long whitespace-only malformed tail. The semantic anomaly does not depend on the sample cap."
+    },
+    {
+      "index": 1,
+      "seed": 43,
+      "text_chars": 5077,
+      "semantic_anomaly": true,
+      "mechanical_flag": true,
+      "observed_malformed_text": {
+        "observed": false,
+        "stray_language": false,
+        "description": "No malformed fragment or stray-language text is observed. The text ends mid-phrase at the 1,024-token diagnostic boundary; the cap alone is not malformed text."
+      },
+      "evidence": [
+        {
+          "char_range": [
+            0,
+            720
+          ],
+          "paraphrase": "Restates that propanoate is at C6, questions the substituents there, corrects itself that ethyl/methyl belong at C2, then repeatedly affirms this is the result of C6 enolate formation."
+        },
+        {
+          "char_range": [
+            720,
+            5077
+          ],
+          "paraphrase": "Near-verbatim alternating assertions that propanoate is at C6 and that this follows from C6 enolate formation continue through the diagnostic boundary. The terminal mid-phrase cut is cap-only and is not counted as malformed text."
+        }
+      ],
+      "basis": "A fixed two-sentence assertion cycle occupies most of the continuation with no new chemistry or resolution; this is semantic degeneration beyond simply reaching the diagnostic length."
+    },
+    {
+      "index": 2,
+      "seed": 44,
+      "text_chars": 4142,
+      "semantic_anomaly": true,
+      "mechanical_flag": true,
+      "observed_malformed_text": {
+        "observed": false,
+        "stray_language": false,
+        "description": "No malformed fragment or stray-language text is observed. The output ends at the diagnostic sample boundary during another repetition; the abrupt cap alone is not counted as malformed or anomalous."
+      },
+      "evidence": [
+        {
+          "char_range": [
+            0,
+            430
+          ],
+          "paraphrase": "Affirms the C6 placement and proposes a product name, then says it matches its earlier prediction."
+        },
+        {
+          "char_range": [
+            430,
+            4142
+          ],
+          "paraphrase": "Repeats essentially the same product-name sentence over and over, without a new check, correction, or reasoning step, until the sample boundary."
+        }
+      ],
+      "basis": "Near-verbatim repetition of one product claim dominates the full continuation and shows no substantive progression."
+    }
+  ],
+  "pattern_comparison": "All three full precision suffix continuations show semantic anomaly, with distinct form: seed 42 repeats the same ring-numbering/alpha-site argument before an extensive excessive-indentation/whitespace formatting failure; seed 43 repeats a two-claim C6 conclusion cycle; seed 44 repeats one product-name claim. Malformed formatting is observed only in seed 42; seed 43's mid-phrase ending occurs at the diagnostic boundary and is not counted as malformed. No stray-language fragment appears. These observations are compatible with the original reply's option/alpha-site cycling, but the diagnostic suffix changes context and position origin. They establish only what is present in these three strings, not reproduction of the native reply, precision causality, or a population rate.",
+  "teacher_forced_continuation": {
+    "chosen_exists": true,
+    "executed": true,
+    "assessment": "not assessed, per review scope"
+  },
+  "official_scoring": {
+    "status": "completed; no pending score claim",
+    "assessment": "not assessed or changed by this semantic review"
+  },
+  "limits": [
+    "Host-only semantic assessment of the three saved free-running texts. The exact 512-token suffix comes from reconstructed IDs, with 1,830 preceding tokens removed and position origin changed; it is not an original-prompt reproduction.",
+    "The private onset metadata says raw native sampled token IDs are unavailable; reconstructed and native completion counts agreeing does not establish token identity. No equivalence to the original full response is claimed.",
+    "The chosen teacher-forced continuation exists and was executed; this review does not assess its results.",
+    "The official score is complete, with no pending scoring work. This review makes no score claim or change.",
+    "Mechanical flags are copied exactly from each saved continuation and are reported separately from semantic judgments and observed malformed text.",
+    "No precision-causation, population, or general model-behavior conclusion follows from these three diagnostic strings."
+  ]
+}

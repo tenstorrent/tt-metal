@@ -1,0 +1,15 @@
+{
+  "status": "draft_pending_root_forecast_review",
+  "reviewer": "root",
+  "accepted": false,
+  "forecast_sha256": "516a0676a9535ddc9a1954740a4588c95a4e07630b47343920c8e68c1eb01cfa",
+  "forecast_range_seconds": [
+    2018.038988828659,
+    6457.7247642517095
+  ],
+  "forecast_point_seconds": 3430.6662810087205,
+  "uncertainty_acknowledged": false,
+  "p2_contention_excluded_from_speed_calibration": true,
+  "uncertainty_summary": "Planning proxy from clean P1 fixed108 only; range multipliers are assumptions, not measured precision scaling. P2 is serialized/correctness evidence only because unintended HF CPU work overlapped it; no speed ranking uses P2 wall.",
+  "note": "Root may set uncertainty_acknowledged=true only after review. No measured P3 outcome exists."
+}

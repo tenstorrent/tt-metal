@@ -1,0 +1,10 @@
+{
+  "status": "correction_in_progress",
+  "detected_unix": 1794728432.658122,
+  "incorrect_arm": "setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/runs/served",
+  "actual_policy": "head_bfp4",
+  "intended_policy": "stage12_head_bfp8_lofi",
+  "evidence": "Original result runtime_precision, old commands and served_build_kwargs all show BFP4. Other SWE85 completed control groups audited runtime_precision use intended selected BFP8 head.",
+  "action": "Preserve old BFP4 as extra comparison; exact same512 fixtures/chosen64/seeds42/43/44/cap512 rerun selected BFP8 to fresh directory; full BF16 controls unaffected.",
+  "corrected_arm": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-suffix512-head-bfp8-correction/runs"
+}

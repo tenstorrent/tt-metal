@@ -1,0 +1,900 @@
+{
+  "status": "optional_candidate_only_requires_reviewer_and_root_admission",
+  "source_roster": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-tt-execution-plan/anomaly-cases.json",
+  "source_roster_sha256": "a0ca3f19d19dd21e3e39f02a94da50e2a84342e3a3762883dfad59c9d623951c",
+  "source_count": 32,
+  "candidate_count": 32,
+  "deduplicated_existing_short": [],
+  "cases": [
+    {
+      "source_job": "anomaly.sympy__sympy-13480.call1.onset",
+      "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-sympy13480-controls/sympy__sympy-13480.call1.onset.private.json",
+      "source_sha256": "0ff8f259c62590aaa1fa0b6874d2d5fdb5e1b5f686c5558142fa1e8dbaccc91f",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-83/anomaly.sympy__sympy-13480.call1.onset.suffix512.private.json",
+      "case_sha256": "fe8cff53ec1e57e20ccf083f6a70d15929f370d9d9dd97a674c0a89d8f107f2a",
+      "source_prompt_tokens": 1175,
+      "source_suffix_range": {
+        "start_inclusive": 663,
+        "end_exclusive": 1175
+      },
+      "prompt_tokens": 512,
+      "teacher_forcing_positions": 64,
+      "free_run_token_cap": 1536,
+      "seeds": [
+        42,
+        43,
+        44
+      ],
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "all_other_source_metadata_and_continuations_unchanged": true
+    },
+    {
+      "source_job": "anomaly.sympy__sympy-13551.call1.onset",
+      "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-sympy13551-controls/sympy__sympy-13551.call1.onset.private.json",
+      "source_sha256": "f2806c4d025cc3a6da053df45a4bfcd6c3dba23bf2c31d7e892b78a957ae767b",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-83/anomaly.sympy__sympy-13551.call1.onset.suffix512.private.json",
+      "case_sha256": "7dfc679b3721d35d2aa88f130d38a810fe9c8abc3653ea42ae8d9f604cda323e",
+      "source_prompt_tokens": 1217,
+      "source_suffix_range": {
+        "start_inclusive": 705,
+        "end_exclusive": 1217
+      },
+      "prompt_tokens": 512,
+      "teacher_forcing_positions": 64,
+      "free_run_token_cap": 1536,
+      "seeds": [
+        42,
+        43,
+        44
+      ],
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "all_other_source_metadata_and_continuations_unchanged": true
+    },
+    {
+      "source_job": "anomaly.psf__requests-1921.call1.onset",
+      "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-getall-call1-controls/psf__requests-1921.call1.onset.private.json",
+      "source_sha256": "ba91bfa87c059b14b4385dcf00dd1e20390c87e320990104fd328ccb18f4d863",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-83/anomaly.psf__requests-1921.call1.onset.suffix512.private.json",
+      "case_sha256": "0b13e09b873e071b9975737522d81697d724a66f58b2b872088ae5c88a000ee4",
+      "source_prompt_tokens": 1235,
+      "source_suffix_range": {
+        "start_inclusive": 723,
+        "end_exclusive": 1235
+      },
+      "prompt_tokens": 512,
+      "teacher_forcing_positions": 18,
+      "free_run_token_cap": 1536,
+      "seeds": [
+        42,
+        43,
+        44
+      ],
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "all_other_source_metadata_and_continuations_unchanged": true
+    },
+    {
+      "source_job": "anomaly.sympy__sympy-18763.call1.onset",
+      "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-18763-7432-controls/sympy__sympy-18763.call1.onset.private.json",
+      "source_sha256": "103660810451ddcc930c5b818de9eed1e054d0df02f3b6601b0fb142e6aed3f3",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-83/anomaly.sympy__sympy-18763.call1.onset.suffix512.private.json",
+      "case_sha256": "c7057cab42d95c712396411defa32418d5b41241336190298bbc613f63724eed",
+      "source_prompt_tokens": 1254,
+      "source_suffix_range": {
+        "start_inclusive": 742,
+        "end_exclusive": 1254
+      },
+      "prompt_tokens": 512,
+      "teacher_forcing_positions": 64,
+      "free_run_token_cap": 1536,
+      "seeds": [
+        42,
+        43,
+        44
+      ],
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "all_other_source_metadata_and_continuations_unchanged": true
+    },
+    {
+      "source_job": "anomaly.pylint-dev__pylint-4551.call1.onset",
+      "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-getall-call1-controls/pylint-dev__pylint-4551.call1.onset.private.json",
+      "source_sha256": "34ad0af91e9d911cc9ac0e1bcb97d6adf7e3754df831a45af074c3bdba1fa369",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-83/anomaly.pylint-dev__pylint-4551.call1.onset.suffix512.private.json",
+      "case_sha256": "da8e58b48d850d342423be7a73a995b7dc797e6b82b0162c06ccce8b95d07696",
+      "source_prompt_tokens": 1263,
+      "source_suffix_range": {
+        "start_inclusive": 751,
+        "end_exclusive": 1263
+      },
+      "prompt_tokens": 512,
+      "teacher_forcing_positions": 18,
+      "free_run_token_cap": 1536,
+      "seeds": [
+        42,
+        43,
+        44
+      ],
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "all_other_source_metadata_and_continuations_unchanged": true
+    },
+    {
+      "source_job": "anomaly.sympy__sympy-14711.call1.onset",
+      "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-protocol-scan83-controls/sympy__sympy-14711.call1.onset.private.json",
+      "source_sha256": "30151a4ad6ba3f457477b50bbb7d8817b24944e8e57242c10b1f494f4697d6e5",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-83/anomaly.sympy__sympy-14711.call1.onset.suffix512.private.json",
+      "case_sha256": "f24c8b2fec1f309e214ae5d740f75600924f9b8b9bd011dfb9472a99306dd453",
+      "source_prompt_tokens": 1351,
+      "source_suffix_range": {
+        "start_inclusive": 839,
+        "end_exclusive": 1351
+      },
+      "prompt_tokens": 512,
+      "teacher_forcing_positions": 64,
+      "free_run_token_cap": 1536,
+      "seeds": [
+        42,
+        43,
+        44
+      ],
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "all_other_source_metadata_and_continuations_unchanged": true
+    },
+    {
+      "source_job": "anomaly.xarray7233-call1.canonicalprefix",
+      "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-precision/xarray7233-call1/canonicalprefix/case.private.json",
+      "source_sha256": "62b1bda540651c48e254900037080c96f8b179b3412ac1b8b962d3dd5c0c3661",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-83/anomaly.xarray7233-call1.canonicalprefix.suffix512.private.json",
+      "case_sha256": "0b2bde68e0a723c1ad110bbba8911c2a677dafc40a4bca9e010695860c7538b0",
+      "source_prompt_tokens": 1578,
+      "source_suffix_range": {
+        "start_inclusive": 1066,
+        "end_exclusive": 1578
+      },
+      "prompt_tokens": 512,
+      "teacher_forcing_positions": 64,
+      "free_run_token_cap": 1536,
+      "seeds": [
+        42,
+        43,
+        44
+      ],
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "all_other_source_metadata_and_continuations_unchanged": true
+    },
+    {
+      "source_job": "anomaly.sympy__sympy-13878.call1.onset",
+      "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-sympy13878-controls/sympy__sympy-13878.call1.onset.private.json",
+      "source_sha256": "8e2cae61d60bb364c79e2e651b3d3ffd992c094e14923ae258c9810d12da0439",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-83/anomaly.sympy__sympy-13878.call1.onset.suffix512.private.json",
+      "case_sha256": "fc7e505b1cc0bb906ee15b4f75ca6303c2188335491fb5495690ba3181eac78e",
+      "source_prompt_tokens": 1968,
+      "source_suffix_range": {
+        "start_inclusive": 1456,
+        "end_exclusive": 1968
+      },
+      "prompt_tokens": 512,
+      "teacher_forcing_positions": 16,
+      "free_run_token_cap": 1536,
+      "seeds": [
+        42,
+        43,
+        44
+      ],
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "all_other_source_metadata_and_continuations_unchanged": true
+    },
+    {
+      "source_job": "anomaly.sympy__sympy-18763.call10.onset",
+      "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-18763-7432-controls/sympy__sympy-18763.call10.onset.private.json",
+      "source_sha256": "c4f9cd2d30fa59235eb8207fc7d6675e8c8cd95b17b544458a44aaa0921f43a6",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-83/anomaly.sympy__sympy-18763.call10.onset.suffix512.private.json",
+      "case_sha256": "80774ba6724a050c5994cf6053bfe3c404516327b34a67561826b3c73bfbb67b",
+      "source_prompt_tokens": 5846,
+      "source_suffix_range": {
+        "start_inclusive": 5334,
+        "end_exclusive": 5846
+      },
+      "prompt_tokens": 512,
+      "teacher_forcing_positions": 34,
+      "free_run_token_cap": 1536,
+      "seeds": [
+        42,
+        43,
+        44
+      ],
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "all_other_source_metadata_and_continuations_unchanged": true
+    },
+    {
+      "source_job": "anomaly.requests2931.call20.canonicalprefix",
+      "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-precision/requests2931-call20/canonicalprefix/case.private.json",
+      "source_sha256": "7f527603e08f61f5516745fc2fab496c6ae7020985372c8f71fd0459895c10f0",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-83/anomaly.requests2931.call20.canonicalprefix.suffix512.private.json",
+      "case_sha256": "da599c3fe62bc64633d87f367401c0d8b78eafbc7e277ba5a1f496003b8c294b",
+      "source_prompt_tokens": 8580,
+      "source_suffix_range": {
+        "start_inclusive": 8068,
+        "end_exclusive": 8580
+      },
+      "prompt_tokens": 512,
+      "teacher_forcing_positions": 64,
+      "free_run_token_cap": 1536,
+      "seeds": [
+        42,
+        43,
+        44
+      ],
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "all_other_source_metadata_and_continuations_unchanged": true
+    },
+    {
+      "source_job": "anomaly.pytest-dev__pytest-5787.call1.onset",
+      "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-pytest5787-controls/pytest-dev__pytest-5787.call1.onset.private.json",
+      "source_sha256": "198ec73ad83296c21c93e0484d12b52717c6803b9ae7ea0131dcfac76f6ae3af",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-83/anomaly.pytest-dev__pytest-5787.call1.onset.suffix512.private.json",
+      "case_sha256": "45809fd7029539cce1182a2019bdb19ff7ea2fde2fb09e4f804d0012fbc9aba4",
+      "source_prompt_tokens": 9606,
+      "source_suffix_range": {
+        "start_inclusive": 9094,
+        "end_exclusive": 9606
+      },
+      "prompt_tokens": 512,
+      "teacher_forcing_positions": 64,
+      "free_run_token_cap": 1536,
+      "seeds": [
+        42,
+        43,
+        44
+      ],
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "all_other_source_metadata_and_continuations_unchanged": true
+    },
+    {
+      "source_job": "anomaly.pytest-dev__pytest-7432.call19.onset",
+      "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-18763-7432-controls/pytest-dev__pytest-7432.call19.onset.private.json",
+      "source_sha256": "436bf8f06cebc27f9ac206ab4c85c655b2c707145be67b8341f14288370807f5",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-83/anomaly.pytest-dev__pytest-7432.call19.onset.suffix512.private.json",
+      "case_sha256": "4c0d24b850f843d3b357e44036bf49b04fbca15c69e69a93cfd513098ce855d7",
+      "source_prompt_tokens": 11095,
+      "source_suffix_range": {
+        "start_inclusive": 10583,
+        "end_exclusive": 11095
+      },
+      "prompt_tokens": 512,
+      "teacher_forcing_positions": 64,
+      "free_run_token_cap": 1536,
+      "seeds": [
+        42,
+        43,
+        44
+      ],
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "all_other_source_metadata_and_continuations_unchanged": true
+    },
+    {
+      "source_job": "anomaly.pytest10356-call14.canonicalprefix",
+      "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-precision/pytest10356-call14/canonicalprefix/case.private.json",
+      "source_sha256": "07b45f8cd1bf0b42a6b7114dbf180eb5a1b0e4a31a80c1d3817660b24d50f71e",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-83/anomaly.pytest10356-call14.canonicalprefix.suffix512.private.json",
+      "case_sha256": "d89b2739ebc134cde4361ecd2775dbda638837cd604ca62fa899218bbf8d73ba",
+      "source_prompt_tokens": 11309,
+      "source_suffix_range": {
+        "start_inclusive": 10797,
+        "end_exclusive": 11309
+      },
+      "prompt_tokens": 512,
+      "teacher_forcing_positions": 28,
+      "free_run_token_cap": 1536,
+      "seeds": [
+        42,
+        43,
+        44
+      ],
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "all_other_source_metadata_and_continuations_unchanged": true
+    },
+    {
+      "source_job": "anomaly.scikit-learn__scikit-learn-13135.call29.onset",
+      "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-extra-contraction-controls/scikit-learn__scikit-learn-13135.call29.onset.private.json",
+      "source_sha256": "1403d7a48b7ecca8ec2095479c77a871caa3add09bedd7f6830d36315a883bd2",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-83/anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix512.private.json",
+      "case_sha256": "8d0aec57f2bd9a9ef4b8e56f88aaa6508c98a5659d2ed339516dc617c2c6d499",
+      "source_prompt_tokens": 17395,
+      "source_suffix_range": {
+        "start_inclusive": 16883,
+        "end_exclusive": 17395
+      },
+      "prompt_tokens": 512,
+      "teacher_forcing_positions": 64,
+      "free_run_token_cap": 1536,
+      "seeds": [
+        42,
+        43,
+        44
+      ],
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "all_other_source_metadata_and_continuations_unchanged": true
+    },
+    {
+      "source_job": "anomaly.sphinx-doc__sphinx-11510.call28.onset",
+      "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-sphinx11510-controls/sphinx-doc__sphinx-11510.call28.onset.private.json",
+      "source_sha256": "27d9b5a053a0a02b97cd38585870c83a8b4dfd1c8da2acdcec68071bf592e57e",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-83/anomaly.sphinx-doc__sphinx-11510.call28.onset.suffix512.private.json",
+      "case_sha256": "602290c2012fa5f844ca198de6ef4dfb26a481d968840d473e5c98899c61c700",
+      "source_prompt_tokens": 25118,
+      "source_suffix_range": {
+        "start_inclusive": 24606,
+        "end_exclusive": 25118
+      },
+      "prompt_tokens": 512,
+      "teacher_forcing_positions": 64,
+      "free_run_token_cap": 1536,
+      "seeds": [
+        42,
+        43,
+        44
+      ],
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "all_other_source_metadata_and_continuations_unchanged": true
+    },
+    {
+      "source_job": "anomaly.xarray3095-call53.canonicalprefix",
+      "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-precision/xarray3095-call53/canonicalprefix/case.private.json",
+      "source_sha256": "5d0644f31e453280e572402aed27346ca307323d7763d5762b7d9ab74f10a723",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-83/anomaly.xarray3095-call53.canonicalprefix.suffix512.private.json",
+      "case_sha256": "e5a44edfb70ad811634f466fbdd443a59885c9e96361c091b93879fbd17c3a51",
+      "source_prompt_tokens": 33233,
+      "source_suffix_range": {
+        "start_inclusive": 32721,
+        "end_exclusive": 33233
+      },
+      "prompt_tokens": 512,
+      "teacher_forcing_positions": 22,
+      "free_run_token_cap": 1536,
+      "seeds": [
+        42,
+        43,
+        44
+      ],
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "all_other_source_metadata_and_continuations_unchanged": true
+    },
+    {
+      "source_job": "anomaly.pylint-dev__pylint-4604.call45.onset",
+      "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-extra-contraction-controls/pylint-dev__pylint-4604.call45.onset.private.json",
+      "source_sha256": "ce0cbc8b5fd000b397c01d2e62b16764bccf0bfd113b7e7ce884b992f2a8a42b",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-83/anomaly.pylint-dev__pylint-4604.call45.onset.suffix512.private.json",
+      "case_sha256": "4f929fa2098280a3d7c9e9f38a7a3a294d4ea69bde1c8b999ef2737f2d2c5e2d",
+      "source_prompt_tokens": 37057,
+      "source_suffix_range": {
+        "start_inclusive": 36545,
+        "end_exclusive": 37057
+      },
+      "prompt_tokens": 512,
+      "teacher_forcing_positions": 54,
+      "free_run_token_cap": 1536,
+      "seeds": [
+        42,
+        43,
+        44
+      ],
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "all_other_source_metadata_and_continuations_unchanged": true
+    },
+    {
+      "source_job": "anomaly.matplotlib__matplotlib-20488.call82.onset",
+      "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-protocol-scan83-controls/matplotlib__matplotlib-20488.call82.onset.private.json",
+      "source_sha256": "e89e80916d35a6acbbedaa4a14e693bbc381e976191406bbf122db0fadc532ca",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-83/anomaly.matplotlib__matplotlib-20488.call82.onset.suffix512.private.json",
+      "case_sha256": "d7561d141964e3e97deedcfdbb2fb6b17128b89b8f9c08a12e6f30bd8a6f6d6d",
+      "source_prompt_tokens": 44428,
+      "source_suffix_range": {
+        "start_inclusive": 43916,
+        "end_exclusive": 44428
+      },
+      "prompt_tokens": 512,
+      "teacher_forcing_positions": 64,
+      "free_run_token_cap": 1536,
+      "seeds": [
+        42,
+        43,
+        44
+      ],
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "all_other_source_metadata_and_continuations_unchanged": true
+    },
+    {
+      "source_job": "anomaly.matplotlib__matplotlib-20488.call86.onset",
+      "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-protocol-scan83-controls/matplotlib__matplotlib-20488.call86.onset.private.json",
+      "source_sha256": "c11bb5890af7b0166bbbb61c44a3200e58aa3eb4b509403759fbb162ae58d179",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-83/anomaly.matplotlib__matplotlib-20488.call86.onset.suffix512.private.json",
+      "case_sha256": "048dce6717d337f35ac0e7af5a9661e2f1470bc894a53437c07ffd0abb584bd7",
+      "source_prompt_tokens": 46118,
+      "source_suffix_range": {
+        "start_inclusive": 45606,
+        "end_exclusive": 46118
+      },
+      "prompt_tokens": 512,
+      "teacher_forcing_positions": 64,
+      "free_run_token_cap": 1536,
+      "seeds": [
+        42,
+        43,
+        44
+      ],
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "all_other_source_metadata_and_continuations_unchanged": true
+    },
+    {
+      "source_job": "anomaly.call88.canonicalprefix",
+      "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-precision/call88/canonicalprefix/case.private.json",
+      "source_sha256": "72f3e9c534720245f42e4002c624360e57e1b5c147d96c30ffe52fe948e1fc7d",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-83/anomaly.call88.canonicalprefix.suffix512.private.json",
+      "case_sha256": "8153b0fba472a5011fe5d3126dc8a6eb9522fa0952f3ad02197ffc7bc8cb3299",
+      "source_prompt_tokens": 47038,
+      "source_suffix_range": {
+        "start_inclusive": 46526,
+        "end_exclusive": 47038
+      },
+      "prompt_tokens": 512,
+      "teacher_forcing_positions": 64,
+      "free_run_token_cap": 1536,
+      "seeds": [
+        42,
+        43,
+        44
+      ],
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "all_other_source_metadata_and_continuations_unchanged": true
+    },
+    {
+      "source_job": "anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset",
+      "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-sphinx11510-protocol-controls/sphinx-doc__sphinx-11510.call86.onset.private.json",
+      "source_sha256": "0f5f2fc54d5863761ed3ecaa8f593937a0ad4ae0d785e059f3adc51bc3cba892",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-83/anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.suffix512.private.json",
+      "case_sha256": "023747e0f78f4ff460d89b9eb2ab1fd0b3148747c0286d08aa1b114d1110c715",
+      "source_prompt_tokens": 47548,
+      "source_suffix_range": {
+        "start_inclusive": 47036,
+        "end_exclusive": 47548
+      },
+      "prompt_tokens": 512,
+      "teacher_forcing_positions": 64,
+      "free_run_token_cap": 1536,
+      "seeds": [
+        42,
+        43,
+        44
+      ],
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "all_other_source_metadata_and_continuations_unchanged": true
+    },
+    {
+      "source_job": "anomaly.call91.canonicalprefix",
+      "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-precision/call91/canonicalprefix/case.private.json",
+      "source_sha256": "3d32de201c14cf805635d3e38fafc2ff220202aded67b71861e16df4fbdf9180",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-83/anomaly.call91.canonicalprefix.suffix512.private.json",
+      "case_sha256": "9960a99234a6dbf604296077ed1a0a9bc3536b759efd5706d0b26ee18bedf995",
+      "source_prompt_tokens": 48411,
+      "source_suffix_range": {
+        "start_inclusive": 47899,
+        "end_exclusive": 48411
+      },
+      "prompt_tokens": 512,
+      "teacher_forcing_positions": 64,
+      "free_run_token_cap": 1536,
+      "seeds": [
+        42,
+        43,
+        44
+      ],
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "all_other_source_metadata_and_continuations_unchanged": true
+    },
+    {
+      "source_job": "anomaly.pytest-dev__pytest-5787.call65.onset",
+      "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-pytest5787-controls/pytest-dev__pytest-5787.call65.onset.private.json",
+      "source_sha256": "d4470a4dd919a2e81683e8d17339d2a237ab7399409b70ed45e8bf5c9127a2e6",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-83/anomaly.pytest-dev__pytest-5787.call65.onset.suffix512.private.json",
+      "case_sha256": "b704a720d76d293bc22c0c6c1e78e35577f6f8c2cfe8ef411825f39ce8f3292f",
+      "source_prompt_tokens": 53684,
+      "source_suffix_range": {
+        "start_inclusive": 53172,
+        "end_exclusive": 53684
+      },
+      "prompt_tokens": 512,
+      "teacher_forcing_positions": 64,
+      "free_run_token_cap": 1536,
+      "seeds": [
+        42,
+        43,
+        44
+      ],
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "all_other_source_metadata_and_continuations_unchanged": true
+    },
+    {
+      "source_job": "anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset",
+      "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-sphinx11510-protocol-controls/sphinx-doc__sphinx-11510.call95.onset.private.json",
+      "source_sha256": "f8d568443212982a955027d82b1efa79f34d906acc58017d0ab537dbe378e0b4",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-83/anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.suffix512.private.json",
+      "case_sha256": "6956782a16207c8c09aea09fb1c6598d70247eceba4ee5f0ff15867f89dd3081",
+      "source_prompt_tokens": 55438,
+      "source_suffix_range": {
+        "start_inclusive": 54926,
+        "end_exclusive": 55438
+      },
+      "prompt_tokens": 512,
+      "teacher_forcing_positions": 64,
+      "free_run_token_cap": 1536,
+      "seeds": [
+        42,
+        43,
+        44
+      ],
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "all_other_source_metadata_and_continuations_unchanged": true
+    },
+    {
+      "source_job": "anomaly.sphinx-doc__sphinx-10323.call57.onset",
+      "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-extra-contraction-controls/sphinx-doc__sphinx-10323.call57.onset.private.json",
+      "source_sha256": "9870b7562fa8d43d828bf29c4da37d7bfd294a39809044e442a628e7d418d404",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-83/anomaly.sphinx-doc__sphinx-10323.call57.onset.suffix512.private.json",
+      "case_sha256": "65be25784f4c74b66aceb37483c31e7becf7b084786eda68efbcd038132944a1",
+      "source_prompt_tokens": 58695,
+      "source_suffix_range": {
+        "start_inclusive": 58183,
+        "end_exclusive": 58695
+      },
+      "prompt_tokens": 512,
+      "teacher_forcing_positions": 64,
+      "free_run_token_cap": 1536,
+      "seeds": [
+        42,
+        43,
+        44
+      ],
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "all_other_source_metadata_and_continuations_unchanged": true
+    },
+    {
+      "source_job": "anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset",
+      "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-sphinx11510-contraction101-controls/sphinx-doc__sphinx-11510.call101.onset.private.json",
+      "source_sha256": "54cd79a3e542f7af7063ff77484cec0a2e213e9baa95ef5c5cc2276ff4c39995",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-83/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.suffix512.private.json",
+      "case_sha256": "2a6e7c002d421f8a0a8bff1c4740e340c6ee4d307f459549f92734cda12fa62a",
+      "source_prompt_tokens": 58982,
+      "source_suffix_range": {
+        "start_inclusive": 58470,
+        "end_exclusive": 58982
+      },
+      "prompt_tokens": 512,
+      "teacher_forcing_positions": 64,
+      "free_run_token_cap": 1536,
+      "seeds": [
+        42,
+        43,
+        44
+      ],
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "all_other_source_metadata_and_continuations_unchanged": true
+    },
+    {
+      "source_job": "anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset",
+      "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-sphinx11510-protocol-controls/sphinx-doc__sphinx-11510.call101.onset.private.json",
+      "source_sha256": "e940e736fad1b9ac133cd217d6163ea3ba1cdb01380471e0a9b77a35afb9f1c2",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-83/anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset.suffix512.private.json",
+      "case_sha256": "8a34a7caa3f765bef8b6e90508a3d7d80ef49fa887c5dd0d03acca2a3e22fe2b",
+      "source_prompt_tokens": 59716,
+      "source_suffix_range": {
+        "start_inclusive": 59204,
+        "end_exclusive": 59716
+      },
+      "prompt_tokens": 512,
+      "teacher_forcing_positions": 64,
+      "free_run_token_cap": 1536,
+      "seeds": [
+        42,
+        43,
+        44
+      ],
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "all_other_source_metadata_and_continuations_unchanged": true
+    },
+    {
+      "source_job": "anomaly.sphinx-doc__sphinx-11510.call108.onset",
+      "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-sphinx11510-controls/sphinx-doc__sphinx-11510.call108.onset.private.json",
+      "source_sha256": "6efd3333b509e5dc6fe9c28b96829c345056cb2dc88538f0324b5fbce8ecb724",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-83/anomaly.sphinx-doc__sphinx-11510.call108.onset.suffix512.private.json",
+      "case_sha256": "7a4f709084d3f2da3de4d0d9fd34ae91ddc9cd196447ea42e8b24a901205d226",
+      "source_prompt_tokens": 62453,
+      "source_suffix_range": {
+        "start_inclusive": 61941,
+        "end_exclusive": 62453
+      },
+      "prompt_tokens": 512,
+      "teacher_forcing_positions": 64,
+      "free_run_token_cap": 1536,
+      "seeds": [
+        42,
+        43,
+        44
+      ],
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "all_other_source_metadata_and_continuations_unchanged": true
+    },
+    {
+      "source_job": "anomaly.sphinx-doc__sphinx-10323.call68.onset",
+      "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-sphinx10323-controls/sphinx-doc__sphinx-10323.call68.onset.private.json",
+      "source_sha256": "2d726d2a43b0678df8fb3d931ffda87277954bf9599424c4140394c669cfa103",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-83/anomaly.sphinx-doc__sphinx-10323.call68.onset.suffix512.private.json",
+      "case_sha256": "576a02f7e59f8793cf308ca08c81ef342483ffa2a7e9389e034f4c798bec827e",
+      "source_prompt_tokens": 64509,
+      "source_suffix_range": {
+        "start_inclusive": 63997,
+        "end_exclusive": 64509
+      },
+      "prompt_tokens": 512,
+      "teacher_forcing_positions": 64,
+      "free_run_token_cap": 1536,
+      "seeds": [
+        42,
+        43,
+        44
+      ],
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "all_other_source_metadata_and_continuations_unchanged": true
+    },
+    {
+      "source_job": "anomaly.sphinx-doc__sphinx-10323.call70.onset",
+      "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-extra-contraction-controls/sphinx-doc__sphinx-10323.call70.onset.private.json",
+      "source_sha256": "7d39e2c87e91327f35317968bf2647887a402d0086085ec8f95db8ff5fc2ab64",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-83/anomaly.sphinx-doc__sphinx-10323.call70.onset.suffix512.private.json",
+      "case_sha256": "77eeb6611bae6a040724b94267c60d4d7090094c748eab01610e538e7084ea6b",
+      "source_prompt_tokens": 65779,
+      "source_suffix_range": {
+        "start_inclusive": 65267,
+        "end_exclusive": 65779
+      },
+      "prompt_tokens": 512,
+      "teacher_forcing_positions": 37,
+      "free_run_token_cap": 1536,
+      "seeds": [
+        42,
+        43,
+        44
+      ],
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "all_other_source_metadata_and_continuations_unchanged": true
+    },
+    {
+      "source_job": "anomaly.sphinx-doc__sphinx-9461.call184.onset",
+      "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-protocol-scan83-controls/sphinx-doc__sphinx-9461.call184.onset.private.json",
+      "source_sha256": "4334a4d9557ddbd3e9fd41ff8caaa073d270ae45c2498827c511a23ae60caac3",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-83/anomaly.sphinx-doc__sphinx-9461.call184.onset.suffix512.private.json",
+      "case_sha256": "93a4b5880c3774e9adce6bb1b4942f429e4c0e7f820208b435f0b15c02c3c06f",
+      "source_prompt_tokens": 71843,
+      "source_suffix_range": {
+        "start_inclusive": 71331,
+        "end_exclusive": 71843
+      },
+      "prompt_tokens": 512,
+      "teacher_forcing_positions": 64,
+      "free_run_token_cap": 1536,
+      "seeds": [
+        42,
+        43,
+        44
+      ],
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "all_other_source_metadata_and_continuations_unchanged": true
+    },
+    {
+      "source_job": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset",
+      "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-sphinx11510-protocol-controls/sphinx-doc__sphinx-11510.call119.onset.private.json",
+      "source_sha256": "2fa92bb645e64f5d0eaa239cd27b5438d1f31554d71f37e6eb7e501ab5df0e55",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-83/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.suffix512.private.json",
+      "case_sha256": "4b76cdb2eb68532102ec3d21db11ed072a03bdb742bb2cfe1e79c3c276c4b739",
+      "source_prompt_tokens": 76441,
+      "source_suffix_range": {
+        "start_inclusive": 75929,
+        "end_exclusive": 76441
+      },
+      "prompt_tokens": 512,
+      "teacher_forcing_positions": 64,
+      "free_run_token_cap": 1536,
+      "seeds": [
+        42,
+        43,
+        44
+      ],
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "all_other_source_metadata_and_continuations_unchanged": true
+    }
+  ],
+  "cpu_schema_validation": [
+    {
+      "mode": "served",
+      "config": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/head_bfp8_build_kwargs.json",
+      "config_sha256": "2e583fa8bd7aff7c5f8be110835df751924d167243c5a44a68aa5b3d70c6845f",
+      "command": [
+        "python_env/bin/python",
+        "-m",
+        "models.autoports.google_gemma_4_31b_it.tools.precision_repro_batch",
+        "--cases",
+        "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-83/candidate-cases.json",
+        "--build-kwargs-file",
+        "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/head_bfp8_build_kwargs.json",
+        "--output-dir",
+        "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-83/UNADMITTED-served",
+        "--validate-only"
+      ],
+      "exit_code": 0,
+      "stdout": "Validated 32 jobs without importing TTNN"
+    },
+    {
+      "mode": "full",
+      "config": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_build_kwargs.json",
+      "config_sha256": "ff2b5ed24e0b6a1dee7eb5cd8bd437d17c3df5f8f25567927d239e666f0699f9",
+      "command": [
+        "python_env/bin/python",
+        "-m",
+        "models.autoports.google_gemma_4_31b_it.tools.precision_repro_batch",
+        "--cases",
+        "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-83/candidate-cases.json",
+        "--build-kwargs-file",
+        "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_build_kwargs.json",
+        "--output-dir",
+        "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-83/UNADMITTED-full",
+        "--validate-only"
+      ],
+      "exit_code": 0,
+      "stdout": "Validated 32 jobs without importing TTNN"
+    }
+  ],
+  "inference_executed": false,
+  "admitted_manifests_modified": false,
+  "original_source_hashes_unchanged": true,
+  "added_work_per_precision_if_admitted": {
+    "teacher_forcing_positions": 1763,
+    "free_run_token_cap": 49152,
+    "prefill_input_tokens_proxy": 65536,
+    "prefill_calls_proxy": 128,
+    "same_jobs_with_original_prefix_prefill_input_tokens_proxy": 4125452,
+    "ratio_suffix_to_original_prefill_tokens": 0.015885774455744486
+  },
+  "added_work_two_TT_precisions_if_both_admitted": {
+    "teacher_forcing_positions": 3526,
+    "free_run_token_cap": 98304,
+    "prefill_input_tokens_proxy": 131072
+  },
+  "estimate_limits": "Token-count proxy only, not wall-time or measured throughput. Free-run values are caps and may stop early. No HF execution plan or host weight load authorized. Full-prefix originals remain authoritative; no effect on admitted manifests.",
+  "gate": "Matched TT suffix must reproduce source anomaly before conditional HF suffix comparison; negative suffix result is inconclusive for full prefix."
+}

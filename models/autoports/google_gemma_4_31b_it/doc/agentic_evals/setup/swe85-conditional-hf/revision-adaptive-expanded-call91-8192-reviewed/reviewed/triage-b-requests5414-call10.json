@@ -1,0 +1,77 @@
+{
+  "job": "anomaly.psf__requests-5414.call10.onset",
+  "mode": "conditional_hf_cpu_suffix4096",
+  "seed": 42,
+  "verdict": "reproduced_native_motif",
+  "evidence": {
+    "hf_result": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/results/requests10-cap4096-seed42/anomaly.psf__requests-5414.call10.onset.suffix4096.seed42.hf.private.json",
+      "sha256": "c4409f7bea3f5af2a80a4f5ee8162e0e282a265ae4b0abb5a5731adff64d275b",
+      "status": "complete",
+      "case_sha256": "3d9d27b333ad2e1c1db496e1f2e2d27e7aa721a6b8b5425bd15a3374339f2986",
+      "revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+      "device": "cpu",
+      "weights_dtype": "bfloat16",
+      "prompt_tokens": 4096,
+      "prompt_source": "Saved prompt_token_ids, no chat rerender",
+      "results[0].seed": 42,
+      "results[0].generated_tokens": 512,
+      "results[0].streamed_generated_tokens": 512,
+      "results[0].unique_generated_token_ids": 1,
+      "results[0].generated_token_id": 172109,
+      "results[0].text_chars": 2048,
+      "results[0].text_all_carets": true,
+      "results[0].tail_ratio": 0.01123046875,
+      "results[0].tail_distinct": 1,
+      "results[0].flag": true,
+      "results[0].wall_s": 1917.0624897568487,
+      "total_wall_s": 2047.0404443230946,
+      "case_metadata.call": 10,
+      "case_metadata.onset_token_index": 188,
+      "case_metadata.motif": "^^^^",
+      "case_metadata.native_completion_tokens": 32768,
+      "case_metadata.native_seed": null,
+      "case_metadata.sampling": {"temperature": 1.0, "top_p": 0.95, "top_k": 20}
+    },
+    "fixture": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/fixtures/anomaly.psf__requests-5414.call10.onset.suffix4096.seed42.full.private.json",
+      "sha256": "3d9d27b333ad2e1c1db496e1f2e2d27e7aa721a6b8b5425bd15a3374339f2986",
+      "prompt_ids": 4096,
+      "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-requests5414-caret-controls/psf__requests-5414.call10.onset.private.json",
+      "source_case_sha256": "38cba2429d022e64133da2c34388d9e88a9b26b82ec58594153692842dccb961",
+      "source_prompt_ids": 7057,
+      "source_prompt_ids_sha256": "5346b81d58f2029b22b8a4887460124cb3e0dc81dd992648ba498f2df7dd8428",
+      "exact_suffix_slice": "source prompt_token_ids[2961:7057]",
+      "suffix_ids_match_source": true,
+      "source_metadata_native_prompt_tokens": 6870,
+      "source_metadata_reconstructed_prompt_tokens": 6869,
+      "scope_caveat": "This tests only the exact last4096 IDs of the reconstructed source context, not the original full native context. Native IDs and native seed are unavailable; diagnostic seed42 is not a native RNG replay."
+    },
+    "matched_tt": {
+      "served": {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/runs/served/anomaly.psf__requests-5414.call10.onset.suffix4096.seed42.json",
+        "sha256": "838d6b3173888be66eec79851c6219bd72c4bdfb79b5d4232963d2b12a380491",
+        "seed": 42,
+        "tokens": 512,
+        "text_chars": 2041,
+        "all_carets": false,
+        "ending": "progresses into URL/IDNA reasoning",
+        "sampling": {"temperature": 1.0, "top_p": 0.95, "top_k": 20},
+        "runtime_precision": {"config_id": "stage12_head_bfp8_lofi", "weight_groups": {"attention": "bfp4", "mlp": "bfp4", "down": "bfp4", "lm_head": "bfp8_lofi"}, "compute_fidelities": {"attention": "LoFi", "mlp": "LoFi", "down": "LoFi", "lm_head": "LoFi"}}
+      },
+      "full": {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/runs/full/anomaly.psf__requests-5414.call10.onset.suffix4096.seed42.json",
+        "sha256": "eeda97d1c40d60a68d6d5a390247b0e25a80b7fc2ef62ba61005d2cfe917b6e5",
+        "seed": 42,
+        "tokens": 512,
+        "text_all_carets": true,
+        "sampling": {"temperature": 1.0, "top_p": 0.95, "top_k": 20},
+        "runtime_precision": {"config_id": "stage12_bf16_hifi4_diagnostic", "weight_groups": {"attention": "bf16", "mlp": "bf16", "down": "bf16", "lm_head": "bf16"}, "compute_fidelities": {"attention": "HiFi4", "mlp": "HiFi4", "down": "HiFi4", "lm_head": "HiFi4"}}
+      },
+      "hf_teacher_forcing_comparisons": {"served_positions": 64, "served_top1_agreement": 1.0, "served_position0_logprob_delta_hf_minus_tt": 0.000008463809990644222, "full_positions": 64, "full_top1_agreement": 1.0, "full_position0_logprob_delta_hf_minus_tt": -0.00000023841823804104934}
+    },
+    "native_motif": "The source onset is the pathological caret run (`motif` `^^^^`, onset token index188) and the native response reached its32768-token cap. HF produces only caret token172109 for all512 generated tokens, exactly matching the same-seed full TT suffix output. Served TT begins with carets but transitions into IDNA discussion by the end of its512-token run."
+  },
+  "confidence": "high that the native repeated-caret motif persists on the shortened4096-token suffix and matches the same-seed full-TT output; no claim about the served continuation or original full-context cause",
+  "cap_notes": "HF is still in the caret-only run at 512/512 with no stop, so the motif is decisively present and no further cap extension is needed merely to establish persistence on this suffix. Trial wall1917.062490s; runner cumulative2047.040444s; group wall2051.112951s, inside the 1380–4980 forecast. CPU HF uses BF16 weights; matched served TT uses BFP8-LoFi lm_head/BFP4-LoFi other groups and matched full TT uses BF16/HiFi4 throughout. All use diagnostic seed42 and T1/top_p.95/top_k20, but HF RNG is not identical to TT and native seed is absent. This supplementary shortened-context test is not exact native replay, a complete-turn replay, a task-solution result, or a causal stack diagnosis. No command/inference/device action was performed."
+}

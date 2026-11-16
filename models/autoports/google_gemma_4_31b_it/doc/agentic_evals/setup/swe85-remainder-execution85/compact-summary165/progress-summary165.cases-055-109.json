@@ -1,0 +1,3697 @@
+[
+  {
+    "name": "fullreply.astropy__astropy-7336.call18",
+    "task": "astropy__astropy-7336",
+    "call": 18,
+    "group": "rest",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/astropy__astropy-7336.call18.case.private.json",
+    "case_sha256": "1054cc464c0237ed62d48564788d77e703e638a53babbd1a1503f9df4b728371",
+    "served": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.astropy__astropy-7336.call18.json",
+      "runtime_config_id": "stage12_head_bfp8_lofi",
+      "wall_s": 18.689830329967663,
+      "branches": {
+        "chosen": {
+          "tokens": 479,
+          "top1_matches_forced_fraction": 0.8768267223382046,
+          "sequence_log_probability": -190.1702577090477,
+          "mean_token_log_probability": -0.39701515179341895,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 18.684955609962344
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "full": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.astropy__astropy-7336.call18.json",
+      "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+      "wall_s": 34.4999835700728,
+      "branches": {
+        "chosen": {
+          "tokens": 479,
+          "top1_matches_forced_fraction": 0.8538622129436325,
+          "sequence_log_probability": -242.73751993073157,
+          "mean_token_log_probability": -0.5067589142603999,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 34.49362803599797
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "comparison_status": "verified",
+    "comparison": {
+      "chosen": {
+        "tokens": 479,
+        "top1_agreement": 0.918580375782881,
+        "served_sequence_log_probability": -190.1702577090477,
+        "full_sequence_log_probability": -242.73751993073157
+      }
+    }
+  },
+  {
+    "name": "fullreply.sympy__sympy-13878.call29",
+    "task": "sympy__sympy-13878",
+    "call": 29,
+    "group": "rest",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-update16/sympy__sympy-13878.call29.case.private.json",
+    "case_sha256": "81381621f069f56a0f25c560deea4d019f0ec2e2d52b8e3101e89113635ea2a4",
+    "served": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.sympy__sympy-13878.call29.json",
+      "runtime_config_id": "stage12_head_bfp8_lofi",
+      "wall_s": 3.2690633069723845,
+      "branches": {
+        "chosen": {
+          "tokens": 41,
+          "top1_matches_forced_fraction": 0.8048780487804879,
+          "sequence_log_probability": -45.76527398944665,
+          "mean_token_log_probability": -1.1162261948645524,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 3.2666030938271433
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "full": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.sympy__sympy-13878.call29.json",
+      "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+      "wall_s": 6.059461343102157,
+      "branches": {
+        "chosen": {
+          "tokens": 41,
+          "top1_matches_forced_fraction": 0.8292682926829268,
+          "sequence_log_probability": -49.713569077038144,
+          "mean_token_log_probability": -1.2125260750497109,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 6.055890936171636
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "comparison_status": "verified",
+    "comparison": {
+      "chosen": {
+        "tokens": 41,
+        "top1_agreement": 0.926829268292683,
+        "served_sequence_log_probability": -45.76527398944665,
+        "full_sequence_log_probability": -49.713569077038144
+      }
+    }
+  },
+  {
+    "name": "fullreply.astropy__astropy-14096.call23",
+    "task": "astropy__astropy-14096",
+    "call": 23,
+    "group": "rest",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/astropy__astropy-14096.call23.case.private.json",
+    "case_sha256": "d14048b5af9a857c576641112f5708343871913db9c8be8fcc73e2522bd0314f",
+    "served": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.astropy__astropy-14096.call23.json",
+      "runtime_config_id": "stage12_head_bfp8_lofi",
+      "wall_s": 27.951670963084325,
+      "branches": {
+        "chosen": {
+          "tokens": 725,
+          "top1_matches_forced_fraction": 0.9006896551724138,
+          "sequence_log_probability": -233.8225235784603,
+          "mean_token_log_probability": -0.3225138256254625,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 27.94542673206888
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "full": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.astropy__astropy-14096.call23.json",
+      "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+      "wall_s": 51.13139444286935,
+      "branches": {
+        "chosen": {
+          "tokens": 725,
+          "top1_matches_forced_fraction": 0.8482758620689655,
+          "sequence_log_probability": -310.7012659353801,
+          "mean_token_log_probability": -0.4285534702556967,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 51.12383687309921
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "comparison_status": "verified",
+    "comparison": {
+      "chosen": {
+        "tokens": 725,
+        "top1_agreement": 0.9131034482758621,
+        "served_sequence_log_probability": -233.8225235784603,
+        "full_sequence_log_probability": -310.7012659353801
+      }
+    }
+  },
+  {
+    "name": "fullreply.pydata__xarray-6992.call16",
+    "task": "pydata__xarray-6992",
+    "call": 16,
+    "group": "rest",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/pydata__xarray-6992.call16.case.private.json",
+    "case_sha256": "d4e14b0c4b07b0a53b78addf31aff853a849a2afab5115e88e7fc0122d150665",
+    "served": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.pydata__xarray-6992.call16.json",
+      "runtime_config_id": "stage12_head_bfp8_lofi",
+      "wall_s": 33.955184152117,
+      "branches": {
+        "chosen": {
+          "tokens": 897,
+          "top1_matches_forced_fraction": 0.9342251950947603,
+          "sequence_log_probability": -185.7789104369176,
+          "mean_token_log_probability": -0.20711138287281786,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 33.948229596950114
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "full": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.pydata__xarray-6992.call16.json",
+      "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+      "wall_s": 62.86342830816284,
+      "branches": {
+        "chosen": {
+          "tokens": 897,
+          "top1_matches_forced_fraction": 0.9141583054626533,
+          "sequence_log_probability": -221.63140570878429,
+          "mean_token_log_probability": -0.24708071985371716,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 62.855120786931366
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "comparison_status": "verified",
+    "comparison": {
+      "chosen": {
+        "tokens": 897,
+        "top1_agreement": 0.9520624303232998,
+        "served_sequence_log_probability": -185.7789104369176,
+        "full_sequence_log_probability": -221.63140570878429
+      }
+    }
+  },
+  {
+    "name": "fullreply.pytest-dev__pytest-5787.call12",
+    "task": "pytest-dev__pytest-5787",
+    "call": 12,
+    "group": "rest",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-update2/pytest-dev__pytest-5787.call12.case.private.json",
+    "case_sha256": "ff0dcfd58e6f6d0d679d8cef7fc0858cf2e86c1c34540cc89d93959a3d051c13",
+    "served": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.pytest-dev__pytest-5787.call12.json",
+      "runtime_config_id": "stage12_head_bfp8_lofi",
+      "wall_s": 7.843444698024541,
+      "branches": {
+        "chosen": {
+          "tokens": 160,
+          "top1_matches_forced_fraction": 0.875,
+          "sequence_log_probability": -80.95818431693141,
+          "mean_token_log_probability": -0.5059886519808213,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 7.839470108039677
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "full": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.pytest-dev__pytest-5787.call12.json",
+      "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+      "wall_s": 14.585123769007623,
+      "branches": {
+        "chosen": {
+          "tokens": 160,
+          "top1_matches_forced_fraction": 0.83125,
+          "sequence_log_probability": -91.49251525652991,
+          "mean_token_log_probability": -0.5718282203533119,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 14.580499118892476
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "comparison_status": "verified",
+    "comparison": {
+      "chosen": {
+        "tokens": 160,
+        "top1_agreement": 0.925,
+        "served_sequence_log_probability": -80.95818431693141,
+        "full_sequence_log_probability": -91.49251525652991
+      }
+    }
+  },
+  {
+    "name": "fullreply.pytest-dev__pytest-10356.call14",
+    "task": "pytest-dev__pytest-10356",
+    "call": 14,
+    "group": "rest",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/pytest-dev__pytest-10356.call14.case.private.json",
+    "case_sha256": "8d17dc747ee414221522e0ce87c20f6eb364984d1c88646501fe742a0fe1d4a6",
+    "served": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.pytest-dev__pytest-10356.call14.json",
+      "runtime_config_id": "stage12_head_bfp8_lofi",
+      "wall_s": 4.228860068833455,
+      "branches": {
+        "chosen": {
+          "tokens": 56,
+          "top1_matches_forced_fraction": 0.8214285714285714,
+          "sequence_log_probability": -85.09044553301791,
+          "mean_token_log_probability": -1.5194722416610342,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 4.226076788967475
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "full": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.pytest-dev__pytest-10356.call14.json",
+      "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+      "wall_s": 7.849890528945252,
+      "branches": {
+        "chosen": {
+          "tokens": 56,
+          "top1_matches_forced_fraction": 0.8392857142857143,
+          "sequence_log_probability": -81.5108174591519,
+          "mean_token_log_probability": -1.4555503117705695,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 7.845669979928061
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "comparison_status": "verified",
+    "comparison": {
+      "chosen": {
+        "tokens": 56,
+        "top1_agreement": 0.8928571428571429,
+        "served_sequence_log_probability": -85.09044553301791,
+        "full_sequence_log_probability": -81.5108174591519
+      }
+    }
+  },
+  {
+    "name": "fullreply.astropy__astropy-13398.call17",
+    "task": "astropy__astropy-13398",
+    "call": 17,
+    "group": "rest",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/astropy__astropy-13398.call17.case.private.json",
+    "case_sha256": "86349f14e7463b534dc8892a717c22842cf57d041935375cdb23b765d0b911a4",
+    "served": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.astropy__astropy-13398.call17.json",
+      "runtime_config_id": "stage12_head_bfp8_lofi",
+      "wall_s": 35.56753128604032,
+      "branches": {
+        "chosen": {
+          "tokens": 928,
+          "top1_matches_forced_fraction": 0.9816810344827587,
+          "sequence_log_probability": -74.26434855794139,
+          "mean_token_log_probability": -0.08002623767019547,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 35.56045485683717
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "full": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.astropy__astropy-13398.call17.json",
+      "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+      "wall_s": 65.33236145181581,
+      "branches": {
+        "chosen": {
+          "tokens": 928,
+          "top1_matches_forced_fraction": 0.9762931034482759,
+          "sequence_log_probability": -87.805069519981,
+          "mean_token_log_probability": -0.09461753181032435,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 65.32371456199326
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "comparison_status": "verified",
+    "comparison": {
+      "chosen": {
+        "tokens": 928,
+        "top1_agreement": 0.9870689655172413,
+        "served_sequence_log_probability": -74.26434855794139,
+        "full_sequence_log_probability": -87.805069519981
+      }
+    }
+  },
+  {
+    "name": "fullreply.sympy__sympy-18763.call20",
+    "task": "sympy__sympy-18763",
+    "call": 20,
+    "group": "rest",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-update14/sympy__sympy-18763.call20.case.private.json",
+    "case_sha256": "fcbe5be0b9d8a938cc982190b75779802fc09fee9e407e74b1e76431d002b6e1",
+    "served": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.sympy__sympy-18763.call20.json",
+      "runtime_config_id": "stage12_head_bfp8_lofi",
+      "wall_s": 5.410015436820686,
+      "branches": {
+        "chosen": {
+          "tokens": 81,
+          "top1_matches_forced_fraction": 0.9012345679012346,
+          "sequence_log_probability": -38.0760038784285,
+          "mean_token_log_probability": -0.4700741219559074,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 5.406193666858599
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "full": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.sympy__sympy-18763.call20.json",
+      "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+      "wall_s": 10.000108496053144,
+      "branches": {
+        "chosen": {
+          "tokens": 81,
+          "top1_matches_forced_fraction": 0.9135802469135802,
+          "sequence_log_probability": -48.715506688920996,
+          "mean_token_log_probability": -0.6014260085051975,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 9.996224140981212
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "comparison_status": "verified",
+    "comparison": {
+      "chosen": {
+        "tokens": 81,
+        "top1_agreement": 0.9629629629629629,
+        "served_sequence_log_probability": -38.0760038784285,
+        "full_sequence_log_probability": -48.715506688920996
+      }
+    }
+  },
+  {
+    "name": "fullreply.psf__requests-5414.call23",
+    "task": "psf__requests-5414",
+    "call": 23,
+    "group": "rest",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-requests5414/psf__requests-5414.call23.case.private.json",
+    "case_sha256": "de5fc4b6ee4dd1ca24d81e6b6dff475b141a5517461f9698b39ea64ac581f86e",
+    "served": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.psf__requests-5414.call23.json",
+      "runtime_config_id": "stage12_head_bfp8_lofi",
+      "wall_s": 25.922009472036734,
+      "branches": {
+        "chosen": {
+          "tokens": 643,
+          "top1_matches_forced_fraction": 0.9253499222395023,
+          "sequence_log_probability": -154.10037325879608,
+          "mean_token_log_probability": -0.23965843430605924,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 25.915497126989067
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "full": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.psf__requests-5414.call23.json",
+      "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+      "wall_s": 47.33141858689487,
+      "branches": {
+        "chosen": {
+          "tokens": 643,
+          "top1_matches_forced_fraction": 0.9020217729393468,
+          "sequence_log_probability": -203.53320342037395,
+          "mean_token_log_probability": -0.31653686379529383,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 47.323958214139566
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "comparison_status": "verified",
+    "comparison": {
+      "chosen": {
+        "tokens": 643,
+        "top1_agreement": 0.9533437013996889,
+        "served_sequence_log_probability": -154.10037325879608,
+        "full_sequence_log_probability": -203.53320342037395
+      }
+    }
+  },
+  {
+    "name": "fullreply.scikit-learn__scikit-learn-14053.call13",
+    "task": "scikit-learn__scikit-learn-14053",
+    "call": 13,
+    "group": "rest",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-update/scikit-learn__scikit-learn-14053.call13.case.private.json",
+    "case_sha256": "d6ce273fd15f0b5300d967144e9c392cd26322665e41312a22d3d488bd01eda3",
+    "served": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.scikit-learn__scikit-learn-14053.call13.json",
+      "runtime_config_id": "stage12_head_bfp8_lofi",
+      "wall_s": 9.63817883306183,
+      "branches": {
+        "chosen": {
+          "tokens": 197,
+          "top1_matches_forced_fraction": 0.8883248730964467,
+          "sequence_log_probability": -92.98397389737048,
+          "mean_token_log_probability": -0.47199986749934253,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 9.634524220833555
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "full": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.scikit-learn__scikit-learn-14053.call13.json",
+      "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+      "wall_s": 17.713438955135643,
+      "branches": {
+        "chosen": {
+          "tokens": 197,
+          "top1_matches_forced_fraction": 0.8629441624365483,
+          "sequence_log_probability": -106.15072427160206,
+          "mean_token_log_probability": -0.5388361638152389,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 17.70849639805965
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "comparison_status": "verified",
+    "comparison": {
+      "chosen": {
+        "tokens": 197,
+        "top1_agreement": 0.9289340101522843,
+        "served_sequence_log_probability": -92.98397389737048,
+        "full_sequence_log_probability": -106.15072427160206
+      }
+    }
+  },
+  {
+    "name": "fullreply.psf__requests-2931.call29",
+    "task": "psf__requests-2931",
+    "call": 29,
+    "group": "rest",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/requests2931-semantic-full-reply/psf__requests-2931.call29.case.private.json",
+    "case_sha256": "dd1ea48276e896332173d8548986db103cbbf54316f2b500b8e6375ac3494fde",
+    "served": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.psf__requests-2931.call29.json",
+      "runtime_config_id": "stage12_head_bfp8_lofi",
+      "wall_s": 8.690791138913482,
+      "branches": {
+        "chosen": {
+          "tokens": 159,
+          "top1_matches_forced_fraction": 0.9559748427672956,
+          "sequence_log_probability": -40.92197918203594,
+          "mean_token_log_probability": -0.25737093825179835,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 8.686964999884367
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "full": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.psf__requests-2931.call29.json",
+      "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+      "wall_s": 15.919239443959668,
+      "branches": {
+        "chosen": {
+          "tokens": 159,
+          "top1_matches_forced_fraction": 0.9371069182389937,
+          "sequence_log_probability": -51.41378536396404,
+          "mean_token_log_probability": -0.3233571406538619,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 15.914550912100822
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "comparison_status": "verified",
+    "comparison": {
+      "chosen": {
+        "tokens": 159,
+        "top1_agreement": 0.9811320754716981,
+        "served_sequence_log_probability": -40.92197918203594,
+        "full_sequence_log_probability": -51.41378536396404
+      }
+    }
+  },
+  {
+    "name": "fullreply.django__django-15037.call19",
+    "task": "django__django-15037",
+    "call": 19,
+    "group": "rest",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/django__django-15037.call19.case.private.json",
+    "case_sha256": "d6ea38fc8bdfe01394cfc55bb1338969bb9213f3d9ad0cdebe7e4c6a50482eef",
+    "served": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.django__django-15037.call19.json",
+      "runtime_config_id": "stage12_head_bfp8_lofi",
+      "wall_s": 40.81382090295665,
+      "branches": {
+        "chosen": {
+          "tokens": 1038,
+          "top1_matches_forced_fraction": 0.9315992292870906,
+          "sequence_log_probability": -189.95754839127898,
+          "mean_token_log_probability": -0.18300341848870808,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 40.8052151480224
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "full": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.django__django-15037.call19.json",
+      "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+      "wall_s": 74.78548375004902,
+      "branches": {
+        "chosen": {
+          "tokens": 1038,
+          "top1_matches_forced_fraction": 0.9132947976878613,
+          "sequence_log_probability": -275.9525261687259,
+          "mean_token_log_probability": -0.26585021788894597,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 74.77463183109649
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "comparison_status": "verified",
+    "comparison": {
+      "chosen": {
+        "tokens": 1038,
+        "top1_agreement": 0.9508670520231214,
+        "served_sequence_log_probability": -189.95754839127898,
+        "full_sequence_log_probability": -275.9525261687259
+      }
+    }
+  },
+  {
+    "name": "fullreply.psf__requests-1921.call34",
+    "task": "psf__requests-1921",
+    "call": 34,
+    "group": "rest",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/psf__requests-1921.call34.case.private.json",
+    "case_sha256": "a3e836f06719d78ff9365231e40c9ca06cf571a9f4658805a96e20685add9c17",
+    "served": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.psf__requests-1921.call34.json",
+      "runtime_config_id": "stage12_head_bfp8_lofi",
+      "wall_s": 8.307575217913836,
+      "branches": {
+        "chosen": {
+          "tokens": 140,
+          "top1_matches_forced_fraction": 0.9642857142857143,
+          "sequence_log_probability": -43.11161302217081,
+          "mean_token_log_probability": -0.3079400930155058,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 8.303001584019512
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "full": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.psf__requests-1921.call34.json",
+      "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+      "wall_s": 15.1407542580273,
+      "branches": {
+        "chosen": {
+          "tokens": 140,
+          "top1_matches_forced_fraction": 0.9571428571428572,
+          "sequence_log_probability": -44.56940811351325,
+          "mean_token_log_probability": -0.3183529150965232,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 15.135387292131782
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "comparison_status": "verified",
+    "comparison": {
+      "chosen": {
+        "tokens": 140,
+        "top1_agreement": 0.9857142857142858,
+        "served_sequence_log_probability": -43.11161302217081,
+        "full_sequence_log_probability": -44.56940811351325
+      }
+    }
+  },
+  {
+    "name": "fullreply.sympy__sympy-12489.call34",
+    "task": "sympy__sympy-12489",
+    "call": 34,
+    "group": "rest",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-update12/sympy__sympy-12489.call34.case.private.json",
+    "case_sha256": "96d4abbd8bf09a643cd4a11de9041879286bd4d9623f93e8b1d8341b2b80b0bd",
+    "served": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.sympy__sympy-12489.call34.json",
+      "runtime_config_id": "stage12_head_bfp8_lofi",
+      "wall_s": 10.640469375997782,
+      "branches": {
+        "chosen": {
+          "tokens": 204,
+          "top1_matches_forced_fraction": 0.9313725490196079,
+          "sequence_log_probability": -67.64853491418569,
+          "mean_token_log_probability": -0.3316104652656161,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 10.635634223930538
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "full": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.sympy__sympy-12489.call34.json",
+      "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+      "wall_s": 19.424204010982066,
+      "branches": {
+        "chosen": {
+          "tokens": 204,
+          "top1_matches_forced_fraction": 0.9215686274509803,
+          "sequence_log_probability": -72.92291079638804,
+          "mean_token_log_probability": -0.35746524900190213,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 19.41828758502379
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "comparison_status": "verified",
+    "comparison": {
+      "chosen": {
+        "tokens": 204,
+        "top1_agreement": 0.9705882352941176,
+        "served_sequence_log_probability": -67.64853491418569,
+        "full_sequence_log_probability": -72.92291079638804
+      }
+    }
+  },
+  {
+    "name": "fullreply.psf__requests-5414.call30",
+    "task": "psf__requests-5414",
+    "call": 30,
+    "group": "rest",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-requests5414/psf__requests-5414.call30.case.private.json",
+    "case_sha256": "c9999c0492ae85110732fcec749f322bbbaa0812c447931ff8ff98a41b13a45f",
+    "served": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.psf__requests-5414.call30.json",
+      "runtime_config_id": "stage12_head_bfp8_lofi",
+      "wall_s": 19.23376401211135,
+      "branches": {
+        "chosen": {
+          "tokens": 441,
+          "top1_matches_forced_fraction": 0.9614512471655329,
+          "sequence_log_probability": -70.21726208205942,
+          "mean_token_log_probability": -0.1592228165126064,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 19.228175013093278
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "full": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.psf__requests-5414.call30.json",
+      "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+      "wall_s": 35.24638733197935,
+      "branches": {
+        "chosen": {
+          "tokens": 441,
+          "top1_matches_forced_fraction": 0.9614512471655329,
+          "sequence_log_probability": -81.53397607101505,
+          "mean_token_log_probability": -0.18488429948075974,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 35.23947633802891
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "comparison_status": "verified",
+    "comparison": {
+      "chosen": {
+        "tokens": 441,
+        "top1_agreement": 0.9841269841269841,
+        "served_sequence_log_probability": -70.21726208205942,
+        "full_sequence_log_probability": -81.53397607101505
+      }
+    }
+  },
+  {
+    "name": "fullreply.matplotlib__matplotlib-20488.call29",
+    "task": "matplotlib__matplotlib-20488",
+    "call": 29,
+    "group": "rest",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/matplotlib__matplotlib-20488.call29.case.private.json",
+    "case_sha256": "e9fb08017dc56414fe1b3d37bcf919ada778e18727ca6669c00c789258f9717d",
+    "served": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.matplotlib__matplotlib-20488.call29.json",
+      "runtime_config_id": "stage12_head_bfp8_lofi",
+      "wall_s": 31.187109323916957,
+      "branches": {
+        "chosen": {
+          "tokens": 759,
+          "top1_matches_forced_fraction": 0.9288537549407114,
+          "sequence_log_probability": -142.20744855383668,
+          "mean_token_log_probability": -0.18736159229754504,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 31.17934518889524
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "full": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.matplotlib__matplotlib-20488.call29.json",
+      "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+      "wall_s": 56.90828651911579,
+      "branches": {
+        "chosen": {
+          "tokens": 759,
+          "top1_matches_forced_fraction": 0.930171277997365,
+          "sequence_log_probability": -173.78860658109443,
+          "mean_token_log_probability": -0.22897049615427462,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 56.89888877701014
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "comparison_status": "verified",
+    "comparison": {
+      "chosen": {
+        "tokens": 759,
+        "top1_agreement": 0.9552042160737813,
+        "served_sequence_log_probability": -142.20744855383668,
+        "full_sequence_log_probability": -173.78860658109443
+      }
+    }
+  },
+  {
+    "name": "fullreply.scikit-learn__scikit-learn-10908.call34",
+    "task": "scikit-learn__scikit-learn-10908",
+    "call": 34,
+    "group": "rest",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-update/scikit-learn__scikit-learn-10908.call34.case.private.json",
+    "case_sha256": "96f9a6466d9c0306ae8d936faa84abc1c885cc33a6cfb0fb5e96dc8ed693fc43",
+    "served": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.scikit-learn__scikit-learn-10908.call34.json",
+      "runtime_config_id": "stage12_head_bfp8_lofi",
+      "wall_s": 11.706257553072646,
+      "branches": {
+        "chosen": {
+          "tokens": 224,
+          "top1_matches_forced_fraction": 0.90625,
+          "sequence_log_probability": -74.53756189262208,
+          "mean_token_log_probability": -0.33275697273492,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 11.701829214813188
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "full": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.scikit-learn__scikit-learn-10908.call34.json",
+      "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+      "wall_s": 21.23361845104955,
+      "branches": {
+        "chosen": {
+          "tokens": 224,
+          "top1_matches_forced_fraction": 0.90625,
+          "sequence_log_probability": -83.05583301781482,
+          "mean_token_log_probability": -0.37078496882953044,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 21.227430986938998
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "comparison_status": "verified",
+    "comparison": {
+      "chosen": {
+        "tokens": 224,
+        "top1_agreement": 0.9598214285714286,
+        "served_sequence_log_probability": -74.53756189262208,
+        "full_sequence_log_probability": -83.05583301781482
+      }
+    }
+  },
+  {
+    "name": "fullreply.astropy__astropy-14598.call33",
+    "task": "astropy__astropy-14598",
+    "call": 33,
+    "group": "rest",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/astropy__astropy-14598.call33.case.private.json",
+    "case_sha256": "1fcccd2c81aa39196618287abc61b59eccc0f6cf2fa6624c6c6e1fe70081f496",
+    "served": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.astropy__astropy-14598.call33.json",
+      "runtime_config_id": "stage12_head_bfp8_lofi",
+      "wall_s": 52.942772932117805,
+      "branches": {
+        "chosen": {
+          "tokens": 1354,
+          "top1_matches_forced_fraction": 0.9121122599704579,
+          "sequence_log_probability": -305.3052175187344,
+          "mean_token_log_probability": -0.22548391249537253,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 52.93249849206768
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "full": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.astropy__astropy-14598.call33.json",
+      "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+      "wall_s": 96.59225449198857,
+      "branches": {
+        "chosen": {
+          "tokens": 1354,
+          "top1_matches_forced_fraction": 0.8980797636632201,
+          "sequence_log_probability": -396.9433820287035,
+          "mean_token_log_probability": -0.2931635022368564,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 96.57980446284637
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "comparison_status": "verified",
+    "comparison": {
+      "chosen": {
+        "tokens": 1354,
+        "top1_agreement": 0.9372230428360414,
+        "served_sequence_log_probability": -305.3052175187344,
+        "full_sequence_log_probability": -396.9433820287035
+      }
+    }
+  },
+  {
+    "name": "fullreply.psf__requests-1142.call31",
+    "task": "psf__requests-1142",
+    "call": 31,
+    "group": "rest",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/psf__requests-1142.call31.case.private.json",
+    "case_sha256": "69fa9eb2bb5d09ce7c1c4854d00750f202213499c7ffb63244eedfbc0c46e3dd",
+    "served": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.psf__requests-1142.call31.json",
+      "runtime_config_id": "stage12_head_bfp8_lofi",
+      "wall_s": 16.515271530020982,
+      "branches": {
+        "chosen": {
+          "tokens": 353,
+          "top1_matches_forced_fraction": 0.9518413597733711,
+          "sequence_log_probability": -64.9919859144413,
+          "mean_token_log_probability": -0.1841132745451595,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 16.509388278005645
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "full": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.psf__requests-1142.call31.json",
+      "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+      "wall_s": 29.92583979293704,
+      "branches": {
+        "chosen": {
+          "tokens": 353,
+          "top1_matches_forced_fraction": 0.9490084985835694,
+          "sequence_log_probability": -68.531467454893,
+          "mean_token_log_probability": -0.19414013443312467,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 29.918942213989794
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "comparison_status": "verified",
+    "comparison": {
+      "chosen": {
+        "tokens": 353,
+        "top1_agreement": 0.9886685552407932,
+        "served_sequence_log_probability": -64.9919859144413,
+        "full_sequence_log_probability": -68.531467454893
+      }
+    }
+  },
+  {
+    "name": "fullreply.django__django-14007.call31",
+    "task": "django__django-14007",
+    "call": 31,
+    "group": "rest",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/django__django-14007.call31.case.private.json",
+    "case_sha256": "7b15b6ec309f10c52ed79ec37177ce80a671c9ab2a2ba3554f3a545d744c3ca3",
+    "served": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.django__django-14007.call31.json",
+      "runtime_config_id": "stage12_head_bfp8_lofi",
+      "wall_s": 14.033265678910539,
+      "branches": {
+        "chosen": {
+          "tokens": 272,
+          "top1_matches_forced_fraction": 0.9558823529411765,
+          "sequence_log_probability": -58.104867380528844,
+          "mean_token_log_probability": -0.21362083595782663,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 14.027982390020043
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "full": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.django__django-14007.call31.json",
+      "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+      "wall_s": 25.571943043963984,
+      "branches": {
+        "chosen": {
+          "tokens": 272,
+          "top1_matches_forced_fraction": 0.9411764705882353,
+          "sequence_log_probability": -69.36036279064456,
+          "mean_token_log_probability": -0.2550013337891344,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 25.56546361395158
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "comparison_status": "verified",
+    "comparison": {
+      "chosen": {
+        "tokens": 272,
+        "top1_agreement": 0.9595588235294118,
+        "served_sequence_log_probability": -58.104867380528844,
+        "full_sequence_log_probability": -69.36036279064456
+      }
+    }
+  },
+  {
+    "name": "fullreply.pylint-dev__pylint-8898.call44",
+    "task": "pylint-dev__pylint-8898",
+    "call": 44,
+    "group": "rest",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/pylint-dev__pylint-8898.call44.case.private.json",
+    "case_sha256": "dab875c767a6a05d28c64800b6aeabef6f960f28aa1b2c7eed95813c218ab1a5",
+    "served": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.pylint-dev__pylint-8898.call44.json",
+      "runtime_config_id": "stage12_head_bfp8_lofi",
+      "wall_s": 25.68234466202557,
+      "branches": {
+        "chosen": {
+          "tokens": 591,
+          "top1_matches_forced_fraction": 0.9746192893401016,
+          "sequence_log_probability": -96.12538816246052,
+          "mean_token_log_probability": -0.1626487109347894,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 25.675019931979477
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "full": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.pylint-dev__pylint-8898.call44.json",
+      "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+      "wall_s": 46.934850743971765,
+      "branches": {
+        "chosen": {
+          "tokens": 591,
+          "top1_matches_forced_fraction": 0.9695431472081218,
+          "sequence_log_probability": -136.28931086489223,
+          "mean_token_log_probability": -0.23060797100658584,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 46.92607662291266
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "comparison_status": "verified",
+    "comparison": {
+      "chosen": {
+        "tokens": 591,
+        "top1_agreement": 0.9796954314720813,
+        "served_sequence_log_probability": -96.12538816246052,
+        "full_sequence_log_probability": -136.28931086489223
+      }
+    }
+  },
+  {
+    "name": "fullreply.sphinx-doc__sphinx-10614.call12",
+    "task": "sphinx-doc__sphinx-10614",
+    "call": 12,
+    "group": "rest",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-update7/sphinx-doc__sphinx-10614.call12.case.private.json",
+    "case_sha256": "5d8bf88e5368b8aba3e47d2b43ac32b0b39623c77978eb1145fc84fbc45d7846",
+    "served": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.sphinx-doc__sphinx-10614.call12.json",
+      "runtime_config_id": "stage12_head_bfp8_lofi",
+      "wall_s": 5.419768285006285,
+      "branches": {
+        "chosen": {
+          "tokens": 25,
+          "top1_matches_forced_fraction": 0.88,
+          "sequence_log_probability": -33.50885950187693,
+          "mean_token_log_probability": -1.340354380075077,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 5.415616231970489
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "full": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.sphinx-doc__sphinx-10614.call12.json",
+      "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+      "wall_s": 9.878110194113106,
+      "branches": {
+        "chosen": {
+          "tokens": 25,
+          "top1_matches_forced_fraction": 0.88,
+          "sequence_log_probability": -34.78107169162259,
+          "mean_token_log_probability": -1.3912428676649038,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 9.872374905040488
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "comparison_status": "verified",
+    "comparison": {
+      "chosen": {
+        "tokens": 25,
+        "top1_agreement": 1.0,
+        "served_sequence_log_probability": -33.50885950187693,
+        "full_sequence_log_probability": -34.78107169162259
+      }
+    }
+  },
+  {
+    "name": "fullreply.pylint-dev__pylint-4661.call19",
+    "task": "pylint-dev__pylint-4661",
+    "call": 19,
+    "group": "rest",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-update10/pylint-dev__pylint-4661.call19.case.private.json",
+    "case_sha256": "41a4eddee9319c32d181e058305504f13ff65a801b6f4c5147fb8b9f0b881dac",
+    "served": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.pylint-dev__pylint-4661.call19.json",
+      "runtime_config_id": "stage12_head_bfp8_lofi",
+      "wall_s": 77.39871781505644,
+      "branches": {
+        "chosen": {
+          "tokens": 1961,
+          "top1_matches_forced_fraction": 0.985721570627231,
+          "sequence_log_probability": -87.07086520266773,
+          "mean_token_log_probability": -0.044401257115077884,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 77.38450602605008
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "full": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.pylint-dev__pylint-4661.call19.json",
+      "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+      "wall_s": 140.15374634508044,
+      "branches": {
+        "chosen": {
+          "tokens": 1961,
+          "top1_matches_forced_fraction": 0.9836817950025497,
+          "sequence_log_probability": -116.78314218576148,
+          "mean_token_log_probability": -0.059552851701051235,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 140.1360923300963
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "comparison_status": "verified",
+    "comparison": {
+      "chosen": {
+        "tokens": 1961,
+        "top1_agreement": 0.9938806731259562,
+        "served_sequence_log_probability": -87.07086520266773,
+        "full_sequence_log_probability": -116.78314218576148
+      }
+    }
+  },
+  {
+    "name": "fullreply.sphinx-doc__sphinx-7590.call44",
+    "task": "sphinx-doc__sphinx-7590",
+    "call": 44,
+    "group": "rest",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-update5/sphinx-doc__sphinx-7590.call44.case.private.json",
+    "case_sha256": "b6e860df4802afee4a152a0d2eae7dc36c033042a455b83d896813eb77b1f552",
+    "served": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.sphinx-doc__sphinx-7590.call44.json",
+      "runtime_config_id": "stage12_head_bfp8_lofi",
+      "wall_s": 14.391965835122392,
+      "branches": {
+        "chosen": {
+          "tokens": 252,
+          "top1_matches_forced_fraction": 0.9682539682539683,
+          "sequence_log_probability": -45.328117939939375,
+          "mean_token_log_probability": -0.17987348388864832,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 14.385819209041074
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "full": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.sphinx-doc__sphinx-7590.call44.json",
+      "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+      "wall_s": 25.552745083114132,
+      "branches": {
+        "chosen": {
+          "tokens": 252,
+          "top1_matches_forced_fraction": 0.9642857142857143,
+          "sequence_log_probability": -47.81299168534776,
+          "mean_token_log_probability": -0.18973409398947524,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 25.544824150158092
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "comparison_status": "verified",
+    "comparison": {
+      "chosen": {
+        "tokens": 252,
+        "top1_agreement": 0.9841269841269841,
+        "served_sequence_log_probability": -45.328117939939375,
+        "full_sequence_log_probability": -47.81299168534776
+      }
+    }
+  },
+  {
+    "name": "fullreply.pytest-dev__pytest-10356.call45",
+    "task": "pytest-dev__pytest-10356",
+    "call": 45,
+    "group": "rest",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/semantic-full-replies/pytest-dev__pytest-10356.call45.case.private.json",
+    "case_sha256": "71b4198bd82e5035cd242d09b9fa150160085b9717ac34508ba928bca7a9fd05",
+    "served": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.pytest-dev__pytest-10356.call45.json",
+      "runtime_config_id": "stage12_head_bfp8_lofi",
+      "wall_s": 40.44688719883561,
+      "branches": {
+        "chosen": {
+          "tokens": 961,
+          "top1_matches_forced_fraction": 0.9406867845993756,
+          "sequence_log_probability": -173.94050628618072,
+          "mean_token_log_probability": -0.1809994862499279,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 40.43738092808053
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "full": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.pytest-dev__pytest-10356.call45.json",
+      "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+      "wall_s": 73.15532671613619,
+      "branches": {
+        "chosen": {
+          "tokens": 961,
+          "top1_matches_forced_fraction": 0.9302809573361083,
+          "sequence_log_probability": -204.1198612599252,
+          "mean_token_log_probability": -0.21240360172728948,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 73.14349324000068
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "comparison_status": "verified",
+    "comparison": {
+      "chosen": {
+        "tokens": 961,
+        "top1_agreement": 0.9552549427679501,
+        "served_sequence_log_probability": -173.94050628618072,
+        "full_sequence_log_probability": -204.1198612599252
+      }
+    }
+  },
+  {
+    "name": "fullreply.sphinx-doc__sphinx-11510.call24",
+    "task": "sphinx-doc__sphinx-11510",
+    "call": 24,
+    "group": "rest",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-sphinx11510/sphinx-doc__sphinx-11510.call24.case.private.json",
+    "case_sha256": "f82dd70aeb57ef2b317946bf23dc71e5f5580ead0be1a4a742a3676bb64a21da",
+    "served": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.sphinx-doc__sphinx-11510.call24.json",
+      "runtime_config_id": "stage12_head_bfp8_lofi",
+      "wall_s": 42.684225981123745,
+      "branches": {
+        "chosen": {
+          "tokens": 1021,
+          "top1_matches_forced_fraction": 0.931439764936337,
+          "sequence_log_probability": -220.3538397274552,
+          "mean_token_log_probability": -0.21582158641278668,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 42.674126328201964
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "full": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.sphinx-doc__sphinx-11510.call24.json",
+      "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+      "wall_s": 77.53487065783702,
+      "branches": {
+        "chosen": {
+          "tokens": 1021,
+          "top1_matches_forced_fraction": 0.9118511263467189,
+          "sequence_log_probability": -255.14367511060723,
+          "mean_token_log_probability": -0.2498958620084302,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 77.52288302895613
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "comparison_status": "verified",
+    "comparison": {
+      "chosen": {
+        "tokens": 1021,
+        "top1_agreement": 0.9480901077375122,
+        "served_sequence_log_probability": -220.3538397274552,
+        "full_sequence_log_probability": -255.14367511060723
+      }
+    }
+  },
+  {
+    "name": "fullreply.pytest-dev__pytest-5840.call15",
+    "task": "pytest-dev__pytest-5840",
+    "call": 15,
+    "group": "rest",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/pytest-dev__pytest-5840.call15.case.private.json",
+    "case_sha256": "b02374d8dff1ae43754183de37661c20bcaef735f86e33e18f93d00ddf68c3ed",
+    "served": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.pytest-dev__pytest-5840.call15.json",
+      "runtime_config_id": "stage12_head_bfp8_lofi",
+      "wall_s": 88.6780948259402,
+      "branches": {
+        "chosen": {
+          "tokens": 2247,
+          "top1_matches_forced_fraction": 0.9701824655095683,
+          "sequence_log_probability": -202.88692290025094,
+          "mean_token_log_probability": -0.09029235554083263,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 88.66186755988747
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "full": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.pytest-dev__pytest-5840.call15.json",
+      "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+      "wall_s": 160.53674333915114,
+      "branches": {
+        "chosen": {
+          "tokens": 2247,
+          "top1_matches_forced_fraction": 0.9679572763684913,
+          "sequence_log_probability": -268.23961307279865,
+          "mean_token_log_probability": -0.11937677484325708,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 160.51750944298692
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "comparison_status": "verified",
+    "comparison": {
+      "chosen": {
+        "tokens": 2247,
+        "top1_agreement": 0.9813084112149533,
+        "served_sequence_log_probability": -202.88692290025094,
+        "full_sequence_log_probability": -268.23961307279865
+      }
+    }
+  },
+  {
+    "name": "fullreply.matplotlib__matplotlib-25479.call34",
+    "task": "matplotlib__matplotlib-25479",
+    "call": 34,
+    "group": "rest",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/matplotlib__matplotlib-25479.call34.case.private.json",
+    "case_sha256": "8e63c3c452fc1db1b2b843a3f443c1bc05ef6b674d9d7172da9911b364c6396f",
+    "served": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.matplotlib__matplotlib-25479.call34.json",
+      "runtime_config_id": "stage12_head_bfp8_lofi",
+      "wall_s": 16.430183075135574,
+      "branches": {
+        "chosen": {
+          "tokens": 299,
+          "top1_matches_forced_fraction": 0.9163879598662207,
+          "sequence_log_probability": -82.55651769218477,
+          "mean_token_log_probability": -0.27610875482336045,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 16.4234853759408
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "full": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.matplotlib__matplotlib-25479.call34.json",
+      "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+      "wall_s": 29.671232488006353,
+      "branches": {
+        "chosen": {
+          "tokens": 299,
+          "top1_matches_forced_fraction": 0.9230769230769231,
+          "sequence_log_probability": -94.28701286608,
+          "mean_token_log_probability": -0.3153411801541137,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 29.663015343947336
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "comparison_status": "verified",
+    "comparison": {
+      "chosen": {
+        "tokens": 299,
+        "top1_agreement": 0.9531772575250836,
+        "served_sequence_log_probability": -82.55651769218477,
+        "full_sequence_log_probability": -94.28701286608
+      }
+    }
+  },
+  {
+    "name": "fullreply.pytest-dev__pytest-7432.call34",
+    "task": "pytest-dev__pytest-7432",
+    "call": 34,
+    "group": "rest",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-update14/pytest-dev__pytest-7432.call34.case.private.json",
+    "case_sha256": "c3455293de10aa65856920d3c44cf0bf37963a6723562015be9b3f9d64916ec5",
+    "served": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.pytest-dev__pytest-7432.call34.json",
+      "runtime_config_id": "stage12_head_bfp8_lofi",
+      "wall_s": 7.898518026107922,
+      "branches": {
+        "chosen": {
+          "tokens": 61,
+          "top1_matches_forced_fraction": 0.8852459016393442,
+          "sequence_log_probability": -37.52545411947529,
+          "mean_token_log_probability": -0.6151713790077916,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 7.893380091059953
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "full": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.pytest-dev__pytest-7432.call34.json",
+      "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+      "wall_s": 14.267081021796912,
+      "branches": {
+        "chosen": {
+          "tokens": 61,
+          "top1_matches_forced_fraction": 0.8688524590163934,
+          "sequence_log_probability": -41.29956308457727,
+          "mean_token_log_probability": -0.6770420177799553,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 14.259942067787051
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "comparison_status": "verified",
+    "comparison": {
+      "chosen": {
+        "tokens": 61,
+        "top1_agreement": 0.9508196721311475,
+        "served_sequence_log_probability": -37.52545411947529,
+        "full_sequence_log_probability": -41.29956308457727
+      }
+    }
+  },
+  {
+    "name": "fullreply.django__django-14011.call33",
+    "task": "django__django-14011",
+    "call": 33,
+    "group": "rest",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/django__django-14011.call33.case.private.json",
+    "case_sha256": "4c11588c48f52dd6692f7f5c50f55d75145b75796601a8e1b8b93a0b34bad2b4",
+    "served": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.django__django-14011.call33.json",
+      "runtime_config_id": "stage12_head_bfp8_lofi",
+      "wall_s": 21.836572313914075,
+      "branches": {
+        "chosen": {
+          "tokens": 436,
+          "top1_matches_forced_fraction": 0.9770642201834863,
+          "sequence_log_probability": -54.2083132500912,
+          "mean_token_log_probability": -0.12433099369286973,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 21.82935078605078
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "full": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.django__django-14011.call33.json",
+      "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+      "wall_s": 39.571667907061055,
+      "branches": {
+        "chosen": {
+          "tokens": 436,
+          "top1_matches_forced_fraction": 0.963302752293578,
+          "sequence_log_probability": -74.44557629519147,
+          "mean_token_log_probability": -0.1707467346219988,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 39.562241403153166
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "comparison_status": "verified",
+    "comparison": {
+      "chosen": {
+        "tokens": 436,
+        "top1_agreement": 0.9678899082568807,
+        "served_sequence_log_probability": -54.2083132500912,
+        "full_sequence_log_probability": -74.44557629519147
+      }
+    }
+  },
+  {
+    "name": "fullreply.mwaskom__seaborn-3069.call50",
+    "task": "mwaskom__seaborn-3069",
+    "call": 50,
+    "group": "rest",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/mwaskom__seaborn-3069.call50.case.private.json",
+    "case_sha256": "9d7c73bd086c2ccd28c6a62990d32262488a599486958ef9d1bd3568550449ff",
+    "served": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.mwaskom__seaborn-3069.call50.json",
+      "runtime_config_id": "stage12_head_bfp8_lofi",
+      "wall_s": 35.64478033292107,
+      "branches": {
+        "chosen": {
+          "tokens": 805,
+          "top1_matches_forced_fraction": 0.9229813664596274,
+          "sequence_log_probability": -184.89522577000275,
+          "mean_token_log_probability": -0.22968351027329534,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 35.63497266313061
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "full": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.mwaskom__seaborn-3069.call50.json",
+      "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+      "wall_s": 64.52309044613503,
+      "branches": {
+        "chosen": {
+          "tokens": 805,
+          "top1_matches_forced_fraction": 0.9142857142857143,
+          "sequence_log_probability": -219.67034000911522,
+          "mean_token_log_probability": -0.2728824099492115,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 64.5115592640359
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "comparison_status": "verified",
+    "comparison": {
+      "chosen": {
+        "tokens": 805,
+        "top1_agreement": 0.9428571428571428,
+        "served_sequence_log_probability": -184.89522577000275,
+        "full_sequence_log_probability": -219.67034000911522
+      }
+    }
+  },
+  {
+    "name": "fullreply.scikit-learn__scikit-learn-14983.call43",
+    "task": "scikit-learn__scikit-learn-14983",
+    "call": 43,
+    "group": "rest",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-update3/scikit-learn__scikit-learn-14983.call43.case.private.json",
+    "case_sha256": "13aff76658e545f0534c23c2b39b0f5496106d05ad15878b0080a2d20b0653f5",
+    "served": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.scikit-learn__scikit-learn-14983.call43.json",
+      "runtime_config_id": "stage12_head_bfp8_lofi",
+      "wall_s": 38.65144846797921,
+      "branches": {
+        "chosen": {
+          "tokens": 879,
+          "top1_matches_forced_fraction": 0.9476678043230944,
+          "sequence_log_probability": -143.59973336278145,
+          "mean_token_log_probability": -0.16336715968462054,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 38.64213334699161
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "full": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.scikit-learn__scikit-learn-14983.call43.json",
+      "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+      "wall_s": 69.97468899097294,
+      "branches": {
+        "chosen": {
+          "tokens": 879,
+          "top1_matches_forced_fraction": 0.9283276450511946,
+          "sequence_log_probability": -193.04632576624348,
+          "mean_token_log_probability": -0.2196203933631894,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 69.96355444588698
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "comparison_status": "verified",
+    "comparison": {
+      "chosen": {
+        "tokens": 879,
+        "top1_agreement": 0.9579067121729238,
+        "served_sequence_log_probability": -143.59973336278145,
+        "full_sequence_log_probability": -193.04632576624348
+      }
+    }
+  },
+  {
+    "name": "fullreply.pytest-dev__pytest-5840.call16",
+    "task": "pytest-dev__pytest-5840",
+    "call": 16,
+    "group": "rest",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/pytest-dev__pytest-5840.call16.case.private.json",
+    "case_sha256": "8b3be62cfb797a1d3e7f007b44751ef8cc9114dc7dbc2bbac789af89e811c6e4",
+    "served": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.pytest-dev__pytest-5840.call16.json",
+      "runtime_config_id": "stage12_head_bfp8_lofi",
+      "wall_s": 10.627753670793027,
+      "branches": {
+        "chosen": {
+          "tokens": 122,
+          "top1_matches_forced_fraction": 0.9016393442622951,
+          "sequence_log_probability": -49.92231777871394,
+          "mean_token_log_probability": -0.4091993260550323,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 10.622219880111516
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "full": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.pytest-dev__pytest-5840.call16.json",
+      "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+      "wall_s": 18.862330222968012,
+      "branches": {
+        "chosen": {
+          "tokens": 122,
+          "top1_matches_forced_fraction": 0.9016393442622951,
+          "sequence_log_probability": -58.735088532924955,
+          "mean_token_log_probability": -0.4814351519092209,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 18.85464888298884
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "comparison_status": "verified",
+    "comparison": {
+      "chosen": {
+        "tokens": 122,
+        "top1_agreement": 0.9672131147540983,
+        "served_sequence_log_probability": -49.92231777871394,
+        "full_sequence_log_probability": -58.735088532924955
+      }
+    }
+  },
+  {
+    "name": "fullreply.sphinx-doc__sphinx-9461.call76",
+    "task": "sphinx-doc__sphinx-9461",
+    "call": 76,
+    "group": "rest",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-update15/sphinx-doc__sphinx-9461.call76.case.private.json",
+    "case_sha256": "a672eb1fc419c438455e4ce05f6b814c41c0e54723905115d09ee9087eb0a25b",
+    "served": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.sphinx-doc__sphinx-9461.call76.json",
+      "runtime_config_id": "stage12_head_bfp8_lofi",
+      "wall_s": 10.973533248063177,
+      "branches": {
+        "chosen": {
+          "tokens": 116,
+          "top1_matches_forced_fraction": 0.9741379310344828,
+          "sequence_log_probability": -37.246607302935715,
+          "mean_token_log_probability": -0.3210914422666872,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 10.966958933975548
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "full": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.sphinx-doc__sphinx-9461.call76.json",
+      "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+      "wall_s": 19.585787646006793,
+      "branches": {
+        "chosen": {
+          "tokens": 116,
+          "top1_matches_forced_fraction": 0.9224137931034483,
+          "sequence_log_probability": -49.841829264718484,
+          "mean_token_log_probability": -0.4296709419372283,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 19.578588597942144
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "comparison_status": "verified",
+    "comparison": {
+      "chosen": {
+        "tokens": 116,
+        "top1_agreement": 0.9396551724137931,
+        "served_sequence_log_probability": -37.246607302935715,
+        "full_sequence_log_probability": -49.841829264718484
+      }
+    }
+  },
+  {
+    "name": "fullreply.sympy__sympy-14248.call50",
+    "task": "sympy__sympy-14248",
+    "call": 50,
+    "group": "rest",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-sympy14248/sympy__sympy-14248.call50.case.private.json",
+    "case_sha256": "5ee988805e15ef3052cd9a59c8fb2f73e65de112a15ef00b649fbb02a4fb1708",
+    "served": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.sympy__sympy-14248.call50.json",
+      "runtime_config_id": "stage12_head_bfp8_lofi",
+      "wall_s": 15.799608134198934,
+      "branches": {
+        "chosen": {
+          "tokens": 245,
+          "top1_matches_forced_fraction": 0.9673469387755103,
+          "sequence_log_probability": -50.1858932535065,
+          "mean_token_log_probability": -0.20484038062655713,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 15.792235265951604
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "full": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.sympy__sympy-14248.call50.json",
+      "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+      "wall_s": 28.516112328972667,
+      "branches": {
+        "chosen": {
+          "tokens": 245,
+          "top1_matches_forced_fraction": 0.9673469387755103,
+          "sequence_log_probability": -54.99489361669626,
+          "mean_token_log_probability": -0.22446895353753576,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 28.507144822971895
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "comparison_status": "verified",
+    "comparison": {
+      "chosen": {
+        "tokens": 245,
+        "top1_agreement": 0.9755102040816327,
+        "served_sequence_log_probability": -50.1858932535065,
+        "full_sequence_log_probability": -54.99489361669626
+      }
+    }
+  },
+  {
+    "name": "fullreply.pydata__xarray-4687.call39",
+    "task": "pydata__xarray-4687",
+    "call": 39,
+    "group": "rest",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/pydata__xarray-4687.call39.case.private.json",
+    "case_sha256": "aef7ccecbbef4c9a09cdd1317613f93e9cf431e32b1a67dc3d507d7a3e6e84a3",
+    "served": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.pydata__xarray-4687.call39.json",
+      "runtime_config_id": "stage12_head_bfp8_lofi",
+      "wall_s": 10.468364702071995,
+      "branches": {
+        "chosen": {
+          "tokens": 95,
+          "top1_matches_forced_fraction": 0.8421052631578947,
+          "sequence_log_probability": -72.20978103712869,
+          "mean_token_log_probability": -0.7601029582855652,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 10.462404145859182
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "full": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.pydata__xarray-4687.call39.json",
+      "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+      "wall_s": 18.62179363379255,
+      "branches": {
+        "chosen": {
+          "tokens": 95,
+          "top1_matches_forced_fraction": 0.8421052631578947,
+          "sequence_log_probability": -74.75698844724155,
+          "mean_token_log_probability": -0.7869156678657006,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 18.61342134606093
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "comparison_status": "verified",
+    "comparison": {
+      "chosen": {
+        "tokens": 95,
+        "top1_agreement": 0.9157894736842105,
+        "served_sequence_log_probability": -72.20978103712869,
+        "full_sequence_log_probability": -74.75698844724155
+      }
+    }
+  },
+  {
+    "name": "fullreply.mwaskom__seaborn-3187.call64",
+    "task": "mwaskom__seaborn-3187",
+    "call": 64,
+    "group": "rest",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/mwaskom__seaborn-3187.call64.case.private.json",
+    "case_sha256": "194876dcf2e5141e51023d4901cb8063ce9db22aafed60849c836fe09d2e5d42",
+    "served": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.mwaskom__seaborn-3187.call64.json",
+      "runtime_config_id": "stage12_head_bfp8_lofi",
+      "wall_s": 8.236587291117758,
+      "branches": {
+        "chosen": {
+          "tokens": 27,
+          "top1_matches_forced_fraction": 0.9259259259259259,
+          "sequence_log_probability": -33.163885783420525,
+          "mean_token_log_probability": -1.228292066052612,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 8.230159176047891
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "full": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.mwaskom__seaborn-3187.call64.json",
+      "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+      "wall_s": 14.520936295157298,
+      "branches": {
+        "chosen": {
+          "tokens": 27,
+          "top1_matches_forced_fraction": 0.9259259259259259,
+          "sequence_log_probability": -31.515350576315036,
+          "mean_token_log_probability": -1.1672352065301865,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 14.513439038069919
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "comparison_status": "verified",
+    "comparison": {
+      "chosen": {
+        "tokens": 27,
+        "top1_agreement": 1.0,
+        "served_sequence_log_probability": -33.163885783420525,
+        "full_sequence_log_probability": -31.515350576315036
+      }
+    }
+  },
+  {
+    "name": "fullreply.pytest-dev__pytest-6197.call35",
+    "task": "pytest-dev__pytest-6197",
+    "call": 35,
+    "group": "rest",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/pytest-dev__pytest-6197.call35.case.private.json",
+    "case_sha256": "67799b495a43b73671dca02af3da7d741b8dbcc8059294f6ccae8138bc2021a9",
+    "served": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.pytest-dev__pytest-6197.call35.json",
+      "runtime_config_id": "stage12_head_bfp8_lofi",
+      "wall_s": 12.055236738175154,
+      "branches": {
+        "chosen": {
+          "tokens": 131,
+          "top1_matches_forced_fraction": 0.9465648854961832,
+          "sequence_log_probability": -47.6745396811334,
+          "mean_token_log_probability": -0.3639277838254458,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 12.04896789509803
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "full": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.pytest-dev__pytest-6197.call35.json",
+      "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+      "wall_s": 21.625374190043658,
+      "branches": {
+        "chosen": {
+          "tokens": 131,
+          "top1_matches_forced_fraction": 0.9389312977099237,
+          "sequence_log_probability": -50.216228879491894,
+          "mean_token_log_probability": -0.383329991446503,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 21.61735925404355
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "comparison_status": "verified",
+    "comparison": {
+      "chosen": {
+        "tokens": 131,
+        "top1_agreement": 0.9389312977099237,
+        "served_sequence_log_probability": -47.6745396811334,
+        "full_sequence_log_probability": -50.216228879491894
+      }
+    }
+  },
+  {
+    "name": "fullreply.pydata__xarray-3095.call53",
+    "task": "pydata__xarray-3095",
+    "call": 53,
+    "group": "rest",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/pydata__xarray-3095.call53.case.private.json",
+    "case_sha256": "cdefa2d1ceb55ca29bbad1dda5c9502104bbce256969081381bad9fbfe0bfdd4",
+    "served": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.pydata__xarray-3095.call53.json",
+      "runtime_config_id": "stage12_head_bfp8_lofi",
+      "wall_s": 40.14936173101887,
+      "branches": {
+        "chosen": {
+          "tokens": 850,
+          "top1_matches_forced_fraction": 0.9223529411764706,
+          "sequence_log_probability": -244.64352403904545,
+          "mean_token_log_probability": -0.2878159106341711,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 40.13923064316623
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "full": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.pydata__xarray-3095.call53.json",
+      "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+      "wall_s": 71.99110203189775,
+      "branches": {
+        "chosen": {
+          "tokens": 850,
+          "top1_matches_forced_fraction": 0.8941176470588236,
+          "sequence_log_probability": -294.33338487205515,
+          "mean_token_log_probability": -0.3462745704377119,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 71.97764745005406
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "comparison_status": "verified",
+    "comparison": {
+      "chosen": {
+        "tokens": 850,
+        "top1_agreement": 0.9376470588235294,
+        "served_sequence_log_probability": -244.64352403904545,
+        "full_sequence_log_probability": -294.33338487205515
+      }
+    }
+  },
+  {
+    "name": "fullreply.pylint-dev__pylint-4970.call51",
+    "task": "pylint-dev__pylint-4970",
+    "call": 51,
+    "group": "rest",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/pylint-dev__pylint-4970.call51.case.private.json",
+    "case_sha256": "7a07421ab539c96fa4cf99f340a83a789a6c97fcf78773e9238d98dfcc4003bb",
+    "served": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.pylint-dev__pylint-4970.call51.json",
+      "runtime_config_id": "stage12_head_bfp8_lofi",
+      "wall_s": 32.448776548029855,
+      "branches": {
+        "chosen": {
+          "tokens": 628,
+          "top1_matches_forced_fraction": 0.8853503184713376,
+          "sequence_log_probability": -203.2016942488224,
+          "mean_token_log_probability": -0.323569576829335,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 32.438391615170985
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "full": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.pylint-dev__pylint-4970.call51.json",
+      "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+      "wall_s": 57.96289504808374,
+      "branches": {
+        "chosen": {
+          "tokens": 628,
+          "top1_matches_forced_fraction": 0.8646496815286624,
+          "sequence_log_probability": -259.17397638994237,
+          "mean_token_log_probability": -0.4126974146336662,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 57.950259629869834
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "comparison_status": "verified",
+    "comparison": {
+      "chosen": {
+        "tokens": 628,
+        "top1_agreement": 0.9219745222929936,
+        "served_sequence_log_probability": -203.2016942488224,
+        "full_sequence_log_probability": -259.17397638994237
+      }
+    }
+  },
+  {
+    "name": "fullreply.pylint-dev__pylint-4970.call55",
+    "task": "pylint-dev__pylint-4970",
+    "call": 55,
+    "group": "rest",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/pylint-dev__pylint-4970.call55.case.private.json",
+    "case_sha256": "87af55c486f6660e4f149d66a13170383424a31a002fdd5cd730aa100be130d1",
+    "served": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.pylint-dev__pylint-4970.call55.json",
+      "runtime_config_id": "stage12_head_bfp8_lofi",
+      "wall_s": 31.82418031617999,
+      "branches": {
+        "chosen": {
+          "tokens": 600,
+          "top1_matches_forced_fraction": 0.9233333333333333,
+          "sequence_log_probability": -136.32091439055696,
+          "mean_token_log_probability": -0.2272015239842616,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 31.81366764008999
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "full": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.pylint-dev__pylint-4970.call55.json",
+      "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+      "wall_s": 56.773928506998345,
+      "branches": {
+        "chosen": {
+          "tokens": 600,
+          "top1_matches_forced_fraction": 0.91,
+          "sequence_log_probability": -178.03631748563197,
+          "mean_token_log_probability": -0.2967271958093866,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 56.76141406991519
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "comparison_status": "verified",
+    "comparison": {
+      "chosen": {
+        "tokens": 600,
+        "top1_agreement": 0.9416666666666667,
+        "served_sequence_log_probability": -136.32091439055696,
+        "full_sequence_log_probability": -178.03631748563197
+      }
+    }
+  },
+  {
+    "name": "fullreply.pylint-dev__pylint-4551.call35",
+    "task": "pylint-dev__pylint-4551",
+    "call": 35,
+    "group": "rest",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/pylint-dev__pylint-4551.call35.case.private.json",
+    "case_sha256": "2ac9e9aa4e07b399a38a79dc7424ced5a2926fd2e3bde5beaa129813b6ea7918",
+    "served": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.pylint-dev__pylint-4551.call35.json",
+      "runtime_config_id": "stage12_head_bfp8_lofi",
+      "wall_s": 55.12411784706637,
+      "branches": {
+        "chosen": {
+          "tokens": 1201,
+          "top1_matches_forced_fraction": 0.9750208159866778,
+          "sequence_log_probability": -88.81891673590661,
+          "mean_token_log_probability": -0.07395413550033857,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 55.11010725982487
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "full": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.pylint-dev__pylint-4551.call35.json",
+      "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+      "wall_s": 98.64081961708143,
+      "branches": {
+        "chosen": {
+          "tokens": 1201,
+          "top1_matches_forced_fraction": 0.9675270607826811,
+          "sequence_log_probability": -131.15471763454033,
+          "mean_token_log_probability": -0.10920459420028338,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 98.62429230893031
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "comparison_status": "verified",
+    "comparison": {
+      "chosen": {
+        "tokens": 1201,
+        "top1_agreement": 0.9833472106577852,
+        "served_sequence_log_probability": -88.81891673590661,
+        "full_sequence_log_probability": -131.15471763454033
+      }
+    }
+  },
+  {
+    "name": "fullreply.sympy__sympy-14248.call79",
+    "task": "sympy__sympy-14248",
+    "call": 79,
+    "group": "rest",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-sympy14248/sympy__sympy-14248.call79.case.private.json",
+    "case_sha256": "cf85df09d8452c4bc7b28a177082172dd535220abcc0a8ae9217064522b5ffca",
+    "served": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.sympy__sympy-14248.call79.json",
+      "runtime_config_id": "stage12_head_bfp8_lofi",
+      "wall_s": 20.125708123203367,
+      "branches": {
+        "chosen": {
+          "tokens": 190,
+          "top1_matches_forced_fraction": 0.8894736842105263,
+          "sequence_log_probability": -82.8753852054405,
+          "mean_token_log_probability": -0.436186237923371,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 20.116009429097176
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "full": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.sympy__sympy-14248.call79.json",
+      "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+      "wall_s": 35.25070586404763,
+      "branches": {
+        "chosen": {
+          "tokens": 190,
+          "top1_matches_forced_fraction": 0.8894736842105263,
+          "sequence_log_probability": -95.01324214518834,
+          "mean_token_log_probability": -0.5000696955009912,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 35.239023345988244
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "comparison_status": "verified",
+    "comparison": {
+      "chosen": {
+        "tokens": 190,
+        "top1_agreement": 0.9315789473684211,
+        "served_sequence_log_probability": -82.8753852054405,
+        "full_sequence_log_probability": -95.01324214518834
+      }
+    }
+  },
+  {
+    "name": "fullreply.matplotlib__matplotlib-20488.call88",
+    "task": "matplotlib__matplotlib-20488",
+    "call": 88,
+    "group": "rest",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/matplotlib__matplotlib-20488.call88.case.private.json",
+    "case_sha256": "d47a568ee9098cfac1284de4d061a77ff02e614de8b17b464bf63483d80d3fc6",
+    "served": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.matplotlib__matplotlib-20488.call88.json",
+      "runtime_config_id": "stage12_head_bfp8_lofi",
+      "wall_s": 44.24435048899613,
+      "branches": {
+        "chosen": {
+          "tokens": 794,
+          "top1_matches_forced_fraction": 0.9483627204030227,
+          "sequence_log_probability": -128.2340097049873,
+          "mean_token_log_probability": -0.1615037905604374,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 44.23159985500388
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "full": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.matplotlib__matplotlib-20488.call88.json",
+      "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+      "wall_s": 77.76563988509588,
+      "branches": {
+        "chosen": {
+          "tokens": 794,
+          "top1_matches_forced_fraction": 0.9483627204030227,
+          "sequence_log_probability": -156.2007321692565,
+          "mean_token_log_probability": -0.1967263629335724,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 77.74964369204827
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "comparison_status": "verified",
+    "comparison": {
+      "chosen": {
+        "tokens": 794,
+        "top1_agreement": 0.9760705289672544,
+        "served_sequence_log_probability": -128.2340097049873,
+        "full_sequence_log_probability": -156.2007321692565
+      }
+    }
+  },
+  {
+    "name": "fullreply.matplotlib__matplotlib-20488.call91",
+    "task": "matplotlib__matplotlib-20488",
+    "call": 91,
+    "group": "rest",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/matplotlib__matplotlib-20488.call91.case.private.json",
+    "case_sha256": "62e3bcae8970a06f16fd33b9e6053e3201126cd1349758f6060036b4df6a100e",
+    "served": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.matplotlib__matplotlib-20488.call91.json",
+      "runtime_config_id": "stage12_head_bfp8_lofi",
+      "wall_s": 24.128907115897164,
+      "branches": {
+        "chosen": {
+          "tokens": 265,
+          "top1_matches_forced_fraction": 0.8981132075471698,
+          "sequence_log_probability": -102.88294154687995,
+          "mean_token_log_probability": -0.3882375152712451,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 24.118566426914185
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "full": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.matplotlib__matplotlib-20488.call91.json",
+      "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+      "wall_s": 42.185807849047706,
+      "branches": {
+        "chosen": {
+          "tokens": 265,
+          "top1_matches_forced_fraction": 0.879245283018868,
+          "sequence_log_probability": -114.51633397753892,
+          "mean_token_log_probability": -0.43213710934920346,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 42.17235726583749
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "comparison_status": "verified",
+    "comparison": {
+      "chosen": {
+        "tokens": 265,
+        "top1_agreement": 0.9433962264150944,
+        "served_sequence_log_probability": -102.88294154687995,
+        "full_sequence_log_probability": -114.51633397753892
+      }
+    }
+  },
+  {
+    "name": "fullreply.pylint-dev__pylint-6386.call33",
+    "task": "pylint-dev__pylint-6386",
+    "call": 33,
+    "group": "rest",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/pylint-dev__pylint-6386.call33.case.private.json",
+    "case_sha256": "a82a21f6a3819b53a5ec63996d9394d929c7b61db604d7e6d766a4e62c71d284",
+    "served": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.pylint-dev__pylint-6386.call33.json",
+      "runtime_config_id": "stage12_head_bfp8_lofi",
+      "wall_s": 27.16845979914069,
+      "branches": {
+        "chosen": {
+          "tokens": 305,
+          "top1_matches_forced_fraction": 0.9147540983606557,
+          "sequence_log_probability": -84.29695823512728,
+          "mean_token_log_probability": -0.2763834696233681,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 27.156805844977498
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "full": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.pylint-dev__pylint-6386.call33.json",
+      "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+      "wall_s": 47.0388588688802,
+      "branches": {
+        "chosen": {
+          "tokens": 305,
+          "top1_matches_forced_fraction": 0.9180327868852459,
+          "sequence_log_probability": -93.06023489452306,
+          "mean_token_log_probability": -0.3051155242443379,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 47.02506388910115
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "comparison_status": "verified",
+    "comparison": {
+      "chosen": {
+        "tokens": 305,
+        "top1_agreement": 0.9606557377049181,
+        "served_sequence_log_probability": -84.29695823512728,
+        "full_sequence_log_probability": -93.06023489452306
+      }
+    }
+  },
+  {
+    "name": "fullreply.django__django-16950.call80",
+    "task": "django__django-16950",
+    "call": 80,
+    "group": "rest",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies/django__django-16950.call80.case.private.json",
+    "case_sha256": "8905c521fec5033aa7ad06de897038849f8189a2eac9d4087bcea04e1f5d6587",
+    "served": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.django__django-16950.call80.json",
+      "runtime_config_id": "stage12_head_bfp8_lofi",
+      "wall_s": 21.810492939082906,
+      "branches": {
+        "chosen": {
+          "tokens": 68,
+          "top1_matches_forced_fraction": 0.8235294117647058,
+          "sequence_log_probability": -49.400030474997436,
+          "mean_token_log_probability": -0.7264710363970212,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 21.79781513218768
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "full": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.django__django-16950.call80.json",
+      "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+      "wall_s": 37.34297842695378,
+      "branches": {
+        "chosen": {
+          "tokens": 68,
+          "top1_matches_forced_fraction": 0.7941176470588235,
+          "sequence_log_probability": -51.322877763867666,
+          "mean_token_log_probability": -0.7547482024098187,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 37.32742655207403
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "not_applicable"
+      }
+    },
+    "comparison_status": "verified",
+    "comparison": {
+      "chosen": {
+        "tokens": 68,
+        "top1_agreement": 0.8970588235294118,
+        "served_sequence_log_probability": -49.400030474997436,
+        "full_sequence_log_probability": -51.322877763867666
+      }
+    }
+  },
+  {
+    "name": "action.astropy__astropy-13398.call17",
+    "task": "astropy__astropy-13398",
+    "call": 17,
+    "group": "rest",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/astropy__astropy-13398/action_counterfactual.candidate.private.json",
+    "case_sha256": "cf257559635633305e61cdd43ee580830d26040857d3a664e1e8291c8492d030",
+    "served": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/action.astropy__astropy-13398.call17.json",
+      "runtime_config_id": "stage12_head_bfp8_lofi",
+      "wall_s": 188.91318952292204,
+      "branches": {
+        "chosen": {
+          "tokens": 775,
+          "top1_matches_forced_fraction": 1.0,
+          "sequence_log_probability": -0.30582069028081804,
+          "mean_token_log_probability": -0.00039460734229782973,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 30.23817259212956
+        },
+        "correct": {
+          "tokens": 4330,
+          "top1_matches_forced_fraction": 0.8353348729792148,
+          "sequence_log_probability": -5180.46432715039,
+          "mean_token_log_probability": -1.196412084792238,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 158.63846996193752
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "verified_common_prefix",
+        "branch_position_zero_based": 8,
+        "absolute_next_token_index_zero_based": 11841,
+        "conditioning_tokens": 11833,
+        "shared_forced_prefix_tokens": 8,
+        "conditioning_and_preceding_forced_prefix_identical": true,
+        "targets": {
+          "chosen": {
+            "target_log_probability": -1.1920928244535389e-07,
+            "target_probability": 0.9999998807907104,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -32.5,
+            "target_probability": 7.68120477976069e-15,
+            "target_is_top1": false
+          }
+        },
+        "scope": "Local alternative-token probabilities under a common prefix; not sequence preference or task success.",
+        "same_top1_across_branch_replays": true
+      }
+    },
+    "full": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/action.astropy__astropy-13398.call17.json",
+      "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+      "wall_s": 346.1781702579465,
+      "branches": {
+        "chosen": {
+          "tokens": 775,
+          "top1_matches_forced_fraction": 1.0,
+          "sequence_log_probability": -0.06743714942647472,
+          "mean_token_log_probability": -8.701567667932221e-05,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 55.447173974942416
+        },
+        "correct": {
+          "tokens": 4330,
+          "top1_matches_forced_fraction": 0.8381062355658199,
+          "sequence_log_probability": -4835.553702335906,
+          "mean_token_log_probability": -1.116756051347784,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 290.6871628400404
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "verified_common_prefix",
+        "branch_position_zero_based": 8,
+        "absolute_next_token_index_zero_based": 11841,
+        "conditioning_tokens": 11833,
+        "shared_forced_prefix_tokens": 8,
+        "conditioning_and_preceding_forced_prefix_identical": true,
+        "targets": {
+          "chosen": {
+            "target_log_probability": 0.0,
+            "target_probability": 1.0,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -32.75,
+            "target_probability": 5.982128261852607e-15,
+            "target_is_top1": false
+          }
+        },
+        "scope": "Local alternative-token probabilities under a common prefix; not sequence preference or task success.",
+        "same_top1_across_branch_replays": true
+      }
+    },
+    "comparison_status": "verified",
+    "comparison": {
+      "chosen": {
+        "tokens": 775,
+        "top1_agreement": 1.0,
+        "served_sequence_log_probability": -0.30582069028081804,
+        "full_sequence_log_probability": -0.06743714942647472
+      },
+      "correct": {
+        "tokens": 4330,
+        "top1_agreement": 0.9528868360277136,
+        "served_sequence_log_probability": -5180.46432715039,
+        "full_sequence_log_probability": -4835.553702335906
+      }
+    },
+    "action_divergence_comparison": {
+      "status": "verified_common_prefix_across_precisions",
+      "branch_position_zero_based": 8,
+      "absolute_next_token_index_zero_based": 11841,
+      "served_full_top1_agreement_by_branch": {
+        "chosen": true,
+        "correct": true
+      },
+      "scope": "Same conditioning and forced prefix verified; see each mode action_divergence for local target probabilities."
+    }
+  },
+  {
+    "name": "action.astropy__astropy-14096.call23",
+    "task": "astropy__astropy-14096",
+    "call": 23,
+    "group": "rest",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/astropy__astropy-14096/action_counterfactual.candidate.private.json",
+    "case_sha256": "5feeb353e8d4dc4a956d0ff4fd4c9cb54ebaf173e8c8306bb4e8b242a3c970d9",
+    "served": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/action.astropy__astropy-14096.call23.json",
+      "runtime_config_id": "stage12_head_bfp8_lofi",
+      "wall_s": 12.977818306069821,
+      "branches": {
+        "chosen": {
+          "tokens": 39,
+          "top1_matches_forced_fraction": 0.9743589743589743,
+          "sequence_log_probability": -4.027311286634131,
+          "mean_token_log_probability": -0.1032643919649777,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 3.4099574650172144
+        },
+        "correct": {
+          "tokens": 211,
+          "top1_matches_forced_fraction": 0.8957345971563981,
+          "sequence_log_probability": -265.9481030165428,
+          "mean_token_log_probability": -1.2604175498414352,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 9.559007747098804
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "verified_common_prefix",
+        "branch_position_zero_based": 8,
+        "absolute_next_token_index_zero_based": 10611,
+        "conditioning_tokens": 10603,
+        "shared_forced_prefix_tokens": 8,
+        "conditioning_and_preceding_forced_prefix_identical": true,
+        "targets": {
+          "chosen": {
+            "target_log_probability": -0.031208518892526627,
+            "target_probability": 0.9692734479904175,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -20.499958038330078,
+            "target_probability": 1.2502052726404145e-09,
+            "target_is_top1": false
+          }
+        },
+        "scope": "Local alternative-token probabilities under a common prefix; not sequence preference or task success.",
+        "same_top1_across_branch_replays": true
+      }
+    },
+    "full": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/action.astropy__astropy-14096.call23.json",
+      "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+      "wall_s": 24.005118530010805,
+      "branches": {
+        "chosen": {
+          "tokens": 39,
+          "top1_matches_forced_fraction": 0.9743589743589743,
+          "sequence_log_probability": -11.689687971465602,
+          "mean_token_log_probability": -0.29973558901193853,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 6.349615060957149
+        },
+        "correct": {
+          "tokens": 211,
+          "top1_matches_forced_fraction": 0.8909952606635071,
+          "sequence_log_probability": -260.4110590756307,
+          "mean_token_log_probability": -1.2341756354295295,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 17.645866589155048
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "verified_common_prefix",
+        "branch_position_zero_based": 8,
+        "absolute_next_token_index_zero_based": 10611,
+        "conditioning_tokens": 10603,
+        "shared_forced_prefix_tokens": 8,
+        "conditioning_and_preceding_forced_prefix_identical": true,
+        "targets": {
+          "chosen": {
+            "target_log_probability": -0.057267218828201294,
+            "target_probability": 0.9443416595458984,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -22.776018142700195,
+            "target_probability": 1.2838106966395202e-10,
+            "target_is_top1": false
+          }
+        },
+        "scope": "Local alternative-token probabilities under a common prefix; not sequence preference or task success.",
+        "same_top1_across_branch_replays": true
+      }
+    },
+    "comparison_status": "verified",
+    "comparison": {
+      "chosen": {
+        "tokens": 39,
+        "top1_agreement": 1.0,
+        "served_sequence_log_probability": -4.027311286634131,
+        "full_sequence_log_probability": -11.689687971465602
+      },
+      "correct": {
+        "tokens": 211,
+        "top1_agreement": 0.990521327014218,
+        "served_sequence_log_probability": -265.9481030165428,
+        "full_sequence_log_probability": -260.4110590756307
+      }
+    },
+    "action_divergence_comparison": {
+      "status": "verified_common_prefix_across_precisions",
+      "branch_position_zero_based": 8,
+      "absolute_next_token_index_zero_based": 10611,
+      "served_full_top1_agreement_by_branch": {
+        "chosen": true,
+        "correct": true
+      },
+      "scope": "Same conditioning and forced prefix verified; see each mode action_divergence for local target probabilities."
+    }
+  },
+  {
+    "name": "action.astropy__astropy-14598.call33",
+    "task": "astropy__astropy-14598",
+    "call": 33,
+    "group": "rest",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/astropy__astropy-14598/action_counterfactual.candidate.private.json",
+    "case_sha256": "ce76fb1ce580b1ddae47e94c6b2d78c92418e4da1be822ab2b7e505462ab9c3d",
+    "served": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/action.astropy__astropy-14598.call33.json",
+      "runtime_config_id": "stage12_head_bfp8_lofi",
+      "wall_s": 22.449669459136203,
+      "branches": {
+        "chosen": {
+          "tokens": 57,
+          "top1_matches_forced_fraction": 0.9824561403508771,
+          "sequence_log_probability": -3.1880912211534422,
+          "mean_token_log_probability": -0.05593142493251653,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 6.058947145007551
+        },
+        "correct": {
+          "tokens": 339,
+          "top1_matches_forced_fraction": 0.8082595870206489,
+          "sequence_log_probability": -550.4427496712372,
+          "mean_token_log_probability": -1.6237249252838855,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 16.377375120064244
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "verified_common_prefix",
+        "branch_position_zero_based": 8,
+        "absolute_next_token_index_zero_based": 18586,
+        "conditioning_tokens": 18578,
+        "shared_forced_prefix_tokens": 8,
+        "conditioning_and_preceding_forced_prefix_identical": true,
+        "targets": {
+          "chosen": {
+            "target_log_probability": -0.0005158047424629331,
+            "target_probability": 0.9994843006134033,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -18.03176498413086,
+            "target_probability": 1.4753802624056789e-08,
+            "target_is_top1": false
+          }
+        },
+        "scope": "Local alternative-token probabilities under a common prefix; not sequence preference or task success.",
+        "same_top1_across_branch_replays": true
+      }
+    },
+    "full": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/action.astropy__astropy-14598.call33.json",
+      "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+      "wall_s": 40.817044703057036,
+      "branches": {
+        "chosen": {
+          "tokens": 57,
+          "top1_matches_forced_fraction": 1.0,
+          "sequence_log_probability": -0.7529266009754139,
+          "mean_token_log_probability": -0.013209238613603753,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 10.977153673069552
+        },
+        "correct": {
+          "tokens": 339,
+          "top1_matches_forced_fraction": 0.8171091445427728,
+          "sequence_log_probability": -505.93993369139326,
+          "mean_token_log_probability": -1.492448181980511,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 29.82276295707561
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "verified_common_prefix",
+        "branch_position_zero_based": 8,
+        "absolute_next_token_index_zero_based": 18586,
+        "conditioning_tokens": 18578,
+        "shared_forced_prefix_tokens": 8,
+        "conditioning_and_preceding_forced_prefix_identical": true,
+        "targets": {
+          "chosen": {
+            "target_log_probability": -0.0006349454633891582,
+            "target_probability": 0.9993652701377869,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -16.625635147094727,
+            "target_probability": 6.019749321239942e-08,
+            "target_is_top1": false
+          }
+        },
+        "scope": "Local alternative-token probabilities under a common prefix; not sequence preference or task success.",
+        "same_top1_across_branch_replays": true
+      }
+    },
+    "comparison_status": "verified",
+    "comparison": {
+      "chosen": {
+        "tokens": 57,
+        "top1_agreement": 0.9824561403508771,
+        "served_sequence_log_probability": -3.1880912211534422,
+        "full_sequence_log_probability": -0.7529266009754139
+      },
+      "correct": {
+        "tokens": 339,
+        "top1_agreement": 0.9321533923303835,
+        "served_sequence_log_probability": -550.4427496712372,
+        "full_sequence_log_probability": -505.93993369139326
+      }
+    },
+    "action_divergence_comparison": {
+      "status": "verified_common_prefix_across_precisions",
+      "branch_position_zero_based": 8,
+      "absolute_next_token_index_zero_based": 18586,
+      "served_full_top1_agreement_by_branch": {
+        "chosen": true,
+        "correct": true
+      },
+      "scope": "Same conditioning and forced prefix verified; see each mode action_divergence for local target probabilities."
+    }
+  },
+  {
+    "name": "action.django__django-14007.call31",
+    "task": "django__django-14007",
+    "call": 31,
+    "group": "rest",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/django__django-14007/action_counterfactual.candidate.private.json",
+    "case_sha256": "1afac21fa317e6099c8d74ffe523dbae743de534bb7b2fe2637cc92ad923000b",
+    "served": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/action.django__django-14007.call31.json",
+      "runtime_config_id": "stage12_head_bfp8_lofi",
+      "wall_s": 32.74194838106632,
+      "branches": {
+        "chosen": {
+          "tokens": 85,
+          "top1_matches_forced_fraction": 1.0,
+          "sequence_log_probability": -0.6976676209656247,
+          "mean_token_log_probability": -0.008207854364301468,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 7.28436336806044
+        },
+        "correct": {
+          "tokens": 576,
+          "top1_matches_forced_fraction": 0.9236111111111112,
+          "sequence_log_probability": -428.2412945431939,
+          "mean_token_log_probability": -0.7434744696930449,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 25.442314920015633
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "verified_common_prefix",
+        "branch_position_zero_based": 8,
+        "absolute_next_token_index_zero_based": 19591,
+        "conditioning_tokens": 19583,
+        "shared_forced_prefix_tokens": 8,
+        "conditioning_and_preceding_forced_prefix_identical": true,
+        "targets": {
+          "chosen": {
+            "target_log_probability": -0.16041532158851624,
+            "target_probability": 0.8517899513244629,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -20.597915649414062,
+            "target_probability": 1.1335453686811547e-09,
+            "target_is_top1": false
+          }
+        },
+        "scope": "Local alternative-token probabilities under a common prefix; not sequence preference or task success.",
+        "same_top1_across_branch_replays": true
+      }
+    },
+    "full": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/action.django__django-14007.call31.json",
+      "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+      "wall_s": 59.4342345551122,
+      "branches": {
+        "chosen": {
+          "tokens": 85,
+          "top1_matches_forced_fraction": 0.9882352941176471,
+          "sequence_log_probability": -2.712582627016552,
+          "mean_token_log_probability": -0.03191273678843002,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 13.351044565904886
+        },
+        "correct": {
+          "tokens": 576,
+          "top1_matches_forced_fraction": 0.9201388888888888,
+          "sequence_log_probability": -417.72973486479674,
+          "mean_token_log_probability": -0.7252252341402721,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 46.06502987607382
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "verified_common_prefix",
+        "branch_position_zero_based": 8,
+        "absolute_next_token_index_zero_based": 19591,
+        "conditioning_tokens": 19583,
+        "shared_forced_prefix_tokens": 8,
+        "conditioning_and_preceding_forced_prefix_identical": true,
+        "targets": {
+          "chosen": {
+            "target_log_probability": -0.011086059734225273,
+            "target_probability": 0.9889751672744751,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -22.636085510253906,
+            "target_probability": 1.4766343703342955e-10,
+            "target_is_top1": false
+          }
+        },
+        "scope": "Local alternative-token probabilities under a common prefix; not sequence preference or task success.",
+        "same_top1_across_branch_replays": true
+      }
+    },
+    "comparison_status": "verified",
+    "comparison": {
+      "chosen": {
+        "tokens": 85,
+        "top1_agreement": 0.9882352941176471,
+        "served_sequence_log_probability": -0.6976676209656247,
+        "full_sequence_log_probability": -2.712582627016552
+      },
+      "correct": {
+        "tokens": 576,
+        "top1_agreement": 0.9791666666666666,
+        "served_sequence_log_probability": -428.2412945431939,
+        "full_sequence_log_probability": -417.72973486479674
+      }
+    },
+    "action_divergence_comparison": {
+      "status": "verified_common_prefix_across_precisions",
+      "branch_position_zero_based": 8,
+      "absolute_next_token_index_zero_based": 19591,
+      "served_full_top1_agreement_by_branch": {
+        "chosen": true,
+        "correct": true
+      },
+      "scope": "Same conditioning and forced prefix verified; see each mode action_divergence for local target probabilities."
+    }
+  },
+  {
+    "name": "action.django__django-14011.call33",
+    "task": "django__django-14011",
+    "call": 33,
+    "group": "rest",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/django__django-14011/action_counterfactual.candidate.private.json",
+    "case_sha256": "2656153fba29079165b1bcbb49ac7ddfd6bbf1dfe378285d680816f607639341",
+    "served": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/action.django__django-14011.call33.json",
+      "runtime_config_id": "stage12_head_bfp8_lofi",
+      "wall_s": 48.55279514589347,
+      "branches": {
+        "chosen": {
+          "tokens": 414,
+          "top1_matches_forced_fraction": 0.9830917874396136,
+          "sequence_log_probability": -21.786257902501738,
+          "mean_token_log_probability": -0.052623811358699854,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 20.96625091508031
+        },
+        "correct": {
+          "tokens": 589,
+          "top1_matches_forced_fraction": 0.8370118845500849,
+          "sequence_log_probability": -863.1944507472977,
+          "mean_token_log_probability": -1.4655253832721522,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 27.563786359038204
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "verified_common_prefix",
+        "branch_position_zero_based": 8,
+        "absolute_next_token_index_zero_based": 25213,
+        "conditioning_tokens": 25205,
+        "shared_forced_prefix_tokens": 8,
+        "conditioning_and_preceding_forced_prefix_identical": true,
+        "targets": {
+          "chosen": {
+            "target_log_probability": -0.0005983707960695028,
+            "target_probability": 0.9994018077850342,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -24.516223907470703,
+            "target_probability": 2.2528860721404698e-11,
+            "target_is_top1": false
+          }
+        },
+        "scope": "Local alternative-token probabilities under a common prefix; not sequence preference or task success.",
+        "same_top1_across_branch_replays": true
+      }
+    },
+    "full": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/action.django__django-14011.call33.json",
+      "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+      "wall_s": 88.00319451605901,
+      "branches": {
+        "chosen": {
+          "tokens": 414,
+          "top1_matches_forced_fraction": 0.9710144927536232,
+          "sequence_log_probability": -41.97244506841717,
+          "mean_token_log_probability": -0.10138271755656322,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 38.1739136390388
+        },
+        "correct": {
+          "tokens": 589,
+          "top1_matches_forced_fraction": 0.8404074702886248,
+          "sequence_log_probability": -810.6952292493567,
+          "mean_token_log_probability": -1.3763925793707243,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 49.80338952410966
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "verified_common_prefix",
+        "branch_position_zero_based": 8,
+        "absolute_next_token_index_zero_based": 25213,
+        "conditioning_tokens": 25205,
+        "shared_forced_prefix_tokens": 8,
+        "conditioning_and_preceding_forced_prefix_identical": true,
+        "targets": {
+          "chosen": {
+            "target_log_probability": -0.0002456601650919765,
+            "target_probability": 0.9997543692588806,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -25.781496047973633,
+            "target_probability": 6.356799635287569e-12,
+            "target_is_top1": false
+          }
+        },
+        "scope": "Local alternative-token probabilities under a common prefix; not sequence preference or task success.",
+        "same_top1_across_branch_replays": true
+      }
+    },
+    "comparison_status": "verified",
+    "comparison": {
+      "chosen": {
+        "tokens": 414,
+        "top1_agreement": 0.9734299516908212,
+        "served_sequence_log_probability": -21.786257902501738,
+        "full_sequence_log_probability": -41.97244506841717
+      },
+      "correct": {
+        "tokens": 589,
+        "top1_agreement": 0.9575551782682513,
+        "served_sequence_log_probability": -863.1944507472977,
+        "full_sequence_log_probability": -810.6952292493567
+      }
+    },
+    "action_divergence_comparison": {
+      "status": "verified_common_prefix_across_precisions",
+      "branch_position_zero_based": 8,
+      "absolute_next_token_index_zero_based": 25213,
+      "served_full_top1_agreement_by_branch": {
+        "chosen": true,
+        "correct": true
+      },
+      "scope": "Same conditioning and forced prefix verified; see each mode action_divergence for local target probabilities."
+    }
+  },
+  {
+    "name": "action.django__django-15037.call19",
+    "task": "django__django-15037",
+    "call": 19,
+    "group": "rest",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/django__django-15037/action_counterfactual.candidate.private.json",
+    "case_sha256": "f40ae4b27d642a43e5a31e278d4f709afa52c973d5edf5acb57230b7b0a064d2",
+    "served": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/action.django__django-15037.call19.json",
+      "runtime_config_id": "stage12_head_bfp8_lofi",
+      "wall_s": 21.159625336993486,
+      "branches": {
+        "chosen": {
+          "tokens": 51,
+          "top1_matches_forced_fraction": 1.0,
+          "sequence_log_probability": -1.3103160505651061,
+          "mean_token_log_probability": -0.025692471579707964,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 5.19461509399116
+        },
+        "correct": {
+          "tokens": 349,
+          "top1_matches_forced_fraction": 0.9083094555873925,
+          "sequence_log_probability": -295.36476330381055,
+          "mean_token_log_probability": -0.846317373363354,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 15.952371638966724
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "verified_common_prefix",
+        "branch_position_zero_based": 8,
+        "absolute_next_token_index_zero_based": 16369,
+        "conditioning_tokens": 16361,
+        "shared_forced_prefix_tokens": 8,
+        "conditioning_and_preceding_forced_prefix_identical": true,
+        "targets": {
+          "chosen": {
+            "target_log_probability": -0.007615344598889351,
+            "target_probability": 0.9924135804176331,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -23.21074104309082,
+            "target_probability": 8.311955984607877e-11,
+            "target_is_top1": false
+          }
+        },
+        "scope": "Local alternative-token probabilities under a common prefix; not sequence preference or task success.",
+        "same_top1_across_branch_replays": true
+      }
+    },
+    "full": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/action.django__django-15037.call19.json",
+      "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+      "wall_s": 38.72002110700123,
+      "branches": {
+        "chosen": {
+          "tokens": 51,
+          "top1_matches_forced_fraction": 1.0,
+          "sequence_log_probability": -0.36692882180335573,
+          "mean_token_log_probability": -0.007194682780457955,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 9.471942322095856
+        },
+        "correct": {
+          "tokens": 349,
+          "top1_matches_forced_fraction": 0.9169054441260746,
+          "sequence_log_probability": -258.05547914987403,
+          "mean_token_log_probability": -0.7394139803721319,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 29.233925160951912
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "verified_common_prefix",
+        "branch_position_zero_based": 8,
+        "absolute_next_token_index_zero_based": 16369,
+        "conditioning_tokens": 16361,
+        "shared_forced_prefix_tokens": 8,
+        "conditioning_and_preceding_forced_prefix_identical": true,
+        "targets": {
+          "chosen": {
+            "target_log_probability": -0.0031873397529125214,
+            "target_probability": 0.9968177080154419,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -23.69068717956543,
+            "target_probability": 5.143577577748637e-11,
+            "target_is_top1": false
+          }
+        },
+        "scope": "Local alternative-token probabilities under a common prefix; not sequence preference or task success.",
+        "same_top1_across_branch_replays": true
+      }
+    },
+    "comparison_status": "verified",
+    "comparison": {
+      "chosen": {
+        "tokens": 51,
+        "top1_agreement": 1.0,
+        "served_sequence_log_probability": -1.3103160505651061,
+        "full_sequence_log_probability": -0.36692882180335573
+      },
+      "correct": {
+        "tokens": 349,
+        "top1_agreement": 0.9627507163323782,
+        "served_sequence_log_probability": -295.36476330381055,
+        "full_sequence_log_probability": -258.05547914987403
+      }
+    },
+    "action_divergence_comparison": {
+      "status": "verified_common_prefix_across_precisions",
+      "branch_position_zero_based": 8,
+      "absolute_next_token_index_zero_based": 16369,
+      "served_full_top1_agreement_by_branch": {
+        "chosen": true,
+        "correct": true
+      },
+      "scope": "Same conditioning and forced prefix verified; see each mode action_divergence for local target probabilities."
+    }
+  },
+  {
+    "name": "action.django__django-16950.call80",
+    "task": "django__django-16950",
+    "call": 80,
+    "group": "rest",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/django__django-16950/action_counterfactual.candidate.private.json",
+    "case_sha256": "03cd0cc1a00bdfef7d263043f6e738d111760fd8d2481dcd450145deb30a6ebd",
+    "served": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/action.django__django-16950.call80.json",
+      "runtime_config_id": "stage12_head_bfp8_lofi",
+      "wall_s": 50.3157204259187,
+      "branches": {
+        "chosen": {
+          "tokens": 40,
+          "top1_matches_forced_fraction": 0.9,
+          "sequence_log_probability": -9.182887865674154,
+          "mean_token_log_probability": -0.22957219664185385,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 20.669163041049615
+        },
+        "correct": {
+          "tokens": 258,
+          "top1_matches_forced_fraction": 0.7209302325581395,
+          "sequence_log_probability": -615.8861654677519,
+          "mean_token_log_probability": -2.3871556801075653,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 29.61049093096517
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "verified_common_prefix",
+        "branch_position_zero_based": 8,
+        "absolute_next_token_index_zero_based": 60969,
+        "conditioning_tokens": 60961,
+        "shared_forced_prefix_tokens": 8,
+        "conditioning_and_preceding_forced_prefix_identical": true,
+        "targets": {
+          "chosen": {
+            "target_log_probability": -0.21355342864990234,
+            "target_probability": 0.8077089786529541,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -21.43230438232422,
+            "target_probability": 4.921171248284395e-10,
+            "target_is_top1": false
+          }
+        },
+        "scope": "Local alternative-token probabilities under a common prefix; not sequence preference or task success.",
+        "same_top1_across_branch_replays": true
+      }
+    },
+    "full": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/action.django__django-16950.call80.json",
+      "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+      "wall_s": 86.10689058317803,
+      "branches": {
+        "chosen": {
+          "tokens": 40,
+          "top1_matches_forced_fraction": 0.875,
+          "sequence_log_probability": -10.543232569324928,
+          "mean_token_log_probability": -0.2635808142331232,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 35.27418903587386
+        },
+        "correct": {
+          "tokens": 258,
+          "top1_matches_forced_fraction": 0.7248062015503876,
+          "sequence_log_probability": -569.6383391171416,
+          "mean_token_log_probability": -2.2079005392137274,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 50.788750421022996
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "verified_common_prefix",
+        "branch_position_zero_based": 8,
+        "absolute_next_token_index_zero_based": 60969,
+        "conditioning_tokens": 60961,
+        "shared_forced_prefix_tokens": 8,
+        "conditioning_and_preceding_forced_prefix_identical": true,
+        "targets": {
+          "chosen": {
+            "target_log_probability": -0.5500393509864807,
+            "target_probability": 0.576927125453949,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -20.518789291381836,
+            "target_probability": 1.2268827065398114e-09,
+            "target_is_top1": false
+          }
+        },
+        "scope": "Local alternative-token probabilities under a common prefix; not sequence preference or task success.",
+        "same_top1_across_branch_replays": true
+      }
+    },
+    "comparison_status": "verified",
+    "comparison": {
+      "chosen": {
+        "tokens": 40,
+        "top1_agreement": 0.925,
+        "served_sequence_log_probability": -9.182887865674154,
+        "full_sequence_log_probability": -10.543232569324928
+      },
+      "correct": {
+        "tokens": 258,
+        "top1_agreement": 0.9302325581395349,
+        "served_sequence_log_probability": -615.8861654677519,
+        "full_sequence_log_probability": -569.6383391171416
+      }
+    },
+    "action_divergence_comparison": {
+      "status": "verified_common_prefix_across_precisions",
+      "branch_position_zero_based": 8,
+      "absolute_next_token_index_zero_based": 60969,
+      "served_full_top1_agreement_by_branch": {
+        "chosen": true,
+        "correct": true
+      },
+      "scope": "Same conditioning and forced prefix verified; see each mode action_divergence for local target probabilities."
+    }
+  },
+  {
+    "name": "action.matplotlib__matplotlib-25479.call34",
+    "task": "matplotlib__matplotlib-25479",
+    "call": 34,
+    "group": "rest",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/matplotlib__matplotlib-25479/action_counterfactual.candidate.private.json",
+    "case_sha256": "725d37edcc62b651707cc77079508353478c8a16fc09810fe13b17f005a44d8a",
+    "served": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/action.matplotlib__matplotlib-25479.call34.json",
+      "runtime_config_id": "stage12_head_bfp8_lofi",
+      "wall_s": 27.149314276175573,
+      "branches": {
+        "chosen": {
+          "tokens": 124,
+          "top1_matches_forced_fraction": 0.9838709677419355,
+          "sequence_log_probability": -4.44602437009253,
+          "mean_token_log_probability": -0.035855035242681695,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 9.912293445086107
+        },
+        "correct": {
+          "tokens": 321,
+          "top1_matches_forced_fraction": 0.7819314641744548,
+          "sequence_log_probability": -644.3834503113854,
+          "mean_token_log_probability": -2.007425078851668,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 17.219874400179833
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "verified_common_prefix",
+        "branch_position_zero_based": 8,
+        "absolute_next_token_index_zero_based": 23937,
+        "conditioning_tokens": 23929,
+        "shared_forced_prefix_tokens": 8,
+        "conditioning_and_preceding_forced_prefix_identical": true,
+        "targets": {
+          "chosen": {
+            "target_log_probability": -0.004401875659823418,
+            "target_probability": 0.9956077933311462,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -19.53565216064453,
+            "target_probability": 3.2792464299546964e-09,
+            "target_is_top1": false
+          }
+        },
+        "scope": "Local alternative-token probabilities under a common prefix; not sequence preference or task success.",
+        "same_top1_across_branch_replays": true
+      }
+    },
+    "full": {
+      "status": "complete",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/action.matplotlib__matplotlib-25479.call34.json",
+      "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+      "wall_s": 49.36426504608244,
+      "branches": {
+        "chosen": {
+          "tokens": 124,
+          "top1_matches_forced_fraction": 0.9838709677419355,
+          "sequence_log_probability": -8.49558938415101,
+          "mean_token_log_probability": -0.06851281761412105,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 18.022961935028434
+        },
+        "correct": {
+          "tokens": 321,
+          "top1_matches_forced_fraction": 0.7819314641744548,
+          "sequence_log_probability": -571.8460666367491,
+          "mean_token_log_probability": -1.7814519209867574,
+          "sequence_comparison_caveat": "Unequal-length sums are confounded by length; mean logprob is descriptive, not a task-level preference.",
+          "wall_s_including_prefill": 31.321400500833988
+        }
+      },
+      "free_running": [],
+      "action_divergence": {
+        "status": "verified_common_prefix",
+        "branch_position_zero_based": 8,
+        "absolute_next_token_index_zero_based": 23937,
+        "conditioning_tokens": 23929,
+        "shared_forced_prefix_tokens": 8,
+        "conditioning_and_preceding_forced_prefix_identical": true,
+        "targets": {
+          "chosen": {
+            "target_log_probability": -0.027313267812132835,
+            "target_probability": 0.9730563759803772,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -19.496063232421875,
+            "target_probability": 3.4116722780197506e-09,
+            "target_is_top1": false
+          }
+        },
+        "scope": "Local alternative-token probabilities under a common prefix; not sequence preference or task success.",
+        "same_top1_across_branch_replays": true
+      }
+    },
+    "comparison_status": "verified",
+    "comparison": {
+      "chosen": {
+        "tokens": 124,
+        "top1_agreement": 0.9838709677419355,
+        "served_sequence_log_probability": -4.44602437009253,
+        "full_sequence_log_probability": -8.49558938415101
+      },
+      "correct": {
+        "tokens": 321,
+        "top1_agreement": 0.9314641744548287,
+        "served_sequence_log_probability": -644.3834503113854,
+        "full_sequence_log_probability": -571.8460666367491
+      }
+    },
+    "action_divergence_comparison": {
+      "status": "verified_common_prefix_across_precisions",
+      "branch_position_zero_based": 8,
+      "absolute_next_token_index_zero_based": 23937,
+      "served_full_top1_agreement_by_branch": {
+        "chosen": true,
+        "correct": true
+      },
+      "scope": "Same conditioning and forced prefix verified; see each mode action_divergence for local target probabilities."
+    }
+  }
+]

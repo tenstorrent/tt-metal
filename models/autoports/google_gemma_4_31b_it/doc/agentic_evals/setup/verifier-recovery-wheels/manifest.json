@@ -1,0 +1,243 @@
+{
+  "status": "downloaded_not_installed_or_runtime_validated",
+  "source": "https://pypi.org/simple",
+  "binary_only": true,
+  "target_python": "3.9",
+  "selected_pins": {
+    "pytest": "4.6.11",
+    "pluggy": "0.13.1",
+    "attrs": "21.4.0",
+    "packaging": "24.2",
+    "pyparsing": "3.0.9",
+    "more-itertools": "8.14.0",
+    "wcwidth": "0.2.6",
+    "six": "1.16.0",
+    "py": "1.11.0",
+    "atomicwrites": "1.4.0",
+    "appdirs": "1.4.4"
+  },
+  "requirements_sha256": "1aa197acd215ccdeac9f18d7ee8ed8106b6bff5979292dd2fe01bfdd94951b3d",
+  "wheels": [
+    {
+      "file": "six-1.17.0-py2.py3-none-any.whl",
+      "name": "six",
+      "version": "1.17.0",
+      "sha256": "4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274",
+      "selected": false,
+      "requires_python": ">=2.7, !=3.0.*, !=3.1.*, !=3.2.*",
+      "requires_dist": []
+    },
+    {
+      "file": "attrs-21.4.0-py2.py3-none-any.whl",
+      "name": "attrs",
+      "version": "21.4.0",
+      "sha256": "2d27e3784d7a565d36ab851fe94887c5eccd6a463168875832a1be79c82828b4",
+      "selected": true,
+      "requires_python": ">=2.7, !=3.0.*, !=3.1.*, !=3.2.*, !=3.3.*, !=3.4.*",
+      "requires_dist": [
+        "coverage[toml] (>=5.0.2) ; extra == 'dev'",
+        "hypothesis ; extra == 'dev'",
+        "pympler ; extra == 'dev'",
+        "pytest (>=4.3.0) ; extra == 'dev'",
+        "six ; extra == 'dev'",
+        "mypy ; extra == 'dev'",
+        "pytest-mypy-plugins ; extra == 'dev'",
+        "zope.interface ; extra == 'dev'",
+        "furo ; extra == 'dev'",
+        "sphinx ; extra == 'dev'",
+        "sphinx-notfound-page ; extra == 'dev'",
+        "pre-commit ; extra == 'dev'",
+        "cloudpickle ; (platform_python_implementation == \"CPython\") and extra == 'dev'",
+        "furo ; extra == 'docs'",
+        "sphinx ; extra == 'docs'",
+        "zope.interface ; extra == 'docs'",
+        "sphinx-notfound-page ; extra == 'docs'",
+        "coverage[toml] (>=5.0.2) ; extra == 'tests'",
+        "hypothesis ; extra == 'tests'",
+        "pympler ; extra == 'tests'",
+        "pytest (>=4.3.0) ; extra == 'tests'",
+        "six ; extra == 'tests'",
+        "mypy ; extra == 'tests'",
+        "pytest-mypy-plugins ; extra == 'tests'",
+        "zope.interface ; extra == 'tests'",
+        "cloudpickle ; (platform_python_implementation == \"CPython\") and extra == 'tests'",
+        "coverage[toml] (>=5.0.2) ; extra == 'tests_no_zope'",
+        "hypothesis ; extra == 'tests_no_zope'",
+        "pympler ; extra == 'tests_no_zope'",
+        "pytest (>=4.3.0) ; extra == 'tests_no_zope'",
+        "six ; extra == 'tests_no_zope'",
+        "mypy ; extra == 'tests_no_zope'",
+        "pytest-mypy-plugins ; extra == 'tests_no_zope'",
+        "cloudpickle ; (platform_python_implementation == \"CPython\") and extra == 'tests_no_zope'"
+      ]
+    },
+    {
+      "file": "more_itertools-8.14.0-py3-none-any.whl",
+      "name": "more-itertools",
+      "version": "8.14.0",
+      "sha256": "1bc4f91ee5b1b31ac7ceacc17c09befe6a40a503907baf9c839c229b5095cfd2",
+      "selected": true,
+      "requires_python": ">=3.5",
+      "requires_dist": []
+    },
+    {
+      "file": "attrs-26.1.0-py3-none-any.whl",
+      "name": "attrs",
+      "version": "26.1.0",
+      "sha256": "c647aa4a12dfbad9333ca4e71fe62ddc36f4e63b2d260a37a8b83d2f043ac309",
+      "selected": false,
+      "requires_python": ">=3.9",
+      "requires_dist": []
+    },
+    {
+      "file": "py-1.11.0-py2.py3-none-any.whl",
+      "name": "py",
+      "version": "1.11.0",
+      "sha256": "607c53218732647dff4acdfcd50cb62615cedf612e72d1724fb1a0cc6405b378",
+      "selected": true,
+      "requires_python": ">=2.7, !=3.0.*, !=3.1.*, !=3.2.*, !=3.3.*, !=3.4.*",
+      "requires_dist": []
+    },
+    {
+      "file": "packaging-26.3-py3-none-any.whl",
+      "name": "packaging",
+      "version": "26.3",
+      "sha256": "d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c",
+      "selected": false,
+      "requires_python": ">=3.9",
+      "requires_dist": []
+    },
+    {
+      "file": "pytest-4.6.11-py2.py3-none-any.whl",
+      "name": "pytest",
+      "version": "4.6.11",
+      "sha256": "a00a7d79cbbdfa9d21e7d0298392a8dd4123316bfac545075e6f8f24c94d8c97",
+      "selected": true,
+      "requires_python": "!=3.0.*,!=3.1.*,!=3.2.*,!=3.3.*,>=2.7",
+      "requires_dist": [
+        "py (>=1.5.0)",
+        "six (>=1.10.0)",
+        "packaging",
+        "attrs (>=17.4.0)",
+        "atomicwrites (>=1.0)",
+        "pluggy (<1.0,>=0.12)",
+        "wcwidth",
+        "funcsigs (>=1.0) ; python_version < \"3.0\"",
+        "pathlib2 (>=2.2.0) ; python_version < \"3.6\"",
+        "importlib-metadata (>=0.12) ; python_version < \"3.8\"",
+        "more-itertools (<6.0.0,>=4.0.0) ; python_version <= \"2.7\"",
+        "more-itertools (>=4.0.0) ; python_version > \"2.7\"",
+        "colorama ; sys_platform == \"win32\" and python_version != \"3.4\"",
+        "colorama (<=0.4.1) ; sys_platform == \"win32\" and python_version == \"3.4\"",
+        "argcomplete ; extra == 'testing'",
+        "hypothesis (>=3.56) ; extra == 'testing'",
+        "nose ; extra == 'testing'",
+        "requests ; extra == 'testing'",
+        "mock ; (python_version == \"2.7\") and extra == 'testing'"
+      ]
+    },
+    {
+      "file": "wcwidth-0.2.6-py2.py3-none-any.whl",
+      "name": "wcwidth",
+      "version": "0.2.6",
+      "sha256": "795b138f6875577cd91bba52baf9e445cd5118fd32723b460e30a0af30ea230e",
+      "selected": true,
+      "requires_python": null,
+      "requires_dist": [
+        "backports.functools-lru-cache (>=1.2.1) ; python_version < \"3.2\""
+      ]
+    },
+    {
+      "file": "six-1.16.0-py2.py3-none-any.whl",
+      "name": "six",
+      "version": "1.16.0",
+      "sha256": "8abb2f1d86890a2dfb989f9a77cfcfd3e47c2a354b01111771326f8aa26e0254",
+      "selected": true,
+      "requires_python": ">=2.7, !=3.0.*, !=3.1.*, !=3.2.*",
+      "requires_dist": []
+    },
+    {
+      "file": "more_itertools-10.8.0-py3-none-any.whl",
+      "name": "more-itertools",
+      "version": "10.8.0",
+      "sha256": "52d4362373dcf7c52546bc4af9a86ee7c4579df9a8dc268be0a2f949d376cc9b",
+      "selected": false,
+      "requires_python": ">=3.9",
+      "requires_dist": []
+    },
+    {
+      "file": "pluggy-0.13.1-py2.py3-none-any.whl",
+      "name": "pluggy",
+      "version": "0.13.1",
+      "sha256": "966c145cd83c96502c3c3868f50408687b38434af77734af1e9ca461a4081d2d",
+      "selected": true,
+      "requires_python": ">=2.7, !=3.0.*, !=3.1.*, !=3.2.*, !=3.3.*",
+      "requires_dist": [
+        "importlib-metadata (>=0.12) ; python_version < \"3.8\"",
+        "pre-commit ; extra == 'dev'",
+        "tox ; extra == 'dev'"
+      ]
+    },
+    {
+      "file": "atomicwrites-1.4.0-py2.py3-none-any.whl",
+      "name": "atomicwrites",
+      "version": "1.4.0",
+      "sha256": "6d1784dea7c0c8d4a5172b6c620f40b6e4cbfdf96d783691f2e1302a7b88e197",
+      "selected": true,
+      "requires_python": ">=2.7, !=3.0.*, !=3.1.*, !=3.2.*, !=3.3.*",
+      "requires_dist": []
+    },
+    {
+      "file": "wcwidth-0.9.4-py3-none-any.whl",
+      "name": "wcwidth",
+      "version": "0.9.4",
+      "sha256": "901eace6d2dd25ebb917d0ce5db18e5c537e1504c905cf32f0d006c12098b05d",
+      "selected": false,
+      "requires_python": ">=3.9",
+      "requires_dist": []
+    },
+    {
+      "file": "appdirs-1.4.4-py2.py3-none-any.whl",
+      "name": "appdirs",
+      "version": "1.4.4",
+      "sha256": "a841dacd6b99318a741b166adb07e19ee71a274450e68237b4650ca1055ab128",
+      "selected": true,
+      "requires_python": null,
+      "requires_dist": []
+    },
+    {
+      "file": "pyparsing-3.0.9-py3-none-any.whl",
+      "name": "pyparsing",
+      "version": "3.0.9",
+      "sha256": "5026bae9a10eeaefb61dab2f09052b9f4307d44aee4eda64b309723d8d206bbc",
+      "selected": true,
+      "requires_python": ">=3.6.8",
+      "requires_dist": [
+        "railroad-diagrams ; extra == \"diagrams\"",
+        "jinja2 ; extra == \"diagrams\""
+      ]
+    },
+    {
+      "file": "packaging-21.3-py3-none-any.whl",
+      "name": "packaging",
+      "version": "21.3",
+      "sha256": "ef103e05f519cdc783ae24ea4e2e0f508a9c99b2d4969652eed6a2e1ea5bd522",
+      "selected": false,
+      "requires_python": ">=3.6",
+      "requires_dist": [
+        "pyparsing (!=3.0.5,>=2.0.2)"
+      ]
+    },
+    {
+      "file": "packaging-24.2-py3-none-any.whl",
+      "name": "packaging",
+      "version": "24.2",
+      "sha256": "09abb1bccd265c01f4a3aa3f7a7db064b36514d2cba19a2f694fe6150451a759",
+      "selected": true,
+      "requires_python": ">=3.8",
+      "requires_dist": []
+    }
+  ],
+  "commands": "pip download --only-binary=:all: --index-url https://pypi.org/simple --python-version39 with exact pins; no Docker start or environment installation. Initial resolver-selected newer extras retained but pinned requirements prevent selection.",
+  "runtime_requirement": "Run import, exact version, pytest CLI and legacy raises-string preflight in task testbed before original full verifier; unsupported means infrastructure blocker, never alter tests. Also assert packaging24.2 canonicalize_version keyword, then original setup.py egg_info and python -m pip install . before verifier."
+}

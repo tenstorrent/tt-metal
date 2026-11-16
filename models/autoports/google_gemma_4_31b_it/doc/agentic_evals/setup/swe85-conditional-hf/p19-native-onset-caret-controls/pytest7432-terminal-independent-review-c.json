@@ -1,0 +1,89 @@
+{
+  "status": "completed_independent_host_review",
+  "case": "pytest-dev__pytest-7432.call19.onset",
+  "seed": 42,
+  "identity": {
+    "case": "anomalies/swe85-18763-7432-controls/pytest-dev__pytest-7432.call19.onset.private.json",
+    "case_sha256": "436bf8f06cebc27f9ac206ab4c85c655b2c707145be67b8341f14288370807f5",
+    "prompt_tokens": 11095,
+    "prompt_source": "Saved prompt_token_ids, no chat rerender",
+    "same_case_path_across_hf_full_tt_p19": true,
+    "hf_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+    "sampling": {
+      "temperature": 1.0,
+      "top_p": 0.95,
+      "top_k": 20
+    }
+  },
+  "sources": {
+    "hf": {
+      "path": "setup/swe85-conditional-hf/p19-native-onset-caret-controls/results/anomaly.pytest-dev__pytest-7432.call19.onset.seed42.cap256.hf.private.json",
+      "sha256": "6ccdd49c513f3c8258977245d0a65ee808a6c233d76c97c118a1b42d405f3fa5"
+    },
+    "full_tt": {
+      "path": "setup/swe85-pilot-split85/runs/rest/full/anomaly.pytest-dev__pytest-7432.call19.onset.json",
+      "sha256": "62dc8a7a0d36eaadf188803d4e1d08372a099dccb41aaa09ca7119710dfe2f07"
+    },
+    "p19": {
+      "path": "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.pytest-dev__pytest-7432.call19.onset.seed42.cap256.json",
+      "sha256": "ec7088f6b0b9405fdeb20193f0247390757b18c620261ff5bf8a0fce70a4b706"
+    },
+    "root_review": {
+      "path": "setup/swe85-conditional-hf/p19-native-onset-caret-controls/root-terminal-review.json",
+      "sha256": "dd855b5a287233a722f6edffe772ae836a29e84fae7f3fcd11734d94b8fa635a"
+    },
+    "completion": {
+      "path": "setup/swe85-conditional-hf/p19-native-onset-caret-controls/completion.json",
+      "sha256": "ed242c3c69e37654ae6bba7bfa2ff1e814739942bf1f2f4de55a4b4b524dbbf2"
+    }
+  },
+  "completion": {
+    "status": "completed",
+    "exit_code": 0,
+    "elapsed_seconds": 3741.5846090316772,
+    "forecast_seconds": {
+      "low": 3100,
+      "point": 3650,
+      "high": 4500
+    },
+    "forecast_result": "within_range"
+  },
+  "observed": {
+    "hf_generated_tokens": 256,
+    "natural_stop": false,
+    "detector_flag": false,
+    "detector_minimum_met": false,
+    "manual_classification": "caret_repetition_at_diagnostic_cap",
+    "caret_characters": 825,
+    "characters": 969,
+    "description": "Output begins with 25 caret characters, contains a short coherent pytest traceback fragment, then a sustained caret tail through the 256-token diagnostic cap."
+  },
+  "cross_runtime": {
+    "hf_full_tt_p19_generated_ids_identical": true,
+    "tt_p19_sampling_settings_same_case_seed": true,
+    "scope": "Same diagnostic sample on this reconstructed full prompt. Diagnostic seed is not native seed/RNG replay; this is not scored-task correctness or a precision-causality result."
+  },
+  "forced_64_position_comparison": {
+    "hf_vs_full_tt_top1_agreement": 1.0,
+    "mean_chosen_logprob_delta_hf_minus_tt": 0.031013609840302436,
+    "max_abs_chosen_logprob_delta": 1.4330604076385498,
+    "position6_hf": {
+      "position": 6,
+      "forced_token": 172109,
+      "top1_token": 236884,
+      "forced_token_logprob": -0.9742364883422852,
+      "forced_token_probability": 0.3774804472923279,
+      "top1_probability": 0.6223600506782532
+    },
+    "position6_tt": {
+      "position": 6,
+      "forced_token": 172109,
+      "top1_token": 236884,
+      "forced_token_logprob": -2.407296895980835,
+      "forced_token_probability": 0.09005840122699738,
+      "top1_probability": 0.9095576405525208
+    },
+    "interpretation": "All 64 top-1 IDs agree, but the forced caret at position 6 is not top-1 in either model; HF assigns substantially more probability than full TT. This is localized distributional variation, not across-the-board agreement."
+  },
+  "verdict": "HF reproduces the observed caret-repetition symptom at the diagnostic cap, matching full-TT and P19 for seed42. The mechanical detector is false because its minimum-length criterion is unmet; the visible repeated tail still warrants manual anomaly classification. No task completion or native stream identity is established."
+}

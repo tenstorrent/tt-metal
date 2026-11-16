@@ -1,0 +1,114 @@
+{
+  "precision": {
+    "config_id": "stage12_head_bfp8_lofi",
+    "weight_groups": {
+      "attention": "bfp4",
+      "mlp": "bfp4",
+      "down": "bfp4",
+      "lm_head": "bfp8_lofi"
+    },
+    "layer_exceptions": {},
+    "compute_fidelities": {
+      "attention": "LoFi",
+      "mlp": "LoFi",
+      "down": "LoFi",
+      "lm_head": "LoFi"
+    },
+    "activation_dtype": "bfloat8_b",
+    "residual_dtype": "bfloat16",
+    "ccl_dtype": {
+      "prefill": "bfloat8_b",
+      "decode": "bfloat16"
+    },
+    "kv_cache_dtype": "bfloat8_b",
+    "logits_dtype": "bfloat16",
+    "sampling_dtype": "bfloat16",
+    "embedding_dtype": "bfloat16",
+    "norm_dtype": "bfloat16",
+    "max_seq_len": 262144
+  },
+  "source_identity": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/post-gpqa-controls-head-bfp8/server/perf-b32-server.json",
+  "server_pid": 246281,
+  "launch_evidence": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/post-gpqa-controls-head-bfp8/server/server-b32/server.log",
+  "measurement": {
+    "event": "serving_pool_launch_validation",
+    "pool_sizing": "fixed",
+    "pool_sizing_reason": "Stock plugin fixes its pool before loading weights; this launch validates its existing pool against measured shared-mesh allocator free space, not adaptive sizing.",
+    "measurement_basis": "One shared mesh allocator measurement applied uniformly to participating devices; these are not independent physical allocator samples. KV uses replicated ttnn.zeros on the mesh with equal shape/dtype on every device.",
+    "per_device": [
+      {
+        "device_id": 0,
+        "free_bytes": 27448525824,
+        "contiguous_free_bytes": 27212209152,
+        "pool_bytes": 25691422720,
+        "reserve_bytes": 1015693824
+      },
+      {
+        "device_id": 1,
+        "free_bytes": 27448525824,
+        "contiguous_free_bytes": 27212209152,
+        "pool_bytes": 25691422720,
+        "reserve_bytes": 1015693824
+      },
+      {
+        "device_id": 2,
+        "free_bytes": 27448525824,
+        "contiguous_free_bytes": 27212209152,
+        "pool_bytes": 25691422720,
+        "reserve_bytes": 1015693824
+      },
+      {
+        "device_id": 3,
+        "free_bytes": 27448525824,
+        "contiguous_free_bytes": 27212209152,
+        "pool_bytes": 25691422720,
+        "reserve_bytes": 1015693824
+      }
+    ],
+    "page_map_bytes": 62914560,
+    "prepared_reserve_bytes": 147472896,
+    "transient_reserve_bytes": 805306368,
+    "reserve_evidence": "doc/agentic_serving.json ledger; doc/optimized_vllm/memory_comparison.json; transient reserve is analytical, not a full-stack measured peak",
+    "trace_reserve_already_excluded": true,
+    "fits": true,
+    "remaining_bytes_after_reserves": 505092608
+  },
+  "free_gb": [
+    27.448525824,
+    27.448525824,
+    27.448525824,
+    27.448525824
+  ],
+  "pool_gb": [
+    25.69142272,
+    25.69142272,
+    25.69142272,
+    25.69142272
+  ],
+  "working_set_tokens": 131072,
+  "pool_ids": 36896,
+  "ids_per_agent": 2854,
+  "capacity_agents": 12,
+  "pool_tokens": 1572864,
+  "agents": 12,
+  "selection_bounds": {
+    "task_count": 85,
+    "host_slots": 12,
+    "pool_capacity_agents": 12
+  },
+  "batch": 32,
+  "max_num_seqs": 32,
+  "served_max_model_len": 262144,
+  "full_context_capacity_agents": 7,
+  "reason": "Stock plugin fixes its pool before loading weights; this launch validates its existing pool against measured shared-mesh allocator free space, not adaptive sizing.",
+  "suites": [
+    "r1_gpqa_diamond",
+    "swe_bench_verified"
+  ],
+  "feasible_ten_agents": true,
+  "working_set_basis": "GPQA main131072 request envelope; SWE conservative131072 planning estimate from current SWE phase2 measured48361 finalcontext plus32768 output allowance rounded up, not a conversation cap. Full262144 remains served; simultaneous full-context capacity recorded separately.",
+  "selection": "Selected 12=min(tasks 85, host slots 12, measured capacity 12). This collector validates only the supplied B32 candidate launch; it does not select a smaller server batch. For12 agents B32 is the smallest validated1/8/32 batch. Host bounds require separate resource evidence.",
+  "working_set_evidence": "doc/agentic_evals/current/swe-phase2-ready/sampling_counts_completed.json; main SWE output cap32768; sum81129 rounded conservatively to131072.",
+  "validity": "Actual candidate launch only. Restart or precision/pool change requires new measurement; baseline sizing artifacts remain untouched.",
+  "suite": "r1_gpqa_diamond"
+}

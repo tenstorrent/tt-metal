@@ -1,0 +1,30 @@
+{
+  "status": "launched",
+  "start_unix": 1794747130.283113,
+  "argv": [
+    "timeout",
+    "2400",
+    "env",
+    "HF_HUB_OFFLINE=1",
+    "HF_DATASETS_OFFLINE=1",
+    "HF_HUB_DISABLE_TELEMETRY=1",
+    "OMP_NUM_THREADS=16",
+    "MKL_NUM_THREADS=16",
+    "OPENBLAS_NUM_THREADS=16",
+    "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tools/actual_branch_logits.py",
+    "--later-loop",
+    "--execute",
+    "--mode",
+    "hf",
+    "--case",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-loop-branch-investigation/actual-branch-logits/later-loop-conditional-candidate/fixture/anomaly.psf__requests-5414.call11.onset.suffix2048.private.json",
+    "--branches",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-loop-branch-investigation/actual-branch-logits/later-loop-conditional-candidate/branches.json",
+    "--output-prefix",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-loop-branch-investigation/actual-branch-logits/later-loop-conditional-candidate/outputs/hf"
+  ],
+  "admission_sha256": "3488b5613a7aa19c18094d895067187aceb7084646cdc6d416c058df1f1e494d",
+  "device_owner_check_returncode": 1
+}

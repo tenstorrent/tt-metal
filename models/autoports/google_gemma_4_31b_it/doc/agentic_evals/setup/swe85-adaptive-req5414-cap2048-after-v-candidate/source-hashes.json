@@ -1,0 +1,135 @@
+{
+  "status": "candidate_only_not_admitted_not_run",
+  "hashes": [
+    {
+      "kind": "original_suffix2048_fixture",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/fixtures/anomaly.psf__requests-5414.call10.onset.suffix2048.private.json",
+      "sha256": "4cb0ce0c350d029b506ecd31cd5df6a6f0a02a0c49f56761a478f7a1f6b4c781"
+    },
+    {
+      "kind": "cap1024_fixture",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-candidate/fixtures/served/anomaly.psf__requests-5414.call10.onset.suffix2048.cap1024.seed42.private.json",
+      "sha256": "6e4c48b0c32701a0e95f6bccd463129418012c02d48d0c426fe1b14f6ec4bea2"
+    },
+    {
+      "kind": "cap1024_result",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-execution-candidate/runs/served/anomaly.psf__requests-5414.call10.onset.suffix2048.cap1024.seed42.json",
+      "sha256": "84168fff11b5ad2c8a1c3fa9ec9d6a76d78f832aa938e674ac43a71a8bbfe421"
+    },
+    {
+      "kind": "root_coordinator",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-execution-candidate/served-coordinator-requests10-seed42.json",
+      "sha256": "6d165ac6e0a247c7351af03f904c8db96932dac394630a0284b6b7c3f81a016a"
+    },
+    {
+      "kind": "candidate_fixture",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-req5414-cap2048-after-v-candidate/fixtures/served/anomaly.psf__requests-5414.call10.onset.suffix2048.cap2048.seed42.private.json",
+      "sha256": "a86dde9a348404fbdd4d8f321a82f504288372ecc7d82f3cbd5fbdcfb5abec34"
+    },
+    {
+      "kind": "mode_load",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-execution-candidate/runs/served/load.json",
+      "sha256": "18c8f4249798687e95f11c6c766e5394182618d007a22d0eca18efa1e08e73f1"
+    },
+    {
+      "kind": "mode_execution_log",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-execution-candidate/served.log",
+      "sha256": "ccefb17a60a72e5cabbb0ec7b2f559f26c88780d4836fbc5af7f5249ac3eb6e6"
+    },
+    {
+      "kind": "precision_config",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/head_bfp8_precision_config.json",
+      "sha256": "aa0e651fb3fdd7afc285293645c5ca309b2da246619e6e7fb6da86c5d2f28853"
+    },
+    {
+      "kind": "build_kwargs",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/head_bfp8_build_kwargs.json",
+      "sha256": "2e583fa8bd7aff7c5f8be110835df751924d167243c5a44a68aa5b3d70c6845f"
+    },
+    {
+      "kind": "original_suffix2048_fixture",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/fixtures/anomaly.psf__requests-5414.call11.onset.suffix2048.private.json",
+      "sha256": "fbe984e026dbe8ef2b9d8a4288056617cbfde5235d1efd4a3bd14038a2db5ad7"
+    },
+    {
+      "kind": "cap1024_fixture",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-candidate/fixtures/full/anomaly.psf__requests-5414.call11.onset.suffix2048.cap1024.seed42.private.json",
+      "sha256": "906674f12d643a2d5825f6f6d0747ba70cdfd8b7e7764b3ac7ff267ff82db53f"
+    },
+    {
+      "kind": "cap1024_result",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-execution-candidate/runs/full/anomaly.psf__requests-5414.call11.onset.suffix2048.cap1024.seed42.json",
+      "sha256": "bbe10ef469c6473e26d18e3d1be8c9a3dfaa5e1ff64f9bed8eff8e1c5a725867"
+    },
+    {
+      "kind": "root_coordinator",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-execution-candidate/full-coordinator-requests11-seed42.json",
+      "sha256": "2cd7018e95b78de54850d1127fc540485f1e9eb6722720117676d4690365602a"
+    },
+    {
+      "kind": "candidate_fixture",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-req5414-cap2048-after-v-candidate/fixtures/full/anomaly.psf__requests-5414.call11.onset.suffix2048.cap2048.seed42.private.json",
+      "sha256": "64c16cb0741ab60771f71f2d4900bd8acc0e12c5259d6aa7d4ec6e6041bd76b5"
+    },
+    {
+      "kind": "mode_load",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-execution-candidate/runs/full/load.json",
+      "sha256": "1fd85b5a7e2bfbbf2f9603aeb58643dabee7ef532007699c39bfa0ea44d1763b"
+    },
+    {
+      "kind": "mode_execution_log",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-execution-candidate/full.log",
+      "sha256": "08011cb72030ae8229a009a0b6089cfd820610814356bcc151751066a939278e"
+    },
+    {
+      "kind": "precision_config",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_config.json",
+      "sha256": "63ce02f7fa0df993a27daca25eeeb3adca51e15c7c6956d1cef122534ebdc7a9"
+    },
+    {
+      "kind": "build_kwargs",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_build_kwargs.json",
+      "sha256": "ff2b5ed24e0b6a1dee7eb5cd8bd437d17c3df5f8f25567927d239e666f0699f9"
+    },
+    {
+      "kind": "admitted_predecessor_admission",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/admission.json",
+      "sha256": "246dbd17606f3baaec25ddc490e35f0a4c394808d43479a3a4dd0b267550906a"
+    },
+    {
+      "kind": "candidate_forecast",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-req5414-cap2048-after-v-candidate/forecast.json",
+      "sha256": "0f4f85f903b7b57b233dc0c4428fa177a29237c24b95bf1d0ea3e5f49875910f"
+    },
+    {
+      "kind": "U_root_review_completion_summary",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-execution-candidate/completion-summary.json",
+      "sha256": "b727f5bb2893b24caddf665f1e0a4ee991abd8b8a2edb08caa8438e9fa9e9eb5"
+    },
+    {
+      "kind": "N_call11_seed43_adjudication_correction",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/full-call11-seed43-adjudication-correction.json",
+      "sha256": "6f75679d6c13213bbf1c0bd2096630a53fe04b0c1be01b20c8754ab81c2615e5"
+    },
+    {
+      "kind": "U_call10_stock_parser_audit",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-execution-candidate/full-requests10-stock-parser-audit-b.json",
+      "sha256": "57b50238af241c598918b8eb427ad9ccd7b7be655c0c41265dca43238e9cedc3"
+    },
+    {
+      "kind": "U_call11_seed43_independent_confirmation",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-execution-candidate/full-requests11-seed43-independent-addendum-b.json",
+      "sha256": "7bd646ee5cbd7115b43a8cf82547f74c72e13c39db6e5e88ce4c2de6ab125eb9"
+    },
+    {
+      "kind": "candidate_provenance",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-req5414-cap2048-after-v-candidate/provenance.json",
+      "sha256": "ccfd894439a09c595d239af7a66d379ae32126312517021db7c7643b5fab25c1"
+    },
+    {
+      "kind": "candidate_readme",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-req5414-cap2048-after-v-candidate/README.md",
+      "sha256": "77ba3b908b05a860ff13de1907f377f95cd99790bd60982f7e058d1af793ca70"
+    }
+  ]
+}

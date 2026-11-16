@@ -1,0 +1,189 @@
+{
+  "reviewer": "independent CPU-only fixture and forecast review",
+  "scope": "third-cap fixture validity, source selection, forecast arithmetic, and validate-only checks; no admission, launch, or anomaly acceptance",
+  "status": "clean for coordinator review",
+  "selection": "All 8 rows match actual coordinator inconclusive rows at exactly 1024 generated IDs (2 served, 6 full).",
+  "fixture_checks": {
+    "all_candidate_fixtures_equal_exact_second_cap_fixtures": true,
+    "prompt_continuations_sampling_seed_preserved": true,
+    "each_metadata_cap_extension_1024_to_2048": true,
+    "all_jobs_branchless_cap2048_one_trial": true,
+    "chosen_continuation_length": 64,
+    "rows": 8
+  },
+  "forecast_recalculation": {
+    "served": {
+      "jobs": 2,
+      "load_fixed_s": 145.2108264057897,
+      "measured_prep_fixed_s": 16.380446143914014,
+      "variable_work_s": 183.125145233696,
+      "point_s": 344.7164177833997,
+      "range_s": [
+        289.7788742132909,
+        472.9040194469869
+      ],
+      "cases": [
+        {
+          "job": "anomaly.pytest-dev__pytest-5787.call65.onset.cap2048.seed43",
+          "seed": 43,
+          "source_generated_ids": 1024,
+          "replay_calls": 1023,
+          "prefill_host_overhead_s": 16.00717450492084,
+          "projected_decode_s": 69.42831258240902,
+          "projected_case_s": 85.43548708732986
+        },
+        {
+          "job": "anomaly.sphinx-doc__sphinx-9461.call184.onset.cap2048.seed43",
+          "seed": 43,
+          "source_generated_ids": 1024,
+          "replay_calls": 1023,
+          "prefill_host_overhead_s": 24.753408004995435,
+          "projected_decode_s": 72.9362501413707,
+          "projected_case_s": 97.68965814636614
+        }
+      ]
+    },
+    "full": {
+      "jobs": 6,
+      "load_fixed_s": 78.36897834506817,
+      "measured_prep_fixed_s": 16.380446143914014,
+      "variable_work_s": 981.8667316304286,
+      "point_s": 1076.6161561194108,
+      "range_s": [
+        782.0561366302821,
+        1763.9228682607109
+      ],
+      "cases": [
+        {
+          "job": "anomaly.pytest-dev__pytest-5787.call65.onset.cap2048.seed42",
+          "seed": 42,
+          "source_generated_ids": 1024,
+          "replay_calls": 1023,
+          "prefill_host_overhead_s": 27.101194127928466,
+          "projected_decode_s": 131.1655420963812,
+          "projected_case_s": 158.26673622430965
+        },
+        {
+          "job": "anomaly.pytest-dev__pytest-5787.call65.onset.cap2048.seed43",
+          "seed": 43,
+          "source_generated_ids": 1024,
+          "replay_calls": 1023,
+          "prefill_host_overhead_s": 27.13062662188895,
+          "projected_decode_s": 131.16418001898325,
+          "projected_case_s": 158.2948066408722
+        },
+        {
+          "job": "anomaly.pytest-dev__pytest-5787.call65.onset.cap2048.seed44",
+          "seed": 44,
+          "source_generated_ids": 1024,
+          "replay_calls": 1023,
+          "prefill_host_overhead_s": 27.112278593005612,
+          "projected_decode_s": 131.17190702371516,
+          "projected_case_s": 158.28418561672078
+        },
+        {
+          "job": "anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.cap2048.seed42",
+          "seed": 42,
+          "source_generated_ids": 1024,
+          "replay_calls": 1023,
+          "prefill_host_overhead_s": 30.90922143100761,
+          "projected_decode_s": 132.27826897554507,
+          "projected_case_s": 163.18749040655268
+        },
+        {
+          "job": "anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.cap2048.seed43",
+          "seed": 43,
+          "source_generated_ids": 1024,
+          "replay_calls": 1023,
+          "prefill_host_overhead_s": 30.864678943995386,
+          "projected_decode_s": 132.25551507383483,
+          "projected_case_s": 163.12019401783022
+        },
+        {
+          "job": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap2048.seed43",
+          "seed": 43,
+          "source_generated_ids": 1024,
+          "replay_calls": 1023,
+          "prefill_host_overhead_s": 44.740967120276764,
+          "projected_decode_s": 135.97235160386614,
+          "projected_case_s": 180.7133187241429
+        }
+      ]
+    }
+  },
+  "preparation_basis": {
+    "seconds": 16.380446143914014,
+    "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/full/anomaly.psf__requests-5414.call10.onset.optional-suffix512.json",
+    "measured_field": "continuations.chosen.diagnostic_wall_s_including_prefill",
+    "tokens": 64,
+    "fixed_once_per_mode_process": true,
+    "note": "This is a measured chosen-branch wall proxy, not a direct 2048 trace-warmup measurement."
+  },
+  "cpu_validation": [
+    {
+      "mode": "served",
+      "returncode": 0,
+      "stdout": "Validated 2 jobs without importing TTNN",
+      "stderr": "",
+      "jobs": 2,
+      "ttnn_imported": false
+    },
+    {
+      "mode": "full",
+      "returncode": 0,
+      "stdout": "Validated 6 jobs without importing TTNN",
+      "stderr": "",
+      "jobs": 6,
+      "ttnn_imported": false
+    }
+  ],
+  "prerequisite_completion_summary": {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions-completion-summary.json",
+    "sha256": "6ce535335c172e3194b0f6a024b5e2133c0eee9245bd6c7db2008bb741184c84",
+    "status": "completed_second_cap_queue_evidence_summary",
+    "prefix_and_counter_invariants_pass": true
+  },
+  "no_device_work": true,
+  "no_admission": true,
+  "reviewed_sha256": {
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_build_kwargs.json": "ff2b5ed24e0b6a1dee7eb5cd8bd437d17c3df5f8f25567927d239e666f0699f9",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/head_bfp8_build_kwargs.json": "2e583fa8bd7aff7c5f8be110835df751924d167243c5a44a68aa5b3d70c6845f",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/full/load.json": "cc5db79ed82d3c92c96961657d53aa8f5903c9cf5c9aabada9ed1e66bb82fafa",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/served/load.json": "82e21dc216777029ea6a6590fa3210955c012a23bc744906638797adae0266fb",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/full/anomaly.psf__requests-5414.call10.onset.optional-suffix512.json": "78d21a5ed066928895adc25a37c2474ffff6c716d4d261f164162fd7058f2922",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/load.json": "6fa1c06ad0cbd8a0b7033d0cd3bef542b62412704c92841b2b8df7b38348dbda",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/load.json": "b5ed68750af790c5531343cda33e373bc6eeeea0b210de1d98e6d2b8a963c5a6",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions-completion-summary.json": "6ce535335c172e3194b0f6a024b5e2133c0eee9245bd6c7db2008bb741184c84",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.pytest-dev__pytest-5787.call65.onset.cap1024.seed42.private.json": "b4227c60daa44f579a37f54090a99dde3280a0627ed4611fcbcdf807f15a0ede",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.pytest-dev__pytest-5787.call65.onset.cap1024.seed43.private.json": "124f09af80f50f70f6308ae2a58a2d4ada46b9ce3204b43c7b814ed17be3959c",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.pytest-dev__pytest-5787.call65.onset.cap1024.seed44.private.json": "cd4a079c43aa220d3a9c92e90ed2b691c90fa5d89061a17203db4629248ff10f",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.cap1024.seed42.private.json": "78344549cf5925ec2b037752e589f2bba107fb21b464e32db5fe05f15d5322a6",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.cap1024.seed43.private.json": "073203e754a006cd573b89ef7f2b47ce668c0d992562d3dd2f515306b2115fa6",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap1024.seed43.private.json": "64b310bd67a392c4a32219b6201abaeb6272206f792d9dcc290dd0e7d16d7597",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/served/anomaly.pytest-dev__pytest-5787.call65.onset.cap1024.seed43.private.json": "6f489182de104872fcb88834ac27e8208f2603ae893011f22516336c51ae0274",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/served/anomaly.sphinx-doc__sphinx-9461.call184.onset.cap1024.seed43.private.json": "0f61675840c1bc8ac8f89d6ab5d9f931e752d2fd53aeb2a62400b02e2e24ff1f",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/full-coordinator-pytest-first.json": "f7559774e7a04f7d145316f0b4f93c857d8404cdd55e9afdf5457191fbfcd893",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/full-coordinator-pytest-second.json": "dad8eea30e1e826be49534a1fdd02babdbde7a72c58cf3171e2ce55e71dc37d8",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/full-coordinator-pytest-third.json": "e7aceeb45e978290fcf6291f22698fa6dc8dd017e335578f111df581812d0a83",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/full-coordinator-sphinx101.json": "2ef3859561877b88428b7d3b0521491c668b612897aed40a2b2920f0ddec78ec",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/full-coordinator-sphinx119-second.json": "3c07cc3262fe2ef8ed05d1bd128b5caabcba31c8fa87812b27729cfb9aa7aa68",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/runs/full/anomaly.pytest-dev__pytest-5787.call65.onset.cap1024.seed42.json": "dbe538e9b2b1b305aca84b2b4be3d09aa2c9ead231a7c5826580505e2b8778b9",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/runs/full/anomaly.pytest-dev__pytest-5787.call65.onset.cap1024.seed43.json": "84053f3591749c42effd756ee8a308eb47866f1e007612ac225d7334fbdccdd3",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/runs/full/anomaly.pytest-dev__pytest-5787.call65.onset.cap1024.seed44.json": "6cff1a06bc27f3d2a2745e7d47feefcbe02e7722d8185ee3e7783ba40fe77774",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/runs/full/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.cap1024.seed42.json": "d5f8fa19cfd333137d0f993bbd18e0ba6a3fcc7d1a06ab3099080f032101fe7a",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/runs/full/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.cap1024.seed43.json": "b8fcad86750e14f2232d2c6dcd3630d89d56adf8a03fdb872055fc6660ed42be",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/runs/full/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap1024.seed43.json": "211f4fe67a2826c3b934dba39139c70ef7d0ef8e57037493db713434ce9687c0",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/runs/full/load.json": "a2b50e88657034bf4cfd4c2eca4d4de4deca1e8de4f0274c9da6b7ee8927b351",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/runs/served/anomaly.pytest-dev__pytest-5787.call65.onset.cap1024.seed43.json": "a17ee90953817cc39ba43767a3264593a2f628bcfda801230fa1dd99bc6ffd7a",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/runs/served/anomaly.sphinx-doc__sphinx-9461.call184.onset.cap1024.seed43.json": "d6bb4da366a5d92b00a011aa9d85baa4a5573a943c47d2a8d7e4600d35e7ada9",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/runs/served/load.json": "bec3d00810fdfc212367c7ef5115fd0c01e2b1353965632b5b4c2ea1da2b14ad",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/served-coordinator-next3.json": "2f370ae65c56f4e1fad10d508ee94742a6d14fd54fba30df39a626ca9f5e2b55",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/served-coordinator-sphinx9461-first2.json": "afe0e220f588c5b9aff64d7de5752f5e00d52443489f27ce134a46f9af0013b2",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/coordinator-scan-summary.json": "2b1773f7a0a0a4e764a5c38602c2f1a9a3ca5be0a207fe47588e62e850118b22",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/cost-estimate.json": "c6dddb98b3d2d6a5e0aa3ccbda7a52188821fdf9e5a12b9ae8b429764cb988ee",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/full-candidate-cases.json": "f54ca8d64a9e52b459f7b9f251a1ab7175e3d5a085009e7b23e3eed2bcc39319",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/host-validation.json": "b88ac67fa21fe99f4aba752456379b6325957449c89a7af1071c2fbf5b714a80",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/provenance.json": "afd4026b93f0217efb682c14ef1e9e5084e55b75a8e540466709e79ab75a7370",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/served-candidate-cases.json": "f56bca31596c368f3e909497d32744a0ece4f44cb68d23c4cd71ff15e1a6d82a"
+  }
+}

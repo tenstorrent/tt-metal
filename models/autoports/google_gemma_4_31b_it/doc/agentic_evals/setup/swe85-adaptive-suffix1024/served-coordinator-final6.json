@@ -1,0 +1,71 @@
+{
+  "status": "root_raw_text_and_pinned_prefix_review",
+  "rows": [
+    {
+      "case": "anomaly.call91.canonicalprefix",
+      "mode": "served",
+      "seed": 42,
+      "tokens": 58,
+      "verdict": "normal",
+      "exact_native_motif": false,
+      "reason": "Completes existing tool-call body and EOF; no degeneration; repair correctness not inferred.",
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/served/anomaly.call91.canonicalprefix.json",
+      "source_sha256": "4291808df0b2ba86956bd4924a8b60e7afcdd7809666f321c8b47ea5803da3eb"
+    },
+    {
+      "case": "anomaly.call91.canonicalprefix",
+      "mode": "served",
+      "seed": 43,
+      "tokens": 37,
+      "verdict": "normal",
+      "exact_native_motif": false,
+      "reason": "Completes existing tool-call body and EOF; no degeneration; repair correctness not inferred.",
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/served/anomaly.call91.canonicalprefix.json",
+      "source_sha256": "4291808df0b2ba86956bd4924a8b60e7afcdd7809666f321c8b47ea5803da3eb"
+    },
+    {
+      "case": "anomaly.call91.canonicalprefix",
+      "mode": "served",
+      "seed": 44,
+      "tokens": 302,
+      "verdict": "normal",
+      "exact_native_motif": false,
+      "reason": "Completes existing tool-call body and EOF; no degeneration; repair correctness not inferred.",
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/served/anomaly.call91.canonicalprefix.json",
+      "source_sha256": "4291808df0b2ba86956bd4924a8b60e7afcdd7809666f321c8b47ea5803da3eb"
+    },
+    {
+      "case": "anomaly.sphinx-doc__sphinx-10323.call70.onset",
+      "mode": "served",
+      "seed": 42,
+      "tokens": 122,
+      "verdict": "other_anomaly",
+      "exact_native_motif": false,
+      "reason": "Coherent abandonment summary but no required tool call and malformed channel boundary; protocol anomaly, not contraction loop.",
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/served/anomaly.sphinx-doc__sphinx-10323.call70.onset.json",
+      "source_sha256": "ce633f522c58657f78738d741d04aaca2e58704a8ea0aac93fa8b71440cb2187"
+    },
+    {
+      "case": "anomaly.sphinx-doc__sphinx-10323.call70.onset",
+      "mode": "served",
+      "seed": 43,
+      "tokens": 154,
+      "verdict": "other_anomaly",
+      "exact_native_motif": false,
+      "reason": "Coherent abandonment summary but no required tool call and malformed channel boundary; protocol anomaly, not contraction loop.",
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/served/anomaly.sphinx-doc__sphinx-10323.call70.onset.json",
+      "source_sha256": "ce633f522c58657f78738d741d04aaca2e58704a8ea0aac93fa8b71440cb2187"
+    },
+    {
+      "case": "anomaly.sphinx-doc__sphinx-10323.call70.onset",
+      "mode": "served",
+      "seed": 44,
+      "tokens": 512,
+      "verdict": "native_anomaly",
+      "exact_native_motif": true,
+      "reason": "Repeated contraction burst across512 tokens.",
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/served/anomaly.sphinx-doc__sphinx-10323.call70.onset.json",
+      "source_sha256": "ce633f522c58657f78738d741d04aaca2e58704a8ea0aac93fa8b71440cb2187"
+    }
+  ]
+}

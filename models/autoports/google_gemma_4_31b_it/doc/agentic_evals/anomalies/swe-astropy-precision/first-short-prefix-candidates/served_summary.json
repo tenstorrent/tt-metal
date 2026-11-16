@@ -1,0 +1,59 @@
+{
+  "regime": "Accuracy only; concurrent CPU HF and Docker builds. Timing invalid for performance ranking.",
+  "cases": [
+    {
+      "case": "astropy.first.suffix2048",
+      "trials": [
+        {
+          "seed": 42,
+          "tokens": 1024,
+          "flag": false,
+          "tail_zlib_ratio": 0.06377204884667571,
+          "tail_distinct_chars": 33
+        },
+        {
+          "seed": 43,
+          "tokens": 1024,
+          "flag": false,
+          "tail_zlib_ratio": 0.09656042915746292,
+          "tail_distinct_chars": 43
+        },
+        {
+          "seed": 44,
+          "tokens": 1024,
+          "flag": false,
+          "tail_zlib_ratio": 0.1159375,
+          "tail_distinct_chars": 47
+        }
+      ],
+      "semantic_review": "All three remain in repetitive unexecuted editing/mock/line-inspection deliberation; less mechanically stable than suffix512; no automated flags."
+    },
+    {
+      "case": "astropy.first.suffix512",
+      "trials": [
+        {
+          "seed": 42,
+          "tokens": 1024,
+          "flag": false,
+          "tail_zlib_ratio": 0.05857418111753372,
+          "tail_distinct_chars": 35
+        },
+        {
+          "seed": 43,
+          "tokens": 1024,
+          "flag": true,
+          "tail_zlib_ratio": 0.04510408635312259,
+          "tail_distinct_chars": 32
+        },
+        {
+          "seed": 44,
+          "tokens": 1024,
+          "flag": false,
+          "tail_zlib_ratio": 0.05001938735944164,
+          "tail_distinct_chars": 34
+        }
+      ],
+      "semantic_review": "All three repeat unexecuted promises to inspect the same source lines; strong stable text loop."
+    }
+  ]
+}

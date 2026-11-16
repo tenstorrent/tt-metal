@@ -1,0 +1,150 @@
+{
+  "status": "pass_for_fixed108_admission_not_policy_selection",
+  "reviewed_unix": 1794773997.0902658,
+  "completion": {
+    "start_unix": 1794772980.4598236,
+    "end_unix": 1794773945.7663949,
+    "exit_code": 0,
+    "wall_seconds": 965.3065712451935
+  },
+  "forecast_seconds": [
+    800,
+    1500,
+    3000
+  ],
+  "forecast_result": "HIT",
+  "source_pins_match": true,
+  "policy_inventory_layers": 60,
+  "accuracy": {
+    "prefill_top1": "100/100",
+    "decode_top1_repeats": [
+      "98/100",
+      "98/100",
+      "98/100"
+    ],
+    "natural_top1": "466/512",
+    "natural_top5": "512/512",
+    "all_top100": 1
+  },
+  "trace_evidence": {
+    "decode_replays": 297,
+    "natural_replays": 511,
+    "ar_per_sample": {
+      "model_replays": 127,
+      "sample_replays": 128,
+      "token_refreshes": 0,
+      "position_refreshes": 1,
+      "page_refreshes": 0,
+      "readbacks": 2,
+      "captures": 0
+    },
+    "tracking": "1",
+    "failure_signatures": []
+  },
+  "autoregressive_diagnostic": {
+    "source": "autoregressive",
+    "input_tokens": 4096,
+    "generated_tokens": 128,
+    "batch_size": 1,
+    "concurrent_requests": 1,
+    "ttft_ms": 1167.1495148912072,
+    "decode_tps": 18.5037961501331
+  },
+  "context": {
+    "scope": "full60layers",
+    "context": 262144,
+    "boundaries": [
+      {
+        "prompt_tokens": 262143,
+        "output": [
+          236795
+        ]
+      },
+      {
+        "prompt_tokens": 262144,
+        "output": [
+          35769
+        ]
+      }
+    ],
+    "last_decode_input_position": 262143,
+    "last_decode_output": [
+      35769
+    ],
+    "positions_after": [
+      262144
+    ],
+    "host_sampling_compatibility_equal": true,
+    "host_sampling_logit_reads": 8
+  },
+  "qualitative": [
+    {
+      "id": "shared_0",
+      "tokens": 19,
+      "hf_tokens": 19,
+      "first_divergence": null,
+      "natural_stop": true,
+      "verdict": "coherent natural stop; exact HF match"
+    },
+    {
+      "id": "shared_1",
+      "tokens": 128,
+      "hf_tokens": 128,
+      "first_divergence": 21,
+      "natural_stop": false,
+      "verdict": "coherent bounded prefix only"
+    },
+    {
+      "id": "shared_2",
+      "tokens": 128,
+      "hf_tokens": 128,
+      "first_divergence": 28,
+      "natural_stop": false,
+      "verdict": "coherent bounded prefix only"
+    },
+    {
+      "id": "shared_3",
+      "tokens": 128,
+      "hf_tokens": 128,
+      "first_divergence": 83,
+      "natural_stop": false,
+      "verdict": "coherent bounded prefix only"
+    },
+    {
+      "id": "shared_4",
+      "tokens": 104,
+      "hf_tokens": 104,
+      "first_divergence": null,
+      "natural_stop": true,
+      "verdict": "coherent natural stop; exact HF match"
+    },
+    {
+      "id": "shared_5",
+      "tokens": 128,
+      "hf_tokens": 128,
+      "first_divergence": 65,
+      "natural_stop": false,
+      "verdict": "coherent bounded prefix only"
+    }
+  ],
+  "long_prefix": "32083 tokens; ORCHID-742 retrieved, natural stop; fenced JSON is not strict raw JSON",
+  "limitations": [
+    "Four qualitative replies reach128-token cap in both HF and TT; bounded-prefix evidence only, no task correctness claim.",
+    "Tracking1 differs from oldQ128 tracking0; no speed gain inferred. AR is not vLLM; selected serving policy and rates unchanged.",
+    "Fullcontext is boundary execution, not semantic long-context accuracy. Fixed108 revalidation pending."
+  ],
+  "artifacts": {
+    "source_manifest.json": "08eb7fe3de3051ab32b4d76fa2df2bc1a09dda977533c85c3345ed4e1ad31b0d",
+    "qualitative_prompt_format.json": "16e4bfd8857e67ee9ca39297c8521b30e8ceacf0c848783e83b1192ef331cb9c",
+    "qualitative_tt.json": "21efd97b319f6c554803dd68ed98604019ccb47ca1bacde84fdf1a2a37123837",
+    "qualitative_hf.json": "05c2ac233052909c2e785b9d36f819c52e95cecfcfd299eff81a6b1de3a174d6",
+    "readiness_accuracy.json": "3c14699f1a59053e40c07a3939a567af705579d35fb43419b34d6d626e8554ef",
+    "runtime_policy.json": "db381061657ecdbecaab977c428f47e9b12ab55ec73b8d4afb633db744050b76",
+    "aime24_prompt.json": "578790e2d9e5d7fad6d187bc6d733699c3514218ea5a42ca2bf9d25d7afdd4dd",
+    "full_context_post_barrier.json": "7cef036492930fa5857a0c42a99af57ee56fd4e3d442b03f0dac6d9715aa1610",
+    "performance_b1.json": "94e60675a2bbb621b0854ad239f2b79068b1f7867c0e0121bf46674a3ad5dabc",
+    "long_prefix.json": "c2b410c7c772d9c30027f3f9cbe5faf59b5cc51696d9a233364bb3a6893a719c",
+    "memory.json": "9053b70c348654139dc83502604c869711bab23667d86d0e1b50d6dc64e82ee1"
+  },
+  "head_embedding_norm_sampling": "BF16; head HiFi4; runtime inventory verified"
+}

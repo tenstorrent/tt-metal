@@ -1,0 +1,13 @@
+{
+  "status": "process_exit_observed_all_results_collected_exit_status_unknown",
+  "start_unix": 1794784925.965542,
+  "end_unix": 1794786272.6901937,
+  "wall_seconds": 1346.7246515750885,
+  "exit_code": null,
+  "wrapper_exit_code": 143,
+  "missing_reasons": {
+    "exit_code": "Outer wrapper terminated unexpectedly; actual child completed later, but was reaped before /proc exit status could be read. No exit0 is inferred."
+  },
+  "observer": "process-exit-observer.json",
+  "device_release_observed": true
+}

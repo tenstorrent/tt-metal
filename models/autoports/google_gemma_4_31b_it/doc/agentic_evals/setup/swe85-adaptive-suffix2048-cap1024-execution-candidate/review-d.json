@@ -1,0 +1,57 @@
+{
+  "reviewer": "independent CPU-only fixture/driver review",
+  "scope": "U adaptive suffix2048 cap1024 execution candidate; fixture validity and admission-gate integrity only, not anomaly adjudication or stage sign-off.",
+  "status": "valid_after_gate_corrections; predecessor_pending",
+  "findings": [
+    {
+      "severity": "corrected_before_admission",
+      "finding": "The serial driver previously hashed original/source inputs but did not recheck the exact execution manifests it launches. Added per-batch SHA-256 validation for both candidate_manifests entries."
+    },
+    {
+      "severity": "corrected_before_admission",
+      "finding": "The predecessor check previously supplied the required queue status as a get() default, allowing a missing status to pass. It now requires the actual full-completion record name=full and exit_code=0, plus execution-queue status=all_third_cap_jobs_completed and exit_code=0."
+    },
+    {
+      "severity": "clean",
+      "finding": "Five fixture cases are exact cap1024 extensions: all retain their respective 2048-token source prompt IDs and saved continuations/sampling (temperature 1.0, top_p .95, top_k 20), with trial seeds 42/43/44 and branches=[]; each runs 1024 free-run tokens once. CPU validation records five jobs and no TTNN import."
+    },
+    {
+      "severity": "clean",
+      "finding": "Forecast point and range totals recompute from same-mode measured loads, one measured same-mode trace-preparation proxy, and each matched cap512 overhead plus decode scaled 1023/511. The 0.7\u20131.7 multipliers apply variable case work while load and prep remain fixed; totals are served 183.5781s [174.5700,204.5971], full 332.5479s [259.6435,502.6581]."
+    },
+    {
+      "severity": "pending",
+      "finding": "The required T full-completion artifact and terminal queue status are not yet present; the driver will wait for these explicit records. No admission or device execution was performed."
+    }
+  ],
+  "reviewed_hashes": {
+    "served_manifest": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-execution-candidate/served-cases.json",
+      "sha256": "98f9ced06ec27196e666962c996b8f08cd8dac0da3806bb0d241b4892e13328b"
+    },
+    "full_manifest": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-execution-candidate/full-cases.json",
+      "sha256": "23a0fcbb1dd545197501f491771442a62ac45e117d4ce7d3d25ddb35fb9e748f"
+    },
+    "proposal": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-execution-candidate/proposal.json",
+      "sha256": "f87ed6e30d561e193ba778c60b4a3cb42a2376bb064eaf7764060fde229a7712"
+    },
+    "driver": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-execution-candidate/run_cap1024_after_t.py",
+      "sha256": "7af4936bc65a3d69a72b02e48ecf398c43e1fc7912415dae7ff13a88d513e363"
+    },
+    "admission": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-execution-candidate/admission.json",
+      "sha256": "b4ae3e71c4252fe48b78c20cb2e275790d30fdd6967abb94f8d1ece7804dc50f"
+    }
+  },
+  "checks": {
+    "fixture_identity": "passed",
+    "forecast_arithmetic": "passed",
+    "cpu_validation": "passed per candidate cpu-validation.json",
+    "driver_syntax": "python -m py_compile passed",
+    "admission_status": "candidate_only_not_admitted",
+    "device_work": "none"
+  }
+}

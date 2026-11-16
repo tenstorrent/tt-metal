@@ -1,0 +1,10 @@
+{
+  "source_inventory_sha256": "e1254ae95f87360bc214b01757062a8910b5fed95f6e6cfd13244b024cce01ad",
+  "row_key": "admission",
+  "row": {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/admission.json",
+    "sha256": "428bea328fae8fa6e4f6fe21802f3763985d6b5ee819f5beac6c6df3ff1f2b97"
+  },
+  "actual_admission_sha256": "91dc764e6a3a6b1e8a1be51e6eee5fc958c19d1dfcfa3d057b989aa325618cdd",
+  "note": "The prior P source inventory was frozen before root admission and pins an admission placeholder. P/source-hashes.json is immutable and is deliberately not rewritten. Consumers verify final admission bytes against the independently fixed expected admitted digest and status, then skip only this exact stale inventory row; all other inventory entries remain hash-checked."
+}

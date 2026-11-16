@@ -1,0 +1,67 @@
+{
+  "status": "reviewed_candidate_only_not_admitted_not_run",
+  "scope": "Independent CPU-only fixture, precision configuration, provenance, and planning-estimate review of fixed 108-row HiFi2 panel. No launch, device work, or stage signoff.",
+  "panel": {
+    "result": "The same 108 (36 onsets \u00d7 seeds 42/43/44) keys as proposal-c are retained. Exactly the 29 old cap512 rows selected in the refreshed second-cap provenance move to cap1024; the other 79 rows keep their prior cap (72 at256 and7 at512).",
+    "cases": 108,
+    "cap_counts": {
+      "256": 72,
+      "512": 7,
+      "1024": 29
+    },
+    "promoted_rows": 29,
+    "input_check": "For all 108 rows, source_onset/seed identities match proposal-c; prompt IDs, chosen continuations, sampling metadata, and metadata.seed match the corresponding saved source input. Extension fixtures match exact inputs across served/full duplicate checks recorded by provenance.",
+    "source_hashes": "All 64 provenance source-file hashes, selected extension fixture hashes, and all runtime-estimate source-result hashes were checked against disk.",
+    "branch_policy": "Every candidate row has branches=[], one free-running trial, and per-row cap matching the frozen or promoted cap."
+  },
+  "precision": {
+    "finding": "Configuration is BFP8 lm_head with HiFi2 compute fidelity; remaining groups and policy stay as in proposal-c.",
+    "local_precision_sha256": "6ef80afe2b6ae02403eb99fbbabcf3cc6d0d4706ba9b3f67a1c8723e16d3855b",
+    "build_kwargs_precision_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-c/head_bfp8_hifi2_precision.json",
+    "path_note": "The build-kwargs path resolves and its bytes exactly match the local precision file hash above."
+  },
+  "cpu_validation": {
+    "status": "passed_cpu_validate_only",
+    "returncode": 0,
+    "stdout": "Validated 108 jobs without importing TTNN",
+    "stderr_empty": true
+  },
+  "forecast": {
+    "status": "planning_only_not_performance_not_run",
+    "formula": "Use observed per-trial diagnostic wall for caps256/512; for cap1024 use measured cap512 prefill/host overhead plus decode_wall_s \u00d7 1023/511. Sum 108 cases; add one measured served load and fixed180s prep allowance; range scales case work 0.7x\u20131.5x with load/prep fixed.",
+    "case_generation_s": 2648.6273497545067,
+    "load_s": 144.17307648900896,
+    "first_preparation_allowance_s": 180.0,
+    "total_s": 2972.8004262435156,
+    "range_s": [
+      2178.2122213171633,
+      4297.114101120769
+    ],
+    "recalculation": "All 108 source trial hashes and values, case sum, total, and range endpoints recompute exactly. Seconds/hours fields also agree.",
+    "prep_note": "The 180s allowance is an explicit planning margin, not a measured HiFi2 first-preparation duration."
+  },
+  "command_review": {
+    "timeout_s": 21600,
+    "compare_dir": "omitted for branches=[] free-run-only rows; later adjudication must compare token streams by source_onset+seed",
+    "execution_status": "not run"
+  },
+  "findings": [],
+  "limitations": [
+    "No candidate outputs or semantic behavior were reviewed because the panel has not run.",
+    "This is preparation review only, not admission or stage signoff."
+  ],
+  "reviewed_hashes": {
+    "candidate-cases.json": "bbef683b6129a2b00a7b73fc74d3a1ca25d3a20adc648bd057d5f4d22ecb7ec4",
+    "candidate-input-provenance.json": "e3ee26a4a4f7cc652c16f34fccd28e11657659a41246cb9f1f0a4e30b3fc8b8d",
+    "runtime-estimate.json": "37f7647cf29db4f11c8bb842b7ed02c2d85243a8207c6f61d92144c642eae880",
+    "command.json": "034e8ea85e26f37119fd8e079221b3cfc66e0353cb9f8ed36d93fd8a136e2e58",
+    "cpu-validation.json": "6dba06a26293da635270545afe1adfc82d22c97e13a3638efc4d79caa1ae7094",
+    "README.md": "fbb8308396217c69073fd85ef7eeef25a7e74aa3d2c66bc66ec4cd97ce2518f3",
+    "head_bfp8_hifi2_precision.json": "6ef80afe2b6ae02403eb99fbbabcf3cc6d0d4706ba9b3f67a1c8723e16d3855b",
+    "head_bfp8_hifi2_build_kwargs.json": "43b2978f23fe950617e0e97bbd1e25d2ff086536d72d8b727c61103f6eb2d533"
+  },
+  "proposal_c_reference_hashes": {
+    "candidate_manifest": "6300ef8d51a63fd600fa8b963e6b4b516d9f262301ef034e6f51bd47dc78fef2",
+    "precision_config": "6ef80afe2b6ae02403eb99fbbabcf3cc6d0d4706ba9b3f67a1c8723e16d3855b"
+  }
+}

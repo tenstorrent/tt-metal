@@ -1,0 +1,828 @@
+{
+  "status": "completed",
+  "command": [
+    "timeout",
+    "9000",
+    "env",
+    "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+    "READINESS_TRACE_REGION_SIZE=134217728",
+    "OMP_NUM_THREADS=16",
+    "MKL_NUM_THREADS=16",
+    "OPENBLAS_NUM_THREADS=16",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+    "-m",
+    "models.autoports.google_gemma_4_31b_it.tools.precision_repro_batch",
+    "--cases",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/candidate-cases.json",
+    "--build-kwargs-file",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/down_bfp8_lofi_isolated_build_kwargs.json",
+    "--output-dir",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated"
+  ],
+  "start_unix": 1794740099.5587447,
+  "timeout_seconds": 9000,
+  "candidate_admission_sha256": "a65c311b3dde652e676d9e0ad02583cf78a52473c3fc59604f45f91959ae8c51",
+  "candidate_proposal_sha256": "dbaa7eb5bdb789586794b5061dd0eda81aea5b2562a77a901d80e2735e63c632",
+  "candidate_source_inventory_sha256": "2c6199d5f2f501f13b9b4f8f419e95df6b62a278a77a46a2fb2f452d0d5c2ecf",
+  "forecast": {
+    "status": "planning_proxy_clean_P1_only_not_measurement",
+    "baseline": {
+      "source": "P1 BFP8/HiFi2 fixed108 completion, clean serial evidence",
+      "completion_sha256": "fa70e146164d0b1b948f3bb969fff7e56b44b8d6cc85912f2dfb814c941675d9",
+      "completion_summary_sha256": "3e235673a01aa0a28ad88d49677ad8099b38dbe6e89d7ce65885365284a8d67f",
+      "forecast_miss_acceptance_sha256": "b33ebae3a3366738541d2983238c18f57cc3841bc539afcc021a85d86fd7c18b",
+      "manifest_sha256": "57193e4b91af3a31df00f0c92dbc0f2219fbce011e6533594e5244a93a3021ed",
+      "trials": 108,
+      "elapsed_seconds": 2018.038988828659,
+      "load_seconds": 138.38867970812134,
+      "case_seconds": 1874.3906799475662,
+      "decode_seconds": 911.1484370483086,
+      "decode_replays": 27884
+    },
+    "candidate_uncertainty": {
+      "low": "P1 wall as optimistic floor; assumes no net slowdown despite adding BFP8 down and retaining BF16 HiFi4 head",
+      "central": "1.7x P1 as planning allowance for changed precision, output-length variance, and host/prefill uncertainty",
+      "high": "3.2x P1 broad tail allowance; not a measured upper confidence bound",
+      "p2_use": "P2 wall is excluded from forecast calibration because an unintended HF CPU process overlapped it; P2 is predecessor/correctness evidence only, not speed ranking."
+    },
+    "scenarios": {
+      "low": {
+        "multiplier": 1.0,
+        "seconds": 2018.038988828659
+      },
+      "central": {
+        "multiplier": 1.7,
+        "seconds": 3430.6662810087205
+      },
+      "high": {
+        "multiplier": 3.2,
+        "seconds": 6457.7247642517095
+      }
+    },
+    "forecast_seconds": {
+      "low": 2018.038988828659,
+      "central": 3430.6662810087205,
+      "high": 6457.7247642517095
+    },
+    "timeout_seconds": 9000,
+    "timeout_margin_seconds_vs_high": 2542.2752357482905,
+    "method": "Scale the exact clean P1 fixed108 measured elapsed. Broad multipliers are planning judgments, not measured precision scaling. Include one model load and one serial fixed108 panel; no selected-policy/rate claim. Reforecast after P2 terminal and root reconciliation before any admission."
+  },
+  "expected_runtime_precision": {
+    "config_id": "stage12_swe85_down_bfp8_lofi_isolated_served_head_bfp8_lofi",
+    "weight_groups": {
+      "attention": "bfp4",
+      "mlp": "bfp4",
+      "down": "bfp8_lofi",
+      "lm_head": "bfp8_lofi"
+    },
+    "layer_exceptions": {},
+    "compute_fidelities": {
+      "attention": "LoFi",
+      "mlp": "LoFi",
+      "down": "LoFi",
+      "lm_head": "LoFi"
+    },
+    "activation_dtype": "bfloat8_b",
+    "residual_dtype": "bfloat16",
+    "ccl_dtype": {
+      "prefill": "bfloat8_b",
+      "decode": "bfloat16"
+    },
+    "kv_cache_dtype": "bfloat8_b",
+    "logits_dtype": "bfloat16",
+    "sampling_dtype": "bfloat16",
+    "embedding_dtype": "bfloat16",
+    "norm_dtype": "bfloat16",
+    "max_seq_len": 262144
+  },
+  "build_kwargs": {
+    "batch_size": 1,
+    "precision_config": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/down_bfp8_lofi_isolated_precision.json"
+  },
+  "p2_terminal": {
+    "admission_sha256": "74bef162c97e23e882612eb85dae365f32c9da1f13ba4b9b8e1e1f8f582ad1be",
+    "queue_sha256": "a3e38a94d97c827735d1f16a868b721dc669984ae26ef0ee42d0c5de2a847e86",
+    "launch_sha256": "fd34812c8d86ace46b6abbd162be21e39a447d79691b48201d1dfd3f479202ef",
+    "completion_sha256": "47896893e57257757d1153dd3ae4df6b05985cd97b0fbb9993739e30145b2880",
+    "elapsed_seconds": 2469.2918775081635,
+    "forecast_range_seconds": [
+      2018.038988828659,
+      5910.468657604884
+    ],
+    "forecast_review_sha256": "bd9643f2926279d315e9774f14b6ace484efdee050a763895b2b1c38c5e91a99"
+  },
+  "sklearn_serial": {
+    "sk_evidence_sha256": {
+      "corrected_bfp8_admission_sha256": "3135aac12cbe11d97803b166dc3173def8f9bc03a6e8bb786fe015ce3f24bf08",
+      "corrected_bfp8_completion_sha256": "1be9414e4447a6600ea163967ec4fc0601ae9ffbbd47e44ab5e407a1c3ee453e",
+      "corrected_bfp8_root_review_sha256": "777d1a61090d8b827c76fc905b1a884b58270613d976c5eed73d8a41c2319151",
+      "corrected_bfp8_triage_sha256": "04195f9c199eac5276e59af247dc20bc7a5965d514ba2f77d7a9f6d56af73de9",
+      "old_full_bf16_admission_sha256": "32fe5e6ccf38aff945424de6b7f3c8e24a7a375cf6a806424bd1097e99bb6194",
+      "old_full_bf16_completion_sha256": "927e9425adeb62200b42d38c6f7fc367358f8fd02ad1bcbabaf4010fc3f76dec",
+      "old_full_bf16_root_review_sha256": "50073a981e1dcfb8446d10bc1c1c7e012cbfa53a8700cca79b952cb12f549fbd",
+      "old_full_bf16_triage_sha256": "ef7d0994f7067d540f7fbd986e8e9769d9440f470e00a8c57125a7458517f7a2",
+      "suffix1024_admission_sha256": "2e635a1169648396cf6abd95a6a3f3918808a45f0918431702fae2f5ff3ba308",
+      "suffix1024_served_completion_sha256": "b0485e6d7f64bfe2e2905c98f8bc493fd5a2db92e59522f58ac2dd972c32cf26",
+      "suffix1024_full_completion_sha256": "c28b61d76a152ef27c7cc92da987ccd80a36cdcea16eb48ef6933a792ce752b9",
+      "suffix1024_served_root_review_sha256": "2ee7c06425277e37c938256fd508c60a855838227058ec5047260a5a0f8b87ff",
+      "suffix1024_full_root_review_sha256": "8736f9c042e98cdeea4b4d158b739b48e46c5ab73b369f87091d1a733f6ccc6b",
+      "suffix1024_served_triage_sha256": "5f48a80b44ce6086390e541eade5c4d9f878e00ef8c6e829d7a1b18d29b04b7b",
+      "suffix1024_full_triage_sha256": "7c5d1a20673ca8036f94fe8f30b5b6ae145a3038fa4f0ccae904030f2ec48791",
+      "suffix1024_summary_sha256": "ecbbc26c4f42b9ca977e06f881c9301eecbb3ed59a0336ccfdcfad5bd05e6781"
+    },
+    "serial_review_sha256": "d94c90d83aa66e6e80df723e0a5ba7cfb7c875f869aec1c07294e81e169f57fa",
+    "hf_decision_sha256": "67c26519c6e852d7f01c372a13d2e85bf75f379f4a110b7ab360b59173cf7267",
+    "hf_followup": {
+      "decision": "not_required",
+      "decision_sha256": "67c26519c6e852d7f01c372a13d2e85bf75f379f4a110b7ab360b59173cf7267",
+      "reason": "Not required as a prerequisite to the P3 full-prompt precision diagnostic: P3 itself includes original full-prompt SK seed42 at cap1024. The SK secondary-HF controls and suffix2048 extension remain required follow-up diagnostics after P3; this decision does not waive or declare them complete."
+    },
+    "h9_terminal": {
+      "review_sha256": "88d22737a84202b16948c9c313654d2d91e2d3263ffe538632a78792f8ec3366",
+      "admission_sha256": "74640276fdf5e463fa968d5d188994622759df96f09d4f408e02712b7d09ae66",
+      "progress_sha256": "4a9363429f50949031da53c13f3156c2bd399f756d227f353babaafd065ec773",
+      "completion_sha256": {
+        "1": "fc52a3d203e4cc299ce8037dde0bf7c25fdcf36c62e767ef98183c46fcb203fe",
+        "2": "e297a2ba0181f1f8fa9c8b9f69d2ea1e68d31b425da587bdbd5faa5415253ebf",
+        "3": "43482c49d0073fa1407d0f919451c7349a8314752c1b555eca4785f458081005",
+        "4": "d39b7440fd10612ecd8e51d84c02db9ea68c8742325c4a2f4597e3df86c3c967",
+        "5": "957d8f1e97def011efef8d7e3aa1024b77f73247d7bcc475b78862bd694e6992",
+        "6": "ad828e22fcc086bfac514723cff621d9b1d7cef84ba1de833351e85e5c2f22a5",
+        "7": "67edd55881ada416e6e9ebcc37a907228b80d8d438fc2b4bfcc5ac47116e84f3",
+        "8": "54c14908183b4c1cee5f986e6321f277fc3b5358486e4d810513000d1643182b"
+      },
+      "output_sha256": {
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/results/seed42-suffix512/anomaly.requests2931.call20.canonicalprefix.optional-suffix512.hf.private.json": "a91e0aff64f340594679d595122c256f280e66e650a512ce34a85d52ed432156",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/results/seed42-suffix512/anomaly.sympy__sympy-14248.call53.onset.optional-suffix512.hf.private.json": "33d3407480d344a1537e40965d584ef95ecae49c5bea9609eacb83cac4783cf3",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/results/seed44-suffix512/anomaly.pytest-dev__pytest-7432.call19.onset.optional-suffix512.hf.private.json": "389d4c9c55f00e544dcacb209814a289e7c61af4dec2ec55ebfc265cd872cb63",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/results/seed44-suffix1024/anomaly.psf__requests-5414.call9.onset.hf.private.json": "4f1a6497eeb57b8754ce74bea702170078d7ce7e93fef610357f785044b2b045",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/results/seed44-suffix2048/anomaly.psf__requests-5414.call11.onset.hf.private.json": "ea3eb180de1ef8898c2565dcb5ffd7700f3e792ccfce8bc279efef80c6dfe9a4",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/results/requests10-cap4096-seed42/anomaly.psf__requests-5414.call10.onset.suffix4096.seed42.hf.private.json": "c4409f7bea3f5af2a80a4f5ee8162e0e282a265ae4b0abb5a5731adff64d275b",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/results/matplotlib86-cap4096-seed43/anomaly.matplotlib__matplotlib-20488.call86.onset.suffix4096.seed43.hf.private.json": "7544c2c7a570e573fa29b8743a75ef5edba01e55de629d35741cc8cb4c59f520",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/results/sphinx70-cap2048-seed43/anomaly.sphinx-doc__sphinx-10323.call70.onset.hf.private.json": "2472008d4ab3ca68d5803944ccf3410c53e603940e62529f062df2e8fdf199a2",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/results/call91-cap8192-seed43/anomaly.call91.canonicalprefix.suffix8192.seed43.hf.private.json": "c42dc1b3206ca95431c91d0468bca2b71dc3386221bc28d12951a6b09cdf8fb9"
+      }
+    },
+    "h9_terminal_review_sha256": "88d22737a84202b16948c9c313654d2d91e2d3263ffe538632a78792f8ec3366"
+  },
+  "forecast_review_sha256": "785368a538df283b778c2aeedddffc569383e22a24a1b439f0d70636ea09ddd8",
+  "active_hf_processes": [],
+  "device_owner_preflight": [],
+  "end_unix": 1794742239.7525618,
+  "elapsed_seconds": 2140.1934437209275,
+  "exit_code": 0,
+  "timed_out": false,
+  "process_error": null,
+  "validation_errors": [],
+  "outputs": [
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.call88.canonicalprefix.seed42.cap1024.json",
+      "sha256": "6b91eef363c62087ad470ddd81da0a2335e3803682e8530aa8f4404a7d7281e1",
+      "tokens": 619,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.call88.canonicalprefix.seed43.cap1024.json",
+      "sha256": "80e9cb3a01e726eec992b31e79758e5f2a483f61f8ac6d20bb3703db2256a143",
+      "tokens": 608,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.call88.canonicalprefix.seed44.cap1024.json",
+      "sha256": "02a1fb19a1238d83cc88119e1ff6ead161b0795f357dd27fc1eefd7fbdafdf76",
+      "tokens": 689,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.call91.canonicalprefix.seed42.cap256.json",
+      "sha256": "66a026e975146f2da324cc448a4ee1a2f9d857efc69e621100d2d23c70f20d56",
+      "tokens": 191,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.call91.canonicalprefix.seed43.cap256.json",
+      "sha256": "8303bc6c9ef460036ebd4bd8550e71111fb177a2e4838a2376da713d9963f204",
+      "tokens": 87,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.call91.canonicalprefix.seed44.cap1024.json",
+      "sha256": "93130293dbdafa4440e98e7f413721bfde90bcbc9456aa42cffe1f8966e30c5c",
+      "tokens": 63,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.matplotlib__matplotlib-20488.call82.onset.seed42.cap512.json",
+      "sha256": "424096635d5761158344e3066b1ad8b1cf0d5b860c5bde25c22d15b36a5228b5",
+      "tokens": 82,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.matplotlib__matplotlib-20488.call82.onset.seed43.cap256.json",
+      "sha256": "c31d46424af97be266e3cfb159087c56c17469b952bbd9811bfa99602a509d0e",
+      "tokens": 150,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.matplotlib__matplotlib-20488.call82.onset.seed44.cap256.json",
+      "sha256": "1a2ade82e92433c90eb10ef3ab74f74a5246dcfa7a95b2bbde04e063136c3064",
+      "tokens": 117,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.matplotlib__matplotlib-20488.call86.onset.seed42.cap256.json",
+      "sha256": "3f2597e30c38851ab9ea1b36e649b4f8ae911bfaebe865a184faa1760fcccf8c",
+      "tokens": 119,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.matplotlib__matplotlib-20488.call86.onset.seed43.cap256.json",
+      "sha256": "d56c88c3087cd02ab6838c3b520b86ce97431673619e20c69cc6c102b439a78d",
+      "tokens": 165,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.matplotlib__matplotlib-20488.call86.onset.seed44.cap1024.json",
+      "sha256": "e1bed80f75fb549b8e50fe807742bd081802aa486a7787e2da069b8dbdc7d8ed",
+      "tokens": 269,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.psf__requests-1921.call1.onset.seed42.cap256.json",
+      "sha256": "025b32091ec5a72e1052359857af5b8f929bdb34f402649c9167b7e57d20ea92",
+      "tokens": 16,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.psf__requests-1921.call1.onset.seed43.cap256.json",
+      "sha256": "0a16521d316aa20fc5972782d1590ff71c35a70c40243faab7aa7b32ec2f1660",
+      "tokens": 51,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.psf__requests-1921.call1.onset.seed44.cap256.json",
+      "sha256": "96cb2fb4fb695bef7e9cbb443d4d524721a485c9b63ef9a475f4b947c5499db6",
+      "tokens": 16,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.psf__requests-5414.call10.onset.seed42.cap256.json",
+      "sha256": "51b40437942121d43d32b1f4b7280027f6da1e86bcd572eff4c360146dfddf83",
+      "tokens": 256,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.psf__requests-5414.call10.onset.seed43.cap256.json",
+      "sha256": "f46d86e3d90fd75a8bf54a3e8c19da58a34591cec30a9a828ca51c767b4fda84",
+      "tokens": 256,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.psf__requests-5414.call10.onset.seed44.cap256.json",
+      "sha256": "5f6af6bab0a52a7f0317ca48b3b2200cc44d131548c1b22df6af4412873c19c2",
+      "tokens": 256,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.psf__requests-5414.call11.onset.seed42.cap256.json",
+      "sha256": "178c2bbbf77dec7b779c2633efe6f22f7c0bd8909c73415b767ec263dda73e63",
+      "tokens": 256,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.psf__requests-5414.call11.onset.seed43.cap256.json",
+      "sha256": "2d0f0479ba8e9633d808c43701b29699380e13336391d8d2458401288d1b602c",
+      "tokens": 256,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.psf__requests-5414.call11.onset.seed44.cap256.json",
+      "sha256": "baf29a3adb7cd8947a4f969c5d3875c343bc42ae137fbf5d38f58597017c7aeb",
+      "tokens": 256,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.psf__requests-5414.call9.onset.seed42.cap256.json",
+      "sha256": "50c0a4a5d3b319140fb280e4835442e9dd66fe934eedd7cc6f46a42f6acdcf95",
+      "tokens": 256,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.psf__requests-5414.call9.onset.seed43.cap256.json",
+      "sha256": "1a33a0b0c0e1cad7bf705db08f40b3dff05c215f9dd069ac96e6644b4d9cc18a",
+      "tokens": 256,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.psf__requests-5414.call9.onset.seed44.cap256.json",
+      "sha256": "c1b1191bc1f4e3eacf009b64c77fe4cee4654626ec6b32f30ea4272614fb79ba",
+      "tokens": 256,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.pylint-dev__pylint-4551.call1.onset.seed42.cap256.json",
+      "sha256": "9944d0ad40ea262fcf4e5e44fa44493942aeae7342db9f6372b363e0bab15dde",
+      "tokens": 16,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.pylint-dev__pylint-4551.call1.onset.seed43.cap256.json",
+      "sha256": "46ee77e67f6501f73961dc6cac7d992ed57aa32c41b4ddd18409db710be44b0d",
+      "tokens": 18,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.pylint-dev__pylint-4551.call1.onset.seed44.cap256.json",
+      "sha256": "772f66090a06d1e558f84c56d18828d08db08e0c752a0dcaa96a9f34f888bd1c",
+      "tokens": 16,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.pylint-dev__pylint-4604.call45.onset.seed42.cap256.json",
+      "sha256": "53aa87388a7291c81ff2ee103aff9e12cc3ca3bcfd4e54144ce92ef48475c41f",
+      "tokens": 84,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.pylint-dev__pylint-4604.call45.onset.seed43.cap256.json",
+      "sha256": "753bb1b476a69dae663641af14d81711188fdc494a34307476fa60458f0b418a",
+      "tokens": 76,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.pylint-dev__pylint-4604.call45.onset.seed44.cap256.json",
+      "sha256": "e55a9dc5b76a9dd37306b647f3f88e7a3d7c715a5793dbb7ac3ba68389010b1a",
+      "tokens": 51,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.pytest-dev__pytest-5787.call1.onset.seed42.cap256.json",
+      "sha256": "e3093a79a1999145796c8199a4c4326acf9ce8b65fe6ad2da595426b05c76590",
+      "tokens": 17,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.pytest-dev__pytest-5787.call1.onset.seed43.cap256.json",
+      "sha256": "644ad79170595fcc07ae7b4358572d5a2c08f5940c03470875ab1e4c7f13e22f",
+      "tokens": 15,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.pytest-dev__pytest-5787.call1.onset.seed44.cap256.json",
+      "sha256": "d27e70bde9fad04b83cb4e6583cf96828f14b8b3e6ebfffdd4a0a3c8bf9f408e",
+      "tokens": 17,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.pytest-dev__pytest-5787.call65.onset.seed42.cap2048.json",
+      "sha256": "00ad34d68ea214cd51c8a3d3872b0cb02357ca40afd733296c384553b5a6df0a",
+      "tokens": 160,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.pytest-dev__pytest-5787.call65.onset.seed43.cap2048.json",
+      "sha256": "3228a96bc18c8640bc6a6fb08158c19c6f31f695991fd4d2c5ae3783891112d9",
+      "tokens": 2048,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.pytest-dev__pytest-5787.call65.onset.seed44.cap4096.json",
+      "sha256": "707d0665038c4ae9fd1b8e10ccc31bdb230f762c60a63946167bf66cf3eb687a",
+      "tokens": 61,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.pytest-dev__pytest-7432.call19.onset.seed42.cap256.json",
+      "sha256": "31a546e7d507b42116d2a4c8f67ccb3211bf0a9bb4e91776105117eae62e7961",
+      "tokens": 256,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.pytest-dev__pytest-7432.call19.onset.seed43.cap256.json",
+      "sha256": "2a30e0170c8c4f1e0158736264f93db0c37bf315b7fa087e0761f3133996bc23",
+      "tokens": 256,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.pytest-dev__pytest-7432.call19.onset.seed44.cap256.json",
+      "sha256": "e5bf9e1881ab9558d1b08f4dad677cad4cf6574bc78d64ef748e082545d99a7f",
+      "tokens": 256,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.pytest10356-call14.canonicalprefix.seed42.cap256.json",
+      "sha256": "21bed595ac96856a23b6c64e925d0e7c496dee4bcdf39d19a1bb1a7afa571758",
+      "tokens": 33,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.pytest10356-call14.canonicalprefix.seed43.cap256.json",
+      "sha256": "bb4a72f326857d232ff4f5e561a1742e9bebafb1150e8b1c9d87caf78a5650de",
+      "tokens": 34,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.pytest10356-call14.canonicalprefix.seed44.cap256.json",
+      "sha256": "ca3be283457ed1b1e6c874bc45541783dbf88b262f602b4efbefcd5179ac5afe",
+      "tokens": 33,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.requests2931.call20.canonicalprefix.seed42.cap256.json",
+      "sha256": "053e005cc03266adcb5f6ab6a6ae45dfbbae7be685a7c75ec1cfca13f8e90c38",
+      "tokens": 256,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.requests2931.call20.canonicalprefix.seed43.cap256.json",
+      "sha256": "431c7e7b659f01cf7b5c1f7d42d1cd91ae5b5855f5728ff3a49805b682cad08b",
+      "tokens": 256,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.requests2931.call20.canonicalprefix.seed44.cap256.json",
+      "sha256": "d29279c03319d653e89438f4e550c1520dc6245f1b87cdf7ca3a73ee71e8b63c",
+      "tokens": 256,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.scikit-learn__scikit-learn-13135.call29.onset.seed42.cap1024.json",
+      "sha256": "7c00e94c6d76ffc47384eb7bfe7b955f373ac5781f299a6807d12466b481951d",
+      "tokens": 156,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.scikit-learn__scikit-learn-13135.call29.onset.seed43.cap512.json",
+      "sha256": "89472b741bfe36da625673ff93b580fec839ee5fedb258cb06e9f61ce854c507",
+      "tokens": 394,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.scikit-learn__scikit-learn-13135.call29.onset.seed44.cap512.json",
+      "sha256": "a3ebc7e7161163805ea36cd1219315568aaa7d2cd4fa57d267d82d8afec2371c",
+      "tokens": 93,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sphinx-doc__sphinx-10323.call57.onset.seed42.cap512.json",
+      "sha256": "08cf0a251b59d9661bd8516a9887849347afd25fa136def0f8316869606f5b35",
+      "tokens": 512,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sphinx-doc__sphinx-10323.call57.onset.seed43.cap256.json",
+      "sha256": "1faf633e2acc8b91982c830dc8564243b5598eb86244743222dc13916561987e",
+      "tokens": 145,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sphinx-doc__sphinx-10323.call57.onset.seed44.cap512.json",
+      "sha256": "cdf589ed5c9defedd45085e9d647d16964648c44e0e26e9b3a8bd9470252ae5e",
+      "tokens": 71,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sphinx-doc__sphinx-10323.call68.onset.seed42.cap256.json",
+      "sha256": "981c0ce51f8ed8ac8549f0a36ac6c18bb30b65ff757369470b4afe6b87b37a5e",
+      "tokens": 105,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sphinx-doc__sphinx-10323.call68.onset.seed43.cap256.json",
+      "sha256": "9de01cc34e86e7f72e16827eb3f9c0ecb9ed1cefaad93678b4845ac0f1f484cf",
+      "tokens": 38,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sphinx-doc__sphinx-10323.call68.onset.seed44.cap256.json",
+      "sha256": "7bd74074a053a80bf4f2c8eac538c8a399bf1137ad18244163d9f1d9c8395251",
+      "tokens": 104,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sphinx-doc__sphinx-10323.call70.onset.seed42.cap256.json",
+      "sha256": "cb63761c04c61541cc188cbe0ff52a187646b570bc8a1e60df326afc5183c567",
+      "tokens": 47,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sphinx-doc__sphinx-10323.call70.onset.seed43.cap256.json",
+      "sha256": "4c35f3146e391b35948da75553676476606351d640cfd2bbd39eba6aa65d25a7",
+      "tokens": 38,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sphinx-doc__sphinx-10323.call70.onset.seed44.cap256.json",
+      "sha256": "f97cadf56d2e48dcaa6d33b980bdd3f5c26c38cdafbd9cac33955fecdceee051",
+      "tokens": 45,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.seed42.cap2048.json",
+      "sha256": "ca6dd5cf36df6bcbf8401ce5a2f68ef29368706a191cd231f30fe3e53fe8e279",
+      "tokens": 482,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.seed43.cap2048.json",
+      "sha256": "9998f0613978430ddb7b6428a0c38efffd3b00e482763afef0ef79efc46478e7",
+      "tokens": 329,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.seed44.cap1024.json",
+      "sha256": "01ec3d3a81a337191a2c3f4bcabd3cc6d403afd3971b6506b9591391cb6d4f74",
+      "tokens": 305,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset.seed42.cap256.json",
+      "sha256": "2f2eaa3effd26e5def7ae926222d9ad09ea01b7aefc88926ffc530d8d7a8650e",
+      "tokens": 42,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset.seed43.cap256.json",
+      "sha256": "6838adf0be328f76cc0ff43a8ad858e2cf8438e0582cab1c5d76ab617b5248c7",
+      "tokens": 48,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset.seed44.cap256.json",
+      "sha256": "edaecba8bfa9db46f3b8f901a3cbf4e57ad1d54c05f8d34369d186bd3f159440",
+      "tokens": 256,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sphinx-doc__sphinx-11510.call108.onset.seed42.cap256.json",
+      "sha256": "c0e4622323f1717630cf72e783af50442cbfbded44663117e65da0adb9e99588",
+      "tokens": 36,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sphinx-doc__sphinx-11510.call108.onset.seed43.cap256.json",
+      "sha256": "aa44251f262da5e099c3d7129ff1b67f99c2fc9cddddb92b0f830046cb1467c3",
+      "tokens": 36,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sphinx-doc__sphinx-11510.call108.onset.seed44.cap256.json",
+      "sha256": "bd68ca00752c6054bb8e20e41dcda05c4526052106aae58d1d560cf806ac7243",
+      "tokens": 36,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed42.cap1024.json",
+      "sha256": "cf64a6afad9c1e7bf59c07d2bf3c4bae92e6b19664470931de7b3cd43e3a13d9",
+      "tokens": 812,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed43.cap2048.json",
+      "sha256": "aa575216e43dd4295eafdd70f56a0975a5c3aa39a8583be5a19c0ec8fb8dcf9a",
+      "tokens": 549,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed44.cap1024.json",
+      "sha256": "1e544f50ef08db3968395a0eb93c1fd70e0db9cded4d68bc19170150cc4bb88f",
+      "tokens": 497,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sphinx-doc__sphinx-11510.call28.onset.seed42.cap1024.json",
+      "sha256": "4126feec4afec041335eb26dac2d7b61424ef58a32d00a18acce709e5303e47f",
+      "tokens": 320,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sphinx-doc__sphinx-11510.call28.onset.seed43.cap1024.json",
+      "sha256": "777745fa595c1402eb8667e8aaea0985b2be1066ad57d2363c575233618c1baa",
+      "tokens": 575,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sphinx-doc__sphinx-11510.call28.onset.seed44.cap1024.json",
+      "sha256": "e2ad15221efddfe4443115b4bc844067e3fdbebfa3fa50777006d4150b5f688a",
+      "tokens": 433,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.seed42.cap1024.json",
+      "sha256": "a34bb5917d044becd97f00389f4374f850a3992394acdbb6e569ba317b512bc9",
+      "tokens": 1024,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.seed43.cap1024.json",
+      "sha256": "e9abaa2456f9f7868cd6501cd156c9d6bb3825a65ee292ecb58c8cd253687dd3",
+      "tokens": 1024,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.seed44.cap1024.json",
+      "sha256": "106ff303e561e8b902878b8c427189c37c712263efd387201d4e69a13eece1b8",
+      "tokens": 1024,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.seed42.cap1024.json",
+      "sha256": "4bb66d1f3fc2f8d799dd3be64b89b70b629673ac30dda36a2710419ed22935ed",
+      "tokens": 834,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.seed43.cap1024.json",
+      "sha256": "434968867930e07b350f85125d5e46926d2e34dacef812834b8c31260de80903",
+      "tokens": 827,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.seed44.cap1024.json",
+      "sha256": "e93d7474f1654bf2be286c26e715d1877738f4f1947599c0c54ca7f2a92c5150",
+      "tokens": 828,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sphinx-doc__sphinx-9461.call184.onset.seed42.cap1024.json",
+      "sha256": "91988f52f7b533c2f2a56e7ec49e7e389ab6705127a9a3657e9183361f312913",
+      "tokens": 614,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sphinx-doc__sphinx-9461.call184.onset.seed43.cap2048.json",
+      "sha256": "b8022076c59e91d8e6bec2b28ba81520c9398ba620f61b34743aec1427c5ff37",
+      "tokens": 1515,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sphinx-doc__sphinx-9461.call184.onset.seed44.cap1024.json",
+      "sha256": "302903521cde127e6869348e1c0f5f84a5bb984f62b1ffbed023d2555edbd897",
+      "tokens": 767,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sympy__sympy-13480.call1.onset.seed42.cap256.json",
+      "sha256": "a50584c54896f8a67a7a26025dd2ff94170e282a9be2462fb4d7a1c77bb334c6",
+      "tokens": 179,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sympy__sympy-13480.call1.onset.seed43.cap256.json",
+      "sha256": "14a5765dc95d40e392482687e95b4a9230d0c31f1c0567c6865b499446abc81b",
+      "tokens": 256,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sympy__sympy-13480.call1.onset.seed44.cap256.json",
+      "sha256": "b3a1acd72feabb3c5495fb68d27487198d263ccf7ed67272d144b8b4d6505547",
+      "tokens": 189,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sympy__sympy-13551.call1.onset.seed42.cap256.json",
+      "sha256": "648f86e3ee05b084ac2b380907e12890fb70fb3a60003518c8001009cf191ec5",
+      "tokens": 164,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sympy__sympy-13551.call1.onset.seed43.cap512.json",
+      "sha256": "b70e2c3fbecaf319add54ff7a43f6860babe5062be728da00280fe415da45dbe",
+      "tokens": 162,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sympy__sympy-13551.call1.onset.seed44.cap256.json",
+      "sha256": "c1b980575d69b392fe025768ab0b27e487c60602bd928d9b9ce8cc899a95093a",
+      "tokens": 169,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sympy__sympy-13878.call1.onset.seed42.cap256.json",
+      "sha256": "8d0d234f5c8f721848d51739328936356af8e039b6125d39d403ac484dae915f",
+      "tokens": 22,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sympy__sympy-13878.call1.onset.seed43.cap256.json",
+      "sha256": "ef8fec5c9f8bd894967dbdf006afbcf1e95e87b153866973b897bbbab56c1554",
+      "tokens": 21,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sympy__sympy-13878.call1.onset.seed44.cap256.json",
+      "sha256": "920ecd6a57831e53f857ca0d82eb1bf13d2dc07dc8efdac2ae46ec90d587dad9",
+      "tokens": 19,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sympy__sympy-14248.call53.onset.seed42.cap256.json",
+      "sha256": "5e5c59434a937d649f3a2715f14d0ca4f290f3a3401129ee6722834f86504f10",
+      "tokens": 256,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sympy__sympy-14248.call53.onset.seed43.cap256.json",
+      "sha256": "bb15bc6363d071c8ca19f1fa6f1de7ddc57fdfbdf47042abab7b29b51405bffe",
+      "tokens": 256,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sympy__sympy-14248.call53.onset.seed44.cap256.json",
+      "sha256": "afd243b59f4aa5602880287b2cbf95057a6c458324ae1ecb7000d46a3fe73326",
+      "tokens": 256,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sympy__sympy-14711.call1.onset.seed42.cap256.json",
+      "sha256": "2797688e84de68063b6144df5df1de309d853aae9b0314a0f1c246ef98f293be",
+      "tokens": 234,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sympy__sympy-14711.call1.onset.seed43.cap256.json",
+      "sha256": "9f8769adbbc32e8fe6be1c2fdb83c4991b2cd2ca08a53f86ee478c5f94585818",
+      "tokens": 137,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sympy__sympy-14711.call1.onset.seed44.cap256.json",
+      "sha256": "56db840a020ae0fad5247e280813da0b8a1e5c5661b508452269e848645447d8",
+      "tokens": 139,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sympy__sympy-18763.call1.onset.seed42.cap256.json",
+      "sha256": "c63bca57bdd768fac185cd7418ceed481a4f78eac7c9b664695d21da97e3fba4",
+      "tokens": 91,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sympy__sympy-18763.call1.onset.seed43.cap256.json",
+      "sha256": "a42f60c7656edde8cb7736b9a1472aab01f2e1b07cbb364e675699278091025e",
+      "tokens": 90,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sympy__sympy-18763.call1.onset.seed44.cap256.json",
+      "sha256": "2776bb4d1756d9f4222235fe3abc6f7377978e7603365305419344b4d721a681",
+      "tokens": 91,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sympy__sympy-18763.call10.onset.seed42.cap256.json",
+      "sha256": "6ee18103c1b8f3a5768a8d4f6007f63c15d260378e17cfb5c008dee9058acf5c",
+      "tokens": 22,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sympy__sympy-18763.call10.onset.seed43.cap256.json",
+      "sha256": "53a9bd8ff32a2c9b528e2c6e563ee5ef373d5c2917787ba696817604bca3562f",
+      "tokens": 22,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sympy__sympy-18763.call10.onset.seed44.cap256.json",
+      "sha256": "147789d42faf5f3fab76e3b580a3fe8353ebc7e9e4c0df2e792a8bd33e1d4658",
+      "tokens": 22,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.xarray3095-call53.canonicalprefix.seed42.cap256.json",
+      "sha256": "18b80ccaf3783f4fce7537dcccf85d6660138611e514f56d6c19950ef20faccc",
+      "tokens": 34,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.xarray3095-call53.canonicalprefix.seed43.cap256.json",
+      "sha256": "c899062c33c7f609b616bd2a7b7377eec490da87820948b598dc41ddd66ac48d",
+      "tokens": 34,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.xarray3095-call53.canonicalprefix.seed44.cap256.json",
+      "sha256": "0ab245c39f1bf4d34693b280a9296116af96e2e4fbeedd2f8544062d9c050038",
+      "tokens": 34,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.xarray7233-call1.canonicalprefix.seed42.cap1024.json",
+      "sha256": "29e0b5ef8fbd9c4a04c0b59e18b76bf91cdc0502eee22d6637c6482e35426709",
+      "tokens": 298,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.xarray7233-call1.canonicalprefix.seed43.cap512.json",
+      "sha256": "0687eafd579f61f2d2f1acf5e140f9dd6695576e62b4d0ea078f5c06cf2c7c51",
+      "tokens": 318,
+      "runtime_precision_match": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.xarray7233-call1.canonicalprefix.seed44.cap1024.json",
+      "sha256": "a859e92ab7a812b99c14a208efb5cfe2d864ded3d9ca6fda2d3b70223768f9f4",
+      "tokens": 824,
+      "runtime_precision_match": true
+    }
+  ]
+}

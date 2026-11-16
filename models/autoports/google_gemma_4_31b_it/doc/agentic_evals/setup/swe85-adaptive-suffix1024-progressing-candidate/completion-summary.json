@@ -1,0 +1,37 @@
+{
+  "status": "completed",
+  "rows": [
+    {
+      "case": "anomaly.psf__requests-5414.call11.onset.suffix1024.cap1024.seed42",
+      "mode": "full",
+      "seed": 42,
+      "tokens": 733,
+      "verdict": "other",
+      "original512_prefix_identical": true,
+      "reason": "Coherent diagnostic reasoning completes but emitted call:bash: JSON-style macro parses as disallowed bash: and lacks string command. Affirmative protocol anomaly, native ellipsis burst absent, no cap-based failure.",
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024-progressing-candidate/runs/full/anomaly.psf__requests-5414.call11.onset.suffix1024.cap1024.seed42.json",
+      "source_sha256": "e68faadf21170a73cde0c3fa445ba88efc216fd76be711ccb2ab5d9050680409",
+      "parser_evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-followups-execution/full-adaptive1024-seed42-stock-parser-audit-k.json",
+      "parser_sha256": "6af2bd4a750b7b2913b1d382f258a93e538d830bd8f0818c044108d80ed09892"
+    },
+    {
+      "case": "anomaly.matplotlib__matplotlib-20488.call86.onset.suffix1024.cap1024.seed42",
+      "mode": "full",
+      "seed": 42,
+      "tokens": 637,
+      "verdict": "normal",
+      "original512_prefix_identical": true,
+      "reason": "Pinned suffix ends Ive; continuation completes grammatical thought then valid canonical bash(command), with distinct replacement-method statements and invocation. No contraction burst or generation loop; patch correctness separate.",
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024-progressing-candidate/runs/full/anomaly.matplotlib__matplotlib-20488.call86.onset.suffix1024.cap1024.seed42.json",
+      "source_sha256": "5e6a1a65b56c9c4481225990ad2dc357ff418ef9a32baf9221455d29d8c1d3b0"
+    }
+  ],
+  "counts": {
+    "normal": 1,
+    "other": 1
+  },
+  "trace_counter_audit": "pass",
+  "measured_hours": 0.049095713761117724,
+  "prediction_range_hit": true,
+  "score_change": false
+}

@@ -1,0 +1,14 @@
+{
+  "status": "admitted",
+  "reviewer": "root",
+  "admitted_unix": 1794727508.2766569,
+  "scope": "Matched Sklearn call29 suffix512 served then full, 3 seeds each; launch requires terminal P2 and root forecast/serialization gates. STOP remains until those gates are met.",
+  "proposal_sha256": "afae82ad53bb768661d781d4da108b527ee0b1cd2f4f55cc23563b51fbf654e0",
+  "driver_sha256": "e221a7fef9a593fc835413131b242561b799eca0d91748eaa7c36564d66ac332",
+  "source_inventory_sha256": "3fc390e6f34b8805f75628d841e5827a2a5401e91923a2cd7c77830001f22922",
+  "commands_sha256": "4fc7e9c6d905c721100011a7e6a78a6a481d7cb4c208ac2672f8a336e89fb845",
+  "forecast_sha256": "00c4488365bf25e4c744fe0dc85b957802e22392710b945caae98713a31546eb",
+  "validation": "Root inspected driver and commands; host self-test and validate-only pass before final inventory correction, correction inspected separately; six fixture input IDs match original[-512:] and chosen64 exactly. No inference launched.",
+  "supersedes_admission_sha256": "b63fe0f052d998212cb7de138bac823ae3ffc82125ce41ec84b7b74cee7fcf44",
+  "correction": "Excluded mutable learned.json from runtime source pins; model/config/fixture/runner pins unchanged."
+}

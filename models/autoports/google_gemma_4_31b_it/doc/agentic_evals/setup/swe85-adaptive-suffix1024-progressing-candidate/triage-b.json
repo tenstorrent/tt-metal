@@ -1,0 +1,53 @@
+{
+  "status": "partial_two_of_two_candidate_results_reviewed",
+  "rows": [
+    {
+      "job": "anomaly.matplotlib__matplotlib-20488.call86.onset.suffix1024.cap1024",
+      "mode": "full",
+      "seed": 42,
+      "verdict": "normal",
+      "evidence": "Pinned prompt ends with grammatical unfinished contraction “I’ve”; generated continuation begins “ tried” and advances into distinct patch code. It closes the canonical tool call below cap. Selected native curly-apostrophe burst is not regenerated.",
+      "confidence": "high",
+      "token_count": 637,
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024-progressing-candidate/runs/full/anomaly.matplotlib__matplotlib-20488.call86.onset.suffix1024.cap1024.seed42.json",
+      "source_sha256": "5e6a1a65b56c9c4481225990ad2dc357ff418ef9a32baf9221455d29d8c1d3b0",
+      "generated_text_field": "$.free_running[0].text",
+      "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024-progressing-candidate/fixtures/anomaly.matplotlib__matplotlib-20488.call86.onset.suffix1024.cap1024.seed42.private.json",
+      "conditioning_field": "$.prompt_token_ids",
+      "conditioning_prompt_token_count": 1024,
+      "conditioning_prompt_token_ids_sha256": "640a9ea157bdebc13e93b32a8b2bae5e39c7737b8334b8de7bdfe891b3961e6b",
+      "conditioning_decoded_tail": ", in \\u003cmodule\\u003e\\n    from matplotlib.colors import Colormap, is_color_like\\n  File \\\"/testbed/lib/matplotlib/colors.py\\\", line 1219\\n    if self.vmax is None and A.size:\\n    ^\\nIndentationError: expected an indented block after \\u0027if\\u0027 statement on line 1218\\n\"\n}<|\"|>}<tool_response|><|channel>thought\n<|channel>thought\nI've",
+      "native_chosen_head": "’ve’ve’ve’ve really messed up the `lib/matplotlib/colors.py` file.\nI'll just use the `sed` commands to fix the indentation and the missing lines.\nActually, the best thing is to use the original file.\nWait, I can't.",
+      "native_motif": "I've’ve",
+      "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/full/anomaly.matplotlib__matplotlib-20488.call86.onset.json",
+      "source_result_sha256": "a2dc3012fc83468f00dd3dfc66c82c940c093b5b2c6c72c4a7a1bfd09631e7a9",
+      "source_sample_token_count": 512,
+      "source_token_ids_match_first512": true,
+      "cap_notes": "Terminated below1024 with a completed canonical tool response; no task-correctness claim."
+    },
+    {
+      "job": "anomaly.psf__requests-5414.call11.onset.suffix1024.cap1024",
+      "mode": "full",
+      "seed": 42,
+      "verdict": "other_anomaly",
+      "evidence": "Pinned prefix ends mid supplied traceback (return six.raise_from); generated text advances through distinct hypotheses and contains no repeated native caret burst. Its final apparent bash action is serialized as call:bash:{\"command\":...}, not canonical conditioned call syntax; trailing tool-response marker alone does not establish execution.",
+      "confidence": "high",
+      "token_count": 733,
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024-progressing-candidate/runs/full/anomaly.psf__requests-5414.call11.onset.suffix1024.cap1024.seed42.json",
+      "source_sha256": "e68faadf21170a73cde0c3fa445ba88efc216fd76be711ccb2ab5d9050680409",
+      "generated_text_field": "$.free_running[0].text",
+      "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024-progressing-candidate/fixtures/anomaly.psf__requests-5414.call11.onset.suffix1024.cap1024.seed42.private.json",
+      "conditioning_field": "$.prompt_token_ids",
+      "conditioning_prompt_token_count": 1024,
+      "conditioning_prompt_token_ids_sha256": "4625c1c415385637a34f99ed1d9922854765d3e23c7ede68cf627c92bfb4a20f",
+      "conditioning_decoded_tail": "except Exception:\n    traceback.print_exc()\n```\nThe output was:\n```\nTraceback (most recent call last):\n  File \"/testbed/reproduce_issue.py\", line 5, in <module>\n    requests.get(\"http://.example.com\")\n  ...\n  File \"/opt/miniconda3/lib/python3.11/site-packages/urllib3/util/connection.py\", line 68, in create_connection\n    return six.raise_from(\n           ",
+      "native_chosen_head": "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^",
+      "native_motif": "^^^^",
+      "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/full/anomaly.psf__requests-5414.call11.onset.json",
+      "source_result_sha256": "6a22257dbe5b30dec221560fc555e6331e83891872d9e274b89be6b293718b82",
+      "source_sample_token_count": 512,
+      "source_token_ids_match_first512": true,
+      "cap_notes": "Terminated below1024, but with malformed tool-call serialization; no command was executed and no task-completion claim."
+    }
+  ]
+}

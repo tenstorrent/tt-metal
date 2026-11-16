@@ -1,0 +1,176 @@
+{
+  "job": "anomaly.psf__requests-5414.call11.onset",
+  "mode": "conditional_hf_cpu_adaptive_suffix2048_cap1024",
+  "seed": 44,
+  "verdict": "inconclusive",
+  "evidence": {
+    "hf_result": {
+      "path": "setup/swe85-conditional-hf/requests5414-call11-suffix2048-cap1024/runs/anomaly.psf__requests-5414.call11.onset.hf.private.json",
+      "sha256": "d93fed6e376703e49812966b5b25b6217ddc117730ef27653ee659bfa3f2cfa2",
+      "status": "complete",
+      "case_sha256": "fbe984e026dbe8ef2b9d8a4288056617cbfde5235d1efd4a3bd14038a2db5ad7",
+      "revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+      "device": "cpu",
+      "weights_dtype": "bfloat16",
+      "prefill_chunk": 512,
+      "prompt_tokens": 2048,
+      "prompt_source": "Saved prompt_token_ids, no chat rerender",
+      "seed": 44,
+      "generated_tokens": 1024,
+      "streamed_generated_tokens": 1024,
+      "requested_tokens": 1024,
+      "wall_s": 2877.8389281770214,
+      "tail_ratio": 0.3696837513631407,
+      "tail_distinct": 69,
+      "flag": false,
+      "text_chars": 3668,
+      "text_sha256": "25ecd51566231a1b8c3b3524a6b52886bc580eb3c0ed203c3ebf61e7a0df488e",
+      "total_wall_s": 2947.319561472861,
+      "case_metadata.task": "psf__requests-5414",
+      "case_metadata.call": 11,
+      "case_metadata.onset_token_index": 223,
+      "case_metadata.motif": "^^^^",
+      "case_metadata.native_seed": null,
+      "case_metadata.sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      }
+    },
+    "fixture": {
+      "path": "setup/swe85-adaptive-suffix2048-candidate/fixtures/anomaly.psf__requests-5414.call11.onset.suffix2048.private.json",
+      "sha256": "fbe984e026dbe8ef2b9d8a4288056617cbfde5235d1efd4a3bd14038a2db5ad7",
+      "prompt_token_ids_length": 2048,
+      "source_case": "anomalies/swe85-requests5414-caret-controls/psf__requests-5414.call11.onset.private.json",
+      "source_case_sha256": "50cbd0eb4e62c843a1ec8ac800a580135c3abc5dc2154d6be0a7e39d0c37ed6f",
+      "source_prompt_token_ids_length": 7226,
+      "exact_suffix_range": "source prompt_token_ids[5178:7226]",
+      "suffix_prompt_ids_identical": true,
+      "chosen64_identical_to_source": true,
+      "native_prompt_token_count": 7004,
+      "reconstructed_prompt_token_count": 7003,
+      "native_prompt_ids_available": false,
+      "native_seed": null,
+      "scope_caveat": "This is only the exact final 2048 IDs of the 7226-ID reconstructed source prompt. Native prompt/output IDs and native seed are unavailable; not an exact native replay or full-context reproduction."
+    },
+    "prior_hf_prefix": {
+      "path": "setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/results/seed44-suffix2048/anomaly.psf__requests-5414.call11.onset.hf.private.json",
+      "sha256": "ea3eb180de1ef8898c2565dcb5ffd7700f3e792ccfce8bc279efef80c6dfe9a4",
+      "seed": 44,
+      "prior_generated_tokens": 512,
+      "new_output_prefix_tokens": 512,
+      "new_generated_token_ids_first512_equal_prior": true,
+      "comparison": "1024-token continuation preserves the earlier 512-token HF free-running prefix exactly."
+    },
+    "matched_tt": {
+      "served": {
+        "path": "setup/swe85-adaptive-suffix2048-candidate/runs/served/anomaly.psf__requests-5414.call11.onset.json",
+        "sha256": "fe2ed3734685fbc806bc3ce821a77e21f9b390cb838fc223daf8d6090cc8d039",
+        "seed": 44,
+        "tokens": 512,
+        "runtime_precision": {
+          "config_id": "stage12_head_bfp8_lofi",
+          "weight_groups": {
+            "attention": "bfp4",
+            "mlp": "bfp4",
+            "down": "bfp4",
+            "lm_head": "bfp8_lofi"
+          },
+          "layer_exceptions": {},
+          "compute_fidelities": {
+            "attention": "LoFi",
+            "mlp": "LoFi",
+            "down": "LoFi",
+            "lm_head": "LoFi"
+          },
+          "activation_dtype": "bfloat8_b",
+          "residual_dtype": "bfloat16",
+          "ccl_dtype": {
+            "prefill": "bfloat8_b",
+            "decode": "bfloat16"
+          },
+          "kv_cache_dtype": "bfloat8_b",
+          "logits_dtype": "bfloat16",
+          "sampling_dtype": "bfloat16",
+          "embedding_dtype": "bfloat16",
+          "norm_dtype": "bfloat16",
+          "max_seq_len": 262144
+        },
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 44
+        },
+        "first_ids": [
+          1390,
+          107,
+          147,
+          1390,
+          107,
+          147,
+          1390,
+          107,
+          147
+        ],
+        "morphology": "ellipsis/newline/indentation sequence [1390,107,147] repeats throughout all 512 tokens."
+      },
+      "full": {
+        "path": "setup/swe85-adaptive-suffix2048-candidate/runs/full/anomaly.psf__requests-5414.call11.onset.json",
+        "sha256": "a967659d1f4edd7b726a36c976168ae767957b9821ffc4a2a31640d594e7a885",
+        "seed": 44,
+        "tokens": 512,
+        "runtime_precision": {
+          "config_id": "stage12_bf16_hifi4_diagnostic",
+          "weight_groups": {
+            "attention": "bf16",
+            "mlp": "bf16",
+            "down": "bf16",
+            "lm_head": "bf16"
+          },
+          "layer_exceptions": {},
+          "compute_fidelities": {
+            "attention": "HiFi4",
+            "mlp": "HiFi4",
+            "down": "HiFi4",
+            "lm_head": "HiFi4"
+          },
+          "activation_dtype": "bfloat16",
+          "residual_dtype": "bfloat16",
+          "ccl_dtype": {
+            "prefill": "bfloat16",
+            "decode": "bfloat16"
+          },
+          "kv_cache_dtype": "bfloat16",
+          "logits_dtype": "bfloat16",
+          "sampling_dtype": "bfloat16",
+          "embedding_dtype": "bfloat16",
+          "norm_dtype": "bfloat16",
+          "max_seq_len": 262144,
+          "sdpa_compute_fidelity": "HiFi4"
+        },
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 44
+        },
+        "first_ids": [
+          1390,
+          107,
+          147,
+          1390,
+          107,
+          147,
+          1390,
+          107,
+          147
+        ],
+        "morphology": "same ellipsis/newline/indentation sequence repeats throughout all 512 tokens."
+      }
+    },
+    "semantic_observation": "HF begins from the same 2048-ID suffix and proceeds through a coherent URL/IDNA/urllib3 explanation, proposes a source check, and ends mid-Python test scaffold at token 1024. It contains neither the matched TT ellipsis/newline/indentation loop nor the native caret motif. The response is incomplete at cap; this only establishes absence of those motifs in this bounded HF sample, not a completed answer, task correctness, native non-incidence, or the behavior after token 1024. Markdown code is generated text, not evidence that a command or test ran. HF/TT RNGs and precision regimes differ, so this is not causal attribution."
+  },
+  "confidence": "high that this HF 1024-token sample has a coherent progressing trajectory without the matched TT ellipsis loop; inconclusive about completion or later continuation.",
+  "cap_notes": "The sample reached 1024/1024 while still developing a proposed test, ending mid-script. Preserve as progressing_at_cap/inconclusive. No task score, completed-response, exact-native-seed, or model-mechanism claim. A further cap is not automatically indicated by this result alone. Group wall 2951.491790s is within forecast 2475.450935–3508.458589s; result free-run wall 2877.838928s, cumulative total_wall_s 2947.319561s. No model or device work was done during this triage."
+}

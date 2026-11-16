@@ -1,0 +1,7 @@
+{
+  "status": "pending_root_review",
+  "reviewer": "root",
+  "accepted": false,
+  "completion_sha256": "fill_after_served",
+  "forecast_status": "in_range_or_accepted_miss"
+}

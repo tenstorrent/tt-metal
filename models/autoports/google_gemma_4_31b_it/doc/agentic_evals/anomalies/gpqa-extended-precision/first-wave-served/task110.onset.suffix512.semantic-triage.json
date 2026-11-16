@@ -1,0 +1,95 @@
+{
+  "task": "110",
+  "diagnostic": "served suffix512 first-wave free-running continuations",
+  "source": "anomalies/gpqa-extended-precision/first-wave-served/task110.onset.suffix512.json",
+  "source_metadata": "anomalies/gpqa-extended-precision/task110.onset.suffix512.private.json",
+  "comparison_context": {
+    "original_triage": "current/gpqa-extended198-head-bfp8/digest/110.triage.json",
+    "coordinator_context": "current/gpqa-extended198-head-bfp8/digest/coordinator.json",
+    "learned_context": "learned.json",
+    "original_finding": "The full native reasoning repeatedly established C2 as non-enolizable and C6 as the alpha site, then revisited how the same option encodes the attachment and whether A and B are equivalent under ring renumbering. It ultimately selected B, conflicting with the packet's expected A. The triage calls the repeated semantic cycles dominant despite topical progress; official scoring remains pending in the coordinator record.",
+    "prompt_suffix_context": "The selected onset follows repeated naming and alpha-site reasoning, at a renewed read of option A. The diagnostic prompt is the exact retained suffix of 512 reconstructed reply tokens; 1830 earlier tokens from the 2342-token original prefix were removed, and no tokens were added. This changes the position origin and is not the original full prompt.",
+    "ranges": "Character ranges are zero-based, half-open offsets in each saved free_running[].text string. Evidence is paraphrased. Stored detector flags are listed separately from the host semantic and mechanical judgments. mechanical_flag reproduces the source free_running[].flag value; observed_malformed_text is the separate host assessment."
+  },
+  "seeds": [
+    {
+      "index": 0,
+      "seed": 42,
+      "text_chars": 4891,
+      "semantic_anomaly": true,
+      "mechanical_flag": true,
+      "evidence": [
+        {
+          "char_range": [
+            0,
+            4891
+          ],
+          "paraphrase": "The entire continuation alternates between noting a methyl at C6 and concluding that the propanoate must attach at C6. It repeats this same two-claim cycle through the end, without checking a new structural premise or resolving the conflict with the option wording."
+        }
+      ],
+      "basis": "A single unchanged inference loop fills the complete output. The text remains readable and does not show a separate malformed-text artifact.",
+      "observed_malformed_text": false,
+      "mechanical_observation": "The saved text is legible; no separate malformed fragment was identified. mechanical_flag is copied from the source artifact and is reported independently."
+    },
+    {
+      "index": 1,
+      "seed": 43,
+      "text_chars": 4979,
+      "semantic_anomaly": true,
+      "mechanical_flag": false,
+      "evidence": [
+        {
+          "char_range": [
+            0,
+            1172
+          ],
+          "paraphrase": "Parses the named product as placing the propanoate substituent at C3, lays out the substituents, and attempts to renumber from the ketone. It recognizes the conflict between that reading and the C6 enolate argument, but does not resolve it."
+        },
+        {
+          "char_range": [
+            1172,
+            4979
+          ],
+          "paraphrase": "Restarts the same named-product parsing, renumbering, C2-quaternary/C6-enolate argument, and C3-versus-C6 conflict in progressively nested bullet formatting. The output ends during another restart."
+        }
+      ],
+      "basis": "The first pass contains relevant structural reasoning, but subsequent passes repeat the same unresolved conflict with no discriminating check or new premise. The increasingly nested formatting is repetitive but legible; it is not counted as a distinct mechanical corruption. The detector flag is false and does not negate the semantic evidence.",
+      "observed_malformed_text": false,
+      "mechanical_observation": "The saved text is legible; no separate malformed fragment was identified. mechanical_flag is copied from the source artifact and is reported independently."
+    },
+    {
+      "index": 2,
+      "seed": 44,
+      "text_chars": 4652,
+      "semantic_anomaly": true,
+      "mechanical_flag": true,
+      "evidence": [
+        {
+          "char_range": [
+            0,
+            675
+          ],
+          "paraphrase": "Briefly considers whether C3 and C6 could be equivalent by ring rotation, rejects that idea, lists available positions, and restates that only C6 can enolize."
+        },
+        {
+          "char_range": [
+            675,
+            4652
+          ],
+          "paraphrase": "Repeatedly contrasts the option's C3 placement with the C6-enolate conclusion, asks whether C2 could instead enolize, and reaffirms that C2 is already quaternary. The same contradiction and conclusion recur until the text is cut off."
+        }
+      ],
+      "basis": "After a short exploratory start, the continuation cycles through the same position and enolate checks without resolving the option mismatch or advancing to another reaction step. The ending is an incomplete sentence at the text boundary, but no separate malformed fragment is evident.",
+      "observed_malformed_text": false,
+      "mechanical_observation": "The saved text is legible; no separate malformed fragment was identified. mechanical_flag is copied from the source artifact and is reported independently."
+    }
+  ],
+  "pattern_comparison": "All three served continuations revisit the original task's unresolved relationship between the C6 enolate argument and the product or option naming. Seed 42 collapses to a two-claim C6 loop; seed 43 repeats the named-product renumbering conflict; seed 44 repeatedly compares C3 and C6. This resembles the original full-response semantic cycle, though these short suffix-conditioned continuations do not reproduce its broader answer development. Detector flags vary across the three while the semantic pattern is present in each.",
+  "limitations": [
+    "This is a host-only reading of three saved free-running strings conditioned on a 512-token suffix of reconstructed IDs, not the original full prompt. Truncation changes position origin and available context.",
+    "The private metadata records matching native and reconstructed completion token counts, but raw native sampled token IDs are unavailable; count agreement does not establish token identity.",
+    "The selected-onset teacher-forced diagnostic was executed, but this semantic review assesses only the three saved free-running continuations and makes no judgment about that diagnostic. It does not establish a precision cause or explain why these strings occurred.",
+    "The official reconciliation is complete: task 110 is recorded as not solved in the original scored set, and the coordinator accepts the anomaly classification. This triage adds no score or repair claim and makes no prevalence or model-wide claim.",
+    "Stored mechanical flags are copied from the source artifact. A missing flag is not treated as a pass; repeated cycles and the cut-off fragment are described only where present in the text."
+  ]
+}

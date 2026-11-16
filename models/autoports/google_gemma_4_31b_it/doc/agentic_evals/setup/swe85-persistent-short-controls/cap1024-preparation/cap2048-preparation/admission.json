@@ -1,0 +1,68 @@
+{
+  "status": "admitted",
+  "jobs": [
+    {
+      "name": "full",
+      "command": [
+        "timeout",
+        "3600",
+        "env",
+        "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+        "READINESS_TRACE_REGION_SIZE=134217728",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+        "-m",
+        "models.autoports.google_gemma_4_31b_it.tools.precision_repro_batch",
+        "--cases",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/cap1024-preparation/cap2048-preparation/full-candidate-cases.json",
+        "--build-kwargs-file",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_build_kwargs.json",
+        "--output-dir",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/cap1024-preparation/cap2048-preparation/runs/full"
+      ],
+      "prediction": {
+        "predicted_hours": 0.05919280687301611,
+        "range_hours": [
+          0.04924041198686085,
+          0.08241506160737837
+        ],
+        "basis": "Sameprompt seed44, observed1024 decode scaled to2047replays, observedprefill, same-mode load; explicit prior full first-TF preparation allowance, not measured2048warmup. Range applies 0.7x\u20131.7x uncertainty multipliers to variable case work only; load and first-preparation allowance remain fixed."
+      },
+      "hashes": [
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/cap1024-preparation/cap2048-preparation/full-candidate-cases.json",
+          "sha256": "ed951b5640c9a90f7d8f172a9cc49cc429b420cf4a968b01068f43a540639fb2"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/cap1024-preparation/cap2048-preparation/cost-estimate.json",
+          "sha256": "393f7af7197a532dea924cf3096a5f9eadcd4c543930ab7ecbd6d1cd4af04f0b"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/cap1024-preparation/cap2048-preparation/review-d.json",
+          "sha256": "95de50f93bb4d95d0f265d59b5ac8be439053fcdde14e3e5c00d4cc40a1a83d8"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/cap1024-preparation/seed44-protocol-adjudication.json",
+          "sha256": "8b82fa6a5c41bdfb4ea33ceb23c0e7485cade47ff3dc2bb3ab294c4642e70acb"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_build_kwargs.json",
+          "sha256": "ff2b5ed24e0b6a1dee7eb5cd8bd437d17c3df5f8f25567927d239e666f0699f9"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_config.json",
+          "sha256": "63ce02f7fa0df993a27daca25eeeb3adca51e15c7c6956d1cef122534ebdc7a9"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/tools/precision_repro_batch.py",
+          "sha256": "172f5a1dd7a7403847e47b966ae79c306163650a60211418c7c195794ec5c125"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/cap1024-preparation/cap2048-preparation/anomaly.psf__requests-5414.call11.onset.optional-suffix512.cap2048.seed44.private.json",
+          "sha256": "007fe3e3a0098e9cc52f0a0da473f5cc9572c189381af49b35f82ff425c0337f"
+        }
+      ]
+    }
+  ],
+  "question": "Resolve progressing1024-token seed44 despite separate fabricated-output protocol anomaly. No score change.",
+  "ordering": "After second-cap full completion exit0 and device ownerzero."
+}

@@ -1,0 +1,22 @@
+{
+  "status": "host_preparation",
+  "native_prompt_tokens": 11495,
+  "rendered_prompt_tokens": 11494,
+  "prompt_count_matches": false,
+  "native_completion_tokens": 32768,
+  "content_retokenized_tokens": 32764,
+  "native_reasoning_tokens": 2,
+  "native_seed": null,
+  "diagnostic_seeds": [
+    42,
+    43,
+    44
+  ],
+  "sampling": {
+    "temperature": 1.0,
+    "top_p": 0.95,
+    "top_k": 20
+  },
+  "revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+  "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-phase2-ready/astropy-after-first-cap/chatcmpl-bdff2676d029ceb6.private.json"
+}

@@ -1,0 +1,45 @@
+{
+  "status": "admitted_control_not_selection",
+  "argv": [
+    "timeout",
+    "1200",
+    "env",
+    "HF_HUB_OFFLINE=1",
+    "HF_DATASETS_OFFLINE=1",
+    "HF_HUB_DISABLE_TELEMETRY=1",
+    "OMP_NUM_THREADS=16",
+    "MKL_NUM_THREADS=16",
+    "OPENBLAS_NUM_THREADS=16",
+    "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+    "READINESS_TRACE_REGION_SIZE=134217728",
+    "TT_METAL_TRACE_ALLOC_TRACKING=0",
+    "TT_METAL_DEVICE_PROFILER=0",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+    "-m",
+    "models.autoports.google_gemma_4_31b_it.tests.run_datatype_candidate",
+    "--config",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_config.json",
+    "--id",
+    "stage12_full_bf16_natural_accuracy_control",
+    "--output-dir",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full-bf16-natural-accuracy-control/run",
+    "--reference",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/attention-down-acceptance/references/aime24.refpt",
+    "--natural-reference",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/attention-down-acceptance/references/natural.refpt",
+    "--require-accuracy",
+    "--accuracy-only"
+  ],
+  "source_sha256": {
+    "models/autoports/google_gemma_4_31b_it/tests/run_datatype_candidate.py": "f68517e9133e2541949b3786548d0fe5d7ce99b7d021335218ba073b49620a86",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/attention-down-acceptance/references/aime24.refpt": "1c1a90cada967dc89159edf6e61eb51f2638955ab9defe1cc51939587e99ab45",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/attention-down-acceptance/references/natural.refpt": "861f29370af0ba7e13c77f548e688cceff429846d20a9283697ae77b8b069584",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_config.json": "63ce02f7fa0df993a27daca25eeeb3adca51e15c7c6956d1cef122534ebdc7a9"
+  },
+  "forecast_seconds": [
+    180,
+    900
+  ],
+  "timeout_seconds": 1200,
+  "basis": "P8accuracy187.646s, BF16 load and HiFi4 slower; broad bound. FullTT control on identical100AIME/512natural positions distinguishes reducedprecision effect from reference or sharedstack mismatch. No new evaluatedlist or serving rate."
+}

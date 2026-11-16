@@ -1,0 +1,29 @@
+{
+  "status": "root_static_review_seven_case_candidate_not_launched",
+  "at_unix": 1794742885.1385605,
+  "reviewer": "root",
+  "accepted": true,
+  "manifest_indices": [
+    33,
+    58,
+    66,
+    67,
+    68,
+    74,
+    93
+  ],
+  "checks": [
+    "Only down BFP8 LoFi to BFP8 HiFi2 and config ID change",
+    "Exact P3 cases except result names; same fixture/seed/cap/branches/trials",
+    "No source/default changes; existing runner,1800s timeout"
+  ],
+  "pins": {
+    "command.json": "63a779e1ef0e44a96e846c183d780b4fc9932e6661f2bf2c64e0e70b72b52a99",
+    "forecast.json": "2896912bb2cc76cc0ca650833f1029da92d56a03b68bc1bae89988545b4d9521",
+    "down_bfp8_hifi2_build_kwargs.json": "7ed91a1ca7a1765cbc14b1e6e9de9184b4dc7e12a9eabf5c36173672a0b00fbc",
+    "provenance.json": "912844d6fdebebd50c6ea63e19726dfa9899c470c67e4c96f4acd8795932c620",
+    "candidate-cases.json": "a87d67811b8027f38b33f217193f1a670f035c27fd0315b5cf4b955f2ec015bc",
+    "down_bfp8_hifi2_precision.json": "118dceaf55f938ac3521684d77953390e1ee5ba0c4cf893c3195b403910b93b8"
+  },
+  "next": "Only after active nine-case P3 extensions release hardware and forecast is reconciled."
+}

@@ -1,0 +1,28 @@
+{
+  "config_id": "stage12_bfp8_lofi_kv_bf16_p16",
+  "weight_groups": {
+    "attention": "bfp8_lofi",
+    "mlp": "bfp8_lofi",
+    "down": "bfp8_lofi",
+    "lm_head": "bfp8_lofi"
+  },
+  "layer_exceptions": {},
+  "compute_fidelities": {
+    "attention": "LoFi",
+    "mlp": "LoFi",
+    "down": "LoFi",
+    "lm_head": "LoFi"
+  },
+  "activation_dtype": "bfloat8_b",
+  "residual_dtype": "bfloat16",
+  "ccl_dtype": {
+    "prefill": "bfloat8_b",
+    "decode": "bfloat16"
+  },
+  "kv_cache_dtype": "bfloat16",
+  "logits_dtype": "bfloat16",
+  "sampling_dtype": "bfloat16",
+  "embedding_dtype": "bfloat16",
+  "norm_dtype": "bfloat16",
+  "max_seq_len": 262144
+}

@@ -1,0 +1,15 @@
+{
+  "status": "candidate_source_pins",
+  "sha256": {
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-precision/requests2931-call20/canonicalprefix/case.private.json": "7f527603e08f61f5516745fc2fab496c6ae7020985372c8f71fd0459895c10f0",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full-q32-production-validation/fixed108/runs/anomaly.requests2931.call20.canonicalprefix.seed42.cap256.json": "ffbb921fa8743fd804ff55e8b6d4bbbf937bf878c139d324d5096a9bb52b2bbc",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full-q32-production-validation/fixed108/cap-extensions-root/runs/anomaly.requests2931.call20.canonicalprefix.seed42.cap256-extended-to512.json": "1e4bb0714f7fab91acf414b42548a98e8f5a80a4b78a315f60d9bbae39196949",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.requests2931.call20.canonicalprefix.seed44.private.json": "971939b876f462ed4002ba8757826708e6e3d19a20d9496298f61c49af698d40",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full-q32-production-validation/fixed108/runs/anomaly.requests2931.call20.canonicalprefix.seed44.cap256.json": "2a9f6f733c86710fc56e3fe20c772497ca10e9fef91dd941e47bcddf266634f8",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full-q32-production-validation/fixed108/cap-extensions-root/runs/anomaly.requests2931.call20.canonicalprefix.seed44.cap256-extended-to512.json": "e229f0e76fe7b7cf8cd6505756ee657f7a0a3b92a4322210d8a90b656dd0ea74",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_build_kwargs.json": "ff2b5ed24e0b6a1dee7eb5cd8bd437d17c3df5f8f25567927d239e666f0699f9",
+    "models/autoports/google_gemma_4_31b_it/tools/precision_repro_batch.py": "172f5a1dd7a7403847e47b966ae79c306163650a60211418c7c195794ec5c125",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full-q32-production-validation/fixed108/cap-extensions-root/completion.json": "c7bf20be09cf4d10366e51456a0175fe407442aecbc3c46d2845d326cd36923a",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full-q32-production-validation/fixed108/cap-extensions-root/runs/load.json": "26586599f20b51838826b0a4fcbbe3841143dfa99ca4e5b278f7720447ba38c3"
+  }
+}

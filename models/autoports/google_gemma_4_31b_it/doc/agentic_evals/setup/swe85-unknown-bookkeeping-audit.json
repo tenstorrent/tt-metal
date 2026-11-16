@@ -1,0 +1,261 @@
+{
+  "schema_version": 1,
+  "created_utc": "2026-11-14T22:05:30.300887+00:00",
+  "scope": "Host-only bookkeeping audit; proposed edits only. No inference, containers, network, devices, or authoritative result modifications.",
+  "reward_invariant": "All three counted rewards remain null. Native reward zero and resolved:false are not substituted for unresolved external-verifier outcomes. All remain in denominator85; no point score inferred.",
+  "proposed_corrections": [
+    {
+      "target": {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-extended85-head-bfp8/rerun_queue.json",
+        "sha256": "7e8d91212af38ffe883c6ac51279ea9e3f8afe05e0c99019981b55040db4c1da",
+        "json_pointer": "/tasks/2/evidence"
+      },
+      "operation": "replace",
+      "expected_current_value": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-extended85-head-bfp8/verifier-recovery/requests2317-attempt2/recovery-provenance.json",
+      "proposed_value": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-extended85-head-bfp8/verifier-recovery/requests2317-attempt4/recovery-provenance.json",
+      "rationale": "Attempt4 supersedes attempt2; attempt3 failed preflight without tests.",
+      "evidence": [
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-extended85-head-bfp8/verifier-recovery/requests2317-attempt4/recovery-provenance.json",
+          "sha256": "8cca9cc223253d2b3575dabdce7b616dcf3bbd23c95e9c7daa8d18f7105d574d"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-extended85-head-bfp8/verifier-recovery/requests2317-attempt4/verifier/report.json",
+          "sha256": "f28475b5563153ff0073e20614b0722a0be609f1d1345e113deea3a5005df587",
+          "json_pointer": "/psf__requests-2317/tests_status"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-extended85-head-bfp8/live-tasks/psf__requests-2317-first/coordinator.json",
+          "sha256": "a6ba74dcd7c8e189a70593a58582dcb6959e0ff639c6506abc8655f339c678be"
+        }
+      ]
+    },
+    {
+      "target": {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-extended85-head-bfp8/rerun_queue.json",
+        "sha256": "7e8d91212af38ffe883c6ac51279ea9e3f8afe05e0c99019981b55040db4c1da",
+        "json_pointer": "/tasks/2/reason"
+      },
+      "operation": "replace",
+      "expected_current_value": "Verifier TLS, external redirect behavior and legacy pytest.raises(string) incompatibility",
+      "proposed_value": "Legacy pytest and authentic certifi dependency repaired; latest unchanged verifier has142passed and1failed, solely test_auth_is_stripped_on_redirect_off_host due to external redirect policy. Counted reward remains null.",
+      "rationale": "TLS and legacy pytest are historical repaired issues, not current blockers.",
+      "evidence": [
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-extended85-head-bfp8/verifier-recovery/requests2317-attempt4/recovery-provenance.json",
+          "sha256": "8cca9cc223253d2b3575dabdce7b616dcf3bbd23c95e9c7daa8d18f7105d574d"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-extended85-head-bfp8/verifier-recovery/requests2317-attempt4/verifier/report.json",
+          "sha256": "f28475b5563153ff0073e20614b0722a0be609f1d1345e113deea3a5005df587",
+          "json_pointer": "/psf__requests-2317/tests_status"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-extended85-head-bfp8/live-tasks/psf__requests-2317-first/coordinator.json",
+          "sha256": "a6ba74dcd7c8e189a70593a58582dcb6959e0ff639c6506abc8655f339c678be"
+        }
+      ]
+    },
+    {
+      "target": {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-extended85-head-bfp8/rerun_queue.json",
+        "sha256": "7e8d91212af38ffe883c6ac51279ea9e3f8afe05e0c99019981b55040db4c1da",
+        "json_pointer": "/tasks/1/reason"
+      },
+      "operation": "replace",
+      "expected_current_value": "verifier HTTP429, TLS certificate and legacy pytest.raises(string) incompatibility",
+      "proposed_value": "Legacy pytest compatibility repaired; latest unchanged verifier has89passed and2failed: external POSTBIN HTTP429 and mixed-case-scheme TLS certificate verification. Counted reward remains null.",
+      "rationale": "Legacy pytest is repaired in latest attempt2.",
+      "evidence": [
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-extended85-head-bfp8/verifier-recovery/requests1766-attempt2/recovery-provenance.json",
+          "sha256": "480e91f24c87e506d4ad0c9574c5946764682a25826a645396bb9ea8da957d6c"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-extended85-head-bfp8/verifier-recovery/requests1766-attempt2/verifier/report.json",
+          "sha256": "ac4830d349b5f153228c499e6149488c87ac85c02917d9892904b59fb3b51c18",
+          "json_pointer": "/psf__requests-1766/tests_status"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-extended85-head-bfp8/live-tasks/psf__requests-1766-first/coordinator.json",
+          "sha256": "7953b9b4167014c4b976a6285924f4dffb71b1174583f0ea52dcdec28c4fa169"
+        }
+      ]
+    }
+  ],
+  "unknown_tasks": [
+    {
+      "task": "psf__requests-1724",
+      "latest_attempt": 2,
+      "provenance": {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-extended85-head-bfp8/verifier-recovery/requests1724-attempt2/recovery-provenance.json",
+        "sha256": "0dd20ac3ebdd6d8a3846e21896759e56a162d407182d4fec9789ce63a68051b1"
+      },
+      "report": {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-extended85-head-bfp8/verifier-recovery/requests1724-attempt2/verifier/report.json",
+        "sha256": "eb149613e9264a225ef9fc7eca2cda845cc695a3325fd5c9734280f9c6134d5a",
+        "json_pointer": "/psf__requests-1724/tests_status"
+      },
+      "coordinator": {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-extended85-head-bfp8/live-tasks/psf__requests-1724-first/coordinator.json",
+        "sha256": "1ff60216bbf338328019ee2f3decd4c7a90f243b812b2677a59ab89b687369cc"
+      },
+      "source_and_test_hashes_preserved": true,
+      "original_trial_modified": false,
+      "image_id": "sha256:04538eebb26b299f4b967fe5e8e3b1ef6eb11c96cc6f0e245835c69597eccd10",
+      "elapsed_wall_seconds": 7.1701012798585,
+      "pytest_summary": {
+        "passed": 86,
+        "failed": 2
+      },
+      "fail_to_pass": {
+        "success": 6,
+        "failure": 0
+      },
+      "pass_to_pass_failures": [
+        "test_requests.py::RequestsTestCase::test_POSTBIN_GET_POST_FILES_WITH_DATA",
+        "test_requests.py::RequestsTestCase::test_mixed_case_scheme_acceptable"
+      ],
+      "results_records": [
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/results.json",
+          "sha256": "4097e99a58cc41984519485c03ab74c7afaa007e7227cd63c3f4496d79e49e6c",
+          "json_pointer": "/runs/8/failures/9"
+        }
+      ],
+      "counted_reward": null,
+      "disposition": "Keep unresolved infrastructure classification and null counted reward."
+    },
+    {
+      "task": "psf__requests-1766",
+      "latest_attempt": 2,
+      "provenance": {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-extended85-head-bfp8/verifier-recovery/requests1766-attempt2/recovery-provenance.json",
+        "sha256": "480e91f24c87e506d4ad0c9574c5946764682a25826a645396bb9ea8da957d6c"
+      },
+      "report": {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-extended85-head-bfp8/verifier-recovery/requests1766-attempt2/verifier/report.json",
+        "sha256": "ac4830d349b5f153228c499e6149488c87ac85c02917d9892904b59fb3b51c18",
+        "json_pointer": "/psf__requests-1766/tests_status"
+      },
+      "coordinator": {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-extended85-head-bfp8/live-tasks/psf__requests-1766-first/coordinator.json",
+        "sha256": "7953b9b4167014c4b976a6285924f4dffb71b1174583f0ea52dcdec28c4fa169"
+      },
+      "source_and_test_hashes_preserved": true,
+      "original_trial_modified": false,
+      "image_id": "sha256:1d5fbd40acdedf5a90a77dc69edeee77ed06d903e4a5d881d9f068350b116031",
+      "elapsed_wall_seconds": 10.002980496967211,
+      "pytest_summary": {
+        "passed": 89,
+        "failed": 2
+      },
+      "fail_to_pass": {
+        "success": 6,
+        "failure": 0
+      },
+      "pass_to_pass_failures": [
+        "test_requests.py::RequestsTestCase::test_POSTBIN_GET_POST_FILES_WITH_DATA",
+        "test_requests.py::RequestsTestCase::test_mixed_case_scheme_acceptable"
+      ],
+      "results_records": [
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/results.json",
+          "sha256": "4097e99a58cc41984519485c03ab74c7afaa007e7227cd63c3f4496d79e49e6c",
+          "json_pointer": "/runs/8/failures/52"
+        }
+      ],
+      "counted_reward": null,
+      "disposition": "Keep unresolved infrastructure classification and null counted reward."
+    },
+    {
+      "task": "psf__requests-2317",
+      "latest_attempt": 4,
+      "provenance": {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-extended85-head-bfp8/verifier-recovery/requests2317-attempt4/recovery-provenance.json",
+        "sha256": "8cca9cc223253d2b3575dabdce7b616dcf3bbd23c95e9c7daa8d18f7105d574d"
+      },
+      "report": {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-extended85-head-bfp8/verifier-recovery/requests2317-attempt4/verifier/report.json",
+        "sha256": "f28475b5563153ff0073e20614b0722a0be609f1d1345e113deea3a5005df587",
+        "json_pointer": "/psf__requests-2317/tests_status"
+      },
+      "coordinator": {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-extended85-head-bfp8/live-tasks/psf__requests-2317-first/coordinator.json",
+        "sha256": "a6ba74dcd7c8e189a70593a58582dcb6959e0ff639c6506abc8655f339c678be"
+      },
+      "source_and_test_hashes_preserved": true,
+      "original_trial_modified": false,
+      "image_id": "sha256:fad9862511f08ec40fd997daffee73aed03f0ded928f145c03bc6903c11d86bc",
+      "elapsed_wall_seconds": 418.7711954670958,
+      "pytest_summary": {
+        "passed": 142,
+        "failed": 1
+      },
+      "fail_to_pass": {
+        "success": 8,
+        "failure": 0
+      },
+      "pass_to_pass_failures": [
+        "test_requests.py::RequestsTestCase::test_auth_is_stripped_on_redirect_off_host"
+      ],
+      "results_records": [
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/results.json",
+          "sha256": "4097e99a58cc41984519485c03ab74c7afaa007e7227cd63c3f4496d79e49e6c",
+          "json_pointer": "/runs/8/failures/51"
+        }
+      ],
+      "counted_reward": null,
+      "disposition": "Keep unresolved infrastructure classification and null counted reward."
+    }
+  ],
+  "final_collection": {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-extended85-head-bfp8/collected-final/final-score-with-adjudication.json",
+    "sha256": "18bde7bf9874448a75ba34f56611c1e4fe1e9fbfd6a1f5778d7ff4683febe7fa"
+  },
+  "report_audit": {
+    "snapshot": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/REPORT.md",
+      "sha256": "39e3e48bf683a3f996c717a5c8968da831a2ceaac7ffab9dff99988e6cd8d956"
+    },
+    "status": "No current stale running/uncollected SWE evaluation claim found. Lines13,62,64,66 correctly describe85 collected and distinguish ongoing precision controls. Historical snapshots must not be promoted to final scores.",
+    "relevant_lines": {
+      "13": "Extended SWE-bench Verified: **not passed yet; precision analysis in progress**. All 85 first attempts are collected and reviewed. There are **23 confirmed passes**, 59 unsuccessful tasks (22 fetched solutions, 26 incorrect patches and 11 primary anomalies), and three unresolved external-verifier outcomes. The point score remains unknown: its bounds are **23\u201326/85 (27.06\u201330.59%)**; the envelope of corresponding Wilson 95% intervals is **18.76\u201341.05%**, wholly below the 64.8% reference. Unknown outcomes remain in the denominator without invented grades. The list took **3.523453 hours**, versus **8.789750 hours explained** (approximate extrapolation) and **9.590058 hours predicted**. Timing passes; rates are pessimistic for this traffic. All 4,427 calls reconcile, including six capped caret loops. The server has shut down cleanly; matched served/full-TT controls are in progress. See [final accounting and adjudication](current/swe-extended85-head-bfp8/collected-final/final-score-with-adjudication.json).",
+      "62": "Extended SWE85 completed after admission in `setup/swe85-admission.json`. All85 images and task-definition equivalence have a scoped independent clean-pass in `review/swe85-preparation.md`. Forecast9.590058h, or11.987573h including25%margin, fits the12h run limit. Fresh server identity, measured-launch sizing, resources, lifetime and response logging passed before launch. Final stage review and local evidence commits remain pending.",
+      "64": "Extended SWE85 launched 2026-11-14 18:02:43 UTC on12 agents/B32, projected9.590058h (11.987573h with25% margin), timeout12h. The point score remains unknown because three verifier outcomes are unresolved. Official task definitions declare public network for agent and verifier; the prepared metadata incorrectly called this no-network. Harbor confirms public policy, so the endpoint allowlist is ignored. Declared network use is allowed by the operator; fetched solutions remain failures and all 85 trajectories have been audited. No task definition or harness network policy was changed.",
+      "66": "SWE85 analysis: all 85 tasks collected and reviewed; 23 accepted passes, 26 incorrect patches, 22 fetched-solution failures, 11 primary anomalies and three unresolved infrastructure outcomes. Semantic anomalies occur in 21 tasks, including one accepted pass; the 36 onset controls preserve those distinctions. Every per-task decision is linked from the final accounting. The evaluation server is closed and matched precision controls are running. Historical live snapshots remain evidence, not final scores.",
+      "68": "The final [cost breakdown](current/swe-extended85-head-bfp8/collected-final/cost-by-cause.json) covers all85 tasks. Eight of31 native verifier passes fetched their solution and are disqualified, leaving23 accepted passes. The26 incorrect patches and11 primary-anomaly outcomes have no native passes; fetched solutions explain part of the score gap. Across summed agent trajectories, 96.11% of time falls inside model calls and 3.89% outside them. Call time includes server scheduling, prefill, generation and transport; it is not device time or generation-only time. These overlapping sums are not elapsed list time, and the three unresolved verifier outcomes remain unknown."
+    },
+    "proposed_changes": []
+  },
+  "results_summary_audit": {
+    "status": "Earlier stale strings were corrected concurrently before final audit snapshot; no additional replacement proposed.",
+    "current_values": {
+      "/pipeline/extended": "Corrected GPQA157/198 passed with completed shortened-input HF controls. SWE85 collected:23 confirmed passes,59 definitive unsuccessful tasks,3 unknown external verifier outcomes; score bounds23..26/85 below band, time3.523453h vs8.789750h explained passes. Matched served/full TT controls in progress; no new precision selected.",
+      "/anomalies/1/extended_candidate/status": "GPQA198 corrected157/198 passed and nine anomaly investigations complete. SWE85 admitted, completed and collected; below-band precision analysis in progress.",
+      "/anomalies/4/missing_reasons/measurements": "Both longest-prefix pilots completed. Served160 remainder running; full160 queued after successful completion and device release. Four supplemental semantic jobs admitted, awaiting serialized execution. No precision conclusion from incomplete controls."
+    },
+    "snapshot": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/results.json",
+      "sha256": "4097e99a58cc41984519485c03ab74c7afaa007e7227cd63c3f4496d79e49e6c"
+    },
+    "unknown_records": "Latest recovery evidence already included; preserve these records."
+  },
+  "application_preconditions": "Re-read target and compare expected value before applying. Files may change while TT controls run. Preserve recovery history; do not rewrite attempt2 artifacts or change unknown rewards.",
+  "snapshot_sha256": {
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-extended85-head-bfp8/verifier-recovery/requests1724-attempt2/recovery-provenance.json": "0dd20ac3ebdd6d8a3846e21896759e56a162d407182d4fec9789ce63a68051b1",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-extended85-head-bfp8/verifier-recovery/requests1724-attempt2/verifier/report.json": "eb149613e9264a225ef9fc7eca2cda845cc695a3325fd5c9734280f9c6134d5a",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-extended85-head-bfp8/live-tasks/psf__requests-1724-first/coordinator.json": "1ff60216bbf338328019ee2f3decd4c7a90f243b812b2677a59ab89b687369cc",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/results.json": "4097e99a58cc41984519485c03ab74c7afaa007e7227cd63c3f4496d79e49e6c",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-extended85-head-bfp8/verifier-recovery/requests1766-attempt2/recovery-provenance.json": "480e91f24c87e506d4ad0c9574c5946764682a25826a645396bb9ea8da957d6c",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-extended85-head-bfp8/verifier-recovery/requests1766-attempt2/verifier/report.json": "ac4830d349b5f153228c499e6149488c87ac85c02917d9892904b59fb3b51c18",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-extended85-head-bfp8/live-tasks/psf__requests-1766-first/coordinator.json": "7953b9b4167014c4b976a6285924f4dffb71b1174583f0ea52dcdec28c4fa169",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-extended85-head-bfp8/verifier-recovery/requests2317-attempt4/recovery-provenance.json": "8cca9cc223253d2b3575dabdce7b616dcf3bbd23c95e9c7daa8d18f7105d574d",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-extended85-head-bfp8/verifier-recovery/requests2317-attempt4/verifier/report.json": "f28475b5563153ff0073e20614b0722a0be609f1d1345e113deea3a5005df587",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-extended85-head-bfp8/live-tasks/psf__requests-2317-first/coordinator.json": "a6ba74dcd7c8e189a70593a58582dcb6959e0ff639c6506abc8655f339c678be",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-extended85-head-bfp8/rerun_queue.json": "7e8d91212af38ffe883c6ac51279ea9e3f8afe05e0c99019981b55040db4c1da",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-extended85-head-bfp8/collected-final/final-score-with-adjudication.json": "18bde7bf9874448a75ba34f56611c1e4fe1e9fbfd6a1f5778d7ff4683febe7fa",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/REPORT.md": "39e3e48bf683a3f996c717a5c8968da831a2ceaac7ffab9dff99988e6cd8d956"
+  }
+}

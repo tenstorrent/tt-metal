@@ -1,0 +1,10 @@
+[
+  {
+    "name": "sympy__sympy-13551.fetch-next-action",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/sympy__sympy-13551/action_counterfactual.candidate.private.json",
+    "branches": [
+      "chosen",
+      "correct"
+    ]
+  }
+]

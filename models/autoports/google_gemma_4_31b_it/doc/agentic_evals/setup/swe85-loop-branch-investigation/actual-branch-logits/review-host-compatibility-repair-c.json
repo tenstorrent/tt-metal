@@ -1,0 +1,47 @@
+{
+  "status": "independent_semantic_delta_review_complete",
+  "scope": "Review of the host_sampling compatibility repair only. No model or TT execution performed; frozen rereview and root admission were not changed.",
+  "reviewed_hashes": {
+    "actual_branch_logits_py_sha256": "fa2eaf9f66a6a36c57385351a0b3e838edeabac4644c77c98aa81a817e3e3d5e",
+    "source_pins_sha256": "c064842ef0fb247609005ba4f0ba58b71b5b21ce9a66ef5334d7d9fd9ef388d3",
+    "proposal_sha256": "914fda1f852560533941c56b26b040c658cd273c34ddbdc035cbbe47c8196336",
+    "host_sampling_guard_fix_delta_sha256": "546ee24b18139b76e1b8db064eab0cf7bacc79b6bbe7f9ec0e3e7a664f4cf285",
+    "command_sha256": "eaed7f8b7d20c6ea3720afac9dc8f14d6b0d4b9e5bf5461fae3bc49efec2693c",
+    "generator_py_sha256": "3276fd7427898077ab25e139f89a7b03d2a968cd9bafb79e9aa08bb975016f22",
+    "root_admission_sha256": "3733589f29cafa52d03f8f457ea1900448050c1353c9dfb66af7da0d66e870bd"
+  },
+  "findings": [],
+  "review": {
+    "forced_history_and_logits": {
+      "verdict": "repair preserves the diagnostic's forced-history semantics at the inspected source-contract level",
+      "evidence": [
+        "actual_branch_logits.py:247-263 validates greedy compatibility parameters, reads generator.logits to host before the callback returns the exact saved branch token, and checks the expected captured row count.",
+        "generator.py:343-438 stores the terminal prefill model logits in self.logits and runs the existing sampler trace; generate() then reads raw self.logits argmax in host mode and invokes next_input, whose return is copied into the next input token (generator.py:706-723). Thus the sampler-selected prefill token is discarded when the callback supplies the branch token.",
+        "generator.py:568-575 executes the model trace and returns self.logits directly in host_sampling mode without executing sample_trace; generator.py:725-735 then captures the row and forces the saved branch token for the next model replay.",
+        "generator.py:148-154 copies model.decode logits into self.logits. The inspected sampler force-argmax path assigns transformed/gathered values to local x variables and writes token indices to tt_out_tok; it does not overwrite the generator's logits buffer."
+      ],
+      "qualification": "Prefill still performs one greedy sampler replay per branch call before the callback replaces its selected token. The diagnostic records forced-history model logits, not stochastic sampled histories or a canonical sampler replay."
+    },
+    "guard_and_test": {
+      "verdict": "the repaired host-test design checks the actual generator guard and callback values without importing TTNN",
+      "evidence": "actual_branch_logits.py:197-226 extracts the exact guard AST from the current generator source and rejects a changed guard; its mocks exercise accepted greedy parameters, rejection of the prior stochastic pair, captured logits rows, and the exact forced branch inputs.",
+      "validation_record_limit": "host-sampling-guard-fix-delta.json reports --validate-only --mock-tests exit 0 and py_compile success for this hash. I did not rerun those tests. The existing host-validation.json is an older record and must not be treated as validation of this repaired hash."
+    },
+    "reporting_limits": {
+      "verdict": "the revised output description appropriately limits interpretation",
+      "evidence": "actual_branch_logits.py:294-305 identifies compatibility settings, discarded greedy prefill choice, forced histories, host-reconstructed T=1/top_k=20/top_p=.95 distributions, and explicitly excludes canonical device candidate mapping, probability quantization, PRNG state, or sampled draw.",
+      "additional_limit": "Strict top-k20 host tie-breaking is a proxy; tied kth logits can leave HF TopKLogitsWarper with more than 20 candidates. Raw logits/ranks are the primary evidence, as the tool states."
+    },
+    "execution_authority": "The unchanged root-admission.json pins the previous diagnostic tool SHA 0106720fba10ffa1cef53476a309f0a6855dd636e8d056347849d7fcb3cf8a52, not the repaired SHA reviewed here. This review does not authorize execution; root admission must be refreshed for this candidate first.",
+    "scope_exclusions": [
+      "The HF capture path was unchanged by this delta and was not re-reviewed beyond confirming that its implementation was not part of the repair diff.",
+      "No TT logits capture or numerical comparison is established by this review; the preserved first TT attempt failed the guard before capture."
+    ]
+  },
+  "source_references": {
+    "diagnostic": "models/autoports/google_gemma_4_31b_it/tools/actual_branch_logits.py",
+    "generator": "models/autoports/google_gemma_4_31b_it/tt/generator.py",
+    "sampler": "models/common/sampling/tt_sampling.py",
+    "delta_record": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-loop-branch-investigation/actual-branch-logits/host-sampling-guard-fix-delta.json"
+  }
+}

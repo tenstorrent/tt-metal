@@ -1,0 +1,150 @@
+{
+  "status": "candidate planning estimate, not serving performance",
+  "method": "For each matched 1024-token result, prefill/host overhead = diagnostic_wall_s_including_prefill - decode_wall_s; project decode as decode_wall_s * 2047/1023. Add max same-mode observed model-load time and one measured prior first chosen64 teacher-forcing branch as generator-preparation proxy. Range scales variable case work by 0.7x-1.7x and keeps load/preparation fixed.",
+  "target_generated_ids": 2048,
+  "source_generated_ids": 1024,
+  "source_decode_tokens": 1023,
+  "projected_decode_tokens": 2047,
+  "range_variable_component_multipliers": [
+    0.7,
+    1.7
+  ],
+  "first_preparation_allowance_seconds": 16.380446143914014,
+  "first_preparation_source": {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/full/anomaly.psf__requests-5414.call10.onset.optional-suffix512.json",
+    "sha256": "78d21a5ed066928895adc25a37c2474ffff6c716d4d261f164162fd7058f2922",
+    "measurement": "first chosen64 teacher-forcing branch diagnostic wall; preparation proxy, not measured 2048-cap warmup"
+  },
+  "modes": {
+    "served": {
+      "jobs": 2,
+      "load_sources": [
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/runs/served/load.json",
+          "wall_s": 145.2108264057897,
+          "sha256": "bec3d00810fdfc212367c7ef5115fd0c01e2b1353965632b5b4c2ea1da2b14ad"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/served/load.json",
+          "wall_s": 144.17307648900896,
+          "sha256": "82e21dc216777029ea6a6590fa3210955c012a23bc744906638797adae0266fb"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/load.json",
+          "wall_s": 140.70528853707947,
+          "sha256": "b5ed68750af790c5531343cda33e373bc6eeeea0b210de1d98e6d2b8a963c5a6"
+        }
+      ],
+      "load_seconds_used": 145.2108264057897,
+      "first_preparation_allowance_seconds": 16.380446143914014,
+      "case_estimates": [
+        {
+          "job": "anomaly.pytest-dev__pytest-5787.call65.onset.cap2048.seed43",
+          "seed": 43,
+          "source_prefill_host_overhead_seconds": 16.00717450492084,
+          "source_decode_tokens": 1023,
+          "source_decode_seconds": 34.69719773903489,
+          "projected_2047_decode_seconds": 69.42831258240902,
+          "projected_case_seconds": 85.43548708732986
+        },
+        {
+          "job": "anomaly.sphinx-doc__sphinx-9461.call184.onset.cap2048.seed43",
+          "seed": 43,
+          "source_prefill_host_overhead_seconds": 24.753408004995435,
+          "source_decode_tokens": 1023,
+          "source_decode_seconds": 36.4503096700646,
+          "projected_2047_decode_seconds": 72.9362501413707,
+          "projected_case_seconds": 97.68965814636614
+        }
+      ],
+      "estimated_total_seconds": 344.7164177833997,
+      "estimated_range_seconds": [
+        289.7788742132909,
+        472.9040194469869
+      ]
+    },
+    "full": {
+      "jobs": 6,
+      "load_sources": [
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/runs/full/load.json",
+          "wall_s": 77.62507099285722,
+          "sha256": "a2b50e88657034bf4cfd4c2eca4d4de4deca1e8de4f0274c9da6b7ee8927b351"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/full/load.json",
+          "wall_s": 78.36897834506817,
+          "sha256": "cc5db79ed82d3c92c96961657d53aa8f5903c9cf5c9aabada9ed1e66bb82fafa"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/load.json",
+          "wall_s": 75.54386684880592,
+          "sha256": "6fa1c06ad0cbd8a0b7033d0cd3bef542b62412704c92841b2b8df7b38348dbda"
+        }
+      ],
+      "load_seconds_used": 78.36897834506817,
+      "first_preparation_allowance_seconds": 16.380446143914014,
+      "case_estimates": [
+        {
+          "job": "anomaly.pytest-dev__pytest-5787.call65.onset.cap2048.seed42",
+          "seed": 42,
+          "source_prefill_host_overhead_seconds": 27.101194127928466,
+          "source_decode_tokens": 1023,
+          "source_decode_seconds": 65.55073256697506,
+          "projected_2047_decode_seconds": 131.1655420963812,
+          "projected_case_seconds": 158.26673622430965
+        },
+        {
+          "job": "anomaly.pytest-dev__pytest-5787.call65.onset.cap2048.seed43",
+          "seed": 43,
+          "source_prefill_host_overhead_seconds": 27.13062662188895,
+          "source_decode_tokens": 1023,
+          "source_decode_seconds": 65.55005186097696,
+          "projected_2047_decode_seconds": 131.16418001898325,
+          "projected_case_seconds": 158.2948066408722
+        },
+        {
+          "job": "anomaly.pytest-dev__pytest-5787.call65.onset.cap2048.seed44",
+          "seed": 44,
+          "source_prefill_host_overhead_seconds": 27.112278593005612,
+          "source_decode_tokens": 1023,
+          "source_decode_seconds": 65.55391347594559,
+          "projected_2047_decode_seconds": 131.17190702371516,
+          "projected_case_seconds": 158.28418561672078
+        },
+        {
+          "job": "anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.cap2048.seed42",
+          "seed": 42,
+          "source_prefill_host_overhead_seconds": 30.90922143100761,
+          "source_decode_tokens": 1023,
+          "source_decode_seconds": 66.10682421200909,
+          "projected_2047_decode_seconds": 132.27826897554507,
+          "projected_case_seconds": 163.18749040655268
+        },
+        {
+          "job": "anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.cap2048.seed43",
+          "seed": 43,
+          "source_prefill_host_overhead_seconds": 30.864678943995386,
+          "source_decode_tokens": 1023,
+          "source_decode_seconds": 66.09545281901956,
+          "projected_2047_decode_seconds": 132.25551507383483,
+          "projected_case_seconds": 163.12019401783022
+        },
+        {
+          "job": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap2048.seed43",
+          "seed": 43,
+          "source_prefill_host_overhead_seconds": 44.740967120276764,
+          "source_decode_tokens": 1023,
+          "source_decode_seconds": 67.95296320994385,
+          "projected_2047_decode_seconds": 135.97235160386614,
+          "projected_case_seconds": 180.7133187241429
+        }
+      ],
+      "estimated_total_seconds": 1076.6161561194108,
+      "estimated_range_seconds": [
+        782.0561366302821,
+        1763.9228682607109
+      ]
+    }
+  }
+}

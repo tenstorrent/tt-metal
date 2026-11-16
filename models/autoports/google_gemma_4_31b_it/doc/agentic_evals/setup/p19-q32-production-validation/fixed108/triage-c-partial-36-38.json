@@ -1,0 +1,183 @@
+{
+  "schema_version": 1,
+  "status": "partial_indices36_38_reviewed_indices39_71_pending",
+  "captured_at_utc": "2026-11-15T20:26:00Z",
+  "scope": {
+    "manifest": "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/candidate-cases.json",
+    "manifest_sha256": "57193e4b91af3a31df00f0c92dbc0f2219fbce011e6533594e5244a93a3021ed",
+    "indices_in_assigned_slice": [
+      36,
+      71
+    ],
+    "completed_reviewed_indices": [
+      36,
+      37,
+      38
+    ],
+    "pending_indices": [
+      39,
+      40,
+      41,
+      42,
+      43,
+      44,
+      45,
+      46,
+      47,
+      48,
+      49,
+      50,
+      51,
+      52,
+      53,
+      54,
+      55,
+      56,
+      57,
+      58,
+      59,
+      60,
+      61,
+      62,
+      63,
+      64,
+      65,
+      66,
+      67,
+      68,
+      69,
+      70,
+      71
+    ],
+    "tokenizer_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+    "tokenizer_path": "/home/mvasiljevic/.cache/huggingface/hub/models--google--gemma-4-31B-it/snapshots/842da3794eaa0b77d5f08bae87a17459d91ff475/tokenizer.json"
+  },
+  "runtime_policy": "stage12_bf16_hifi4_kv_down_bfp8_p19 with production HiFi4 Q32 prefill geometry; output rows are diagnostic generations, not serving-performance measurements.",
+  "full_control_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/anomaly.pytest-dev__pytest-7432.call19.onset.json",
+  "rows": [
+    {
+      "manifest_index": 36,
+      "job": "pytest-dev__pytest-7432.call19.onset",
+      "seed": 42,
+      "cap": 256,
+      "verdict": "reproduced_native_motif",
+      "confidence": "high",
+      "identity": {
+        "case_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-18763-7432-controls/pytest-dev__pytest-7432.call19.onset.private.json",
+        "case_sha256": "436bf8f06cebc27f9ac206ab4c85c655b2c707145be67b8341f14288370807f5",
+        "prompt_tokens": 11095,
+        "result_path": "setup/p19-q32-production-validation/fixed108/runs/p19_q32/anomaly.pytest-dev__pytest-7432.call19.onset.seed42.cap256.json",
+        "result_sha256": "cbe0e0e17433a9c90214123cad2406bb3437155f20afb6d2492593d4331e65a7",
+        "result_case_matches_fixture": true,
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 42
+        },
+        "generated_tokens": 256,
+        "runtime_precision": "stage12_bf16_hifi4_kv_down_bfp8_p19"
+      },
+      "prompt_tail_decoded": "\", line 161, in exec_module\n    source_stat, co = _rewrite_test(fn, self.config)\n                      ",
+      "text_evidence": "The output begins with a plausible traceback continuation, then repeats the caret character across the terminal line through the 256-token cap. This is the saved native motif (sustained caret run), not a normal traceback tail.",
+      "comparisons": {
+        "all_group_full_bf16_hifi4_path": "setup/swe85-pilot-split85/runs/rest/full/anomaly.pytest-dev__pytest-7432.call19.onset.json",
+        "full_result_sha256": "62dc8a7a0d36eaadf188803d4e1d08372a099dccb41aaa09ca7119710dfe2f07",
+        "full_seed_matches_exact_generated_ids": true,
+        "full_runtime_precision": "stage12_bf16_hifi4_diagnostic",
+        "p19_q128_result": "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.pytest-dev__pytest-7432.call19.onset.seed42.cap256.json",
+        "p19_q128_result_sha256": "ec7088f6b0b9405fdeb20193f0247390757b18c620261ff5bf8a0fce70a4b706",
+        "p19_q128_exact_generated_ids": true,
+        "hf_conditional_result": "setup/swe85-conditional-hf/p19-native-onset-caret-controls/results/anomaly.pytest-dev__pytest-7432.call19.onset.seed42.cap256.hf.private.json",
+        "hf_result_sha256": "6ccdd49c513f3c8258977245d0a65ee808a6c233d76c97c118a1b42d405f3fa5",
+        "hf_case_and_generated_ids_match": true
+      },
+      "cap_notes": "Completed at its 256-token diagnostic cap with the anomaly already visible; no cap extension is needed to classify this reproduced motif. This does not imply native seed/RNG replay or task-success equivalence."
+    },
+    {
+      "manifest_index": 37,
+      "job": "pytest-dev__pytest-7432.call19.onset",
+      "seed": 43,
+      "cap": 256,
+      "verdict": "reproduced_native_motif",
+      "confidence": "high",
+      "identity": {
+        "case_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.pytest-dev__pytest-7432.call19.onset.seed43.private.json",
+        "case_sha256": "2eaad18936f926fc558cc1f2361399238e80897e4cf3b1b849fc28fa620edc2a",
+        "prompt_tokens": 11095,
+        "result_path": "setup/p19-q32-production-validation/fixed108/runs/p19_q32/anomaly.pytest-dev__pytest-7432.call19.onset.seed43.cap256.json",
+        "result_sha256": "afa612ef1c65a11ea4f75c1be1a1462cfb341f6e4682a7cf9bc367f508b4d5b2",
+        "result_case_matches_fixture": true,
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 43
+        },
+        "generated_tokens": 256,
+        "runtime_precision": "stage12_bf16_hifi4_kv_down_bfp8_p19"
+      },
+      "prompt_tail_decoded": "\", line 161, in exec_module\n    source_stat, co = _rewrite_test(fn, self.config)\n                      ",
+      "text_evidence": "The output begins with a plausible traceback continuation, then repeats the caret character across the terminal line through the 256-token cap. This is the saved native motif (sustained caret run), not a normal traceback tail.",
+      "comparisons": {
+        "all_group_full_bf16_hifi4_path": "setup/swe85-pilot-split85/runs/rest/full/anomaly.pytest-dev__pytest-7432.call19.onset.json",
+        "full_result_sha256": "62dc8a7a0d36eaadf188803d4e1d08372a099dccb41aaa09ca7119710dfe2f07",
+        "full_seed_matches_exact_generated_ids": true,
+        "full_runtime_precision": "stage12_bf16_hifi4_diagnostic",
+        "p19_q128_result": "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.pytest-dev__pytest-7432.call19.onset.seed43.cap256.json",
+        "p19_q128_result_sha256": "a367898432d1c5cc0c13ec6eeaea4e80b10e392df21b085556abc9872698d7bb",
+        "p19_q128_exact_generated_ids": true,
+        "hf_conditional_result": null,
+        "hf_result_sha256": null,
+        "hf_case_and_generated_ids_match": null
+      },
+      "cap_notes": "Completed at its 256-token diagnostic cap with the anomaly already visible; no cap extension is needed to classify this reproduced motif. This does not imply native seed/RNG replay or task-success equivalence."
+    },
+    {
+      "manifest_index": 38,
+      "job": "pytest-dev__pytest-7432.call19.onset",
+      "seed": 44,
+      "cap": 256,
+      "verdict": "reproduced_native_motif",
+      "confidence": "high",
+      "identity": {
+        "case_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.pytest-dev__pytest-7432.call19.onset.seed44.private.json",
+        "case_sha256": "5dbb2f59dbc730651a720f58734568c2dc6a5839aef74be2be5d66b99c6f8eb5",
+        "prompt_tokens": 11095,
+        "result_path": "setup/p19-q32-production-validation/fixed108/runs/p19_q32/anomaly.pytest-dev__pytest-7432.call19.onset.seed44.cap256.json",
+        "result_sha256": "574c9d339ead9dfa34f60223adca4dce1aa2869c5f246630ff40d0326c35cf2c",
+        "result_case_matches_fixture": true,
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 44
+        },
+        "generated_tokens": 256,
+        "runtime_precision": "stage12_bf16_hifi4_kv_down_bfp8_p19"
+      },
+      "prompt_tail_decoded": "\", line 161, in exec_module\n    source_stat, co = _rewrite_test(fn, self.config)\n                      ",
+      "text_evidence": "The output begins with a plausible traceback continuation, then repeats the caret character across the terminal line through the 256-token cap. This is the saved native motif (sustained caret run), not a normal traceback tail.",
+      "comparisons": {
+        "all_group_full_bf16_hifi4_path": "setup/swe85-pilot-split85/runs/rest/full/anomaly.pytest-dev__pytest-7432.call19.onset.json",
+        "full_result_sha256": "62dc8a7a0d36eaadf188803d4e1d08372a099dccb41aaa09ca7119710dfe2f07",
+        "full_seed_matches_exact_generated_ids": true,
+        "full_runtime_precision": "stage12_bf16_hifi4_diagnostic",
+        "p19_q128_result": "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.pytest-dev__pytest-7432.call19.onset.seed44.cap256.json",
+        "p19_q128_result_sha256": "82c3e07f27b68ef21efb13143fdabf09c7d9709a343dec885a236c20eaf33e0e",
+        "p19_q128_exact_generated_ids": true,
+        "hf_conditional_result": null,
+        "hf_result_sha256": null,
+        "hf_case_and_generated_ids_match": null
+      },
+      "cap_notes": "Completed at its 256-token diagnostic cap with the anomaly already visible; no cap extension is needed to classify this reproduced motif. This does not imply native seed/RNG replay or task-success equivalence."
+    }
+  ],
+  "partial_counts": {
+    "normal": 0,
+    "reproduced_native_motif": 3,
+    "other_anomaly": 0,
+    "inconclusive": 0
+  },
+  "limitations": "Only completed outputs were reviewed. No model/device work, score change, native RNG replay, task-correctness inference, or canonical record update."
+}

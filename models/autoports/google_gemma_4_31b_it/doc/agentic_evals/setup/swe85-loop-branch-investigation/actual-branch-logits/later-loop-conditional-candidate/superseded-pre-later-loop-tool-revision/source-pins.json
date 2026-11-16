@@ -1,0 +1,23 @@
+{
+  "status": "candidate_input_pins_unadmitted",
+  "files": {
+    "models/autoports/google_gemma_4_31b_it/tools/actual_branch_logits.py": "fa2eaf9f66a6a36c57385351a0b3e838edeabac4644c77c98aa81a817e3e3d5e",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_config.json": "63ce02f7fa0df993a27daca25eeeb3adca51e15c7c6956d1cef122534ebdc7a9",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_build_kwargs.json": "ff2b5ed24e0b6a1dee7eb5cd8bd437d17c3df5f8f25567927d239e666f0699f9",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-loop-branch-investigation/actual-branch-logits/fixture/anomaly.psf__requests-5414.call11.onset.suffix2048.private.json": "fbe984e026dbe8ef2b9d8a4288056617cbfde5235d1efd4a3bd14038a2db5ad7",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/runs/full/anomaly.psf__requests-5414.call11.onset.json": "a967659d1f4edd7b726a36c976168ae767957b9821ffc4a2a31640d594e7a885",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/results/seed44-suffix2048/anomaly.psf__requests-5414.call11.onset.hf.private.json": "ea3eb180de1ef8898c2565dcb5ffd7700f3e792ccfce8bc279efef80c6dfe9a4",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-loop-branch-investigation/actual-branch-logits/serial-runs/hf.completion.json": "dff38a2ba09fe83b85ec13a7d2663e01d22cd783b16de3c550dadb3892bf0e85",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-loop-branch-investigation/actual-branch-logits/serial-runs/tt-full.completion.json": "8b24a2ac2eba7e8aee8d4246d1274ce834cf9225491995fe76b70009b4a8286a",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-loop-branch-investigation/actual-branch-logits/outputs/hf.report.json": "697927aac05966b7360ef0db488c4264dfdc012d08db08c7e8a7be1b538ddd6b",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-loop-branch-investigation/actual-branch-logits/outputs/tt-full.report.json": "bd09e59dd1052f03d990d530475bbb68e1b1a6640f87d5747e618bcbebb4b519"
+  },
+  "candidate_files": {
+    "branches.json": "f19d1bea338fdcc0948ef044219e883efe404fda3e4cd7b8651d8210ab70ecbc",
+    "branch-provenance.json": "e90e5c0c06b36d43b8a733d4f6b2e3d1a731db27d39f26e281d6330beb52e37d",
+    "forecast.json": "ea039d74aca72b99bed91c7cf110c5465998896379adedac6089898761b7648c",
+    "commands.json": "f9dbcce591c80963befaef862cb7e23e2243c6ecc439a318bd729d7f1a114773",
+    "proposal.json": "5222ed493f1c5f4215946a692a0898bfc933fb975ef027324367c1d02300d1eb"
+  },
+  "known_tool_preflight_blocker": "Frozen tool accepts neither this one-branch map nor 30-token history; no execution allowed until reviewed revision."
+}

@@ -1,0 +1,1140 @@
+{
+  "status": "host-only plan; nothing executed",
+  "config_label": "head_bfp8 candidate, subject to measured acceptance; exact config/hash required",
+  "precision_route": "initialize_vllm_model calls Gemma4Model with no precision argument; load_precision(None) reads tt/selected_precision_config.json. No serving env/CLI override exists. Do not change default until candidate accepted; standalone build kwargs precision_config can select candidate file.",
+  "preserve": {
+    "models/autoports/google_gemma_4_31b_it/doc/benchmark/serving_rates.json": "d69d30aa6186e399e699f59b7300403d74d6f71dcddce54004d970cc9781af1e",
+    "models/autoports/google_gemma_4_31b_it/doc/benchmark/serving_rates-gpqa.json": "597dd5eae38c05bfbb9395f5aa1a47cd64535649737bf5799a17839521b889c7",
+    "models/autoports/google_gemma_4_31b_it/doc/benchmark/serving_rates-swe.json": "70921c650f3ac59e1776ca05045a3e284b5da27ef7d41beaf3817070dd24be08",
+    "models/autoports/google_gemma_4_31b_it/doc/benchmark/plan.json": "80914ad1ac423febc168586290070c6c3e884f784469c2acbeb28491b8d50546",
+    "models/autoports/google_gemma_4_31b_it/doc/benchmark/stage_timing.json": "07b0e77743a8527a7348e6df98fcc48f8025081b4f9eb60e9bdf680308d113c0"
+  },
+  "output_directory": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/head-bfp8-rates",
+  "row_scope": "Only existing measured B32 policy rows used by B32 explain_hours interpolation:15 rows, GPQA8 + SWE7; no B1/B8 or unrelated release rows. C1 and C32 both required to interpolate10 active requests. C32 above28672 excluded by prior pool feasibility; freshly recheck pool after precision change.",
+  "rows": [
+    {
+      "id": "b32-c32-i4096-gpqa",
+      "batch": 32,
+      "concurrency": 32,
+      "input_tokens": 4096,
+      "output_tokens": 128,
+      "sampling": "gpqa",
+      "commands": [
+        {
+          "env": {
+            "BENCHMARK_SERVER_BATCH": "32",
+            "BENCHMARK_PHASE_DIR": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/head-bfp8-rates",
+            "BENCHMARK_SAMPLING": "gpqa"
+          },
+          "argv": [
+            "python_env/bin/python",
+            "models/autoports/google_gemma_4_31b_it/tools/benchmark_eval_client.py",
+            "--model",
+            "google/gemma-4-31B-it",
+            "--base-url",
+            "http://127.0.0.1:8000",
+            "--result-dir",
+            "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/head-bfp8-rates/grid/b32-c32-i4096-gpqa",
+            "--result-filename",
+            "perf-b32-warmup.json",
+            "--max-concurrency",
+            "32",
+            "--num-prompts",
+            "32",
+            "--random-input-len",
+            "4096",
+            "--random-output-len",
+            "128",
+            "--seed",
+            "7001"
+          ]
+        },
+        {
+          "env": {
+            "BENCHMARK_SERVER_BATCH": "32",
+            "BENCHMARK_PHASE_DIR": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/head-bfp8-rates",
+            "BENCHMARK_SAMPLING": "gpqa"
+          },
+          "argv": [
+            "python_env/bin/python",
+            "models/autoports/google_gemma_4_31b_it/tools/benchmark_eval_client.py",
+            "--model",
+            "google/gemma-4-31B-it",
+            "--base-url",
+            "http://127.0.0.1:8000",
+            "--result-dir",
+            "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/head-bfp8-rates/grid/b32-c32-i4096-gpqa",
+            "--result-filename",
+            "perf-b32.json",
+            "--max-concurrency",
+            "32",
+            "--num-prompts",
+            "96",
+            "--random-input-len",
+            "4096",
+            "--random-output-len",
+            "128",
+            "--seed",
+            "7000"
+          ]
+        }
+      ],
+      "previous_measured_seconds": 109.46097369189374,
+      "estimated_warm_and_measured_seconds": 218.92194738378748
+    },
+    {
+      "id": "b32-c32-i22420-gpqa",
+      "batch": 32,
+      "concurrency": 32,
+      "input_tokens": 22420,
+      "output_tokens": 128,
+      "sampling": "gpqa",
+      "commands": [
+        {
+          "env": {
+            "BENCHMARK_SERVER_BATCH": "32",
+            "BENCHMARK_PHASE_DIR": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/head-bfp8-rates",
+            "BENCHMARK_SAMPLING": "gpqa"
+          },
+          "argv": [
+            "python_env/bin/python",
+            "models/autoports/google_gemma_4_31b_it/tools/benchmark_eval_client.py",
+            "--model",
+            "google/gemma-4-31B-it",
+            "--base-url",
+            "http://127.0.0.1:8000",
+            "--result-dir",
+            "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/head-bfp8-rates/grid/b32-c32-i22420-gpqa",
+            "--result-filename",
+            "perf-b32-warmup.json",
+            "--max-concurrency",
+            "32",
+            "--num-prompts",
+            "32",
+            "--random-input-len",
+            "22420",
+            "--random-output-len",
+            "128",
+            "--seed",
+            "7003"
+          ]
+        },
+        {
+          "env": {
+            "BENCHMARK_SERVER_BATCH": "32",
+            "BENCHMARK_PHASE_DIR": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/head-bfp8-rates",
+            "BENCHMARK_SAMPLING": "gpqa"
+          },
+          "argv": [
+            "python_env/bin/python",
+            "models/autoports/google_gemma_4_31b_it/tools/benchmark_eval_client.py",
+            "--model",
+            "google/gemma-4-31B-it",
+            "--base-url",
+            "http://127.0.0.1:8000",
+            "--result-dir",
+            "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/head-bfp8-rates/grid/b32-c32-i22420-gpqa",
+            "--result-filename",
+            "perf-b32.json",
+            "--max-concurrency",
+            "32",
+            "--num-prompts",
+            "32",
+            "--random-input-len",
+            "22420",
+            "--random-output-len",
+            "128",
+            "--seed",
+            "7002"
+          ]
+        }
+      ],
+      "previous_measured_seconds": 208.47427231492475,
+      "estimated_warm_and_measured_seconds": 625.4228169447742
+    },
+    {
+      "id": "b32-c32-i28672-gpqa",
+      "batch": 32,
+      "concurrency": 32,
+      "input_tokens": 28672,
+      "output_tokens": 128,
+      "sampling": "gpqa",
+      "commands": [
+        {
+          "env": {
+            "BENCHMARK_SERVER_BATCH": "32",
+            "BENCHMARK_PHASE_DIR": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/head-bfp8-rates",
+            "BENCHMARK_SAMPLING": "gpqa"
+          },
+          "argv": [
+            "python_env/bin/python",
+            "models/autoports/google_gemma_4_31b_it/tools/benchmark_eval_client.py",
+            "--model",
+            "google/gemma-4-31B-it",
+            "--base-url",
+            "http://127.0.0.1:8000",
+            "--result-dir",
+            "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/head-bfp8-rates/grid/b32-c32-i28672-gpqa",
+            "--result-filename",
+            "perf-b32-warmup.json",
+            "--max-concurrency",
+            "32",
+            "--num-prompts",
+            "32",
+            "--random-input-len",
+            "28672",
+            "--random-output-len",
+            "128",
+            "--seed",
+            "7005"
+          ]
+        },
+        {
+          "env": {
+            "BENCHMARK_SERVER_BATCH": "32",
+            "BENCHMARK_PHASE_DIR": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/head-bfp8-rates",
+            "BENCHMARK_SAMPLING": "gpqa"
+          },
+          "argv": [
+            "python_env/bin/python",
+            "models/autoports/google_gemma_4_31b_it/tools/benchmark_eval_client.py",
+            "--model",
+            "google/gemma-4-31B-it",
+            "--base-url",
+            "http://127.0.0.1:8000",
+            "--result-dir",
+            "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/head-bfp8-rates/grid/b32-c32-i28672-gpqa",
+            "--result-filename",
+            "perf-b32.json",
+            "--max-concurrency",
+            "32",
+            "--num-prompts",
+            "32",
+            "--random-input-len",
+            "28672",
+            "--random-output-len",
+            "128",
+            "--seed",
+            "7004"
+          ]
+        }
+      ],
+      "previous_measured_seconds": 278.7567004810553,
+      "estimated_warm_and_measured_seconds": 836.2701014431659
+    },
+    {
+      "id": "b32-c1-i4096-gpqa",
+      "batch": 32,
+      "concurrency": 1,
+      "input_tokens": 4096,
+      "output_tokens": 128,
+      "sampling": "gpqa",
+      "commands": [
+        {
+          "env": {
+            "BENCHMARK_SERVER_BATCH": "32",
+            "BENCHMARK_PHASE_DIR": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/head-bfp8-rates",
+            "BENCHMARK_SAMPLING": "gpqa"
+          },
+          "argv": [
+            "python_env/bin/python",
+            "models/autoports/google_gemma_4_31b_it/tools/benchmark_eval_client.py",
+            "--model",
+            "google/gemma-4-31B-it",
+            "--base-url",
+            "http://127.0.0.1:8000",
+            "--result-dir",
+            "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/head-bfp8-rates/grid/b32-c1-i4096-gpqa",
+            "--result-filename",
+            "perf-b32-warmup.json",
+            "--max-concurrency",
+            "1",
+            "--num-prompts",
+            "1",
+            "--random-input-len",
+            "4096",
+            "--random-output-len",
+            "128",
+            "--seed",
+            "7011"
+          ]
+        },
+        {
+          "env": {
+            "BENCHMARK_SERVER_BATCH": "32",
+            "BENCHMARK_PHASE_DIR": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/head-bfp8-rates",
+            "BENCHMARK_SAMPLING": "gpqa"
+          },
+          "argv": [
+            "python_env/bin/python",
+            "models/autoports/google_gemma_4_31b_it/tools/benchmark_eval_client.py",
+            "--model",
+            "google/gemma-4-31B-it",
+            "--base-url",
+            "http://127.0.0.1:8000",
+            "--result-dir",
+            "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/head-bfp8-rates/grid/b32-c1-i4096-gpqa",
+            "--result-filename",
+            "perf-b32.json",
+            "--max-concurrency",
+            "1",
+            "--num-prompts",
+            "2",
+            "--random-input-len",
+            "4096",
+            "--random-output-len",
+            "128",
+            "--seed",
+            "7010"
+          ]
+        }
+      ],
+      "previous_measured_seconds": 11.429265460930765,
+      "estimated_warm_and_measured_seconds": 25.71584728709422
+    },
+    {
+      "id": "b32-c1-i22420-gpqa",
+      "batch": 32,
+      "concurrency": 1,
+      "input_tokens": 22420,
+      "output_tokens": 128,
+      "sampling": "gpqa",
+      "commands": [
+        {
+          "env": {
+            "BENCHMARK_SERVER_BATCH": "32",
+            "BENCHMARK_PHASE_DIR": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/head-bfp8-rates",
+            "BENCHMARK_SAMPLING": "gpqa"
+          },
+          "argv": [
+            "python_env/bin/python",
+            "models/autoports/google_gemma_4_31b_it/tools/benchmark_eval_client.py",
+            "--model",
+            "google/gemma-4-31B-it",
+            "--base-url",
+            "http://127.0.0.1:8000",
+            "--result-dir",
+            "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/head-bfp8-rates/grid/b32-c1-i22420-gpqa",
+            "--result-filename",
+            "perf-b32-warmup.json",
+            "--max-concurrency",
+            "1",
+            "--num-prompts",
+            "1",
+            "--random-input-len",
+            "22420",
+            "--random-output-len",
+            "128",
+            "--seed",
+            "7013"
+          ]
+        },
+        {
+          "env": {
+            "BENCHMARK_SERVER_BATCH": "32",
+            "BENCHMARK_PHASE_DIR": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/head-bfp8-rates",
+            "BENCHMARK_SAMPLING": "gpqa"
+          },
+          "argv": [
+            "python_env/bin/python",
+            "models/autoports/google_gemma_4_31b_it/tools/benchmark_eval_client.py",
+            "--model",
+            "google/gemma-4-31B-it",
+            "--base-url",
+            "http://127.0.0.1:8000",
+            "--result-dir",
+            "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/head-bfp8-rates/grid/b32-c1-i22420-gpqa",
+            "--result-filename",
+            "perf-b32.json",
+            "--max-concurrency",
+            "1",
+            "--num-prompts",
+            "2",
+            "--random-input-len",
+            "22420",
+            "--random-output-len",
+            "128",
+            "--seed",
+            "7012"
+          ]
+        }
+      ],
+      "previous_measured_seconds": 24.7045352908317,
+      "estimated_warm_and_measured_seconds": 55.585204404371325
+    },
+    {
+      "id": "b32-c1-i28672-gpqa",
+      "batch": 32,
+      "concurrency": 1,
+      "input_tokens": 28672,
+      "output_tokens": 128,
+      "sampling": "gpqa",
+      "commands": [
+        {
+          "env": {
+            "BENCHMARK_SERVER_BATCH": "32",
+            "BENCHMARK_PHASE_DIR": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/head-bfp8-rates",
+            "BENCHMARK_SAMPLING": "gpqa"
+          },
+          "argv": [
+            "python_env/bin/python",
+            "models/autoports/google_gemma_4_31b_it/tools/benchmark_eval_client.py",
+            "--model",
+            "google/gemma-4-31B-it",
+            "--base-url",
+            "http://127.0.0.1:8000",
+            "--result-dir",
+            "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/head-bfp8-rates/grid/b32-c1-i28672-gpqa",
+            "--result-filename",
+            "perf-b32-warmup.json",
+            "--max-concurrency",
+            "1",
+            "--num-prompts",
+            "1",
+            "--random-input-len",
+            "28672",
+            "--random-output-len",
+            "128",
+            "--seed",
+            "7015"
+          ]
+        },
+        {
+          "env": {
+            "BENCHMARK_SERVER_BATCH": "32",
+            "BENCHMARK_PHASE_DIR": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/head-bfp8-rates",
+            "BENCHMARK_SAMPLING": "gpqa"
+          },
+          "argv": [
+            "python_env/bin/python",
+            "models/autoports/google_gemma_4_31b_it/tools/benchmark_eval_client.py",
+            "--model",
+            "google/gemma-4-31B-it",
+            "--base-url",
+            "http://127.0.0.1:8000",
+            "--result-dir",
+            "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/head-bfp8-rates/grid/b32-c1-i28672-gpqa",
+            "--result-filename",
+            "perf-b32.json",
+            "--max-concurrency",
+            "1",
+            "--num-prompts",
+            "2",
+            "--random-input-len",
+            "28672",
+            "--random-output-len",
+            "128",
+            "--seed",
+            "7014"
+          ]
+        }
+      ],
+      "previous_measured_seconds": 29.93914724700153,
+      "estimated_warm_and_measured_seconds": 67.36308130575344
+    },
+    {
+      "id": "b32-c1-i131072-gpqa",
+      "batch": 32,
+      "concurrency": 1,
+      "input_tokens": 131072,
+      "output_tokens": 128,
+      "sampling": "gpqa",
+      "commands": [
+        {
+          "env": {
+            "BENCHMARK_SERVER_BATCH": "32",
+            "BENCHMARK_PHASE_DIR": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/head-bfp8-rates",
+            "BENCHMARK_SAMPLING": "gpqa"
+          },
+          "argv": [
+            "python_env/bin/python",
+            "models/autoports/google_gemma_4_31b_it/tools/benchmark_eval_client.py",
+            "--model",
+            "google/gemma-4-31B-it",
+            "--base-url",
+            "http://127.0.0.1:8000",
+            "--result-dir",
+            "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/head-bfp8-rates/grid/b32-c1-i131072-gpqa",
+            "--result-filename",
+            "perf-b32-warmup.json",
+            "--max-concurrency",
+            "1",
+            "--num-prompts",
+            "1",
+            "--random-input-len",
+            "131072",
+            "--random-output-len",
+            "128",
+            "--seed",
+            "7017"
+          ]
+        },
+        {
+          "env": {
+            "BENCHMARK_SERVER_BATCH": "32",
+            "BENCHMARK_PHASE_DIR": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/head-bfp8-rates",
+            "BENCHMARK_SAMPLING": "gpqa"
+          },
+          "argv": [
+            "python_env/bin/python",
+            "models/autoports/google_gemma_4_31b_it/tools/benchmark_eval_client.py",
+            "--model",
+            "google/gemma-4-31B-it",
+            "--base-url",
+            "http://127.0.0.1:8000",
+            "--result-dir",
+            "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/head-bfp8-rates/grid/b32-c1-i131072-gpqa",
+            "--result-filename",
+            "perf-b32.json",
+            "--max-concurrency",
+            "1",
+            "--num-prompts",
+            "2",
+            "--random-input-len",
+            "131072",
+            "--random-output-len",
+            "128",
+            "--seed",
+            "7016"
+          ]
+        }
+      ],
+      "previous_measured_seconds": 171.13253636588342,
+      "estimated_warm_and_measured_seconds": 385.0482068232377
+    },
+    {
+      "id": "b32-c1-i262016-gpqa",
+      "batch": 32,
+      "concurrency": 1,
+      "input_tokens": 262016,
+      "output_tokens": 128,
+      "sampling": "gpqa",
+      "commands": [
+        {
+          "env": {
+            "BENCHMARK_SERVER_BATCH": "32",
+            "BENCHMARK_PHASE_DIR": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/head-bfp8-rates",
+            "BENCHMARK_SAMPLING": "gpqa"
+          },
+          "argv": [
+            "python_env/bin/python",
+            "models/autoports/google_gemma_4_31b_it/tools/benchmark_eval_client.py",
+            "--model",
+            "google/gemma-4-31B-it",
+            "--base-url",
+            "http://127.0.0.1:8000",
+            "--result-dir",
+            "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/head-bfp8-rates/grid/b32-c1-i262016-gpqa",
+            "--result-filename",
+            "perf-b32-warmup.json",
+            "--max-concurrency",
+            "1",
+            "--num-prompts",
+            "1",
+            "--random-input-len",
+            "262016",
+            "--random-output-len",
+            "128",
+            "--seed",
+            "7019"
+          ]
+        },
+        {
+          "env": {
+            "BENCHMARK_SERVER_BATCH": "32",
+            "BENCHMARK_PHASE_DIR": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/head-bfp8-rates",
+            "BENCHMARK_SAMPLING": "gpqa"
+          },
+          "argv": [
+            "python_env/bin/python",
+            "models/autoports/google_gemma_4_31b_it/tools/benchmark_eval_client.py",
+            "--model",
+            "google/gemma-4-31B-it",
+            "--base-url",
+            "http://127.0.0.1:8000",
+            "--result-dir",
+            "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/head-bfp8-rates/grid/b32-c1-i262016-gpqa",
+            "--result-filename",
+            "perf-b32.json",
+            "--max-concurrency",
+            "1",
+            "--num-prompts",
+            "2",
+            "--random-input-len",
+            "262016",
+            "--random-output-len",
+            "128",
+            "--seed",
+            "7018"
+          ]
+        }
+      ],
+      "previous_measured_seconds": 502.34260685299523,
+      "estimated_warm_and_measured_seconds": 1130.2708654192393
+    },
+    {
+      "id": "b32-c32-i4096-swe",
+      "batch": 32,
+      "concurrency": 32,
+      "input_tokens": 4096,
+      "output_tokens": 128,
+      "sampling": "swe",
+      "commands": [
+        {
+          "env": {
+            "BENCHMARK_SERVER_BATCH": "32",
+            "BENCHMARK_PHASE_DIR": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/head-bfp8-rates",
+            "BENCHMARK_SAMPLING": "swe"
+          },
+          "argv": [
+            "python_env/bin/python",
+            "models/autoports/google_gemma_4_31b_it/tools/benchmark_eval_client.py",
+            "--model",
+            "google/gemma-4-31B-it",
+            "--base-url",
+            "http://127.0.0.1:8000",
+            "--result-dir",
+            "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/head-bfp8-rates/grid/b32-c32-i4096-swe",
+            "--result-filename",
+            "perf-b32-warmup.json",
+            "--max-concurrency",
+            "32",
+            "--num-prompts",
+            "32",
+            "--random-input-len",
+            "4096",
+            "--random-output-len",
+            "128",
+            "--seed",
+            "7021"
+          ]
+        },
+        {
+          "env": {
+            "BENCHMARK_SERVER_BATCH": "32",
+            "BENCHMARK_PHASE_DIR": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/head-bfp8-rates",
+            "BENCHMARK_SAMPLING": "swe"
+          },
+          "argv": [
+            "python_env/bin/python",
+            "models/autoports/google_gemma_4_31b_it/tools/benchmark_eval_client.py",
+            "--model",
+            "google/gemma-4-31B-it",
+            "--base-url",
+            "http://127.0.0.1:8000",
+            "--result-dir",
+            "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/head-bfp8-rates/grid/b32-c32-i4096-swe",
+            "--result-filename",
+            "perf-b32.json",
+            "--max-concurrency",
+            "32",
+            "--num-prompts",
+            "32",
+            "--random-input-len",
+            "4096",
+            "--random-output-len",
+            "128",
+            "--seed",
+            "7020"
+          ]
+        }
+      ],
+      "previous_measured_seconds": 38.210718588205054,
+      "estimated_warm_and_measured_seconds": 114.63215576461516
+    },
+    {
+      "id": "b32-c32-i22420-swe",
+      "batch": 32,
+      "concurrency": 32,
+      "input_tokens": 22420,
+      "output_tokens": 128,
+      "sampling": "swe",
+      "commands": [
+        {
+          "env": {
+            "BENCHMARK_SERVER_BATCH": "32",
+            "BENCHMARK_PHASE_DIR": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/head-bfp8-rates",
+            "BENCHMARK_SAMPLING": "swe"
+          },
+          "argv": [
+            "python_env/bin/python",
+            "models/autoports/google_gemma_4_31b_it/tools/benchmark_eval_client.py",
+            "--model",
+            "google/gemma-4-31B-it",
+            "--base-url",
+            "http://127.0.0.1:8000",
+            "--result-dir",
+            "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/head-bfp8-rates/grid/b32-c32-i22420-swe",
+            "--result-filename",
+            "perf-b32-warmup.json",
+            "--max-concurrency",
+            "32",
+            "--num-prompts",
+            "32",
+            "--random-input-len",
+            "22420",
+            "--random-output-len",
+            "128",
+            "--seed",
+            "7023"
+          ]
+        },
+        {
+          "env": {
+            "BENCHMARK_SERVER_BATCH": "32",
+            "BENCHMARK_PHASE_DIR": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/head-bfp8-rates",
+            "BENCHMARK_SAMPLING": "swe"
+          },
+          "argv": [
+            "python_env/bin/python",
+            "models/autoports/google_gemma_4_31b_it/tools/benchmark_eval_client.py",
+            "--model",
+            "google/gemma-4-31B-it",
+            "--base-url",
+            "http://127.0.0.1:8000",
+            "--result-dir",
+            "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/head-bfp8-rates/grid/b32-c32-i22420-swe",
+            "--result-filename",
+            "perf-b32.json",
+            "--max-concurrency",
+            "32",
+            "--num-prompts",
+            "32",
+            "--random-input-len",
+            "22420",
+            "--random-output-len",
+            "128",
+            "--seed",
+            "7022"
+          ]
+        }
+      ],
+      "previous_measured_seconds": 208.52126641385257,
+      "estimated_warm_and_measured_seconds": 625.5637992415577
+    },
+    {
+      "id": "b32-c32-i28672-swe",
+      "batch": 32,
+      "concurrency": 32,
+      "input_tokens": 28672,
+      "output_tokens": 128,
+      "sampling": "swe",
+      "commands": [
+        {
+          "env": {
+            "BENCHMARK_SERVER_BATCH": "32",
+            "BENCHMARK_PHASE_DIR": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/head-bfp8-rates",
+            "BENCHMARK_SAMPLING": "swe"
+          },
+          "argv": [
+            "python_env/bin/python",
+            "models/autoports/google_gemma_4_31b_it/tools/benchmark_eval_client.py",
+            "--model",
+            "google/gemma-4-31B-it",
+            "--base-url",
+            "http://127.0.0.1:8000",
+            "--result-dir",
+            "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/head-bfp8-rates/grid/b32-c32-i28672-swe",
+            "--result-filename",
+            "perf-b32-warmup.json",
+            "--max-concurrency",
+            "32",
+            "--num-prompts",
+            "32",
+            "--random-input-len",
+            "28672",
+            "--random-output-len",
+            "128",
+            "--seed",
+            "7025"
+          ]
+        },
+        {
+          "env": {
+            "BENCHMARK_SERVER_BATCH": "32",
+            "BENCHMARK_PHASE_DIR": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/head-bfp8-rates",
+            "BENCHMARK_SAMPLING": "swe"
+          },
+          "argv": [
+            "python_env/bin/python",
+            "models/autoports/google_gemma_4_31b_it/tools/benchmark_eval_client.py",
+            "--model",
+            "google/gemma-4-31B-it",
+            "--base-url",
+            "http://127.0.0.1:8000",
+            "--result-dir",
+            "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/head-bfp8-rates/grid/b32-c32-i28672-swe",
+            "--result-filename",
+            "perf-b32.json",
+            "--max-concurrency",
+            "32",
+            "--num-prompts",
+            "32",
+            "--random-input-len",
+            "28672",
+            "--random-output-len",
+            "128",
+            "--seed",
+            "7024"
+          ]
+        }
+      ],
+      "previous_measured_seconds": 278.71242457907647,
+      "estimated_warm_and_measured_seconds": 836.1372737372294
+    },
+    {
+      "id": "b32-c1-i4096-swe",
+      "batch": 32,
+      "concurrency": 1,
+      "input_tokens": 4096,
+      "output_tokens": 128,
+      "sampling": "swe",
+      "commands": [
+        {
+          "env": {
+            "BENCHMARK_SERVER_BATCH": "32",
+            "BENCHMARK_PHASE_DIR": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/head-bfp8-rates",
+            "BENCHMARK_SAMPLING": "swe"
+          },
+          "argv": [
+            "python_env/bin/python",
+            "models/autoports/google_gemma_4_31b_it/tools/benchmark_eval_client.py",
+            "--model",
+            "google/gemma-4-31B-it",
+            "--base-url",
+            "http://127.0.0.1:8000",
+            "--result-dir",
+            "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/head-bfp8-rates/grid/b32-c1-i4096-swe",
+            "--result-filename",
+            "perf-b32-warmup.json",
+            "--max-concurrency",
+            "1",
+            "--num-prompts",
+            "1",
+            "--random-input-len",
+            "4096",
+            "--random-output-len",
+            "128",
+            "--seed",
+            "7031"
+          ]
+        },
+        {
+          "env": {
+            "BENCHMARK_SERVER_BATCH": "32",
+            "BENCHMARK_PHASE_DIR": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/head-bfp8-rates",
+            "BENCHMARK_SAMPLING": "swe"
+          },
+          "argv": [
+            "python_env/bin/python",
+            "models/autoports/google_gemma_4_31b_it/tools/benchmark_eval_client.py",
+            "--model",
+            "google/gemma-4-31B-it",
+            "--base-url",
+            "http://127.0.0.1:8000",
+            "--result-dir",
+            "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/head-bfp8-rates/grid/b32-c1-i4096-swe",
+            "--result-filename",
+            "perf-b32.json",
+            "--max-concurrency",
+            "1",
+            "--num-prompts",
+            "2",
+            "--random-input-len",
+            "4096",
+            "--random-output-len",
+            "128",
+            "--seed",
+            "7030"
+          ]
+        }
+      ],
+      "previous_measured_seconds": 11.462654646020383,
+      "estimated_warm_and_measured_seconds": 25.79097295354586
+    },
+    {
+      "id": "b32-c1-i22420-swe",
+      "batch": 32,
+      "concurrency": 1,
+      "input_tokens": 22420,
+      "output_tokens": 128,
+      "sampling": "swe",
+      "commands": [
+        {
+          "env": {
+            "BENCHMARK_SERVER_BATCH": "32",
+            "BENCHMARK_PHASE_DIR": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/head-bfp8-rates",
+            "BENCHMARK_SAMPLING": "swe"
+          },
+          "argv": [
+            "python_env/bin/python",
+            "models/autoports/google_gemma_4_31b_it/tools/benchmark_eval_client.py",
+            "--model",
+            "google/gemma-4-31B-it",
+            "--base-url",
+            "http://127.0.0.1:8000",
+            "--result-dir",
+            "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/head-bfp8-rates/grid/b32-c1-i22420-swe",
+            "--result-filename",
+            "perf-b32-warmup.json",
+            "--max-concurrency",
+            "1",
+            "--num-prompts",
+            "1",
+            "--random-input-len",
+            "22420",
+            "--random-output-len",
+            "128",
+            "--seed",
+            "7033"
+          ]
+        },
+        {
+          "env": {
+            "BENCHMARK_SERVER_BATCH": "32",
+            "BENCHMARK_PHASE_DIR": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/head-bfp8-rates",
+            "BENCHMARK_SAMPLING": "swe"
+          },
+          "argv": [
+            "python_env/bin/python",
+            "models/autoports/google_gemma_4_31b_it/tools/benchmark_eval_client.py",
+            "--model",
+            "google/gemma-4-31B-it",
+            "--base-url",
+            "http://127.0.0.1:8000",
+            "--result-dir",
+            "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/head-bfp8-rates/grid/b32-c1-i22420-swe",
+            "--result-filename",
+            "perf-b32.json",
+            "--max-concurrency",
+            "1",
+            "--num-prompts",
+            "2",
+            "--random-input-len",
+            "22420",
+            "--random-output-len",
+            "128",
+            "--seed",
+            "7032"
+          ]
+        }
+      ],
+      "previous_measured_seconds": 24.740050917956978,
+      "estimated_warm_and_measured_seconds": 55.6651145654032
+    },
+    {
+      "id": "b32-c1-i28672-swe",
+      "batch": 32,
+      "concurrency": 1,
+      "input_tokens": 28672,
+      "output_tokens": 128,
+      "sampling": "swe",
+      "commands": [
+        {
+          "env": {
+            "BENCHMARK_SERVER_BATCH": "32",
+            "BENCHMARK_PHASE_DIR": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/head-bfp8-rates",
+            "BENCHMARK_SAMPLING": "swe"
+          },
+          "argv": [
+            "python_env/bin/python",
+            "models/autoports/google_gemma_4_31b_it/tools/benchmark_eval_client.py",
+            "--model",
+            "google/gemma-4-31B-it",
+            "--base-url",
+            "http://127.0.0.1:8000",
+            "--result-dir",
+            "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/head-bfp8-rates/grid/b32-c1-i28672-swe",
+            "--result-filename",
+            "perf-b32-warmup.json",
+            "--max-concurrency",
+            "1",
+            "--num-prompts",
+            "1",
+            "--random-input-len",
+            "28672",
+            "--random-output-len",
+            "128",
+            "--seed",
+            "7035"
+          ]
+        },
+        {
+          "env": {
+            "BENCHMARK_SERVER_BATCH": "32",
+            "BENCHMARK_PHASE_DIR": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/head-bfp8-rates",
+            "BENCHMARK_SAMPLING": "swe"
+          },
+          "argv": [
+            "python_env/bin/python",
+            "models/autoports/google_gemma_4_31b_it/tools/benchmark_eval_client.py",
+            "--model",
+            "google/gemma-4-31B-it",
+            "--base-url",
+            "http://127.0.0.1:8000",
+            "--result-dir",
+            "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/head-bfp8-rates/grid/b32-c1-i28672-swe",
+            "--result-filename",
+            "perf-b32.json",
+            "--max-concurrency",
+            "1",
+            "--num-prompts",
+            "2",
+            "--random-input-len",
+            "28672",
+            "--random-output-len",
+            "128",
+            "--seed",
+            "7034"
+          ]
+        }
+      ],
+      "previous_measured_seconds": 29.9219838778954,
+      "estimated_warm_and_measured_seconds": 67.32446372526465
+    },
+    {
+      "id": "b32-c1-i131072-swe",
+      "batch": 32,
+      "concurrency": 1,
+      "input_tokens": 131072,
+      "output_tokens": 128,
+      "sampling": "swe",
+      "commands": [
+        {
+          "env": {
+            "BENCHMARK_SERVER_BATCH": "32",
+            "BENCHMARK_PHASE_DIR": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/head-bfp8-rates",
+            "BENCHMARK_SAMPLING": "swe"
+          },
+          "argv": [
+            "python_env/bin/python",
+            "models/autoports/google_gemma_4_31b_it/tools/benchmark_eval_client.py",
+            "--model",
+            "google/gemma-4-31B-it",
+            "--base-url",
+            "http://127.0.0.1:8000",
+            "--result-dir",
+            "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/head-bfp8-rates/grid/b32-c1-i131072-swe",
+            "--result-filename",
+            "perf-b32-warmup.json",
+            "--max-concurrency",
+            "1",
+            "--num-prompts",
+            "1",
+            "--random-input-len",
+            "131072",
+            "--random-output-len",
+            "128",
+            "--seed",
+            "7037"
+          ]
+        },
+        {
+          "env": {
+            "BENCHMARK_SERVER_BATCH": "32",
+            "BENCHMARK_PHASE_DIR": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/head-bfp8-rates",
+            "BENCHMARK_SAMPLING": "swe"
+          },
+          "argv": [
+            "python_env/bin/python",
+            "models/autoports/google_gemma_4_31b_it/tools/benchmark_eval_client.py",
+            "--model",
+            "google/gemma-4-31B-it",
+            "--base-url",
+            "http://127.0.0.1:8000",
+            "--result-dir",
+            "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/head-bfp8-rates/grid/b32-c1-i131072-swe",
+            "--result-filename",
+            "perf-b32.json",
+            "--max-concurrency",
+            "1",
+            "--num-prompts",
+            "2",
+            "--random-input-len",
+            "131072",
+            "--random-output-len",
+            "128",
+            "--seed",
+            "7036"
+          ]
+        }
+      ],
+      "previous_measured_seconds": 171.32750440901145,
+      "estimated_warm_and_measured_seconds": 385.48688492027577
+    }
+  ],
+  "budget": {
+    "estimated_measurement_seconds": 5455.198735919315,
+    "formula": "1.5 * previous duration * (1+warmup_count/measured_count), plus fresh startup and at least600s closure reserve; schedule within current stage12 budget, never reuse expired stage11 deadline",
+    "caveat": "Estimate only; head change can alter rates. Long-context C32 remains extrapolated. Add SWE C1/262016 only if observed context needs it and budget permits."
+  },
+  "required_tool_changes_before_launch": [
+    "benchmark_server.observe asserts head_bfp4; replace with exact expected candidate config comparison and preserve full identity/hash checks.",
+    "collect_benchmark_roofline.healthy asserts head_bfp4; parameterize expected precision without weakening module/layer/device checks.",
+    "benchmark_grid uses expired stage11 timing, completed-row skip and hardwired BASE; do not invoke unchanged. Use listed per-row lower-level commands in fresh directory after metadata preparation.",
+    "report_benchmark_v5 asserts head_bfp4 and writes stage11 artifacts; use isolated candidate reporter/output directory and preserve identical formulas/schema."
+  ],
+  "server_command_after_required_tool_changes": [
+    "python_env/bin/python",
+    "models/autoports/google_gemma_4_31b_it/tools/benchmark_server.py",
+    "--max-num-seqs",
+    "32",
+    "--base-url",
+    "http://127.0.0.1:8000",
+    "--output",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/head-bfp8-rates/perf-b32-server.json"
+  ],
+  "measurement_steps": [
+    "Parent serializes device ownership and accepts precision first. Fresh launch with phase observer; preserve262144 context, top_k32 server defaults, stock plugin.",
+    "Create each row directory; copy fresh perf-b32-server.json and configuration-b32.json. Write row prediction before traffic. Run warmup then measured command; assert failed0, completed count, exact input/output lengths.",
+    "Call collect_benchmark_roofline.collect(argparse.Namespace(run_dir=ROW,concurrency=32),server) while same observer alive, after precision check parameterization.",
+    "Build candidate serving_rates.json with full server config/config_label/config hash on every row, validated_batches[32], input/TTFT prefill rate and1000/TPOT decode rate. Write separate policy subsets; never combine sampling policies for explain_hours. Keep old rates only with old precision label, not candidate replay."
+  ],
+  "qualitative": {
+    "hf_argv": [
+      "python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.generate_qualitative_reference",
+      "--output-dir",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/head-bfp8-rates/qualitative-hf",
+      "--max-new-tokens",
+      "256",
+      "--include-sampled"
+    ],
+    "tt_argv": [
+      "python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.generate_qualitative_tt_control",
+      "--output-dir",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/head-bfp8-rates/qualitative-tt",
+      "--max-new-tokens",
+      "256",
+      "--context",
+      "4096"
+    ],
+    "format": "Both read installed readiness_check/vllm_prompts.txt six prompts and pinned tokenizer chat template. Greedy plus T0.7/k32/p0.9 seed42; verify exact prompt token equality and normalization/EOS before judgments. HF CPU reference may run concurrently only under parent CPU/device scheduling. TT script uses selected default, no precision CLI.",
+    "existing_hf_control": "models/autoports/google_gemma_4_31b_it/doc/datatype_sweep/selected_default/qualitative_hf.json"
+  },
+  "resume": {
+    "argv": [
+      "python_env/bin/python",
+      "-m",
+      "readiness_check.run_prefill_resume_check",
+      "--model-dir",
+      "models/autoports/google_gemma_4_31b_it",
+      "--lengths",
+      "2560,16384",
+      "--block-sizes",
+      "32,64",
+      "--sliding-window",
+      "1024",
+      "--build-kwargs",
+      "{\"max_seq_len\": 16384, \"batch_size\": 1, \"precision_config\": \"<accepted-candidate-config-path>\"}",
+      "--fabric-config",
+      "FABRIC_1D_RING",
+      "--output",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/head-bfp8-rates/prefill_resume_check.json"
+    ],
+    "gate": "Full60 natural continuation14 cases incl aligned and unaligned132/1029; no-history/fresh-suffix negative controls must fail as intended. Do not substitute reduced probe_resume_stages."
+  }
+}

@@ -1,0 +1,5463 @@
+{
+  "artifact_policy": "private local file; not uploaded or sent to telemetry",
+  "branches": {
+    "hf_seed44_ellipsis_history": [
+      1390,
+      107,
+      138,
+      556,
+      58982,
+      236800
+    ],
+    "tt_seed44_loop_history": [
+      1390,
+      107,
+      147,
+      1390,
+      107,
+      147
+    ]
+  },
+  "branches_sha256": "5bdae0bb70b5b11a6b93f959a2db5de71de9435bdfcbcc53b55f2093fd85967b",
+  "build_kwargs_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_build_kwargs.json",
+  "build_kwargs_sha256": "ff2b5ed24e0b6a1dee7eb5cd8bd437d17c3df5f8f25567927d239e666f0699f9",
+  "case_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-loop-branch-investigation/actual-branch-logits/fixture/anomaly.psf__requests-5414.call11.onset.suffix2048.private.json",
+  "case_sha256": "fbe984e026dbe8ef2b9d8a4288056617cbfde5235d1efd4a3bd14038a2db5ad7",
+  "effective_bfloat16_top_p": 0.94921875,
+  "generator_counters": {
+    "captures": 3,
+    "model_replays": 12,
+    "page_refreshes": 60,
+    "position_refreshes": 2,
+    "readbacks": 30,
+    "sample_replays": 2,
+    "token_refreshes": 14
+  },
+  "hf_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+  "interpretation_limit": "Branch-conditional diagnostic only; no model-answer, correctness, performance, or causal-bug claim. Top-k/nucleus probabilities are strict-20 host proxies, not exact HF/device support; raw logits and ranks are primary.",
+  "logits_pt": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-loop-branch-investigation/actual-branch-logits/outputs/tt-full.logits.pt",
+  "logits_pt_sha256": "081e5f1987e3bc8f1a06e7dbcd74d8dade17d78dc9826624a41bce10f0097453",
+  "mode": "tt-full",
+  "precision": {
+    "activation_dtype": "bfloat16",
+    "ccl_dtype": {
+      "decode": "bfloat16",
+      "prefill": "bfloat16"
+    },
+    "compute_fidelities": {
+      "attention": "HiFi4",
+      "down": "HiFi4",
+      "lm_head": "HiFi4",
+      "mlp": "HiFi4"
+    },
+    "config_id": "stage12_bf16_hifi4_diagnostic",
+    "embedding_dtype": "bfloat16",
+    "kv_cache_dtype": "bfloat16",
+    "layer_exceptions": {},
+    "logits_dtype": "bfloat16",
+    "max_seq_len": 262144,
+    "norm_dtype": "bfloat16",
+    "residual_dtype": "bfloat16",
+    "sampling_dtype": "bfloat16",
+    "sdpa_compute_fidelity": "HiFi4",
+    "weight_groups": {
+      "attention": "bf16",
+      "down": "bf16",
+      "lm_head": "bf16",
+      "mlp": "bf16"
+    }
+  },
+  "precision_config_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_config.json",
+  "precision_config_sha256": "63ce02f7fa0df993a27daca25eeeb3adca51e15c7c6956d1cef122534ebdc7a9",
+  "prompt_token_ids_sha256": "55fea04ac956c00e84884f04bf7e287a85e9d1a2b90794040070751161c968f0",
+  "rows": {
+    "hf_seed44_ellipsis_history": [
+      {
+        "absolute_input_position": 2047,
+        "expected_next_token_id": 1390,
+        "history_after_input": [
+          147
+        ],
+        "input_token_id": 147,
+        "predicted_continuation_index": 0,
+        "row_index": 0,
+        "summary": {
+          "distribution_reconstruction_note": "Host-side reconstruction from saved logits; does not model device probability quantization.",
+          "host_rank_tie_break": "descending logit, then ascending global token ID",
+          "targets": [
+            {
+              "logit": 9.6875,
+              "rank": 256,
+              "raw_softmax_probability": 9.182871999881725e-08,
+              "token_id": 138,
+              "top_k20_probability": 0.0,
+              "top_p095_bf16_probability": 0.0,
+              "top_p095_nominal_probability": 0.0
+            },
+            {
+              "logit": 2.484375,
+              "rank": 35781,
+              "raw_softmax_probability": 6.834410975018215e-11,
+              "token_id": 147,
+              "top_k20_probability": 0.0,
+              "top_p095_bf16_probability": 0.0,
+              "top_p095_nominal_probability": 0.0
+            },
+            {
+              "logit": 25.875,
+              "rank": 1,
+              "raw_softmax_probability": 0.9842840703318897,
+              "token_id": 1390,
+              "top_k20_probability": 0.9845531720238703,
+              "top_p095_bf16_probability": 1.0,
+              "top_p095_nominal_probability": 1.0
+            },
+            {
+              "logit": 19.75,
+              "rank": 5,
+              "raw_softmax_probability": 0.002153112661619907,
+              "token_id": 107,
+              "top_k20_probability": 0.0021537013191810024,
+              "top_p095_bf16_probability": 0.0,
+              "top_p095_nominal_probability": 0.0
+            },
+            {
+              "logit": 16.375,
+              "rank": 13,
+              "raw_softmax_probability": 7.367546379365614e-05,
+              "token_id": 556,
+              "top_k20_probability": 7.369560654772676e-05,
+              "top_p095_bf16_probability": 0.0,
+              "top_p095_nominal_probability": 0.0
+            },
+            {
+              "logit": 12.5625,
+              "rank": 52,
+              "raw_softmax_probability": 1.6277030085099822e-06,
+              "token_id": 172109,
+              "top_k20_probability": 0.0,
+              "top_p095_bf16_probability": 0.0,
+              "top_p095_nominal_probability": 0.0
+            }
+          ],
+          "top32": [
+            {
+              "logit": 25.875,
+              "rank": 1,
+              "raw_softmax_probability": 0.9842840703318897,
+              "token_id": 1390
+            },
+            {
+              "logit": 20.375,
+              "rank": 2,
+              "raw_softmax_probability": 0.004022544025967523,
+              "token_id": 236865
+            },
+            {
+              "logit": 20.125,
+              "rank": 3,
+              "raw_softmax_probability": 0.0031327604373627086,
+              "token_id": 27214
+            },
+            {
+              "logit": 20.0,
+              "rank": 4,
+              "raw_softmax_probability": 0.002764651382512153,
+              "token_id": 120956
+            },
+            {
+              "logit": 19.75,
+              "rank": 5,
+              "raw_softmax_probability": 0.002153112661619907,
+              "token_id": 107
+            },
+            {
+              "logit": 19.25,
+              "rank": 6,
+              "raw_softmax_probability": 0.001305928843087946,
+              "token_id": 173169
+            },
+            {
+              "logit": 18.5,
+              "rank": 7,
+              "raw_softmax_probability": 0.0006168771057345146,
+              "token_id": 236769
+            },
+            {
+              "logit": 17.875,
+              "rank": 8,
+              "raw_softmax_probability": 0.0003301905208361165,
+              "token_id": 236768
+            },
+            {
+              "logit": 17.875,
+              "rank": 9,
+              "raw_softmax_probability": 0.0003301905208361165,
+              "token_id": 236782
+            },
+            {
+              "logit": 17.25,
+              "rank": 10,
+              "raw_softmax_probability": 0.00017673824986616914,
+              "token_id": 3729
+            },
+            {
+              "logit": 17.25,
+              "rank": 11,
+              "raw_softmax_probability": 0.00017673824986616914,
+              "token_id": 236780
+            },
+            {
+              "logit": 16.75,
+              "rank": 12,
+              "raw_softmax_probability": 0.0001071971672877838,
+              "token_id": 236820
+            },
+            {
+              "logit": 16.375,
+              "rank": 13,
+              "raw_softmax_probability": 7.367546379365614e-05,
+              "token_id": 556
+            },
+            {
+              "logit": 16.375,
+              "rank": 14,
+              "raw_softmax_probability": 7.367546379365614e-05,
+              "token_id": 1852
+            },
+            {
+              "logit": 15.8125,
+              "rank": 15,
+              "raw_softmax_probability": 4.197901387371024e-05,
+              "token_id": 236779
+            },
+            {
+              "logit": 15.8125,
+              "rank": 16,
+              "raw_softmax_probability": 4.197901387371024e-05,
+              "token_id": 236840
+            },
+            {
+              "logit": 15.5,
+              "rank": 17,
+              "raw_softmax_probability": 3.071250263777431e-05,
+              "token_id": 1025
+            },
+            {
+              "logit": 15.25,
+              "rank": 18,
+              "raw_softmax_probability": 2.3918921104381222e-05,
+              "token_id": 71468
+            },
+            {
+              "logit": 15.125,
+              "rank": 19,
+              "raw_softmax_probability": 2.1108373787781738e-05,
+              "token_id": 236756
+            },
+            {
+              "logit": 15.0,
+              "rank": 20,
+              "raw_softmax_probability": 1.862807448631525e-05,
+              "token_id": 6375
+            },
+            {
+              "logit": 14.9375,
+              "rank": 21,
+              "raw_softmax_probability": 1.7499456507506974e-05,
+              "token_id": 236884
+            },
+            {
+              "logit": 14.8125,
+              "rank": 22,
+              "raw_softmax_probability": 1.5443216164788747e-05,
+              "token_id": 35457
+            },
+            {
+              "logit": 14.5,
+              "rank": 23,
+              "raw_softmax_probability": 1.1298498307360863e-05,
+              "token_id": 53190
+            },
+            {
+              "logit": 14.5,
+              "rank": 24,
+              "raw_softmax_probability": 1.1298498307360863e-05,
+              "token_id": 236909
+            },
+            {
+              "logit": 14.25,
+              "rank": 25,
+              "raw_softmax_probability": 8.799279329303584e-06,
+              "token_id": 547
+            },
+            {
+              "logit": 14.25,
+              "rank": 26,
+              "raw_softmax_probability": 8.799279329303584e-06,
+              "token_id": 72831
+            },
+            {
+              "logit": 14.125,
+              "rank": 27,
+              "raw_softmax_probability": 7.765336753087068e-06,
+              "token_id": 236744
+            },
+            {
+              "logit": 13.8125,
+              "rank": 28,
+              "raw_softmax_probability": 5.681241732592268e-06,
+              "token_id": 9336
+            },
+            {
+              "logit": 13.8125,
+              "rank": 29,
+              "raw_softmax_probability": 5.681241732592268e-06,
+              "token_id": 121825
+            },
+            {
+              "logit": 13.6875,
+              "rank": 30,
+              "raw_softmax_probability": 5.013678231847017e-06,
+              "token_id": 44955
+            },
+            {
+              "logit": 13.625,
+              "rank": 31,
+              "raw_softmax_probability": 4.709914823740658e-06,
+              "token_id": 31303
+            },
+            {
+              "logit": 13.5625,
+              "rank": 32,
+              "raw_softmax_probability": 4.424555510160803e-06,
+              "token_id": 856
+            }
+          ],
+          "top_k20_distribution": [
+            {
+              "probability": 0.9845531720238703,
+              "token_id": 1390
+            },
+            {
+              "probability": 0.0040236437830763515,
+              "token_id": 236865
+            },
+            {
+              "probability": 0.003133616929060253,
+              "token_id": 27214
+            },
+            {
+              "probability": 0.002765407233782325,
+              "token_id": 120956
+            },
+            {
+              "probability": 0.0021537013191810024,
+              "token_id": 107
+            },
+            {
+              "probability": 0.0013062858819468223,
+              "token_id": 173169
+            },
+            {
+              "probability": 0.0006170457589494765,
+              "token_id": 236769
+            },
+            {
+              "probability": 0.0003302807943968813,
+              "token_id": 236768
+            },
+            {
+              "probability": 0.0003302807943968813,
+              "token_id": 236782
+            },
+            {
+              "probability": 0.0001767865698212616,
+              "token_id": 3729
+            },
+            {
+              "probability": 0.0001767865698212616,
+              "token_id": 236780
+            },
+            {
+              "probability": 0.00010722647482202333,
+              "token_id": 236820
+            },
+            {
+              "probability": 7.369560654772676e-05,
+              "token_id": 556
+            },
+            {
+              "probability": 7.369560654772676e-05,
+              "token_id": 1852
+            },
+            {
+              "probability": 4.1990490869022454e-05,
+              "token_id": 236779
+            },
+            {
+              "probability": 4.1990490869022454e-05,
+              "token_id": 236840
+            },
+            {
+              "probability": 3.072089938691808e-05,
+              "token_id": 1025
+            },
+            {
+              "probability": 2.3925460499189642e-05,
+              "token_id": 71468
+            },
+            {
+              "probability": 2.111414478344495e-05,
+              "token_id": 236756
+            },
+            {
+              "probability": 1.863316737211286e-05,
+              "token_id": 6375
+            }
+          ],
+          "top_p095_bf16_distribution": [
+            {
+              "probability": 1.0,
+              "token_id": 1390
+            }
+          ],
+          "top_p095_nominal_distribution": [
+            {
+              "probability": 1.0,
+              "token_id": 1390
+            }
+          ],
+          "top_p_cutoffs": {
+            "effective_bfloat16": 0.94921875,
+            "nominal_hf": 0.95
+          },
+          "top_p_kept_counts": {
+            "effective_bfloat16": 1,
+            "nominal_hf": 1
+          },
+          "top_p_pre_renormalization_masses": {
+            "effective_bfloat16": 0.9845531720238703,
+            "nominal_hf": 0.9845531720238703
+          },
+          "topk_nucleus_support_semantics": "PROXY only: strict top-k20 with deterministic token-ID tie-break; HF may retain all kth-logit ties and device support is not exposed. Raw logits and ranks are primary evidence.",
+          "vocab_size": 262144
+        }
+      },
+      {
+        "absolute_input_position": 2048,
+        "expected_next_token_id": 107,
+        "history_after_input": [
+          147,
+          1390
+        ],
+        "input_token_id": 1390,
+        "predicted_continuation_index": 1,
+        "row_index": 1,
+        "summary": {
+          "distribution_reconstruction_note": "Host-side reconstruction from saved logits; does not model device probability quantization.",
+          "host_rank_tie_break": "descending logit, then ascending global token ID",
+          "targets": [
+            {
+              "logit": 18.25,
+              "rank": 7,
+              "raw_softmax_probability": 3.118297408603152e-05,
+              "token_id": 138,
+              "top_k20_probability": 3.118362973182931e-05,
+              "top_p095_bf16_probability": 0.0,
+              "top_p095_nominal_probability": 0.0
+            },
+            {
+              "logit": 13.8125,
+              "rank": 34,
+              "raw_softmax_probability": 3.687531767296759e-07,
+              "token_id": 147,
+              "top_k20_probability": 0.0,
+              "top_p095_bf16_probability": 0.0,
+              "top_p095_nominal_probability": 0.0
+            },
+            {
+              "logit": 10.75,
+              "rank": 138,
+              "raw_softmax_probability": 1.7246815581708962e-08,
+              "token_id": 1390,
+              "top_k20_probability": 0.0,
+              "top_p095_bf16_probability": 0.0,
+              "top_p095_nominal_probability": 0.0
+            },
+            {
+              "logit": 28.625,
+              "rank": 1,
+              "raw_softmax_probability": 0.9993618892099903,
+              "token_id": 107,
+              "top_k20_probability": 0.9993829015554233,
+              "top_p095_bf16_probability": 1.0,
+              "top_p095_nominal_probability": 1.0
+            },
+            {
+              "logit": 6.71875,
+              "rank": 1524,
+              "raw_softmax_probability": 3.061676419536027e-10,
+              "token_id": 556,
+              "top_k20_probability": 0.0,
+              "top_p095_bf16_probability": 0.0,
+              "top_p095_nominal_probability": 0.0
+            },
+            {
+              "logit": 3.46875,
+              "rank": 20034,
+              "raw_softmax_probability": 1.1871407780457243e-11,
+              "token_id": 172109,
+              "top_k20_probability": 0.0,
+              "top_p095_bf16_probability": 0.0,
+              "top_p095_nominal_probability": 0.0
+            }
+          ],
+          "top32": [
+            {
+              "logit": 28.625,
+              "rank": 1,
+              "raw_softmax_probability": 0.9993618892099903,
+              "token_id": 107
+            },
+            {
+              "logit": 20.25,
+              "rank": 2,
+              "raw_softmax_probability": 0.00023041274485318766,
+              "token_id": 236743
+            },
+            {
+              "logit": 19.375,
+              "rank": 3,
+              "raw_softmax_probability": 9.605032217916866e-05,
+              "token_id": 759
+            },
+            {
+              "logit": 19.25,
+              "rank": 4,
+              "raw_softmax_probability": 8.476411181536879e-05,
+              "token_id": 1732
+            },
+            {
+              "logit": 19.0,
+              "rank": 5,
+              "raw_softmax_probability": 6.601435665816135e-05,
+              "token_id": 568
+            },
+            {
+              "logit": 18.625,
+              "rank": 6,
+              "raw_softmax_probability": 4.5370959577437726e-05,
+              "token_id": 997
+            },
+            {
+              "logit": 18.25,
+              "rank": 7,
+              "raw_softmax_probability": 3.118297408603152e-05,
+              "token_id": 138
+            },
+            {
+              "logit": 18.0,
+              "rank": 8,
+              "raw_softmax_probability": 2.4285324636696677e-05,
+              "token_id": 965
+            },
+            {
+              "logit": 17.0,
+              "rank": 9,
+              "raw_softmax_probability": 8.934071656015034e-06,
+              "token_id": 2454
+            },
+            {
+              "logit": 16.75,
+              "rank": 10,
+              "raw_softmax_probability": 6.957862001720552e-06,
+              "token_id": 496
+            },
+            {
+              "logit": 16.25,
+              "rank": 11,
+              "raw_softmax_probability": 4.22015663009303e-06,
+              "token_id": 236789
+            },
+            {
+              "logit": 16.125,
+              "rank": 12,
+              "raw_softmax_probability": 3.7242751544789433e-06,
+              "token_id": 236769
+            },
+            {
+              "logit": 16.0,
+              "rank": 13,
+              "raw_softmax_probability": 3.286661288200433e-06,
+              "token_id": 1223
+            },
+            {
+              "logit": 15.8125,
+              "rank": 14,
+              "raw_softmax_probability": 2.724737909514464e-06,
+              "token_id": 1373
+            },
+            {
+              "logit": 15.5,
+              "rank": 15,
+              "raw_softmax_probability": 1.9934608393841824e-06,
+              "token_id": 870
+            },
+            {
+              "logit": 15.25,
+              "rank": 16,
+              "raw_softmax_probability": 1.5525088627345812e-06,
+              "token_id": 769
+            },
+            {
+              "logit": 15.25,
+              "rank": 17,
+              "raw_softmax_probability": 1.5525088627345812e-06,
+              "token_id": 66841
+            },
+            {
+              "logit": 15.25,
+              "rank": 18,
+              "raw_softmax_probability": 1.5525088627345812e-06,
+              "token_id": 236858
+            },
+            {
+              "logit": 15.125,
+              "rank": 19,
+              "raw_softmax_probability": 1.3700842625984007e-06,
+              "token_id": 3729
+            },
+            {
+              "logit": 14.9375,
+              "rank": 20,
+              "raw_softmax_probability": 1.1358397480547962e-06,
+              "token_id": 144
+            },
+            {
+              "logit": 14.9375,
+              "rank": 21,
+              "raw_softmax_probability": 1.1358397480547962e-06,
+              "token_id": 31004
+            },
+            {
+              "logit": 14.75,
+              "rank": 22,
+              "raw_softmax_probability": 9.416442247241158e-07,
+              "token_id": 537
+            },
+            {
+              "logit": 14.625,
+              "rank": 23,
+              "raw_softmax_probability": 8.309981116557048e-07,
+              "token_id": 17103
+            },
+            {
+              "logit": 14.5625,
+              "rank": 24,
+              "raw_softmax_probability": 7.806504812627004e-07,
+              "token_id": 108
+            },
+            {
+              "logit": 14.5,
+              "rank": 25,
+              "raw_softmax_probability": 7.333532595898073e-07,
+              "token_id": 2812
+            },
+            {
+              "logit": 14.4375,
+              "rank": 26,
+              "raw_softmax_probability": 6.889216317155068e-07,
+              "token_id": 653
+            },
+            {
+              "logit": 14.4375,
+              "rank": 27,
+              "raw_softmax_probability": 6.889216317155068e-07,
+              "token_id": 21617
+            },
+            {
+              "logit": 14.4375,
+              "rank": 28,
+              "raw_softmax_probability": 6.889216317155068e-07,
+              "token_id": 53190
+            },
+            {
+              "logit": 14.25,
+              "rank": 29,
+              "raw_softmax_probability": 5.711360928365092e-07,
+              "token_id": 9670
+            },
+            {
+              "logit": 14.0625,
+              "rank": 30,
+              "raw_softmax_probability": 4.734884514052505e-07,
+              "token_id": 779
+            },
+            {
+              "logit": 13.9375,
+              "rank": 31,
+              "raw_softmax_probability": 4.1785209177471027e-07,
+              "token_id": 140
+            },
+            {
+              "logit": 13.9375,
+              "rank": 32,
+              "raw_softmax_probability": 4.1785209177471027e-07,
+              "token_id": 7066
+            }
+          ],
+          "top_k20_distribution": [
+            {
+              "probability": 0.9993829015554233,
+              "token_id": 107
+            },
+            {
+              "probability": 0.00023041758945676854,
+              "token_id": 236743
+            },
+            {
+              "probability": 9.605234171040191e-05,
+              "token_id": 759
+            },
+            {
+              "probability": 8.476589404542682e-05,
+              "token_id": 1732
+            },
+            {
+              "probability": 6.601574466032614e-05,
+              "token_id": 568
+            },
+            {
+              "probability": 4.537191353644453e-05,
+              "token_id": 997
+            },
+            {
+              "probability": 3.118362973182931e-05,
+              "token_id": 138
+            },
+            {
+              "probability": 2.428583525415741e-05,
+              "token_id": 965
+            },
+            {
+              "probability": 8.934259501681141e-06,
+              "token_id": 2454
+            },
+            {
+              "probability": 6.9580082960724126e-06,
+              "token_id": 496
+            },
+            {
+              "probability": 4.220245362102776e-06,
+              "token_id": 236789
+            },
+            {
+              "probability": 3.7243534602027043e-06,
+              "token_id": 236769
+            },
+            {
+              "probability": 3.286730392759107e-06,
+              "token_id": 1223
+            },
+            {
+              "probability": 2.7247951992058034e-06,
+              "token_id": 1373
+            },
+            {
+              "probability": 1.993502753417744e-06,
+              "token_id": 870
+            },
+            {
+              "probability": 1.5525415054167407e-06,
+              "token_id": 769
+            },
+            {
+              "probability": 1.5525415054167407e-06,
+              "token_id": 66841
+            },
+            {
+              "probability": 1.5525415054167407e-06,
+              "token_id": 236858
+            },
+            {
+              "probability": 1.3701130696642986e-06,
+              "token_id": 3729
+            },
+            {
+              "probability": 1.1358636299512348e-06,
+              "token_id": 144
+            }
+          ],
+          "top_p095_bf16_distribution": [
+            {
+              "probability": 1.0,
+              "token_id": 107
+            }
+          ],
+          "top_p095_nominal_distribution": [
+            {
+              "probability": 1.0,
+              "token_id": 107
+            }
+          ],
+          "top_p_cutoffs": {
+            "effective_bfloat16": 0.94921875,
+            "nominal_hf": 0.95
+          },
+          "top_p_kept_counts": {
+            "effective_bfloat16": 1,
+            "nominal_hf": 1
+          },
+          "top_p_pre_renormalization_masses": {
+            "effective_bfloat16": 0.9993829015554233,
+            "nominal_hf": 0.9993829015554233
+          },
+          "topk_nucleus_support_semantics": "PROXY only: strict top-k20 with deterministic token-ID tie-break; HF may retain all kth-logit ties and device support is not exposed. Raw logits and ranks are primary evidence.",
+          "vocab_size": 262144
+        }
+      },
+      {
+        "absolute_input_position": 2049,
+        "expected_next_token_id": 138,
+        "history_after_input": [
+          147,
+          1390,
+          107
+        ],
+        "input_token_id": 107,
+        "predicted_continuation_index": 2,
+        "row_index": 2,
+        "summary": {
+          "distribution_reconstruction_note": "Host-side reconstruction from saved logits; does not model device probability quantization.",
+          "host_rank_tie_break": "descending logit, then ascending global token ID",
+          "targets": [
+            {
+              "logit": 28.25,
+              "rank": 1,
+              "raw_softmax_probability": 0.6598597347711842,
+              "token_id": 138,
+              "top_k20_probability": 0.6600996277758957,
+              "top_p095_bf16_probability": 0.6761375039864048,
+              "top_p095_nominal_probability": 0.6761375039864048
+            },
+            {
+              "logit": 26.75,
+              "rank": 2,
+              "raw_softmax_probability": 0.14723460829499474,
+              "token_id": 147,
+              "top_k20_probability": 0.14728813565955454,
+              "top_p095_bf16_probability": 0.15086666954684613,
+              "top_p095_nominal_probability": 0.15086666954684613
+            },
+            {
+              "logit": 17.375,
+              "rank": 29,
+              "raw_softmax_probability": 1.2488179642786605e-05,
+              "token_id": 1390,
+              "top_k20_probability": 0.0,
+              "top_p095_bf16_probability": 0.0,
+              "top_p095_nominal_probability": 0.0
+            },
+            {
+              "logit": 12.25,
+              "rank": 218,
+              "raw_softmax_probability": 7.425743054267919e-08,
+              "token_id": 107,
+              "top_k20_probability": 0.0,
+              "top_p095_bf16_probability": 0.0,
+              "top_p095_nominal_probability": 0.0
+            },
+            {
+              "logit": 26.5,
+              "rank": 3,
+              "raw_softmax_probability": 0.11466642823535349,
+              "token_id": 556,
+              "top_k20_probability": 0.11470811538878839,
+              "top_p095_bf16_probability": 0.11749508038245864,
+              "top_p095_nominal_probability": 0.11749508038245864
+            },
+            {
+              "logit": 2.265625,
+              "rank": 40501,
+              "raw_softmax_probability": 3.4243720995424103e-12,
+              "token_id": 172109,
+              "top_k20_probability": 0.0,
+              "top_p095_bf16_probability": 0.0,
+              "top_p095_nominal_probability": 0.0
+            }
+          ],
+          "top32": [
+            {
+              "logit": 28.25,
+              "rank": 1,
+              "raw_softmax_probability": 0.6598597347711842,
+              "token_id": 138
+            },
+            {
+              "logit": 26.75,
+              "rank": 2,
+              "raw_softmax_probability": 0.14723460829499474,
+              "token_id": 147
+            },
+            {
+              "logit": 26.5,
+              "rank": 3,
+              "raw_softmax_probability": 0.11466642823535349,
+              "token_id": 556
+            },
+            {
+              "logit": 25.75,
+              "rank": 4,
+              "raw_softmax_probability": 0.05416458542065888,
+              "token_id": 146
+            },
+            {
+              "logit": 24.0,
+              "rank": 5,
+              "raw_softmax_probability": 0.00941239360390638,
+              "token_id": 236780
+            },
+            {
+              "logit": 23.625,
+              "rank": 6,
+              "raw_softmax_probability": 0.006469037211725575,
+              "token_id": 1852
+            },
+            {
+              "logit": 22.875,
+              "rank": 7,
+              "raw_softmax_probability": 0.0030557568072561558,
+              "token_id": 2717
+            },
+            {
+              "logit": 22.5,
+              "rank": 8,
+              "raw_softmax_probability": 0.0021001888922196872,
+              "token_id": 66841
+            },
+            {
+              "logit": 21.875,
+              "rank": 9,
+              "raw_softmax_probability": 0.0011241501066092253,
+              "token_id": 6375
+            },
+            {
+              "logit": 20.875,
+              "rank": 10,
+              "raw_softmax_probability": 0.00041355171301221916,
+              "token_id": 140
+            },
+            {
+              "logit": 20.75,
+              "rank": 11,
+              "raw_softmax_probability": 0.00036495810579183696,
+              "token_id": 5425
+            },
+            {
+              "logit": 20.25,
+              "rank": 12,
+              "raw_softmax_probability": 0.0002213582806733959,
+              "token_id": 145
+            },
+            {
+              "logit": 19.75,
+              "rank": 13,
+              "raw_softmax_probability": 0.00013426058400968908,
+              "token_id": 759
+            },
+            {
+              "logit": 19.25,
+              "rank": 14,
+              "raw_softmax_probability": 8.143316059280017e-05,
+              "token_id": 139
+            },
+            {
+              "logit": 19.25,
+              "rank": 15,
+              "raw_softmax_probability": 8.143316059280017e-05,
+              "token_id": 236768
+            },
+            {
+              "logit": 19.125,
+              "rank": 16,
+              "raw_softmax_probability": 7.186451199082009e-05,
+              "token_id": 123540
+            },
+            {
+              "logit": 18.75,
+              "rank": 17,
+              "raw_softmax_probability": 4.939170861683591e-05,
+              "token_id": 142
+            },
+            {
+              "logit": 18.75,
+              "rank": 18,
+              "raw_softmax_probability": 4.939170861683591e-05,
+              "token_id": 144
+            },
+            {
+              "logit": 18.625,
+              "rank": 19,
+              "raw_softmax_probability": 4.358802986771856e-05,
+              "token_id": 236756
+            },
+            {
+              "logit": 18.5,
+              "rank": 20,
+              "raw_softmax_probability": 3.846630134802646e-05,
+              "token_id": 141
+            },
+            {
+              "logit": 18.5,
+              "rank": 21,
+              "raw_softmax_probability": 3.846630134802646e-05,
+              "token_id": 148
+            },
+            {
+              "logit": 18.25,
+              "rank": 22,
+              "raw_softmax_probability": 2.9957585611703645e-05,
+              "token_id": 143
+            },
+            {
+              "logit": 18.0,
+              "rank": 23,
+              "raw_softmax_probability": 2.333099113332345e-05,
+              "token_id": 48921
+            },
+            {
+              "logit": 18.0,
+              "rank": 24,
+              "raw_softmax_probability": 2.333099113332345e-05,
+              "token_id": 236842
+            },
+            {
+              "logit": 17.75,
+              "rank": 25,
+              "raw_softmax_probability": 1.8170194164464306e-05,
+              "token_id": 10512
+            },
+            {
+              "logit": 17.5,
+              "rank": 26,
+              "raw_softmax_probability": 1.4150961443844272e-05,
+              "token_id": 547
+            },
+            {
+              "logit": 17.5,
+              "rank": 27,
+              "raw_softmax_probability": 1.4150961443844272e-05,
+              "token_id": 13513
+            },
+            {
+              "logit": 17.5,
+              "rank": 28,
+              "raw_softmax_probability": 1.4150961443844272e-05,
+              "token_id": 21617
+            },
+            {
+              "logit": 17.375,
+              "rank": 29,
+              "raw_softmax_probability": 1.2488179642786605e-05,
+              "token_id": 1390
+            },
+            {
+              "logit": 17.375,
+              "rank": 30,
+              "raw_softmax_probability": 1.2488179642786605e-05,
+              "token_id": 2454
+            },
+            {
+              "logit": 17.0,
+              "rank": 31,
+              "raw_softmax_probability": 8.582991980102907e-06,
+              "token_id": 14406
+            },
+            {
+              "logit": 16.875,
+              "rank": 32,
+              "raw_softmax_probability": 7.5744638373492385e-06,
+              "token_id": 502
+            }
+          ],
+          "top_k20_distribution": [
+            {
+              "probability": 0.6600996277758957,
+              "token_id": 138
+            },
+            {
+              "probability": 0.14728813565955454,
+              "token_id": 147
+            },
+            {
+              "probability": 0.11470811538878839,
+              "token_id": 556
+            },
+            {
+              "probability": 0.054184277037620514,
+              "token_id": 146
+            },
+            {
+              "probability": 0.00941581549383872,
+              "token_id": 236780
+            },
+            {
+              "probability": 0.006471389039989274,
+              "token_id": 1852
+            },
+            {
+              "probability": 0.003056867732265718,
+              "token_id": 2717
+            },
+            {
+              "probability": 0.0021009524190683,
+              "token_id": 66841
+            },
+            {
+              "probability": 0.0011245587930809266,
+              "token_id": 6375
+            },
+            {
+              "probability": 0.0004137020603630429,
+              "token_id": 140
+            },
+            {
+              "probability": 0.0003650907868632507,
+              "token_id": 5425
+            },
+            {
+              "probability": 0.00022143875581117188,
+              "token_id": 145
+            },
+            {
+              "probability": 0.00013430939464809482,
+              "token_id": 759
+            },
+            {
+              "probability": 8.14627657415134e-05,
+              "token_id": 139
+            },
+            {
+              "probability": 8.14627657415134e-05,
+              "token_id": 236768
+            },
+            {
+              "probability": 7.189063844286007e-05,
+              "token_id": 123540
+            },
+            {
+              "probability": 4.940966504721583e-05,
+              "token_id": 142
+            },
+            {
+              "probability": 4.940966504721583e-05,
+              "token_id": 144
+            },
+            {
+              "probability": 4.3603876361910316e-05,
+              "token_id": 236756
+            },
+            {
+              "probability": 3.848028583006751e-05,
+              "token_id": 141
+            }
+          ],
+          "top_p095_bf16_distribution": [
+            {
+              "probability": 0.6761375039864048,
+              "token_id": 138
+            },
+            {
+              "probability": 0.15086666954684613,
+              "token_id": 147
+            },
+            {
+              "probability": 0.11749508038245864,
+              "token_id": 556
+            },
+            {
+              "probability": 0.05550074608429042,
+              "token_id": 146
+            }
+          ],
+          "top_p095_nominal_distribution": [
+            {
+              "probability": 0.6761375039864048,
+              "token_id": 138
+            },
+            {
+              "probability": 0.15086666954684613,
+              "token_id": 147
+            },
+            {
+              "probability": 0.11749508038245864,
+              "token_id": 556
+            },
+            {
+              "probability": 0.05550074608429042,
+              "token_id": 146
+            }
+          ],
+          "top_p_cutoffs": {
+            "effective_bfloat16": 0.94921875,
+            "nominal_hf": 0.95
+          },
+          "top_p_kept_counts": {
+            "effective_bfloat16": 4,
+            "nominal_hf": 4
+          },
+          "top_p_pre_renormalization_masses": {
+            "effective_bfloat16": 0.9762801558618591,
+            "nominal_hf": 0.9762801558618591
+          },
+          "topk_nucleus_support_semantics": "PROXY only: strict top-k20 with deterministic token-ID tie-break; HF may retain all kth-logit ties and device support is not exposed. Raw logits and ranks are primary evidence.",
+          "vocab_size": 262144
+        }
+      },
+      {
+        "absolute_input_position": 2050,
+        "expected_next_token_id": 556,
+        "history_after_input": [
+          147,
+          1390,
+          107,
+          138
+        ],
+        "input_token_id": 138,
+        "predicted_continuation_index": 3,
+        "row_index": 3,
+        "summary": {
+          "distribution_reconstruction_note": "Host-side reconstruction from saved logits; does not model device probability quantization.",
+          "host_rank_tie_break": "descending logit, then ascending global token ID",
+          "targets": [
+            {
+              "logit": 12.125,
+              "rank": 72,
+              "raw_softmax_probability": 1.452767426268985e-07,
+              "token_id": 138,
+              "top_k20_probability": 0.0,
+              "top_p095_bf16_probability": 0.0,
+              "top_p095_nominal_probability": 0.0
+            },
+            {
+              "logit": 2.625,
+              "rank": 10611,
+              "raw_softmax_probability": 1.0874230025747868e-11,
+              "token_id": 147,
+              "top_k20_probability": 0.0,
+              "top_p095_bf16_probability": 0.0,
+              "top_p095_nominal_probability": 0.0
+            },
+            {
+              "logit": 25.125,
+              "rank": 3,
+              "raw_softmax_probability": 0.0642723764855731,
+              "token_id": 1390,
+              "top_k20_probability": 0.06427645654773843,
+              "top_p095_bf16_probability": 0.06443306326603006,
+              "top_p095_nominal_probability": 0.06443306326603006
+            },
+            {
+              "logit": 17.875,
+              "rank": 11,
+              "raw_softmax_probability": 4.5644595690100103e-05,
+              "token_id": 107,
+              "top_k20_probability": 4.5647493245754806e-05,
+              "top_p095_bf16_probability": 0.0,
+              "top_p095_nominal_probability": 0.0
+            },
+            {
+              "logit": 27.625,
+              "rank": 1,
+              "raw_softmax_probability": 0.7829978383755543,
+              "token_id": 556,
+              "top_k20_probability": 0.7830475437082427,
+              "top_p095_bf16_probability": 0.784955404108036,
+              "top_p095_nominal_probability": 0.784955404108036
+            },
+            {
+              "logit": 2.234375,
+              "rank": 12711,
+              "raw_softmax_probability": 7.357872086369137e-12,
+              "token_id": 172109,
+              "top_k20_probability": 0.0,
+              "top_p095_bf16_probability": 0.0,
+              "top_p095_nominal_probability": 0.0
+            }
+          ],
+          "top32": [
+            {
+              "logit": 27.625,
+              "rank": 1,
+              "raw_softmax_probability": 0.7829978383755543,
+              "token_id": 556
+            },
+            {
+              "logit": 25.5,
+              "rank": 2,
+              "raw_softmax_probability": 0.09351575598361762,
+              "token_id": 1852
+            },
+            {
+              "logit": 25.125,
+              "rank": 3,
+              "raw_softmax_probability": 0.0642723764855731,
+              "token_id": 1390
+            },
+            {
+              "logit": 25.0,
+              "rank": 4,
+              "raw_softmax_probability": 0.05672017317026924,
+              "token_id": 3202
+            },
+            {
+              "logit": 21.125,
+              "rank": 5,
+              "raw_softmax_probability": 0.001177189638230527,
+              "token_id": 236865
+            },
+            {
+              "logit": 20.375,
+              "rank": 6,
+              "raw_softmax_probability": 0.0005560650113333963,
+              "token_id": 6375
+            },
+            {
+              "logit": 19.25,
+              "rank": 7,
+              "raw_softmax_probability": 0.0001805278779410358,
+              "token_id": 48921
+            },
+            {
+              "logit": 19.25,
+              "rank": 8,
+              "raw_softmax_probability": 0.0001805278779410358,
+              "token_id": 236779
+            },
+            {
+              "logit": 18.25,
+              "rank": 9,
+              "raw_softmax_probability": 6.64124948528146e-05,
+              "token_id": 98802
+            },
+            {
+              "logit": 18.25,
+              "rank": 10,
+              "raw_softmax_probability": 6.64124948528146e-05,
+              "token_id": 236780
+            },
+            {
+              "logit": 17.875,
+              "rank": 11,
+              "raw_softmax_probability": 4.5644595690100103e-05,
+              "token_id": 107
+            },
+            {
+              "logit": 17.875,
+              "rank": 12,
+              "raw_softmax_probability": 4.5644595690100103e-05,
+              "token_id": 66841
+            },
+            {
+              "logit": 17.75,
+              "rank": 13,
+              "raw_softmax_probability": 4.028121431623951e-05,
+              "token_id": 236842
+            },
+            {
+              "logit": 16.75,
+              "rank": 14,
+              "raw_softmax_probability": 1.4818630612365293e-05,
+              "token_id": 3434
+            },
+            {
+              "logit": 16.75,
+              "rank": 15,
+              "raw_softmax_probability": 1.4818630612365293e-05,
+              "token_id": 27214
+            },
+            {
+              "logit": 16.375,
+              "rank": 16,
+              "raw_softmax_probability": 1.0184685946242364e-05,
+              "token_id": 547
+            },
+            {
+              "logit": 16.25,
+              "rank": 17,
+              "raw_softmax_probability": 8.987953801355746e-06,
+              "token_id": 217309
+            },
+            {
+              "logit": 16.125,
+              "rank": 18,
+              "raw_softmax_probability": 7.931841390269886e-06,
+              "token_id": 57701
+            },
+            {
+              "logit": 16.125,
+              "rank": 19,
+              "raw_softmax_probability": 7.931841390269886e-06,
+              "token_id": 136366
+            },
+            {
+              "logit": 16.0,
+              "rank": 20,
+              "raw_softmax_probability": 6.999825458705466e-06,
+              "token_id": 145290
+            },
+            {
+              "logit": 15.9375,
+              "rank": 21,
+              "raw_softmax_probability": 6.575727473322244e-06,
+              "token_id": 10512
+            },
+            {
+              "logit": 15.8125,
+              "rank": 22,
+              "raw_softmax_probability": 5.803059127447308e-06,
+              "token_id": 123540
+            },
+            {
+              "logit": 15.5,
+              "rank": 23,
+              "raw_softmax_probability": 4.245608753341913e-06,
+              "token_id": 29059
+            },
+            {
+              "logit": 15.25,
+              "rank": 24,
+              "raw_softmax_probability": 3.3064834217174923e-06,
+              "token_id": 3729
+            },
+            {
+              "logit": 15.0,
+              "rank": 25,
+              "raw_softmax_probability": 2.5750918780462015e-06,
+              "token_id": 15484
+            },
+            {
+              "logit": 15.0,
+              "rank": 26,
+              "raw_softmax_probability": 2.5750918780462015e-06,
+              "token_id": 120956
+            },
+            {
+              "logit": 15.0,
+              "rank": 27,
+              "raw_softmax_probability": 2.5750918780462015e-06,
+              "token_id": 173169
+            },
+            {
+              "logit": 14.625,
+              "rank": 28,
+              "raw_softmax_probability": 1.7698330396828639e-06,
+              "token_id": 121825
+            },
+            {
+              "logit": 14.625,
+              "rank": 29,
+              "raw_softmax_probability": 1.7698330396828639e-06,
+              "token_id": 236756
+            },
+            {
+              "logit": 14.625,
+              "rank": 30,
+              "raw_softmax_probability": 1.7698330396828639e-06,
+              "token_id": 236768
+            },
+            {
+              "logit": 14.5,
+              "rank": 31,
+              "raw_softmax_probability": 1.561872175612007e-06,
+              "token_id": 196201
+            },
+            {
+              "logit": 14.4375,
+              "rank": 32,
+              "raw_softmax_probability": 1.4672431242148222e-06,
+              "token_id": 236820
+            }
+          ],
+          "top_k20_distribution": [
+            {
+              "probability": 0.7830475437082427,
+              "token_id": 556
+            },
+            {
+              "probability": 0.0935216924390393,
+              "token_id": 1852
+            },
+            {
+              "probability": 0.06427645654773843,
+              "token_id": 1390
+            },
+            {
+              "probability": 0.056723773812492495,
+              "token_id": 3202
+            },
+            {
+              "probability": 0.0011772643671757906,
+              "token_id": 236865
+            },
+            {
+              "probability": 0.0005561003107876604,
+              "token_id": 6375
+            },
+            {
+              "probability": 0.00018053933799595906,
+              "token_id": 48921
+            },
+            {
+              "probability": 0.00018053933799595906,
+              "token_id": 236779
+            },
+            {
+              "probability": 6.641671077141557e-05,
+              "token_id": 98802
+            },
+            {
+              "probability": 6.641671077141557e-05,
+              "token_id": 236780
+            },
+            {
+              "probability": 4.5647493245754806e-05,
+              "token_id": 107
+            },
+            {
+              "probability": 4.5647493245754806e-05,
+              "token_id": 66841
+            },
+            {
+              "probability": 4.028377140012985e-05,
+              "token_id": 236842
+            },
+            {
+              "probability": 1.4819571310957901e-05,
+              "token_id": 3434
+            },
+            {
+              "probability": 1.4819571310957901e-05,
+              "token_id": 27214
+            },
+            {
+              "probability": 1.0185332478299637e-05,
+              "token_id": 547
+            },
+            {
+              "probability": 8.988524363893712e-06,
+              "token_id": 217309
+            },
+            {
+              "probability": 7.932344909942371e-06,
+              "token_id": 57701
+            },
+            {
+              "probability": 7.932344909942371e-06,
+              "token_id": 136366
+            },
+            {
+              "probability": 7.000269813256824e-06,
+              "token_id": 145290
+            }
+          ],
+          "top_p095_bf16_distribution": [
+            {
+              "probability": 0.784955404108036,
+              "token_id": 556
+            },
+            {
+              "probability": 0.09374955386962515,
+              "token_id": 1852
+            },
+            {
+              "probability": 0.06443306326603006,
+              "token_id": 1390
+            },
+            {
+              "probability": 0.056861978756308794,
+              "token_id": 3202
+            }
+          ],
+          "top_p095_nominal_distribution": [
+            {
+              "probability": 0.784955404108036,
+              "token_id": 556
+            },
+            {
+              "probability": 0.09374955386962515,
+              "token_id": 1852
+            },
+            {
+              "probability": 0.06443306326603006,
+              "token_id": 1390
+            },
+            {
+              "probability": 0.056861978756308794,
+              "token_id": 3202
+            }
+          ],
+          "top_p_cutoffs": {
+            "effective_bfloat16": 0.94921875,
+            "nominal_hf": 0.95
+          },
+          "top_p_kept_counts": {
+            "effective_bfloat16": 4,
+            "nominal_hf": 4
+          },
+          "top_p_pre_renormalization_masses": {
+            "effective_bfloat16": 0.9975694665075129,
+            "nominal_hf": 0.9975694665075129
+          },
+          "topk_nucleus_support_semantics": "PROXY only: strict top-k20 with deterministic token-ID tie-break; HF may retain all kth-logit ties and device support is not exposed. Raw logits and ranks are primary evidence.",
+          "vocab_size": 262144
+        }
+      },
+      {
+        "absolute_input_position": 2051,
+        "expected_next_token_id": 58982,
+        "history_after_input": [
+          147,
+          1390,
+          107,
+          138,
+          556
+        ],
+        "input_token_id": 556,
+        "predicted_continuation_index": 4,
+        "row_index": 4,
+        "summary": {
+          "distribution_reconstruction_note": "Host-side reconstruction from saved logits; does not model device probability quantization.",
+          "host_rank_tie_break": "descending logit, then ascending global token ID",
+          "targets": [
+            {
+              "logit": -4.96875,
+              "rank": 146,
+              "raw_softmax_probability": 8.690850660075389e-12,
+              "token_id": 138,
+              "top_k20_probability": 0.0,
+              "top_p095_bf16_probability": 0.0,
+              "top_p095_nominal_probability": 0.0
+            },
+            {
+              "logit": -10.25,
+              "rank": 12737,
+              "raw_softmax_probability": 4.420226813353585e-14,
+              "token_id": 147,
+              "top_k20_probability": 0.0,
+              "top_p095_bf16_probability": 0.0,
+              "top_p095_nominal_probability": 0.0
+            },
+            {
+              "logit": -6.53125,
+              "rank": 587,
+              "raw_softmax_probability": 1.8217012623814366e-12,
+              "token_id": 1390,
+              "top_k20_probability": 0.0,
+              "top_p095_bf16_probability": 0.0,
+              "top_p095_nominal_probability": 0.0
+            },
+            {
+              "logit": -7.46875,
+              "rank": 1382,
+              "raw_softmax_probability": 7.133884644727982e-13,
+              "token_id": 107,
+              "top_k20_probability": 0.0,
+              "top_p095_bf16_probability": 0.0,
+              "top_p095_nominal_probability": 0.0
+            },
+            {
+              "logit": -8.9375,
+              "rank": 5056,
+              "raw_softmax_probability": 1.6423134975541633e-13,
+              "token_id": 556,
+              "top_k20_probability": 0.0,
+              "top_p095_bf16_probability": 0.0,
+              "top_p095_nominal_probability": 0.0
+            },
+            {
+              "logit": -15.5625,
+              "rank": 154917,
+              "raw_softmax_probability": 2.1789894101663588e-16,
+              "token_id": 172109,
+              "top_k20_probability": 0.0,
+              "top_p095_bf16_probability": 0.0,
+              "top_p095_nominal_probability": 0.0
+            }
+          ],
+          "top32": [
+            {
+              "logit": 20.5,
+              "rank": 1,
+              "raw_softmax_probability": 0.9999997080947957,
+              "token_id": 58982
+            },
+            {
+              "logit": 5.3125,
+              "rank": 2,
+              "raw_softmax_probability": 2.536018569872433e-07,
+              "token_id": 66841
+            },
+            {
+              "logit": 2.3125,
+              "rank": 3,
+              "raw_softmax_probability": 1.2626092992041138e-08,
+              "token_id": 5285
+            },
+            {
+              "logit": 1.7109375,
+              "rank": 4,
+              "raw_softmax_probability": 6.91852810240813e-09,
+              "token_id": 859
+            },
+            {
+              "logit": 0.79296875,
+              "rank": 5,
+              "raw_softmax_probability": 2.762771368722834e-09,
+              "token_id": 144687
+            },
+            {
+              "logit": 0.0927734375,
+              "rank": 6,
+              "raw_softmax_probability": 1.3716837263011494e-09,
+              "token_id": 748
+            },
+            {
+              "logit": -0.33203125,
+              "rank": 7,
+              "raw_softmax_probability": 8.969405416028732e-10,
+              "token_id": 8608
+            },
+            {
+              "logit": -0.46875,
+              "rank": 8,
+              "raw_softmax_probability": 7.823254449812329e-10,
+              "token_id": 209906
+            },
+            {
+              "logit": -0.76171875,
+              "rank": 9,
+              "raw_softmax_probability": 5.836503419750099e-10,
+              "token_id": 40145
+            },
+            {
+              "logit": -0.78125,
+              "rank": 10,
+              "raw_softmax_probability": 5.723615224709062e-10,
+              "token_id": 229649
+            },
+            {
+              "logit": -1.1484375,
+              "rank": 11,
+              "raw_softmax_probability": 3.9646323939323397e-10,
+              "token_id": 828
+            },
+            {
+              "logit": -1.1875,
+              "rank": 12,
+              "raw_softmax_probability": 3.812749712065149e-10,
+              "token_id": 4694
+            },
+            {
+              "logit": -1.234375,
+              "rank": 13,
+              "raw_softmax_probability": 3.638151190924668e-10,
+              "token_id": 236766
+            },
+            {
+              "logit": -1.375,
+              "rank": 14,
+              "raw_softmax_probability": 3.160880531635946e-10,
+              "token_id": 24523
+            },
+            {
+              "logit": -1.453125,
+              "rank": 15,
+              "raw_softmax_probability": 2.923336608401711e-10,
+              "token_id": 712
+            },
+            {
+              "logit": -1.7421875,
+              "rank": 16,
+              "raw_softmax_probability": 2.1894779535448153e-10,
+              "token_id": 236820
+            },
+            {
+              "logit": -1.7890625,
+              "rank": 17,
+              "raw_softmax_probability": 2.0892144582650397e-10,
+              "token_id": 519
+            },
+            {
+              "logit": -1.859375,
+              "rank": 18,
+              "raw_softmax_probability": 1.9473620036224038e-10,
+              "token_id": 236779
+            },
+            {
+              "logit": -1.8671875,
+              "rank": 19,
+              "raw_softmax_probability": 1.9322075122805582e-10,
+              "token_id": 506
+            },
+            {
+              "logit": -2.0,
+              "rank": 20,
+              "raw_softmax_probability": 1.6918974287413217e-10,
+              "token_id": 106425
+            },
+            {
+              "logit": -2.0,
+              "rank": 21,
+              "raw_softmax_probability": 1.6918974287413217e-10,
+              "token_id": 123047
+            },
+            {
+              "logit": -2.25,
+              "rank": 22,
+              "raw_softmax_probability": 1.3176510423802377e-10,
+              "token_id": 117399
+            },
+            {
+              "logit": -2.453125,
+              "rank": 23,
+              "raw_softmax_probability": 1.075435437854841e-10,
+              "token_id": 141145
+            },
+            {
+              "logit": -2.484375,
+              "rank": 24,
+              "raw_softmax_probability": 1.0423477679025309e-10,
+              "token_id": 70339
+            },
+            {
+              "logit": -2.578125,
+              "rank": 25,
+              "raw_softmax_probability": 9.490684428366054e-11,
+              "token_id": 65733
+            },
+            {
+              "logit": -2.578125,
+              "rank": 26,
+              "raw_softmax_probability": 9.490684428366054e-11,
+              "token_id": 130211
+            },
+            {
+              "logit": -2.640625,
+              "rank": 27,
+              "raw_softmax_probability": 8.915672927047516e-11,
+              "token_id": 68255
+            },
+            {
+              "logit": -2.671875,
+              "rank": 28,
+              "raw_softmax_probability": 8.641366508615437e-11,
+              "token_id": 95109
+            },
+            {
+              "logit": -2.703125,
+              "rank": 29,
+              "raw_softmax_probability": 8.375499611440894e-11,
+              "token_id": 709
+            },
+            {
+              "logit": -2.75,
+              "rank": 30,
+              "raw_softmax_probability": 7.991957560059248e-11,
+              "token_id": 166944
+            },
+            {
+              "logit": -2.796875,
+              "rank": 31,
+              "raw_softmax_probability": 7.625979177951383e-11,
+              "token_id": 155237
+            },
+            {
+              "logit": -2.828125,
+              "rank": 32,
+              "raw_softmax_probability": 7.39135246469507e-11,
+              "token_id": 197641
+            }
+          ],
+          "top_k20_distribution": [
+            {
+              "probability": 0.9999997171487954,
+              "token_id": 58982
+            },
+            {
+              "probability": 2.5360185928335514e-07,
+              "token_id": 66841
+            },
+            {
+              "probability": 1.2626093106357814e-08,
+              "token_id": 5285
+            },
+            {
+              "probability": 6.9185281650485e-09,
+              "token_id": 859
+            },
+            {
+              "probability": 2.7627713937369722e-09,
+              "token_id": 144687
+            },
+            {
+              "probability": 1.3716837387203771e-09,
+              "token_id": 748
+            },
+            {
+              "probability": 8.969405497237749e-10,
+              "token_id": 8608
+            },
+            {
+              "probability": 7.823254520644094e-10,
+              "token_id": 209906
+            },
+            {
+              "probability": 5.836503472593815e-10,
+              "token_id": 40145
+            },
+            {
+              "probability": 5.723615276530687e-10,
+              "token_id": 229649
+            },
+            {
+              "probability": 3.9646324298281303e-10,
+              "token_id": 828
+            },
+            {
+              "probability": 3.812749746585794e-10,
+              "token_id": 4694
+            },
+            {
+              "probability": 3.638151223864498e-10,
+              "token_id": 236766
+            },
+            {
+              "probability": 3.1608805602545654e-10,
+              "token_id": 24523
+            },
+            {
+              "probability": 2.923336634869608e-10,
+              "token_id": 712
+            },
+            {
+              "probability": 2.1894779733683538e-10,
+              "token_id": 236820
+            },
+            {
+              "probability": 2.0892144771807921e-10,
+              "token_id": 519
+            },
+            {
+              "probability": 1.9473620212538237e-10,
+              "token_id": 236779
+            },
+            {
+              "probability": 1.9322075297747695e-10,
+              "token_id": 506
+            },
+            {
+              "probability": 1.691897444059765e-10,
+              "token_id": 106425
+            }
+          ],
+          "top_p095_bf16_distribution": [
+            {
+              "probability": 1.0,
+              "token_id": 58982
+            }
+          ],
+          "top_p095_nominal_distribution": [
+            {
+              "probability": 1.0,
+              "token_id": 58982
+            }
+          ],
+          "top_p_cutoffs": {
+            "effective_bfloat16": 0.94921875,
+            "nominal_hf": 0.95
+          },
+          "top_p_kept_counts": {
+            "effective_bfloat16": 1,
+            "nominal_hf": 1
+          },
+          "top_p_pre_renormalization_masses": {
+            "effective_bfloat16": 0.9999997171487954,
+            "nominal_hf": 0.9999997171487954
+          },
+          "topk_nucleus_support_semantics": "PROXY only: strict top-k20 with deterministic token-ID tie-break; HF may retain all kth-logit ties and device support is not exposed. Raw logits and ranks are primary evidence.",
+          "vocab_size": 262144
+        }
+      },
+      {
+        "absolute_input_position": 2052,
+        "expected_next_token_id": 236800,
+        "history_after_input": [
+          147,
+          1390,
+          107,
+          138,
+          556,
+          58982
+        ],
+        "input_token_id": 58982,
+        "predicted_continuation_index": 5,
+        "row_index": 5,
+        "summary": {
+          "distribution_reconstruction_note": "Host-side reconstruction from saved logits; does not model device probability quantization.",
+          "host_rank_tie_break": "descending logit, then ascending global token ID",
+          "targets": [
+            {
+              "logit": 3.03125,
+              "rank": 56,
+              "raw_softmax_probability": 3.437298644842871e-11,
+              "token_id": 138,
+              "top_k20_probability": 0.0,
+              "top_p095_bf16_probability": 0.0,
+              "top_p095_nominal_probability": 0.0
+            },
+            {
+              "logit": -3.8125,
+              "rank": 25183,
+              "raw_softmax_probability": 3.664497302304947e-14,
+              "token_id": 147,
+              "top_k20_probability": 0.0,
+              "top_p095_bf16_probability": 0.0,
+              "top_p095_nominal_probability": 0.0
+            },
+            {
+              "logit": 6.625,
+              "rank": 8,
+              "raw_softmax_probability": 1.2501526942367457e-09,
+              "token_id": 1390,
+              "top_k20_probability": 1.2501527108494106e-09,
+              "top_p095_bf16_probability": 0.0,
+              "top_p095_nominal_probability": 0.0
+            },
+            {
+              "logit": 0.294921875,
+              "rank": 773,
+              "raw_softmax_probability": 2.2276402764680983e-12,
+              "token_id": 107,
+              "top_k20_probability": 0.0,
+              "top_p095_bf16_probability": 0.0,
+              "top_p095_nominal_probability": 0.0
+            },
+            {
+              "logit": -2.484375,
+              "rank": 10141,
+              "raw_softmax_probability": 1.3829668340340885e-13,
+              "token_id": 556,
+              "top_k20_probability": 0.0,
+              "top_p095_bf16_probability": 0.0,
+              "top_p095_nominal_probability": 0.0
+            },
+            {
+              "logit": -8.375,
+              "rank": 167823,
+              "raw_softmax_probability": 3.824246101486301e-16,
+              "token_id": 172109,
+              "top_k20_probability": 0.0,
+              "top_p095_bf16_probability": 0.0,
+              "top_p095_nominal_probability": 0.0
+            }
+          ],
+          "top32": [
+            {
+              "logit": 27.125,
+              "rank": 1,
+              "raw_softmax_probability": 0.9999998622968428,
+              "token_id": 236800
+            },
+            {
+              "logit": 10.3125,
+              "rank": 2,
+              "raw_softmax_probability": 4.993717419466808e-08,
+              "token_id": 236743
+            },
+            {
+              "logit": 10.0625,
+              "rank": 3,
+              "raw_softmax_probability": 3.889111036718065e-08,
+              "token_id": 236778
+            },
+            {
+              "logit": 9.0,
+              "rank": 4,
+              "raw_softmax_probability": 1.3440408100348136e-08,
+              "token_id": 236761
+            },
+            {
+              "logit": 8.8125,
+              "rank": 5,
+              "raw_softmax_probability": 1.1142489675416325e-08,
+              "token_id": 236751
+            },
+            {
+              "logit": 7.78125,
+              "rank": 6,
+              "raw_softmax_probability": 3.97297704570435e-09,
+              "token_id": 236771
+            },
+            {
+              "logit": 7.15625,
+              "rank": 7,
+              "raw_softmax_probability": 2.1265813689568678e-09,
+              "token_id": 236772
+            },
+            {
+              "logit": 6.625,
+              "rank": 8,
+              "raw_softmax_probability": 1.2501526942367457e-09,
+              "token_id": 1390
+            },
+            {
+              "logit": 6.09375,
+              "rank": 9,
+              "raw_softmax_probability": 7.349268557139765e-10,
+              "token_id": 1025
+            },
+            {
+              "logit": 5.65625,
+              "rank": 10,
+              "raw_softmax_probability": 4.74504441424013e-10,
+              "token_id": 228972
+            },
+            {
+              "logit": 5.375,
+              "rank": 11,
+              "raw_softmax_probability": 3.5817474370651825e-10,
+              "token_id": 236840
+            },
+            {
+              "logit": 5.25,
+              "rank": 12,
+              "raw_softmax_probability": 3.1608810190503366e-10,
+              "token_id": 144687
+            },
+            {
+              "logit": 5.21875,
+              "rank": 13,
+              "raw_softmax_probability": 3.0636309338890404e-10,
+              "token_id": 35824
+            },
+            {
+              "logit": 5.1875,
+              "rank": 14,
+              "raw_softmax_probability": 2.9693729192950573e-10,
+              "token_id": 66841
+            },
+            {
+              "logit": 5.03125,
+              "rank": 15,
+              "raw_softmax_probability": 2.5398392515522276e-10,
+              "token_id": 173994
+            },
+            {
+              "logit": 4.84375,
+              "rank": 16,
+              "raw_softmax_probability": 2.1056006950343112e-10,
+              "token_id": 157610
+            },
+            {
+              "logit": 4.8125,
+              "rank": 17,
+              "raw_softmax_probability": 2.0408181721637433e-10,
+              "token_id": 108003
+            },
+            {
+              "logit": 4.6875,
+              "rank": 18,
+              "raw_softmax_probability": 1.8010157156728593e-10,
+              "token_id": 236786
+            },
+            {
+              "logit": 4.59375,
+              "rank": 19,
+              "raw_softmax_probability": 1.6398434701284156e-10,
+              "token_id": 236770
+            },
+            {
+              "logit": 4.53125,
+              "rank": 20,
+              "raw_softmax_probability": 1.5404903768080137e-10,
+              "token_id": 159113
+            },
+            {
+              "logit": 4.5,
+              "rank": 21,
+              "raw_softmax_probability": 1.493094470593313e-10,
+              "token_id": 232064
+            },
+            {
+              "logit": 4.4375,
+              "rank": 22,
+              "raw_softmax_probability": 1.4026324496899292e-10,
+              "token_id": 53817
+            },
+            {
+              "logit": 4.4375,
+              "rank": 23,
+              "raw_softmax_probability": 1.4026324496899292e-10,
+              "token_id": 230283
+            },
+            {
+              "logit": 4.40625,
+              "rank": 24,
+              "raw_softmax_probability": 1.3594779859944483e-10,
+              "token_id": 237490
+            },
+            {
+              "logit": 4.25,
+              "rank": 25,
+              "raw_softmax_probability": 1.1628231428976569e-10,
+              "token_id": 236851
+            },
+            {
+              "logit": 4.0625,
+              "rank": 26,
+              "raw_softmax_probability": 9.640142447562061e-11,
+              "token_id": 179972
+            },
+            {
+              "logit": 4.0,
+              "rank": 27,
+              "raw_softmax_probability": 9.056075742622474e-11,
+              "token_id": 194751
+            },
+            {
+              "logit": 3.953125,
+              "rank": 28,
+              "raw_softmax_probability": 8.641367841132231e-11,
+              "token_id": 897
+            },
+            {
+              "logit": 3.921875,
+              "rank": 29,
+              "raw_softmax_probability": 8.375500902960456e-11,
+              "token_id": 101
+            },
+            {
+              "logit": 3.921875,
+              "rank": 30,
+              "raw_softmax_probability": 8.375500902960456e-11,
+              "token_id": 3729
+            },
+            {
+              "logit": 3.890625,
+              "rank": 31,
+              "raw_softmax_probability": 8.117813830535903e-11,
+              "token_id": 232788
+            },
+            {
+              "logit": 3.84375,
+              "rank": 32,
+              "raw_softmax_probability": 7.746072070194229e-11,
+              "token_id": 23054
+            }
+          ],
+          "top_k20_distribution": [
+            {
+              "probability": 0.9999998755853495,
+              "token_id": 236800
+            },
+            {
+              "probability": 4.993717485825865e-08,
+              "token_id": 236743
+            },
+            {
+              "probability": 3.889111088398551e-08,
+              "token_id": 236778
+            },
+            {
+              "probability": 1.3440408278951116e-08,
+              "token_id": 236761
+            },
+            {
+              "probability": 1.1142489823483395e-08,
+              "token_id": 236751
+            },
+            {
+              "probability": 3.97297709849929e-09,
+              "token_id": 236771
+            },
+            {
+              "probability": 2.1265813972159627e-09,
+              "token_id": 236772
+            },
+            {
+              "probability": 1.2501527108494106e-09,
+              "token_id": 1390
+            },
+            {
+              "probability": 7.349268654800585e-10,
+              "token_id": 1025
+            },
+            {
+              "probability": 4.745044477294694e-10,
+              "token_id": 228972
+            },
+            {
+              "probability": 3.5817474846612645e-10,
+              "token_id": 236840
+            },
+            {
+              "probability": 3.1608810610537316e-10,
+              "token_id": 144687
+            },
+            {
+              "probability": 3.0636309746001265e-10,
+              "token_id": 35824
+            },
+            {
+              "probability": 2.969372958753595e-10,
+              "token_id": 66841
+            },
+            {
+              "probability": 2.539839285302903e-10,
+              "token_id": 173994
+            },
+            {
+              "probability": 2.1056007230146043e-10,
+              "token_id": 157610
+            },
+            {
+              "probability": 2.0408181992831733e-10,
+              "token_id": 108003
+            },
+            {
+              "probability": 1.801015739605672e-10,
+              "token_id": 236786
+            },
+            {
+              "probability": 1.6398434919194898e-10,
+              "token_id": 236770
+            },
+            {
+              "probability": 1.5404903972788331e-10,
+              "token_id": 159113
+            }
+          ],
+          "top_p095_bf16_distribution": [
+            {
+              "probability": 1.0,
+              "token_id": 236800
+            }
+          ],
+          "top_p095_nominal_distribution": [
+            {
+              "probability": 1.0,
+              "token_id": 236800
+            }
+          ],
+          "top_p_cutoffs": {
+            "effective_bfloat16": 0.94921875,
+            "nominal_hf": 0.95
+          },
+          "top_p_kept_counts": {
+            "effective_bfloat16": 1,
+            "nominal_hf": 1
+          },
+          "top_p_pre_renormalization_masses": {
+            "effective_bfloat16": 0.9999998755853495,
+            "nominal_hf": 0.9999998755853495
+          },
+          "topk_nucleus_support_semantics": "PROXY only: strict top-k20 with deterministic token-ID tie-break; HF may retain all kth-logit ties and device support is not exposed. Raw logits and ranks are primary evidence.",
+          "vocab_size": 262144
+        }
+      },
+      {
+        "absolute_input_position": 2053,
+        "expected_next_token_id": null,
+        "history_after_input": [
+          147,
+          1390,
+          107,
+          138,
+          556,
+          58982,
+          236800
+        ],
+        "input_token_id": 236800,
+        "predicted_continuation_index": 6,
+        "row_index": 6,
+        "summary": {
+          "distribution_reconstruction_note": "Host-side reconstruction from saved logits; does not model device probability quantization.",
+          "host_rank_tie_break": "descending logit, then ascending global token ID",
+          "targets": [
+            {
+              "logit": 7.75,
+              "rank": 49,
+              "raw_softmax_probability": 2.9989240987877663e-09,
+              "token_id": 138,
+              "top_k20_probability": 0.0,
+              "top_p095_bf16_probability": 0.0,
+              "top_p095_nominal_probability": 0.0
+            },
+            {
+              "logit": -3.40625,
+              "rank": 128114,
+              "raw_softmax_probability": 4.284179516174405e-14,
+              "token_id": 147,
+              "top_k20_probability": 0.0,
+              "top_p095_bf16_probability": 0.0,
+              "top_p095_nominal_probability": 0.0
+            },
+            {
+              "logit": 11.0625,
+              "rank": 8,
+              "raw_softmax_probability": 8.233148436531288e-08,
+              "token_id": 1390,
+              "top_k20_probability": 8.233154073073387e-08,
+              "top_p095_bf16_probability": 0.0,
+              "top_p095_nominal_probability": 0.0
+            },
+            {
+              "logit": 6.8125,
+              "rank": 73,
+              "raw_softmax_probability": 1.1743955510619378e-09,
+              "token_id": 107,
+              "top_k20_probability": 0.0,
+              "top_p095_bf16_probability": 0.0,
+              "top_p095_nominal_probability": 0.0
+            },
+            {
+              "logit": 4.5,
+              "rank": 624,
+              "raw_softmax_probability": 1.1628090627795647e-10,
+              "token_id": 556,
+              "top_k20_probability": 0.0,
+              "top_p095_bf16_probability": 0.0,
+              "top_p095_nominal_probability": 0.0
+            },
+            {
+              "logit": -8.8125,
+              "rank": 253057,
+              "raw_softmax_probability": 1.922928417576412e-16,
+              "token_id": 172109,
+              "top_k20_probability": 0.0,
+              "top_p095_bf16_probability": 0.0,
+              "top_p095_nominal_probability": 0.0
+            }
+          ],
+          "top32": [
+            {
+              "logit": 27.375,
+              "rank": 1,
+              "raw_softmax_probability": 0.9999877537348149,
+              "token_id": 236761
+            },
+            {
+              "logit": 15.8125,
+              "rank": 2,
+              "raw_softmax_probability": 9.516225714426025e-06,
+              "token_id": 537
+            },
+            {
+              "logit": 13.0,
+              "rank": 3,
+              "raw_softmax_probability": 5.714937748966445e-07,
+              "token_id": 236800
+            },
+            {
+              "logit": 12.9375,
+              "rank": 4,
+              "raw_softmax_probability": 5.36868717454492e-07,
+              "token_id": 759
+            },
+            {
+              "logit": 12.0625,
+              "rank": 5,
+              "raw_softmax_probability": 2.2380017786028995e-07,
+              "token_id": 236772
+            },
+            {
+              "logit": 11.8125,
+              "rank": 6,
+              "raw_softmax_probability": 1.7429575376911353e-07,
+              "token_id": 1852
+            },
+            {
+              "logit": 11.25,
+              "rank": 7,
+              "raw_softmax_probability": 9.931072692117092e-08,
+              "token_id": 1419
+            },
+            {
+              "logit": 11.0625,
+              "rank": 8,
+              "raw_softmax_probability": 8.233148436531288e-08,
+              "token_id": 1390
+            },
+            {
+              "logit": 11.0,
+              "rank": 9,
+              "raw_softmax_probability": 7.734327189359836e-08,
+              "token_id": 25920
+            },
+            {
+              "logit": 10.5625,
+              "rank": 10,
+              "raw_softmax_probability": 4.993656952721358e-08,
+              "token_id": 4917
+            },
+            {
+              "logit": 10.3125,
+              "rank": 11,
+              "raw_softmax_probability": 3.889063945169359e-08,
+              "token_id": 715
+            },
+            {
+              "logit": 10.25,
+              "rank": 12,
+              "raw_softmax_probability": 3.653437472209007e-08,
+              "token_id": 236762
+            },
+            {
+              "logit": 9.9375,
+              "rank": 13,
+              "raw_softmax_probability": 2.672911954047422e-08,
+              "token_id": 642
+            },
+            {
+              "logit": 9.8125,
+              "rank": 14,
+              "raw_softmax_probability": 2.3588365203281882e-08,
+              "token_id": 653
+            },
+            {
+              "logit": 9.6875,
+              "rank": 15,
+              "raw_softmax_probability": 2.081665922893051e-08,
+              "token_id": 496
+            },
+            {
+              "logit": 9.625,
+              "rank": 16,
+              "raw_softmax_probability": 1.955544160379402e-08,
+              "token_id": 1079
+            },
+            {
+              "logit": 9.5,
+              "rank": 17,
+              "raw_softmax_probability": 1.7257616644022153e-08,
+              "token_id": 236745
+            },
+            {
+              "logit": 9.4375,
+              "rank": 18,
+              "raw_softmax_probability": 1.6212030508421666e-08,
+              "token_id": 236786
+            },
+            {
+              "logit": 9.375,
+              "rank": 19,
+              "raw_softmax_probability": 1.522979323434191e-08,
+              "token_id": 1025
+            },
+            {
+              "logit": 9.375,
+              "rank": 20,
+              "raw_softmax_probability": 1.522979323434191e-08,
+              "token_id": 12288
+            },
+            {
+              "logit": 9.375,
+              "rank": 21,
+              "raw_softmax_probability": 1.522979323434191e-08,
+              "token_id": 236785
+            },
+            {
+              "logit": 9.1875,
+              "rank": 22,
+              "raw_softmax_probability": 1.2625942055136301e-08,
+              "token_id": 101
+            },
+            {
+              "logit": 9.125,
+              "rank": 23,
+              "raw_softmax_probability": 1.1860974896921065e-08,
+              "token_id": 236771
+            },
+            {
+              "logit": 8.875,
+              "rank": 24,
+              "raw_softmax_probability": 9.2373365377124e-09,
+              "token_id": 236781
+            },
+            {
+              "logit": 8.875,
+              "rank": 25,
+              "raw_softmax_probability": 9.2373365377124e-09,
+              "token_id": 241075
+            },
+            {
+              "logit": 8.8125,
+              "rank": 26,
+              "raw_softmax_probability": 8.677674609131234e-09,
+              "token_id": 783
+            },
+            {
+              "logit": 8.8125,
+              "rank": 27,
+              "raw_softmax_probability": 8.677674609131234e-09,
+              "token_id": 2444
+            },
+            {
+              "logit": 8.8125,
+              "rank": 28,
+              "raw_softmax_probability": 8.677674609131234e-09,
+              "token_id": 236789
+            },
+            {
+              "logit": 8.6875,
+              "rank": 29,
+              "raw_softmax_probability": 7.658020964195303e-09,
+              "token_id": 7221
+            },
+            {
+              "logit": 8.6875,
+              "rank": 30,
+              "raw_softmax_probability": 7.658020964195303e-09,
+              "token_id": 66841
+            },
+            {
+              "logit": 8.6875,
+              "rank": 31,
+              "raw_softmax_probability": 7.658020964195303e-09,
+              "token_id": 236924
+            },
+            {
+              "logit": 8.6875,
+              "rank": 32,
+              "raw_softmax_probability": 7.658020964195303e-09,
+              "token_id": 237420
+            }
+          ],
+          "top_k20_distribution": [
+            {
+              "probability": 0.9999884383420603,
+              "token_id": 236761
+            },
+            {
+              "probability": 9.516232229382881e-06,
+              "token_id": 537
+            },
+            {
+              "probability": 5.714941661502149e-07,
+              "token_id": 236800
+            },
+            {
+              "probability": 5.368690850032068e-07,
+              "token_id": 759
+            },
+            {
+              "probability": 2.2380033107738958e-07,
+              "token_id": 236772
+            },
+            {
+              "probability": 1.7429587309471068e-07,
+              "token_id": 1852
+            },
+            {
+              "probability": 9.931079491084673e-08,
+              "token_id": 1419
+            },
+            {
+              "probability": 8.233154073073387e-08,
+              "token_id": 1390
+            },
+            {
+              "probability": 7.734332484401112e-08,
+              "token_id": 25920
+            },
+            {
+              "probability": 4.9936603714569556e-08,
+              "token_id": 4917
+            },
+            {
+              "probability": 3.8890666076833194e-08,
+              "token_id": 715
+            },
+            {
+              "probability": 3.6534399734094014e-08,
+              "token_id": 236762
+            },
+            {
+              "probability": 2.6729137839647215e-08,
+              "token_id": 642
+            },
+            {
+              "probability": 2.3588381352245373e-08,
+              "token_id": 653
+            },
+            {
+              "probability": 2.0816673480340773e-08,
+              "token_id": 496
+            },
+            {
+              "probability": 1.955545499175498e-08,
+              "token_id": 1079
+            },
+            {
+              "probability": 1.7257628458856235e-08,
+              "token_id": 236745
+            },
+            {
+              "probability": 1.6212041607431136e-08,
+              "token_id": 236786
+            },
+            {
+              "probability": 1.5229803660896393e-08,
+              "token_id": 1025
+            },
+            {
+              "probability": 1.5229803660896393e-08,
+              "token_id": 12288
+            }
+          ],
+          "top_p095_bf16_distribution": [
+            {
+              "probability": 1.0,
+              "token_id": 236761
+            }
+          ],
+          "top_p095_nominal_distribution": [
+            {
+              "probability": 1.0,
+              "token_id": 236761
+            }
+          ],
+          "top_p_cutoffs": {
+            "effective_bfloat16": 0.94921875,
+            "nominal_hf": 0.95
+          },
+          "top_p_kept_counts": {
+            "effective_bfloat16": 1,
+            "nominal_hf": 1
+          },
+          "top_p_pre_renormalization_masses": {
+            "effective_bfloat16": 0.9999884383420603,
+            "nominal_hf": 0.9999884383420603
+          },
+          "topk_nucleus_support_semantics": "PROXY only: strict top-k20 with deterministic token-ID tie-break; HF may retain all kth-logit ties and device support is not exposed. Raw logits and ranks are primary evidence.",
+          "vocab_size": 262144
+        }
+      }
+    ],
+    "tt_seed44_loop_history": [
+      {
+        "absolute_input_position": 2047,
+        "expected_next_token_id": 1390,
+        "history_after_input": [
+          147
+        ],
+        "input_token_id": 147,
+        "predicted_continuation_index": 0,
+        "row_index": 0,
+        "summary": {
+          "distribution_reconstruction_note": "Host-side reconstruction from saved logits; does not model device probability quantization.",
+          "host_rank_tie_break": "descending logit, then ascending global token ID",
+          "targets": [
+            {
+              "logit": 9.6875,
+              "rank": 256,
+              "raw_softmax_probability": 9.182871999881725e-08,
+              "token_id": 138,
+              "top_k20_probability": 0.0,
+              "top_p095_bf16_probability": 0.0,
+              "top_p095_nominal_probability": 0.0
+            },
+            {
+              "logit": 2.484375,
+              "rank": 35781,
+              "raw_softmax_probability": 6.834410975018215e-11,
+              "token_id": 147,
+              "top_k20_probability": 0.0,
+              "top_p095_bf16_probability": 0.0,
+              "top_p095_nominal_probability": 0.0
+            },
+            {
+              "logit": 25.875,
+              "rank": 1,
+              "raw_softmax_probability": 0.9842840703318897,
+              "token_id": 1390,
+              "top_k20_probability": 0.9845531720238703,
+              "top_p095_bf16_probability": 1.0,
+              "top_p095_nominal_probability": 1.0
+            },
+            {
+              "logit": 19.75,
+              "rank": 5,
+              "raw_softmax_probability": 0.002153112661619907,
+              "token_id": 107,
+              "top_k20_probability": 0.0021537013191810024,
+              "top_p095_bf16_probability": 0.0,
+              "top_p095_nominal_probability": 0.0
+            },
+            {
+              "logit": 16.375,
+              "rank": 13,
+              "raw_softmax_probability": 7.367546379365614e-05,
+              "token_id": 556,
+              "top_k20_probability": 7.369560654772676e-05,
+              "top_p095_bf16_probability": 0.0,
+              "top_p095_nominal_probability": 0.0
+            },
+            {
+              "logit": 12.5625,
+              "rank": 52,
+              "raw_softmax_probability": 1.6277030085099822e-06,
+              "token_id": 172109,
+              "top_k20_probability": 0.0,
+              "top_p095_bf16_probability": 0.0,
+              "top_p095_nominal_probability": 0.0
+            }
+          ],
+          "top32": [
+            {
+              "logit": 25.875,
+              "rank": 1,
+              "raw_softmax_probability": 0.9842840703318897,
+              "token_id": 1390
+            },
+            {
+              "logit": 20.375,
+              "rank": 2,
+              "raw_softmax_probability": 0.004022544025967523,
+              "token_id": 236865
+            },
+            {
+              "logit": 20.125,
+              "rank": 3,
+              "raw_softmax_probability": 0.0031327604373627086,
+              "token_id": 27214
+            },
+            {
+              "logit": 20.0,
+              "rank": 4,
+              "raw_softmax_probability": 0.002764651382512153,
+              "token_id": 120956
+            },
+            {
+              "logit": 19.75,
+              "rank": 5,
+              "raw_softmax_probability": 0.002153112661619907,
+              "token_id": 107
+            },
+            {
+              "logit": 19.25,
+              "rank": 6,
+              "raw_softmax_probability": 0.001305928843087946,
+              "token_id": 173169
+            },
+            {
+              "logit": 18.5,
+              "rank": 7,
+              "raw_softmax_probability": 0.0006168771057345146,
+              "token_id": 236769
+            },
+            {
+              "logit": 17.875,
+              "rank": 8,
+              "raw_softmax_probability": 0.0003301905208361165,
+              "token_id": 236768
+            },
+            {
+              "logit": 17.875,
+              "rank": 9,
+              "raw_softmax_probability": 0.0003301905208361165,
+              "token_id": 236782
+            },
+            {
+              "logit": 17.25,
+              "rank": 10,
+              "raw_softmax_probability": 0.00017673824986616914,
+              "token_id": 3729
+            },
+            {
+              "logit": 17.25,
+              "rank": 11,
+              "raw_softmax_probability": 0.00017673824986616914,
+              "token_id": 236780
+            },
+            {
+              "logit": 16.75,
+              "rank": 12,
+              "raw_softmax_probability": 0.0001071971672877838,
+              "token_id": 236820
+            },
+            {
+              "logit": 16.375,
+              "rank": 13,
+              "raw_softmax_probability": 7.367546379365614e-05,
+              "token_id": 556
+            },
+            {
+              "logit": 16.375,
+              "rank": 14,
+              "raw_softmax_probability": 7.367546379365614e-05,
+              "token_id": 1852
+            },
+            {
+              "logit": 15.8125,
+              "rank": 15,
+              "raw_softmax_probability": 4.197901387371024e-05,
+              "token_id": 236779
+            },
+            {
+              "logit": 15.8125,
+              "rank": 16,
+              "raw_softmax_probability": 4.197901387371024e-05,
+              "token_id": 236840
+            },
+            {
+              "logit": 15.5,
+              "rank": 17,
+              "raw_softmax_probability": 3.071250263777431e-05,
+              "token_id": 1025
+            },
+            {
+              "logit": 15.25,
+              "rank": 18,
+              "raw_softmax_probability": 2.3918921104381222e-05,
+              "token_id": 71468
+            },
+            {
+              "logit": 15.125,
+              "rank": 19,
+              "raw_softmax_probability": 2.1108373787781738e-05,
+              "token_id": 236756
+            },
+            {
+              "logit": 15.0,
+              "rank": 20,
+              "raw_softmax_probability": 1.862807448631525e-05,
+              "token_id": 6375
+            },
+            {
+              "logit": 14.9375,
+              "rank": 21,
+              "raw_softmax_probability": 1.7499456507506974e-05,
+              "token_id": 236884
+            },
+            {
+              "logit": 14.8125,
+              "rank": 22,
+              "raw_softmax_probability": 1.5443216164788747e-05,
+              "token_id": 35457
+            },
+            {
+              "logit": 14.5,
+              "rank": 23,
+              "raw_softmax_probability": 1.1298498307360863e-05,
+              "token_id": 53190
+            },
+            {
+              "logit": 14.5,
+              "rank": 24,
+              "raw_softmax_probability": 1.1298498307360863e-05,
+              "token_id": 236909
+            },
+            {
+              "logit": 14.25,
+              "rank": 25,
+              "raw_softmax_probability": 8.799279329303584e-06,
+              "token_id": 547
+            },
+            {
+              "logit": 14.25,
+              "rank": 26,
+              "raw_softmax_probability": 8.799279329303584e-06,
+              "token_id": 72831
+            },
+            {
+              "logit": 14.125,
+              "rank": 27,
+              "raw_softmax_probability": 7.765336753087068e-06,
+              "token_id": 236744
+            },
+            {
+              "logit": 13.8125,
+              "rank": 28,
+              "raw_softmax_probability": 5.681241732592268e-06,
+              "token_id": 9336
+            },
+            {
+              "logit": 13.8125,
+              "rank": 29,
+              "raw_softmax_probability": 5.681241732592268e-06,
+              "token_id": 121825
+            },
+            {
+              "logit": 13.6875,
+              "rank": 30,
+              "raw_softmax_probability": 5.013678231847017e-06,
+              "token_id": 44955
+            },
+            {
+              "logit": 13.625,
+              "rank": 31,
+              "raw_softmax_probability": 4.709914823740658e-06,
+              "token_id": 31303
+            },
+            {
+              "logit": 13.5625,
+              "rank": 32,
+              "raw_softmax_probability": 4.424555510160803e-06,
+              "token_id": 856
+            }
+          ],
+          "top_k20_distribution": [
+            {
+              "probability": 0.9845531720238703,
+              "token_id": 1390
+            },
+            {
+              "probability": 0.0040236437830763515,
+              "token_id": 236865
+            },
+            {
+              "probability": 0.003133616929060253,
+              "token_id": 27214
+            },
+            {
+              "probability": 0.002765407233782325,
+              "token_id": 120956
+            },
+            {
+              "probability": 0.0021537013191810024,
+              "token_id": 107
+            },
+            {
+              "probability": 0.0013062858819468223,
+              "token_id": 173169
+            },
+            {
+              "probability": 0.0006170457589494765,
+              "token_id": 236769
+            },
+            {
+              "probability": 0.0003302807943968813,
+              "token_id": 236768
+            },
+            {
+              "probability": 0.0003302807943968813,
+              "token_id": 236782
+            },
+            {
+              "probability": 0.0001767865698212616,
+              "token_id": 3729
+            },
+            {
+              "probability": 0.0001767865698212616,
+              "token_id": 236780
+            },
+            {
+              "probability": 0.00010722647482202333,
+              "token_id": 236820
+            },
+            {
+              "probability": 7.369560654772676e-05,
+              "token_id": 556
+            },
+            {
+              "probability": 7.369560654772676e-05,
+              "token_id": 1852
+            },
+            {
+              "probability": 4.1990490869022454e-05,
+              "token_id": 236779
+            },
+            {
+              "probability": 4.1990490869022454e-05,
+              "token_id": 236840
+            },
+            {
+              "probability": 3.072089938691808e-05,
+              "token_id": 1025
+            },
+            {
+              "probability": 2.3925460499189642e-05,
+              "token_id": 71468
+            },
+            {
+              "probability": 2.111414478344495e-05,
+              "token_id": 236756
+            },
+            {
+              "probability": 1.863316737211286e-05,
+              "token_id": 6375
+            }
+          ],
+          "top_p095_bf16_distribution": [
+            {
+              "probability": 1.0,
+              "token_id": 1390
+            }
+          ],
+          "top_p095_nominal_distribution": [
+            {
+              "probability": 1.0,
+              "token_id": 1390
+            }
+          ],
+          "top_p_cutoffs": {
+            "effective_bfloat16": 0.94921875,
+            "nominal_hf": 0.95
+          },
+          "top_p_kept_counts": {
+            "effective_bfloat16": 1,
+            "nominal_hf": 1
+          },
+          "top_p_pre_renormalization_masses": {
+            "effective_bfloat16": 0.9845531720238703,
+            "nominal_hf": 0.9845531720238703
+          },
+          "topk_nucleus_support_semantics": "PROXY only: strict top-k20 with deterministic token-ID tie-break; HF may retain all kth-logit ties and device support is not exposed. Raw logits and ranks are primary evidence.",
+          "vocab_size": 262144
+        }
+      },
+      {
+        "absolute_input_position": 2048,
+        "expected_next_token_id": 107,
+        "history_after_input": [
+          147,
+          1390
+        ],
+        "input_token_id": 1390,
+        "predicted_continuation_index": 1,
+        "row_index": 1,
+        "summary": {
+          "distribution_reconstruction_note": "Host-side reconstruction from saved logits; does not model device probability quantization.",
+          "host_rank_tie_break": "descending logit, then ascending global token ID",
+          "targets": [
+            {
+              "logit": 18.25,
+              "rank": 7,
+              "raw_softmax_probability": 3.118297408603152e-05,
+              "token_id": 138,
+              "top_k20_probability": 3.118362973182931e-05,
+              "top_p095_bf16_probability": 0.0,
+              "top_p095_nominal_probability": 0.0
+            },
+            {
+              "logit": 13.8125,
+              "rank": 34,
+              "raw_softmax_probability": 3.687531767296759e-07,
+              "token_id": 147,
+              "top_k20_probability": 0.0,
+              "top_p095_bf16_probability": 0.0,
+              "top_p095_nominal_probability": 0.0
+            },
+            {
+              "logit": 10.75,
+              "rank": 138,
+              "raw_softmax_probability": 1.7246815581708962e-08,
+              "token_id": 1390,
+              "top_k20_probability": 0.0,
+              "top_p095_bf16_probability": 0.0,
+              "top_p095_nominal_probability": 0.0
+            },
+            {
+              "logit": 28.625,
+              "rank": 1,
+              "raw_softmax_probability": 0.9993618892099903,
+              "token_id": 107,
+              "top_k20_probability": 0.9993829015554233,
+              "top_p095_bf16_probability": 1.0,
+              "top_p095_nominal_probability": 1.0
+            },
+            {
+              "logit": 6.71875,
+              "rank": 1524,
+              "raw_softmax_probability": 3.061676419536027e-10,
+              "token_id": 556,
+              "top_k20_probability": 0.0,
+              "top_p095_bf16_probability": 0.0,
+              "top_p095_nominal_probability": 0.0
+            },
+            {
+              "logit": 3.46875,
+              "rank": 20034,
+              "raw_softmax_probability": 1.1871407780457243e-11,
+              "token_id": 172109,
+              "top_k20_probability": 0.0,
+              "top_p095_bf16_probability": 0.0,
+              "top_p095_nominal_probability": 0.0
+            }
+          ],
+          "top32": [
+            {
+              "logit": 28.625,
+              "rank": 1,
+              "raw_softmax_probability": 0.9993618892099903,
+              "token_id": 107
+            },
+            {
+              "logit": 20.25,
+              "rank": 2,
+              "raw_softmax_probability": 0.00023041274485318766,
+              "token_id": 236743
+            },
+            {
+              "logit": 19.375,
+              "rank": 3,
+              "raw_softmax_probability": 9.605032217916866e-05,
+              "token_id": 759
+            },
+            {
+              "logit": 19.25,
+              "rank": 4,
+              "raw_softmax_probability": 8.476411181536879e-05,
+              "token_id": 1732
+            },
+            {
+              "logit": 19.0,
+              "rank": 5,
+              "raw_softmax_probability": 6.601435665816135e-05,
+              "token_id": 568
+            },
+            {
+              "logit": 18.625,
+              "rank": 6,
+              "raw_softmax_probability": 4.5370959577437726e-05,
+              "token_id": 997
+            },
+            {
+              "logit": 18.25,
+              "rank": 7,
+              "raw_softmax_probability": 3.118297408603152e-05,
+              "token_id": 138
+            },
+            {
+              "logit": 18.0,
+              "rank": 8,
+              "raw_softmax_probability": 2.4285324636696677e-05,
+              "token_id": 965
+            },
+            {
+              "logit": 17.0,
+              "rank": 9,
+              "raw_softmax_probability": 8.934071656015034e-06,
+              "token_id": 2454
+            },
+            {
+              "logit": 16.75,
+              "rank": 10,
+              "raw_softmax_probability": 6.957862001720552e-06,
+              "token_id": 496
+            },
+            {
+              "logit": 16.25,
+              "rank": 11,
+              "raw_softmax_probability": 4.22015663009303e-06,
+              "token_id": 236789
+            },
+            {
+              "logit": 16.125,
+              "rank": 12,
+              "raw_softmax_probability": 3.7242751544789433e-06,
+              "token_id": 236769
+            },
+            {
+              "logit": 16.0,
+              "rank": 13,
+              "raw_softmax_probability": 3.286661288200433e-06,
+              "token_id": 1223
+            },
+            {
+              "logit": 15.8125,
+              "rank": 14,
+              "raw_softmax_probability": 2.724737909514464e-06,
+              "token_id": 1373
+            },
+            {
+              "logit": 15.5,
+              "rank": 15,
+              "raw_softmax_probability": 1.9934608393841824e-06,
+              "token_id": 870
+            },
+            {
+              "logit": 15.25,
+              "rank": 16,
+              "raw_softmax_probability": 1.5525088627345812e-06,
+              "token_id": 769
+            },
+            {
+              "logit": 15.25,
+              "rank": 17,
+              "raw_softmax_probability": 1.5525088627345812e-06,
+              "token_id": 66841
+            },
+            {
+              "logit": 15.25,
+              "rank": 18,
+              "raw_softmax_probability": 1.5525088627345812e-06,
+              "token_id": 236858
+            },
+            {
+              "logit": 15.125,
+              "rank": 19,
+              "raw_softmax_probability": 1.3700842625984007e-06,
+              "token_id": 3729
+            },
+            {
+              "logit": 14.9375,
+              "rank": 20,
+              "raw_softmax_probability": 1.1358397480547962e-06,
+              "token_id": 144
+            },
+            {
+              "logit": 14.9375,
+              "rank": 21,
+              "raw_softmax_probability": 1.1358397480547962e-06,
+              "token_id": 31004
+            },
+            {
+              "logit": 14.75,
+              "rank": 22,
+              "raw_softmax_probability": 9.416442247241158e-07,
+              "token_id": 537
+            },
+            {
+              "logit": 14.625,
+              "rank": 23,
+              "raw_softmax_probability": 8.309981116557048e-07,
+              "token_id": 17103
+            },
+            {
+              "logit": 14.5625,
+              "rank": 24,
+              "raw_softmax_probability": 7.806504812627004e-07,
+              "token_id": 108
+            },
+            {
+              "logit": 14.5,
+              "rank": 25,
+              "raw_softmax_probability": 7.333532595898073e-07,
+              "token_id": 2812
+            },
+            {
+              "logit": 14.4375,
+              "rank": 26,
+              "raw_softmax_probability": 6.889216317155068e-07,
+              "token_id": 653
+            },
+            {
+              "logit": 14.4375,
+              "rank": 27,
+              "raw_softmax_probability": 6.889216317155068e-07,
+              "token_id": 21617
+            },
+            {
+              "logit": 14.4375,
+              "rank": 28,
+              "raw_softmax_probability": 6.889216317155068e-07,
+              "token_id": 53190
+            },
+            {
+              "logit": 14.25,
+              "rank": 29,
+              "raw_softmax_probability": 5.711360928365092e-07,
+              "token_id": 9670
+            },
+            {
+              "logit": 14.0625,
+              "rank": 30,
+              "raw_softmax_probability": 4.734884514052505e-07,
+              "token_id": 779
+            },
+            {
+              "logit": 13.9375,
+              "rank": 31,
+              "raw_softmax_probability": 4.1785209177471027e-07,
+              "token_id": 140
+            },
+            {
+              "logit": 13.9375,
+              "rank": 32,
+              "raw_softmax_probability": 4.1785209177471027e-07,
+              "token_id": 7066
+            }
+          ],
+          "top_k20_distribution": [
+            {
+              "probability": 0.9993829015554233,
+              "token_id": 107
+            },
+            {
+              "probability": 0.00023041758945676854,
+              "token_id": 236743
+            },
+            {
+              "probability": 9.605234171040191e-05,
+              "token_id": 759
+            },
+            {
+              "probability": 8.476589404542682e-05,
+              "token_id": 1732
+            },
+            {
+              "probability": 6.601574466032614e-05,
+              "token_id": 568
+            },
+            {
+              "probability": 4.537191353644453e-05,
+              "token_id": 997
+            },
+            {
+              "probability": 3.118362973182931e-05,
+              "token_id": 138
+            },
+            {
+              "probability": 2.428583525415741e-05,
+              "token_id": 965
+            },
+            {
+              "probability": 8.934259501681141e-06,
+              "token_id": 2454
+            },
+            {
+              "probability": 6.9580082960724126e-06,
+              "token_id": 496
+            },
+            {
+              "probability": 4.220245362102776e-06,
+              "token_id": 236789
+            },
+            {
+              "probability": 3.7243534602027043e-06,
+              "token_id": 236769
+            },
+            {
+              "probability": 3.286730392759107e-06,
+              "token_id": 1223
+            },
+            {
+              "probability": 2.7247951992058034e-06,
+              "token_id": 1373
+            },
+            {
+              "probability": 1.993502753417744e-06,
+              "token_id": 870
+            },
+            {
+              "probability": 1.5525415054167407e-06,
+              "token_id": 769
+            },
+            {
+              "probability": 1.5525415054167407e-06,
+              "token_id": 66841
+            },
+            {
+              "probability": 1.5525415054167407e-06,
+              "token_id": 236858
+            },
+            {
+              "probability": 1.3701130696642986e-06,
+              "token_id": 3729
+            },
+            {
+              "probability": 1.1358636299512348e-06,
+              "token_id": 144
+            }
+          ],
+          "top_p095_bf16_distribution": [
+            {
+              "probability": 1.0,
+              "token_id": 107
+            }
+          ],
+          "top_p095_nominal_distribution": [
+            {
+              "probability": 1.0,
+              "token_id": 107
+            }
+          ],
+          "top_p_cutoffs": {
+            "effective_bfloat16": 0.94921875,
+            "nominal_hf": 0.95
+          },
+          "top_p_kept_counts": {
+            "effective_bfloat16": 1,
+            "nominal_hf": 1
+          },
+          "top_p_pre_renormalization_masses": {
+            "effective_bfloat16": 0.9993829015554233,
+            "nominal_hf": 0.9993829015554233
+          },
+          "topk_nucleus_support_semantics": "PROXY only: strict top-k20 with deterministic token-ID tie-break; HF may retain all kth-logit ties and device support is not exposed. Raw logits and ranks are primary evidence.",
+          "vocab_size": 262144
+        }
+      },
+      {
+        "absolute_input_position": 2049,
+        "expected_next_token_id": 147,
+        "history_after_input": [
+          147,
+          1390,
+          107
+        ],
+        "input_token_id": 107,
+        "predicted_continuation_index": 2,
+        "row_index": 2,
+        "summary": {
+          "distribution_reconstruction_note": "Host-side reconstruction from saved logits; does not model device probability quantization.",
+          "host_rank_tie_break": "descending logit, then ascending global token ID",
+          "targets": [
+            {
+              "logit": 28.25,
+              "rank": 1,
+              "raw_softmax_probability": 0.6598597347711842,
+              "token_id": 138,
+              "top_k20_probability": 0.6600996277758957,
+              "top_p095_bf16_probability": 0.6761375039864048,
+              "top_p095_nominal_probability": 0.6761375039864048
+            },
+            {
+              "logit": 26.75,
+              "rank": 2,
+              "raw_softmax_probability": 0.14723460829499474,
+              "token_id": 147,
+              "top_k20_probability": 0.14728813565955454,
+              "top_p095_bf16_probability": 0.15086666954684613,
+              "top_p095_nominal_probability": 0.15086666954684613
+            },
+            {
+              "logit": 17.375,
+              "rank": 29,
+              "raw_softmax_probability": 1.2488179642786605e-05,
+              "token_id": 1390,
+              "top_k20_probability": 0.0,
+              "top_p095_bf16_probability": 0.0,
+              "top_p095_nominal_probability": 0.0
+            },
+            {
+              "logit": 12.25,
+              "rank": 218,
+              "raw_softmax_probability": 7.425743054267919e-08,
+              "token_id": 107,
+              "top_k20_probability": 0.0,
+              "top_p095_bf16_probability": 0.0,
+              "top_p095_nominal_probability": 0.0
+            },
+            {
+              "logit": 26.5,
+              "rank": 3,
+              "raw_softmax_probability": 0.11466642823535349,
+              "token_id": 556,
+              "top_k20_probability": 0.11470811538878839,
+              "top_p095_bf16_probability": 0.11749508038245864,
+              "top_p095_nominal_probability": 0.11749508038245864
+            },
+            {
+              "logit": 2.265625,
+              "rank": 40501,
+              "raw_softmax_probability": 3.4243720995424103e-12,
+              "token_id": 172109,
+              "top_k20_probability": 0.0,
+              "top_p095_bf16_probability": 0.0,
+              "top_p095_nominal_probability": 0.0
+            }
+          ],
+          "top32": [
+            {
+              "logit": 28.25,
+              "rank": 1,
+              "raw_softmax_probability": 0.6598597347711842,
+              "token_id": 138
+            },
+            {
+              "logit": 26.75,
+              "rank": 2,
+              "raw_softmax_probability": 0.14723460829499474,
+              "token_id": 147
+            },
+            {
+              "logit": 26.5,
+              "rank": 3,
+              "raw_softmax_probability": 0.11466642823535349,
+              "token_id": 556
+            },
+            {
+              "logit": 25.75,
+              "rank": 4,
+              "raw_softmax_probability": 0.05416458542065888,
+              "token_id": 146
+            },
+            {
+              "logit": 24.0,
+              "rank": 5,
+              "raw_softmax_probability": 0.00941239360390638,
+              "token_id": 236780
+            },
+            {
+              "logit": 23.625,
+              "rank": 6,
+              "raw_softmax_probability": 0.006469037211725575,
+              "token_id": 1852
+            },
+            {
+              "logit": 22.875,
+              "rank": 7,
+              "raw_softmax_probability": 0.0030557568072561558,
+              "token_id": 2717
+            },
+            {
+              "logit": 22.5,
+              "rank": 8,
+              "raw_softmax_probability": 0.0021001888922196872,
+              "token_id": 66841
+            },
+            {
+              "logit": 21.875,
+              "rank": 9,
+              "raw_softmax_probability": 0.0011241501066092253,
+              "token_id": 6375
+            },
+            {
+              "logit": 20.875,
+              "rank": 10,
+              "raw_softmax_probability": 0.00041355171301221916,
+              "token_id": 140
+            },
+            {
+              "logit": 20.75,
+              "rank": 11,
+              "raw_softmax_probability": 0.00036495810579183696,
+              "token_id": 5425
+            },
+            {
+              "logit": 20.25,
+              "rank": 12,
+              "raw_softmax_probability": 0.0002213582806733959,
+              "token_id": 145
+            },
+            {
+              "logit": 19.75,
+              "rank": 13,
+              "raw_softmax_probability": 0.00013426058400968908,
+              "token_id": 759
+            },
+            {
+              "logit": 19.25,
+              "rank": 14,
+              "raw_softmax_probability": 8.143316059280017e-05,
+              "token_id": 139
+            },
+            {
+              "logit": 19.25,
+              "rank": 15,
+              "raw_softmax_probability": 8.143316059280017e-05,
+              "token_id": 236768
+            },
+            {
+              "logit": 19.125,
+              "rank": 16,
+              "raw_softmax_probability": 7.186451199082009e-05,
+              "token_id": 123540
+            },
+            {
+              "logit": 18.75,
+              "rank": 17,
+              "raw_softmax_probability": 4.939170861683591e-05,
+              "token_id": 142
+            },
+            {
+              "logit": 18.75,
+              "rank": 18,
+              "raw_softmax_probability": 4.939170861683591e-05,
+              "token_id": 144
+            },
+            {
+              "logit": 18.625,
+              "rank": 19,
+              "raw_softmax_probability": 4.358802986771856e-05,
+              "token_id": 236756
+            },
+            {
+              "logit": 18.5,
+              "rank": 20,
+              "raw_softmax_probability": 3.846630134802646e-05,
+              "token_id": 141
+            },
+            {
+              "logit": 18.5,
+              "rank": 21,
+              "raw_softmax_probability": 3.846630134802646e-05,
+              "token_id": 148
+            },
+            {
+              "logit": 18.25,
+              "rank": 22,
+              "raw_softmax_probability": 2.9957585611703645e-05,
+              "token_id": 143
+            },
+            {
+              "logit": 18.0,
+              "rank": 23,
+              "raw_softmax_probability": 2.333099113332345e-05,
+              "token_id": 48921
+            },
+            {
+              "logit": 18.0,
+              "rank": 24,
+              "raw_softmax_probability": 2.333099113332345e-05,
+              "token_id": 236842
+            },
+            {
+              "logit": 17.75,
+              "rank": 25,
+              "raw_softmax_probability": 1.8170194164464306e-05,
+              "token_id": 10512
+            },
+            {
+              "logit": 17.5,
+              "rank": 26,
+              "raw_softmax_probability": 1.4150961443844272e-05,
+              "token_id": 547
+            },
+            {
+              "logit": 17.5,
+              "rank": 27,
+              "raw_softmax_probability": 1.4150961443844272e-05,
+              "token_id": 13513
+            },
+            {
+              "logit": 17.5,
+              "rank": 28,
+              "raw_softmax_probability": 1.4150961443844272e-05,
+              "token_id": 21617
+            },
+            {
+              "logit": 17.375,
+              "rank": 29,
+              "raw_softmax_probability": 1.2488179642786605e-05,
+              "token_id": 1390
+            },
+            {
+              "logit": 17.375,
+              "rank": 30,
+              "raw_softmax_probability": 1.2488179642786605e-05,
+              "token_id": 2454
+            },
+            {
+              "logit": 17.0,
+              "rank": 31,
+              "raw_softmax_probability": 8.582991980102907e-06,
+              "token_id": 14406
+            },
+            {
+              "logit": 16.875,
+              "rank": 32,
+              "raw_softmax_probability": 7.5744638373492385e-06,
+              "token_id": 502
+            }
+          ],
+          "top_k20_distribution": [
+            {
+              "probability": 0.6600996277758957,
+              "token_id": 138
+            },
+            {
+              "probability": 0.14728813565955454,
+              "token_id": 147
+            },
+            {
+              "probability": 0.11470811538878839,
+              "token_id": 556
+            },
+            {
+              "probability": 0.054184277037620514,
+              "token_id": 146
+            },
+            {
+              "probability": 0.00941581549383872,
+              "token_id": 236780
+            },
+            {
+              "probability": 0.006471389039989274,
+              "token_id": 1852
+            },
+            {
+              "probability": 0.003056867732265718,
+              "token_id": 2717
+            },
+            {
+              "probability": 0.0021009524190683,
+              "token_id": 66841
+            },
+            {
+              "probability": 0.0011245587930809266,
+              "token_id": 6375
+            },
+            {
+              "probability": 0.0004137020603630429,
+              "token_id": 140
+            },
+            {
+              "probability": 0.0003650907868632507,
+              "token_id": 5425
+            },
+            {
+              "probability": 0.00022143875581117188,
+              "token_id": 145
+            },
+            {
+              "probability": 0.00013430939464809482,
+              "token_id": 759
+            },
+            {
+              "probability": 8.14627657415134e-05,
+              "token_id": 139
+            },
+            {
+              "probability": 8.14627657415134e-05,
+              "token_id": 236768
+            },
+            {
+              "probability": 7.189063844286007e-05,
+              "token_id": 123540
+            },
+            {
+              "probability": 4.940966504721583e-05,
+              "token_id": 142
+            },
+            {
+              "probability": 4.940966504721583e-05,
+              "token_id": 144
+            },
+            {
+              "probability": 4.3603876361910316e-05,
+              "token_id": 236756
+            },
+            {
+              "probability": 3.848028583006751e-05,
+              "token_id": 141
+            }
+          ],
+          "top_p095_bf16_distribution": [
+            {
+              "probability": 0.6761375039864048,
+              "token_id": 138
+            },
+            {
+              "probability": 0.15086666954684613,
+              "token_id": 147
+            },
+            {
+              "probability": 0.11749508038245864,
+              "token_id": 556
+            },
+            {
+              "probability": 0.05550074608429042,
+              "token_id": 146
+            }
+          ],
+          "top_p095_nominal_distribution": [
+            {
+              "probability": 0.6761375039864048,
+              "token_id": 138
+            },
+            {
+              "probability": 0.15086666954684613,
+              "token_id": 147
+            },
+            {
+              "probability": 0.11749508038245864,
+              "token_id": 556
+            },
+            {
+              "probability": 0.05550074608429042,
+              "token_id": 146
+            }
+          ],
+          "top_p_cutoffs": {
+            "effective_bfloat16": 0.94921875,
+            "nominal_hf": 0.95
+          },
+          "top_p_kept_counts": {
+            "effective_bfloat16": 4,
+            "nominal_hf": 4
+          },
+          "top_p_pre_renormalization_masses": {
+            "effective_bfloat16": 0.9762801558618591,
+            "nominal_hf": 0.9762801558618591
+          },
+          "topk_nucleus_support_semantics": "PROXY only: strict top-k20 with deterministic token-ID tie-break; HF may retain all kth-logit ties and device support is not exposed. Raw logits and ranks are primary evidence.",
+          "vocab_size": 262144
+        }
+      },
+      {
+        "absolute_input_position": 2050,
+        "expected_next_token_id": 1390,
+        "history_after_input": [
+          147,
+          1390,
+          107,
+          147
+        ],
+        "input_token_id": 147,
+        "predicted_continuation_index": 3,
+        "row_index": 3,
+        "summary": {
+          "distribution_reconstruction_note": "Host-side reconstruction from saved logits; does not model device probability quantization.",
+          "host_rank_tie_break": "descending logit, then ascending global token ID",
+          "targets": [
+            {
+              "logit": 10.3125,
+              "rank": 1226,
+              "raw_softmax_probability": 5.001350395015897e-09,
+              "token_id": 138,
+              "top_k20_probability": 0.0,
+              "top_p095_bf16_probability": 0.0,
+              "top_p095_nominal_probability": 0.0
+            },
+            {
+              "logit": 1.140625,
+              "rank": 85814,
+              "raw_softmax_probability": 5.19747705931818e-13,
+              "token_id": 147,
+              "top_k20_probability": 0.0,
+              "top_p095_bf16_probability": 0.0,
+              "top_p095_nominal_probability": 0.0
+            },
+            {
+              "logit": 29.25,
+              "rank": 1,
+              "raw_softmax_probability": 0.8385694438776439,
+              "token_id": 1390,
+              "top_k20_probability": 0.8388270734460622,
+              "top_p095_bf16_probability": 0.8519528019683106,
+              "top_p095_nominal_probability": 0.8519528019683106
+            },
+            {
+              "logit": 23.125,
+              "rank": 5,
+              "raw_softmax_probability": 0.0018343632104619073,
+              "token_id": 107,
+              "top_k20_probability": 0.0018349267728546036,
+              "top_p095_bf16_probability": 0.0,
+              "top_p095_nominal_probability": 0.0
+            },
+            {
+              "logit": 27.5,
+              "rank": 2,
+              "raw_softmax_probability": 0.1457215191196649,
+              "token_id": 556,
+              "top_k20_probability": 0.1457662884257184,
+              "top_p095_bf16_probability": 0.14804719803168948,
+              "top_p095_nominal_probability": 0.14804719803168948
+            },
+            {
+              "logit": 5.5625,
+              "rank": 17901,
+              "raw_softmax_probability": 4.3270159221684525e-11,
+              "token_id": 172109,
+              "top_k20_probability": 0.0,
+              "top_p095_bf16_probability": 0.0,
+              "top_p095_nominal_probability": 0.0
+            }
+          ],
+          "top32": [
+            {
+              "logit": 29.25,
+              "rank": 1,
+              "raw_softmax_probability": 0.8385694438776439,
+              "token_id": 1390
+            },
+            {
+              "logit": 27.5,
+              "rank": 2,
+              "raw_softmax_probability": 0.1457215191196649,
+              "token_id": 556
+            },
+            {
+              "logit": 24.125,
+              "rank": 3,
+              "raw_softmax_probability": 0.004986316181792398,
+              "token_id": 6375
+            },
+            {
+              "logit": 24.125,
+              "rank": 4,
+              "raw_softmax_probability": 0.004986316181792398,
+              "token_id": 27214
+            },
+            {
+              "logit": 23.125,
+              "rank": 5,
+              "raw_softmax_probability": 0.0018343632104619073,
+              "token_id": 107
+            },
+            {
+              "logit": 22.75,
+              "rank": 6,
+              "raw_softmax_probability": 0.0012607381679590566,
+              "token_id": 236768
+            },
+            {
+              "logit": 21.875,
+              "rank": 7,
+              "raw_softmax_probability": 0.0005255538589811949,
+              "token_id": 123540
+            },
+            {
+              "logit": 21.625,
+              "rank": 8,
+              "raw_softmax_probability": 0.0004093017569207533,
+              "token_id": 1852
+            },
+            {
+              "logit": 21.5,
+              "rank": 9,
+              "raw_softmax_probability": 0.00036120753270499773,
+              "token_id": 48921
+            },
+            {
+              "logit": 20.875,
+              "rank": 10,
+              "raw_softmax_probability": 0.000193340459947497,
+              "token_id": 236865
+            },
+            {
+              "logit": 20.75,
+              "rank": 11,
+              "raw_softmax_probability": 0.0001706223570479471,
+              "token_id": 547
+            },
+            {
+              "logit": 20.75,
+              "rank": 12,
+              "raw_softmax_probability": 0.0001706223570479471,
+              "token_id": 236779
+            },
+            {
+              "logit": 20.75,
+              "rank": 13,
+              "raw_softmax_probability": 0.0001706223570479471,
+              "token_id": 236820
+            },
+            {
+              "logit": 20.625,
+              "rank": 14,
+              "raw_softmax_probability": 0.00015057370160649625,
+              "token_id": 236780
+            },
+            {
+              "logit": 19.75,
+              "rank": 15,
+              "raw_softmax_probability": 6.27684573621531e-05,
+              "token_id": 66841
+            },
+            {
+              "logit": 19.375,
+              "rank": 16,
+              "raw_softmax_probability": 4.314008779125609e-05,
+              "token_id": 236756
+            },
+            {
+              "logit": 18.875,
+              "rank": 17,
+              "raw_softmax_probability": 2.6165785908091475e-05,
+              "token_id": 3434
+            },
+            {
+              "logit": 18.625,
+              "rank": 18,
+              "raw_softmax_probability": 2.037793455490037e-05,
+              "token_id": 236769
+            },
+            {
+              "logit": 18.375,
+              "rank": 19,
+              "raw_softmax_probability": 1.587035138873425e-05,
+              "token_id": 1569
+            },
+            {
+              "logit": 18.25,
+              "rank": 20,
+              "raw_softmax_probability": 1.4005535943487109e-05,
+              "token_id": 3054
+            },
+            {
+              "logit": 18.25,
+              "rank": 21,
+              "raw_softmax_probability": 1.4005535943487109e-05,
+              "token_id": 3729
+            },
+            {
+              "logit": 18.25,
+              "rank": 22,
+              "raw_softmax_probability": 1.4005535943487109e-05,
+              "token_id": 57701
+            },
+            {
+              "logit": 18.125,
+              "rank": 23,
+              "raw_softmax_probability": 1.2359842089164592e-05,
+              "token_id": 2454
+            },
+            {
+              "logit": 18.125,
+              "rank": 24,
+              "raw_softmax_probability": 1.2359842089164592e-05,
+              "token_id": 98802
+            },
+            {
+              "logit": 18.125,
+              "rank": 25,
+              "raw_softmax_probability": 1.2359842089164592e-05,
+              "token_id": 120956
+            },
+            {
+              "logit": 17.875,
+              "rank": 26,
+              "raw_softmax_probability": 9.625854697680293e-06,
+              "token_id": 53190
+            },
+            {
+              "logit": 17.75,
+              "rank": 27,
+              "raw_softmax_probability": 8.494786955432235e-06,
+              "token_id": 825
+            },
+            {
+              "logit": 17.75,
+              "rank": 28,
+              "raw_softmax_probability": 8.494786955432235e-06,
+              "token_id": 21617
+            },
+            {
+              "logit": 17.625,
+              "rank": 29,
+              "raw_softmax_probability": 7.496623176284974e-06,
+              "token_id": 2812
+            },
+            {
+              "logit": 17.625,
+              "rank": 30,
+              "raw_softmax_probability": 7.496623176284974e-06,
+              "token_id": 7125
+            },
+            {
+              "logit": 17.5,
+              "rank": 31,
+              "raw_softmax_probability": 6.61574673291538e-06,
+              "token_id": 694
+            },
+            {
+              "logit": 17.5,
+              "rank": 32,
+              "raw_softmax_probability": 6.61574673291538e-06,
+              "token_id": 856
+            }
+          ],
+          "top_k20_distribution": [
+            {
+              "probability": 0.8388270734460622,
+              "token_id": 1390
+            },
+            {
+              "probability": 0.1457662884257184,
+              "token_id": 556
+            },
+            {
+              "probability": 0.004987848103203667,
+              "token_id": 6375
+            },
+            {
+              "probability": 0.004987848103203667,
+              "token_id": 27214
+            },
+            {
+              "probability": 0.0018349267728546036,
+              "token_id": 107
+            },
+            {
+              "probability": 0.0012611254983494866,
+              "token_id": 236768
+            },
+            {
+              "probability": 0.0005257153223100323,
+              "token_id": 123540
+            },
+            {
+              "probability": 0.00040942750468768923,
+              "token_id": 1852
+            },
+            {
+              "probability": 0.0003613185047198257,
+              "token_id": 48921
+            },
+            {
+              "probability": 0.00019339985898667942,
+              "token_id": 236865
+            },
+            {
+              "probability": 0.00017067477651604209,
+              "token_id": 547
+            },
+            {
+              "probability": 0.00017067477651604209,
+              "token_id": 236779
+            },
+            {
+              "probability": 0.00017067477651604209,
+              "token_id": 236820
+            },
+            {
+              "probability": 0.00015061996162472522,
+              "token_id": 236780
+            },
+            {
+              "probability": 6.278774140678238e-05,
+              "token_id": 66841
+            },
+            {
+              "probability": 4.315334150838152e-05,
+              "token_id": 236756
+            },
+            {
+              "probability": 2.617382469388321e-05,
+              "token_id": 3434
+            },
+            {
+              "probability": 2.0384195167569917e-05,
+              "token_id": 236769
+            },
+            {
+              "probability": 1.58752271587838e-05,
+              "token_id": 1569
+            },
+            {
+              "probability": 1.400983879545355e-05,
+              "token_id": 3054
+            }
+          ],
+          "top_p095_bf16_distribution": [
+            {
+              "probability": 0.8519528019683106,
+              "token_id": 1390
+            },
+            {
+              "probability": 0.14804719803168948,
+              "token_id": 556
+            }
+          ],
+          "top_p095_nominal_distribution": [
+            {
+              "probability": 0.8519528019683106,
+              "token_id": 1390
+            },
+            {
+              "probability": 0.14804719803168948,
+              "token_id": 556
+            }
+          ],
+          "top_p_cutoffs": {
+            "effective_bfloat16": 0.94921875,
+            "nominal_hf": 0.95
+          },
+          "top_p_kept_counts": {
+            "effective_bfloat16": 2,
+            "nominal_hf": 2
+          },
+          "top_p_pre_renormalization_masses": {
+            "effective_bfloat16": 0.9845933618717806,
+            "nominal_hf": 0.9845933618717806
+          },
+          "topk_nucleus_support_semantics": "PROXY only: strict top-k20 with deterministic token-ID tie-break; HF may retain all kth-logit ties and device support is not exposed. Raw logits and ranks are primary evidence.",
+          "vocab_size": 262144
+        }
+      },
+      {
+        "absolute_input_position": 2051,
+        "expected_next_token_id": 107,
+        "history_after_input": [
+          147,
+          1390,
+          107,
+          147,
+          1390
+        ],
+        "input_token_id": 1390,
+        "predicted_continuation_index": 4,
+        "row_index": 4,
+        "summary": {
+          "distribution_reconstruction_note": "Host-side reconstruction from saved logits; does not model device probability quantization.",
+          "host_rank_tie_break": "descending logit, then ascending global token ID",
+          "targets": [
+            {
+              "logit": 17.875,
+              "rank": 7,
+              "raw_softmax_probability": 1.1473720797051323e-05,
+              "token_id": 138,
+              "top_k20_probability": 1.147384527419595e-05,
+              "top_p095_bf16_probability": 0.0,
+              "top_p095_nominal_probability": 0.0
+            },
+            {
+              "logit": 13.3125,
+              "rank": 40,
+              "raw_softmax_probability": 1.1973902122964205e-07,
+              "token_id": 147,
+              "top_k20_probability": 0.0,
+              "top_p095_bf16_probability": 0.0,
+              "top_p095_nominal_probability": 0.0
+            },
+            {
+              "logit": 10.3125,
+              "rank": 165,
+              "raw_softmax_probability": 5.961454836261301e-09,
+              "token_id": 1390,
+              "top_k20_probability": 0.0,
+              "top_p095_bf16_probability": 0.0,
+              "top_p095_nominal_probability": 0.0
+            },
+            {
+              "logit": 29.25,
+              "rank": 1,
+              "raw_softmax_probability": 0.9995488162011572,
+              "token_id": 107,
+              "top_k20_probability": 0.9995596601971684,
+              "top_p095_bf16_probability": 1.0,
+              "top_p095_nominal_probability": 1.0
+            },
+            {
+              "logit": 9.0,
+              "rank": 411,
+              "raw_softmax_probability": 1.6045038022936639e-09,
+              "token_id": 556,
+              "top_k20_probability": 0.0,
+              "top_p095_bf16_probability": 0.0,
+              "top_p095_nominal_probability": 0.0
+            },
+            {
+              "logit": 1.8515625,
+              "rank": 62973,
+              "raw_softmax_probability": 1.26128662424256e-12,
+              "token_id": 172109,
+              "top_k20_probability": 0.0,
+              "top_p095_bf16_probability": 0.0,
+              "top_p095_nominal_probability": 0.0
+            }
+          ],
+          "top32": [
+            {
+              "logit": 29.25,
+              "rank": 1,
+              "raw_softmax_probability": 0.9995488162011572,
+              "token_id": 107
+            },
+            {
+              "logit": 20.875,
+              "rank": 2,
+              "raw_softmax_probability": 0.00023045584271552056,
+              "token_id": 759
+            },
+            {
+              "logit": 20.125,
+              "rank": 3,
+              "raw_softmax_probability": 0.00010885963198255594,
+              "token_id": 236743
+            },
+            {
+              "logit": 19.0,
+              "rank": 4,
+              "raw_softmax_probability": 3.5341548118858704e-05,
+              "token_id": 965
+            },
+            {
+              "logit": 18.0,
+              "rank": 5,
+              "raw_softmax_probability": 1.3001428972099378e-05,
+              "token_id": 1732
+            },
+            {
+              "logit": 18.0,
+              "rank": 6,
+              "raw_softmax_probability": 1.3001428972099378e-05,
+              "token_id": 66841
+            },
+            {
+              "logit": 17.875,
+              "rank": 7,
+              "raw_softmax_probability": 1.1473720797051323e-05,
+              "token_id": 138
+            },
+            {
+              "logit": 17.25,
+              "rank": 8,
+              "raw_softmax_probability": 6.141440184257738e-06,
+              "token_id": 568
+            },
+            {
+              "logit": 17.125,
+              "rank": 9,
+              "raw_softmax_probability": 5.419801940016021e-06,
+              "token_id": 496
+            },
+            {
+              "logit": 16.375,
+              "rank": 10,
+              "raw_softmax_probability": 2.5601331589444316e-06,
+              "token_id": 2454
+            },
+            {
+              "logit": 16.375,
+              "rank": 11,
+              "raw_softmax_probability": 2.5601331589444316e-06,
+              "token_id": 236789
+            },
+            {
+              "logit": 16.125,
+              "rank": 12,
+              "raw_softmax_probability": 1.9938337089529927e-06,
+              "token_id": 31004
+            },
+            {
+              "logit": 15.8125,
+              "rank": 13,
+              "raw_softmax_probability": 1.4587199029906593e-06,
+              "token_id": 108
+            },
+            {
+              "logit": 15.8125,
+              "rank": 14,
+              "raw_softmax_probability": 1.4587199029906593e-06,
+              "token_id": 653
+            },
+            {
+              "logit": 15.8125,
+              "rank": 15,
+              "raw_softmax_probability": 1.4587199029906593e-06,
+              "token_id": 1223
+            },
+            {
+              "logit": 15.6875,
+              "rank": 16,
+              "raw_softmax_probability": 1.2873157961277583e-06,
+              "token_id": 997
+            },
+            {
+              "logit": 15.6875,
+              "rank": 17,
+              "raw_softmax_probability": 1.2873157961277583e-06,
+              "token_id": 4044
+            },
+            {
+              "logit": 15.5625,
+              "rank": 18,
+              "raw_softmax_probability": 1.1360522027309692e-06,
+              "token_id": 537
+            },
+            {
+              "logit": 15.25,
+              "rank": 19,
+              "raw_softmax_probability": 8.311535468172358e-07,
+              "token_id": 236858
+            },
+            {
+              "logit": 14.9375,
+              "rank": 20,
+              "raw_softmax_probability": 6.080849249059241e-07,
+              "token_id": 3729
+            },
+            {
+              "logit": 14.8125,
+              "rank": 21,
+              "raw_softmax_probability": 5.366330627378643e-07,
+              "token_id": 1373
+            },
+            {
+              "logit": 14.8125,
+              "rank": 22,
+              "raw_softmax_probability": 5.366330627378643e-07,
+              "token_id": 1852
+            },
+            {
+              "logit": 14.8125,
+              "rank": 23,
+              "raw_softmax_probability": 5.366330627378643e-07,
+              "token_id": 7066
+            },
+            {
+              "logit": 14.625,
+              "rank": 24,
+              "raw_softmax_probability": 4.4488443478801904e-07,
+              "token_id": 2812
+            },
+            {
+              "logit": 14.5,
+              "rank": 25,
+              "raw_softmax_probability": 3.926091357085253e-07,
+              "token_id": 21617
+            },
+            {
+              "logit": 14.5,
+              "rank": 26,
+              "raw_softmax_probability": 3.926091357085253e-07,
+              "token_id": 236786
+            },
+            {
+              "logit": 14.3125,
+              "rank": 27,
+              "raw_softmax_probability": 3.254844055660078e-07,
+              "token_id": 53190
+            },
+            {
+              "logit": 14.0625,
+              "rank": 28,
+              "raw_softmax_probability": 2.5348750993233763e-07,
+              "token_id": 9670
+            },
+            {
+              "logit": 13.8125,
+              "rank": 29,
+              "raw_softmax_probability": 1.9741627123412504e-07,
+              "token_id": 3921
+            },
+            {
+              "logit": 13.75,
+              "rank": 30,
+              "raw_softmax_probability": 1.8545542400926531e-07,
+              "token_id": 870
+            },
+            {
+              "logit": 13.75,
+              "rank": 31,
+              "raw_softmax_probability": 1.8545542400926531e-07,
+              "token_id": 81236
+            },
+            {
+              "logit": 13.6875,
+              "rank": 32,
+              "raw_softmax_probability": 1.7421924788391573e-07,
+              "token_id": 17103
+            }
+          ],
+          "top_k20_distribution": [
+            {
+              "probability": 0.9995596601971684,
+              "token_id": 107
+            },
+            {
+              "probability": 0.00023045834290580508,
+              "token_id": 759
+            },
+            {
+              "probability": 0.00010886081298882184,
+              "token_id": 236743
+            },
+            {
+              "probability": 3.534193153545689e-05,
+              "token_id": 965
+            },
+            {
+              "probability": 1.3001570023183255e-05,
+              "token_id": 1732
+            },
+            {
+              "probability": 1.3001570023183255e-05,
+              "token_id": 66841
+            },
+            {
+              "probability": 1.147384527419595e-05,
+              "token_id": 138
+            },
+            {
+              "probability": 6.1415068120719895e-06,
+              "token_id": 568
+            },
+            {
+              "probability": 5.4198607388557236e-06,
+              "token_id": 496
+            },
+            {
+              "probability": 2.5601609335496474e-06,
+              "token_id": 2454
+            },
+            {
+              "probability": 2.5601609335496474e-06,
+              "token_id": 236789
+            },
+            {
+              "probability": 1.9938553398372844e-06,
+              "token_id": 31004
+            },
+            {
+              "probability": 1.4587357284836748e-06,
+              "token_id": 108
+            },
+            {
+              "probability": 1.4587357284836748e-06,
+              "token_id": 653
+            },
+            {
+              "probability": 1.4587357284836748e-06,
+              "token_id": 1223
+            },
+            {
+              "probability": 1.2873297620763263e-06,
+              "token_id": 997
+            },
+            {
+              "probability": 1.2873297620763263e-06,
+              "token_id": 4044
+            },
+            {
+              "probability": 1.1360645276373222e-06,
+              "token_id": 537
+            },
+            {
+              "probability": 8.311625639113489e-07,
+              "token_id": 236858
+            },
+            {
+              "probability": 6.08091521952905e-07,
+              "token_id": 3729
+            }
+          ],
+          "top_p095_bf16_distribution": [
+            {
+              "probability": 1.0,
+              "token_id": 107
+            }
+          ],
+          "top_p095_nominal_distribution": [
+            {
+              "probability": 1.0,
+              "token_id": 107
+            }
+          ],
+          "top_p_cutoffs": {
+            "effective_bfloat16": 0.94921875,
+            "nominal_hf": 0.95
+          },
+          "top_p_kept_counts": {
+            "effective_bfloat16": 1,
+            "nominal_hf": 1
+          },
+          "top_p_pre_renormalization_masses": {
+            "effective_bfloat16": 0.9995596601971684,
+            "nominal_hf": 0.9995596601971684
+          },
+          "topk_nucleus_support_semantics": "PROXY only: strict top-k20 with deterministic token-ID tie-break; HF may retain all kth-logit ties and device support is not exposed. Raw logits and ranks are primary evidence.",
+          "vocab_size": 262144
+        }
+      },
+      {
+        "absolute_input_position": 2052,
+        "expected_next_token_id": 147,
+        "history_after_input": [
+          147,
+          1390,
+          107,
+          147,
+          1390,
+          107
+        ],
+        "input_token_id": 107,
+        "predicted_continuation_index": 5,
+        "row_index": 5,
+        "summary": {
+          "distribution_reconstruction_note": "Host-side reconstruction from saved logits; does not model device probability quantization.",
+          "host_rank_tie_break": "descending logit, then ascending global token ID",
+          "targets": [
+            {
+              "logit": 27.25,
+              "rank": 3,
+              "raw_softmax_probability": 0.1611794060523585,
+              "token_id": 138,
+              "top_k20_probability": 0.16124540912849178,
+              "top_p095_bf16_probability": 0.16425148070148662,
+              "top_p095_nominal_probability": 0.16425148070148662
+            },
+            {
+              "logit": 27.375,
+              "rank": 2,
+              "raw_softmax_probability": 0.1826401946344599,
+              "token_id": 147,
+              "top_k20_probability": 0.18271498591807797,
+              "top_p095_bf16_probability": 0.18612131127082523,
+              "top_p095_nominal_probability": 0.18612131127082523
+            },
+            {
+              "logit": 19.125,
+              "rank": 21,
+              "raw_softmax_probability": 4.771631375549476e-05,
+              "token_id": 1390,
+              "top_k20_probability": 0.0,
+              "top_p095_bf16_probability": 0.0,
+              "top_p095_nominal_probability": 0.0
+            },
+            {
+              "logit": 12.4375,
+              "rank": 219,
+              "raw_softmax_probability": 5.9473368603433634e-08,
+              "token_id": 107,
+              "top_k20_probability": 0.0,
+              "top_p095_bf16_probability": 0.0,
+              "top_p095_nominal_probability": 0.0
+            },
+            {
+              "logit": 28.625,
+              "rank": 1,
+              "raw_softmax_probability": 0.6374769170918472,
+              "token_id": 556,
+              "top_k20_probability": 0.637737964321903,
+              "top_p095_bf16_probability": 0.6496272080276881,
+              "top_p095_nominal_probability": 0.6496272080276881
+            },
+            {
+              "logit": -0.0135498046875,
+              "rank": 59498,
+              "raw_softmax_probability": 2.327556938276645e-13,
+              "token_id": 172109,
+              "top_k20_probability": 0.0,
+              "top_p095_bf16_probability": 0.0,
+              "top_p095_nominal_probability": 0.0
+            }
+          ],
+          "top32": [
+            {
+              "logit": 28.625,
+              "rank": 1,
+              "raw_softmax_probability": 0.6374769170918472,
+              "token_id": 556
+            },
+            {
+              "logit": 27.375,
+              "rank": 2,
+              "raw_softmax_probability": 0.1826401946344599,
+              "token_id": 147
+            },
+            {
+              "logit": 27.25,
+              "rank": 3,
+              "raw_softmax_probability": 0.1611794060523585,
+              "token_id": 138
+            },
+            {
+              "logit": 23.625,
+              "rank": 4,
+              "raw_softmax_probability": 0.004295285680505267,
+              "token_id": 6375
+            },
+            {
+              "logit": 23.25,
+              "rank": 5,
+              "raw_softmax_probability": 0.002952103797555655,
+              "token_id": 146
+            },
+            {
+              "logit": 23.25,
+              "rank": 6,
+              "raw_softmax_probability": 0.002952103797555655,
+              "token_id": 236780
+            },
+            {
+              "logit": 22.875,
+              "rank": 7,
+              "raw_softmax_probability": 0.002028949289938116,
+              "token_id": 140
+            },
+            {
+              "logit": 22.875,
+              "rank": 8,
+              "raw_softmax_probability": 0.002028949289938116,
+              "token_id": 66841
+            },
+            {
+              "logit": 22.625,
+              "rank": 9,
+              "raw_softmax_probability": 0.001580147295815976,
+              "token_id": 2717
+            },
+            {
+              "logit": 22.125,
+              "rank": 10,
+              "raw_softmax_probability": 0.0009584077817743975,
+              "token_id": 1852
+            },
+            {
+              "logit": 21.375,
+              "rank": 11,
+              "raw_softmax_probability": 0.00045271977999693485,
+              "token_id": 48921
+            },
+            {
+              "logit": 20.75,
+              "rank": 12,
+              "raw_softmax_probability": 0.00024232343615996236,
+              "token_id": 5425
+            },
+            {
+              "logit": 20.75,
+              "rank": 13,
+              "raw_softmax_probability": 0.00024232343615996236,
+              "token_id": 123540
+            },
+            {
+              "logit": 20.0,
+              "rank": 14,
+              "raw_softmax_probability": 0.00011446548618723877,
+              "token_id": 148
+            },
+            {
+              "logit": 20.0,
+              "rank": 15,
+              "raw_softmax_probability": 0.00011446548618723877,
+              "token_id": 10512
+            },
+            {
+              "logit": 19.625,
+              "rank": 16,
+              "raw_softmax_probability": 7.867090144808533e-05,
+              "token_id": 145
+            },
+            {
+              "logit": 19.5,
+              "rank": 17,
+              "raw_softmax_probability": 6.942682685147326e-05,
+              "token_id": 21617
+            },
+            {
+              "logit": 19.375,
+              "rank": 18,
+              "raw_softmax_probability": 6.126895965270216e-05,
+              "token_id": 139
+            },
+            {
+              "logit": 19.375,
+              "rank": 19,
+              "raw_softmax_probability": 6.126895965270216e-05,
+              "token_id": 144
+            },
+            {
+              "logit": 19.375,
+              "rank": 20,
+              "raw_softmax_probability": 6.126895965270216e-05,
+              "token_id": 547
+            },
+            {
+              "logit": 19.125,
+              "rank": 21,
+              "raw_softmax_probability": 4.771631375549476e-05,
+              "token_id": 1390
+            },
+            {
+              "logit": 19.0,
+              "rank": 22,
+              "raw_softmax_probability": 4.2109499091978845e-05,
+              "token_id": 141
+            },
+            {
+              "logit": 18.875,
+              "rank": 23,
+              "raw_softmax_probability": 3.716150251806017e-05,
+              "token_id": 142
+            },
+            {
+              "logit": 18.875,
+              "rank": 24,
+              "raw_softmax_probability": 3.716150251806017e-05,
+              "token_id": 236768
+            },
+            {
+              "logit": 18.375,
+              "rank": 25,
+              "raw_softmax_probability": 2.253959063819172e-05,
+              "token_id": 143
+            },
+            {
+              "logit": 18.25,
+              "rank": 26,
+              "raw_softmax_probability": 1.9891118923728934e-05,
+              "token_id": 236842
+            },
+            {
+              "logit": 18.125,
+              "rank": 27,
+              "raw_softmax_probability": 1.7553850839132618e-05,
+              "token_id": 57701
+            },
+            {
+              "logit": 17.875,
+              "rank": 28,
+              "raw_softmax_probability": 1.3670952779435119e-05,
+              "token_id": 9392
+            },
+            {
+              "logit": 17.75,
+              "rank": 29,
+              "raw_softmax_probability": 1.2064573483231759e-05,
+              "token_id": 236756
+            },
+            {
+              "logit": 17.75,
+              "rank": 30,
+              "raw_softmax_probability": 1.2064573483231759e-05,
+              "token_id": 255970
+            },
+            {
+              "logit": 17.5,
+              "rank": 31,
+              "raw_softmax_probability": 9.3958992761634e-06,
+              "token_id": 255968
+            },
+            {
+              "logit": 17.375,
+              "rank": 32,
+              "raw_softmax_probability": 8.291852008211042e-06,
+              "token_id": 759
+            }
+          ],
+          "top_k20_distribution": [
+            {
+              "probability": 0.637737964321903,
+              "token_id": 556
+            },
+            {
+              "probability": 0.18271498591807797,
+              "token_id": 147
+            },
+            {
+              "probability": 0.16124540912849178,
+              "token_id": 138
+            },
+            {
+              "probability": 0.004297044602905641,
+              "token_id": 6375
+            },
+            {
+              "probability": 0.0029533126860636573,
+              "token_id": 146
+            },
+            {
+              "probability": 0.0029533126860636573,
+              "token_id": 236780
+            },
+            {
+              "probability": 0.00202978014604892,
+              "token_id": 140
+            },
+            {
+              "probability": 0.00202978014604892,
+              "token_id": 66841
+            },
+            {
+              "probability": 0.0015807943672056894,
+              "token_id": 2717
+            },
+            {
+              "probability": 0.0009588002504112817,
+              "token_id": 1852
+            },
+            {
+              "probability": 0.0004529051690539988,
+              "token_id": 48921
+            },
+            {
+              "probability": 0.0002424226677714782,
+              "token_id": 5425
+            },
+            {
+              "probability": 0.0002424226677714782,
+              "token_id": 123540
+            },
+            {
+              "probability": 0.00011451235988149344,
+              "token_id": 148
+            },
+            {
+              "probability": 0.00011451235988149344,
+              "token_id": 10512
+            },
+            {
+              "probability": 7.870311723560388e-05,
+              "token_id": 145
+            },
+            {
+              "probability": 6.945525718417271e-05,
+              "token_id": 21617
+            },
+            {
+              "probability": 6.129404933324888e-05,
+              "token_id": 139
+            },
+            {
+              "probability": 6.129404933324888e-05,
+              "token_id": 144
+            },
+            {
+              "probability": 6.129404933324888e-05,
+              "token_id": 547
+            }
+          ],
+          "top_p095_bf16_distribution": [
+            {
+              "probability": 0.6496272080276881,
+              "token_id": 556
+            },
+            {
+              "probability": 0.18612131127082523,
+              "token_id": 147
+            },
+            {
+              "probability": 0.16425148070148662,
+              "token_id": 138
+            }
+          ],
+          "top_p095_nominal_distribution": [
+            {
+              "probability": 0.6496272080276881,
+              "token_id": 556
+            },
+            {
+              "probability": 0.18612131127082523,
+              "token_id": 147
+            },
+            {
+              "probability": 0.16425148070148662,
+              "token_id": 138
+            }
+          ],
+          "top_p_cutoffs": {
+            "effective_bfloat16": 0.94921875,
+            "nominal_hf": 0.95
+          },
+          "top_p_kept_counts": {
+            "effective_bfloat16": 3,
+            "nominal_hf": 3
+          },
+          "top_p_pre_renormalization_masses": {
+            "effective_bfloat16": 0.9816983593684727,
+            "nominal_hf": 0.9816983593684727
+          },
+          "topk_nucleus_support_semantics": "PROXY only: strict top-k20 with deterministic token-ID tie-break; HF may retain all kth-logit ties and device support is not exposed. Raw logits and ranks are primary evidence.",
+          "vocab_size": 262144
+        }
+      },
+      {
+        "absolute_input_position": 2053,
+        "expected_next_token_id": null,
+        "history_after_input": [
+          147,
+          1390,
+          107,
+          147,
+          1390,
+          107,
+          147
+        ],
+        "input_token_id": 147,
+        "predicted_continuation_index": 6,
+        "row_index": 6,
+        "summary": {
+          "distribution_reconstruction_note": "Host-side reconstruction from saved logits; does not model device probability quantization.",
+          "host_rank_tie_break": "descending logit, then ascending global token ID",
+          "targets": [
+            {
+              "logit": 10.375,
+              "rank": 1055,
+              "raw_softmax_probability": 4.884907877010292e-09,
+              "token_id": 138,
+              "top_k20_probability": 0.0,
+              "top_p095_bf16_probability": 0.0,
+              "top_p095_nominal_probability": 0.0
+            },
+            {
+              "logit": 0.66796875,
+              "rank": 134011,
+              "raw_softmax_probability": 2.972667057323181e-13,
+              "token_id": 147,
+              "top_k20_probability": 0.0,
+              "top_p095_bf16_probability": 0.0,
+              "top_p095_nominal_probability": 0.0
+            },
+            {
+              "logit": 29.5,
+              "rank": 1,
+              "raw_softmax_probability": 0.9879576861159786,
+              "token_id": 1390,
+              "top_k20_probability": 0.9880797314932455,
+              "top_p095_bf16_probability": 1.0,
+              "top_p095_nominal_probability": 1.0
+            },
+            {
+              "logit": 22.25,
+              "rank": 4,
+              "raw_softmax_probability": 0.000701622245939714,
+              "token_id": 107,
+              "top_k20_probability": 0.0007017089194409255,
+              "top_p095_bf16_probability": 0.0,
+              "top_p095_nominal_probability": 0.0
+            },
+            {
+              "logit": 24.875,
+              "rank": 2,
+              "raw_softmax_probability": 0.009685596344669794,
+              "token_id": 556,
+              "top_k20_probability": 0.009686792835447235,
+              "top_p095_bf16_probability": 0.0,
+              "top_p095_nominal_probability": 0.0
+            },
+            {
+              "logit": 5.3125,
+              "rank": 25965,
+              "raw_softmax_probability": 3.0920076750958685e-11,
+              "token_id": 172109,
+              "top_k20_probability": 0.0,
+              "top_p095_bf16_probability": 0.0,
+              "top_p095_nominal_probability": 0.0
+            }
+          ],
+          "top32": [
+            {
+              "logit": 29.5,
+              "rank": 1,
+              "raw_softmax_probability": 0.9879576861159786,
+              "token_id": 1390
+            },
+            {
+              "logit": 24.875,
+              "rank": 2,
+              "raw_softmax_probability": 0.009685596344669794,
+              "token_id": 556
+            },
+            {
+              "logit": 22.5,
+              "rank": 3,
+              "raw_softmax_probability": 0.0009009007967001304,
+              "token_id": 27214
+            },
+            {
+              "logit": 22.25,
+              "rank": 4,
+              "raw_softmax_probability": 0.000701622245939714,
+              "token_id": 107
+            },
+            {
+              "logit": 20.75,
+              "rank": 5,
+              "raw_softmax_probability": 0.00015655308410022942,
+              "token_id": 6375
+            },
+            {
+              "logit": 20.25,
+              "rank": 6,
+              "raw_softmax_probability": 9.495424537935953e-05,
+              "token_id": 123540
+            },
+            {
+              "logit": 20.125,
+              "rank": 7,
+              "raw_softmax_probability": 8.37968274345424e-05,
+              "token_id": 236768
+            },
+            {
+              "logit": 20.125,
+              "rank": 8,
+              "raw_softmax_probability": 8.37968274345424e-05,
+              "token_id": 236780
+            },
+            {
+              "logit": 19.25,
+              "rank": 9,
+              "raw_softmax_probability": 3.493171472701479e-05,
+              "token_id": 236820
+            },
+            {
+              "logit": 19.125,
+              "rank": 10,
+              "raw_softmax_probability": 3.0827130048559244e-05,
+              "token_id": 547
+            },
+            {
+              "logit": 19.0,
+              "rank": 11,
+              "raw_softmax_probability": 2.7204846783426045e-05,
+              "token_id": 856
+            },
+            {
+              "logit": 19.0,
+              "rank": 12,
+              "raw_softmax_probability": 2.7204846783426045e-05,
+              "token_id": 236756
+            },
+            {
+              "logit": 18.5,
+              "rank": 13,
+              "raw_softmax_probability": 1.650057366693251e-05,
+              "token_id": 236779
+            },
+            {
+              "logit": 18.5,
+              "rank": 14,
+              "raw_softmax_probability": 1.650057366693251e-05,
+              "token_id": 236865
+            },
+            {
+              "logit": 18.25,
+              "rank": 15,
+              "raw_softmax_probability": 1.2850659692934444e-05,
+              "token_id": 57701
+            },
+            {
+              "logit": 18.25,
+              "rank": 16,
+              "raw_softmax_probability": 1.2850659692934444e-05,
+              "token_id": 66841
+            },
+            {
+              "logit": 18.0,
+              "rank": 17,
+              "raw_softmax_probability": 1.0008103831841484e-05,
+              "token_id": 98802
+            },
+            {
+              "logit": 17.875,
+              "rank": 18,
+              "raw_softmax_probability": 8.832120632345131e-06,
+              "token_id": 48921
+            },
+            {
+              "logit": 17.75,
+              "rank": 19,
+              "raw_softmax_probability": 7.794319101298074e-06,
+              "token_id": 29059
+            },
+            {
+              "logit": 17.5,
+              "rank": 20,
+              "raw_softmax_probability": 6.07022181959935e-06,
+              "token_id": 1569
+            },
+            {
+              "logit": 17.375,
+              "rank": 21,
+              "raw_softmax_probability": 5.356951953797853e-06,
+              "token_id": 825
+            },
+            {
+              "logit": 17.375,
+              "rank": 22,
+              "raw_softmax_probability": 5.356951953797853e-06,
+              "token_id": 3434
+            },
+            {
+              "logit": 17.25,
+              "rank": 23,
+              "raw_softmax_probability": 4.7274935065211014e-06,
+              "token_id": 2454
+            },
+            {
+              "logit": 17.125,
+              "rank": 24,
+              "raw_softmax_probability": 4.171998376493659e-06,
+              "token_id": 2812
+            },
+            {
+              "logit": 17.0,
+              "rank": 25,
+              "raw_softmax_probability": 3.6817756448436154e-06,
+              "token_id": 3054
+            },
+            {
+              "logit": 17.0,
+              "rank": 26,
+              "raw_softmax_probability": 3.6817756448436154e-06,
+              "token_id": 3729
+            },
+            {
+              "logit": 16.875,
+              "rank": 27,
+              "raw_softmax_probability": 3.249155602585892e-06,
+              "token_id": 147112
+            },
+            {
+              "logit": 16.5,
+              "rank": 28,
+              "raw_softmax_probability": 2.2331098107809043e-06,
+              "token_id": 120956
+            },
+            {
+              "logit": 16.5,
+              "rank": 29,
+              "raw_softmax_probability": 2.2331098107809043e-06,
+              "token_id": 236769
+            },
+            {
+              "logit": 16.375,
+              "rank": 30,
+              "raw_softmax_probability": 1.9707124911454204e-06,
+              "token_id": 502
+            },
+            {
+              "logit": 16.375,
+              "rank": 31,
+              "raw_softmax_probability": 1.9707124911454204e-06,
+              "token_id": 149762
+            },
+            {
+              "logit": 16.25,
+              "rank": 32,
+              "raw_softmax_probability": 1.7391476693206052e-06,
+              "token_id": 759
+            }
+          ],
+          "top_k20_distribution": [
+            {
+              "probability": 0.9880797314932455,
+              "token_id": 1390
+            },
+            {
+              "probability": 0.009686792835447235,
+              "token_id": 556
+            },
+            {
+              "probability": 0.0009010120876786394,
+              "token_id": 27214
+            },
+            {
+              "probability": 0.0007017089194409255,
+              "token_id": 107
+            },
+            {
+              "probability": 0.00015657242357243538,
+              "token_id": 6375
+            },
+            {
+              "probability": 9.49659753621951e-05,
+              "token_id": 123540
+            },
+            {
+              "probability": 8.380717910806217e-05,
+              "token_id": 236768
+            },
+            {
+              "probability": 8.380717910806217e-05,
+              "token_id": 236780
+            },
+            {
+              "probability": 3.493602994654529e-05,
+              "token_id": 236820
+            },
+            {
+              "probability": 3.0830938216428885e-05,
+              "token_id": 547
+            },
+            {
+              "probability": 2.7208207479775525e-05,
+              "token_id": 856
+            },
+            {
+              "probability": 2.7208207479775525e-05,
+              "token_id": 236756
+            },
+            {
+              "probability": 1.6502612032306456e-05,
+              "token_id": 236779
+            },
+            {
+              "probability": 1.6502612032306456e-05,
+              "token_id": 236865
+            },
+            {
+              "probability": 1.2852247173483856e-05,
+              "token_id": 57701
+            },
+            {
+              "probability": 1.2852247173483856e-05,
+              "token_id": 66841
+            },
+            {
+              "probability": 1.0009340162936478e-05,
+              "token_id": 98802
+            },
+            {
+              "probability": 8.833211690707032e-06,
+              "token_id": 48921
+            },
+            {
+              "probability": 7.795281956922991e-06,
+              "token_id": 29059
+            },
+            {
+              "probability": 6.07097169231402e-06,
+              "token_id": 1569
+            }
+          ],
+          "top_p095_bf16_distribution": [
+            {
+              "probability": 1.0,
+              "token_id": 1390
+            }
+          ],
+          "top_p095_nominal_distribution": [
+            {
+              "probability": 1.0,
+              "token_id": 1390
+            }
+          ],
+          "top_p_cutoffs": {
+            "effective_bfloat16": 0.94921875,
+            "nominal_hf": 0.95
+          },
+          "top_p_kept_counts": {
+            "effective_bfloat16": 1,
+            "nominal_hf": 1
+          },
+          "top_p_pre_renormalization_masses": {
+            "effective_bfloat16": 0.9880797314932455,
+            "nominal_hf": 0.9880797314932455
+          },
+          "topk_nucleus_support_semantics": "PROXY only: strict top-k20 with deterministic token-ID tie-break; HF may retain all kth-logit ties and device support is not exposed. Raw logits and ranks are primary evidence.",
+          "vocab_size": 262144
+        }
+      }
+    ]
+  },
+  "runtime_limitation": "TT logits are read back through generator.generate(next_input=..., host_sampling=True, buffered=False). This mode requires greedy compatibility parameters (temperature=0, top_k=1). Prefill computes the model logits and its greedy token is discarded in favor of the raw-logit argmax; the callback then forces the branch token. Subsequent host_sampling model replays skip sampling and the callback forces every next history token. Recorded histories and raw logits are therefore not stochastic samples. The T=1, top_k=20, top_p=0.95 distributions are reconstructed host proxies from those same logits, not sampler settings used during capture. This captures forced-history logits and host-side distribution summaries, not the canonical device sampler candidate mapping, probability quantization, PRNG state, or sampled draw.",
+  "sampling_settings_for_distribution_reconstruction": {
+    "temperature": 1.0,
+    "top_k": 20,
+    "top_p": 0.95
+  },
+  "source_hashes": {
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_build_kwargs.json": "ff2b5ed24e0b6a1dee7eb5cd8bd437d17c3df5f8f25567927d239e666f0699f9",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_config.json": "63ce02f7fa0df993a27daca25eeeb3adca51e15c7c6956d1cef122534ebdc7a9",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/head_bfp8_build_kwargs.json": "2e583fa8bd7aff7c5f8be110835df751924d167243c5a44a68aa5b3d70c6845f",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/head_bfp8_precision_config.json": "aa0e651fb3fdd7afc285293645c5ca309b2da246619e6e7fb6da86c5d2f28853",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/fixtures/anomaly.psf__requests-5414.call11.onset.suffix2048.private.json": "fbe984e026dbe8ef2b9d8a4288056617cbfde5235d1efd4a3bd14038a2db5ad7",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/runs/full/anomaly.psf__requests-5414.call11.onset.json": "a967659d1f4edd7b726a36c976168ae767957b9821ffc4a2a31640d594e7a885",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/runs/served/anomaly.psf__requests-5414.call11.onset.json": "fe2ed3734685fbc806bc3ce821a77e21f9b390cb838fc223daf8d6090cc8d039",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/results/seed44-suffix2048/anomaly.psf__requests-5414.call11.onset.hf.private.json": "ea3eb180de1ef8898c2565dcb5ffd7700f3e792ccfce8bc279efef80c6dfe9a4",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-loop-branch-investigation/AUTODEBUG.md": "e415e18704d5cb74ba7fefe7aba4eeb0a149067c8711bfe99cd8af71abddf041",
+    "models/autoports/google_gemma_4_31b_it/tests/generate_full_reference.py": "30f69ad0db3ce951aa1a6dc8deb1900ea33d5cdd578f8aff36cefc33056e5d7d",
+    "models/autoports/google_gemma_4_31b_it/tools/actual_branch_logits.py": "fa2eaf9f66a6a36c57385351a0b3e838edeabac4644c77c98aa81a817e3e3d5e",
+    "models/autoports/google_gemma_4_31b_it/tools/precision_repro_hf.py": "aafe67c88bb5a1eb38b8718570bbddd5749e2a9ecbb9dd19cdb100a49572c03e",
+    "models/autoports/google_gemma_4_31b_it/tt/generator.py": "3276fd7427898077ab25e139f89a7b03d2a968cd9bafb79e9aa08bb975016f22",
+    "models/autoports/google_gemma_4_31b_it/tt/weights.py": "bca69b111c9c9cbf9bc620c3dc6bee873abdecdd75f08d5b8b93638e881868cd",
+    "models/common/sampling/tt_sampling.py": "fa48c2d253b20a8b14d2be1d8597d30395a03070e33522f16550e95d36fd374a"
+  },
+  "source_pins_sha256": "c064842ef0fb247609005ba4f0ba58b71b5b21ce9a66ef5334d7d9fd9ef388d3",
+  "source_prompt_tokens": 2048,
+  "status": "completed_logits_capture",
+  "target_token_ids": [
+    138,
+    147,
+    1390,
+    107,
+    556,
+    172109
+  ],
+  "tt_host_compatibility_sampling_settings": {
+    "temperature": 0.0,
+    "top_k": 1
+  }
+}

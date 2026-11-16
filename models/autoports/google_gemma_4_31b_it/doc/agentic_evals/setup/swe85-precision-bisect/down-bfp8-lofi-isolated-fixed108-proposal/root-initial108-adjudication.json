@@ -1,0 +1,44 @@
+{
+  "status": "root_collected_initial108_extensions_pending",
+  "at_unix": 1794742853.688422,
+  "reviewer": "root",
+  "counts": {
+    "normal": 76,
+    "inconclusive": 9,
+    "reproduced_native_motif": 17,
+    "other_anomaly": 6
+  },
+  "trial_count": 108,
+  "original_served_anomalous_full_normal_targets": {
+    "count": 15,
+    "p3_normal": 15,
+    "evidence": [
+      "triage-target-pair-addendum.json",
+      "reviewed/triage-c-mid36.json",
+      "reviewed/triage-d-last36.json"
+    ]
+  },
+  "progressing_cap_indices": [
+    15,
+    18,
+    34,
+    43,
+    48,
+    62,
+    72,
+    73,
+    82
+  ],
+  "triage_sha256": {
+    "setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/triage-b-partial.json": "ec923e0acd04ce948c905eabd1d96d8535078be4f6da0d99a5bbc294fe902471",
+    "setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/reviewed/triage-c-mid36.json": "301446a655cfe1a712d6997b219bdd16f85cac62a16b8a652458329f5481fd4b",
+    "setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/reviewed/triage-d-last36.json": "f4088f67f3c479734086e1de4e4850ddcc68bf4376322001cb6eaa60be0340bd"
+  },
+  "terminal_review": "root-terminal-forecast-review.json",
+  "decision": "Not selected: persistent anomalies and9 progressing capped controls remain under analysis. Test higher down fidelity on remaining protocol/localized anomalies; do not change serving policy or score.",
+  "root_notes": [
+    "Index33 localized doubled article a a is not a sustained loop; retain separate small-repetition observation rather than claiming degeneracy.",
+    "Parser-backed invalid argument keys in66\u201368 are real protocol evidence; alternate JSON form alone is accepted.",
+    "Full-model baseline controls for four protocol outputs were shorter and progressing, so do not label those complete normal baselines."
+  ]
+}

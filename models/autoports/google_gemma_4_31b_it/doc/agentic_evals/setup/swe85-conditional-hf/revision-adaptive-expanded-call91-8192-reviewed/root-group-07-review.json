@@ -1,0 +1,31 @@
+{
+  "status": "completed_root_and_corrected_independent_triage_reconciled",
+  "reviewer": "root",
+  "accepted": true,
+  "utc": "2026-11-15T10:26:13.926909+00:00",
+  "serial_order": 7,
+  "admission_sha256": "74640276fdf5e463fa968d5d188994622759df96f09d4f408e02712b7d09ae66",
+  "launch_sha256": "e20284698febbae7bf41d3c783f0e37ba74df5aa0708f4146bcdb61b5c118559",
+  "completion_sha256": "67edd55881ada416e6e9ebcc37a907228b80d8d438fc2b4bfcc5ac47116e84f3",
+  "result_sha256": "2472008d4ab3ca68d5803944ccf3410c53e603940e62529f062df2e8fdf199a2",
+  "independent_triage_sha256": "44935b1e464f11fc9cd6d25015082ee406725c6bd3671a4bdf726c222132cfd8",
+  "triage_correction_sha256": "eedd144a59f5c7f356cf4c33c42469e7818b1f6490127c71b42e2c0a00c16c52",
+  "verdict": "normal_reference_tool_handoff",
+  "exact_fixture_sha256": "3267a7e718c71d0fa067a781f948b1c3d07d335891a90057b4c21435c146f0b1",
+  "source_sha256": "7d39e2c87e91327f35317968bf2647887a402d0086085ec8f95db8ff5fc2ab64",
+  "source_slice": [
+    63731,
+    65779
+  ],
+  "seed": 43,
+  "generated_tokens": 56,
+  "natural_stop_id": 50,
+  "forecast_acceptance_sha256": "7a667e82d841b31d3404c557dccc8a7a7e4a4a445fc6f9590f960d38f435c5b3",
+  "measured_seconds": 219.28860688209534,
+  "forecast_range_seconds": [
+    980,
+    3380
+  ],
+  "matched_tt": "Selected368/full52tokens seed43 both naturally stop; selected adds two contraction suffixes, full one, before coherent text/tool handoff. Exact2048prompt matched. Initial independent seed42-only claim corrected; no source data modified.",
+  "interpretation": "HF samples different first token; no RNG equality, causal precision or native replay claim. No cap extension required for these three seed43 outputs."
+}

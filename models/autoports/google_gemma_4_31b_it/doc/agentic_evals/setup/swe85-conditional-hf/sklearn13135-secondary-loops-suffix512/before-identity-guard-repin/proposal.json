@@ -1,0 +1,97 @@
+{
+  "status": "candidate_only_not_admitted_not_run",
+  "scope": "Two matched CPU HF reference diagnostics for exact existing Sklearn13135 call29 suffix512 full-mode seed42 and seed43 loops, compared against corrected selected head-BFP8/LoFi served outputs and valid full-mode outputs. Each retains chosen64 and free512.",
+  "question": "Do pinned HF outputs show the same secondary short-loop families on these exact shortened inputs?",
+  "semantic_basis": {
+    "source_controls": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/completion-summary.json",
+    "full_review": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/root-full-review.json",
+    "served_review": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/root-served-review.json",
+    "triage": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/triage-d.json",
+    "full_seed42": "Repeated unchanged \u201cSince I\u2019ve fixed the source code / check\u201d sentence to the 512-token cap.",
+    "full_seed43": "After an initial applied-fix phrase, repeated apostrophe-a token loop to the 512-token cap.",
+    "served_contrast": "Corrected stage12_head_bfp8_lofi arm: seed42 and44 reproduce immediate native-family apostrophe-ve loops to512; seed43 is another apostrophe-hyphen loop. Full BF16/HiFi4 seed42 is the sentence loop; seed43 is an apostrophe-a loop; seed44 is normal at85 tokens.",
+    "full_seed44_contrast": "Normal completed response at85 tokens.",
+    "interpretation_limit": "These are different secondary loop families on an exact 512-token suffix. They are not the original full17,395-token missing-tool response, do not establish native-prompt equivalence, and do not imply task score/cause."
+  },
+  "workload": {
+    "prompt_suffix_tokens": 512,
+    "chosen_teacher_forcing_positions": 64,
+    "free_generation_tokens": 512,
+    "trials_per_seed": 1
+  },
+  "serial_groups": [
+    {
+      "order": 1,
+      "seed": 42,
+      "case": "anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix512.seed42",
+      "manifest": "secondary-loop-seed42.json",
+      "manifest_sha256": "e9ef583e1c26d77bd0366884bea508151df2f13498e9bc7e41fd378a571f8621",
+      "timeout_seconds": 3600
+    },
+    {
+      "order": 2,
+      "seed": 43,
+      "case": "anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix512.seed43",
+      "manifest": "secondary-loop-seed43.json",
+      "manifest_sha256": "aa1e3a75676a80f0754db46a90e3e4d8f05c8589f156496108ff9551b742e85b",
+      "timeout_seconds": 3600
+    }
+  ],
+  "compare_dirs": [
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/runs/served",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/runs/full"
+  ],
+  "forecast_file": "forecast.json",
+  "commands_file": "commands.json",
+  "source_integrity": {
+    "path": "source-integrity.json",
+    "sha256": "cf5efba0647800b7b401e2d3f1be87e352b7b479b06e96ccac38bcd3eec6f789"
+  },
+  "candidate_hashes": {
+    "manifests": {
+      "secondary-loop-seed42.json": "e9ef583e1c26d77bd0366884bea508151df2f13498e9bc7e41fd378a571f8621",
+      "secondary-loop-seed43.json": "aa1e3a75676a80f0754db46a90e3e4d8f05c8589f156496108ff9551b742e85b"
+    },
+    "forecast_sha256": "e5962ee880ae51627e85dda1610342bef8155556850211846424ee473054504b",
+    "commands_sha256": "c265bee496925a1897c98cfb25ca8cf93135df2d583493a8cfd0a4bcff1b2383",
+    "source_integrity_sha256": "cf5efba0647800b7b401e2d3f1be87e352b7b479b06e96ccac38bcd3eec6f789",
+    "runner_sha256": "aafe67c88bb5a1eb38b8718570bbddd5749e2a9ecbb9dd19cdb100a49572c03e",
+    "driver_sha256": "ae085eb32cb96a9e5b6f96ea4f41c284968a6999a7f59af46e97208e00d706d9",
+    "manifest_sha256s": {
+      "secondary-loop-seed42.json": "e9ef583e1c26d77bd0366884bea508151df2f13498e9bc7e41fd378a571f8621",
+      "secondary-loop-seed43.json": "aa1e3a75676a80f0754db46a90e3e4d8f05c8589f156496108ff9551b742e85b"
+    }
+  },
+  "no_claims": [
+    "No exact native token identity; native prompt IDs were unavailable.",
+    "No original native missing-tool reproduction is tested here; full suffix512 did not reproduce that protocol family.",
+    "No task score, serving-rate, or precision-policy conclusion."
+  ],
+  "corrected_served_arm": {
+    "directory": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-suffix512-head-bfp8-correction",
+    "config_id": "stage12_head_bfp8_lofi",
+    "admission_sha256": "3135aac12cbe11d97803b166dc3173def8f9bc03a6e8bb786fe015ce3f24bf08",
+    "completion_sha256": "1be9414e4447a6600ea163967ec4fc0601ae9ffbbd47e44ab5e407a1c3ee453e",
+    "root_review_sha256": "777d1a61090d8b827c76fc905b1a884b58270613d976c5eed73d8a41c2319151",
+    "counts": {
+      "native": 2,
+      "other": 1
+    },
+    "wall_seconds": 201.28028845787048,
+    "forecast_range_seconds": [
+      160,
+      300
+    ]
+  },
+  "stale_prior_candidate_snapshot": {
+    "proposal": "proposal-pre-bfp8-correction-stale.json",
+    "proposal_sha256": "8c8c59e34a96f16e295d196b861158aaeaf3129a31f9e3f636a3e6747888b96f",
+    "commands": "commands-pre-bfp8-correction-stale.json",
+    "commands_sha256": "b746e7675363e774d8b8c4c33f85d268799952a3a372a826106533506a16e68b",
+    "admission": "admission-pre-bfp8-correction-stale.json",
+    "admission_sha256": "d0fb8b3bfd2f46d3ed0d48ac6dd6e9cfd846facd3f028a15d770ccf3b93517bd",
+    "reason": "Prior compare dir contained an SK512 served arm recorded as head_bfp4; root corrected the same fixture rerun to stage12_head_bfp8_lofi. Only the new correction runs path is used as the served compare dir."
+  },
+  "served_compare_dir": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-suffix512-head-bfp8-correction/runs",
+  "execution_policy": "Inert by default. Root admits exact package first. Driver accepts only one explicit --group at a time; group2 requires root-reviewed group1 raw result hashes and forecast gate. No automatic group progression."
+}

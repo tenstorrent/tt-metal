@@ -1,0 +1,9 @@
+{
+  "status": "all_followups_completed",
+  "queued_unix": 1794716900.7565887,
+  "admission_sha256": "81028d4723625f7fd7819681bdea77f3440b2458bf2c2a1205f7005d68f58fd2",
+  "stop_file": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-followups-execution/STOP_BEFORE_NEXT_JOB",
+  "start_unix": 1794718255.4761412,
+  "exit_code": 0,
+  "end_unix": 1794718612.0065155
+}

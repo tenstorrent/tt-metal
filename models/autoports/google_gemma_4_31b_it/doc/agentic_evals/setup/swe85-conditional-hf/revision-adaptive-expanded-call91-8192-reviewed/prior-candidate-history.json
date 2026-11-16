@@ -1,0 +1,23 @@
+{
+  "status": "prior_candidate_and_incident_preserved_separately",
+  "new_candidate": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed",
+  "prior_candidate": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-candidate",
+  "prior_candidate_admission_sha256": "cbb88d0abb8776634e15c66908407807987aa2d6d7b5ab98e045dbfe2f1cff91",
+  "incident_audit": {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/runner-validation-incident-c.json",
+    "sha256": "54405687018d25d504794afc0743e61222c496f47d22534658d62743c8ac0a6f"
+  },
+  "partial_attempt_output": {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-candidate/results/seed42-suffix512/anomaly.requests2931.call20.canonicalprefix.optional-suffix512.hf.private.json",
+    "sha256": "c0fcae77a6dc66cbbb4018dcb76da0dc51aa2a2eeaf67d7c5e2baf7d6e381dcc",
+    "copied_into_new_candidate": false
+  },
+  "old_review_artifacts_retained_in_prior_candidate": [
+    "review-c.json",
+    "review-d.json",
+    "driver-host-validation.json",
+    "p2-gate-validation-c.json",
+    "refresh-validation-c.json"
+  ],
+  "raw_results_copied": false
+}

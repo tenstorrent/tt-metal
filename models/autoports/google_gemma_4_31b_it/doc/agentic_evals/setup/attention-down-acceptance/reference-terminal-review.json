@@ -1,0 +1,33 @@
+{
+  "status": "completed_reference_only",
+  "epoch": 1794751723.8579285,
+  "elapsed_seconds": 42.11426067352295,
+  "forecast_seconds": [
+    120,
+    900
+  ],
+  "forecast_hit": false,
+  "forecast_explanation": "Earlier287s anchor included100 sequential autoregressive steps. This job reused exact continuation IDs and ran two batch forwards; AIME261tokens took8.07s, natural1024tokens27.74s, remaining load/import/save~6.30s. Batched CPU throughput was under-estimated in the conservative120s floor. No overlapping model work; not a serving performance result.",
+  "records": [
+    {
+      "name": "aime24",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/attention-down-acceptance/references/aime24.refpt",
+      "sha256": "1c1a90cada967dc89159edf6e61eb51f2638955ab9defe1cc51939587e99ab45",
+      "prompt_tokens": 161,
+      "positions": 100,
+      "basis": "Previously saved pinned HF continuation; logits recomputed, no old TT scores reused",
+      "elapsed_seconds": 8.073281288146973
+    },
+    {
+      "name": "natural",
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/attention-down-acceptance/references/natural.refpt",
+      "sha256": "861f29370af0ba7e13c77f548e688cceff429846d20a9283697ae77b8b069584",
+      "prompt_tokens": 512,
+      "positions": 512,
+      "basis": "Actual book tokens, offset4096, prefix512 and512 scored positions; continuation stress accuracy, not chat quality",
+      "elapsed_seconds": 27.744828462600708
+    }
+  ],
+  "revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+  "reference_manifest_sha256": "f665053108019dfc020e8c7a4fa654288281e79b2c6504f089f25e834df951df"
+}

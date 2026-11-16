@@ -1,0 +1,65 @@
+{
+  "status": "prepared_not_launched",
+  "prepared_utc": "2026-11-14T10:09:39.436470+00:00",
+  "bounded_argv": [
+    "timeout",
+    "10800",
+    "env",
+    "HF_HUB_OFFLINE=1",
+    "HF_DATASETS_OFFLINE=1",
+    "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+    "models/autoports/google_gemma_4_31b_it/tools/precision_repro_hf.py",
+    "--cases",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe-astropy-precision/short-hf-batch/cases.json",
+    "--output",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe-astropy-precision/short-hf-batch/results",
+    "--tokens",
+    "512",
+    "--seeds",
+    "42",
+    "--prefill-chunk",
+    "512"
+  ],
+  "bounded_command": "timeout 10800 env HF_HUB_OFFLINE=1 HF_DATASETS_OFFLINE=1 PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python models/autoports/google_gemma_4_31b_it/tools/precision_repro_hf.py --cases models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe-astropy-precision/short-hf-batch/cases.json --output models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe-astropy-precision/short-hf-batch/results --tokens 512 --seeds 42 --prefill-chunk 512",
+  "revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+  "one_model_load": true,
+  "sampling": {
+    "seed": 42,
+    "temperature": 1.0,
+    "top_p": 0.95,
+    "top_k": 20,
+    "max_new_tokens": 512
+  },
+  "source_sha256": {
+    "models/autoports/google_gemma_4_31b_it/tools/precision_repro_hf.py": "b8eab29c31193383d6b5c4e5c911f5e81c11bc94cd10c671a2075064d3a12c04",
+    "models/autoports/google_gemma_4_31b_it/tests/generate_full_reference.py": "30f69ad0db3ce951aa1a6dc8deb1900ea33d5cdd578f8aff36cefc33056e5d7d",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe-astropy-precision/short-hf-batch/cases.json": "577123dd26686f6688c71f269800606b2f050b152a98c813ec75af0374bde2e6",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe-astropy-precision/first-short-prefix-candidates/astropy.first.suffix512.private.json": "edaa1687f22e43316120ef9daa3b93c5b2bc7b5c145239f648e9f31d240ae271",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe-astropy-precision/short-prefix-candidates/astropy.second.suffix512.private.json": "d2b890b2343fc4350cadfa9154ab65e0dc79bbf793cba83ab926570e6ade4321"
+  },
+  "launch_gate": "Root must first confirm original HF process completed or timed out and check available host memory. Do not run concurrently with original HF.",
+  "prompt_scope": "Both unchanged saved suffix512 token-ID cases; diagnostic truncations of reconstructed native onset prompts, not exact native requests. No chat rerender.",
+  "progress": "Current helper TokenCountStreamer reports generated counts every128, skipping initial prompt; no raw text or RNG changes.",
+  "teacher_forcing": "First64 chosen-token logprobs/top1 retained; after outputs compare each case against its explicit served/full source mapping, verify forced token IDs equal before comparison. --compare-dir intentionally omitted because sources occupy different roots.",
+  "tt_comparison_sources": {
+    "astropy.first.suffix512": {
+      "served": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe-astropy-precision/first-short-prefix-candidates/served/astropy.first.suffix512.json",
+      "full": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe-astropy-precision/first-short-prefix-candidates/full/astropy.first.suffix512.json"
+    },
+    "astropy.second.suffix512": {
+      "served": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe-astropy-precision/short-prefix-candidates/served/astropy.second.suffix512.json",
+      "full": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe-astropy-precision/short-prefix-candidates/full/astropy.second.suffix512.json"
+    }
+  },
+  "decision_predeclared": {
+    "positive": "Sustained semantic looping on unchanged sentences, action intentions or repeated code blocks matching the TT phenomenon establishes HF reference reproduction for this diagnostic input. Does not establish equal incidence or native-prompt equivalence.",
+    "negative_or_inconclusive": "No automated flag cannot pass. If HF is coherent or inconclusive at512, extend to1024 tokens and add seeds43/44 before any anomaly closure. Do not declare precision repair or rule out HF reproduction from one short negative.",
+    "independent_cases": "Judge each anomaly separately. Positive on one does not settle the other."
+  },
+  "budget": "Bounded10800s total;512prompt plus512newtokens for each of2cases, one model load. Runtime unmeasured; earlier161prompt/100token HF control287s is only rough context, not a guarantee. Partial artifacts retained if timeout.",
+  "evidence": [
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe-astropy-precision/first-short-prefix-candidates/first512-control-check.json",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe-astropy-precision/short-prefix-candidates/first512-control-check.json"
+  ]
+}

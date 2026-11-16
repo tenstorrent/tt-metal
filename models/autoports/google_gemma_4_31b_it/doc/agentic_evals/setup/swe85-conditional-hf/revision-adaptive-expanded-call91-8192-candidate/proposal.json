@@ -1,0 +1,150 @@
+{
+  "status": "expanded_candidate_unadmitted_no_launch",
+  "revision_of": "revision-adaptive2048 plus three additional full-precision native-family positives",
+  "selection": {
+    "retained_previous_cases": 5,
+    "added_cases": 4,
+    "added_case_names": [
+      "anomaly.psf__requests-5414.call10.onset.suffix4096.seed42",
+      "anomaly.matplotlib__matplotlib-20488.call86.onset.suffix4096.seed43",
+      "anomaly.sphinx-doc__sphinx-10323.call70.onset",
+      "anomaly.call91.canonicalprefix.suffix8192.seed43"
+    ],
+    "total_cases": 9,
+    "native_positive_basis": "Requests5414 call10 seed42 suffix4096 caret motif; Matplotlib call86 seed43 suffix4096 repeated-contraction motif (shortest shortened full prompt positive); Sphinx call70 seed43 suffix2048 one-extra-ve boundary motif. Call91 was not positive in shortened full prompts through4096, but the completed X canonical-prefix suffix8192 full seed43 result now reproduces the native immediate extra apostrophe-ve after completed contraction (53 generated tokens); served seed43 is native-positive at68 tokens. Full seeds42/44 were reviewed normal (169/54 tokens), so the HF9 manifest adds only the matched served/full seed43 diagnostic.",
+    "added_sources": [
+      {
+        "filename": "native-positive-candidates-seed42-suffix4096.json",
+        "seed": 42,
+        "suffix_source": "exact_saved_suffix4096",
+        "slug": "requests10-cap4096-seed42",
+        "case_name": "anomaly.psf__requests-5414.call10.onset.suffix4096.seed42",
+        "fixture": "setup/swe85-adaptive-suffix4096-candidate/fixtures/anomaly.psf__requests-5414.call10.onset.suffix4096.seed42.full.private.json",
+        "fixture_sha256": "3d9d27b333ad2e1c1db496e1f2e2d27e7aa721a6b8b5425bd15a3374339f2986",
+        "input_prompt_tokens": 4096,
+        "chosen_branch_tokens": 64,
+        "served_source": "setup/swe85-adaptive-suffix4096-candidate/runs/served/anomaly.psf__requests-5414.call10.onset.suffix4096.seed42.json",
+        "served_sha256": "838d6b3173888be66eec79851c6219bd72c4bdfb79b5d4232963d2b12a380491",
+        "full_source": "setup/swe85-adaptive-suffix4096-candidate/runs/full/anomaly.psf__requests-5414.call10.onset.suffix4096.seed42.json",
+        "full_sha256": "eeda97d1c40d60a68d6d5a390247b0e25a80b7fc2ef62ba61005d2cfe917b6e5",
+        "timeout_seconds": 7200,
+        "evidence_file": "setup/swe85-adaptive-suffix4096-candidate/triage-b.json"
+      },
+      {
+        "filename": "native-positive-candidates-seed43-suffix4096.json",
+        "seed": 43,
+        "suffix_source": "exact_saved_suffix4096",
+        "slug": "matplotlib86-cap4096-seed43",
+        "case_name": "anomaly.matplotlib__matplotlib-20488.call86.onset.suffix4096.seed43",
+        "fixture": "setup/swe85-adaptive-suffix4096-candidate/fixtures/anomaly.matplotlib__matplotlib-20488.call86.onset.suffix4096.seed43.full.private.json",
+        "fixture_sha256": "7e8ee5bb1a24cca6e4e58651929198f7a4c4de279ca54495cedae74f3678193d",
+        "input_prompt_tokens": 4096,
+        "chosen_branch_tokens": 64,
+        "served_source": "setup/swe85-adaptive-suffix4096-candidate/runs/served/anomaly.matplotlib__matplotlib-20488.call86.onset.suffix4096.seed43.json",
+        "served_sha256": "0473b2a180e527d9a609a1f28d65cb7770bb3421012c0affa534ac5fa3ef6d56",
+        "full_source": "setup/swe85-adaptive-suffix4096-candidate/runs/full/anomaly.matplotlib__matplotlib-20488.call86.onset.suffix4096.seed43.json",
+        "full_sha256": "2fc88476353a38633134bcb85d1fbf8624f99d8e55bb8273e42fca2898bc594d",
+        "timeout_seconds": 7200,
+        "evidence_file": "setup/swe85-adaptive-suffix4096-candidate/contraction-family-adjudication-b.json"
+      },
+      {
+        "filename": "native-positive-candidates-seed43-suffix2048.json",
+        "seed": 43,
+        "suffix_source": "exact_saved_suffix2048",
+        "slug": "sphinx70-cap2048-seed43",
+        "case_name": "anomaly.sphinx-doc__sphinx-10323.call70.onset",
+        "fixture": "setup/swe85-adaptive-suffix2048-candidate/fixtures/anomaly.sphinx-doc__sphinx-10323.call70.onset.suffix2048.private.json",
+        "fixture_sha256": "3267a7e718c71d0fa067a781f948b1c3d07d335891a90057b4c21435c146f0b1",
+        "input_prompt_tokens": 2048,
+        "chosen_branch_tokens": 37,
+        "served_source": "setup/swe85-adaptive-suffix2048-candidate/runs/served/anomaly.sphinx-doc__sphinx-10323.call70.onset.json",
+        "served_sha256": "1fa9f54e8a4aace416fa70fed3ea9daa36f074e6c5f8ebe00c6550d3aee01f30",
+        "full_source": "setup/swe85-adaptive-suffix2048-candidate/runs/full/anomaly.sphinx-doc__sphinx-10323.call70.onset.json",
+        "full_sha256": "079baccb97ee11584b68c0e69353c172f1dd976fcbfdf65df71d53d421fd3182",
+        "timeout_seconds": 3600,
+        "evidence_file": "setup/swe85-adaptive-suffix4096-candidate/contraction-family-adjudication-b.json"
+      },
+      {
+        "filename": "native-positive-candidates-seed43-suffix8192.json",
+        "seed": 43,
+        "suffix_source": "exact_saved_suffix8192",
+        "slug": "call91-cap8192-seed43",
+        "case_name": "anomaly.call91.canonicalprefix.suffix8192.seed43",
+        "fixture": "setup/swe85-adaptive-canonicalprefix-suffix8192-candidate/fixtures/anomaly.call91.canonicalprefix.suffix8192.seed43.full.private.json",
+        "fixture_sha256": "d70cf7ed6d97f32ae539b88484d73d4b9b166af69ce3b5f0defc2a7adc80211f",
+        "input_prompt_tokens": 8192,
+        "chosen_branch_tokens": 64,
+        "served_source": "setup/swe85-adaptive-canonicalprefix-suffix8192-p1pinfix-candidate/runs/served/anomaly.call91.canonicalprefix.suffix8192.seed43.json",
+        "served_sha256": "724d4df0cbc71b53938da054e4bb4345f4946ae4559ac3dc2e54fedbda1c4123",
+        "full_source": "setup/swe85-adaptive-canonicalprefix-suffix8192-p1pinfix-candidate/runs/full/anomaly.call91.canonicalprefix.suffix8192.seed43.json",
+        "full_sha256": "10610713eed42214a5faf48fe4c33bd5be7a9041dc5034e762490b951c69b82b",
+        "timeout_seconds": 7200,
+        "evidence_file": "setup/swe85-adaptive-canonicalprefix-suffix8192-p1pinfix-candidate/root-full-review.json"
+      }
+    ]
+  },
+  "workload": {
+    "generation_tokens": 512,
+    "teacher_forcing_positions": 64,
+    "sampling": {
+      "temperature": 1.0,
+      "top_p": 0.95,
+      "top_k": 20
+    },
+    "reference_seeds_are_diagnostic": true,
+    "hf_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+    "prefill_chunk": 512,
+    "teacher_forcing_positions_max": 64,
+    "teacher_forcing_note": "Runner teacher-forces the saved chosen branch up to64 tokens; newly added branches are Requests10=64, Mpl86=64, Sphinx70=37."
+  },
+  "execution": "Eight serial offline CPU processes grouped by exact seed and suffix source. Added one case from the exact 8192-token X full-positive seed43 fixture, with 64 chosen-token teacher forcing, one 512-token free-run and matched served/full compare dirs. No HF model load or run occurred.",
+  "mandatory_prelaunch_gates": [
+    "Root must explicitly admit this candidate; admission.json status must be admitted and bind proposal, driver, commands, source-integrity, forecast, and pinned runner hashes.",
+    "P source inventory exception: preserve frozen P source-hashes.json; after verifying current P admission status and exact final digest, skip only row admission pinned to the known placeholder 428bea328fae8fa6e4f6fe21802f3763985d6b5ee819f5beac6c6df3ff1f2b97; verify every other source row.",
+    "Wait for exact suffix8192 call91 served/full queue and both completion records to be terminal-success (exit_code 0); verify suffix8192 admission SHA-256 300d69403a28112bc5f2a7225df5327bdb9e577ad9ca96cf754ab304f3538205 and all frozen candidate pins.",
+    "Immediately before every serial HF group, recheck both predecessor admissions, proposals, drivers, source inventories, terminal queues/completions/launches, candidate pins, and command hashes.",
+    "Immediately before every serial HF group require zero device owners, no precision_repro_hf.py process, and MemAvailable >=100 GiB.",
+    "Keep HF groups serial and do not overlap any TT queue. STOP_BEFORE_LAUNCH or STOP_BETWEEN_GROUPS pauses at a group boundary; resume only with --resume after root chooses timing and rechecks all gates.",
+    "Before HF execution, compare measured P and suffix8192 mode wall seconds with their launch-frozen forecast ranges; every out-of-range predecessor requires a root-authored exact hash-bound forecast-miss acceptance record.",
+    "Before every HF group, recheck P/suffix8192 terminal and forecast-gate hashes plus candidate pins. If a prior HF group misses its own forecast range, stop before the next group until root records an exact completion-hash-bound acceptance.",
+    "Root acceptance records bind status=root_accepted_forecast_miss, reviewer=root, accepted=true, exact completion_sha256, measured_seconds, forecast_range_seconds, and admission_sha256; per-HF-group records also bind serial_order.",
+    "P source-hashes.json remains frozen; validate final P admission SHA/status, skip only exact `admission` row placeholder 428bea328fae8fa6e4f6fe21802f3763985d6b5ee819f5beac6c6df3ff1f2b97, and check every other row.",
+    "Wait for exact P2 head-bf16-hifi4 fixed108 execution (admission SHA 74bef162c97e23e882612eb85dae365f32c9da1f13ba4b9b8e1e1f8f582ad1be) to reach queue completed/exit0 and completion exit0. Reverify P2 admission, proposal, driver, complete source inventory, queue/completion/launch and forecast pins before HF start and before every HF group. P2 elapsed must lie within runtime-estimate forecast_seconds.low/high or require root forecast-miss-accepted.json binding completion SHA, measured seconds, exact range, and admission SHA.",
+    "Before HF admission, review the call91 suffix8192 cost sensitivity; its high scenario is not a bound, process hard timeout is7200s, and timeout requires stopping the serial queue."
+  ],
+  "forecast_file": "forecast.json",
+  "commands_file": "commands.json",
+  "manifests": [
+    "native-positive-candidates-seed42-suffix512.json",
+    "native-positive-candidates-seed44-suffix512.json",
+    "native-positive-candidates-seed44-suffix1024.json",
+    "native-positive-candidates-seed44-suffix2048.json",
+    "native-positive-candidates-seed42-suffix4096.json",
+    "native-positive-candidates-seed43-suffix4096.json",
+    "native-positive-candidates-seed43-suffix2048.json",
+    "native-positive-candidates-seed43-suffix8192.json"
+  ],
+  "validation": "cpu-validation.json: the inherited seven manifest groups have recorded runner --validate-only success. The added call91 group is structurally checked by driver --validate-only; HF runner --validate-only was attempted but stopped during slow Python startup before a result, so the eighth group is not yet recorded as runner-validated.",
+  "manifest_sha256s": {
+    "native-positive-candidates-seed42-suffix512.json": "3ee6b4e9c15a7bee52da5b083bba00f5c334acb9f4062e6b92eaad5861e8c6cf",
+    "native-positive-candidates-seed44-suffix512.json": "7635a0b1f75bfc8edb430bcfd33ec03926f8e863434878476f3d8cc5a83d5a0b",
+    "native-positive-candidates-seed44-suffix1024.json": "b9602b3c8ba1a97f7f64a73e7ac2e502edd12d6e6ccb1212a9dec39ec6c1a4a1",
+    "native-positive-candidates-seed44-suffix2048.json": "8be05cbc74c014acefe3372df69386534f31330b7276bdac0bed35e154fbd5c2",
+    "native-positive-candidates-seed42-suffix4096.json": "13667fc0b8c2c1dab6a1d276c24dd1e66eb763efdfae2f09539b70851079dac8",
+    "native-positive-candidates-seed43-suffix4096.json": "0dea5abb26a89e862306a89acdbef3a8c2c9e990defc60313b90795d47a857d2",
+    "native-positive-candidates-seed43-suffix2048.json": "2f8afa3ee25882068428f09fc072eb85f0768f176c32f659fedd00f86ae6f9c8",
+    "native-positive-candidates-seed43-suffix8192.json": "24f689147e562376c157df2d80613f05525de8b9c174a3bcfd44ad8101277f65"
+  },
+  "forecast_note": "Call91 suffix8192 adds one long-prefix CPU process with explicit prefill scaling scenarios from measured 512-prefix HF timing; output/decode may change with long context and the timeout is a hard stop, not a forecast bound.",
+  "manifest_groups": 8,
+  "source_integrity": {
+    "path": "source-integrity.json",
+    "sha256": "8930bc8196f4df36d186741d933d0ae1710dccc9b1552f9538648cc261ae1312"
+  },
+  "execution_driver": {
+    "path": "run_expanded_after_predecessors.py",
+    "sha256": "9511250e40fb64627e2273a6b8c209b7cfab0cdf11c3530ed7f703f8542dc34a",
+    "default_behavior": "inert"
+  },
+  "forecast_miss_policy": "A predecessor miss blocks initial HF launch without a root acceptance record. Each HF process is checked against its own forecast after completion; a miss blocks the next group pending root hash-bound acceptance. No automatic retry."
+}

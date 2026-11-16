@@ -1,0 +1,195 @@
+{
+  "status": "planning_proxy_not_measurement",
+  "question": "Can a 2048-token exact source suffix and cap1024 continue far enough to reproduce the original full missing_tool protocol anomaly?",
+  "input_tokens": 2048,
+  "chosen_tokens": 64,
+  "free_run_cap_tokens": 1024,
+  "jobs_per_mode": 3,
+  "seeds": [
+    42,
+    43,
+    44
+  ],
+  "serial_order": [
+    "served",
+    "full"
+  ],
+  "mode_estimates": {
+    "served": {
+      "policy": "stage12_head_bfp8_lofi",
+      "measured_suffix1024": {
+        "completion_seconds": 166.36522507667542,
+        "load_seconds": 139.06262786802836,
+        "case_seconds": 22.278884618077427,
+        "free_run_seconds": 5.096605851082131,
+        "natural_generated_tokens": [
+          49,
+          54,
+          58
+        ]
+      },
+      "suffix512_decode_basis": {
+        "mean_tokens_per_second": 35.56115186799022,
+        "samples": [
+          {
+            "seed": 42,
+            "decode_tokens": 511,
+            "decode_wall_s": 14.367631427943707,
+            "tokens_per_second": 35.56605711684339
+          },
+          {
+            "seed": 43,
+            "decode_tokens": 511,
+            "decode_wall_s": 14.37096812017262,
+            "tokens_per_second": 35.557799288602276
+          },
+          {
+            "seed": 44,
+            "decode_tokens": 511,
+            "decode_wall_s": 14.370240709045902,
+            "tokens_per_second": 35.559599198525
+          }
+        ],
+        "source": "Corrected selected-BFP8 suffix512 outputs directly under runs/*.json (not runs/served/); all three decoded511 tokens."
+      },
+      "early_stop_scenario": {
+        "point_seconds": 190,
+        "range_seconds": [
+          150,
+          310
+        ],
+        "calculation": "One observed load 139.06s; case setup/chosen work 17.18s scaled 1\u20133x for doubled prompt context; free work approximates observed 5.10s if replies stop near prior 49\u201358 tokens; ~5s outer overhead. Broad range accommodates prefill variability.",
+        "point_condition": "Replies terminate near the previously observed49/54/58-token natural stops."
+      },
+      "full_1024_cap_scenario": {
+        "point_seconds": 320,
+        "range_seconds": [
+          250,
+          470
+        ],
+        "calculation": "One observed load139.06s; observed suffix1024 case setup/chosen17.18s scaled1\u20133x; 3\u00d71024 decode at exact corrected suffix512 mean35.56 tok/s is86.6s before context penalty, with1\u20132.5x decode-context multiplier; ~5s outer overhead.",
+        "point_condition": "All three generate close to the1024-token cap; decode-context multiplier1.5 at the scenario point."
+      },
+      "timeout_seconds": 1200,
+      "primary_forecast": {
+        "point_seconds": 190,
+        "point_condition": "early-stop scenario: replies terminate near the observed suffix1024 natural stops",
+        "range_seconds": [
+          150,
+          470
+        ],
+        "gate": "Use this one predeclared envelope for forecast review; do not choose scenario after observing wall time."
+      }
+    },
+    "full": {
+      "policy": "stage12_bf16_hifi4_diagnostic",
+      "measured_suffix1024": {
+        "completion_seconds": 117.3222713470459,
+        "load_seconds": 75.68418956897222,
+        "case_seconds": 36.79946665489115,
+        "free_run_seconds": 11.119676606031135,
+        "natural_generated_tokens": [
+          55,
+          58,
+          63
+        ]
+      },
+      "suffix512_decode_basis": {
+        "mean_tokens_per_second": 17.340715426014928,
+        "samples": [
+          {
+            "seed": 42,
+            "decode_tokens": 511,
+            "decode_wall_s": 29.537427803035825,
+            "tokens_per_second": 17.300084604776586
+          },
+          {
+            "seed": 43,
+            "decode_tokens": 511,
+            "decode_wall_s": 29.55060133081861,
+            "tokens_per_second": 17.29237230333696
+          },
+          {
+            "seed": 44,
+            "decode_tokens": 84,
+            "decode_wall_s": 4.8193629970774055,
+            "tokens_per_second": 17.429689369931236
+          }
+        ],
+        "source": "Full-precision suffix512 outputs under runs/full/*.json. Seed44 stopped naturally at85 generated tokens (84 decode replays); mean includes that measured early stop."
+      },
+      "early_stop_scenario": {
+        "point_seconds": 150,
+        "range_seconds": [
+          110,
+          270
+        ],
+        "calculation": "One observed load75.68s; case setup/chosen work25.68s scaled 1\u20133x for doubled prompt context; free work approximates observed11.12s if replies stop near prior55\u201363 tokens; ~5s outer overhead. Broad range accommodates prefill variability.",
+        "point_condition": "Replies terminate near the previously observed55/58/63-token natural stops."
+      },
+      "full_1024_cap_scenario": {
+        "point_seconds": 420,
+        "range_seconds": [
+          280,
+          700
+        ],
+        "calculation": "One observed load75.68s; observed suffix1024 case setup/chosen25.68s scaled1\u20133x; 3\u00d71024 decode at exact suffix512 mean17.34 tok/s is177.2s before context penalty, with1\u20132.5x decode-context multiplier; ~5s outer overhead. Mean explicitly includes seed44\u2019s natural85-token output.",
+        "point_condition": "All three generate close to the1024-token cap; decode-context multiplier1.5 at the scenario point."
+      },
+      "timeout_seconds": 1200,
+      "primary_forecast": {
+        "point_seconds": 150,
+        "point_condition": "early-stop scenario: replies terminate near the observed suffix1024 natural stops",
+        "range_seconds": [
+          110,
+          700
+        ],
+        "gate": "Use this one predeclared envelope for forecast review; do not choose scenario after observing wall time."
+      }
+    }
+  },
+  "combined_scenarios": {
+    "early_stop_point_seconds": 340,
+    "early_stop_range_seconds": [
+      260,
+      580
+    ],
+    "full_cap_point_seconds": 740,
+    "full_cap_range_seconds": [
+      530,
+      1170
+    ],
+    "primary_gate_ranges_seconds": {
+      "served": [
+        150,
+        470
+      ],
+      "full": [
+        110,
+        700
+      ]
+    }
+  },
+  "basis": {
+    "served_root_review": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix1024/root-served-review.json",
+    "full_root_review": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix1024/root-full-review.json",
+    "suffix512_decode_calibration": [
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-suffix512-head-bfp8-correction/runs/anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix512.seed42.json",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-suffix512-head-bfp8-correction/runs/anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix512.seed43.json",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-suffix512-head-bfp8-correction/runs/anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix512.seed44.json",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/runs/full/anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix512.seed42.json",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/runs/full/anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix512.seed43.json",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/runs/full/anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix512.seed44.json"
+    ],
+    "measured_suffix1024_completion": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix1024/completion-summary.json",
+    "measured_suffix1024_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix2048/prefix-provenance.json"
+  },
+  "assumptions": [
+    "One model load per mode and three serial jobs; served mode first, then full.",
+    "Early-stop scenario extrapolates the measured suffix1024 natural stops; the samples terminate around55\u201363 tokens and did not reach onset665.",
+    "Full-cap scenario uses same-mode suffix512 decode rates as a proxy and broad context multiplier; 2048-context prefill/decode has not been measured for a 1024-token output.",
+    "These are host-wall planning ranges, not a speed/memory or task-correctness claim. Forecast review and root serial HF clearance required before either launch.",
+    "The selected forecast acceptance gate is frozen to the broad primary envelope before observing candidate execution; descriptive scenario ranges are not alternate post-hoc gates."
+  ],
+  "primary_gate_policy": "The forecast gate is always the predeclared per-mode primary_forecast.range_seconds (served150\u2013470, full110\u2013700), never a scenario selected after observing elapsed wall. Scenario ranges explain early-stop and full-cap sensitivity only."
+}

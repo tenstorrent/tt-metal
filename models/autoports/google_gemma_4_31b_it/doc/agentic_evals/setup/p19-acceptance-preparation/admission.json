@@ -1,0 +1,29 @@
+{
+  "status": "admitted",
+  "start_unix": 1794765524.7361696,
+  "command_sha256": "ff52b9c0c4105d62becfa564ef3d56ef6b3e4180aa81c6197c9ffd2d5cf68c5d",
+  "source_checks": 48,
+  "source_mismatches": [],
+  "owner_check": {
+    "returncode": 1,
+    "stdout": "",
+    "stderr": ""
+  },
+  "previous_hf_completion": {
+    "status": "completed",
+    "start_unix": 1794761693.2828577,
+    "end_unix": 1794765434.8674667,
+    "elapsed_seconds": 3741.5846090316772,
+    "process_exit_code": 0
+  },
+  "hf_root_review": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/p19-native-onset-caret-controls/root-terminal-review.json",
+  "hf_root_review_sha256": "dd855b5a287233a722f6edffe772ae836a29e84fae7f3fcd11734d94b8fa635a",
+  "forecast_seconds": {
+    "low": 600,
+    "point": 1500,
+    "high": 3000
+  },
+  "deadline_unix": 1794791725,
+  "closure_reserve_seconds": 1800,
+  "selection": "candidate acceptance only; no serving/default change"
+}

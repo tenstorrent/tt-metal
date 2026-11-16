@@ -1,0 +1,17 @@
+{
+  "status": "forecast_miss_explained",
+  "observed_seconds": 356.5300512313843,
+  "forecast_low_seconds": 363.6539027607287,
+  "miss_seconds_below_low": 7.123851529344449,
+  "actual_generated_tokens": 3930,
+  "prior_suffix1024_tokens_used_for_point": 4771,
+  "completed_before_cap": 10,
+  "actual_load_seconds": 77.36976773384959,
+  "predicted_load_seconds": 77.84875810099766,
+  "reason": "Changed prefix caused earlier completed outputs; prior stop lengths informed point and low forecast. Upper forecast already cap-safe. Lower-bound miss is diagnostic sampling-work variation, not a selected serving speedup. No new precision policy.",
+  "sources": [
+    "forecast.json",
+    "runs/full",
+    "../swe85-adaptive-followups-execution/suffix2048-full-completion.json"
+  ]
+}

@@ -1,0 +1,159 @@
+{
+  "status": "candidate_input_source_pins",
+  "files": {
+    "cases.json": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/cap-extensions-preparation/batch/cases.json",
+      "sha256": "c532692990e141977a6272db8454b491ae5bb6200a3766f355d448abf8f50882"
+    },
+    "build_kwargs.json": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/cap-extensions-preparation/batch/build_kwargs.json",
+      "sha256": "6bb591a2e1cdb4a1837129f1d2eccf130974fdfef1d0cf7b342aaf9153a6a3ef"
+    },
+    "command.json": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/cap-extensions-preparation/batch/command.json",
+      "sha256": "f62e5d40de6d44274abb096126f8f131f231dfd075ee725f017671ab731d6352"
+    },
+    "forecast.json": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/cap-extensions-preparation/batch/forecast.json",
+      "sha256": "4e8e872e534128c8376368e07379599967871d834bdf5ee3a1659dfde188956d"
+    },
+    "p19_precision.json": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/precision.json",
+      "sha256": "540760ea34cea22459c9248b4ce8c90ad1b34e000b18e82b70552e45fd766fad"
+    },
+    "p19_build_kwargs.json": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/build_kwargs.json",
+      "sha256": "b4ae49bdd44f605435f46482d0bc7e2ad1c4c2749f2acd4b1a64a7b89ef0ee6a"
+    },
+    "precision_repro_batch.py": {
+      "path": "models/autoports/google_gemma_4_31b_it/tools/precision_repro_batch.py",
+      "sha256": "172f5a1dd7a7403847e47b966ae79c306163650a60211418c7c195794ec5c125"
+    },
+    "precision_repro_probe.py": {
+      "path": "models/autoports/google_gemma_4_31b_it/tools/precision_repro_probe.py",
+      "sha256": "2ffc23b9081d7be78f3a0e911da7c50dd51dbf80de07a8716d600579dad1c25f"
+    },
+    "generator.py": {
+      "path": "models/autoports/google_gemma_4_31b_it/tt/generator.py",
+      "sha256": "3276fd7427898077ab25e139f89a7b03d2a968cd9bafb79e9aa08bb975016f22"
+    },
+    "p19_load.json": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/load.json",
+      "sha256": "56bc9a1f537028238f2668abb836b9f4edb5b5960accc704be2e4f6fd7f4a337"
+    },
+    "row10_fixture": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.matplotlib__matplotlib-20488.call86.onset.seed43.private.json",
+      "sha256": "a427e543e23d8291eed5bac6535acc3965401ab0ccf18535cbc4c4d6caf97da3"
+    },
+    "row10_p19_result": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.matplotlib__matplotlib-20488.call86.onset.seed43.cap256.json",
+      "sha256": "84b2492b334ddfffe11df139d707e35fbb06dcabd6048ed6fe8c5ab5238e9dd4"
+    },
+    "row10_row_preparation": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/cap-extensions-preparation/row10.json",
+      "sha256": "74ac230546a033c1f275e4a244b32787f72d3fe8c29d782858f9e37fa93aabbb"
+    },
+    "row49_fixture": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.sphinx-doc__sphinx-10323.call57.onset.seed43.private.json",
+      "sha256": "f92ea14c2024b7c89722784a2f1d8e8551e470f4cd281f974e3b9e691f6a8523"
+    },
+    "row49_p19_result": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-10323.call57.onset.seed43.cap256.json",
+      "sha256": "8563ed7f5806f8d002b291d1a4f88858c44ea2f22b98561b2444ce1f34ff57e6"
+    },
+    "row49_row_preparation": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/cap-extensions-preparation/row49.json",
+      "sha256": "763fc95a3833043786ea0651edc2bf13ab0a7350696bedcdb3f4cb17b55ad180"
+    },
+    "row66_fixture": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap1024.seed42.private.json",
+      "sha256": "b4253957ad89651510a0e39ea3aa49373926c9ff2d963a4ee381047b400efac8"
+    },
+    "row66_p19_result": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed42.cap1024.json",
+      "sha256": "e4878adb1a16e1615880e90a21769012a4274e88436d859024fb7fec7d899d42"
+    },
+    "row66_row_preparation": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/cap-extensions-preparation/row66.json",
+      "sha256": "0cd64a02af4ce5ce956f9def7d31018a5d6c6553c92d15c71c442792d8f39755"
+    },
+    "row74_fixture": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.cap1024.seed44.private.json",
+      "sha256": "14b67b9fcb8ad382713dff99ccb47922690bc5be90131e3adc25a195f3e712d3"
+    },
+    "row74_p19_result": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.seed44.cap1024.json",
+      "sha256": "a79a20bd828f19237d4fd30477eca3b19e21761ccbedf2ac4dc075a6edbad117"
+    },
+    "row74_row_preparation": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/cap-extensions-preparation/row74.json",
+      "sha256": "13c3760a3d94a0dbee3784a8870661f749237bb3b5653a303e1973c9d8d0a1da"
+    }
+  },
+  "extension_prefix_comparisons": [
+    {
+      "source_index": 10,
+      "name": "anomaly.matplotlib__matplotlib-20488.call86.onset.seed43.cap512",
+      "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.matplotlib__matplotlib-20488.call86.onset.seed43.private.json",
+      "fixture_sha256": "a427e543e23d8291eed5bac6535acc3965401ab0ccf18535cbc4c4d6caf97da3",
+      "prompt_token_count": 46118,
+      "prompt_ids_sha256": "1e4ba82282f5bf6ed6955e16ab44f78305ef4a87b38a3c60dcb76a30679b187b",
+      "seed": 43,
+      "original_p19_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.matplotlib__matplotlib-20488.call86.onset.seed43.cap256.json",
+      "original_result_sha256": "84b2492b334ddfffe11df139d707e35fbb06dcabd6048ed6fe8c5ab5238e9dd4",
+      "original_generated_tokens": 256,
+      "extension_cap": 512,
+      "expected_extension_prefix_length": 256,
+      "expected_original_ids_sha256": "db60bcae3f813fe0935e97f553f4d4a47e337235588681ed6c674c5c3915bc19",
+      "comparison_rule": "extension free_running token_ids[:expected_extension_prefix_length] must equal exact original P19 free_running token_ids; report both matched and differing first index if not."
+    },
+    {
+      "source_index": 49,
+      "name": "anomaly.sphinx-doc__sphinx-10323.call57.onset.seed43.cap512",
+      "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.sphinx-doc__sphinx-10323.call57.onset.seed43.private.json",
+      "fixture_sha256": "f92ea14c2024b7c89722784a2f1d8e8551e470f4cd281f974e3b9e691f6a8523",
+      "prompt_token_count": 58695,
+      "prompt_ids_sha256": "b717f8d15d30f0bd3b445deef9213defb8a6c36f4bc1bc86a7f889289270c2fb",
+      "seed": 43,
+      "original_p19_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-10323.call57.onset.seed43.cap256.json",
+      "original_result_sha256": "8563ed7f5806f8d002b291d1a4f88858c44ea2f22b98561b2444ce1f34ff57e6",
+      "original_generated_tokens": 256,
+      "extension_cap": 512,
+      "expected_extension_prefix_length": 256,
+      "expected_original_ids_sha256": "b1ccdee92148e3ec363378860b5e8d57f7fc5db546cb88bbbe507e43ccf5fa7d",
+      "comparison_rule": "extension free_running token_ids[:expected_extension_prefix_length] must equal exact original P19 free_running token_ids; report both matched and differing first index if not."
+    },
+    {
+      "source_index": 66,
+      "name": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed42.cap2048",
+      "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap1024.seed42.private.json",
+      "fixture_sha256": "b4253957ad89651510a0e39ea3aa49373926c9ff2d963a4ee381047b400efac8",
+      "prompt_token_count": 76441,
+      "prompt_ids_sha256": "5e8c9025218ae22d2ae1491e4ff24e3aacdf82ad5d2985c6e2792168270c6808",
+      "seed": 42,
+      "original_p19_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed42.cap1024.json",
+      "original_result_sha256": "e4878adb1a16e1615880e90a21769012a4274e88436d859024fb7fec7d899d42",
+      "original_generated_tokens": 1024,
+      "extension_cap": 2048,
+      "expected_extension_prefix_length": 1024,
+      "expected_original_ids_sha256": "de238d541c0cc7b010d415d242ec954290fd54fefc701ebb1ade85cdfcea5bfa",
+      "comparison_rule": "extension free_running token_ids[:expected_extension_prefix_length] must equal exact original P19 free_running token_ids; report both matched and differing first index if not."
+    },
+    {
+      "source_index": 74,
+      "name": "anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.seed44.cap2048",
+      "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.cap1024.seed44.private.json",
+      "fixture_sha256": "14b67b9fcb8ad382713dff99ccb47922690bc5be90131e3adc25a195f3e712d3",
+      "prompt_token_count": 47548,
+      "prompt_ids_sha256": "7aaf88be1dd4df81aa4880bf0dd1741f94a99b241903c24f0def9fa78423479b",
+      "seed": 44,
+      "original_p19_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.seed44.cap1024.json",
+      "original_result_sha256": "a79a20bd828f19237d4fd30477eca3b19e21761ccbedf2ac4dc075a6edbad117",
+      "original_generated_tokens": 1024,
+      "extension_cap": 2048,
+      "expected_extension_prefix_length": 1024,
+      "expected_original_ids_sha256": "70dcb8a48bf508ef622aec8d3b67943ce6b19bd51196f7da3d028a4b99fb4fea",
+      "comparison_rule": "extension free_running token_ids[:expected_extension_prefix_length] must equal exact original P19 free_running token_ids; report both matched and differing first index if not."
+    }
+  ]
+}

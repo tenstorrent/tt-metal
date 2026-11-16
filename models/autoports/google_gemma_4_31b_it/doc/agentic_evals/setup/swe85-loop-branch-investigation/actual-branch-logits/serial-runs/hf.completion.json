@@ -1,0 +1,70 @@
+{
+  "candidate_admission_sha256": "3733589f29cafa52d03f8f457ea1900448050c1353c9dfb66af7da0d66e870bd",
+  "child_exit_codes": [
+    {
+      "command": "hf",
+      "exit_code": 0
+    }
+  ],
+  "driver_exit_code": 0,
+  "elapsed_seconds": 163.2542417049408,
+  "finished_unix": 1794739442.8748848,
+  "forecast_gate": {
+    "measured_seconds": 163.2542417049408,
+    "range_seconds": [
+      90,
+      300
+    ],
+    "root_acceptance_path": null,
+    "status": "range_hit"
+  },
+  "h9_terminal_evidence": {
+    "admission_sha256": "74640276fdf5e463fa968d5d188994622759df96f09d4f408e02712b7d09ae66",
+    "group_count": 8,
+    "progress_sha256": "4a9363429f50949031da53c13f3156c2bd399f756d227f353babaafd065ec773",
+    "root_reviews": {
+      "01": "0c6e547db4f93a2c7bfb8e0278deba56ac643a79c633ade638db045bdc436803",
+      "02": "27fb72254a1ee6149b04d013174a471bcaeab60e69bf982e4fe357c901a0d85a",
+      "03": "7f119e66e90420977079dec6a9d65c09b00b851ba8c7e9ae786ee6188635e071",
+      "04": "c88541915f789412656370cd353ba50dfa62e68e5624c33d4b348901d9227503",
+      "05": "244884fec49742320618150b86258143478976547e05c2196b6a368f9146a3c5",
+      "06": "4f2f0dd6941f59a507139aee30b6013f789bca0a9769d15ba65f696fd8de5a5c",
+      "07": "44e493ccda9f00b75e8ae562c79880fd7da2d5d7beb3262a135a4d56bcae8127",
+      "08": "3261fbdcd51ce4584887196549fb347419bc705d19cee2b2af075f5494b91ffd"
+    },
+    "root_terminal_review_sha256": "e7109b54dafdd7f8507703b7f0c31795ee2678b56f9a543a1ef2d0b4f6f36cd5"
+  },
+  "launch_sha256": "d693b8a8bb07a0237798a785423325fbbd3bcb9eb47bc14a1698d1cd0f7fd7cf",
+  "logs": [
+    {
+      "command": "hf",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_sha256": "7ae149a64eaeb7b2dfab6d323a6c31ae3d1905f97240e435c24cbe71f5f28d65"
+    }
+  ],
+  "mode": "hf",
+  "output_validation": {
+    "capture": {
+      "branch_names": [
+        "tt_seed44_loop_history",
+        "hf_seed44_ellipsis_history"
+      ],
+      "report_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-loop-branch-investigation/actual-branch-logits/outputs/hf.report.json",
+      "report_sha256": "697927aac05966b7360ef0db488c4264dfdc012d08db08c7e8a7be1b538ddd6b",
+      "rows_per_branch": 7,
+      "tensor_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-loop-branch-investigation/actual-branch-logits/outputs/hf.logits.pt",
+      "tensor_sha256": "2bb7eff7ef87ea289ce9aeeda97b4c3e4c9022b11641790cda2038915cd29f81"
+    },
+    "status": "capture_tensor_and_branch_identity_validated"
+  },
+  "prior_forecast_gates": {},
+  "resource_preflight": {
+    "active_hf_or_probe_processes": [],
+    "fuser": null,
+    "mem_available_bytes": 132499406848,
+    "proc_device_owners": [],
+    "required_mem_available_bytes_for_hf": 107374182400
+  },
+  "started_unix": 1794739279.6206431,
+  "status": "completed"
+}

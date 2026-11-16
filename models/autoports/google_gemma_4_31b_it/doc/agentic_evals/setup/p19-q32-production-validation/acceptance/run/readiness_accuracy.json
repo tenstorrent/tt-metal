@@ -1,0 +1,141 @@
+{
+  "scope": "full60layers",
+  "reference": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/attention-down-acceptance/references/aime24.refpt",
+  "revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+  "prefill": [
+    {
+      "top1": 1.0,
+      "top5": 1.0,
+      "top100": 1.0,
+      "matches_top1": 100,
+      "matches_top5": 100,
+      "matches_top100": 100,
+      "total": 100,
+      "k": 100
+    }
+  ],
+  "prefill_counters": {
+    "model_replays": 0,
+    "sample_replays": 0,
+    "token_refreshes": 0,
+    "position_refreshes": 0,
+    "page_refreshes": 60,
+    "readbacks": 1,
+    "captures": 0
+  },
+  "traces": {
+    "model": "MeshTraceId(0)",
+    "sampling": "MeshTraceId(1)"
+  },
+  "decode": [
+    {
+      "top1": 0.98,
+      "top5": 1.0,
+      "top100": 1.0,
+      "matches_top1": 98,
+      "matches_top5": 100,
+      "matches_top100": 100,
+      "total": 100,
+      "k": 100,
+      "elapsed_s": 5.221558005083352,
+      "e2e_t/s/u": 19.151372043104153,
+      "ttft_ms": 114.30276883766055,
+      "decode_tokens": 99.0,
+      "decode_elapsed_s": 5.106755593093112,
+      "decode_t/s/u": 19.386995849634356
+    }
+  ],
+  "teacher_forcing_repeats": [
+    [
+      {
+        "top1": 0.98,
+        "top5": 1.0,
+        "top100": 1.0,
+        "matches_top1": 98,
+        "matches_top5": 100,
+        "matches_top100": 100,
+        "total": 100,
+        "k": 100,
+        "elapsed_s": 5.221558005083352,
+        "e2e_t/s/u": 19.151372043104153,
+        "ttft_ms": 114.69841306097806,
+        "decode_tokens": 99.0,
+        "decode_elapsed_s": 5.106755593093112,
+        "decode_t/s/u": 19.386085391260455
+      }
+    ],
+    [
+      {
+        "top1": 0.98,
+        "top5": 1.0,
+        "top100": 1.0,
+        "matches_top1": 98,
+        "matches_top5": 100,
+        "matches_top100": 100,
+        "total": 100,
+        "k": 100,
+        "elapsed_s": 5.22053736099042,
+        "e2e_t/s/u": 19.15511624286669,
+        "ttft_ms": 114.30276883766055,
+        "decode_tokens": 99.0,
+        "decode_elapsed_s": 5.106180950067937,
+        "decode_t/s/u": 19.388267076332813
+      }
+    ],
+    [
+      {
+        "top1": 0.98,
+        "top5": 1.0,
+        "top100": 1.0,
+        "matches_top1": 98,
+        "matches_top5": 100,
+        "matches_top100": 100,
+        "total": 100,
+        "k": 100,
+        "elapsed_s": 5.220676054945216,
+        "e2e_t/s/u": 19.154607362637705,
+        "ttft_ms": 114.01863698847592,
+        "decode_tokens": 99.0,
+        "decode_elapsed_s": 5.106515767984092,
+        "decode_t/s/u": 19.386995849634356
+      }
+    ]
+  ],
+  "decode_counters": {
+    "model_replays": 297,
+    "sample_replays": 300,
+    "token_refreshes": 300,
+    "position_refreshes": 3,
+    "page_refreshes": 0,
+    "readbacks": 300,
+    "captures": 0
+  },
+  "natural": [
+    {
+      "top1": 0.91015625,
+      "top5": 1.0,
+      "top100": 1.0,
+      "matches_top1": 466,
+      "matches_top5": 512,
+      "matches_top100": 512,
+      "total": 512,
+      "k": 100,
+      "elapsed_s": 27.310302200959995,
+      "e2e_t/s/u": 18.747504009018343,
+      "ttft_ms": 164.710964076221,
+      "decode_tokens": 511.0,
+      "decode_elapsed_s": 27.14549146592617,
+      "decode_t/s/u": 18.824488797390995
+    }
+  ],
+  "natural_reference": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/attention-down-acceptance/references/natural.refpt",
+  "natural_counters": {
+    "model_replays": 511,
+    "sample_replays": 512,
+    "token_refreshes": 512,
+    "position_refreshes": 1,
+    "page_refreshes": 60,
+    "readbacks": 512,
+    "captures": 0
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "name": "served",
+  "command": [
+    "timeout",
+    "3600",
+    "env",
+    "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+    "READINESS_TRACE_REGION_SIZE=134217728",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+    "-m",
+    "models.autoports.google_gemma_4_31b_it.tools.precision_repro_batch",
+    "--cases",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/served-candidate-cases.json",
+    "--build-kwargs-file",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/head_bfp8_build_kwargs.json",
+    "--output-dir",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/runs/served"
+  ],
+  "start_unix": 1794718615.2491293,
+  "device_owner_preflight": [],
+  "prediction": {
+    "point_seconds": 344.7164177833997,
+    "range_seconds": [
+      289.7788742132909,
+      472.9040194469869
+    ],
+    "point_hours": 0.09575456049538882,
+    "range_hours": [
+      0.08049413172591414,
+      0.13136222762416302
+    ]
+  },
+  "admission_sha256": "1aea13a3e89e382fab8eaf62fa6d99a7f50e7e077191fa958cdabf9fdd917580",
+  "scope": "Diagnostic host-wall, not serving performance.",
+  "end_unix": 1794718906.3634691,
+  "exit_code": 0,
+  "measured_hours": 0.08086509439680312,
+  "prediction_range_hit": true
+}

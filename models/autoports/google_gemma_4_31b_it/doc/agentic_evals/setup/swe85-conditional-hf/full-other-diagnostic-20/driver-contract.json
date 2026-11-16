@@ -1,0 +1,112 @@
+{
+  "status": "candidate_driver_contract_not_admitted",
+  "execution_default": "inert",
+  "allowed_cli_modes": [
+    "--validate-only",
+    "--execute --group N"
+  ],
+  "group_invocation": "--execute --group N",
+  "single_group_only": true,
+  "no_auto_advance": true,
+  "root_admission_schema": {
+    "status": "admitted",
+    "reviewer": "root",
+    "authorized_groups": "exactly [N] for this invocation",
+    "group_authorizations": {
+      "N": {
+        "status": "authorized",
+        "reviewer": "root",
+        "forecast_sha256": "current forecast.json SHA-256",
+        "forecast_range_seconds": "exact group range_seconds from forecast.json",
+        "accepted_runtime_ceiling_seconds": "root-accepted budget at least group timeout_seconds + 60 seconds",
+        "deadline_unix": "root-authorized deadline; both now + accepted ceiling and now + fixed subprocess timeout plus 60-second grace must be <= deadline"
+      }
+    },
+    "candidate_hash_pins": [
+      "proposal_sha256",
+      "commands_sha256",
+      "source_integrity_sha256",
+      "forecast_sha256"
+    ],
+    "driver_hash_pins": [
+      "driver_integrity_sha256",
+      "driver_sha256",
+      "driver_contract_sha256",
+      "tests_sha256"
+    ],
+    "predecessor_gate_sha256": "hash of predecessor-gate.json"
+  },
+  "predecessor_gate_schema": {
+    "status": "root_accepted_predecessors_terminal",
+    "reviewer": "root",
+    "predecessors": {
+      "hf9": {
+        "status": "completed",
+        "exit_code": 0,
+        "completion_path": "root-relative or absolute",
+        "completion_sha256": "..."
+      },
+      "skhf": {
+        "status": "completed",
+        "exit_code": 0,
+        "completion_path": "root-relative or absolute",
+        "completion_sha256": "..."
+      },
+      "p3": {
+        "status": "completed",
+        "exit_code": 0,
+        "completion_path": "root-relative or absolute",
+        "completion_sha256": "..."
+      }
+    }
+  },
+  "between_group_gate": {
+    "prior_completion": "completed, child and driver exit 0, outputs validated and hash-bound",
+    "prior_root_review": "root_reviewed_forecast_and_outputs_next_group_authorized",
+    "forecast_miss": "requires forecast-miss-accepted-group-N.json with root signature fields and hashes bound to completion and admission",
+    "group_review": "must explicitly authorize the next group; driver never advances automatically"
+  },
+  "runtime_preflight": [
+    "no precision_repro_hf.py process",
+    "no open /dev/tenstorrent owners",
+    "MemAvailable >= 100 GiB",
+    "no STOP_BEFORE_LAUNCH sentinel",
+    "group output directory absent"
+  ],
+  "recording": {
+    "launch": "exclusive launch-group-NN.json immediately before child invocation",
+    "terminal": "exclusive completion-group-NN.json on every execution-path error after invocation request",
+    "statuses": [
+      "preflight_failed",
+      "failed",
+      "child_failed",
+      "output_validation_failed",
+      "completed"
+    ],
+    "child_exit_code_separate_from_driver_validation_exit": true,
+    "existing_records_or_outputs_are_never_overwritten": true
+  },
+  "runtime_timeout": {
+    "policy": "No automatic run truncation based on accepted ceiling; refuse launch unless accepted ceiling and remaining deadline cover the frozen child timeout plus 60-second subprocess grace.",
+    "group_timeout_seconds": 18000,
+    "subprocess_timeout_grace_seconds": 60
+  },
+  "output_validation": [
+    "complete result status",
+    "exact pinned HF revision",
+    "CPU device",
+    "exact source case path and case SHA-256",
+    "exact prompt token count",
+    "exact saved chosen-position count",
+    "one trial at admitted seed",
+    "requested generation cap equals original group cap",
+    "generated IDs and count agree and do not exceed cap",
+    "result file SHA-256 recorded"
+  ],
+  "execution_policy": "The inference runner is invoked only inside --execute --group N after all checks and an actual root admission. Validation and tests do not import TTNN, touch devices, load the model, or invoke the HF runner.",
+  "volatile_predecessor_snapshot_paths": [
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/progress.json"
+  ],
+  "volatile_predecessor_note": "The frozen progress snapshot hash remains in source-integrity.json but is not compared to its mutable live file; final HF9 completion must be independently pinned by root in predecessor-gate.json.",
+  "root_roster_review": "Required static root review verifies all20 seed-specific source/fixture hashes and exact proposal/forecast pins; review status does not authorize execution."
+}

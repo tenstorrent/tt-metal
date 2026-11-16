@@ -1,0 +1,119 @@
+{
+  "status": "prepared_CPU_only_not_executed",
+  "tasks": [
+    "psf__requests-1921",
+    "pylint-dev__pylint-4551"
+  ],
+  "cases": [
+    {
+      "task": "psf__requests-1921",
+      "call": 1,
+      "response_id": "chatcmpl-b767061204ec5d62",
+      "private_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-getall-call1-controls/psf__requests-1921.call1.onset.private.json",
+      "private_case_sha256": "ba91bfa87c059b14b4385dcf00dd1e20390c87e320990104fd328ccb18f4d863",
+      "raw_packet": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/protocol-call1-archive/psf__requests-1921.call1.packet.private.json",
+      "raw_packet_sha256": "02d996cc78ccbf116e3b690cf68356824398a4c6c411330dd30aa831c49d8bd0",
+      "native_prompt_tokens": 1033,
+      "reconstructed_request_prompt_tokens": 1032,
+      "native_reply_tokens": 223,
+      "reconstructed_reply_tokens": 221,
+      "conditioning_tokens": 1235,
+      "onset_positions": 18,
+      "onset_token_index": 203,
+      "motif": "GetAll-bash",
+      "evidence": "Visible content contains GetAll-bash alongside a valid structured bash tool call. Canonical content-onset control only: native token IDs and original generated stream ordering unavailable; not proof of an invalid executed tool call. Pylint4551 also has directory.thought at the reasoning boundary.",
+      "limitations": "Exact request body with historical JSON tool arguments deserialized for pinned template. Reply reconstructed as canonical thought header, complete saved reasoning, channel boundary, complete visible content, canonical tool-call macros from pinned template, native stop ID. No native token IDs: generated whitespace/order/protocol spelling cannot be recovered uniquely; counts and hashes are evidence, not identity proof. Canonicalization of malformed tool names is not proof of exact malformed native bytes.",
+      "native_message_indices": [
+        2
+      ],
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "native_seed": null,
+      "diagnostic_seeds": [
+        42,
+        43,
+        44
+      ]
+    },
+    {
+      "task": "pylint-dev__pylint-4551",
+      "call": 1,
+      "response_id": "chatcmpl-a6bb52ac80c04f20",
+      "private_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-getall-call1-controls/pylint-dev__pylint-4551.call1.onset.private.json",
+      "private_case_sha256": "34ad0af91e9d911cc9ac0e1bcb97d6adf7e3754df831a45af074c3bdba1fa369",
+      "raw_packet": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/protocol-call1-archive/pylint-dev__pylint-4551.call1.packet.private.json",
+      "raw_packet_sha256": "49d388e3d01b85a0294434c79b850e9bdd6628e6fa0f651e3d4152f3475a48d4",
+      "native_prompt_tokens": 1136,
+      "reconstructed_request_prompt_tokens": 1135,
+      "native_reply_tokens": 151,
+      "reconstructed_reply_tokens": 146,
+      "conditioning_tokens": 1263,
+      "onset_positions": 18,
+      "onset_token_index": 128,
+      "motif": "GetAll-bash",
+      "evidence": "Visible content contains GetAll-bash alongside a valid structured bash tool call. Canonical content-onset control only: native token IDs and original generated stream ordering unavailable; not proof of an invalid executed tool call. Pylint4551 also has directory.thought at the reasoning boundary.",
+      "limitations": "Exact request body with historical JSON tool arguments deserialized for pinned template. Reply reconstructed as canonical thought header, complete saved reasoning, channel boundary, complete visible content, canonical tool-call macros from pinned template, native stop ID. No native token IDs: generated whitespace/order/protocol spelling cannot be recovered uniquely; counts and hashes are evidence, not identity proof. Canonicalization of malformed tool names is not proof of exact malformed native bytes.",
+      "native_message_indices": [
+        2
+      ],
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "native_seed": null,
+      "diagnostic_seeds": [
+        42,
+        43,
+        44
+      ]
+    }
+  ],
+  "cpu_validation": [
+    {
+      "mode": "served",
+      "config": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/head_bfp8_build_kwargs.json",
+      "config_sha256": "2e583fa8bd7aff7c5f8be110835df751924d167243c5a44a68aa5b3d70c6845f",
+      "exit_code": 0,
+      "stdout": "Validated 2 jobs without importing TTNN"
+    },
+    {
+      "mode": "full",
+      "config": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_build_kwargs.json",
+      "config_sha256": "ff2b5ed24e0b6a1dee7eb5cd8bd437d17c3df5f8f25567927d239e666f0699f9",
+      "exit_code": 0,
+      "stdout": "Validated 2 jobs without importing TTNN"
+    }
+  ],
+  "commands_staged_only": {
+    "served": [
+      "python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tools.precision_repro_batch",
+      "--cases",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-getall-call1-controls/cases.json",
+      "--build-kwargs-file",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/head_bfp8_build_kwargs.json",
+      "--output-dir",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-getall-call1-controls/served"
+    ],
+    "full": [
+      "python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tools.precision_repro_batch",
+      "--cases",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-getall-call1-controls/cases.json",
+      "--build-kwargs-file",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_build_kwargs.json",
+      "--output-dir",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-getall-call1-controls/full",
+      "--compare-dir",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-getall-call1-controls/served"
+    ]
+  },
+  "no_inference": true,
+  "phase_scope": "Anomaly controls independent of later wrong-action controls; no score or corrected answer claim."
+}

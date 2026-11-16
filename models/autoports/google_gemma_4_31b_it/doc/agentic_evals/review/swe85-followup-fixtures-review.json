@@ -1,0 +1,113 @@
+{
+  "review": "swe85-followup-fixtures",
+  "scope": "Independent CPU-only fixture validity/admission review; not anomaly resolution or stage signoff",
+  "disposition": "no_concrete_fixture_or_cost_error_found",
+  "actions_not_performed": [
+    "TTNN import",
+    "device work",
+    "server start",
+    "fixture modification",
+    "generated command execution"
+  ],
+  "cap_extensions": {
+    "served_cases": 25,
+    "full_cases": 33,
+    "per_case": {
+      "trials": 1,
+      "branches": [],
+      "source_cap": 256,
+      "candidate_cap": 512
+    },
+    "checked": [
+      "prompt IDs, continuations, sampling and chosen seed match source",
+      "source generated exactly 256 IDs",
+      "all coordinator judgments inconclusive",
+      "57 explicit at_cap true; one omitted flag but cap note and token count confirm cap",
+      "prompt token sums recompute",
+      "stored hashes match candidate manifests",
+      "stored CPU validate-only record inspected"
+    ],
+    "prompt_token_sums": {
+      "served": 1106308,
+      "full": 1514818
+    },
+    "cost_hours": {
+      "formula": "sum(wall-decode_wall + decode_wall*(new_cap-1)/decode_tokens) + one measured load per mode",
+      "served": {
+        "estimate": 0.2497183532780531,
+        "low": 0.17480284729463716,
+        "high": 0.37457752991707965
+      },
+      "full": {
+        "estimate": 0.54120530679392,
+        "low": 0.37884371475574397,
+        "high": 0.81180796019088
+      },
+      "mismatches": 0
+    },
+    "non_blocking_note": "Preparation, host-validation and cost artifacts retain stale wording about remaining review; candidate-only/not-admitted status is accurate."
+  },
+  "contraction_short_controls": {
+    "cases": [
+      "Matplotlib86",
+      "canonicalprefix91",
+      "Sphinx10323"
+    ],
+    "per_case": {
+      "prompt": "exact last 512 original IDs",
+      "continuations": "unchanged",
+      "chosen_TF": "unchanged",
+      "seeds": [
+        42,
+        43,
+        44
+      ],
+      "cap": 512,
+      "trials": 3,
+      "branches": [
+        "chosen"
+      ]
+    },
+    "checked": [
+      "fixture and source metadata hashes",
+      "native seed-43 full-run motif adjudications",
+      "HF conditional on same short full-TT reproduction",
+      "non-reproductions preserved"
+    ],
+    "cost_hours": {
+      "formula": "conservative chosen-TF wall allowance + sum((sample_wall-decode_wall)*512/original_prompt_tokens + decode_wall*511/decode_tokens) over three runs + one measured load per mode",
+      "served": {
+        "estimate": 0.0979548406672922,
+        "low": 0.0489774203336461,
+        "high": 0.16652322913439674
+      },
+      "full": {
+        "estimate": 0.13066658657292493,
+        "low": 0.06533329328646247,
+        "high": 0.22213319717397237
+      },
+      "mismatches": 0
+    },
+    "non_blocking_note": "Preparation prerequisite to finish long-full review is met. Generator replay needs --expected-count 36 (default 21); invocation is not recorded."
+  },
+  "sha256": {
+    "setup/swe85-cap-extensions/served-candidate-cases.json": "4cb883c6fe971328c3ba49179d449579169a8335ce83f3b1b12a9c148319786d",
+    "setup/swe85-cap-extensions/full-candidate-cases.json": "f749b36d171fdaabbc6b96bef1f4f933a59ef8ea2a5e7b2d96b525b0b3c30a12",
+    "setup/swe85-cap-extensions/preparation.json": "1211de20883579efbe1628c5966a2756a4d9863e8a6b7f80e74555ccfd5f02fe",
+    "setup/swe85-cap-extensions/host-validation.json": "dc708be93dca1d2c8b457289534d21917b7a5f05179d7913f0a7f4ccd8efab81",
+    "setup/swe85-cap-extensions/cost-estimate.json": "21bfc3457d46af9d85f0ed3749dd445660c20d1196a228455b17e9126ab5da40",
+    "setup/swe85-cap-extensions/runner-validation.json": "bb8c43e3b6714fae349b3d9e174ca64142250d2ed7e462ba551e7a9ba007ed69",
+    "setup/swe85-contraction-short-controls/candidate-cases.json": "06f5becacaad409badf1813b00e65a337174e82753e4e001701be5835c1fc06f",
+    "setup/swe85-contraction-short-controls/preparation.json": "7a7bd3a29a83d9992ad5af81b3201e05bd0059590e0f34390732d92fc6074925",
+    "setup/swe85-contraction-short-controls/cost-estimate.json": "bbe5edc4526d4ccd7dbb1d88065f32f1708e674503f217520a21548986603f0f",
+    "setup/swe85-admitted-controls85/combined-cases.json": "f2aeb0bfe40bce8c102ceba564c41ca164a138d90d9fd25adc5993b6c3d8eb81",
+    "setup/prepare_swe85_cap_extensions.py": "c20f6827b7b9e8a03ca67f54b96ed84cb807ff99b154d62ba61de95c6d6c5e0b",
+    "setup/validate_swe85_cap_extensions.py": "2fd1ab4af2a2d7297042abb932fa922f9b93590003324fc85bfc0b8cef837043",
+    "setup/prepare_swe85_optional_suffix512.py": "3265ef22814b9a61a8c385dd274928fdcb37e464da3f7bb3facee64a8b186ec9"
+  },
+  "followup_command_draft": {
+    "path": "setup/swe85-followup-execution/admission-draft.json",
+    "sha256": "47e91d363855e1644e1c55998a0951a39790cb3feaee46300aebac9959d0fe8e",
+    "finding": "Sequence and paths are internally consistent: contraction served/full then cap served/full; compare-dir only for matching contraction manifests; draft remains pending and unlaunched."
+  }
+}

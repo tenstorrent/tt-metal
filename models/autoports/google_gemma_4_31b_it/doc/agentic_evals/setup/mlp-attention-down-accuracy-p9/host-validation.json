@@ -1,0 +1,12 @@
+{
+  "status": "host_only_validation_passed",
+  "active_runner_edited": false,
+  "device_or_model_work": false,
+  "checks": [
+    "P9 config differs from P8 only in precision aliases/fidelities and config_id; all unrelated fields match",
+    "P9 command keeps the exact AIME and natural reference paths and uses a unique output directory that does not exist",
+    "Unapplied patch applies to an isolated temporary runner copy and patched source compiles",
+    "AST-extracted counter helper accepts 3x99 plus 511 replay counts with captures=0",
+    "AST-extracted counter helper rejects mismatched natural replay count and nonzero captures"
+  ]
+}

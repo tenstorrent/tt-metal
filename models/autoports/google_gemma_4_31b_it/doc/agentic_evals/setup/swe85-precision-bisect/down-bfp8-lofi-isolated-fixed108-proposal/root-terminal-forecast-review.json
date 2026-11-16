@@ -1,0 +1,22 @@
+{
+  "status": "root_terminal_forecast_accepted_triage_pending",
+  "reviewer": "root",
+  "accepted": true,
+  "at_unix": 1794742278.550219,
+  "completion_sha256": "0f4b67270fbca7ed37ae3ebb360c3e4f8ff675ea74f8814b4d09ab3ae7246782",
+  "elapsed_seconds": 2140.1934437209275,
+  "forecast_range_seconds": [
+    2018.038988828659,
+    6457.7247642517095
+  ],
+  "in_range": true,
+  "validated_outputs": 108,
+  "runtime_policies_match": true,
+  "cap_reached_rows": 25,
+  "decode_tokens": 28953,
+  "decode_wall_seconds": 1017.3925147645641,
+  "diagnostic_decode_tok_s_user": 28.458043065807345,
+  "rate_scope": "Traced diagnostic host-wall token-out, excludes prefill, not vLLM or device timing. Differing outputs preclude direct matched-speed gain claim.",
+  "forecast_text_correction": "Frozen forecast low-scenario prose incorrectly says BF16 HiFi4 head; actual expected/runtime policy is selected BFP8 LoFi head. Numerical forecast was P1 wall multipliers and is preserved.",
+  "selection": "pending full triage and cap extensions; not selected"
+}

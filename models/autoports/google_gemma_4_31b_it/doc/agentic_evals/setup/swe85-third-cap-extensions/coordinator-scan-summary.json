@@ -1,0 +1,111 @@
+{
+  "source_directory": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions",
+  "coordinator_snapshots": [
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/full-coordinator-first4.json",
+      "sha256": "0d294a8184ba2792864feac7224b8a05f6acacba1d99894f297f4868d6b0ff36"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/full-coordinator-pytest-first.json",
+      "sha256": "f7559774e7a04f7d145316f0b4f93c857d8404cdd55e9afdf5457191fbfcd893"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/full-coordinator-pytest-second.json",
+      "sha256": "dad8eea30e1e826be49534a1fdd02babdbde7a72c58cf3171e2ce55e71dc37d8"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/full-coordinator-pytest-third.json",
+      "sha256": "e7aceeb45e978290fcf6291f22698fa6dc8dd017e335578f111df581812d0a83"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/full-coordinator-sklearn13135.json",
+      "sha256": "4e2eddf28b2e3a89dd26d589db61ca52aecb232b882c2c2c56cfea68af330aab"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/full-coordinator-sphinx101.json",
+      "sha256": "2ef3859561877b88428b7d3b0521491c668b612897aed40a2b2920f0ddec78ec"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/full-coordinator-sphinx119-first.json",
+      "sha256": "b196b0787cd83db86fcb6ed8105e1a69e0fd3fe7e8e27ef8294ce006350e82ec"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/full-coordinator-sphinx119-second.json",
+      "sha256": "3c07cc3262fe2ef8ed05d1bd128b5caabcba31c8fa87812b27729cfb9aa7aa68"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/full-coordinator-sphinx119-third.json",
+      "sha256": "acc70266c664d02fdd17dbf4969f6deeea3a186c8e42377a91900d34aae5e88f"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/full-coordinator-sphinx28-first2.json",
+      "sha256": "6ba7f3791b3ea32824c6313dc24125425e08f8a165f20de8756697ec41cb34b4"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/full-coordinator-sphinx86-first2.json",
+      "sha256": "67762113e0df97773cd5691921948f2e2f48078cb089d1ee0781ceb46375a181"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/full-coordinator-sphinx86last95first.json",
+      "sha256": "11ee67940b32853f073bca52ef25a1a7987c0769015351aa5319d6dc352e903a"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/full-coordinator-sphinx9461-first.json",
+      "sha256": "4eeb67ea69f916d3dbea7cf6acb817adfc03638a12ade2633cfb0a0890fed7bd"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/full-coordinator-sphinx9461-second.json",
+      "sha256": "c83f2eee23110780f15eea82662c1f5ad3eb49c89e00adbf2a645600bf45cc57"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/full-coordinator-sphinx95-second.json",
+      "sha256": "3eb82b71546b836d4d2cd500ce16aec1f42070e8ee1fdd6fd2f2a701df6b9766"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/full-coordinator-sphinx95-third.json",
+      "sha256": "f4311df38af9e223f0e88ac31abc83be82e5890fafacd0bc91e2f15c8ee1088b"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/served-coordinator-call95-last2.json",
+      "sha256": "0d14c727e737935529ece74df12c002806d4cc74ae4d6367d3e850e3f1780d8a"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/served-coordinator-final3.json",
+      "sha256": "f9a800969dafeb952f8bc9dd404598aae2730e67c9eec504cf77a6f1d49fcc50"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/served-coordinator-first2.json",
+      "sha256": "7eef01c7ad8a0a41c1648b5f9baa1f622778b3be2013f74f8895adb68bc8f5d1"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/served-coordinator-next2.json",
+      "sha256": "6587ec927580efb56efcee4a405c94a067fd25ea9e815ad2c85dfd4cbb1c53d8"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/served-coordinator-next3.json",
+      "sha256": "2f370ae65c56f4e1fad10d508ee94742a6d14fd54fba30df39a626ca9f5e2b55"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/served-coordinator-sphinx9461-first2.json",
+      "sha256": "afe0e220f588c5b9aff64d7de5752f5e00d52443489f27ce134a46f9af0013b2"
+    }
+  ],
+  "second_cap_manifest_counts": {
+    "served": 14,
+    "full": 24
+  },
+  "latest_coordinator_row_counts_by_mode": {
+    "served": 14,
+    "full": 24
+  },
+  "selected_inconclusive_1024_rows": 8,
+  "selected_by_mode": {
+    "served": 2,
+    "full": 6
+  },
+  "pending_without_any_coordinator_row_by_mode": {
+    "served": [],
+    "full": []
+  },
+  "note": "Coordinator snapshots are incomplete while second-cap full review is ongoing. Missing rows are listed explicitly and are not assumed complete or normal."
+}

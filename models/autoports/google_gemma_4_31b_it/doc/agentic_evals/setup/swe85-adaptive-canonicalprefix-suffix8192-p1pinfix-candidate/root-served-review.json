@@ -1,0 +1,63 @@
+{
+  "reviewed_unix": 1794724651.6448696,
+  "rows": [
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-canonicalprefix-suffix8192-p1pinfix-candidate/runs/served/anomaly.call91.canonicalprefix.suffix8192.seed42.json",
+      "sha256": "a2502f2f0e21d1a118e16b51e6a4e351d77e061a85e0d7c076cb2e73ac556726",
+      "seed": 42,
+      "tokens": 38,
+      "verdict": "native",
+      "reason": "Immediate extra apostrophe-ve units after completed Ive; native contraction family.",
+      "trace_counters_delta": {
+        "model_replays": 37,
+        "sample_replays": 37,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 37,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-canonicalprefix-suffix8192-p1pinfix-candidate/runs/served/anomaly.call91.canonicalprefix.suffix8192.seed43.json",
+      "sha256": "724d4df0cbc71b53938da054e4bb4345f4946ae4559ac3dc2e54fedbda1c4123",
+      "seed": 43,
+      "tokens": 68,
+      "verdict": "native",
+      "reason": "Immediate extra apostrophe-ve units after completed Ive; native contraction family.",
+      "trace_counters_delta": {
+        "model_replays": 67,
+        "sample_replays": 67,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 67,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-canonicalprefix-suffix8192-p1pinfix-candidate/runs/served/anomaly.call91.canonicalprefix.suffix8192.seed44.json",
+      "sha256": "e52dce93ecda8e92adc6947f7b654a23aae114e0eaa73b123dce7141c13c01a4",
+      "seed": 44,
+      "tokens": 512,
+      "verdict": "other",
+      "reason": "After brief coherent start, repeats the same No Ill just use the original files content line >20times; semantic loop, not cap-only failure.",
+      "trace_counters_delta": {
+        "model_replays": 511,
+        "sample_replays": 511,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 511,
+        "captures": 0
+      }
+    }
+  ],
+  "counts": {
+    "native": 2,
+    "other": 1
+  },
+  "elapsed_seconds": 186.30404543876648,
+  "forecast_range_hit": true,
+  "scope": "All raw continuations and pinned boundary read; no native prompt identity or incidence claim, no scorechange."
+}

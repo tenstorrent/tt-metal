@@ -1,0 +1,22 @@
+{
+  "reviewed_unix": 1794723694.4689302,
+  "rows": [
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.seed42.cap1024.json",
+      "sha256": "d727c4d76837d8c2e0626d709f0b53f80cfa898dce1eb356ad95f09e906521d9",
+      "seed": 42,
+      "tokens": 829,
+      "verdict": "normal",
+      "reason": "Full raw text and pinned prefix read; generated argument opener and canonical closure intact, distinct proposed script. No patch correctness endorsement.",
+      "trace_counters_delta": {
+        "model_replays": 828,
+        "sample_replays": 828,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 828,
+        "captures": 0
+      }
+    }
+  ]
+}

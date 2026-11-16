@@ -1,0 +1,73 @@
+{
+  "reviewed_unix": 1794727217.8991897,
+  "rows": [
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/runs/head_bf16_hifi4/anomaly.xarray3095-call53.canonicalprefix.seed43.cap256.json",
+      "sha256": "07ff4fc82daf1eb12ddd7ca38cb4604154d156f4ebaaeba41758a359366c8a9e",
+      "seed": 43,
+      "tokens": 34,
+      "verdict": "normal",
+      "reason": "Entire raw continuation with pinned call:bash prefix reviewed: canonical command opener, nl/sed inspection, valid closure.",
+      "trace_counters_delta": {
+        "model_replays": 33,
+        "sample_replays": 33,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 33,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/runs/head_bf16_hifi4/anomaly.xarray3095-call53.canonicalprefix.seed42.cap256.json",
+      "sha256": "b7fcebcf0f3c97ace46b1b92b4c026bc998d4ca4ac175189de1f4169d4104097",
+      "seed": 42,
+      "tokens": 34,
+      "verdict": "normal",
+      "reason": "Entire raw continuation with pinned call:bash prefix reviewed: canonical command opener, nl/sed inspection, valid closure.",
+      "trace_counters_delta": {
+        "model_replays": 33,
+        "sample_replays": 33,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 33,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/runs/head_bf16_hifi4/anomaly.xarray3095-call53.canonicalprefix.seed44.cap256.json",
+      "sha256": "1c5f6d09579e9985e3b58f60502135760c185fd4ea617a5bf627c131eec3e197",
+      "seed": 44,
+      "tokens": 34,
+      "verdict": "normal",
+      "reason": "Entire raw continuation with pinned call:bash prefix reviewed: canonical command opener, nl/sed inspection, valid closure.",
+      "trace_counters_delta": {
+        "model_replays": 33,
+        "sample_replays": 33,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 33,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/runs/head_bf16_hifi4/anomaly.xarray7233-call1.canonicalprefix.seed42.cap1024.json",
+      "sha256": "c5f63cd2bc1cd049cbe6e7ddffdbcbc849d22030617c21d233a9610e2783426e",
+      "seed": 42,
+      "tokens": 798,
+      "verdict": "other",
+      "reason": "Entire798-token text reviewed: localized malformed it's\u2019 still (extra curly apostrophe after completed contraction) inside comments; valid tool syntax otherwise and varying reasoning. Different from native tool-protocol failure.",
+      "trace_counters_delta": {
+        "model_replays": 797,
+        "sample_replays": 797,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 797,
+        "captures": 0
+      }
+    }
+  ]
+}

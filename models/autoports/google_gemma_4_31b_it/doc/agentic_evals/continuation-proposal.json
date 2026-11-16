@@ -1,0 +1,33 @@
+{
+  "status": "proposed_not_authorized",
+  "created_unix": 1794785281.1298103,
+  "current_stage_budget_hours": 50,
+  "current_deadline_unix": 1794791725,
+  "requested_additional_hours": 12,
+  "question": "Authorize an additional 12-hour local-only window to finish precision-policy validation, measured-memory serving setup and matched vLLM rate rows, then rerun the retained 85 SWE tasks only if its measured projection fits the remaining window and 12-hour run limit?",
+  "basis": "The fixed 108-case and full-BF16 resume diagnostics are complete; the broad baseline check has produced all expected boundary artifacts and released the devices (child exit status unknown after wrapper interruption). The KV-only BFP8 candidate passes two protocol controls but has not passed the full panel, resume, or broad acceptance checks. No current candidate has serving sizing, matched rates, or a scored repair. Historical rescheduling estimates do not establish a candidate runtime.",
+  "planned_gates": [
+    "Validate the fastest materially plausible precision candidate against the same 108-case panel and controls, retaining prior outcomes",
+    "Measure free device memory at launch and size the hybrid KV pool and agent count without reducing the 262144-token context",
+    "Read back request body, token counts and finish reason before the evaluation",
+    "Measure only relevant stage-11 vLLM rate rows under the accepted precision",
+    "Admit the unchanged retained 85-task list only with a measured-rate projection within the remaining time and 12-hour run limit",
+    "Collect all outcomes and analyse every failure and progressing cap; preserve fetched-solution penalties and unknown verifier grades until faithful recovery",
+    "Obtain independent review and make a local stage-owned checkpoint; never push"
+  ],
+  "not_authorized": [
+    "Any new model or device job after the final broad check in the current window",
+    "Different harness, scheduler constraints, or context reduction",
+    "Fabricated verifier grades or denominator exclusions",
+    "CI, GitHub, pushes, or credential substitution"
+  ],
+  "verifier_dependency": "Three Requests outcomes remain unknown after faithful recovery. Preserve the null point score and reported bounds. A future faithful verifier result may resolve them; no permission to invent outcomes is requested.",
+  "forecast_missing_reason": "Matched serving rates and a measured-memory agent count for the next accepted candidate do not yet exist. Twelve hours is a proposed budget, not a completed or guaranteed run forecast.",
+  "current_window_admission_limit": {
+    "recorded_unix": 1794785801.2345154,
+    "deadline_unix": 1794791725,
+    "full_bf16_fixed108_measured_seconds": 4000.206803560257,
+    "closure_reserve_seconds": 2700,
+    "explanation": "The KV-only candidate has no matching full-panel runtime measurement. The nearest full-BF16 panel already took about 66.7 minutes, before the current broad check finishes, additional candidate gates, serving setup, rates and a scored rerun. This is evidence against admitting that entire remaining chain now, not a guaranteed lower bound or a substituted candidate forecast."
+  }
+}

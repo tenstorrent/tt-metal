@@ -1,0 +1,141 @@
+{
+  "status": "admitted",
+  "reviewer": "root",
+  "accepted": true,
+  "deadline_utc": "2026-11-16T01:15:25Z",
+  "timeout_seconds": 1200,
+  "candidate_pins": {
+    "proposal.json": "b1e7d477a5d0c2a87737d8dcfa7c4a4e3fc66f3cb157e507e18e18bdab055e7b",
+    "command.json": "2fdf433ce016404670ac7b2dfe84dd88628f6afd00093643c8456450f69e6dd4",
+    "cases.json": "f94c5a53507333b8ec730a5f603246ddf8fc5a0bcf55ddd2d6697108a9d8b5c0",
+    "forecast.json": "c2d3d2edfe7cc18432a45ce8d449908bd9ffb1f4842a777bbb9a7836acb29ee1",
+    "source-pins.json": "e8aad1f4c218ba054c4ec959dcb33be9694b7f01800655b192fb357c1228ecee",
+    "runtime-pins.json": "0be338833ced4dd17c7fbd4354bb461fd5d0359058b4513cba4d0dfa7b54857d",
+    "admission-template.json": "3b0b821f737f8708b3741914ede3365cc0fe791d006584a4070bcbc8eb5ddf27",
+    "run_cap1024.py": "f4f4f709095ae3f6d995a833703720d19e6a409a8fd53ed5d579ee5915016d53",
+    "test_run_cap1024.py": "39cf3b60bde583294132dbfd65a7538d7811c6795892fd96a93b64d2530bba10"
+  },
+  "candidate_forecast_review": {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-matplotlib86-full-suffix4096-cap1024-extension-candidate/root-forecast-review.json",
+    "sha256": "1bf1f0222c61c0ce8ba890b9154ea6ff4e7c3ad051acd50a5ce4402164e586b3"
+  },
+  "h9_predecessor": {
+    "progress": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/progress.json",
+      "sha256": "4a9363429f50949031da53c13f3156c2bd399f756d227f353babaafd065ec773"
+    },
+    "terminal_status": "all_groups_completed",
+    "groups": [
+      {
+        "serial_order": 1,
+        "completion": {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/completion-group-01.json",
+          "sha256": "fc52a3d203e4cc299ce8037dde0bf7c25fdcf36c62e767ef98183c46fcb203fe"
+        },
+        "root_review": {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/root-group-01-review.json",
+          "sha256": "0c6e547db4f93a2c7bfb8e0278deba56ac643a79c633ade638db045bdc436803"
+        }
+      },
+      {
+        "serial_order": 2,
+        "completion": {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/completion-group-02.json",
+          "sha256": "e297a2ba0181f1f8fa9c8b9f69d2ea1e68d31b425da587bdbd5faa5415253ebf"
+        },
+        "root_review": {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/root-group-02-review.json",
+          "sha256": "27fb72254a1ee6149b04d013174a471bcaeab60e69bf982e4fe357c901a0d85a"
+        }
+      },
+      {
+        "serial_order": 3,
+        "completion": {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/completion-group-03.json",
+          "sha256": "43482c49d0073fa1407d0f919451c7349a8314752c1b555eca4785f458081005"
+        },
+        "root_review": {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/root-group-03-review.json",
+          "sha256": "7f119e66e90420977079dec6a9d65c09b00b851ba8c7e9ae786ee6188635e071"
+        }
+      },
+      {
+        "serial_order": 4,
+        "completion": {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/completion-group-04.json",
+          "sha256": "d39b7440fd10612ecd8e51d84c02db9ea68c8742325c4a2f4597e3df86c3c967"
+        },
+        "root_review": {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/root-group-04-review.json",
+          "sha256": "c88541915f789412656370cd353ba50dfa62e68e5624c33d4b348901d9227503"
+        }
+      },
+      {
+        "serial_order": 5,
+        "completion": {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/completion-group-05.json",
+          "sha256": "957d8f1e97def011efef8d7e3aa1024b77f73247d7bcc475b78862bd694e6992"
+        },
+        "root_review": {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/root-group-05-review.json",
+          "sha256": "244884fec49742320618150b86258143478976547e05c2196b6a368f9146a3c5"
+        }
+      },
+      {
+        "serial_order": 6,
+        "completion": {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/completion-group-06.json",
+          "sha256": "ad828e22fcc086bfac514723cff621d9b1d7cef84ba1de833351e85e5c2f22a5"
+        },
+        "root_review": {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/root-group-06-review.json",
+          "sha256": "4f2f0dd6941f59a507139aee30b6013f789bca0a9769d15ba65f696fd8de5a5c"
+        }
+      },
+      {
+        "serial_order": 7,
+        "completion": {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/completion-group-07.json",
+          "sha256": "67edd55881ada416e6e9ebcc37a907228b80d8d438fc2b4bfcc5ac47116e84f3"
+        },
+        "root_review": {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/root-group-07-review.json",
+          "sha256": "44e493ccda9f00b75e8ae562c79880fd7da2d5d7beb3262a135a4d56bcae8127"
+        }
+      },
+      {
+        "serial_order": 8,
+        "completion": {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/completion-group-08.json",
+          "sha256": "54c14908183b4c1cee5f986e6321f277fc3b5358486e4d810513000d1643182b"
+        },
+        "root_review": {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/root-group-08-review.json",
+          "sha256": "3261fbdcd51ce4584887196549fb347419bc705d19cee2b2af075f5494b91ffd"
+        }
+      }
+    ],
+    "forecast_miss_acceptances": [
+      {
+        "serial_order": 2,
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/forecast-miss-accepted-group-02.json",
+        "sha256": "382eed9fe9dd21ec664b330ce9a2ed97b048d7fb53f076f1007f8313bb675f49"
+      },
+      {
+        "serial_order": 6,
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/forecast-miss-accepted-group-06.json",
+        "sha256": "826020c4ae0320e42865337e28278f8e3c117b3cc393d0fad77e4ff029e90ba0"
+      },
+      {
+        "serial_order": 7,
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/forecast-miss-accepted-group-07.json",
+        "sha256": "7a667e82d841b31d3404c557dccc8a7a7e4a4a445fc6f9590f960d38f435c5b3"
+      },
+      {
+        "serial_order": 8,
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/forecast-miss-accepted-group-08.json",
+        "sha256": "8aec32da9a2441c62763b90d5c51bdea93f5531b88b98e12f6bd0459048f5650"
+      }
+    ]
+  }
+}

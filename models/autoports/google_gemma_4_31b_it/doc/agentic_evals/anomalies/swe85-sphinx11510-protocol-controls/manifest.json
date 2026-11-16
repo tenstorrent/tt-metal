@@ -1,0 +1,176 @@
+{
+  "status": "prepared_CPU_only_not_executed",
+  "tasks": [
+    "sphinx-doc__sphinx-11510"
+  ],
+  "cases": [
+    {
+      "task": "sphinx-doc__sphinx-11510",
+      "call": 86,
+      "response_id": "chatcmpl-8a7d4a0330171b5b",
+      "private_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-sphinx11510-protocol-controls/sphinx-doc__sphinx-11510.call86.onset.private.json",
+      "private_case_sha256": "0f5f2fc54d5863761ed3ecaa8f593937a0ad4ae0d785e059f3adc51bc3cba892",
+      "raw_packet": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-sphinx11510-protocol/sphinx-doc__sphinx-11510.call86.packet.private.json",
+      "raw_packet_sha256": "9d2f492cd7aa7f4656945dd141efee5bdab373b5fbf05c0acb16110be195a045",
+      "native_prompt_tokens": 46833,
+      "reconstructed_request_prompt_tokens": 46832,
+      "native_reply_tokens": 1548,
+      "reconstructed_reply_tokens": 1523,
+      "conditioning_tokens": 47548,
+      "onset_positions": 64,
+      "onset_token_index": 716,
+      "motif": "call:bash\n",
+      "evidence": "Structured tool name contains newline and shell-command prose after bash; invalid tool identity. Native agent extra.actions omits malformed tool calls. Onset is newline following bash in canonical protocol reconstruction, not recovered native serialization bytes.",
+      "limitations": "Exact request body with historical JSON tool arguments deserialized for pinned template. Reply reconstructed as canonical thought header, complete saved reasoning, channel boundary, complete visible content, canonical tool-call macros from pinned template, native stop ID. No native token IDs: generated whitespace/order/protocol spelling cannot be recovered uniquely; counts and hashes are evidence, not identity proof. Canonicalization of malformed tool names is not proof of exact malformed native bytes.",
+      "native_message_indices": [],
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "native_seed": null,
+      "diagnostic_seeds": [
+        42,
+        43,
+        44
+      ]
+    },
+    {
+      "task": "sphinx-doc__sphinx-11510",
+      "call": 95,
+      "response_id": "chatcmpl-a1712a5a1cbbced5",
+      "private_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-sphinx11510-protocol-controls/sphinx-doc__sphinx-11510.call95.onset.private.json",
+      "private_case_sha256": "f8d568443212982a955027d82b1efa79f34d906acc58017d0ab537dbe378e0b4",
+      "raw_packet": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-sphinx11510-protocol/sphinx-doc__sphinx-11510.call95.packet.private.json",
+      "raw_packet_sha256": "49ce8433bbad3afcc08b08f3d184256fa6dd3ddabb125927a58f89e81b0ec6d9",
+      "native_prompt_tokens": 54408,
+      "reconstructed_request_prompt_tokens": 54407,
+      "native_reply_tokens": 1860,
+      "reconstructed_reply_tokens": 1885,
+      "conditioning_tokens": 55438,
+      "onset_positions": 64,
+      "onset_token_index": 1031,
+      "motif": "call:bash\n",
+      "evidence": "Structured tool name contains newline and shell-command prose after bash; invalid tool identity. Native agent extra.actions omits malformed tool calls. Onset is newline following bash in canonical protocol reconstruction, not recovered native serialization bytes.",
+      "limitations": "Exact request body with historical JSON tool arguments deserialized for pinned template. Reply reconstructed as canonical thought header, complete saved reasoning, channel boundary, complete visible content, canonical tool-call macros from pinned template, native stop ID. No native token IDs: generated whitespace/order/protocol spelling cannot be recovered uniquely; counts and hashes are evidence, not identity proof. Canonicalization of malformed tool names is not proof of exact malformed native bytes.",
+      "native_message_indices": [],
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "native_seed": null,
+      "diagnostic_seeds": [
+        42,
+        43,
+        44
+      ]
+    },
+    {
+      "task": "sphinx-doc__sphinx-11510",
+      "call": 101,
+      "response_id": "chatcmpl-8aecbec2f425757e",
+      "private_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-sphinx11510-protocol-controls/sphinx-doc__sphinx-11510.call101.onset.private.json",
+      "private_case_sha256": "e940e736fad1b9ac133cd217d6163ea3ba1cdb01380471e0a9b77a35afb9f1c2",
+      "raw_packet": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-sphinx11510-protocol/sphinx-doc__sphinx-11510.call101.packet.private.json",
+      "raw_packet_sha256": "98773875fa1b8fc3c8f181916e07052cfdf0ece8af0fa9bd17a4fe6468ede98a",
+      "native_prompt_tokens": 58384,
+      "reconstructed_request_prompt_tokens": 58383,
+      "native_reply_tokens": 1484,
+      "reconstructed_reply_tokens": 1457,
+      "conditioning_tokens": 59716,
+      "onset_positions": 64,
+      "onset_token_index": 1333,
+      "motif": "call:bash\n",
+      "evidence": "Structured tool name contains newline and shell-command prose after bash; invalid tool identity. Native agent extra.actions omits malformed tool calls. Onset is newline following bash in canonical protocol reconstruction, not recovered native serialization bytes.",
+      "limitations": "Exact request body with historical JSON tool arguments deserialized for pinned template. Reply reconstructed as canonical thought header, complete saved reasoning, channel boundary, complete visible content, canonical tool-call macros from pinned template, native stop ID. No native token IDs: generated whitespace/order/protocol spelling cannot be recovered uniquely; counts and hashes are evidence, not identity proof. Canonicalization of malformed tool names is not proof of exact malformed native bytes.",
+      "native_message_indices": [],
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "native_seed": null,
+      "diagnostic_seeds": [
+        42,
+        43,
+        44
+      ]
+    },
+    {
+      "task": "sphinx-doc__sphinx-11510",
+      "call": 119,
+      "response_id": "chatcmpl-881d0e63c2717d01",
+      "private_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-sphinx11510-protocol-controls/sphinx-doc__sphinx-11510.call119.onset.private.json",
+      "private_case_sha256": "2fa92bb645e64f5d0eaa239cd27b5438d1f31554d71f37e6eb7e501ab5df0e55",
+      "raw_packet": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-sphinx11510-protocol/sphinx-doc__sphinx-11510.call119.packet.private.json",
+      "raw_packet_sha256": "aabe6570f4836e7706e6f2fc140d5ae2b30a2a0358dd531b5abd3ed85fe150e5",
+      "native_prompt_tokens": 75773,
+      "reconstructed_request_prompt_tokens": 75772,
+      "native_reply_tokens": 1323,
+      "reconstructed_reply_tokens": 1334,
+      "conditioning_tokens": 76441,
+      "onset_positions": 64,
+      "onset_token_index": 669,
+      "motif": "call:bash\n",
+      "evidence": "Structured tool name contains newline and shell-command prose after bash; invalid tool identity. Native agent extra.actions omits malformed tool calls. Onset is newline following bash in canonical protocol reconstruction, not recovered native serialization bytes.",
+      "limitations": "Exact request body with historical JSON tool arguments deserialized for pinned template. Reply reconstructed as canonical thought header, complete saved reasoning, channel boundary, complete visible content, canonical tool-call macros from pinned template, native stop ID. No native token IDs: generated whitespace/order/protocol spelling cannot be recovered uniquely; counts and hashes are evidence, not identity proof. Canonicalization of malformed tool names is not proof of exact malformed native bytes.",
+      "native_message_indices": [],
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "native_seed": null,
+      "diagnostic_seeds": [
+        42,
+        43,
+        44
+      ]
+    }
+  ],
+  "cpu_validation": [
+    {
+      "mode": "served",
+      "config": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/head_bfp8_build_kwargs.json",
+      "config_sha256": "2e583fa8bd7aff7c5f8be110835df751924d167243c5a44a68aa5b3d70c6845f",
+      "exit_code": 0,
+      "stdout": "Validated 4 jobs without importing TTNN"
+    },
+    {
+      "mode": "full",
+      "config": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_build_kwargs.json",
+      "config_sha256": "ff2b5ed24e0b6a1dee7eb5cd8bd437d17c3df5f8f25567927d239e666f0699f9",
+      "exit_code": 0,
+      "stdout": "Validated 4 jobs without importing TTNN"
+    }
+  ],
+  "commands_staged_only": {
+    "served": [
+      "python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tools.precision_repro_batch",
+      "--cases",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-sphinx11510-protocol-controls/cases.json",
+      "--build-kwargs-file",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/head_bfp8_build_kwargs.json",
+      "--output-dir",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-sphinx11510-protocol-controls/served"
+    ],
+    "full": [
+      "python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tools.precision_repro_batch",
+      "--cases",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-sphinx11510-protocol-controls/cases.json",
+      "--build-kwargs-file",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_build_kwargs.json",
+      "--output-dir",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-sphinx11510-protocol-controls/full",
+      "--compare-dir",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-sphinx11510-protocol-controls/served"
+    ]
+  },
+  "no_inference": true,
+  "phase_scope": "Anomaly controls independent of later wrong-action controls; no score or corrected answer claim."
+}

@@ -9,6 +9,14 @@ KV and materialized tensors, not a measured memory-controller counter.
 H, I, V, TP = 5376, 21504, 262144, 4
 BFP4_BYTES, BFP8_BYTES = 576 / 1024, 1088 / 1024
 LAYERS = ((50, 256, 16, 1024, False), (10, 512, 4, None, True))
+KV_BYTES = {"bfloat8_b": BFP8_BYTES, "bfloat16": 2.0}
+WEIGHT_BYTES = {
+    "bfp4": BFP4_BYTES,
+    "bfp4_hifi2": BFP4_BYTES,
+    "bfp8": BFP8_BYTES,
+    "bfp8_lofi": BFP8_BYTES,
+    "bf16": 2.0,
+}
 
 
 def projection_elements(d, kv, shared, *, physical=False):
@@ -20,6 +28,17 @@ def projection_elements(d, kv, shared, *, physical=False):
         + 2 * H * intermediate
         + hidden_out * intermediate
     )
+
+
+def projection_group_elements(d, kv, shared, *, physical=False):
+    """Return useful attention, gate/up, and down projection element counts."""
+    hidden_out = 5632 if physical else H
+    intermediate = 22528 if physical else I
+    return {
+        "attention": H * (32 * d + kv * d * (1 if shared else 2)) + hidden_out * 32 * d,
+        "mlp": 2 * H * intermediate,
+        "down": hidden_out * intermediate,
+    }
 
 
 def causal_pairs(start, end, window=None):
@@ -53,31 +72,42 @@ def prefill_work(starts, ends):
 def decode_work(positions, batch_size, precision=None):
     positions = [int(p) for p in positions if int(p) >= 0]
     # Weights are TP-sharded: sum full-model elements once, not four copies.
-    head_bytes = BFP4_BYTES
+    groups = {"attention": "bfp4", "mlp": "bfp4", "down": "bfp4", "lm_head": "bfp4"}
+    kv_bytes = BFP8_BYTES
     if precision is not None:
-        groups = precision["weight_groups"]
-        if (
-            any(groups[k] != "bfp4" for k in ("attention", "mlp", "down"))
-            or precision["layer_exceptions"]
-            or precision["kv_cache_dtype"] != "bfloat8_b"
-        ):
-            raise ValueError("Work model supports unchanged BFP4 decoder/BFP8 KV with head-only precision changes")
-        head_bytes = {
-            "bfp4": BFP4_BYTES,
-            "bfp4_hifi2": BFP4_BYTES,
-            "bfp8": BFP8_BYTES,
-            "bfp8_lofi": BFP8_BYTES,
-            "bf16": 2,
-        }[groups["lm_head"]]
-    weights = (
-        BFP4_BYTES * sum(n * projection_elements(d, kv, shared, physical=True) for n, d, kv, _, shared in LAYERS)
-        + head_bytes * H * V
-    )
+        supplied = precision["weight_groups"]
+        if set(supplied) != set(groups) or precision.get("layer_exceptions") != {}:
+            raise ValueError("Work model requires four supported weight groups and no layer exceptions")
+        groups.update(supplied)
+        try:
+            kv_bytes = KV_BYTES[precision["kv_cache_dtype"]]
+        except KeyError as exc:
+            raise ValueError("Work model supports BFP8 or BF16 KV cache") from exc
+
+    # Validate labels even when this call contains no active decode positions.
+    weight_bytes = {}
+    try:
+        weight_bytes = {group: WEIGHT_BYTES[label] for group, label in groups.items()}
+    except KeyError as exc:
+        raise ValueError(f"Unsupported precision label: {exc.args[0]}") from exc
+
+    if all(groups[name] == "bfp4" for name in ("attention", "mlp", "down")):
+        # Preserve established decoder arithmetic exactly for baseline/head-only rows.
+        decoder_weights = BFP4_BYTES * sum(
+            n * projection_elements(d, kv, shared, physical=True) for n, d, kv, _, shared in LAYERS
+        )
+    else:
+        decoder_weights = sum(
+            weight_bytes[group] * n * projection_group_elements(d, kv, shared, physical=True)[group]
+            for n, d, kv, _, shared in LAYERS
+            for group in ("attention", "mlp", "down")
+        )
+    weights = decoder_weights + weight_bytes["lm_head"] * H * V
     kv_read = sum(
-        n * 2 * kv * d * BFP8_BYTES * sum(min(p + 1, window) if window else p + 1 for p in positions)
+        n * 2 * kv * d * kv_bytes * sum(min(p + 1, window) if window else p + 1 for p in positions)
         for n, d, kv, window, _ in LAYERS
     )
-    kv_write = sum(n * 2 * kv * d * BFP8_BYTES * len(positions) for n, d, kv, _, _ in LAYERS)
+    kv_write = sum(n * 2 * kv * d * kv_bytes * len(positions) for n, d, kv, _, _ in LAYERS)
     # Norm weights are BF16 replicated on four chips. Q/K norms are headwise.
     norms = TP * 2 * sum(n * (4 * H + 2 * d) for n, d, _, _, _ in LAYERS)
     # Logical batches <=32 execute one 32-row tile. Residual DRAM staging and
@@ -102,8 +132,8 @@ def decode_work(positions, batch_size, precision=None):
 ASSUMPTIONS = {
     "architecture": "60 dense layers: 50 sliding_attention (32 Q,16 KV,dim256,window1024), 10 full_attention (32 Q,4 KV,dim512,K=V shared projection); hidden5376, intermediate21504, vocab262144; TP4",
     "prefill": "Useful dense projection and causal/sliding QK+AV multiply-adds only; one LM head row per nonempty adapter prefill row. Padding, softmax, norm, GELU and rotary arithmetic omitted from useful-FLOP numerator; all remain in wall-time denominator.",
-    "weights": "Decoder BFP4_B 576bytes/1024elements; head uses observed precision (BFP4=576, BFP8=1088 bytes/1024elements, BF16=2bytes/element). Physical MLP intermediate22528 and output5632 padding from multichip_decoder.py; full TP-sharded weights read once per decode replay, not once per user. Observed compute fidelities retained in observer identity.",
-    "kv": "BFP8_B 1088bytes/1024elements; estimated one K and V read per attended token and write per active row; global K=V projection shared but attention consumes both K and V. Cache reuse, SDPA tile rounding and repeated reads are not measured.",
+    "weights": "Decode weight bytes use observed attention, MLP gate/up, down, and lm_head weight_groups independently: BFP4/BFP4_HiFi2=576bytes/1024elements, BFP8/BFP8_LoFi=1088bytes/1024elements, BF16=2bytes/element; fidelity suffixes do not change storage width. Group element counts use physical MLP intermediate22528 and output5632 padding from multichip_decoder.py; full TP-sharded weights are summed once per decode replay, not once per user. Layer exceptions are unsupported. This is modeled DRAM traffic, not a hardware counter.",
+    "kv": "KV read and write bytes follow kv_cache_dtype: BFP8_B=1088bytes/1024elements or BF16=2bytes/element. Estimate one K and V read per attended token and write per active row; global K=V projection shared but attention consumes both K and V. Cache reuse, SDPA tile rounding and repeated reads are not measured.",
     "other_dram": "Includes replicated BF16 norm weights, approximate residual/collective staging, embedding and logits; one physical32-row tile for all supported decode batches. L1 reuse and exact temporary/CCL traffic unknown. This is modeled DRAM traffic, not a hardware counter; no claim of exact utilization.",
     "sources": [
         "tt/model.py:Gemma4Model",

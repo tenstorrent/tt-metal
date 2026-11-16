@@ -1,0 +1,112 @@
+{
+  "status": "independent_host_only_terminal_audit",
+  "scope": "P19 production Q32 fixed108 identity/runtime and timing; this review does not adjudicate text semantics or select precision.",
+  "completion": {
+    "start_unix": 1794774086.8710067,
+    "end_unix": 1794777429.054624,
+    "exit_code": 0,
+    "wall_seconds": 3342.1836173534393
+  },
+  "manifest": {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/candidate-cases.json",
+    "sha256": "57193e4b91af3a31df00f0c92dbc0f2219fbce011e6533594e5244a93a3021ed",
+    "expected_rows": 108,
+    "unique_names": 108,
+    "result_json_count": 109,
+    "missing_or_extra_result_count": 1
+  },
+  "source_pins": {
+    "count": 130,
+    "all_current_sha256_match": true,
+    "mismatches": []
+  },
+  "identity_checks": {
+    "all108_result_names_match_manifest": false,
+    "manifest_fixture_matches_result_case": true,
+    "old_and_new_prompt_ids_and_continuations_match_manifest": true,
+    "sampling_and_seed_match": true,
+    "cap_trial_counts_match": true,
+    "runtime_precision_all108_equals_pinned_precision_json": true,
+    "prompt_token_count_min_median_max": [
+      1175,
+      28889.0,
+      76441
+    ],
+    "caps_count": {
+      "256": 72,
+      "512": 7,
+      "1024": 22,
+      "2048": 6,
+      "4096": 1
+    },
+    "errors": []
+  },
+  "runtime_policy": {
+    "config_id": "stage12_bf16_hifi4_kv_down_bfp8_p19",
+    "weight_groups": {
+      "attention": "bf16",
+      "mlp": "bf16",
+      "down": "bfp8_lofi",
+      "lm_head": "bf16"
+    },
+    "layer_exceptions": {},
+    "compute_fidelities": {
+      "attention": "HiFi4",
+      "mlp": "HiFi4",
+      "down": "LoFi",
+      "lm_head": "HiFi4"
+    },
+    "activation_dtype": "bfloat16",
+    "residual_dtype": "bfloat16",
+    "ccl_dtype": {
+      "prefill": "bfloat16",
+      "decode": "bfloat16"
+    },
+    "kv_cache_dtype": "bfloat8_b",
+    "logits_dtype": "bfloat16",
+    "sampling_dtype": "bfloat16",
+    "embedding_dtype": "bfloat16",
+    "norm_dtype": "bfloat16",
+    "max_seq_len": 262144,
+    "sdpa_compute_fidelity": "HiFi4"
+  },
+  "timing": {
+    "forecast_seconds": {
+      "low": 3600,
+      "point": 4800,
+      "high": 6500
+    },
+    "actual_wall_seconds": 3342.1836173534393,
+    "actual_minus_low_seconds": -257.81638264656067,
+    "actual_minus_point_seconds": -1457.8163826465607,
+    "sum_q32_diagnostic_trial_wall_s": 3229.3732567017432,
+    "sum_old_p19_diagnostic_trial_wall_s": 3474.0303354582284,
+    "q32_wall_minus_trial_sum_load_plus_setup_teardown_and_unattributed_s": 5.228303360752761,
+    "q32_trace_alloc_tracking": 1,
+    "old_trace_alloc_tracking": "disabled/unset",
+    "interpretation": "Forecast low-side miss is not evidence of causal speedup. Q32 emitted 28,236 tokens vs old P19 29,713 (1,477 fewer; 4.97%). Tracking was enabled for Q32 and disabled/unset on historical P19. New wall decomposes into build_generator, diagnostic trial sum, and a small residual, but unlike-for-like generation and tracking comparisons are unavailable.",
+    "load_measurement": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/p19-q32-production-validation/fixed108/runs/p19_q32/load.json",
+      "sha256": "ff7d9b0857d91b76dd519e2080c6d7e439d1f4d81cb07e7363389695d1f55c91",
+      "wall_s": 107.58205729094334,
+      "scope": "Measured around build_generator as recorded in load.json"
+    },
+    "residual_after_load_and_trial_s": 5.228303360752761,
+    "q32_wall_decomposition": "3342.183617s total = 107.582057s measured build_generator + 3229.373257s summed per-case diagnostic wall + 5.228303s unallocated orchestration/teardown residual. The first trace preparation event is not added separately because it is within the measured build/trial intervals; do not double count it."
+  },
+  "generated_tokens": {
+    "q32_sum": 28236,
+    "old_p19_sum": 29713,
+    "delta_q32_minus_old": -1477,
+    "q32_min_median_max": [
+      15,
+      197.0,
+      1887
+    ],
+    "old_min_median_max": [
+      15,
+      199.5,
+      1569
+    ]
+  }
+}

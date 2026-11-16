@@ -1,0 +1,141 @@
+{
+  "reviewed_unix": 1794722984.065504,
+  "rows": [
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.sphinx-doc__sphinx-10323.call57.onset.seed42.cap512.json",
+      "sha256": "322f9f526f3ea04025dc08279110fe4b79db1d99d48763344656be11b3d648b8",
+      "seed": 42,
+      "tokens": 407,
+      "verdict": "native",
+      "reason": "Adjacent duplicated apostrophe-ve immediately after pinned Ive; nativefamily, also recurs later in call57.",
+      "trace_counters_delta": {
+        "model_replays": 406,
+        "sample_replays": 406,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 406,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.sphinx-doc__sphinx-10323.call57.onset.seed43.cap256.json",
+      "sha256": "530fbb8caf2da409f770ef51dba9df734339b45ed8acd9253e6c1b0999dcc259",
+      "seed": 43,
+      "tokens": 147,
+      "verdict": "normal",
+      "reason": "Pinned prefix/fullrawtext reviewed: grammatical continuation, coherent distinct next action endingcanonicaltoolclose; notproof taskfix or claimedrootcause.",
+      "trace_counters_delta": {
+        "model_replays": 146,
+        "sample_replays": 146,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 146,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.sphinx-doc__sphinx-10323.call57.onset.seed44.cap512.json",
+      "sha256": "c5be45645689e97f60702af4bce24febe83330beb1ddca8110dda83a4bd4c3f5",
+      "seed": 44,
+      "tokens": 51,
+      "verdict": "other",
+      "reason": "Generated apostrophe-s appended to pinned completed Ive creates malformed Ive-s, distinctfromoriginalve duplication.",
+      "trace_counters_delta": {
+        "model_replays": 50,
+        "sample_replays": 50,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 50,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.sphinx-doc__sphinx-10323.call68.onset.seed42.cap256.json",
+      "sha256": "0823d090c0cd67f8bf906cf52011123a651530b6d6efec5157db6135a9892e68",
+      "seed": 42,
+      "tokens": 104,
+      "verdict": "normal",
+      "reason": "Pinned prefix/fullrawtext reviewed: grammatical continuation, coherent distinct next action endingcanonicaltoolclose; notproof taskfix or claimedrootcause.",
+      "trace_counters_delta": {
+        "model_replays": 103,
+        "sample_replays": 103,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 103,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.sphinx-doc__sphinx-10323.call68.onset.seed43.cap256.json",
+      "sha256": "97275e67bc6aff93c99ba855f3bda9e72f11b1e287077557bd8ce7cc561df3c4",
+      "seed": 43,
+      "tokens": 113,
+      "verdict": "native",
+      "reason": "Adjacent duplicated apostrophe-ve immediately after pinned Ive; nativefamily, also recurs later in call57.",
+      "trace_counters_delta": {
+        "model_replays": 112,
+        "sample_replays": 112,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 112,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.sphinx-doc__sphinx-10323.call68.onset.seed44.cap256.json",
+      "sha256": "53b0284eec0c510b952271a88fbff30e51f0e58e441d1918650ac1b7ba5e384e",
+      "seed": 44,
+      "tokens": 103,
+      "verdict": "normal",
+      "reason": "Pinned prefix/fullrawtext reviewed: grammatical continuation, coherent distinct next action endingcanonicaltoolclose; notproof taskfix or claimedrootcause.",
+      "trace_counters_delta": {
+        "model_replays": 102,
+        "sample_replays": 102,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 102,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.sphinx-doc__sphinx-10323.call70.onset.seed42.cap256.json",
+      "sha256": "181166e0b5e3237b1b44d8f4b6f27fb0764e6e62f83b2fc26c13c6299b3e569b",
+      "seed": 42,
+      "tokens": 36,
+      "verdict": "normal",
+      "reason": "Pinned prefix/fullrawtext reviewed: grammatical continuation, coherent distinct next action endingcanonicaltoolclose; notproof taskfix or claimedrootcause.",
+      "trace_counters_delta": {
+        "model_replays": 35,
+        "sample_replays": 35,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 35,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.sphinx-doc__sphinx-10323.call70.onset.seed43.cap256.json",
+      "sha256": "439ca0b3f6fda22453e8c371c750285408654fb226fe031cd58d6f30c5a09078",
+      "seed": 43,
+      "tokens": 44,
+      "verdict": "native",
+      "reason": "Adjacent duplicated apostrophe-ve immediately after pinned Ive; nativefamily, also recurs later in call57.",
+      "trace_counters_delta": {
+        "model_replays": 43,
+        "sample_replays": 43,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 43,
+        "captures": 0
+      }
+    }
+  ]
+}

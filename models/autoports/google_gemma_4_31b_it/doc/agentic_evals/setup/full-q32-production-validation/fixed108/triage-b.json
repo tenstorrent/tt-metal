@@ -1,0 +1,2761 @@
+{
+  "status": "complete_independent_raw_text_triage_slice_72_107",
+  "scope": "Full BF16 Q32 fixed108 panel, indices72\u2013107 only; output rows added only when available. Exact prompt IDs, seed, cap and runtime policy checked; compare with P19 Q32 and earlier full BF16 control. No model/device commands or task-score claims.",
+  "candidate_cases_sha256": "57193e4b91af3a31df00f0c92dbc0f2219fbce011e6533594e5244a93a3021ed",
+  "full_q32_result_directory": "setup/full-q32-production-validation/fixed108/runs",
+  "indices_reviewed": [
+    72,
+    73,
+    74,
+    75,
+    76,
+    77,
+    78,
+    79,
+    80,
+    81,
+    82,
+    83,
+    84,
+    85,
+    86,
+    87,
+    88,
+    89,
+    90,
+    91,
+    92,
+    93,
+    94,
+    95,
+    96,
+    97,
+    98,
+    99,
+    100,
+    101,
+    102,
+    103,
+    104,
+    105,
+    106,
+    107
+  ],
+  "pending_indices": [],
+  "summary": {
+    "normal": 32,
+    "reproduced_native_motif": 3,
+    "other_anomaly": 0,
+    "inconclusive": 1
+  },
+  "rows": [
+    {
+      "index": 72,
+      "case_name": "anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.seed42.cap1024",
+      "source_onset": "anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset",
+      "task": "sphinx-doc__sphinx-11510",
+      "call": 86,
+      "mode": "full",
+      "seed": 42,
+      "cap": 1024,
+      "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.cap1024.seed42.private.json",
+      "fixture_sha256": "ca3ccbea7cb65f7fb929521189cde459f36391aa461d248ed5cf3d57f3eff981",
+      "prompt_token_count": 47548,
+      "prompt_token_ids_sha256": "7aaf88be1dd4df81aa4880bf0dd1741f94a99b241903c24f0def9fa78423479b",
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full-q32-production-validation/fixed108/runs/anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.seed42.cap1024.json",
+      "result_sha256": "00554a969654c233675de123b3ee9d8794785e3ac93e878fd8d8e275077c4103",
+      "generated_tokens": 958,
+      "generated_token_ids_sha256": "8ff60397aab17723f95f982c1e7665027b404bec9b8541eb489e79c464cc5d7f",
+      "terminal_token_id": 50,
+      "natural_stop_before_cap": true,
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 42
+      },
+      "runtime_precision": {
+        "config_id": "stage12_bf16_hifi4_diagnostic",
+        "weight_groups": {
+          "attention": "bf16",
+          "mlp": "bf16",
+          "down": "bf16",
+          "lm_head": "bf16"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "HiFi4",
+          "mlp": "HiFi4",
+          "down": "HiFi4",
+          "lm_head": "HiFi4"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat16",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144,
+        "sdpa_compute_fidelity": "HiFi4"
+      },
+      "runtime_precision_sha256": "92895d431970ff8a90e45a339161bfedff8298c39be1475d092ac478ffeefff4",
+      "verdict": "normal",
+      "confidence": "high",
+      "evidence": "Inspected the complete 958-token continuation. It continues the inherited canonical `call:bash` with command arguments, forms one long docutils Include.run replacement attempt, and naturally yields with token50. It remains coherent and does not reproduce the native malformed tool-name/protocol motif or a repeated semantic loop. This is not a patch correctness claim.",
+      "p19_q32_comparison": {
+        "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/p19-q32-production-validation/fixed108/runs/p19_q32/anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.seed42.cap1024.json",
+        "sha256": "143f35c902f15add00a4027536e5bfd1a5a6e14c8e6c2d033913cbc3a24f9925",
+        "same_fixture_prompt_ids": true,
+        "same_seed": true,
+        "same_cap": true,
+        "generated_tokens": 602,
+        "terminal_token_id": 50,
+        "first_token_divergence": 51,
+        "prefix_equal_before_divergence": 51,
+        "verdict": "normal",
+        "interpretation": "P19 Q32 also naturally stops with a coherent command continuation. Full BF16 produces a longer but still coherent continuation. Token outputs diverge at token51; no same-sample identity claim."
+      },
+      "historical_full_bf16_comparison": {
+        "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/runs/full/anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.cap1024.seed42.json",
+        "sha256": "886f3f7f8c0511a78a1ebe5ccafbef00c65c7284461b3c24df39c87639bc49e4",
+        "same_fixture_prompt_ids": true,
+        "same_seed": true,
+        "same_cap": true,
+        "generated_tokens": 953,
+        "terminal_token_id": 50,
+        "first_token_divergence": 37,
+        "prefix_equal_before_divergence": 37,
+        "verdict": "normal_natural_stop",
+        "interpretation": "The previously saved all-group BF16/HiFi4 control on this fixture/seed/cap also naturally stops after a coherent script. Current full-Q32 continuation differs from token38; neither sample is a loop or native collapse."
+      },
+      "cap_notes": "Natural token50 at 958 of 1024; no extension indicated."
+    },
+    {
+      "index": 73,
+      "case_name": "anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.seed43.cap1024",
+      "source_onset": "anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset",
+      "task": "sphinx-doc__sphinx-11510",
+      "call": 86,
+      "mode": "full",
+      "seed": 43,
+      "cap": 1024,
+      "fixture": "setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.cap1024.seed43.private.json",
+      "fixture_sha256": "24e925807caaf57dbd0eb481fbd956901db36a766ab8e0552039253d0e63bebc",
+      "prompt_token_count": 47548,
+      "prompt_token_ids_sha256": "7aaf88be1dd4df81aa4880bf0dd1741f94a99b241903c24f0def9fa78423479b",
+      "result": "setup/full-q32-production-validation/fixed108/runs/anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.seed43.cap1024.json",
+      "result_sha256": "b1f32d3a2e81afc550468a9153cb283791065f84bff9dcf81d4c02b5057c98cc",
+      "generated_tokens": 597,
+      "generated_token_ids_sha256": "0265c4e63551b40aeceb11cfc5eb797d7d61a553d65182c9ced4ab23e807777c",
+      "terminal_token_id": 50,
+      "natural_stop_before_cap": true,
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 43
+      },
+      "runtime_precision": {
+        "config_id": "stage12_bf16_hifi4_diagnostic",
+        "weight_groups": {
+          "attention": "bf16",
+          "mlp": "bf16",
+          "down": "bf16",
+          "lm_head": "bf16"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "HiFi4",
+          "mlp": "HiFi4",
+          "down": "HiFi4",
+          "lm_head": "HiFi4"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat16",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144,
+        "sdpa_compute_fidelity": "HiFi4"
+      },
+      "runtime_precision_sha256": "92895d431970ff8a90e45a339161bfedff8298c39be1475d092ac478ffeefff4",
+      "verdict": "normal",
+      "confidence": "high",
+      "evidence": "The full 597-token response is a coherent continuation of the inherited canonical bash call, with one replacement script and normal token50 tool yield. No malformed tool-name recurrence or semantic loop.",
+      "p19_q32_comparison": {
+        "result": "setup/p19-q32-production-validation/fixed108/runs/p19_q32/anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.seed43.cap1024.json",
+        "sha256": "d376431ab15edacf300b18e444ea961a99dfa66f0f135b68389c77d7d6f63f42",
+        "same_fixture_prompt_ids": true,
+        "same_seed": true,
+        "same_cap": false,
+        "generated_tokens": 834,
+        "terminal_token_id": 50,
+        "shared_output_prefix_tokens": 33,
+        "verdict": "normal",
+        "interpretation": "P19 Q32 was a distinct sample; decoded branch remains broadly coherent. Token divergence is expected for separately run sampling; no same-sample identity inference."
+      },
+      "cap_notes": "Normal token50 at 597/1024."
+    },
+    {
+      "index": 74,
+      "case_name": "anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.seed44.cap1024",
+      "source_onset": "anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset",
+      "task": "sphinx-doc__sphinx-11510",
+      "call": 86,
+      "mode": "full",
+      "seed": 44,
+      "cap": 1024,
+      "fixture": "setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.cap1024.seed44.private.json",
+      "fixture_sha256": "14b67b9fcb8ad382713dff99ccb47922690bc5be90131e3adc25a195f3e712d3",
+      "prompt_token_count": 47548,
+      "prompt_token_ids_sha256": "7aaf88be1dd4df81aa4880bf0dd1741f94a99b241903c24f0def9fa78423479b",
+      "result": "setup/full-q32-production-validation/fixed108/runs/anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.seed44.cap1024.json",
+      "result_sha256": "6cc981aef16a2a048bd67882b473f403e39c1a7843e5e90ae8deb512d6546ec4",
+      "generated_tokens": 1024,
+      "generated_token_ids_sha256": "4d77be128f9a868620dba4d55af58aaeca11ceb85982e9c0811a8d71f759ca62",
+      "terminal_token_id": 2692,
+      "natural_stop_before_cap": false,
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 44
+      },
+      "runtime_precision": {
+        "config_id": "stage12_bf16_hifi4_diagnostic",
+        "weight_groups": {
+          "attention": "bf16",
+          "mlp": "bf16",
+          "down": "bf16",
+          "lm_head": "bf16"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "HiFi4",
+          "mlp": "HiFi4",
+          "down": "HiFi4",
+          "lm_head": "HiFi4"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat16",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144,
+        "sdpa_compute_fidelity": "HiFi4"
+      },
+      "runtime_precision_sha256": "92895d431970ff8a90e45a339161bfedff8298c39be1475d092ac478ffeefff4",
+      "verdict": "inconclusive",
+      "confidence": "high",
+      "evidence": "The full continuation remains a coherent replacement script and related Python patch commands but ends at a shell `cd` while still at cap; it is progressing, not evidence of a completed answer or loop.",
+      "p19_q32_comparison": {
+        "result": "setup/p19-q32-production-validation/fixed108/runs/p19_q32/anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.seed44.cap1024.json",
+        "sha256": "8cb70cc6e69cbfd8f0226c91163232eddc2a7c49225a58902669a3e4737e799e",
+        "same_fixture_prompt_ids": true,
+        "same_seed": true,
+        "same_cap": false,
+        "generated_tokens": 594,
+        "terminal_token_id": 50,
+        "shared_output_prefix_tokens": 28,
+        "verdict": "normal",
+        "interpretation": "P19 Q32 was a distinct sample; decoded branch remains broadly coherent. Token divergence is expected for separately run sampling; no same-sample identity inference."
+      },
+      "cap_notes": "1024/1024 tokens without stop; coherent patch sequence still in progress. Suggest 2048 only if this anomaly remains unresolved and budget allows."
+    },
+    {
+      "index": 75,
+      "case_name": "anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.seed42.cap1024",
+      "source_onset": "anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset",
+      "task": "sphinx-doc__sphinx-11510",
+      "call": 95,
+      "mode": "full",
+      "seed": 42,
+      "cap": 1024,
+      "fixture": "setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.cap1024.seed42.private.json",
+      "fixture_sha256": "1ec793a6242ddcb79a68bfb33e3f6e63dba76ba268365c16550906acda07cf36",
+      "prompt_token_count": 55438,
+      "prompt_token_ids_sha256": "824d2526667c133d55c51bee56ccd02326aa09ee6824f077ed732fbc47de65aa",
+      "result": "setup/full-q32-production-validation/fixed108/runs/anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.seed42.cap1024.json",
+      "result_sha256": "54c4bc57ab30ff89d86b35ad9ffeeb7427f95afb99d9aba8b05b20d2e8081c8d",
+      "generated_tokens": 829,
+      "generated_token_ids_sha256": "c0cd80633b658542b5af45b337db3c957da80d11aa8fd7029b1d793fd9c33670",
+      "terminal_token_id": 50,
+      "natural_stop_before_cap": true,
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 42
+      },
+      "runtime_precision": {
+        "config_id": "stage12_bf16_hifi4_diagnostic",
+        "weight_groups": {
+          "attention": "bf16",
+          "mlp": "bf16",
+          "down": "bf16",
+          "lm_head": "bf16"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "HiFi4",
+          "mlp": "HiFi4",
+          "down": "HiFi4",
+          "lm_head": "HiFi4"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat16",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144,
+        "sdpa_compute_fidelity": "HiFi4"
+      },
+      "runtime_precision_sha256": "92895d431970ff8a90e45a339161bfedff8298c39be1475d092ac478ffeefff4",
+      "verdict": "normal",
+      "confidence": "high",
+      "evidence": "The complete response is a coherent script followed by build invocation and normal token50 tool yield; no repeated native motif or semantic loop.",
+      "p19_q32_comparison": {
+        "result": "setup/p19-q32-production-validation/fixed108/runs/p19_q32/anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.seed42.cap1024.json",
+        "sha256": "32b2b49f518963d19fa88d8c209e00d0ba5f614a9f5532c78cfede819b5f1059",
+        "same_fixture_prompt_ids": true,
+        "same_seed": true,
+        "same_cap": false,
+        "generated_tokens": 825,
+        "terminal_token_id": 50,
+        "shared_output_prefix_tokens": 67,
+        "verdict": "normal",
+        "interpretation": "P19 Q32 was a distinct sample; decoded branch remains broadly coherent. Token divergence is expected for separately run sampling; no same-sample identity inference."
+      },
+      "cap_notes": "Normal token50 at 597/1024."
+    },
+    {
+      "index": 76,
+      "case_name": "anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.seed43.cap1024",
+      "source_onset": "anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset",
+      "task": "sphinx-doc__sphinx-11510",
+      "call": 95,
+      "mode": "full",
+      "seed": 43,
+      "cap": 1024,
+      "fixture": "setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.cap1024.seed43.private.json",
+      "fixture_sha256": "c186544e1b085f76357b2c53fb9c5794409b13f7a700777fc7aeb02b3bd30b28",
+      "prompt_token_count": 55438,
+      "prompt_token_ids_sha256": "824d2526667c133d55c51bee56ccd02326aa09ee6824f077ed732fbc47de65aa",
+      "result": "setup/full-q32-production-validation/fixed108/runs/anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.seed43.cap1024.json",
+      "result_sha256": "71620c28775aaaaf84855ab5395198136c7fa964b155cebac47883eff932b7d0",
+      "generated_tokens": 884,
+      "generated_token_ids_sha256": "22ec12638601862473110e9af63a4762f313191c7d4afd55ec1aa70b4bc85e36",
+      "terminal_token_id": 50,
+      "natural_stop_before_cap": true,
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 43
+      },
+      "runtime_precision": {
+        "config_id": "stage12_bf16_hifi4_diagnostic",
+        "weight_groups": {
+          "attention": "bf16",
+          "mlp": "bf16",
+          "down": "bf16",
+          "lm_head": "bf16"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "HiFi4",
+          "mlp": "HiFi4",
+          "down": "HiFi4",
+          "lm_head": "HiFi4"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat16",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144,
+        "sdpa_compute_fidelity": "HiFi4"
+      },
+      "runtime_precision_sha256": "92895d431970ff8a90e45a339161bfedff8298c39be1475d092ac478ffeefff4",
+      "verdict": "normal",
+      "confidence": "high",
+      "evidence": "The complete response is a coherent script followed by build invocation and normal token50 tool yield; no repeated native motif or semantic loop.",
+      "p19_q32_comparison": {
+        "result": "setup/p19-q32-production-validation/fixed108/runs/p19_q32/anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.seed43.cap1024.json",
+        "sha256": "f0a59beb3b10dd705261aa1c9bdf35b6c2a4917f887cececbec188527abbe815",
+        "same_fixture_prompt_ids": true,
+        "same_seed": true,
+        "same_cap": false,
+        "generated_tokens": 825,
+        "terminal_token_id": 50,
+        "shared_output_prefix_tokens": 339,
+        "verdict": "normal",
+        "interpretation": "P19 Q32 was a distinct sample; decoded branch remains broadly coherent. Token divergence is expected for separately run sampling; no same-sample identity inference."
+      },
+      "cap_notes": "Normal token50 at 597/1024."
+    },
+    {
+      "index": 77,
+      "case_name": "anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.seed44.cap1024",
+      "source_onset": "anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset",
+      "task": "sphinx-doc__sphinx-11510",
+      "call": 95,
+      "mode": "full",
+      "seed": 44,
+      "cap": 1024,
+      "fixture": "setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.cap1024.seed44.private.json",
+      "fixture_sha256": "1983cb0cec009541460d10e207452f945bb0b5c35cbb9271b4779678599f06e8",
+      "prompt_token_count": 55438,
+      "prompt_token_ids_sha256": "824d2526667c133d55c51bee56ccd02326aa09ee6824f077ed732fbc47de65aa",
+      "result": "setup/full-q32-production-validation/fixed108/runs/anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.seed44.cap1024.json",
+      "result_sha256": "12931b618a248e29f965af35e24d17c2893e7e84d96007452b6ade24e5f49da5",
+      "generated_tokens": 827,
+      "generated_token_ids_sha256": "7b8319b3b52e0d16b5d64e96f3c06401b6f21d898f18def4f5d965b993a11e92",
+      "terminal_token_id": 50,
+      "natural_stop_before_cap": true,
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 44
+      },
+      "runtime_precision": {
+        "config_id": "stage12_bf16_hifi4_diagnostic",
+        "weight_groups": {
+          "attention": "bf16",
+          "mlp": "bf16",
+          "down": "bf16",
+          "lm_head": "bf16"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "HiFi4",
+          "mlp": "HiFi4",
+          "down": "HiFi4",
+          "lm_head": "HiFi4"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat16",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144,
+        "sdpa_compute_fidelity": "HiFi4"
+      },
+      "runtime_precision_sha256": "92895d431970ff8a90e45a339161bfedff8298c39be1475d092ac478ffeefff4",
+      "verdict": "normal",
+      "confidence": "high",
+      "evidence": "Complete coherent Sphinx extension script and build command; normal token50 tool yield. No malformed native tool-name pattern or semantic loop.",
+      "p19_q32_comparison": {
+        "result": "setup/p19-q32-production-validation/fixed108/runs/p19_q32/anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.seed44.cap1024.json",
+        "sha256": "fe93f5723dcf93462718f8595a3b96e0b3c150e8dfe8d18c094bec9f2399cb5c",
+        "same_fixture_prompt_ids": true,
+        "same_seed": true,
+        "old_generated_tokens": 819,
+        "old_terminal_token_id": 50,
+        "shared_output_prefix_tokens": 67,
+        "interpretation": "Same original fixture prompt and seed, but separate stochastic samples; both are coherent and stop naturally. Divergence is not a deterministic parity claim."
+      },
+      "cap_notes": "Natural token50 before cap; no extension indicated."
+    },
+    {
+      "index": 78,
+      "case_name": "anomaly.sphinx-doc__sphinx-9461.call184.onset.seed42.cap1024",
+      "source_onset": "anomaly.sphinx-doc__sphinx-9461.call184.onset",
+      "task": "sphinx-doc__sphinx-9461",
+      "call": 184,
+      "mode": "full",
+      "seed": 42,
+      "cap": 1024,
+      "fixture": "setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-9461.call184.onset.cap1024.seed42.private.json",
+      "fixture_sha256": "45d3dc1e5af1f012f825bf7da1ca84e67ff79fc45aac8c144ffc05b241243206",
+      "prompt_token_count": 71843,
+      "prompt_token_ids_sha256": "9c979bd6e5f156d291fc5cf681f4d2fccdf7c32ce8a2e5353e199dcd1635c092",
+      "result": "setup/full-q32-production-validation/fixed108/runs/anomaly.sphinx-doc__sphinx-9461.call184.onset.seed42.cap1024.json",
+      "result_sha256": "675a927190cc0ee74a1075254bf1c0dd8fa530d13fd5f4e371193f93ce786431",
+      "generated_tokens": 549,
+      "generated_token_ids_sha256": "c2f37073691e47383c66b4ceaff41083c0dbb90a27501a51d3f8f21005611c2b",
+      "terminal_token_id": 50,
+      "natural_stop_before_cap": true,
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 42
+      },
+      "runtime_precision": {
+        "config_id": "stage12_bf16_hifi4_diagnostic",
+        "weight_groups": {
+          "attention": "bf16",
+          "mlp": "bf16",
+          "down": "bf16",
+          "lm_head": "bf16"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "HiFi4",
+          "mlp": "HiFi4",
+          "down": "HiFi4",
+          "lm_head": "HiFi4"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat16",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144,
+        "sdpa_compute_fidelity": "HiFi4"
+      },
+      "runtime_precision_sha256": "92895d431970ff8a90e45a339161bfedff8298c39be1475d092ac478ffeefff4",
+      "verdict": "normal",
+      "confidence": "high",
+      "evidence": "Complete coherent Sphinx extension script and build command; normal token50 tool yield. No malformed native tool-name pattern or semantic loop.",
+      "p19_q32_comparison": {
+        "result": "setup/p19-q32-production-validation/fixed108/runs/p19_q32/anomaly.sphinx-doc__sphinx-9461.call184.onset.seed42.cap1024.json",
+        "sha256": "2bc406115a37d3ef5602ce781ff8b85fe95070ef9285117a3f6252b3c3d99355",
+        "same_fixture_prompt_ids": true,
+        "same_seed": true,
+        "old_generated_tokens": 271,
+        "old_terminal_token_id": 50,
+        "shared_output_prefix_tokens": 143,
+        "interpretation": "Same original fixture prompt and seed, but separate stochastic samples; both are coherent and stop naturally. Divergence is not a deterministic parity claim."
+      },
+      "cap_notes": "Natural token50 before cap; no extension indicated."
+    },
+    {
+      "index": 79,
+      "case_name": "anomaly.sphinx-doc__sphinx-9461.call184.onset.seed43.cap2048",
+      "source_onset": "anomaly.sphinx-doc__sphinx-9461.call184.onset",
+      "task": "sphinx-doc__sphinx-9461",
+      "call": 184,
+      "mode": "full",
+      "seed": 43,
+      "cap": 2048,
+      "fixture": "setup/swe85-third-cap-extensions/fixtures/served/anomaly.sphinx-doc__sphinx-9461.call184.onset.cap2048.seed43.private.json",
+      "fixture_sha256": "afa85f0f7abc73e7c3c71da8900e5910d5d8484630eebf6925ffe2995a24dbb6",
+      "prompt_token_count": 71843,
+      "prompt_token_ids_sha256": "9c979bd6e5f156d291fc5cf681f4d2fccdf7c32ce8a2e5353e199dcd1635c092",
+      "result": "setup/full-q32-production-validation/fixed108/runs/anomaly.sphinx-doc__sphinx-9461.call184.onset.seed43.cap2048.json",
+      "result_sha256": "4a3aea41a7f82e5482d3b3c94c31179ad041e69f27fb30dd24176243e5c560fb",
+      "generated_tokens": 548,
+      "generated_token_ids_sha256": "9547ffadd50c8637d9f996287ec2aa735a3aca78510fa39b7a7052385b4b2a18",
+      "terminal_token_id": 50,
+      "natural_stop_before_cap": true,
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 43
+      },
+      "runtime_precision": {
+        "config_id": "stage12_bf16_hifi4_diagnostic",
+        "weight_groups": {
+          "attention": "bf16",
+          "mlp": "bf16",
+          "down": "bf16",
+          "lm_head": "bf16"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "HiFi4",
+          "mlp": "HiFi4",
+          "down": "HiFi4",
+          "lm_head": "HiFi4"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat16",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144,
+        "sdpa_compute_fidelity": "HiFi4"
+      },
+      "runtime_precision_sha256": "92895d431970ff8a90e45a339161bfedff8298c39be1475d092ac478ffeefff4",
+      "verdict": "normal",
+      "confidence": "high",
+      "evidence": "Complete coherent Sphinx extension script and build command; normal token50 tool yield. No malformed native tool-name pattern or semantic loop.",
+      "p19_q32_comparison": {
+        "result": "setup/p19-q32-production-validation/fixed108/runs/p19_q32/anomaly.sphinx-doc__sphinx-9461.call184.onset.seed43.cap2048.json",
+        "sha256": "add719cae4a87051808d74c892316dafcaab358114f4de1d88b24d0ea2e58581",
+        "same_fixture_prompt_ids": true,
+        "same_seed": true,
+        "old_generated_tokens": 514,
+        "old_terminal_token_id": 50,
+        "shared_output_prefix_tokens": 56,
+        "interpretation": "Same original fixture prompt and seed, but separate stochastic samples; both are coherent and stop naturally. Divergence is not a deterministic parity claim."
+      },
+      "cap_notes": "Natural token50 before cap; no extension indicated."
+    },
+    {
+      "index": 80,
+      "case_name": "anomaly.sphinx-doc__sphinx-9461.call184.onset.seed44.cap1024",
+      "source_onset": "anomaly.sphinx-doc__sphinx-9461.call184.onset",
+      "task": "sphinx-doc__sphinx-9461",
+      "call": 184,
+      "mode": "full",
+      "seed": 44,
+      "cap": 1024,
+      "fixture": "setup/swe85-second-cap-extensions/fixtures/served/anomaly.sphinx-doc__sphinx-9461.call184.onset.cap1024.seed44.private.json",
+      "fixture_sha256": "552f3e08333444cf6b9ad9f2149e220af543669e05b0896f89f0afa0645dd6b8",
+      "prompt_token_count": 71843,
+      "prompt_token_ids_sha256": "9c979bd6e5f156d291fc5cf681f4d2fccdf7c32ce8a2e5353e199dcd1635c092",
+      "result": "setup/full-q32-production-validation/fixed108/runs/anomaly.sphinx-doc__sphinx-9461.call184.onset.seed44.cap1024.json",
+      "result_sha256": "b9bde8450dfcd8bf8afa659a3cd2dda897332947b9b627a3afb4efed06d357fe",
+      "generated_tokens": 546,
+      "generated_token_ids_sha256": "70a21033406a00305a152629e42a7fa2116fc1af42c2b5a9f220894e620ef9b3",
+      "terminal_token_id": 50,
+      "natural_stop_before_cap": true,
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 44
+      },
+      "runtime_precision": {
+        "config_id": "stage12_bf16_hifi4_diagnostic",
+        "weight_groups": {
+          "attention": "bf16",
+          "mlp": "bf16",
+          "down": "bf16",
+          "lm_head": "bf16"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "HiFi4",
+          "mlp": "HiFi4",
+          "down": "HiFi4",
+          "lm_head": "HiFi4"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat16",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144,
+        "sdpa_compute_fidelity": "HiFi4"
+      },
+      "runtime_precision_sha256": "92895d431970ff8a90e45a339161bfedff8298c39be1475d092ac478ffeefff4",
+      "verdict": "normal",
+      "confidence": "high",
+      "evidence": "Complete coherent script/reproducer and token50 tool-yield. No repeated collapse or malformed protocol in this continuation.",
+      "p19_q32_comparison": {
+        "result": "setup/p19-q32-production-validation/fixed108/runs/p19_q32/anomaly.sphinx-doc__sphinx-9461.call184.onset.seed44.cap1024.json",
+        "sha256": "dd1d5bd545267732a31ae4306be4e0817b73c4f7dd30bd319321fe0b3bb55a7e",
+        "same_fixture_prompt_ids": true,
+        "same_seed": true,
+        "old_generated_tokens": 504,
+        "old_terminal_token_id": 50,
+        "shared_output_prefix_tokens": 378,
+        "interpretation": "Same prompt and seed, separate stochastic trials; both are coherent natural-stop samples. No deterministic parity claim."
+      },
+      "cap_notes": "Natural token50 before cap; no extension indicated."
+    },
+    {
+      "index": 81,
+      "case_name": "anomaly.sympy__sympy-13480.call1.onset.seed42.cap256",
+      "source_onset": "anomaly.sympy__sympy-13480.call1.onset",
+      "task": "sympy__sympy-13480",
+      "call": 1,
+      "mode": "full",
+      "seed": 42,
+      "cap": 256,
+      "fixture": "anomalies/swe85-sympy13480-controls/sympy__sympy-13480.call1.onset.private.json",
+      "fixture_sha256": "0ff8f259c62590aaa1fa0b6874d2d5fdb5e1b5f686c5558142fa1e8dbaccc91f",
+      "prompt_token_count": 1175,
+      "prompt_token_ids_sha256": "ba6427cb210ec1569c0ff6a700ab10ec4dac2add229725082fbafb15034749b8",
+      "result": "setup/full-q32-production-validation/fixed108/runs/anomaly.sympy__sympy-13480.call1.onset.seed42.cap256.json",
+      "result_sha256": "0cd127db8f554132cb46ffbc694fcbab888a76ec071779f97bd50a0499fe4bc1",
+      "generated_tokens": 150,
+      "generated_token_ids_sha256": "15f7c5c3de980981332d33ec739e98fe2680823a3e6bec2834e1561d314b5831",
+      "terminal_token_id": 50,
+      "natural_stop_before_cap": true,
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 42
+      },
+      "runtime_precision": {
+        "config_id": "stage12_bf16_hifi4_diagnostic",
+        "weight_groups": {
+          "attention": "bf16",
+          "mlp": "bf16",
+          "down": "bf16",
+          "lm_head": "bf16"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "HiFi4",
+          "mlp": "HiFi4",
+          "down": "HiFi4",
+          "lm_head": "HiFi4"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat16",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144,
+        "sdpa_compute_fidelity": "HiFi4"
+      },
+      "runtime_precision_sha256": "92895d431970ff8a90e45a339161bfedff8298c39be1475d092ac478ffeefff4",
+      "verdict": "normal",
+      "confidence": "high",
+      "evidence": "Complete coherent script/reproducer and token50 tool-yield. No repeated collapse or malformed protocol in this continuation.",
+      "p19_q32_comparison": {
+        "result": "setup/p19-q32-production-validation/fixed108/runs/p19_q32/anomaly.sympy__sympy-13480.call1.onset.seed42.cap256.json",
+        "sha256": "0da5c4d7a8d97f9efb8a528df8417cf023e32de66668ed896d7e9d063a6476b9",
+        "same_fixture_prompt_ids": true,
+        "same_seed": true,
+        "old_generated_tokens": 206,
+        "old_terminal_token_id": 50,
+        "shared_output_prefix_tokens": 35,
+        "interpretation": "Same prompt and seed, separate stochastic trials; both are coherent natural-stop samples. No deterministic parity claim."
+      },
+      "cap_notes": "Natural token50 before cap; no extension indicated."
+    },
+    {
+      "index": 82,
+      "case_name": "anomaly.sympy__sympy-13480.call1.onset.seed43.cap256",
+      "source_onset": "anomaly.sympy__sympy-13480.call1.onset",
+      "task": "sympy__sympy-13480",
+      "call": 1,
+      "mode": "full",
+      "seed": 43,
+      "cap": 256,
+      "fixture": "setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.sympy__sympy-13480.call1.onset.seed43.private.json",
+      "fixture_sha256": "b49edc6f6717909718addf7ed6cc8065e8b588db9be07b4c66cea0f3b3951b78",
+      "prompt_token_count": 1175,
+      "prompt_token_ids_sha256": "ba6427cb210ec1569c0ff6a700ab10ec4dac2add229725082fbafb15034749b8",
+      "result": "setup/full-q32-production-validation/fixed108/runs/anomaly.sympy__sympy-13480.call1.onset.seed43.cap256.json",
+      "result_sha256": "0fce4057ba8ec66f244194110a954b18d4a2eef87ab2a856b49c84cb26d6f63f",
+      "generated_tokens": 187,
+      "generated_token_ids_sha256": "9806698a59c018f5554b6c5d3b8411a22b58de61a05ee33f78c147b0ce783939",
+      "terminal_token_id": 50,
+      "natural_stop_before_cap": true,
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 43
+      },
+      "runtime_precision": {
+        "config_id": "stage12_bf16_hifi4_diagnostic",
+        "weight_groups": {
+          "attention": "bf16",
+          "mlp": "bf16",
+          "down": "bf16",
+          "lm_head": "bf16"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "HiFi4",
+          "mlp": "HiFi4",
+          "down": "HiFi4",
+          "lm_head": "HiFi4"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat16",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144,
+        "sdpa_compute_fidelity": "HiFi4"
+      },
+      "runtime_precision_sha256": "92895d431970ff8a90e45a339161bfedff8298c39be1475d092ac478ffeefff4",
+      "verdict": "normal",
+      "confidence": "high",
+      "evidence": "Complete coherent script/reproducer and token50 tool-yield. No repeated collapse or malformed protocol in this continuation.",
+      "p19_q32_comparison": {
+        "result": "setup/p19-q32-production-validation/fixed108/runs/p19_q32/anomaly.sympy__sympy-13480.call1.onset.seed43.cap256.json",
+        "sha256": "314e71e282710886bec940568d58e36b9d4de45b64fb3e5943a2331758742f68",
+        "same_fixture_prompt_ids": true,
+        "same_seed": true,
+        "old_generated_tokens": 207,
+        "old_terminal_token_id": 50,
+        "shared_output_prefix_tokens": 36,
+        "interpretation": "Same prompt and seed, separate stochastic trials; both are coherent natural-stop samples. No deterministic parity claim."
+      },
+      "cap_notes": "Natural token50 before cap; no extension indicated."
+    },
+    {
+      "index": 83,
+      "case_name": "anomaly.sympy__sympy-13480.call1.onset.seed44.cap256",
+      "source_onset": "anomaly.sympy__sympy-13480.call1.onset",
+      "task": "sympy__sympy-13480",
+      "call": 1,
+      "mode": "full",
+      "seed": 44,
+      "cap": 256,
+      "fixture": "setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.sympy__sympy-13480.call1.onset.seed44.private.json",
+      "fixture_sha256": "a742fcf1c22680f2a044f851fcf77b978f97fb850f546367fe229ed6e793df7d",
+      "prompt_token_count": 1175,
+      "prompt_token_ids_sha256": "ba6427cb210ec1569c0ff6a700ab10ec4dac2add229725082fbafb15034749b8",
+      "result": "setup/full-q32-production-validation/fixed108/runs/anomaly.sympy__sympy-13480.call1.onset.seed44.cap256.json",
+      "result_sha256": "d0cbaca69b69e941bf8cdc361ebd04137753a7cc003ffd4595881c0dd2a6eb6a",
+      "generated_tokens": 143,
+      "generated_token_ids_sha256": "95eb0486063666c5718445b3d89ed458373a59802e44a30bd725cd4506258c22",
+      "terminal_token_id": 50,
+      "natural_stop_before_cap": true,
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 44
+      },
+      "runtime_precision": {
+        "config_id": "stage12_bf16_hifi4_diagnostic",
+        "weight_groups": {
+          "attention": "bf16",
+          "mlp": "bf16",
+          "down": "bf16",
+          "lm_head": "bf16"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "HiFi4",
+          "mlp": "HiFi4",
+          "down": "HiFi4",
+          "lm_head": "HiFi4"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat16",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144,
+        "sdpa_compute_fidelity": "HiFi4"
+      },
+      "runtime_precision_sha256": "92895d431970ff8a90e45a339161bfedff8298c39be1475d092ac478ffeefff4",
+      "verdict": "normal",
+      "confidence": "high",
+      "evidence": "Complete coherent script/reproducer and token50 tool-yield. No repeated collapse or malformed protocol in this continuation.",
+      "p19_q32_comparison": {
+        "result": "setup/p19-q32-production-validation/fixed108/runs/p19_q32/anomaly.sympy__sympy-13480.call1.onset.seed44.cap256.json",
+        "sha256": "b2a28a56b2074a9dc0aedebc6393e1091359132c9e7cf9c32d153f8fd6c5f467",
+        "same_fixture_prompt_ids": true,
+        "same_seed": true,
+        "old_generated_tokens": 143,
+        "old_terminal_token_id": 50,
+        "shared_output_prefix_tokens": 143,
+        "interpretation": "Same prompt and seed, separate stochastic trials; both are coherent natural-stop samples. No deterministic parity claim."
+      },
+      "cap_notes": "Natural token50 before cap; no extension indicated."
+    },
+    {
+      "index": 84,
+      "case_name": "anomaly.sympy__sympy-13551.call1.onset.seed42.cap256",
+      "source_onset": "anomaly.sympy__sympy-13551.call1.onset",
+      "task": "sympy__sympy-13551",
+      "call": 1,
+      "mode": "full",
+      "seed": 42,
+      "cap": 256,
+      "fixture": "anomalies/swe85-sympy13551-controls/sympy__sympy-13551.call1.onset.private.json",
+      "fixture_sha256": "f2806c4d025cc3a6da053df45a4bfcd6c3dba23bf2c31d7e892b78a957ae767b",
+      "prompt_token_count": 1217,
+      "prompt_token_ids_sha256": "4da0c529950107c5a9ace2acb72249067865238716cd7760ad17e194e20c3658",
+      "result": "setup/full-q32-production-validation/fixed108/runs/anomaly.sympy__sympy-13551.call1.onset.seed42.cap256.json",
+      "result_sha256": "ceebd86c10fb59f5cb890f24ebdab0bc67fcebafe6b11f2266dae49bb1a82b4d",
+      "generated_tokens": 166,
+      "generated_token_ids_sha256": "e76e68029db96a5d162af711492319ef0af0fa041aa77aa5c2614e96c88c7b38",
+      "terminal_token_id": 50,
+      "natural_stop_before_cap": true,
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 42
+      },
+      "runtime_precision": {
+        "config_id": "stage12_bf16_hifi4_diagnostic",
+        "weight_groups": {
+          "attention": "bf16",
+          "mlp": "bf16",
+          "down": "bf16",
+          "lm_head": "bf16"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "HiFi4",
+          "mlp": "HiFi4",
+          "down": "HiFi4",
+          "lm_head": "HiFi4"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat16",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144,
+        "sdpa_compute_fidelity": "HiFi4"
+      },
+      "runtime_precision_sha256": "92895d431970ff8a90e45a339161bfedff8298c39be1475d092ac478ffeefff4",
+      "verdict": "normal",
+      "confidence": "high",
+      "evidence": "Complete coherent script/reproducer and token50 tool-yield. No repeated collapse or malformed protocol in this continuation.",
+      "p19_q32_comparison": {
+        "result": "setup/p19-q32-production-validation/fixed108/runs/p19_q32/anomaly.sympy__sympy-13551.call1.onset.seed42.cap256.json",
+        "sha256": "4407ae61f3451b284bfd7cde96a4139c822ec0caca46d56c14e7750ef44aba10",
+        "same_fixture_prompt_ids": true,
+        "same_seed": true,
+        "old_generated_tokens": 202,
+        "old_terminal_token_id": 50,
+        "shared_output_prefix_tokens": 23,
+        "interpretation": "Same prompt and seed, separate stochastic trials; both are coherent natural-stop samples. No deterministic parity claim."
+      },
+      "cap_notes": "Natural token50 before cap; no extension indicated."
+    },
+    {
+      "index": 85,
+      "case_name": "anomaly.sympy__sympy-13551.call1.onset.seed43.cap512",
+      "source_onset": "anomaly.sympy__sympy-13551.call1.onset",
+      "task": "sympy__sympy-13551",
+      "call": 1,
+      "mode": "full",
+      "seed": 43,
+      "cap": 512,
+      "fixture": "setup/swe85-cap-extensions/fixtures/full/anomaly.sympy__sympy-13551.call1.onset.cap512.seed43.private.json",
+      "fixture_sha256": "c24b4e24ae4091674d614870cd826c09be6cde322415f347ac1c6cfafac0f1c7",
+      "prompt_token_count": 1217,
+      "prompt_token_ids_sha256": "4da0c529950107c5a9ace2acb72249067865238716cd7760ad17e194e20c3658",
+      "result": "setup/full-q32-production-validation/fixed108/runs/anomaly.sympy__sympy-13551.call1.onset.seed43.cap512.json",
+      "result_sha256": "ddd2c3099ff6636d6f1236443c88a1fd9b598746c7d3423db1e393a19677b092",
+      "generated_tokens": 300,
+      "generated_token_ids_sha256": "c0c159d520e5fcf07a52685c7513dde38226844a331b0938512afcd37deb07f0",
+      "terminal_token_id": 50,
+      "natural_stop_before_cap": true,
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 43
+      },
+      "runtime_precision": {
+        "config_id": "stage12_bf16_hifi4_diagnostic",
+        "weight_groups": {
+          "attention": "bf16",
+          "mlp": "bf16",
+          "down": "bf16",
+          "lm_head": "bf16"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "HiFi4",
+          "mlp": "HiFi4",
+          "down": "HiFi4",
+          "lm_head": "HiFi4"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat16",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144,
+        "sdpa_compute_fidelity": "HiFi4"
+      },
+      "runtime_precision_sha256": "92895d431970ff8a90e45a339161bfedff8298c39be1475d092ac478ffeefff4",
+      "verdict": "normal",
+      "confidence": "high",
+      "evidence": "Complete coherent script/reproducer and token50 tool-yield. No repeated collapse or malformed protocol in this continuation.",
+      "p19_q32_comparison": {
+        "result": "setup/p19-q32-production-validation/fixed108/runs/p19_q32/anomaly.sympy__sympy-13551.call1.onset.seed43.cap512.json",
+        "sha256": "093829005cbf09a4b1748d639d5cfbb4ad97d3582fdcc5321e49202677066476",
+        "same_fixture_prompt_ids": true,
+        "same_seed": true,
+        "old_generated_tokens": 182,
+        "old_terminal_token_id": 50,
+        "shared_output_prefix_tokens": 67,
+        "interpretation": "Same prompt and seed, separate stochastic trials; both are coherent natural-stop samples. No deterministic parity claim."
+      },
+      "cap_notes": "Natural token50 before cap; no extension indicated."
+    },
+    {
+      "index": 86,
+      "case_name": "anomaly.sympy__sympy-13551.call1.onset.seed44.cap256",
+      "source_onset": "anomaly.sympy__sympy-13551.call1.onset",
+      "task": "sympy__sympy-13551",
+      "call": 1,
+      "mode": "full",
+      "seed": 44,
+      "cap": 256,
+      "fixture": "setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.sympy__sympy-13551.call1.onset.seed44.private.json",
+      "fixture_sha256": "fd88dd296c45ee44bfbb687431647551c8a2661a9142b28110ec47aeff4a7362",
+      "prompt_token_count": 1217,
+      "prompt_token_ids_sha256": "4da0c529950107c5a9ace2acb72249067865238716cd7760ad17e194e20c3658",
+      "result": "setup/full-q32-production-validation/fixed108/runs/anomaly.sympy__sympy-13551.call1.onset.seed44.cap256.json",
+      "result_sha256": "89483923f489377548d093b70817c7a8b4e97edfdf206c01ffeb5061b72b9c0a",
+      "generated_tokens": 252,
+      "generated_token_ids_sha256": "3449c12d1e18aa86ef6d4f14f89fda4492a1c35498eee98a540cea7218223c47",
+      "terminal_token_id": 50,
+      "natural_stop_before_cap": true,
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 44
+      },
+      "runtime_precision": {
+        "config_id": "stage12_bf16_hifi4_diagnostic",
+        "weight_groups": {
+          "attention": "bf16",
+          "mlp": "bf16",
+          "down": "bf16",
+          "lm_head": "bf16"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "HiFi4",
+          "mlp": "HiFi4",
+          "down": "HiFi4",
+          "lm_head": "HiFi4"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat16",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144,
+        "sdpa_compute_fidelity": "HiFi4"
+      },
+      "runtime_precision_sha256": "92895d431970ff8a90e45a339161bfedff8298c39be1475d092ac478ffeefff4",
+      "verdict": "normal",
+      "confidence": "high",
+      "evidence": "Coherent SymPy product reproducer script; completes with canonical tool yield token50 before cap. No collapse or repeated semantic loop.",
+      "p19_q32_comparison": {
+        "result": "setup/p19-q32-production-validation/fixed108/runs/p19_q32/anomaly.sympy__sympy-13551.call1.onset.seed44.cap256.json",
+        "sha256": "17ea67d5f65455ac6475ebdcf45ddcaea8f75bb8accbb298102a52c8b3c4ab56",
+        "same_fixture_prompt_ids": true,
+        "same_seed": true,
+        "same_cap": false,
+        "generated_tokens": 191,
+        "terminal_token_id": 50,
+        "shared_output_prefix_tokens": 66,
+        "interpretation": "Same prompt and seed, separate sampled continuations; both yield coherent outputs. Exact token equality is not assumed."
+      },
+      "cap_notes": "Natural token50 stop; no extension needed."
+    },
+    {
+      "index": 87,
+      "case_name": "anomaly.sympy__sympy-13878.call1.onset.seed42.cap256",
+      "source_onset": "anomaly.sympy__sympy-13878.call1.onset",
+      "task": "sympy__sympy-13878",
+      "call": 1,
+      "mode": "full",
+      "seed": 42,
+      "cap": 256,
+      "fixture": "anomalies/swe85-sympy13878-controls/sympy__sympy-13878.call1.onset.private.json",
+      "fixture_sha256": "8e2cae61d60bb364c79e2e651b3d3ffd992c094e14923ae258c9810d12da0439",
+      "prompt_token_count": 1968,
+      "prompt_token_ids_sha256": "e6fc93a99df8548ad8aac06d66b7587d3d1e3e0bb43864a350baa447d72a8143",
+      "result": "setup/full-q32-production-validation/fixed108/runs/anomaly.sympy__sympy-13878.call1.onset.seed42.cap256.json",
+      "result_sha256": "a1189ae40f7cb4814d8aa9ce567d0fcb00acbfec4c8fc535464810f234299ef1",
+      "generated_tokens": 22,
+      "generated_token_ids_sha256": "6a9b937a285e7973e3c097d6e67825242ca91ea4fe231f350e07ff37497f6716",
+      "terminal_token_id": 50,
+      "natural_stop_before_cap": true,
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 42
+      },
+      "runtime_precision": {
+        "config_id": "stage12_bf16_hifi4_diagnostic",
+        "weight_groups": {
+          "attention": "bf16",
+          "mlp": "bf16",
+          "down": "bf16",
+          "lm_head": "bf16"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "HiFi4",
+          "mlp": "HiFi4",
+          "down": "HiFi4",
+          "lm_head": "HiFi4"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat16",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144,
+        "sdpa_compute_fidelity": "HiFi4"
+      },
+      "runtime_precision_sha256": "92895d431970ff8a90e45a339161bfedff8298c39be1475d092ac478ffeefff4",
+      "verdict": "normal",
+      "confidence": "high",
+      "evidence": "Canonical tool sequence `call:bash {command:...} <tool_call|><tool_response>` then token50 yield. Seed44 current full result matches saved earlier Full-BF16 canonical full-protocol control at 19 tokens; P19 distinct sample also completed canonically.",
+      "p19_q32_comparison": {
+        "result": "setup/p19-q32-production-validation/fixed108/runs/p19_q32/anomaly.sympy__sympy-13878.call1.onset.seed42.cap256.json",
+        "sha256": "b5637f3e74768c0cb2cbf68e8b72b59c8ca63aaa2e17b5a9e13640cb575aaefe",
+        "same_fixture_prompt_ids": true,
+        "same_seed": true,
+        "same_cap": false,
+        "generated_tokens": 22,
+        "terminal_token_id": 50,
+        "shared_output_prefix_tokens": 22,
+        "interpretation": "Same prompt and seed, separate sampled continuations; both yield coherent outputs. Exact token equality is not assumed."
+      },
+      "cap_notes": "Natural token50 stop; no extension needed."
+    },
+    {
+      "index": 88,
+      "case_name": "anomaly.sympy__sympy-13878.call1.onset.seed43.cap256",
+      "source_onset": "anomaly.sympy__sympy-13878.call1.onset",
+      "task": "sympy__sympy-13878",
+      "call": 1,
+      "mode": "full",
+      "seed": 43,
+      "cap": 256,
+      "fixture": "setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.sympy__sympy-13878.call1.onset.seed43.private.json",
+      "fixture_sha256": "a137fb3ba6d6665f4fd4e259d6ea30d57b9530f1eda089ae40ddd03ec8602e28",
+      "prompt_token_count": 1968,
+      "prompt_token_ids_sha256": "e6fc93a99df8548ad8aac06d66b7587d3d1e3e0bb43864a350baa447d72a8143",
+      "result": "setup/full-q32-production-validation/fixed108/runs/anomaly.sympy__sympy-13878.call1.onset.seed43.cap256.json",
+      "result_sha256": "832aba67548899c96a60203edb6cac9d56506c212c1489ce9d245eec117f1a2b",
+      "generated_tokens": 21,
+      "generated_token_ids_sha256": "286a5f3e5cf071febaee22478c9ae220d531590ea545a71b2062cf67ec42a6be",
+      "terminal_token_id": 50,
+      "natural_stop_before_cap": true,
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 43
+      },
+      "runtime_precision": {
+        "config_id": "stage12_bf16_hifi4_diagnostic",
+        "weight_groups": {
+          "attention": "bf16",
+          "mlp": "bf16",
+          "down": "bf16",
+          "lm_head": "bf16"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "HiFi4",
+          "mlp": "HiFi4",
+          "down": "HiFi4",
+          "lm_head": "HiFi4"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat16",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144,
+        "sdpa_compute_fidelity": "HiFi4"
+      },
+      "runtime_precision_sha256": "92895d431970ff8a90e45a339161bfedff8298c39be1475d092ac478ffeefff4",
+      "verdict": "normal",
+      "confidence": "high",
+      "evidence": "Canonical tool sequence `call:bash {command:...} <tool_call|><tool_response>` then token50 yield. Seed44 current full result matches saved earlier Full-BF16 canonical full-protocol control at 19 tokens; P19 distinct sample also completed canonically.",
+      "p19_q32_comparison": {
+        "result": "setup/p19-q32-production-validation/fixed108/runs/p19_q32/anomaly.sympy__sympy-13878.call1.onset.seed43.cap256.json",
+        "sha256": "6594bdacb41397f14a85b422c58c1afdc58680585a6f4b80cc7fa03986332cdf",
+        "same_fixture_prompt_ids": true,
+        "same_seed": true,
+        "same_cap": false,
+        "generated_tokens": 21,
+        "terminal_token_id": 50,
+        "shared_output_prefix_tokens": 21,
+        "interpretation": "Same prompt and seed, separate sampled continuations; both yield coherent outputs. Exact token equality is not assumed."
+      },
+      "cap_notes": "Natural token50 stop; no extension needed."
+    },
+    {
+      "index": 89,
+      "case_name": "anomaly.sympy__sympy-13878.call1.onset.seed44.cap256",
+      "source_onset": "anomaly.sympy__sympy-13878.call1.onset",
+      "task": "sympy__sympy-13878",
+      "call": 1,
+      "mode": "full",
+      "seed": 44,
+      "cap": 256,
+      "fixture": "setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.sympy__sympy-13878.call1.onset.seed44.private.json",
+      "fixture_sha256": "884cc1eebec08f3511e27e1b989fa0a779bf750611494cbbdd7b33937ac54420",
+      "prompt_token_count": 1968,
+      "prompt_token_ids_sha256": "e6fc93a99df8548ad8aac06d66b7587d3d1e3e0bb43864a350baa447d72a8143",
+      "result": "setup/full-q32-production-validation/fixed108/runs/anomaly.sympy__sympy-13878.call1.onset.seed44.cap256.json",
+      "result_sha256": "1cf19c28ec91894e52a517f61bb2641c601883df6d7bb5ae71fa82ecb5debbd1",
+      "generated_tokens": 19,
+      "generated_token_ids_sha256": "c7b66b95207a3e3563c1aeb98585d2449f6350c2c58ff1168f6ff34885c470cc",
+      "terminal_token_id": 50,
+      "natural_stop_before_cap": true,
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 44
+      },
+      "runtime_precision": {
+        "config_id": "stage12_bf16_hifi4_diagnostic",
+        "weight_groups": {
+          "attention": "bf16",
+          "mlp": "bf16",
+          "down": "bf16",
+          "lm_head": "bf16"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "HiFi4",
+          "mlp": "HiFi4",
+          "down": "HiFi4",
+          "lm_head": "HiFi4"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat16",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144,
+        "sdpa_compute_fidelity": "HiFi4"
+      },
+      "runtime_precision_sha256": "92895d431970ff8a90e45a339161bfedff8298c39be1475d092ac478ffeefff4",
+      "verdict": "normal",
+      "confidence": "high",
+      "evidence": "Canonical tool sequence `call:bash {command:...} <tool_call|><tool_response>` then token50 yield. Seed44 current full result matches saved earlier Full-BF16 canonical full-protocol control at 19 tokens; P19 distinct sample also completed canonically.",
+      "p19_q32_comparison": {
+        "result": "setup/p19-q32-production-validation/fixed108/runs/p19_q32/anomaly.sympy__sympy-13878.call1.onset.seed44.cap256.json",
+        "sha256": "05394df14e0e37f5b31e279156ebd03c4baa393cbf0f7a0b77c21c09dc3485ef",
+        "same_fixture_prompt_ids": true,
+        "same_seed": true,
+        "same_cap": false,
+        "generated_tokens": 19,
+        "terminal_token_id": 50,
+        "shared_output_prefix_tokens": 1,
+        "interpretation": "Same prompt and seed, separate sampled continuations; both yield coherent outputs. Exact token equality is not assumed."
+      },
+      "cap_notes": "Natural token50 stop; no extension needed."
+    },
+    {
+      "index": 90,
+      "case_name": "anomaly.sympy__sympy-14248.call53.onset.seed42.cap256",
+      "source_onset": "anomaly.sympy__sympy-14248.call53.onset",
+      "task": "sympy__sympy-14248",
+      "call": 53,
+      "mode": "full",
+      "seed": 42,
+      "cap": 256,
+      "fixture": "anomalies/swe85-sympy14248-caret-controls/sympy__sympy-14248.call53.onset.private.json",
+      "fixture_sha256": "b088288cd811300e8ff36818cdc1b685bdb0f5569866a0f6fbb69b739f610f1a",
+      "prompt_token_count": 32660,
+      "prompt_token_ids_sha256": "c0db928adb280ca7f865a689080f00e255d43eb10a956957e6fc52a83c27f897",
+      "result": "setup/full-q32-production-validation/fixed108/runs/anomaly.sympy__sympy-14248.call53.onset.seed42.cap256.json",
+      "result_sha256": "a7433bb59f04ee857cf5a9b5f6bd875e6044556e28c6015b6110b1aee77f38f0",
+      "generated_tokens": 256,
+      "generated_token_ids_sha256": "477919d03de67b643379e76a04843f4e924b6d9dbea9381a50c905bd3bb31990",
+      "terminal_token_id": 172109,
+      "natural_stop_before_cap": false,
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 42
+      },
+      "runtime_precision": {
+        "config_id": "stage12_bf16_hifi4_diagnostic",
+        "weight_groups": {
+          "attention": "bf16",
+          "mlp": "bf16",
+          "down": "bf16",
+          "lm_head": "bf16"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "HiFi4",
+          "mlp": "HiFi4",
+          "down": "HiFi4",
+          "lm_head": "HiFi4"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat16",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144,
+        "sdpa_compute_fidelity": "HiFi4"
+      },
+      "runtime_precision_sha256": "92895d431970ff8a90e45a339161bfedff8298c39be1475d092ac478ffeefff4",
+      "verdict": "reproduced_native_motif",
+      "confidence": "high",
+      "evidence": "All 256 generated IDs are caret token 172109, as in native collapse motif; same fixture and seed reproduce the identical caret IDs in P19. Capped at 256 without recovery; reproduced native motif.",
+      "p19_q32_comparison": {
+        "result": "setup/p19-q32-production-validation/fixed108/runs/p19_q32/anomaly.sympy__sympy-14248.call53.onset.seed42.cap256.json",
+        "sha256": "8cd64b9977e2dae6a368930f1a23a4de88dff6f4dad0003fa3778de6b8e03eba",
+        "same_fixture_prompt_ids": true,
+        "same_seed": true,
+        "same_cap": true,
+        "generated_tokens": 256,
+        "terminal_token_id": 172109,
+        "shared_output_prefix_tokens": 256,
+        "interpretation": "Exact same 256 caret IDs through cap, independently reproducing the source caret motif in P19 as well; no stop."
+      },
+      "cap_notes": "Caret continuation persists to full 256 cap. Existing identical P19 capped result confirms motif; no claim beyond observed cap."
+    },
+    {
+      "index": 91,
+      "case_name": "anomaly.sympy__sympy-14248.call53.onset.seed43.cap256",
+      "source_onset": "anomaly.sympy__sympy-14248.call53.onset",
+      "task": "sympy__sympy-14248",
+      "call": 53,
+      "mode": "full",
+      "seed": 43,
+      "cap": 256,
+      "fixture": "setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.sympy__sympy-14248.call53.onset.seed43.private.json",
+      "fixture_sha256": "feda9c087c2f2fdfd0e21e9dcb9190084c350b69e4d9fc14190bdf6fa480419b",
+      "prompt_token_count": 32660,
+      "prompt_token_ids_sha256": "c0db928adb280ca7f865a689080f00e255d43eb10a956957e6fc52a83c27f897",
+      "result": "setup/full-q32-production-validation/fixed108/runs/anomaly.sympy__sympy-14248.call53.onset.seed43.cap256.json",
+      "result_sha256": "2423629abfa6d0d2af3a912c25f06c913f0e6122640ecbbaeeb7fb4fe11b171c",
+      "generated_tokens": 256,
+      "generated_token_ids_sha256": "477919d03de67b643379e76a04843f4e924b6d9dbea9381a50c905bd3bb31990",
+      "terminal_token_id": 172109,
+      "natural_stop_before_cap": false,
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 43
+      },
+      "runtime_precision": {
+        "config_id": "stage12_bf16_hifi4_diagnostic",
+        "weight_groups": {
+          "attention": "bf16",
+          "mlp": "bf16",
+          "down": "bf16",
+          "lm_head": "bf16"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "HiFi4",
+          "mlp": "HiFi4",
+          "down": "HiFi4",
+          "lm_head": "HiFi4"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat16",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144,
+        "sdpa_compute_fidelity": "HiFi4"
+      },
+      "runtime_precision_sha256": "92895d431970ff8a90e45a339161bfedff8298c39be1475d092ac478ffeefff4",
+      "verdict": "reproduced_native_motif",
+      "confidence": "high",
+      "evidence": "All 256 generated IDs are caret token 172109, as in native collapse motif; same fixture and seed reproduce the identical caret IDs in P19. Capped at 256 without recovery; reproduced native motif.",
+      "p19_q32_comparison": {
+        "result": "setup/p19-q32-production-validation/fixed108/runs/p19_q32/anomaly.sympy__sympy-14248.call53.onset.seed43.cap256.json",
+        "sha256": "6ee05ec10ff2fe8298dcfbacc43beeec70162d93d9ac320a4bf475491f02042d",
+        "same_fixture_prompt_ids": true,
+        "same_seed": true,
+        "same_cap": true,
+        "generated_tokens": 256,
+        "terminal_token_id": 172109,
+        "shared_output_prefix_tokens": 256,
+        "interpretation": "Exact same 256 caret IDs through cap, independently reproducing the source caret motif in P19 as well; no stop."
+      },
+      "cap_notes": "Caret continuation persists to full 256 cap. Existing identical P19 capped result confirms motif; no claim beyond observed cap."
+    },
+    {
+      "index": 92,
+      "case_name": "anomaly.sympy__sympy-14248.call53.onset.seed44.cap256",
+      "source_onset": "anomaly.sympy__sympy-14248.call53.onset",
+      "task": "sympy__sympy-14248",
+      "call": 53,
+      "mode": "full",
+      "seed": 44,
+      "cap": 256,
+      "fixture": "setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.sympy__sympy-14248.call53.onset.seed44.private.json",
+      "fixture_sha256": "97bdb4bdd2294f42e8cd548761591a5dbabc0625618966e39a0ccb7855defd92",
+      "prompt_token_count": 32660,
+      "prompt_token_ids_sha256": "c0db928adb280ca7f865a689080f00e255d43eb10a956957e6fc52a83c27f897",
+      "result": "setup/full-q32-production-validation/fixed108/runs/anomaly.sympy__sympy-14248.call53.onset.seed44.cap256.json",
+      "result_sha256": "6404ff81128be126a9b38bf58d8ac9a51ca521d6c78231b789d82fb3324f97ca",
+      "generated_tokens": 256,
+      "generated_token_ids_sha256": "477919d03de67b643379e76a04843f4e924b6d9dbea9381a50c905bd3bb31990",
+      "terminal_token_id": 172109,
+      "natural_stop_before_cap": false,
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 44
+      },
+      "runtime_precision": {
+        "config_id": "stage12_bf16_hifi4_diagnostic",
+        "weight_groups": {
+          "attention": "bf16",
+          "mlp": "bf16",
+          "down": "bf16",
+          "lm_head": "bf16"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "HiFi4",
+          "mlp": "HiFi4",
+          "down": "HiFi4",
+          "lm_head": "HiFi4"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat16",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144,
+        "sdpa_compute_fidelity": "HiFi4"
+      },
+      "runtime_precision_sha256": "92895d431970ff8a90e45a339161bfedff8298c39be1475d092ac478ffeefff4",
+      "verdict": "reproduced_native_motif",
+      "confidence": "high",
+      "evidence": "All 256 generated IDs are caret token 172109, as in native collapse motif; same fixture and seed reproduce the identical caret IDs in P19. Capped at 256 without recovery; reproduced native motif.",
+      "p19_q32_comparison": {
+        "result": "setup/p19-q32-production-validation/fixed108/runs/p19_q32/anomaly.sympy__sympy-14248.call53.onset.seed44.cap256.json",
+        "sha256": "1f541381e6b8d8e38c9601111f5891fef19e4d202bf067290fd9d2a78593de8d",
+        "same_fixture_prompt_ids": true,
+        "same_seed": true,
+        "same_cap": true,
+        "generated_tokens": 256,
+        "terminal_token_id": 172109,
+        "shared_output_prefix_tokens": 256,
+        "interpretation": "Exact same 256 caret IDs through cap, independently reproducing the source caret motif in P19 as well; no stop."
+      },
+      "cap_notes": "Caret continuation persists to full 256 cap. Existing identical P19 capped result confirms motif; no claim beyond observed cap."
+    },
+    {
+      "index": 93,
+      "case_name": "anomaly.sympy__sympy-14711.call1.onset.seed42.cap256",
+      "source_onset": "anomaly.sympy__sympy-14711.call1.onset",
+      "task": "sympy__sympy-14711",
+      "call": 1,
+      "mode": "full",
+      "seed": 42,
+      "cap": 256,
+      "fixture": "anomalies/swe85-protocol-scan83-controls/sympy__sympy-14711.call1.onset.private.json",
+      "fixture_sha256": "30151a4ad6ba3f457477b50bbb7d8817b24944e8e57242c10b1f494f4697d6e5",
+      "prompt_token_count": 1351,
+      "prompt_token_ids_sha256": "63b8b0d7bffacf896c9173a5d24ffd2d1f07b2ec57def9862e1936f66120b086",
+      "result": "setup/full-q32-production-validation/fixed108/runs/anomaly.sympy__sympy-14711.call1.onset.seed42.cap256.json",
+      "result_sha256": "8b2f2f16e8e9b73e9ac31d560836db4018cdd4d94b3f7ffb5f822eed9730823a",
+      "generated_tokens": 139,
+      "generated_token_ids_sha256": "238c719779037f1114aa347cfa918a1373f4fefd153ef0c039a47a8045279fdd",
+      "terminal_token_id": 50,
+      "natural_stop_before_cap": true,
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 42
+      },
+      "runtime_precision": {
+        "config_id": "stage12_bf16_hifi4_diagnostic",
+        "weight_groups": {
+          "attention": "bf16",
+          "mlp": "bf16",
+          "down": "bf16",
+          "lm_head": "bf16"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "HiFi4",
+          "mlp": "HiFi4",
+          "down": "HiFi4",
+          "lm_head": "HiFi4"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat16",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144,
+        "sdpa_compute_fidelity": "HiFi4"
+      },
+      "runtime_precision_sha256": "92895d431970ff8a90e45a339161bfedff8298c39be1475d092ac478ffeefff4",
+      "verdict": "normal",
+      "confidence": "high",
+      "evidence": "Starts with the source-associated localized `<channel|>I will start...` planning text, then the repeated channel boundary and canonical bash call. The same exact 139 generated IDs occur in P19 and the saved all-group BF16 control; it naturally yields token50. This is a localized source-associated form, not a newly introduced full-BF16 anomaly, and no repeated semantic loop.",
+      "p19_q32_comparison": {
+        "result": "setup/p19-q32-production-validation/fixed108/runs/p19_q32/anomaly.sympy__sympy-14711.call1.onset.seed42.cap256.json",
+        "sha256": "5618f03f65267583d98fa41b84f36fe6716bc5587b29d9fb5c8aec4efe69842a",
+        "same_fixture_prompt_ids": true,
+        "same_seed": true,
+        "same_cap": false,
+        "generated_tokens": 139,
+        "terminal_token_id": 50,
+        "shared_output_prefix_tokens": 139,
+        "interpretation": "Same prompt and seed, separate sampled continuations; both yield coherent outputs. Exact token equality is not assumed."
+      },
+      "cap_notes": "Natural token50 stop; no extension needed."
+    },
+    {
+      "index": 94,
+      "case_name": "anomaly.sympy__sympy-14711.call1.onset.seed43.cap256",
+      "source_onset": "anomaly.sympy__sympy-14711.call1.onset",
+      "task": "sympy__sympy-14711",
+      "call": 1,
+      "mode": "full",
+      "seed": 43,
+      "cap": 256,
+      "fixture": "setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.sympy__sympy-14711.call1.onset.seed43.private.json",
+      "fixture_sha256": "6e1247713eae093d109e3be7a41d026f33a2a88f6ac41acc74efa856176bdc7a",
+      "prompt_token_count": 1351,
+      "prompt_token_ids_sha256": "63b8b0d7bffacf896c9173a5d24ffd2d1f07b2ec57def9862e1936f66120b086",
+      "result": "setup/full-q32-production-validation/fixed108/runs/anomaly.sympy__sympy-14711.call1.onset.seed43.cap256.json",
+      "result_sha256": "feedf33f74e4f8e60def99b872f8f4fe041340ee8ad72c865ba62737b61b04fd",
+      "generated_tokens": 135,
+      "generated_token_ids_sha256": "29291d9fe77a0348dabc80e50e83c42975513211e69226189708909229db1f54",
+      "terminal_token_id": 50,
+      "natural_stop_before_cap": true,
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 43
+      },
+      "runtime_precision": {
+        "config_id": "stage12_bf16_hifi4_diagnostic",
+        "weight_groups": {
+          "attention": "bf16",
+          "mlp": "bf16",
+          "down": "bf16",
+          "lm_head": "bf16"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "HiFi4",
+          "mlp": "HiFi4",
+          "down": "HiFi4",
+          "lm_head": "HiFi4"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat16",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144,
+        "sdpa_compute_fidelity": "HiFi4"
+      },
+      "runtime_precision_sha256": "92895d431970ff8a90e45a339161bfedff8298c39be1475d092ac478ffeefff4",
+      "verdict": "normal",
+      "confidence": "high",
+      "evidence": "Continuation has a localized initial channel/planning phrase then a canonical bash call and coherent reproducer script. It yields normally at token50. Same source-associated form seen in seed42 and prior controls; no sustained protocol loop or semantic collapse.",
+      "p19_q32_comparison": {
+        "result": "setup/p19-q32-production-validation/fixed108/runs/p19_q32/anomaly.sympy__sympy-14711.call1.onset.seed43.cap256.json",
+        "sha256": "85f548026add76db9894ea306427697a3f50d5232e6f96294431001b2edce86d",
+        "same_fixture_prompt_ids": true,
+        "same_seed": true,
+        "old_generated_tokens": 135,
+        "old_terminal_token_id": 50,
+        "shared_output_prefix_tokens": 135,
+        "interpretation": "Same exact fixture prompt and seed; distinct samples generally diverge naturally. Both outputs complete with valid tool-yield token50. No task correctness claim."
+      },
+      "cap_notes": "Natural token50 before cap; no extension indicated."
+    },
+    {
+      "index": 95,
+      "case_name": "anomaly.sympy__sympy-14711.call1.onset.seed44.cap256",
+      "source_onset": "anomaly.sympy__sympy-14711.call1.onset",
+      "task": "sympy__sympy-14711",
+      "call": 1,
+      "mode": "full",
+      "seed": 44,
+      "cap": 256,
+      "fixture": "setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.sympy__sympy-14711.call1.onset.seed44.private.json",
+      "fixture_sha256": "cd0dbb1d246809f20d43bc66a833e3ca92ebeb6c54925c6c2885db50ef346377",
+      "prompt_token_count": 1351,
+      "prompt_token_ids_sha256": "63b8b0d7bffacf896c9173a5d24ffd2d1f07b2ec57def9862e1936f66120b086",
+      "result": "setup/full-q32-production-validation/fixed108/runs/anomaly.sympy__sympy-14711.call1.onset.seed44.cap256.json",
+      "result_sha256": "1e876cec932ed10e90c156a10c27b0630a5105be905c94b7f3fb32bd4e513343",
+      "generated_tokens": 139,
+      "generated_token_ids_sha256": "238c719779037f1114aa347cfa918a1373f4fefd153ef0c039a47a8045279fdd",
+      "terminal_token_id": 50,
+      "natural_stop_before_cap": true,
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 44
+      },
+      "runtime_precision": {
+        "config_id": "stage12_bf16_hifi4_diagnostic",
+        "weight_groups": {
+          "attention": "bf16",
+          "mlp": "bf16",
+          "down": "bf16",
+          "lm_head": "bf16"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "HiFi4",
+          "mlp": "HiFi4",
+          "down": "HiFi4",
+          "lm_head": "HiFi4"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat16",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144,
+        "sdpa_compute_fidelity": "HiFi4"
+      },
+      "runtime_precision_sha256": "92895d431970ff8a90e45a339161bfedff8298c39be1475d092ac478ffeefff4",
+      "verdict": "normal",
+      "confidence": "high",
+      "evidence": "Continuation has a localized initial channel/planning phrase then a canonical bash call and coherent reproducer script. It yields normally at token50. Same source-associated form seen in seed42 and prior controls; no sustained protocol loop or semantic collapse.",
+      "p19_q32_comparison": {
+        "result": "setup/p19-q32-production-validation/fixed108/runs/p19_q32/anomaly.sympy__sympy-14711.call1.onset.seed44.cap256.json",
+        "sha256": "455ba5f7dc3cf202b432703a3adc2fa83125e6ea484f4e2179f49be153962987",
+        "same_fixture_prompt_ids": true,
+        "same_seed": true,
+        "old_generated_tokens": 139,
+        "old_terminal_token_id": 50,
+        "shared_output_prefix_tokens": 139,
+        "interpretation": "Same exact fixture prompt and seed; distinct samples generally diverge naturally. Both outputs complete with valid tool-yield token50. No task correctness claim."
+      },
+      "cap_notes": "Natural token50 before cap; no extension indicated."
+    },
+    {
+      "index": 96,
+      "case_name": "anomaly.sympy__sympy-18763.call1.onset.seed42.cap256",
+      "source_onset": "anomaly.sympy__sympy-18763.call1.onset",
+      "task": "sympy__sympy-18763",
+      "call": 1,
+      "mode": "full",
+      "seed": 42,
+      "cap": 256,
+      "fixture": "anomalies/swe85-18763-7432-controls/sympy__sympy-18763.call1.onset.private.json",
+      "fixture_sha256": "103660810451ddcc930c5b818de9eed1e054d0df02f3b6601b0fb142e6aed3f3",
+      "prompt_token_count": 1254,
+      "prompt_token_ids_sha256": "7a01b5bb299ebb4faf3edd7e5d431d5ce24506885fc24c140a13cb67569a01b7",
+      "result": "setup/full-q32-production-validation/fixed108/runs/anomaly.sympy__sympy-18763.call1.onset.seed42.cap256.json",
+      "result_sha256": "23b4f1b18c82ac3136a9834f762831ead06ec8da17dda0c34a1c160fe2d4119a",
+      "generated_tokens": 91,
+      "generated_token_ids_sha256": "5ab3497ffbca0fe5682a9cf1d5497814299958b605c6ba035f013172f4db04c5",
+      "terminal_token_id": 50,
+      "natural_stop_before_cap": true,
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 42
+      },
+      "runtime_precision": {
+        "config_id": "stage12_bf16_hifi4_diagnostic",
+        "weight_groups": {
+          "attention": "bf16",
+          "mlp": "bf16",
+          "down": "bf16",
+          "lm_head": "bf16"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "HiFi4",
+          "mlp": "HiFi4",
+          "down": "HiFi4",
+          "lm_head": "HiFi4"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat16",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144,
+        "sdpa_compute_fidelity": "HiFi4"
+      },
+      "runtime_precision_sha256": "92895d431970ff8a90e45a339161bfedff8298c39be1475d092ac478ffeefff4",
+      "verdict": "normal",
+      "confidence": "high",
+      "evidence": "Coherent SymPy reproducer script and canonical bash tool-yield token50; no malformed protocol or loop.",
+      "p19_q32_comparison": {
+        "result": "setup/p19-q32-production-validation/fixed108/runs/p19_q32/anomaly.sympy__sympy-18763.call1.onset.seed42.cap256.json",
+        "sha256": "8d87860954e8824818f075cdcaa896718de2eafa93eb50ad5aab55f82ccc91da",
+        "same_fixture_prompt_ids": true,
+        "same_seed": true,
+        "old_generated_tokens": 143,
+        "old_terminal_token_id": 50,
+        "shared_output_prefix_tokens": 0,
+        "interpretation": "Same exact fixture prompt and seed; distinct samples generally diverge naturally. Both outputs complete with valid tool-yield token50. No task correctness claim."
+      },
+      "cap_notes": "Natural token50 before cap; no extension indicated."
+    },
+    {
+      "index": 97,
+      "case_name": "anomaly.sympy__sympy-18763.call1.onset.seed43.cap256",
+      "source_onset": "anomaly.sympy__sympy-18763.call1.onset",
+      "task": "sympy__sympy-18763",
+      "call": 1,
+      "mode": "full",
+      "seed": 43,
+      "cap": 256,
+      "fixture": "setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.sympy__sympy-18763.call1.onset.seed43.private.json",
+      "fixture_sha256": "414e05259ae36e619b7f1c83951449abdcb4cb67207b11f846753f58968b9c4b",
+      "prompt_token_count": 1254,
+      "prompt_token_ids_sha256": "7a01b5bb299ebb4faf3edd7e5d431d5ce24506885fc24c140a13cb67569a01b7",
+      "result": "setup/full-q32-production-validation/fixed108/runs/anomaly.sympy__sympy-18763.call1.onset.seed43.cap256.json",
+      "result_sha256": "1b81dfd06ee0ababfdaa7509083aa50d60ae5e25999977eef7431dec08256604",
+      "generated_tokens": 182,
+      "generated_token_ids_sha256": "7752ea847064f03f2ce54de72fa20a14669888ca6256f27db47662fd4c882332",
+      "terminal_token_id": 50,
+      "natural_stop_before_cap": true,
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 43
+      },
+      "runtime_precision": {
+        "config_id": "stage12_bf16_hifi4_diagnostic",
+        "weight_groups": {
+          "attention": "bf16",
+          "mlp": "bf16",
+          "down": "bf16",
+          "lm_head": "bf16"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "HiFi4",
+          "mlp": "HiFi4",
+          "down": "HiFi4",
+          "lm_head": "HiFi4"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat16",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144,
+        "sdpa_compute_fidelity": "HiFi4"
+      },
+      "runtime_precision_sha256": "92895d431970ff8a90e45a339161bfedff8298c39be1475d092ac478ffeefff4",
+      "verdict": "normal",
+      "confidence": "high",
+      "evidence": "Coherent SymPy reproducer script and canonical bash tool-yield token50; no malformed protocol or loop.",
+      "p19_q32_comparison": {
+        "result": "setup/p19-q32-production-validation/fixed108/runs/p19_q32/anomaly.sympy__sympy-18763.call1.onset.seed43.cap256.json",
+        "sha256": "fc823430927e8459ba55fbe1f024ebd0961f635cd6ba2bd22f4b6c026688478f",
+        "same_fixture_prompt_ids": true,
+        "same_seed": true,
+        "old_generated_tokens": 159,
+        "old_terminal_token_id": 50,
+        "shared_output_prefix_tokens": 109,
+        "interpretation": "Same exact fixture prompt and seed; distinct samples generally diverge naturally. Both outputs complete with valid tool-yield token50. No task correctness claim."
+      },
+      "cap_notes": "Natural token50 before cap; no extension indicated."
+    },
+    {
+      "index": 98,
+      "case_name": "anomaly.sympy__sympy-18763.call1.onset.seed44.cap256",
+      "source_onset": "anomaly.sympy__sympy-18763.call1.onset",
+      "task": "sympy__sympy-18763",
+      "call": 1,
+      "mode": "full",
+      "seed": 44,
+      "cap": 256,
+      "fixture": "setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.sympy__sympy-18763.call1.onset.seed44.private.json",
+      "fixture_sha256": "a659c35dfb74acf1969179117a2ecdda48baa91e8a4b1141fd9413d54aff776d",
+      "prompt_token_count": 1254,
+      "prompt_token_ids_sha256": "7a01b5bb299ebb4faf3edd7e5d431d5ce24506885fc24c140a13cb67569a01b7",
+      "result": "setup/full-q32-production-validation/fixed108/runs/anomaly.sympy__sympy-18763.call1.onset.seed44.cap256.json",
+      "result_sha256": "906a98a9f24c573605b3d20c00145d68f2f8db27c9472e5ac0ccd7fb88953d5b",
+      "generated_tokens": 91,
+      "generated_token_ids_sha256": "5ab3497ffbca0fe5682a9cf1d5497814299958b605c6ba035f013172f4db04c5",
+      "terminal_token_id": 50,
+      "natural_stop_before_cap": true,
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 44
+      },
+      "runtime_precision": {
+        "config_id": "stage12_bf16_hifi4_diagnostic",
+        "weight_groups": {
+          "attention": "bf16",
+          "mlp": "bf16",
+          "down": "bf16",
+          "lm_head": "bf16"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "HiFi4",
+          "mlp": "HiFi4",
+          "down": "HiFi4",
+          "lm_head": "HiFi4"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat16",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144,
+        "sdpa_compute_fidelity": "HiFi4"
+      },
+      "runtime_precision_sha256": "92895d431970ff8a90e45a339161bfedff8298c39be1475d092ac478ffeefff4",
+      "verdict": "normal",
+      "confidence": "high",
+      "evidence": "Coherent SymPy reproducer script and canonical bash tool-yield token50; no malformed protocol or loop.",
+      "p19_q32_comparison": {
+        "result": "setup/p19-q32-production-validation/fixed108/runs/p19_q32/anomaly.sympy__sympy-18763.call1.onset.seed44.cap256.json",
+        "sha256": "c0c49813d5d2fbc03361d5935df405a4e3093cacb78e09b38341ee5cf561031c",
+        "same_fixture_prompt_ids": true,
+        "same_seed": true,
+        "old_generated_tokens": 173,
+        "old_terminal_token_id": 50,
+        "shared_output_prefix_tokens": 0,
+        "interpretation": "Same exact fixture prompt and seed; distinct samples generally diverge naturally. Both outputs complete with valid tool-yield token50. No task correctness claim."
+      },
+      "cap_notes": "Natural token50 before cap; no extension indicated."
+    },
+    {
+      "index": 99,
+      "case_name": "anomaly.sympy__sympy-18763.call10.onset.seed42.cap256",
+      "source_onset": "anomaly.sympy__sympy-18763.call10.onset",
+      "task": "sympy__sympy-18763",
+      "call": 10,
+      "mode": "full",
+      "seed": 42,
+      "cap": 256,
+      "fixture": "anomalies/swe85-18763-7432-controls/sympy__sympy-18763.call10.onset.private.json",
+      "fixture_sha256": "c4f9cd2d30fa59235eb8207fc7d6675e8c8cd95b17b544458a44aaa0921f43a6",
+      "prompt_token_count": 5846,
+      "prompt_token_ids_sha256": "c5b160476ed6c4db5e7f66d77f4aa499ed01913d2c24e38577ea418949f3731e",
+      "result": "setup/full-q32-production-validation/fixed108/runs/anomaly.sympy__sympy-18763.call10.onset.seed42.cap256.json",
+      "result_sha256": "59f43ba90cd257c35dccb9b3c2944680940ea4d2aa5a2d4f24c047b50546753b",
+      "generated_tokens": 22,
+      "generated_token_ids_sha256": "fff2566c63af5f03cced902ce798083a549c38194b37fd94831719dfdd1944cd",
+      "terminal_token_id": 50,
+      "natural_stop_before_cap": true,
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 42
+      },
+      "runtime_precision": {
+        "config_id": "stage12_bf16_hifi4_diagnostic",
+        "weight_groups": {
+          "attention": "bf16",
+          "mlp": "bf16",
+          "down": "bf16",
+          "lm_head": "bf16"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "HiFi4",
+          "mlp": "HiFi4",
+          "down": "HiFi4",
+          "lm_head": "HiFi4"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat16",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144,
+        "sdpa_compute_fidelity": "HiFi4"
+      },
+      "runtime_precision_sha256": "92895d431970ff8a90e45a339161bfedff8298c39be1475d092ac478ffeefff4",
+      "verdict": "normal",
+      "confidence": "high",
+      "evidence": "Canonical inherited bash argument is a grep command; canonical tool-yield token50 follows. No malformed tool name or anomaly loop.",
+      "p19_q32_comparison": {
+        "result": "setup/p19-q32-production-validation/fixed108/runs/p19_q32/anomaly.sympy__sympy-18763.call10.onset.seed42.cap256.json",
+        "sha256": "7538fd784fef85d1156bcfe76876126b36a8a369c3af57f8ba3c7754aadd1153",
+        "same_fixture_prompt_ids": true,
+        "same_seed": true,
+        "old_generated_tokens": 22,
+        "old_terminal_token_id": 50,
+        "shared_output_prefix_tokens": 22,
+        "interpretation": "Same exact fixture prompt and seed; distinct samples generally diverge naturally. Both outputs complete with valid tool-yield token50. No task correctness claim."
+      },
+      "cap_notes": "Natural token50 before cap; no extension indicated."
+    },
+    {
+      "index": 100,
+      "case_name": "anomaly.sympy__sympy-18763.call10.onset.seed43.cap256",
+      "source_onset": "anomaly.sympy__sympy-18763.call10.onset",
+      "task": "sympy__sympy-18763",
+      "call": 10,
+      "mode": "full",
+      "seed": 43,
+      "cap": 256,
+      "fixture": "setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.sympy__sympy-18763.call10.onset.seed43.private.json",
+      "fixture_sha256": "6174f61c0f21bd6fe9193d5ff381831b525213601fa322ab630f75a33ae49fe6",
+      "prompt_token_count": 5846,
+      "prompt_token_ids_sha256": "c5b160476ed6c4db5e7f66d77f4aa499ed01913d2c24e38577ea418949f3731e",
+      "result": "setup/full-q32-production-validation/fixed108/runs/anomaly.sympy__sympy-18763.call10.onset.seed43.cap256.json",
+      "result_sha256": "24688242c7e5de3dbd51867fd9201ca50663a1ca70ccdf6c64c8a53726b9701f",
+      "generated_tokens": 22,
+      "generated_token_ids_sha256": "fff2566c63af5f03cced902ce798083a549c38194b37fd94831719dfdd1944cd",
+      "terminal_token_id": 50,
+      "natural_stop_before_cap": true,
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 43
+      },
+      "runtime_precision": {
+        "config_id": "stage12_bf16_hifi4_diagnostic",
+        "weight_groups": {
+          "attention": "bf16",
+          "mlp": "bf16",
+          "down": "bf16",
+          "lm_head": "bf16"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "HiFi4",
+          "mlp": "HiFi4",
+          "down": "HiFi4",
+          "lm_head": "HiFi4"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat16",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144,
+        "sdpa_compute_fidelity": "HiFi4"
+      },
+      "runtime_precision_sha256": "92895d431970ff8a90e45a339161bfedff8298c39be1475d092ac478ffeefff4",
+      "verdict": "normal",
+      "confidence": "high",
+      "evidence": "Canonical inherited bash argument is a grep command; canonical tool-yield token50 follows. No malformed tool name or anomaly loop.",
+      "p19_q32_comparison": {
+        "result": "setup/p19-q32-production-validation/fixed108/runs/p19_q32/anomaly.sympy__sympy-18763.call10.onset.seed43.cap256.json",
+        "sha256": "fe6812a6e0f437b2225aa4e5bc4dd9b063e2018eaae053ab679de520c11ba5fa",
+        "same_fixture_prompt_ids": true,
+        "same_seed": true,
+        "old_generated_tokens": 28,
+        "old_terminal_token_id": 50,
+        "shared_output_prefix_tokens": 9,
+        "interpretation": "Same exact fixture prompt and seed; distinct samples generally diverge naturally. Both outputs complete with valid tool-yield token50. No task correctness claim."
+      },
+      "cap_notes": "Natural token50 before cap; no extension indicated."
+    },
+    {
+      "index": 101,
+      "case_name": "anomaly.sympy__sympy-18763.call10.onset.seed44.cap256",
+      "source_onset": "anomaly.sympy__sympy-18763.call10.onset",
+      "task": "sympy__sympy-18763",
+      "call": 10,
+      "mode": "full",
+      "seed": 44,
+      "cap": 256,
+      "fixture": "setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.sympy__sympy-18763.call10.onset.seed44.private.json",
+      "fixture_sha256": "e2999422c6dae41318cd200be419b2664d89e9080afcea7200f258f1a9d9a0a6",
+      "prompt_token_count": 5846,
+      "prompt_token_ids_sha256": "c5b160476ed6c4db5e7f66d77f4aa499ed01913d2c24e38577ea418949f3731e",
+      "result": "setup/full-q32-production-validation/fixed108/runs/anomaly.sympy__sympy-18763.call10.onset.seed44.cap256.json",
+      "result_sha256": "84fdb741a5c16acf11bcf9d6b6b1805a77a7903a90edf2240196f25c5e818c2e",
+      "generated_tokens": 22,
+      "generated_token_ids_sha256": "fff2566c63af5f03cced902ce798083a549c38194b37fd94831719dfdd1944cd",
+      "terminal_token_id": 50,
+      "natural_stop_before_cap": true,
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 44
+      },
+      "runtime_precision": {
+        "config_id": "stage12_bf16_hifi4_diagnostic",
+        "weight_groups": {
+          "attention": "bf16",
+          "mlp": "bf16",
+          "down": "bf16",
+          "lm_head": "bf16"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "HiFi4",
+          "mlp": "HiFi4",
+          "down": "HiFi4",
+          "lm_head": "HiFi4"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat16",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144,
+        "sdpa_compute_fidelity": "HiFi4"
+      },
+      "runtime_precision_sha256": "92895d431970ff8a90e45a339161bfedff8298c39be1475d092ac478ffeefff4",
+      "verdict": "normal",
+      "confidence": "high",
+      "evidence": "Canonical inherited bash argument is a grep command; canonical tool-yield token50 follows. No malformed tool name or anomaly loop.",
+      "p19_q32_comparison": {
+        "result": "setup/p19-q32-production-validation/fixed108/runs/p19_q32/anomaly.sympy__sympy-18763.call10.onset.seed44.cap256.json",
+        "sha256": "3a8c8e7d779966ea7337752fe7bd529517a5fe621599f98f4c6cbc5c61c416d9",
+        "same_fixture_prompt_ids": true,
+        "same_seed": true,
+        "old_generated_tokens": 23,
+        "old_terminal_token_id": 50,
+        "shared_output_prefix_tokens": 9,
+        "interpretation": "Same exact fixture prompt and seed; distinct samples generally diverge naturally. Both outputs complete with valid tool-yield token50. No task correctness claim."
+      },
+      "cap_notes": "Natural token50 before cap; no extension indicated."
+    },
+    {
+      "index": 102,
+      "case_name": "anomaly.xarray3095-call53.canonicalprefix.seed42.cap256",
+      "source_onset": "anomaly.xarray3095-call53.canonicalprefix",
+      "task": null,
+      "call": 53,
+      "mode": "full",
+      "seed": 42,
+      "cap": 256,
+      "fixture": "anomalies/swe85-precision/xarray3095-call53/canonicalprefix/case.private.json",
+      "fixture_sha256": "5d0644f31e453280e572402aed27346ca307323d7763d5762b7d9ab74f10a723",
+      "prompt_token_count": 33233,
+      "prompt_token_ids_sha256": "1c778f61a388d8c632f905345fe1d53b3d779b516611d4bcbe2a14cfb5d1c2e3",
+      "result": "setup/full-q32-production-validation/fixed108/runs/anomaly.xarray3095-call53.canonicalprefix.seed42.cap256.json",
+      "result_sha256": "b11b6254455840a811868366b3a413dc691d41a6018e22aaa9e7bbd93f7461ae",
+      "generated_tokens": 34,
+      "generated_token_ids_sha256": "251040ef711a896713df065e57ecc980e0cb9b98b44236640e222168df5e547a",
+      "terminal_token_id": 50,
+      "natural_stop_before_cap": true,
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 42
+      },
+      "runtime_precision": {
+        "config_id": "stage12_bf16_hifi4_diagnostic",
+        "weight_groups": {
+          "attention": "bf16",
+          "mlp": "bf16",
+          "down": "bf16",
+          "lm_head": "bf16"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "HiFi4",
+          "mlp": "HiFi4",
+          "down": "HiFi4",
+          "lm_head": "HiFi4"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat16",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144,
+        "sdpa_compute_fidelity": "HiFi4"
+      },
+      "runtime_precision_sha256": "92895d431970ff8a90e45a339161bfedff8298c39be1475d092ac478ffeefff4",
+      "verdict": "normal",
+      "confidence": "high",
+      "evidence": "Canonical inherited bash argument is a source-inspection command; normal token50 tool-yield follows. No malformed tool name or anomaly loop.",
+      "p19_q32_comparison": {
+        "result": "setup/p19-q32-production-validation/fixed108/runs/p19_q32/anomaly.xarray3095-call53.canonicalprefix.seed42.cap256.json",
+        "sha256": "ab0c88b695d966288efa61382e5971576e37c192d37283fe0e0d7aa062ae149b",
+        "same_fixture_prompt_ids": true,
+        "same_seed": true,
+        "old_generated_tokens": 34,
+        "old_terminal_token_id": 50,
+        "shared_output_prefix_tokens": 34,
+        "interpretation": "Same exact fixture prompt and seed; distinct samples generally diverge naturally. Both outputs complete with valid tool-yield token50. No task correctness claim."
+      },
+      "cap_notes": "Natural token50 before cap; no extension indicated."
+    },
+    {
+      "index": 103,
+      "case_name": "anomaly.xarray3095-call53.canonicalprefix.seed43.cap256",
+      "source_onset": "anomaly.xarray3095-call53.canonicalprefix",
+      "task": null,
+      "call": 53,
+      "mode": "full",
+      "seed": 43,
+      "cap": 256,
+      "fixture": "setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.xarray3095-call53.canonicalprefix.seed43.private.json",
+      "fixture_sha256": "f400a7eb418a26c3876c401c07d5c390cee33ecebdcd4f1abf82179ad1e5bd4b",
+      "prompt_token_count": 33233,
+      "prompt_token_ids_sha256": "1c778f61a388d8c632f905345fe1d53b3d779b516611d4bcbe2a14cfb5d1c2e3",
+      "result": "setup/full-q32-production-validation/fixed108/runs/anomaly.xarray3095-call53.canonicalprefix.seed43.cap256.json",
+      "result_sha256": "1c024626c617c3cb3495595b23ac08a0e8e7c8326503a2a0e5a1faaca48b7941",
+      "generated_tokens": 34,
+      "generated_token_ids_sha256": "251040ef711a896713df065e57ecc980e0cb9b98b44236640e222168df5e547a",
+      "terminal_token_id": 50,
+      "natural_stop_before_cap": true,
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 43
+      },
+      "runtime_precision": {
+        "config_id": "stage12_bf16_hifi4_diagnostic",
+        "weight_groups": {
+          "attention": "bf16",
+          "mlp": "bf16",
+          "down": "bf16",
+          "lm_head": "bf16"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "HiFi4",
+          "mlp": "HiFi4",
+          "down": "HiFi4",
+          "lm_head": "HiFi4"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat16",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144,
+        "sdpa_compute_fidelity": "HiFi4"
+      },
+      "runtime_precision_sha256": "92895d431970ff8a90e45a339161bfedff8298c39be1475d092ac478ffeefff4",
+      "verdict": "normal",
+      "confidence": "high",
+      "evidence": "Canonical inherited bash argument is a source-inspection command; normal token50 tool-yield follows. No malformed tool name or anomaly loop.",
+      "p19_q32_comparison": {
+        "result": "setup/p19-q32-production-validation/fixed108/runs/p19_q32/anomaly.xarray3095-call53.canonicalprefix.seed43.cap256.json",
+        "sha256": "92dc37efba6d8d131af9909376f32f350e90ef75c342da6a8b16a7b42af2c611",
+        "same_fixture_prompt_ids": true,
+        "same_seed": true,
+        "old_generated_tokens": 34,
+        "old_terminal_token_id": 50,
+        "shared_output_prefix_tokens": 34,
+        "interpretation": "Same exact fixture prompt and seed; distinct samples generally diverge naturally. Both outputs complete with valid tool-yield token50. No task correctness claim."
+      },
+      "cap_notes": "Natural token50 before cap; no extension indicated."
+    },
+    {
+      "index": 104,
+      "case_name": "anomaly.xarray3095-call53.canonicalprefix.seed44.cap256",
+      "source_onset": "anomaly.xarray3095-call53.canonicalprefix",
+      "task": null,
+      "call": 53,
+      "mode": "full",
+      "seed": 44,
+      "cap": 256,
+      "fixture": "setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.xarray3095-call53.canonicalprefix.seed44.private.json",
+      "fixture_sha256": "7698cb57cdb508240882010f075a9e0f25ce1e3b9c4a79f56b6cd0f76639cbbe",
+      "prompt_token_count": 33233,
+      "prompt_token_ids_sha256": "1c778f61a388d8c632f905345fe1d53b3d779b516611d4bcbe2a14cfb5d1c2e3",
+      "result": "setup/full-q32-production-validation/fixed108/runs/anomaly.xarray3095-call53.canonicalprefix.seed44.cap256.json",
+      "result_sha256": "a25c07d9c360fe9e377bea615179bad6e942813102d34f7a46e3725b08fd3d72",
+      "generated_tokens": 34,
+      "generated_token_ids_sha256": "251040ef711a896713df065e57ecc980e0cb9b98b44236640e222168df5e547a",
+      "terminal_token_id": 50,
+      "natural_stop_before_cap": true,
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 44
+      },
+      "runtime_precision": {
+        "config_id": "stage12_bf16_hifi4_diagnostic",
+        "weight_groups": {
+          "attention": "bf16",
+          "mlp": "bf16",
+          "down": "bf16",
+          "lm_head": "bf16"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "HiFi4",
+          "mlp": "HiFi4",
+          "down": "HiFi4",
+          "lm_head": "HiFi4"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat16",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144,
+        "sdpa_compute_fidelity": "HiFi4"
+      },
+      "runtime_precision_sha256": "92895d431970ff8a90e45a339161bfedff8298c39be1475d092ac478ffeefff4",
+      "verdict": "normal",
+      "confidence": "high",
+      "evidence": "Canonical inherited bash source-inspection command, normal tool-yield token50. No malformed marker or loop.",
+      "p19_q32_comparison": {
+        "result": "setup/p19-q32-production-validation/fixed108/runs/p19_q32/anomaly.xarray3095-call53.canonicalprefix.seed44.cap256.json",
+        "sha256": "46aa59cd717b2a1fd559507538a67f17dfe7b979ea4e36f54a712a4915d8f183",
+        "same_fixture_prompt_ids": true,
+        "same_seed": true,
+        "old_generated_tokens": 34,
+        "old_terminal_token_id": 50,
+        "shared_output_prefix_tokens": 34,
+        "old_starts_with_local_channel_marker": false,
+        "interpretation": "Same original fixture prompt and seed, distinct stochastic trials. For seed44 both share the localized marker; seed42 P19 does not. Token identity is not assumed."
+      },
+      "cap_notes": "Natural token50 before cap; no extension indicated."
+    },
+    {
+      "index": 105,
+      "case_name": "anomaly.xarray7233-call1.canonicalprefix.seed42.cap1024",
+      "source_onset": "anomaly.xarray7233-call1.canonicalprefix",
+      "task": null,
+      "call": 1,
+      "mode": "full",
+      "seed": 42,
+      "cap": 1024,
+      "fixture": "setup/swe85-second-cap-extensions/fixtures/served/anomaly.xarray7233-call1.canonicalprefix.cap1024.seed42.private.json",
+      "fixture_sha256": "bc0442142f6d925d292476dbf651b0957dfe0e070ace703938102eddc8b7817a",
+      "prompt_token_count": 1578,
+      "prompt_token_ids_sha256": "9f142dc60e4c17edebe57cde1154b155810a163a810bbcacb1e21feda8c7c5eb",
+      "result": "setup/full-q32-production-validation/fixed108/runs/anomaly.xarray7233-call1.canonicalprefix.seed42.cap1024.json",
+      "result_sha256": "dcf9fe0a8e3ee97bbcf18e1c68553e8d4520971cc16b54d1aeb85973087be398",
+      "generated_tokens": 316,
+      "generated_token_ids_sha256": "f001e0f7bc551d1ccfe8432b11c1636748d0cefa4326eab2857b548966da2924",
+      "terminal_token_id": 50,
+      "natural_stop_before_cap": true,
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 42
+      },
+      "runtime_precision": {
+        "config_id": "stage12_bf16_hifi4_diagnostic",
+        "weight_groups": {
+          "attention": "bf16",
+          "mlp": "bf16",
+          "down": "bf16",
+          "lm_head": "bf16"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "HiFi4",
+          "mlp": "HiFi4",
+          "down": "HiFi4",
+          "lm_head": "HiFi4"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat16",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144,
+        "sdpa_compute_fidelity": "HiFi4"
+      },
+      "runtime_precision_sha256": "92895d431970ff8a90e45a339161bfedff8298c39be1475d092ac478ffeefff4",
+      "verdict": "normal",
+      "confidence": "high",
+      "evidence": "The pinned tokenizer maps token100 to `<|channel>`; generated IDs [100,45518,107] decode to 'thought\\n', the template's valid open thought-channel form. The exact prompt tail ends \"ase.\\n3. Fix the issue.\\n4. Verify the fix.\\n\\nLet's start by reproducing the issue.\\nI will create a reproduction script to verify the reported issue.\\n\\n\"; it contains prior assistant planning text but no channel opener at the final boundary, so token100 opens the next assistant thought segment rather than nesting a duplicate. Token101 then closes that thought segment as `<channel|>`, followed by the canonical bash tool call and coherent completion at token50. This is a normal controlled protocol style, not a malformed marker or native wire-format claim.",
+      "p19_q32_comparison": {
+        "result": "setup/p19-q32-production-validation/fixed108/runs/p19_q32/anomaly.xarray7233-call1.canonicalprefix.seed42.cap1024.json",
+        "sha256": "9c3c41995c337460d2d38cc6c1efddbd52a758b0902171a7908809bfc4cfff9f",
+        "same_fixture_prompt_ids": true,
+        "same_seed": true,
+        "old_generated_tokens": 402,
+        "old_terminal_token_id": 50,
+        "shared_output_prefix_tokens": 0,
+        "old_starts_with_local_channel_marker": false,
+        "interpretation": "Same original fixture prompt and seed, distinct stochastic trials. For seed44 both share the localized marker; seed42 P19 does not. Token identity is not assumed."
+      },
+      "cap_notes": "Natural token50 before cap; no extension indicated.",
+      "historical_full_bf16_control": {
+        "result": "setup/swe85-pilot-split85/runs/rest/full/anomaly.xarray7233-call1.canonicalprefix.json",
+        "sha256": "966a6a8a5e3bef732cebcf570026e5ad022e1e49b32e8084f1c48f893e58c258",
+        "runtime_precision": {
+          "config_id": "stage12_bf16_hifi4_diagnostic",
+          "weight_groups": {
+            "attention": "bf16",
+            "mlp": "bf16",
+            "down": "bf16",
+            "lm_head": "bf16"
+          },
+          "layer_exceptions": {},
+          "compute_fidelities": {
+            "attention": "HiFi4",
+            "mlp": "HiFi4",
+            "down": "HiFi4",
+            "lm_head": "HiFi4"
+          },
+          "activation_dtype": "bfloat16",
+          "residual_dtype": "bfloat16",
+          "ccl_dtype": {
+            "prefill": "bfloat16",
+            "decode": "bfloat16"
+          },
+          "kv_cache_dtype": "bfloat16",
+          "logits_dtype": "bfloat16",
+          "sampling_dtype": "bfloat16",
+          "embedding_dtype": "bfloat16",
+          "norm_dtype": "bfloat16",
+          "max_seq_len": 262144,
+          "sdpa_compute_fidelity": "HiFi4"
+        },
+        "same_prompt_ids": true,
+        "prompt_token_count": 1578,
+        "same_seed": true,
+        "control_generated_tokens": 256,
+        "control_terminal_token_id": 236779,
+        "control_first_three_token_ids": [
+          100,
+          45518,
+          107
+        ],
+        "current_first_three_token_ids": [
+          100,
+          45518,
+          107
+        ],
+        "shared_output_prefix_tokens": 87,
+        "scope": "Exact same reconstructed prompt and seed for full BF16 diagnostic. Earlier output cap may differ; this establishes only that the localized opener is already present under the same full-mode setup."
+      },
+      "matched_hf_control": {
+        "available": false,
+        "inventory_scope": "37 HF private result files scanned; none uses an exact, suffix-matched, or prefix-matched prompt-token sequence for this xarray7233 reconstructed prompt.",
+        "prompt_token_count": 1578,
+        "prompt_ids_sha256": "9f142dc60e4c17edebe57cde1154b155810a163a810bbcacb1e21feda8c7c5eb",
+        "token100_probability_or_HF_agreement": null,
+        "interpretation": "No matched HF output or teacher-forced distribution at this prompt boundary. Exact-step HF agreement/probability is unmeasured; TT control agreement does not establish HF agreement or rule out a stack/model issue."
+      },
+      "prompt_boundary_audit": {
+        "tokenizer_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+        "tokenizer_json_sha256": "cc8d3a0ce36466ccc1278bf987df5f71db1719b9ca6b4118264f45cb627bfe0f",
+        "prompt_token_count": 1578,
+        "prompt_ids_sha256": "9f142dc60e4c17edebe57cde1154b155810a163a810bbcacb1e21feda8c7c5eb",
+        "decoded_last80_ids": "arsen().construct()` demotes non-dimensional coordinates to variables in xarray.\nI need to:\n1. Reproduce the issue.\n2. Identify the cause in the xarray codebase.\n3. Fix the issue.\n4. Verify the fix.\n\nLet's start by reproducing the issue.\nI will create a reproduction script to verify the reported issue.\n\n",
+        "first_four_generated_token_pieces": {
+          "100": "<|channel>",
+          "45518": "thought",
+          "107": "\n",
+          "101": "<channel|>"
+        },
+        "first_three_generated_decoded": "thought\n",
+        "interpretation": "Valid thought-channel open marker, not duplicated/nested."
+      }
+    },
+    {
+      "index": 106,
+      "case_name": "anomaly.xarray7233-call1.canonicalprefix.seed43.cap512",
+      "source_onset": "anomaly.xarray7233-call1.canonicalprefix",
+      "task": null,
+      "call": 1,
+      "mode": "full",
+      "seed": 43,
+      "cap": 512,
+      "fixture": "setup/swe85-cap-extensions/fixtures/full/anomaly.xarray7233-call1.canonicalprefix.cap512.seed43.private.json",
+      "fixture_sha256": "847864ddb35e8c689e48bd11c6aa9f4f68f3b3f4ffaf9a99b1915ea0b753c307",
+      "prompt_token_count": 1578,
+      "prompt_token_ids_sha256": "9f142dc60e4c17edebe57cde1154b155810a163a810bbcacb1e21feda8c7c5eb",
+      "result": "setup/full-q32-production-validation/fixed108/runs/anomaly.xarray7233-call1.canonicalprefix.seed43.cap512.json",
+      "result_sha256": "d2a3924abfbb6c1fdbaf38c62ee9b51e77abc0eec308b32d81d16a3215e48393",
+      "generated_tokens": 285,
+      "generated_token_ids_sha256": "17efd51891e86f452f3a36df94b38a4e3aa5916f02acef6a5ac80ddb99b4d569",
+      "terminal_token_id": 50,
+      "natural_stop_before_cap": true,
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 43
+      },
+      "runtime_precision": {
+        "config_id": "stage12_bf16_hifi4_diagnostic",
+        "weight_groups": {
+          "attention": "bf16",
+          "mlp": "bf16",
+          "down": "bf16",
+          "lm_head": "bf16"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "HiFi4",
+          "mlp": "HiFi4",
+          "down": "HiFi4",
+          "lm_head": "HiFi4"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat16",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144,
+        "sdpa_compute_fidelity": "HiFi4"
+      },
+      "runtime_precision_sha256": "92895d431970ff8a90e45a339161bfedff8298c39be1475d092ac478ffeefff4",
+      "verdict": "normal",
+      "confidence": "high",
+      "evidence": "Canonical prefix continues with a coherent reproduction script and normal token50 yield. No malformed marker or loop.",
+      "p19_q32_comparison": {
+        "result": "setup/p19-q32-production-validation/fixed108/runs/p19_q32/anomaly.xarray7233-call1.canonicalprefix.seed43.cap512.json",
+        "sha256": "c4d0f15d1a5bd2cd4b60e8dd9592cc75edc9fa51bd2ccc831187804d10d19de4",
+        "same_fixture_prompt_ids": true,
+        "same_seed": true,
+        "old_generated_tokens": 364,
+        "old_terminal_token_id": 50,
+        "shared_output_prefix_tokens": 158,
+        "old_starts_with_local_channel_marker": false,
+        "interpretation": "Same original fixture prompt and seed, distinct stochastic trials. For seed44 both share the localized marker; seed42 P19 does not. Token identity is not assumed."
+      },
+      "cap_notes": "Natural token50 before cap; no extension indicated."
+    },
+    {
+      "index": 107,
+      "case_name": "anomaly.xarray7233-call1.canonicalprefix.seed44.cap1024",
+      "source_onset": "anomaly.xarray7233-call1.canonicalprefix",
+      "task": null,
+      "call": 1,
+      "mode": "full",
+      "seed": 44,
+      "cap": 1024,
+      "fixture": "setup/swe85-second-cap-extensions/fixtures/served/anomaly.xarray7233-call1.canonicalprefix.cap1024.seed44.private.json",
+      "fixture_sha256": "89295e18efe7e474a0d1ef95e63b30987ce0fb4efc21b46a071e2798d9e93cc2",
+      "prompt_token_count": 1578,
+      "prompt_token_ids_sha256": "9f142dc60e4c17edebe57cde1154b155810a163a810bbcacb1e21feda8c7c5eb",
+      "result": "setup/full-q32-production-validation/fixed108/runs/anomaly.xarray7233-call1.canonicalprefix.seed44.cap1024.json",
+      "result_sha256": "b3fb3839022b9de24fdd0263e878eac30698fd18596b079d8a107219a49fb281",
+      "generated_tokens": 286,
+      "generated_token_ids_sha256": "156586ce8348918ff2ba1433223606c7b2e14dc5ec3518967f83d734a16a0bd8",
+      "terminal_token_id": 50,
+      "natural_stop_before_cap": true,
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 44
+      },
+      "runtime_precision": {
+        "config_id": "stage12_bf16_hifi4_diagnostic",
+        "weight_groups": {
+          "attention": "bf16",
+          "mlp": "bf16",
+          "down": "bf16",
+          "lm_head": "bf16"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "HiFi4",
+          "mlp": "HiFi4",
+          "down": "HiFi4",
+          "lm_head": "HiFi4"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat16",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144,
+        "sdpa_compute_fidelity": "HiFi4"
+      },
+      "runtime_precision_sha256": "92895d431970ff8a90e45a339161bfedff8298c39be1475d092ac478ffeefff4",
+      "verdict": "normal",
+      "confidence": "high",
+      "evidence": "The pinned tokenizer maps token100 to `<|channel>`; generated IDs [100,45518,107] decode to 'thought\\n', the template's valid open thought-channel form. The exact prompt tail ends \"ase.\\n3. Fix the issue.\\n4. Verify the fix.\\n\\nLet's start by reproducing the issue.\\nI will create a reproduction script to verify the reported issue.\\n\\n\"; it contains prior assistant planning text but no channel opener at the final boundary, so token100 opens the next assistant thought segment rather than nesting a duplicate. Token101 then closes that thought segment as `<channel|>`, followed by the canonical bash tool call and coherent completion at token50. This is a normal controlled protocol style, not a malformed marker or native wire-format claim.",
+      "p19_q32_comparison": {
+        "result": "setup/p19-q32-production-validation/fixed108/runs/p19_q32/anomaly.xarray7233-call1.canonicalprefix.seed44.cap1024.json",
+        "sha256": "4d8a1bc700cce75bb0f10b31cf58c8d2cbc2cbcd5db7844d5ca58dfa7a3d492d",
+        "same_fixture_prompt_ids": true,
+        "same_seed": true,
+        "old_generated_tokens": 288,
+        "old_terminal_token_id": 50,
+        "shared_output_prefix_tokens": 127,
+        "old_starts_with_local_channel_marker": true,
+        "interpretation": "Same original fixture prompt and seed, distinct stochastic trials. For seed44 both share the localized marker; seed42 P19 does not. Token identity is not assumed."
+      },
+      "cap_notes": "Natural token50 before cap; no extension indicated.",
+      "historical_full_bf16_control": {
+        "result": "setup/swe85-cap-extensions/runs/full/anomaly.xarray7233-call1.canonicalprefix.cap512.seed44.json",
+        "sha256": "d3a8a3aa2f45e24e63fd3b11cfde65eb9cbf879c4c68fcf67bbead7117eee29f",
+        "runtime_precision": {
+          "config_id": "stage12_bf16_hifi4_diagnostic",
+          "weight_groups": {
+            "attention": "bf16",
+            "mlp": "bf16",
+            "down": "bf16",
+            "lm_head": "bf16"
+          },
+          "layer_exceptions": {},
+          "compute_fidelities": {
+            "attention": "HiFi4",
+            "mlp": "HiFi4",
+            "down": "HiFi4",
+            "lm_head": "HiFi4"
+          },
+          "activation_dtype": "bfloat16",
+          "residual_dtype": "bfloat16",
+          "ccl_dtype": {
+            "prefill": "bfloat16",
+            "decode": "bfloat16"
+          },
+          "kv_cache_dtype": "bfloat16",
+          "logits_dtype": "bfloat16",
+          "sampling_dtype": "bfloat16",
+          "embedding_dtype": "bfloat16",
+          "norm_dtype": "bfloat16",
+          "max_seq_len": 262144,
+          "sdpa_compute_fidelity": "HiFi4"
+        },
+        "same_prompt_ids": true,
+        "prompt_token_count": 1578,
+        "same_seed": true,
+        "control_generated_tokens": 286,
+        "control_terminal_token_id": 50,
+        "control_first_three_token_ids": [
+          100,
+          45518,
+          107
+        ],
+        "current_first_three_token_ids": [
+          100,
+          45518,
+          107
+        ],
+        "shared_output_prefix_tokens": 87,
+        "scope": "Exact same reconstructed prompt and seed for full BF16 diagnostic. Earlier output cap may differ; this establishes only that the localized opener is already present under the same full-mode setup."
+      },
+      "matched_hf_control": {
+        "available": false,
+        "inventory_scope": "37 HF private result files scanned; none uses an exact, suffix-matched, or prefix-matched prompt-token sequence for this xarray7233 reconstructed prompt.",
+        "prompt_token_count": 1578,
+        "prompt_ids_sha256": "9f142dc60e4c17edebe57cde1154b155810a163a810bbcacb1e21feda8c7c5eb",
+        "token100_probability_or_HF_agreement": null,
+        "interpretation": "No matched HF output or teacher-forced distribution at this prompt boundary. Exact-step HF agreement/probability is unmeasured; TT control agreement does not establish HF agreement or rule out a stack/model issue."
+      },
+      "prompt_boundary_audit": {
+        "tokenizer_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+        "tokenizer_json_sha256": "cc8d3a0ce36466ccc1278bf987df5f71db1719b9ca6b4118264f45cb627bfe0f",
+        "prompt_token_count": 1578,
+        "prompt_ids_sha256": "9f142dc60e4c17edebe57cde1154b155810a163a810bbcacb1e21feda8c7c5eb",
+        "decoded_last80_ids": "arsen().construct()` demotes non-dimensional coordinates to variables in xarray.\nI need to:\n1. Reproduce the issue.\n2. Identify the cause in the xarray codebase.\n3. Fix the issue.\n4. Verify the fix.\n\nLet's start by reproducing the issue.\nI will create a reproduction script to verify the reported issue.\n\n",
+        "first_four_generated_token_pieces": {
+          "100": "<|channel>",
+          "45518": "thought",
+          "107": "\n",
+          "101": "<channel|>"
+        },
+        "first_three_generated_decoded": "thought\n",
+        "interpretation": "Valid thought-channel open marker, not duplicated/nested."
+      }
+    }
+  ],
+  "panel_completion": {
+    "status": "exit0",
+    "wall_s": 4000.20680356,
+    "started_unix": 1794778823.4747014,
+    "ended_unix": 1794782823.681505
+  }
+}

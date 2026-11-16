@@ -1,0 +1,7 @@
+{
+  "first_driver_exit": 1,
+  "reason": "P1 completed below forecast before root component analysis was available; stopped before either launch",
+  "no_device_launch": true,
+  "next_action": "Rerun unchanged admitted driver after root hash-bound forecast-miss acceptance",
+  "reviewed_unix": 1794724067.5673602
+}

@@ -1,0 +1,902 @@
+[
+  {
+    "task": "astropy__astropy-13579",
+    "exit_code": 0,
+    "error": "",
+    "cpu_summary": {
+      "task": "astropy__astropy-13579",
+      "call": 3,
+      "status": "cpu_validated_not_executed",
+      "valid_next_action": null,
+      "full_solution_claim": false,
+      "diagnostic_only": true,
+      "original_trial_modified": false,
+      "candidate_manifest_sha256": "0d24f3ed0f53fa9eb516ea827dfdb57ffe345d751c867f663537400610c27565",
+      "action_sha256": "209d2d1915950a058423751584943fa7750fd7791d30fb73c76e503c8f18d1aa",
+      "action_case_sha256": "818704ce976b75ba3f4fe0139bba86f45e6e51b24de46c979053b8e59b153f4d",
+      "image_id": "sha256:6989371a19030b99bed7989e7fd4ccc224c7538623e177da3f6324708cca1f3e",
+      "image_tag": "v5-swe-offline-verifier:astropy__astropy-13579",
+      "image_head": "62194260181d107f2f6630d4588887fbf46f5a0c",
+      "copied_prestate_files": {
+        "reproduce_issue.py": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/astropy__astropy-13579/precall/reproduce_issue.py",
+          "sha256": "be03e869560b5f086d6a2a5f3037d695d8bb9f5c5bbaa697dd7d77f123e3eebe"
+        }
+      },
+      "base_image_file_hashes": {
+        "/opt/miniconda3/envs/testbed/conda-meta/history": "ebf1234761eed815a2129ffeb68dcb64d189a42676c759a294841b9f7c2d5b76",
+        "/testbed/astropy/__init__.py": "d01f6d86c79e60c9ebb3dc03c4d2cad5630b6eb235bf2bb29679cf7110e43ea4"
+      },
+      "expectations": {
+        "required_output_substrings": [
+          "LOCAL_TARGET",
+          "/testbed/",
+          "/opt/miniconda3/envs/testbed/bin/python",
+          "LOCAL_SLICED_WCS_SOURCE",
+          "world_to_pixel_values"
+        ],
+        "allowed_returncodes": [
+          0
+        ],
+        "target_package": "astropy",
+        "target_path_prefix": "/testbed/",
+        "purpose": "Establish local target provenance and advance original reproduction. Reproducing the bug counts as valid next action, not task pass."
+      },
+      "scope": "Original solar-frame reproduction needs extra coordinate-frame support. Import local Astropy and inspect sliced world-to-pixel implementation to continue local investigation; no reproduction-pass claim.",
+      "state_scope": "Pinned image plus every materialized pre-call tracked edit/helper. Exact submitted bytes are checked. Prior base-interpreter installs/builds are not replayed; action switches to image testbed environment. This is not native whole-filesystem equivalence.",
+      "state_limits": "Prior installs/build attempts in base Python recorded in audit, not replayed. Candidate explicitly switches to untouched testbed environment. Generated build artifacts beyond listed source/helpers are not reconstructed; assess if execution reveals contamination.",
+      "limits": {
+        "cpus": 1,
+        "memory_gib": 4,
+        "job_seconds": 300,
+        "cleanup_seconds": 60
+      },
+      "network": "none",
+      "mounts": [],
+      "slot_admission": "Coordinator admits worker; shared lock serializes semantic validators."
+    }
+  },
+  {
+    "task": "astropy__astropy-7336",
+    "exit_code": 0,
+    "error": "",
+    "cpu_summary": {
+      "task": "astropy__astropy-7336",
+      "call": 18,
+      "status": "cpu_validated_not_executed",
+      "valid_next_action": null,
+      "full_solution_claim": false,
+      "diagnostic_only": true,
+      "original_trial_modified": false,
+      "candidate_manifest_sha256": "f8ab18de72e851b857c2d723e01b1fb6b7e4f6c4dbed1d070ab8aa6bf47ba8fd",
+      "action_sha256": "4a8665d9242be5a83bcc0c9643aa207151c316c7af2de92aeb55c962d59f8b20",
+      "action_case_sha256": "419a06a00c05c49e4e6b51c9978a1c913ed7c59cf95414bea9d7bc624813aec6",
+      "image_id": "sha256:8bbe7c27c8e1a7581588d85f3716f598336c81297ebf01141ddd7191516443c8",
+      "image_tag": "v5-swe-offline-linked:astropy__astropy-7336-mode-restored",
+      "image_head": "f1bdcc256af128d74589f7adcd59e4929fea5539",
+      "copied_prestate_files": {
+        "poc.py": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/astropy__astropy-7336/precall/poc.py",
+          "sha256": "ef4e03d469d2d8e45cf3d9e07b567e4327db6b0ca486951a49deb575f52bdc0d"
+        },
+        "astropy/units/decorators.py": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/astropy__astropy-7336/precall/astropy/units/decorators.py",
+          "sha256": "dce480325b89e0065d1c1dccca9bb32118fb1e960a0222df8cb4615c892eafa8"
+        },
+        "astropy/extern/configobj/configobj.py": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/astropy__astropy-7336/precall/astropy/extern/configobj/configobj.py",
+          "sha256": "216456e5237651d15ca43c10145a47daeb3a46284684a1fe0081047e2393ac7c"
+        }
+      },
+      "base_image_file_hashes": {
+        "/opt/miniconda3/envs/testbed/conda-meta/history": "47db0509e622d455f59358d0c9547d6b493404655a5d80c816a605d2f30c60f6",
+        "/testbed/astropy/__init__.py": "692fc16e7d309ca57d6e2d47aa234c0f9047b379386a7e6970345a4e518c40a0",
+        "/testbed/astropy/units/decorators.py": "f70d081b536f685fd13fe69b0eeffefdd97407ca466efe657d93fd71eeab769c",
+        "/testbed/astropy/extern/configobj/configobj.py": "1bd374b063b8b240a449761811b14603f1d6a2457c8fd50403e300275cc56d1c"
+      },
+      "expectations": {
+        "required_output_substrings": [
+          "LOCAL_TARGET",
+          "/testbed/",
+          "/opt/miniconda3/envs/testbed/bin/python",
+          "Successfully created PoC instance"
+        ],
+        "allowed_returncodes": [
+          0
+        ],
+        "target_package": "astropy",
+        "target_path_prefix": "/testbed/",
+        "purpose": "Establish local target provenance and advance original reproduction. Reproducing the bug counts as valid next action, not task pass."
+      },
+      "scope": "Activate the existing image testbed interpreter and run the original local reproduction, without fetching target source. This is an environment-recovery next action, not a complete solution.",
+      "state_scope": "Pinned image plus every materialized pre-call tracked edit/helper. Exact submitted bytes are checked. Prior base-interpreter installs/builds are not replayed; action switches to image testbed environment. This is not native whole-filesystem equivalence.",
+      "state_limits": "Prior installs/build attempts in base Python recorded in audit, not replayed. Candidate explicitly switches to untouched testbed environment. Generated build artifacts beyond listed source/helpers are not reconstructed; assess if execution reveals contamination.",
+      "limits": {
+        "cpus": 1,
+        "memory_gib": 4,
+        "job_seconds": 300,
+        "cleanup_seconds": 60
+      },
+      "network": "none",
+      "mounts": [],
+      "slot_admission": "Coordinator admits worker; shared lock serializes semantic validators."
+    }
+  },
+  {
+    "task": "astropy__astropy-8872",
+    "exit_code": 0,
+    "error": "",
+    "cpu_summary": {
+      "task": "astropy__astropy-8872",
+      "call": 8,
+      "status": "cpu_validated_not_executed",
+      "valid_next_action": null,
+      "full_solution_claim": false,
+      "diagnostic_only": true,
+      "original_trial_modified": false,
+      "candidate_manifest_sha256": "4536b088c2bb6e607f85f4f97f34221920d74f3d502b95055496f0b28c1f3ca6",
+      "action_sha256": "e3a3175ce1a1d6196bb214d1e0215a16a840b930dba1ba42432f7e8eddbd1b95",
+      "action_case_sha256": "c1dca0d99577b5bf1ae854f330af3954f7a84e89f41ea6811fc11b4979e8aba5",
+      "image_id": "sha256:18b5e5de98898ffd67c07363569f289fdaf5d54e2714c24721be7ccf2f19c64d",
+      "image_tag": "v5-swe-offline-linked:astropy__astropy-8872-mode-restored",
+      "image_head": "dc4f4acd17d9c8a606bffd3141a303e2b8ae6005",
+      "copied_prestate_files": {
+        "reproduce_issue.py": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/astropy__astropy-8872/precall/reproduce_issue.py",
+          "sha256": "06279514ce196bb749a22102dddfd80fd26f1c313d98fd5976beaaa1ce25c3a1"
+        }
+      },
+      "base_image_file_hashes": {
+        "/opt/miniconda3/envs/testbed/conda-meta/history": "ba20c0ec2db39ff7146cbd441a32e4790e74d2f84e3cabb59816070e514a82c7",
+        "/testbed/astropy/__init__.py": "ecc9c6b1fa6e53f91ffe90be4c11681bc39d32483486c306549e67c1810e03c2"
+      },
+      "expectations": {
+        "required_output_substrings": [
+          "LOCAL_TARGET",
+          "/testbed/",
+          "/opt/miniconda3/envs/testbed/bin/python",
+          "Input dtype: float16",
+          "Quantity dtype:"
+        ],
+        "allowed_returncodes": [
+          0
+        ],
+        "target_package": "astropy",
+        "target_path_prefix": "/testbed/",
+        "purpose": "Establish local target provenance and advance original reproduction. Reproducing the bug counts as valid next action, not task pass."
+      },
+      "scope": "Activate the existing image testbed interpreter and run the original local reproduction, without fetching target source. This is an environment-recovery next action, not a complete solution.",
+      "state_scope": "Pinned image plus every materialized pre-call tracked edit/helper. Exact submitted bytes are checked. Prior base-interpreter installs/builds are not replayed; action switches to image testbed environment. This is not native whole-filesystem equivalence.",
+      "state_limits": "Prior installs/build attempts in base Python recorded in audit, not replayed. Candidate explicitly switches to untouched testbed environment. Generated build artifacts beyond listed source/helpers are not reconstructed; assess if execution reveals contamination.",
+      "limits": {
+        "cpus": 1,
+        "memory_gib": 4,
+        "job_seconds": 300,
+        "cleanup_seconds": 60
+      },
+      "network": "none",
+      "mounts": [],
+      "slot_admission": "Coordinator admits worker; shared lock serializes semantic validators."
+    }
+  },
+  {
+    "task": "matplotlib__matplotlib-25332",
+    "exit_code": 0,
+    "error": "",
+    "cpu_summary": {
+      "task": "matplotlib__matplotlib-25332",
+      "call": 2,
+      "status": "cpu_validated_not_executed",
+      "valid_next_action": null,
+      "full_solution_claim": false,
+      "diagnostic_only": true,
+      "original_trial_modified": false,
+      "candidate_manifest_sha256": "35ffc6dad48bbc060c2a71bcc0d267d47509d8706241532bb181eb0f3f9f1174",
+      "action_sha256": "fc7f2a8aeaa3ce7b869217eed4a9c206a5b029f3172f9bcf79c08d2b2aea30c2",
+      "action_case_sha256": "70957d53e94df9eacd837421afdf66bf7c7b46972a52e341f17c96fd8498a6ff",
+      "image_id": "sha256:5f8a452c2defaf4e2186d3f7d4684c45574e27fb801411b05c3de822670a325f",
+      "image_tag": "v5-swe-offline-verifier:matplotlib__matplotlib-25332",
+      "image_head": "6c27723157e92ea4612a40b14625ff371ed0245e",
+      "copied_prestate_files": {
+        "reproduce_bug.py": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/matplotlib__matplotlib-25332/precall/reproduce_bug.py",
+          "sha256": "f4ba19a55c59675aeeb14bad9f6aa05ca3fb73539bd17bbfd6a7241a6cfbb2cd"
+        }
+      },
+      "base_image_file_hashes": {
+        "/opt/miniconda3/envs/testbed/conda-meta/history": "ff7c20ba51083c62e88ef6deada4ce052684c527609f0157d69fe714b3747a4e",
+        "/testbed/lib/matplotlib/__init__.py": "ebd0446eed5cfcf58efdbbc318dde2e30dea595a6b3b09237be89f2420a8db6e",
+        "/testbed/lib/matplotlib/figure.py": "8d66f8a70625534c22ee98019550f7c4263ecaac30383ef5658747a9d1112ea5"
+      },
+      "expectations": {
+        "required_output_substrings": [
+          "LOCAL_TARGET",
+          "/testbed/",
+          "/opt/miniconda3/envs/testbed/bin/python",
+          "Pickling failed:"
+        ],
+        "allowed_returncodes": [
+          0
+        ],
+        "target_package": "matplotlib",
+        "target_path_prefix": "/testbed/",
+        "purpose": "Establish local target provenance and advance original reproduction. Reproducing the bug counts as valid next action, not task pass."
+      },
+      "scope": "Activate the existing image testbed interpreter and run the original local reproduction, without fetching target source. This is an environment-recovery next action, not a complete solution.",
+      "state_scope": "Pinned image plus every materialized pre-call tracked edit/helper. Exact submitted bytes are checked. Prior base-interpreter installs/builds are not replayed; action switches to image testbed environment. This is not native whole-filesystem equivalence.",
+      "state_limits": "Prior installs/build attempts in base Python recorded in audit, not replayed. Candidate explicitly switches to untouched testbed environment. Generated build artifacts beyond listed source/helpers are not reconstructed; assess if execution reveals contamination.",
+      "limits": {
+        "cpus": 1,
+        "memory_gib": 4,
+        "job_seconds": 300,
+        "cleanup_seconds": 60
+      },
+      "network": "none",
+      "mounts": [],
+      "slot_admission": "Coordinator admits worker; shared lock serializes semantic validators."
+    }
+  },
+  {
+    "task": "matplotlib__matplotlib-25960",
+    "exit_code": 0,
+    "error": "",
+    "cpu_summary": {
+      "task": "matplotlib__matplotlib-25960",
+      "call": 3,
+      "status": "cpu_validated_not_executed",
+      "valid_next_action": null,
+      "full_solution_claim": false,
+      "diagnostic_only": true,
+      "original_trial_modified": false,
+      "candidate_manifest_sha256": "5a56dfad0fdc39ad2c7b5a9f15d5f377984d8ad49175821ec3614e874484465e",
+      "action_sha256": "e87f7d9d504a5c0dcdd44d24e2bac18e6d7632f0ec12204e8eeabf20093cd420",
+      "action_case_sha256": "0ff0f74cf765bbba8acad052b164b1d070775ac8492cc4efcb2716cc87f01ad8",
+      "image_id": "sha256:164dc4e809ce883142777e09e24a4291128e62326590808a577be5cbef0638fd",
+      "image_tag": "v5-swe-offline-linked:matplotlib__matplotlib-25960-mode-restored",
+      "image_head": "054ff9bee689cd3f6d17c8fb463742f13b0e78da",
+      "copied_prestate_files": {
+        "reproduce_bug.py": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/matplotlib__matplotlib-25960/precall/reproduce_bug.py",
+          "sha256": "818b8586e62cd27feb0e1732fec133d098783dddadcc9bc8167a2ad5039c76d3"
+        }
+      },
+      "base_image_file_hashes": {
+        "/opt/miniconda3/envs/testbed/conda-meta/history": "af1920e09c4035353d54c622d35960e1d07a132a6fa9af0eebdaac7e23b15801",
+        "/testbed/lib/matplotlib/__init__.py": "aebe92233253ce899cdda35034a53e0d2a4b56f12918f831de42127d30ef61fb",
+        "/testbed/lib/matplotlib/figure.py": "870253df304ba1aaf85e8c26c10aa673c5ac5cefc8bfa654e6635eaa8d999b16"
+      },
+      "expectations": {
+        "required_output_substrings": [
+          "LOCAL_TARGET",
+          "/testbed/",
+          "/opt/miniconda3/envs/testbed/bin/python",
+          "LOCAL_SUBFIGURES_SOURCE",
+          "def subfigures",
+          "wspace",
+          "hspace"
+        ],
+        "allowed_returncodes": [
+          0
+        ],
+        "target_package": "matplotlib",
+        "target_path_prefix": "/testbed/",
+        "purpose": "Establish local target provenance and advance original reproduction. Reproducing the bug counts as valid next action, not task pass."
+      },
+      "scope": "Original reproduction calls nonexistent SubFigure.get_position. Import local checkout and inspect Figure.subfigures spacing implementation before repairing reproduction; no false successful-reproduction claim.",
+      "state_scope": "Pinned image plus every materialized pre-call tracked edit/helper. Exact submitted bytes are checked. Prior base-interpreter installs/builds are not replayed; action switches to image testbed environment. This is not native whole-filesystem equivalence.",
+      "state_limits": "Prior installs/build attempts in base Python recorded in audit, not replayed. Candidate explicitly switches to untouched testbed environment. Generated build artifacts beyond listed source/helpers are not reconstructed; assess if execution reveals contamination.",
+      "limits": {
+        "cpus": 1,
+        "memory_gib": 4,
+        "job_seconds": 300,
+        "cleanup_seconds": 60
+      },
+      "network": "none",
+      "mounts": [],
+      "slot_admission": "Coordinator admits worker; shared lock serializes semantic validators."
+    }
+  },
+  {
+    "task": "matplotlib__matplotlib-26208",
+    "exit_code": 0,
+    "error": "",
+    "cpu_summary": {
+      "task": "matplotlib__matplotlib-26208",
+      "call": 3,
+      "status": "cpu_validated_not_executed",
+      "valid_next_action": null,
+      "full_solution_claim": false,
+      "diagnostic_only": true,
+      "original_trial_modified": false,
+      "candidate_manifest_sha256": "9739984fb28706b31a9d7668d6f053083d3e48b21b56e198dc7eac8ab4997da4",
+      "action_sha256": "fc7f2a8aeaa3ce7b869217eed4a9c206a5b029f3172f9bcf79c08d2b2aea30c2",
+      "action_case_sha256": "d60a3730d0c0792a5c836607969e0a89ec8040d7575a655add74fe904d4f19e9",
+      "image_id": "sha256:791082aed15d6ca6877fc014bcd05360ce2f9ca94efb06f48dadc2b3f0933859",
+      "image_tag": "v5-swe-offline-verifier:matplotlib__matplotlib-26208",
+      "image_head": "e6998c9fe2c081073e497e12ddfb6c6822098b4d",
+      "copied_prestate_files": {
+        "reproduce_bug.py": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/matplotlib__matplotlib-26208/precall/reproduce_bug.py",
+          "sha256": "946ee491fb2085bc477ddb407aa35bf17c72e22d612857e250246b1e25fc2090"
+        }
+      },
+      "base_image_file_hashes": {
+        "/opt/miniconda3/envs/testbed/conda-meta/history": "af1920e09c4035353d54c622d35960e1d07a132a6fa9af0eebdaac7e23b15801",
+        "/testbed/lib/matplotlib/__init__.py": "aebe92233253ce899cdda35034a53e0d2a4b56f12918f831de42127d30ef61fb",
+        "/testbed/lib/matplotlib/figure.py": "e4e596ca52f7938db4369bfaa4995f540eb3a9281b8f667c0de55efaa60a47e0"
+      },
+      "expectations": {
+        "required_output_substrings": [
+          "LOCAL_TARGET",
+          "/testbed/",
+          "/opt/miniconda3/envs/testbed/bin/python",
+          "ax1 after stackplot:",
+          "ax1, ax2 after ax2.plot():"
+        ],
+        "allowed_returncodes": [
+          0
+        ],
+        "target_package": "matplotlib",
+        "target_path_prefix": "/testbed/",
+        "purpose": "Establish local target provenance and advance original reproduction. Reproducing the bug counts as valid next action, not task pass."
+      },
+      "scope": "Activate the existing image testbed interpreter and run the original local reproduction, without fetching target source. This is an environment-recovery next action, not a complete solution.",
+      "state_scope": "Pinned image plus every materialized pre-call tracked edit/helper. Exact submitted bytes are checked. Prior base-interpreter installs/builds are not replayed; action switches to image testbed environment. This is not native whole-filesystem equivalence.",
+      "state_limits": "Prior installs/build attempts in base Python recorded in audit, not replayed. Candidate explicitly switches to untouched testbed environment. Generated build artifacts beyond listed source/helpers are not reconstructed; assess if execution reveals contamination.",
+      "limits": {
+        "cpus": 1,
+        "memory_gib": 4,
+        "job_seconds": 300,
+        "cleanup_seconds": 60
+      },
+      "network": "none",
+      "mounts": [],
+      "slot_admission": "Coordinator admits worker; shared lock serializes semantic validators."
+    }
+  },
+  {
+    "task": "matplotlib__matplotlib-26291",
+    "exit_code": 0,
+    "error": "",
+    "cpu_summary": {
+      "task": "matplotlib__matplotlib-26291",
+      "call": 3,
+      "status": "cpu_validated_not_executed",
+      "valid_next_action": null,
+      "full_solution_claim": false,
+      "diagnostic_only": true,
+      "original_trial_modified": false,
+      "candidate_manifest_sha256": "09ca56b24ee47fef47a5e7a68de1ee710b00fc64fbbc5a265d18523f1ffb4e4a",
+      "action_sha256": "fc7f2a8aeaa3ce7b869217eed4a9c206a5b029f3172f9bcf79c08d2b2aea30c2",
+      "action_case_sha256": "6b3b98d4d9369490b1935d1a462105bb4ace2b1432a67c11ad2242329a4fdec7",
+      "image_id": "sha256:e86f52fc5c0560c9daf2c1e0a9596f284bd7fa001c15bf24473877d5ca2e910e",
+      "image_tag": "v5-swe-offline-verifier:matplotlib__matplotlib-26291",
+      "image_head": "ac633d35a99469ccbcd5ece0b09b20655cc00af9",
+      "copied_prestate_files": {
+        "reproduce_bug.py": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/matplotlib__matplotlib-26291/precall/reproduce_bug.py",
+          "sha256": "5a9be758dfd29581a6191cf8fecaeb3d27724228798de7aec665b459e018584d"
+        }
+      },
+      "base_image_file_hashes": {
+        "/opt/miniconda3/envs/testbed/conda-meta/history": "af1920e09c4035353d54c622d35960e1d07a132a6fa9af0eebdaac7e23b15801",
+        "/testbed/lib/matplotlib/__init__.py": "aebe92233253ce899cdda35034a53e0d2a4b56f12918f831de42127d30ef61fb",
+        "/testbed/lib/matplotlib/figure.py": "8bfcf8f76c8a22bca1d8449100fd434432de9240c2fae99c18d1279820c94bfd"
+      },
+      "expectations": {
+        "required_output_substrings": [
+          "LOCAL_TARGET",
+          "/testbed/",
+          "/opt/miniconda3/envs/testbed/bin/python",
+          "AttributeError"
+        ],
+        "allowed_returncodes": [
+          1
+        ],
+        "target_package": "matplotlib",
+        "target_path_prefix": "/testbed/",
+        "purpose": "Establish local target provenance and advance original reproduction. Reproducing the bug counts as valid next action, not task pass."
+      },
+      "scope": "Activate the existing image testbed interpreter and run the original local reproduction, without fetching target source. This is an environment-recovery next action, not a complete solution.",
+      "state_scope": "Pinned image plus every materialized pre-call tracked edit/helper. Exact submitted bytes are checked. Prior base-interpreter installs/builds are not replayed; action switches to image testbed environment. This is not native whole-filesystem equivalence.",
+      "state_limits": "Prior installs/build attempts in base Python recorded in audit, not replayed. Candidate explicitly switches to untouched testbed environment. Generated build artifacts beyond listed source/helpers are not reconstructed; assess if execution reveals contamination.",
+      "limits": {
+        "cpus": 1,
+        "memory_gib": 4,
+        "job_seconds": 300,
+        "cleanup_seconds": 60
+      },
+      "network": "none",
+      "mounts": [],
+      "slot_admission": "Coordinator admits worker; shared lock serializes semantic validators."
+    }
+  },
+  {
+    "task": "pydata__xarray-4687",
+    "exit_code": 0,
+    "error": "",
+    "cpu_summary": {
+      "task": "pydata__xarray-4687",
+      "call": 39,
+      "status": "cpu_validated_not_executed",
+      "valid_next_action": null,
+      "full_solution_claim": false,
+      "diagnostic_only": true,
+      "original_trial_modified": false,
+      "candidate_manifest_sha256": "7813cdabc2c4ffc512c713ddfd8e54ba62c9e50f56e50dca7e6211b918e3feed",
+      "action_sha256": "b474406af62d7d0ae55837f60af2cefcad370ba951955d4910515d45486639d1",
+      "action_case_sha256": "7e0c07030b0bf623c339fe053d59edc4b48d861bbe09a17bfbab1358b3269294",
+      "image_id": "sha256:c116abed31127da7df6c75e88e4b5f94bb684356de22f19b3fd61d6770595ea0",
+      "image_tag": "v5-swe-offline-linked:pydata__xarray-4687-mode-restored",
+      "image_head": "7f6c8b0609fba5f50a918734bb5b8c42fb34f311",
+      "copied_prestate_files": {
+        "test_attrs.py": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/pydata__xarray-4687/precall/test_attrs.py",
+          "sha256": "3d1e6639be034e4964790ac3ddf77b2ce59c4e8318b79459af0d7635f098f69d"
+        },
+        "reproduce_issue.py": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/pydata__xarray-4687/precall/reproduce_issue.py",
+          "sha256": "74a8d7e40dd0b5d1e4152648383aee3ca2ffcb391ef45696395636451662a041"
+        },
+        "xarray/core/computation.py": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/pydata__xarray-4687/precall/xarray/core/computation.py",
+          "sha256": "96f1d70d73f2d9117891b01aa77510e44bf189d36b8b87df3cf5870101d8ada2"
+        }
+      },
+      "base_image_file_hashes": {
+        "/opt/miniconda3/envs/testbed/conda-meta/history": "120c3062c9f65a1d3c7694c4397baaeafd7ffbd98a71f01c09bd04eaddff98ad",
+        "/testbed/xarray/core/computation.py": "440ed45b12aa47e5c36afc1658fa94949b660f2d3f437d6ce619d299d7009053"
+      },
+      "expectations": {
+        "required_output_substrings": [
+          "LOCAL_TARGET",
+          "/testbed/",
+          "/opt/miniconda3/envs/testbed/bin/python",
+          "LOCAL_WHERE_SOURCE_RESTORED",
+          "def where",
+          "keep_attrs"
+        ],
+        "allowed_returncodes": [
+          0
+        ],
+        "target_package": "xarray",
+        "target_path_prefix": "/testbed/",
+        "purpose": "Establish local target provenance and advance original reproduction. Reproducing the bug counts as valid next action, not task pass."
+      },
+      "scope": "Call37 destroyed computation.py with truncated malformed text (TYPE_ Pence). Restore only this file from local image HEAD then inspect local where, preserving other state. Repairs self-inflicted truncation; not target bug fix.",
+      "state_scope": "Pinned image plus every materialized pre-call tracked edit/helper. Exact submitted bytes are checked. Prior base-interpreter installs/builds are not replayed; action switches to image testbed environment. This is not native whole-filesystem equivalence.",
+      "state_limits": "Prior installs/build attempts in base Python recorded in audit, not replayed. Candidate explicitly switches to untouched testbed environment. Generated build artifacts beyond listed source/helpers are not reconstructed; assess if execution reveals contamination.",
+      "limits": {
+        "cpus": 1,
+        "memory_gib": 4,
+        "job_seconds": 300,
+        "cleanup_seconds": 60
+      },
+      "network": "none",
+      "mounts": [],
+      "slot_admission": "Coordinator admits worker; shared lock serializes semantic validators."
+    }
+  },
+  {
+    "task": "pydata__xarray-7233",
+    "exit_code": 0,
+    "error": "",
+    "cpu_summary": {
+      "task": "pydata__xarray-7233",
+      "call": 4,
+      "status": "cpu_validated_not_executed",
+      "valid_next_action": null,
+      "full_solution_claim": false,
+      "diagnostic_only": true,
+      "original_trial_modified": false,
+      "candidate_manifest_sha256": "e9344236f1dfbe9c3845c64828b61c299b5e7b646db9f8bec7f88c38d26c9b1f",
+      "action_sha256": "4d8db9d178628f8ca40dfc737d6f1e31475b553c36c3fd6c2cdcaa4d18b13304",
+      "action_case_sha256": "30ae1e5e6a2ead902fe27b73cedc09c710f2eab176789d8fbcc3b65203bda684",
+      "image_id": "sha256:a8f79e009b4c128c05393bc59eeb6800cdcb4661b4d0a6800ad03c7b4a98bcdb",
+      "image_tag": "v5-swe-offline-verifier:pydata__xarray-7233",
+      "image_head": "24fa87354c1d68bd79c7a2907aeed82b1ec38a83",
+      "copied_prestate_files": {
+        "reproduce_issue.py": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/pydata__xarray-7233/precall/reproduce_issue.py",
+          "sha256": "f48f7abaeaecc907e0f73d9d220d8bf511a3218e2956c85ee3465a11aed64147"
+        }
+      },
+      "base_image_file_hashes": {
+        "/opt/miniconda3/envs/testbed/conda-meta/history": "d7ff0b697bf737533d684dff4a9c03e96202ec6d85a0294b4439eaadce1fe7e1",
+        "/testbed/xarray/__init__.py": "b69885960d6782998682aafc58719f0fca2b7ab1afffc11b2e373a9869bcb700"
+      },
+      "expectations": {
+        "required_output_substrings": [
+          "LOCAL_TARGET",
+          "/testbed/",
+          "/opt/miniconda3/envs/testbed/bin/python",
+          "'day' is no longer a coordinate."
+        ],
+        "allowed_returncodes": [
+          0
+        ],
+        "target_package": "xarray",
+        "target_path_prefix": "/testbed/",
+        "purpose": "Establish local target provenance and advance original reproduction. Reproducing the bug counts as valid next action, not task pass."
+      },
+      "scope": "Activate the existing image testbed interpreter and run the original local reproduction, without fetching target source. This is an environment-recovery next action, not a complete solution.",
+      "state_scope": "Pinned image plus every materialized pre-call tracked edit/helper. Exact submitted bytes are checked. Prior base-interpreter installs/builds are not replayed; action switches to image testbed environment. This is not native whole-filesystem equivalence.",
+      "state_limits": "Prior installs/build attempts in base Python recorded in audit, not replayed. Candidate explicitly switches to untouched testbed environment. Generated build artifacts beyond listed source/helpers are not reconstructed; assess if execution reveals contamination.",
+      "limits": {
+        "cpus": 1,
+        "memory_gib": 4,
+        "job_seconds": 300,
+        "cleanup_seconds": 60
+      },
+      "network": "none",
+      "mounts": [],
+      "slot_admission": "Coordinator admits worker; shared lock serializes semantic validators."
+    }
+  },
+  {
+    "task": "pylint-dev__pylint-4604",
+    "exit_code": 0,
+    "error": "",
+    "cpu_summary": {
+      "task": "pylint-dev__pylint-4604",
+      "call": 8,
+      "status": "cpu_validated_not_executed",
+      "valid_next_action": null,
+      "full_solution_claim": false,
+      "diagnostic_only": true,
+      "original_trial_modified": false,
+      "candidate_manifest_sha256": "6bc0b65c7d52643484da79f1276c1ad73c61f45e19fd36202eff8fa311334353",
+      "action_sha256": "ee8dc828c3585b81df9ef001d9d515ff2225a179c5765980c1ed970182e4fcaa",
+      "action_case_sha256": "0f01a95975a6c04e528a1d6b939806fc2c73cd50e45f4503051c0df58e5c4a12",
+      "image_id": "sha256:b393308b8b17368ae65034b7f6a76f95f615ea0d5506ce24edbb898f2ef4ff05",
+      "image_tag": "v5-swe-offline-verifier:pylint-dev__pylint-4604",
+      "image_head": "0f266873c24f8f7270d257c8c8a8676930be0c72",
+      "copied_prestate_files": {
+        "reproduce_issue.py": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/pylint-dev__pylint-4604/precall/reproduce_issue.py",
+          "sha256": "8041ac2ff5717cf38887498e0f33fc586e709f6f7eeeeb1ed580606e055cd39c"
+        }
+      },
+      "base_image_file_hashes": {
+        "/opt/miniconda3/envs/testbed/conda-meta/history": "e9b5e1a44afb40873db9dcc39399fdf67a4c2f8f660bfcf8b69968c5f18ab6cb",
+        "/testbed/pylint/__init__.py": "0b4a0799443b9e1679f81e68c9b39ce40d95d81c37abdaf1f364bd407e2bf6b1"
+      },
+      "expectations": {
+        "required_output_substrings": [
+          "LOCAL_TARGET",
+          "/testbed/",
+          "/opt/miniconda3/envs/testbed/bin/python",
+          "unused-import"
+        ],
+        "allowed_returncodes": [
+          0,
+          2,
+          4,
+          8,
+          16,
+          20,
+          24,
+          28
+        ],
+        "target_package": "pylint",
+        "target_path_prefix": "/testbed/",
+        "purpose": "Establish local target provenance and advance original reproduction. Reproducing the bug counts as valid next action, not task pass."
+      },
+      "scope": "Use existing testbed interpreter and local Pylint instead of upgrading target to overcome base-environment wrapt conflict. Original reproduction should show unused-import bug; nonzero lint code expected.",
+      "state_scope": "Pinned image plus every materialized pre-call tracked edit/helper. Exact submitted bytes are checked. Prior base-interpreter installs/builds are not replayed; action switches to image testbed environment. This is not native whole-filesystem equivalence.",
+      "state_limits": "Prior installs/build attempts in base Python recorded in audit, not replayed. Candidate explicitly switches to untouched testbed environment. Generated build artifacts beyond listed source/helpers are not reconstructed; assess if execution reveals contamination.",
+      "limits": {
+        "cpus": 1,
+        "memory_gib": 4,
+        "job_seconds": 300,
+        "cleanup_seconds": 60
+      },
+      "network": "none",
+      "mounts": [],
+      "slot_admission": "Coordinator admits worker; shared lock serializes semantic validators."
+    }
+  },
+  {
+    "task": "pytest-dev__pytest-5787",
+    "exit_code": 0,
+    "error": "",
+    "cpu_summary": {
+      "task": "pytest-dev__pytest-5787",
+      "call": 12,
+      "status": "cpu_validated_not_executed",
+      "valid_next_action": null,
+      "full_solution_claim": false,
+      "diagnostic_only": true,
+      "original_trial_modified": false,
+      "candidate_manifest_sha256": "fc439a9a7ff68e92885c96f4243acae80a32df813e3137f8000db25abae5f9c9",
+      "action_sha256": "ba865a5709d18336c08b5475a9bbb12ba45b9d5c3de4259ba1370fc182ac2554",
+      "action_case_sha256": "6bed68e36238b97ebb2fee8fb7db215d095bfc8ed60781e62a5d7adee6bb8586",
+      "image_id": "sha256:d0545ef976f9e2dd61a7ddef94c7169d7ccf22bc6e220f2f017ef00c02161d4a",
+      "image_tag": "v5-swe-offline-linked:pytest-dev__pytest-5787-mode-restored",
+      "image_head": "b32361f0accbefc2e6200fd85113d404f5ab4907",
+      "copied_prestate_files": {},
+      "base_image_file_hashes": {
+        "/opt/miniconda3/envs/testbed/conda-meta/history": "90d61cf16762e1cf42f3a76000546cd4bca16dad66df318b0a240927280ee765",
+        "/testbed/src/pytest.py": "8d944e9f607fe391d56b472d61a3f2767e6865ca0e27cfb9e1a33096f5255aba",
+        "/testbed/src/_pytest/reports.py": "117caad56cce03d98a83bc3b1226a439db83e92faab1f9b50313fef9971337e3"
+      },
+      "expectations": {
+        "required_output_substrings": [
+          "LOCAL_TARGET",
+          "/testbed/",
+          "/opt/miniconda3/envs/testbed/bin/python",
+          "LOCAL_REPORT_SERIALIZATION_SOURCE",
+          "def _to_json",
+          "longrepr"
+        ],
+        "allowed_returncodes": [
+          0
+        ],
+        "target_package": "pytest",
+        "target_path_prefix": "/testbed/",
+        "purpose": "Establish local target provenance and advance original reproduction. Reproducing the bug counts as valid next action, not task pass."
+      },
+      "scope": "Inspect local pytest report serialization, which owns chained exception encoding used by xdist. No xdist install or target pytest upgrade; this is a local investigation next step, not a completed fix.",
+      "state_scope": "Pinned image plus every materialized pre-call tracked edit/helper. Exact submitted bytes are checked. Prior base-interpreter installs/builds are not replayed; action switches to image testbed environment. This is not native whole-filesystem equivalence.",
+      "state_limits": "Prior installs/build attempts in base Python recorded in audit, not replayed. Candidate explicitly switches to untouched testbed environment. Generated build artifacts beyond listed source/helpers are not reconstructed; assess if execution reveals contamination.",
+      "limits": {
+        "cpus": 1,
+        "memory_gib": 4,
+        "job_seconds": 300,
+        "cleanup_seconds": 60
+      },
+      "network": "none",
+      "mounts": [],
+      "slot_admission": "Coordinator admits worker; shared lock serializes semantic validators."
+    }
+  },
+  {
+    "task": "scikit-learn__scikit-learn-13135",
+    "exit_code": 0,
+    "error": "",
+    "cpu_summary": {
+      "task": "scikit-learn__scikit-learn-13135",
+      "call": 9,
+      "status": "cpu_validated_not_executed",
+      "valid_next_action": null,
+      "full_solution_claim": false,
+      "diagnostic_only": true,
+      "original_trial_modified": false,
+      "candidate_manifest_sha256": "6212b0955c1610cf643e0d393a90a6883e64e661f56552eab7e03e443c930e25",
+      "action_sha256": "f4846b83abb13084ae2cc5e58d3ba7c2dc65cbe9c7b1535362fb5650e103ea0f",
+      "action_case_sha256": "3690a5be8a7e9906ffcc7429684a6bf42523f0fc94b489ec2ba6c6b56da5d5a7",
+      "image_id": "sha256:67994d453fce04b638a4513c3ef78307259a63c9f5b89751d946c683d1a87258",
+      "image_tag": "v5-swe-offline-verifier:scikit-learn__scikit-learn-13135",
+      "image_head": "2231c5414b8c70467382535a40f788e03639bf38",
+      "copied_prestate_files": {
+        "reproduce_issue.py": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/scikit-learn__scikit-learn-13135/precall/reproduce_issue.py",
+          "sha256": "71cf73ffc743fc82c80ad44d0e62bf240120cb952ec6a1f90d94ca450f1b1403"
+        }
+      },
+      "base_image_file_hashes": {
+        "/opt/miniconda3/envs/testbed/conda-meta/history": "fc2a145c27b5df17bf1bbfb0bbc8b0415fd4d7bdde7561c70e745ad855316d8f",
+        "/testbed/sklearn/__init__.py": "b92f4592c7fae3b7fd4ebd5a15b8f876d99ff0a288a6c0f434ccf3df122fa445",
+        "/testbed/sklearn/__check_build/setup.py": "ad433520cfcc9eac16b4f81f88b4cd7a719e977dcd626949750f695c6e99fde1",
+        "/testbed/sklearn/__check_build/__init__.py": "72bba71229a0c01ccd0e6d2d7954898b2f23ca0d6848ddf0bd9998d01aeb18ea",
+        "/testbed/sklearn/__check_build/_check_build.cpython-36m-x86_64-linux-gnu.so": "e9a8349a5473e5dcc28ca46647ce62773cdd7d13203b5bad19be79febd75def9",
+        "/testbed/sklearn/__check_build/_check_build.c": "d601571a145d6b67e9c7a6c7d1a848be9645ec447fe13b05860b690b2fe4e64c",
+        "/testbed/sklearn/__check_build/_check_build.pyx": "3b5bc76ad0d52f59d1502006549b98b499e1568144434da4f41804bc838afe1c",
+        "/testbed/sklearn/__check_build/__pycache__/setup.cpython-36.pyc": "05940fb2fc96bb008ad83c52a9b908b7a2ab77def3e15cfb931b32b8e1befb51"
+      },
+      "expectations": {
+        "required_output_substrings": [
+          "LOCAL_TARGET",
+          "/testbed/",
+          "/opt/miniconda3/envs/testbed/bin/python",
+          "Caught expected ValueError:"
+        ],
+        "allowed_returncodes": [
+          0
+        ],
+        "target_package": "sklearn",
+        "target_path_prefix": "/testbed/",
+        "purpose": "Establish local target provenance and advance original reproduction. Reproducing the bug counts as valid next action, not task pass."
+      },
+      "scope": "Activate the existing image testbed interpreter and run the original local reproduction, without fetching target source. This is an environment-recovery next action, not a complete solution.",
+      "state_scope": "Pinned image plus every materialized pre-call tracked edit/helper. Exact submitted bytes are checked. Prior base-interpreter installs/builds are not replayed; action switches to image testbed environment. This is not native whole-filesystem equivalence.",
+      "state_limits": "Prior installs/build attempts in base Python recorded in audit, not replayed. Candidate explicitly switches to untouched testbed environment. Generated build artifacts beyond listed source/helpers are not reconstructed; assess if execution reveals contamination.",
+      "limits": {
+        "cpus": 1,
+        "memory_gib": 4,
+        "job_seconds": 300,
+        "cleanup_seconds": 60
+      },
+      "network": "none",
+      "mounts": [],
+      "slot_admission": "Coordinator admits worker; shared lock serializes semantic validators."
+    }
+  },
+  {
+    "task": "scikit-learn__scikit-learn-13328",
+    "exit_code": 0,
+    "error": "",
+    "cpu_summary": {
+      "task": "scikit-learn__scikit-learn-13328",
+      "call": 3,
+      "status": "cpu_validated_not_executed",
+      "valid_next_action": null,
+      "full_solution_claim": false,
+      "diagnostic_only": true,
+      "original_trial_modified": false,
+      "candidate_manifest_sha256": "2726f1386fd49eb03e2d74de30c95ed529b9d305df43c34d96f8c072c11096f3",
+      "action_sha256": "f4846b83abb13084ae2cc5e58d3ba7c2dc65cbe9c7b1535362fb5650e103ea0f",
+      "action_case_sha256": "52f6614498c828972727e13a1086bb30323983eae756e9989ed4d4e44e6d4cf2",
+      "image_id": "sha256:aa9070f44f7a42363e3f90826b7aec9edf6fce6487e9a223e97089f2654dd429",
+      "image_tag": "v5-swe-offline-verifier:scikit-learn__scikit-learn-13328",
+      "image_head": "a8460bf89d6dcabf669ef1d760b81691ea06ad81",
+      "copied_prestate_files": {
+        "reproduce_issue.py": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/scikit-learn__scikit-learn-13328/precall/reproduce_issue.py",
+          "sha256": "e83415373cab213213fcac7534d3e1f5325011c6e3747e509fd91c80ada20f2c"
+        }
+      },
+      "base_image_file_hashes": {
+        "/opt/miniconda3/envs/testbed/conda-meta/history": "fc2a145c27b5df17bf1bbfb0bbc8b0415fd4d7bdde7561c70e745ad855316d8f",
+        "/testbed/sklearn/__init__.py": "dde1abb872fb4b75ff9a3f1b8dbcdad96720d013bb49955a17186e42ea2dae45",
+        "/testbed/sklearn/__check_build/setup.py": "ad433520cfcc9eac16b4f81f88b4cd7a719e977dcd626949750f695c6e99fde1",
+        "/testbed/sklearn/__check_build/__init__.py": "72bba71229a0c01ccd0e6d2d7954898b2f23ca0d6848ddf0bd9998d01aeb18ea",
+        "/testbed/sklearn/__check_build/_check_build.cpython-36m-x86_64-linux-gnu.so": "e9e5086076d398d8c4599267ddc08b74abd45d92fc607932149e8bbcf5cbf28a",
+        "/testbed/sklearn/__check_build/_check_build.c": "b4918d580d1c8902fc6a0201b8e0843b04d14661c04877f4d2a06ef831ca11b7",
+        "/testbed/sklearn/__check_build/_check_build.pyx": "5eafb854da9f78d0addff3277e8d53d3b88850f541323469e70b815c25333792",
+        "/testbed/sklearn/__check_build/__pycache__/setup.cpython-36.pyc": "05940fb2fc96bb008ad83c52a9b908b7a2ab77def3e15cfb931b32b8e1befb51"
+      },
+      "expectations": {
+        "required_output_substrings": [
+          "LOCAL_TARGET",
+          "/testbed/",
+          "/opt/miniconda3/envs/testbed/bin/python",
+          "Testing HuberRegressor with boolean X...",
+          "Caught exception:"
+        ],
+        "allowed_returncodes": [
+          0
+        ],
+        "target_package": "sklearn",
+        "target_path_prefix": "/testbed/",
+        "purpose": "Establish local target provenance and advance original reproduction. Reproducing the bug counts as valid next action, not task pass."
+      },
+      "scope": "Activate the existing image testbed interpreter and run the original local reproduction, without fetching target source. This is an environment-recovery next action, not a complete solution.",
+      "state_scope": "Pinned image plus every materialized pre-call tracked edit/helper. Exact submitted bytes are checked. Prior base-interpreter installs/builds are not replayed; action switches to image testbed environment. This is not native whole-filesystem equivalence.",
+      "state_limits": "Prior installs/build attempts in base Python recorded in audit, not replayed. Candidate explicitly switches to untouched testbed environment. Generated build artifacts beyond listed source/helpers are not reconstructed; assess if execution reveals contamination.",
+      "limits": {
+        "cpus": 1,
+        "memory_gib": 4,
+        "job_seconds": 300,
+        "cleanup_seconds": 60
+      },
+      "network": "none",
+      "mounts": [],
+      "slot_admission": "Coordinator admits worker; shared lock serializes semantic validators."
+    }
+  },
+  {
+    "task": "scikit-learn__scikit-learn-14053",
+    "exit_code": 0,
+    "error": "",
+    "cpu_summary": {
+      "task": "scikit-learn__scikit-learn-14053",
+      "call": 13,
+      "status": "cpu_validated_not_executed",
+      "valid_next_action": null,
+      "full_solution_claim": false,
+      "diagnostic_only": true,
+      "original_trial_modified": false,
+      "candidate_manifest_sha256": "fdf6c95b27dac9977628158ffb442bb27a55bdd14257d0d9ca48100ece3fec57",
+      "action_sha256": "f4846b83abb13084ae2cc5e58d3ba7c2dc65cbe9c7b1535362fb5650e103ea0f",
+      "action_case_sha256": "0a46e147aeeeecfd9af92f33074485993ede14d196a3d64f8664aca22fd1ce22",
+      "image_id": "sha256:365b5c58b5303708bd39a87c495e84890fd7a2a77d1056fa28eb86714a846b11",
+      "image_tag": "v5-swe-offline-linked:scikit-learn__scikit-learn-14053-mode-restored",
+      "image_head": "831a71ed26848bbb2ee4f176ca3e88bf455c64df",
+      "copied_prestate_files": {
+        "reproduce_issue.py": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/scikit-learn__scikit-learn-14053/precall/reproduce_issue.py",
+          "sha256": "29fdcbe9e3b5def47ca80d1699889fafa47d93193377a8c8239b4dccc48fcac6"
+        }
+      },
+      "base_image_file_hashes": {
+        "/opt/miniconda3/envs/testbed/conda-meta/history": "0c8c280a40604f1dd8870775d8cbac63d23fdb4e507bdf84ff91b89bb36de41f",
+        "/testbed/sklearn/__init__.py": "ba17aff09a0886699bde2cf2d2860a305e4fdf163a4f93abf352e6fa7c59d068",
+        "/testbed/sklearn/__check_build/setup.py": "ad433520cfcc9eac16b4f81f88b4cd7a719e977dcd626949750f695c6e99fde1",
+        "/testbed/sklearn/__check_build/__init__.py": "72bba71229a0c01ccd0e6d2d7954898b2f23ca0d6848ddf0bd9998d01aeb18ea",
+        "/testbed/sklearn/__check_build/_check_build.cpython-36m-x86_64-linux-gnu.so": "35caa9b8bebd6e394280756ba54ca5c97d3ce99fa7a99f3a0aedaca13f3716e3",
+        "/testbed/sklearn/__check_build/_check_build.c": "2a5796ad4cbce3976f5027c521220797a2fad4a4b429f796f6d16e6274b4d548",
+        "/testbed/sklearn/__check_build/_check_build.pyx": "f2ea34304be8aa08095f226e83a5f588eb6b1c48c4b911c4cbc5caf44104b151",
+        "/testbed/sklearn/__check_build/__pycache__/setup.cpython-36.pyc": "76b477f863245070c854d0c9fd9331b2b8c8c498219ff0f791e4558d6c92528e"
+      },
+      "expectations": {
+        "required_output_substrings": [
+          "LOCAL_TARGET",
+          "/testbed/",
+          "/opt/miniconda3/envs/testbed/bin/python",
+          "Caught expected IndexError:"
+        ],
+        "allowed_returncodes": [
+          0
+        ],
+        "target_package": "sklearn",
+        "target_path_prefix": "/testbed/",
+        "purpose": "Establish local target provenance and advance original reproduction. Reproducing the bug counts as valid next action, not task pass."
+      },
+      "scope": "Activate the existing image testbed interpreter and run the original local reproduction, without fetching target source. This is an environment-recovery next action, not a complete solution.",
+      "state_scope": "Pinned image plus every materialized pre-call tracked edit/helper. Exact submitted bytes are checked. Prior base-interpreter installs/builds are not replayed; action switches to image testbed environment. This is not native whole-filesystem equivalence.",
+      "state_limits": "Prior installs/build attempts in base Python recorded in audit, not replayed. Candidate explicitly switches to untouched testbed environment. Generated build artifacts beyond listed source/helpers are not reconstructed; assess if execution reveals contamination.",
+      "limits": {
+        "cpus": 1,
+        "memory_gib": 4,
+        "job_seconds": 300,
+        "cleanup_seconds": 60
+      },
+      "network": "none",
+      "mounts": [],
+      "slot_admission": "Coordinator admits worker; shared lock serializes semantic validators."
+    }
+  },
+  {
+    "task": "scikit-learn__scikit-learn-14629",
+    "exit_code": 0,
+    "error": "",
+    "cpu_summary": {
+      "task": "scikit-learn__scikit-learn-14629",
+      "call": 8,
+      "status": "cpu_validated_not_executed",
+      "valid_next_action": null,
+      "full_solution_claim": false,
+      "diagnostic_only": true,
+      "original_trial_modified": false,
+      "candidate_manifest_sha256": "ad8988c03d454f337f0661bb704cd6644b2e38fc6d6a3286da19b5759ec3eb15",
+      "action_sha256": "f4846b83abb13084ae2cc5e58d3ba7c2dc65cbe9c7b1535362fb5650e103ea0f",
+      "action_case_sha256": "4f59833554b0af7b257288ee13cdba89b3c118e35383c9360d8b1935d08713b6",
+      "image_id": "sha256:ba87f549294c243fc71fac2b567e0b34e956345b5726b747238232e542c54e4b",
+      "image_tag": "v5-swe-offline-verifier:scikit-learn__scikit-learn-14629",
+      "image_head": "eb6f369813728a490ea354f6d137783cc5fd29e9",
+      "copied_prestate_files": {
+        "reproduce_issue.py": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/scikit-learn__scikit-learn-14629/precall/reproduce_issue.py",
+          "sha256": "b094bc888fd76ee7acde7b12e9eb70fb112c4118ff7719b87f241cde045b71fa"
+        }
+      },
+      "base_image_file_hashes": {
+        "/opt/miniconda3/envs/testbed/conda-meta/history": "0c8c280a40604f1dd8870775d8cbac63d23fdb4e507bdf84ff91b89bb36de41f",
+        "/testbed/sklearn/__init__.py": "ba17aff09a0886699bde2cf2d2860a305e4fdf163a4f93abf352e6fa7c59d068",
+        "/testbed/sklearn/__check_build/setup.py": "ad433520cfcc9eac16b4f81f88b4cd7a719e977dcd626949750f695c6e99fde1",
+        "/testbed/sklearn/__check_build/__init__.py": "72bba71229a0c01ccd0e6d2d7954898b2f23ca0d6848ddf0bd9998d01aeb18ea",
+        "/testbed/sklearn/__check_build/_check_build.cpython-36m-x86_64-linux-gnu.so": "35caa9b8bebd6e394280756ba54ca5c97d3ce99fa7a99f3a0aedaca13f3716e3",
+        "/testbed/sklearn/__check_build/_check_build.c": "2a5796ad4cbce3976f5027c521220797a2fad4a4b429f796f6d16e6274b4d548",
+        "/testbed/sklearn/__check_build/_check_build.pyx": "f2ea34304be8aa08095f226e83a5f588eb6b1c48c4b911c4cbc5caf44104b151",
+        "/testbed/sklearn/__check_build/__pycache__/setup.cpython-36.pyc": "36da2d2efdeb2815898332d3aeb7a69232bcd3f2beeea8519250a6c57b198acb"
+      },
+      "expectations": {
+        "required_output_substrings": [
+          "LOCAL_TARGET",
+          "/testbed/",
+          "/opt/miniconda3/envs/testbed/bin/python",
+          "cross_val_predict(method='predict_proba') failed:"
+        ],
+        "allowed_returncodes": [
+          0
+        ],
+        "target_package": "sklearn",
+        "target_path_prefix": "/testbed/",
+        "purpose": "Establish local target provenance and advance original reproduction. Reproducing the bug counts as valid next action, not task pass."
+      },
+      "scope": "Activate the existing image testbed interpreter and run the original local reproduction, without fetching target source. This is an environment-recovery next action, not a complete solution.",
+      "state_scope": "Pinned image plus every materialized pre-call tracked edit/helper. Exact submitted bytes are checked. Prior base-interpreter installs/builds are not replayed; action switches to image testbed environment. This is not native whole-filesystem equivalence.",
+      "state_limits": "Prior installs/build attempts in base Python recorded in audit, not replayed. Candidate explicitly switches to untouched testbed environment. Generated build artifacts beyond listed source/helpers are not reconstructed; assess if execution reveals contamination.",
+      "limits": {
+        "cpus": 1,
+        "memory_gib": 4,
+        "job_seconds": 300,
+        "cleanup_seconds": 60
+      },
+      "network": "none",
+      "mounts": [],
+      "slot_admission": "Coordinator admits worker; shared lock serializes semantic validators."
+    }
+  }
+]

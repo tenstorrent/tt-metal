@@ -1,0 +1,39 @@
+{
+  "reviewed_unix": 1794727255.1049664,
+  "rows": [
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/runs/head_bf16_hifi4/anomaly.xarray7233-call1.canonicalprefix.seed43.cap512.json",
+      "sha256": "9670124e51891e49aeab76c9bb02ad62ed75e48f97280ba6bf145c10587a5382",
+      "seed": 43,
+      "tokens": 335,
+      "verdict": "other",
+      "reason": "Entire raw continuation reviewed: localized malformed it's\u2019 considered in code comment; extra apostrophes distinct from native protocol motif. Otherwise canonical invocation; not a cap failure.",
+      "trace_counters_delta": {
+        "model_replays": 334,
+        "sample_replays": 334,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 334,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/runs/head_bf16_hifi4/anomaly.xarray7233-call1.canonicalprefix.seed44.cap1024.json",
+      "sha256": "ff21635cd5cfae080ca6b394a004830fc931d061ffefdac1ace0f966189fdadf",
+      "seed": 44,
+      "tokens": 360,
+      "verdict": "other",
+      "reason": "Entire raw continuation reviewed: localized malformed To\u2019be\u2019 sure in code comment; extra apostrophes distinct from native protocol motif. Otherwise canonical invocation; not a cap failure.",
+      "trace_counters_delta": {
+        "model_replays": 359,
+        "sample_replays": 359,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 359,
+        "captures": 0
+      }
+    }
+  ]
+}

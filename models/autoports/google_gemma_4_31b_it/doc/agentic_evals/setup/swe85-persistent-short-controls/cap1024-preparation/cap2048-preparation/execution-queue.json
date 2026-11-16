@@ -1,0 +1,9 @@
+{
+  "status": "all_followups_completed",
+  "queued_unix": 1794714321.1696541,
+  "admission_sha256": "bbca9650c94cc6623d25da34d00acdd68db8d8600e2a8e4b445bd0230cfa1f1a",
+  "stop_file": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/cap1024-preparation/cap2048-preparation/STOP_BEFORE_NEXT_JOB",
+  "start_unix": 1794717523.990007,
+  "exit_code": 0,
+  "end_unix": 1794717738.299361
+}

@@ -1,0 +1,100 @@
+{
+  "status": "passed_candidate_revision_host_checks",
+  "scope": "CPU-only validate-only for 3 served and 3 full jobs. No model load, TTNN import, device access, or execution. Structural checks confirm exact original prompt_token_ids[-8192:], matched mode prompt/chosen/sampling/seed, branches=[chosen], one 512-token free-run trial.",
+  "checks": [
+    {
+      "mode": "served",
+      "command": [
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+        "-m",
+        "models.autoports.google_gemma_4_31b_it.tools.precision_repro_batch",
+        "--cases",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-canonicalprefix-suffix8192-candidate/served-cases.json",
+        "--build-kwargs-file",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/head_bfp8_build_kwargs.json",
+        "--output-dir",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-canonicalprefix-suffix8192-candidate/unused-served",
+        "--validate-only"
+      ],
+      "returncode": 0,
+      "stdout": "Validated 3 jobs without importing TTNN",
+      "stderr": "",
+      "case_count": 3,
+      "ttnn_imported": false,
+      "build_kwargs_sha256": "2e583fa8bd7aff7c5f8be110835df751924d167243c5a44a68aa5b3d70c6845f",
+      "manifest_sha256": "4247057be66e9cc30b5f474001c42043a9f2c945fa8f4866fc97f0375e072c51"
+    },
+    {
+      "mode": "full",
+      "command": [
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+        "-m",
+        "models.autoports.google_gemma_4_31b_it.tools.precision_repro_batch",
+        "--cases",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-canonicalprefix-suffix8192-candidate/full-cases.json",
+        "--build-kwargs-file",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_build_kwargs.json",
+        "--output-dir",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-canonicalprefix-suffix8192-candidate/unused-full",
+        "--validate-only"
+      ],
+      "returncode": 0,
+      "stdout": "Validated 3 jobs without importing TTNN",
+      "stderr": "",
+      "case_count": 3,
+      "ttnn_imported": false,
+      "build_kwargs_sha256": "ff2b5ed24e0b6a1dee7eb5cd8bd437d17c3df5f8f25567927d239e666f0699f9",
+      "manifest_sha256": "59f6d8286bbb9c4de5121404975c007a32a9ae522fa37f14caa814e19d3376cc"
+    }
+  ],
+  "structural_validation": {
+    "exact_original_suffix8192_all_six": true,
+    "same_prompt_ids_across_modes_by_seed": true,
+    "same_chosen_continuation_across_modes_by_seed": true,
+    "sampling_seed_preserved": true,
+    "free_run_cap_and_trials_preserved": true
+  },
+  "wrapper_checks": {
+    "py_compile": {
+      "command": "python -m py_compile run_after_p.py",
+      "status": "passed"
+    },
+    "forecast_gate_self_test": {
+      "command": "python run_after_p.py --self-test",
+      "status": "passed",
+      "stdout": "forecast gate self-test passed; no TTNN, device, or predecessor access"
+    },
+    "candidate_source_hashes": {
+      "count": 8,
+      "status": "passed"
+    },
+    "p_admission_pin": {
+      "expected_sha256": "91dc764e6a3a6b1e8a1be51e6eee5fc958c19d1dfcfa3d057b989aa325618cdd",
+      "observed_sha256": "91dc764e6a3a6b1e8a1be51e6eee5fc958c19d1dfcfa3d057b989aa325618cdd",
+      "status": "passed"
+    },
+    "ttnn_imported": false,
+    "device_or_predecessor_accessed": false,
+    "launch_performed": false,
+    "driver_sha256": "a79de95caeaf2d04d8751ec9a3543568d17305075c12bf852ba4edfd1da082e5",
+    "repository_root_assertion": {
+      "path": "parents[7]",
+      "contract_file_exists": true,
+      "status": "passed"
+    },
+    "same_admission_record_rechecked_before_each_mode": true,
+    "source_hash_exception": {
+      "status": "passed",
+      "inventory_sha256": "e1254ae95f87360bc214b01757062a8910b5fed95f6e6cfd13244b024cce01ad",
+      "exception_row": "admission",
+      "stale_placeholder_sha256": "428bea328fae8fa6e4f6fe21802f3763985d6b5ee819f5beac6c6df3ff1f2b97",
+      "verified_current_admission_sha256": "91dc764e6a3a6b1e8a1be51e6eee5fc958c19d1dfcfa3d057b989aa325618cdd",
+      "all_other_rows_checked": true
+    },
+    "no_launch_files_or_results": true,
+    "p_admission_inventory_exception": {
+      "status": "passed",
+      "note": "Only exact known frozen placeholder row skipped after exact final admission hash/status validation."
+    }
+  }
+}

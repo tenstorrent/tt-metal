@@ -1,0 +1,48 @@
+{
+  "status": "passed_host_validate_only_mock_tests",
+  "argv": [
+    "timeout",
+    "60",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+    "models/autoports/google_gemma_4_31b_it/tools/actual_branch_logits.py",
+    "--validate-only",
+    "--later-loop",
+    "--mock-tests",
+    "--case",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-loop-branch-investigation/actual-branch-logits/later-loop-conditional-candidate/fixture/anomaly.psf__requests-5414.call11.onset.suffix2048.private.json",
+    "--branches",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-loop-branch-investigation/actual-branch-logits/later-loop-conditional-candidate/branches.json"
+  ],
+  "exit_code": 0,
+  "tool_sha256": "3a9ad550813ee01d3a6fa701b2fe9b614bd7e2d694b7771bdd05a6636a8a6380",
+  "source_pins_sha256_at_run": "e3035787746fde4d66d20d17793a84cd38dcb884fbf23a1792f786fd48898322",
+  "validated_facts": {
+    "prompt_tokens": 2048,
+    "branch_count": 1,
+    "branch_name": "tt_seed44_loop_history",
+    "branch_tokens": 30,
+    "rows_per_branch": 31,
+    "source_pin_count": 11
+  },
+  "mock_tests": {
+    "original_six_token_branches_retained": true,
+    "exact30_token_branch_accepted": true,
+    "altered_history_rejected": true,
+    "altered_source_hash_rejected": true,
+    "seed43_provenance_rejected": true,
+    "host_sampling_callback_and_compare_tests_retained": true,
+    "no_torch_transformers_or_ttnn_imported": true
+  },
+  "scope": "Host-only JSON/source validation and mocks. No model, TTNN, device, generated command, or inference runner invoked.",
+  "source_pins_sha256_at_successful_run": "436476495706280aa19a491a6e0a067a3d86150da2fd8b98217b8d075ed62b1b",
+  "attempts": [
+    {
+      "exit_code": 2,
+      "note": "One earlier validation invocation had a misspelled repository path and failed opening the fixture before code validation; it did not reach model imports or execution."
+    },
+    {
+      "exit_code": 0,
+      "note": "The corrected explicit --validate-only --later-loop --mock-tests invocation passed against the final candidate inputs and pins."
+    }
+  ]
+}

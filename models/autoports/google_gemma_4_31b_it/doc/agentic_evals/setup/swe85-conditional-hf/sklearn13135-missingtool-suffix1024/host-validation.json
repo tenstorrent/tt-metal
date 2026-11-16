@@ -1,0 +1,58 @@
+{
+  "status": "host_only_validation_passed_no_inference",
+  "rows": [
+    {
+      "mode": "served",
+      "command": [
+        "timeout",
+        "600",
+        "env",
+        "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+        "READINESS_TRACE_REGION_SIZE=134217728",
+        "OMP_NUM_THREADS=16",
+        "MKL_NUM_THREADS=16",
+        "OPENBLAS_NUM_THREADS=16",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+        "-m",
+        "models.autoports.google_gemma_4_31b_it.tools.precision_repro_batch",
+        "--cases",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix1024/served-cases.json",
+        "--build-kwargs-file",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/head_bfp8_build_kwargs.json",
+        "--output-dir",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix1024/runs/served",
+        "--validate-only"
+      ],
+      "exit_code": 0,
+      "stdout": "Validated 3 jobs without importing TTNN",
+      "elapsed_host_seconds": 0.022
+    },
+    {
+      "mode": "full",
+      "command": [
+        "timeout",
+        "600",
+        "env",
+        "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+        "READINESS_TRACE_REGION_SIZE=134217728",
+        "OMP_NUM_THREADS=16",
+        "MKL_NUM_THREADS=16",
+        "OPENBLAS_NUM_THREADS=16",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+        "-m",
+        "models.autoports.google_gemma_4_31b_it.tools.precision_repro_batch",
+        "--cases",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix1024/full-cases.json",
+        "--build-kwargs-file",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_build_kwargs.json",
+        "--output-dir",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix1024/runs/full",
+        "--validate-only"
+      ],
+      "exit_code": 0,
+      "stdout": "Validated 3 jobs without importing TTNN",
+      "elapsed_host_seconds": 0.022
+    }
+  ],
+  "note": "Both precision_repro_batch commands used --validate-only; no TTNN/device/model inference was launched."
+}

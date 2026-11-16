@@ -1,0 +1,404 @@
+{
+  "status": "proposed_only_no_canonical_mutation",
+  "purpose": "Exact learned.json replacements for stale active/queued/unadmitted SWE85 claims after status-reconciliation-b; preserve scores and historical verdicts.",
+  "source_pins": {
+    "learned_sha256": "d84f3e8551afc49d51bfa2f0134db56493159f85fc22f409cf7c02682fc4cb1e",
+    "results_sha256": "1980582a4f5ef9afc1a07c2d1b133c94caa93ccef7e73e3b62bd9d386b3d239a",
+    "status_reconciliation_b_sha256": "fa7e0ac006697612f3ab95992fd7585df933b9bc5878f14e6720b6b043b8bc5e"
+  },
+  "observed_hf9_live_state": {
+    "admission_status": "admitted",
+    "progress_status": "group_running",
+    "groups": [
+      {
+        "serial_order": 1,
+        "status": "running"
+      }
+    ],
+    "partial_artifact_status": "partial",
+    "partial_artifact_results_count": 0
+  },
+  "replacements": [
+    {
+      "learned_json_path": "$.current_v5_phase_status.extended.note",
+      "current_value": "GPQA157/198 passed. SWE85 bounds23..26/85 below reference,3 unknown verifier outcomes. Original165 paired controls and recorded cap/prefix followups through suffix8192 are complete. P1 head BFP8/HiFi2 rejected; P2 head BF16/HiFi4 fixed108 completed, root rejected14/15 targets still anomalous, with HF-incident host contention, excluded from policy speed ranking. Matched Sklearn suffix512 test prepared, not run. No new policy or score change. No authorized conditional HF comparison completed. Three accidental commands omitted --validate-only; a partial CPU BF16 artifact contains64 TF positions and zero stored free samples, attributable only to the combined A/B incident. Fresh nine-case/eight-group proposal is prepared but unadmitted at setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed. See setup/swe85-conditional-hf/runner-validation-incident-c.json.",
+      "proposed_value": "Original165 paired controls and recorded cap/prefix followups through suffix8192 are complete. P1 BFP8/HiFi2 and P2 BF16/HiFi4 fixed108 panels are complete and rejected; P2 leaves14/15 target pairs anomalous, with its wall excluded from speed ranking due to HF-incident host contention. Selected-BFP8 Sklearn suffix512 and suffix1024 served/full controls are complete; suffix1024 did not reproduce original full missing_tool. The admitted nine-case/eight-group conditional HF batch is running at group1 with no completed HF result. A Sklearn suffix2048/cap1024 control is requested after the serial HF block. No score or policy change.",
+      "reason": "Replaces stale prepared/not-run Sklearn and follow-up wording.",
+      "evidence": [
+        {
+          "path": "setup/swe85-status-reconciliation-b.json",
+          "sha256": "fa7e0ac006697612f3ab95992fd7585df933b9bc5878f14e6720b6b043b8bc5e"
+        },
+        {
+          "path": "setup/swe85-conditional-hf/sklearn13135-suffix512-head-bfp8-correction/completion-summary.json",
+          "sha256": "ac1a85eb4a83efdb352fbc5f06d664bf49dc04dae8695b8eef603c191994949d"
+        },
+        {
+          "path": "setup/swe85-conditional-hf/sklearn13135-missingtool-suffix1024/completion-summary.json",
+          "sha256": "ecbbc26c4f42b9ca977e06f881c9301eecbb3ed59a0336ccfdcfad5bd05e6781"
+        },
+        {
+          "path": "setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/progress.json",
+          "sha256": "6e8d750a3f8a7657f552669b0233a1835e30b0f4ffcb4880477743a397f70bae"
+        }
+      ]
+    },
+    {
+      "learned_json_path": "$.swe85_diagnostic_provenance.precision_status",
+      "current_value": "Original165 paired controls and recorded cap/prefix followups through suffix8192 are complete. P1 head BFP8/HiFi2 rejected; P2 head BF16/HiFi4 fixed108 completed, root rejected14/15 targets still anomalous, with HF-incident host contention, excluded from policy speed ranking. Matched Sklearn suffix512 test prepared, not run. No new policy or score change.",
+      "proposed_value": "Original165 paired controls and recorded cap/prefix followups through suffix8192 are complete. P1 BFP8/HiFi2 and P2 BF16/HiFi4 fixed108 panels are complete and rejected; P2 leaves14/15 target pairs anomalous, with its wall excluded from speed ranking due to HF-incident host contention. Selected-BFP8 Sklearn suffix512 and suffix1024 served/full controls are complete; suffix1024 did not reproduce original full missing_tool. The admitted nine-case/eight-group conditional HF batch is running at group1 with no completed HF result. A Sklearn suffix2048/cap1024 control is requested after the serial HF block. No score or policy change.",
+      "reason": "Same stale live precision summary.",
+      "evidence": [
+        {
+          "path": "setup/swe85-status-reconciliation-b.json",
+          "sha256": "fa7e0ac006697612f3ab95992fd7585df933b9bc5878f14e6720b6b043b8bc5e"
+        },
+        {
+          "path": "setup/swe85-conditional-hf/sklearn13135-suffix512-head-bfp8-correction/completion-summary.json",
+          "sha256": "ac1a85eb4a83efdb352fbc5f06d664bf49dc04dae8695b8eef603c191994949d"
+        },
+        {
+          "path": "setup/swe85-conditional-hf/sklearn13135-missingtool-suffix1024/completion-summary.json",
+          "sha256": "ecbbc26c4f42b9ca977e06f881c9301eecbb3ed59a0336ccfdcfad5bd05e6781"
+        },
+        {
+          "path": "setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/progress.json",
+          "sha256": "6e8d750a3f8a7657f552669b0233a1835e30b0f4ffcb4880477743a397f70bae"
+        }
+      ]
+    },
+    {
+      "learned_json_path": "$.swe85_short_controls_progress.status",
+      "current_value": "both_modes_and_cap_extensions_complete_conditional_hf_pending",
+      "proposed_value": "existing_short_cap_prefix_followups_complete_hf9_group1_running_sklearn2048_requested",
+      "reason": "Distinguishes active HF9 from completed cap/prefix work.",
+      "evidence": [
+        {
+          "path": "setup/swe85-status-reconciliation-b.json",
+          "sha256": "fa7e0ac006697612f3ab95992fd7585df933b9bc5878f14e6720b6b043b8bc5e"
+        },
+        {
+          "path": "setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/progress.json",
+          "sha256": "6e8d750a3f8a7657f552669b0233a1835e30b0f4ffcb4880477743a397f70bae"
+        },
+        {
+          "path": "setup/swe85-second-cap-extensions-completion-summary.json",
+          "sha256": "6ce535335c172e3194b0f6a024b5e2133c0eee9245bd6c7db2008bb741184c84"
+        }
+      ]
+    },
+    {
+      "learned_json_path": "$.swe85_short_controls_progress.conditional_hf",
+      "current_value": "No authorized conditional HF comparison completed. Three accidental commands omitted --validate-only; a partial CPU BF16 artifact contains64 TF positions and zero stored free samples, attributable only to the combined A/B incident. Fresh nine-case/eight-group proposal is prepared but unadmitted at setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed. See setup/swe85-conditional-hf/runner-validation-incident-c.json.",
+      "proposed_value": "Admitted nine-case/eight-group matched pinned CPU HF batch is running at group1. No completed HF result exists yet; one partial result artifact has status=partial and an empty results array. Earlier accidental attempts remain excluded.",
+      "reason": "Current text calls HF9 unadmitted/no authorized comparison.",
+      "evidence": [
+        {
+          "path": "setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/admission.json",
+          "sha256": "74640276fdf5e463fa968d5d188994622759df96f09d4f408e02712b7d09ae66"
+        },
+        {
+          "path": "setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/progress.json",
+          "sha256": "6e8d750a3f8a7657f552669b0233a1835e30b0f4ffcb4880477743a397f70bae"
+        },
+        {
+          "path": "setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/results/seed42-suffix512/anomaly.requests2931.call20.canonicalprefix.optional-suffix512.hf.private.json",
+          "sha256": "c0fcae77a6dc66cbbb4018dcb76da0dc51aa2a2eeaf67d7c5e2baf7d6e381dcc"
+        }
+      ]
+    },
+    {
+      "learned_json_path": "$.swe85_short_controls_progress.open",
+      "current_value": "Original165 paired controls and recorded cap/prefix followups through suffix8192 are complete. P1 head BFP8/HiFi2 rejected; P2 head BF16/HiFi4 fixed108 completed, root rejected14/15 targets still anomalous, with HF-incident host contention, excluded from policy speed ranking. Matched Sklearn suffix512 test prepared, not run. No new policy or score change.",
+      "proposed_value": "No existing cap/prefix output remains queued for 1024/2048/4096/8192 extension. HF9 is running at group1. A separate Sklearn suffix2048/cap1024 diagnostic is requested after the serial HF block because suffix1024 runs stopped naturally at55\u201363 tokens, short of the original missing_tool onset at665. The remaining26 original full target families were normal in reviewed full-mode baseline; they are not automatically HF-required. The single original full other family is Sklearn call29; it remains unmatched at onset.",
+      "reason": "Removes completed extension work and stale Sklearn prep status.",
+      "evidence": [
+        {
+          "path": "setup/swe85-status-reconciliation-b.json",
+          "sha256": "fa7e0ac006697612f3ab95992fd7585df933b9bc5878f14e6720b6b043b8bc5e"
+        },
+        {
+          "path": "setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/progress.json",
+          "sha256": "6e8d750a3f8a7657f552669b0233a1835e30b0f4ffcb4880477743a397f70bae"
+        },
+        {
+          "path": "setup/swe85-conditional-hf/sklearn13135-missingtool-suffix1024/completion-summary.json",
+          "sha256": "ecbbc26c4f42b9ca977e06f881c9301eecbb3ed59a0336ccfdcfad5bd05e6781"
+        }
+      ]
+    },
+    {
+      "learned_json_path": "$.swe85_cap_extension_observation.status",
+      "current_value": "both512_batches_complete_1024_followups_complete_2048_running",
+      "proposed_value": "both_512_batches_and_all_recorded_1024_2048_4096_8192_followups_complete",
+      "reason": "Status said 2048 running, but the recorded follow-up queue is complete.",
+      "evidence": [
+        {
+          "path": "setup/swe85-status-reconciliation-b.json",
+          "sha256": "fa7e0ac006697612f3ab95992fd7585df933b9bc5878f14e6720b6b043b8bc5e"
+        },
+        {
+          "path": "setup/swe85-second-cap-extensions-completion-summary.json",
+          "sha256": "6ce535335c172e3194b0f6a024b5e2133c0eee9245bd6c7db2008bb741184c84"
+        },
+        {
+          "path": "setup/swe85-third-cap-extensions/completion-summary.json",
+          "sha256": "8149f12cbcb5a8e4a552e02241d0c3ebd7e3ff686a99bde8d46659c09e506e5b"
+        },
+        {
+          "path": "setup/swe85-adaptive-suffix4096-candidate/completion-summary.json",
+          "sha256": "a2e2727b807fa873595efe1b9e35e59ba9b1374e39711caf94bfe09cb30474b9"
+        },
+        {
+          "path": "setup/swe85-adaptive-canonicalprefix-suffix8192-p1pinfix-candidate/completion-summary.json",
+          "sha256": "113927ea41d64d5bfb476616a9087230a8c97c6aa2a60e66240cfa0aeda8441d"
+        }
+      ]
+    },
+    {
+      "learned_json_path": "$.swe85_secondcap_observation.next",
+      "current_value": "All eight cap2048 followups complete; one full Pytest5787seed44 requires4096. See swe85_thirdcap_observation.",
+      "proposed_value": "All38 second-cap samples are complete. Recorded later adaptive cap/prefix followups are also closed through suffix8192; next requested diagnostic is the separate Sklearn original-missing-tool suffix2048/cap1024 test after the serial HF block.",
+      "reason": "Pytest seed44 cap4096 completed normally; no longer pending.",
+      "evidence": [
+        {
+          "path": "setup/swe85-status-reconciliation-b.json",
+          "sha256": "fa7e0ac006697612f3ab95992fd7585df933b9bc5878f14e6720b6b043b8bc5e"
+        },
+        {
+          "path": "setup/swe85-second-cap-extensions-completion-summary.json",
+          "sha256": "6ce535335c172e3194b0f6a024b5e2133c0eee9245bd6c7db2008bb741184c84"
+        },
+        {
+          "path": "setup/swe85-adaptive-suffix4096-candidate/full-coordinator-pytest-cap4096.json",
+          "sha256": "d6511e92c8c7ca51771794210c4ec5fd87d9af27b5857427df753b605607c8a2"
+        }
+      ]
+    },
+    {
+      "learned_json_path": "$.swe85_thirdcap_observation.next",
+      "current_value": "One full Pytest5787 call65 seed44 progressing2048 needs4096; served same-seed commoncap must follow in precision panel. Served seed43 localized Deloitte anomaly remains a target.",
+      "proposed_value": "Third-cap extensions are complete. Full Pytest5787 call65 seed44 reached4096 and completed normally after2380 generated tokens; served seed43 is a localized Deloitte other anomaly, not a pending cap continuation.",
+      "reason": "Cap4096 completion supersedes pending-next claim.",
+      "evidence": [
+        {
+          "path": "setup/swe85-status-reconciliation-b.json",
+          "sha256": "fa7e0ac006697612f3ab95992fd7585df933b9bc5878f14e6720b6b043b8bc5e"
+        },
+        {
+          "path": "setup/swe85-third-cap-extensions/completion-summary.json",
+          "sha256": "8149f12cbcb5a8e4a552e02241d0c3ebd7e3ff686a99bde8d46659c09e506e5b"
+        },
+        {
+          "path": "setup/swe85-adaptive-suffix4096-candidate/full-coordinator-pytest-cap4096.json",
+          "sha256": "d6511e92c8c7ca51771794210c4ec5fd87d9af27b5857427df753b605607c8a2"
+        }
+      ]
+    },
+    {
+      "learned_json_path": "$.swe85_adaptive2048_cap1024_observation.next",
+      "current_value": "Both progressing samples completed cap2048; servedsemanticloop, fullmissingtool (independent parser pending); no capbased task failure.",
+      "proposed_value": "Both progressing samples were extended to2048 and resolved as other anomalies (Requests5414 call10 served seed42 and call11 full seed42). Full call11 seed43 localized stray own remains a separate affirmative other anomaly.",
+      "reason": "Parser confirmation/review supersedes pending status.",
+      "evidence": [
+        {
+          "path": "setup/swe85-status-reconciliation-b.json",
+          "sha256": "fa7e0ac006697612f3ab95992fd7585df933b9bc5878f14e6720b6b043b8bc5e"
+        },
+        {
+          "path": "setup/swe85-adaptive-suffix2048-cap1024-execution-candidate/completion-summary.json",
+          "sha256": "b727f5bb2893b24caddf665f1e0a4ee991abd8b8a2edb08caa8438e9fa9e9eb5"
+        }
+      ]
+    },
+    {
+      "learned_json_path": "$.swe85_adaptive8192_observation.interpretation",
+      "current_value": "Full seed43 repeats extra contraction after completed Ive prefix; exact shortened input only, no native identity/incidence or score change. No authorized conditional HF comparison completed. Three accidental commands omitted --validate-only; a partial CPU BF16 artifact contains64 TF positions and zero stored free samples, attributable only to the combined A/B incident. Fresh nine-case/eight-group proposal is prepared but unadmitted at setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed. See setup/swe85-conditional-hf/runner-validation-incident-c.json.",
+      "proposed_value": "Full seed43 repeats extra contraction after completed Ive prefix on the exact shortened 8192-token input; no native identity/incidence or score change. The matched nine-case/eight-group pinned CPU HF comparison is admitted and currently running at group1; no completed result is available yet. Earlier accidental validation attempts remain excluded; the partial CPU BF16 artifact from that incident has64 teacher-forced positions and zero stored free samples.",
+      "reason": "Proposal is now admitted/running; preserve shortened-input and incident caveats.",
+      "evidence": [
+        {
+          "path": "setup/swe85-status-reconciliation-b.json",
+          "sha256": "fa7e0ac006697612f3ab95992fd7585df933b9bc5878f14e6720b6b043b8bc5e"
+        },
+        {
+          "path": "setup/swe85-adaptive-canonicalprefix-suffix8192-p1pinfix-candidate/completion-summary.json",
+          "sha256": "113927ea41d64d5bfb476616a9087230a8c97c6aa2a60e66240cfa0aeda8441d"
+        },
+        {
+          "path": "setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/admission.json",
+          "sha256": "74640276fdf5e463fa968d5d188994622759df96f09d4f408e02712b7d09ae66"
+        },
+        {
+          "path": "setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/progress.json",
+          "sha256": "6e8d750a3f8a7657f552669b0233a1835e30b0f4ffcb4880477743a397f70bae"
+        },
+        {
+          "path": "setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/results/seed42-suffix512/anomaly.requests2931.call20.canonicalprefix.optional-suffix512.hf.private.json",
+          "sha256": "c0fcae77a6dc66cbbb4018dcb76da0dc51aa2a2eeaf67d7c5e2baf7d6e381dcc"
+        },
+        {
+          "path": "setup/swe85-conditional-hf/runner-validation-incident-c.json",
+          "sha256": "54405687018d25d504794afc0743e61222c496f47d22534658d62743c8ac0a6f"
+        }
+      ]
+    },
+    {
+      "learned_json_path": "$.swe85_precision_candidate.next",
+      "current_value": "BF16/HiFi4 head fixed108 panel admitted and running; other groups unchanged. No selected-policy or score change.",
+      "proposed_value": "BF16/HiFi4 head fixed108 panel completed and was rejected: 60 normal,13 other and35 native; 14/15 served-anomalous/full-normal targets remained anomalous. No selected-policy or score change; P2 host wall is excluded from policy speed ranking because of HF-incident contention.",
+      "reason": "Current next says P2 is admitted and running, but it completed.",
+      "evidence": [
+        {
+          "path": "setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/completion-summary.json",
+          "sha256": "254b4f17dd02cbd1d448be1a5a8a940847f689028d0f73843a5a6f80eb626eb4"
+        },
+        {
+          "path": "setup/swe85-status-reconciliation-b.json",
+          "sha256": "fa7e0ac006697612f3ab95992fd7585df933b9bc5878f14e6720b6b043b8bc5e"
+        }
+      ]
+    },
+    {
+      "learned_json_path": "$.swe85_sklearn_suffix512_observation.configuration_correction.status",
+      "current_value": "correction_in_progress",
+      "proposed_value": "corrected_selected_bfp8_arm_completed_root_reviewed; previous served BFP4 comparison preserved as historical extra arm",
+      "reason": "Correction is complete; old BFP4 comparison remains historical.",
+      "evidence": [
+        {
+          "path": "setup/swe85-status-reconciliation-b.json",
+          "sha256": "fa7e0ac006697612f3ab95992fd7585df933b9bc5878f14e6720b6b043b8bc5e"
+        },
+        {
+          "path": "setup/swe85-conditional-hf/sklearn13135-suffix512-head-bfp8-correction/completion-summary.json",
+          "sha256": "ac1a85eb4a83efdb352fbc5f06d664bf49dc04dae8695b8eef603c191994949d"
+        },
+        {
+          "path": "setup/swe85-conditional-hf/sklearn13135-suffix512-head-bfp8-correction/root-review.json",
+          "sha256": "777d1a61090d8b827c76fc905b1a884b58270613d976c5eed73d8a41c2319151"
+        }
+      ]
+    },
+    {
+      "learned_json_path": "$.swe85_sklearn_suffix512_observation.configuration_correction.action",
+      "current_value": "Preserve old BFP4 as extra comparison; exact same512 fixtures/chosen64/seeds42/43/44/cap512 rerun selected BFP8 to fresh directory; full BF16 controls unaffected.",
+      "proposed_value": "Preserve the original suffix512 BFP4 arm as an extra historical comparison; the corrected selected-BFP8 suffix512 arm is complete and root reviewed.",
+      "reason": "Current action still calls for a completed rerun.",
+      "evidence": [
+        {
+          "path": "setup/swe85-conditional-hf/sklearn13135-suffix512-head-bfp8-correction/completion-summary.json",
+          "sha256": "ac1a85eb4a83efdb352fbc5f06d664bf49dc04dae8695b8eef603c191994949d"
+        },
+        {
+          "path": "setup/swe85-conditional-hf/sklearn13135-suffix512-head-bfp8-correction/root-review.json",
+          "sha256": "777d1a61090d8b827c76fc905b1a884b58270613d976c5eed73d8a41c2319151"
+        }
+      ]
+    },
+    {
+      "learned_json_path": "$.swe85_sklearn_suffix512_observation.next",
+      "current_value": "Adapt original suffix to1024, cap1024 to seek original full missing-tool. New full short-loop families42/43 need pinned HF comparisons on same512-ID fixtures; no native-prompt equivalence or score change.",
+      "proposed_value": "Selected-BFP8 suffix1024 served/full controls are complete: served generated49/54/58 tokens (two normal, one extra contraction); full generated55/58/63 tokens (all normal). These stopped naturally before original full missing_tool onset665. Next requested diagnostic is original prompt suffix2048 with chosen64/cap1024 after the serial HF block. A separate two-group HF proposal for the two full suffix512 secondary loops is prepared but unadmitted; it is distinct from the native-pattern HF9 batch. No score/policy change.",
+      "reason": "Replaces completed suffix1024 prep and marks the distinct secondary-loop HF package as unadmitted.",
+      "evidence": [
+        {
+          "path": "setup/swe85-status-reconciliation-b.json",
+          "sha256": "fa7e0ac006697612f3ab95992fd7585df933b9bc5878f14e6720b6b043b8bc5e"
+        },
+        {
+          "path": "setup/swe85-conditional-hf/sklearn13135-missingtool-suffix1024/completion-summary.json",
+          "sha256": "ecbbc26c4f42b9ca977e06f881c9301eecbb3ed59a0336ccfdcfad5bd05e6781"
+        },
+        {
+          "path": "setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/progress.json",
+          "sha256": "6e8d750a3f8a7657f552669b0233a1835e30b0f4ffcb4880477743a397f70bae"
+        },
+        {
+          "path": "setup/swe85-conditional-hf/sklearn13135-secondary-loops-suffix512/admission.json",
+          "sha256": "90388c18405720b1f3898f08831b881332587e638f58d44d526622bbe4435d25"
+        }
+      ]
+    },
+    {
+      "learned_json_path": "$.swe85_sklearn_suffix1024_observation.status",
+      "current_value": "completed_root_and_independent_triage_reconciled",
+      "proposed_value": "completed_root_and_independent_triage_reconciled",
+      "reason": "Use the terminal status from the reviewed completion summary.",
+      "evidence": [
+        {
+          "path": "setup/swe85-status-reconciliation-b.json",
+          "sha256": "fa7e0ac006697612f3ab95992fd7585df933b9bc5878f14e6720b6b043b8bc5e"
+        },
+        {
+          "path": "setup/swe85-conditional-hf/sklearn13135-missingtool-suffix1024/completion-summary.json",
+          "sha256": "ecbbc26c4f42b9ca977e06f881c9301eecbb3ed59a0336ccfdcfad5bd05e6781"
+        }
+      ]
+    },
+    {
+      "learned_json_path": "$.swe85_sklearn_suffix1024_observation.next",
+      "current_value": "HF9 queued now; prepare longer2048prefix test for original missingtool after HF serial block. Separate HF512secondary2 pending.",
+      "proposed_value": "The nine-case/eight-group HF9 batch is admitted and running at group1 with no completed result. After that serial block, the next requested TT diagnostic is the original Sklearn suffix2048/cap1024 test; the separate two-group suffix512 HF comparison remains prepared but unadmitted.",
+      "reason": "Replaces queued wording with current active/next status.",
+      "evidence": [
+        {
+          "path": "setup/swe85-status-reconciliation-b.json",
+          "sha256": "fa7e0ac006697612f3ab95992fd7585df933b9bc5878f14e6720b6b043b8bc5e"
+        },
+        {
+          "path": "setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/progress.json",
+          "sha256": "6e8d750a3f8a7657f552669b0233a1835e30b0f4ffcb4880477743a397f70bae"
+        },
+        {
+          "path": "setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/admission.json",
+          "sha256": "74640276fdf5e463fa968d5d188994622759df96f09d4f408e02712b7d09ae66"
+        },
+        {
+          "path": "setup/swe85-conditional-hf/sklearn13135-secondary-loops-suffix512/admission.json",
+          "sha256": "90388c18405720b1f3898f08831b881332587e638f58d44d526622bbe4435d25"
+        }
+      ]
+    },
+    {
+      "learned_json_path": "$.swe85_conditional_hf_execution.status",
+      "current_value": "running",
+      "proposed_value": "group1_running_no_completed_hf_results",
+      "reason": "Clarifies live progress; partial output is not a completed sample.",
+      "evidence": [
+        {
+          "path": "setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/progress.json",
+          "sha256": "6e8d750a3f8a7657f552669b0233a1835e30b0f4ffcb4880477743a397f70bae"
+        },
+        {
+          "path": "setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/results/seed42-suffix512/anomaly.requests2931.call20.canonicalprefix.optional-suffix512.hf.private.json",
+          "sha256": "c0fcae77a6dc66cbbb4018dcb76da0dc51aa2a2eeaf67d7c5e2baf7d6e381dcc"
+        }
+      ]
+    },
+    {
+      "learned_json_path": "$.swe85_conditional_hf_execution.scope",
+      "current_value": "Matched pinnedCPUHF on shortdiagnosticinputs; serial isolated fromTT. Earlier unadmitted partial attempts retained separately; no result reused.",
+      "proposed_value": "Matched pinned CPU HF on shortened diagnostic inputs; admitted serial batch, currently group1 running. No completed HF result yet; one partial result has status=partial and an empty results array. No exact native-prompt or native-ID replay claim.",
+      "reason": "Clarifies live state and partial output limits.",
+      "evidence": [
+        {
+          "path": "setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/admission.json",
+          "sha256": "74640276fdf5e463fa968d5d188994622759df96f09d4f408e02712b7d09ae66"
+        },
+        {
+          "path": "setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/progress.json",
+          "sha256": "6e8d750a3f8a7657f552669b0233a1835e30b0f4ffcb4880477743a397f70bae"
+        },
+        {
+          "path": "setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/results/seed42-suffix512/anomaly.requests2931.call20.canonicalprefix.optional-suffix512.hf.private.json",
+          "sha256": "c0fcae77a6dc66cbbb4018dcb76da0dc51aa2a2eeaf67d7c5e2baf7d6e381dcc"
+        }
+      ]
+    }
+  ],
+  "non_changes": [
+    "Do not change scores, intervals, task outcomes, per-seed verdicts, or incident attribution.",
+    "Do not call the partial HF artifact complete or use it as a semantic result.",
+    "No canonical learned/results/report edit, inference, device work, or manifest command execution was performed."
+  ]
+}

@@ -1,0 +1,105 @@
+{
+  "status": "read_only_plan_ready_no_replay_performed",
+  "scope": {
+    "tasks": ["psf__requests-1724", "psf__requests-1766"],
+    "changed_files": ["setup/requests-verifier-recovery-plan.json"],
+    "no_container_device_or_network_calls": true,
+    "no_solution_or_reference_patch_applied": true,
+    "scores_unchanged": true
+  },
+  "task_comparison": {
+    "psf__requests-1724": {
+      "image": "v5-swe-offline-verifier:psf__requests-1724",
+      "python_pytest_from_log": "Python 2.7.18 / pytest 4.6.4 / pluggy 0.13.1",
+      "task_test": "test_unicode_method_name",
+      "official_targets": ["httpbin.org/post (HTTP)"],
+      "observed_environment_failures": [
+        "HTTP 429 on a POSTBIN_GET_POST_FILES_WITH_DATA API call (test-stdout.txt:64-78).",
+        "TLS certificate verification error in mixed-case-scheme test (test-stdout.txt:88-188)."
+      ],
+      "pytest_compatibility": "The string-form pytest.raises call is accepted by pytest 4.6.4 and only emits deprecation warnings in the captured output (lines 193-202); retain the recorded environment version."
+    },
+    "psf__requests-1766": {
+      "image": "v5-swe-offline-linked:psf__requests-1766-mode-restored",
+      "python_pytest_from_log": "Python 3.9.20 / pytest 7.4.4 / pluggy 1.0.0",
+      "task_test": "test_DIGESTAUTH_QUOTES_QOP_VALUE",
+      "official_targets": ["httpbin.org/digest-auth/auth/user/pass (HTTPS)", "httpbin.org/post (HTTPS)", "httpbin.org/get (HTTPS)"],
+      "observed_environment_failures": [
+        "HTTP 429 on a POSTBIN_GET_POST_FILES_WITH_DATA API call (test-stdout.txt:66-76).",
+        "The unmodified legacy test_conflicting_post_params uses pytest.raises(ValueError, string) and errors with TypeError under pytest 7.4.4 (lines 54-58, 77-87).",
+        "TLS certificate verification failure in mixed-case-scheme test (lines 88-90, 225-235, 523-528)."
+      ],
+      "pytest_compatibility_candidate": {
+        "pytest": "4.6.11",
+        "pluggy": "0.13.1",
+        "evidence": "This pairing is already observed in the sibling Requests 1724 task image as pytest 4.6.4 / pluggy 0.13.1; pytest 4.6 supports Python 3.9, but this exact newer patch release has not been tested in the task image.",
+        "unresolved": "Confirm offline availability of pytest 4.6.11 and its dependency metadata in the cached image/wheel cache before choosing it. If unavailable, report the legacy test as an environment incompatibility instead of editing tests or changing the official task definition."
+      }
+    }
+  },
+  "network_and_trust_analysis": {
+    "http_target": "Both failing POST cases resolve through test_requests.py's httpbin('post') helper to the public httpbin.org/post service. The logs show HTTP 429, indicating an external rate-limit response; this cannot be repaired by a local Requests code change while preserving the official test target.",
+    "tls_target": "The mixed-case-scheme test builds URLs from httpbin('get') and performs HTTPS requests; it fails with CERTIFICATE_VERIFY_FAILED in both task images.",
+    "trust_source_known": false,
+    "trust_source_note": "The historical Requests source ships requests/cacert.pem, but the logs do not identify the certificate issuer or show that this bundle is current. The host has /etc/ssl/certs/ca-certificates.crt, but its availability/content inside the two task images is unverified. Do not disable verification or replace the task's trust policy blindly.",
+    "candidate_check_inside_each_image": "Read-only, when Docker capacity is available: test -r /etc/ssl/certs/ca-certificates.crt; inspect the Requests default CA path; compare the configured bundle's certificate expiry/issuer to the observed chain using existing local files only. Do not call openssl s_client/curl/requests against a remote host during the no-network phase.",
+    "candidate_repair_if_proven": "If the image already has a system CA bundle that trusts the observed legitimate server chain, run the unchanged suite with REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt (or the proven in-image path). This is only a candidate: neither the in-image file nor issuer match has been validated. If no trusted local source exists, defer TLS assertions until the task's normal public-network verifier can run with a valid trust chain. Never set verify=False.",
+    "http_429_recovery": "No environment-only deterministic repair is established. Retry the unchanged verifier only after the official external service is known to be healthy and not rate limited; do not redirect httpbin, mock its responses, skip these tests, or alter their URLs."
+  },
+  "replay_plan_after_root_approval_and_capacity": {
+    "preserve_original_agent_patches": true,
+    "patch_reconstruction_sources": {
+      "psf__requests-1724": "Native trajectory records requests/models.py: prepare_method changed from str(self.method.upper()) to builtin_str(self.method.upper()); builtin_str is already imported in that file. This is an agent-authored fix, not the SWE-bench oracle patch. Reconstruct a one-hunk diff against the task base commit 1ba83c47ce7b177efe90d5f51f7760680f72eda0 and compare to the transcript before use.",
+      "psf__requests-1766": "Native trajectory command at mini-swe-agent.txt:963-967 changes requests/auth.py's Digest header format to qop=\"auth\", nc=\"%s\", cnonce=\"%s\". Reconstruct only this transcript-authored edit against base commit 847735553aeda6e6633f2b32e14ba14ba86887a4. It is broader than the issue's qop-only requirement because the agent also quoted nc; retain it for faithful replay."
+    },
+    "preflight": [
+      "Wait for the local Docker worker budget to be available; make no concurrent host-device work assumptions.",
+      "Inspect each cached image and its testbed checkout offline. Verify the exact base commit, test patch, test script, Python and pytest versions, CA file presence, and absence of a running owner before starting a container.",
+      "Apply only the reconstructed original agent patch in a disposable task checkout; do not source or apply solution/solve.sh, SWE-bench oracle patches, or any later Requests release.",
+      "Make only an image-local pytest dependency adjustment for 1766 if pytest 4.6.11/pluggy 0.13.1 are already cached and the owner approves it. Keep 1724's recorded pytest 4.6.4 / pluggy 0.13.1 unchanged.",
+      "For any CA-bundle candidate, first verify the actual in-image bundle and chain evidence; pass the env var only to the verifier process and preserve HTTPS verification."
+    ],
+    "replay_commands_template": [
+      "# In a disposable checkout/image with verified base SHA; patch file reconstructed from the agent transcript only:\ngit apply --check /tmp/agent-authored.patch && git apply /tmp/agent-authored.patch",
+      "# Preserve the task's original tests/test.sh unchanged; capture its LOG_FILE and run the existing parser/config exactly as provisioned by the cached verifier image. A diagnostic single-test run may precede it but cannot replace the full verifier result."
+    ],
+    "scoring_rule": "Do not overwrite either original result.json, verifier/report.json, reward.txt, collected results, or learned.json. Store any replay in a clearly separate diagnostic directory and have the root agent decide whether it qualifies for score reconciliation.",
+    "unresolved": [
+      "The in-image CA bundle and the actual public certificate chain/issuer are unknown until inspected locally; no remote check has been run.",
+      "Whether httpbin.org will remain rate limited at replay time is unknown and not locally inferable.",
+      "pytest 4.6.11 is a compatibility candidate only; cached wheel availability in the task image is unverified.",
+      "Harbor result folders retain trajectories and verifier logs but no standalone agent patch artifact; the faithful patch must be reconstructed from recorded agent commands and checked against the recorded final source inspection before replay."
+    ]
+  },
+  "raw_evidence_sources": [
+    "setup/swe-jobs/swe-extended85-head-bfp8/psf__requests-1724__7XetsSF/verifier/test-stdout.txt",
+    "setup/swe-jobs/swe-extended85-head-bfp8/psf__requests-1724__7XetsSF/verifier/report.json",
+    "setup/swe-jobs/swe-extended85-head-bfp8/psf__requests-1724__7XetsSF/agent/mini-swe-agent.txt",
+    "setup/swe-jobs/swe-extended85-head-bfp8/psf__requests-1724__7XetsSF/agent/mini-swe-agent.trajectory.json",
+    "setup/swe-jobs/swe-extended85-head-bfp8/psf__requests-1766__FVMeYgm/verifier/test-stdout.txt",
+    "setup/swe-jobs/swe-extended85-head-bfp8/psf__requests-1766__FVMeYgm/verifier/report.json",
+    "setup/swe-jobs/swe-extended85-head-bfp8/psf__requests-1766__FVMeYgm/agent/mini-swe-agent.txt",
+    "setup/swe-jobs/swe-extended85-head-bfp8/psf__requests-1766__FVMeYgm/agent/mini-swe-agent.trajectory.json",
+    "setup/swe85-candidate/tasks85-offline-verifier/psf__requests-1724/tests/test.sh",
+    "setup/swe85-candidate/tasks85-offline-verifier/psf__requests-1724/tests/config.json",
+    "setup/swe85-candidate/tasks85-offline-verifier/psf__requests-1724/task.toml",
+    "setup/swe85-candidate/tasks85-offline-verifier/psf__requests-1724/environment/Dockerfile",
+    "setup/swe85-candidate/tasks85-offline-verifier/psf__requests-1766/tests/test.sh",
+    "setup/swe85-candidate/tasks85-offline-verifier/psf__requests-1766/tests/config.json",
+    "setup/swe85-candidate/tasks85-offline-verifier/psf__requests-1766/task.toml",
+    "setup/swe85-candidate/tasks85-offline-verifier/psf__requests-1766/environment/Dockerfile",
+    "setup/offline-verifier-build/Dockerfile",
+    "setup/offline-verifier-build/evidence.json",
+    "setup/extended_offline_verifier_preparation.json",
+    "setup/swe-jobs/swe-extended85-head-bfp8_harbor_config.json",
+    "/home/mvasiljevic/v5-agentic/home/.cache/uv/archive-v0/8AkAmJ0lm24h7QIwEFue_/harbor/",
+    "/home/mvasiljevic/v5-agentic/home/.cache/uv/archive-v0/mBADHpk9sllPplmiNY6tW/swebench/"
+  ],
+  "assumption_checks": [
+    "Task test scripts install only the checked-out Requests project with python -m pip install . before applying the official test patch; they do not pin pytest themselves.",
+    "The test scripts run pytest -rA test_requests.py || true and the parser grades the official FAIL_TO_PASS and PASS_TO_PASS lists. Skipping tests or changing their URLs cannot yield an unchanged-verifier recovery.",
+    "The test tasks declare verifier network_mode=public. No test-time HTTP client is redirected to the serving gateway; 172.17.0.1 is only the model API allowed host in Harbor config.",
+    "The offline verifier generic harness pins only parser dependencies swebench==4.0.3, datasets==2.16.1, fastcore==1.10.5; it does not pin testbed pytest or Requests runtime dependencies.",
+    "No source file, task definition, image, score, result artifact, or shared learning file was modified during this read-only analysis."
+  ]
+}

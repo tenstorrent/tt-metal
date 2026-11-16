@@ -1,0 +1,268 @@
+{
+  "status": "completed_all25_root_raw_reviewed",
+  "paired_suffix4096": {
+    "served": {
+      "native": 7,
+      "normal": 4,
+      "other": 1
+    },
+    "full": {
+      "native": 5,
+      "normal": 5,
+      "other": 2
+    }
+  },
+  "separate_full_longprompt_cap4096": {
+    "verdict": "normal",
+    "tokens": 2380,
+    "evidence": "full-coordinator-pytest-cap4096.json"
+  },
+  "subtype_addendum": "contraction-family-root-addendum.json",
+  "forecast_analysis": [
+    "served-forecast-analysis.json",
+    "full-forecast-analysis.json"
+  ],
+  "score_changed": false,
+  "rows": [
+    {
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/fixtures/anomaly.psf__requests-5414.call10.onset.suffix4096.seed42.served.private.json",
+      "mode": "served",
+      "seed": 42,
+      "tokens": 512,
+      "verdict": "native",
+      "reason": "Native caret burst at generated start after existing traceback: 1808 consecutive caret characters before later prose; later coherence does not erase the burst. This is affirmative anomaly, not cap-based task failure.",
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/runs/served/anomaly.psf__requests-5414.call10.onset.suffix4096.seed42.json",
+      "source_sha256": "838d6b3173888be66eec79851c6219bd72c4bdfb79b5d4232963d2b12a380491"
+    },
+    {
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/fixtures/anomaly.psf__requests-5414.call10.onset.suffix4096.seed43.served.private.json",
+      "mode": "served",
+      "seed": 43,
+      "tokens": 512,
+      "verdict": "native",
+      "reason": "Native caret burst at generated start after existing traceback: 1808 consecutive caret characters before later prose; later coherence does not erase the burst. This is affirmative anomaly, not cap-based task failure.",
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/runs/served/anomaly.psf__requests-5414.call10.onset.suffix4096.seed43.json",
+      "source_sha256": "803a0b9cdefee079a11612afeeaf4983c421e2603095d98a33b6db631102ae31"
+    },
+    {
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/fixtures/anomaly.psf__requests-5414.call10.onset.suffix4096.seed44.served.private.json",
+      "mode": "served",
+      "seed": 44,
+      "tokens": 512,
+      "verdict": "native",
+      "reason": "Native caret burst at generated start after existing traceback: 724 consecutive caret characters before later prose; later coherence does not erase the burst. This is affirmative anomaly, not cap-based task failure.",
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/runs/served/anomaly.psf__requests-5414.call10.onset.suffix4096.seed44.json",
+      "source_sha256": "b73e821223a7256a7224e2f3e23d300c19e34ea8a05c866fd39a3fbb1638f7d1"
+    },
+    {
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/fixtures/anomaly.matplotlib__matplotlib-20488.call86.onset.suffix4096.seed42.served.private.json",
+      "mode": "served",
+      "seed": 42,
+      "tokens": 72,
+      "verdict": "normal",
+      "reason": "Prefix ends Ive; introduced is grammatical. Completes canonical bash inspection command at72 tokens. No contraction burst or localized stray observed; does not establish task correctness.",
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/runs/served/anomaly.matplotlib__matplotlib-20488.call86.onset.suffix4096.seed42.json",
+      "source_sha256": "24c228d030db3e9e3d19b2416e6a93a73aee117db65e4628f5352bd211d9f4cf"
+    },
+    {
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/fixtures/anomaly.matplotlib__matplotlib-20488.call86.onset.suffix4096.seed43.served.private.json",
+      "mode": "served",
+      "seed": 43,
+      "tokens": 238,
+      "verdict": "native",
+      "reason": "Conditioned Ive followed by curly ve twice is malformed duplication; additional malformed path/comment text appears later. Canonical command close does not erase localized anomaly; not sustained original burst.",
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/runs/served/anomaly.matplotlib__matplotlib-20488.call86.onset.suffix4096.seed43.json",
+      "source_sha256": "0473b2a180e527d9a609a1f28d65cb7770bb3421012c0affa534ac5fa3ef6d56"
+    },
+    {
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/fixtures/anomaly.matplotlib__matplotlib-20488.call86.onset.suffix4096.seed44.served.private.json",
+      "mode": "served",
+      "seed": 44,
+      "tokens": 138,
+      "verdict": "native",
+      "reason": "Conditioned Ive followed by three extra mixed apostrophe-ve suffixes is localized malformed contraction. Later canonical sed command does not erase it; not sustained original burst.",
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/runs/served/anomaly.matplotlib__matplotlib-20488.call86.onset.suffix4096.seed44.json",
+      "source_sha256": "3eedba823b3b3f55be41012a0a7f87ef45ca6e748a876c8842020f903e2d7edd"
+    },
+    {
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/fixtures/anomaly.call91.canonicalprefix.suffix4096.seed42.served.private.json",
+      "mode": "served",
+      "seed": 42,
+      "tokens": 56,
+      "verdict": "normal",
+      "reason": "Conditioned comment Since Ive + messed up is grammatical; distinct comments close the existing heredoc and canonical tool. No degenerate motif; this does not certify effective repair.",
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/runs/served/anomaly.call91.canonicalprefix.suffix4096.seed42.json",
+      "source_sha256": "7f53e3e2e2a091c7128d21ff8cfdcec099fb58e4851ee94ddafc1e7d44843670"
+    },
+    {
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/fixtures/anomaly.call91.canonicalprefix.suffix4096.seed43.served.private.json",
+      "mode": "served",
+      "seed": 43,
+      "tokens": 38,
+      "verdict": "other",
+      "reason": "Conditioned Since Ive + already\u2019ve already is localized malformed contraction/repetition, before otherwise short canonical tool close. Not sustained native burst.",
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/runs/served/anomaly.call91.canonicalprefix.suffix4096.seed43.json",
+      "source_sha256": "27f7fae378ddd5b117501588bce252cf8e68f25accd3b60b7952e747e19afb28"
+    },
+    {
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/fixtures/anomaly.call91.canonicalprefix.suffix4096.seed44.served.private.json",
+      "mode": "served",
+      "seed": 44,
+      "tokens": 111,
+      "verdict": "normal",
+      "reason": "Conditioned Since Ive + messed up is grammatical; distinct comments and loop close canonical tool. Proposed self.// string replacement is admitted as not working in its comment: code-quality/repair failure is not by itself token degeneration. No sustained motif observed; no task correctness claim.",
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/runs/served/anomaly.call91.canonicalprefix.suffix4096.seed44.json",
+      "source_sha256": "35c67dba68959904229453814285f5eb193d3a2e4aa7e39740ddfe6a767ba813"
+    },
+    {
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/fixtures/anomaly.sphinx-doc__sphinx-10323.call70.onset.suffix4096.seed42.served.private.json",
+      "mode": "served",
+      "seed": 42,
+      "tokens": 48,
+      "verdict": "native",
+      "reason": "Conditioned Ive + explored is grammatical, but and\u2019ve\u2019ve\u2019ve later is a localized malformed contraction. Canonical tool completion does not erase it; not a sustained native burst.",
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/runs/served/anomaly.sphinx-doc__sphinx-10323.call70.onset.suffix4096.seed42.json",
+      "source_sha256": "a6ec360216bf436f7e4c39b04cbde70ca0f4353e9f39bb2b65aef3e83c3ca094"
+    },
+    {
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/fixtures/anomaly.sphinx-doc__sphinx-10323.call70.onset.suffix4096.seed43.served.private.json",
+      "mode": "served",
+      "seed": 43,
+      "tokens": 116,
+      "verdict": "native",
+      "reason": "Conditioned Ive followed by extra curly ve is a localized malformed contraction. Later sed command includes invalid pseudo-comment code; no task correctness claim. Not sustained native burst.",
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/runs/served/anomaly.sphinx-doc__sphinx-10323.call70.onset.suffix4096.seed43.json",
+      "source_sha256": "bfbd718661ba70c712a02aebea1f93378570721cf44cec131b8fed91c40b833c"
+    },
+    {
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/fixtures/anomaly.sphinx-doc__sphinx-10323.call70.onset.suffix4096.seed44.served.private.json",
+      "mode": "served",
+      "seed": 44,
+      "tokens": 62,
+      "verdict": "normal",
+      "reason": "Conditioned Ive + tried is grammatical. Short canonical sed tool call completes. Its self.start_// patch string is invalid/inadequate code, but no affirmative degenerate repetition or unrelated stray word establishes a token anomaly; normal here does not certify patch correctness.",
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/runs/served/anomaly.sphinx-doc__sphinx-10323.call70.onset.suffix4096.seed44.json",
+      "source_sha256": "953f442e20b071c33de51254d53c88ad0cc86b9418c859ac1845f4de58615fd5"
+    },
+    {
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/fixtures/anomaly.psf__requests-5414.call10.onset.suffix4096.seed42.full.private.json",
+      "mode": "full",
+      "seed": 42,
+      "tokens": 512,
+      "verdict": "native",
+      "reason": "2048 consecutive caret characters and no other text, after pinned existing traceback prefix. Native caret degeneration at full precision; matched HF exactsuffix4096 control required.",
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/runs/full/anomaly.psf__requests-5414.call10.onset.suffix4096.seed42.json",
+      "source_sha256": "eeda97d1c40d60a68d6d5a390247b0e25a80b7fc2ef62ba61005d2cfe917b6e5"
+    },
+    {
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/fixtures/anomaly.psf__requests-5414.call10.onset.suffix4096.seed43.full.private.json",
+      "mode": "full",
+      "seed": 43,
+      "tokens": 512,
+      "verdict": "native",
+      "reason": "2048 consecutive caret characters and no other text, after pinned existing traceback prefix. Native caret degeneration at full precision; matched HF exactsuffix4096 control required.",
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/runs/full/anomaly.psf__requests-5414.call10.onset.suffix4096.seed43.json",
+      "source_sha256": "016566e474a73a27c48dc2c39b75c72a6d21c840e51de7c94b45d541dbab9542"
+    },
+    {
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/fixtures/anomaly.psf__requests-5414.call10.onset.suffix4096.seed44.full.private.json",
+      "mode": "full",
+      "seed": 44,
+      "tokens": 512,
+      "verdict": "native",
+      "reason": "2048 consecutive caret characters and no other text, after pinned existing traceback prefix. Native caret degeneration at full precision; matched HF exactsuffix4096 control required.",
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/runs/full/anomaly.psf__requests-5414.call10.onset.suffix4096.seed44.json",
+      "source_sha256": "ff2b6dc9e140ecb05880f8bdfc1af709aaddc0160f07514079437094c81b492f"
+    },
+    {
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/fixtures/anomaly.matplotlib__matplotlib-20488.call86.onset.suffix4096.seed42.full.private.json",
+      "mode": "full",
+      "seed": 42,
+      "tokens": 137,
+      "verdict": "normal",
+      "reason": "Conditioned Ive + broken is grammatical; distinct reflection ends canonical file-inspection command. No duplicated contraction; no task correctness claim.",
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/runs/full/anomaly.matplotlib__matplotlib-20488.call86.onset.suffix4096.seed42.json",
+      "source_sha256": "bf72f9a8e59294f769dce975da2d917e69fd62a1572d778310ce773b74792595"
+    },
+    {
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/fixtures/anomaly.matplotlib__matplotlib-20488.call86.onset.suffix4096.seed43.full.private.json",
+      "mode": "full",
+      "seed": 43,
+      "tokens": 512,
+      "verdict": "native",
+      "reason": "Conditioned Ive plus two extra curly ve suffixes is malformed; later explicit ASCII Iveve duplication (apostrophe-ve repeated) also appears in reasoning. Same duplicated-contraction family as original, independent of later progressing cap.",
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/runs/full/anomaly.matplotlib__matplotlib-20488.call86.onset.suffix4096.seed43.json",
+      "source_sha256": "2fc88476353a38633134bcb85d1fbf8624f99d8e55bb8273e42fca2898bc594d"
+    },
+    {
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/fixtures/anomaly.matplotlib__matplotlib-20488.call86.onset.suffix4096.seed44.full.private.json",
+      "mode": "full",
+      "seed": 44,
+      "tokens": 69,
+      "verdict": "normal",
+      "reason": "Conditioned Ive + messed up is grammatical; canonical file-inspection command completes, no duplicated contraction.",
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/runs/full/anomaly.matplotlib__matplotlib-20488.call86.onset.suffix4096.seed44.json",
+      "source_sha256": "0cc72d580c11939d9ca44a66580d36ec9aec81d578f59e13c26a17ec480bbe1e"
+    },
+    {
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/fixtures/anomaly.call91.canonicalprefix.suffix4096.seed42.full.private.json",
+      "mode": "full",
+      "seed": 42,
+      "tokens": 39,
+      "verdict": "other",
+      "reason": "Conditioned Since Ive + really messed it up is grammatical, but the invented phrase a's la's la's l's logic is localized nonsensical token repetition before command close. Not the original duplicated-ve motif.",
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/runs/full/anomaly.call91.canonicalprefix.suffix4096.seed42.json",
+      "source_sha256": "395c749ff59a128749ec3606ada859cca84798e9be3cc73a67bbeac539eee3b4"
+    },
+    {
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/fixtures/anomaly.call91.canonicalprefix.suffix4096.seed43.full.private.json",
+      "mode": "full",
+      "seed": 43,
+      "tokens": 148,
+      "verdict": "normal",
+      "reason": "Conditioned Since Ive + already done that is grammatical; distinct indentation patch script completes canonical tool close. No malformed contraction; not patch correctness.",
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/runs/full/anomaly.call91.canonicalprefix.suffix4096.seed43.json",
+      "source_sha256": "0e7ea7bee6d85b8e910228abcb95c665ba62b7c50c09ec0ed21be04fa582373d"
+    },
+    {
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/fixtures/anomaly.call91.canonicalprefix.suffix4096.seed44.full.private.json",
+      "mode": "full",
+      "seed": 44,
+      "tokens": 264,
+      "verdict": "normal",
+      "reason": "Conditioned Since Ive + really messed it up is grammatical; distinct file-rewrite loop completes canonical tool close. No duplicated contraction.",
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/runs/full/anomaly.call91.canonicalprefix.suffix4096.seed44.json",
+      "source_sha256": "aea5b2d0e873e71c856b0e3c22802b30dd468b94d2b9bf8290b7dbd71253a183"
+    },
+    {
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/fixtures/anomaly.sphinx-doc__sphinx-10323.call70.onset.suffix4096.seed42.full.private.json",
+      "mode": "full",
+      "seed": 42,
+      "tokens": 73,
+      "verdict": "native",
+      "reason": "Conditioned Ive followed by two additional ASCII apostrophe-ve suffixes duplicates the original malformed contraction family; canonical tool close does not erase it.",
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/runs/full/anomaly.sphinx-doc__sphinx-10323.call70.onset.suffix4096.seed42.json",
+      "source_sha256": "c697bf38a482271dcb854202205ffa7f638da022d5d8eac243c0298b87070f1f"
+    },
+    {
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/fixtures/anomaly.sphinx-doc__sphinx-10323.call70.onset.suffix4096.seed43.full.private.json",
+      "mode": "full",
+      "seed": 43,
+      "tokens": 102,
+      "verdict": "normal",
+      "reason": "Conditioned Ive + explored is grammatical; canonical sed command completes, no duplicated contraction or token loop. Not task correctness.",
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/runs/full/anomaly.sphinx-doc__sphinx-10323.call70.onset.suffix4096.seed43.json",
+      "source_sha256": "feebcee326bad1b086bf1ce757049ebe245dbe7adc24e3bc63ed36a517d215eb"
+    },
+    {
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/fixtures/anomaly.sphinx-doc__sphinx-10323.call70.onset.suffix4096.seed44.full.private.json",
+      "mode": "full",
+      "seed": 44,
+      "tokens": 512,
+      "verdict": "other",
+      "reason": "Canonical tool starts after grammatical Ive tried, then hundreds of C/ fragments repeat inside sed replacement until512. Affirmative token loop, not the original contraction motif; not a cap-based task failure.",
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/runs/full/anomaly.sphinx-doc__sphinx-10323.call70.onset.suffix4096.seed44.json",
+      "source_sha256": "c193e6752a5481dd12dfc3e5942b8d687e15bd58f4660dddc252ec6dd49aead0"
+    }
+  ]
+}

@@ -1,0 +1,57 @@
+{
+  "reviewer": "root",
+  "reviewed_unix": 1794727725.139877,
+  "rows": [
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/runs/served/anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix512.seed42.json",
+      "sha256": "923e900812390a6cfe76172d3a34a9e9f02858ace8f6206d6d564e12baa53fd5",
+      "seed": 42,
+      "tokens": 87,
+      "verdict": "normal",
+      "reason": "Grammatical applied continuation and completion claim; quoted invalid word has spacing typo, no token degeneration. No task-success claim.",
+      "trace_counters_delta": {
+        "model_replays": 86,
+        "sample_replays": 86,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 86,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/runs/served/anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix512.seed43.json",
+      "sha256": "15488420a35897b7c8898161d743e349aaeda40d182ffcb100044183fed77125",
+      "seed": 43,
+      "tokens": 512,
+      "verdict": "native",
+      "reason": "Repeated apostrophe-ve token loop; seed43 starts immediately, seed44 after short applied-fix phrase. Native contraction-family repetition; independent of cap.",
+      "trace_counters_delta": {
+        "model_replays": 511,
+        "sample_replays": 511,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 511,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/runs/served/anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix512.seed44.json",
+      "sha256": "c9e2b3ba0cd30c5811201e1a79d7141beef49a9409b4df1eadb51e6bb84192fc",
+      "seed": 44,
+      "tokens": 512,
+      "verdict": "other",
+      "reason": "After grammatical applied-fix continuation, and-ve becomes a repeated apostrophe-ve loop to512. Related contraction degeneration, but original completed-Ive boundary motif is absent; other anomaly rather than native onset reproduction.",
+      "trace_counters_delta": {
+        "model_replays": 511,
+        "sample_replays": 511,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 511,
+        "captures": 0
+      }
+    }
+  ]
+}

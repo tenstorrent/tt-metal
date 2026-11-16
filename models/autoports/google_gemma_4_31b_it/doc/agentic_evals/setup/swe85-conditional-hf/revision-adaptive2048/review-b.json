@@ -1,0 +1,97 @@
+{
+  "reviewer": "independent host-only review",
+  "scope": "proposal/commands/manifests/fixtures/source hashes/forecast/runner inspection only; no HF process, model load, admission, or device work",
+  "overall": "review_pass_after_metadata_only_corrections;_conditional_unadmitted",
+  "coverage": {
+    "candidate_count": 5,
+    "cases": [
+      "anomaly.requests2931.call20.canonicalprefix.optional-suffix512",
+      "anomaly.sympy__sympy-14248.call53.onset.optional-suffix512",
+      "anomaly.pytest-dev__pytest-7432.call19.onset.optional-suffix512",
+      "anomaly.psf__requests-5414.call9.onset",
+      "anomaly.psf__requests-5414.call11.onset"
+    ],
+    "group_counts": [
+      2,
+      1,
+      1,
+      1
+    ],
+    "validation_groups": 4,
+    "all_validation_returncodes_zero": true,
+    "no_missing_or_duplicate_candidate_names": true,
+    "details": "commands.json serial groups 1\u20134 cover exactly five unique candidate names. cpu-validation.json has four corresponding successful validate-only rows (2,1,1,1); proposal validation text is now corrected to four groups."
+  },
+  "fixture_and_positive_evidence": {
+    "fixture_sha256_matches_source_integrity": "5/5",
+    "suffix_lengths": {
+      "512": 3,
+      "1024": 1,
+      "2048": 1
+    },
+    "chosen_token_lengths": "64 for every candidate",
+    "exact_prompt_suffix_provenance": "The 1024 and 2048 Requests fixtures record exact tail slices from source prompts, with no rerendering; the 512 candidates are the referenced saved suffix fixtures. Source-integrity records 2048 provenance slice 5178:7226 of 7226 source IDs and exact-last-2048 method.",
+    "positive_basis": "Source-integrity says full and served seed44 at the same Requests5414 call11 2048 suffix each generated 512 tokens with only IDs [1390,107,147], and chosen64/sampling were preserved. This is directly relevant full-mode native-motif evidence; it remains an onset/suffix diagnostic, not proof of full-context equivalence."
+  },
+  "commands": {
+    "serial_groups": 4,
+    "one_model_load_per_group": true,
+    "offline_flags": true,
+    "pinned_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+    "thread_caps": "OMP/MKL/OpenBLAS 16; runner also uses torch.set_num_threads(16)",
+    "runner_sha256_matches": true,
+    "runner_sha256": "aafe67c88bb5a1eb38b8718570bbddd5749e2a9ecbb9dd19cdb100a49572c03e",
+    "comparison_partitioning": "Each command compares only against same-name served/full jobs from the same suffix family. All ten referenced source comparison files exist. Runner checks forced-token equality before calculating top1 agreement/logprob deltas.",
+    "teacher_forcing_and_free_run": "Commands use --tokens 512, --prefill-chunk 512, and --seeds 42 or 44 (one diagnostic free-run per case in the executed command). The 64 chosen positions are compared by runner when present. HF RNG is a new trial; it is not a TT token-for-token replay.",
+    "manifest_hash_references_current": true,
+    "manifest_hash_references_note": "commands.json and cpu-validation.json hash references refreshed to match metadata-only corrected manifests; execution argv/flags, group membership, fixture paths, sampling, and generation work were not changed."
+  },
+  "metadata_issues": [
+    {
+      "status": "corrected",
+      "before": "candidate manifest free_run_trials was 3 for each entry; README requested three seeds 42\u201344 for the new case.",
+      "after": "all five manifest entries free_run_trials=1; README states one diagnostic seed 44 for the added case and one trial per candidate, matching commands."
+    },
+    {
+      "status": "corrected",
+      "before": "proposal validation text said three manifests.",
+      "after": "proposal now says all four manifest groups passed validate-only."
+    },
+    {
+      "status": "corrected",
+      "before": "source-integrity SHA for seed44 suffix2048 manifest was 39c6c64e0b98bc9258fb2f33983ba34c4a487a956c5465b51b0e165dcc974847.",
+      "after": "source-integrity now records 8be05cbc74c014acefe3372df69386534f31330b7276bdac0bed35e154fbd5c2, matching the corrected candidate manifest; its candidate_manifests alias is also updated."
+    }
+  ],
+  "forecast": {
+    "basis": "All eight historical result files in ../cost-basis.json match their declared SHA256 and contain 512-token free generations; recomputed median incremental wall is 1040.1832335699582 seconds, matching the forecast.",
+    "arithmetic": "Recomputed group point and interval totals match: 5920.916 seconds point, range 4720\u201310320 seconds; 4 serial groups and 720 seconds total process/model-load margin.",
+    "caveat": "The new 2048-prompt group's 1220.183-second point is a placeholder based on the 512-prefix median, not measured. Its 980\u20133380 second group range is a sensitivity envelope, not a bound; the proposal explicitly acknowledges increased prefill may exceed it. All group upper envelopes are below 3600-second timeouts."
+  },
+  "gates": "Proposal/commands require frozen positive set, completion of all TT queues, zero device owners, fresh MemAvailable >=100GB, no HF/model process, and rechecking hashes. No authorization/admission is inferred by this review.",
+  "correction_record": {
+    "scope": "Metadata only; no command argv, fixture IDs/token IDs, sampling settings, or case membership changed. No HF launch or --validate-only rerun.",
+    "before_hashes": {
+      "proposal.json": "a4e8bb2d84701bca0de8cf8548113e8ad0b3794da93eb44b25ca4ad4823b89a0",
+      "README.md": "not recorded before correction",
+      "source-integrity.json": "a3696dee2b48fc2e99ecb8d237b383540747dbf7a5def54db228d6b036de5508",
+      "commands.json": "6847deb7ccb6874f0c7891586eaba99986bff68e9ebef14a8a32a2863ae5590b",
+      "cpu-validation.json": "158924b47cff7977a47c446e7c9ea633cfb5557b89b75904663d12f070fed9a2",
+      "seed42_suffix512_manifest": "16b10f6da567a27cff6f7ef0bfb40be6acbbe4487dddff68f0b684baed77e842",
+      "seed44_suffix512_manifest": "db7fd3763b4b0606edb4773ef53d0217a6723d1cc06df824842020b25c8a262e",
+      "seed44_suffix1024_manifest": "d5cff440b07e98ac652ffc8890929717f2318b9d0f5e6453a449251c2d303224",
+      "seed44_suffix2048_manifest": "390cf4e06198033e9ca8ea57fda92b31cfcb8751e02552e9cff4aaa86222373a"
+    },
+    "after_hashes": {
+      "proposal.json": "7c41af9dd06504e694b1b14e9e94d64e7b0135038d2da81857c1a51ac7cb6471",
+      "README.md": "4b5c4d316dd39628c1a5e52b5866879a6fcc4c16bdef384d2f4c70f56bf77e35",
+      "source-integrity.json": "c1adec63f1b10dae6d80e40081c8d2ad762a549d8be240266190a947b1bce055",
+      "commands.json": "4e52ee236a8361287d8a584c499dee3dba82d3002a97bd011a443a412fec2038",
+      "cpu-validation.json": "60c9158d1e34a0c0f40b537b7016d20f3a87e7b4fe0dd91da5bd98678be1f05e",
+      "seed42_suffix512_manifest": "3ee6b4e9c15a7bee52da5b083bba00f5c334acb9f4062e6b92eaad5861e8c6cf",
+      "seed44_suffix512_manifest": "7635a0b1f75bfc8edb430bcfd33ec03926f8e863434878476f3d8cc5a83d5a0b",
+      "seed44_suffix1024_manifest": "b9602b3c8ba1a97f7f64a73e7ac2e502edd12d6e6ccb1212a9dec39ec6c1a4a1",
+      "seed44_suffix2048_manifest": "8be05cbc74c014acefe3372df69386534f31330b7276bdac0bed35e154fbd5c2"
+    }
+  }
+}

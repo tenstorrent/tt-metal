@@ -1,0 +1,77 @@
+{
+  "status": "candidate_only_not_executable_with_frozen_tool",
+  "required_modes": [
+    "hf",
+    "tt-full"
+  ],
+  "commands": [
+    {
+      "name": "hf",
+      "timeout_seconds": 1800,
+      "argv": [
+        "timeout",
+        "2400",
+        "env",
+        "HF_HUB_OFFLINE=1",
+        "HF_DATASETS_OFFLINE=1",
+        "HF_HUB_DISABLE_TELEMETRY=1",
+        "OMP_NUM_THREADS=16",
+        "MKL_NUM_THREADS=16",
+        "OPENBLAS_NUM_THREADS=16",
+        "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tools/actual_branch_logits.py",
+        "--execute",
+        "--mode",
+        "hf",
+        "--case",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-loop-branch-investigation/actual-branch-logits/fixture/anomaly.psf__requests-5414.call11.onset.suffix2048.private.json",
+        "--branches",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-loop-branch-investigation/actual-branch-logits/later-loop-conditional-candidate/branches.json",
+        "--output-prefix",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-loop-branch-investigation/actual-branch-logits/later-loop-conditional-candidate/outputs/hf"
+      ]
+    },
+    {
+      "name": "tt-full",
+      "timeout_seconds": 1800,
+      "argv": [
+        "timeout",
+        "1800",
+        "env",
+        "HF_HUB_OFFLINE=1",
+        "HF_DATASETS_OFFLINE=1",
+        "HF_HUB_DISABLE_TELEMETRY=1",
+        "READINESS_TRACE_REGION_SIZE=134217728",
+        "OMP_NUM_THREADS=16",
+        "MKL_NUM_THREADS=16",
+        "OPENBLAS_NUM_THREADS=16",
+        "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tools/actual_branch_logits.py",
+        "--execute",
+        "--mode",
+        "tt-full",
+        "--case",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-loop-branch-investigation/actual-branch-logits/fixture/anomaly.psf__requests-5414.call11.onset.suffix2048.private.json",
+        "--branches",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-loop-branch-investigation/actual-branch-logits/later-loop-conditional-candidate/branches.json",
+        "--build-kwargs-file",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_build_kwargs.json",
+        "--output-prefix",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-loop-branch-investigation/actual-branch-logits/later-loop-conditional-candidate/outputs/tt-full"
+      ]
+    }
+  ],
+  "blocking_tool_contract": {
+    "tool_path": "models/autoports/google_gemma_4_31b_it/tools/actual_branch_logits.py",
+    "tool_sha256": "fa2eaf9f66a6a36c57385351a0b3e838edeabac4644c77c98aa81a817e3e3d5e",
+    "facts": [
+      "validate_case_and_branches currently requires exactly two named six-token branches; candidate has one named 30-token branch.",
+      "validate_branch_provenance currently compares the complete candidate branch to a six-token observed slice.",
+      "Therefore both commands would fail input validation before model loading with the frozen tool hash."
+    ],
+    "minimum_future_revision": "Add an explicit reviewed input contract for one named 30-token TT-history branch, validate all30 IDs against the pinned full-TT seed44 source, and keep the existing original diagnostic defaults unchanged. Re-pin/re-review before any execution."
+  },
+  "no_execution_authority": "Commands are inert proposals only. Existing root admission covers the original three-mode six-token candidate, not this candidate."
+}

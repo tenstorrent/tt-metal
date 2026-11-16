@@ -1,0 +1,73 @@
+{
+  "job": "anomaly.psf__requests-5414.call9.onset",
+  "mode": "conditional_hf_cpu_adaptive_suffix1024",
+  "seed": 44,
+  "verdict": "reproduced_native_motif",
+  "evidence": {
+    "hf_result": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/results/seed44-suffix1024/anomaly.psf__requests-5414.call9.onset.hf.private.json",
+      "sha256": "4f1a6497eeb57b8754ce74bea702170078d7ce7e93fef610357f785044b2b045",
+      "status": "complete",
+      "case_sha256": "9e19aaa5b7f11f026931ef8a8ca1e49bb070a338805b3568cc89dd5065e41e7c",
+      "revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+      "device": "cpu",
+      "prompt_tokens": 1024,
+      "prompt_source": "Saved prompt_token_ids, no chat rerender",
+      "results[0].seed": 44,
+      "results[0].generated_tokens": 512,
+      "results[0].streamed_generated_tokens": 512,
+      "results[0].requested_tokens": 512,
+      "results[0].unique_generated_token_id_count": 1,
+      "results[0].generated_token_id": 172109,
+      "results[0].text_chars": 2048,
+      "results[0].text_all_carets": true,
+      "results[0].tail_ratio": 0.01123046875,
+      "results[0].tail_distinct": 1,
+      "results[0].flag": true,
+      "results[0].wall_s": 1167.4797154800035,
+      "total_wall_s": 1201.287358150119,
+      "case_metadata.call": 9,
+      "case_metadata.motif": "^^^^",
+      "case_metadata.onset_token_index": 216,
+      "case_metadata.native_completion_tokens": 32768,
+      "case_metadata.native_seed": null,
+      "case_metadata.sampling": {"temperature": 1.0, "top_p": 0.95, "top_k": 20}
+    },
+    "fixture": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/fixtures/anomaly.psf__requests-5414.call9.onset.suffix1024.private.json",
+      "sha256": "9e19aaa5b7f11f026931ef8a8ca1e49bb070a338805b3568cc89dd5065e41e7c",
+      "prompt_ids": 1024,
+      "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-requests5414-caret-controls/psf__requests-5414.call9.onset.private.json",
+      "source_case_sha256": "5024622915942584d71a4eebe667180b660a2f3c45955bddb72de8e019ad7181",
+      "source_prompt_ids": 8383,
+      "exact_slice": "source prompt_token_ids[7359:8383]",
+      "suffix_ids_match_source": true,
+      "source_metadata_native_prompt_tokens": 8168,
+      "source_metadata_reconstructed_prompt_tokens": 8167,
+      "scope_caveat": "This diagnostic conditions on only the exact final 1024 IDs of the reconstructed source prompt, not the full native context. Native prompt/output IDs and native seed are unavailable; this is not exact native replay."
+    },
+    "matched_tt": {
+      "served": {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/served/anomaly.psf__requests-5414.call9.onset.json",
+        "sha256": "ab28180a1cce9bb9eec291201f38527c99ec0fac41b22ae84abca5774091d969",
+        "seed": 44,
+        "tokens": 512,
+        "text_all_carets": true,
+        "sampling": {"temperature": 1.0, "top_p": 0.95, "top_k": 20},
+        "runtime_precision": {"config_id": "stage12_head_bfp8_lofi", "weight_groups": {"attention": "bfp4", "mlp": "bfp4", "down": "bfp4", "lm_head": "bfp8_lofi"}, "compute_fidelities": {"attention": "LoFi", "mlp": "LoFi", "down": "LoFi", "lm_head": "LoFi"}}
+      },
+      "full": {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/full/anomaly.psf__requests-5414.call9.onset.json",
+        "sha256": "dec3d27c4021946b317f76a9bac5049e6ecadbd2f5dcc60fd9d67fd95951be71",
+        "seed": 44,
+        "tokens": 512,
+        "text_all_carets": true,
+        "sampling": {"temperature": 1.0, "top_p": 0.95, "top_k": 20},
+        "runtime_precision": {"config_id": "stage12_bf16_hifi4_diagnostic", "weight_groups": {"attention": "bf16", "mlp": "bf16", "down": "bf16", "lm_head": "bf16"}, "compute_fidelities": {"attention": "HiFi4", "mlp": "HiFi4", "down": "HiFi4", "lm_head": "HiFi4"}}
+      }
+    },
+    "native_motif": "The source call9 onset is the pathological caret repetition (metadata motif `^^^^`, onset token index 216); the native reconstructed completion reached its 32768-token cap. The HF sample is a sustained all-caret run for all 512 tokens, and both same-seed matched TT modes emit 512 carets as well."
+  },
+  "confidence": "high for reproducing the repeated-caret motif on this shortened 1024-token suffix; not evidence of full-context equivalence",
+  "cap_notes": "HF generated exactly 512/512 tokens with no stop and remained all carets through the cap, not coherent progress cut off mid-response. HF trial wall was 1167.479715 seconds; total_wall_s=1201.287358 seconds is runner cumulative across loaded cases. Group wall 1205.438614 seconds is within the 980–1780-second forecast envelope. HF uses CPU BF16 weights; matched TT served uses the stage12 BFP8-LoFi lm_head with BFP4-LoFi other weight groups; full uses BF16/HiFi4 throughout. All three use diagnostic seed44 and temperature1.0/top_p0.95/top_k20, but HF RNG differs and native seed is absent. The source candidate records `executed:false`; no generated tool/code was executed and no full-request or task-solution claim is made."
+}

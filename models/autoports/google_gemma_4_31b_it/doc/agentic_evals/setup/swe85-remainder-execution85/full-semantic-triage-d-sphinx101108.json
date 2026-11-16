@@ -1,0 +1,85 @@
+{
+  "rows": [
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset",
+      "mode": "full",
+      "seed": 42,
+      "verdict": "inconclusive",
+      "evidence": "Continues the conditioned Sphinx include-directive investigation coherently; generated suffix does not reproduce the native doubled-contraction motif (`'s\u2019s`).",
+      "confidence": "high",
+      "cap_notes": "All 3 seeds reach the 256-token cap while progressing; no completed-normal conclusion."
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset",
+      "mode": "full",
+      "seed": 43,
+      "verdict": "inconclusive",
+      "evidence": "Continues the conditioned Sphinx include-directive investigation coherently; generated suffix does not reproduce the native doubled-contraction motif (`'s\u2019s`).",
+      "confidence": "high",
+      "cap_notes": "All 3 seeds reach the 256-token cap while progressing; no completed-normal conclusion."
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset",
+      "mode": "full",
+      "seed": 44,
+      "verdict": "inconclusive",
+      "evidence": "Continues the conditioned Sphinx include-directive investigation coherently; generated suffix does not reproduce the native doubled-contraction motif (`'s\u2019s`).",
+      "confidence": "high",
+      "cap_notes": "All 3 seeds reach the 256-token cap while progressing; no completed-normal conclusion."
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset",
+      "mode": "full",
+      "seed": 42,
+      "verdict": "normal",
+      "evidence": "Completes the conditioned question with a valid structured Python inspection command; no malformed call:bash-newline/prose tool-name motif is reproduced.",
+      "confidence": "high",
+      "cap_notes": "Each short continuation ends at a valid tool-response boundary before cap."
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset",
+      "mode": "full",
+      "seed": 43,
+      "verdict": "normal",
+      "evidence": "Completes the conditioned question with a valid structured Python inspection command; no malformed call:bash-newline/prose tool-name motif is reproduced.",
+      "confidence": "high",
+      "cap_notes": "Each short continuation ends at a valid tool-response boundary before cap."
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset",
+      "mode": "full",
+      "seed": 44,
+      "verdict": "normal",
+      "evidence": "Completes the conditioned question with a valid structured Python inspection command; no malformed call:bash-newline/prose tool-name motif is reproduced.",
+      "confidence": "high",
+      "cap_notes": "Each short continuation ends at a valid tool-response boundary before cap."
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call108.onset",
+      "mode": "full",
+      "seed": 42,
+      "verdict": "normal",
+      "evidence": "Completes the partial path as a valid site-packages path and cleanly issues `rm -rf reproduction/build` followed by `cd reproduction && sphinx-build . build`; no native stray `singkat` token appears.",
+      "confidence": "high",
+      "cap_notes": "Short complete tool continuation; no cap."
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call108.onset",
+      "mode": "full",
+      "seed": 43,
+      "verdict": "normal",
+      "evidence": "Completes the partial path as a valid site-packages path and cleanly issues `rm -rf reproduction/build` followed by `cd reproduction && sphinx-build . build`; no native stray `singkat` token appears.",
+      "confidence": "high",
+      "cap_notes": "Short complete tool continuation; no cap."
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call108.onset",
+      "mode": "full",
+      "seed": 44,
+      "verdict": "normal",
+      "evidence": "Completes the partial path as a valid site-packages path and cleanly issues `rm -rf reproduction/build` followed by `cd reproduction && sphinx-build . build`; no native stray `singkat` token appears.",
+      "confidence": "high",
+      "cap_notes": "Short complete tool continuation; no cap."
+    }
+  ]
+}

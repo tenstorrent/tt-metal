@@ -1,0 +1,17 @@
+{
+  "status": "root_static_review_passed_unadmitted",
+  "reviewer": "root",
+  "utc": "2026-11-15T08:51:24.834562+00:00",
+  "proposal_sha256": "4173746c27097acc3eaf778ce82bc3657e098b09ac6d561c0a7c3cc7e208388a",
+  "command_sha256": "2cfe6313cfa53445e243191711045702c54b807838f7fc4ac316e2ff4677d444",
+  "fixture_sha256": "acfe5c87d2b16de1f566b55b295f632beac9db6269121545a105882a9b67f24e",
+  "forecast_sha256": "19e3a080e40713f303e7d91de342039abd8cc7d63543c920c191b7b373570dd4",
+  "checks": [
+    "Exact suffix512 IDs plus first actual full-TT seed44 token verified",
+    "Chosen63 IDs are exact source chosen64[1:64]",
+    "Frozen offline pinned HF command seed44/cap512/chunk512 read",
+    "Forecast point1051.84s range841.907\u20131268.86s; timeout2400s; observed basis is first HF case cumulative time, used once"
+  ],
+  "serial_plan": "After primary HF9 and before TT resumes, subject to current owner/RAM checks and terminal forecast review. No admission or execution by this record.",
+  "interpretation": "Conditional continuation after one observed TT token, not same-prompt equal-incidence evidence or a replacement for original normal HF sample."
+}

@@ -1,0 +1,56 @@
+[
+  {
+    "name": "anomaly.psf__requests-1921.call1.onset.seed42.cap256",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-getall-call1-controls/psf__requests-1921.call1.onset.private.json",
+    "branches": [],
+    "free_run_tokens": 256,
+    "free_run_trials": 1,
+    "source_onset": "anomaly.psf__requests-1921.call1.onset.seed42.cap256",
+    "seed": 42
+  },
+  {
+    "name": "anomaly.psf__requests-1921.call1.onset.seed43.cap256",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.psf__requests-1921.call1.onset.seed43.private.json",
+    "branches": [],
+    "free_run_tokens": 256,
+    "free_run_trials": 1,
+    "source_onset": "anomaly.psf__requests-1921.call1.onset.seed43.cap256",
+    "seed": 43
+  },
+  {
+    "name": "anomaly.psf__requests-1921.call1.onset.seed44.cap256",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.psf__requests-1921.call1.onset.seed44.private.json",
+    "branches": [],
+    "free_run_tokens": 256,
+    "free_run_trials": 1,
+    "source_onset": "anomaly.psf__requests-1921.call1.onset.seed44.cap256",
+    "seed": 44
+  },
+  {
+    "name": "anomaly.pylint-dev__pylint-4551.call1.onset.seed42.cap256",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-getall-call1-controls/pylint-dev__pylint-4551.call1.onset.private.json",
+    "branches": [],
+    "free_run_tokens": 256,
+    "free_run_trials": 1,
+    "source_onset": "anomaly.pylint-dev__pylint-4551.call1.onset.seed42.cap256",
+    "seed": 42
+  },
+  {
+    "name": "anomaly.pylint-dev__pylint-4551.call1.onset.seed43.cap256",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.pylint-dev__pylint-4551.call1.onset.seed43.private.json",
+    "branches": [],
+    "free_run_tokens": 256,
+    "free_run_trials": 1,
+    "source_onset": "anomaly.pylint-dev__pylint-4551.call1.onset.seed43.cap256",
+    "seed": 43
+  },
+  {
+    "name": "anomaly.pylint-dev__pylint-4551.call1.onset.seed44.cap256",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.pylint-dev__pylint-4551.call1.onset.seed44.private.json",
+    "branches": [],
+    "free_run_tokens": 256,
+    "free_run_trials": 1,
+    "source_onset": "anomaly.pylint-dev__pylint-4551.call1.onset.seed44.cap256",
+    "seed": 44
+  }
+]

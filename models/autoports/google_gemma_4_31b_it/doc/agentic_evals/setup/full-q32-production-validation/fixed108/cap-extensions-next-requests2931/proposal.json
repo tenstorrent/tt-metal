@@ -1,0 +1,14 @@
+{
+  "status": "candidate_only_not_admitted",
+  "purpose": "Continue only Requests2931 call20 seeds42 and44, both still progressing at512 full-BF16/Q32 diagnostic tokens.",
+  "source_cases": "Exact original fixed108 fixtures, unchanged prompt IDs.",
+  "sampling": "Same temperature1.0/top_p0.95/top_k20, seeds42/44, one trial, branches[] exactly.",
+  "runtime_policy": "All-group BF16/HiFi4, BF16 KV, current Q32 geometry.",
+  "identity_gate": "Require generated IDs[0:512] exactly equal pinned cap512 output before interpreting the extension.",
+  "source_pins": "source-pins.json",
+  "command": "command.json",
+  "forecast": "forecast.json",
+  "admission_required": true,
+  "no_execution_performed": true,
+  "limitations": "Cap512 outputs are progressing and inconclusive, not failures; this package is inert pending root admission."
+}

@@ -1,0 +1,73 @@
+{
+  "status": "independent_followup_review_repairs_verified_candidate_only",
+  "scope": "Follow-up to review-c: verify semantic evidence hashes, refreshed dependent pins, and the inert seven-group HF driver. No execution or admission.",
+  "reviewed_hashes": {
+    "proposal.json": "1d2fff2ebb652fe20f92240396e22c75d7afc11aad733553743536d3e0ddedef",
+    "preparation.json": "bdbd3c07d6f3041284066ddf01b0458ba95d5f17063ef9fa5b8f732362132842",
+    "commands.json": "fd7bf6d4c3abb8af5fcd8330a1a09997a92a0f6363fda9d2e9da1487607bfbc7",
+    "source-integrity.json": "b74be29ac34fdbc5ef2af25d837b64e804dfce7bd732e94a6ebb2ae04325d4d6",
+    "admission.json": "068f97f3501e78c5c849726026dd3ebb2cc1fce6d4e00a6bb8440bc22beec18d",
+    "forecast.json": "85f3d46bd51531155a0734bb63ef7481f760b842a91adcb0c7aca8d739ec2358",
+    "run_expanded_after_predecessors.py": "285de701c70b01e973006992bc7659f82e6e832323feee1846197eefe09f7c60"
+  },
+  "semantic_evidence_hashes": {
+    "requests5414_call10_seed42_full_suffix4096": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/triage-b.json",
+      "sha256": "57bbf5305a4fd0b6eeb6a105fc5a5afdf29ab42381b78fb99e74020f0e7594d0",
+      "purpose": "Served/full suffix4096 semantic triage, including the full seed42 row used for Requests call10."
+    },
+    "matplotlib_call86_and_sphinx_call70_native_family": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/contraction-family-adjudication-b.json",
+      "sha256": "9ff38abb735a5fe240f468405d9bce73a00af007905b53e08fe13c4651ce0721",
+      "purpose": "Native repeated-contraction criterion and full-positive evidence for Matplotlib call86 and Sphinx call70."
+    }
+  },
+  "cross_file_pin_checks": {
+    "source_integrity_driver_pin_matches_file": true,
+    "proposal_source_integrity_pin_matches_file": true,
+    "commands_source_integrity_pin_matches_file": true,
+    "preparation_source_integrity_pin_matches_file": true,
+    "admission_placeholder_binds_all_candidate_hashes": true,
+    "admission_status_remains_unadmitted": true
+  },
+  "driver_review": {
+    "required_predecessor_admissions": {
+      "P": "91dc764e6a3a6b1e8a1be51e6eee5fc958c19d1dfcfa3d057b989aa325618cdd",
+      "suffix8192": "f71ac674ff37bedd8304b92762cf98528f70d687afe14ebbf7416fe5860a06ec"
+    },
+    "terminal_success_and_exit_zero_required": true,
+    "forecast_miss_acceptance": {
+      "predecessor_misses_block_initial_launch_and_each_group": true,
+      "HF_group_miss_blocks_next_group": true,
+      "acceptance_binds_completion_hash_time_range_admission_and_group_order": true
+    },
+    "per_group_resource_gates": [
+      "zero device owners",
+      "no HF process",
+      "MemAvailable >=100 GiB"
+    ],
+    "stop_resume": "STOP_BEFORE_LAUNCH and STOP_BETWEEN_GROUPS are checked at boundaries; progress hashes support resume only after successful group completion; failed or partial group is not retried.",
+    "host_mocked_terminal_lookup_test": "self-test covers captured admission/proposal pins and asserts nonexistent fallback paths are not evaluated.",
+    "review_limit": "Live predecessor terminal and resource gates were not evaluated; execution remains gated."
+  },
+  "host_tests": {
+    "py_compile": "pass",
+    "--self-test": "pass",
+    "--validate-only": "pass, no model/network/device access"
+  },
+  "observed_predecessor_queue_states": {
+    "P": {
+      "path": "setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/queue.json",
+      "status": "panel_started"
+    },
+    "suffix8192": {
+      "path": "setup/swe85-adaptive-canonicalprefix-suffix8192-candidate/queue.json",
+      "status": "waiting_for_P_terminal_success_and_forecast_gate"
+    }
+  },
+  "decision": "Pin repair and inert driver are ready for root review. This is not admission and does not authorize HF execution.",
+  "host_validation_record": {
+    "path": "driver-host-validation.json",
+    "sha256": "5218d8b0bbdc8b7908308407990cc22af75c4cd835511309277f79a25f0b5d38"
+  }
+}

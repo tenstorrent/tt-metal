@@ -1,0 +1,87 @@
+{
+  "task": "129",
+  "review": "served suffix512 semantic triage",
+  "source": "anomalies/gpqa-extended-precision/first-wave-served/task129.onset.suffix512.json",
+  "scope": "Host-only semantic review of all three free-running served continuations. Does not assess the already executed teacher-forced check. Official scoring is complete; no score or population claim is made.",
+  "context": {
+    "private_case": "anomalies/gpqa-extended-precision/task129.onset.suffix512.private.json",
+    "suffix_prompt_tokens": 512,
+    "removed_prefix_tokens": 860,
+    "native_prompt_tokens": 138,
+    "reconstruction_limit": "Native prompt count138 matches rendering. Reconstructed reply7861 versus native7865 is4tokens short; unresolved channel/retokenization difference. Raw sampled IDs unavailable; not exact native replay. suffix2048 retains all1372 onset-prefix IDs because prefix is shorter than2048.",
+    "original_triage": "current/gpqa-extended198-head-bfp8/digest/129.triage.json",
+    "coordinator": "current/gpqa-extended198-head-bfp8/digest/coordinator.json",
+    "prior_pattern": "Original full reply was judged a high-confidence semantic loop: repeated 3500/3800/4000 Å threshold calculations and 1.9-versus-2.4 option cycling, with speculative claims and no new evidence settling the assumed optical cutoff. Original text also had stray apostrophe-s fragments and a normal final stop; the coordinator retained it as a single-response semantic/text anomaly.",
+    "limitations": [
+      "This is a generated suffix continuation from a prompt made by removing 860 prefix tokens; it is not a full-prompt replay and position origin changes.",
+      "The native prompt count matches, but reconstructed completion is four tokens shorter than native; native sampled token IDs are unavailable.",
+      "The original onset window was explicitly a reproducible selected window, not proof of the first model error.",
+      "The served continuations are much shorter than the original full answer, so this comparison supports recurrence of the semantic pattern in these samples only.",
+      "No correctness determination, score, prevalence estimate, or precision-causality claim is made."
+    ]
+  },
+  "seeds": [
+    {
+      "seed": 42,
+      "semantic_anomaly": true,
+      "mechanical_flag": false,
+      "observed_malformed_text": {
+        "present": false,
+        "note": "No stray apostrophe-s fragment or other clear token corruption observed in this served text. The start is a continuation fragment and the end is cut mid-thought; both are boundary truncation/continuation characteristics and are not independently classified as malformed generation."
+      },
+      "spans": [
+        {
+          "chars": "~0-700",
+          "paraphrase": "Begins as a continuation, repeats the wavelength relation and evaluates z=1.2, then repeatedly asserts z=2.4 is plausible."
+        },
+        {
+          "chars": "~700-end (2439)",
+          "paraphrase": "Cycles through the same z=2.4, 1.9 and 1.2 calculations and visible/optical judgments; no new cutoff rule is established. Ends inside a calculation."
+        }
+      ],
+      "assessment": "The response spends its available continuation repeatedly recomputing and comparing the same redshift thresholds without adding a decisive optical-cutoff rule. This matches the original semantic cycling pattern despite this seed’s shorter continuation and unflagged mechanical repetition metric."
+    },
+    {
+      "seed": 43,
+      "semantic_anomaly": true,
+      "mechanical_flag": false,
+      "observed_malformed_text": {
+        "present": false,
+        "note": "No stray apostrophe-s fragment or other clear token corruption observed in this served text. The start is a continuation fragment and the end is cut mid-thought; both are boundary truncation/continuation characteristics and are not independently classified as malformed generation."
+      },
+      "spans": [
+        {
+          "chars": "~0-500",
+          "paraphrase": "Continues an option evaluation, then rechecks z=2.1 and z=2.3 against the same optical threshold."
+        },
+        {
+          "chars": "~500-end (2346)",
+          "paraphrase": "Repeats the 912 Å limit versus 1216 Å line distinction and the z=2.4/1.9/2.1/2.3 calculations without resolving the criterion; ends mid-sentence."
+        }
+      ],
+      "assessment": "The response spends its available continuation repeatedly recomputing and comparing the same redshift thresholds without adding a decisive optical-cutoff rule. This matches the original semantic cycling pattern despite this seed’s shorter continuation and unflagged mechanical repetition metric."
+    },
+    {
+      "seed": 44,
+      "semantic_anomaly": true,
+      "mechanical_flag": false,
+      "observed_malformed_text": {
+        "present": false,
+        "note": "No stray apostrophe-s fragment or other clear token corruption observed in this served text. The start is a continuation fragment and the end is cut mid-thought; both are boundary truncation/continuation characteristics and are not independently classified as malformed generation."
+      },
+      "spans": [
+        {
+          "chars": "~0-650",
+          "paraphrase": "Continues the z=1.9/1.2 checks, then adds a general Lyman-alpha forest observability claim."
+        },
+        {
+          "chars": "~650-end (2788)",
+          "paraphrase": "Repeats the Lyman-alpha limit/line distinction and the z=2.4, 1.9, and 1.2 calculations, returning to the same threshold argument; ends mid-sentence."
+        }
+      ],
+      "assessment": "The response spends its available continuation repeatedly recomputing and comparing the same redshift thresholds without adding a decisive optical-cutoff rule. This matches the original semantic cycling pattern despite this seed’s shorter continuation and unflagged mechanical repetition metric."
+    }
+  ],
+  "comparison": "All three served continuations independently show the central original pattern: reiteration of wavelength/redshift arithmetic and cycling among candidate cutoffs/options without resolving the controlling optical criterion. They do not reproduce the original stray apostrophe-s text defect. Mechanical flags remain exactly as stored (false for each), which does not negate the semantic finding; the served outputs stop at continuation boundaries while the original triage noted a normal stop.",
+  "mechanical_flags_note": "mechanical_flag is copied verbatim from each stored free_running record; semantic_anomaly is an independent human semantic judgment."
+}

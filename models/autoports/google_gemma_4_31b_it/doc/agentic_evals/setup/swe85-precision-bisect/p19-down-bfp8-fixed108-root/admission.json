@@ -1,0 +1,13 @@
+{
+  "status": "admitted",
+  "epoch": 1794757302.4482362,
+  "deadline_epoch": 1794791725,
+  "closure_reserve_seconds": 3600,
+  "owners": "",
+  "active_hf": [],
+  "source_inventory_sha256": "43505b027c65ff98eb9100f05c8185fd15cb0ded7fdcafcccc8e97928451f555",
+  "command_sha256": "61b8d925d35d2b1391473db4852c719fbb905b2dfca862d532570ec88a971a65",
+  "forecast_sha256": "89873397ace2a1ff74f5157abd4ca823f037c67ce0a2628961848387b1bec7a7",
+  "accuracy_gate": "P19 pass; faster P18/P20 rejected; P17 fallback. Serving not selected.",
+  "execution": "Direct bounded subprocess avoids the previously contradictory convenience-wrapper STOP gate. Exact command and static fixture validation preserved."
+}

@@ -1,0 +1,124 @@
+{
+  "reviewed_unix": 1794725318.881301,
+  "rows": [
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/runs/head_bf16_hifi4/anomaly.psf__requests-5414.call9.onset.seed42.cap256.json",
+      "sha256": "9050c7d8be7f17b0ffd73d19812bb047a0a66018293ee81b1a0491b3c577dd9c",
+      "seed": 42,
+      "tokens": 256,
+      "verdict": "native",
+      "reason": "Root raw and decoded conditioning review: Full continuation pure carets after traceback; affirmative loop, not progressing cap.",
+      "trace_counters_delta": {
+        "model_replays": 255,
+        "sample_replays": 255,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 255,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/runs/head_bf16_hifi4/anomaly.psf__requests-5414.call9.onset.seed43.cap256.json",
+      "sha256": "5d4ebfef9de18ff67360ded37430ca4affa221d6ca71c3ee74dcabf519523ab4",
+      "seed": 43,
+      "tokens": 256,
+      "verdict": "native",
+      "reason": "Root raw and decoded conditioning review: Full continuation pure carets after traceback; affirmative loop, not progressing cap.",
+      "trace_counters_delta": {
+        "model_replays": 255,
+        "sample_replays": 255,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 255,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/runs/head_bf16_hifi4/anomaly.psf__requests-5414.call9.onset.seed44.cap256.json",
+      "sha256": "a8728aac832c5100bb10b4e43d829028523f077949b321d0b90b403296374f6e",
+      "seed": 44,
+      "tokens": 256,
+      "verdict": "native",
+      "reason": "Root raw and decoded conditioning review: Full continuation pure carets after traceback; affirmative loop, not progressing cap.",
+      "trace_counters_delta": {
+        "model_replays": 255,
+        "sample_replays": 255,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 255,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/runs/head_bf16_hifi4/anomaly.pylint-dev__pylint-4551.call1.onset.seed42.cap256.json",
+      "sha256": "9b1a8f0efb9edd3b602bde5f3cdfbf36bc15714b7b68ad5e05b017d050929ab1",
+      "seed": 42,
+      "tokens": 20,
+      "verdict": "other",
+      "reason": "Root raw and decoded conditioning review: Closing tool marker used as invocation opener before call:bash; malformed protocol as P1, stock parser crosscheck pending.",
+      "trace_counters_delta": {
+        "model_replays": 19,
+        "sample_replays": 19,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 19,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/runs/head_bf16_hifi4/anomaly.pylint-dev__pylint-4551.call1.onset.seed43.cap256.json",
+      "sha256": "beee33e6d5d82308e847b60eeb236e208747b95ddfa66b76d62733eb4d05f5d7",
+      "seed": 43,
+      "tokens": 20,
+      "verdict": "normal",
+      "reason": "Root raw and decoded conditioning review: Canonical bash invocation; no anomaly.",
+      "trace_counters_delta": {
+        "model_replays": 19,
+        "sample_replays": 19,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 19,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/runs/head_bf16_hifi4/anomaly.pylint-dev__pylint-4551.call1.onset.seed44.cap256.json",
+      "sha256": "328bfc66d58ea2348de95f5446686b2b821d1ec208f58465fb66ea43e134a829",
+      "seed": 44,
+      "tokens": 20,
+      "verdict": "other",
+      "reason": "Root raw and decoded conditioning review: Closing tool marker used as invocation opener before call:bash; malformed protocol as P1, stock parser crosscheck pending.",
+      "trace_counters_delta": {
+        "model_replays": 19,
+        "sample_replays": 19,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 19,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/runs/head_bf16_hifi4/anomaly.pylint-dev__pylint-4604.call45.onset.seed42.cap256.json",
+      "sha256": "5f9957e718003f2d2cd659ae653f275f78711387a5210c21abf5dde8f3bbc257",
+      "seed": 42,
+      "tokens": 65,
+      "verdict": "normal",
+      "reason": "Root raw and decoded conditioning review: Grammatical aliased continuation, coherent reasoning and canonical astroid inspection command.",
+      "trace_counters_delta": {
+        "model_replays": 64,
+        "sample_replays": 64,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 64,
+        "captures": 0
+      }
+    }
+  ]
+}

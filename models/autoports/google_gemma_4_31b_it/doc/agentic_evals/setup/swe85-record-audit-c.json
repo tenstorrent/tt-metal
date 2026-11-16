@@ -1,0 +1,121 @@
+{
+  "status": "host_only_stale_claims_checklist",
+  "scope": "Read-only audit of canonical REPORT.md, results.json, and learned.json against completed P1/X, active P2, and the HF runner incident/fresh candidate. No canonical records edited.",
+  "reviewed_evidence": {
+    "p1": "setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/completion-summary.json; P1 is complete and rejected for selection (14/15 target pairs remain anomalous).",
+    "x": "setup/swe85-adaptive-canonicalprefix-suffix8192-p1pinfix-candidate/completion-summary.json; six 8192 controls complete and reviewed.",
+    "p2": "setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/launch.json; status running, 108 fixed trials, launch 2026-11-15T06:39:12.719586Z.",
+    "hf_incident": "setup/swe85-conditional-hf/runner-validation-incident-c.json; three invocations lacked --validate-only, partial CPU BF16 inference occurred during the incident, one partial output has 64 teacher-forced positions and zero free-run results, artifact attribution between overlapping A/B is uncertain, and P2 host timing is potentially contaminated.",
+    "hf_fresh_candidate": "setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/admission.json; candidate_only_not_admitted and explicitly no execution authority."
+  },
+  "findings": [
+    {
+      "severity": "high",
+      "source": "REPORT.md",
+      "line": 94,
+      "claim": "Remaining cap/prefix controls and precision selection are still pending; expanded HF proposal has not been launched.",
+      "proposed_correction": "State that the documented cap/prefix followups through suffix8192 are complete; P1 is complete and rejected; P2 fixed108 BF16/HiFi4 is running. State that no authorized HF comparison is complete: three accidental non-validation invocations caused CPU reference work and a partial non-scoring output, and the fresh nine-case candidate is staged but unadmitted."
+    },
+    {
+      "severity": "high",
+      "source": "REPORT.md",
+      "line": 110,
+      "claim": "All three commands loaded the CPU reference; an old candidate directory is cited as the incident record; further work only requires a fresh output directory and validation-flag checks.",
+      "proposed_correction": "Use incident audit facts precisely: all three commands omitted --validate-only, but weight-load completion is not established for A/C; CPU BF16 inference occurred during the combined incident, while the partial artifact cannot be assigned to A or B. Preserve B's conflicting start observations and 527.693s lower bound, not an exact duration. Say P2's host timing is potentially contaminated. Link runner-validation-incident-c.json and identify revision-adaptive-expanded-call91-8192-reviewed as a candidate only, with root admission/execution still required."
+    },
+    {
+      "severity": "medium",
+      "source": "REPORT.md",
+      "line": 102,
+      "claim": "Precision panel and pinned HF controls remain pending.",
+      "proposed_correction": "Replace the generic statement with the later status at lines 106-110: P1 rejected, X completed, P2 running, and HF comparison unadmitted after the validation incident. Keep the chronology heading because this is a dated update."
+    },
+    {
+      "severity": "medium",
+      "source": "results.json",
+      "line": 7975,
+      "json_path": "$.anomalies[3].status",
+      "claim": "paired_controls_complete_followup_in_progress (also lines 8542 and 8566-8577).",
+      "proposed_correction": "The broad status can remain in-progress, but update the attached stale descriptions at lines 8022, 8027-8028, 8543, 8566, 8571, 8574, and 8577. Original165 controls are complete; follow-up cap/prefix controls are complete through current X; P1 is complete/rejected and P2 runs; conditional HF comparison remains uncompleted and its incident is non-scoring. Mark initial full-precision onset counts at lines 8004-8015 as historical baseline to avoid implying extensions are still pending."
+    },
+    {
+      "severity": "high",
+      "source": "results.json",
+      "line": 8079,
+      "json_path": "$.anomalies[3].persistent_short_controls.conditional_hf",
+      "claim": "NoHFlaunched.",
+      "proposed_correction": "Distinguish no authorized/completed conditional-HF comparison from the accidental CPU reference inference documented in runner-validation-incident-c.json. Mention the partial artifact is not a completed sample or score evidence."
+    },
+    {
+      "severity": "high",
+      "source": "results.json",
+      "line": 8475,
+      "json_path": "$.anomalies[3].adaptive_suffix8192_controls.interpretation",
+      "claim": "Pinned HF reference preparation pending.",
+      "proposed_correction": "A fresh nine-case/eight-group candidate is prepared at revision-adaptive-expanded-call91-8192-reviewed, but it remains unadmitted; the earlier erroneous invocation and partial output are incident evidence only."
+    },
+    {
+      "severity": "medium",
+      "source": "results.json",
+      "line": 8577,
+      "json_path": "$.anomalies[4].new_requests5414_controls",
+      "claim": "Shorter-prefix and remaining action controls pending.",
+      "proposed_correction": "Those followups are no longer generally pending; refer to completed adaptive suffix2048/4096/8192 summaries and distinguish any outstanding P2 comparison. Preserve original baseline record links and counts."
+    },
+    {
+      "severity": "medium",
+      "source": "results.json",
+      "line": 8661,
+      "json_path": "$.pipeline.extended",
+      "claim": "Matched served/full-TT controls in progress.",
+      "proposed_correction": "Specify the stage: 165 baseline controls and named cap/prefix followups through X are complete; P1 completed and was rejected; P2 fixed108 BF16/HiFi4 is currently running with potential host-wall contamination from the HF incident; no precision policy or score changed."
+    },
+    {
+      "severity": "medium",
+      "source": "learned.json",
+      "line": 4424,
+      "json_path": "$.current_v5_phase_status.extended.note",
+      "claim": "HF controls pending.",
+      "proposed_correction": "Say authorized HF comparison remains uncompleted; record the accidental partial CPU inference and non-scoring status separately, and state P2 running after P1 rejection."
+    },
+    {
+      "severity": "medium",
+      "source": "learned.json",
+      "line": 4465,
+      "json_path": "$.swe85_diagnostic_provenance.precision_status",
+      "claim": "Follow-up cap/prefix controls and conditional HF remain active.",
+      "proposed_correction": "Cap/prefix followups through X are complete; P1 rejected and P2 runs. Conditional HF remains unadmitted/incomplete despite the accidental incident work."
+    },
+    {
+      "severity": "high",
+      "source": "learned.json",
+      "line": 4525,
+      "json_path": "$.swe85_short_controls_progress.conditional_hf",
+      "claim": "NoHFlaunched.",
+      "proposed_correction": "Use the same distinction as results.json: no authorized/completed comparison; accidental CPU BF16 inference occurred, with a partial 64-position TF artifact and no free-run sample. Link incident audit."
+    },
+    {
+      "severity": "medium",
+      "source": "learned.json",
+      "line": 4526,
+      "json_path": "$.swe85_short_controls_progress.open",
+      "claim": "Conditional HF controls and precision selection remain pending.",
+      "proposed_correction": "Precision selection remains open with P2 running; the HF candidate is staged but unadmitted, and accidental reference execution is recorded as a workflow incident rather than a completed control."
+    },
+    {
+      "severity": "medium",
+      "source": "learned.json",
+      "line": 4749,
+      "json_path": "$.swe85_adaptive8192_observation.interpretation",
+      "claim": "Pinned HF reference preparation pending.",
+      "proposed_correction": "Fresh candidate preparation is complete but unadmitted. Do not imply a valid HF comparison exists; cross-reference incident audit."
+    }
+  ],
+  "nonstale_claims_checked": [
+    "REPORT.md lines 13-15 retain correct SWE score bounds and overall analysis-in-progress status.",
+    "REPORT.md lines 106-108 correctly report P1 and X outcomes and P2 as running.",
+    "results.json lines 8452-8456 correctly report P2 status, no score/policy change, 14/15 targets still anomalous, and the host-contention incident link.",
+    "learned.json lines 4718-4730 correctly report P1 completed/not accepted and P2 running."
+  ],
+  "limits": "This is a checklist, not a source edit or score/policy adjudication. Older baseline counts remain valid when explicitly labeled historical; no independent inference or device work was performed."
+}

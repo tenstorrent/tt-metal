@@ -1,0 +1,27 @@
+{
+  "status": "host_only_review_complete_candidate_unadmitted",
+  "tool_sha256": "3a9ad550813ee01d3a6fa701b2fe9b614bd7e2d694b7771bdd05a6636a8a6380",
+  "prior_tool_snapshot_sha256": "fa2eaf9f66a6a36c57385351a0b3e838edeabac4644c77c98aa81a817e3e3d5e",
+  "scope": "Review only of --later-loop validation path and its host tests. The model-capture and sampler paths are unchanged from the preserved original tool snapshot.",
+  "findings": [],
+  "checks": [
+    "The later-loop case is constrained to one named branch containing exactly [1390,107,147] repeated ten times.",
+    "Provenance requires full-TT seed44 and exact source hash, and compares the whole 30-token branch to the recorded seed44 output prefix.",
+    "The candidate fixture byte copy and source pins are checked before validation succeeds.",
+    "Original six-token validation remains on the default path and is covered by existing mocks."
+  ],
+  "validation": {
+    "argv": "--validate-only --later-loop --mock-tests --case <candidate fixture> --branches <candidate branches>",
+    "exit_code": 0,
+    "mock_tests": [
+      "exact 30-token accepted",
+      "altered history rejected",
+      "altered source hash rejected",
+      "seed43 provenance rejected",
+      "original six-token branches retained",
+      "callback/logit row mocks retained"
+    ],
+    "imports": "No torch, transformers, TTNN, or device imports in validate-only/mock path."
+  },
+  "review_limit": "This is static/host validation only; it does not admit or run either HF or full-TT candidate command."
+}

@@ -1,0 +1,1061 @@
+{
+  "status": "candidate_only_not_admitted_not_run",
+  "scope": "Exact suffix4096 paired chosen-continuation/free-run controls for four full-native motif families, plus one separately named full-only cap4096 Pytest5787 seed44 progressing-cap extension. Diagnostic only; no stage/precision/score decision.",
+  "serial_order": [
+    "served",
+    "full"
+  ],
+  "prerequisite": {
+    "completion_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-execution-candidate/full-completion.json",
+    "queue_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-execution-candidate/queue.json",
+    "required_completion": {
+      "name": "full",
+      "exit_code": 0
+    },
+    "required_queue": {
+      "status": "all_cap1024_batches_completed",
+      "exit_code": 0
+    }
+  },
+  "preflight": [
+    "Root must explicitly admit; candidate remains inert until admission.json says admitted and pinned proposal/driver hashes match.",
+    "Wait for U cap1024 full completion and its explicit successful terminal queue status.",
+    "Before each batch, require benchmark_server.device_owners() to be empty.",
+    "Before each batch, check all source hashes and exact candidate manifest hashes.",
+    "Do not start full mode until all twelve served result files exist.",
+    "Each mode has a 3600-second timeout; stop after any nonzero exit.",
+    "After both jobs, run the host-only comparison script for the twelve shared names; it excludes the separately named Pytest full-only extension."
+  ],
+  "jobs": [
+    {
+      "name": "served",
+      "mode": "served",
+      "command": [
+        "timeout",
+        "3600",
+        "env",
+        "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+        "READINESS_TRACE_REGION_SIZE=134217728",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+        "-m",
+        "models.autoports.google_gemma_4_31b_it.tools.precision_repro_batch",
+        "--cases",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/served-cases.json",
+        "--build-kwargs-file",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/head_bfp8_build_kwargs.json",
+        "--output-dir",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/runs/served"
+      ],
+      "timeout_seconds": 3600,
+      "cases": 12,
+      "manifest_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/served-cases.json",
+      "manifest_sha256": "af4b101a47cd6cbd2f52e48a9b2c50d1ba35afe9c3fc2df4fd1584db5c21e4d5",
+      "output_dir": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/runs/served",
+      "prediction": {
+        "jobs": 12,
+        "load_source": {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/runs/served/load.json",
+          "sha256": "5bcd95673b1e8c6f8a56e72d3289ca67185276b7d27c59aadb0d779c84063f80",
+          "wall_s": 143.9548370661214
+        },
+        "first_generator_trace_preparation_proxy": {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-followups-execution/suffix2048-served.log",
+          "sha256": "be506fef114d0098480ae18d0124f8ccb326788eb87efb09538d414138ed54d2",
+          "event": {
+            "line": 119,
+            "seconds": 10.280770049896091
+          }
+        },
+        "fixed_load_plus_preparation_s": 154.2356071160175,
+        "case_estimates": [
+          {
+            "name": "anomaly.psf__requests-5414.call10.onset.suffix4096.seed42",
+            "onset": "anomaly.psf__requests-5414.call10.onset",
+            "seed": 42,
+            "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/runs/served/anomaly.psf__requests-5414.call10.onset.json",
+            "source_result_sha256": "db7de934dddf4587a779c855e99a37bebdf23e8d9a48806d6269217ea24a2b42",
+            "chosen_tokens": 64,
+            "source_chosen_tf_wall_s": 12.855456775985658,
+            "tf_context_ratio": 1.9848521279153644,
+            "projected_chosen_tf_wall_s": 25.516180737139123,
+            "source_free_output_tokens": 512,
+            "source_decode_replays": 511,
+            "source_free_diagnostic_wall_s": 15.173240179894492,
+            "source_free_prefill_host_overhead_s": 0.34845097176730633,
+            "free_prefill_context_ratio": 2.0,
+            "projected_free_prefill_host_overhead_s": 0.6969019435346127,
+            "source_decode_wall_s": 14.824789208127186,
+            "projected_decode_observed_stop_s": 28.008101539106114,
+            "projected_decode_all511_s": 28.008101539106114,
+            "observed_point_variable_work_s": 54.22118421977985,
+            "cap_safe_variable_work_s": 54.22118421977985
+          },
+          {
+            "name": "anomaly.psf__requests-5414.call10.onset.suffix4096.seed43",
+            "onset": "anomaly.psf__requests-5414.call10.onset",
+            "seed": 43,
+            "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/runs/served/anomaly.psf__requests-5414.call10.onset.json",
+            "source_result_sha256": "db7de934dddf4587a779c855e99a37bebdf23e8d9a48806d6269217ea24a2b42",
+            "chosen_tokens": 64,
+            "source_chosen_tf_wall_s": 12.855456775985658,
+            "tf_context_ratio": 1.9848521279153644,
+            "projected_chosen_tf_wall_s": 25.516180737139123,
+            "source_free_output_tokens": 512,
+            "source_decode_replays": 511,
+            "source_free_diagnostic_wall_s": 15.171100571984425,
+            "source_free_prefill_host_overhead_s": 0.3522663509938866,
+            "free_prefill_context_ratio": 2.0,
+            "projected_free_prefill_host_overhead_s": 0.7045327019877732,
+            "source_decode_wall_s": 14.818834220990539,
+            "projected_decode_observed_stop_s": 27.996850931623896,
+            "projected_decode_all511_s": 27.996850931623896,
+            "observed_point_variable_work_s": 54.21756437075079,
+            "cap_safe_variable_work_s": 54.21756437075079
+          },
+          {
+            "name": "anomaly.psf__requests-5414.call10.onset.suffix4096.seed44",
+            "onset": "anomaly.psf__requests-5414.call10.onset",
+            "seed": 44,
+            "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/runs/served/anomaly.psf__requests-5414.call10.onset.json",
+            "source_result_sha256": "db7de934dddf4587a779c855e99a37bebdf23e8d9a48806d6269217ea24a2b42",
+            "chosen_tokens": 64,
+            "source_chosen_tf_wall_s": 12.855456775985658,
+            "tf_context_ratio": 1.9848521279153644,
+            "projected_chosen_tf_wall_s": 25.516180737139123,
+            "source_free_output_tokens": 512,
+            "source_decode_replays": 511,
+            "source_free_diagnostic_wall_s": 15.166206046007574,
+            "source_free_prefill_host_overhead_s": 0.3477849659975618,
+            "free_prefill_context_ratio": 2.0,
+            "projected_free_prefill_host_overhead_s": 0.6955699319951236,
+            "source_decode_wall_s": 14.818421080010012,
+            "projected_decode_observed_stop_s": 27.996070394756213,
+            "projected_decode_all511_s": 27.996070394756213,
+            "observed_point_variable_work_s": 54.207821063890464,
+            "cap_safe_variable_work_s": 54.207821063890464
+          },
+          {
+            "name": "anomaly.matplotlib__matplotlib-20488.call86.onset.suffix4096.seed42",
+            "onset": "anomaly.matplotlib__matplotlib-20488.call86.onset",
+            "seed": 42,
+            "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/runs/served/anomaly.matplotlib__matplotlib-20488.call86.onset.json",
+            "source_result_sha256": "ac7d49f941553dce1eb827c6a9dda5aee221bb31a972f76800518590478f579d",
+            "chosen_tokens": 64,
+            "source_chosen_tf_wall_s": 2.558295600116253,
+            "tf_context_ratio": 1.9848521279153644,
+            "projected_chosen_tf_wall_s": 5.077838465727258,
+            "source_free_output_tokens": 512,
+            "source_decode_replays": 511,
+            "source_free_diagnostic_wall_s": 15.199454087996855,
+            "source_free_prefill_host_overhead_s": 0.34913705103099346,
+            "free_prefill_context_ratio": 2.0,
+            "projected_free_prefill_host_overhead_s": 0.6982741020619869,
+            "source_decode_wall_s": 14.850317036965862,
+            "projected_decode_observed_stop_s": 28.056330624332812,
+            "projected_decode_all511_s": 28.056330624332812,
+            "observed_point_variable_work_s": 33.83244319212206,
+            "cap_safe_variable_work_s": 33.83244319212206
+          },
+          {
+            "name": "anomaly.matplotlib__matplotlib-20488.call86.onset.suffix4096.seed43",
+            "onset": "anomaly.matplotlib__matplotlib-20488.call86.onset",
+            "seed": 43,
+            "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/runs/served/anomaly.matplotlib__matplotlib-20488.call86.onset.json",
+            "source_result_sha256": "ac7d49f941553dce1eb827c6a9dda5aee221bb31a972f76800518590478f579d",
+            "chosen_tokens": 64,
+            "source_chosen_tf_wall_s": 2.558295600116253,
+            "tf_context_ratio": 1.9848521279153644,
+            "projected_chosen_tf_wall_s": 5.077838465727258,
+            "source_free_output_tokens": 245,
+            "source_decode_replays": 244,
+            "source_free_diagnostic_wall_s": 7.424645908176899,
+            "source_free_prefill_host_overhead_s": 0.3482285160571337,
+            "free_prefill_context_ratio": 2.0,
+            "projected_free_prefill_host_overhead_s": 0.6964570321142673,
+            "source_decode_wall_s": 7.076417392119765,
+            "projected_decode_observed_stop_s": 13.756529316093621,
+            "projected_decode_all511_s": 29.721720365727528,
+            "observed_point_variable_work_s": 19.530824813935148,
+            "cap_safe_variable_work_s": 35.496015863569056
+          },
+          {
+            "name": "anomaly.matplotlib__matplotlib-20488.call86.onset.suffix4096.seed44",
+            "onset": "anomaly.matplotlib__matplotlib-20488.call86.onset",
+            "seed": 44,
+            "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/runs/served/anomaly.matplotlib__matplotlib-20488.call86.onset.json",
+            "source_result_sha256": "ac7d49f941553dce1eb827c6a9dda5aee221bb31a972f76800518590478f579d",
+            "chosen_tokens": 64,
+            "source_chosen_tf_wall_s": 2.558295600116253,
+            "tf_context_ratio": 1.9848521279153644,
+            "projected_chosen_tf_wall_s": 5.077838465727258,
+            "source_free_output_tokens": 75,
+            "source_decode_replays": 74,
+            "source_free_diagnostic_wall_s": 2.4951323920395225,
+            "source_free_prefill_host_overhead_s": 0.34925485285930336,
+            "free_prefill_context_ratio": 2.0,
+            "projected_free_prefill_host_overhead_s": 0.6985097057186067,
+            "source_decode_wall_s": 2.145877539180219,
+            "projected_decode_observed_stop_s": 4.2541803457242775,
+            "projected_decode_all511_s": 30.930098159447603,
+            "observed_point_variable_work_s": 10.030528517170143,
+            "cap_safe_variable_work_s": 36.70644633089347
+          },
+          {
+            "name": "anomaly.call91.canonicalprefix.suffix4096.seed42",
+            "onset": "anomaly.call91.canonicalprefix",
+            "seed": 42,
+            "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/runs/served/anomaly.call91.canonicalprefix.json",
+            "source_result_sha256": "2c660fd154ca3b4b7ae2e032e14f004d5a9b0afd3db025620b19b08e00b73537",
+            "chosen_tokens": 64,
+            "source_chosen_tf_wall_s": 2.5878600659780204,
+            "tf_context_ratio": 1.9848521279153644,
+            "projected_chosen_tf_wall_s": 5.136519558703669,
+            "source_free_output_tokens": 59,
+            "source_decode_replays": 58,
+            "source_free_diagnostic_wall_s": 2.03135317703709,
+            "source_free_prefill_host_overhead_s": 0.34954154188744724,
+            "free_prefill_context_ratio": 2.0,
+            "projected_free_prefill_host_overhead_s": 0.6990830837748945,
+            "source_decode_wall_s": 1.6818116351496428,
+            "projected_decode_observed_stop_s": 3.3405403752346263,
+            "projected_decode_all511_s": 31.04755514449833,
+            "observed_point_variable_work_s": 9.17614301771319,
+            "cap_safe_variable_work_s": 36.883157786976895
+          },
+          {
+            "name": "anomaly.call91.canonicalprefix.suffix4096.seed43",
+            "onset": "anomaly.call91.canonicalprefix",
+            "seed": 43,
+            "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/runs/served/anomaly.call91.canonicalprefix.json",
+            "source_result_sha256": "2c660fd154ca3b4b7ae2e032e14f004d5a9b0afd3db025620b19b08e00b73537",
+            "chosen_tokens": 64,
+            "source_chosen_tf_wall_s": 2.5878600659780204,
+            "tf_context_ratio": 1.9848521279153644,
+            "projected_chosen_tf_wall_s": 5.136519558703669,
+            "source_free_output_tokens": 512,
+            "source_decode_replays": 511,
+            "source_free_diagnostic_wall_s": 15.16398349404335,
+            "source_free_prefill_host_overhead_s": 0.3466877529863268,
+            "free_prefill_context_ratio": 2.0,
+            "projected_free_prefill_host_overhead_s": 0.6933755059726536,
+            "source_decode_wall_s": 14.817295741057023,
+            "projected_decode_observed_stop_s": 27.993944320164616,
+            "projected_decode_all511_s": 27.993944320164616,
+            "observed_point_variable_work_s": 33.82383938484094,
+            "cap_safe_variable_work_s": 33.82383938484094
+          },
+          {
+            "name": "anomaly.call91.canonicalprefix.suffix4096.seed44",
+            "onset": "anomaly.call91.canonicalprefix",
+            "seed": 44,
+            "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/runs/served/anomaly.call91.canonicalprefix.json",
+            "source_result_sha256": "2c660fd154ca3b4b7ae2e032e14f004d5a9b0afd3db025620b19b08e00b73537",
+            "chosen_tokens": 64,
+            "source_chosen_tf_wall_s": 2.5878600659780204,
+            "tf_context_ratio": 1.9848521279153644,
+            "projected_chosen_tf_wall_s": 5.136519558703669,
+            "source_free_output_tokens": 82,
+            "source_decode_replays": 81,
+            "source_free_diagnostic_wall_s": 2.7007179791107774,
+            "source_free_prefill_host_overhead_s": 0.34757319721393287,
+            "free_prefill_context_ratio": 2.0,
+            "projected_free_prefill_host_overhead_s": 0.6951463944278657,
+            "source_decode_wall_s": 2.3531447818968445,
+            "projected_decode_observed_stop_s": 4.661210161841642,
+            "projected_decode_all511_s": 30.93450129737802,
+            "observed_point_variable_work_s": 10.492876114973177,
+            "cap_safe_variable_work_s": 36.766167250509554
+          },
+          {
+            "name": "anomaly.sphinx-doc__sphinx-10323.call70.onset.suffix4096.seed42",
+            "onset": "anomaly.sphinx-doc__sphinx-10323.call70.onset",
+            "seed": 42,
+            "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/runs/served/anomaly.sphinx-doc__sphinx-10323.call70.onset.json",
+            "source_result_sha256": "1fa9f54e8a4aace416fa70fed3ea9daa36f074e6c5f8ebe00c6550d3aee01f30",
+            "chosen_tokens": 37,
+            "source_chosen_tf_wall_s": 1.7404862230177969,
+            "tf_context_ratio": 1.9912875121006777,
+            "projected_chosen_tf_wall_s": 3.465808480878614,
+            "source_free_output_tokens": 512,
+            "source_decode_replays": 511,
+            "source_free_diagnostic_wall_s": 15.181589072803035,
+            "source_free_prefill_host_overhead_s": 0.3507164088077843,
+            "free_prefill_context_ratio": 2.0,
+            "projected_free_prefill_host_overhead_s": 0.7014328176155686,
+            "source_decode_wall_s": 14.830872663995251,
+            "projected_decode_observed_stop_s": 28.019594859332756,
+            "projected_decode_all511_s": 28.019594859332756,
+            "observed_point_variable_work_s": 32.18683615782694,
+            "cap_safe_variable_work_s": 32.18683615782694
+          },
+          {
+            "name": "anomaly.sphinx-doc__sphinx-10323.call70.onset.suffix4096.seed43",
+            "onset": "anomaly.sphinx-doc__sphinx-10323.call70.onset",
+            "seed": 43,
+            "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/runs/served/anomaly.sphinx-doc__sphinx-10323.call70.onset.json",
+            "source_result_sha256": "1fa9f54e8a4aace416fa70fed3ea9daa36f074e6c5f8ebe00c6550d3aee01f30",
+            "chosen_tokens": 37,
+            "source_chosen_tf_wall_s": 1.7404862230177969,
+            "tf_context_ratio": 1.9912875121006777,
+            "projected_chosen_tf_wall_s": 3.465808480878614,
+            "source_free_output_tokens": 368,
+            "source_decode_replays": 367,
+            "source_free_diagnostic_wall_s": 10.996673080138862,
+            "source_free_prefill_host_overhead_s": 0.34964842931367457,
+            "free_prefill_context_ratio": 2.0,
+            "projected_free_prefill_host_overhead_s": 0.6992968586273491,
+            "source_decode_wall_s": 10.647024650825188,
+            "projected_decode_observed_stop_s": 20.42071648627565,
+            "projected_decode_all511_s": 28.911632074036447,
+            "observed_point_variable_work_s": 24.585821825781615,
+            "cap_safe_variable_work_s": 33.07673741354241
+          },
+          {
+            "name": "anomaly.sphinx-doc__sphinx-10323.call70.onset.suffix4096.seed44",
+            "onset": "anomaly.sphinx-doc__sphinx-10323.call70.onset",
+            "seed": 44,
+            "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/runs/served/anomaly.sphinx-doc__sphinx-10323.call70.onset.json",
+            "source_result_sha256": "1fa9f54e8a4aace416fa70fed3ea9daa36f074e6c5f8ebe00c6550d3aee01f30",
+            "chosen_tokens": 37,
+            "source_chosen_tf_wall_s": 1.7404862230177969,
+            "tf_context_ratio": 1.9912875121006777,
+            "projected_chosen_tf_wall_s": 3.465808480878614,
+            "source_free_output_tokens": 122,
+            "source_decode_replays": 121,
+            "source_free_diagnostic_wall_s": 3.865708919009194,
+            "source_free_prefill_host_overhead_s": 0.34991554310545325,
+            "free_prefill_context_ratio": 2.0,
+            "projected_free_prefill_host_overhead_s": 0.6998310862109065,
+            "source_decode_wall_s": 3.5157933759037405,
+            "projected_decode_observed_stop_s": 6.9315167316204676,
+            "projected_decode_all511_s": 30.646250709782162,
+            "observed_point_variable_work_s": 11.097156298709988,
+            "cap_safe_variable_work_s": 34.81189027687168
+          }
+        ],
+        "point_variable_work_s": 347.4030389774943,
+        "cap_safe_variable_work_s": 476.23010331157406,
+        "point_total_s": 501.6386460935118,
+        "range_s": [
+          397.4177344002635,
+          963.8267827456933
+        ]
+      }
+    },
+    {
+      "name": "full",
+      "mode": "full",
+      "command": [
+        "timeout",
+        "3600",
+        "env",
+        "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+        "READINESS_TRACE_REGION_SIZE=134217728",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+        "-m",
+        "models.autoports.google_gemma_4_31b_it.tools.precision_repro_batch",
+        "--cases",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/full-cases.json",
+        "--build-kwargs-file",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_build_kwargs.json",
+        "--output-dir",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/runs/full"
+      ],
+      "timeout_seconds": 3600,
+      "cases": 13,
+      "manifest_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/full-cases.json",
+      "manifest_sha256": "b734dfb2e5e822b1eff8f01b82d2ead1a785b37cc30db5ce76811341bbb0eca5",
+      "output_dir": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/runs/full",
+      "prediction": {
+        "jobs": 13,
+        "load_source": {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/runs/full/load.json",
+          "sha256": "74c4650613d1c674d3080c6af6a4b8d96bd7653a5e7b129e791968b1f28f4cf0",
+          "wall_s": 77.36976773384959
+        },
+        "first_generator_trace_preparation_proxy": {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-followups-execution/suffix2048-full.log",
+          "sha256": "67a5ddc5db1e423bdda2787214180a2b29b96b6881e7a7148888ca2e501cb62d",
+          "event": {
+            "line": 119,
+            "seconds": 12.361038153991103
+          }
+        },
+        "fixed_load_plus_preparation_s": 89.73080588784069,
+        "case_estimates": [
+          {
+            "name": "anomaly.psf__requests-5414.call10.onset.suffix4096.seed42",
+            "onset": "anomaly.psf__requests-5414.call10.onset",
+            "seed": 42,
+            "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/runs/full/anomaly.psf__requests-5414.call10.onset.json",
+            "source_result_sha256": "1f34cd733be27e7e4c655da4dcf0fba30ac7c06fc83cca3753973dbae03263ff",
+            "chosen_tokens": 64,
+            "source_chosen_tf_wall_s": 17.157743752002716,
+            "tf_context_ratio": 1.9848521279153644,
+            "projected_chosen_tf_wall_s": 34.05558419638914,
+            "source_free_output_tokens": 500,
+            "source_decode_replays": 499,
+            "source_free_diagnostic_wall_s": 29.96200656890869,
+            "source_free_prefill_host_overhead_s": 0.6601802168879658,
+            "free_prefill_context_ratio": 2.0,
+            "projected_free_prefill_host_overhead_s": 1.3203604337759316,
+            "source_decode_wall_s": 29.301826352020726,
+            "projected_decode_observed_stop_s": 55.42726839335222,
+            "projected_decode_all511_s": 56.83856868273347,
+            "observed_point_variable_work_s": 90.80321302351729,
+            "cap_safe_variable_work_s": 92.21451331289853
+          },
+          {
+            "name": "anomaly.psf__requests-5414.call10.onset.suffix4096.seed43",
+            "onset": "anomaly.psf__requests-5414.call10.onset",
+            "seed": 43,
+            "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/runs/full/anomaly.psf__requests-5414.call10.onset.json",
+            "source_result_sha256": "1f34cd733be27e7e4c655da4dcf0fba30ac7c06fc83cca3753973dbae03263ff",
+            "chosen_tokens": 64,
+            "source_chosen_tf_wall_s": 17.157743752002716,
+            "tf_context_ratio": 1.9848521279153644,
+            "projected_chosen_tf_wall_s": 34.05558419638914,
+            "source_free_output_tokens": 512,
+            "source_decode_replays": 511,
+            "source_free_diagnostic_wall_s": 30.66935790888965,
+            "source_free_prefill_host_overhead_s": 0.6631682578008622,
+            "free_prefill_context_ratio": 2.0,
+            "projected_free_prefill_host_overhead_s": 1.3263365156017244,
+            "source_decode_wall_s": 30.00618965108879,
+            "projected_decode_observed_stop_s": 56.68993971857895,
+            "projected_decode_all511_s": 56.68993971857895,
+            "observed_point_variable_work_s": 92.07186043056981,
+            "cap_safe_variable_work_s": 92.07186043056981
+          },
+          {
+            "name": "anomaly.psf__requests-5414.call10.onset.suffix4096.seed44",
+            "onset": "anomaly.psf__requests-5414.call10.onset",
+            "seed": 44,
+            "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/runs/full/anomaly.psf__requests-5414.call10.onset.json",
+            "source_result_sha256": "1f34cd733be27e7e4c655da4dcf0fba30ac7c06fc83cca3753973dbae03263ff",
+            "chosen_tokens": 64,
+            "source_chosen_tf_wall_s": 17.157743752002716,
+            "tf_context_ratio": 1.9848521279153644,
+            "projected_chosen_tf_wall_s": 34.05558419638914,
+            "source_free_output_tokens": 512,
+            "source_decode_replays": 511,
+            "source_free_diagnostic_wall_s": 30.68033648491837,
+            "source_free_prefill_host_overhead_s": 0.6567965669091791,
+            "free_prefill_context_ratio": 2.0,
+            "projected_free_prefill_host_overhead_s": 1.3135931338183582,
+            "source_decode_wall_s": 30.02353991800919,
+            "projected_decode_observed_stop_s": 56.722719141666516,
+            "projected_decode_all511_s": 56.722719141666516,
+            "observed_point_variable_work_s": 92.09189647187401,
+            "cap_safe_variable_work_s": 92.09189647187401
+          },
+          {
+            "name": "anomaly.matplotlib__matplotlib-20488.call86.onset.suffix4096.seed42",
+            "onset": "anomaly.matplotlib__matplotlib-20488.call86.onset",
+            "seed": 42,
+            "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/runs/full/anomaly.matplotlib__matplotlib-20488.call86.onset.json",
+            "source_result_sha256": "a556f1d00926a250659c8b0120a8ffdface28209ef3246febf96c5db772fe6b3",
+            "chosen_tokens": 64,
+            "source_chosen_tf_wall_s": 4.733232772909105,
+            "tf_context_ratio": 1.9848521279153644,
+            "projected_chosen_tf_wall_s": 9.394767141227378,
+            "source_free_output_tokens": 65,
+            "source_decode_replays": 64,
+            "source_free_diagnostic_wall_s": 4.412804898107424,
+            "source_free_prefill_host_overhead_s": 0.6539016931783408,
+            "free_prefill_context_ratio": 2.0,
+            "projected_free_prefill_host_overhead_s": 1.3078033863566816,
+            "source_decode_wall_s": 3.7589032049290836,
+            "projected_decode_observed_stop_s": 7.460867024931374,
+            "projected_decode_all511_s": 62.796035620148565,
+            "observed_point_variable_work_s": 18.163437552515433,
+            "cap_safe_variable_work_s": 73.49860614773263
+          },
+          {
+            "name": "anomaly.matplotlib__matplotlib-20488.call86.onset.suffix4096.seed43",
+            "onset": "anomaly.matplotlib__matplotlib-20488.call86.onset",
+            "seed": 43,
+            "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/runs/full/anomaly.matplotlib__matplotlib-20488.call86.onset.json",
+            "source_result_sha256": "a556f1d00926a250659c8b0120a8ffdface28209ef3246febf96c5db772fe6b3",
+            "chosen_tokens": 64,
+            "source_chosen_tf_wall_s": 4.733232772909105,
+            "tf_context_ratio": 1.9848521279153644,
+            "projected_chosen_tf_wall_s": 9.394767141227378,
+            "source_free_output_tokens": 102,
+            "source_decode_replays": 101,
+            "source_free_diagnostic_wall_s": 6.596827225992456,
+            "source_free_prefill_host_overhead_s": 0.6647746290545911,
+            "free_prefill_context_ratio": 2.0,
+            "projected_free_prefill_host_overhead_s": 1.3295492581091821,
+            "source_decode_wall_s": 5.932052596937865,
+            "projected_decode_observed_stop_s": 11.722731204434885,
+            "projected_decode_all511_s": 62.24265634399744,
+            "observed_point_variable_work_s": 22.447047603771445,
+            "cap_safe_variable_work_s": 72.966972743334
+          },
+          {
+            "name": "anomaly.matplotlib__matplotlib-20488.call86.onset.suffix4096.seed44",
+            "onset": "anomaly.matplotlib__matplotlib-20488.call86.onset",
+            "seed": 44,
+            "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/runs/full/anomaly.matplotlib__matplotlib-20488.call86.onset.json",
+            "source_result_sha256": "a556f1d00926a250659c8b0120a8ffdface28209ef3246febf96c5db772fe6b3",
+            "chosen_tokens": 64,
+            "source_chosen_tf_wall_s": 4.733232772909105,
+            "tf_context_ratio": 1.9848521279153644,
+            "projected_chosen_tf_wall_s": 9.394767141227378,
+            "source_free_output_tokens": 67,
+            "source_decode_replays": 66,
+            "source_free_diagnostic_wall_s": 4.5370678619947284,
+            "source_free_prefill_host_overhead_s": 0.6612274218350649,
+            "free_prefill_context_ratio": 2.0,
+            "projected_free_prefill_host_overhead_s": 1.3224548436701298,
+            "source_decode_wall_s": 3.8758404401596636,
+            "projected_decode_observed_stop_s": 7.691135427637189,
+            "projected_decode_all511_s": 62.757295207837785,
+            "observed_point_variable_work_s": 18.4083574125347,
+            "cap_safe_variable_work_s": 73.47451719273529
+          },
+          {
+            "name": "anomaly.call91.canonicalprefix.suffix4096.seed42",
+            "onset": "anomaly.call91.canonicalprefix",
+            "seed": 42,
+            "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/runs/full/anomaly.call91.canonicalprefix.json",
+            "source_result_sha256": "5fa7cf2a7817014afd07c2db91bb142ec1bfd2fefa3b94ab33ffe68d748cc67b",
+            "chosen_tokens": 64,
+            "source_chosen_tf_wall_s": 4.742908056825399,
+            "tf_context_ratio": 1.9848521279153644,
+            "projected_chosen_tf_wall_s": 9.41397114909682,
+            "source_free_output_tokens": 208,
+            "source_decode_replays": 207,
+            "source_free_diagnostic_wall_s": 12.83021291019395,
+            "source_free_prefill_host_overhead_s": 0.6606041360646486,
+            "free_prefill_context_ratio": 2.0,
+            "projected_free_prefill_host_overhead_s": 1.3212082721292973,
+            "source_decode_wall_s": 12.169608774129301,
+            "projected_decode_observed_stop_s": 23.75647942471824,
+            "projected_decode_all511_s": 60.76812612414156,
+            "observed_point_variable_work_s": 34.49165884594436,
+            "cap_safe_variable_work_s": 71.50330554536768
+          },
+          {
+            "name": "anomaly.call91.canonicalprefix.suffix4096.seed43",
+            "onset": "anomaly.call91.canonicalprefix",
+            "seed": 43,
+            "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/runs/full/anomaly.call91.canonicalprefix.json",
+            "source_result_sha256": "5fa7cf2a7817014afd07c2db91bb142ec1bfd2fefa3b94ab33ffe68d748cc67b",
+            "chosen_tokens": 64,
+            "source_chosen_tf_wall_s": 4.742908056825399,
+            "tf_context_ratio": 1.9848521279153644,
+            "projected_chosen_tf_wall_s": 9.41397114909682,
+            "source_free_output_tokens": 200,
+            "source_decode_replays": 199,
+            "source_free_diagnostic_wall_s": 12.35671513597481,
+            "source_free_prefill_host_overhead_s": 0.6648591118864715,
+            "free_prefill_context_ratio": 2.0,
+            "projected_free_prefill_host_overhead_s": 1.329718223772943,
+            "source_decode_wall_s": 11.691856024088338,
+            "projected_decode_observed_stop_s": 22.844590601327702,
+            "projected_decode_all511_s": 60.84267799541038,
+            "observed_point_variable_work_s": 33.58827997419746,
+            "cap_safe_variable_work_s": 71.58636736828014
+          },
+          {
+            "name": "anomaly.call91.canonicalprefix.suffix4096.seed44",
+            "onset": "anomaly.call91.canonicalprefix",
+            "seed": 44,
+            "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/runs/full/anomaly.call91.canonicalprefix.json",
+            "source_result_sha256": "5fa7cf2a7817014afd07c2db91bb142ec1bfd2fefa3b94ab33ffe68d748cc67b",
+            "chosen_tokens": 64,
+            "source_chosen_tf_wall_s": 4.742908056825399,
+            "tf_context_ratio": 1.9848521279153644,
+            "projected_chosen_tf_wall_s": 9.41397114909682,
+            "source_free_output_tokens": 37,
+            "source_decode_replays": 36,
+            "source_free_diagnostic_wall_s": 2.7674866968300194,
+            "source_free_prefill_host_overhead_s": 0.6537351708393544,
+            "free_prefill_context_ratio": 2.0,
+            "projected_free_prefill_host_overhead_s": 1.3074703416787088,
+            "source_decode_wall_s": 2.113751525990665,
+            "projected_decode_observed_stop_s": 4.209594239730138,
+            "projected_decode_all511_s": 63.2027852628921,
+            "observed_point_variable_work_s": 14.931035730505666,
+            "cap_safe_variable_work_s": 73.92422675366763
+          },
+          {
+            "name": "anomaly.sphinx-doc__sphinx-10323.call70.onset.suffix4096.seed42",
+            "onset": "anomaly.sphinx-doc__sphinx-10323.call70.onset",
+            "seed": 42,
+            "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/runs/full/anomaly.sphinx-doc__sphinx-10323.call70.onset.json",
+            "source_result_sha256": "079baccb97ee11584b68c0e69353c172f1dd976fcbfdf65df71d53d421fd3182",
+            "chosen_tokens": 37,
+            "source_chosen_tf_wall_s": 2.989350213902071,
+            "tf_context_ratio": 1.9912875121006777,
+            "projected_chosen_tf_wall_s": 5.952655750238684,
+            "source_free_output_tokens": 89,
+            "source_decode_replays": 88,
+            "source_free_diagnostic_wall_s": 5.830603436101228,
+            "source_free_prefill_host_overhead_s": 0.6612000220920891,
+            "free_prefill_context_ratio": 2.0,
+            "projected_free_prefill_host_overhead_s": 1.3224000441841781,
+            "source_decode_wall_s": 5.169403414009139,
+            "projected_decode_observed_stop_s": 10.23129114620647,
+            "projected_decode_all511_s": 62.44675387376813,
+            "observed_point_variable_work_s": 17.50634694062933,
+            "cap_safe_variable_work_s": 69.72180966819099
+          },
+          {
+            "name": "anomaly.sphinx-doc__sphinx-10323.call70.onset.suffix4096.seed43",
+            "onset": "anomaly.sphinx-doc__sphinx-10323.call70.onset",
+            "seed": 43,
+            "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/runs/full/anomaly.sphinx-doc__sphinx-10323.call70.onset.json",
+            "source_result_sha256": "079baccb97ee11584b68c0e69353c172f1dd976fcbfdf65df71d53d421fd3182",
+            "chosen_tokens": 37,
+            "source_chosen_tf_wall_s": 2.989350213902071,
+            "tf_context_ratio": 1.9912875121006777,
+            "projected_chosen_tf_wall_s": 5.952655750238684,
+            "source_free_output_tokens": 52,
+            "source_decode_replays": 51,
+            "source_free_diagnostic_wall_s": 3.661509261932224,
+            "source_free_prefill_host_overhead_s": 0.6622359678149223,
+            "free_prefill_context_ratio": 2.0,
+            "projected_free_prefill_host_overhead_s": 1.3244719356298447,
+            "source_decode_wall_s": 2.9992732941173017,
+            "projected_decode_observed_stop_s": 5.962375902101978,
+            "projected_decode_all511_s": 63.07489638472176,
+            "observed_point_variable_work_s": 13.239503587970507,
+            "cap_safe_variable_work_s": 70.35202407059029
+          },
+          {
+            "name": "anomaly.sphinx-doc__sphinx-10323.call70.onset.suffix4096.seed44",
+            "onset": "anomaly.sphinx-doc__sphinx-10323.call70.onset",
+            "seed": 44,
+            "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/runs/full/anomaly.sphinx-doc__sphinx-10323.call70.onset.json",
+            "source_result_sha256": "079baccb97ee11584b68c0e69353c172f1dd976fcbfdf65df71d53d421fd3182",
+            "chosen_tokens": 37,
+            "source_chosen_tf_wall_s": 2.989350213902071,
+            "tf_context_ratio": 1.9912875121006777,
+            "projected_chosen_tf_wall_s": 5.952655750238684,
+            "source_free_output_tokens": 50,
+            "source_decode_replays": 49,
+            "source_free_diagnostic_wall_s": 3.5482418090105057,
+            "source_free_prefill_host_overhead_s": 0.6694073311518878,
+            "free_prefill_context_ratio": 2.0,
+            "projected_free_prefill_host_overhead_s": 1.3388146623037755,
+            "source_decode_wall_s": 2.878834477858618,
+            "projected_decode_observed_stop_s": 5.724323382614626,
+            "projected_decode_all511_s": 63.04357717601267,
+            "observed_point_variable_work_s": 13.015793795157085,
+            "cap_safe_variable_work_s": 70.33504758855513
+          },
+          {
+            "name": "anomaly.pytest-dev__pytest-5787.call65.onset.cap4096.seed44",
+            "source_kind": "T full cap2048 Pytest5787 seed44; standalone full case merged into this batch to share one full-mode model load",
+            "seed": 44,
+            "cap_from": 2048,
+            "cap_to": 4096,
+            "case_count": 1,
+            "source_fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/pytest-call65-cap4096/pytest-call65.cap4096.seed44.private.json",
+            "source_fixture_sha256": "a383f6456c2dc6a0e08eeb4d17aad8561a2ad783ef92d8642e74218b1963447c",
+            "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/runs/full/anomaly.pytest-dev__pytest-5787.call65.onset.cap2048.seed44.json",
+            "source_result_sha256": "8d87356ff1f0e6cb835889f799cd9bb4340db6f72b250a8a31e3423c7e497c55",
+            "source_decode_replays": 2047,
+            "projected_decode_replays": 4095,
+            "source_prompt_tokens": 53684,
+            "projected_variable_work_s": 294.60510968298956,
+            "standalone_full_load_and_prep_s": 87.6422862240579,
+            "incremental_shared_load_and_prep_s": 0.0,
+            "shared_load_saving_s": 87.6422862240579,
+            "cap_safe": true
+          }
+        ],
+        "point_variable_work_s": 755.3635410521766,
+        "cap_safe_variable_work_s": 1218.3462569767855,
+        "point_total_s": 845.0943469400173,
+        "range_s": [
+          618.4852846243643,
+          2160.9194427483762
+        ]
+      }
+    }
+  ],
+  "post_batch_comparison": {
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/compare_suffix4096_outputs.py"
+    ],
+    "script_sha256": "44dbee2286624a560c5167bc4f3c704d12fe126c5e90f2d55e41ef0a4d7926b3",
+    "paired_case_count": 12,
+    "full_only_case": "anomaly.pytest-dev__pytest-5787.call65.onset.cap4096.seed44",
+    "output": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/comparison-summary.json"
+  },
+  "total_point_seconds": 1346.732993033529,
+  "total_range_seconds": [
+    1015.9030190246278,
+    3124.7462254940697
+  ],
+  "candidate_manifests": {
+    "served": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/served-cases.json",
+      "sha256": "af4b101a47cd6cbd2f52e48a9b2c50d1ba35afe9c3fc2df4fd1584db5c21e4d5"
+    },
+    "full": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/full-cases.json",
+      "sha256": "b734dfb2e5e822b1eff8f01b82d2ead1a785b37cc30db5ce76811341bbb0eca5"
+    }
+  },
+  "source_hashes": [
+    {
+      "kind": "candidate_manifest",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/served-cases.json",
+      "sha256": "af4b101a47cd6cbd2f52e48a9b2c50d1ba35afe9c3fc2df4fd1584db5c21e4d5"
+    },
+    {
+      "kind": "candidate_fixture",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/fixtures/anomaly.psf__requests-5414.call10.onset.suffix4096.seed42.served.private.json",
+      "sha256": "4ee5d2a78289bfda82ac535f009035eb0f669082dc4b37b474b11ba6095bdccc"
+    },
+    {
+      "kind": "candidate_fixture",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/fixtures/anomaly.psf__requests-5414.call10.onset.suffix4096.seed43.served.private.json",
+      "sha256": "8ceac6889a1d6e10992f68b52596ce262f4031608317b5a40a32906fc3eb7ca7"
+    },
+    {
+      "kind": "candidate_fixture",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/fixtures/anomaly.psf__requests-5414.call10.onset.suffix4096.seed44.served.private.json",
+      "sha256": "40173399c4c62f8ccb70d4ac349200924e81e89c7453962c13ff4c312ef780e5"
+    },
+    {
+      "kind": "candidate_fixture",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/fixtures/anomaly.matplotlib__matplotlib-20488.call86.onset.suffix4096.seed42.served.private.json",
+      "sha256": "513f9f1e29de8eaa956d70b10cfb15d84fd8fcc7ec114e26966db94d150ea641"
+    },
+    {
+      "kind": "candidate_fixture",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/fixtures/anomaly.matplotlib__matplotlib-20488.call86.onset.suffix4096.seed43.served.private.json",
+      "sha256": "a5d83f9ee832bb85a537f6b02f93d5552283b752c77a9cd418a211f97d52b4fd"
+    },
+    {
+      "kind": "candidate_fixture",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/fixtures/anomaly.matplotlib__matplotlib-20488.call86.onset.suffix4096.seed44.served.private.json",
+      "sha256": "c5d804e5405e9e6fa0a57c1986030ff017b1f06af282067d920df7c0424d4266"
+    },
+    {
+      "kind": "candidate_fixture",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/fixtures/anomaly.call91.canonicalprefix.suffix4096.seed42.served.private.json",
+      "sha256": "ae41ea6882901a66170d4eb1da286bc864004d02a375ca634d2e5ccc62366d25"
+    },
+    {
+      "kind": "candidate_fixture",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/fixtures/anomaly.call91.canonicalprefix.suffix4096.seed43.served.private.json",
+      "sha256": "6caec5b093009522b2380b19a8bd6e62d34490b9ddcaf37d7d19422392bd541f"
+    },
+    {
+      "kind": "candidate_fixture",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/fixtures/anomaly.call91.canonicalprefix.suffix4096.seed44.served.private.json",
+      "sha256": "796f3e9245800c84311dd3ad7f5ae699d2c76f506b3556a9d0b4c643f5cb662c"
+    },
+    {
+      "kind": "candidate_fixture",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/fixtures/anomaly.sphinx-doc__sphinx-10323.call70.onset.suffix4096.seed42.served.private.json",
+      "sha256": "62397a3ddac9e4edd1cfda3c86c390de768d28395ccf3c8edf73a830f3a79be4"
+    },
+    {
+      "kind": "candidate_fixture",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/fixtures/anomaly.sphinx-doc__sphinx-10323.call70.onset.suffix4096.seed43.served.private.json",
+      "sha256": "31791e688141f85e6a7f9f660f81a2ff2ecf69e79f3c621f2af05855e303e315"
+    },
+    {
+      "kind": "candidate_fixture",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/fixtures/anomaly.sphinx-doc__sphinx-10323.call70.onset.suffix4096.seed44.served.private.json",
+      "sha256": "6effd6b8eda2e38af845844022c4c02cb7f7638e30851abaf64cacc2dece4263"
+    },
+    {
+      "kind": "build_kwargs",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/head_bfp8_build_kwargs.json",
+      "sha256": "2e583fa8bd7aff7c5f8be110835df751924d167243c5a44a68aa5b3d70c6845f"
+    },
+    {
+      "kind": "precision_config",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/head_bfp8_precision_config.json",
+      "sha256": "aa0e651fb3fdd7afc285293645c5ca309b2da246619e6e7fb6da86c5d2f28853"
+    },
+    {
+      "kind": "source_model_load",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/runs/served/load.json",
+      "sha256": "5bcd95673b1e8c6f8a56e72d3289ca67185276b7d27c59aadb0d779c84063f80"
+    },
+    {
+      "kind": "source_execution_log",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-followups-execution/suffix2048-served.log",
+      "sha256": "be506fef114d0098480ae18d0124f8ccb326788eb87efb09538d414138ed54d2"
+    },
+    {
+      "kind": "matched_suffix2048_result",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/runs/served/anomaly.psf__requests-5414.call10.onset.json",
+      "sha256": "db7de934dddf4587a779c855e99a37bebdf23e8d9a48806d6269217ea24a2b42"
+    },
+    {
+      "kind": "matched_suffix2048_result",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/runs/served/anomaly.matplotlib__matplotlib-20488.call86.onset.json",
+      "sha256": "ac7d49f941553dce1eb827c6a9dda5aee221bb31a972f76800518590478f579d"
+    },
+    {
+      "kind": "matched_suffix2048_result",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/runs/served/anomaly.call91.canonicalprefix.json",
+      "sha256": "2c660fd154ca3b4b7ae2e032e14f004d5a9b0afd3db025620b19b08e00b73537"
+    },
+    {
+      "kind": "matched_suffix2048_result",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/runs/served/anomaly.sphinx-doc__sphinx-10323.call70.onset.json",
+      "sha256": "1fa9f54e8a4aace416fa70fed3ea9daa36f074e6c5f8ebe00c6550d3aee01f30"
+    },
+    {
+      "kind": "candidate_manifest",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/full-cases.json",
+      "sha256": "b734dfb2e5e822b1eff8f01b82d2ead1a785b37cc30db5ce76811341bbb0eca5"
+    },
+    {
+      "kind": "candidate_fixture",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/fixtures/anomaly.psf__requests-5414.call10.onset.suffix4096.seed42.full.private.json",
+      "sha256": "3d9d27b333ad2e1c1db496e1f2e2d27e7aa721a6b8b5425bd15a3374339f2986"
+    },
+    {
+      "kind": "candidate_fixture",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/fixtures/anomaly.psf__requests-5414.call10.onset.suffix4096.seed43.full.private.json",
+      "sha256": "fa8f63b6a5a8b443bc4c7f8c321d064ac0a38bf2287597f2fdf27478438510f6"
+    },
+    {
+      "kind": "candidate_fixture",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/fixtures/anomaly.psf__requests-5414.call10.onset.suffix4096.seed44.full.private.json",
+      "sha256": "a95c26a2fe0a8649880e6c33663e382f2cedfc8d7707519258f2dba851c25ee4"
+    },
+    {
+      "kind": "candidate_fixture",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/fixtures/anomaly.matplotlib__matplotlib-20488.call86.onset.suffix4096.seed42.full.private.json",
+      "sha256": "dd17353fffc032eb5bb82ee8025870eab4841d414e2f01f1e87d976bd812e62d"
+    },
+    {
+      "kind": "candidate_fixture",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/fixtures/anomaly.matplotlib__matplotlib-20488.call86.onset.suffix4096.seed43.full.private.json",
+      "sha256": "7e8ee5bb1a24cca6e4e58651929198f7a4c4de279ca54495cedae74f3678193d"
+    },
+    {
+      "kind": "candidate_fixture",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/fixtures/anomaly.matplotlib__matplotlib-20488.call86.onset.suffix4096.seed44.full.private.json",
+      "sha256": "b1813964f7d3bae886d4aabaf794affb4a26217b708ec322f485c79d8c5f300a"
+    },
+    {
+      "kind": "candidate_fixture",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/fixtures/anomaly.call91.canonicalprefix.suffix4096.seed42.full.private.json",
+      "sha256": "3c0b7d82cc4f4e627cc65415002c9e5113237c3e83c66fbaaa4813a2f48726e4"
+    },
+    {
+      "kind": "candidate_fixture",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/fixtures/anomaly.call91.canonicalprefix.suffix4096.seed43.full.private.json",
+      "sha256": "e952644afadb00abed9fac52db02976bf0f03f4ccdca9f3039866d53bd512a6b"
+    },
+    {
+      "kind": "candidate_fixture",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/fixtures/anomaly.call91.canonicalprefix.suffix4096.seed44.full.private.json",
+      "sha256": "38be301909c01754a52d0f28c704aca1826f4c86b2018ca8510c31b78e047a37"
+    },
+    {
+      "kind": "candidate_fixture",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/fixtures/anomaly.sphinx-doc__sphinx-10323.call70.onset.suffix4096.seed42.full.private.json",
+      "sha256": "b3ce39612e93df0a5ca3adb9df9e040308fc7fb84ee091c1d6f3a2f88bfde89a"
+    },
+    {
+      "kind": "candidate_fixture",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/fixtures/anomaly.sphinx-doc__sphinx-10323.call70.onset.suffix4096.seed43.full.private.json",
+      "sha256": "a3e871e689bd1ea9ca7e9e6b18fb21f64c32286dec94bec5e3840c1a547698ba"
+    },
+    {
+      "kind": "candidate_fixture",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/fixtures/anomaly.sphinx-doc__sphinx-10323.call70.onset.suffix4096.seed44.full.private.json",
+      "sha256": "05f781687dd299562714596868b1744ebca8300330e730a23db118e841d27f40"
+    },
+    {
+      "kind": "candidate_fixture",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/pytest-call65-cap4096/pytest-call65.cap4096.seed44.private.json",
+      "sha256": "a383f6456c2dc6a0e08eeb4d17aad8561a2ad783ef92d8642e74218b1963447c"
+    },
+    {
+      "kind": "build_kwargs",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_build_kwargs.json",
+      "sha256": "ff2b5ed24e0b6a1dee7eb5cd8bd437d17c3df5f8f25567927d239e666f0699f9"
+    },
+    {
+      "kind": "precision_config",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_config.json",
+      "sha256": "63ce02f7fa0df993a27daca25eeeb3adca51e15c7c6956d1cef122534ebdc7a9"
+    },
+    {
+      "kind": "source_model_load",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/runs/full/load.json",
+      "sha256": "74c4650613d1c674d3080c6af6a4b8d96bd7653a5e7b129e791968b1f28f4cf0"
+    },
+    {
+      "kind": "source_execution_log",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-followups-execution/suffix2048-full.log",
+      "sha256": "67a5ddc5db1e423bdda2787214180a2b29b96b6881e7a7148888ca2e501cb62d"
+    },
+    {
+      "kind": "matched_suffix2048_result",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/runs/full/anomaly.psf__requests-5414.call10.onset.json",
+      "sha256": "1f34cd733be27e7e4c655da4dcf0fba30ac7c06fc83cca3753973dbae03263ff"
+    },
+    {
+      "kind": "matched_suffix2048_result",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/runs/full/anomaly.matplotlib__matplotlib-20488.call86.onset.json",
+      "sha256": "a556f1d00926a250659c8b0120a8ffdface28209ef3246febf96c5db772fe6b3"
+    },
+    {
+      "kind": "matched_suffix2048_result",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/runs/full/anomaly.call91.canonicalprefix.json",
+      "sha256": "5fa7cf2a7817014afd07c2db91bb142ec1bfd2fefa3b94ab33ffe68d748cc67b"
+    },
+    {
+      "kind": "matched_suffix2048_result",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/runs/full/anomaly.sphinx-doc__sphinx-10323.call70.onset.json",
+      "sha256": "079baccb97ee11584b68c0e69353c172f1dd976fcbfdf65df71d53d421fd3182"
+    },
+    {
+      "kind": "cap4096_pytest_source",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/fixtures/full/anomaly.pytest-dev__pytest-5787.call65.onset.cap2048.seed44.private.json",
+      "sha256": "e1d35e0a08dca171114e3856df379fe7070264bce3410b7b4e6097a1a6562085"
+    },
+    {
+      "kind": "cap4096_pytest_source",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/runs/full/anomaly.pytest-dev__pytest-5787.call65.onset.cap2048.seed44.json",
+      "sha256": "8d87356ff1f0e6cb835889f799cd9bb4340db6f72b250a8a31e3423c7e497c55"
+    },
+    {
+      "kind": "cap4096_pytest_source",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/full-candidate-cases.json",
+      "sha256": "f54ca8d64a9e52b459f7b9f251a1ab7175e3d5a085009e7b23e3eed2bcc39319"
+    },
+    {
+      "kind": "cap4096_pytest_source",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/completion-summary.json",
+      "sha256": "8149f12cbcb5a8e4a552e02241d0c3ebd7e3ff686a99bde8d46659c09e506e5b"
+    },
+    {
+      "kind": "cap4096_pytest_source",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/runs/full/load.json",
+      "sha256": "2792bf6b72dd79789d05ce3d11b93f0e597e3930731cfc91ca2869b4f47870ff"
+    },
+    {
+      "kind": "cap4096_pytest_source",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-execution/full.log",
+      "sha256": "686be58e5a27e7839cb7beb6d86977fdef4e7dc0deb81a031a8f85a659a9ba0c"
+    },
+    {
+      "kind": "cap4096_pytest_source",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_build_kwargs.json",
+      "sha256": "ff2b5ed24e0b6a1dee7eb5cd8bd437d17c3df5f8f25567927d239e666f0699f9"
+    },
+    {
+      "kind": "cap4096_pytest_source",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_config.json",
+      "sha256": "63ce02f7fa0df993a27daca25eeeb3adca51e15c7c6956d1cef122534ebdc7a9"
+    },
+    {
+      "kind": "cap4096_pytest_source",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/pytest-call65-cap4096/pytest-call65.cap4096.seed44.private.json",
+      "sha256": "a383f6456c2dc6a0e08eeb4d17aad8561a2ad783ef92d8642e74218b1963447c"
+    },
+    {
+      "kind": "cap4096_pytest_source",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/pytest-call65-cap4096/full-cases.json",
+      "sha256": "2d1ea29c9fcac5846713e3243e2446fb22d36ac9484ed4c3adf5283d3141904d"
+    },
+    {
+      "kind": "cap4096_pytest_source",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/pytest-call65-cap4096/forecast.json",
+      "sha256": "717931e5ffa2e4fedc23da5dd4ed4fd71233f829135ab713f6f24c1411f9bd64"
+    },
+    {
+      "kind": "cap4096_pytest_source",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/pytest-call65-cap4096/command.json",
+      "sha256": "92c9b6b55552685251823016bbf6b84dd51fb5d91a960106293facb3bd9ba718"
+    },
+    {
+      "kind": "cap4096_pytest_source",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/pytest-call65-cap4096/README.md",
+      "sha256": "d28ef7af9ec73c50764b566b7932b83b9ea07adc3eb77e03e4988a10e28ba075"
+    },
+    {
+      "kind": "source_or_candidate_artifact",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-admitted-controls85/combined-cases.json",
+      "sha256": "f2aeb0bfe40bce8c102ceba564c41ca164a138d90d9fd25adc5993b6c3d8eb81"
+    },
+    {
+      "kind": "source_or_candidate_artifact",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/triage-b.json",
+      "sha256": "5a81a0320842a63860b9859f95d0c92ad0be2c09b35a11a2fbc504f8c142ca1a"
+    },
+    {
+      "kind": "source_or_candidate_artifact",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/completed-anomaly-review-index.json",
+      "sha256": "d40481cf719ee4a489dd88c3625b04e4b85023885343373942b9afd424bbd19e"
+    },
+    {
+      "kind": "source_or_candidate_artifact",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/provenance.json",
+      "sha256": "84a2cce62555364e966d6bf0ed01125d289666d453f488db61ca00c0e5d94539"
+    },
+    {
+      "kind": "source_or_candidate_artifact",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/forecast.json",
+      "sha256": "901d3288842d7bf9a4b7b6dd71016bc5b7d02d1579dfc320a92e5129aaecd10e"
+    },
+    {
+      "kind": "source_or_candidate_artifact",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/README.md",
+      "sha256": "5cdb94d1284296385618411dab187b7e0ca7247b17ed24cb39e70165c5a7da2c"
+    },
+    {
+      "kind": "source_or_candidate_artifact",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/command.json",
+      "sha256": "34c9bf57c797132169533bd158e477baa97bb18477b39126f9df105486e64f61"
+    },
+    {
+      "kind": "source_or_candidate_artifact",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/cpu-validation.json",
+      "sha256": "3dcf3258c70a40dcac0c833609d22f84327c2c2f720ce4022e796ee3877d17e8"
+    },
+    {
+      "kind": "source_or_candidate_artifact",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/compare_suffix4096_outputs.py",
+      "sha256": "44dbee2286624a560c5167bc4f3c704d12fe126c5e90f2d55e41ef0a4d7926b3"
+    },
+    {
+      "kind": "source_or_candidate_artifact",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/merged-fourth-cap.json",
+      "sha256": "4f72f395f008c9ac5bfaefe42a0c0c7dcd092b9b31195220c5ef658862a289f6"
+    },
+    {
+      "kind": "source_or_candidate_artifact",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/pytest-call65-cap4096/full-cases.json",
+      "sha256": "2d1ea29c9fcac5846713e3243e2446fb22d36ac9484ed4c3adf5283d3141904d"
+    },
+    {
+      "kind": "source_or_candidate_artifact",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/pytest-call65-cap4096/forecast.json",
+      "sha256": "717931e5ffa2e4fedc23da5dd4ed4fd71233f829135ab713f6f24c1411f9bd64"
+    },
+    {
+      "kind": "source_or_candidate_artifact",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/pytest-call65-cap4096/command.json",
+      "sha256": "92c9b6b55552685251823016bbf6b84dd51fb5d91a960106293facb3bd9ba718"
+    },
+    {
+      "kind": "source_or_candidate_artifact",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/pytest-call65-cap4096/README.md",
+      "sha256": "d28ef7af9ec73c50764b566b7932b83b9ea07adc3eb77e03e4988a10e28ba075"
+    }
+  ],
+  "forecast_sha256": "901d3288842d7bf9a4b7b6dd71016bc5b7d02d1579dfc320a92e5129aaecd10e",
+  "cpu_validation_sha256": "3dcf3258c70a40dcac0c833609d22f84327c2c2f720ce4022e796ee3877d17e8",
+  "merged_extension_record_sha256": "4f72f395f008c9ac5bfaefe42a0c0c7dcd092b9b31195220c5ef658862a289f6"
+}

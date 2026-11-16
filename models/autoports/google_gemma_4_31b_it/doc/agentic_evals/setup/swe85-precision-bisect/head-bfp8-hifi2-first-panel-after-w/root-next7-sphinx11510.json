@@ -1,0 +1,124 @@
+{
+  "reviewed_unix": 1794723357.4862115,
+  "rows": [
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.sphinx-doc__sphinx-10323.call70.onset.seed44.cap256.json",
+      "sha256": "b3bf91923e359562a71460386d45a71573f3029540e95118d8b9096b4903b777",
+      "seed": 44,
+      "tokens": 36,
+      "verdict": "normal",
+      "reason": "Full raw continuation and pinned prefix read; coherent distinct continuation with canonical tool arguments. No task correctness claim.",
+      "trace_counters_delta": {
+        "model_replays": 35,
+        "sample_replays": 35,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 35,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.seed42.cap2048.json",
+      "sha256": "97ccd0b795cb8b5b08ed24251b362114ed15019f237248d379606e72a625025e",
+      "seed": 42,
+      "tokens": 267,
+      "verdict": "normal",
+      "reason": "Full raw continuation and pinned prefix read; coherent distinct continuation with canonical tool arguments. No task correctness claim.",
+      "trace_counters_delta": {
+        "model_replays": 266,
+        "sample_replays": 266,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 266,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.seed43.cap2048.json",
+      "sha256": "bdf0ba4d3b84ac74ad2045783f5ef7e9ee73434f76af9abfa2ee4a3d35de49b7",
+      "seed": 43,
+      "tokens": 946,
+      "verdict": "other",
+      "reason": "Grammatical contraction onset but later tool invocation missing argument-object opener; parser audit requested.",
+      "trace_counters_delta": {
+        "model_replays": 945,
+        "sample_replays": 945,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 945,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.seed44.cap1024.json",
+      "sha256": "1222e6ea106199dcbb25f749da730939ce8ae00e73eaaafa1ab05275f7e349a5",
+      "seed": 44,
+      "tokens": 174,
+      "verdict": "normal",
+      "reason": "Full raw continuation and pinned prefix read; coherent distinct continuation with canonical tool arguments. No task correctness claim.",
+      "trace_counters_delta": {
+        "model_replays": 173,
+        "sample_replays": 173,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 173,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset.seed42.cap256.json",
+      "sha256": "5ad478ce83c0d719217361bc36c2e55f8ceb5e78f06fa812bf98ffe251752e70",
+      "seed": 42,
+      "tokens": 48,
+      "verdict": "normal",
+      "reason": "Full raw continuation and pinned prefix read; coherent distinct continuation with canonical tool arguments. No task correctness claim.",
+      "trace_counters_delta": {
+        "model_replays": 47,
+        "sample_replays": 47,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 47,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset.seed43.cap256.json",
+      "sha256": "72ba95abd92abf19ee4a48e6c131e908658fa0d4490b5a3284c028c1afe3ada5",
+      "seed": 43,
+      "tokens": 4,
+      "verdict": "native",
+      "reason": "Original malformed tool protocol family: inherited call:bash followed by empty malformed argument continuation; parser confirms invalid function/arguments.",
+      "trace_counters_delta": {
+        "model_replays": 3,
+        "sample_replays": 3,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 3,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset.seed44.cap256.json",
+      "sha256": "2f003fb494cddb6a9790830c815dcb78936469e976af7d41b980720d239011db",
+      "seed": 44,
+      "tokens": 116,
+      "verdict": "normal",
+      "reason": "Full raw continuation and pinned prefix read; coherent distinct continuation with canonical tool arguments. No task correctness claim.",
+      "trace_counters_delta": {
+        "model_replays": 115,
+        "sample_replays": 115,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 115,
+        "captures": 0
+      }
+    }
+  ]
+}

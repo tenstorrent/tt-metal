@@ -1,0 +1,73 @@
+{
+  "reviewed_unix": 1794725204.138442,
+  "rows": [
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/runs/head_bf16_hifi4/anomaly.matplotlib__matplotlib-20488.call82.onset.seed43.cap256.json",
+      "sha256": "aeeac94331f399624c06bec97fac337dbe014f0af11771bbdeb42a230837513e",
+      "seed": 43,
+      "tokens": 87,
+      "verdict": "normal",
+      "reason": "Root read full text with exact decoded prefix ending completed Ive. Grammatical continuation and canonical inspection tool call, no visible anomaly; no task-correctness claim.",
+      "trace_counters_delta": {
+        "model_replays": 86,
+        "sample_replays": 86,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 86,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/runs/head_bf16_hifi4/anomaly.matplotlib__matplotlib-20488.call82.onset.seed44.cap256.json",
+      "sha256": "7a9655d075e8e35bc20227a4994b839e3a81cf7b5f9f5208bdc948ae7ad7fdd9",
+      "seed": 44,
+      "tokens": 58,
+      "verdict": "native",
+      "reason": "Root read full text with exact decoded prefix ending completed Ive. Immediate extra curly apostrophe-ve: localized native contraction anomaly.",
+      "trace_counters_delta": {
+        "model_replays": 57,
+        "sample_replays": 57,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 57,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/runs/head_bf16_hifi4/anomaly.matplotlib__matplotlib-20488.call86.onset.seed42.cap256.json",
+      "sha256": "5fb5cec6a3c7df23e72ad372bf374054bc648a9050561d95e859e442c1b4160f",
+      "seed": 42,
+      "tokens": 121,
+      "verdict": "normal",
+      "reason": "Root read full text with exact decoded prefix ending completed Ive. Grammatical continuation and canonical inspection tool call, no visible anomaly; no task-correctness claim.",
+      "trace_counters_delta": {
+        "model_replays": 120,
+        "sample_replays": 120,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 120,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/runs/head_bf16_hifi4/anomaly.matplotlib__matplotlib-20488.call86.onset.seed43.cap256.json",
+      "sha256": "d7f6a8077dd4106684e4d07e3e1e18a6c4e0cec0298539cc892e9cfe81cd2dfa",
+      "seed": 43,
+      "tokens": 94,
+      "verdict": "native",
+      "reason": "Root read full text with exact decoded prefix ending completed Ive. Immediate extra curly apostrophe-ve: localized native contraction anomaly.",
+      "trace_counters_delta": {
+        "model_replays": 93,
+        "sample_replays": 93,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 93,
+        "captures": 0
+      }
+    }
+  ]
+}

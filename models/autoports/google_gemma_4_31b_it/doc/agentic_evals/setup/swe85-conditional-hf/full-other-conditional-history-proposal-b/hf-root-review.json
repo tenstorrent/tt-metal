@@ -1,0 +1,28 @@
+{
+  "status": "complete_root_reviewed",
+  "at_unix": 1794770600.729069,
+  "cases": 22,
+  "positions": 1370,
+  "completion": {
+    "start_unix": 1794769306.604741,
+    "end_unix": 1794770495.630669,
+    "exit_code": 0,
+    "wall_seconds": 1189.0259280204773
+  },
+  "aggregate": {
+    "weighted_top1_agreement": 0.9861313868613139,
+    "mean_abs_chosen_logprob_delta": 0.02525844680451669,
+    "mean_signed_chosen_logprob_delta": -0.006236229241713188,
+    "max_abs_chosen_logprob_delta": 1.251607894897461
+  },
+  "independent_review": "hf-independent-terminal-review-c.json",
+  "independent_review_sha256": "5b473f48490ae1de9e4211e1ca9470586ea4be83f376559439f3e56cace92c0c",
+  "forecast_seconds": [
+    1500,
+    2700,
+    5000
+  ],
+  "forecast_result": "below_low",
+  "forecast_analysis": "Conservative extrapolation from two long-context HF CPU prefill anchors overestimated this shared-load batch of short windows. Completed all22 windows; no quality inference from speed. These are conditional comparisons, not serving performance.",
+  "scope": "Exact saved reconstructed histories and forced continuations compared to frozen pre-Q32 TT22. Not native prompt/RNG replay, free-running anomaly incidence, or task score. One free HF token is excluded from incidence evidence."
+}

@@ -1,0 +1,789 @@
+{
+  "scope": "real_layer0_local_output_projection_and_down_projection_bf16_ccl_only",
+  "sources": {
+    "self_attn.o_proj": {
+      "dtype": "DataType.BFLOAT16",
+      "shape": [
+        1,
+        1,
+        1024,
+        5376
+      ]
+    },
+    "mlp.down_proj": {
+      "dtype": "DataType.BFLOAT16",
+      "shape": [
+        1,
+        1,
+        1024,
+        5376
+      ]
+    }
+  },
+  "precision_config": {
+    "config_id": "stage12_bf16_hifi4_kv_down_bfp8_p19",
+    "weight_groups": {
+      "attention": "bf16",
+      "mlp": "bf16",
+      "down": "bfp8_lofi",
+      "lm_head": "bf16"
+    },
+    "layer_exceptions": {},
+    "compute_fidelities": {
+      "attention": "HiFi4",
+      "mlp": "HiFi4",
+      "down": "LoFi",
+      "lm_head": "HiFi4"
+    },
+    "activation_dtype": "bfloat16",
+    "residual_dtype": "bfloat16",
+    "ccl_dtype": {
+      "prefill": "bfloat16",
+      "decode": "bfloat16"
+    },
+    "kv_cache_dtype": "bfloat8_b",
+    "logits_dtype": "bfloat16",
+    "sampling_dtype": "bfloat16",
+    "embedding_dtype": "bfloat16",
+    "norm_dtype": "bfloat16",
+    "max_seq_len": 262144,
+    "sdpa_compute_fidelity": "HiFi4"
+  },
+  "precision_config_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/bf16-hifi4-kv-down-bfp8-accuracy-p19/precision.json",
+  "prefill_ccl_bfp8": false,
+  "mesh": [
+    1,
+    4
+  ],
+  "num_links": 2,
+  "precision_changed": false,
+  "hypothesis": "P19 BF16 prefill CCL bypasses the BFP8-only absolute-row phase padding. This test compares reduction of exact BF16 rows with suffix views and leading-padding variants; it tests a local mechanism only.",
+  "comparisons": [
+    {
+      "projection": "self_attn.o_proj",
+      "start": 32,
+      "mode": "direct",
+      "leading_rows": 0,
+      "physical_rows": 992,
+      "input_exact": true,
+      "shape": [
+        992,
+        5376
+      ],
+      "exact_equal": false,
+      "max_abs_difference": 0.5,
+      "mean_abs_difference": 0.003136044465428856,
+      "pcc_mean": 0.9999981472221274,
+      "pcc_min": 0.9999946484309462,
+      "worst_row_offset": 489
+    },
+    {
+      "projection": "self_attn.o_proj",
+      "start": 32,
+      "mode": "fixed_workers_2",
+      "leading_rows": 0,
+      "physical_rows": 992,
+      "input_exact": true,
+      "shape": [
+        992,
+        5376
+      ],
+      "exact_equal": false,
+      "max_abs_difference": 0.5,
+      "mean_abs_difference": 0.003136044465428856,
+      "pcc_mean": 0.9999981472221274,
+      "pcc_min": 0.9999946484309462,
+      "worst_row_offset": 489
+    },
+    {
+      "projection": "self_attn.o_proj",
+      "start": 32,
+      "mode": "tail_pad_1024",
+      "leading_rows": 0,
+      "physical_rows": 1024,
+      "input_exact": true,
+      "shape": [
+        992,
+        5376
+      ],
+      "exact_equal": false,
+      "max_abs_difference": 0.5,
+      "mean_abs_difference": 0.003136044465428856,
+      "pcc_mean": 0.9999981472221274,
+      "pcc_min": 0.9999946484309462,
+      "worst_row_offset": 489
+    },
+    {
+      "projection": "self_attn.o_proj",
+      "start": 32,
+      "mode": "leading_phase_pad",
+      "leading_rows": 32,
+      "physical_rows": 1024,
+      "input_exact": true,
+      "shape": [
+        992,
+        5376
+      ],
+      "exact_equal": true,
+      "max_abs_difference": 0.0,
+      "mean_abs_difference": 0.0,
+      "pcc_mean": 1.0000000000000007,
+      "pcc_min": 0.9999999999999701,
+      "worst_row_offset": 423
+    },
+    {
+      "projection": "self_attn.o_proj",
+      "start": 32,
+      "mode": "absolute_leading_pad",
+      "leading_rows": 32,
+      "physical_rows": 1024,
+      "input_exact": true,
+      "shape": [
+        992,
+        5376
+      ],
+      "exact_equal": true,
+      "max_abs_difference": 0.0,
+      "mean_abs_difference": 0.0,
+      "pcc_mean": 1.0000000000000007,
+      "pcc_min": 0.9999999999999701,
+      "worst_row_offset": 423
+    },
+    {
+      "projection": "self_attn.o_proj",
+      "start": 64,
+      "mode": "direct",
+      "leading_rows": 0,
+      "physical_rows": 960,
+      "input_exact": true,
+      "shape": [
+        960,
+        5376
+      ],
+      "exact_equal": false,
+      "max_abs_difference": 0.5,
+      "mean_abs_difference": 0.002082332803143395,
+      "pcc_mean": 0.9999987716394666,
+      "pcc_min": 0.9999955484974546,
+      "worst_row_offset": 38
+    },
+    {
+      "projection": "self_attn.o_proj",
+      "start": 64,
+      "mode": "fixed_workers_2",
+      "leading_rows": 0,
+      "physical_rows": 960,
+      "input_exact": true,
+      "shape": [
+        960,
+        5376
+      ],
+      "exact_equal": false,
+      "max_abs_difference": 0.5,
+      "mean_abs_difference": 0.002082332803143395,
+      "pcc_mean": 0.9999987716394666,
+      "pcc_min": 0.9999955484974546,
+      "worst_row_offset": 38
+    },
+    {
+      "projection": "self_attn.o_proj",
+      "start": 64,
+      "mode": "tail_pad_1024",
+      "leading_rows": 0,
+      "physical_rows": 1024,
+      "input_exact": true,
+      "shape": [
+        960,
+        5376
+      ],
+      "exact_equal": false,
+      "max_abs_difference": 0.5,
+      "mean_abs_difference": 0.002082332803143395,
+      "pcc_mean": 0.9999987716394666,
+      "pcc_min": 0.9999955484974546,
+      "worst_row_offset": 38
+    },
+    {
+      "projection": "self_attn.o_proj",
+      "start": 64,
+      "mode": "leading_phase_pad",
+      "leading_rows": 64,
+      "physical_rows": 1024,
+      "input_exact": true,
+      "shape": [
+        960,
+        5376
+      ],
+      "exact_equal": true,
+      "max_abs_difference": 0.0,
+      "mean_abs_difference": 0.0,
+      "pcc_mean": 1.0000000000000004,
+      "pcc_min": 0.9999999999999701,
+      "worst_row_offset": 391
+    },
+    {
+      "projection": "self_attn.o_proj",
+      "start": 64,
+      "mode": "absolute_leading_pad",
+      "leading_rows": 64,
+      "physical_rows": 1024,
+      "input_exact": true,
+      "shape": [
+        960,
+        5376
+      ],
+      "exact_equal": true,
+      "max_abs_difference": 0.0,
+      "mean_abs_difference": 0.0,
+      "pcc_mean": 1.0000000000000004,
+      "pcc_min": 0.9999999999999701,
+      "worst_row_offset": 391
+    },
+    {
+      "projection": "self_attn.o_proj",
+      "start": 128,
+      "mode": "direct",
+      "leading_rows": 0,
+      "physical_rows": 896,
+      "input_exact": true,
+      "shape": [
+        896,
+        5376
+      ],
+      "exact_equal": false,
+      "max_abs_difference": 0.5,
+      "mean_abs_difference": 0.004206416479052127,
+      "pcc_mean": 0.9999975249406239,
+      "pcc_min": 0.9999939370350835,
+      "worst_row_offset": 210
+    },
+    {
+      "projection": "self_attn.o_proj",
+      "start": 128,
+      "mode": "fixed_workers_2",
+      "leading_rows": 0,
+      "physical_rows": 896,
+      "input_exact": true,
+      "shape": [
+        896,
+        5376
+      ],
+      "exact_equal": false,
+      "max_abs_difference": 0.5,
+      "mean_abs_difference": 0.004206416479052127,
+      "pcc_mean": 0.9999975249406239,
+      "pcc_min": 0.9999939370350835,
+      "worst_row_offset": 210
+    },
+    {
+      "projection": "self_attn.o_proj",
+      "start": 128,
+      "mode": "tail_pad_1024",
+      "leading_rows": 0,
+      "physical_rows": 1024,
+      "input_exact": true,
+      "shape": [
+        896,
+        5376
+      ],
+      "exact_equal": false,
+      "max_abs_difference": 0.5,
+      "mean_abs_difference": 0.004206416479052127,
+      "pcc_mean": 0.9999975249406239,
+      "pcc_min": 0.9999939370350835,
+      "worst_row_offset": 210
+    },
+    {
+      "projection": "self_attn.o_proj",
+      "start": 128,
+      "mode": "leading_phase_pad",
+      "leading_rows": 128,
+      "physical_rows": 1024,
+      "input_exact": true,
+      "shape": [
+        896,
+        5376
+      ],
+      "exact_equal": true,
+      "max_abs_difference": 0.0,
+      "mean_abs_difference": 0.0,
+      "pcc_mean": 1.0000000000000007,
+      "pcc_min": 0.9999999999999701,
+      "worst_row_offset": 327
+    },
+    {
+      "projection": "self_attn.o_proj",
+      "start": 128,
+      "mode": "absolute_leading_pad",
+      "leading_rows": 128,
+      "physical_rows": 1024,
+      "input_exact": true,
+      "shape": [
+        896,
+        5376
+      ],
+      "exact_equal": true,
+      "max_abs_difference": 0.0,
+      "mean_abs_difference": 0.0,
+      "pcc_mean": 1.0000000000000007,
+      "pcc_min": 0.9999999999999701,
+      "worst_row_offset": 327
+    },
+    {
+      "projection": "self_attn.o_proj",
+      "start": 256,
+      "mode": "direct",
+      "leading_rows": 0,
+      "physical_rows": 768,
+      "input_exact": true,
+      "shape": [
+        768,
+        5376
+      ],
+      "exact_equal": true,
+      "max_abs_difference": 0.0,
+      "mean_abs_difference": 0.0,
+      "pcc_mean": 1.0000000000000007,
+      "pcc_min": 0.9999999999999701,
+      "worst_row_offset": 199
+    },
+    {
+      "projection": "self_attn.o_proj",
+      "start": 256,
+      "mode": "fixed_workers_2",
+      "leading_rows": 0,
+      "physical_rows": 768,
+      "input_exact": true,
+      "shape": [
+        768,
+        5376
+      ],
+      "exact_equal": true,
+      "max_abs_difference": 0.0,
+      "mean_abs_difference": 0.0,
+      "pcc_mean": 1.0000000000000007,
+      "pcc_min": 0.9999999999999701,
+      "worst_row_offset": 199
+    },
+    {
+      "projection": "self_attn.o_proj",
+      "start": 256,
+      "mode": "tail_pad_1024",
+      "leading_rows": 0,
+      "physical_rows": 1024,
+      "input_exact": true,
+      "shape": [
+        768,
+        5376
+      ],
+      "exact_equal": true,
+      "max_abs_difference": 0.0,
+      "mean_abs_difference": 0.0,
+      "pcc_mean": 1.0000000000000007,
+      "pcc_min": 0.9999999999999701,
+      "worst_row_offset": 199
+    },
+    {
+      "projection": "self_attn.o_proj",
+      "start": 256,
+      "mode": "leading_phase_pad",
+      "leading_rows": 0,
+      "physical_rows": 768,
+      "input_exact": true,
+      "shape": [
+        768,
+        5376
+      ],
+      "exact_equal": true,
+      "max_abs_difference": 0.0,
+      "mean_abs_difference": 0.0,
+      "pcc_mean": 1.0000000000000007,
+      "pcc_min": 0.9999999999999701,
+      "worst_row_offset": 199
+    },
+    {
+      "projection": "self_attn.o_proj",
+      "start": 256,
+      "mode": "absolute_leading_pad",
+      "leading_rows": 256,
+      "physical_rows": 1024,
+      "input_exact": true,
+      "shape": [
+        768,
+        5376
+      ],
+      "exact_equal": true,
+      "max_abs_difference": 0.0,
+      "mean_abs_difference": 0.0,
+      "pcc_mean": 1.0000000000000007,
+      "pcc_min": 0.9999999999999701,
+      "worst_row_offset": 199
+    },
+    {
+      "projection": "mlp.down_proj",
+      "start": 32,
+      "mode": "direct",
+      "leading_rows": 0,
+      "physical_rows": 992,
+      "input_exact": true,
+      "shape": [
+        992,
+        5376
+      ],
+      "exact_equal": false,
+      "max_abs_difference": 0.125,
+      "mean_abs_difference": 0.0007354944347820249,
+      "pcc_mean": 0.9999980548961278,
+      "pcc_min": 0.9999964780756312,
+      "worst_row_offset": 876
+    },
+    {
+      "projection": "mlp.down_proj",
+      "start": 32,
+      "mode": "fixed_workers_2",
+      "leading_rows": 0,
+      "physical_rows": 992,
+      "input_exact": true,
+      "shape": [
+        992,
+        5376
+      ],
+      "exact_equal": false,
+      "max_abs_difference": 0.125,
+      "mean_abs_difference": 0.0007354944347820249,
+      "pcc_mean": 0.9999980548961278,
+      "pcc_min": 0.9999964780756312,
+      "worst_row_offset": 876
+    },
+    {
+      "projection": "mlp.down_proj",
+      "start": 32,
+      "mode": "tail_pad_1024",
+      "leading_rows": 0,
+      "physical_rows": 1024,
+      "input_exact": true,
+      "shape": [
+        992,
+        5376
+      ],
+      "exact_equal": false,
+      "max_abs_difference": 0.125,
+      "mean_abs_difference": 0.0007354944347820249,
+      "pcc_mean": 0.9999980548961278,
+      "pcc_min": 0.9999964780756312,
+      "worst_row_offset": 876
+    },
+    {
+      "projection": "mlp.down_proj",
+      "start": 32,
+      "mode": "leading_phase_pad",
+      "leading_rows": 32,
+      "physical_rows": 1024,
+      "input_exact": true,
+      "shape": [
+        992,
+        5376
+      ],
+      "exact_equal": true,
+      "max_abs_difference": 0.0,
+      "mean_abs_difference": 0.0,
+      "pcc_mean": 1.0000000000000004,
+      "pcc_min": 0.9999999999999722,
+      "worst_row_offset": 215
+    },
+    {
+      "projection": "mlp.down_proj",
+      "start": 32,
+      "mode": "absolute_leading_pad",
+      "leading_rows": 32,
+      "physical_rows": 1024,
+      "input_exact": true,
+      "shape": [
+        992,
+        5376
+      ],
+      "exact_equal": true,
+      "max_abs_difference": 0.0,
+      "mean_abs_difference": 0.0,
+      "pcc_mean": 1.0000000000000004,
+      "pcc_min": 0.9999999999999722,
+      "worst_row_offset": 215
+    },
+    {
+      "projection": "mlp.down_proj",
+      "start": 64,
+      "mode": "direct",
+      "leading_rows": 0,
+      "physical_rows": 960,
+      "input_exact": true,
+      "shape": [
+        960,
+        5376
+      ],
+      "exact_equal": false,
+      "max_abs_difference": 0.125,
+      "mean_abs_difference": 0.00048598842547526436,
+      "pcc_mean": 0.9999987302592158,
+      "pcc_min": 0.9999971647485096,
+      "worst_row_offset": 844
+    },
+    {
+      "projection": "mlp.down_proj",
+      "start": 64,
+      "mode": "fixed_workers_2",
+      "leading_rows": 0,
+      "physical_rows": 960,
+      "input_exact": true,
+      "shape": [
+        960,
+        5376
+      ],
+      "exact_equal": false,
+      "max_abs_difference": 0.125,
+      "mean_abs_difference": 0.00048598842547526436,
+      "pcc_mean": 0.9999987302592158,
+      "pcc_min": 0.9999971647485096,
+      "worst_row_offset": 844
+    },
+    {
+      "projection": "mlp.down_proj",
+      "start": 64,
+      "mode": "tail_pad_1024",
+      "leading_rows": 0,
+      "physical_rows": 1024,
+      "input_exact": true,
+      "shape": [
+        960,
+        5376
+      ],
+      "exact_equal": false,
+      "max_abs_difference": 0.125,
+      "mean_abs_difference": 0.00048598842547526436,
+      "pcc_mean": 0.9999987302592158,
+      "pcc_min": 0.9999971647485096,
+      "worst_row_offset": 844
+    },
+    {
+      "projection": "mlp.down_proj",
+      "start": 64,
+      "mode": "leading_phase_pad",
+      "leading_rows": 64,
+      "physical_rows": 1024,
+      "input_exact": true,
+      "shape": [
+        960,
+        5376
+      ],
+      "exact_equal": true,
+      "max_abs_difference": 0.0,
+      "mean_abs_difference": 0.0,
+      "pcc_mean": 1.0000000000000007,
+      "pcc_min": 0.9999999999999722,
+      "worst_row_offset": 183
+    },
+    {
+      "projection": "mlp.down_proj",
+      "start": 64,
+      "mode": "absolute_leading_pad",
+      "leading_rows": 64,
+      "physical_rows": 1024,
+      "input_exact": true,
+      "shape": [
+        960,
+        5376
+      ],
+      "exact_equal": true,
+      "max_abs_difference": 0.0,
+      "mean_abs_difference": 0.0,
+      "pcc_mean": 1.0000000000000007,
+      "pcc_min": 0.9999999999999722,
+      "worst_row_offset": 183
+    },
+    {
+      "projection": "mlp.down_proj",
+      "start": 128,
+      "mode": "direct",
+      "leading_rows": 0,
+      "physical_rows": 896,
+      "input_exact": true,
+      "shape": [
+        896,
+        5376
+      ],
+      "exact_equal": false,
+      "max_abs_difference": 0.125,
+      "mean_abs_difference": 0.0009710659284055943,
+      "pcc_mean": 0.9999974235777911,
+      "pcc_min": 0.9999953765649102,
+      "worst_row_offset": 780
+    },
+    {
+      "projection": "mlp.down_proj",
+      "start": 128,
+      "mode": "fixed_workers_2",
+      "leading_rows": 0,
+      "physical_rows": 896,
+      "input_exact": true,
+      "shape": [
+        896,
+        5376
+      ],
+      "exact_equal": false,
+      "max_abs_difference": 0.125,
+      "mean_abs_difference": 0.0009710659284055943,
+      "pcc_mean": 0.9999974235777911,
+      "pcc_min": 0.9999953765649102,
+      "worst_row_offset": 780
+    },
+    {
+      "projection": "mlp.down_proj",
+      "start": 128,
+      "mode": "tail_pad_1024",
+      "leading_rows": 0,
+      "physical_rows": 1024,
+      "input_exact": true,
+      "shape": [
+        896,
+        5376
+      ],
+      "exact_equal": false,
+      "max_abs_difference": 0.125,
+      "mean_abs_difference": 0.0009710659284055943,
+      "pcc_mean": 0.9999974235777911,
+      "pcc_min": 0.9999953765649102,
+      "worst_row_offset": 780
+    },
+    {
+      "projection": "mlp.down_proj",
+      "start": 128,
+      "mode": "leading_phase_pad",
+      "leading_rows": 128,
+      "physical_rows": 1024,
+      "input_exact": true,
+      "shape": [
+        896,
+        5376
+      ],
+      "exact_equal": true,
+      "max_abs_difference": 0.0,
+      "mean_abs_difference": 0.0,
+      "pcc_mean": 1.0000000000000004,
+      "pcc_min": 0.9999999999999722,
+      "worst_row_offset": 119
+    },
+    {
+      "projection": "mlp.down_proj",
+      "start": 128,
+      "mode": "absolute_leading_pad",
+      "leading_rows": 128,
+      "physical_rows": 1024,
+      "input_exact": true,
+      "shape": [
+        896,
+        5376
+      ],
+      "exact_equal": true,
+      "max_abs_difference": 0.0,
+      "mean_abs_difference": 0.0,
+      "pcc_mean": 1.0000000000000004,
+      "pcc_min": 0.9999999999999722,
+      "worst_row_offset": 119
+    },
+    {
+      "projection": "mlp.down_proj",
+      "start": 256,
+      "mode": "direct",
+      "leading_rows": 0,
+      "physical_rows": 768,
+      "input_exact": true,
+      "shape": [
+        768,
+        5376
+      ],
+      "exact_equal": true,
+      "max_abs_difference": 0.0,
+      "mean_abs_difference": 0.0,
+      "pcc_mean": 1.0000000000000007,
+      "pcc_min": 0.9999999999999744,
+      "worst_row_offset": 351
+    },
+    {
+      "projection": "mlp.down_proj",
+      "start": 256,
+      "mode": "fixed_workers_2",
+      "leading_rows": 0,
+      "physical_rows": 768,
+      "input_exact": true,
+      "shape": [
+        768,
+        5376
+      ],
+      "exact_equal": true,
+      "max_abs_difference": 0.0,
+      "mean_abs_difference": 0.0,
+      "pcc_mean": 1.0000000000000007,
+      "pcc_min": 0.9999999999999744,
+      "worst_row_offset": 351
+    },
+    {
+      "projection": "mlp.down_proj",
+      "start": 256,
+      "mode": "tail_pad_1024",
+      "leading_rows": 0,
+      "physical_rows": 1024,
+      "input_exact": true,
+      "shape": [
+        768,
+        5376
+      ],
+      "exact_equal": true,
+      "max_abs_difference": 0.0,
+      "mean_abs_difference": 0.0,
+      "pcc_mean": 1.0000000000000007,
+      "pcc_min": 0.9999999999999744,
+      "worst_row_offset": 351
+    },
+    {
+      "projection": "mlp.down_proj",
+      "start": 256,
+      "mode": "leading_phase_pad",
+      "leading_rows": 0,
+      "physical_rows": 768,
+      "input_exact": true,
+      "shape": [
+        768,
+        5376
+      ],
+      "exact_equal": true,
+      "max_abs_difference": 0.0,
+      "mean_abs_difference": 0.0,
+      "pcc_mean": 1.0000000000000007,
+      "pcc_min": 0.9999999999999744,
+      "worst_row_offset": 351
+    },
+    {
+      "projection": "mlp.down_proj",
+      "start": 256,
+      "mode": "absolute_leading_pad",
+      "leading_rows": 256,
+      "physical_rows": 1024,
+      "input_exact": true,
+      "shape": [
+        768,
+        5376
+      ],
+      "exact_equal": true,
+      "max_abs_difference": 0.0,
+      "mean_abs_difference": 0.0,
+      "pcc_mean": 1.0000000000000007,
+      "pcc_min": 0.9999999999999744,
+      "worst_row_offset": 351
+    }
+  ],
+  "limitations": [
+    "Correctness-only host reads; no performance claim.",
+    "All cases use slices of the same real local projection, not regenerated projections.",
+    "This does not compare full resumed versus fresh model logits or identify earliest divergence.",
+    "Any alignment result is evidence about this captured layer0 BF16 projection only."
+  ]
+}

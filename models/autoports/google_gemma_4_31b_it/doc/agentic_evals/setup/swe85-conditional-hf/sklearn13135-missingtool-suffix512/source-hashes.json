@@ -1,0 +1,29 @@
+{
+  "status": "stable-source-inventory",
+  "purpose": "Root admission binds this inventory; mutable canonical learned.json is deliberately excluded. Immutable fixtures, source code, original evidence, candidate manifests, commands, and runtime inputs remain hash-pinned.",
+  "files": {
+    "bringup/run_contract.json": "64003208ab7d8feefbcbb2c5ea8fe4cb99f9d172f26800529489f23a0055b43e",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-extra-contraction-controls/scikit-learn__scikit-learn-13135.call29.onset.private.json": "1403d7a48b7ecca8ec2095479c77a871caa3add09bedd7f6830d36315a883bd2",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/full-sklearn13135-seed42-stock-parser-audit-e.json": "dabab80a6d483271e69611faa05c32c69ee059eb5d9a5005ab7f2cec934e7595",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/full-coordinator-sklearn13135.json": "4e2eddf28b2e3a89dd26d589db61ca52aecb232b882c2c2c56cfea68af330aab",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/full/anomaly.scikit-learn__scikit-learn-13135.call29.onset.cap512.seed42.json": "0c8c1b05d5eb308b5101a9cbfaac37905ce80759d1819a68260e364cd4026b60",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/fixtures/full/anomaly.scikit-learn__scikit-learn-13135.call29.onset.cap512.seed42.private.json": "b2bc1faecef939654bf2a604c330cceff4a8ea7d2858fb422e9acff931f1dabe",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/served/anomaly.scikit-learn__scikit-learn-13135.call29.onset.cap512.seed42.json": "64c679d381610abf89aac0e9261c9851dcdbe00d8c328563c512922bf447853c",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/fixtures/served/anomaly.scikit-learn__scikit-learn-13135.call29.onset.cap512.seed42.private.json": "81a7a3e9ed29c693244311ba748a2afe72be7ef3200c2eee5005c799e2fd2bdf",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/cost-estimate.json": "21bfc3457d46af9d85f0ed3749dd445660c20d1196a228455b17e9126ab5da40",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded/original-full-coverage-audit-b.json": "50074a235ad71676c8824e6cc89cdff0aaa6d43b47a1723863909da7844cb356",
+    "models/autoports/google_gemma_4_31b_it/tools/precision_repro_batch.py": "172f5a1dd7a7403847e47b966ae79c306163650a60211418c7c195794ec5c125",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/served_build_kwargs.json": "5fa69bb46bd0ad950e1a720d53e1c89ef87b07d6857a59f85a7d96f36dfff201",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/served_precision_config.json": "af0969d87723dccb3a1199c01632ae720324f68c0287e8e327566a754be2d410",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_build_kwargs.json": "ff2b5ed24e0b6a1dee7eb5cd8bd437d17c3df5f8f25567927d239e666f0699f9",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_config.json": "63ce02f7fa0df993a27daca25eeeb3adca51e15c7c6956d1cef122534ebdc7a9",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/served-cases.json": "a93796ce41a985492fc2e5075f4463186fa9fc258a2095f9728b5f9eff3b9bdf",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/fixtures/served/anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix512.seed42.private.json": "5a7ba37c9bbe628df48ee771eda26ddae50445000e69c9afa32fcd662206767c",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/fixtures/served/anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix512.seed43.private.json": "cacc24dd02f9bcbc28aad63bc75ca93d1e0cfaccc45eeecc38958db676fa6d4d",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/fixtures/served/anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix512.seed44.private.json": "4a94d27b233d885c8a874ab5c9070a0b6c57d4633ccd230367490ffa6379148e",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/full-cases.json": "10f582d0c77b4fa472bef0ab6c17535ddf2a5a288ffb6d3c2af34d89c3264e35",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/fixtures/full/anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix512.seed42.private.json": "146c1ded9c3431eb4237ef84a8616b3e82ccad773e5a8cfc9202e34c449a0315",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/fixtures/full/anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix512.seed43.private.json": "8928fdb36ab1ff489efe48df4fddc51eb2e9efa090f2073ba41cde14c5248889",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/fixtures/full/anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix512.seed44.private.json": "2606ab1840fd85edc58d68ed0a33c3b6fbd88db86620104c8600acb9602a6ea7"
+  }
+}

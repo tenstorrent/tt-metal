@@ -1,0 +1,69 @@
+{
+  "status": "host_validation_passed_candidate_only_unadmitted_no_launch",
+  "candidate": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed",
+  "checks": {
+    "driver_py_compile": "pass",
+    "driver_self_test": "pass",
+    "driver_validate_only": "pass",
+    "manifest_count": 8,
+    "case_count": 9,
+    "manifest_hashes_match_prior_hf9_candidate": true,
+    "forecast_sha256_unchanged": "c9382b55bcc2f54b9f3be6788950fd76487804d6b17b3d49b04887ecd88c3fc0",
+    "output_namespace_fresh": true,
+    "saved_execution_commands_contain_no_validate_only": true,
+    "runner_validate_only": {
+      "new_invocation_by_this_agent": false,
+      "call91_group_validation_source": "root-call91-runner-validation.json in prior candidate",
+      "timeout_seconds": 60
+    }
+  },
+  "commands_run": [
+    "python -m py_compile models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/run_expanded_after_predecessors.py",
+    "python models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/run_expanded_after_predecessors.py --self-test",
+    "python models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/run_expanded_after_predecessors.py --validate-only"
+  ],
+  "manifest_checks": [
+    {
+      "serial_order": 1,
+      "sha256": "3ee6b4e9c15a7bee52da5b083bba00f5c334acb9f4062e6b92eaad5861e8c6cf",
+      "cases": 2
+    },
+    {
+      "serial_order": 2,
+      "sha256": "7635a0b1f75bfc8edb430bcfd33ec03926f8e863434878476f3d8cc5a83d5a0b",
+      "cases": 1
+    },
+    {
+      "serial_order": 3,
+      "sha256": "b9602b3c8ba1a97f7f64a73e7ac2e502edd12d6e6ccb1212a9dec39ec6c1a4a1",
+      "cases": 1
+    },
+    {
+      "serial_order": 4,
+      "sha256": "8be05cbc74c014acefe3372df69386534f31330b7276bdac0bed35e154fbd5c2",
+      "cases": 1
+    },
+    {
+      "serial_order": 5,
+      "sha256": "13667fc0b8c2c1dab6a1d276c24dd1e66eb763efdfae2f09539b70851079dac8",
+      "cases": 1
+    },
+    {
+      "serial_order": 6,
+      "sha256": "0dea5abb26a89e862306a89acdbef3a8c2c9e990defc60313b90795d47a857d2",
+      "cases": 1
+    },
+    {
+      "serial_order": 7,
+      "sha256": "2f8afa3ee25882068428f09fc072eb85f0768f176c32f659fedd00f86ae6f9c8",
+      "cases": 1
+    },
+    {
+      "serial_order": 8,
+      "sha256": "24f689147e562376c157df2d80613f05525de8b9c174a3bcfd44ad8101277f65",
+      "cases": 1
+    }
+  ],
+  "scope": "No HF tool invocation, model load, network access, TTNN import, predecessor wait, device query, admission, or launch.",
+  "incident_audit_sha256": "54405687018d25d504794afc0743e61222c496f47d22534658d62743c8ac0a6f"
+}

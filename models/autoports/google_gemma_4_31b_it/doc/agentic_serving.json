@@ -1,92 +1,157 @@
 {
   "workload": {
-    "target_concurrency": 8,
-    "working_set_tokens": 131072,
-    "typical_context_tokens": 231.5,
-    "source": "Valid C8/160 phase/harness association and complete native replies; capacity separately confirmed at131072 per agent.",
-    "measured_by_eval": {
-      "r1_gpqa_diamond": {
-        "target_concurrency": 8,
-        "observed_peak_running": 8,
-        "working_set_tokens": 131072,
-        "observed_processed_cache_tokens_max": 127456,
-        "typical_context_tokens": 231.5,
-        "prompt_tokens_min": 99,
-        "prompt_tokens_max": 2428,
-        "prompt_tokens_total": 41854,
-        "completed_tasks": 160,
-        "total_physical_decode_samples": 3597724,
-        "source": [
-          "doc/agentic_evals/runs/larger-gpqa160-c8/RESULT.json",
-          "doc/agentic_evals/runs/gpqa-b8-expanded-pool/local-confirmation.json"
-        ],
-        "scope": "Valid frozen160 single-turn GPQA at C8. Retained positions/work exclude prefill samples; exact API emitted counts are separately native observed, not inferred. Working-set131072 is separately validated capacity."
+    "run": "swe-extended85-head-bfp8",
+    "precision": "stage12_head_bfp8_lofi",
+    "target_concurrency": 12,
+    "observed_peak_inflight_calls": 12,
+    "working_set_tokens": 77096,
+    "typical_context_tokens": 16892,
+    "prompt_tokens_min": 893,
+    "prompt_tokens_max": 75871,
+    "prompt_tokens_total": 87066659,
+    "output_tokens_total": 1202253,
+    "cached_tokens_total": 83913152,
+    "final_context_tokens_median": 17136,
+    "native_calls": 4427,
+    "completed_tasks": 85,
+    "served_max_context_tokens": 262144,
+    "launch_sizing_working_set_tokens": 131072,
+    "sampling": {
+      "prefill:host_compatibility": 426,
+      "decode:device": 137686,
+      "prefill:device": 4288
+    },
+    "source": "All completed native SWE85 calls, including discarded capped replies. Observed context lengths are traffic measurements, not imposed limits.",
+    "evidence": [
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-extended85-head-bfp8/collected-final/calls.json",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-extended85-head-bfp8/collected-final/sampling_counts.json"
+    ],
+    "prior_measurements": {
+      "gpqa-phase1-ready": {
+        "target_concurrency": 10,
+        "observed_peak_inflight_calls": 10,
+        "working_set_tokens": 127204,
+        "typical_context_tokens": 189.0,
+        "source": "Fresh v5 gpqa-phase1-ready complete native API usage and timing; no prior results reused. typical_context_tokens is median prompt length; working_set_tokens is observed maximum prompt+output, not context limit.",
+        "prompt_tokens_min": 148,
+        "prompt_tokens_max": 481,
+        "prompt_tokens_total": 2158,
+        "output_tokens_total": 179259,
+        "final_context_tokens_median": 6849.0,
+        "cached_tokens_total": 0,
+        "completed_tasks": 10,
+        "served_max_context_tokens": 262144,
+        "launch_sizing_working_set_tokens": 131072
       },
-      "swe_bench_verified": {
-        "target_concurrency": 2,
-        "working_set_tokens": 35998,
-        "typical_context_tokens": 22420,
-        "recorded_calls": 91,
-        "completed_tasks": 2,
-        "prompt_p95": 34072.5,
-        "source": "doc/agentic_evals/runs/swe-valid-runtime-analysis/result.json",
-        "limits": "Valid2-task smoke, not population or higher capacity bound. Earlier107585token stress retained separately.",
-        "nightly_valid_subset": {
-          "planned_clients": 2,
-          "fully_audited_tasks": 3,
-          "recorded_calls": 145,
-          "max_prompt_tokens": 44880,
-          "max_completion_tokens": 2047,
-          "max_prompt_plus_completion_tokens": 44912,
-          "mean_prompt_tokens": 22736.63448275862,
-          "median_prompt_tokens": 22180,
-          "source": "runs/nightly-swe-observable/audit.json",
-          "scope": "Validthree-task subset of incomplete nightly5; Xarraynetworkquarantine andAstropyunresolvedcap excluded. Notnewbankedrung orpopulationbound."
-        }
+      "gpqa-head-bfp8-fixed10-before-swe-update": {
+        "target_concurrency": 10,
+        "observed_peak_inflight_calls": 10,
+        "working_set_tokens": 11303,
+        "typical_context_tokens": 189.0,
+        "source": "Fresh v5 gpqa-head-bfp8-fixed10 native accounting; selected head BFP8/LoFi. Median prompt and maximum final context are observed traffic, not context limits.",
+        "prompt_tokens_min": 148,
+        "prompt_tokens_max": 481,
+        "prompt_tokens_total": 2158,
+        "output_tokens_total": 58323,
+        "final_context_tokens_median": 5214.5,
+        "cached_tokens_total": 0,
+        "completed_tasks": 10,
+        "served_max_context_tokens": 262144,
+        "launch_sizing_working_set_tokens": 131072
       },
-      "terminal_bench_2_1": {
-        "planned_clients": 2,
-        "completed_tasks": 2,
-        "calls": 47,
-        "observed_max_prompt_tokens": 53645,
-        "observed_max_completion_tokens": 4669,
-        "observed_max_prompt_plus_completion_tokens": 54247,
-        "source": "doc/agentic_evals/runs/terminal-smoke-runtime-analysis/result.json",
-        "coverage": "47/47 saved calls; raw native requests not retained, no C4 capacity claim"
+      "gpqa-head-bfp8-fixed10": {
+        "target_concurrency": 10,
+        "observed_peak_inflight_calls": 10,
+        "working_set_tokens": 11303,
+        "typical_context_tokens": 189.0,
+        "source": "Fresh v5 gpqa-head-bfp8-fixed10 native accounting; selected head BFP8/LoFi. Median prompt and maximum final context are observed traffic, not context limits.",
+        "prompt_tokens_min": 148,
+        "prompt_tokens_max": 481,
+        "prompt_tokens_total": 2158,
+        "output_tokens_total": 58323,
+        "final_context_tokens_median": 5214.5,
+        "cached_tokens_total": 0,
+        "completed_tasks": 10,
+        "served_max_context_tokens": 262144,
+        "launch_sizing_working_set_tokens": 131072
+      },
+      "swe-phase2-ready": {
+        "run": "swe-phase2-ready",
+        "precision": "stage12_head_bfp8_lofi",
+        "target_concurrency": 10,
+        "observed_peak_inflight_calls": 10,
+        "working_set_tokens": 48361,
+        "typical_context_tokens": 14074.0,
+        "source": "Fresh v5 completed434 native SWE model calls and trial lifecycles; observed context lengths are measurements, not imposed limits. Astropy anomaly outputs retained.",
+        "prompt_tokens_min": 930,
+        "prompt_tokens_max": 48189,
+        "prompt_tokens_total": 6557453,
+        "output_tokens_total": 168336,
+        "cached_tokens_total": 6224000,
+        "final_context_tokens_median": 14334.5,
+        "completed_tasks": 10,
+        "native_calls": 434,
+        "served_max_context_tokens": 262144,
+        "launch_sizing_working_set_tokens": 131072,
+        "sampling": {
+          "steps": 85176,
+          "host_prefill_steps": 48,
+          "device_prefill_steps": 421,
+          "device_decode_steps": 84707,
+          "host_decode_steps": 0
+        },
+        "evidence": [
+          "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-phase2-ready/collected-final/calls.json",
+          "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-phase2-ready/sampling_counts_completed.json"
+        ]
       }
     },
-    "prior_quarantined_stress_workload": {
-      "target_concurrency": 2,
-      "working_set_tokens": 107585,
-      "typical_context_tokens": 31755,
-      "recorded_calls": 150,
-      "attempted_calls": 161,
-      "prompt_p95": 94242,
-      "source": "doc/agentic_evals/runs/real-history-capacity/workload-result.json",
-      "limits": "No continuous simultaneouspeakoccupancy; quarantinedscore; notrepresentativepopulation; missing11calls."
-    },
-    "prior_tool_workload_top_level": {
-      "target_concurrency": 2,
-      "working_set_tokens": 107585,
-      "typical_context_tokens": 31755,
-      "source": "Conservative observed stress target107585/typical31755 retained from prior quarantined real SWE workload; valid smoke per-suite measurements recorded separately below. No unsupported capacity claim."
-    },
-    "historical_gpqa80_workload": {
-      "target_concurrency": 8,
-      "observed_peak_running": 8,
-      "working_set_tokens": 131072,
-      "observed_processed_cache_tokens_max": 127456,
-      "typical_context_tokens": 229.0,
-      "prompt_tokens_min": 99,
-      "prompt_tokens_max": 2428,
-      "prompt_tokens_total": 21919,
-      "completed_tasks": 80,
-      "total_physical_decode_samples": 2114531,
-      "source": [
-        "doc/agentic_evals/runs/gpqa80-c8-saturation-comparison/RESULT.json",
-        "doc/agentic_evals/runs/gpqa-b8-expanded-pool/local-confirmation.json"
-      ],
-      "scope": "Valid frozen80 single-turn GPQA at C8. Retained physical positions/work exclude prefill samples and do not prove exact emitted-ID coverage."
+    "measured_by_eval": {
+      "r1_gpqa_diamond": {
+        "run": "gpqa-extended198-head-bfp8",
+        "precision": "stage12_head_bfp8_lofi",
+        "target_concurrency": 12,
+        "observed_peak_inflight_calls": 12,
+        "working_set_tokens": 20794,
+        "typical_context_tokens": 231.5,
+        "prompt_tokens_total": 51582,
+        "output_tokens_total": 1266227,
+        "cached_tokens_total": 64,
+        "native_calls": 198,
+        "completed_tasks": 198,
+        "served_max_context_tokens": 262144,
+        "launch_sizing_working_set_tokens": 131072,
+        "source": "Observed original198 native calls, including later corrected harness-affected prompts; measured traffic only, not final scoring. Corrected12 separate accounting retained.",
+        "evidence": "doc/agentic_evals/current/gpqa-extended198-head-bfp8/workload.json"
+      },
+      "swe_bench_verified": {
+        "run": "swe-extended85-head-bfp8",
+        "precision": "stage12_head_bfp8_lofi",
+        "target_concurrency": 12,
+        "observed_peak_inflight_calls": 12,
+        "working_set_tokens": 77096,
+        "typical_context_tokens": 16892,
+        "prompt_tokens_min": 893,
+        "prompt_tokens_max": 75871,
+        "prompt_tokens_total": 87066659,
+        "output_tokens_total": 1202253,
+        "cached_tokens_total": 83913152,
+        "final_context_tokens_median": 17136,
+        "native_calls": 4427,
+        "completed_tasks": 85,
+        "served_max_context_tokens": 262144,
+        "launch_sizing_working_set_tokens": 131072,
+        "sampling": {
+          "prefill:host_compatibility": 426,
+          "decode:device": 137686,
+          "prefill:device": 4288
+        },
+        "source": "All completed native SWE85 calls, including discarded capped replies. Observed context lengths are traffic measurements, not imposed limits.",
+        "evidence": [
+          "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-extended85-head-bfp8/collected-final/calls.json",
+          "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-extended85-head-bfp8/collected-final/sampling_counts.json"
+        ]
+      }
     }
   },
   "batch_sizes": [
@@ -429,7 +494,8 @@
     ],
     "full_attention_kv_bytes_per_token_per_device": 10880,
     "sliding_kv_steady_bytes_per_user_per_device": 111411200,
-    "sliding_kv_basis": "5 groups *32 retained blocks/group at1024-token window *696320 bytes/normalized ID; alignment/inflight overhead budgeted separately. Groups share the global normalized ID pool rather than reserve per-user arenas."
+    "sliding_kv_basis": "5 groups *32 retained blocks/group at1024-token window *696320 bytes/normalized ID; alignment/inflight overhead budgeted separately. Groups share the global normalized ID pool rather than reserve per-user arenas.",
+    "scope": "Historical BFP4-head allocation inventory; retained measurements, not selected stage12 BFP8-head sizing. See selected_stage12_ledger."
   },
   "stage_checker": "Context and 18-row serving contract pass. Prefill off/on ratio is deferred by the explicit stage9/10 skill split; serial burst measured. Agentic checker has only justified tied-weight representations and fixed pre-load budget advisories. Logs: readiness_vllm/final_stage_check.log and final_agentic_check.log.",
   "fused_measurements": [
@@ -1859,5 +1925,59 @@
       "budget_slack_bytes": 92405760,
       "shape_basis": "Group total rows<=1024; dense/norm activation volumes no larger than prepared solo1024. Attention uses at most128 keys within each short row. Terminal has<=32 logical rows, same padded height as solo. Per-row logits retained across groups are bounded by the existing31-extra-tile allowance. Persistent inputs/program state are already in allocator endpoints."
     }
+  },
+  "selected_stage12_ledger": {
+    "precision": "stage12_head_bfp8_lofi",
+    "runtime_commit": "fdac20baa579586be87b906938be843fd1ddeb03",
+    "lm_head_bytes_per_device": 374341632,
+    "lm_head_increase_bytes_per_device": 176160768,
+    "model_weights_rope_ccl_bytes_per_device": 6595987456,
+    "model_bytes_basis": "Fresh pre-KV shared mesh allocator total replicated per device; equals historical6419826688+176160768.",
+    "copy_reason": "BF16 row-major hidden-sharded embedding and BFP8 tiled transposed vocabulary-sharded head require distinct construction-time representations. No runtime repacking.",
+    "evidence": "agentic_evals/setup/head_bfp8_context_memory_audit.json",
+    "pool_validation": {
+      "event": "serving_pool_launch_validation",
+      "pool_sizing": "fixed",
+      "pool_sizing_reason": "Stock plugin fixes its pool before loading weights; this launch validates its existing pool against measured shared-mesh allocator free space, not adaptive sizing.",
+      "measurement_basis": "One shared mesh allocator measurement applied uniformly to participating devices; these are not independent physical allocator samples. KV uses replicated ttnn.zeros on the mesh with equal shape/dtype on every device.",
+      "per_device": [
+        {
+          "device_id": 0,
+          "free_bytes": 27448525824,
+          "contiguous_free_bytes": 27212209152,
+          "pool_bytes": 25691422720,
+          "reserve_bytes": 1015693824
+        },
+        {
+          "device_id": 1,
+          "free_bytes": 27448525824,
+          "contiguous_free_bytes": 27212209152,
+          "pool_bytes": 25691422720,
+          "reserve_bytes": 1015693824
+        },
+        {
+          "device_id": 2,
+          "free_bytes": 27448525824,
+          "contiguous_free_bytes": 27212209152,
+          "pool_bytes": 25691422720,
+          "reserve_bytes": 1015693824
+        },
+        {
+          "device_id": 3,
+          "free_bytes": 27448525824,
+          "contiguous_free_bytes": 27212209152,
+          "pool_bytes": 25691422720,
+          "reserve_bytes": 1015693824
+        }
+      ],
+      "page_map_bytes": 62914560,
+      "prepared_reserve_bytes": 147472896,
+      "transient_reserve_bytes": 805306368,
+      "reserve_evidence": "doc/agentic_serving.json ledger; doc/optimized_vllm/memory_comparison.json; transient reserve is analytical, not a full-stack measured peak",
+      "trace_reserve_already_excluded": true,
+      "fits": true,
+      "remaining_bytes_after_reserves": 505092608
+    },
+    "scope": "Measured selected-policy launch; shared mesh allocator applied uniformly to four devices, not independent physical samples. Each eval run retains its own launch identity and sizing evidence; future SWE85 launch remains pending."
   }
 }

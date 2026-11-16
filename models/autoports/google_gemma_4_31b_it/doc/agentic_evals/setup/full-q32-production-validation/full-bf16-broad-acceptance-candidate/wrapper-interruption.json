@@ -1,0 +1,12 @@
+{
+  "status": "wrapper_terminated_children_still_running",
+  "observed_unix": 1794785751.5771017,
+  "wrapper_session": 8518,
+  "wrapper_exit_code": 143,
+  "child_pids": [
+    591918,
+    591919
+  ],
+  "cause": "Unknown; timeout reparented to PID1, model continues. No model stop or reset issued.",
+  "observer": "Read-only pidfd_open syscall434 then poll; read /proc/PID/stat exit_code if available. Python os.pidfd_open unavailable, so earlier observer attempt exited before observation. No device synchronization."
+}

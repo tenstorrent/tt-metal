@@ -1,0 +1,51 @@
+{
+  "status": "conditional_candidate_only_not_scheduled",
+  "source_manifest": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/cap-extensions-preparation/batch/cases.json",
+  "source_manifest_sha256": "47b2c85d254375c35b960de93ca03a558a71d58bdf13fba559ceb1b72d3e1ea8",
+  "source_completion": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/cap-extensions-preparation/batch/completion.json",
+  "source_completion_sha256": "68db369b2c08db120c49dfbb990fcb18ba0bc5f2c39c91533a4cc7e561e3b289",
+  "candidate_count": 5,
+  "cases": [
+    {
+      "name": "anomaly.matplotlib__matplotlib-20488.call86.onset.seed43.cap512",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.matplotlib__matplotlib-20488.call86.onset.seed43.private.json",
+      "seed": 43,
+      "cap_tokens": 512,
+      "source_onset": "anomaly.matplotlib__matplotlib-20488.call86.onset",
+      "previous_P19_Q128_cap_result": "historical only"
+    },
+    {
+      "name": "anomaly.sphinx-doc__sphinx-10323.call57.onset.seed43.cap512",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.sphinx-doc__sphinx-10323.call57.onset.seed43.private.json",
+      "seed": 43,
+      "cap_tokens": 512,
+      "source_onset": "anomaly.sphinx-doc__sphinx-10323.call57.onset",
+      "previous_P19_Q128_cap_result": "historical only"
+    },
+    {
+      "name": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed42.cap2048",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap1024.seed42.private.json",
+      "seed": 42,
+      "cap_tokens": 2048,
+      "source_onset": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset",
+      "previous_P19_Q128_cap_result": "historical only"
+    },
+    {
+      "name": "anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.seed44.cap2048",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.cap1024.seed44.private.json",
+      "seed": 44,
+      "cap_tokens": 2048,
+      "source_onset": "anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset",
+      "previous_P19_Q128_cap_result": "historical only"
+    },
+    {
+      "name": "anomaly.xarray7233-call1.canonicalprefix.seed43.cap1024",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/fixtures/full/anomaly.xarray7233-call1.canonicalprefix.cap512.seed43.private.json",
+      "seed": 43,
+      "cap_tokens": 1024,
+      "source_onset": "anomaly.xarray7233-call1.canonicalprefix",
+      "previous_P19_Q128_cap_result": "historical only"
+    }
+  ],
+  "future_rule": "Do not execute these extensions automatically. After the Q32 fixed108 outputs are independently triaged, first identify exact rows that still have progressing-cap inconclusive verdicts and confirm extension is required; then form a new subset manifest from only those exact rows, preserving source fixture identity and recording fresh hashes/admission. Do not substitute old extension verdicts for post-Q32 evidence."
+}

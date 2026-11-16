@@ -1,0 +1,8 @@
+{
+  "status": "host_only_driver_followup",
+  "finding_from_independent_review_d": "The initial W driver checked V predecessor hashes before the first batch only.",
+  "change": "The driver now rechecks the exact V admission, full-completion and terminal queue hashes immediately before every mode; served and full cannot continue if any predecessor artifact changes.",
+  "driver_sha256": "2da27ecc371f7861e506ae7b468c9b4249bedb50a6ef8f07c6aabeaebc4b2de6",
+  "admission_driver_sha256": "2da27ecc371f7861e506ae7b468c9b4249bedb50a6ef8f07c6aabeaebc4b2de6",
+  "candidate_remains_unadmitted": true
+}

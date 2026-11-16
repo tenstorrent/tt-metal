@@ -1,0 +1,77 @@
+{
+  "status": "host_only_independent_review_complete_first_trial_only",
+  "case": "psf__requests-5414.call11.onset",
+  "verdict": "reproduced_native_caret_loop_motif_at_diagnostic_cap",
+  "confidence": "high_for_saved_diagnostic_output; limited_for_native_identity",
+  "hf_result": {
+    "path": "setup/swe85-conditional-hf/p19-native-onset-caret-controls/results/anomaly.psf__requests-5414.call11.onset.seed42.cap256.hf.private.json",
+    "sha256": "6e2644ac37e50c804bc5b8547deb087662d46a3b3cb61b715143897fe95c3f23",
+    "status": "complete",
+    "revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+    "dtype": "bfloat16",
+    "prompt_tokens": 7226,
+    "seed": 42,
+    "requested_tokens": 256,
+    "generated_tokens": 256,
+    "detector_flag": true,
+    "natural_stop": false,
+    "text_summary": "Exactly 1,024 consecutive caret characters (256 generated token IDs); no prose, explanation, tool call or yield before the requested cap.",
+    "wall_seconds": 1340.5616576990578
+  },
+  "matched_full_tt": {
+    "path": "setup/swe85-pilot-split85/runs/rest/full/anomaly.psf__requests-5414.call11.onset.json",
+    "sha256": "f02de92f04d37c6202ac72b60baebcc4b393610a63f13ad6425ba0d6fa109fd6",
+    "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+    "case_path_matches_hf": true,
+    "seed": 42,
+    "generated_tokens": 256,
+    "same_generated_ids_as_hf": true,
+    "same_generated_text_as_hf": true,
+    "text_summary": "Same 256-token/1,024-character caret loop at the cap."
+  },
+  "matched_p19_control": {
+    "path": "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.psf__requests-5414.call11.onset.seed42.cap256.json",
+    "sha256": "fc8ad8eb441d45761864f6ed0dc2192afd13367976cfab171ce216b785bc9dd8",
+    "runtime_config_id": "stage12_bf16_hifi4_kv_down_bfp8_p19",
+    "seed": 42,
+    "same_generated_ids_as_hf": true,
+    "same_generated_text_as_hf": true,
+    "scope_note": "Additional exact same-prompt/seed diagnostic match; not a substitute for the all-group full-TT reference."
+  },
+  "partial_teacher_forcing": {
+    "path": "setup/swe85-conditional-hf/p19-native-onset-caret-controls/requests11-partial-tf-comparison.json",
+    "sha256": "9f111a46063a24e27c2e286150f1d4aa49ad3646aba4ef159f6b07c90a41b91d",
+    "positions": 64,
+    "reported_top1_agreement": 1.0,
+    "mean_hf_minus_tt_chosen_logprob_delta": 0.0019201232007617364,
+    "max_abs_delta": 0.058528557419776917,
+    "first_caret_hf_raw_probability": 0.9999998807907104,
+    "identity": {
+      "same_hf_and_tt_case_path": true,
+      "case_prompt_ids_verified": true,
+      "conditioning_token_ids_verified": true,
+      "manual_raw_row_check_positions_0_through_63": true,
+      "forced_token_and_top1_rows_equal_at_all_64_positions": true
+    },
+    "scope_limit": "The partial summary marks explicit_window_checked=false and leaves tt_case_sha256 null. This review independently compared saved HF and full-TT position rows0–63; both result case paths resolve to the exact same source-case bytes. It is a 64-position teacher-forced comparison, not a free-run explanation by itself."
+  },
+  "interpretation": {
+    "finding": "Pinned CPU BF16 HF seed42 freely generated exactly the same 256-token caret loop as the matching full BF16/HiFi4 TT seed42 control on the same full reconstructed 7,226-token prompt IDs. First64 forced positions also match top1 across saved HF/full-TT distributions.",
+    "classification": "This is a reproduced caret-loop phenotype at the diagnostic cap, not coherent progressive content. Cap exhaustion does not establish whether a later token would stop; the observed 256-token response is already an unambiguous anomaly and is not a completed answer.",
+    "native_identity_limit": "Native prompt/output token IDs and native seed are unavailable. The reconstructed prompt has7,226 IDs versus7,004 native metadata tokens (one-token prompt count gap); this is exact agreement between saved diagnostic HF/TT fixtures, not native stream or RNG replay.",
+    "sampling_limit": "HF and TT RNG implementations differ; matching seed labels the diagnostic trial only. No claim about native-seed replay or task correctness.",
+    "second_case": "Pytest7432 remains in progress and is intentionally not classified here."
+  },
+  "source_hashes": {
+    "hf": "6e2644ac37e50c804bc5b8547deb087662d46a3b3cb61b715143897fe95c3f23",
+    "full_tt": "f02de92f04d37c6202ac72b60baebcc4b393610a63f13ad6425ba0d6fa109fd6",
+    "p19": "fc8ad8eb441d45761864f6ed0dc2192afd13367976cfab171ce216b785bc9dd8",
+    "partial_tf": "9f111a46063a24e27c2e286150f1d4aa49ad3646aba4ef159f6b07c90a41b91d",
+    "source_case": "50cbd0eb4e62c843a1ec8ac800a580135c3abc5dc2154d6be0a7e39d0c37ed6f"
+  },
+  "reviewed_sources": {
+    "hf_case_sha256": "50cbd0eb4e62c843a1ec8ac800a580135c3abc5dc2154d6be0a7e39d0c37ed6f",
+    "full_tt_runtime_config": "stage12_bf16_hifi4_diagnostic",
+    "partial_tf_status": "teacher_forcing_comparison_complete_free_generation_pending"
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "argv": [
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/benchmark-client/bin/python",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/v5-main-harness/llm_module/lm_eval_request_overrides.py",
+    "--request-body",
+    "{\"chat_template_kwargs\": {\"enable_thinking\": true}}",
+    "--",
+    "--tasks",
+    "r1_gpqa_diamond",
+    "--model",
+    "local-chat-completions",
+    "--model_args",
+    "model=google/gemma-4-31B-it,base_url=http://127.0.0.1:8000/v1/chat/completions,tokenizer_backend=huggingface,max_length=131072,timeout=14400,tokenizer=/home/mvasiljevic/.cache/huggingface/hub/models--google--gemma-4-31B-it/snapshots/842da3794eaa0b77d5f08bae87a17459d91ff475,num_concurrent=10",
+    "--gen_kwargs",
+    "stream=false,max_gen_toks=126976,until=[],do_sample=true,temperature=1.0,top_k=20,top_p=0.95,seed=42",
+    "--output_path",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/gpqa-phase1-retry/eval_gemma4-v5",
+    "--seed",
+    "42",
+    "--num_fewshot",
+    "0",
+    "--batch_size",
+    "1",
+    "--log_samples",
+    "--show_config",
+    "--apply_chat_template",
+    "--trust_remote_code",
+    "--confirm_run_unsafe_code",
+    "--samples",
+    "{\"r1_gpqa_diamond\": [0, 1, 7, 67, 87, 93, 158, 167, 195, 197]}"
+  ],
+  "main_sha": "7a51c2f20f51e7508d8ea365d09092d00bbd5fcb",
+  "reference_limits": {
+    "request_timeout_seconds": 14400,
+    "output_cap_tokens": 126976
+  },
+  "agents": 10,
+  "note": "Concurrency must be lowered if pool-first launch evidence selects fewer agents; request protocol unchanged main builder. Start at reference thinking=true, not learned fastest thinking-off."
+}

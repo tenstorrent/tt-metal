@@ -1,0 +1,59 @@
+{
+  "status": "prepared_not_executed_correct_branches_pending",
+  "snapshot_utc": "2026-11-14T21:42:31.054146+00:00",
+  "reviewed_coordinators": 0,
+  "failed_tasks": 1,
+  "prepared_cases": 1,
+  "excluded_unresolved_infrastructure": [],
+  "gaps": [],
+  "cases": [
+    {
+      "task": "sympy__sympy-14248",
+      "call": 53,
+      "response_id": "chatcmpl-87fb873da8be7f29",
+      "cause": "wrong recursive printer edit50 and inert final attribute79; capped caret anomaly53",
+      "native_trajectory": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe-jobs/swe-extended85-head-bfp8/sympy__sympy-14248__pPCUZwn/agent/mini-swe-agent.trajectory.json",
+      "native_message_indices": [],
+      "request_source": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/post-gpqa-controls-head-bfp8/server/server-b32/server.log",
+      "response_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-extended85-head-bfp8/live-tasks/sympy__sympy-14248-first/responses.private.log",
+      "native_prompt_tokens": 32604,
+      "native_completion_tokens": 32768,
+      "action_excerpt": "text: ...^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^",
+      "anomaly": true,
+      "request_line": 161110,
+      "response_line": 53,
+      "request_sha256": "124d810ca31a1d5f3a025a6912458319cb8403293ff2b4c61cae219af89fa91b",
+      "native_response_sha256": "492276bbacc6bd6d2c159b391743b00a99c031185663a825bbf3c25329fc0975",
+      "hf_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+      "template_sha256": "ae53464bf3be25802b3a5b37def7fd89667067d7577049b3b2d74c4d8de4c6d4",
+      "reconstructed_prompt_tokens": 32603,
+      "reconstructed_completion_tokens": 32768,
+      "prompt_token_count_gap": -1,
+      "completion_token_count_gap": 0,
+      "native_prompt_ids_available": false,
+      "native_output_ids_available": false,
+      "correct_branch": "pending validated pre-call state; not constructed",
+      "scope": "Full original reply reconstruction, no truncation. Agreement only, not completed precision attempt.",
+      "reconstruction": "Exact request body with historical JSON tool arguments deserialized for pinned template. Reply reconstructed as canonical thought header, complete saved reasoning, channel boundary, complete visible content, canonical tool-call macros from pinned template, native stop ID when present; length-capped replies have no appended synthetic stop. No native token IDs: generated whitespace/order/protocol spelling cannot be recovered uniquely; counts and hashes are evidence, not identity proof. Canonicalization of malformed tool names is not proof of exact malformed native bytes.",
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "native_seed": null,
+      "executed": false,
+      "private_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-sympy14248-caps/sympy__sympy-14248.call53.case.private.json",
+      "private_case_sha256": "428e7da8578a3b8ce6975d2be4dc01a04fd7f8dde65267f21cb8793a7aa0c19e",
+      "private_packet": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-sympy14248-caps/sympy__sympy-14248.call53.packet.private.json",
+      "private_packet_sha256": "6ca7a60715e7f17480d18aaf657deef151f5c83fa9b6ce01c0a9a53fdabdb55e"
+    }
+  ],
+  "mapping_qualifications": {
+    "pylint-dev__pylint-4970": "Both call51 initial attempt and call55 actual insertion prepared; root identifies55 as actual edit. Do not label51 executed insertion.",
+    "pytest-dev__pytest-5840": "Call15 writes replacement script,16 executes it; both saved for decision/execution comparison.",
+    "matplotlib__matplotlib-20488": "Call29 earliest destructive rewrite identified by triage;88/91 separate anomalous repetitions. Root must ratify29 semantic first-bad status.",
+    "pydata__xarray-3095": "Recovered malformed53 native ID omitted; triage maps to message106 FormatError. First semantic wrong-edit call still unresolved.",
+    "pytest-dev__pytest-10356": "Recovered malformed14; semantic wrong-action identification requires separate adjudication.",
+    "pydata__xarray-7233": "Call1 protocol anomaly,4 fetched-release scoring violation; both preserved."
+  }
+}

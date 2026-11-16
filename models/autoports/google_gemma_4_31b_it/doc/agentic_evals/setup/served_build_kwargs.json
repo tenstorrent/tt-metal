@@ -1,0 +1,4 @@
+{
+  "batch_size": 1,
+  "precision_config": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/served_precision_config.json"
+}

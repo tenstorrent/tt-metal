@@ -1,0 +1,156 @@
+{
+  "status": "planning_forecast_reconciliation_not_admitted_not_run",
+  "candidate_command_sha256": "d4edc6a1dac266e37d94eba6a8fe2200e78b5f0e253f8bc9e5d3408941b8ab23",
+  "deadline_epoch": 1794791725,
+  "forecast_seconds": {
+    "low": 3100,
+    "point": 3650,
+    "high": 4500
+  },
+  "timeout_seconds": 5400,
+  "timeout_margin_over_high_seconds": 900,
+  "closure_reserve_seconds": 900,
+  "latest_start_epoch_for_timeout_plus_reserve": 1794785425,
+  "basis": {
+    "measured_decode": [
+      {
+        "prompt_tokens": 512,
+        "generated_tokens": 512,
+        "generate_wall_s": 1032.383354,
+        "s_per_token": 2.0164
+      },
+      {
+        "prompt_tokens": 1024,
+        "generated_tokens": 512,
+        "generate_wall_s": 1167.479715,
+        "s_per_token": 2.2802
+      },
+      {
+        "prompt_tokens": 2048,
+        "generated_tokens": 512,
+        "generate_wall_s": 1377.343539,
+        "s_per_token": 2.6901
+      },
+      {
+        "prompt_tokens": 4096,
+        "generated_tokens": 512,
+        "generate_wall_s": 1917.06249,
+        "s_per_token": 3.7443
+      },
+      {
+        "prompt_tokens": 8192,
+        "generated_tokens": 55,
+        "generate_wall_s": 303.499254,
+        "s_per_token": 5.5182,
+        "caveat": "short natural-stop sequence; high uncertainty"
+      }
+    ],
+    "measured_prefill": [
+      {
+        "prompt_tokens": 512,
+        "elapsed_s": 16.45
+      },
+      {
+        "prompt_tokens": 2048,
+        "elapsed_s": 60.07
+      },
+      {
+        "prompt_tokens": 4096,
+        "elapsed_s": 126.82
+      },
+      {
+        "prompt_tokens": 8192,
+        "elapsed_s": 305.63
+      }
+    ],
+    "per_case_estimates": [
+      {
+        "fixture": "Requests5414 call11",
+        "prompt_tokens": 7226,
+        "prefill_s": {
+          "low": 220,
+          "point": 260,
+          "high": 360
+        },
+        "decode_s": {
+          "low": 960,
+          "point": 1178,
+          "high": 1413
+        },
+        "decode_rate_s_per_token": {
+          "low": 3.75,
+          "point": 4.6,
+          "high": 5.52
+        },
+        "generated_cap": 256
+      },
+      {
+        "fixture": "Pytest7432 call19",
+        "prompt_tokens": 11095,
+        "prefill_s": {
+          "low": 340,
+          "point": 430,
+          "high": 600
+        },
+        "decode_s": {
+          "low": 1413,
+          "point": 1587,
+          "high": 1843
+        },
+        "decode_rate_s_per_token": {
+          "low": 5.52,
+          "point": 6.2,
+          "high": 7.2
+        },
+        "generated_cap": 256
+      }
+    ],
+    "shared_overhead_seconds": {
+      "low": 180,
+      "point": 180,
+      "high": 240,
+      "covers": "one shared model load and ancillary/teacher-forcing work; not separately measured for this exact pair"
+    },
+    "aggregation": "Totals: low 3113s, point 3635s, high 4456s; command envelope rounded outward to 3100/3650/4500. Decode scales are context-bracket extrapolations, prompt estimates from observed prefill timestamps; neither is a hard bound.",
+    "decision": "5400s command timeout covers the 4500s rounded high scenario plus 900s. At the recorded check time 2026-11-15 16:27:23 UTC, deadline left about 8h48m; do not infer launch eligibility until fresh admission checks P19 terminal, owners, memory, and latest start against epoch1794791725."
+  },
+  "evidence_sha256": {
+    "512prompt_512generated": {
+      "path": "setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/results/seed42-suffix512/anomaly.requests2931.call20.canonicalprefix.optional-suffix512.hf.private.json",
+      "sha256": "a91e0aff64f340594679d595122c256f280e66e650a512ce34a85d52ed432156"
+    },
+    "1024prompt_512generated": {
+      "path": "setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/results/seed44-suffix1024/anomaly.psf__requests-5414.call9.onset.hf.private.json",
+      "sha256": "4f1a6497eeb57b8754ce74bea702170078d7ce7e93fef610357f785044b2b045"
+    },
+    "2048prompt_512generated": {
+      "path": "setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/results/seed44-suffix2048/anomaly.psf__requests-5414.call11.onset.hf.private.json",
+      "sha256": "ea3eb180de1ef8898c2565dcb5ffd7700f3e792ccfce8bc279efef80c6dfe9a4"
+    },
+    "4096prompt_512generated": {
+      "path": "setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/results/requests10-cap4096-seed42/anomaly.psf__requests-5414.call10.onset.suffix4096.seed42.hf.private.json",
+      "sha256": "c4409f7bea3f5af2a80a4f5ee8162e0e282a265ae4b0abb5a5731adff64d275b"
+    },
+    "8192prompt_55generated": {
+      "path": "setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/results/call91-cap8192-seed43/anomaly.call91.canonicalprefix.suffix8192.seed43.hf.private.json",
+      "sha256": "c42dc1b3206ca95431c91d0468bca2b71dc3386221bc28d12951a6b09cdf8fb9"
+    },
+    "prefill_512": {
+      "path": "setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/group-02.log",
+      "sha256": "4098a193c214a60e09fd968eeb7cf659f064de7351f6190a299a424c783a1f4d"
+    },
+    "prefill_2048": {
+      "path": "setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/group-07.log",
+      "sha256": "dad7169020a384bc289032a9a3d42f01f45d60a42117bf505022f7308331829c"
+    },
+    "prefill_4096": {
+      "path": "setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/group-06.log",
+      "sha256": "2f8e126a79cf8232aa573ee54838656339be56de1533978330bffc5c87e92e72"
+    },
+    "prefill_8192": {
+      "path": "setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/group-08.log",
+      "sha256": "f296caf15c3cb4584894caa748d77f13606a1da428f36ad6e3143e35f65f044f"
+    }
+  },
+  "scope": "Forecast-only host planning. No HF model execution, TT/device work, admission, or canonical-record changes."
+}

@@ -1,0 +1,47 @@
+{
+  "status": "prepared_not_admitted",
+  "epoch": 1794751875.8820143,
+  "argv": [
+    "timeout",
+    "1200",
+    "env",
+    "HF_HUB_OFFLINE=1",
+    "HF_DATASETS_OFFLINE=1",
+    "HF_HUB_DISABLE_TELEMETRY=1",
+    "OMP_NUM_THREADS=16",
+    "MKL_NUM_THREADS=16",
+    "OPENBLAS_NUM_THREADS=16",
+    "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+    "READINESS_TRACE_REGION_SIZE=134217728",
+    "TT_METAL_TRACE_ALLOC_TRACKING=0",
+    "TT_METAL_DEVICE_PROFILER=0",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+    "-m",
+    "models.autoports.google_gemma_4_31b_it.tests.run_datatype_candidate",
+    "--config",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/attention-hifi2-down-lofi-ten-case-candidate/attention_hifi2_down_lofi_precision.json",
+    "--id",
+    "stage12_attention_hifi2_accuracy",
+    "--output-dir",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/attention-hifi2-accuracy/run",
+    "--reference",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/attention-down-acceptance/references/aime24.refpt",
+    "--natural-reference",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/attention-down-acceptance/references/natural.refpt",
+    "--require-accuracy",
+    "--accuracy-only"
+  ],
+  "timeout_seconds": 1200,
+  "planning_range_seconds": [
+    180,
+    600
+  ],
+  "planning_basis": "Measured P6full load141s plus prepared trace and400AIME/512natural TF positions. Broad forecast for full60layer candidate, no performance headline; exact costs may differ from sampled tokenout. CPU references nowavailableverified.",
+  "admission_requires": "P7 focused cases terminal and root-reviewed; accuracy bars90/98/100 unchanged; do not select from focus alone.",
+  "source_sha256": {
+    "models/autoports/google_gemma_4_31b_it/tests/run_datatype_candidate.py": "f68517e9133e2541949b3786548d0fe5d7ce99b7d021335218ba073b49620a86",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/attention-hifi2-down-lofi-ten-case-candidate/attention_hifi2_down_lofi_precision.json": "622daf9b6670fd6412eb3cb7a3f6fadccd494f56aee206fa76eff259b7ea29f4",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/attention-down-acceptance/references/aime24.refpt": "1c1a90cada967dc89159edf6e61eb51f2638955ab9defe1cc51939587e99ab45",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/attention-down-acceptance/references/natural.refpt": "861f29370af0ba7e13c77f548e688cceff429846d20a9283697ae77b8b069584"
+  }
+}

@@ -1,0 +1,124 @@
+{
+  "reviewed_unix": 1794726056.238477,
+  "rows": [
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/runs/head_bf16_hifi4/anomaly.scikit-learn__scikit-learn-13135.call29.onset.seed42.cap1024.json",
+      "sha256": "5a970997255956b9f894707572cebcfa1e9f7f7a216c4b421b8521619f44895f",
+      "seed": 42,
+      "tokens": 116,
+      "verdict": "normal",
+      "reason": "Root entire raw/pinned-prefix review: Grammatical continuation with canonical submission or distinct reproduction script; references to prior fetched solution are not new diagnostic degeneration or task-success proof.",
+      "trace_counters_delta": {
+        "model_replays": 115,
+        "sample_replays": 115,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 115,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/runs/head_bf16_hifi4/anomaly.scikit-learn__scikit-learn-13135.call29.onset.seed43.cap512.json",
+      "sha256": "ffdaef75aa16c449326ef65e42b81b0ea7f2d01bb484bc1203450c5f9853d43d",
+      "seed": 43,
+      "tokens": 486,
+      "verdict": "other",
+      "reason": "Root entire raw/pinned-prefix review: Malformed nonadjacent contraction Ive now-ve in full486-token text, distinct from native immediate extra suffix.",
+      "trace_counters_delta": {
+        "model_replays": 485,
+        "sample_replays": 485,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 485,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/runs/head_bf16_hifi4/anomaly.scikit-learn__scikit-learn-13135.call29.onset.seed44.cap512.json",
+      "sha256": "8397077c40cbb09ee66407a5fe9f7ef5a335d53424e425eb9eaf09d2202feee3",
+      "seed": 44,
+      "tokens": 425,
+      "verdict": "normal",
+      "reason": "Root entire raw/pinned-prefix review: Grammatical continuation with canonical submission or distinct reproduction script; references to prior fetched solution are not new diagnostic degeneration or task-success proof.",
+      "trace_counters_delta": {
+        "model_replays": 424,
+        "sample_replays": 424,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 424,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/runs/head_bf16_hifi4/anomaly.sphinx-doc__sphinx-10323.call57.onset.seed42.cap512.json",
+      "sha256": "1ab462b139a8f1642c7ebc59a8086806944c3badef2b6d6c68c4aa91bae49523",
+      "seed": 42,
+      "tokens": 282,
+      "verdict": "normal",
+      "reason": "Root entire raw/pinned-prefix review: Grammatical continuation and varied reasoning with canonical inspection command.",
+      "trace_counters_delta": {
+        "model_replays": 281,
+        "sample_replays": 281,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 281,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/runs/head_bf16_hifi4/anomaly.sphinx-doc__sphinx-10323.call57.onset.seed43.cap256.json",
+      "sha256": "7b41dd73d7eb4a3d5dfd66c225aa4bc5f2f078f5cee8df13add7bbc081820c59",
+      "seed": 43,
+      "tokens": 140,
+      "verdict": "normal",
+      "reason": "Root entire raw/pinned-prefix review: Grammatical continuation and varied reasoning with canonical inspection command.",
+      "trace_counters_delta": {
+        "model_replays": 139,
+        "sample_replays": 139,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 139,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/runs/head_bf16_hifi4/anomaly.sphinx-doc__sphinx-10323.call57.onset.seed44.cap512.json",
+      "sha256": "e68978cc7bc33aaae6090664fb658ee66584f4c21f6f6954f3978bd7d04ca4d3",
+      "seed": 44,
+      "tokens": 51,
+      "verdict": "other",
+      "reason": "Root entire raw/pinned-prefix review: Extra apostrophe-s after completed Ive produces malformed Ive-s; different suffix from native ve duplication.",
+      "trace_counters_delta": {
+        "model_replays": 50,
+        "sample_replays": 50,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 50,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/runs/head_bf16_hifi4/anomaly.sphinx-doc__sphinx-10323.call68.onset.seed42.cap256.json",
+      "sha256": "58e247f101bbbcfbe8c077f64a5683328b059db667fde85d35ff7794355bd144",
+      "seed": 42,
+      "tokens": 104,
+      "verdict": "normal",
+      "reason": "Root entire raw/pinned-prefix review: Grammatical identified continuation and canonical sed command. Claimed task completion is not verified correctness.",
+      "trace_counters_delta": {
+        "model_replays": 103,
+        "sample_replays": 103,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 103,
+        "captures": 0
+      }
+    }
+  ]
+}

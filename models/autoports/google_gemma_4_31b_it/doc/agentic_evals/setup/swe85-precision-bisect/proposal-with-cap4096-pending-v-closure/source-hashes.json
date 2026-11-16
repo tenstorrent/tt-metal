@@ -1,0 +1,90 @@
+{
+  "status": "frozen_source_hash_inventory",
+  "scope": "P common-cap4096 candidate package and source evidence; candidate remains pending V closure and root admission",
+  "files": {
+    "candidate_cases": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-with-cap4096-pending-v-closure/candidate-cases.json",
+      "sha256": "57193e4b91af3a31df00f0c92dbc0f2219fbce011e6533594e5244a93a3021ed"
+    },
+    "precision": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-with-cap4096-pending-v-closure/head_bfp8_hifi2_precision.json",
+      "sha256": "6ef80afe2b6ae02403eb99fbbabcf3cc6d0d4706ba9b3f67a1c8723e16d3855b"
+    },
+    "build_kwargs": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-with-cap4096-pending-v-closure/head_bfp8_hifi2_build_kwargs.json",
+      "sha256": "d4c7c1a316a6af514f3c3aa819077065d2d7bf138a6b4fad512bae826ea8c9c5"
+    },
+    "command": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-with-cap4096-pending-v-closure/command.json",
+      "sha256": "94a40a49c4c4348449e7ff55087544e60eb3d95af4aa90e323c022225865fe5f"
+    },
+    "cpu_validation": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-with-cap4096-pending-v-closure/cpu-validation.json",
+      "sha256": "1a6188d92fef7a29a9e45653a5d69d03f0955b3dbb3ca05434dcbb687cfc9b18"
+    },
+    "runtime_estimate": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-with-cap4096-pending-v-closure/runtime-estimate.json",
+      "sha256": "8c675a31b77d38267e2acb34e14aad462aee13687aa169268cc8b331dc81fb4f"
+    },
+    "proposal": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-with-cap4096-pending-v-closure/proposal.json",
+      "sha256": "6a2e8c6009a2b819c24c1552a73e695814f782da2db024ce28ff6af177f6314f"
+    },
+    "readme": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-with-cap4096-pending-v-closure/README.md",
+      "sha256": "cbb23aa5e92f20a04b98247187cfd4e306e4d576074eb5a35eb03481891bbb5c"
+    },
+    "new_fixture": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-with-cap4096-pending-v-closure/fixtures/pytest5787.call65.seed44.cap4096.private.json",
+      "sha256": "eb66af59398c5cbf2e73697e177ec70330060512e774e76f041839d957b9e77c"
+    },
+    "source_panel": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-with-cap2048-pending-t-closure/candidate-cases.json",
+      "sha256": "99ce7c952732e52bcf75eea901c93fe88983c781cf7fba147412f86940af3faa"
+    },
+    "source_panel_provenance": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-with-cap2048-pending-t-closure/candidate-input-provenance.json",
+      "sha256": "a3ebe7fba5255ff5b6a357f43c8f104a24123b68b6faa0f00091a789d5b06e10"
+    },
+    "acceptance_decision": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/acceptance-decision.json",
+      "sha256": "64e671fbd642b4556ae8dc3fb276c36d32230a2a28dd0f1a6d77ce1125adc05c"
+    },
+    "T_completion": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/completion-summary.json",
+      "sha256": "8149f12cbcb5a8e4a552e02241d0c3ebd7e3ff686a99bde8d46659c09e506e5b"
+    },
+    "T_full_pytest_seed44": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/runs/full/anomaly.pytest-dev__pytest-5787.call65.onset.cap2048.seed44.json",
+      "sha256": "8d87356ff1f0e6cb835889f799cd9bb4340db6f72b250a8a31e3423c7e497c55"
+    },
+    "long_cap4096_forecast": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/pytest-call65-cap4096/forecast.json",
+      "sha256": "717931e5ffa2e4fedc23da5dd4ed4fd71233f829135ab713f6f24c1411f9bd64"
+    },
+    "long_cap4096_fixture": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/pytest-call65-cap4096/pytest-call65.cap4096.seed44.private.json",
+      "sha256": "a383f6456c2dc6a0e08eeb4d17aad8561a2ad783ef92d8642e74218b1963447c"
+    },
+    "V_admission": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/admission.json",
+      "sha256": "246dbd17606f3baaec25ddc490e35f0a4c394808d43479a3a4dd0b267550906a"
+    },
+    "V_full_launch": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/full-launch.json",
+      "sha256": "1004c96ace5c914c9fce381db44ac1b0bf9a46f3b8a3d52c518cdb29dc3806b7"
+    },
+    "load_proxy": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/runs/served/load.json",
+      "sha256": "bec3d00810fdfc212367c7ef5115fd0c01e2b1353965632b5b4c2ea1da2b14ad"
+    },
+    "first_preparation_proxy": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/full/anomaly.psf__requests-5414.call10.onset.optional-suffix512.json",
+      "sha256": "78d21a5ed066928895adc25a37c2474ffff6c716d4d261f164162fd7058f2922"
+    },
+    "provenance": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-with-cap4096-pending-v-closure/candidate-input-provenance.json",
+      "sha256": "d3ee3a39a83ce19247cc8ed85fdcb82edc1c7b11125756c619935dd570385f19"
+    }
+  }
+}

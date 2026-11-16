@@ -1,0 +1,105 @@
+{
+  "task": "147",
+  "diagnostic": "Full-precision suffix512 first-wave free-running semantic review",
+  "source": "anomalies/gpqa-extended-precision/first-wave-full/task147.onset.suffix512.json",
+  "comparison_context": {
+    "suffix_packet": "anomalies/gpqa-extended-precision/task147.onset.suffix512.private.json",
+    "original_triage": "current/gpqa-extended198-head-bfp8/digest/147.triage.json",
+    "coordinator_context": "current/gpqa-extended198-head-bfp8/digest/coordinator.json",
+    "learned_context": "learned.json",
+    "original_finding": "The original uncapped, unflagged response (42,437 reasoning characters plus 1,741 content characters) was classified anomalous for returning to the same PtF5/PtF2 fluorine-fraction mismatch and, later, the AmF6/A1 contradiction after recognizing it. It also explored other candidates such as SbF3 and AmF6 before returning to rejected hypotheses. That finding is context only; each present continuation is assessed independently.",
+    "selected_onset": "The diagnostic prompt is the exact retained suffix of 512 reconstructed IDs, with 18,329 earlier IDs removed and the position origin changed. It is not the original native prompt.",
+    "reconstruction_limit": "Raw native sampled token IDs are unavailable; matching completion counts do not prove sampled-token identity.",
+    "review_scope": "All three saved free_running texts only. TFchosen was executed and is not assessed here; official scoring is complete."
+  },
+  "pattern_comparison": {
+    "shared_pattern": "Each continuation begins with a brief, locally task-related reconsideration or candidate probe, then spends most of its saved text repeating an unchanged prompt-fragment response or candidate search without new discriminating checks or resolution. The surface patterns differ across seeds; the verdict is based on each full visible text, not copied from another seed or the original response.",
+    "between_seeds": "Seed 42 repeatedly reopens whether A2/A1 is AmF6 and repeats the xenon-oxidation clue, eventually substituting the malformed candidate spelling 'lautetium'. Seed 43 briefly checks RuF6 properties, then alternates the same broad lanthanide and transition-metal prompts followed by 'Let's check.' Seed 44 repeatedly restates the same ωF=0.3196 equation and asks to test other elements, without naming or evaluating a candidate.",
+    "relation_to_original": "The three outputs independently support no-progress semantic repetition. Seed 42 echoes the original AmF6/A1 contradiction motif; seeds 43 and 44 show different new surface forms. These suffix-conditioned texts do not establish the onset or native prompt path of the original answer.",
+    "progress_and_cutoff": "The initial reconsiderations and seed 43's short RuF6 property questions are not by themselves anomalous. In each seed, repeated cycles then persist across many consecutive iterations without adding evidence, evaluating a new candidate, or resolving the task. Seeds 43 and 44 end mid-phrase at the saved output boundary; that terminal cutoff is not malformed-text evidence."
+  },
+  "seeds": [
+    {
+      "seed": 42,
+      "text_chars": 3020,
+      "semantic_anomaly": true,
+      "mechanical_flag": false,
+      "observed_malformed_text": {
+        "observed": true,
+        "stray_language": false,
+        "actual_bad_fragments": true,
+        "description": "From about char 571 onward, 'lautetium' is repeatedly used where a chemical element name is expected, inside an otherwise readable repeated sentence. No stray-language passage is visible."
+      },
+      "evidence": [
+        {
+          "char_range": [0, 571],
+          "paraphrase": "The text questions whether A2 is an americium fluoride, reconsiders AmF6 as A1, and tests alternative broad categories against the xenon-oxidation clue. These are brief relevant checks."
+        },
+        {
+          "char_range": [571, 3020],
+          "paraphrase": "The same 'A1 is a fluoride of a lautetium' question and unchanged xenon-oxidation clue repeat roughly every 112 characters through the end, with no candidate evidence or resolution. The repeated malformed spelling is an actual bad text fragment; the sustained cycle is independently semantic."
+        }
+      ],
+      "relation_to_original": "The repeated AmF6/A1 and xenon-clue reconsideration resembles the original contradiction cycle, but the suffix continuation's later repeated 'lautetium' template is its own pattern and does not reproduce the original full reasoning path.",
+      "basis": "A relevant opening gives way to over twenty unchanged candidate/clue cycles occupying most of the text. Mechanical flag is false and does not alter the semantic judgment."
+    },
+    {
+      "seed": 43,
+      "text_chars": 2991,
+      "semantic_anomaly": true,
+      "mechanical_flag": false,
+      "observed_malformed_text": {
+        "observed": false,
+        "stray_language": false,
+        "actual_bad_fragments": false,
+        "description": "The visible text is readable English with chemistry notation. The ending at char 2991 cuts off after a check prompt at the saved output boundary; that cutoff alone is not malformed."
+      },
+      "evidence": [
+        {
+          "char_range": [0, 261],
+          "paraphrase": "The continuation questions the AmF6 assumption, briefly considers another element, and asks whether RuF6 is a compound, bright red, or an oxidizer of xenon. These are candidate probes, though they do not reach an answer."
+        },
+        {
+          "char_range": [261, 2991],
+          "paraphrase": "It repeatedly alternates 'compound of a lanthanide?' and 'compound of a transition metal?' with 'Let's check.' The alternatives recur in the same order without reporting a check result, introducing a distinguishing property, or advancing toward a resolution. The final repetition is cut off at the output boundary."
+        }
+      ],
+      "relation_to_original": "This does not repeat the original Pt/Am fraction calculations. It is a distinct suffix-conditioned semantic loop: broad element-class alternation after a short RuF6 probe. The repeated candidate prompts still show no-progress behavior in this sample.",
+      "basis": "The alternation persists through many consecutive iterations, not just one repeated question or a single recheck. The cutoff is not counted as malformed and the mechanical flag is false."
+    },
+    {
+      "seed": 44,
+      "text_chars": 2404,
+      "semantic_anomaly": true,
+      "mechanical_flag": false,
+      "observed_malformed_text": {
+        "observed": true,
+        "stray_language": false,
+        "actual_bad_fragments": true,
+        "description": "The phrase 'fluoride ofelement X' omits a space and recurs throughout the repeated template. No stray-language passage is visible. The final incomplete equation at char 2404 is an output-boundary cutoff and is not independently called malformed."
+      },
+      "evidence": [
+        {
+          "char_range": [0, 148],
+          "paraphrase": "The text asks what element could have the stated fluorine mass fraction and proposes testing other elements. This is a coherent opening setup."
+        },
+        {
+          "char_range": [148, 2404],
+          "paraphrase": "The same general equation, 'If A2 is a fluoride ofelement X, then ωF (XFₙ) = 0.3196,' alternates with 'Let's test some other elements' every roughly 105 characters. It never names an element or tests a candidate, so the repetitions add no discriminating check or conclusion. The final copy ends partway through the equation at the saved boundary."
+        }
+      ],
+      "relation_to_original": "The original answer included fluorine-fraction calculations for specific candidates and returned to rejected Pt/Am assignments. This continuation instead repeats only the generic fraction setup, without carrying forward those candidate checks; it is independently anomalous but not a direct repetition of the original substantive cycle.",
+      "basis": "The unchanged generic setup repeats more than twenty times across nearly the whole text, with no candidate testing. The recurring missing-space fragment is separately noted; the cap-boundary cutoff and false detector flag do not establish the semantic verdict."
+    }
+  ],
+  "limits": [
+    "Mechanical flags are copied exactly from the three saved free_running records and are separate from semantic judgments.",
+    "These are three suffix-truncated diagnostic continuations, not native-path reproductions or population evidence.",
+    "No answer correctness or score claim is made, and completed official scoring is not reassessed.",
+    "The executed TFchosen continuation is outside this review; no precision-causality conclusion is drawn."
+  ],
+  "assessment_status": {
+    "TFchosen": "executed but not assessed in this artifact",
+    "scoring": "completed; no score claim"
+  }
+}

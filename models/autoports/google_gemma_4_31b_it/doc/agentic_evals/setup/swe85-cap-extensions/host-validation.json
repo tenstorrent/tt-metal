@@ -1,0 +1,24 @@
+{
+  "created_utc": "2026-11-15T00:24:16.642423+00:00",
+  "status": "candidate_snapshot_not_admitted",
+  "rows": [
+    {
+      "mode": "served",
+      "jobs": 25,
+      "manifest_sha256": "4cb883c6fe971328c3ba49179d449579169a8335ce83f3b1b12a9c148319786d",
+      "total_prefill_tokens": 1106308,
+      "prompt_ids_continuations_sampling_unchanged": true,
+      "source_hashes_and_traced_replays_verified": true
+    },
+    {
+      "mode": "full",
+      "jobs": 33,
+      "manifest_sha256": "f749b36d171fdaabbc6b96bef1f4f933a59ef8ea2a5e7b2d96b525b0b3c30a12",
+      "total_prefill_tokens": 1514818,
+      "prompt_ids_continuations_sampling_unchanged": true,
+      "source_hashes_and_traced_replays_verified": true
+    }
+  ],
+  "basis": "Same-case serial traced diagnostic wall: preserve prefill/host overhead, scale decode to new cap minus one, add observed model load. Planning interval 0.7\u20131.5x; not serving performance.",
+  "limitation": "Refresh after remaining full review and candidate regeneration; independent fixture review required before admission."
+}

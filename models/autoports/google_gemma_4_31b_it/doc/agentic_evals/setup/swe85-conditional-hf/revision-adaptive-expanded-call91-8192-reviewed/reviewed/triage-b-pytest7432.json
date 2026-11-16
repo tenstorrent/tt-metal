@@ -1,0 +1,77 @@
+{
+  "job": "anomaly.pytest-dev__pytest-7432.call19.onset",
+  "mode": "conditional_hf_cpu_short_suffix512",
+  "seed": 44,
+  "verdict": "other_anomaly",
+  "evidence": {
+    "result_file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/results/seed44-suffix512/anomaly.pytest-dev__pytest-7432.call19.onset.optional-suffix512.hf.private.json",
+    "result_sha256": "389d4c9c55f00e544dcacb209814a289e7c61af4dec2ec55ebfc265cd872cb63",
+    "result_fields": {
+      "status": "complete",
+      "case_sha256": "7ca8039708a12c24acd3c2cfb1c2c51b8946e99df118576545605efad6225bf4",
+      "revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+      "prompt_tokens": 512,
+      "prompt_source": "Saved prompt_token_ids, no chat rerender",
+      "device": "cpu",
+      "results[0].seed": 44,
+      "results[0].generated_tokens": 307,
+      "results[0].streamed_generated_tokens": 307,
+      "results[0].requested_tokens": 512,
+      "results[0].generated_token_ids_unique_count": 91,
+      "results[0].text_chars": 992,
+      "results[0].tail_ratio": 0.31350806451612906,
+      "results[0].tail_distinct": 55,
+      "results[0].flag": false,
+      "results[0].wall_s": 612.353732440155,
+      "total_wall_s": 631.6686964069959,
+      "case_metadata.task": "pytest-dev__pytest-7432",
+      "case_metadata.call": 19,
+      "case_metadata.onset_char_offset": 607,
+      "case_metadata.onset_token_index": 195,
+      "case_metadata.motif": "^^^^^^^^^^^^^^^^^^^^",
+      "case_metadata.seed": 42,
+      "case_metadata.native_completion_tokens": 32768,
+      "case_metadata.sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "results[0].first_generated_token_id": 236884
+    },
+    "fixture": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-85/anomaly.pytest-dev__pytest-7432.call19.onset.suffix512.private.json",
+      "sha256": "7ca8039708a12c24acd3c2cfb1c2c51b8946e99df118576545605efad6225bf4",
+      "prompt_token_ids_length": 512,
+      "same_ids_as_original_case_suffix": true,
+      "original_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-18763-7432-controls/pytest-dev__pytest-7432.call19.onset.private.json",
+      "original_case_sha256": "436bf8f06cebc27f9ac206ab4c85c655b2c707145be67b8341f14288370807f5",
+      "original_prompt_token_ids_length": 11095,
+      "suffix_range": "original prompt_token_ids[10583:11095]",
+      "source_caveat": "The native prompt count is 10901 while reconstructed prompt count is 10900; native prompt/output token IDs and native seed are unavailable. This suffix drops 10583 reconstructed IDs and may begin mid-turn/protocol. No exact native serialization or replay claim."
+    },
+    "matched_tt": {
+      "served_file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/served/anomaly.pytest-dev__pytest-7432.call19.onset.optional-suffix512.json",
+      "served_sha256": "21b2fb860e3dba265f76605c5807f7b89c32d6c76d2428444e42e95047c97639",
+      "served_seed": 44,
+      "served_free_running_tokens": 464,
+      "served_text_chars": 1356,
+      "full_file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/full/anomaly.pytest-dev__pytest-7432.call19.onset.optional-suffix512.json",
+      "full_sha256": "ec50a12e48db7b2446435f2e3f64d5fd158f0dc58988d7788a620815b5abcca4",
+      "full_seed": 44,
+      "full_free_running_tokens": 512,
+      "full_text_chars": 2048,
+      "served_observation": "Finite repeated rewrite.py traceback frames followed by coherent reasoning and a structured bash call, closely resembling HF recovery; not caret-only. The stock parser accepted a structured bash call.",
+      "full_text_all_carets": true
+    },
+    "semantic_observation": "HF continuation begins with one caret and four repetitions of the same traceback block (`exec_module`, line 161, `_rewrite_test` frame), then exits the repeated block and gives coherent reasoning before a parser-valid bash call. It does not sustain the native caret-only collapse. Its finite traceback repetition and subsequent recovery closely resemble matched served TT seed44 (464 tokens, then a parser-valid bash call), while matched full TT seed44 is caret-only through 512. I classify the HF sample as other_anomaly because its generated stream appends `<tool_call|><tool_response>` after the parsed call without an actual tool turn/result; this is distinct from the native caret collapse. The malformed-looking `<channel|>` display alone is not the basis: the stock parser successfully extracts the structured call. The command was not executed.",
+    "parser_audit": {
+      "parser": "stock vLLM Gemma4Parser, CPU-only; no TTNN imports or device work",
+      "generated_only_result": "0 visible content chars; 860 reasoning chars; one structured tool named bash with command argument `cat src/_pytest/assertion/rewrite.py | sed -n '150,170p'`",
+      "served_seed44_result": "0 visible content chars; one structured bash call, command requests grep for _rewrite_test",
+      "full_seed44_result": "no structured tool; output remains caret-only text",
+      "interpretation": "The HF call itself parses as a structured bash call. Parser success does not mean the command ran. Raw generated output continues with `<tool_call|><tool_response>` and no real tool output, so this is a malformed/fabricated tool-turn boundary rather than evidence of an executed inspection."
+    }
+  },
+  "confidence": "high that the native sustained caret-collapse is not reproduced; medium that the premature generated tool-response boundary warrants a distinct protocol anomaly label",
+  "cap_notes": "Natural stop at 307/512 tokens, not an unfinished coherent reply cut by the cap; no caret loop at the end. The free-trial wall is 612.353732 seconds. The 631.668696-second total_wall_s is cumulative since model load across cases; the stated 635.712823-second group wall includes 19.314964 seconds non-free trial runner work plus 4.044127 seconds outside time. The shorter-than-forecast runtime is explained by natural stop rather than cap completion. The parser recognizes the bash call, but neither the command nor tool output was executed. Diagnostic HF seed44 diverged from the chosen caret branch at its first token: teacher_forced_chosen.positions[0] forces 172109 with probability 0.10442692 while top1 is 236884 (caret) at probability 0.32165754; sampled output begins 236884. Later conditioned forced-caret positions are strongly self-reinforcing. Matched full TT teacher forcing has 1.0 top1 agreement and HF-minus-TT first chosen-token logprob delta 0.070656, so the first-token branch/RNG divergence is a plausible explanation for differing continuations, not evidence of a stack bug. Native seed is unavailable."
+}

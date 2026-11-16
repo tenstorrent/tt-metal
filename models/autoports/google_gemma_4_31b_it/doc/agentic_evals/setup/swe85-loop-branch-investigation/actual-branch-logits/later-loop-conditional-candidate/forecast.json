@@ -1,0 +1,42 @@
+{
+  "status": "unadmitted_planning_forecast_only",
+  "scope": "One serial HF run followed by one serial full-TT run; no selected-precision run or comparisons.",
+  "row_basis": {
+    "prior_rows_per_mode": 14,
+    "candidate_rows_per_mode": 31,
+    "prior_branches": 2,
+    "candidate_branches": 1,
+    "prior_decode_rows_per_branch": 7,
+    "candidate_decode_rows_per_branch": 31,
+    "linear_output_row_factor": 2.2142857142857144
+  },
+  "observed_prior_wall_seconds": {
+    "hf": 163.2542417049408,
+    "tt_full": 97.29416108131409,
+    "combined": 260.5484027862549,
+    "source_completion_sha256": {
+      "hf": "dff38a2ba09fe83b85ec13a7d2663e01d22cd783b16de3c550dadb3892bf0e85",
+      "tt_full": "8b24a2ac2eba7e8aee8d4246d1274ce834cf9225491995fe76b70009b4a8286a"
+    }
+  },
+  "point_estimate_seconds": {
+    "hf": 361.4915352037975,
+    "tt_full": 215.4370709657669,
+    "serial_total": 576.9286061695644
+  },
+  "planning_range_seconds": {
+    "serial_total": [
+      260.5484027862549,
+      865.3929092543467
+    ]
+  },
+  "formula": "Per mode point = that mode\u2019s completed wall \u00d7 (31 capture rows / 14 prior capture rows); total point is serial sum. Range lower end is prior combined wall for reference; upper end is 1.5\u00d7 row-scaled point as a planning allowance. This is not a statistical interval.",
+  "uncertainty": [
+    "Prior wall includes model load, prefix work and two branch calls; component times are not separately measured, so linear scaling overstates or understates extra decode work.",
+    "Candidate uses one 2048-token prefill branch instead of two, reducing repeated prefix work while increasing captured rows from14 to31.",
+    "CPU scheduling and TT build/trace preparation vary; no matched 31-row run exists.",
+    "The prior TT-full completion was below its forecast range and has root-accepted miss evidence; that is context, not a calibrated runtime distribution."
+  ],
+  "command_timeout_seconds_each": 1800,
+  "status_note": "Do not use this forecast as admission or schedule authorization."
+}

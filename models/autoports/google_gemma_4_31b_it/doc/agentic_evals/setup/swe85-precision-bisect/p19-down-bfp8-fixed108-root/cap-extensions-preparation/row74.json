@@ -1,0 +1,18 @@
+{
+  "status": "prepared_not_admitted_not_run",
+  "source_index": 74,
+  "case": {
+    "name": "anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.seed44.cap2048",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.cap1024.seed44.private.json",
+    "branches": [],
+    "free_run_tokens": 2048,
+    "free_run_trials": 1,
+    "source_onset": "anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset",
+    "seed": 44,
+    "cap_source": "P19 coherent1024 diagnostic cap; double to2048"
+  },
+  "original_output": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.seed44.cap1024.json",
+  "original_output_sha256": "a79a20bd828f19237d4fd30477eca3b19e21761ccbedf2ac4dc075a6edbad117",
+  "reason": "Distinct replacement patch script reaches cap inside a line-index conditional; no sustained repetition in reviewed text. Independent final-slice review pending. No score change.",
+  "created_unix": 1794760100.9524593
+}

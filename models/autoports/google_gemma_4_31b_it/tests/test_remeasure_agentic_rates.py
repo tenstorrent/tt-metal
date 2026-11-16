@@ -20,7 +20,7 @@ def test_population_rejects_short_generation():
 
 
 def test_rate_math_and_precision_identity(tmp_path):
-    row = {"id": "x-gpqa", "input_tokens": 64, "output_tokens": 128, "requests": 1, "sampling": "gpqa"}
+    row = {"id": "x-gpqa", "batch": 8, "input_tokens": 64, "output_tokens": 128, "requests": 1, "sampling": "gpqa"}
     raw = {
         "failed": 0,
         "completed": 1,
@@ -33,6 +33,8 @@ def test_rate_math_and_precision_identity(tmp_path):
     policy = {"config_id": "candidate", "weight_groups": {"lm_head": "bfp8"}}
     result = r.measured_row(row, raw, tmp_path, policy)
     assert result["prefill_tok_s"] == 32 and result["decode_tok_s_user"] == 40
+    assert result["raw"].endswith("perf-b8.json")
+    assert result["server_identity"].endswith("perf-b8-server.json")
     assert result["precision_sha256"] == r.policy_hash(policy)
     assert r.policy_hash(policy) != r.policy_hash(dict(policy, weight_groups={"lm_head": "bfp4"}))
 
@@ -46,7 +48,9 @@ def test_report_separates_configurations_and_policies(tmp_path):
     policy = {"config_id": "candidate"}
     rows = [{"id": "x-gpqa", "sampling": "gpqa"}, {"id": "x-swe", "sampling": "swe"}]
     before = json.dumps(original, sort_keys=True)
-    r.report(tmp_path, original, rows, {"precision": policy}, policy, ["x-gpqa", "x-swe", "missing-swe"])
+    r.report(
+        tmp_path, original, rows, {"precision": policy, "max_num_seqs": 8}, policy, ["x-gpqa", "x-swe", "missing-swe"]
+    )
     merged = json.loads((tmp_path / "serving_rates-by-config.json").read_text())
     assert "rows" not in merged
     assert merged["configurations"]["old"] == original
@@ -54,6 +58,7 @@ def test_report_separates_configurations_and_policies(tmp_path):
     gpqa = json.loads((tmp_path / "serving_rates-gpqa.json").read_text())
     assert gpqa["rows"] == rows[:1] and gpqa["missing_rows"] == []
     assert gpqa["status"] == "incomplete"
+    assert gpqa["validated_batches"] == [8]
 
 
 def test_collector_rejects_wrong_precision_before_model_call(monkeypatch, tmp_path):
@@ -84,7 +89,7 @@ def test_head_precision_changes_only_head_dram_estimate():
     new = w.decode_work([100], 32, policy)
     assert new["weight_bytes"] - old["weight_bytes"] == (w.BFP8_BYTES - w.BFP4_BYTES) * w.H * w.V
     assert new["kv_read_bytes"] == old["kv_read_bytes"]
-    policy["weight_groups"]["attention"] = "bf16"
+    policy["weight_groups"]["attention"] = "unsupported"
     with unittest.TestCase().assertRaises(ValueError):
         w.decode_work([100], 32, policy)
 
@@ -124,6 +129,30 @@ def test_provenance_allows_only_explicit_host_accounting_paths():
     ):
         with unittest.TestCase().assertRaises(RuntimeError):
             server.validate_host_only_commit_changes(paths)
+
+
+def test_body_change_requires_matching_forecast():
+    prior = {"decode_tok_s_user": 40, "prefill_tok_s": 1000, "duration_s": 100}
+    old = {"precision": {"weight_groups": {"attention": "bfp4"}}, "source_commits": {}}
+    new = {
+        "precision": {"weight_groups": {"attention": "bfp8_lofi"}},
+        "source_commits": {},
+        "configuration_evidence_sha256": "candidate",
+    }
+    with unittest.TestCase().assertRaisesRegex(ValueError, "body precision"):
+        r.rate_prediction(prior, old, new)
+    forecast = {
+        "basis": "Measured diagnostic change, with serving uncertainty",
+        "ratio_ranges": {"decode_tok_s_user": [0.6, 0.9], "prefill_tok_s": [0.7, 1.1], "duration_s": [1.1, 1.8]},
+    }
+    prediction = r.rate_prediction(prior, old, new, forecast)
+    assert prediction["basis"] == forecast["basis"]
+    assert not r.compare_prediction({"decode_tok_s_user": 30, "prefill_tok_s": 900, "duration_s": 140}, prediction)[
+        "explanation_required"
+    ]
+    forecast["ratio_ranges"]["decode_tok_s_user"] = [0.9, 0.6]
+    with unittest.TestCase().assertRaisesRegex(ValueError, "ordered"):
+        r.rate_prediction(prior, old, new, forecast)
 
 
 def test_actual_request_population_overrides_stale_plan():
@@ -173,3 +202,18 @@ def test_headline_correction_refuses_active_measurement(tmp_path, monkeypatch):
     with unittest.TestCase().assertRaisesRegex(ValueError, "must finish"):
         c.main()
     assert not (tmp_path / "correction").exists()
+
+
+def test_select_rows_preserves_batch_and_rejects_missing_or_duplicate():
+    rows = [{"id": f"b{b}-swe", "batch": b, "concurrency": b, "sampling": "swe"} for b in (1, 8, 32)]
+    original = {"rows": rows}
+    assert r.select_rows(original, 8, "swe") == [rows[1]]
+    assert r.select_rows(original, 1, row_id="b1-swe") == [rows[0]]
+    for data, batch, sampling, row_id in (
+        (original, 8, "gpqa", None),
+        (original, 8, None, "b32-swe"),
+        ({"rows": rows + [rows[1]]}, 8, None, None),
+        ({"rows": [dict(rows[1], concurrency=9)]}, 8, None, None),
+    ):
+        with unittest.TestCase().assertRaises(ValueError):
+            r.select_rows(data, batch, sampling, row_id)

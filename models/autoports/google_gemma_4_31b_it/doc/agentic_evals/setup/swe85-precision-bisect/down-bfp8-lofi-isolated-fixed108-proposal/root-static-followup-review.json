@@ -1,0 +1,22 @@
+{
+  "status": "root_static_review_passed_unadmitted",
+  "reviewer": "root",
+  "utc": "2026-11-15T08:35:40.663429+00:00",
+  "checks": [
+    "Read repaired runtime-policy resolution, output validation, terminal-record helper and main execution guards",
+    "Host-only --validate-only passed: 108 trials, 36 cases, 59 source pins, no TTNN import",
+    "Every result must match exact candidate runtime precision and fixture/seed/cap",
+    "Process errors and invalid outputs preserve terminal records and do not authorize retry"
+  ],
+  "limitations": [
+    "Actual HF9 and SKHF terminal reviews are still required; no hardware launch authorized by this static review",
+    "Runtime policy is checked on every result; this review does not substitute for post-run output triage or forecast reconciliation"
+  ],
+  "sha256": {
+    "run_serial_candidate.py": "b813686bfbb4a5c18326d404999f1ff71c33ce560d9a07011e992b26c27c85b2",
+    "proposal.json": "dbaa7eb5bdb789586794b5061dd0eda81aea5b2562a77a901d80e2735e63c632",
+    "source-hashes.json": "2c6199d5f2f501f13b9b4f8f419e95df6b62a278a77a46a2fb2f452d0d5c2ecf",
+    "candidate-cases.json": "57193e4b91af3a31df00f0c92dbc0f2219fbce011e6533594e5244a93a3021ed",
+    "gate-repair-followup-d.json": "bb19a2b0913886336f86924b704ceda239431b16427e5ccbf331844ef4686c9f"
+  }
+}

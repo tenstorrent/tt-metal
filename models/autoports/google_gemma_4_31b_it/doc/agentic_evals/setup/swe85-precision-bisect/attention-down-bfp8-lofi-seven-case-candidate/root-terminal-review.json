@@ -1,0 +1,302 @@
+{
+  "status": "seven_case_gate_passed_not_selected_requires_fixed108",
+  "wall_seconds": 519.0206434726715,
+  "forecast_seconds": [
+    350,
+    1200
+  ],
+  "forecast_hit": true,
+  "rows": [
+    {
+      "name": "anomaly.pytest-dev__pytest-5787.call65.onset.seed42.p6_attention_down_bfp8_lofi.cap2048",
+      "sha256": "9123a2120e846ec0fa67b8e5fc6e9be28f645fc0d9f81e8ed99a45fd6fa55f0a",
+      "tokens": 234,
+      "cap": 2048,
+      "last_token": 50,
+      "decode_timing": {
+        "decode_tokens": 233,
+        "decode_wall_s": 9.060962879098952,
+        "decode_tok_s_user": 25.714706384843968,
+        "trace_counters_before_decode": {
+          "model_replays": 0,
+          "sample_replays": 1,
+          "token_refreshes": 0,
+          "position_refreshes": 1,
+          "page_refreshes": 60,
+          "readbacks": 1,
+          "captures": 3
+        },
+        "trace_counters_after_decode": {
+          "model_replays": 233,
+          "sample_replays": 234,
+          "token_refreshes": 0,
+          "position_refreshes": 1,
+          "page_refreshes": 60,
+          "readbacks": 234,
+          "captures": 3
+        },
+        "trace_counters_delta": {
+          "model_replays": 233,
+          "sample_replays": 233,
+          "token_refreshes": 0,
+          "position_refreshes": 0,
+          "page_refreshes": 0,
+          "readbacks": 233,
+          "captures": 0
+        },
+        "basis": "Batch1 wall from immediately before first _replay to return after last existing synchronous token-out readback; counts completed replay calls, includes host loop gaps, excludes prefill/first token and text decoding. No added device sync or profiler. Traced diagnostic rate, not serving benchmark."
+      }
+    },
+    {
+      "name": "anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.seed43.p6_attention_down_bfp8_lofi.cap2048",
+      "sha256": "a42e2488a7acddada09a5c58933e49bb61a9acedceebfd67af5b32d715a0b651",
+      "tokens": 1574,
+      "cap": 2048,
+      "last_token": 50,
+      "decode_timing": {
+        "decode_tokens": 1573,
+        "decode_wall_s": 62.051493470789865,
+        "decode_tok_s_user": 25.349913628436266,
+        "trace_counters_before_decode": {
+          "model_replays": 233,
+          "sample_replays": 235,
+          "token_refreshes": 0,
+          "position_refreshes": 2,
+          "page_refreshes": 120,
+          "readbacks": 235,
+          "captures": 3
+        },
+        "trace_counters_after_decode": {
+          "model_replays": 1806,
+          "sample_replays": 1808,
+          "token_refreshes": 0,
+          "position_refreshes": 2,
+          "page_refreshes": 120,
+          "readbacks": 1808,
+          "captures": 3
+        },
+        "trace_counters_delta": {
+          "model_replays": 1573,
+          "sample_replays": 1573,
+          "token_refreshes": 0,
+          "position_refreshes": 0,
+          "page_refreshes": 0,
+          "readbacks": 1573,
+          "captures": 0
+        },
+        "basis": "Batch1 wall from immediately before first _replay to return after last existing synchronous token-out readback; counts completed replay calls, includes host loop gaps, excludes prefill/first token and text decoding. No added device sync or profiler. Traced diagnostic rate, not serving benchmark."
+      }
+    },
+    {
+      "name": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed42.p6_attention_down_bfp8_lofi.cap1024",
+      "sha256": "4e9508c54d83e212569348b8b805d8b0fade733a9bc3caa3f48df10e4c9d0fd6",
+      "tokens": 771,
+      "cap": 1024,
+      "last_token": 50,
+      "decode_timing": {
+        "decode_tokens": 770,
+        "decode_wall_s": 31.61438648495823,
+        "decode_tok_s_user": 24.3560000876929,
+        "trace_counters_before_decode": {
+          "model_replays": 1806,
+          "sample_replays": 1809,
+          "token_refreshes": 0,
+          "position_refreshes": 3,
+          "page_refreshes": 180,
+          "readbacks": 1809,
+          "captures": 3
+        },
+        "trace_counters_after_decode": {
+          "model_replays": 2576,
+          "sample_replays": 2579,
+          "token_refreshes": 0,
+          "position_refreshes": 3,
+          "page_refreshes": 180,
+          "readbacks": 2579,
+          "captures": 3
+        },
+        "trace_counters_delta": {
+          "model_replays": 770,
+          "sample_replays": 770,
+          "token_refreshes": 0,
+          "position_refreshes": 0,
+          "page_refreshes": 0,
+          "readbacks": 770,
+          "captures": 0
+        },
+        "basis": "Batch1 wall from immediately before first _replay to return after last existing synchronous token-out readback; counts completed replay calls, includes host loop gaps, excludes prefill/first token and text decoding. No added device sync or profiler. Traced diagnostic rate, not serving benchmark."
+      }
+    },
+    {
+      "name": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed43.p6_attention_down_bfp8_lofi.cap2048",
+      "sha256": "273ba61163db37e146c88a4672fef89f08cce6c5592000480739eade4b79aa5d",
+      "tokens": 546,
+      "cap": 2048,
+      "last_token": 50,
+      "decode_timing": {
+        "decode_tokens": 545,
+        "decode_wall_s": 22.373166017001495,
+        "decode_tok_s_user": 24.35953854657188,
+        "trace_counters_before_decode": {
+          "model_replays": 2576,
+          "sample_replays": 2580,
+          "token_refreshes": 0,
+          "position_refreshes": 4,
+          "page_refreshes": 240,
+          "readbacks": 2580,
+          "captures": 3
+        },
+        "trace_counters_after_decode": {
+          "model_replays": 3121,
+          "sample_replays": 3125,
+          "token_refreshes": 0,
+          "position_refreshes": 4,
+          "page_refreshes": 240,
+          "readbacks": 3125,
+          "captures": 3
+        },
+        "trace_counters_delta": {
+          "model_replays": 545,
+          "sample_replays": 545,
+          "token_refreshes": 0,
+          "position_refreshes": 0,
+          "page_refreshes": 0,
+          "readbacks": 545,
+          "captures": 0
+        },
+        "basis": "Batch1 wall from immediately before first _replay to return after last existing synchronous token-out readback; counts completed replay calls, includes host loop gaps, excludes prefill/first token and text decoding. No added device sync or profiler. Traced diagnostic rate, not serving benchmark."
+      }
+    },
+    {
+      "name": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed44.p6_attention_down_bfp8_lofi.cap1024",
+      "sha256": "58f395024dff57d4bf5b89f1ba3ffca36263e5beffa7f609bc611923caaf0d57",
+      "tokens": 507,
+      "cap": 1024,
+      "last_token": 50,
+      "decode_timing": {
+        "decode_tokens": 506,
+        "decode_wall_s": 20.77608523191884,
+        "decode_tok_s_user": 24.354925114699615,
+        "trace_counters_before_decode": {
+          "model_replays": 3121,
+          "sample_replays": 3126,
+          "token_refreshes": 0,
+          "position_refreshes": 5,
+          "page_refreshes": 300,
+          "readbacks": 3126,
+          "captures": 3
+        },
+        "trace_counters_after_decode": {
+          "model_replays": 3627,
+          "sample_replays": 3632,
+          "token_refreshes": 0,
+          "position_refreshes": 5,
+          "page_refreshes": 300,
+          "readbacks": 3632,
+          "captures": 3
+        },
+        "trace_counters_delta": {
+          "model_replays": 506,
+          "sample_replays": 506,
+          "token_refreshes": 0,
+          "position_refreshes": 0,
+          "page_refreshes": 0,
+          "readbacks": 506,
+          "captures": 0
+        },
+        "basis": "Batch1 wall from immediately before first _replay to return after last existing synchronous token-out readback; counts completed replay calls, includes host loop gaps, excludes prefill/first token and text decoding. No added device sync or profiler. Traced diagnostic rate, not serving benchmark."
+      }
+    },
+    {
+      "name": "anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.seed44.p6_attention_down_bfp8_lofi.cap1024",
+      "sha256": "508bc39521e653b1122ed0f69046abb8c7a6290034bd59872a8ace55f07c4c9e",
+      "tokens": 1007,
+      "cap": 1024,
+      "last_token": 50,
+      "decode_timing": {
+        "decode_tokens": 1006,
+        "decode_wall_s": 38.57267236802727,
+        "decode_tok_s_user": 26.08064047006163,
+        "trace_counters_before_decode": {
+          "model_replays": 3627,
+          "sample_replays": 3633,
+          "token_refreshes": 0,
+          "position_refreshes": 6,
+          "page_refreshes": 360,
+          "readbacks": 3633,
+          "captures": 3
+        },
+        "trace_counters_after_decode": {
+          "model_replays": 4633,
+          "sample_replays": 4639,
+          "token_refreshes": 0,
+          "position_refreshes": 6,
+          "page_refreshes": 360,
+          "readbacks": 4639,
+          "captures": 3
+        },
+        "trace_counters_delta": {
+          "model_replays": 1006,
+          "sample_replays": 1006,
+          "token_refreshes": 0,
+          "position_refreshes": 0,
+          "page_refreshes": 0,
+          "readbacks": 1006,
+          "captures": 0
+        },
+        "basis": "Batch1 wall from immediately before first _replay to return after last existing synchronous token-out readback; counts completed replay calls, includes host loop gaps, excludes prefill/first token and text decoding. No added device sync or profiler. Traced diagnostic rate, not serving benchmark."
+      }
+    },
+    {
+      "name": "anomaly.sympy__sympy-14711.call1.onset.seed42.p6_attention_down_bfp8_lofi.cap256",
+      "sha256": "9d177536c99c875a1c8b5b30b3ace9d6a365b8783ac47fe752119d85044aebd7",
+      "tokens": 139,
+      "cap": 256,
+      "last_token": 50,
+      "decode_timing": {
+        "decode_tokens": 138,
+        "decode_wall_s": 4.6801479500718415,
+        "decode_tok_s_user": 29.48624733068143,
+        "trace_counters_before_decode": {
+          "model_replays": 4633,
+          "sample_replays": 4640,
+          "token_refreshes": 0,
+          "position_refreshes": 7,
+          "page_refreshes": 420,
+          "readbacks": 4640,
+          "captures": 3
+        },
+        "trace_counters_after_decode": {
+          "model_replays": 4771,
+          "sample_replays": 4778,
+          "token_refreshes": 0,
+          "position_refreshes": 7,
+          "page_refreshes": 420,
+          "readbacks": 4778,
+          "captures": 3
+        },
+        "trace_counters_delta": {
+          "model_replays": 138,
+          "sample_replays": 138,
+          "token_refreshes": 0,
+          "position_refreshes": 0,
+          "page_refreshes": 0,
+          "readbacks": 138,
+          "captures": 0
+        },
+        "basis": "Batch1 wall from immediately before first _replay to return after last existing synchronous token-out readback; counts completed replay calls, includes host loop gaps, excludes prefill/first token and text decoding. No added device sync or profiler. Traced diagnostic rate, not serving benchmark."
+      }
+    }
+  ],
+  "diagnostic_decode_tokens": 4771,
+  "diagnostic_decode_wall_s": 189.1289144018665,
+  "diagnostic_decode_tps": 25.226179799575455,
+  "timing_scope": "Traced host-wall token-out diagnostic, differing outputs from prior arms; not vLLM/device timing or direct speed ranking",
+  "selected": false,
+  "next": "Fixed108 panel; no selection or served change",
+  "classification": {
+    "normal": 7
+  },
+  "triage_sha256": "a2d56266934115838ba989c7dd92a764e75c49cb17a639f0d782c97d77068210",
+  "parser_scope": "P6 seven-case canonical syntax inspected by root and triage; full pinned parser execution covered P5 and canonical/JSON controls only, not P6 actual outputs."
+}

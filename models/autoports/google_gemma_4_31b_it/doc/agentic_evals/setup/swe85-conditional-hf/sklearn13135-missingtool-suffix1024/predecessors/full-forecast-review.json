@@ -1,0 +1,21 @@
+{
+  "reviewer": "root",
+  "accepted": true,
+  "forecast_status": "accepted_miss",
+  "completion_sha256": "c28b61d76a152ef27c7cc92da987ccd80a36cdcea16eb48ef6933a792ce752b9",
+  "admission_sha256": "2e635a1169648396cf6abd95a6a3f3918808a45f0918431702fae2f5ff3ba308",
+  "forecast_range_seconds": [
+    210.0,
+    420.0
+  ],
+  "reviewed_elapsed_seconds": 117.3222713470459,
+  "explanation": "Low miss: all three terminate naturally55/58/63 versus1024-cap allowance; freework11.120s. Load75.684s versus77.209proxy. No speed ranking claim.",
+  "accounting": {
+    "load_seconds": 75.68418956897222,
+    "case_seconds": 36.79946665489115,
+    "free_seconds": 11.119676606031135,
+    "chosen_and_case_setup_seconds": 25.679790048860013,
+    "outside_load_and_cases_seconds": 4.838615123182535
+  },
+  "reviewed_unix": 1794729165.1216989
+}

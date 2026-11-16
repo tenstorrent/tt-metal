@@ -1,0 +1,99 @@
+{
+  "status": "reviewed_conditional_proposal_no_admission_no_launch",
+  "scope": "Host-only review of existing exact native-positive short HF controls, commands, pinned runner, and grouped cost forecast. No model load, network access, device work, or proposal edits.",
+  "case_selection": {
+    "result": "All three selected exact saved suffix512 fixtures and matching full-TT outputs/hashes verified. Fixtures have 512 prompt IDs, the same exact source prompt suffix, chosen64 IDs, sampling 1.0/0.95/20, pinned revision 842da3794eaa0b77d5f08bae87a17459d91ff475, and recorded seed metadata. Matched full-TT outputs contain 512 tokens of only caret characters at positive seeds 42,42,44 respectively.",
+    "cases": [
+      {
+        "case": "anomaly.requests2931.call20.canonicalprefix.optional-suffix512",
+        "seed": 42,
+        "fixture_sha256": "5017461630f07f8232f054ddf6c2b979c4e3bb14370431de6799ca8c4d1d7804",
+        "full_tt_sha256": "14ec7feaac78ac5659f21df7926336c2521648b4c9fb33966d0687610e9dfe98"
+      },
+      {
+        "case": "anomaly.sympy__sympy-14248.call53.onset.optional-suffix512",
+        "seed": 42,
+        "fixture_sha256": "91359efd10ca926d39011351f97d53948db58fc4fedd961705ad4c0a462dbad1",
+        "full_tt_sha256": "c2f99685050adea2459487a86fffcf009129abb1698ca848ef402a1514d219d7"
+      },
+      {
+        "case": "anomaly.pytest-dev__pytest-7432.call19.onset.optional-suffix512",
+        "seed": 44,
+        "fixture_sha256": "7ca8039708a12c24acd3c2cfb1c2c51b8946e99df118576545605efad6225bf4",
+        "full_tt_sha256": "ec50a12e48db7b2446435f2e3f64d5fd158f0dc58988d7788a620815b5abcca4"
+      }
+    ],
+    "scope_limit": "Positive means the exact short full-TT diagnostic reproduces the caret motif; it does not claim native prompt identity or incidence."
+  },
+  "commands_and_runner": {
+    "runner_sha256": "aafe67c88bb5a1eb38b8718570bbddd5749e2a9ecbb9dd19cdb100a49572c03e",
+    "revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+    "offline": "Both actual group commands set HF_HUB_OFFLINE=1 and HF_DATASETS_OFFLINE=1; runner uses local_files_only=True for tokenizer and the revision is pinned in reference/weights code; offline environment also covers config, generation config, and hub weights.",
+    "cpu_threads": "load_reference() calls torch.set_num_threads(16) before loading the reference model.",
+    "serial": "Seed42 group (2 cases) and seed44 group (1 case) are ordered 1 then 2, each in its own process, with explicit serial-execution instruction and one model load per group. Each command timeout is3600s.",
+    "comparison": "Repeated --compare-dir is supported by runner argparse; output job names align to both existing served/full short-control JSON filenames and chosen64 forced IDs are checked."
+  },
+  "cost_review": {
+    "basis_sources": 8,
+    "source_hashes_and_cumulative_deltas": "All 8 listed HF source-result hashes, cumulative totals, and incremental differences verified. Each source is complete, prompt512, chosen TF64, and one generated512-token result.",
+    "median_incremental_case_s": 1040.1832335699582,
+    "seed42_group": {
+      "cases": 2,
+      "point_s": 2260.3664671399165,
+      "range_s": [
+        1780,
+        3380
+      ]
+    },
+    "seed44_group": {
+      "cases": 1,
+      "point_s": 1220.1832335699582,
+      "range_s": [
+        980,
+        1780
+      ]
+    },
+    "total_serial_point_s": 3480.5497007098747,
+    "total_serial_range_s": [
+      2760,
+      5160
+    ],
+    "formula": "Median matched incremental HF case wall \u00d7 cases per process +180s model/process margin per seed group; range uses 800\u20131600s per case plus one180s margin per process.",
+    "check": "Stored medians, group points/ranges, and totals recompute. Both group upper bounds fit their individual 3600s timeout.",
+    "limits": "Point/range are host wall planning estimates from different prompt contents and may vary; no serving/performance claim."
+  },
+  "prelaunch_gates": {
+    "satisfied_in_proposal": "A no-prior-HF-process check is stated in plan.json; groups are serial.",
+    "missing_or_understated": [
+      "No explicit MemAvailable >=100GB threshold appears in the plan, command gate, or preparation artifacts; plan only says to check available memory.",
+      "commands.json gate waits for adaptive suffix1024 completion and root review but does not explicitly require all TT diagnostic queues complete or zero active TT owners before these HF processes."
+    ],
+    "live_evidence": "No fresh MemAvailable or process snapshot is present. This is expected for an unlaunched candidate; those checks must be recorded at the eventual launch gate.",
+    "disposition": "Substantive prelaunch documentation gaps: before execution, make the >=100GB check and all-TT-queues-drained condition explicit and record fresh memory/process evidence. No launch performed."
+  },
+  "findings": [
+    "Prelaunch gate is incomplete: explicit MemAvailable>=100GB and all TT queues complete/zero owners are not stated."
+  ],
+  "not_findings": [
+    "Pinned/offline HF invocation, serial grouping, CPU16 thread setting, source fixture integrity, and grouped cost arithmetic are valid."
+  ],
+  "limitations": [
+    "Proposal still depends on later adaptive-suffix1024 completion and root review for any added cases.",
+    "No conditional HF process was started."
+  ],
+  "reviewed_hashes": {
+    "commands.json": "a59b956f209f4cb12e02f0eb3e92866d7e24de8cd4e6136e1a04c157c2fab32d",
+    "candidate-source-integrity.json": "a0a750f41561b2dccd257263e18a102e1b1bbc5f41e3cd4b74972f5f51cb2884",
+    "native-positive-preparation.json": "7405f44f68fc79149508dd2eaa1676450963b22a09d3189c69045fd4909c04e1",
+    "native-positive-candidates-seed42.json": "16b10f6da567a27cff6f7ef0bfb40be6acbbe4487dddff68f0b684baed77e842",
+    "native-positive-candidates-seed44.json": "db7fd3763b4b0606edb4773ef53d0217a6723d1cc06df824842020b25c8a262e",
+    "cost-basis.json": "dc16b01ffe4dc12f0148cad0cb6b7fade4f1fce2a00688f964413f4ab3e685c5",
+    "queue-cost-proposal.json": "b5bc2c21c5a484b5adf76ceed3edb80611ca54524bcd20842a72479c8a96c530",
+    "plan.json": "51aacceb55fff40bf1ce948054010086baa8ac70e838d6ec019965acff694b7d"
+  },
+  "implementation_hashes": {
+    "precision_repro_hf.py": "aafe67c88bb5a1eb38b8718570bbddd5749e2a9ecbb9dd19cdb100a49572c03e",
+    "generate_full_reference.py": "30f69ad0db3ce951aa1a6dc8deb1900ea33d5cdd578f8aff36cefc33056e5d7d",
+    "weights.py": "bca69b111c9c9cbf9bc620c3dc6bee873abdecdd75f08d5b8b93638e881868cd"
+  }
+}

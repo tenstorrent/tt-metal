@@ -1,0 +1,70 @@
+{
+  "status": "validated_not_executed",
+  "task": "pylint-dev__pylint-4661",
+  "source_sha256": "fc3ab232132ef17e1e129780ede4f9cfbc91eb6b6cb6cd1d782a13eaee18b617",
+  "source_bytes": 4497,
+  "input_hashes": {
+    "task_definition": "3855e6c24a35f0b2945a427c1c240a017d1ef5cea0922d11b4c308e76b3f3159",
+    "test_script": "6ba24a9450c34a411ea18e863a676d5e472650e48831440c59480ca98ad91ec3",
+    "test_config": "d79ca0a506da0170a42b94bc996d53544f844473b0a5407b28e555b15e42002c",
+    "dockerfile": "98ca6a22079352e56c1e623c1ec8fa0a2ed27c4663cb398bca53d0d28b01354b"
+  },
+  "image": "v5-swe-offline-verifier:pylint-dev__pylint-4661",
+  "expected_image_id": "sha256:4d262a52059cbedba0e511bf5672f591bee1487d48e6ec1a7b1934619dd11ac0",
+  "limits": {
+    "cpus": 1,
+    "memory": "4g",
+    "memory_swap": "4g",
+    "pids": 256,
+    "total_job_seconds": 1800
+  },
+  "network_on_execution": "Only real appdirs==1.4.4 wheel install uses PyPI; unchanged verifier uses PIP_NO_INDEX=1, UV_OFFLINE=1 and UV_PYTHON_DOWNLOADS=never. No GitHub downloads.",
+  "unchanged_verifier": true,
+  "original_trial_modified": false,
+  "driver": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/recover_pylint4661_verifier.py",
+  "validation": "Python AST parse and default CPU-only file/hash validation passed; no Docker/network commands executed.",
+  "execution_command": [
+    "python_env/bin/python",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/recover_pylint4661_verifier.py",
+    "--execute",
+    "--output",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-extended85-head-bfp8/pylint4661-verifier-recovery"
+  ],
+  "launch_owner": "Coordinator only, after resource slot is free",
+  "outputs": "Fresh output directory with command stdout/stderr, unchanged emitted parser, test-output, report, reward and source pre/post hash. Original trial untouched.",
+  "unknowns": [
+    "Image/cache availability checked at launch; no Docker inspection performed.",
+    "PyPI appdirs wheel access may fail.",
+    "Unchanged editable reinstall must succeed from existing environment/cache offline; failure remains infrastructure error.",
+    "Untouched assertion outcome and resource fit unknown."
+  ],
+  "sequence": [
+    "Validate source and input hashes.",
+    "Inspect pinned image; create bounded container without bind mounts.",
+    "docker cp unchanged tests; verify in-container hashes; mark files read-only; check cached parser versions.",
+    "docker cp exact source and check hash.",
+    "Install real appdirs1.4.4 wheel fromPyPI without dependencies; disconnect bridge.",
+    "Run unchanged verifier network-isolated; capture LOG_FILE and parser in original output layout.",
+    "Verify source and test/config hashes; docker cp outputs to fresh host directory; remove container."
+  ],
+  "driver_sha256": "4860dc2722832793f155784197649d91f8c1fb8b7d352e288c573dee77a88091",
+  "host_socket_path_handling": "No host binds. docker cp tests/source into container, hash verify, copy verifier outputs back before removal.",
+  "offline_parser_evidence": {
+    "dockerfile": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/Dockerfile.offline",
+    "facts": [
+      "Copies real uv runtime and prebuilt parser environment; no shim evidenced.",
+      "ENV UV_OFFLINE=1 UV_PYTHON_DOWNLOADS=never; validates parser during image build.",
+      "Driver checks exact cached package versions swebench4.0.3 datasets2.16.1 fastcore1.10.5 before verifier.",
+      "Driver disconnects container bridge after real appdirs install; original verifier runs network-isolated."
+    ]
+  },
+  "slot_enforcement": "Manual coordinator admission only; per-container CPU/RAM/PID limits enforced. No launch while12 workers active.",
+  "timing": "Records UTC start/end and monotonic elapsed;1800s job plus at most60s artifact-copy/removal cleanup.",
+  "wheel_update": {
+    "manifest": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/verifier-recovery-wheels/manifest.json",
+    "status": "PyPI-only binary wheels downloaded/hash-pinned; no environment installed or Docker started",
+    "requests": "--legacy-pytest now supports1766 and2317; docker cp wheels, --no-index --find-links /wheels with pinned requirements, then Python3.9/version/CLI/legacy raises-string preflight before official tests.",
+    "pylint": "appdirs1.4.4 wheel copied/hash-checked; container network none; --no-index --find-links /wheels.",
+    "runtime_support": "Not yet tested in isolated Python3.9; failure stops before original tests."
+  }
+}

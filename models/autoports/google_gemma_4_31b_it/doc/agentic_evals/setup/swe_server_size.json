@@ -1,0 +1,262 @@
+{
+  "free_gb": [
+    27.624686592,
+    27.624686592,
+    27.624686592,
+    27.624686592
+  ],
+  "pool_gb": [
+    25.69142272,
+    25.69142272,
+    25.69142272,
+    25.69142272
+  ],
+  "working_set_tokens": 131072,
+  "reason": "Stock plugin fixes its pool before loading weights; this launch validates its existing pool against measured shared-mesh allocator free space, not adaptive sizing. Pool uses93% of measured free; residual space covers recorded preparation/page-map/transient reserves and fragmentation.",
+  "measurement": {
+    "event": "serving_pool_launch_validation",
+    "pool_sizing": "fixed",
+    "pool_sizing_reason": "Stock plugin fixes its pool before loading weights; this launch validates its existing pool against measured shared-mesh allocator free space, not adaptive sizing.",
+    "measurement_basis": "One shared mesh allocator measurement applied uniformly to participating devices; these are not independent physical allocator samples. KV uses replicated ttnn.zeros on the mesh with equal shape/dtype on every device.",
+    "per_device": [
+      {
+        "device_id": 0,
+        "free_bytes": 27624686592,
+        "contiguous_free_bytes": 27455085568,
+        "pool_bytes": 25691422720,
+        "reserve_bytes": 1015693824
+      },
+      {
+        "device_id": 1,
+        "free_bytes": 27624686592,
+        "contiguous_free_bytes": 27455085568,
+        "pool_bytes": 25691422720,
+        "reserve_bytes": 1015693824
+      },
+      {
+        "device_id": 2,
+        "free_bytes": 27624686592,
+        "contiguous_free_bytes": 27455085568,
+        "pool_bytes": 25691422720,
+        "reserve_bytes": 1015693824
+      },
+      {
+        "device_id": 3,
+        "free_bytes": 27624686592,
+        "contiguous_free_bytes": 27455085568,
+        "pool_bytes": 25691422720,
+        "reserve_bytes": 1015693824
+      }
+    ],
+    "page_map_bytes": 62914560,
+    "prepared_reserve_bytes": 147472896,
+    "transient_reserve_bytes": 805306368,
+    "reserve_evidence": "doc/agentic_serving.json ledger; doc/optimized_vllm/memory_comparison.json; transient reserve is analytical, not a full-stack measured peak",
+    "trace_reserve_already_excluded": true,
+    "fits": true,
+    "remaining_bytes_after_reserves": 747969024
+  },
+  "pool_ids": 36896,
+  "ids_per_agent": 2854,
+  "capacity_agents": 12,
+  "pool_tokens": 1572864,
+  "pool_tokens_basis": "Conservative12-agent capacity at131072 working set, not arbitrary context composition or plugin synthetic budget.",
+  "agents": 10,
+  "batch": 32,
+  "max_num_seqs": 32,
+  "selection": "Pool-first choice retains current36896-ID measured pool, capacity12, host10 and tasks10 =>10agents. Smallest stage11 validated batch1/8/32 holding10 is32. B8 pool20480 supports7 and2waves; default B8 supports3 and4waves. These alternatives require restart and fresh pool measurement; no setting changed.",
+  "launch_evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/server-phase1-counted/server-b32/server.log",
+  "suite": "swe_bench_verified",
+  "status": "host_only_sizing_plan",
+  "created_utc": "2026-11-13T23:47:11.286181+00:00",
+  "working_set_basis": "Prior learned SWE finalcontext maximum77144 plus unchanged main output allowance32768=109912 rounded up131072; stage11 also measured131072. Historical workload informs planning only, no score reused. Main does not constrain total conversation to32768.",
+  "served_max_model_len": 262144,
+  "reference_output_cap_tokens": 32768,
+  "reference_limits_source": "setup/swe_command.json: unchanged closest-model main Qwen/Qwen3.8-27B recipe",
+  "hybrid_capacity": {
+    "formula": "ceil(working_set/64) +5*(ceil((1023+4096)/32)+1) +1 output; capacity=floor((36896-1 null)/ids_per_agent)",
+    "sliding_ids_per_group": 161,
+    "ids_for_ten_at_working_set": 28541,
+    "ids_per_agent_at_full_context": 4902,
+    "ids_for_ten_at_full_context": 49021,
+    "capacity_at_full_context": 7
+  },
+  "full_context_reason": "Served262144 context unchanged. Ten agents fit expected131072 working sets, not ten simultaneous maximum262144 conversations. Larger growth may cause normal scheduler preemption/eviction; measure actual SWE usage and revisit sizing without reducing context or scheduler limits.",
+  "host_capacity": {
+    "evidence": "setup/host_checks.json; setup/swe-tasks/*/task.toml",
+    "available_ram_gib_at_setup": 142,
+    "available_disk_gib_at_setup": 480,
+    "each_task_memory_mib": 4096,
+    "each_task_storage_mib": 10240,
+    "each_task_cpus": 1,
+    "ten_task_ram_gib": 40,
+    "ten_task_storage_gib": 100,
+    "sandbox_bound_used": 10,
+    "note": "Existing setup comfortably holds all10; refresh resource availability before launch if consumers change."
+  },
+  "candidates": [
+    {
+      "batch": 32,
+      "pool_ids": 36896,
+      "agents": 10,
+      "capacity": 12,
+      "waves": [
+        {
+          "agents": 10,
+          "seconds": 11802.333398810022,
+          "rate_reasons": [
+            "contexts above the longest measured row (28672 at batch 32) are extrapolated"
+          ]
+        }
+      ],
+      "conditional_single_call_task_hours": 3.278425944113895,
+      "current_launch_measured": true
+    },
+    {
+      "batch": 8,
+      "pool_ids": 20480,
+      "agents": 7,
+      "capacity": 7,
+      "waves": [
+        {
+          "agents": 7,
+          "seconds": 9378.850162815042,
+          "rate_reasons": [
+            "contexts above the longest measured row (28672 at batch 8) are extrapolated"
+          ]
+        },
+        {
+          "agents": 3,
+          "seconds": 3892.4954786638023,
+          "rate_reasons": [
+            "contexts above the longest measured row (28672 at batch 8) are extrapolated"
+          ]
+        }
+      ],
+      "conditional_single_call_task_hours": 3.6864849004107905,
+      "current_launch_measured": false
+    },
+    {
+      "batch": 8,
+      "pool_ids": 10248,
+      "agents": 3,
+      "capacity": 3,
+      "waves": [
+        {
+          "agents": 3,
+          "seconds": 3892.4954786638023,
+          "rate_reasons": [
+            "contexts above the longest measured row (28672 at batch 8) are extrapolated"
+          ]
+        },
+        {
+          "agents": 3,
+          "seconds": 3892.4954786638023,
+          "rate_reasons": [
+            "contexts above the longest measured row (28672 at batch 8) are extrapolated"
+          ]
+        },
+        {
+          "agents": 3,
+          "seconds": 3892.4954786638023,
+          "rate_reasons": [
+            "contexts above the longest measured row (28672 at batch 8) are extrapolated"
+          ]
+        },
+        {
+          "agents": 1,
+          "seconds": 1149.318136588183,
+          "rate_reasons": [
+            "contexts above the longest measured row (28672 at batch 8) are extrapolated"
+          ]
+        }
+      ],
+      "conditional_single_call_task_hours": 3.563001270160997,
+      "current_launch_measured": false
+    },
+    {
+      "batch": 1,
+      "pool_ids": 8449,
+      "agents": 1,
+      "capacity": 2,
+      "waves": [
+        {
+          "agents": 1,
+          "seconds": 1035.1240801517745,
+          "rate_reasons": [
+            "no rows below full concurrency at server batch 1; few requests in flight are priced as a full batch"
+          ]
+        },
+        {
+          "agents": 1,
+          "seconds": 1035.1240801517745,
+          "rate_reasons": [
+            "no rows below full concurrency at server batch 1; few requests in flight are priced as a full batch"
+          ]
+        },
+        {
+          "agents": 1,
+          "seconds": 1035.1240801517745,
+          "rate_reasons": [
+            "no rows below full concurrency at server batch 1; few requests in flight are priced as a full batch"
+          ]
+        },
+        {
+          "agents": 1,
+          "seconds": 1035.1240801517745,
+          "rate_reasons": [
+            "no rows below full concurrency at server batch 1; few requests in flight are priced as a full batch"
+          ]
+        },
+        {
+          "agents": 1,
+          "seconds": 1035.1240801517745,
+          "rate_reasons": [
+            "no rows below full concurrency at server batch 1; few requests in flight are priced as a full batch"
+          ]
+        },
+        {
+          "agents": 1,
+          "seconds": 1035.1240801517745,
+          "rate_reasons": [
+            "no rows below full concurrency at server batch 1; few requests in flight are priced as a full batch"
+          ]
+        },
+        {
+          "agents": 1,
+          "seconds": 1035.1240801517745,
+          "rate_reasons": [
+            "no rows below full concurrency at server batch 1; few requests in flight are priced as a full batch"
+          ]
+        },
+        {
+          "agents": 1,
+          "seconds": 1035.1240801517745,
+          "rate_reasons": [
+            "no rows below full concurrency at server batch 1; few requests in flight are priced as a full batch"
+          ]
+        },
+        {
+          "agents": 1,
+          "seconds": 1035.1240801517745,
+          "rate_reasons": [
+            "no rows below full concurrency at server batch 1; few requests in flight are priced as a full batch"
+          ]
+        },
+        {
+          "agents": 1,
+          "seconds": 1035.1240801517745,
+          "rate_reasons": [
+            "no rows below full concurrency at server batch 1; few requests in flight are priced as a full batch"
+          ]
+        }
+      ],
+      "conditional_single_call_task_hours": 2.8753446670882625,
+      "current_launch_measured": false
+    }
+  ],
+  "projection_basis": "Sensitivity only: ten independent single calls each22420 uncached prompt and32768 outputcap; no cache reuse, tools or variable task tails. NOT a full SWE hours projection. Uses unchanged installed explain_hours seconds/token interpolation on existing policy-specific serving_rates-swe.json; no recipe averaging.",
+  "projection_tool_issue": "Combined serving_rates.json contains two sampling recipes and cannot be fed directly to installed extrapolation (duplicate lengths). Existing policy-specific serving_rates-swe.json has no duplicate same-policy rows and is used successfully; no checker or rate changes needed.",
+  "launch_reuse_rule": "Evidence is actual pre-KV measurement from current server-phase1-counted only while that same server/pool remains alive. Restart/precision/pool change requires fresh evidence and sizing. This plan launches nothing.",
+  "projection_rates": "models/autoports/google_gemma_4_31b_it/doc/benchmark/serving_rates-swe.json"
+}

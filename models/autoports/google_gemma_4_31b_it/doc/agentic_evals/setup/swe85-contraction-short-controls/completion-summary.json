@@ -1,0 +1,29 @@
+{
+  "status": "both_modes_complete_semantic_reviewed",
+  "served_counts": {
+    "normal": 3,
+    "other_anomaly": 6
+  },
+  "full_counts": {
+    "normal": 5,
+    "other_anomaly": 4
+  },
+  "native_exact_motif_reproduced": false,
+  "nomenclature": "Independent triage calls servedMpl86seed44 native straycontraction family; root labels other_anomaly because d duplication differs from original ve. Both agree degeneration.",
+  "evidence": [
+    "served-coordinator.json",
+    "full-coordinator.json",
+    "triage-d.json"
+  ],
+  "next": "Prepare exactsuffix1024controls to find short native motif reproduction before conditionalHF inference. No policy or score changes.",
+  "served_completion": {
+    "measured_hours": 0.07089513904518552,
+    "exit_code": 0,
+    "prediction_range_hit": true
+  },
+  "full_completion": {
+    "measured_hours": 0.0673048347234726,
+    "exit_code": 0,
+    "prediction_range_hit": true
+  }
+}

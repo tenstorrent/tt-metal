@@ -1,0 +1,197 @@
+{
+  "status": "planning_forecast_candidate_only_not_execution",
+  "as_of_utc": "2026-11-15T08:31:06Z",
+  "formula": "Per seed+cap group: point cap-length scenario = n*(cap*1032.3833539891057/512) + 19.45656383293751*(sum(prompt_tokens)/512) +180s. Measured 19.4566s is 512-prompt total-minus-free bundle (prefill+64 chosen positions, not isolated). Sensitivity low/high applies .75x/2.5x to decode and .75x/3x to bundled prompt component, plus180s per fresh process. Factors are planning sensitivity only, not confidence interval or measured context law.",
+  "measured_reference": {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/results/seed42-suffix512/anomaly.requests2931.call20.canonicalprefix.optional-suffix512.hf.private.json",
+    "sha256": "a91e0aff64f340594679d595122c256f280e66e650a512ce34a85d52ed432156",
+    "status": "complete",
+    "revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+    "prompt_tokens": 512,
+    "chosen_positions": 64,
+    "seed": 42,
+    "generated_tokens": 512,
+    "free_wall_s": 1032.3833539891057,
+    "total_case_wall_s": 1051.8399178220425,
+    "prefill_plus_chosen_bundle_s": 19.45656383293681,
+    "seconds_per_generated_token": 2.016373738259972
+  },
+  "prior_hf9_basis": {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/cost-basis.json",
+    "sha256": "dc16b01ffe4dc12f0148cad0cb6b7fade4f1fce2a00688f964413f4ab3e685c5",
+    "median_incremental_s": 1040.1832335699582,
+    "prior_range_s": [
+      800,
+      1600
+    ],
+    "scope": "512-token prompt,512-token initial HF free continuation,chosen64 teacher forcing. Prior runner total_wall_s is cumulative from shared model load; differences used, never sums of cumulative times.",
+    "role": "Earlier 8-case baseline is secondary context; current measured Requests2931 rate is primary."
+  },
+  "groups": [
+    {
+      "group": 1,
+      "seed": 42,
+      "cap": 512,
+      "cases": 4,
+      "prompt_tokens_total": 8192,
+      "point_cap_length_scenario_seconds": 4620.838437283412,
+      "sensitivity_range_seconds": [
+        3510.6288279625587,
+        11437.748603872024
+      ],
+      "timeout_seconds": 18000,
+      "components_seconds": {
+        "decode_reference_rate": 4129.533415956423,
+        "bundled_prefill_chosen_proxy": 311.30502132698894,
+        "fresh_process_load": 180
+      },
+      "interpretation": "Cap-length scenario assumes all outputs reach cap; natural stopping is unquantified."
+    },
+    {
+      "group": 2,
+      "seed": 42,
+      "cap": 1024,
+      "cases": 1,
+      "prompt_tokens_total": 1024,
+      "point_cap_length_scenario_seconds": 2283.679835644085,
+      "sensitivity_range_seconds": [
+        1757.7598767330637,
+        5458.656152943149
+      ],
+      "timeout_seconds": 18000,
+      "components_seconds": {
+        "decode_reference_rate": 2064.7667079782113,
+        "bundled_prefill_chosen_proxy": 38.91312766587362,
+        "fresh_process_load": 180
+      },
+      "interpretation": "Cap-length scenario assumes all outputs reach cap; natural stopping is unquantified."
+    },
+    {
+      "group": 3,
+      "seed": 42,
+      "cap": 2048,
+      "cases": 1,
+      "prompt_tokens_total": 2048,
+      "point_cap_length_scenario_seconds": 4387.35967128817,
+      "sensitivity_range_seconds": [
+        3335.5197534661274,
+        10737.312305886298
+      ],
+      "timeout_seconds": 18000,
+      "components_seconds": {
+        "decode_reference_rate": 4129.533415956423,
+        "bundled_prefill_chosen_proxy": 77.82625533174723,
+        "fresh_process_load": 180
+      },
+      "interpretation": "Cap-length scenario assumes all outputs reach cap; natural stopping is unquantified."
+    },
+    {
+      "group": 4,
+      "seed": 43,
+      "cap": 512,
+      "cases": 4,
+      "prompt_tokens_total": 4096,
+      "point_cap_length_scenario_seconds": 4465.185926619917,
+      "sensitivity_range_seconds": [
+        3393.889444964938,
+        10970.79107188154
+      ],
+      "timeout_seconds": 18000,
+      "components_seconds": {
+        "decode_reference_rate": 4129.533415956423,
+        "bundled_prefill_chosen_proxy": 155.65251066349447,
+        "fresh_process_load": 180
+      },
+      "interpretation": "Cap-length scenario assumes all outputs reach cap; natural stopping is unquantified."
+    },
+    {
+      "group": 5,
+      "seed": 43,
+      "cap": 1024,
+      "cases": 3,
+      "prompt_tokens_total": 4608,
+      "point_cap_length_scenario_seconds": 6549.409198431065,
+      "sensitivity_range_seconds": [
+        4957.056898823299,
+        16191.077533325879
+      ],
+      "timeout_seconds": 18000,
+      "components_seconds": {
+        "decode_reference_rate": 6194.300123934634,
+        "bundled_prefill_chosen_proxy": 175.10907449643128,
+        "fresh_process_load": 180
+      },
+      "interpretation": "Cap-length scenario assumes all outputs reach cap; natural stopping is unquantified."
+    },
+    {
+      "group": 6,
+      "seed": 44,
+      "cap": 512,
+      "cases": 5,
+      "prompt_tokens_total": 8192,
+      "point_cap_length_scenario_seconds": 5653.221791272517,
+      "sensitivity_range_seconds": [
+        4284.916343454388,
+        14018.706988844788
+      ],
+      "timeout_seconds": 18000,
+      "components_seconds": {
+        "decode_reference_rate": 5161.916769945528,
+        "bundled_prefill_chosen_proxy": 311.30502132698894,
+        "fresh_process_load": 180
+      },
+      "interpretation": "Cap-length scenario assumes all outputs reach cap; natural stopping is unquantified."
+    },
+    {
+      "group": 7,
+      "seed": 44,
+      "cap": 1024,
+      "cases": 1,
+      "prompt_tokens_total": 2048,
+      "point_cap_length_scenario_seconds": 2322.5929633099586,
+      "sensitivity_range_seconds": [
+        1786.944722482469,
+        5575.39553594077
+      ],
+      "timeout_seconds": 18000,
+      "components_seconds": {
+        "decode_reference_rate": 2064.7667079782113,
+        "bundled_prefill_chosen_proxy": 77.82625533174723,
+        "fresh_process_load": 180
+      },
+      "interpretation": "Cap-length scenario assumes all outputs reach cap; natural stopping is unquantified."
+    },
+    {
+      "group": 8,
+      "seed": 44,
+      "cap": 2048,
+      "cases": 1,
+      "prompt_tokens_total": 512,
+      "point_cap_length_scenario_seconds": 4328.9899797893595,
+      "sensitivity_range_seconds": [
+        3291.7424848420196,
+        10562.203231389867
+      ],
+      "timeout_seconds": 18000,
+      "components_seconds": {
+        "decode_reference_rate": 4129.533415956423,
+        "bundled_prefill_chosen_proxy": 19.45656383293681,
+        "fresh_process_load": 180
+      },
+      "interpretation": "Cap-length scenario assumes all outputs reach cap; natural stopping is unquantified."
+    }
+  ],
+  "total_cap_length_point_seconds": 34611.277803638484,
+  "total_cap_length_point_hours": 9.614243834344023,
+  "total_sensitivity_range_seconds": [
+    26318.458352728863,
+    84951.89142408432
+  ],
+  "total_sensitivity_range_hours": [
+    7.310682875758018,
+    23.597747617801197
+  ],
+  "natural_stop": "Unknown. Scenario estimates use cap-length work; early natural EOS can reduce time. No natural-stop distribution from the full-mode diagnostic-other inventory is inferred.",
+  "deadline_note": "Upper sensitivity estimate may exceed remaining stage budget before pending HF9, SKHF and P3. Per-group admissions could be considered after root review; no subset is reported as complete coverage.",
+  "timeouts_are_hard_stops_not_forecast_bounds": true
+}

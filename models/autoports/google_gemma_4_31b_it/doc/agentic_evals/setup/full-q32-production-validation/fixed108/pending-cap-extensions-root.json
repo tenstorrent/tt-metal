@@ -1,0 +1,87 @@
+{
+  "status": "prepared_not_admitted_not_run",
+  "as_of_epoch": 1794782319.23664,
+  "command": "cap-extensions-root/command.json",
+  "forecast": "cap-extensions-root/forecast.json",
+  "gate": "Main108 terminal; collect all semantic extension needs; recheck pins, owners and deadline with enlarged1400s extension timeout plus closure reserve. Verify exactoriginal prefixes.",
+  "rows": [
+    {
+      "index": 37,
+      "old_name": "anomaly.pytest-dev__pytest-7432.call19.onset.seed43.cap256",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.pytest-dev__pytest-7432.call19.onset.seed43.private.json",
+      "seed": 43,
+      "old_cap": 256,
+      "new_cap": 512,
+      "original_output": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full-q32-production-validation/fixed108/runs/anomaly.pytest-dev__pytest-7432.call19.onset.seed43.cap256.json",
+      "original_output_sha256": "7e5276c0992ed8d07b1914d7b6588cecfdd299f49492f53ad427f3c93c7589b7",
+      "original_tokens": 256,
+      "forecast_trial_seconds": 34.858498926233395,
+      "basis": "Measured same-policy nondecode plus doubled-cap envelope at diagnostic decode rate; not vLLM."
+    },
+    {
+      "index": 42,
+      "old_name": "anomaly.requests2931.call20.canonicalprefix.seed42.cap256",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-precision/requests2931-call20/canonicalprefix/case.private.json",
+      "seed": 42,
+      "old_cap": 256,
+      "new_cap": 512,
+      "original_output": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full-q32-production-validation/fixed108/runs/anomaly.requests2931.call20.canonicalprefix.seed42.cap256.json",
+      "original_output_sha256": "ffbb921fa8743fd804ff55e8b6d4bbbf937bf878c139d324d5096a9bb52b2bbc",
+      "original_tokens": 256,
+      "forecast_trial_seconds": 33.639685299205496,
+      "basis": "Measured same-policy nondecode plus doubled-cap envelope at diagnostic decode rate; not vLLM."
+    },
+    {
+      "index": 44,
+      "old_name": "anomaly.requests2931.call20.canonicalprefix.seed44.cap256",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.requests2931.call20.canonicalprefix.seed44.private.json",
+      "seed": 44,
+      "old_cap": 256,
+      "new_cap": 512,
+      "original_output": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full-q32-production-validation/fixed108/runs/anomaly.requests2931.call20.canonicalprefix.seed44.cap256.json",
+      "original_output_sha256": "2a9f6f733c86710fc56e3fe20c772497ca10e9fef91dd941e47bcddf266634f8",
+      "original_tokens": 256,
+      "forecast_trial_seconds": 33.63005429039089,
+      "basis": "Measured same-policy nondecode plus doubled-cap envelope at diagnostic decode rate; not vLLM."
+    },
+    {
+      "index": 48,
+      "old_name": "anomaly.sphinx-doc__sphinx-10323.call57.onset.seed42.cap512",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-10323.call57.onset.cap512.seed42.private.json",
+      "seed": 42,
+      "old_cap": 512,
+      "new_cap": 1024,
+      "original_output": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full-q32-production-validation/fixed108/runs/anomaly.sphinx-doc__sphinx-10323.call57.onset.seed42.cap512.json",
+      "original_output_sha256": "7b5847261c4a4bd89069fc0f295525fed92a99716cf09b45385bca9ef4ba5345",
+      "original_tokens": 512,
+      "forecast_trial_seconds": 108.41537936539034,
+      "basis": "Measured same-policy nondecode plus doubled-cap envelope at diagnostic decode rate; not vLLM."
+    },
+    {
+      "index": 68,
+      "old_name": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed44.cap1024",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap1024.seed44.private.json",
+      "seed": 44,
+      "old_cap": 1024,
+      "new_cap": 2048,
+      "original_output": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full-q32-production-validation/fixed108/runs/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed44.cap1024.json",
+      "original_output_sha256": "342461d65c726c5815f40e9f697f17c1cc928d5dad516fbcb74f2c9fff206919",
+      "original_tokens": 1024,
+      "forecast_trial_seconds": 200.3232242134593,
+      "basis": "Measured same-policy nondecode plus doubled-cap envelope at diagnostic decode rate; not vLLM."
+    },
+    {
+      "index": 74,
+      "old_name": "anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.seed44.cap1024",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.cap1024.seed44.private.json",
+      "seed": 44,
+      "old_cap": 1024,
+      "new_cap": 2048,
+      "original_output": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full-q32-production-validation/fixed108/runs/anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.seed44.cap1024.json",
+      "original_output_sha256": "6cc981aef16a2a048bd67882b473f403e39c1a7843e5e90ae8deb512d6546ec4",
+      "original_tokens": 1024,
+      "forecast_trial_seconds": 160.46531830356824,
+      "basis": "Measured same-policy nondecode plus doubled-cap envelope at diagnostic decode rate; not vLLM."
+    }
+  ]
+}

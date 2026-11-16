@@ -1,0 +1,63 @@
+{
+  "status": "independent_review_pass_scoped_resume_gate_only",
+  "scope": "Host-only review of the completed full-BF16/HiFi4 Q32 prefill-resume diagnostic. No model or device execution. This is not broad acceptance, policy selection, score evidence, or serving evidence.",
+  "sources": {
+    "result": {
+      "path": "setup/full-q32-production-validation/full-bf16-resume-candidate/run/prefill_resume.json",
+      "sha256": "b6111ded1ae6d9c77f97dd1fbf6a033c7d0273671344b15d5dd24413a1b10826"
+    },
+    "root_review": {
+      "path": "setup/full-q32-production-validation/full-bf16-resume-candidate/root-review.json",
+      "sha256": "843073d65c65d8936a44e5bf0cde5ea9ffb4ea30a86fde47265c9dba6bebc2ca"
+    },
+    "source_pins": {
+      "path": "setup/full-q32-production-validation/full-bf16-resume-candidate/source-pins.json",
+      "sha256": "82b9b7e29567e57174bd4305aaa7eb9a143bafea45fe17e4ba5ba1dbda0acc6e",
+      "declared_pin_count": 166
+    },
+    "completion": {
+      "path": "setup/full-q32-production-validation/full-bf16-resume-candidate/completion.json",
+      "sha256": "1d2ea17366bac66cb93d3e22f26bb0d25195fec52b9019978e732dc6a10fd805"
+    }
+  },
+  "completion": {
+    "start_unix": 1794784525.9896798,
+    "end_unix": 1794784844.845618,
+    "exit_code": 0,
+    "wall_seconds": 318.85593819618225
+  },
+  "raw_recheck": {
+    "cases": 14,
+    "passing": 14,
+    "failing": 0,
+    "minimum_pcc_min": 0.9999314491442819,
+    "minimum_top1_agreement": 1.0,
+    "negative_controls": 24,
+    "negative_controls_failed_as_expected": 24,
+    "control_types": {
+      "no_history": 12,
+      "fresh_suffix": 12
+    },
+    "case_kinds": [
+      "block_aligned",
+      "last_token",
+      "lcm_aligned",
+      "prefix_cache_hit",
+      "tile_unaligned",
+      "window_plus_unaligned",
+      "window_start"
+    ],
+    "all_controls_below_gate": true
+  },
+  "root_review_reconciliation": {
+    "cases_passed": 14,
+    "cases_total": 14,
+    "negative_controls_failed_as_expected": 24,
+    "minimum_pcc": 0.9999314491442819,
+    "minimum_top1": 1.0,
+    "pins_verified": 173,
+    "forecast_result": "318.856s inside200-700s range",
+    "scope": "Full BF16 HiFi4 Q32 baseline; same14cases and thresholds; not serving policy or score acceptance."
+  },
+  "finding": "The saved result independently satisfies the stated 14-case resume gate: all14 cases pass, all24 controls fail as expected, minimum PCC is 0.999931449, and top-1 agreement is1.0 throughout. Completion is318.856s and inside the recorded200\u2013700s range. The completion/source identity agrees with root review. This only clears the resume diagnostic gate; broad accuracy/qualitative acceptance and any policy selection remain separate."
+}

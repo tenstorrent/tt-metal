@@ -1,0 +1,362 @@
+{
+  "status": "partial_completed_outputs_CPU_stock_nonstreaming_parser_only",
+  "created_utc": "2026-11-15T07:13:16.549197+00:00",
+  "manifest_sha256": "effdf9c6bbb7ccabdec56fd8dc6658c96b85fb532daa6048b676945368d80a1c",
+  "protocol_jobs_selected": 1,
+  "selected_jobs": [
+    "anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset"
+  ],
+  "completed_case_modes": 1,
+  "completed_trials": 3,
+  "pending": [
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset",
+      "mode": "served"
+    }
+  ],
+  "errors": [],
+  "sources_sha256": {
+    "python_env/lib/python3.10/site-packages/vllm/parser/gemma4.py": "c974f47dc39ab7276da1e4ae38c4010e3f5411481f75e3879e29f47b2fd08df7",
+    "python_env/lib/python3.10/site-packages/vllm/parser/engine/parser_engine.py": "d1075deeb25b4872e92752d7ef0598a07a747afaf2afc56058ec30c6dc1da89a",
+    "python_env/lib/python3.10/site-packages/vllm/parser/engine/adapters.py": "7a77bcb86e2129762f4199ee726398a4850b9e207893fc4295f2b759bcfeeb36",
+    "python_env/lib/python3.10/site-packages/vllm/tool_parsers/gemma4_engine_tool_parser.py": "02f31bdcc4d8527440daebb4f4e3e74c83a6010eb56cd33fe7522bea8f51bc65",
+    "python_env/lib/python3.10/site-packages/vllm/reasoning/gemma4_engine_reasoning_parser.py": "3e9adef8ae56ee993fbaee43e82aa36216fb71251ee2de14dc9f8b326220a594",
+    "/home/mvasiljevic/.cache/huggingface/hub/models--google--gemma-4-31B-it/snapshots/842da3794eaa0b77d5f08bae87a17459d91ff475/chat_template.jinja": "ae53464bf3be25802b3a5b37def7fd89667067d7577049b3b2d74c4d8de4c6d4",
+    "/home/mvasiljevic/.cache/huggingface/hub/models--google--gemma-4-31B-it/snapshots/842da3794eaa0b77d5f08bae87a17459d91ff475/tokenizer.json": "cc8d3a0ce36466ccc1278bf987df5f71db1719b9ca6b4118264f45cb627bfe0f",
+    "/home/mvasiljevic/.cache/huggingface/hub/models--google--gemma-4-31B-it/snapshots/842da3794eaa0b77d5f08bae87a17459d91ff475/tokenizer_config.json": "9f4fec4b1dc6ecddf8f4a92e9caea5971c0e67d81309f3f9066a2bee8c362633",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/audit_swe85_protocol_outputs.py": "c049003433ff2fa694206e7f5942a9551f8473763d4d3788c0aeeaa1e35417e9"
+  },
+  "rows": [
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset",
+      "mode": "full",
+      "result": "/tmp/p2-call86-runs/full/anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.json",
+      "result_sha256": "47fbc0e8b74738382ab1e5ed6e033de1841e96fab832811a5c40f25332828cb9",
+      "fixture_sha256": "0f5f2fc54d5863761ed3ecaa8f593937a0ad4ae0d785e059f3adc51bc3cba892",
+      "packet_sha256": "9d2f492cd7aa7f4656945dd141efee5bdab373b5fbf05c0acb16110be195a045",
+      "assistant_prefix_token_count": 716,
+      "assistant_prefix_tail_ids": [
+        3453,
+        815,
+        496,
+        5577,
+        531,
+        506,
+        850,
+        236761,
+        108,
+        6481,
+        236789,
+        236751,
+        2056,
+        672,
+        236888,
+        101,
+        48,
+        6639,
+        236787,
+        42422
+      ],
+      "assistant_prefix_tail": "nx.addnodes.document`, which has a reference to the environment, and the environment has a reference to the app.\n\nLet's try this!<channel|><|tool_call>call:bash",
+      "native": {
+        "response_id": "chatcmpl-8a7d4a0330171b5b",
+        "structured_tool_names": [
+          "bash\n# I will modify docutils's Include.run to emit the source-read event.\n# First, let's find where to import Sphinx.\n# Actually, we can just access it through the document.\n\ncat <<'EOF' > replacement_docutils_include.py\n    def run"
+        ],
+        "content_only_current_parser": {
+          "structured_tool_count": 0,
+          "missing_tool": true,
+          "malformed_name": false,
+          "invalid_arguments": false,
+          "tools": [],
+          "visible_content_chars": 0,
+          "visible_content_head": "",
+          "reasoning_chars": 0,
+          "visible_GetAll_bash": false,
+          "visible_pseudo_call": false,
+          "reasoning_literal_thought_tail": false
+        },
+        "canonical_full_reply_current_parser": {
+          "structured_tool_count": 1,
+          "missing_tool": false,
+          "malformed_name": true,
+          "invalid_arguments": true,
+          "tools": [
+            {
+              "name": "bash\n# I will modify docutils's Include.run to emit the source-read event.\n# First, let's find where to import Sphinx.\n# Actually, we can just access it through the document.\n\ncat <<'EOF' > replacement_docutils_include.py\n    def run",
+              "expected_bash": false,
+              "valid_json": true,
+              "valid_command_schema": false,
+              "argument_keys": [
+                "'r') as f",
+                "]\n                # Emit source-read event\n                app.emit('source-read', rel_filename, source)\n                content = source[0]\n                \n                # Now we need to tell docutils's Include to use this modified content.\n                # The easiest way is to use a temporary file.\n                import tempfile\n                import os\n                with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', delete=False) as tmp",
+                "]\n                # Use Sphinx's path processing to get the full path and docname\n                rel_filename, filename = env.relfn2path(path)\n                \n                # Read the content\n                with open(filename, 'r', encoding='utf-8') as f",
+                "]\n                self.arguments[0] = tmp_path\n                try",
+                "] = [replacement + '\\n']\n    with open(path, 'w') as f",
+                "<|\"|>,] = original_path\n                    if os.path.exists(tmp_path)",
+                "].startswith('    ') or not lines[j].strip()",
+                "len(lines))",
+                "line in enumerate(lines)",
+                "self)",
+                "self.state.document is a sphinx.addnodes.document\n            # which has a reference to the environment, and the environment has the app.\n            doc = self.state.document\n            if hasattr(doc, 'env') and hasattr(doc.env, 'app')"
+              ]
+            }
+          ],
+          "visible_content_chars": 0,
+          "visible_content_head": "",
+          "reasoning_chars": 2551,
+          "visible_GetAll_bash": false,
+          "visible_pseudo_call": false,
+          "reasoning_literal_thought_tail": false
+        }
+      },
+      "trials": [
+        {
+          "seed": 42,
+          "tokens": 1024,
+          "at_requested_token_cap": true,
+          "generated_has_tool_close_token": false,
+          "generated_last_id": 22389,
+          "generated_head_ids": [
+            107,
+            236865,
+            1191,
+            795,
+            17114,
+            6484,
+            13364,
+            236786,
+            197662,
+            236786,
+            97271,
+            236786
+          ],
+          "generated_text_head": "\n# We will modify docutils/parsers/rst/directives/misc.py to emit the source-read event.\n# We need t",
+          "generated_text_tail": "  raise self.severe('Problem with \"start-after\" option of \"%",
+          "conditioning_plus_generated": {
+            "structured_tool_count": 1,
+            "missing_tool": false,
+            "malformed_name": true,
+            "invalid_arguments": true,
+            "tools": [
+              {
+                "name": "bash\n# We will modify docutils/parsers/rst/directives/misc.py to emit the source-read event.\n# We need to find where to inject the code.\n# The run method is at line 48.\n\ncat <<'EOF' > replacement_docutils_include.py\n    def run",
+                "expected_bash": false,
+                "valid_json": true,
+                "valid_command_schema": false,
+                "argument_keys": [
+                  "self)",
+                  "the file (or a clipping) is\n        converted to nodes and returned or inserted into the input stream.\n        \"\"\"\n        if not self.state.document.settings.file_insertion_enabled",
+                  "])\n        if path.startswith('<') and path.endswith('>')",
+                  "path[1",
+                  "])\n        path = os.path.normpath(os.path.join(source_dir, path))\n        path = utils.relative_path(None, path)\n        path = nodes.reprunicode(path)\n        encoding = self.options.get(\n            'encoding', self.state.document.settings.input_encoding)\n        e_handler=self.state.document.settings.input_encoding_error_handler\n        tab_width = self.options.get(\n            'tab-width', self.state.document.settings.tab_width)\n        try",
+                  "encoding=encoding,\n                                        error_handler=e_handler)\n        except UnicodeEncodeError as error",
+                  "SafeString(path)))\n        except IOError as error",
+                  "ErrorString(error)))\n\n        # Get to-be-included content\n        startline = self.options.get('start-line', None)\n        endline = self.options.get('end-line', None)\n        try",
+                  "])\n            else",
+                  "ErrorString(error)))\n\n        # --- BEGIN SPHINX HACK ---\n        try",
+                  "'env', None)\n            if env is not None",
+                  "'app', None)\n                if app is not None",
+                  "we'll use the filename\n                    docname = os.path.splitext(os.path.basename(path))[0]\n                    source = [rawtext]\n                    app.emit('source-read', docname, source)\n                    rawtext = source[0]\n        except Exception as e",
+                  "}\")\n        # --- END SPHINX HACK ---\n\n        # start-after/end-before",
+                  "# and no restrictions on matching inside lines vs. line boundaries\n        after_text = self.options.get('start-after', None)\n        if after_text"
+                ]
+              }
+            ],
+            "visible_content_chars": 0,
+            "visible_content_head": "",
+            "reasoning_chars": 2551,
+            "visible_GetAll_bash": false,
+            "visible_pseudo_call": false,
+            "reasoning_literal_thought_tail": false
+          },
+          "generated_only": {
+            "structured_tool_count": 0,
+            "missing_tool": true,
+            "malformed_name": false,
+            "invalid_arguments": false,
+            "tools": [],
+            "visible_content_chars": 3965,
+            "visible_content_head": "\n# We will modify docutils/parsers/rst/directives/misc.py to emit the source-read event.\n# We need to find where to inje",
+            "reasoning_chars": 0,
+            "visible_GetAll_bash": false,
+            "visible_pseudo_call": false,
+            "reasoning_literal_thought_tail": false
+          },
+          "mechanical_flag_from_runner": false,
+          "mechanical_repetition_not_adjudicated_by_parser": true
+        },
+        {
+          "seed": 43,
+          "tokens": 841,
+          "at_requested_token_cap": true,
+          "generated_has_tool_close_token": true,
+          "generated_last_id": 50,
+          "generated_head_ids": [
+            107,
+            236865,
+            110238,
+            6484,
+            13364,
+            236789,
+            236751,
+            12213,
+            236761,
+            4503,
+            531,
+            29910
+          ],
+          "generated_text_head": "\n# Modify docutils's Include.run to emit 'source-read' event.\n# We'll need to find the right place t",
+          "generated_text_tail": "ython3 modify_docutils.py\n<|\"|>}<tool_call|><|tool_response>",
+          "conditioning_plus_generated": {
+            "structured_tool_count": 1,
+            "missing_tool": false,
+            "malformed_name": true,
+            "invalid_arguments": true,
+            "tools": [
+              {
+                "name": "bash\n# Modify docutils's Include.run to emit 'source-read' event.\n# We'll need to find the right place to insert the code.\n# I'll use a python script to modify the file.\n\ncat <<'EOF' > modify_docutils.py\nimport sys\n\npath = '/opt/miniconda3/lib/python3.11/site-packages/docutils/parsers/rst/directives/misc.py'\nwith open",
+                "expected_bash": false,
+                "valid_json": true,
+                "valid_command_schema": false,
+                "argument_keys": [
+                  "path, 'r') as f",
+                  "line in enumerate(lines)",
+                  "'        # Sphinx integration",
+                  "'        try",
+                  "'            from sphinx import addnodes\\n',\n        '            if isinstance(self.state.document, addnodes.document)",
+                  "'                env = self.state.document.environment\\n',\n        '                app = env.app\\n',\n        '                \\n',\n        '                # Get the path of the file being included\\n',\n        '                import os\\n',\n        '                from docutils.parsers.rst import directives\\n',\n        '                path = directives.path(self.arguments[0])\\n',\n        '                \\n',\n        '                # We need to resolve the path relative to the current document\\n',\n        '                # but we don't have the current document's path easily here.\\n',\n        '                # However, we can try to use the environment to resolve it.\\n',\n        '                # For now, let's just try to read the file and emit the event.\\n',\n        '                # Note",
+                  "'                \\n',\n        '                # To avoid duplicating the reading process, we can just\\n',\n        '                # try to use a temporary file if the content was modified.\\n',\n        '                # But since we are in docutils, we don't have the source cache.\\n',\n        '                # Let's just emit the event and see if it works.\\n',\n        '                \\n',\n        '                # Actually, the best way is to let Sphinx handle the inclusion.\\n',\n        '                # But we are already in docutils.Include.run.\\n',\n        '                # Let's just print a message for now to confirm it's called.\\n',\n        '                print(f\"DEBUG",
+                  "}\")\\n',\n        '        except Exception as e",
+                  "'            print(f\"DEBUG",
+                  "}\")\\n'\n    ]\n    \n    lines[start_line",
+                  "] = replacement\n    \n    with open(path, 'w') as f"
+                ]
+              }
+            ],
+            "visible_content_chars": 0,
+            "visible_content_head": "",
+            "reasoning_chars": 2551,
+            "visible_GetAll_bash": false,
+            "visible_pseudo_call": false,
+            "reasoning_literal_thought_tail": false
+          },
+          "generated_only": {
+            "structured_tool_count": 0,
+            "missing_tool": true,
+            "malformed_name": false,
+            "invalid_arguments": false,
+            "tools": [],
+            "visible_content_chars": 3145,
+            "visible_content_head": "\n# Modify docutils's Include.run to emit 'source-read' event.\n# We'll need to find the right place to insert the code.\n#",
+            "reasoning_chars": 0,
+            "visible_GetAll_bash": false,
+            "visible_pseudo_call": false,
+            "reasoning_literal_thought_tail": false
+          },
+          "mechanical_flag_from_runner": false,
+          "mechanical_repetition_not_adjudicated_by_parser": true
+        },
+        {
+          "seed": 44,
+          "tokens": 1024,
+          "at_requested_token_cap": true,
+          "generated_has_tool_close_token": false,
+          "generated_last_id": 236761,
+          "generated_head_ids": [
+            107,
+            236865,
+            564,
+            795,
+            17114,
+            6484,
+            13364,
+            236789,
+            236751,
+            12213,
+            236761,
+            4503
+          ],
+          "generated_text_head": "\n# I will modify docutils's Include.run to emit the 'source-read' event if it's running within Sphin",
+          "generated_text_tail": "ath, 'w') as f:\n        f.writelines(lines)\n\"\n\n# Test again.",
+          "conditioning_plus_generated": {
+            "structured_tool_count": 1,
+            "missing_tool": false,
+            "malformed_name": true,
+            "invalid_arguments": true,
+            "tools": [
+              {
+                "name": "bash\n# I will modify docutils's Include.run to emit the 'source-read' event if it's running within Sphinx.\n# This is where the root of the problem is: the Include directive used is the docutils one.\n\ncat <<'EOF' > replacement_docutils_include.py\n    def run",
+                "expected_bash": false,
+                "valid_json": true,
+                "valid_command_schema": false,
+                "argument_keys": [
+                  "self)",
+                  "it's an instance of sphinx.addnodes.document.\n            # We can check if it has a 'env' attribute.\n            if hasattr(self.state.document, 'env')",
+                  "] is the path to the file\n                filename = self.arguments[0]\n                # We need to resolve the path relative to the current source file\n                # docutils's Include already does some path resolution, \n                # but let's just use the resolved path.\n                \n                # We'll try to emit the 'source-read' event.\n                # We need the docname for the event.\n                # We can try to get the relative path.\n                import os\n                # The current source file is available in self.state_machine.input_lines.source\n                source_file = self.state_machine.input_lines.source\n                source_dir = os.path.dirname(os.path.abspath(source_file))\n                # Resolve the included file's path\n                path = os.path.normpath(os.path.join(source_dir, filename))\n                \n                # Now we need the docname. This is tricky.\n                # Let's just use the relative path from the source directory as the docname.\n                # Or better, use env.relfn2path to get the rel_filename.\n                if hasattr(env, 'relfn2path')",
+                  "_ = env.relfn2path(path)\n                else",
+                  "'r', encoding='utf-8') as f",
+                  "]\n                if hasattr(env, 'app')",
+                  "rel_filename, source)\n                content = source[0]\n                \n                # Use a temporary file to pass the modified content to the original Include.run\n                import tempfile\n                with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', delete=False) as tmp",
+                  "] = tmp_path\n                    return super().run()\n                finally",
+                  "'r') as f",
+                  "line in enumerate(lines)",
+                  "len(lines))",
+                  "].startswith('    ') or not lines[j].strip()",
+                  "] = [replacement + '\\n']\n    with open(path, 'w') as f"
+                ]
+              }
+            ],
+            "visible_content_chars": 0,
+            "visible_content_head": "",
+            "reasoning_chars": 2551,
+            "visible_GetAll_bash": false,
+            "visible_pseudo_call": false,
+            "reasoning_literal_thought_tail": false
+          },
+          "generated_only": {
+            "structured_tool_count": 0,
+            "missing_tool": true,
+            "malformed_name": false,
+            "invalid_arguments": false,
+            "tools": [],
+            "visible_content_chars": 4014,
+            "visible_content_head": "\n# I will modify docutils's Include.run to emit the 'source-read' event if it's running within Sphinx.\n# This is where t",
+            "reasoning_chars": 0,
+            "visible_GetAll_bash": false,
+            "visible_pseudo_call": false,
+            "reasoning_literal_thought_tail": false
+          },
+          "mechanical_flag_from_runner": false,
+          "mechanical_repetition_not_adjudicated_by_parser": true
+        }
+      ]
+    }
+  ],
+  "rules": [
+    "Expected structured tool is bash with JSON mapping containing string command. Missing tool, malformed function name and invalid arguments are separate outcomes.",
+    "Missing tool at token cap may be incomplete; inspect completion/stop and channel context before declaring reproduction.",
+    "Valid structured call does not excuse visible GetAll-bash, stray thought, repetition, wrong actions or other semantic anomalies. Mechanical repetition is not assessed by this parser.",
+    "Raw special-marker display alone is not reproduction: runner decodes skip_special_tokens=False. Compare actual channel-aware structured results with native response body.",
+    "Native token IDs and exact historical stream absent. Canonical reconstruction/current nonstreaming parse is not proof of historical stream/parser equivalence or full-model correctness.",
+    "Full-prefix findings may include fixed inherited anomalous text. Compare generated-only findings and exact prefix before attributing anomaly to new sampling. A capped parser-extracted call is not necessarily complete/executable; tool-close-token presence is recorded separately."
+  ],
+  "partial_counts": {
+    "served": {
+      "case_modes": 0,
+      "trials": 0,
+      "missing_tool": 0,
+      "malformed_name": 0,
+      "invalid_arguments": 0,
+      "capped_trials": 0
+    },
+    "full": {
+      "case_modes": 1,
+      "trials": 3,
+      "missing_tool": 0,
+      "malformed_name": 3,
+      "invalid_arguments": 3,
+      "capped_trials": 3
+    }
+  }
+}

@@ -1,0 +1,209 @@
+{
+  "reviewed_unix": 1794724120.0768516,
+  "rows": [
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.sympy__sympy-18763.call1.onset.seed42.cap256.json",
+      "sha256": "7c3d1213ebf2dbce911aab0321c6d7dd68ab2c0e214c6df1329fa7182524a5ab",
+      "seed": 42,
+      "tokens": 78,
+      "verdict": "normal",
+      "reason": "Full raw text and pinned prefix reviewed; canonical tool invocation and distinct script/command. No task correctness claim.",
+      "trace_counters_delta": {
+        "model_replays": 77,
+        "sample_replays": 77,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 77,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.sympy__sympy-18763.call1.onset.seed43.cap256.json",
+      "sha256": "c9c784516fa1056e773264d86496017b9f63bff8daf3ae329b59ffc1ece40bd2",
+      "seed": 43,
+      "tokens": 91,
+      "verdict": "native",
+      "reason": "Closing tool marker used as opener; serialized missing-tool native family, stock-parser audit requested.",
+      "trace_counters_delta": {
+        "model_replays": 90,
+        "sample_replays": 90,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 90,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.sympy__sympy-18763.call1.onset.seed44.cap256.json",
+      "sha256": "ee082db8aadfd306601b080adfd20ae562479183e41bf88a002b2cde9c9428b7",
+      "seed": 44,
+      "tokens": 90,
+      "verdict": "normal",
+      "reason": "Full raw text and pinned prefix reviewed; canonical tool invocation and distinct script/command. No task correctness claim.",
+      "trace_counters_delta": {
+        "model_replays": 89,
+        "sample_replays": 89,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 89,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.sympy__sympy-18763.call10.onset.seed42.cap256.json",
+      "sha256": "82f9a058ae5f11d16791536789541224c5029dbd73e638cf9c88af3849057e4e",
+      "seed": 42,
+      "tokens": 22,
+      "verdict": "normal",
+      "reason": "Full raw text and pinned prefix reviewed; canonical tool invocation and distinct script/command. No task correctness claim.",
+      "trace_counters_delta": {
+        "model_replays": 21,
+        "sample_replays": 21,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 21,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.sympy__sympy-18763.call10.onset.seed43.cap256.json",
+      "sha256": "1d4062ee6f5cc8945b2cad81ab7d82638e821fece00e4e3bfeecb2f2e8f6763a",
+      "seed": 43,
+      "tokens": 22,
+      "verdict": "normal",
+      "reason": "Full raw text and pinned prefix reviewed; canonical tool invocation and distinct script/command. No task correctness claim.",
+      "trace_counters_delta": {
+        "model_replays": 21,
+        "sample_replays": 21,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 21,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.sympy__sympy-18763.call10.onset.seed44.cap256.json",
+      "sha256": "dc4c631940ebb5cfd896087c7f64cc9a6ed7be53551de2578ad15d651195636e",
+      "seed": 44,
+      "tokens": 22,
+      "verdict": "normal",
+      "reason": "Full raw text and pinned prefix reviewed; canonical tool invocation and distinct script/command. No task correctness claim.",
+      "trace_counters_delta": {
+        "model_replays": 21,
+        "sample_replays": 21,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 21,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.xarray3095-call53.canonicalprefix.seed42.cap256.json",
+      "sha256": "5941ed84328d85b2d35aec9fd5bef1a49fe4f2c58a8802ac370173e4aec74ed4",
+      "seed": 42,
+      "tokens": 34,
+      "verdict": "normal",
+      "reason": "Full raw text and pinned prefix reviewed; canonical tool invocation and distinct script/command. No task correctness claim.",
+      "trace_counters_delta": {
+        "model_replays": 33,
+        "sample_replays": 33,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 33,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.xarray3095-call53.canonicalprefix.seed43.cap256.json",
+      "sha256": "2f877cfde5b7215a09ae5cec6cdd262dc5f21e6e33058627d3a254f7929c491b",
+      "seed": 43,
+      "tokens": 34,
+      "verdict": "normal",
+      "reason": "Full raw text and pinned prefix reviewed; canonical tool invocation and distinct script/command. No task correctness claim.",
+      "trace_counters_delta": {
+        "model_replays": 33,
+        "sample_replays": 33,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 33,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.xarray3095-call53.canonicalprefix.seed44.cap256.json",
+      "sha256": "b5db9f940b52ecb1b2d5e3c7839da6a325799a17ce90581d1eff6b0029ca8fc6",
+      "seed": 44,
+      "tokens": 34,
+      "verdict": "normal",
+      "reason": "Full raw text and pinned prefix reviewed; canonical tool invocation and distinct script/command. No task correctness claim.",
+      "trace_counters_delta": {
+        "model_replays": 33,
+        "sample_replays": 33,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 33,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.xarray7233-call1.canonicalprefix.seed42.cap1024.json",
+      "sha256": "8ce7fdf3cd2a297a4075387b21927fb085e0d7a5252351fe33147f5030799588",
+      "seed": 42,
+      "tokens": 737,
+      "verdict": "other",
+      "reason": "Localized stray contraction in otherwise coherent script: or\u2019s marked (seed42), it's\u2019 considered (seed43).",
+      "trace_counters_delta": {
+        "model_replays": 736,
+        "sample_replays": 736,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 736,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.xarray7233-call1.canonicalprefix.seed43.cap512.json",
+      "sha256": "7b1e7196793e83eb91af802c3c0e6cda82ed110f10bba838d13488e4186c3e8c",
+      "seed": 43,
+      "tokens": 335,
+      "verdict": "other",
+      "reason": "Localized stray contraction in otherwise coherent script: or\u2019s marked (seed42), it's\u2019 considered (seed43).",
+      "trace_counters_delta": {
+        "model_replays": 334,
+        "sample_replays": 334,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 334,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.xarray7233-call1.canonicalprefix.seed44.cap1024.json",
+      "sha256": "38b6030b6133ecfff1677dc506a8f73c56a9ba3f09d3cb265c3e8952e0b70089",
+      "seed": 44,
+      "tokens": 359,
+      "verdict": "normal",
+      "reason": "Full raw text and pinned prefix reviewed; canonical tool invocation and distinct script/command. No task correctness claim.",
+      "trace_counters_delta": {
+        "model_replays": 358,
+        "sample_replays": 358,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 358,
+        "captures": 0
+      }
+    }
+  ]
+}

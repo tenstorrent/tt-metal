@@ -1,0 +1,56 @@
+{
+  "reviewed_unix": 1794726197.3471577,
+  "rows": [
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/runs/head_bf16_hifi4/anomaly.sphinx-doc__sphinx-10323.call70.onset.seed43.cap256.json",
+      "sha256": "b85b97e5082f9d2b846006a5ce320b0a100ca5fba95befd475dedfd0ae965dfd",
+      "seed": 43,
+      "tokens": 44,
+      "verdict": "native",
+      "reason": "Root full raw and decoded prefix: Two immediate extra curly apostrophe-ve suffixes after completed Ive.",
+      "trace_counters_delta": {
+        "model_replays": 43,
+        "sample_replays": 43,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 43,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/runs/head_bf16_hifi4/anomaly.sphinx-doc__sphinx-10323.call70.onset.seed44.cap256.json",
+      "sha256": "a5f95f7adf58b64e334e53d0660a335150b54a64bfd020961ab1ebbede32fea1",
+      "seed": 44,
+      "tokens": 36,
+      "verdict": "normal",
+      "reason": "Root full raw and decoded prefix: Grammatical tried-everything and canonical submission, no task correctness claim.",
+      "trace_counters_delta": {
+        "model_replays": 35,
+        "sample_replays": 35,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 35,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/runs/head_bf16_hifi4/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.seed42.cap2048.json",
+      "sha256": "45d5e668c5139f8fad0d5bcd62414122b7fb5df9821f16f12c388f49d460c9f9",
+      "seed": 42,
+      "tokens": 183,
+      "verdict": "normal",
+      "reason": "Root full raw and decoded prefix: Prefix ends bare it, generated apostrophe-s legitimately completes its contraction. Varied reasoning and canonical sed/build command.",
+      "trace_counters_delta": {
+        "model_replays": 182,
+        "sample_replays": 182,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 182,
+        "captures": 0
+      }
+    }
+  ]
+}

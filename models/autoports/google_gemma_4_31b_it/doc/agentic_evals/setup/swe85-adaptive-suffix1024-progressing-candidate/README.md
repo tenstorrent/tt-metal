@@ -1,0 +1,3 @@
+Candidate only; not admitted or run. These two full-mode rows extend the exact existing suffix1024 conditioning for seed42 from 512 generated IDs to a 1024-token cap: Requests5414 call11 and Matplotlib20488 call86. The fixtures retain exact prompt IDs, chosen continuation, and sampling.
+
+The forecast projects to 1023 replay calls, preserves source prefill/host overhead, adds the measured 77.85s load and one 12.16s cold trace-preparation allowance because `branches=[]` skips the source chosen-TF warmup. Updated point estimate is 210.66s and range is 174.46–295.11s. CPU validation passed; no device was used.

@@ -1,0 +1,25 @@
+{
+  "status": "candidate_only_unadmitted_no_hf_launch",
+  "change": "HF predecessor reference refreshed from superseded unlaunched suffix8192 package to admitted P1 pinfix package; P inventory exact exception retained. P2 intentionally remains an admission blocker until root supplies frozen exact execution pin.",
+  "old_suffix8192": {
+    "directory": "swe85-adaptive-canonicalprefix-suffix8192-candidate",
+    "admission_sha256": "f71ac674ff37bedd8304b92762cf98528f70d687afe14ebbf7416fe5860a06ec"
+  },
+  "new_suffix8192": {
+    "directory": "swe85-adaptive-canonicalprefix-suffix8192-p1pinfix-candidate",
+    "admission_sha256": "300d69403a28112bc5f2a7225df5327bdb9e577ad9ca96cf754ab304f3538205",
+    "current_admission_status": "admitted"
+  },
+  "p_inventory_exception": {
+    "stale_row_sha256": "428bea328fae8fa6e4f6fe21802f3763985d6b5ee819f5beac6c6df3ff1f2b97",
+    "verified_current_p_admission_sha256": "91dc764e6a3a6b1e8a1be51e6eee5fc958c19d1dfcfa3d057b989aa325618cdd"
+  },
+  "files": {
+    "run_expanded_after_predecessors.py": "b03526fd42e4a6be1e869842796c8d8039e2a16280d585d902b3801523ddde77",
+    "source-integrity.json": "36e822bfd5235f1d6cdb315f5dbee42981f5b3871f1a3af291595ccb66f44b26",
+    "proposal.json": "feb08c25978fc2879f6494ba76e7a2ce5b4e41864e2aee55199cd4c080ea56fe",
+    "commands.json": "80bfeecb4a82125458664b35d9bbd0d9481ee990d1bf31dfb782c254edc0e86b",
+    "admission.json": "023886a82f7a69006b2a75a97a1b063f92b9f4e900022a2f35c6a59ef66f4bd9"
+  },
+  "execution": "none; no HF/model load, device query, or launch"
+}

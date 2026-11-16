@@ -1,0 +1,12 @@
+[
+  {
+    "name": "anomaly.psf__requests-1921.call1.onset",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-getall-call1-controls/psf__requests-1921.call1.onset.private.json",
+    "free_run_tokens": 256
+  },
+  {
+    "name": "anomaly.pylint-dev__pylint-4551.call1.onset",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-getall-call1-controls/pylint-dev__pylint-4551.call1.onset.private.json",
+    "free_run_tokens": 256
+  }
+]

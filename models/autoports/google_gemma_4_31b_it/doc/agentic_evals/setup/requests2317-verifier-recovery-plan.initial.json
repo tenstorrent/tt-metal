@@ -1,0 +1,73 @@
+{
+  "status": "read_only_cpu_recovery_plan_ready_no_replay_performed",
+  "scope": {
+    "task": "psf__requests-2317",
+    "changed_files": [
+      "setup/requests2317-verifier-recovery-plan.json"
+    ],
+    "no_docker_device_or_network_commands_run": true,
+    "no_reference_or_oracle_patch_applied": true,
+    "shared_results_untouched": true
+  },
+  "task_identity": {
+    "trial": "psf__requests-2317__FwcKtRY",
+    "base_commit": "091991be0da19de9108dbe5e3752917fea3d7fdc",
+    "test_image_base": "swebench/sweb.eval.x86_64.psf_1776_requests-2317:latest",
+    "configured_image": "v5-swe-offline-verifier:psf__requests-2317",
+    "testbed_python": "3.9.20",
+    "testbed_pytest": "7.4.4",
+    "testbed_pluggy": "1.0.0",
+    "test_target": "test_requests.py::TestTimeout::test_encoded_methods",
+    "source": "setup/swe85-candidate/tasks85-offline-verifier/psf__requests-2317/tests/config.json",
+    "source_sha256": "a6739bd30dcf261f9482aea872efb871e239956c94e7591c0ed02179b488d9b2"
+  },
+  "agent_patch": {
+    "standalone_patch_file": null,
+    "saved_location": "setup/swe-jobs/swe-extended85-head-bfp8/psf__requests-2317__FwcKtRY/agent/trajectory.json (ATIF steps 17-18, lines 590-637) and agent/mini-swe-agent.txt (lines 580-615)",
+    "agent_authored_edit": "In requests/sessions.py, immediately before method = builtin_str(method), insert: if isinstance(method, bytes):\\n            method = method.decode('utf-8')",
+    "minimal_reconstruction": "diff --git a/requests/sessions.py b/requests/sessions.py\\n--- a/requests/sessions.py\\n+++ b/requests/sessions.py\\n@@ -425,6 +425,8 @@\\n-        method = builtin_str(method)\\n+        if isinstance(method, bytes):\\n+            method = method.decode('utf-8')\\n+        method = builtin_str(method)",
+    "apply_rule": "Reconstruct into a disposable checkout at the exact base commit; verify context with git diff and the trajectory's final source inspection. Apply only this transcript-authored source edit. Never use the lock.json `patch` field: it is the SWE-bench oracle/reference solution using to_native_string, not the agent patch. Do not replay any unrelated Python 3.11 collections compatibility edits from the transcript; they were debugging-environment workarounds and are not the minimal submitted fix.",
+    "patch_evidence": "The agent inserted the two lines by sed in trajectory step 17 and immediately inspected the resulting source in step 18. Later mocked session.request reproductions report Request.method 'GET'/'POST' for bytes and text inputs (trajectory step 45, lines 1673-1691). The verifier's injected test passes (test-stdout.txt line 2282)."
+  },
+  "verifier_provenance": {
+    "task_test_script": "setup/swe85-candidate/tasks85-offline-verifier/psf__requests-2317/tests/test.sh",
+    "task_test_script_sha256": "af1e4169b579d0ec1291ce611fa5c8cb37daeaf4afb570f8decfb5d2e5568259",
+    "official_test_patch": "Embedded in that test.sh: adds test_encoded_methods only. It is distinct from the source patch.",
+    "parser_source": "The same test.sh embeds parser.py in its heredoc at lines 73 onward; this is the exact task evaluator/parser provenance.",
+    "parser_behavior": "Reads /tests/config.json, wraps LOG_FILE in SWEbench START_TEST_OUTPUT/END_TEST_OUTPUT markers, calls swebench.harness.grading get_logs_eval, get_eval_tests_report, and get_resolution_status, and writes /logs/verifier/report.json and reward.txt.",
+    "parser_dependency_environment": "setup/offline-verifier-build/evidence.json establishes an offline Python 3.12.12 / uv 0.7.13 parser image and the recovery env bringup/artifacts/swe-verifier-recovery-env. Its pins in setup/extended_offline_verifier_preparation.json are swebench==4.0.3, datasets==2.16.1, fastcore==1.10.5. The cache contains swebench 4.0.3; no parser was run as part of this read-only plan.",
+    "generic_helper_reuse": "setup/recover_swe_verifier_offline.py demonstrates reconstructing parser source from an original test.sh, isolating a bounded test-output slice, running parser against a copied log with task config mounted read-only, and recording provenance separately. Do not execute or mutate that generic helper; adapt its method to a new task-specific diagnostic runner after worker capacity is available.",
+    "submitted_source_evidence": "The verifier log shows python -m pip install . and injected test patch application, then test output; the printed diff is only the test patch. The agent source patch is recoverable from the trajectory, not a standalone artifact. The test install is the local target project build/install, not a fetched Requests release."
+  },
+  "safe_recovery_plan_when_slot_free": {
+    "phase_1_cpu_only_patch_replay": [
+      "Wait until the 12-worker run and Docker capacity are idle; confirm no owner is using the task image.",
+      "Create a disposable task checkout/image from the already-cached v5-swe-offline-verifier:psf__requests-2317 image, pin the Requests tree to base commit 091991be0da19de9108dbe5e3752917fea3d7fdc, and record the actual image ID. Do not build or pull an image.",
+      "Before running test.sh, disable/remove only its test patch block and parser tail in the disposable copy, leaving original source untouched; install the base Requests package as the original script does, apply only the reconstructed agent sessions.py edit, then run a minimal offline mocked-send assertion equivalent to the saved transcript. This proves applied patch content without public HTTP.",
+      "For exact testbed reproduction, restore the original task test.sh in a fresh disposable checkout and allow its own test patch/test harness to run only when explicitly treating this as a networked diagnostic. Do not call remote HTTP targets in the CPU recovery path.",
+      "No saved submitted source diff exists in the trial directory. Reconstruct the minimal patch from trajectory ATIF step 17/18 only; do not mistake the lock.json patch field for submitted code. The lock patch is the SWE-bench oracle solution and is explicitly excluded."
+    ],
+    "phase_2_offline_verifier_parse": [
+      "Extract the embedded parser heredoc from the immutable original task test.sh and use the matching tests/config.json unchanged.",
+      "Slice the original verifier test-stdout.txt to only the pytest section, bounded by the final '+ set +x' immediately before the pytest session and the first post-test 'Updated 1 path' checkout line. The slice must retain the original 'test_encoded_methods' PASSED line and all failure summaries; record 1-based inclusive source line bounds and SHA-256.",
+      "Copy that slice to a diagnostic-only directory; never edit the saved trial stdout/report/reward or current shared results. In a network-none parser container, parse the copied log using the exact task config and original embedded parser. Record parser image ID, source script/config/log hashes, command, return code, report, and reward under a new diagnostic directory.",
+      "This parse will faithfully recover the official score from the recorded run only if log parser classification finds every configured FAIL_TO_PASS test. Current log marks test_requests_history_is_saved failed, so expected parsed reward remains 0; external HTTP/TLS failures explain why this historical run cannot certify the whole task. The passing encoded-method test is still useful evidence that the submitted fix addresses the task regression.",
+      "Concrete parser-only invocation template (after extracting parser.py and making a bounded copy of the saved log): docker run --rm --network none --user 6002:6002 --entrypoint /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/swe-verifier-recovery-env/bin/python -v /home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:ro -v /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-candidate/tasks85-offline-verifier/psf__requests-2317/tests:/tests:ro -v <diagnostic-dir>:/recovery:rw -v <diagnostic-dir>:/logs/verifier:rw -e LOG_FILE=/recovery/test-output.parser.txt -e HF_HUB_OFFLINE=1 -e HF_DATASETS_OFFLINE=1 v5-swe-prepared:pylint-dev__pylint-6903 /recovery/parser.py. This is a future template, not run here; verify image availability and interpreter symlink targets before use, and do not substitute an image that fetches dependencies."
+    ],
+    "no_go": [
+      "Do not use the oracle solution in lock.json (to_native_string), official reference patch, later Requests release, or any downloaded/fetched target project source.",
+      "Do not execute the saved trajectory, original test suite, container, or remote HTTP requests while workers are active; do not make Docker/device/network calls during the current no-capacity phase.",
+      "Do not edit tests/config.json, tests/test.sh, original logs, report.json, reward.txt, collected results, or shared coordinator results to manufacture a pass.",
+      "Do not count dependency installation or python -m pip install . as evidence of a fetched solution/release."
+    ]
+  },
+  "evidence_files": {
+    "task_trial": "setup/swe-jobs/swe-extended85-head-bfp8/psf__requests-2317__FwcKtRY",
+    "trajectory_sha256": "17ccfa484604919de2d38b5bd025d2693348b02ecac498779da1b6d7f044b57c",
+    "verifier_log_sha256": "07205ee19cd53cf71446eea41a6382f7d5c80f0542fc6ae74d5ce1daf7dc3681",
+    "lock_sha256": "35245d7ff4aca4eb8b9b0299804a3a73c50399eb40fd859522d4ffc969a23e9c",
+    "reference_patch_warning": "lock.json patch field is oracle/reference patch and must not be replayed",
+    "recovery_helper": "setup/recover_swe_verifier_offline.py",
+    "task_parser": "setup/swe85-candidate/tasks85-offline-verifier/psf__requests-2317/tests/test.sh"
+  }
+}

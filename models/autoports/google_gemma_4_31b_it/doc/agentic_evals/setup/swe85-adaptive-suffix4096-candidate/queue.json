@@ -1,0 +1,14 @@
+{
+  "status": "all_suffix4096_jobs_completed",
+  "admission_sha256": "246dbd17606f3baaec25ddc490e35f0a4c394808d43479a3a4dd0b267550906a",
+  "stop_file": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/STOP_BEFORE_NEXT_JOB",
+  "queued_unix": 1794720419.8254013,
+  "predecessor_completion_sha256": "58972dd98c183302faa7c11ef099194916f988ad74f7e4d07e0d94eaedfbaada",
+  "predecessor_queue_sha256": "f9b8fe8a09c95124d451a88e42e7bcbfaa0f6c0da7baf170b05acfcf5115d5ce",
+  "start_unix": 1794720688.5779655,
+  "exit_code": 0,
+  "end_unix": 1794721238.56118,
+  "comparison_returncode": 0,
+  "comparison_output": "",
+  "comparison_stderr": ""
+}

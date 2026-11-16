@@ -1,0 +1,26 @@
+{
+  "status": "root_admitted",
+  "reviewer": "root",
+  "accepted": true,
+  "stage_deadline_unix": 1794791725.0,
+  "primary_hf9_progress_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/progress.json",
+  "primary_hf9_progress_sha256": "4a9363429f50949031da53c13f3156c2bd399f756d227f353babaafd065ec773",
+  "primary_hf9_root_review_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/root-terminal-review.json",
+  "primary_hf9_root_review_sha256": "e7109b54dafdd7f8507703b7f0c31795ee2678b56f9a543a1ef2d0b4f6f36cd5",
+  "execution_note": "Coordinator launches serially after active actual-branch and Requests extension jobs terminate. This is conditional branch behavior after forcing first fullTT token, not unconditional HF anomaly incidence.",
+  "driver_sha256": "2516262e035f942393bb6409052b806847c1ba53fb98163236c2adc6ca569673",
+  "driver_integrity_sha256": "dd6547d44ac116f50a01c242017b5737fcebe8bed8a4dda7cd7f70b7122ea218",
+  "proposal_sha256": "4173746c27097acc3eaf778ce82bc3657e098b09ac6d561c0a7c3cc7e208388a",
+  "command_sha256": "2cfe6313cfa53445e243191711045702c54b807838f7fc4ac316e2ff4677d444",
+  "fixture_sha256": "acfe5c87d2b16de1f566b55b295f632beac9db6269121545a105882a9b67f24e",
+  "manifest_sha256": "2a6435b88ab24f780db9a26207989e0a511ad54dca5ddb35e26384aa914c6f32",
+  "forecast_sha256": "19e3a080e40713f303e7d91de342039abd8cc7d63543c920c191b7b373570dd4",
+  "root_static_review_sha256": "5f8d48277f24af01ee49d95eae75bf3625aa3fa0a87aa69d141be1d10831105a",
+  "repin": {
+    "epoch": 1794752777.6219976,
+    "reason": "Only HF comparison identity guard source changed; generation/sampling unchanged. Command does not request comparison. Exactprompt/seed/cap/forecast retained.",
+    "prior_admission_sha256": "127dbf87c307093c88ecd592168d214b772925b000f1b9321e7a70703c783244",
+    "source_inventory_sha256": "429977f500e321d3fe56c3981b513fed994373c8ed368c3999a1ebd0a5f76638",
+    "no_execution": "Model launch still requires current queue/device/deadline/memory checks."
+  }
+}

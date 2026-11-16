@@ -384,7 +384,8 @@
       "warm_decode_sampling_incremental_peak_b32": 19922944,
       "budget_bytes_per_device": 805306368,
       "budget_basis": "Conservative 768 MiB budget exceeds measured cold two-layer prefill peak plus 31 retained selected-logit tiles (31 * 4194304 bytes). Decoder layers execute sequentially and release transient activations. All-layer persistent buffers and trace allocations are accounted separately by prepared allocator snapshots; this budget is an analytical bound, not a measured full-stack peak.",
-      "stage08_basis": "Retain stage07 conservative transient bound: decoder/activation/KV/output shapes and dtypes are unchanged; only head weights shrink from BFP8 to BFP4. Head output and sampling storage remain BF16. This is an analytical bound, not a new full-stack transient peak."
+      "stage08_basis": "Retain stage07 conservative transient bound: decoder/activation/KV/output shapes and dtypes are unchanged; only head weights shrink from BFP8 to BFP4. Head output and sampling storage remain BF16. This is an analytical bound, not a new full-stack transient peak.",
+      "stage12_basis": "Current head rises BFP4->BFP8 (+168MiB/device); decoder, activation, KV and output storage unchanged. Prior805306368-byte transient reserve retained analytically, not asserted fresh full-stack peak; candidate launch fixed-pool fit validated separately."
     },
     "trace_region_bytes_per_device": 134217728,
     "trace_region_note": "Reserved separately and already excluded from allocator usable DRAM34044513280; never subtract twice.",
@@ -405,7 +406,8 @@
       "longer_outputs": "existing streaming API; or configure larger output_capacity before capture"
     },
     "kv_cache_dtype": "bfloat8_b",
-    "selected_precision_config": "datatype_sweep/selected_precision_config.json"
+    "selected_precision_config": "datatype_sweep/selected_precision_config.json",
+    "measurement_precision": "Historical stage08 head_bfp4; capacity_rows, inventory and model_weights_rope_ccl_bytes_per_device remain unchanged original measurements. Current selected serving memory is in stage12_selected_serving_memory."
   },
   "historical_fields_note": "functional/fused/optimized/multichip layer fields retain earlier stage evidence. full_model_plan is the current full-stack allocation and context contract.",
   "optimized_vllm_preparation": {
@@ -423,5 +425,146 @@
       "../readiness_vllm/stage10_sync_tracked/mixed_sync.json"
     ],
     "maximum_context_evidence": "Unchanged full-model long-prefill/decode path retains the selected datatype-sweep maximum-context validation above."
+  },
+  "stage12_selected_serving_memory": {
+    "precision": {
+      "config_id": "stage12_head_bfp8_lofi",
+      "weight_groups": {
+        "attention": "bfp4",
+        "mlp": "bfp4",
+        "down": "bfp4",
+        "lm_head": "bfp8_lofi"
+      },
+      "layer_exceptions": {},
+      "compute_fidelities": {
+        "attention": "LoFi",
+        "mlp": "LoFi",
+        "down": "LoFi",
+        "lm_head": "LoFi"
+      },
+      "activation_dtype": "bfloat8_b",
+      "residual_dtype": "bfloat16",
+      "ccl_dtype": {
+        "prefill": "bfloat8_b",
+        "decode": "bfloat16"
+      },
+      "kv_cache_dtype": "bfloat8_b",
+      "logits_dtype": "bfloat16",
+      "sampling_dtype": "bfloat16",
+      "embedding_dtype": "bfloat16",
+      "norm_dtype": "bfloat16",
+      "max_seq_len": 262144
+    },
+    "launch_implementation_commit": "fdac20baa579586be87b906938be843fd1ddeb03",
+    "host_only_followup_commit": "662f278c",
+    "observed_identity": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/head-bfp8-rates/server/perf-b32-server.json",
+    "launch_memory_evidence": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/head-bfp8-rates/server/server-b32/server.log",
+    "context_tokens": 262144,
+    "capability_reduction": null,
+    "context_boundary_validation": "Historical stage08 full-context execution remains historical; this new launch advertises262144 and validates allocator fit, not a fresh headBFP8 boundary-accuracy run.",
+    "lm_head_bytes_per_device": 374341632,
+    "lm_head_increase_bytes_per_device": 176160768,
+    "model_weights_rope_ccl_bytes_per_device": 6595987456,
+    "model_bytes_basis": "Fresh pre-KV shared mesh allocator total replicated per device; equals historical6419826688+176160768.",
+    "pool_validation": {
+      "event": "serving_pool_launch_validation",
+      "pool_sizing": "fixed",
+      "pool_sizing_reason": "Stock plugin fixes its pool before loading weights; this launch validates its existing pool against measured shared-mesh allocator free space, not adaptive sizing.",
+      "measurement_basis": "One shared mesh allocator measurement applied uniformly to participating devices; these are not independent physical allocator samples. KV uses replicated ttnn.zeros on the mesh with equal shape/dtype on every device.",
+      "per_device": [
+        {
+          "device_id": 0,
+          "free_bytes": 27448525824,
+          "contiguous_free_bytes": 27212209152,
+          "pool_bytes": 25691422720,
+          "reserve_bytes": 1015693824
+        },
+        {
+          "device_id": 1,
+          "free_bytes": 27448525824,
+          "contiguous_free_bytes": 27212209152,
+          "pool_bytes": 25691422720,
+          "reserve_bytes": 1015693824
+        },
+        {
+          "device_id": 2,
+          "free_bytes": 27448525824,
+          "contiguous_free_bytes": 27212209152,
+          "pool_bytes": 25691422720,
+          "reserve_bytes": 1015693824
+        },
+        {
+          "device_id": 3,
+          "free_bytes": 27448525824,
+          "contiguous_free_bytes": 27212209152,
+          "pool_bytes": 25691422720,
+          "reserve_bytes": 1015693824
+        }
+      ],
+      "page_map_bytes": 62914560,
+      "prepared_reserve_bytes": 147472896,
+      "transient_reserve_bytes": 805306368,
+      "reserve_evidence": "doc/agentic_serving.json ledger; doc/optimized_vllm/memory_comparison.json; transient reserve is analytical, not a full-stack measured peak",
+      "trace_reserve_already_excluded": true,
+      "fits": true,
+      "remaining_bytes_after_reserves": 505092608
+    },
+    "startup_memory": {
+      "before_serving_cache": {
+        "event": "serving_memory",
+        "phase": "before_serving_cache",
+        "allocator": {
+          "num_banks": 8,
+          "total_bytes_allocated_per_bank": 824498432,
+          "total_bytes_per_bank": 4255564160,
+          "total_bytes_free_per_bank": 3431065728,
+          "largest_contiguous_bytes_free_per_bank": 3401526144
+        },
+        "program_cache_entries": 20,
+        "generator_counters": null
+      },
+      "after_serving_cache": {
+        "event": "serving_memory",
+        "phase": "after_serving_cache",
+        "allocator": {
+          "num_banks": 8,
+          "total_bytes_allocated_per_bank": 4043790592,
+          "total_bytes_per_bank": 4255564160,
+          "total_bytes_free_per_bank": 211773568,
+          "largest_contiguous_bytes_free_per_bank": 190098304
+        },
+        "program_cache_entries": 20,
+        "generator_counters": null
+      },
+      "after_serving_prepare": {
+        "event": "serving_memory",
+        "phase": "after_serving_prepare",
+        "allocator": {
+          "num_banks": 8,
+          "total_bytes_allocated_per_bank": 4062224704,
+          "total_bytes_per_bank": 4255564160,
+          "total_bytes_free_per_bank": 193339456,
+          "largest_contiguous_bytes_free_per_bank": 181232512
+        },
+        "program_cache_entries": 3180,
+        "generator_counters": {
+          "model_replays": 0,
+          "sample_replays": 0,
+          "token_refreshes": 0,
+          "position_refreshes": 0,
+          "page_refreshes": 0,
+          "readbacks": 0,
+          "captures": 3
+        }
+      }
+    },
+    "ten_agents_gpqa_swe_feasible_at_working_set": true,
+    "working_set_tokens": 131072,
+    "full_context_capacity_agents": 7,
+    "precision_audit": "agentic_evals/setup/head_bfp8_context_memory_audit.json",
+    "sizing_artifacts": [
+      "agentic_evals/setup/gpqa_server_size_head_bfp8.json",
+      "agentic_evals/setup/swe_server_size_head_bfp8.json"
+    ]
   }
 }

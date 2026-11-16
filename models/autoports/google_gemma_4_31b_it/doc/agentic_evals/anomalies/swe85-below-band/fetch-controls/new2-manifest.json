@@ -1,0 +1,22 @@
+{
+  "schema": "swe85-fetch-next-action-v1",
+  "status": "CPU prepared only; no correct branch passed",
+  "tasks": [
+    {
+      "task": "scikit-learn__scikit-learn-25747",
+      "call": 3,
+      "manifest": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/scikit-learn__scikit-learn-25747/manifest.json",
+      "status": "semantic execution pending",
+      "scope": "Inspect local target source in existing testbed environment without upgrading target. Next investigation action only; not completed fix."
+    },
+    {
+      "task": "sphinx-doc__sphinx-8638",
+      "call": 3,
+      "manifest": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/sphinx-doc__sphinx-8638/manifest.json",
+      "status": "semantic execution pending",
+      "scope": "Inspect local target source in existing testbed environment without upgrading target. Next investigation action only; not completed fix. The task-supplied cloned reproducer is not consumed or reconstructed by this action."
+    }
+  ],
+  "n": 2,
+  "revision": "842da3794eaa0b77d5f08bae87a17459d91ff475"
+}

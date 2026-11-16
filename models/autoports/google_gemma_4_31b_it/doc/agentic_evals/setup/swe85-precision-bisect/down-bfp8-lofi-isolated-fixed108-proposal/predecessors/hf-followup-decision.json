@@ -1,0 +1,48 @@
+{
+  "status": "root_reviewed",
+  "reviewer": "root",
+  "accepted": true,
+  "decision": "not_required",
+  "not_required_basis_sha256": {
+    "corrected_bfp8_admission_sha256": "3135aac12cbe11d97803b166dc3173def8f9bc03a6e8bb786fe015ce3f24bf08",
+    "corrected_bfp8_completion_sha256": "1be9414e4447a6600ea163967ec4fc0601ae9ffbbd47e44ab5e407a1c3ee453e",
+    "corrected_bfp8_root_review_sha256": "777d1a61090d8b827c76fc905b1a884b58270613d976c5eed73d8a41c2319151",
+    "corrected_bfp8_triage_sha256": "04195f9c199eac5276e59af247dc20bc7a5965d514ba2f77d7a9f6d56af73de9",
+    "old_full_bf16_admission_sha256": "32fe5e6ccf38aff945424de6b7f3c8e24a7a375cf6a806424bd1097e99bb6194",
+    "old_full_bf16_completion_sha256": "927e9425adeb62200b42d38c6f7fc367358f8fd02ad1bcbabaf4010fc3f76dec",
+    "old_full_bf16_root_review_sha256": "50073a981e1dcfb8446d10bc1c1c7e012cbfa53a8700cca79b952cb12f549fbd",
+    "old_full_bf16_triage_sha256": "ef7d0994f7067d540f7fbd986e8e9769d9440f470e00a8c57125a7458517f7a2",
+    "suffix1024_admission_sha256": "2e635a1169648396cf6abd95a6a3f3918808a45f0918431702fae2f5ff3ba308",
+    "suffix1024_served_completion_sha256": "b0485e6d7f64bfe2e2905c98f8bc493fd5a2db92e59522f58ac2dd972c32cf26",
+    "suffix1024_full_completion_sha256": "c28b61d76a152ef27c7cc92da987ccd80a36cdcea16eb48ef6933a792ce752b9",
+    "suffix1024_served_root_review_sha256": "2ee7c06425277e37c938256fd508c60a855838227058ec5047260a5a0f8b87ff",
+    "suffix1024_full_root_review_sha256": "8736f9c042e98cdeea4b4d158b739b48e46c5ab73b369f87091d1a733f6ccc6b",
+    "suffix1024_served_triage_sha256": "5f48a80b44ce6086390e541eade5c4d9f878e00ef8c6e829d7a1b18d29b04b7b",
+    "suffix1024_full_triage_sha256": "7c5d1a20673ca8036f94fe8f30b5b6ae145a3038fa4f0ccae904030f2ec48791",
+    "suffix1024_summary_sha256": "ecbbc26c4f42b9ca977e06f881c9301eecbb3ed59a0336ccfdcfad5bd05e6781"
+  },
+  "reason": "Not required as a prerequisite to the P3 full-prompt precision diagnostic: P3 itself includes original full-prompt SK seed42 at cap1024. The SK secondary-HF controls and suffix2048 extension remain required follow-up diagnostics after P3; this decision does not waive or declare them complete.",
+  "post_p3_followups_required": [
+    "Complete and root-review the admitted SK secondary-HF diagnostic batch.",
+    "Complete and root-review the original-prompt SK suffix2048/cap1024 diagnostic if still indicated by terminal P3 evidence."
+  ],
+  "gate_compatibility_note": "Current check_sk_serial accepts only completed/not_required. This draft uses not_required strictly for the P3 prerequisite decision; root should ensure post-P3 obligations remain tracked outside this gate.",
+  "sk_evidence_sha256": {
+    "corrected_bfp8_admission_sha256": "3135aac12cbe11d97803b166dc3173def8f9bc03a6e8bb786fe015ce3f24bf08",
+    "corrected_bfp8_completion_sha256": "1be9414e4447a6600ea163967ec4fc0601ae9ffbbd47e44ab5e407a1c3ee453e",
+    "corrected_bfp8_root_review_sha256": "777d1a61090d8b827c76fc905b1a884b58270613d976c5eed73d8a41c2319151",
+    "corrected_bfp8_triage_sha256": "04195f9c199eac5276e59af247dc20bc7a5965d514ba2f77d7a9f6d56af73de9",
+    "old_full_bf16_admission_sha256": "32fe5e6ccf38aff945424de6b7f3c8e24a7a375cf6a806424bd1097e99bb6194",
+    "old_full_bf16_completion_sha256": "927e9425adeb62200b42d38c6f7fc367358f8fd02ad1bcbabaf4010fc3f76dec",
+    "old_full_bf16_root_review_sha256": "50073a981e1dcfb8446d10bc1c1c7e012cbfa53a8700cca79b952cb12f549fbd",
+    "old_full_bf16_triage_sha256": "ef7d0994f7067d540f7fbd986e8e9769d9440f470e00a8c57125a7458517f7a2",
+    "suffix1024_admission_sha256": "2e635a1169648396cf6abd95a6a3f3918808a45f0918431702fae2f5ff3ba308",
+    "suffix1024_served_completion_sha256": "b0485e6d7f64bfe2e2905c98f8bc493fd5a2db92e59522f58ac2dd972c32cf26",
+    "suffix1024_full_completion_sha256": "c28b61d76a152ef27c7cc92da987ccd80a36cdcea16eb48ef6933a792ce752b9",
+    "suffix1024_served_root_review_sha256": "2ee7c06425277e37c938256fd508c60a855838227058ec5047260a5a0f8b87ff",
+    "suffix1024_full_root_review_sha256": "8736f9c042e98cdeea4b4d158b739b48e46c5ab73b369f87091d1a733f6ccc6b",
+    "suffix1024_served_triage_sha256": "5f48a80b44ce6086390e541eade5c4d9f878e00ef8c6e829d7a1b18d29b04b7b",
+    "suffix1024_full_triage_sha256": "7c5d1a20673ca8036f94fe8f30b5b6ae145a3038fa4f0ccae904030f2ec48791",
+    "suffix1024_summary_sha256": "ecbbc26c4f42b9ca977e06f881c9301eecbb3ed59a0336ccfdcfad5bd05e6781"
+  }
+}

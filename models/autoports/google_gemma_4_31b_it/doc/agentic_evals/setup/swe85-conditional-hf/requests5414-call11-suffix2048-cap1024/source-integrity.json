@@ -1,0 +1,32 @@
+{
+  "status": "frozen_source_pins_candidate_only",
+  "sources": {
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/results/seed44-suffix2048/anomaly.psf__requests-5414.call11.onset.hf.private.json": "ea3eb180de1ef8898c2565dcb5ffd7700f3e792ccfce8bc279efef80c6dfe9a4",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/fixtures/anomaly.psf__requests-5414.call11.onset.suffix2048.private.json": "fbe984e026dbe8ef2b9d8a4288056617cbfde5235d1efd4a3bd14038a2db5ad7",
+    "models/autoports/google_gemma_4_31b_it/tools/precision_repro_hf.py": "aafe67c88bb5a1eb38b8718570bbddd5749e2a9ecbb9dd19cdb100a49572c03e",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/native-positive-candidates-seed44-suffix2048.json": "8be05cbc74c014acefe3372df69386534f31330b7276bdac0bed35e154fbd5c2",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/runs/served/anomaly.psf__requests-5414.call11.onset.json": "fe2ed3734685fbc806bc3ce821a77e21f9b390cb838fc223daf8d6090cc8d039",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/runs/full/anomaly.psf__requests-5414.call11.onset.json": "a967659d1f4edd7b726a36c976168ae767957b9821ffc4a2a31640d594e7a885",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/completion-group-04.json": "d39b7440fd10612ecd8e51d84c02db9ea68c8742325c4a2f4597e3df86c3c967",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/launch-group-04.json": "c6521337dd89764fe5a8839a6cd040aced81170cd4e511b9826a7bced185a7b5"
+  },
+  "identity": {
+    "case_name": "anomaly.psf__requests-5414.call11.onset.suffix2048.cap1024.seed44",
+    "fixture_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/fixtures/anomaly.psf__requests-5414.call11.onset.suffix2048.private.json",
+    "fixture_sha256": "fbe984e026dbe8ef2b9d8a4288056617cbfde5235d1efd4a3bd14038a2db5ad7",
+    "prompt_token_ids_sha256": "55fea04ac956c00e84884f04bf7e287a85e9d1a2b90794040070751161c968f0",
+    "prompt_tokens": 2048,
+    "chosen_tokens": 64,
+    "chosen_sha256": "15001e212845ba0bcba68540367d36e76d1a6c148a0d47ce345637d7fee696c1",
+    "seed": 44,
+    "temperature": 1.0,
+    "top_p": 0.95,
+    "top_k": 20,
+    "cap_prior": 512,
+    "cap_candidate": 1024,
+    "revision": "842da3794eaa0b77d5f08bae87a17459d91ff475"
+  },
+  "sampling_source": "Pinned case_metadata in source HF result records temperature=1.0, top_p=0.95, top_k=20; exact fixture has 64 saved chosen tokens. Preserve exactly.",
+  "semantics_path": "semantic-context.json",
+  "semantics_sha256": "8a27f34ab15541d4b75d6e6cb92cc62f489c1e82631aa39de91084eb3bd40c19"
+}

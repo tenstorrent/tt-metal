@@ -1,0 +1,50 @@
+{
+  "status": "host_planning_proxy_not_measurement",
+  "basis": "P3 same-policy completed-row timing and the exact P3 load measurement. Candidate reruns all three rows from their original fixtures in one runner process and one model load; no assumption that generation resumes in-place.",
+  "load_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/load.json",
+  "load_wall_s": 137.96008633519523,
+  "per_case": [
+    {
+      "job": "p3capext.anomaly.psf__requests-5414.call10.onset.seed42.cap512",
+      "source_result_sha256": "51b40437942121d43d32b1f4b7280027f6da1e86bcd572eff4c360146dfddf83",
+      "old_tokens": 256,
+      "new_cap": 512,
+      "measured_decode_tokens_per_s": 31.335836772035297,
+      "measured_old_decode_wall_s": 8.137647698866203,
+      "measured_old_free_wall_s_including_prefill": 9.438316938932985,
+      "estimated_rerun_free_wall_s": 17.607876981716313,
+      "method": "reuse measured prefill/first-token outside-decode overhead and decode throughput; forecast full rerun length, not incremental suffix only"
+    },
+    {
+      "job": "p3capext.anomaly.psf__requests-5414.call11.onset.seed42.cap512",
+      "source_result_sha256": "178c2bbbf77dec7b779c2633efe6f22f7c0bd8909c73415b767ec263dda73e63",
+      "old_tokens": 256,
+      "new_cap": 512,
+      "measured_decode_tokens_per_s": 31.250860938348996,
+      "measured_old_decode_wall_s": 8.159775197971612,
+      "measured_old_free_wall_s_including_prefill": 9.565024169161916,
+      "estimated_rerun_free_wall_s": 17.756798485556946,
+      "method": "reuse measured prefill/first-token outside-decode overhead and decode throughput; forecast full rerun length, not incremental suffix only"
+    },
+    {
+      "job": "p3capext.anomaly.pytest-dev__pytest-5787.call65.onset.seed43.cap4096",
+      "source_result_sha256": "3228a96bc18c8640bc6a6fb08158c19c6f31f695991fd4d2c5ae3783891112d9",
+      "old_tokens": 2048,
+      "new_cap": 4096,
+      "measured_decode_tokens_per_s": 27.463347113060447,
+      "measured_old_decode_wall_s": 74.53570723091252,
+      "measured_old_free_wall_s_including_prefill": 90.63799106702209,
+      "estimated_rerun_free_wall_s": 165.2101104656097,
+      "method": "reuse measured prefill/first-token outside-decode overhead and decode throughput; forecast full rerun length, not incremental suffix only"
+    }
+  ],
+  "estimated_case_wall_s": 200.57478593288295,
+  "point_total_wall_s": 338.5348722680782,
+  "range_seconds": [
+    304.68138504127035,
+    440.09533394850166
+  ],
+  "range_note": "\u00b130% envelope around measured-rate projection for device variability, longer output, and host scheduling; planning only. It is not a confidence interval or guarantee.",
+  "timeout_seconds": 1800,
+  "candidate_not_admitted_or_launched": true
+}

@@ -1,0 +1,9 @@
+{
+  "applied_utc": "2026-11-14T22:05:56.832538+00:00",
+  "audit": "setup/swe85-unknown-bookkeeping-audit.json",
+  "corrections": 3,
+  "reward_changes": false,
+  "targets": {
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-extended85-head-bfp8/rerun_queue.json": "a888e83f94c4a1c03d5bfcc5a1d522bee1fced8a28e15c846fb74d4e5081e4e8"
+  }
+}

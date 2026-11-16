@@ -1,0 +1,154 @@
+{
+  "status": "independent_host_only_review_pass_two_exact_protocol_controls",
+  "scope": "Arm A changes only KV cache from BF16 to BFP8 on two exact Q32 protocol-control fixtures. No inference or device work by reviewer.",
+  "admission_sha256": "13958c460131cc46f3dbaabbf5e9ef3a3fd0a68f1a3eb3f2d4d37955b133c777",
+  "completion": {
+    "start_unix": 1794784130.5166345,
+    "end_unix": 1794784270.8664348,
+    "exit_code": 0,
+    "wall_seconds": 140.34980034828186
+  },
+  "source_pin_count": 160,
+  "all_source_pins_match": true,
+  "runtime_policy": {
+    "config_id": "stage12_bf16_hifi4_kv_bfp8_protocol_probe",
+    "weight_groups": {
+      "attention": "bf16",
+      "mlp": "bf16",
+      "down": "bf16",
+      "lm_head": "bf16"
+    },
+    "layer_exceptions": {},
+    "compute_fidelities": {
+      "attention": "HiFi4",
+      "mlp": "HiFi4",
+      "down": "HiFi4",
+      "lm_head": "HiFi4"
+    },
+    "activation_dtype": "bfloat16",
+    "residual_dtype": "bfloat16",
+    "ccl_dtype": {
+      "prefill": "bfloat16",
+      "decode": "bfloat16"
+    },
+    "kv_cache_dtype": "bfloat8_b",
+    "logits_dtype": "bfloat16",
+    "sampling_dtype": "bfloat16",
+    "embedding_dtype": "bfloat16",
+    "norm_dtype": "bfloat16",
+    "max_seq_len": 262144,
+    "sdpa_compute_fidelity": "HiFi4"
+  },
+  "root_review_sha256": "2a659e2d322f670f49dd48511d579434434012e62ce366cc33cdd0b8ca50c75a",
+  "cases": [
+    {
+      "case_name": "fullq32.anomaly.sphinx-doc__sphinx-10323.call70.onset.seed42.cap256",
+      "case_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-extra-contraction-controls/sphinx-doc__sphinx-10323.call70.onset.private.json",
+      "case_sha256": "7d39e2c87e91327f35317968bf2647887a402d0086085ec8f95db8ff5fc2ab64",
+      "seed": 42,
+      "cap": 512,
+      "branch": "free-running only, branches[]",
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 42
+      },
+      "arm_a_output": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full-q32-production-validation/protocol-group-bisect/arm-a-kv-bfp8-only/runs/fullq32.anomaly.sphinx-doc__sphinx-10323.call70.onset.seed42.cap256.json",
+      "arm_a_output_sha256": "80fe8b090b0fd5957c4ef8137ec9b031a706b5289df0d1b8adb2e049b9fdcddc",
+      "generated_tokens": 48,
+      "terminal_token_id": 50,
+      "runtime_precision": {
+        "config_id": "stage12_bf16_hifi4_kv_bfp8_protocol_probe",
+        "weight_groups": {
+          "attention": "bf16",
+          "mlp": "bf16",
+          "down": "bf16",
+          "lm_head": "bf16"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "HiFi4",
+          "mlp": "HiFi4",
+          "down": "HiFi4",
+          "lm_head": "HiFi4"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat8_b",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144,
+        "sdpa_compute_fidelity": "HiFi4"
+      },
+      "runtime_matches_arm_config": true,
+      "text_protocol_evidence": "The continuation finishes with a complete canonical bash echo call, closing at tool-response.",
+      "matching_full_bf16_control": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/p19-q32-production-validation/fixed108/full-q32-protocol-controls/runs/fullq32.anomaly.sphinx-doc__sphinx-10323.call70.onset.seed42.cap256.json",
+      "control_output_sha256": "455d24443acd739c76d949c067d7309164d51ecfdd188b416c24d2cd31831d54",
+      "same_fixture_and_seed": true,
+      "control_protocol_valid": true,
+      "scope": "Valid protocol on this exact sample only; not task-correctness evidence or a policy pass."
+    },
+    {
+      "case_name": "fullq32.anomaly.sympy__sympy-13878.call1.onset.seed44.cap256",
+      "case_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.sympy__sympy-13878.call1.onset.seed44.private.json",
+      "case_sha256": "884cc1eebec08f3511e27e1b989fa0a779bf750611494cbbdd7b33937ac54420",
+      "seed": 44,
+      "cap": 256,
+      "branch": "free-running only, branches[]",
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 44
+      },
+      "arm_a_output": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full-q32-production-validation/protocol-group-bisect/arm-a-kv-bfp8-only/runs/fullq32.anomaly.sympy__sympy-13878.call1.onset.seed44.cap256.json",
+      "arm_a_output_sha256": "036d7cc6ba7fb37d0d50fb4e70a824a9915041ebaf0c5b4f1ed5dd3416a3ac49",
+      "generated_tokens": 19,
+      "terminal_token_id": 50,
+      "runtime_precision": {
+        "config_id": "stage12_bf16_hifi4_kv_bfp8_protocol_probe",
+        "weight_groups": {
+          "attention": "bf16",
+          "mlp": "bf16",
+          "down": "bf16",
+          "lm_head": "bf16"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "HiFi4",
+          "mlp": "HiFi4",
+          "down": "HiFi4",
+          "lm_head": "HiFi4"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat8_b",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144,
+        "sdpa_compute_fidelity": "HiFi4"
+      },
+      "runtime_matches_arm_config": true,
+      "text_protocol_evidence": "The continuation is a complete canonical bash ls call ending at tool-response.",
+      "matching_full_bf16_control": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/p19-q32-production-validation/fixed108/full-q32-protocol-controls/runs/fullq32.anomaly.sympy__sympy-13878.call1.onset.seed44.cap256.json",
+      "control_output_sha256": "119de5e58c4dcdabe39091f332fc9e4e468b452b30b72ae3573e41c5833009c9",
+      "same_fixture_and_seed": true,
+      "control_protocol_valid": true,
+      "scope": "Valid protocol on this exact sample only; not task-correctness evidence or a policy pass."
+    }
+  ],
+  "conclusion": "Both generated continuations use valid canonical bash tool protocol and close at tool-response, matching the same-fixture/seed full-BF16 controls. This establishes only these two sampled diagnostic continuations. It does not establish task success, a cause, full-policy acceptance, or serving selection."
+}

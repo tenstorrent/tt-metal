@@ -1,0 +1,154 @@
+{
+  "status": "resume_failed_candidate_unselected",
+  "result_sha256": "18954ec0d724fe962f23f0d1094a22ef2699b1a3648d3f9c3162298528147f45",
+  "completion": {
+    "status": "nonzero_exit",
+    "start_unix": 1794766632.0719624,
+    "end_unix": 1794766970.6821163,
+    "elapsed_seconds": 338.6101539134979,
+    "process_exit_code": 1
+  },
+  "cases": 14,
+  "passed": 4,
+  "failed": 10,
+  "negative_controls_all_failed_as_expected": true,
+  "matrix": [
+    {
+      "length": 2560,
+      "start": 32,
+      "kind": "block_aligned",
+      "pcc_mean": 0.9314420310576806,
+      "pcc_min": 0.545735034209753,
+      "top1_agreement": 0.8249027132987976,
+      "pass": false
+    },
+    {
+      "length": 2560,
+      "start": 64,
+      "kind": "lcm_aligned",
+      "pcc_mean": 0.9648002235660474,
+      "pcc_min": 0.4404175325990273,
+      "top1_agreement": 0.8560311198234558,
+      "pass": false
+    },
+    {
+      "length": 2560,
+      "start": 132,
+      "kind": "tile_unaligned",
+      "pcc_mean": 0.9939209862455194,
+      "pcc_min": 0.7146739078845068,
+      "top1_agreement": 0.9805447459220886,
+      "pass": false
+    },
+    {
+      "length": 2560,
+      "start": 1024,
+      "kind": "window_start",
+      "pcc_mean": 1.000002403800841,
+      "pcc_min": 0.9999654200027003,
+      "top1_agreement": 1.0,
+      "pass": true
+    },
+    {
+      "length": 2560,
+      "start": 1029,
+      "kind": "window_plus_unaligned",
+      "pcc_mean": 0.9877395121094794,
+      "pcc_min": 0.5660654815650257,
+      "top1_agreement": 0.9416342377662659,
+      "pass": false
+    },
+    {
+      "length": 2560,
+      "start": 2496,
+      "kind": "prefix_cache_hit",
+      "pcc_mean": 0.9982861483183403,
+      "pcc_min": 0.9328852047871776,
+      "top1_agreement": 0.953125,
+      "pass": false
+    },
+    {
+      "length": 2560,
+      "start": 2559,
+      "kind": "last_token",
+      "pcc_mean": 0.9996085077123981,
+      "pcc_min": 0.9996085077123981,
+      "top1_agreement": 1.0,
+      "pass": true
+    },
+    {
+      "length": 16384,
+      "start": 32,
+      "kind": "block_aligned",
+      "pcc_mean": 0.9314516893668603,
+      "pcc_min": 0.545735034209753,
+      "top1_agreement": 0.8249027132987976,
+      "pass": false
+    },
+    {
+      "length": 16384,
+      "start": 64,
+      "kind": "lcm_aligned",
+      "pcc_mean": 0.9648112214797356,
+      "pcc_min": 0.4404175325990273,
+      "top1_agreement": 0.8560311198234558,
+      "pass": false
+    },
+    {
+      "length": 16384,
+      "start": 132,
+      "kind": "tile_unaligned",
+      "pcc_mean": 0.9939460111653561,
+      "pcc_min": 0.7146739078845068,
+      "top1_agreement": 0.9805447459220886,
+      "pass": false
+    },
+    {
+      "length": 16384,
+      "start": 1024,
+      "kind": "window_start",
+      "pcc_mean": 1.0000024325752543,
+      "pcc_min": 0.9999654200027003,
+      "top1_agreement": 1.0,
+      "pass": true
+    },
+    {
+      "length": 16384,
+      "start": 1029,
+      "kind": "window_plus_unaligned",
+      "pcc_mean": 0.9877389277798896,
+      "pcc_min": 0.5660654815650257,
+      "top1_agreement": 0.9416342377662659,
+      "pass": false
+    },
+    {
+      "length": 16384,
+      "start": 16320,
+      "kind": "prefix_cache_hit",
+      "pcc_mean": 0.9882682273859029,
+      "pcc_min": 0.7408908241664022,
+      "top1_agreement": 0.90625,
+      "pass": false
+    },
+    {
+      "length": 16384,
+      "start": 16383,
+      "kind": "last_token",
+      "pcc_mean": 0.9996767132265567,
+      "pcc_min": 0.9996767132265567,
+      "top1_agreement": 1.0,
+      "pass": true
+    }
+  ],
+  "interpretation": "Actual resumed-versus-fresh discrepancy; not yet attributed to precision, cache state or chunk geometry. Do not treat as HF margin drift without per-position controls. P19 serving selection and measurement held.",
+  "followup": "../p19-resume-investigation/AUTODEBUG.md independent source investigation in progress; next experiment selected from diagnosis.",
+  "forecast": {
+    "range_seconds": [
+      750,
+      2100
+    ],
+    "actual_seconds": 338.6101539134979,
+    "result": "faster_than_range",
+    "explanation": "All14cases and applicable controls completed. Prior-policy historical wall794.726s was a conservative proxy, not same-policy cost. This run has populated kernel caches from prior acceptance; cache contribution was not separately measured, so speedup cause remains unquantified. No performance claim."
+  }
+}

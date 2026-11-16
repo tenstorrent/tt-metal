@@ -1,0 +1,45 @@
+{
+  "status": "conditional_candidate_unadmitted_no_launch",
+  "revision_of": "../swe85-conditional-hf original three-control candidate",
+  "selection": {
+    "retained_suffix512_cases": 3,
+    "added_suffix1024_cases": 1,
+    "added_case": "anomaly.psf__requests-5414.call9.onset",
+    "positive_seed": 44,
+    "positive_evidence": "Root reviewed full seed44 and served seed44; both produce 512 repeated caret token IDs 172109 on this exact saved suffix1024 fixture."
+  },
+  "workload": {
+    "generation_tokens": 512,
+    "teacher_forcing_positions": 64,
+    "sampling": {
+      "temperature": 1.0,
+      "top_p": 0.95,
+      "top_k": 20
+    },
+    "reference_seeds_are_diagnostic": true,
+    "hf_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+    "prefill_chunk": 512
+  },
+  "execution": "Three serial processes, grouped by seed and exact suffix source; no overlapping HF or TT serving/benchmark process.",
+  "mandatory_prelaunch_gates": [
+    "Root must freeze the native-positive set after the pending cap2048 probe; no admission before then.",
+    "All TT queues complete, including the short cap2048 probe and any later adaptive runs.",
+    "Zero active TT device owners.",
+    "Fresh host MemAvailable >=100GB.",
+    "No HF/model process running.",
+    "Reverify candidate, run, runner and command hashes."
+  ],
+  "forecast_file": "forecast.json",
+  "commands_file": "commands.json",
+  "manifests": [
+    "native-positive-candidates-seed42-suffix512.json",
+    "native-positive-candidates-seed44-suffix512.json",
+    "native-positive-candidates-seed44-suffix1024.json"
+  ],
+  "validation": "cpu-validation.json: all three manifests passed runner --validate-only; no model loaded.",
+  "manifest_sha256s": {
+    "native-positive-candidates-seed42-suffix512.json": "16b10f6da567a27cff6f7ef0bfb40be6acbbe4487dddff68f0b684baed77e842",
+    "native-positive-candidates-seed44-suffix512.json": "db7fd3763b4b0606edb4773ef53d0217a6723d1cc06df824842020b25c8a262e",
+    "native-positive-candidates-seed44-suffix1024.json": "d5cff440b07e98ac652ffc8890929717f2318b9d0f5e6453a449251c2d303224"
+  }
+}

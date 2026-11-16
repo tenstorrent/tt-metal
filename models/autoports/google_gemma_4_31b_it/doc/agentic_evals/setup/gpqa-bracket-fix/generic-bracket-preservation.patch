@@ -1,0 +1,71 @@
+commit 6290a8f7e24a7fa8b5e2cfe50e16e2b9b1f49335
+Author:     Local Bringup <local-bringup@localhost>
+AuthorDate: Sat Nov 14 12:48:31 2026 +0000
+Commit:     Local Bringup <local-bringup@localhost>
+CommitDate: Sat Nov 14 12:48:31 2026 +0000
+
+    Fix GPQA preprocessing to preserve bracketed answer content
+
+diff --git a/lm_eval/tasks/gpqa/zeroshot/utils.py b/lm_eval/tasks/gpqa/zeroshot/utils.py
+index c2317e02..8c2c5387 100644
+--- a/lm_eval/tasks/gpqa/zeroshot/utils.py
++++ b/lm_eval/tasks/gpqa/zeroshot/utils.py
+@@ -1,5 +1,4 @@
+ import random
+-import re
+ 
+ import datasets
+ 
+@@ -9,7 +8,6 @@ def preprocess(text):
+         return " "
+     text = text.strip()
+     text = text.replace(" [title]", ". ")
+-    text = re.sub("\\[.*?\\]", "", text)
+     text = text.replace("  ", " ")
+     return text
+ 
+diff --git a/tests/test_gpqa_bracket_preservation.py b/tests/test_gpqa_bracket_preservation.py
+new file mode 100644
+index 00000000..7aa4e8ac
+--- /dev/null
++++ b/tests/test_gpqa_bracket_preservation.py
+@@ -0,0 +1,39 @@
++import random
++import unittest
++
++import datasets
++from lm_eval.tasks.gpqa.zeroshot.utils import preprocess, process_docs
++
++
++class GPQAAnswerPreservationTests(unittest.TestCase):
++    def test_mathematical_brackets_survive(self):
++        for text in ["q = [x / y]", "q = [x / y**2]", "[a[b]c]", r"\left[\alpha\right]"]:
++            with self.subTest(text=text):
++                self.assertEqual(preprocess(text), text)
++
++    def test_chemical_notation_survives(self):
++        for text in ["bicyclo[2.2.1]heptane", "C[C@H](O)[NH3+]", "benzo[c]furan"]:
++            self.assertEqual(preprocess(text), text)
++
++    def test_existing_whitespace_title_behavior(self):
++        self.assertEqual(preprocess(None), " ")
++        self.assertEqual(preprocess("  alpha  beta  "), "alpha beta")
++        self.assertEqual(preprocess("alpha [title]beta"), "alpha. beta")
++
++    def test_shuffle_keeps_distinct_choices_and_correct_index(self):
++        row = {"Incorrect Answer 1": "q = [x/y]", "Incorrect Answer 2": "q = [x*y]",
++               "Incorrect Answer 3": "q = [x-y]", "Correct Answer": "q = [x+y]"}
++        state = random.getstate()
++        try:
++            for seed in range(8):
++                random.seed(seed)
++                doc = process_docs(datasets.Dataset.from_list([row]))[0]
++                choices = [doc[f"choice{i}"] for i in range(1, 5)]
++                self.assertEqual(len(set(choices)), 4)
++                self.assertEqual(choices[ord(doc["answer"][1])-65], row["Correct Answer"])
++        finally:
++            random.setstate(state)
++
++
++if __name__ == "__main__":
++    unittest.main()

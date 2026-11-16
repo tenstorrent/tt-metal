@@ -1,0 +1,186 @@
+{
+  "status": "independent_static_review_candidate_only_no_admission",
+  "scope": "CPU/filesystem-only review of D\u2019s provisional HiFi2 cap2048 panel. Reran only `--validate-only`; no TTNN imports, model load, device work, or launch.",
+  "disposition": "panel_identity_and_precision_policy_retained; seven cap2048 extensions preserve their matched cap1024 conditioning/sampling; forecast arithmetic and command validation pass; pending T closure is a hard pre-admission blocker.",
+  "panel": {
+    "before": 108,
+    "after": 108,
+    "same_onset_seed_identities": true,
+    "caps": {
+      "1024": 22,
+      "256": 72,
+      "512": 7,
+      "2048": 7
+    },
+    "precision_sensitive_pairs_explicitly_pinned": 15,
+    "all_pinned_pairs_in_panel": true,
+    "branches_empty_all": true,
+    "one_free_trial_all": true
+  },
+  "cap2048_extensions": {
+    "count": 7,
+    "all_exact_matched_cap1024_fixture_prompt_continuation_sampling_seed": true,
+    "previous_cap_provenance_hashes_match": true,
+    "fixtures": [
+      {
+        "identity": [
+          "anomaly.pytest-dev__pytest-5787.call65.onset",
+          42
+        ],
+        "fixture_sha256": "346ea388c2e71b88d415e67331f6f1c5de4ee428e641e5159adccef0af382331",
+        "source_fixture_sha256": "b4227c60daa44f579a37f54090a99dde3280a0627ed4611fcbcdf807f15a0ede",
+        "prompt_ids_exact": true,
+        "chosen_exact": true,
+        "sampling_exact": true,
+        "seed_exact": true,
+        "previous_cap_metadata_preserved": true
+      },
+      {
+        "identity": [
+          "anomaly.pytest-dev__pytest-5787.call65.onset",
+          43
+        ],
+        "fixture_sha256": "2f36db800a3807dd533cbbbc1071b060fa91cd099371c96894f1cf60123368e7",
+        "source_fixture_sha256": "124f09af80f50f70f6308ae2a58a2d4ada46b9ce3204b43c7b814ed17be3959c",
+        "prompt_ids_exact": true,
+        "chosen_exact": true,
+        "sampling_exact": true,
+        "seed_exact": true,
+        "previous_cap_metadata_preserved": true
+      },
+      {
+        "identity": [
+          "anomaly.pytest-dev__pytest-5787.call65.onset",
+          44
+        ],
+        "fixture_sha256": "e1d35e0a08dca171114e3856df379fe7070264bce3410b7b4e6097a1a6562085",
+        "source_fixture_sha256": "cd4a079c43aa220d3a9c92e90ed2b691c90fa5d89061a17203db4629248ff10f",
+        "prompt_ids_exact": true,
+        "chosen_exact": true,
+        "sampling_exact": true,
+        "seed_exact": true,
+        "previous_cap_metadata_preserved": true
+      },
+      {
+        "identity": [
+          "anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset",
+          42
+        ],
+        "fixture_sha256": "020694b001269c7998c8e36753d830f23a5d6700a1842526dc098bd459c3ca64",
+        "source_fixture_sha256": "78344549cf5925ec2b037752e589f2bba107fb21b464e32db5fe05f15d5322a6",
+        "prompt_ids_exact": true,
+        "chosen_exact": true,
+        "sampling_exact": true,
+        "seed_exact": true,
+        "previous_cap_metadata_preserved": true
+      },
+      {
+        "identity": [
+          "anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset",
+          43
+        ],
+        "fixture_sha256": "f09f5493bf5e6d1f1bec5f5ce7e4273d0ec9352de1f85ffe780ef897063dec98",
+        "source_fixture_sha256": "073203e754a006cd573b89ef7f2b47ce668c0d992562d3dd2f515306b2115fa6",
+        "prompt_ids_exact": true,
+        "chosen_exact": true,
+        "sampling_exact": true,
+        "seed_exact": true,
+        "previous_cap_metadata_preserved": true
+      },
+      {
+        "identity": [
+          "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset",
+          43
+        ],
+        "fixture_sha256": "e4c5081386cd785ccc1216dda888b4c54cc165beb80b035e96daf69c2f119718",
+        "source_fixture_sha256": "64b310bd67a392c4a32219b6201abaeb6272206f792d9dcc290dd0e7d16d7597",
+        "prompt_ids_exact": true,
+        "chosen_exact": true,
+        "sampling_exact": true,
+        "seed_exact": true,
+        "previous_cap_metadata_preserved": true
+      },
+      {
+        "identity": [
+          "anomaly.sphinx-doc__sphinx-9461.call184.onset",
+          43
+        ],
+        "fixture_sha256": "afa85f0f7abc73e7c3c71da8900e5910d5d8484630eebf6925ffe2995a24dbb6",
+        "source_fixture_sha256": "0f61675840c1bc8ac8f89d6ab5d9f931e752d2fd53aeb2a62400b02e2e24ff1f",
+        "prompt_ids_exact": true,
+        "chosen_exact": true,
+        "sampling_exact": true,
+        "seed_exact": true,
+        "previous_cap_metadata_preserved": true
+      }
+    ],
+    "duplicate_served_full_identity_handled_by_full_source": "Preserve all 108 onset+seed identities from proposal-with-cap1024. Apply seven unique T cap2048 onset+seed pairs; where served/full duplicates are exact, prefer full. Keep prompt, continuation, sampling, seed, and HiFi2 policy unchanged."
+  },
+  "precision_policy_unchanged": true,
+  "forecast": {
+    "source_trials": 108,
+    "formula_recomputed": true,
+    "case_generation_seconds_recomputed": 3398.9852465102826,
+    "fixed_load_plus_preparation_seconds": 161.59127254970372,
+    "total_seconds_recomputed": 3560.5765190599864,
+    "range_seconds_recomputed": [
+      2540.8809451069014,
+      5939.866191617184
+    ],
+    "stored_total_matches": true,
+    "interpretation": "planning_only_pending_T_closure_not_performance_not_run",
+    "range_method": "Use exact matched diagnostic wall including prefill for retained 256/512 trials and actual matched 1024-token diagnostic wall for 22 cap1024 trials. For seven cap2048 trials, preserve matched 1024 prefill/host overhead and project decode as decode_wall_s * (2047/1023). Add one observed served-mode load and one measured chosen64 branch wall as first-preparation proxy. Load/preparation fixed; apply 0.7x\u20131.7x uncertainty multipliers to case-generation work only.",
+    "measured_load_and_preparation_proxies_hash_valid": true
+  },
+  "command_validation": {
+    "validate_only_rerun_exit_code": 0,
+    "stdout": "Validated 108 jobs without importing TTNN",
+    "no_TTNN_import": true,
+    "device_work": false,
+    "launch": false,
+    "execution_timeout_seconds": 21600,
+    "status": "proposal_only_pending_T_closure_not_admitted_not_run"
+  },
+  "gating": {
+    "T_closure": "T is not closed; later coordinator outputs may add cap extensions, so this cap schedule remains provisional.",
+    "closure_artifact_present": false,
+    "must_refresh_cap_schedule_after_T_closure": true,
+    "must_recheck_owner_zero_and_MemAvailable_before_admission": true,
+    "must_recompute_cost_for_any_added_caps": true
+  },
+  "availability": {
+    "cap4096_package_found": false,
+    "searched_directory": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect",
+    "note": "No cap4096 proposal directory/package exists at review time."
+  },
+  "source_hashes": {
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-with-cap2048-pending-t-closure/candidate-cases.json": "99ce7c952732e52bcf75eea901c93fe88983c781cf7fba147412f86940af3faa",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-with-cap2048-pending-t-closure/candidate-input-provenance.json": "a3ebe7fba5255ff5b6a357f43c8f104a24123b68b6faa0f00091a789d5b06e10",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-with-cap2048-pending-t-closure/head_bfp8_hifi2_precision.json": "6ef80afe2b6ae02403eb99fbbabcf3cc6d0d4706ba9b3f67a1c8723e16d3855b",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-with-cap2048-pending-t-closure/head_bfp8_hifi2_build_kwargs.json": "298e5975cdaaab1da2a1953503aaf8be488d7eda9e4a8665856619d5d4f34c3c",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-with-cap2048-pending-t-closure/command.json": "a73ff9dbf6f7be38776be8f50033470864ec4f84f8219744dd87068e54d75401",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-with-cap2048-pending-t-closure/runtime-estimate.json": "5ed56e0d00fc64765e05ca3b784d62a8a7c2d77746c885f1ad4ecb0081da0be8",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-with-cap2048-pending-t-closure/cpu-validation.json": "2d7fd9bc8082581abb9ca06a04f1fb46bd4e80e26e9c4caecbfb6eeda927fa06",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-with-cap1024/candidate-cases.json": "bbef683b6129a2b00a7b73fc74d3a1ca25d3a20adc648bd057d5f4d22ecb7ec4",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-with-cap1024/candidate-input-provenance.json": "e3ee26a4a4f7cc652c16f34fccd28e11657659a41246cb9f1f0a4e30b3fc8b8d"
+  },
+  "findings": [
+    {
+      "severity": "blocker_until_closure",
+      "finding": "The package explicitly remains provisional while T is still open. Its 108-case cap schedule must be refreshed from final T/adaptive outputs before any admission."
+    },
+    {
+      "severity": "limitation",
+      "finding": "The 7 cap2048 decode projection uses actual matched cap1024 decode time scaled by 2047/1023, plus retained prefill/host overhead; the shared 0.7x\u20131.7x range is still a planning sensitivity, not a measured HiFi2 cap2048 run."
+    },
+    {
+      "severity": "gate",
+      "finding": "No admission, live owner check, fresh >=100GB MemAvailable check, or run was performed. These remain launch-time gates."
+    }
+  ],
+  "not_findings": [
+    "All 108 onset/seed identities remain represented; all 15 explicitly pinned precision-sensitive identities are within the panel.",
+    "All seven cap2048 fixtures carry exact prior cap1024 prompt IDs, chosen continuation, sampling, seed, and hash-linked provenance.",
+    "The HiFi2 precision policy and 262144 max sequence length are unchanged from cap1024."
+  ]
+}

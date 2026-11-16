@@ -1,0 +1,13 @@
+{
+  "status": "candidate_only_not_admitted",
+  "proposal_sha256": "c8def963564db7c0d2b3d21a1ffb940b7a839b2f2ea104d526e9e3420e5f992e",
+  "driver_sha256": "da05e12d28c27927267843530cfc0c467a4a7d22cd3f376f5ec4e64ee06af91a",
+  "commands_sha256": "90a3cddcc0bda1dd99c64eafd325c5a0b1537fcf5e6291b8399501e3056192a2",
+  "source_integrity_sha256": "e5257335bbb076f5b46d4acf8403acdc65972f3062e1e1f3e1b9ff46680c97aa",
+  "forecast_sha256": "85f3d46bd51531155a0734bb63ef7481f760b842a91adcb0c7aca8d739ec2358",
+  "runner_sha256": "aafe67c88bb5a1eb38b8718570bbddd5749e2a9ecbb9dd19cdb100a49572c03e",
+  "p_admission_sha256": "91dc764e6a3a6b1e8a1be51e6eee5fc958c19d1dfcfa3d057b989aa325618cdd",
+  "suffix8192_admission_sha256": "300d69403a28112bc5f2a7225df5327bdb9e577ad9ca96cf754ab304f3538205",
+  "note": "Candidate-only placeholder. HF is blocked until exact P1, X, and P2 admissions and terminal-success outputs/forecast gates are verified; no HF execution is authorized.",
+  "p2_admission_sha256": "74bef162c97e23e882612eb85dae365f32c9da1f13ba4b9b8e1e1f8f582ad1be"
+}

@@ -1,0 +1,12 @@
+[
+  {
+    "name": "anomaly.matplotlib__matplotlib-20488.call91.onset.seed43.q32.cap512",
+    "case": "setup/p19-q32-production-validation/fixed108/cap-extensions-d-preparation/fixtures/anomaly.matplotlib-call91-seed43.cap512.private.json",
+    "branches": [],
+    "free_run_tokens": 512,
+    "free_run_trials": 1,
+    "source_onset": "anomaly.call91.canonicalprefix",
+    "seed": 43,
+    "cap_source": "setup/p19-q32-production-validation/fixed108/runs/p19_q32/anomaly.call91.canonicalprefix.seed43.cap256.json"
+  }
+]

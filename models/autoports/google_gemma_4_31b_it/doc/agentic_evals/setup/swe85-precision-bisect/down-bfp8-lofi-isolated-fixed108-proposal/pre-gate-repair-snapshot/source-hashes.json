@@ -1,0 +1,86 @@
+{
+  "status": "frozen_candidate_source_inventory",
+  "purpose": "Pins immutable model/runtime inputs, fixed panel, clean P1 timing, and P2/SK candidate identity. Mutable canonical learned.json is intentionally excluded; dynamic reviews and terminal records are checked separately at launch.",
+  "files": {
+    "source_0": {
+      "path": "bringup/run_contract.json",
+      "sha256": "64003208ab7d8feefbcbb2c5ea8fe4cb99f9d172f26800529489f23a0055b43e"
+    },
+    "source_2": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/candidate-cases.json",
+      "sha256": "57193e4b91af3a31df00f0c92dbc0f2219fbce011e6533594e5244a93a3021ed"
+    },
+    "source_3": {
+      "path": "models/autoports/google_gemma_4_31b_it/tools/precision_repro_batch.py",
+      "sha256": "172f5a1dd7a7403847e47b966ae79c306163650a60211418c7c195794ec5c125"
+    },
+    "source_4": {
+      "path": "models/autoports/google_gemma_4_31b_it/tt/precision.py",
+      "sha256": "2f223a118fe713677b9ce4fb3beb2f563e26af56ef45a98b2e03fad1e25664a9"
+    },
+    "source_5": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/head_bfp8_precision_config.json",
+      "sha256": "aa0e651fb3fdd7afc285293645c5ca309b2da246619e6e7fb6da86c5d2f28853"
+    },
+    "source_6": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/completion.json",
+      "sha256": "fa70e146164d0b1b948f3bb969fff7e56b44b8d6cc85912f2dfb814c941675d9"
+    },
+    "source_7": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/completion-summary.json",
+      "sha256": "3e235673a01aa0a28ad88d49677ad8099b38dbe6e89d7ce65885365284a8d67f"
+    },
+    "source_8": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/forecast-miss-accepted.json",
+      "sha256": "b33ebae3a3366738541d2983238c18f57cc3841bc539afcc021a85d86fd7c18b"
+    },
+    "source_9": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/launch.json",
+      "sha256": "de1e30cac8ce26b64272a88cf95392aed520ad80400df0d61590c789d5e3a4f0"
+    },
+    "source_10": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/queue.json",
+      "sha256": "90eb8cc2ee230f3ed331c93213e8ee316491db73d7dcd80568af597b51c08adc"
+    },
+    "source_11": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/admission.json",
+      "sha256": "74bef162c97e23e882612eb85dae365f32c9da1f13ba4b9b8e1e1f8f582ad1be"
+    },
+    "source_12": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/proposal.json",
+      "sha256": "ddaaa015f62bd731afc6f9f19f37056a0f74d2071023338938420a3a080181a7"
+    },
+    "source_13": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/run_after_p1_x.py",
+      "sha256": "2bcfdcc1f018f2398212de0cd94119030dfe54b5dcc9f1578478b1771ecb1836"
+    },
+    "source_14": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/source-hashes.json",
+      "sha256": "d8d039fa8fefb072264bc902bc798dd260e00371151eda74b204a5c74a5418ad"
+    },
+    "source_15": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/command.json",
+      "sha256": "9926c0937eca719bac79fc4fba48135fab9d2209f4f5f6d310c843f74d5b561e"
+    },
+    "source_16": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/host-contention-incident.json",
+      "sha256": "1e38ae6af03df79db790ea2c711c24d5af0a4880cfb3124db8b285b2c1dbe750"
+    },
+    "source_17": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/admission-before-mutable-pin-fix.json",
+      "sha256": "b63fe0f052d998212cb7de138bac823ae3ffc82125ce41ec84b7b74cee7fcf44"
+    },
+    "source_18": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/proposal.json",
+      "sha256": "afae82ad53bb768661d781d4da108b527ee0b1cd2f4f55cc23563b51fbf654e0"
+    },
+    "source_19": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/run_serial_candidate.py",
+      "sha256": "e221a7fef9a593fc835413131b242561b799eca0d91748eaa7c36564d66ac332"
+    },
+    "source_20": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/source-hashes.json",
+      "sha256": "3fc390e6f34b8805f75628d841e5827a2a5401e91923a2cd7c77830001f22922"
+    }
+  }
+}

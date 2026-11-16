@@ -1,0 +1,63 @@
+{
+  "job": "anomaly.sympy__sympy-14248.call53.onset",
+  "mode": "conditional_hf_cpu_short_suffix512",
+  "seed": 42,
+  "verdict": "reproduced_native_motif",
+  "evidence": {
+    "result_file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/results/seed42-suffix512/anomaly.sympy__sympy-14248.call53.onset.optional-suffix512.hf.private.json",
+    "result_sha256": "33d3407480d344a1537e40965d584ef95ecae49c5bea9609eacb83cac4783cf3",
+    "result_fields": {
+      "status": "complete",
+      "case_sha256": "91359efd10ca926d39011351f97d53948db58fc4fedd961705ad4c0a462dbad1",
+      "revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+      "prompt_tokens": 512,
+      "prompt_source": "Saved prompt_token_ids, no chat rerender",
+      "device": "cpu",
+      "results[0].seed": 42,
+      "results[0].generated_tokens": 512,
+      "results[0].streamed_generated_tokens": 512,
+      "results[0].generated_token_ids_unique_count": 1,
+      "results[0].generated_token_ids_only_value": 172109,
+      "results[0].text_chars": 2048,
+      "results[0].text_all_carets": true,
+      "results[0].tail_ratio": 0.01123046875,
+      "results[0].tail_distinct": 1,
+      "results[0].flag": true,
+      "results[0].wall_s": 1034.075209268136,
+      "case_metadata.task": "sympy__sympy-14248",
+      "case_metadata.call": 53,
+      "case_metadata.onset_char_offset": 160,
+      "case_metadata.onset_token_index": 57,
+      "case_metadata.motif": "^^^^",
+      "case_metadata.seed": 42,
+      "case_metadata.native_completion_tokens": 32768,
+      "case_metadata.sampling": {"temperature": 1.0, "top_p": 0.95, "top_k": 20}
+    },
+    "fixture": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-85/anomaly.sympy__sympy-14248.call53.onset.suffix512.private.json",
+      "sha256": "91359efd10ca926d39011351f97d53948db58fc4fedd961705ad4c0a462dbad1",
+      "prompt_token_ids_length": 512,
+      "same_ids_as_original_case_suffix": true,
+      "original_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-sympy14248-caret-controls/sympy__sympy-14248.call53.onset.private.json",
+      "original_case_sha256": "b088288cd811300e8ff36818cdc1b685bdb0f5569866a0f6fbb69b739f610f1a",
+      "original_prompt_token_ids_length": 32660,
+      "suffix_range": "original prompt_token_ids[32148:32660]",
+      "source_caveat": "Drops 32148 reconstructed conditioning IDs and may begin mid-turn/protocol; no new BOS/template text was added and native serialization equivalence is explicitly not claimed. Source reconstruction reports native prompt length 32604, reconstructed length 32660, no native prompt/output IDs, and no exact native seed. Thus this is a matched suffix diagnostic, not full native replay."
+    },
+    "matched_tt": {
+      "served_file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/served/anomaly.sympy__sympy-14248.call53.onset.optional-suffix512.json",
+      "served_sha256": "c12bf566c6afeb8f0042b3fa0487f0c2167e92011675e99e62a09c4858d63a10",
+      "served_seed": 42,
+      "served_free_running_tokens": 512,
+      "served_text_all_carets": true,
+      "full_file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/full/anomaly.sympy__sympy-14248.call53.onset.optional-suffix512.json",
+      "full_sha256": "c2f99685050adea2459487a86fffcf009129abb1698ca848ef402a1514d219d7",
+      "full_seed": 42,
+      "full_free_running_tokens": 512,
+      "full_text_all_carets": true
+    },
+    "native_motif": "Source case marks pathological caret repetition beginning at character offset 160/token index 57 in the reconstructed complete reply prefix; the native response reached its 32768-token completion cap with the caret motif. HF emits one repeated caret token for all 512 generated positions. Both same-seed matched TT suffix512 controls also emit 512 carets."
+  },
+  "confidence": "high for same-motif degeneration on this shortened suffix; not evidence of native full-context equivalence or full-reply reproduction",
+  "cap_notes": "HF generated all 512 requested tokens and remained entirely in the caret loop at the cap, so this is sustained degeneration rather than a coherent answer cut off mid-progress. Its row wall_s is 1034.075209268136 seconds. The file's total_wall_s=2102.106 is runner cumulative since model load across both cases, not this case's duration; the noted group wall is 2106.151 seconds. Seeds are diagnostic and native_seed is null."
+}

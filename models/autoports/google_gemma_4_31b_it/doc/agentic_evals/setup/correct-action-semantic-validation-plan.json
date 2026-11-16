@@ -1,0 +1,240 @@
+{
+  "status": "prepared_no_execution",
+  "driver": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/validate_correct_action_semantics.py",
+  "driver_sha256": "67edc9e3a691eb427e6394d41c8bf2bc7245f0b44fce42e5289e66111d03c046",
+  "cpu_validation": [
+    {
+      "task": "astropy__astropy-13398",
+      "exit_code": 0,
+      "states": [
+        "before",
+        "after"
+      ],
+      "status": "cpu_validated",
+      "error": ""
+    },
+    {
+      "task": "astropy__astropy-14096",
+      "exit_code": 0,
+      "states": [
+        "before",
+        "after"
+      ],
+      "status": "cpu_validated",
+      "error": ""
+    },
+    {
+      "task": "astropy__astropy-14598",
+      "exit_code": 0,
+      "states": [
+        "before",
+        "after"
+      ],
+      "status": "cpu_validated",
+      "error": ""
+    },
+    {
+      "task": "django__django-14007",
+      "exit_code": 0,
+      "states": [
+        "before",
+        "after"
+      ],
+      "status": "cpu_validated",
+      "error": ""
+    },
+    {
+      "task": "django__django-14011",
+      "exit_code": 0,
+      "states": [
+        "before",
+        "after"
+      ],
+      "status": "cpu_validated",
+      "error": ""
+    },
+    {
+      "task": "django__django-15037",
+      "exit_code": 0,
+      "states": [
+        "before",
+        "after"
+      ],
+      "status": "cpu_validated",
+      "error": ""
+    },
+    {
+      "task": "django__django-16950",
+      "exit_code": 0,
+      "states": [
+        "before",
+        "after"
+      ],
+      "status": "cpu_validated",
+      "error": ""
+    },
+    {
+      "task": "matplotlib__matplotlib-25479",
+      "exit_code": 0,
+      "states": [
+        "before",
+        "after"
+      ],
+      "status": "cpu_validated",
+      "error": ""
+    },
+    {
+      "task": "mwaskom__seaborn-3187",
+      "exit_code": 0,
+      "states": [
+        "before",
+        "after"
+      ],
+      "status": "cpu_validated",
+      "error": ""
+    },
+    {
+      "task": "psf__requests-1921",
+      "exit_code": 0,
+      "states": [
+        "before",
+        "after"
+      ],
+      "status": "cpu_validated",
+      "error": ""
+    },
+    {
+      "task": "pydata__xarray-3993",
+      "exit_code": 0,
+      "states": [
+        "before",
+        "after"
+      ],
+      "status": "cpu_validated",
+      "error": ""
+    },
+    {
+      "task": "pydata__xarray-6992",
+      "exit_code": 0,
+      "states": [
+        "before",
+        "after"
+      ],
+      "status": "cpu_validated",
+      "error": ""
+    },
+    {
+      "task": "pylint-dev__pylint-4551",
+      "exit_code": 0,
+      "states": [
+        "before",
+        "after"
+      ],
+      "status": "cpu_validated",
+      "error": ""
+    },
+    {
+      "task": "pylint-dev__pylint-4970",
+      "exit_code": 0,
+      "states": [
+        "before",
+        "after"
+      ],
+      "status": "cpu_validated",
+      "error": ""
+    },
+    {
+      "task": "pylint-dev__pylint-4970-call55",
+      "exit_code": 0,
+      "states": [
+        "before",
+        "after"
+      ],
+      "status": "cpu_validated",
+      "error": ""
+    },
+    {
+      "task": "pylint-dev__pylint-6386",
+      "exit_code": 0,
+      "states": [
+        "before",
+        "after"
+      ],
+      "status": "cpu_validated",
+      "error": ""
+    },
+    {
+      "task": "pylint-dev__pylint-8898",
+      "exit_code": 0,
+      "states": [
+        "before",
+        "after"
+      ],
+      "status": "cpu_validated",
+      "error": ""
+    },
+    {
+      "task": "pytest-dev__pytest-10356",
+      "exit_code": 0,
+      "states": [
+        "before",
+        "after"
+      ],
+      "status": "cpu_validated",
+      "error": ""
+    },
+    {
+      "task": "pytest-dev__pytest-5840",
+      "exit_code": 0,
+      "states": [
+        "before",
+        "after"
+      ],
+      "status": "cpu_validated",
+      "error": ""
+    },
+    {
+      "task": "pytest-dev__pytest-6197",
+      "exit_code": 0,
+      "states": [
+        "before",
+        "after"
+      ],
+      "status": "cpu_validated",
+      "error": ""
+    },
+    {
+      "task": "scikit-learn__scikit-learn-10908",
+      "exit_code": 0,
+      "states": [
+        "before",
+        "after"
+      ],
+      "status": "cpu_validated",
+      "error": ""
+    }
+  ],
+  "launch": [
+    "python_env/bin/python",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/validate_correct_action_semantics.py",
+    "--task",
+    "<task>",
+    "--execute",
+    "--output",
+    "<new-diagnostic-only-directory>"
+  ],
+  "state_modes": [
+    "both(default,sequential)",
+    "before",
+    "after"
+  ],
+  "resources": "One container at a time,1CPU4GiB,pids256,1800s/state plus60s cleanup. Advisory nonblocking local driver lock. Coordinator admits against active native workers.",
+  "source_checks": "Manifest/source hashes checked; all listed precall/candidate files plus audited prior tracked edits copied. Exact image ID and actual image_head required. Each source hash checked before/after verifier. Never copy .git.",
+  "state_limit": "Candidate reconstruction covers relevant production files and listed prior tracked edits, not complete native filesystem or dependencies. Result is semantic evidence under isolated state, not exact native replay. Missing files/hash/HEAD/known prior edits abort.",
+  "execution_semantics": "Install exact candidate after-state rather than execute editing shell; text-only action may be valid in agent Python3.11 while verifier uses its own environment.",
+  "harness": "Unchanged full task test.sh/config and embedded parser; tests copied and hashes checked; cached parser versions pinned; PIP_NO_INDEX=1,UV_OFFLINE=1,UV_PYTHON_DOWNLOADS=never. No repair guesses, assertions edited, tests skipped, mocks, endpoint changes, or TLS overrides.",
+  "artifacts": "Separate before/after output directories: original verifier stdout/stderr, LOG_FILE, emitted parser, report/reward, command logs and semantic-validation-provenance.json. Root decides semantic interpretation; never overwrite score/raw trials/candidate manifests or expose reference-informed artifacts to scored agents.",
+  "missing_dependencies": "Abort or incomplete report retained as infrastructure evidence, never semantic pass. No dependency downloads performed.",
+  "network_or_docker_execution_during_preparation": false,
+  "source_additions": "Explicit image-absence extraction evidence required for new files; runtime test! -e before copying. Candidate null-before files remain absent in baseline. Audited prior edits support file/files paths."
+}

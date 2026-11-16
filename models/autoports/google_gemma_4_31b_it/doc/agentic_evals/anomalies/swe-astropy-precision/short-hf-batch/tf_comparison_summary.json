@@ -1,0 +1,91 @@
+{
+  "written_utc": "2026-11-14T11:17:07.842236+00:00",
+  "status": "complete",
+  "exit_code": 0,
+  "start_unix": 1794652536.2948663,
+  "end_unix": 1794654974.6853917,
+  "start_utc": "2026-11-14T10:35:36.294866+00:00",
+  "end_utc": "2026-11-14T11:16:14.685392+00:00",
+  "elapsed_wall_s_diagnostic_only": 2438.390525341034,
+  "regime": "CPU HF with overlapping Docker preparations; no concurrent TT or serving. Accuracy-only diagnostics; timings not usable for performance ranking.",
+  "launch_provenance": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe-astropy-precision/short-hf-batch/launch.json",
+  "cases": {
+    "astropy.first.suffix512": {
+      "hf_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe-astropy-precision/short-hf-batch/results/astropy.first.suffix512.hf.private.json",
+      "hf_source_sha256": "168fa5f15c475fccb8e1be5f2db45eeab5ca528095c451be3096da2752dd71bf",
+      "positions": 64,
+      "forced_tokens_match_saved_case": true,
+      "hf_chosen_top1": 0.9375,
+      "hf_mean_chosen_probability": 0.9387825844460167,
+      "hf_chosen_sequence_logprob": -10.30256795132874,
+      "completed_samples": [
+        {
+          "seed": 42,
+          "generated_tokens": 512,
+          "streamed_generated_tokens": 512
+        }
+      ],
+      "served": {
+        "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe-astropy-precision/first-short-prefix-candidates/served/astropy.first.suffix512.json",
+        "forced_token_ids_exact_match": true,
+        "top1_agreement": 0.96875,
+        "mean_chosen_logprob_hf_minus_tt": 0.05109360055736811,
+        "chosen_sequence_logprob_hf_minus_tt": 3.2699904356715592
+      },
+      "full": {
+        "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe-astropy-precision/first-short-prefix-candidates/full/astropy.first.suffix512.json",
+        "forced_token_ids_exact_match": true,
+        "top1_agreement": 1.0,
+        "mean_chosen_logprob_hf_minus_tt": -0.00028715616514229936,
+        "chosen_sequence_logprob_hf_minus_tt": -0.01837799456910716
+      }
+    },
+    "astropy.second.suffix512": {
+      "hf_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe-astropy-precision/short-hf-batch/results/astropy.second.suffix512.hf.private.json",
+      "hf_source_sha256": "752282973239c8e385526662cfbdd314187ad2dbef813f3176ded8a7a32847c8",
+      "positions": 64,
+      "forced_tokens_match_saved_case": true,
+      "hf_chosen_top1": 0.8125,
+      "hf_mean_chosen_probability": 0.7918239256378357,
+      "hf_chosen_sequence_logprob": -63.402000455410416,
+      "completed_samples": [
+        {
+          "seed": 42,
+          "generated_tokens": 512,
+          "streamed_generated_tokens": 512
+        }
+      ],
+      "served": {
+        "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe-astropy-precision/short-prefix-candidates/served/astropy.second.suffix512.json",
+        "forced_token_ids_exact_match": true,
+        "top1_agreement": 0.953125,
+        "mean_chosen_logprob_hf_minus_tt": 0.2180941336707818,
+        "chosen_sequence_logprob_hf_minus_tt": 13.958024554930034
+      },
+      "full": {
+        "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe-astropy-precision/short-prefix-candidates/full/astropy.second.suffix512.json",
+        "forced_token_ids_exact_match": true,
+        "top1_agreement": 0.953125,
+        "mean_chosen_logprob_hf_minus_tt": 0.08000257535645261,
+        "chosen_sequence_logprob_hf_minus_tt": 5.120164822812967
+      }
+    }
+  },
+  "old_long_prefix_control": {
+    "written_unix": 1794652524.644872,
+    "outcome": "bounded CPU reference timeout, exit124; no completed free-running continuation",
+    "completed_tf_positions": 64,
+    "completed_free_samples": 0,
+    "native_scored_task_result_changed": false,
+    "retained": [
+      "hf.log",
+      "hf-launch.json",
+      "hf.exit",
+      "hf_cpu_batch/astropy.onset.hf.private.json",
+      "astropy.onset.hf_tf_summary.json"
+    ],
+    "next": "short-hf-batch/commands.json, independently reproduced suffix512 cases at served/full TT",
+    "regime_update": "Original HF began alone; later TT accuracy-only controls and offline Docker preparation overlapped. Host elapsed is diagnostic cost, not serving performance. See short-prefix-candidates and first-short-prefix-candidates launch sidecars and setup/swe65-candidate manifests."
+  },
+  "scope": "Numeric teacher-forcing comparison only; no free-text judgment. Same diagnostic saved suffix512 IDs, not native-prompt equivalence or incidence equivalence. Full-vocabulary untempered chosen-token probabilities. Old long-prefix timeout produced no completed free-running sample and cannot settle original long-prompt behavior."
+}

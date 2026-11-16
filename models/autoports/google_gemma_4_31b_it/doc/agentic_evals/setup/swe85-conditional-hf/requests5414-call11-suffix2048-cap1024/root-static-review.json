@@ -1,0 +1,18 @@
+{
+  "status": "root_static_review_passed_unadmitted",
+  "reviewer": "root",
+  "utc": "2026-11-15T09:40:32.503207+00:00",
+  "pins": {
+    "run_candidate.py": "b874df0314d95bcea18ee4c7569de46f3e4e0617c6ea2db2779983c18dd75a4a",
+    "test_run_candidate.py": "8a03de261eb5e2bd790bcf55f56fc28d734e97e684fe64d4d9ca14746f67bebb",
+    "driver-integrity.json": "a0537b2cef1292ef3142097ad96ecd9c46090ddfd9e81b80444a0864d176e6d2",
+    "proposal.json": "62d0a479ff9d5d8192e38deaf6dc7a3b61ef5ebf19658f10b89989befddbcbee",
+    "commands.json": "ef38d66c41bcf2be8309d79352d8e2339ca0586283eb68392ebb521bae858679",
+    "manifest.json": "61914c6361a84f8d5c4f43bcbaccdb786c72b2fed57bf1afdb4e356c6f069b74",
+    "forecast.json": "65c0c7a7325e58379b8b5f89f8546074422e949c4e2fc6c5ca6d60d52132a2fb",
+    "source-integrity.json": "a1879479576f6cc9728d64b8396f285cebae3a895242c11289645c924a5d215d"
+  },
+  "validation": "Explicit --validate-only and seven host mocked tests passed; no runner/model/device invoked.",
+  "review": "Read full driver; exact fixture/seed/cap/revision/chosen64 and prefix512 match checked, no overwrite, root terminal HF9/admission and actual memory/owner/deadline gates. Every attempted execute produces terminal record.",
+  "limitations": "Progress at1024 still requires extension; prefix mismatch is an infrastructure/diagnostic identity issue, not a model failure. No result or inference yet."
+}

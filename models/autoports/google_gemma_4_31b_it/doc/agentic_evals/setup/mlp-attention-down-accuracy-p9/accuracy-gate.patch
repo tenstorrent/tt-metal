@@ -1,0 +1,42 @@
+--- a/models/autoports/google_gemma_4_31b_it/tests/run_datatype_candidate.py
++++ b/models/autoports/google_gemma_4_31b_it/tests/run_datatype_candidate.py
+@@ -27,6 +27,26 @@
+         for key in ("math_fidelity", "math_approx_mode", "fp32_dest_acc_en", "packer_l1_acc")
+     }
+ 
++
++
++def _assert_accuracy_trace_counters(result):
++    """Check teacher-forcing replay counts and ensure these checks capture no new traces."""
++    repeats = result.get("teacher_forcing_repeats", [])
++    assert len(repeats) == 3, "Accuracy run requires three AIME teacher-forcing repeats"
++    expected_decode_replays = sum(int(row["total"]) - 1 for trial in repeats for row in trial)
++    assert result["decode_counters"]["model_replays"] == expected_decode_replays, (
++        "AIME decode replay count differs from the teacher-forcing callback positions"
++    )
++    if "natural" in result:
++        assert len(result["natural"]) == 1, "Natural-text reference must be a single scored entry"
++        expected_natural_replays = sum(int(row["total"]) - 1 for row in result["natural"])
++        assert result["natural_counters"]["model_replays"] == expected_natural_replays, (
++            "Natural-text replay count differs from the teacher-forcing callback positions"
++        )
++    for phase in ("prefill", "decode", "natural"):
++        counters = result.get(phase + "_counters")
++        if counters is not None:
++            assert counters.get("captures", 0) == 0, f"Unexpected trace capture during {phase} accuracy check"
+ 
+ def main():
+     parser = argparse.ArgumentParser()
+@@ -173,10 +193,11 @@
+             result["natural_counters"] = {k: gen.counters[k] - v for k, v in before.items()}
+             (root / "readiness_accuracy.json").write_text(json.dumps(result, indent=2) + "\n")
+         if args.require_accuracy:
+-            rows = result["decode"] + result.get("natural", [])
++            rows = result["prefill"] + result["decode"] + result.get("natural", [])
+             assert all(r["top1"] >= 0.90 and r["top5"] >= 0.98 and r["top100"] == 1.0 for r in rows), (
+                 "Candidate does not meet the per-reference accuracy thresholds; results preserved"
+             )
++            _assert_accuracy_trace_counters(result)
+         if args.accuracy_only:
+             return
+         performance(gen, root)

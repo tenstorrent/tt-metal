@@ -1,0 +1,22 @@
+{
+  "status": "root_static_review_accepted_candidate_only",
+  "reviewer": "root",
+  "accepted": true,
+  "utc": "2026-11-15T10:35:53.689991+00:00",
+  "proposal_sha256": "0247e216bc3187e1375e2b1939937a4848b62e2a470cf37c2cf6aa22ef1d802b",
+  "tool_sha256": "fa2eaf9f66a6a36c57385351a0b3e838edeabac4644c77c98aa81a817e3e3d5e",
+  "independent_rereview_sha256": "03cc47bb64421bcce30c413e8844b6fb567ac01fced9a0c01afb43fd4d455f75",
+  "validation": "Root repeated standalone --validate-only --mock-tests after trace-env correction: exit0,15 source pins,no model/device imports. Exact command delta: only add128MiB READINESS_TRACE_REGION_SIZE to twoTTarms; noHF/compare/runtimecodechange.",
+  "limitations": [
+    "Forced-history logits do not establish native branch incidence or equal random streams.",
+    "The TT path uses generator.generate(next_input=..., host_sampling=True, buffered=False). It does not reveal the device sampler draw or full internal candidate mapping; it is not a sampler trace.",
+    "The existing prefill function still executes its ordinary device-sampler operation; its sampled token is discarded. Subsequent model replay logits are forced through the callback.",
+    "No implementation defect, causal bug, answer quality, or performance conclusion is claimed.",
+    "Strict top-k20/nucleus supports and probabilities are deterministic host proxies; HF may keep every tie at the kth logit and device support is not exposed. Raw logits and ranks are primary evidence."
+  ],
+  "execution": "TT retry admitted separately; HF capture retained from unchanged HF execution path with old source snapshot.",
+  "commands_sha256": "eaed7f8b7d20c6ea3720afac9dc8f14d6b0d4b9e5bf5461fae3bc49efec2693c",
+  "source_pins_sha256": "c064842ef0fb247609005ba4f0ba58b71b5b21ce9a66ef5334d7d9fd9ef388d3",
+  "prior_root_static_review_sha256": "43e94c31ab510a9109b9e403325a8e70aeeb415f1fd6f38ec28e52b720669b21",
+  "repair_review": "Root inspected actual generate guard/callback order and repeated repaired standalone validate-only/mock-tests exit0. Greedy host compatibility T0/k1 only, forced histories unchanged, stochastic probability summaries remain host proxies. No generator/model changes."
+}

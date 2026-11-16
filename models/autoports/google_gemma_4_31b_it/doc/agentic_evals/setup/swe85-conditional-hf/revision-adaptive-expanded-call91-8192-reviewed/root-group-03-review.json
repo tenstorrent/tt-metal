@@ -1,0 +1,40 @@
+{
+  "status": "completed_root_and_independent_triage_reconciled",
+  "reviewer": "root",
+  "accepted": true,
+  "utc": "2026-11-15T09:05:28.897254+00:00",
+  "serial_order": 3,
+  "admission_sha256": "74640276fdf5e463fa968d5d188994622759df96f09d4f408e02712b7d09ae66",
+  "launch_sha256": "93d04c01eb36d7a11bd984b4dcd798169de415d117e6f658cdfb7580531e9f80",
+  "completion_sha256": "43482c49d0073fa1407d0f919451c7349a8314752c1b555eca4785f458081005",
+  "result_sha256": "4f1a6497eeb57b8754ce74bea702170078d7ce7e93fef610357f785044b2b045",
+  "independent_triage_sha256": "5482a7350d36b8fe443371d5c8c4121211f6c209872f5f079016ee07144d409e",
+  "verdict": "reproduced_native_motif",
+  "exact_fixture_sha256": "9e19aaa5b7f11f026931ef8a8ca1e49bb070a338805b3568cc89dd5065e41e7c",
+  "source_sha256": "5024622915942584d71a4eebe667180b660a2f3c45955bddb72de8e019ad7181",
+  "source_slice": [
+    7359,
+    8383
+  ],
+  "seed": 44,
+  "generated_tokens": 512,
+  "generated_chars": 2048,
+  "unique_generated_ids": [
+    172109
+  ],
+  "flag": true,
+  "forecast_gate": "hit",
+  "measured_seconds": 1205.4386138916016,
+  "forecast_range_seconds": [
+    980,
+    1780
+  ],
+  "accounting_seconds": {
+    "free_generation": 1167.4797154800035,
+    "runner_total": 1201.287358150119,
+    "runner_nonfree": 33.807642670115456,
+    "outside_runner": 4.151255741482601
+  },
+  "matched_tt": "Selected served BFP8-head/LoFi and full BF16/HiFi4 seed44 each generate512 caret-only tokens on the same saved suffix.",
+  "interpretation": "Reference-model repetition on this exact shortened diagnostic input. No native full-context or incidence equivalence. A demonstrated degenerate loop needs no cap extension; no score or policy change."
+}

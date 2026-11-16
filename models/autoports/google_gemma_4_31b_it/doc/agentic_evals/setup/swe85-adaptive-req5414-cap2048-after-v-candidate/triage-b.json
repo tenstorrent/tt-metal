@@ -1,0 +1,64 @@
+{
+  "status": "independent_cpu_raw_text_pinned_prefix_triage",
+  "scope": "Two W suffix2048 cap2048 outputs; full continuation reviewed, exact saved assistant prefix and source prompt slice verified, output ID-prefix checked against same-mode cap1024 result. No commands executed, no scores changed.",
+  "rows": [
+    {
+      "job": "psf__requests-5414.call10.onset.suffix2048.cap2048.seed42",
+      "mode": "served",
+      "seed": 42,
+      "verdict": "other_anomaly",
+      "confidence": "high",
+      "requested_cap_tokens": 2048,
+      "generated_tokens": 2048,
+      "result_path": "setup/swe85-adaptive-req5414-cap2048-after-v-candidate/runs/served/anomaly.psf__requests-5414.call10.onset.suffix2048.cap2048.seed42.json",
+      "result_sha256": "efcbee0bfb315b0fb30972031750383d8fb6ae620191d55a921cdad28226c156",
+      "fixture_path": "setup/swe85-adaptive-req5414-cap2048-after-v-candidate/fixtures/served/anomaly.psf__requests-5414.call10.onset.suffix2048.cap2048.seed42.private.json",
+      "fixture_sha256": "a86dde9a348404fbdd4d8f321a82f504288372ecc7d82f3cbd5fbdcfb5abec34",
+      "source_case_path": "anomalies/swe85-requests5414-caret-controls/psf__requests-5414.call10.onset.private.json",
+      "source_case_sha256": "38cba2429d022e64133da2c34388d9e88a9b26b82ec58594153692842dccb961",
+      "prompt_identity_against_source_exact_2048_slice": true,
+      "source_prompt_slice": [
+        5009,
+        7057
+      ],
+      "previous_1024_result_path": "setup/swe85-adaptive-suffix2048-cap1024-execution-candidate/runs/served/anomaly.psf__requests-5414.call10.onset.suffix2048.cap1024.seed42.json",
+      "previous_1024_result_sha256": "84168fff11b5ad2c8a1c3fa9ec9d6a76d78f832aa938e674ac43a71a8bbfe421",
+      "prefix_identity_against_previous_1024_generated_ids": true,
+      "previous_generated_tokens": 1024,
+      "evidence": "After coherent URL validation discussion, the same three-sentence intention block repeats exactly 17 times in the continuation tail; output reaches 2048-token cap. This is an actual loop, not a single repeated phrase or token marker.",
+      "cap_notes": "At requested 2048 generation-token cap; loop continues at tail without canonical tool call or terminal stop.",
+      "parser_audit": null,
+      "generated_text_head": "...\n  File \"/opt/miniconda3/lib/python3.11/site-packages/urllib3/util/connection.py\", line 68, in create_connection\n    ...\n  ...\nurllib3.exceptions.LocationPar",
+      "generated_text_tail": "I'll first check the `requests` version.\n\nActually, I'll just apply the fix.\n\nWait, the goal is to raise `InvalidURL`.\n\nActually, I'll just use `bash` to modify the file.\n\nWait, I'll first check the `requests` version.\n\nActually, I'll just apply the fix.\n\nWait, the goal is to raise `InvalidURL`.\n\nActually, I'll just use `bash` to modify the file.\n\n"
+    },
+    {
+      "job": "psf__requests-5414.call11.onset.suffix2048.cap2048.seed42",
+      "mode": "full",
+      "seed": 42,
+      "verdict": "other_anomaly",
+      "confidence": "high",
+      "requested_cap_tokens": 2048,
+      "generated_tokens": 1632,
+      "result_path": "setup/swe85-adaptive-req5414-cap2048-after-v-candidate/runs/full/anomaly.psf__requests-5414.call11.onset.suffix2048.cap2048.seed42.json",
+      "result_sha256": "1ab58b7bb92a7ffdab0bede6798bdac95e0b2e309bbb923653e930cf89c4b466",
+      "fixture_path": "setup/swe85-adaptive-req5414-cap2048-after-v-candidate/fixtures/full/anomaly.psf__requests-5414.call11.onset.suffix2048.cap2048.seed42.private.json",
+      "fixture_sha256": "64c16cb0741ab60771f71f2d4900bd8acc0e12c5259d6aa7d4ec6e6041bd76b5",
+      "source_case_path": "anomalies/swe85-requests5414-caret-controls/psf__requests-5414.call11.onset.private.json",
+      "source_case_sha256": "50cbd0eb4e62c843a1ec8ac800a580135c3abc5dc2154d6be0a7e39d0c37ed6f",
+      "prompt_identity_against_source_exact_2048_slice": true,
+      "source_prompt_slice": [
+        5178,
+        7226
+      ],
+      "previous_1024_result_path": "setup/swe85-adaptive-suffix2048-cap1024-execution-candidate/runs/full/anomaly.psf__requests-5414.call11.onset.suffix2048.cap1024.seed42.json",
+      "previous_1024_result_sha256": "bbe10ef469c6473e26d18e3d1be8c9a3dfaa5e1ff64f9bed8eff8e1c5a725867",
+      "prefix_identity_against_previous_1024_generated_ids": true,
+      "previous_generated_tokens": 1024,
+      "evidence": "The response continues distinct URL/IDNA reasoning through its 1632 generated tokens, then ends naturally with <channel|> followed by fenced bash echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT and <turn|>. Stock parser audit returns zero structured tool calls: visible fenced text is not a tool invocation.",
+      "cap_notes": "Natural stop at 1632 tokens below 2048 cap; no canonical tool call. Parser audit result is missing_tool.",
+      "parser_audit": "setup/swe85-adaptive-req5414-cap2048-after-v-candidate/full-requests11-seed42-stock-parser-audit-b.json",
+      "generated_text_head": "...\n           ...\nurllib3.exceptions.LocationParseError: Failed to parse: '.example.com', label empty or too long\n```\n\nWait, `LocationParseError` is coming fro",
+      "generated_text_tail": "te the host using the IDNA encoding function.\n\nFinal check on the error message:\nThe user says it raises `UnicodeError` (wrapped in `LocationParseError`).\nBy raising `InvalidURL` in `prepare_url`, `requests` will return the correct exception.\n\nI will now submit the final output.<channel|>```bash\necho COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT\n```<turn|>"
+    }
+  ]
+}

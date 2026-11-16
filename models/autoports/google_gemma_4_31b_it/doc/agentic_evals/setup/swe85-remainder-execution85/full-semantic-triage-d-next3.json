@@ -1,0 +1,85 @@
+{
+  "rows": [
+    {
+      "job": "anomaly.matplotlib__matplotlib-20488.call82.onset",
+      "mode": "full",
+      "seed": 42,
+      "verdict": "normal",
+      "evidence": "Continues the conditioned repair investigation coherently, then issues a valid structured bash query (grep for the Norm __call__, class definition, or source lines). No repeated-token degeneration; not capped.",
+      "confidence": "high",
+      "cap_notes": "Complete short continuation ending at a valid tool boundary."
+    },
+    {
+      "job": "anomaly.matplotlib__matplotlib-20488.call82.onset",
+      "mode": "full",
+      "seed": 43,
+      "verdict": "normal",
+      "evidence": "Continues the conditioned repair investigation coherently, then issues a valid structured bash query (grep for the Norm __call__, class definition, or source lines). No repeated-token degeneration; not capped.",
+      "confidence": "high",
+      "cap_notes": "Complete short continuation ending at a valid tool boundary."
+    },
+    {
+      "job": "anomaly.matplotlib__matplotlib-20488.call82.onset",
+      "mode": "full",
+      "seed": 44,
+      "verdict": "normal",
+      "evidence": "Continues the conditioned repair investigation coherently, then issues a valid structured bash query (grep for the Norm __call__, class definition, or source lines). No repeated-token degeneration; not capped.",
+      "confidence": "high",
+      "cap_notes": "Complete short continuation ending at a valid tool boundary."
+    },
+    {
+      "job": "anomaly.matplotlib__matplotlib-20488.call86.onset",
+      "mode": "full",
+      "seed": 42,
+      "verdict": "normal",
+      "evidence": "Continues coherently from the malformed-file diagnosis into a targeted grep/nl bash check; no duplicated contraction or token-loop degeneration.",
+      "confidence": "high",
+      "cap_notes": "Short continuation ending at valid tool boundary; not capped."
+    },
+    {
+      "job": "anomaly.matplotlib__matplotlib-20488.call86.onset",
+      "mode": "full",
+      "seed": 43,
+      "verdict": "reproduced_native_motif",
+      "evidence": "Continues into coherent reasoning and a valid structured bash check, but begins with duplicated contraction suffix `\u2019ve\u2019ve`, matching the native localized duplicated-contraction motif in fixture metadata.",
+      "confidence": "high",
+      "cap_notes": "Short continuation ending at valid tool boundary; not capped."
+    },
+    {
+      "job": "anomaly.matplotlib__matplotlib-20488.call86.onset",
+      "mode": "full",
+      "seed": 44,
+      "verdict": "normal",
+      "evidence": "Continues coherently from the malformed-file diagnosis into a targeted grep/nl bash check; no duplicated contraction or token-loop degeneration.",
+      "confidence": "high",
+      "cap_notes": "Short continuation ending at valid tool boundary; not capped."
+    },
+    {
+      "job": "anomaly.call88.canonicalprefix",
+      "mode": "full",
+      "seed": 42,
+      "verdict": "inconclusive",
+      "evidence": "Conditioned code-writing continuation makes coherent progress through the proposed replacement script; no repeated-token degeneration or repeated native contraction motif is produced in the generated suffix.",
+      "confidence": "high",
+      "cap_notes": "All 3 free runs reach the 256-token cap mid-script; progressing cap cannot establish completed normal behavior."
+    },
+    {
+      "job": "anomaly.call88.canonicalprefix",
+      "mode": "full",
+      "seed": 43,
+      "verdict": "inconclusive",
+      "evidence": "Conditioned code-writing continuation makes coherent progress through the proposed replacement script; no repeated-token degeneration or repeated native contraction motif is produced in the generated suffix.",
+      "confidence": "high",
+      "cap_notes": "All 3 free runs reach the 256-token cap mid-script; progressing cap cannot establish completed normal behavior."
+    },
+    {
+      "job": "anomaly.call88.canonicalprefix",
+      "mode": "full",
+      "seed": 44,
+      "verdict": "inconclusive",
+      "evidence": "Conditioned code-writing continuation makes coherent progress through the proposed replacement script; no repeated-token degeneration or repeated native contraction motif is produced in the generated suffix.",
+      "confidence": "high",
+      "cap_notes": "All 3 free runs reach the 256-token cap mid-script; progressing cap cannot establish completed normal behavior."
+    }
+  ]
+}

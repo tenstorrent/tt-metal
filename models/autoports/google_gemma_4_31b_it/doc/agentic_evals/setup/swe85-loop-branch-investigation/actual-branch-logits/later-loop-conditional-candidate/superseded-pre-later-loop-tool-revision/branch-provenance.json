@@ -1,0 +1,52 @@
+{
+  "status": "candidate_seed44_30_token_prefix_observed_in_full_tt",
+  "branch_name": "tt_seed44_loop_history",
+  "branch_token_ids": [
+    1390,
+    107,
+    147,
+    1390,
+    107,
+    147,
+    1390,
+    107,
+    147,
+    1390,
+    107,
+    147,
+    1390,
+    107,
+    147,
+    1390,
+    107,
+    147,
+    1390,
+    107,
+    147,
+    1390,
+    107,
+    147,
+    1390,
+    107,
+    147,
+    1390,
+    107,
+    147
+  ],
+  "branch_token_count": 30,
+  "rows_per_mode": 31,
+  "origin": {
+    "mode": "tt-full",
+    "seed": 44,
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/runs/full/anomaly.psf__requests-5414.call11.onset.json",
+    "sha256": "a967659d1f4edd7b726a36c976168ae767957b9821ffc4a2a31640d594e7a885",
+    "field": "free_running[].token_ids",
+    "match_rule": "first30 token IDs equal the candidate forced history"
+  },
+  "comparison_reference": {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/results/seed44-suffix2048/anomaly.psf__requests-5414.call11.onset.hf.private.json",
+    "sha256": "ea3eb180de1ef8898c2565dcb5ffd7700f3e792ccfce8bc279efef80c6dfe9a4",
+    "role": "seed44 HF source retained as prior evidence only; its token history is not the branch used in this probe"
+  },
+  "interpretation": "The exact 30-ID loop is observed in the full-TT seed-44 free-running continuation. HF and full-TT logits will both be conditioned on this same TT-derived history; this is a forced-history comparison, not an unconditional generation test."
+}

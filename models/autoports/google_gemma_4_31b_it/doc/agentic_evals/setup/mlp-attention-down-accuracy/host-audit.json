@@ -1,0 +1,130 @@
+{
+  "audit_scope": "Static host-only review of the accuracy-only candidate runner and the saved accuracy-reference provenance. No model, tokenizer, TTNN, or device code was run. The active candidate result was not adjudicated.",
+  "reviewed_at_utc": "2026-11-15",
+  "sources": {
+    "runner": {
+      "path": "models/autoports/google_gemma_4_31b_it/tests/run_datatype_candidate.py",
+      "sha256": "f68517e9133e2541949b3786548d0fe5d7ce99b7d021335218ba073b49620a86"
+    },
+    "reference_builder": {
+      "path": "models/autoports/google_gemma_4_31b_it/tools/stage12_accuracy_references.py",
+      "sha256": "ae13604faa957e6f4cfa0b7f1fce0b07e93071f26c37deb8abbbad710d42c5eb"
+    },
+    "accuracy_reference_manifest": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/attention-down-acceptance/references/references.json",
+      "sha256": "f665053108019dfc020e8c7a4fa654288281e79b2c6504f089f25e834df951df"
+    },
+    "prefill_checker": {
+      "path": "/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime/readiness_check/run_prefill_check.py",
+      "sha256": "85c5b108396e9eef05d9619551143a68ff640064cdd051753761497c96f26a2a"
+    },
+    "teacher_forcing_checker": {
+      "path": "/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime/readiness_check/run_teacher_forcing.py",
+      "sha256": "9f1e5894ad15bbd630f93c835247a25470c604eb4a6bede570d4964fd011ecb5"
+    },
+    "existing_sweep_bar": {
+      "path": "models/autoports/google_gemma_4_31b_it/tests/summarize_datatype_sweep.py",
+      "sha256": "92aaa048fa4ed06485295876f36ff18021be9f83a83bb48d678824845523756f"
+    },
+    "command": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/mlp-attention-down-accuracy/command.json",
+      "sha256": "9125a0ff8643065700235dc625212b91833bc9835db2ce99f80774a23b61f3e5"
+    },
+    "admission": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/mlp-attention-down-accuracy/admission.json",
+      "sha256": "e9b9115484b26c549f5c17301ab1f75a4c9bfa558889e9237ecadb3e576e623a"
+    }
+  },
+  "findings": [
+    {
+      "severity": "must-fix-before-using-this-runner-as-an-accuracy-gate",
+      "finding": "The --require-accuracy gate omits the prefill results. At runner lines 175-178 it checks only result['decode'] plus result.get('natural', []), although the same run computes and saves result['prefill']. The established datatype sweep bar takes the minimum of prefill and decode top1/top5/top100 (summarize_datatype_sweep.py lines 25-32, 66); therefore this gate can pass a candidate below the prefill bar.",
+      "evidence": "The reference prefill checker returns the same top1/top5/top100 accuracy fields for each reference entry. The candidate runner's thresholds are top1>=0.90, top5>=0.98, top100==1.0. Include prefill rows alongside decode and natural rows if this flag is intended to enforce the established accuracy bar.",
+      "scope_note": "This is a source-level gate defect even if the current candidate's recorded prefill happens to pass; it does not itself invalidate or adjudicate the active run's raw scores."
+    },
+    {
+      "severity": "evidence-assertion-gap",
+      "finding": "The accuracy-only runner records prefill/decode/natural counter deltas and trace identifiers, but --require-accuracy asserts only accuracy thresholds. It does not enforce decode model_replays>=99 or captures==0, which the established sweep summarizer asserts for decode.",
+      "evidence": "Runner lines 151-174 record counter deltas and trace names; line 180 returns before performance work. summarize_datatype_sweep.py line 45 contains the decode replay/capture assertion.",
+      "scope_note": "These counters are available for external evidence review. This note does not claim accuracy requires a performance assertion; it identifies that this path does not itself gate the trace-counter invariant."
+    }
+  ],
+  "reference_provenance": {
+    "model": "google/gemma-4-31B-it",
+    "hf_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+    "tokenizer_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+    "manifest_marks_reference_only": true,
+    "regime": "serial_cpu",
+    "aime24": {
+      "artifact": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/attention-down-acceptance/references/aime24.refpt",
+      "sha256": "1c1a90cada967dc89159edf6e61eb51f2638955ab9defe1cc51939587e99ab45",
+      "prompt_tokens": 161,
+      "scored_positions": 100,
+      "alignment": "The builder re-renders the saved AIME prompt with the pinned tokenizer and chat template, asserts exact token-ID equality with the saved prompt, then scores the previously recorded 100-token HF continuation. It recomputes HF logits; no prior TT scores are reused."
+    },
+    "natural_text": {
+      "artifact": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/attention-down-acceptance/references/natural.refpt",
+      "sha256": "861f29370af0ba7e13c77f548e688cceff429846d20a9283697ae77b8b069584",
+      "source": "models/tt_transformers/tests/tale-of-two-cities.txt.bz2",
+      "source_sha256": "25d33cc39a17a4a576712e29056053cd8f818f1288e7b2a8abd668225e630e1e",
+      "span": "Token IDs [4096:5120] from the pinned tokenizer's encoding of the local book text; first 512 IDs are the prompt and next 512 are scored continuation IDs.",
+      "alignment": "The span is contiguous; the readiness checker takes logits at positions prompt_len-1 through prompt_len+gen_len-2, predicting each continuation token in order.",
+      "interpretation": "A natural-text continuation stress reference, explicitly not a chat-quality reference."
+    },
+    "provenance_caveat": "The reference manifest records exact revisions, source hashes, and reference artifact hashes. The builder explicitly requests local_files_only for tokenizer loading; the delegated model loader's AutoConfig and GenerationConfig calls pin the same revision but do not explicitly set local_files_only."
+  },
+  "execution_setup_check": {
+    "command_and_admission_hashes_match": true,
+    "command_pins_runner_config_and_both_reference_artifacts": true,
+    "offline_hf_env_flags_present": true,
+    "trace_region_env_present": true,
+    "status": "Run completed exit 1 after the intended accuracy assertion (completion elapsed 187.646 s, forecast 180\u2013700 s). Root terminal review verified 60 layers, full context, the runtime precision policy, and trace counters. No inference or device work was performed by this audit."
+  },
+  "recommendation": "Fix the gate omission before reusing this runner. Treat this candidate as failing the currently applied natural top1 bar (0.873 < 0.90), while noting stage-8 has no comparable natural-text score; do not ascribe the gap to precision without a same-span full-precision control. The recorded replay/capture counters satisfy the expected trace invariant in this run.",
+  "accuracy_gate_finding_applies_to_this_result": {
+    "result_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/mlp-attention-down-accuracy/run/readiness_accuracy.json",
+    "sha256": "ac9b331c0f92828534e2e029f951c8fa7b49de4602e56de3fac52d09692f7544",
+    "scores": {
+      "aime24_prefill": {
+        "top1": 0.98,
+        "top5": 1.0,
+        "top100": 1.0,
+        "positions": 100
+      },
+      "aime24_decode": {
+        "top1": 0.98,
+        "top5": 1.0,
+        "top100": 1.0,
+        "positions": 100
+      },
+      "natural_decode": {
+        "top1": 0.873046875,
+        "top5": 0.99609375,
+        "top100": 1.0,
+        "matches": {
+          "top1": "447/512",
+          "top5": "510/512",
+          "top100": "512/512"
+        }
+      }
+    },
+    "outcome": "The run failed the natural top1 >= 0.90 threshold, independently of the omitted-prefill gate row. AIME prefill and decode both clear the thresholds. Adding prefill to the gate remains necessary for correctness but would not change this run result.",
+    "trace_counters": {
+      "aime_decode_model_replays": 297,
+      "natural_model_replays": 511,
+      "captures": 0,
+      "aime_prefill_model_replays": 0,
+      "interpretation": "Recorded values agree with 3x99 AIME decode replays, 511 natural continuation replays, and no new trace captures. The accuracy runner recorded these values but did not assert them; root terminal review verified them."
+    }
+  },
+  "stage8_comparability": {
+    "searched_artifacts": [
+      "models/autoports/google_gemma_4_31b_it/doc/datatype_sweep/sweep_results.json",
+      "models/autoports/google_gemma_4_31b_it/doc/datatype_sweep/selected_default/readiness_accuracy.json",
+      "models/autoports/google_gemma_4_31b_it/doc/datatype_sweep/selected_acceptance_snapshot/readiness_accuracy.json"
+    ],
+    "finding": "No earlier stage-8 natural-text reference or natural-text score was found in the datatype sweep artifacts. Stage-8 selected snapshot records only the 100-position AIME reference: prefill and decode top1=0.93, top5=1.0, top100=1.0.",
+    "comparability": "The new 512-token natural-book result is not directly comparable to the earlier AIME-only stage-8 score. Its causal split and pinned reference provenance are internally aligned, but there is no prior same-span baseline here to attribute 87.3% top1 to this precision change versus the model/reference behavior on this new text. The AIME comparison is comparable at 100 positions and improves from 93% to 98% top1 for both prefill and decode.",
+    "old_snapshot_sha256": "157c5a75be707508353242c124700ce737ff9fcf4f42d810b96a644064744a06"
+  }
+}

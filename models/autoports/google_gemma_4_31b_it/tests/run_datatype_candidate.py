@@ -10,9 +10,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 import torch
-from readiness_check import run_prefill_check, run_teacher_forcing
 
 import ttnn
+from readiness_check import run_prefill_check, run_teacher_forcing
 
 from ..tt.generator import build_generator
 from ..tt.precision import POLICIES, load_precision
@@ -28,6 +28,20 @@ def kernel_summary(kernel):
     }
 
 
+def _assert_accuracy_trace_counters(result):
+    """Check teacher-forcing replay counts and absence of new trace captures."""
+    repeats = result["teacher_forcing_repeats"]
+    assert len(repeats) == 3, "Accuracy run requires three AIME teacher-forcing repeats"
+    expected = sum(int(row["total"]) - 1 for trial in repeats for row in trial)
+    assert result["decode_counters"]["model_replays"] == expected, "AIME replay count mismatch"
+    if "natural" in result:
+        expected = sum(int(row["total"]) - 1 for row in result["natural"])
+        assert result["natural_counters"]["model_replays"] == expected, "Natural-text replay count mismatch"
+    for phase in ("prefill", "decode", "natural"):
+        if phase in result:
+            assert result[phase + "_counters"]["captures"] == 0, f"New trace captured during {phase}"
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config")
@@ -36,16 +50,22 @@ def main():
     parser.add_argument("--long-only", action="store_true")
     parser.add_argument("--batch", type=int, default=1)
     parser.add_argument("--acceptance", action="store_true")
+    parser.add_argument("--reference", type=Path)
+    parser.add_argument("--natural-reference", type=Path)
+    parser.add_argument("--output-dir", type=Path)
+    parser.add_argument("--require-accuracy", action="store_true")
+    parser.add_argument("--accuracy-only", action="store_true")
     parser.add_argument("--id", default="baseline")
     args = parser.parse_args()
     policy = load_precision(args.config)
     torch.set_num_threads(8)
     model_dir = Path("models/autoports/google_gemma_4_31b_it")
     source = model_dir / "doc/optimized_full_model"
-    root = model_dir / "doc/datatype_sweep" / args.id
+    root = args.output_dir or model_dir / "doc/datatype_sweep" / args.id
     root.mkdir(parents=True, exist_ok=True)
     reference = json.loads((source / "reference_metadata.json").read_text())
     assert reference["revision"] == HF_REVISION and reference["actual_generated_tokens"] == 100
+    reference_path = args.reference or Path(reference["reference"])
     (root / "aime24_prompt.json").write_text((source / "aime24_prompt.json").read_text())
     manifest = {
         "head": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
@@ -137,7 +157,7 @@ def main():
 
                 long_prefix(gen, root)
             return
-        result = dict(scope="full60layers", reference=reference["reference"], revision=HF_REVISION)
+        result = dict(scope="full60layers", reference=str(reference_path), revision=HF_REVISION)
         for name, module, fn in [
             ("prefill", run_prefill_check, run_prefill_check.run_prefill_check),
             ("decode", run_teacher_forcing, run_teacher_forcing.run_teacher_forcing),
@@ -145,7 +165,7 @@ def main():
             before = dict(gen.counters)
             with patch.object(module, "_import_build_generator", return_value=lambda **kwargs: gen):
                 measurements = [
-                    fn(model_dir=model_dir, reference_path=Path(reference["reference"]), mesh_device=mesh)
+                    fn(model_dir=model_dir, reference_path=reference_path, mesh_device=mesh)
                     for _ in range(3 if name == "decode" else 1)
                 ]
                 result[name] = copy.deepcopy(measurements[0])
@@ -156,6 +176,24 @@ def main():
             result[name + "_counters"] = {k: gen.counters[k] - v for k, v in before.items()}
             result["traces"] = {"model": str(gen.model_trace), "sampling": str(gen.sample_trace)}
             (root / "readiness_accuracy.json").write_text(json.dumps(result, indent=2) + "\n")
+        if args.natural_reference:
+            before = dict(gen.counters)
+            with patch.object(run_teacher_forcing, "_import_build_generator", return_value=lambda **kwargs: gen):
+                natural = run_teacher_forcing.run_teacher_forcing(
+                    model_dir=model_dir, reference_path=args.natural_reference, mesh_device=mesh
+                )
+            result["natural"] = natural
+            result["natural_reference"] = str(args.natural_reference)
+            result["natural_counters"] = {k: gen.counters[k] - v for k, v in before.items()}
+            (root / "readiness_accuracy.json").write_text(json.dumps(result, indent=2) + "\n")
+        if args.require_accuracy:
+            rows = result["prefill"] + result["decode"] + result.get("natural", [])
+            assert all(
+                r["top1"] >= 0.90 and r["top5"] >= 0.98 and r["top100"] == 1.0 for r in rows
+            ), "Candidate does not meet the per-reference accuracy thresholds; results preserved"
+            _assert_accuracy_trace_counters(result)
+        if args.accuracy_only:
+            return
         performance(gen, root)
         from .datatype_long_prefix import run as long_prefix
 

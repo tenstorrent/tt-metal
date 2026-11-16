@@ -1,0 +1,45 @@
+{
+  "status": "terminal_root_and_independent_review_complete",
+  "at_unix": 1794772625.9136994,
+  "completion": {
+    "start_unix": 1794770621.3541358,
+    "end_unix": 1794772568.1985888,
+    "exit_code": 0,
+    "wall_seconds": 1946.8444530963898
+  },
+  "forecast_seconds": [
+    1800,
+    2100,
+    3000
+  ],
+  "forecast_result": "HIT",
+  "rows": [
+    {
+      "name": "sklearn13135-original17k-missingtool-protocol-switch-seed42",
+      "result_sha256": "f2e867ed03fdc856d6fe517b5c9d59354ca49470b6e828c7ea5e8e1d184e8239",
+      "fixture_sha256": "3625877066b53d6eb1fb375ace2b3e70e650f836957e6cc4971fdf3c522e73e0",
+      "positions": 64,
+      "top1_agreement": 0.984375,
+      "mean_abs_chosen_logprob_delta": 0.020737349316616638,
+      "max_abs_chosen_logprob_delta": 0.2070220708847046,
+      "identity_verified": true
+    },
+    {
+      "name": "sklearn13135-original17k-missingtool-terminal-turn-seed42",
+      "result_sha256": "4d7ff8a43a3d1a16d3d941d48d48286105a142c6e9ae902e808a23a020878674",
+      "fixture_sha256": "73c1581a300361930011bb206048cdeb27b3b599399e9c26af9f22d6dee9c047",
+      "positions": 64,
+      "top1_agreement": 0.984375,
+      "mean_abs_chosen_logprob_delta": 0.009870368635624072,
+      "max_abs_chosen_logprob_delta": 0.31572580337524414,
+      "identity_verified": true
+    }
+  ],
+  "scope": "Two conditional64-position comparisons on exact saved original17K reconstructed histories. Historical pre-Q32 full-TT controls; current HF CPU comparison does not execute TT code. Not native prompt/RNG replay, free-running incidence or task correctness. One-token free samples are excluded from outcome claims.",
+  "independent_review": {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-full-missingtool-conditional-history-b/hf-refresh-c-after-tt-review/hf-independent-terminal-review-c.json",
+    "sha256": "54533c0cd4323ba628194cb6339e1f14fe27144c95eab920f77d92771e173b8b"
+  },
+  "review_updated_unix": 1794773325.3369384,
+  "interpretation": "Two disjoint conditional windows each agree63/64. The first forced channel marker is not top1 in either model; final turn marker is top1 in both. The347-token intervening interval and190 prior generated tokens are outside these excerpts. This does not establish spontaneous HF reproduction or native trajectory incidence."
+}

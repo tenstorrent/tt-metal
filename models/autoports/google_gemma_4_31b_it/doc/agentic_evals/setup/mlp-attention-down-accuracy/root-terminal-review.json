@@ -1,0 +1,24 @@
+{
+  "epoch": 1794753488.491573,
+  "exit_code": 1,
+  "reason": "Intentional per-reference accuracy assertion; not runtime or hardware failure",
+  "policy_verified": true,
+  "layers": 60,
+  "context": 262144,
+  "aime_top1": 0.98,
+  "natural_top1": 0.873046875,
+  "natural_top5": 0.99609375,
+  "natural_top100": 1.0,
+  "forecast_seconds": [
+    180,
+    700
+  ],
+  "elapsed_seconds": 187.6457178592682,
+  "forecast_hit": true,
+  "trace_verified": {
+    "aime_replays": 297,
+    "natural_replays": 511,
+    "captures_after_prepare": 0
+  },
+  "selected": false
+}

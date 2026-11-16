@@ -1,0 +1,169 @@
+{
+  "status": "completed_full_tt_conditional_controls_hf_comparison_pending",
+  "completion": {
+    "status": "completed",
+    "start_unix": 1794767054.93616,
+    "end_unix": 1794767249.7433534,
+    "elapsed_seconds": 194.80719327926636,
+    "process_exit_code": 0
+  },
+  "forecast": "HIT:194.807s within144\u2013488.5s;point197.8s",
+  "identity": "All22 exact conditioning IDs/chosen IDs verified against manifests; full BF16 weights/KV/activation/CCL and HiFi4 policy matches on all22. No free continuation requested.",
+  "rows": [
+    {
+      "name": "cond-001-fullother-01-anomaly-psf-requests-5414-call11-s42-p2048-c2-terminal",
+      "result_sha256": "2e8570a55a0be9af6d875131a75d2ad58e04d190ea8118a320103d6b121e4d25",
+      "conditioning_tokens": 3616,
+      "chosen_tokens": 64,
+      "top1_matches_chosen": 57
+    },
+    {
+      "name": "cond-002-fullother-02-anomaly-psf-requests-5414-call10-s42-p2048-c5-terminal",
+      "result_sha256": "a50beecdb49437641870ccd703ea564ef27e88e32bc8db13ae8586990502350b",
+      "conditioning_tokens": 2484,
+      "chosen_tokens": 64,
+      "top1_matches_chosen": 59
+    },
+    {
+      "name": "cond-003-fullother-03-anomaly-psf-requests-5414-call11-s43-p2048-c1-onset",
+      "result_sha256": "b3a2cba41ee5f0a6398f11816bd53ef6f82851c1a43f1650a9442d4e72132e38",
+      "conditioning_tokens": 2048,
+      "chosen_tokens": 64,
+      "top1_matches_chosen": 54
+    },
+    {
+      "name": "cond-004-fullother-04-anomaly-call91-canonicalprefix-s42-p4096-c512-onset",
+      "result_sha256": "d86fc91ac56ffacbb6444da260f57fe7b1f21647ddda8cfd722527c6916069b0",
+      "conditioning_tokens": 4109,
+      "chosen_tokens": 26,
+      "top1_matches_chosen": 22
+    },
+    {
+      "name": "cond-005-fullother-05-anomaly-sphinx-doc-sphinx-10323--s44-p4096-c5-onset",
+      "result_sha256": "c19d9887814684ba8e55e1d4e168fc01262062f42f6a6163c5b0bc822b85266d",
+      "conditioning_tokens": 4149,
+      "chosen_tokens": 64,
+      "top1_matches_chosen": 62
+    },
+    {
+      "name": "cond-006-fullother-06-anomaly-psf-requests-5414-call10-s42-p1024-c5-onset",
+      "result_sha256": "4bccd26a1fe2807989c1d3fc20c131a8fb6c6ae4500f5547b52a86dd6ca0fdfb",
+      "conditioning_tokens": 1024,
+      "chosen_tokens": 64,
+      "top1_matches_chosen": 62
+    },
+    {
+      "name": "cond-007-fullother-07-anomaly-psf-requests-5414-call10-s43-p1024-c5-onset",
+      "result_sha256": "4cf4fed7769c9ea2709d3ba2f8dbf6018b118e11fae74f16aac00c7816953f7d",
+      "conditioning_tokens": 1072,
+      "chosen_tokens": 64,
+      "top1_matches_chosen": 62
+    },
+    {
+      "name": "cond-008-fullother-08-anomaly-psf-requests-5414-call10-s44-p1024-c5-terminal",
+      "result_sha256": "10ee8c4a705cb9343dc458751b05b21c3caf4e4173f9a5ccb8e5764625e23659",
+      "conditioning_tokens": 1288,
+      "chosen_tokens": 64,
+      "top1_matches_chosen": 64
+    },
+    {
+      "name": "cond-009-fullother-09-anomaly-psf-requests-5414-call11-s44-p1024-c5-onset",
+      "result_sha256": "0eba467073d948f2edba79e800e864c3b55853f4e8c7dd4127d543fedc3520b1",
+      "conditioning_tokens": 1042,
+      "chosen_tokens": 64,
+      "top1_matches_chosen": 64
+    },
+    {
+      "name": "cond-010-fullother-10-anomaly-psf-requests-5414-call11-s43-p1024-c5-terminal",
+      "result_sha256": "85fe56e67b15c6aa7c4692d96927c46da02eeb3d2ab64d32833478ee5b921685",
+      "conditioning_tokens": 1084,
+      "chosen_tokens": 64,
+      "top1_matches_chosen": 53
+    },
+    {
+      "name": "cond-011-fullother-11-anomaly-sphinx-doc-sphinx-10323--s42-p1024-c5-terminal",
+      "result_sha256": "a9210767b97aa791538083d987c650422fcc9ac6fc55ab804b1334b2dba70ed1",
+      "conditioning_tokens": 1160,
+      "chosen_tokens": 64,
+      "top1_matches_chosen": 50
+    },
+    {
+      "name": "cond-012-fullother-12-anomaly-sphinx-doc-sphinx-10323--s43-p1024-c5-terminal",
+      "result_sha256": "365ce0e806af47c6d1ca32f981c17fcf9f01655b52d4dccd0d1e96731b3688e6",
+      "conditioning_tokens": 1167,
+      "chosen_tokens": 64,
+      "top1_matches_chosen": 52
+    },
+    {
+      "name": "cond-013-fullother-13-anomaly-sphinx-doc-sphinx-10323--s44-p1024-c5-terminal",
+      "result_sha256": "d21be55633f713324610cead221c40e71ec8712d273e61542913aefb93108383",
+      "conditioning_tokens": 1151,
+      "chosen_tokens": 64,
+      "top1_matches_chosen": 52
+    },
+    {
+      "name": "cond-014-fullother-14-anomaly-matplotlib-matplotlib-20-s43-p1024-c5-onset",
+      "result_sha256": "cc4e8606ae09afa56bbd483bde753388bd12e974b2cf0f059d5791c7a06db5b4",
+      "conditioning_tokens": 1265,
+      "chosen_tokens": 64,
+      "top1_matches_chosen": 57
+    },
+    {
+      "name": "cond-015-fullother-15-anomaly-matplotlib-matplotlib-20-s44-p1024-c5-onset",
+      "result_sha256": "37c869e55745fde9078c911ee0342301a2b88c784a13466af5657ae95e6af6cf",
+      "conditioning_tokens": 1124,
+      "chosen_tokens": 64,
+      "top1_matches_chosen": 63
+    },
+    {
+      "name": "cond-016-fullother-16-anomaly-psf-requests-5414-call11-s42-p1024-c1-terminal",
+      "result_sha256": "0b120b7804518f18ca8df1bacfe825a87a747c1eda81db249463dbb50c62f0de",
+      "conditioning_tokens": 1693,
+      "chosen_tokens": 64,
+      "top1_matches_chosen": 63
+    },
+    {
+      "name": "cond-017-fullother-17-models-autoports-google-gemma-4--s43-p2048-c1-terminal",
+      "result_sha256": "89f0f661714c5417a59a1ade93d5552fdf87022ab26bd9f3a49c930c0817abcf",
+      "conditioning_tokens": 2959,
+      "chosen_tokens": 64,
+      "top1_matches_chosen": 62
+    },
+    {
+      "name": "cond-018-fullother-18-models-autoports-google-gemma-4--s44-p2048-c1-terminal",
+      "result_sha256": "9b676ad696d1f336b8c6e72c00cece0a07f5e5a54710c144848dfd2e557663f6",
+      "conditioning_tokens": 2610,
+      "chosen_tokens": 64,
+      "top1_matches_chosen": 62
+    },
+    {
+      "name": "cond-019-fullother-19-anomaly-psf-requests-5414-call11-s43-p512-c10-onset",
+      "result_sha256": "ac6a6a842a7cdc84e6e90971a0fb949730b7a80db89fb8013ab85833a2f1bdde",
+      "conditioning_tokens": 702,
+      "chosen_tokens": 64,
+      "top1_matches_chosen": 61
+    },
+    {
+      "name": "cond-020-fullother-20-anomaly-psf-requests-5414-call11-s44-p512-c20-onset",
+      "result_sha256": "96934d701e6d8ad345f6900d2d572a0355d547c353b8da8a9ecbb1a5ad31cd89",
+      "conditioning_tokens": 1086,
+      "chosen_tokens": 64,
+      "top1_matches_chosen": 64
+    },
+    {
+      "name": "cond-021-sklearn-secondary-full-seed42-onset",
+      "result_sha256": "0d7e96d17ff56aa1eac3d35273fedc8fa6d0400a4a6c0229ffd79f9743ec89e2",
+      "conditioning_tokens": 532,
+      "chosen_tokens": 64,
+      "top1_matches_chosen": 64
+    },
+    {
+      "name": "cond-022-sklearn-secondary-full-seed43-onset",
+      "result_sha256": "73fb2c28b210d224e8a1f28266f6d717a32abc04f5bed9b4eea7a960e12e5d02",
+      "conditioning_tokens": 526,
+      "chosen_tokens": 64,
+      "top1_matches_chosen": 64
+    }
+  ],
+  "scope": "Conditional likelihood of actual observed histories only. No score or policy selection; HF comparison still required."
+}

@@ -1,0 +1,130 @@
+{
+  "status": "production resume passed; broad acceptance and fixed108 validation pending",
+  "diagnosis": {
+    "source": "P19 full-resume and identical-input Q-partition probes",
+    "mechanism": "Q128-vs-Q32 attention differs with identical rotated queries and unchanged K/V cache/page table, while Q32 full and offset-slice attention are bitwise equal. The first full-layer non-exact capture for offset32/64 was finish.attention_input, before o_proj/CCL.",
+    "interpretation": "Q partitioning explains the observed local discrepancy, and forcing Q32 everywhere passes the unchanged full-model resume gate. This does not prove a hardware defect or explain the historical origin beyond the measured causal behavior."
+  },
+  "q32_full_resume_diagnostic": {
+    "result": "prefill_resume_q32_diagnostic.json",
+    "result_sha256": "1363883dcdeb0c138f6e9e15ce2ffafdf55d2711d5785b068f9a37a8f65c5583",
+    "completion": "q32-resume-completion.json",
+    "completion_sha256": "be99686a886ac8fea262c998b75298fe4cc822054158829186b464f54dbcf249",
+    "wrapper": "run_resume_q32_with_positions.py",
+    "wrapper_sha256": "9a4c6b6384b258d001b0f1c62e5fb185a5e4ee6f1d2d4b49c3ec42da53bbd7fc",
+    "elapsed_seconds": 269.9703812599182,
+    "exit_code": 0,
+    "status": "pass",
+    "cases": 14,
+    "all_case_pass": true,
+    "worst_pcc_mean": 1.0000011046921726,
+    "worst_pcc_min": 0.9998981511531875,
+    "worst_top1_agreement": 1.0,
+    "starts_2560": [
+      32,
+      64,
+      132,
+      1024,
+      1029,
+      2496,
+      2559
+    ],
+    "starts_16384": [
+      32,
+      64,
+      132,
+      1024,
+      1029,
+      16320,
+      16383
+    ],
+    "unchanged_thresholds": {
+      "pcc_mean_min": 0.99,
+      "pcc_min_min": 0.98,
+      "top1_min": 0.98,
+      "control_min_window": 64
+    },
+    "negative_controls": {
+      "no_history": {
+        "cases": 12,
+        "failed_as_expected": 12,
+        "pcc_mean_range": [
+          0.07994169584974815,
+          0.7436152055621197
+        ],
+        "top1_range": [
+          0.015625,
+          0.5408560037612915
+        ]
+      },
+      "fresh_suffix": {
+        "cases": 12,
+        "failed_as_expected": 12,
+        "pcc_mean_range": [
+          0.4410769052423562,
+          0.7787348457175811
+        ],
+        "top1_range": [
+          0.09375,
+          0.575875461101532
+        ]
+      },
+      "note": "The two last-token cases do not run the 64-position negative controls."
+    },
+    "precision_policy": {
+      "path": "setup/bf16-hifi4-kv-down-bfp8-accuracy-p19/precision.json",
+      "sha256": "540760ea34cea22459c9248b4ce8c90ad1b34e000b18e82b70552e45fd766fad",
+      "config_id": "stage12_bf16_hifi4_kv_down_bfp8_p19",
+      "scope": "Only the diagnostic runner overrode the constructed geometry to Q32; policy JSON was unchanged."
+    },
+    "build_kwargs": {
+      "path": "setup/p19-acceptance-preparation/resume-build-kwargs.json",
+      "sha256": "b253ec0c3cd010e97498129b95810aa9d5834ae2a215b31c220805fd5e4e8835"
+    }
+  },
+  "production_change": {
+    "path": "tt/multichip_decoder.py",
+    "sha256": "878c61052aee1ddd6f4afc78c4e4bbcda2c894a5a5878d01531f860e97006d99",
+    "behavior": "Select prefill_q=32 when the model's SDPA compute fidelity is HiFi4; otherwise preserve the previous BF16-global=64 and default=128 geometry. The existing nonaligned-start Q32 arm and K32 literal remain unchanged.",
+    "head_bfp8_hifi2": "Keeps its existing Q128 geometry because its SDPA fidelity is HiFi2 and its KV cache is BFP8.",
+    "not_yet_validated": "Fresh-path natural accuracy, qualitative outputs, fixed108 precision regression, and performance for the changed HiFi4 Q32 configuration. Root owns those follow-up gates."
+  },
+  "host_regression": {
+    "path": "tests/test_prefill_q_partition_policy.py",
+    "sha256": "826a9319e0e0f83147ae9a1184ec83420c712f79d490f83cbbf1599d39a2e2ae",
+    "command": "python models/autoports/google_gemma_4_31b_it/tests/test_prefill_q_partition_policy.py",
+    "result": "4 tests passed; direct import check confirmed ttnn absent",
+    "coverage": [
+      "Actual MultichipDecoder geometry assignment via AST-extracted production code",
+      "HiFi4 selects Q32 for sliding/global and BFP8/BF16 KV conditions",
+      "HiFi2 head policy remains Q128",
+      "HiFi2 BF16 global=64 and sliding=128 existing behavior remains",
+      "Actual OptimizedDecoder SDPA expression selects Q32 for aligned and nonaligned HiFi4 calls",
+      "K chunk remains literal32"
+    ]
+  },
+  "deferred_alternative": {
+    "proposal": "q128-aligned-resume-proposal-d.json",
+    "reason": "Padded Q128 would require a phase-aligned expanded sliding page-table base and aligned chunk_start_idx. Native SDPA rejects scalar offsets not divisible by both Q and K chunks; the optional tensor-offset trace path additionally needs a warmed aligned offset/table input. The already-passing Q32 path is simpler but requires fresh-path acceptance reruns."
+  },
+  "production_resume_validation": {
+    "path": "setup/p19-q32-production-validation/resume/prefill_resume.json",
+    "sha256": "fcd80767bec79343663d0ae56621b659ad8bab0246aa7d30c77fde920ef867bc",
+    "completion_sha256": "1ba953fe8da5df7cde21fe7828b5ce99c2af7c104966299d268472cace273d44",
+    "admission_sha256": "892f9c04d1112d96ba70b697650432d3f9885d92e7bde12c4b129112de8b22cc",
+    "independent_review": "setup/p19-q32-production-validation/resume/independent-review-d.json",
+    "independent_review_sha256": "0274c0e01323a73279a6a8026c16959fcd09d4c305fcdf8d9d54d817a1e3dcd9",
+    "exit_code": 0,
+    "wall_seconds": 272.7324209213257,
+    "all14_pass": true,
+    "applicable_negative_controls_failed_as_expected": 24,
+    "trace_allocation_tracking": 1,
+    "runtime_override_used": false,
+    "matches_q32_diagnostic_metrics": true
+  },
+  "remaining_validation": [
+    "Production Q32 broad P19 accuracy and qualitative/context acceptance",
+    "Post-Q32 fixed108 anomaly regression and any evidence-justified extensions",
+    "Independent review and selection decision; old P19 Q128 broad/fixed108 results are historical only"
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "status": "root_static_review_pass_candidate_unadmitted",
+  "reviewer": "root",
+  "at_utc": "2026-11-15T08:18:02.412835+00:00",
+  "reviewed": "Complete driver then diff; actual selected-BFP8 suffix512 decode rates independently read and matched corrected forecast. Exact fixture/source/policy hashes verified. Completion records retain validation failures. Fixed prelaunch forecast envelopes replace favorable scenario selection.",
+  "pins": {
+    "run_serial_candidate.py": "6e09de7054bbddc489118e8b802f2e651b9a7a556a28ceaecebc0f4bf2c7d0ff",
+    "source-hashes.json": "fed9aad30dd955c3564bb63d832085c111ecf2e86ead3d94bfdc41185e6d1186",
+    "artifact-hashes.json": "90d1ae1763426a871689681c626257a7df2a57d16fcaeb4bf31be834a0441b96",
+    "proposal.json": "c3c757ca7d19be2a17c655be30edc1782452c409ffff8bf69ff3cef7e603dee2",
+    "forecast.json": "0e657ec87c71fb44e7b091588045dc21ff2f098059396b1c1b9b868dd83cb3e1",
+    "commands.json": "c37f0e6c296d32556f9885bed0b5f0c54380d6cd5fa8b10b9ca0b32ba6fc847a"
+  },
+  "source_files": 36,
+  "candidate_files": 26,
+  "execution_authorized": false,
+  "remaining": "Serial HF9 and Sklearn secondary-loop HF completion/review, fresh owner check, root admission."
+}

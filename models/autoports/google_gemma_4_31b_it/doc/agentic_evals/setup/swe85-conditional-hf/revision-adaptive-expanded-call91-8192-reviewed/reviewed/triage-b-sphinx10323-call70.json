@@ -1,0 +1,55 @@
+{
+  "task": "sphinx-doc__sphinx-10323.call70",
+  "mode": "hf_full_precision_bf16",
+  "seed": 43,
+  "verdict": "normal",
+  "confidence": "medium",
+  "evidence": [
+    "HF result SHA-256 2472008d4ab3ca68d5803944ccf3410c53e603940e62529f062df2e8fdf199a2; case SHA-256 3267a7e718c71d0fa067a781f948b1c3d07d335891a90057b4c21435c146f0b1; pinned HF revision 842da3794eaa0b77d5f08bae87a17459d91ff475.",
+    "Fixture SHA-256 3267a7e718c71d0fa067a781f948b1c3d07d335891a90057b4c21435c146f0b1 contains 2048 IDs, exactly equal to the last 2048 IDs of original onset source SHA-256 7d39e2c87e91327f35317968bf2647887a402d0086085ec8f95db8ff5fc2ab64 (source length 65779; source slice [63731,65779]). This is an exact shortened suffix, not the 65,615-token reconstructed native request; native output token IDs and native seed are absent.",
+    "HF seed43 generated 56/512 tokens, flag=false, ending at token50 after a canonical bash tool handoff `<tool_response>`; text is a coherent summary (‘explored all the possibilities... I’ll just finish the task’) and inert comment command. It contains no repeated-contraction burst. This is expected tool-yield EOS, not fabricated execution, and no cap extension is needed for this HF draw.",
+    "Exact 2048-prefix TT comparators are seed42 only: served SHA-256 1fa9f54e8a4aace416fa70fed3ea9daa36f074e6c5f8ebe00c6550d3aee01f30 ran 512 tokens and developed repeated #’ve’ve lines; full BF16/HiFi4 SHA-256 079baccb97ee11584b68c0e69353c172f1dd976fcbfdf65df71d53d421fd3182 naturally stopped after 89 coherent tokens and canonical tool handoff. HF result's chosen-token comparison uses these seed42 runs as logits references (full top1 agreement 1.0 over 37 chosen positions), not as seed43 free-run identity. HF same-history forced position0 for original chosen token236789 has probability0.173226/top1 alternative236858 p0.285601; actual HF free first token30228. Thus this sample does not reproduce the native localized `I’ve’ve` anomaly; it does not disprove it across stochastic paths.",
+    "The Sphinx same-seed43 4096-suffix TT runs are not identical conditioning and are outside the 2048 HF comparison. They are coherent (served116 tokens, full102 tokens) and naturally tool-yield; do not use them as exact 2048-prefix matched controls."
+  ],
+  "scope": {
+    "conditioning": "exact last 2048 original prompt IDs; chosen37 positions; seed43 free run requested512",
+    "hf_free_tokens": 56,
+    "stop": "natural tool-yield EOS token50",
+    "same_prefix_tt_seed_available": 42,
+    "native_replay": "not exact; native seed/token IDs absent and prompt was reconstructed one token shorter per metadata",
+    "timing_s": {
+      "free_trial": 151.39625950087793,
+      "total_wall": 214.8654462019913,
+      "note": "No throughput or score inference."
+    }
+  },
+  "sampling": {
+    "temperature": 1.0,
+    "top_p": 0.95,
+    "top_k": 20,
+    "seed": 43
+  },
+  "runtime_precision": {
+    "HF": "BF16 CPU reference",
+    "TT comparator full": "stage12_bf16_hifi4_diagnostic",
+    "TT comparator served": "stage12_head_bfp8_lofi"
+  },
+  "source_hashes": {
+    "hf": "2472008d4ab3ca68d5803944ccf3410c53e603940e62529f062df2e8fdf199a2",
+    "fixture": "3267a7e718c71d0fa067a781f948b1c3d07d335891a90057b4c21435c146f0b1",
+    "source_onset": "7d39e2c87e91327f35317968bf2647887a402d0086085ec8f95db8ff5fc2ab64",
+    "tt_2048_served": "1fa9f54e8a4aace416fa70fed3ea9daa36f074e6c5f8ebe00c6550d3aee01f30",
+    "tt_2048_full": "079baccb97ee11584b68c0e69353c172f1dd976fcbfdf65df71d53d421fd3182",
+    "group6_full_4096_seed43": "2fc88476353a38633134bcb85d1fbf8624f99d8e55bb8273e42fca2898bc594d"
+  },
+  "group6_cap_extension_check": {
+    "case": "matplotlib__matplotlib-20488.call86",
+    "full_seed43_suffix4096_sha256": "2fc88476353a38633134bcb85d1fbf8624f99d8e55bb8273e42fca2898bc594d",
+    "generated_tokens": 512,
+    "requested_cap": null,
+    "flag": false,
+    "observed_end": "ends mid-Python string/script construction at cap512",
+    "same_prefix_seed43_extension_found": false,
+    "evidence": "Searched setup artifacts; no full-mode extension with same Matplotlib suffix4096 fixture and seed43 was found. Other Matplotlib suffix1024/cap1024 artifact uses a different prefix and seed42, so it is not a valid continuation; exact-prefix cap extension remains outstanding if resolving this capped TT trajectory is still required."
+  }
+}

@@ -1,0 +1,225 @@
+{
+  "status": "candidate_provenance_only_not_admission",
+  "source_P4_candidate": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-hifi2-fourcase-followup-candidate",
+  "source_P4_candidate_manifest_sha256": "a87d67811b8027f38b33f217193f1a670f035c27fd0315b5cf4b955f2ec015bc",
+  "source_P4_policy_sha256": "118dceaf55f938ac3521684d77953390e1ee5ba0c4cf893c3195b403910b93b8",
+  "source_P4_build_kwargs_sha256": "7ed91a1ca7a1765cbc14b1e6e9de9184b4dc7e12a9eabf5c36173672a0b00fbc",
+  "source_P4_completion_sha256": "4244e86608dfda65335067e2fc463f1bcbf2e6ace29b618e26ee9ead14090cb4",
+  "source_P4_root_terminal_review_sha256": "3ec9cbd081e335a60bcbb4b32594f9827b38d24a760b6563205c1388bf6f5cef",
+  "source_P4_launch_sha256": "9c5117668ee7aa39590142388b31f9ff91714e32c481e5290c1201202de58fd4",
+  "source_P4_actual_policy_sha256s": [
+    "0a60051befab5563a3fa1c1a304470dbbf85bc0c5a801e19344de5f609941794"
+  ],
+  "candidate_policy_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bf16-hifi4-seven-case-candidate/down_bf16_hifi4_precision.json",
+  "candidate_policy_sha256": "76874449a2026827c2e1c46f51b2e0f894ba02b0ab5924ed6036a2cdd1b30045",
+  "policy_delta": {
+    "weight_groups.down": {
+      "from": "bfp8",
+      "to": "bf16"
+    },
+    "compute_fidelities.down": {
+      "from": "HiFi2",
+      "to": "HiFi4"
+    },
+    "all_other_policy_values_identical": true
+  },
+  "legal_policy_basis": {
+    "precision_source_path": "models/autoports/google_gemma_4_31b_it/tt/precision.py",
+    "precision_source_sha256": "2f223a118fe713677b9ce4fb3beb2f563e26af56ef45a98b2e03fad1e25664a9",
+    "source_fact": "POLICIES maps bf16 to (bfloat16, HiFi4); load_precision rejects mismatched dtype/fidelity pairs.",
+    "construction_source_path": "models/autoports/google_gemma_4_31b_it/tt/model.py",
+    "construction_source_sha256": "c65ed33bb175f63603946eea561a2623cad0b70521428bdf888bd9445457a01e",
+    "source_fact_2": "Gemma4Model forwards the selected down weight group to MultichipDecoder.from_state_dict as down_precision."
+  },
+  "fixtures": [
+    {
+      "case_name": "anomaly.pytest-dev__pytest-5787.call65.onset.seed42.p5_downbf16_hifi4.cap2048",
+      "source_fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/fixtures/full/anomaly.pytest-dev__pytest-5787.call65.onset.cap2048.seed42.private.json",
+      "source_fixture_sha256": "346ea388c2e71b88d415e67331f6f1c5de4ee428e641e5159adccef0af382331",
+      "candidate_fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bf16-hifi4-seven-case-candidate/fixtures/anomaly.pytest-dev__pytest-5787.call65.onset.cap2048.seed42.private.json",
+      "candidate_fixture_sha256": "346ea388c2e71b88d415e67331f6f1c5de4ee428e641e5159adccef0af382331",
+      "prompt_token_ids_sha256": "12d162f275d91cf035d93b6d9f598c1e91195266be1975c75fe93e99b3000938",
+      "prompt_tokens": 53684,
+      "seed": 42,
+      "free_run_tokens": 2048,
+      "free_run_trials": 1
+    },
+    {
+      "case_name": "anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.seed43.p5_downbf16_hifi4.cap2048",
+      "source_fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.cap2048.seed43.private.json",
+      "source_fixture_sha256": "f09f5493bf5e6d1f1bec5f5ce7e4273d0ec9352de1f85ffe780ef897063dec98",
+      "candidate_fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bf16-hifi4-seven-case-candidate/fixtures/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.cap2048.seed43.private.json",
+      "candidate_fixture_sha256": "f09f5493bf5e6d1f1bec5f5ce7e4273d0ec9352de1f85ffe780ef897063dec98",
+      "prompt_token_ids_sha256": "a4c9e18717ee53ddbf5ced65964c1f28ac089b26e6b489bd9aa52b303e021a45",
+      "prompt_tokens": 58982,
+      "seed": 43,
+      "free_run_tokens": 2048,
+      "free_run_trials": 1
+    },
+    {
+      "case_name": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed42.p5_downbf16_hifi4.cap1024",
+      "source_fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap1024.seed42.private.json",
+      "source_fixture_sha256": "b4253957ad89651510a0e39ea3aa49373926c9ff2d963a4ee381047b400efac8",
+      "candidate_fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bf16-hifi4-seven-case-candidate/fixtures/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap1024.seed42.private.json",
+      "candidate_fixture_sha256": "b4253957ad89651510a0e39ea3aa49373926c9ff2d963a4ee381047b400efac8",
+      "prompt_token_ids_sha256": "5e8c9025218ae22d2ae1491e4ff24e3aacdf82ad5d2985c6e2792168270c6808",
+      "prompt_tokens": 76441,
+      "seed": 42,
+      "free_run_tokens": 1024,
+      "free_run_trials": 1
+    },
+    {
+      "case_name": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed43.p5_downbf16_hifi4.cap2048",
+      "source_fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap2048.seed43.private.json",
+      "source_fixture_sha256": "e4c5081386cd785ccc1216dda888b4c54cc165beb80b035e96daf69c2f119718",
+      "candidate_fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bf16-hifi4-seven-case-candidate/fixtures/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap2048.seed43.private.json",
+      "candidate_fixture_sha256": "e4c5081386cd785ccc1216dda888b4c54cc165beb80b035e96daf69c2f119718",
+      "prompt_token_ids_sha256": "5e8c9025218ae22d2ae1491e4ff24e3aacdf82ad5d2985c6e2792168270c6808",
+      "prompt_tokens": 76441,
+      "seed": 43,
+      "free_run_tokens": 2048,
+      "free_run_trials": 1
+    },
+    {
+      "case_name": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed44.p5_downbf16_hifi4.cap1024",
+      "source_fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap1024.seed44.private.json",
+      "source_fixture_sha256": "7c5da63d138e6afa7b539dfed909ee1e8a937c2e168d587023c4421333688780",
+      "candidate_fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bf16-hifi4-seven-case-candidate/fixtures/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap1024.seed44.private.json",
+      "candidate_fixture_sha256": "7c5da63d138e6afa7b539dfed909ee1e8a937c2e168d587023c4421333688780",
+      "prompt_token_ids_sha256": "5e8c9025218ae22d2ae1491e4ff24e3aacdf82ad5d2985c6e2792168270c6808",
+      "prompt_tokens": 76441,
+      "seed": 44,
+      "free_run_tokens": 1024,
+      "free_run_trials": 1
+    },
+    {
+      "case_name": "anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.seed44.p5_downbf16_hifi4.cap1024",
+      "source_fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.cap1024.seed44.private.json",
+      "source_fixture_sha256": "14b67b9fcb8ad382713dff99ccb47922690bc5be90131e3adc25a195f3e712d3",
+      "candidate_fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bf16-hifi4-seven-case-candidate/fixtures/anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.cap1024.seed44.private.json",
+      "candidate_fixture_sha256": "14b67b9fcb8ad382713dff99ccb47922690bc5be90131e3adc25a195f3e712d3",
+      "prompt_token_ids_sha256": "7aaf88be1dd4df81aa4880bf0dd1741f94a99b241903c24f0def9fa78423479b",
+      "prompt_tokens": 47548,
+      "seed": 44,
+      "free_run_tokens": 1024,
+      "free_run_trials": 1
+    },
+    {
+      "case_name": "anomaly.sympy__sympy-14711.call1.onset.seed42.p5_downbf16_hifi4.cap256",
+      "source_fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-protocol-scan83-controls/sympy__sympy-14711.call1.onset.private.json",
+      "source_fixture_sha256": "30151a4ad6ba3f457477b50bbb7d8817b24944e8e57242c10b1f494f4697d6e5",
+      "candidate_fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bf16-hifi4-seven-case-candidate/fixtures/sympy__sympy-14711.call1.onset.private.json",
+      "candidate_fixture_sha256": "30151a4ad6ba3f457477b50bbb7d8817b24944e8e57242c10b1f494f4697d6e5",
+      "prompt_token_ids_sha256": "63b8b0d7bffacf896c9173a5d24ffd2d1f07b2ec57def9862e1936f66120b086",
+      "prompt_tokens": 1351,
+      "seed": 42,
+      "free_run_tokens": 256,
+      "free_run_trials": 1
+    }
+  ],
+  "p4_trials": [
+    {
+      "case_name": "anomaly.pytest-dev__pytest-5787.call65.onset.seed42.p5_downbf16_hifi4.cap2048",
+      "p4_case_name": "anomaly.pytest-dev__pytest-5787.call65.onset.seed42.p4_hifi2.cap2048",
+      "p4_result_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-hifi2-fourcase-followup-candidate/runs/down_bfp8_hifi2/anomaly.pytest-dev__pytest-5787.call65.onset.seed42.p4_hifi2.cap2048.json",
+      "p4_result_sha256": "162449658fe54c669afb25cca9334b1a981e626eeab21c54c59556b7d10af085",
+      "seed": 42,
+      "cap": 2048,
+      "generated_tokens": 129,
+      "diagnostic_total_wall_s": 31.20280715310946,
+      "decode_tokens": 128,
+      "decode_wall_s": 4.655783806927502,
+      "runtime_precision_sha256": "0a60051befab5563a3fa1c1a304470dbbf85bc0c5a801e19344de5f609941794",
+      "p4_runtime_config_id": "stage12_swe85_down_bfp8_hifi2_fourcase_followup"
+    },
+    {
+      "case_name": "anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.seed43.p5_downbf16_hifi4.cap2048",
+      "p4_case_name": "anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.seed43.p4_hifi2.cap2048",
+      "p4_result_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-hifi2-fourcase-followup-candidate/runs/down_bfp8_hifi2/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.seed43.p4_hifi2.cap2048.json",
+      "p4_result_sha256": "1d21fa373dd247458413bdb9929976e1594eef38d6757bef763645e35883d41e",
+      "seed": 43,
+      "cap": 2048,
+      "generated_tokens": 487,
+      "diagnostic_total_wall_s": 36.47136038984172,
+      "decode_tokens": 486,
+      "decode_wall_s": 17.914205041946843,
+      "runtime_precision_sha256": "0a60051befab5563a3fa1c1a304470dbbf85bc0c5a801e19344de5f609941794",
+      "p4_runtime_config_id": "stage12_swe85_down_bfp8_hifi2_fourcase_followup"
+    },
+    {
+      "case_name": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed42.p5_downbf16_hifi4.cap1024",
+      "p4_case_name": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed42.p4_hifi2.cap1024",
+      "p4_result_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-hifi2-fourcase-followup-candidate/runs/down_bfp8_hifi2/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed42.p4_hifi2.cap1024.json",
+      "p4_result_sha256": "5eec0d6a6c48779e2df1bebe9058032eb01dba8cabd073da6519a3535b94eb34",
+      "seed": 42,
+      "cap": 1024,
+      "generated_tokens": 558,
+      "diagnostic_total_wall_s": 48.99936493905261,
+      "decode_tokens": 557,
+      "decode_wall_s": 21.462420054944232,
+      "runtime_precision_sha256": "0a60051befab5563a3fa1c1a304470dbbf85bc0c5a801e19344de5f609941794",
+      "p4_runtime_config_id": "stage12_swe85_down_bfp8_hifi2_fourcase_followup"
+    },
+    {
+      "case_name": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed43.p5_downbf16_hifi4.cap2048",
+      "p4_case_name": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed43.p4_hifi2.cap2048",
+      "p4_result_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-hifi2-fourcase-followup-candidate/runs/down_bfp8_hifi2/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed43.p4_hifi2.cap2048.json",
+      "p4_result_sha256": "147eb5ccdd541a12b031042ce6ac93ce69d54b452c47a35037060e37c43d7b48",
+      "seed": 43,
+      "cap": 2048,
+      "generated_tokens": 1345,
+      "diagnostic_total_wall_s": 79.39935859595425,
+      "decode_tokens": 1344,
+      "decode_wall_s": 51.849993092007935,
+      "runtime_precision_sha256": "0a60051befab5563a3fa1c1a304470dbbf85bc0c5a801e19344de5f609941794",
+      "p4_runtime_config_id": "stage12_swe85_down_bfp8_hifi2_fourcase_followup"
+    },
+    {
+      "case_name": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed44.p5_downbf16_hifi4.cap1024",
+      "p4_case_name": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed44.p4_hifi2.cap1024",
+      "p4_result_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-hifi2-fourcase-followup-candidate/runs/down_bfp8_hifi2/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed44.p4_hifi2.cap1024.json",
+      "p4_result_sha256": "23b9652083db4c51708326a72510c5537c4c37c918ad575bcdb22a55f83aa264",
+      "seed": 44,
+      "cap": 1024,
+      "generated_tokens": 669,
+      "diagnostic_total_wall_s": 53.303603573003784,
+      "decode_tokens": 668,
+      "decode_wall_s": 25.743254374945536,
+      "runtime_precision_sha256": "0a60051befab5563a3fa1c1a304470dbbf85bc0c5a801e19344de5f609941794",
+      "p4_runtime_config_id": "stage12_swe85_down_bfp8_hifi2_fourcase_followup"
+    },
+    {
+      "case_name": "anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.seed44.p5_downbf16_hifi4.cap1024",
+      "p4_case_name": "anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.seed44.p4_hifi2.cap1024",
+      "p4_result_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-hifi2-fourcase-followup-candidate/runs/down_bfp8_hifi2/anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.seed44.p4_hifi2.cap1024.json",
+      "p4_result_sha256": "dd387b3bdbae320bbcc409a57b7322929c646a13e8d65521adf7df88d30c06e8",
+      "seed": 44,
+      "cap": 1024,
+      "generated_tokens": 1024,
+      "diagnostic_total_wall_s": 50.480610717087984,
+      "decode_tokens": 1023,
+      "decode_wall_s": 36.658705934882164,
+      "runtime_precision_sha256": "0a60051befab5563a3fa1c1a304470dbbf85bc0c5a801e19344de5f609941794",
+      "p4_runtime_config_id": "stage12_swe85_down_bfp8_hifi2_fourcase_followup"
+    },
+    {
+      "case_name": "anomaly.sympy__sympy-14711.call1.onset.seed42.p5_downbf16_hifi4.cap256",
+      "p4_case_name": "anomaly.sympy__sympy-14711.call1.onset.seed42.p4_hifi2.cap256",
+      "p4_result_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-hifi2-fourcase-followup-candidate/runs/down_bfp8_hifi2/anomaly.sympy__sympy-14711.call1.onset.seed42.p4_hifi2.cap256.json",
+      "p4_result_sha256": "d870b3c78d4e64f6dcbb27c612821e9d7bddf9a33972545aedf1df4a89d69b33",
+      "seed": 42,
+      "cap": 256,
+      "generated_tokens": 256,
+      "diagnostic_total_wall_s": 8.301997623872012,
+      "decode_tokens": 255,
+      "decode_wall_s": 8.011239839019254,
+      "runtime_precision_sha256": "0a60051befab5563a3fa1c1a304470dbbf85bc0c5a801e19344de5f609941794",
+      "p4_runtime_config_id": "stage12_swe85_down_bfp8_hifi2_fourcase_followup"
+    }
+  ],
+  "candidate_command_sha256": "16999999bd3af479148cbc84c5f08a07c7530cb9345bb11353fdd47ac3ebee38",
+  "candidate_forecast_sha256": "26cd68fb0c4c11486638fd4a30ce7407df82f87453ba8f068a0ef43398c21964",
+  "candidate_cases_sha256": "c6833471127da15aa28a4c87901d7beac9f3e1b51b85dd6379d163f0a796f5f6",
+  "candidate_build_kwargs_sha256": "f9ff7e5940d8bafb778d5a73ba7321758c1045416a71fd4ef6b693f65aaa6057",
+  "status_note": "Private fixture copies only; P4 output artifacts are referenced by path/hash and were not copied."
+}

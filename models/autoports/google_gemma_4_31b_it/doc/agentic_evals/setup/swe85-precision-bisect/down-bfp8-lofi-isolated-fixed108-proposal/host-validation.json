@@ -1,0 +1,39 @@
+{
+  "status": "host_validate_only_passed_no_ttnn_import_or_device",
+  "validation_result": {
+    "admission_present": false,
+    "caps": {
+      "1024": 22,
+      "2048": 6,
+      "256": 72,
+      "4096": 1,
+      "512": 7
+    },
+    "jobs": 108,
+    "seeds": [
+      42,
+      43,
+      44
+    ],
+    "source_count": 59,
+    "status": "host_static_validation_passed_no_ttnn_import",
+    "stop_present": true,
+    "unique_cases": 36
+  },
+  "driver_sha256": "b813686bfbb4a5c18326d404999f1ff71c33ce560d9a07011e992b26c27c85b2",
+  "command": [
+    "python",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/run_serial_candidate.py",
+    "--validate-only"
+  ],
+  "exit_code": 0,
+  "checks": [
+    "108 manifest jobs, 36 targets x seeds42/43/44",
+    "candidate build kwargs resolve to down-only candidate precision config",
+    "exact precision delta only down changes",
+    "all59 source inventory hashes verified",
+    "STOP_BEFORE_LAUNCH present",
+    "admission.json absent",
+    "no inference command executed"
+  ]
+}

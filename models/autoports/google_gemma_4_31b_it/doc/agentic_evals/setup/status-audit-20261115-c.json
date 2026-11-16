@@ -1,0 +1,119 @@
+{
+  "status": "read_only_canonical_status_audit",
+  "scope": "Compared current results.json, learned.json and REPORT.md with completed compact control records through HF9 group 7; group 8 was live at snapshot. AB actual-branch probe is prepared only. No edits to canonical files, frozen proposals, inference, or device access.",
+  "snapshot": {
+    "canonical_hashes": {
+      "results.json": "40fc82cc3c46b737e37123593bac876694d565cfc25ce57a0e52470887c7c1da",
+      "learned.json": "fdaf6277530036eccc53b53c886f559fadf7d5f1cbaf17b7bedc098a0052bfe8",
+      "REPORT.md": "c971df31642ad02ed72a93b45d4856a6e95af693645b4fe12da99d133b3c61be"
+    },
+    "hf9_admission_sha256": "74640276fdf5e463fa968d5d188994622759df96f09d4f408e02712b7d09ae66",
+    "hf9_progress_sha256": "14535d002de3095a013cd47863badbffae56b0f1ca535b386a819bdc5d48efd9",
+    "hf9_group7_status": "completed",
+    "hf9_group7_completion_sha256": "67edd55881ada416e6e9ebcc37a907228b80d8d438fc2b4bfcc5ac47116e84f3",
+    "hf9_group7_root_review_present": false,
+    "hf9_group8_status": "running",
+    "hf9_group8_launch_sha256": "9ff71424e76c317cf17c67bc20fd6fc1b78bfd6dc2c4277402541435c910b6e1",
+    "hf9_group8_completion_sha256": null,
+    "hf9_counts": {
+      "completed_cases": 8,
+      "total_cases": 9,
+      "completed_groups": 7,
+      "total_groups": 8,
+      "active_group": 8
+    },
+    "corrected_sklearn512_root_review_sha256": "777d1a61090d8b827c76fc905b1a884b58270613d976c5eed73d8a41c2319151",
+    "corrected_sklearn512_root_review_status": "completed_root_reviewed",
+    "ab_probe_status": "candidate_only_not_admitted_not_run",
+    "ab_probe_proposal_sha256": "e71c9f3c4bf150b2989bf99480c1c84a8ca0bbc939e6953d05856ee64bc73ceb"
+  },
+  "findings": [
+    {
+      "id": "results_pipeline_sklearn_suffix512_stale",
+      "severity": "factual_correction",
+      "target": {
+        "file": "results.json",
+        "json_pointer": "/pipeline/extended",
+        "line": 8822
+      },
+      "current_claim": "Matched Sklearn suffix512 test prepared, not run.",
+      "evidence": "The corrected selected-BFP8 suffix512 arm completed and has a root review; learned.json records 3 samples (2 native, 1 other), verified runtime precision, wall 201.280288s, forecast 160–300s and no score/policy change.",
+      "evidence_path": "setup/swe85-conditional-hf/sklearn13135-suffix512-head-bfp8-correction/root-review.json",
+      "proposed_replacement": "Corrected selected-BFP8 Sklearn suffix512 served arm completed/root-reviewed (2 native-pattern, 1 other); the initial mislabeled BFP4 arm is preserved as historical extra comparison. No score/policy change."
+    },
+    {
+      "id": "results_duplicate_sklearn_suffix512_stale",
+      "severity": "factual_correction",
+      "target_fields": [
+        {
+          "file": "results.json",
+          "json_pointer": "/anomalies/4/test",
+          "line": 8704
+        },
+        {
+          "file": "results.json",
+          "json_pointer": "/anomalies/4/changed",
+          "line": 8732
+        }
+      ],
+      "current_claim": "Matched Sklearn suffix512 test prepared, not run.",
+      "evidence": "Same completed correction record as above; neighboring current anomaly object /anomalies/3 already says selected-BFP8 suffix512 and suffix1024 controls are complete.",
+      "proposed_replacement": "Same factual replacement as results.json /pipeline/extended; alternatively label /anomalies/4 as a historical checkpoint and point to current /anomalies/3."
+    },
+    {
+      "id": "results_duplicate_hf_measurement_status_stale",
+      "severity": "factual_correction",
+      "target": {
+        "file": "results.json",
+        "json_pointer": "/anomalies/4/missing_reasons/measurements",
+        "line": 8735
+      },
+      "current_claim": "No authorized conditional HF comparison completed; fresh nine-case/eight-group proposal is prepared but unadmitted.",
+      "evidence": "HF9 is admitted (admission 74640276…). Groups 1–7 are completed, eight of nine cases have results, group 8 is running. Group 7 completion SHA is recorded; its root group-review file is still absent. Group 8 has a launch SHA but no completion/result yet.",
+      "evidence_paths": [
+        "setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/progress.json",
+        "setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/launch-group-07.json",
+        "setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/completion-group-07.json"
+      ],
+      "proposed_replacement": "The admitted nine-case/eight-group HF9 batch has completed groups1–7 (8/9 cases); group8 is live. Group7 semantic/root review remains pending, and the Requests5414 call11 suffix2048 result stopped progressing at512, so its separately prepared cap1024 extension remains pending. Earlier accidental validation attempts remain excluded; their separate partial incident artifact is not a completed result. Precision selection remains open."
+    },
+    {
+      "id": "report_probe_verb_tense",
+      "severity": "minor_status_refresh",
+      "target": {
+        "file": "REPORT.md",
+        "line": 70,
+        "approximate_text": "a sequence-matched logit probe is being prepared"
+      },
+      "current_claim": "Probe is being prepared.",
+      "evidence": "The candidate proposal and branch provenance are now saved, source-pinned, and reviewed. Proposal status remains candidate_only_not_admitted_not_run; no output artifacts exist.",
+      "evidence_path": "setup/swe85-loop-branch-investigation/actual-branch-logits/proposal.json",
+      "proposed_replacement": "A sequence-matched logit probe is prepared as an unadmitted, unrun candidate."
+    }
+  ],
+  "claims_checked_no_correction_needed": [
+    {
+      "claim": "REPORT.md says full-precision decisive-branch agreement does not rule out precision drift; the precision-panel summaries reject both tested fixed108 policies and retain 14/15 target pairs anomalous.",
+      "evidence": "REPORT.md:40,68; results.json /anomalies/3 and P2 completion/review records.",
+      "assessment": "Accurately qualified; no statement that precision was ruled out."
+    },
+    {
+      "claim": "REPORT.md says Requests5414 call11 at cap512 is progressing and cap1024 extension is prepared/required before adjudication.",
+      "evidence": "HF9 group4 result is 512 tokens and status inconclusive/progressing; separate cap1024 candidate has no execution result.",
+      "assessment": "Still current; extension has not run because HF9 primary batch is not terminal."
+    },
+    {
+      "claim": "HF9 group8 is running and group7 semantic review is pending.",
+      "evidence": "progress.json group7 completed, root-group-07-review absent; group8 running with launch and no completion.",
+      "assessment": "Current. The primary batch is not complete."
+    }
+  ],
+  "remaining_final_stage_review_and_report_requirements": [
+    "Finish HF9 group8, reconcile/semantically review its result, and perform group7 root review; resolve or explicitly retain the call11 cap1024 extension as open before final adjudication.",
+    "Decide and record disposition of additional prepared-but-unadmitted diagnostics (including the actual-branch logits candidate, Sklearn secondary-loop HF candidate and other-HF20 candidate) against remaining time; do not imply they ran.",
+    "Refresh canonical results.json, learned.json and REPORT.md to one consistent terminal snapshot after active diagnostics stop; preserve historical rows and explicit unanswered coverage.",
+    "Resolve the three SWE verifier unknowns or report final score bounds and their unresolved status; maintain the below-band no-pass conclusion if bounds remain below the reference band.",
+    "Complete the independent stage-12 review, verify final score/timing/accounting and artifact provenance, then commit stage-owned evidence locally. REPORT.md currently explicitly says final independent review and local evidence commits remain pending (line 18)."
+  ],
+  "not_a_final_stage_review": true
+}

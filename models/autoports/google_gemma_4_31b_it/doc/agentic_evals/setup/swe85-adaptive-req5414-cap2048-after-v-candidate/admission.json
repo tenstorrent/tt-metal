@@ -1,0 +1,8 @@
+{
+  "status": "admitted",
+  "proposal_sha256": "c401afb6134f7ef9f6aa0eb940938397bfcafb17c82a1525ca1af3a1d7a4e248",
+  "driver_sha256": "2da27ecc371f7861e506ae7b468c9b4249bedb50a6ef8f07c6aabeaebc4b2de6",
+  "note": "No execution until root explicitly admits after the pinned V package completes successfully; driver checks V admission/completion/queue hashes before each mode and device ownership.",
+  "admitted_unix": 1794721335.7474883,
+  "coordinator_review": "Root read driver/proposal, verified all source and manifest hashes; D independent review plus C per-mode predecessor-hash correction accepted. Two progressing cap1024 controls extend to2048; no score changes. V terminal zero prerequisite remains enforced."
+}

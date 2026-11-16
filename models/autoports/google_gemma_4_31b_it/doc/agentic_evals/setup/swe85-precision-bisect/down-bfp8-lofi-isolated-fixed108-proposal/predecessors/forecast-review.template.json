@@ -1,0 +1,13 @@
+{
+  "status": "pending_root_review",
+  "reviewer": "root",
+  "accepted": false,
+  "forecast_sha256": "516a0676a9535ddc9a1954740a4588c95a4e07630b47343920c8e68c1eb01cfa",
+  "forecast_range_seconds": [
+    2018.038988828659,
+    6457.7247642517095
+  ],
+  "timeout_seconds": 9000,
+  "uncertainty_acknowledged": true,
+  "p2_contention_excluded_from_speed_calibration": true
+}

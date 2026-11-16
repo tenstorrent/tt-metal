@@ -1,0 +1,12 @@
+{
+  "scripts": [
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_protocol83_full.py",
+      "sha256": "3d7cf1f3571d1b291350fad93cd7c5214b2df7812f621b85db3912d5668fc204"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_protocol83_onsets.py",
+      "sha256": "bd83d63e63b1fe97599e1d73353e24f026666b42cf5998a1bb5fe002d7e9302e"
+    }
+  ]
+}

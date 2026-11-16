@@ -1,0 +1,62 @@
+{
+  "command": [
+    "timeout",
+    "7200",
+    "env",
+    "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+    "READINESS_TRACE_REGION_SIZE=134217728",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+    "-m",
+    "models.autoports.google_gemma_4_31b_it.tools.precision_repro_batch",
+    "--cases",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-with-cap4096-pending-v-closure/candidate-cases.json",
+    "--build-kwargs-file",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-with-cap4096-pending-v-closure/head_bfp8_hifi2_build_kwargs.json",
+    "--output-dir",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2"
+  ],
+  "start_unix": 1794722012.4333591,
+  "admission_sha256": "91dc764e6a3a6b1e8a1be51e6eee5fc958c19d1dfcfa3d057b989aa325618cdd",
+  "w_hashes": {
+    "queue_sha256": "2594f66cde95f8abf610da3789227eaf2fc3f4255741faab2ad46a6e03c6198e",
+    "served_completion_sha256": "3f175c3c145309ab5e0224fe00128f1ea3db012d1c278d56b550e2ea7a01fc30",
+    "full_completion_sha256": "0d03333b568effd3c708110d50a87966c9b2574daadac62a61241e6b991ea08c"
+  },
+  "v_full_completion_sha256": "56ae2df18384155c16eb3a45416e46fda059ba8d334a6b7cc41362e5f04f245e",
+  "owner_preflight": [],
+  "active_hf_processes": [],
+  "forecast": {
+    "serial_order": [
+      "one_panel_batch"
+    ],
+    "timeout_seconds": 7200,
+    "command": [
+      "timeout",
+      "7200",
+      "env",
+      "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+      "READINESS_TRACE_REGION_SIZE=134217728",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tools.precision_repro_batch",
+      "--cases",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-with-cap4096-pending-v-closure/candidate-cases.json",
+      "--build-kwargs-file",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-with-cap4096-pending-v-closure/head_bfp8_hifi2_build_kwargs.json",
+      "--output-dir",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2"
+    ],
+    "output_dir": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2",
+    "forecast_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-with-cap4096-pending-v-closure/runtime-estimate.json",
+    "forecast_sha256": "8c675a31b77d38267e2acb34e14aad462aee13687aa169268cc8b331dc81fb4f",
+    "forecast_point_seconds": 3524.693107434766,
+    "forecast_range_seconds": [
+      2515.762556969247,
+      5878.864391854309
+    ],
+    "timeout_rationale": "7200 seconds exceeds forecast upper bound 5878.86 seconds with bounded headroom."
+  },
+  "end_unix": 1794724030.4723477,
+  "exit_code": 0,
+  "elapsed_seconds": 2018.038988828659
+}

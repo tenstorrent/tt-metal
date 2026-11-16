@@ -1,0 +1,7 @@
+{
+  "exit_code": 0,
+  "stdout": "Validated 6 jobs without importing TTNN\n",
+  "stderr": "",
+  "wall_seconds": 0.036258697509765625,
+  "scope": "stdlib-only case validation exits before TTNN/readiness/model imports; no model or hardware work"
+}

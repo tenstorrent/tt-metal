@@ -1,0 +1,83 @@
+{
+  "status": "completed",
+  "mode": "full",
+  "command": [
+    "timeout",
+    "600",
+    "env",
+    "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+    "READINESS_TRACE_REGION_SIZE=134217728",
+    "OMP_NUM_THREADS=16",
+    "MKL_NUM_THREADS=16",
+    "OPENBLAS_NUM_THREADS=16",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+    "-m",
+    "models.autoports.google_gemma_4_31b_it.tools.precision_repro_batch",
+    "--cases",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/full-cases.json",
+    "--build-kwargs-file",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_build_kwargs.json",
+    "--output-dir",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/runs/full"
+  ],
+  "started_unix": 1794727729.1050315,
+  "timeout_seconds": 600,
+  "candidate_admission_sha256": "32fe5e6ccf38aff945424de6b7f3c8e24a7a375cf6a806424bd1097e99bb6194",
+  "candidate_proposal_sha256": "afae82ad53bb768661d781d4da108b527ee0b1cd2f4f55cc23563b51fbf654e0",
+  "manifest_sha256": "10f582d0c77b4fa472bef0ab6c17535ddf2a5a288ffb6d3c2af34d89c3264e35",
+  "runner_sha256": "172f5a1dd7a7403847e47b966ae79c306163650a60211418c7c195794ec5c125",
+  "forecast": {
+    "point_seconds": 209.04,
+    "range_seconds": [
+      159.54,
+      276.54
+    ],
+    "timeout_seconds": 600
+  },
+  "predecessor_gates": {
+    "p2": {
+      "admission_sha256": "74bef162c97e23e882612eb85dae365f32c9da1f13ba4b9b8e1e1f8f582ad1be",
+      "completion_sha256": "47896893e57257757d1153dd3ae4df6b05985cd97b0fbb9993739e30145b2880",
+      "queue_sha256": "a3e38a94d97c827735d1f16a868b721dc669984ae26ef0ee42d0c5de2a847e86",
+      "forecast_status": "in_range",
+      "forecast_review_sha256": "5d27739c8f376feba9ce6fd76e96b37029be4467d32ced410d4504c72d60ea0b",
+      "elapsed_seconds": 2469.2918775081635,
+      "forecast_bounds_seconds": [
+        2018.038988828659,
+        5910.468657604884
+      ]
+    },
+    "sklearn": {
+      "review_sha256": "c015eb3bb495b92f047b6ae896e280c1fe3d64d8d2f89ea2437aa1a96f651748",
+      "status": "matched_TT_next_then_conditional_HF",
+      "hf_followup": "deferred_until_matched_TT"
+    },
+    "earlier_mode": {
+      "served_completion_sha256": "37340afd0077453ee24a913bc0ebe2ff8ddf6cd14c064a3231c3e213cd5dc7b3",
+      "served_launch_sha256": "a848bad3167a7f7fb86a87b0a97651f168728a8db905e1e362a6a3936e41a0f7",
+      "served_review_sha256": "a0d66429e3605aea05a70255f62eafc9fa6168601c418a971c8dda4a61f50815"
+    }
+  },
+  "active_hf_processes": [],
+  "device_owner_preflight": [],
+  "ended_unix": 1794727900.3425117,
+  "elapsed_seconds": 171.23748016357422,
+  "exit_code": 0,
+  "outputs": [
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/runs/full/anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix512.seed42.json",
+      "sha256": "81cf6fe18b20cfa30b0ddca5b839b9b8ebf57daf2a899708a84d91b3b1523d2b",
+      "free_run_tokens": 512
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/runs/full/anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix512.seed43.json",
+      "sha256": "548b687b902b17b31e874b20054976ea4ca45c0b3c8ecf2ca989885ff8f2f516",
+      "free_run_tokens": 512
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/runs/full/anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix512.seed44.json",
+      "sha256": "bc216e065f572ac48d7dc800a72bb73cdcd037e73c7eb50ed88857d2fd4026d5",
+      "free_run_tokens": 85
+    }
+  ]
+}

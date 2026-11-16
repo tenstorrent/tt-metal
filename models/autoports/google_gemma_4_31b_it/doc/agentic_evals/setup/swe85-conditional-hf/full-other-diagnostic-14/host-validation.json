@@ -1,0 +1,65 @@
+{
+  "status": "host_static_validation_passed_no_runner_invocation",
+  "groups": [
+    {
+      "manifest": "manifests/seed42-cap512.json",
+      "count": 4,
+      "seed": 42,
+      "cap": 512,
+      "valid": true
+    },
+    {
+      "manifest": "manifests/seed42-cap1024.json",
+      "count": 1,
+      "seed": 42,
+      "cap": 1024,
+      "valid": true
+    },
+    {
+      "manifest": "manifests/seed42-cap2048.json",
+      "count": 1,
+      "seed": 42,
+      "cap": 2048,
+      "valid": true
+    },
+    {
+      "manifest": "manifests/seed43-cap512.json",
+      "count": 1,
+      "seed": 43,
+      "cap": 512,
+      "valid": true
+    },
+    {
+      "manifest": "manifests/seed43-cap1024.json",
+      "count": 3,
+      "seed": 43,
+      "cap": 1024,
+      "valid": true
+    },
+    {
+      "manifest": "manifests/seed44-cap512.json",
+      "count": 2,
+      "seed": 44,
+      "cap": 512,
+      "valid": true
+    },
+    {
+      "manifest": "manifests/seed44-cap1024.json",
+      "count": 1,
+      "seed": 44,
+      "cap": 1024,
+      "valid": true
+    },
+    {
+      "manifest": "manifests/seed44-cap2048.json",
+      "count": 1,
+      "seed": 44,
+      "cap": 2048,
+      "valid": true
+    }
+  ],
+  "case_count": 14,
+  "unique_result_files": 14,
+  "prompt_ids_counts_hashes_seed_cap_rechecked": true,
+  "commands_executed": false
+}

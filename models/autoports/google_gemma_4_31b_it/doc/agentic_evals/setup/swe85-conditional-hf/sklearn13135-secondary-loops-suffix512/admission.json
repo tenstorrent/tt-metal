@@ -1,0 +1,17 @@
+{
+  "status": "candidate_only_not_admitted",
+  "execution_authority": "root_owned_no_execute_until_root_explicitly_admits_this_exact_candidate",
+  "proposal_sha256": "15763a149c580625a2072ca21e9bb207adf2d45c3dbbc7bc9ba0544fa2232cea",
+  "commands_sha256": "da56b1dc1b49e51d5d51a19a293b164f884e251132f17669b2d9cfc38413834d",
+  "source_integrity_sha256": "c18763ca1f32802cd63e7654f85f15ee24f44aa39008a0eba06971d7b9f178ec",
+  "forecast_sha256": "e5962ee880ae51627e85dda1610342bef8155556850211846424ee473054504b",
+  "runner_sha256": "dc604d7f6c7e71785f163c5bf85dbb1cae07fa35a05787428a53670e83259e47",
+  "manifest_sha256s": {
+    "secondary-loop-seed42.json": "e9ef583e1c26d77bd0366884bea508151df2f13498e9bc7e41fd378a571f8621",
+    "secondary-loop-seed43.json": "aa1e3a75676a80f0754db46a90e3e4d8f05c8589f156496108ff9551b742e85b"
+  },
+  "driver_sha256": "ae085eb32cb96a9e5b6f96ea4f41c284968a6999a7f59af46e97208e00d706d9",
+  "supersedes_admission_sha256": "4fc2b351911c051a6d40e2911f9dea35639444ff8b510157d1cd040d292ca089",
+  "supersedes_admission_path": "before-identity-guard-repin/admission.json",
+  "note": "The prior admission pins the pre-identity-guard runner and does not authorize current execution. Root must readmit this exact source-repinned candidate."
+}

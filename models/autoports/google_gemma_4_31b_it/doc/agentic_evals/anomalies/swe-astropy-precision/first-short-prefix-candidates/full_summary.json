@@ -1,0 +1,65 @@
+{
+  "regime": "Accuracy only; concurrent CPU HF and Docker builds. Timing invalid for performance ranking.",
+  "cases": [
+    {
+      "case": "astropy.first.suffix2048",
+      "trials": [
+        {
+          "seed": 42,
+          "tokens": 1024,
+          "flag": false,
+          "tail_zlib_ratio": 0.05157936825269892,
+          "tail_distinct_chars": 28,
+          "most_repeated_paragraph_count": 61
+        },
+        {
+          "seed": 43,
+          "tokens": 1024,
+          "flag": false,
+          "tail_zlib_ratio": 0.07395394096659098,
+          "tail_distinct_chars": 41,
+          "most_repeated_paragraph_count": 41
+        },
+        {
+          "seed": 44,
+          "tokens": 1024,
+          "flag": false,
+          "tail_zlib_ratio": 0.09555189456342669,
+          "tail_distinct_chars": 45,
+          "most_repeated_paragraph_count": 8
+        }
+      ],
+      "semantic_review": "All three loop: seed42 repeats mock-use61 times,43 repeats line-check/promise41 times,44 repeats same edit/reproduction/mock cycle7\u20138 times. Automated flags miss all three."
+    },
+    {
+      "case": "astropy.first.suffix512",
+      "trials": [
+        {
+          "seed": 42,
+          "tokens": 1024,
+          "flag": false,
+          "tail_zlib_ratio": 0.08973956699090054,
+          "tail_distinct_chars": 43,
+          "most_repeated_paragraph_count": 12
+        },
+        {
+          "seed": 43,
+          "tokens": 1024,
+          "flag": false,
+          "tail_zlib_ratio": 0.060474440360841965,
+          "tail_distinct_chars": 36,
+          "most_repeated_paragraph_count": 13
+        },
+        {
+          "seed": 44,
+          "tokens": 1024,
+          "flag": false,
+          "tail_zlib_ratio": 0.12172056131787676,
+          "tail_distinct_chars": 47,
+          "most_repeated_paragraph_count": 4
+        }
+      ],
+      "semantic_review": "All three loop without executing actions. Seed42 repeats sed-edit/line-check cycle6 times,43 repeats inspection/promise cycle12\u201313 times,44 repeats same mock-code/promise block4 times."
+    }
+  ]
+}

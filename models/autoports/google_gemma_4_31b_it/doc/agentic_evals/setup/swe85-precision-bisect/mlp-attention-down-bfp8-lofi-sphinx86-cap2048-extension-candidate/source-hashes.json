@@ -1,0 +1,20 @@
+{
+  "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/candidate-cases.json": "57193e4b91af3a31df00f0c92dbc0f2219fbce011e6533594e5244a93a3021ed",
+  "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/mlp-attention-down-bfp8-lofi-eleven-case-candidate/completion.json": "6845b271a9c40b32a861dfd65fb35e5eb0ca1cfab0b11a380d006eb319e4d1d5",
+  "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/mlp-attention-down-bfp8-lofi-eleven-case-candidate/mlp_attention_down_bfp8_lofi_precision.json": "de46de8e771defadd786ab8207308fcc3609b15bac144c662dadc20a6d9e343f",
+  "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/mlp-attention-down-bfp8-lofi-eleven-case-candidate/runs/mlp_attention_down_bfp8_lofi/anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.seed44.p8_mlp_bfp8_lofi.cap1024.json": "243a04538d770183f966af2758363e396b1cdd9679b666e06f37bb42025e9f1c",
+  "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/mlp-attention-down-bfp8-lofi-eleven-case-candidate/runs/mlp_attention_down_bfp8_lofi/load.json": "fd83f5e0445667a2559633f2e4e089707d11b7e6067bdbf8692cc11126b88e9b",
+  "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/mlp-attention-down-bfp8-lofi-sphinx86-cap2048-extension-candidate/README.md": "c77323af10f246f90b0244cfefc30baa4063bec4f9bc9da5b825047ecc36f8bc",
+  "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/mlp-attention-down-bfp8-lofi-sphinx86-cap2048-extension-candidate/anchor-validation.json": "25d835b58b8484f7b8c759675f7a2151354322ab11deca403c5c5b314013e1f7",
+  "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/mlp-attention-down-bfp8-lofi-sphinx86-cap2048-extension-candidate/candidate-cases.json": "7217409733e0163a4aaaaa172186d6ac438e281048243cf4613c706dc3f26f3c",
+  "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/mlp-attention-down-bfp8-lofi-sphinx86-cap2048-extension-candidate/command.json": "72e9b75973c0c62103271cedd680737c27538dd72dc3020de45bc551bab2e245",
+  "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/mlp-attention-down-bfp8-lofi-sphinx86-cap2048-extension-candidate/forecast.json": "12f7c0453f308c82893e5c2670d7b39d305ef37ffb864b9afb82c38b918212b7",
+  "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/mlp-attention-down-bfp8-lofi-sphinx86-cap2048-extension-candidate/mlp_attention_down_bfp8_lofi_build_kwargs.json": "054a3b59de9f4b12339356733c624157183ebd3b260ddcea13ae093107cced62",
+  "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/mlp-attention-down-bfp8-lofi-sphinx86-cap2048-extension-candidate/mlp_attention_down_bfp8_lofi_precision.json": "de46de8e771defadd786ab8207308fcc3609b15bac144c662dadc20a6d9e343f",
+  "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/mlp-attention-down-bfp8-lofi-sphinx86-cap2048-extension-candidate/provenance.json": "daf0aef2f17da3bfd36b7b023db6ab2afce2ae620fa4aca60afbb751e0efbd4b",
+  "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.cap1024.seed44.private.json": "14b67b9fcb8ad382713dff99ccb47922690bc5be90131e3adc25a195f3e712d3",
+  "models/autoports/google_gemma_4_31b_it/tools/precision_repro_batch.py": "172f5a1dd7a7403847e47b966ae79c306163650a60211418c7c195794ec5c125",
+  "models/autoports/google_gemma_4_31b_it/tt/model.py": "c65ed33bb175f63603946eea561a2623cad0b70521428bdf888bd9445457a01e",
+  "models/autoports/google_gemma_4_31b_it/tt/multichip_decoder.py": "c7a4cb14edfe46649b904c0fbb6f3fec14e123e194b31950adfa76c224d201f6",
+  "models/autoports/google_gemma_4_31b_it/tt/precision.py": "2f223a118fe713677b9ce4fb3beb2f563e26af56ef45a98b2e03fad1e25664a9"
+}

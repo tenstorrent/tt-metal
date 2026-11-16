@@ -1,0 +1,18 @@
+# P3 ready-to-admit checklist (host-only)
+
+P3 remains unadmitted. Its fixed108 candidate passes `run_serial_candidate.py --validate-only`: 36 targets × seeds 42/43/44, 59 current source pins, STOP present, no admission, and no TTNN import. The policy delta remains down BFP4 LoFi → BFP8 LoFi only.
+
+The old `root-gate-preparation-d.json` and P3 `root-static-review.json` are stale about H9 still running. H9 is now terminal: `revision-adaptive-expanded-call91-8192-reviewed/progress.json` is `all_groups_completed` (SHA `4a936342…`), with accepted root terminal review at `root-terminal-review.json` (SHA `e7109b54…`) binding all eight groups and outputs. Do not rerun H9. P3 still needs its own `predecessors/h9-terminal-review.json`, because `check_sk_serial()` requires that record to bind the H9 hashes to the final SK evidence map.
+
+The short SK evidence is complete and pinned: corrected selected-BFP8 suffix512 (`sklearn13135-suffix512-head-bfp8-correction`, root-reviewed: 2 native contraction-family rows and 1 other); original BF16 suffix512 full arm; and matched suffix1024 served/full (`sklearn13135-missingtool-suffix1024`, root/independent triage reconciled). The suffix1024 full rows ended naturally at 55–63 tokens and did not reach the original missing-tool onset around generated token 665.
+
+The separate suffix2048/cap1024 candidate is **not** a P3 prerequisite in the current P3 manifest or `check_sk_serial()` evidence map. P3 itself includes the original 17,395-token SK prompt at cap1024 for seed42. If root wants the standalone suffix2048 test first, its static review is candidate-only and its `predecessors/serial-hf-clearance.json` is absent; the clearance template requires both primary H9 and the two-case SK secondary HF batch to be root-reviewed complete. H9 is satisfied; the secondary HF batch (`sklearn13135-secondary-loops-suffix512`) is admitted but has no execution outputs/review. Those suffix512 loop controls are separate shortened-input observations, not the original missing-tool onset. Root should explicitly decide whether to run them or defer them; do not treat H9’s completed status as SK-specific HF evidence.
+
+Before P3 admission, root should:
+
+1. Reconcile the existing SK map in `predecessors/sklearn-serial-review.json` (`status=sk_evidence_root_reviewed`, `reviewer=root`, `accepted=true`, exact `sk_evidence_sha256` map from `check_sk_serial()`). Keep its scope clear: suffix512/1024 short controls do not establish the original onset.
+2. Write `predecessors/hf-followup-decision.json` bound to that exact map. `decision=not_required` needs an explicit reason; `decision=completed` needs the accepted, hash-bound HF evidence package and root output review. The admitted secondary-loop candidate alone is not completion evidence.
+3. Write `predecessors/h9-terminal-review.json` with `status=completed_root_reviewed`, `reviewer=root`, `accepted=true`, `admission_sha256`, `progress_sha256`, exact `launch_sha256`, `completion_sha256`, and `output_sha256` maps, plus the same `sk_evidence_sha256`.
+4. Write the accepted `predecessors/forecast-review.json` with the frozen forecast hash/range, uncertainty acknowledgement, and P2 contention excluded from speed calibration; then create root admission over the reviewed candidate hashes. Keep STOP until admission.
+
+If root makes standalone SK suffix2048 a required predecessor, revise and rereview P3’s evidence inventory/gate before admission; those results are not among its current 59 source pins. Otherwise the current P3 panel is the direct full-prompt follow-up and no source or policy edits are needed. This checklist creates no gate, admission, or execution authority.

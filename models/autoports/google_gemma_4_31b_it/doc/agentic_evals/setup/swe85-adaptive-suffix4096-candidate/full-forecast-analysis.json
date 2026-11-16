@@ -1,0 +1,506 @@
+{
+  "status": "host_only_runtime_forecast_analysis_no_admission_no_score_decision",
+  "scope": "Compare frozen V full-mode planning forecast with completed full batch actual wall, model load, trace preparation, per-case teacher-forcing and free-run diagnostic timers, generated-token counts, and replay counters. No TTNN import/device work occurred in this analysis.",
+  "sources": {
+    "full-completion.json": "56ae2df18384155c16eb3a45416e46fda059ba8d334a6b7cc41362e5f04f245e",
+    "forecast.json": "901d3288842d7bf9a4b7b6dd71016bc5b7d02d1579dfc320a92e5129aaecd10e",
+    "full-launch.json": "1004c96ace5c914c9fce381db44ac1b0bf9a46f3b8a3d52c518cdb29dc3806b7",
+    "full.log": "e4418dca9c91839260ced9cefe2f2f02d874eb83178458941b905fe3b1b31932",
+    "full-cases.json": "b734dfb2e5e822b1eff8f01b82d2ead1a785b37cc30db5ce76811341bbb0eca5",
+    "runs/full/load.json": "344ce5eba8fdafebade63d23e140c3634e163d3c090222b9f794936fdbbad899",
+    "full-coordinator-requests10.json": "7c65b43e8bfd090a6d447e55c2e6ebb569d17f73db7654cfc8cf82e4f839a8fe",
+    "full-coordinator-other9.json": "3043aa466609199a90ed635a84a2607404e4f07b434268f23d34af383781aeea",
+    "full-coordinator-pytest-cap4096.json": "d6511e92c8c7ca51771794210c4ec5fd87d9af27b5857427df753b605607c8a2"
+  },
+  "forecast_vs_outer_wall": {
+    "jobs": 13,
+    "forecast_point_s": 845.0943469400173,
+    "forecast_range_s": [
+      618.4852846243643,
+      2160.9194427483762
+    ],
+    "actual_outer_measured_s": 549.9559595584869,
+    "actual_minus_forecast_point_s": -295.1383873815304,
+    "actual_minus_forecast_low_s": -68.5293250658774,
+    "percent_below_forecast_low": 11.080186832173142,
+    "exit_code": 0
+  },
+  "fixed_cost": {
+    "forecast_load_s": 77.36976773384959,
+    "actual_load_s": 77.52210676879622,
+    "forecast_trace_preparation_proxy_s": 12.361038153991103,
+    "actual_trace_preparation_event_s": 12.195039473008364,
+    "forecast_fixed_sum_s": 89.73080588784069,
+    "actual_load_plus_traceprep_s": 89.71714624180458,
+    "actual_minus_forecast_s": -0.013659646036103368
+  },
+  "matched_12_case_breakdown": {
+    "prompt_group": "12 suffix4096 rows across Requests call10, Mpl call86, canonical call91, Sphinx call70, seeds42-44",
+    "teacher_forcing": {
+      "positions_actual": 687,
+      "actual_wall_s": 72.45460352790542,
+      "forecast_wall_s": 176.45093471085607,
+      "actual_positions_per_s": 9.481799175609407,
+      "forecast_positions_per_s": 3.893433611591589
+    },
+    "free_run": {
+      "actual_generated_tokens_including_first": 3392,
+      "actual_decode_replays": 3380,
+      "actual_wall_including_prefill_and_text_decode_s": 215.47385240043513,
+      "actual_decode_wall_excluding_prefill_and_text_decode_s": 199.2994414526038,
+      "actual_prefill_plus_text_decode_residual_s": 16.174410947831348,
+      "forecast_wall_s": 284.30749665833105,
+      "forecast_decode_component_s": 268.4433156073003,
+      "forecast_prefill_component_s": 15.864181051030755,
+      "actual_token_stop_vs_suffix2048_source": {
+        "longer": 7,
+        "shorter": 3,
+        "same": 2,
+        "matched_source_actual_lengths": [
+          {
+            "name": "anomaly.call91.canonicalprefix.suffix4096.seed42",
+            "actual_generated_tokens": 39,
+            "suffix2048_source_generated_tokens": 208
+          },
+          {
+            "name": "anomaly.call91.canonicalprefix.suffix4096.seed43",
+            "actual_generated_tokens": 148,
+            "suffix2048_source_generated_tokens": 200
+          },
+          {
+            "name": "anomaly.call91.canonicalprefix.suffix4096.seed44",
+            "actual_generated_tokens": 264,
+            "suffix2048_source_generated_tokens": 37
+          },
+          {
+            "name": "anomaly.matplotlib__matplotlib-20488.call86.onset.suffix4096.seed42",
+            "actual_generated_tokens": 137,
+            "suffix2048_source_generated_tokens": 65
+          },
+          {
+            "name": "anomaly.matplotlib__matplotlib-20488.call86.onset.suffix4096.seed43",
+            "actual_generated_tokens": 512,
+            "suffix2048_source_generated_tokens": 102
+          },
+          {
+            "name": "anomaly.matplotlib__matplotlib-20488.call86.onset.suffix4096.seed44",
+            "actual_generated_tokens": 69,
+            "suffix2048_source_generated_tokens": 67
+          },
+          {
+            "name": "anomaly.psf__requests-5414.call10.onset.suffix4096.seed42",
+            "actual_generated_tokens": 512,
+            "suffix2048_source_generated_tokens": 500
+          },
+          {
+            "name": "anomaly.psf__requests-5414.call10.onset.suffix4096.seed43",
+            "actual_generated_tokens": 512,
+            "suffix2048_source_generated_tokens": 512
+          },
+          {
+            "name": "anomaly.psf__requests-5414.call10.onset.suffix4096.seed44",
+            "actual_generated_tokens": 512,
+            "suffix2048_source_generated_tokens": 512
+          },
+          {
+            "name": "anomaly.sphinx-doc__sphinx-10323.call70.onset.suffix4096.seed42",
+            "actual_generated_tokens": 73,
+            "suffix2048_source_generated_tokens": 89
+          },
+          {
+            "name": "anomaly.sphinx-doc__sphinx-10323.call70.onset.suffix4096.seed43",
+            "actual_generated_tokens": 102,
+            "suffix2048_source_generated_tokens": 52
+          },
+          {
+            "name": "anomaly.sphinx-doc__sphinx-10323.call70.onset.suffix4096.seed44",
+            "actual_generated_tokens": 512,
+            "suffix2048_source_generated_tokens": 50
+          }
+        ]
+      }
+    },
+    "combined_actual_tf_plus_free_wall_s": 287.92845592834055,
+    "combined_forecast_variable_wall_s": 460.75843136918706,
+    "combined_actual_minus_forecast_s": -172.8299754408465
+  },
+  "merged_cap4096_case": {
+    "name": "anomaly.pytest-dev__pytest-5787.call65.onset.cap4096.seed44",
+    "generated_tokens_including_first": 2380,
+    "requested_free_run_cap": 4096,
+    "decode_replays": 2379,
+    "decoded_tokens_per_second": 15.591331680578309,
+    "actual_free_wall_including_prefill_and_text_decode_s": 179.61782027198933,
+    "actual_decode_wall_s_excluding_prefill_and_text_decode": 152.58478549099527,
+    "forecast_source_replays": 2047,
+    "forecast_projected_replays": 4095,
+    "forecast_projected_variable_work_s": 294.60510968298956,
+    "actual_minus_forecast_s": -114.98728941100023,
+    "semantic_review": "root full-coordinator-pytest-cap4096.json verdict normal; runtime analysis does not make score/admission decisions"
+  },
+  "all_case_token_and_timer_totals": {
+    "generated_tokens_including_first": 5772,
+    "decode_replays": 5759,
+    "free_wall_including_prefill_and_text_decode_s": 395.09167267242447,
+    "decode_wall_excluding_prefill_and_text_decode_s": 351.88422694359906,
+    "chosen_teacher_forcing_positions": 687,
+    "chosen_teacher_forcing_wall_s": 72.45460352790542,
+    "sum_per_case_diagnostic_total_s": 467.5893551686313,
+    "outer_wall_minus_load_prep_and_case_timer_sum_s": -7.350541851948947,
+    "timer_caveat": "Load, trace-preparation, per-case diagnostic, and outer-process timers have independently defined boundaries and are not exactly additive; the per-case diagnostic sum plus load/preparation exceeds outer wall by the recorded residual."
+  },
+  "trace_counter_validation": {
+    "every_free_run_row_model_replays_equals_decode_replays": true,
+    "every_free_run_row_sample_replays_equals_decode_replays": true,
+    "every_free_run_row_readbacks_equals_decode_replays": true,
+    "all_captures_zero": true,
+    "all_refresh_deltas_zero": true,
+    "all_13_rows": true
+  },
+  "interpretation": "The point estimate missed by 295.14 s; the observed work components explain most of this: on the 12 matched rows the forecast projected 176.45 s of 64-position teacher forcing versus 72.45 s measured, and 284.31 s of free-run work versus 215.47 s measured. The separate Pytest cap4096 row projected 294.61 s using 4095 replays but stopped normally after 2380 emitted tokens / 2379 replays and took 179.62 s. Actual measured load plus trace preparation was 89.72 s, essentially equal to the 89.73 s fixed forecast; fixed setup did not explain the miss. Inference, not a measured causal attribution: forecast decode used context-length scaling and expected historical stop lengths; actual decode throughput at full prompt length did not follow the linear context proxy, and per-seed free-run stops shifted. Teacher-forcing timing also varied markedly across repeated same-prompt seed rows, so the single-source timing proxy did not predict the measured batch well. These are diagnostic timings and do not imply serving performance or semantic quality.",
+  "case_rows": [
+    {
+      "name": "anomaly.call91.canonicalprefix.suffix4096.seed42",
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/runs/full/anomaly.call91.canonicalprefix.suffix4096.seed42.json",
+      "result_sha256": "395c749ff59a128749ec3606ada859cca84798e9be3cc73a67bbeac539eee3b4",
+      "generated_tokens_including_first": 39,
+      "decode_replays": 38,
+      "trace_counters_delta": {
+        "model_replays": 38,
+        "sample_replays": 38,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 38,
+        "captures": 0
+      },
+      "free_wall_including_prefill_and_text_decode_s": 3.5962340040132403,
+      "decode_wall_s_excluding_prefill_and_text_decode": 2.2408304740674794,
+      "chosen_positions": 64,
+      "chosen_tf_wall_s_including_prefill": 5.450392223196104,
+      "case_diagnostic_total_wall_s": 9.049824140965939,
+      "forecast_source_free_tokens": 208,
+      "forecast_tf_s": 9.41397114909682,
+      "forecast_free_prefill_s": 1.3212082721292973,
+      "forecast_free_observed_stop_decode_s": 23.75647942471824,
+      "forecast_case_variable_s": 34.49165884594436
+    },
+    {
+      "name": "anomaly.call91.canonicalprefix.suffix4096.seed43",
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/runs/full/anomaly.call91.canonicalprefix.suffix4096.seed43.json",
+      "result_sha256": "0e7ea7bee6d85b8e910228abcb95c665ba62b7c50c09ec0ed21be04fa582373d",
+      "generated_tokens_including_first": 148,
+      "decode_replays": 147,
+      "trace_counters_delta": {
+        "model_replays": 147,
+        "sample_replays": 147,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 147,
+        "captures": 0
+      },
+      "free_wall_including_prefill_and_text_decode_s": 10.013813680037856,
+      "decode_wall_s_excluding_prefill_and_text_decode": 8.665292656980455,
+      "chosen_positions": 64,
+      "chosen_tf_wall_s_including_prefill": 5.460577924037352,
+      "case_diagnostic_total_wall_s": 15.477606979897246,
+      "forecast_source_free_tokens": 200,
+      "forecast_tf_s": 9.41397114909682,
+      "forecast_free_prefill_s": 1.329718223772943,
+      "forecast_free_observed_stop_decode_s": 22.844590601327702,
+      "forecast_case_variable_s": 33.58827997419746
+    },
+    {
+      "name": "anomaly.call91.canonicalprefix.suffix4096.seed44",
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/runs/full/anomaly.call91.canonicalprefix.suffix4096.seed44.json",
+      "result_sha256": "aea5b2d0e873e71c856b0e3c22802b30dd468b94d2b9bf8290b7dbd71253a183",
+      "generated_tokens_including_first": 264,
+      "decode_replays": 263,
+      "trace_counters_delta": {
+        "model_replays": 263,
+        "sample_replays": 263,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 263,
+        "captures": 0
+      },
+      "free_wall_including_prefill_and_text_decode_s": 16.848424507072195,
+      "decode_wall_s_excluding_prefill_and_text_decode": 15.50513854296878,
+      "chosen_positions": 64,
+      "chosen_tf_wall_s_including_prefill": 5.460191946942359,
+      "case_diagnostic_total_wall_s": 22.312372651183978,
+      "forecast_source_free_tokens": 37,
+      "forecast_tf_s": 9.41397114909682,
+      "forecast_free_prefill_s": 1.3074703416787088,
+      "forecast_free_observed_stop_decode_s": 4.209594239730138,
+      "forecast_case_variable_s": 14.931035730505666
+    },
+    {
+      "name": "anomaly.matplotlib__matplotlib-20488.call86.onset.suffix4096.seed42",
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/runs/full/anomaly.matplotlib__matplotlib-20488.call86.onset.suffix4096.seed42.json",
+      "result_sha256": "bf72f9a8e59294f769dce975da2d917e69fd62a1572d778310ce773b74792595",
+      "generated_tokens_including_first": 137,
+      "decode_replays": 136,
+      "trace_counters_delta": {
+        "model_replays": 136,
+        "sample_replays": 136,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 136,
+        "captures": 0
+      },
+      "free_wall_including_prefill_and_text_decode_s": 9.366220847936347,
+      "decode_wall_s_excluding_prefill_and_text_decode": 8.015021562809125,
+      "chosen_positions": 64,
+      "chosen_tf_wall_s_including_prefill": 5.4622371511068195,
+      "case_diagnostic_total_wall_s": 14.83199711306952,
+      "forecast_source_free_tokens": 65,
+      "forecast_tf_s": 9.394767141227378,
+      "forecast_free_prefill_s": 1.3078033863566816,
+      "forecast_free_observed_stop_decode_s": 7.460867024931374,
+      "forecast_case_variable_s": 18.163437552515433
+    },
+    {
+      "name": "anomaly.matplotlib__matplotlib-20488.call86.onset.suffix4096.seed43",
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/runs/full/anomaly.matplotlib__matplotlib-20488.call86.onset.suffix4096.seed43.json",
+      "result_sha256": "2fc88476353a38633134bcb85d1fbf8624f99d8e55bb8273e42fca2898bc594d",
+      "generated_tokens_including_first": 512,
+      "decode_replays": 511,
+      "trace_counters_delta": {
+        "model_replays": 511,
+        "sample_replays": 511,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 511,
+        "captures": 0
+      },
+      "free_wall_including_prefill_and_text_decode_s": 31.483623042004183,
+      "decode_wall_s_excluding_prefill_and_text_decode": 30.13014394394122,
+      "chosen_positions": 64,
+      "chosen_tf_wall_s_including_prefill": 5.4693439160473645,
+      "case_diagnostic_total_wall_s": 36.956497124861926,
+      "forecast_source_free_tokens": 102,
+      "forecast_tf_s": 9.394767141227378,
+      "forecast_free_prefill_s": 1.3295492581091821,
+      "forecast_free_observed_stop_decode_s": 11.722731204434885,
+      "forecast_case_variable_s": 22.447047603771445
+    },
+    {
+      "name": "anomaly.matplotlib__matplotlib-20488.call86.onset.suffix4096.seed44",
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/runs/full/anomaly.matplotlib__matplotlib-20488.call86.onset.suffix4096.seed44.json",
+      "result_sha256": "0cc72d580c11939d9ca44a66580d36ec9aec81d578f59e13c26a17ec480bbe1e",
+      "generated_tokens_including_first": 69,
+      "decode_replays": 68,
+      "trace_counters_delta": {
+        "model_replays": 68,
+        "sample_replays": 68,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 68,
+        "captures": 0
+      },
+      "free_wall_including_prefill_and_text_decode_s": 5.356922353152186,
+      "decode_wall_s_excluding_prefill_and_text_decode": 4.010411210823804,
+      "chosen_positions": 64,
+      "chosen_tf_wall_s_including_prefill": 5.479977263137698,
+      "case_diagnostic_total_wall_s": 10.840151372831315,
+      "forecast_source_free_tokens": 67,
+      "forecast_tf_s": 9.394767141227378,
+      "forecast_free_prefill_s": 1.3224548436701298,
+      "forecast_free_observed_stop_decode_s": 7.691135427637189,
+      "forecast_case_variable_s": 18.4083574125347
+    },
+    {
+      "name": "anomaly.psf__requests-5414.call10.onset.suffix4096.seed42",
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/runs/full/anomaly.psf__requests-5414.call10.onset.suffix4096.seed42.json",
+      "result_sha256": "eeda97d1c40d60a68d6d5a390247b0e25a80b7fc2ef62ba61005d2cfe917b6e5",
+      "generated_tokens_including_first": 512,
+      "decode_replays": 511,
+      "trace_counters_delta": {
+        "model_replays": 511,
+        "sample_replays": 511,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 511,
+        "captures": 0
+      },
+      "free_wall_including_prefill_and_text_decode_s": 31.500897459918633,
+      "decode_wall_s_excluding_prefill_and_text_decode": 30.147511490853503,
+      "chosen_positions": 64,
+      "chosen_tf_wall_s_including_prefill": 17.66664490615949,
+      "case_diagnostic_total_wall_s": 49.17087811301462,
+      "forecast_source_free_tokens": 500,
+      "forecast_tf_s": 34.05558419638914,
+      "forecast_free_prefill_s": 1.3203604337759316,
+      "forecast_free_observed_stop_decode_s": 55.42726839335222,
+      "forecast_case_variable_s": 90.80321302351729
+    },
+    {
+      "name": "anomaly.psf__requests-5414.call10.onset.suffix4096.seed43",
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/runs/full/anomaly.psf__requests-5414.call10.onset.suffix4096.seed43.json",
+      "result_sha256": "016566e474a73a27c48dc2c39b75c72a6d21c840e51de7c94b45d541dbab9542",
+      "generated_tokens_including_first": 512,
+      "decode_replays": 511,
+      "trace_counters_delta": {
+        "model_replays": 511,
+        "sample_replays": 511,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 511,
+        "captures": 0
+      },
+      "free_wall_including_prefill_and_text_decode_s": 31.48865474201739,
+      "decode_wall_s_excluding_prefill_and_text_decode": 30.14177374308929,
+      "chosen_positions": 64,
+      "chosen_tf_wall_s_including_prefill": 5.474698339123279,
+      "case_diagnostic_total_wall_s": 36.96685528382659,
+      "forecast_source_free_tokens": 512,
+      "forecast_tf_s": 34.05558419638914,
+      "forecast_free_prefill_s": 1.3263365156017244,
+      "forecast_free_observed_stop_decode_s": 56.68993971857895,
+      "forecast_case_variable_s": 92.07186043056981
+    },
+    {
+      "name": "anomaly.psf__requests-5414.call10.onset.suffix4096.seed44",
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/runs/full/anomaly.psf__requests-5414.call10.onset.suffix4096.seed44.json",
+      "result_sha256": "ff2b6dc9e140ecb05880f8bdfc1af709aaddc0160f07514079437094c81b492f",
+      "generated_tokens_including_first": 512,
+      "decode_replays": 511,
+      "trace_counters_delta": {
+        "model_replays": 511,
+        "sample_replays": 511,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 511,
+        "captures": 0
+      },
+      "free_wall_including_prefill_and_text_decode_s": 31.45816316595301,
+      "decode_wall_s_excluding_prefill_and_text_decode": 30.11832046904601,
+      "chosen_positions": 64,
+      "chosen_tf_wall_s_including_prefill": 5.458327070111409,
+      "case_diagnostic_total_wall_s": 36.92020650696941,
+      "forecast_source_free_tokens": 512,
+      "forecast_tf_s": 34.05558419638914,
+      "forecast_free_prefill_s": 1.3135931338183582,
+      "forecast_free_observed_stop_decode_s": 56.722719141666516,
+      "forecast_case_variable_s": 92.09189647187401
+    },
+    {
+      "name": "anomaly.pytest-dev__pytest-5787.call65.onset.cap4096.seed44",
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/runs/full/anomaly.pytest-dev__pytest-5787.call65.onset.cap4096.seed44.json",
+      "result_sha256": "d4f7c3efe8df8d4a5c10cc1d74bd7f6aa88b042b438af94af81dc3f1412035b3",
+      "generated_tokens_including_first": 2380,
+      "decode_replays": 2379,
+      "trace_counters_delta": {
+        "model_replays": 2379,
+        "sample_replays": 2379,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 2379,
+        "captures": 0
+      },
+      "free_wall_including_prefill_and_text_decode_s": 179.61782027198933,
+      "decode_wall_s_excluding_prefill_and_text_decode": 152.58478549099527,
+      "chosen_positions": 0,
+      "chosen_tf_wall_s_including_prefill": 0.0,
+      "case_diagnostic_total_wall_s": 179.62014069408178,
+      "forecast_source_free_tokens": null,
+      "forecast_tf_s": null,
+      "forecast_free_prefill_s": null,
+      "forecast_free_observed_stop_decode_s": null,
+      "forecast_case_variable_s": null
+    },
+    {
+      "name": "anomaly.sphinx-doc__sphinx-10323.call70.onset.suffix4096.seed42",
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/runs/full/anomaly.sphinx-doc__sphinx-10323.call70.onset.suffix4096.seed42.json",
+      "result_sha256": "c697bf38a482271dcb854202205ffa7f638da022d5d8eac243c0298b87070f1f",
+      "generated_tokens_including_first": 73,
+      "decode_replays": 72,
+      "trace_counters_delta": {
+        "model_replays": 72,
+        "sample_replays": 72,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 72,
+        "captures": 0
+      },
+      "free_wall_including_prefill_and_text_decode_s": 5.595028334064409,
+      "decode_wall_s_excluding_prefill_and_text_decode": 4.246159920003265,
+      "chosen_positions": 37,
+      "chosen_tf_wall_s_including_prefill": 3.6782993860542774,
+      "case_diagnostic_total_wall_s": 9.276573155075312,
+      "forecast_source_free_tokens": 89,
+      "forecast_tf_s": 5.952655750238684,
+      "forecast_free_prefill_s": 1.3224000441841781,
+      "forecast_free_observed_stop_decode_s": 10.23129114620647,
+      "forecast_case_variable_s": 17.50634694062933
+    },
+    {
+      "name": "anomaly.sphinx-doc__sphinx-10323.call70.onset.suffix4096.seed43",
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/runs/full/anomaly.sphinx-doc__sphinx-10323.call70.onset.suffix4096.seed43.json",
+      "result_sha256": "feebcee326bad1b086bf1ce757049ebe245dbe7adc24e3bc63ed36a517d215eb",
+      "generated_tokens_including_first": 102,
+      "decode_replays": 101,
+      "trace_counters_delta": {
+        "model_replays": 101,
+        "sample_replays": 101,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 101,
+        "captures": 0
+      },
+      "free_wall_including_prefill_and_text_decode_s": 7.295177253196016,
+      "decode_wall_s_excluding_prefill_and_text_decode": 5.954171004006639,
+      "chosen_positions": 37,
+      "chosen_tf_wall_s_including_prefill": 3.6985378998797387,
+      "case_diagnostic_total_wall_s": 10.997078232001513,
+      "forecast_source_free_tokens": 52,
+      "forecast_tf_s": 5.952655750238684,
+      "forecast_free_prefill_s": 1.3244719356298447,
+      "forecast_free_observed_stop_decode_s": 5.962375902101978,
+      "forecast_case_variable_s": 13.239503587970507
+    },
+    {
+      "name": "anomaly.sphinx-doc__sphinx-10323.call70.onset.suffix4096.seed44",
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/runs/full/anomaly.sphinx-doc__sphinx-10323.call70.onset.suffix4096.seed44.json",
+      "result_sha256": "c193e6752a5481dd12dfc3e5942b8d687e15bd58f4660dddc252ec6dd49aead0",
+      "generated_tokens_including_first": 512,
+      "decode_replays": 511,
+      "trace_counters_delta": {
+        "model_replays": 511,
+        "sample_replays": 511,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 511,
+        "captures": 0
+      },
+      "free_wall_including_prefill_and_text_decode_s": 31.47069301106967,
+      "decode_wall_s_excluding_prefill_and_text_decode": 30.124666434014216,
+      "chosen_positions": 37,
+      "chosen_tf_wall_s_including_prefill": 3.6953755021095276,
+      "case_diagnostic_total_wall_s": 35.16917380085215,
+      "forecast_source_free_tokens": 50,
+      "forecast_tf_s": 5.952655750238684,
+      "forecast_free_prefill_s": 1.3388146623037755,
+      "forecast_free_observed_stop_decode_s": 5.724323382614626,
+      "forecast_case_variable_s": 13.015793795157085
+    }
+  ],
+  "limitations": [
+    "No recomputation of forecast policy or model; this is a retrospective comparison only.",
+    "The full Pytest cap4096 row has no served counterpart and was separately merged into the shared full-mode process; its root semantic verdict is recorded separately.",
+    "Do not treat natural free-run completion, a normal parser verdict, or forecast under-run as an acceptance-score result."
+  ]
+}

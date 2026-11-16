@@ -1,0 +1,31 @@
+{
+  "status": "pending_scoped_review_root_admission_no_execution",
+  "jobs": 4,
+  "sources": [
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/matplotlib__matplotlib-20488/validated/cases.json",
+      "sha256": "6c45c44712e925cc3e8aed6eeeb0d494bb6ef464ee4ae0f4e370898fb1f0ca6f"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/psf__requests-2931/validated/cases.json",
+      "sha256": "ab3460d2571d6de4018fc38663a4b0f232c5ec2ea64676500a8c7650d47614cd"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/pydata__xarray-3095/validated/supplemental-cases.json",
+      "sha256": "0c7ebc2be7765965ca81f822acecf7242be784653e1cf563bef950bd65628b4c"
+    }
+  ],
+  "coverage": "Three previously missing matched semantic action comparisons; Xarray whole48 replaces protocol53 as decisive source-edit coverage. Frozen161 unchanged.",
+  "name_normalization": [
+    {
+      "original_name": "matplotlib__matplotlib-20488.call29.validated-action",
+      "execution_name": "action.matplotlib__matplotlib-20488.call29.validated-action",
+      "only_change": "Job name prefix; case and branches unchanged"
+    },
+    {
+      "original_name": "psf__requests-2931.call29.validated-action",
+      "execution_name": "action.psf__requests-2931.call29.validated-action",
+      "only_change": "Job name prefix; case and branches unchanged"
+    }
+  ]
+}

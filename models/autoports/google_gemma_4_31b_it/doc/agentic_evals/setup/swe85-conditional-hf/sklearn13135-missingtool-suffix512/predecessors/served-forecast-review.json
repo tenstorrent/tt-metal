@@ -1,0 +1,20 @@
+{
+  "reviewer": "root",
+  "accepted": true,
+  "completion_sha256": "37340afd0077453ee24a913bc0ebe2ff8ddf6cd14c064a3231c3e213cd5dc7b3",
+  "forecast_status": "accepted_miss",
+  "forecast_range_seconds": [
+    194.71,
+    281.71
+  ],
+  "measured_seconds": 189.18671536445618,
+  "accounting_seconds": {
+    "load": 137.26086499309167,
+    "cases": 47.119384267833084,
+    "free": 31.02400022884831,
+    "chosen_and_setup": 16.095384038984776,
+    "outside_load_cases": 4.80646610353142
+  },
+  "reason": "5.523s below lower bound. Forecast used original17395-token prompt proxies and full cap512 allowances; actual shortened input512 with seed42 early stop87, other seeds512,1111 total versus1536 cap. Load137.261 versus140.705 proxy also lower. Low miss reflects conservative work/load assumptions, not serving speed.",
+  "speed_claim": false
+}

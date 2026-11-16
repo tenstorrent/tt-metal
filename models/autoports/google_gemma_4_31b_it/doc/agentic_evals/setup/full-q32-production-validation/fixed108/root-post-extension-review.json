@@ -1,0 +1,24 @@
+{
+  "status": "diagnostic_panel_reviewed_not_serving_policy_accepted",
+  "reviewed_unix": 1794784122.183646,
+  "cases": 108,
+  "semantic_counts": {
+    "normal": 90,
+    "reproduced_motif": 18,
+    "other_anomaly": 0,
+    "cap_inconclusive": 0
+  },
+  "scope": "Fixed reconstructed saved-history panel with seeds42/43/44; 18 retained controlled motifs, not zero-anomaly incidence. No native-RNG equivalence or task-success claim.",
+  "extensions": "Six first extensions and two further Requests2931 extensions all exact prefixes; all six original progressing cases now natural tool stops.",
+  "protocol_cases": "54 and89 both correct under fullBF16; identical to earlier two-case full controls.",
+  "channel_cases": "105/107 valid new thought-channel opener at saved boundary; no matching HF control. TT agreement alone is not HF equivalence.",
+  "next": "Admit isolated KV/down group diagnostics, then fullBF16 resume/broad prerequisites if deadline fits. No serving selection or scored rerun admission.",
+  "references": [
+    "terminal-review-d.json",
+    "triage-d-partial.json",
+    "reviewed/triage-c-slice-36-71.json",
+    "triage-b.json",
+    "cap-extensions-root/terminal-review-d.json",
+    "cap-extensions-next-requests2931/retry-root/root-review.json"
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "status": "passed_static_host_validation_candidate_only",
+  "checks": [
+    "JSON parse and source hashes",
+    "served/full input and chosen-token equality for both exact fixtures",
+    "two serial seed groups and saved command schema",
+    "compare-dir source outputs exist",
+    "forecast arithmetic and candidate-only admission pins"
+  ],
+  "no_runner_command_executed": true,
+  "no_model_import_or_inference": true,
+  "no_TTNN_import_or_device_access": true,
+  "pinned_hashes": {
+    "proposal_sha256": "8c8c59e34a96f16e295d196b861158aaeaf3129a31f9e3f636a3e6747888b96f",
+    "commands_sha256": "b746e7675363e774d8b8c4c33f85d268799952a3a372a826106533506a16e68b",
+    "source_integrity_sha256": "42703da032dc23dd3a9b110ce372d7dfe2a79fd7f05a8c8772cb3a97d7e9ae78",
+    "forecast_sha256": "e5962ee880ae51627e85dda1610342bef8155556850211846424ee473054504b",
+    "admission_placeholder_sha256": "d0fb8b3bfd2f46d3ed0d48ac6dd6e9cfd846facd3f028a15d770ccf3b93517bd"
+  },
+  "prompt_token_hashes_by_seed": {
+    "42": "6cb6161236c625fd131a51c46c0c180f8225366631be9579fb22d1d470a1ab74",
+    "43": "6cb6161236c625fd131a51c46c0c180f8225366631be9579fb22d1d470a1ab74"
+  }
+}

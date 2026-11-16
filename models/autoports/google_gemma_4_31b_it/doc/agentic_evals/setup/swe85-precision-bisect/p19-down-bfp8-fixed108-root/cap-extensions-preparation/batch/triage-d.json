@@ -1,0 +1,324 @@
+{
+  "title": "Independent host-only semantic triage of P19 cap extensions",
+  "scope": "Five P19 cap-extension rows only. This is semantic/provenance triage, not precision selection, score adjudication, patch correctness, or serving performance review.",
+  "learned_json_sha256": "3dc380fb1bf4e4e3a951b7f11bcd4a68ef8fe7e9b0ad9e0197288783ff5381c3",
+  "batch": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/cap-extensions-preparation/batch",
+  "batch_completion_sha256": "68db369b2c08db120c49dfbb990fcb18ba0bc5f2c39c91533a4cc7e561e3b289",
+  "batch_status": "completed",
+  "batch_exit_code": 0,
+  "batch_elapsed_seconds": 507.0161921977997,
+  "tokenizer": {
+    "path": "/home/mvasiljevic/.cache/huggingface/hub/models--google--gemma-4-31B-it/snapshots/842da3794eaa0b77d5f08bae87a17459d91ff475/tokenizer.json",
+    "sha256": "cc8d3a0ce36466ccc1278bf987df5f71db1719b9ca6b4118264f45cb627bfe0f",
+    "hf_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+    "terminal_id_50": "<|tool_response>"
+  },
+  "identity_and_policy_checks": {
+    "all_five_prompt_token_arrays_exactly_match_their_P19_manifest_case": true,
+    "all_five_chosen_continuations_exactly_match": true,
+    "all_five_extension_token_prefixes_exactly_match_original_P19_free_run_ids": true,
+    "all_five_sampling_configs_match_seed_temperature_1_top_p_0_95_top_k_20": true,
+    "all_five_runtime_precision_objects_exactly_match_p19_precision_json": true,
+    "requested_caps": [
+      512,
+      512,
+      2048,
+      2048,
+      1024
+    ],
+    "generated_lengths": [
+      258,
+      326,
+      1632,
+      1191,
+      1003
+    ],
+    "terminal_token_id_50_all_rows": true
+  },
+  "rows": [
+    {
+      "source_manifest_index": 10,
+      "job": "anomaly.matplotlib__matplotlib-20488.call86.onset.seed43.cap512",
+      "mode": "full",
+      "seed": 43,
+      "verdict": "reproduced_native_motif",
+      "confidence": "high",
+      "fixture": {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.matplotlib__matplotlib-20488.call86.onset.seed43.private.json",
+        "sha256": "a427e543e23d8291eed5bac6535acc3965401ab0ccf18535cbc4c4d6caf97da3",
+        "prompt_token_count": 46118,
+        "prompt_token_ids_sha256": "1e4ba82282f5bf6ed6955e16ab44f78305ef4a87b38a3c60dcb76a30679b187b",
+        "prompt_exact_match_to_p19_manifest_case": true,
+        "chosen_continuation_exact_match_to_p19_manifest_case": true,
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 43
+        },
+        "requested_cap": 512,
+        "extension_from_cap": 256
+      },
+      "result": {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/cap-extensions-preparation/batch/runs/anomaly.matplotlib__matplotlib-20488.call86.onset.seed43.cap512.json",
+        "sha256": "2a2f46c8f2cbfccb3eedd355d13e9718ffe7a087be8c96fd0e35313a8bfdbe17",
+        "generated_token_count": 258,
+        "generated_token_ids_sha256": "063c3b5669533b951872d519fc9170cbe5d0e8d51ddd68271aa2d141f836fcea",
+        "original_prefix_length": 256,
+        "original_prefix_exact_match": true,
+        "original_prefix_token_ids_sha256": "db60bcae3f813fe0935e97f553f4d4a47e337235588681ed6c674c5c3915bc19",
+        "original_p19_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.matplotlib__matplotlib-20488.call86.onset.seed43.cap256.json",
+        "original_p19_result_sha256": "84b2492b334ddfffe11df139d707e35fbb06dcabd6048ed6fe8c5ab5238e9dd4",
+        "terminal_token_id": 50,
+        "terminal_token": "<|tool_response>",
+        "requested_cap_reached": false,
+        "diagnostic_wall_including_prefill_s": 50.47641285788268,
+        "decode_replays": 257
+      },
+      "runtime_policy": {
+        "config_id": "stage12_bf16_hifi4_kv_down_bfp8_p19",
+        "exact_match_to_p19_precision_json": true,
+        "precision_json_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/precision.json",
+        "precision_json_sha256": "540760ea34cea22459c9248b4ce8c90ad1b34e000b18e82b70552e45fd766fad"
+      },
+      "decisive_text": {
+        "conditioned_prompt_tail": "or: expected an indented block after \\u0027if\\u0027 statement on line 1218\\n\"\n}}thought\nthought\nI've",
+        "generated_text_prefix": "’ve corrupted the file again! I'll just use the `sed` command to remove the `ValueError` a"
+      },
+      "evidence": "The inherited assistant text ends in “I’ve”; the generated continuation immediately begins “’ve corrupted the file again!”, reproducing the localized extra-contraction onset. Later tool-call completion does not erase this anomaly.",
+      "cap_notes": "Natural tool-response termination before requested cap; this is not a cap failure. Affirmative row-10 onset remains anomalous despite later termination."
+    },
+    {
+      "source_manifest_index": 49,
+      "job": "anomaly.sphinx-doc__sphinx-10323.call57.onset.seed43.cap512",
+      "mode": "full",
+      "seed": 43,
+      "verdict": "normal",
+      "confidence": "medium-high",
+      "fixture": {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.sphinx-doc__sphinx-10323.call57.onset.seed43.private.json",
+        "sha256": "f92ea14c2024b7c89722784a2f1d8e8551e470f4cd281f974e3b9e691f6a8523",
+        "prompt_token_count": 58695,
+        "prompt_token_ids_sha256": "b717f8d15d30f0bd3b445deef9213defb8a6c36f4bc1bc86a7f889289270c2fb",
+        "prompt_exact_match_to_p19_manifest_case": true,
+        "chosen_continuation_exact_match_to_p19_manifest_case": true,
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 43
+        },
+        "requested_cap": 512,
+        "extension_from_cap": 256
+      },
+      "result": {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/cap-extensions-preparation/batch/runs/anomaly.sphinx-doc__sphinx-10323.call57.onset.seed43.cap512.json",
+        "sha256": "fb59ed84a4771592416f3604959487ace5faa4ea2eae39889b67465c3cc41cf0",
+        "generated_token_count": 326,
+        "generated_token_ids_sha256": "5138068a654b5733ace8ae67ca04752925e42a973be0a59437b774fa475c2ca2",
+        "original_prefix_length": 256,
+        "original_prefix_exact_match": true,
+        "original_prefix_token_ids_sha256": "b1ccdee92148e3ec363378860b5e8d57f7fc5db546cb88bbbe507e43ccf5fa7d",
+        "original_p19_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-10323.call57.onset.seed43.cap256.json",
+        "original_p19_result_sha256": "8563ed7f5806f8d002b291d1a4f88858c44ea2f22b98561b2444ce1f34ff57e6",
+        "terminal_token_id": 50,
+        "terminal_token": "<|tool_response>",
+        "requested_cap_reached": false,
+        "diagnostic_wall_including_prefill_s": 52.580705773085356,
+        "decode_replays": 325
+      },
+      "runtime_policy": {
+        "config_id": "stage12_bf16_hifi4_kv_down_bfp8_p19",
+        "exact_match_to_p19_precision_json": true,
+        "precision_json_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/precision.json",
+        "precision_json_sha256": "540760ea34cea22459c9248b4ce8c90ad1b34e000b18e82b70552e45fd766fad"
+      },
+      "decisive_text": {
+        "conditioned_prompt_tail": " warning: `'/testbed/src/index.rst:6: WARNING: 'list' object is not callable'`.\nThis is because I've",
+        "generated_text_prefix": " probably introduced a bug in the filters loop.\n\nWait, the `filters` list is defined as:\n```python\n            filters = [self.pyobject_filt",
+        "generated_text_tail": "dent_filter,`.\nThen I deleted line 229.\n\nLet's check the file again.\n<channel|><|tool_call>call:bash{command:<|\"|>nl -ba sphinx/directives/code.py | sed -n '220,230p'<|\"|>}<tool_call|><|tool_response>"
+      },
+      "evidence": "Continuation completes the conditioned “because I’ve ...” thought coherently and then emits a bash tool-call handoff. No repeated-contraction or malformed-protocol motif is present; the handoff occurs before the requested cap.",
+      "cap_notes": "Natural tool-response termination before requested cap; this is not a cap failure. Affirmative row-10 onset remains anomalous despite later termination."
+    },
+    {
+      "source_manifest_index": 66,
+      "job": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed42.cap2048",
+      "mode": "full",
+      "seed": 42,
+      "verdict": "normal",
+      "confidence": "medium-high",
+      "fixture": {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap1024.seed42.private.json",
+        "sha256": "b4253957ad89651510a0e39ea3aa49373926c9ff2d963a4ee381047b400efac8",
+        "prompt_token_count": 76441,
+        "prompt_token_ids_sha256": "5e8c9025218ae22d2ae1491e4ff24e3aacdf82ad5d2985c6e2792168270c6808",
+        "prompt_exact_match_to_p19_manifest_case": true,
+        "chosen_continuation_exact_match_to_p19_manifest_case": true,
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 42
+        },
+        "requested_cap": 2048,
+        "extension_from_cap": 1024
+      },
+      "result": {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/cap-extensions-preparation/batch/runs/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed42.cap2048.json",
+        "sha256": "f1fb871c88fd02db4c3455a4444636f93c4ad515b409ea76be0fe937fe914898",
+        "generated_token_count": 1632,
+        "generated_token_ids_sha256": "6a25ecfc7e66f24d75bd7b936be522fc84f0ed3148ce7d848ad945a9be716758",
+        "original_prefix_length": 1024,
+        "original_prefix_exact_match": true,
+        "original_prefix_token_ids_sha256": "de238d541c0cc7b010d415d242ec954290fd54fefc701ebb1ade85cdfcea5bfa",
+        "original_p19_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed42.cap1024.json",
+        "original_p19_result_sha256": "e4878adb1a16e1615880e90a21769012a4274e88436d859024fb7fec7d899d42",
+        "terminal_token_id": 50,
+        "terminal_token": "<|tool_response>",
+        "requested_cap_reached": false,
+        "diagnostic_wall_including_prefill_s": 150.22863169503398,
+        "decode_replays": 1631
+      },
+      "runtime_policy": {
+        "config_id": "stage12_bf16_hifi4_kv_down_bfp8_p19",
+        "exact_match_to_p19_precision_json": true,
+        "precision_json_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/precision.json",
+        "precision_json_sha256": "540760ea34cea22459c9248b4ce8c90ad1b34e000b18e82b70552e45fd766fad"
+      },
+      "decisive_text": {
+        "conditioned_prompt_tail": "it('source-read', ...)`\n\nLet's implement this in `docutils/parsers/rst/directives/misc.py`.call:bash",
+        "generated_text_prefix": "{command:<|\"|>cat <<'EOF' > patch_docutils_include.py\nimport os\n\nfile_path = '/opt/miniconda3/lib/python3.11/site-packages/docutils/parsers/rst/directives/misc.",
+        "generated_text_tail": "start-after\\\" option of \\\"%s\\\" '\\n\",\n    \"                                  'directive:\\\\nText not found.' % self.name)\\n\",\n    \"        # ... and so on ...\\n\"\n]\nEOF\n<|\"|>}<tool_call|><|tool_response>"
+      },
+      "evidence": "The conditioned prefix ends at call:bash and the generated continuation supplies the {command: opener, script body, and closing tool-call serialization. The complete output is a structured tool handoff, not the earlier missing-argument-opener form. Script/task quality is not adjudicated here.",
+      "cap_notes": "Natural tool-response termination before requested cap; this is not a cap failure. Affirmative row-10 onset remains anomalous despite later termination."
+    },
+    {
+      "source_manifest_index": 74,
+      "job": "anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.seed44.cap2048",
+      "mode": "full",
+      "seed": 44,
+      "verdict": "normal",
+      "confidence": "medium-high",
+      "fixture": {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.cap1024.seed44.private.json",
+        "sha256": "14b67b9fcb8ad382713dff99ccb47922690bc5be90131e3adc25a195f3e712d3",
+        "prompt_token_count": 47548,
+        "prompt_token_ids_sha256": "7aaf88be1dd4df81aa4880bf0dd1741f94a99b241903c24f0def9fa78423479b",
+        "prompt_exact_match_to_p19_manifest_case": true,
+        "chosen_continuation_exact_match_to_p19_manifest_case": true,
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 44
+        },
+        "requested_cap": 2048,
+        "extension_from_cap": 1024
+      },
+      "result": {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/cap-extensions-preparation/batch/runs/anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.seed44.cap2048.json",
+        "sha256": "a3c18dfdfaa31649c5bdc5acc6055fd2012959b3e762252c52d529fd2862e0ef",
+        "generated_token_count": 1191,
+        "generated_token_ids_sha256": "35771bce57382784a45e05f77a9e7b2a0bdb441d94a0594434e70aab9ecc25f1",
+        "original_prefix_length": 1024,
+        "original_prefix_exact_match": true,
+        "original_prefix_token_ids_sha256": "70dcb8a48bf508ef622aec8d3b67943ce6b19bd51196f7da3d028a4b99fb4fea",
+        "original_p19_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.seed44.cap1024.json",
+        "original_p19_result_sha256": "a79a20bd828f19237d4fd30477eca3b19e21761ccbedf2ac4dc075a6edbad117",
+        "terminal_token_id": 50,
+        "terminal_token": "<|tool_response>",
+        "requested_cap_reached": false,
+        "diagnostic_wall_including_prefill_s": 94.42535548494197,
+        "decode_replays": 1190
+      },
+      "runtime_policy": {
+        "config_id": "stage12_bf16_hifi4_kv_down_bfp8_p19",
+        "exact_match_to_p19_precision_json": true,
+        "precision_json_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/precision.json",
+        "precision_json_sha256": "540760ea34cea22459c9248b4ce8c90ad1b34e000b18e82b70552e45fd766fad"
+      },
+      "decisive_text": {
+        "conditioned_prompt_tail": "erence to the environment, and the environment has a reference to the app.\n\nLet's try this!call:bash",
+        "generated_text_prefix": "{command:<|\"|>cat <<'EOF' > replacement_docutils_include.py\n    def run(self):\n        # Access the Sphinx app from the document\n        # self.state.document i",
+        "generated_text_tail": "production && sphinx-build . build\nif grep -Rq \"REPLACE_ME\" build/*.html; then echo \"BAD\"; else echo \"GOOD\"; fi\ngrep -Rq \"REPLACED\" build/*.html | sed 's/^/FOUND: /'\n<|\"|>}<tool_call|><|tool_response>"
+      },
+      "evidence": "The conditioned prefix ends at call:bash and the generated continuation supplies the {command: opener, script body, and closing tool-call serialization. The complete output is a structured tool handoff, not the earlier missing-argument-opener form. Script/task quality is not adjudicated here.",
+      "cap_notes": "Natural tool-response termination before requested cap; this is not a cap failure. Affirmative row-10 onset remains anomalous despite later termination."
+    },
+    {
+      "source_manifest_index": 106,
+      "job": "anomaly.xarray7233-call1.canonicalprefix.seed43.cap1024",
+      "mode": "full",
+      "seed": 43,
+      "verdict": "normal",
+      "confidence": "medium",
+      "fixture": {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/fixtures/full/anomaly.xarray7233-call1.canonicalprefix.cap512.seed43.private.json",
+        "sha256": "847864ddb35e8c689e48bd11c6aa9f4f68f3b3f4ffaf9a99b1915ea0b753c307",
+        "prompt_token_count": 1578,
+        "prompt_token_ids_sha256": "9f142dc60e4c17edebe57cde1154b155810a163a810bbcacb1e21feda8c7c5eb",
+        "prompt_exact_match_to_p19_manifest_case": true,
+        "chosen_continuation_exact_match_to_p19_manifest_case": true,
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 43
+        },
+        "requested_cap": 1024,
+        "extension_from_cap": 512
+      },
+      "result": {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/cap-extensions-preparation/batch/runs/anomaly.xarray7233-call1.canonicalprefix.seed43.cap1024.json",
+        "sha256": "11cb8370701c726a8a55a338eccff5132600c5dd910dccab66ba0493fc7ca741",
+        "generated_token_count": 1003,
+        "generated_token_ids_sha256": "4c32dd9294bddb41bbdb7d8c7390cb630919ca62da3ce44eeeb4449a618fd556",
+        "original_prefix_length": 512,
+        "original_prefix_exact_match": true,
+        "original_prefix_token_ids_sha256": "e64161f4f40044237007994b44ca5202b5081566d078ece3d3c3b49318ec924e",
+        "original_p19_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.xarray7233-call1.canonicalprefix.seed43.cap512.json",
+        "original_p19_result_sha256": "e424194a11801747752469d935785b155bf3f28cafc05707e8c9a1021c981ef0",
+        "terminal_token_id": 50,
+        "terminal_token": "<|tool_response>",
+        "requested_cap_reached": false,
+        "diagnostic_wall_including_prefill_s": 54.41244674613699,
+        "decode_replays": 1002
+      },
+      "runtime_policy": {
+        "config_id": "stage12_bf16_hifi4_kv_down_bfp8_p19",
+        "exact_match_to_p19_precision_json": true,
+        "precision_json_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/precision.json",
+        "precision_json_sha256": "540760ea34cea22459c9248b4ce8c90ad1b34e000b18e82b70552e45fd766fad"
+      },
+      "decisive_text": {
+        "conditioned_prompt_tail": "ed to:\n1. Reproduce the issue.\n2. Identify the cause in the xarray codebase.\n3. Fix the issue.\n4. Verify the fix.\n\nLet's start by reproducing the issue.\nI will create a reproduction script to verify the reported issue.\n\n",
+        "generated_text_prefix": "```bash\ncat <<'EOF' > reproduce_issue.py\nimport xarray as xr\nimport numpy as np\nimport pandas as pd\n\nda = xr.DataArray(np.arange(24), dims=[\"time\"])\nda = da.assign_coords(day=365 * da)\nds = da.to_data",
+        "generated_text_middle": "ordinate. If it's in .data_vars, it's a data variable.\n# Non-dimensional coordinates can be in both. But the issue says \"demotes non-dimensional coordinates to variables\".\n# Let's check if it's still considered a coordinate.\n```\n\nWait, I should check how xarray handles non-dimensional coordinates.\nI",
+        "generated_text_tail": " longer a coordinate *only*?\nWait, if it's in `Coordinates`, it's a coordinate.\n\nLet's run the reproduction script.\n<channel|><|tool_call>call:bash{command:<|\"|>python reproduce_issue.py<|\"|>}<tool_call|><|tool_response>"
+      },
+      "evidence": "The generated text starts with the requested reproduction script, includes exploratory markdown/rumination, then reaches a canonical bash tool handoff. It stops before cap with tool-response token 50; the prior 512-token cap had ended mid-sentence (“In xarray, a variable is a”), so this is cap-resolved progression, not a persistent anomaly. No claim is made about patch correctness.",
+      "cap_notes": "Natural tool-response termination before requested cap; this is not a cap failure. Affirmative row-10 onset remains anomalous despite later termination."
+    }
+  ],
+  "timing_assessment": {
+    "forecast_seconds": {
+      "low": 620,
+      "point": 711,
+      "high": 916
+    },
+    "observed_batch_wall_seconds": 507.0161921977997,
+    "difference_below_forecast_low_seconds": 112.984,
+    "requested_generation_total_tokens": 6144,
+    "generated_total_tokens": 4410,
+    "generated_fraction_of_sum_of_caps": 0.7178,
+    "explanation": "The batch finished faster than the forecast lower bound; all five outputs stopped at token 50 (<|tool_response>) before their requested caps, generating 4,410 of 6,144 requested tokens. Forecast assumed decode to the cap. This is an explanation of this diagnostic wall-time forecast miss only, not a serving-rate or performance claim."
+  },
+  "limitations": [
+    "Text verdicts use the full stored raw output and pinned tokenizer boundary; result raw files remain the source of the complete generated text.",
+    "A valid tool-call handoff is not an assertion that the attempted patch is correct or that the SWE task is solved.",
+    "Row 10 is classified as a reproduced native contraction onset even though it later reaches a tool-response stop.",
+    "No model/device/import/inference operations were performed for this review."
+  ]
+}

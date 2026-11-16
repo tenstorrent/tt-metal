@@ -1,0 +1,7 @@
+[
+  {
+    "name": "anomaly.pytest10356-call14.canonicalprefix",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-precision/pytest10356-call14/canonicalprefix/case.private.json",
+    "free_run_tokens": 256
+  }
+]

@@ -1,0 +1,21 @@
+{
+  "status": "admitted_not_launched",
+  "admitted_unix": 1794664461.9898353,
+  "cases": [
+    "task110.onset.suffix512",
+    "task129.onset.suffix512",
+    "task127.onset.suffix512",
+    "task130.onset.suffix512",
+    "task145.onset.suffix512",
+    "task30.onset.suffix512",
+    "task48.onset.suffix512",
+    "task139.onset.suffix512"
+  ],
+  "seed": 42,
+  "tokens": 512,
+  "basis": "Each case full-TT seed42 independently reviewed and root accepted anomalous. Served control also reproduced. Same saved512-token suffix; no native equivalence claim.",
+  "required_before_launch": "Entire TT batch exit0/devices released, no other HF model, MemAvailable>=100GB.",
+  "full_summary": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first-wave-full/coordinator_summary.json",
+  "served_summary": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first-wave-served/coordinator_summary.json",
+  "manifest_sha256": "7d58722301fd2e4cc8c07386fb186cc933f31de07329e487dfef7c2fcd0b2b91"
+}

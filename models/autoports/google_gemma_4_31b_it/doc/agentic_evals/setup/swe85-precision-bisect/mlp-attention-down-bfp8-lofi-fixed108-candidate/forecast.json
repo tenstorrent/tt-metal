@@ -1,0 +1,36 @@
+{
+  "status": "inert_planning_proxy_no_admission_accuracy_gate_failed",
+  "mode": "full",
+  "cases": 108,
+  "model_loads": 1,
+  "timeout_seconds": 9000,
+  "scope": "Exact byte-identical P3 fixed108 manifest under P8 all-weight-groups BFP8-LoFi. No P8 full108 run exists. The currently completed P8 accuracy gate failed natural accuracy (447/512=87.30%, below 90%; AIME98%, top5 510/512, top100512/512), so no run/admission is presently authorized or implied.",
+  "historical_forecast_snapshot": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/mlp-attention-down-bfp8-lofi-fixed108-candidate/forecast-initial-long11-extrapolation.json",
+  "historical_forecast_sha256": "527e90ad3eb91a6771ae18666819a5d1c0384de94cd7b92b7340a23da347a255",
+  "workload_validation": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/mlp-attention-down-bfp8-lofi-fixed108-candidate/matched-workload-validation.json",
+  "workload_validation_sha256": "23faca2987be0d50fa2cd97071f635fc101a786f1b04430734466c830fb0c61b",
+  "p6_full108_elapsed_s": 2350.1810986995697,
+  "p6_full108_case_wall_s": 2203.778161535505,
+  "p6_full108_prompt_token_ids": 3260067,
+  "p6_full108_generated_tokens": 32795,
+  "p6_full108_decode_tokens": 32687,
+  "p8_focus11_prompt_token_ids": 450003,
+  "p8_focus11_prompt_work_fraction": 0.13803489314790157,
+  "p8_over_p6_matched_decode_rate_ratio": 0.8913918763844065,
+  "p8_over_p6_matched_per_token_latency_ratio": 1.1218410516103436,
+  "p8_over_p6_matched_generated_token_ratio": 0.8094799815922687,
+  "point_scenario_seconds": 2512.3306807775484,
+  "planning_range_seconds": [
+    2234.115437298483,
+    2934.6679769056227
+  ],
+  "forecast_gate_candidate_seconds": 9000,
+  "method": "Workload-weighted estimate: actual P6 108-row nondecode/case work plus P6 decode work adjusted by the 11 exact matched P8/P6 per-token latency ratio; measured P8 load and post-load overhead are added. Low/high scenarios vary generated-token work, decode latency multiplier, and nondecode work. Full row evidence and calculation anchors are SHA-bound in matched-workload-validation.json.",
+  "uncertainty": "The 11-row P8 subset is deliberately long-context/anomaly-focused and not representative. P8 changed output lengths on these seeds, so both output-token workload and per-token timing may shift on the complete panel. Planning range is a sensitivity envelope, not confidence interval or measured bound.",
+  "not_claimed": [
+    "No P8 full108 measurement.",
+    "No precision selection or ranking.",
+    "No claim that P8 passes accuracy; the natural-accuracy gate currently fails.",
+    "No serving throughput inference from diagnostic traced decode."
+  ]
+}

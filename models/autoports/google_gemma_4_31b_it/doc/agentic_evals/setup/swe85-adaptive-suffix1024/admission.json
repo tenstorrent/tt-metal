@@ -1,0 +1,155 @@
+{
+  "status": "admitted",
+  "utc": "2026-11-15T03:04:13.700640+00:00",
+  "question": "Restore six native long-prompt motifs absent at suffix512 using exact suffix1024 before HF attribution.",
+  "review": "review-d.json and independent corrected-forecast rereview in agent message",
+  "jobs": [
+    {
+      "name": "served",
+      "command": [
+        "timeout",
+        "3600",
+        "env",
+        "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+        "READINESS_TRACE_REGION_SIZE=134217728",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+        "-m",
+        "models.autoports.google_gemma_4_31b_it.tools.precision_repro_batch",
+        "--cases",
+        "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/served-cases.json",
+        "--build-kwargs-file",
+        "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/head_bfp8_build_kwargs.json",
+        "--output-dir",
+        "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/served"
+      ],
+      "prediction": {
+        "predicted_hours": 0.11647684925515002,
+        "range_hours": [
+          0.0936468961473385,
+          0.16974673984004357
+        ],
+        "basis": "Corrected forecast includes chosen TF work, same-mode load once and prefill/decode projections. Diagnostic host-wall only."
+      },
+      "hashes": [
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/served-cases.json",
+          "sha256": "9c784d920761e6b4bf33d441d4ec2c79e1bf42c2298cbc9903bc97354054703b"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/head_bfp8_build_kwargs.json",
+          "sha256": "2e583fa8bd7aff7c5f8be110835df751924d167243c5a44a68aa5b3d70c6845f"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/forecast.json",
+          "sha256": "d5023017973310de7c88848f0f859a19fec4ebdf99bb72d7c3ab63a23df5df82"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/command.json",
+          "sha256": "03e66496a41df91e6133a2a9f88475e333f412f1254d782772b0b23324ecd5b3"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/tools/precision_repro_batch.py",
+          "sha256": "172f5a1dd7a7403847e47b966ae79c306163650a60211418c7c195794ec5c125"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/fixtures/anomaly.psf__requests-5414.call9.onset.suffix1024.private.json",
+          "sha256": "9e19aaa5b7f11f026931ef8a8ca1e49bb070a338805b3568cc89dd5065e41e7c"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/fixtures/anomaly.psf__requests-5414.call10.onset.suffix1024.private.json",
+          "sha256": "2d8bee7e1640381dcb31e7213e9f3d4ae020303e3e8c1bdb0f750f1714f5e3a2"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/fixtures/anomaly.psf__requests-5414.call11.onset.suffix1024.private.json",
+          "sha256": "069a6794c0474028161f64153453577e07bc1cbde4690d0e77cef0286214ab65"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/fixtures/anomaly.matplotlib__matplotlib-20488.call86.onset.suffix1024.private.json",
+          "sha256": "56a0d881cd7c275743511dd2ac716c2755c913cbc014e7c9c1dd0713ce46a283"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/fixtures/anomaly.call91.canonicalprefix.suffix1024.private.json",
+          "sha256": "02f743ca2733228f18d81f9c91f50309bbe248648a93a137e7681ebd2e1ad589"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/fixtures/anomaly.sphinx-doc__sphinx-10323.call70.onset.suffix1024.private.json",
+          "sha256": "8d6aaf26c98664977dad85a0771fceb905582caa5b5700f1d2cd0f66f755f051"
+        }
+      ]
+    },
+    {
+      "name": "full",
+      "command": [
+        "timeout",
+        "3600",
+        "env",
+        "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+        "READINESS_TRACE_REGION_SIZE=134217728",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+        "-m",
+        "models.autoports.google_gemma_4_31b_it.tools.precision_repro_batch",
+        "--cases",
+        "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/full-cases.json",
+        "--build-kwargs-file",
+        "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_build_kwargs.json",
+        "--output-dir",
+        "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/full"
+      ],
+      "prediction": {
+        "predicted_hours": 0.16031182056826235,
+        "range_hours": [
+          0.11879449826411859,
+          0.25718557261126435
+        ],
+        "basis": "Corrected forecast includes chosen TF work, same-mode load once and prefill/decode projections. Diagnostic host-wall only."
+      },
+      "hashes": [
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/full-cases.json",
+          "sha256": "9c784d920761e6b4bf33d441d4ec2c79e1bf42c2298cbc9903bc97354054703b"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_build_kwargs.json",
+          "sha256": "ff2b5ed24e0b6a1dee7eb5cd8bd437d17c3df5f8f25567927d239e666f0699f9"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/forecast.json",
+          "sha256": "d5023017973310de7c88848f0f859a19fec4ebdf99bb72d7c3ab63a23df5df82"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/command.json",
+          "sha256": "03e66496a41df91e6133a2a9f88475e333f412f1254d782772b0b23324ecd5b3"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/tools/precision_repro_batch.py",
+          "sha256": "172f5a1dd7a7403847e47b966ae79c306163650a60211418c7c195794ec5c125"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/fixtures/anomaly.psf__requests-5414.call9.onset.suffix1024.private.json",
+          "sha256": "9e19aaa5b7f11f026931ef8a8ca1e49bb070a338805b3568cc89dd5065e41e7c"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/fixtures/anomaly.psf__requests-5414.call10.onset.suffix1024.private.json",
+          "sha256": "2d8bee7e1640381dcb31e7213e9f3d4ae020303e3e8c1bdb0f750f1714f5e3a2"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/fixtures/anomaly.psf__requests-5414.call11.onset.suffix1024.private.json",
+          "sha256": "069a6794c0474028161f64153453577e07bc1cbde4690d0e77cef0286214ab65"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/fixtures/anomaly.matplotlib__matplotlib-20488.call86.onset.suffix1024.private.json",
+          "sha256": "56a0d881cd7c275743511dd2ac716c2755c913cbc014e7c9c1dd0713ce46a283"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/fixtures/anomaly.call91.canonicalprefix.suffix1024.private.json",
+          "sha256": "02f743ca2733228f18d81f9c91f50309bbe248648a93a137e7681ebd2e1ad589"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/fixtures/anomaly.sphinx-doc__sphinx-10323.call70.onset.suffix1024.private.json",
+          "sha256": "8d6aaf26c98664977dad85a0771fceb905582caa5b5700f1d2cd0f66f755f051"
+        }
+      ]
+    }
+  ],
+  "scope": "Diagnostic only, no score or selected precision change."
+}

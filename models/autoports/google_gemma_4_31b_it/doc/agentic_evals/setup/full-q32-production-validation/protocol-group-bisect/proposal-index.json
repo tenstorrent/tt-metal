@@ -1,0 +1,39 @@
+{
+  "status": "candidate_only_not_admitted",
+  "arms": [
+    {
+      "directory": "arm-a-kv-bfp8-only",
+      "proposal_sha256": "5c378be3de94926f2b8e232e0c73fafc8ff5d593df7bd483589271341b9fae1a",
+      "runtime_delta": {
+        "kv_cache_dtype": "bfloat8_b"
+      }
+    },
+    {
+      "directory": "arm-b-down-bfp8-lofi-only",
+      "proposal_sha256": "672c5a28eb28dec87bb74442867a8347fa1b7504403d5092f9645110282b2114",
+      "runtime_delta": {
+        "down_weight": "bfp8_lofi",
+        "down_compute_fidelity": "LoFi"
+      }
+    }
+  ],
+  "serial_execution_only": true,
+  "same_exact_prompt_seed_caps": true,
+  "case_fixtures_source": "p19-q32-production-validation/fixed108/full-q32-protocol-controls/cases.json",
+  "caps_by_source_case": [
+    {
+      "name": "fullq32.anomaly.sphinx-doc__sphinx-10323.call70.onset.seed42.cap256",
+      "seed": 42,
+      "free_run_tokens": 512,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-extra-contraction-controls/sphinx-doc__sphinx-10323.call70.onset.private.json"
+    },
+    {
+      "name": "fullq32.anomaly.sympy__sympy-13878.call1.onset.seed44.cap256",
+      "seed": 44,
+      "free_run_tokens": 256,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.sympy__sympy-13878.call1.onset.seed44.private.json"
+    }
+  ],
+  "no_admission_or_launch": true,
+  "gate": "Root may admit only after full-Q32 fixed108 panel and its cap extensions are reviewed, with deadline/closure budget fit and device-owner checks."
+}

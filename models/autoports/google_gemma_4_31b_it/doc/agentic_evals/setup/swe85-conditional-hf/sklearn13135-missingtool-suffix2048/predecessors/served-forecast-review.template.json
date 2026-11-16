@@ -1,0 +1,10 @@
+{
+  "reviewer": "root",
+  "accepted": false,
+  "forecast_status": "pending",
+  "completion_sha256": "",
+  "admission_sha256": "",
+  "forecast_range_seconds": [],
+  "reviewed_elapsed_seconds": null,
+  "explanation": ""
+}

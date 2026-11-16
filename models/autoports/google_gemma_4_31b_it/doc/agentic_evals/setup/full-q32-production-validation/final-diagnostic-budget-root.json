@@ -1,0 +1,16 @@
+{
+  "status": "prospective_only_not_admitted",
+  "recorded_unix": 1794784697.6317406,
+  "deadline_unix": 1794791725,
+  "broad_timeout_seconds": 3600,
+  "closure_reserve_seconds": 2700,
+  "prior_closure_reserve_seconds": 3600,
+  "latest_broad_admission_unix": 1794785425,
+  "rationale": "Host62tests+60subtests and source/historicalartifact hooks completed; independent targetedreview ready; compactinventory incremental;45min reserved for terminalcollection/canonicalreview/gate/telemetry/hooks/localcommit. No more device/model experiments after broad. Broad retains full3600s timeout and original800/1500/3000s forecast; not shortened to force admission.",
+  "prerequisites": [
+    "fullBF16 resume terminalpasses withnegativecontrols",
+    "pins anddeviceownerscheck atlaunch",
+    "actuallaunch+3600+2700 beforeharddeadline"
+  ],
+  "limitations": "No admitted candidate-serving/rates/retained85 rerun in this window; fastestpassingpolicy remains unselected."
+}

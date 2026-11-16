@@ -1,0 +1,12 @@
+{
+  "reviewer": "root",
+  "accepted": true,
+  "completion_sha256": "e83f641d4d6557204c78c96201c4076a94da3c6282f1ac014abdb119bda3da6a",
+  "elapsed_seconds": 503.0153603553772,
+  "forecast_range_seconds": [
+    480.0002405,
+    896.000449
+  ],
+  "forecast_hit": true,
+  "triage_pending": "last three results; no precision selection or score change"
+}

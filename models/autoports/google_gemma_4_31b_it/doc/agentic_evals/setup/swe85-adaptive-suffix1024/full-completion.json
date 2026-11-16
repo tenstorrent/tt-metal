@@ -1,0 +1,35 @@
+{
+  "name": "full",
+  "command": [
+    "timeout",
+    "3600",
+    "env",
+    "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+    "READINESS_TRACE_REGION_SIZE=134217728",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+    "-m",
+    "models.autoports.google_gemma_4_31b_it.tools.precision_repro_batch",
+    "--cases",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/full-cases.json",
+    "--build-kwargs-file",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_build_kwargs.json",
+    "--output-dir",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/full"
+  ],
+  "start_unix": 1794714307.8985775,
+  "device_owner_preflight": [],
+  "prediction": {
+    "predicted_hours": 0.16031182056826235,
+    "range_hours": [
+      0.11879449826411859,
+      0.25718557261126435
+    ],
+    "basis": "Corrected forecast includes chosen TF work, same-mode load once and prefill/decode projections. Diagnostic host-wall only."
+  },
+  "admission_sha256": "853e0d710114ab27b83886ead5bb7506a9e6f0c5d00ed1c3fe417f0a52ddf694",
+  "scope": "Diagnostic host-wall, not serving performance.",
+  "end_unix": 1794714802.3594835,
+  "exit_code": 0,
+  "measured_hours": 0.1373502516746521,
+  "prediction_range_hit": true
+}

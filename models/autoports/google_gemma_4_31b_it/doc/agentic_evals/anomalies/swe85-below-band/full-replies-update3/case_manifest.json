@@ -1,0 +1,64 @@
+{
+  "status": "prepared_not_executed_correct_branches_pending",
+  "snapshot_utc": "2026-11-14T20:02:28.528297+00:00",
+  "reviewed_coordinators": 1,
+  "failed_tasks": 1,
+  "prepared_cases": 1,
+  "excluded_unresolved_infrastructure": [],
+  "gaps": [],
+  "cases": [
+    {
+      "task": "scikit-learn__scikit-learn-14983",
+      "call": 43,
+      "response_id": "chatcmpl-8769e686aaa83c94",
+      "coordinator": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-extended85-head-bfp8/live-tasks/scikit-learn__scikit-learn-14983-first/coordinator.json",
+      "coordinator_sha256": "49aa9e10db686fb7f5a7c301ee0a974dd24886c94eec2a78c88a250906545d00",
+      "triage": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-extended85-head-bfp8/live-tasks/scikit-learn__scikit-learn-14983-first/digest/scikit-learn__scikit-learn-14983.triage.json",
+      "cause": "wrong",
+      "native_trajectory": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe-jobs/swe-extended85-head-bfp8/scikit-learn__scikit-learn-14983__QYWvf6N/agent/mini-swe-agent.trajectory.json",
+      "native_message_indices": [
+        86
+      ],
+      "request_source": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/post-gpqa-controls-head-bfp8/server/server-b32/server.log",
+      "response_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-extended85-head-bfp8/live-tasks/scikit-learn__scikit-learn-14983-first/responses.private.log",
+      "native_prompt_tokens": 25703,
+      "native_completion_tokens": 877,
+      "action_excerpt": "tool bash {\"command\": \"cat <<'EOF' > patch_repr.py\\nimport sys\\n\\nwith open('sklearn/model_selection/_split.py', 'r') as f:\\n    lines = f.readlines()\\n\\n# Find",
+      "anomaly": false,
+      "request_line": 93679,
+      "response_line": 43,
+      "request_sha256": "f79ee6c89dc1f56715f23fda9826731cf43bfc37859b98163ad08ed7b4410d49",
+      "native_response_sha256": "c951d5048a6a531ec433650d9f05351f4070e4a279112393318e78c11e04c3e4",
+      "hf_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+      "template_sha256": "ae53464bf3be25802b3a5b37def7fd89667067d7577049b3b2d74c4d8de4c6d4",
+      "reconstructed_prompt_tokens": 25702,
+      "reconstructed_completion_tokens": 879,
+      "prompt_token_count_gap": -1,
+      "completion_token_count_gap": 2,
+      "native_prompt_ids_available": false,
+      "native_output_ids_available": false,
+      "correct_branch": "pending validated pre-call state; not constructed",
+      "scope": "Full original reply reconstruction, no truncation. Agreement only, not completed precision attempt.",
+      "reconstruction": "Exact request body with historical JSON tool arguments deserialized for pinned template. Reply reconstructed as canonical thought header, complete saved reasoning, channel boundary, complete visible content, canonical tool-call macros from pinned template, native stop ID. No native token IDs: generated whitespace/order/protocol spelling cannot be recovered uniquely; counts and hashes are evidence, not identity proof. Canonicalization of malformed tool names is not proof of exact malformed native bytes.",
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "native_seed": null,
+      "executed": false,
+      "private_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-update3/scikit-learn__scikit-learn-14983.call43.case.private.json",
+      "private_case_sha256": "13aff76658e545f0534c23c2b39b0f5496106d05ad15878b0080a2d20b0653f5",
+      "private_packet": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-update3/scikit-learn__scikit-learn-14983.call43.packet.private.json",
+      "private_packet_sha256": "b73b1a9e7416688823af2f7aeb4d78589ef48989531ccef0ddcf4050519c0bef"
+    }
+  ],
+  "mapping_qualifications": {
+    "pylint-dev__pylint-4970": "Both call51 initial attempt and call55 actual insertion prepared; root identifies55 as actual edit. Do not label51 executed insertion.",
+    "pytest-dev__pytest-5840": "Call15 writes replacement script,16 executes it; both saved for decision/execution comparison.",
+    "matplotlib__matplotlib-20488": "Call29 earliest destructive rewrite identified by triage;88/91 separate anomalous repetitions. Root must ratify29 semantic first-bad status.",
+    "pydata__xarray-3095": "Recovered malformed53 native ID omitted; triage maps to message106 FormatError. First semantic wrong-edit call still unresolved.",
+    "pytest-dev__pytest-10356": "Recovered malformed14; semantic wrong-action identification requires separate adjudication.",
+    "pydata__xarray-7233": "Call1 protocol anomaly,4 fetched-release scoring violation; both preserved."
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "name": "contraction-full",
+  "command": [
+    "timeout",
+    "3600",
+    "env",
+    "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+    "READINESS_TRACE_REGION_SIZE=134217728",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+    "-m",
+    "models.autoports.google_gemma_4_31b_it.tools.precision_repro_batch",
+    "--cases",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-contraction-short-controls/candidate-cases.json",
+    "--build-kwargs-file",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_build_kwargs.json",
+    "--output-dir",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-contraction-short-controls/runs/full",
+    "--compare-dir",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-contraction-short-controls/runs/served"
+  ],
+  "start_unix": 1794710552.0710356,
+  "device_owner_preflight": [],
+  "prediction": {
+    "predicted_hours": 0.13066658657292493,
+    "range_hours": [
+      0.06533329328646247,
+      0.22213319717397237
+    ]
+  },
+  "admission_sha256": "f4f9517e2e9d788c87448952cc1bdfd184b9a0b4f6f30fb758603c04a23c34ac",
+  "scope": "Diagnostic host-wall, not serving performance."
+}

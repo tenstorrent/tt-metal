@@ -1,0 +1,16 @@
+{
+  "status": "authorization_required_after_evidence_checkpoint",
+  "recorded_unix": 1794786787.9455175,
+  "stage": "12-agentic-evals",
+  "reason": "The remaining precision-policy serving validation, measured-memory sizing, matched vLLM rates and retained85-task repair have no admitted plan within the current50-hour window. Completed diagnostics and all original scores are retained.",
+  "question": "Authorize the proposed additional12-hour local-only window? The retained85-task rerun will be admitted only if its measured-rate projection fits the remaining window and12-hour run limit.",
+  "proposal": "continuation-proposal.json",
+  "budget_source": "bringup/agentic_evals/inputs.json",
+  "deadline_source": "stage_timing.json",
+  "review": "review/stage12-final-review.md",
+  "review_verdict": "more-work-needed",
+  "unknown_verifier_outcomes": 3,
+  "score_reporting": "Extended SWE not passed yet;23\u201326/85 bounds, null point score, no denominator exclusions.",
+  "no_current_model_jobs": true,
+  "goal_status_update": "After local evidence checkpoint and SHA record; not a completed stage."
+}

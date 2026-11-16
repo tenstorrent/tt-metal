@@ -1,0 +1,2015 @@
+{
+  "started_utc": "2026-11-14T07:42:51.705455+00:00",
+  "status": "stopped_pull_failed",
+  "stop_file": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/STOP_PULLS",
+  "candidate_sha256": "0d971599ad5e63ae06614f5cf47ade8ee68861e92fd4125bfadd6d8ff06ae88f",
+  "rows": [
+    {
+      "task": "pallets__flask-5014",
+      "image": "docker.io/swebench/sweb.eval.x86_64.pallets_1776_flask-5014:latest",
+      "status": "pulled",
+      "disk_before": {
+        "available_bytes": 474087231488,
+        "total_bytes": 3935709487104
+      },
+      "started_utc": "2026-11-14T07:42:51.984540+00:00",
+      "log": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/pull-logs/pallets__flask-5014.log",
+      "latest_disk": {
+        "available_bytes": 472032374784,
+        "total_bytes": 3935709487104
+      },
+      "finished_utc": "2026-11-14T07:43:08.580322+00:00",
+      "exit_code": 0,
+      "disk_after": {
+        "available_bytes": 472032362496,
+        "total_bytes": 3935709487104
+      },
+      "elapsed_setup_seconds": 16.99924454302527,
+      "image_id": "sha256:bde4fbdafa36141d4396944da88ec37aabdef612ed36920090675bccd0ca5d72",
+      "repo_digests": [
+        "swebench/sweb.eval.x86_64.pallets_1776_flask-5014@sha256:bde4fbdafa36141d4396944da88ec37aabdef612ed36920090675bccd0ca5d72"
+      ],
+      "size_bytes": 1145545580,
+      "rootfs_layers": [
+        "sha256:beb59027b96ddbf30ac9c80b527668fe7011f4f553fe83f5e59199e9a84fb5ca",
+        "sha256:24df650e8ccc41451cf4f7113e09420f7ec00ca9ae41e8be09c60bc467cdf4fe",
+        "sha256:098cb03ec50e1bd1637b7db5e2696a4d1dc3f1c3811adbbe444f43f631f2e7fd",
+        "sha256:fc3a8fa12509a555b3cea8d1f7457c0837ab8360be78e7a380294e09f96fe2f2",
+        "sha256:a3540f5c375c231bc054e7472d0de5a6d8fe5c96b92948f7655914860647fb54",
+        "sha256:f3684f1a85d5159913e2c41a55a86947882302421241b14b57583633bfc31873",
+        "sha256:203918e4e4f61405c5bcee9ef12df780b6b77fa39518403fd7aade1188cd94ea",
+        "sha256:6ad81b8402e309717fce35e914d504af78f01737909641c9dee857a734d75c36",
+        "sha256:b8c5d01aefbb34160f4b5b0614b3cfe9b05bb7f12a11b58d6a30b342da741e3c",
+        "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
+      ]
+    },
+    {
+      "task": "mwaskom__seaborn-3187",
+      "image": "docker.io/swebench/sweb.eval.x86_64.mwaskom_1776_seaborn-3187:latest",
+      "status": "pulled",
+      "disk_before": {
+        "available_bytes": 472032358400,
+        "total_bytes": 3935709487104
+      },
+      "started_utc": "2026-11-14T07:43:09.292206+00:00",
+      "log": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/pull-logs/mwaskom__seaborn-3187.log",
+      "latest_disk": {
+        "available_bytes": 469511372800,
+        "total_bytes": 3935709487104
+      },
+      "finished_utc": "2026-11-14T07:43:31.406175+00:00",
+      "exit_code": 0,
+      "disk_after": {
+        "available_bytes": 469511368704,
+        "total_bytes": 3935709487104
+      },
+      "elapsed_setup_seconds": 22.432971643051133,
+      "image_id": "sha256:aea7e43b20703256f5cb807b54cd78a12601f21086d3a62a41de18c254771f4e",
+      "repo_digests": [
+        "swebench/sweb.eval.x86_64.mwaskom_1776_seaborn-3187@sha256:aea7e43b20703256f5cb807b54cd78a12601f21086d3a62a41de18c254771f4e"
+      ],
+      "size_bytes": 1295128746,
+      "rootfs_layers": [
+        "sha256:beb59027b96ddbf30ac9c80b527668fe7011f4f553fe83f5e59199e9a84fb5ca",
+        "sha256:24df650e8ccc41451cf4f7113e09420f7ec00ca9ae41e8be09c60bc467cdf4fe",
+        "sha256:098cb03ec50e1bd1637b7db5e2696a4d1dc3f1c3811adbbe444f43f631f2e7fd",
+        "sha256:fc3a8fa12509a555b3cea8d1f7457c0837ab8360be78e7a380294e09f96fe2f2",
+        "sha256:a3540f5c375c231bc054e7472d0de5a6d8fe5c96b92948f7655914860647fb54",
+        "sha256:f3684f1a85d5159913e2c41a55a86947882302421241b14b57583633bfc31873",
+        "sha256:53df1caa178adae0bc2095d81c687d45b05d3892c4bbdd45619cbed80db9fc9e",
+        "sha256:9e76653c0d7082708ac681c70904b36656a7c103377aa7945806a7e3f821cb5d",
+        "sha256:48bea11520e9145eaf4cf482cdc0c6d7e368a27342feca328a35725b0342ad25",
+        "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
+      ]
+    },
+    {
+      "task": "pytest-dev__pytest-7982",
+      "image": "docker.io/swebench/sweb.eval.x86_64.pytest-dev_1776_pytest-7982:latest",
+      "status": "pulled",
+      "disk_before": {
+        "available_bytes": 469511356416,
+        "total_bytes": 3935709487104
+      },
+      "started_utc": "2026-11-14T07:43:32.130207+00:00",
+      "log": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/pull-logs/pytest-dev__pytest-7982.log",
+      "latest_disk": {
+        "available_bytes": 467851354112,
+        "total_bytes": 3935709487104
+      },
+      "finished_utc": "2026-11-14T07:43:48.898462+00:00",
+      "exit_code": 0,
+      "disk_after": {
+        "available_bytes": 467851345920,
+        "total_bytes": 3935709487104
+      },
+      "elapsed_setup_seconds": 17.144242201931775,
+      "image_id": "sha256:1b6cd660102de29c36d28954eb2f6158b93d11b855a9bbfc577a55eb67a8f375",
+      "repo_digests": [
+        "swebench/sweb.eval.x86_64.pytest-dev_1776_pytest-7982@sha256:1b6cd660102de29c36d28954eb2f6158b93d11b855a9bbfc577a55eb67a8f375"
+      ],
+      "size_bytes": 1026967300,
+      "rootfs_layers": [
+        "sha256:beb59027b96ddbf30ac9c80b527668fe7011f4f553fe83f5e59199e9a84fb5ca",
+        "sha256:24df650e8ccc41451cf4f7113e09420f7ec00ca9ae41e8be09c60bc467cdf4fe",
+        "sha256:098cb03ec50e1bd1637b7db5e2696a4d1dc3f1c3811adbbe444f43f631f2e7fd",
+        "sha256:fc3a8fa12509a555b3cea8d1f7457c0837ab8360be78e7a380294e09f96fe2f2",
+        "sha256:a3540f5c375c231bc054e7472d0de5a6d8fe5c96b92948f7655914860647fb54",
+        "sha256:f3684f1a85d5159913e2c41a55a86947882302421241b14b57583633bfc31873",
+        "sha256:b92f2f08abb58dff6d8c1423f4cc306cf870d17bb93a2235c86b820bf50b60d0",
+        "sha256:387b3597262a319e49e52707fc7664bcce7880b8db9313048498c3d58064dc45",
+        "sha256:7569a3770d063933a182cbaa5900729203bb29d9e6b21cacf0d16322f49b13d2",
+        "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
+      ]
+    },
+    {
+      "task": "sympy__sympy-14711",
+      "image": "docker.io/swebench/sweb.eval.x86_64.sympy_1776_sympy-14711:latest",
+      "status": "pulled",
+      "disk_before": {
+        "available_bytes": 467851341824,
+        "total_bytes": 3935709487104
+      },
+      "started_utc": "2026-11-14T07:43:49.628215+00:00",
+      "log": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/pull-logs/sympy__sympy-14711.log",
+      "latest_disk": {
+        "available_bytes": 467702079488,
+        "total_bytes": 3935709487104
+      },
+      "finished_utc": "2026-11-14T07:43:55.084771+00:00",
+      "exit_code": 0,
+      "disk_after": {
+        "available_bytes": 467702071296,
+        "total_bytes": 3935709487104
+      },
+      "elapsed_setup_seconds": 5.6752240508794785,
+      "image_id": "sha256:c5366c33ed254ded2f8b39f7350deada09fc6ff5b1fe252041d10844fab54997",
+      "repo_digests": [
+        "swebench/sweb.eval.x86_64.sympy_1776_sympy-14711@sha256:c5366c33ed254ded2f8b39f7350deada09fc6ff5b1fe252041d10844fab54997"
+      ],
+      "size_bytes": 1070319286,
+      "rootfs_layers": [
+        "sha256:beb59027b96ddbf30ac9c80b527668fe7011f4f553fe83f5e59199e9a84fb5ca",
+        "sha256:24df650e8ccc41451cf4f7113e09420f7ec00ca9ae41e8be09c60bc467cdf4fe",
+        "sha256:098cb03ec50e1bd1637b7db5e2696a4d1dc3f1c3811adbbe444f43f631f2e7fd",
+        "sha256:fc3a8fa12509a555b3cea8d1f7457c0837ab8360be78e7a380294e09f96fe2f2",
+        "sha256:a3540f5c375c231bc054e7472d0de5a6d8fe5c96b92948f7655914860647fb54",
+        "sha256:f3684f1a85d5159913e2c41a55a86947882302421241b14b57583633bfc31873",
+        "sha256:fe542fe64c3f8a7b726310ec1785fb4a03948f157976e080e06c684396010d13",
+        "sha256:c41677510cfe38564e7bb15dea585ec1b5057f40b29ceaad3b1c733edd8a35a8",
+        "sha256:86dccdc1cace9aa46dae823bf07ee1ed9d4d8c1e2f6053a6f0c225468b826cc2",
+        "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
+      ]
+    },
+    {
+      "task": "pylint-dev__pylint-8898",
+      "image": "docker.io/swebench/sweb.eval.x86_64.pylint-dev_1776_pylint-8898:latest",
+      "status": "pulled",
+      "disk_before": {
+        "available_bytes": 467702046720,
+        "total_bytes": 3935709487104
+      },
+      "started_utc": "2026-11-14T07:43:55.764879+00:00",
+      "log": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/pull-logs/pylint-dev__pylint-8898.log",
+      "latest_disk": {
+        "available_bytes": 465967919104,
+        "total_bytes": 3935709487104
+      },
+      "finished_utc": "2026-11-14T07:44:12.566893+00:00",
+      "exit_code": 0,
+      "disk_after": {
+        "available_bytes": 465967915008,
+        "total_bytes": 3935709487104
+      },
+      "elapsed_setup_seconds": 17.114479830954224,
+      "image_id": "sha256:a78e6034f627c1ae69c67b5a25ae5420192afb7279a4fd032a74095752e707d7",
+      "repo_digests": [
+        "swebench/sweb.eval.x86_64.pylint-dev_1776_pylint-8898@sha256:a78e6034f627c1ae69c67b5a25ae5420192afb7279a4fd032a74095752e707d7"
+      ],
+      "size_bytes": 1043406888,
+      "rootfs_layers": [
+        "sha256:beb59027b96ddbf30ac9c80b527668fe7011f4f553fe83f5e59199e9a84fb5ca",
+        "sha256:24df650e8ccc41451cf4f7113e09420f7ec00ca9ae41e8be09c60bc467cdf4fe",
+        "sha256:098cb03ec50e1bd1637b7db5e2696a4d1dc3f1c3811adbbe444f43f631f2e7fd",
+        "sha256:fc3a8fa12509a555b3cea8d1f7457c0837ab8360be78e7a380294e09f96fe2f2",
+        "sha256:a3540f5c375c231bc054e7472d0de5a6d8fe5c96b92948f7655914860647fb54",
+        "sha256:f3684f1a85d5159913e2c41a55a86947882302421241b14b57583633bfc31873",
+        "sha256:4658be72c7477ca9c94da0f105152638e86e5d4a614993b871047bd7ffe8f6eb",
+        "sha256:8023461bc24aa05cd3d8057df9a6ef45adeaeb624c49b3657c8a09c91b8ea828",
+        "sha256:59032586a15da72ca8974c5830a967b91bb6df63fe3b3d54cc2ba76188127650",
+        "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
+      ]
+    },
+    {
+      "task": "scikit-learn__scikit-learn-13135",
+      "image": "docker.io/swebench/sweb.eval.x86_64.scikit-learn_1776_scikit-learn-13135:latest",
+      "status": "pulled",
+      "disk_before": {
+        "available_bytes": 465967898624,
+        "total_bytes": 3935709487104
+      },
+      "started_utc": "2026-11-14T07:44:13.378316+00:00",
+      "log": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/pull-logs/scikit-learn__scikit-learn-13135.log",
+      "latest_disk": {
+        "available_bytes": 462781980672,
+        "total_bytes": 3935709487104
+      },
+      "finished_utc": "2026-11-14T07:44:41.163707+00:00",
+      "exit_code": 0,
+      "disk_after": {
+        "available_bytes": 462781972480,
+        "total_bytes": 3935709487104
+      },
+      "elapsed_setup_seconds": 28.067261775955558,
+      "image_id": "sha256:b705dbd922584148fc14794e27c7117bb29654791d8e0937dc28dea06788e2d3",
+      "repo_digests": [
+        "swebench/sweb.eval.x86_64.scikit-learn_1776_scikit-learn-13135@sha256:b705dbd922584148fc14794e27c7117bb29654791d8e0937dc28dea06788e2d3"
+      ],
+      "size_bytes": 1480606948,
+      "rootfs_layers": [
+        "sha256:beb59027b96ddbf30ac9c80b527668fe7011f4f553fe83f5e59199e9a84fb5ca",
+        "sha256:24df650e8ccc41451cf4f7113e09420f7ec00ca9ae41e8be09c60bc467cdf4fe",
+        "sha256:098cb03ec50e1bd1637b7db5e2696a4d1dc3f1c3811adbbe444f43f631f2e7fd",
+        "sha256:fc3a8fa12509a555b3cea8d1f7457c0837ab8360be78e7a380294e09f96fe2f2",
+        "sha256:a3540f5c375c231bc054e7472d0de5a6d8fe5c96b92948f7655914860647fb54",
+        "sha256:f3684f1a85d5159913e2c41a55a86947882302421241b14b57583633bfc31873",
+        "sha256:36bc17c43f70b347cd3d69820fc95875d5404e64c68f1400a60b6b90d34666cf",
+        "sha256:0ab3624eb7802179d3f5fe124e75e93e0849c00896ee49438de1cceb7eb3903a",
+        "sha256:f3e5fed69c78f691772f6ab15d1a79d657a71abff55b721eaa04ae002bb338ee",
+        "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
+      ]
+    },
+    {
+      "task": "psf__requests-2931",
+      "image": "docker.io/swebench/sweb.eval.x86_64.psf_1776_requests-2931:latest",
+      "status": "pulled",
+      "disk_before": {
+        "available_bytes": 462781956096,
+        "total_bytes": 3935709487104
+      },
+      "started_utc": "2026-11-14T07:44:41.808565+00:00",
+      "log": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/pull-logs/psf__requests-2931.log",
+      "latest_disk": {
+        "available_bytes": 462766923776,
+        "total_bytes": 3935709487104
+      },
+      "finished_utc": "2026-11-14T07:44:47.145031+00:00",
+      "exit_code": 0,
+      "disk_after": {
+        "available_bytes": 462766911488,
+        "total_bytes": 3935709487104
+      },
+      "elapsed_setup_seconds": 5.653225963003933,
+      "image_id": "sha256:705258c23c73d25bc78ed6fa4b14836078d848a64ab9c3ea3032d1d523d7cca4",
+      "repo_digests": [
+        "swebench/sweb.eval.x86_64.psf_1776_requests-2931@sha256:705258c23c73d25bc78ed6fa4b14836078d848a64ab9c3ea3032d1d523d7cca4"
+      ],
+      "size_bytes": 1015376674,
+      "rootfs_layers": [
+        "sha256:beb59027b96ddbf30ac9c80b527668fe7011f4f553fe83f5e59199e9a84fb5ca",
+        "sha256:24df650e8ccc41451cf4f7113e09420f7ec00ca9ae41e8be09c60bc467cdf4fe",
+        "sha256:098cb03ec50e1bd1637b7db5e2696a4d1dc3f1c3811adbbe444f43f631f2e7fd",
+        "sha256:fc3a8fa12509a555b3cea8d1f7457c0837ab8360be78e7a380294e09f96fe2f2",
+        "sha256:a3540f5c375c231bc054e7472d0de5a6d8fe5c96b92948f7655914860647fb54",
+        "sha256:f3684f1a85d5159913e2c41a55a86947882302421241b14b57583633bfc31873",
+        "sha256:f17ac596f61eb5d3f00dc171508c3c39572f7f8a14bca44afb2cee30f2dff8d9",
+        "sha256:4db169898266e7aae43905577235ef03d1c0d40defe24af146da9c0ee68d11b3",
+        "sha256:c39f87c89e12b36d784619079e6b26867d6d2f77700e4f4cb3eb2ebac31c75da",
+        "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
+      ]
+    },
+    {
+      "task": "django__django-15037",
+      "image": "docker.io/swebench/sweb.eval.x86_64.django_1776_django-15037:latest",
+      "status": "pulled",
+      "disk_before": {
+        "available_bytes": 462766907392,
+        "total_bytes": 3935709487104
+      },
+      "started_utc": "2026-11-14T07:44:47.823197+00:00",
+      "log": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/pull-logs/django__django-15037.log",
+      "latest_disk": {
+        "available_bytes": 460571512832,
+        "total_bytes": 3935709487104
+      },
+      "finished_utc": "2026-11-14T07:45:10.031994+00:00",
+      "exit_code": 0,
+      "disk_after": {
+        "available_bytes": 460571500544,
+        "total_bytes": 3935709487104
+      },
+      "elapsed_setup_seconds": 22.533385933144018,
+      "image_id": "sha256:4a75865ed731741f5b3c52483f71fd538bd86933d8339298279e68d87804bc13",
+      "repo_digests": [
+        "swebench/sweb.eval.x86_64.django_1776_django-15037@sha256:4a75865ed731741f5b3c52483f71fd538bd86933d8339298279e68d87804bc13"
+      ],
+      "size_bytes": 1207791134,
+      "rootfs_layers": [
+        "sha256:beb59027b96ddbf30ac9c80b527668fe7011f4f553fe83f5e59199e9a84fb5ca",
+        "sha256:24df650e8ccc41451cf4f7113e09420f7ec00ca9ae41e8be09c60bc467cdf4fe",
+        "sha256:098cb03ec50e1bd1637b7db5e2696a4d1dc3f1c3811adbbe444f43f631f2e7fd",
+        "sha256:fc3a8fa12509a555b3cea8d1f7457c0837ab8360be78e7a380294e09f96fe2f2",
+        "sha256:a3540f5c375c231bc054e7472d0de5a6d8fe5c96b92948f7655914860647fb54",
+        "sha256:f3684f1a85d5159913e2c41a55a86947882302421241b14b57583633bfc31873",
+        "sha256:ea287cde03f4009ad7cc557b29a91120e913fb1301da08a545191db4d8faa98d",
+        "sha256:0f54b542e6bdc464311bb7c07e3415b36ab84238135c1303b6cd9b4da43f2667",
+        "sha256:40fdb8364cca7af5e5b57e2410a6483766caa406758e1126dc8ac431d8a9ff80",
+        "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
+      ]
+    },
+    {
+      "task": "matplotlib__matplotlib-20488",
+      "image": "docker.io/swebench/sweb.eval.x86_64.matplotlib_1776_matplotlib-20488:latest",
+      "status": "pulled",
+      "disk_before": {
+        "available_bytes": 460571488256,
+        "total_bytes": 3935709487104
+      },
+      "started_utc": "2026-11-14T07:45:10.627198+00:00",
+      "log": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/pull-logs/matplotlib__matplotlib-20488.log",
+      "latest_disk": {
+        "available_bytes": 455024603136,
+        "total_bytes": 3935709487104
+      },
+      "finished_utc": "2026-11-14T07:45:55.830055+00:00",
+      "exit_code": 0,
+      "disk_after": {
+        "available_bytes": 455024594944,
+        "total_bytes": 3935709487104
+      },
+      "elapsed_setup_seconds": 45.480062526185066,
+      "image_id": "sha256:be05d6f5074be17d15bec1c6436945b2f77c39e4fbebd89a334f65750f5934ff",
+      "repo_digests": [
+        "swebench/sweb.eval.x86_64.matplotlib_1776_matplotlib-20488@sha256:be05d6f5074be17d15bec1c6436945b2f77c39e4fbebd89a334f65750f5934ff"
+      ],
+      "size_bytes": 2256746004,
+      "rootfs_layers": [
+        "sha256:beb59027b96ddbf30ac9c80b527668fe7011f4f553fe83f5e59199e9a84fb5ca",
+        "sha256:24df650e8ccc41451cf4f7113e09420f7ec00ca9ae41e8be09c60bc467cdf4fe",
+        "sha256:098cb03ec50e1bd1637b7db5e2696a4d1dc3f1c3811adbbe444f43f631f2e7fd",
+        "sha256:fc3a8fa12509a555b3cea8d1f7457c0837ab8360be78e7a380294e09f96fe2f2",
+        "sha256:a3540f5c375c231bc054e7472d0de5a6d8fe5c96b92948f7655914860647fb54",
+        "sha256:f3684f1a85d5159913e2c41a55a86947882302421241b14b57583633bfc31873",
+        "sha256:e85248313ff7881c70a935037e8aaedfcc56f2f4c410c5dce838ed7134475af6",
+        "sha256:598933ba7bcdea8bee158d134a69af2b8b5fafbcaf133c36e18b37bd2ea0d8d6",
+        "sha256:65dd80e9707946a0c5f0d5ef9c6aa1aecbecf272df764dc15b1903720521e7d3",
+        "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
+      ]
+    },
+    {
+      "task": "pydata__xarray-4629",
+      "image": "docker.io/swebench/sweb.eval.x86_64.pydata_1776_xarray-4629:latest",
+      "status": "pulled",
+      "disk_before": {
+        "available_bytes": 455024582656,
+        "total_bytes": 3935709487104
+      },
+      "started_utc": "2026-11-14T07:45:56.541516+00:00",
+      "log": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/pull-logs/pydata__xarray-4629.log",
+      "latest_disk": {
+        "available_bytes": 454991228928,
+        "total_bytes": 3935709487104
+      },
+      "finished_utc": "2026-11-14T07:46:02.052479+00:00",
+      "exit_code": 0,
+      "disk_after": {
+        "available_bytes": 454991224832,
+        "total_bytes": 3935709487104
+      },
+      "elapsed_setup_seconds": 5.812343898927793,
+      "image_id": "sha256:033589865b8522fd28ad477db28dccb4fcfcc3e56174bbc95e7996b2a948135b",
+      "repo_digests": [
+        "swebench/sweb.eval.x86_64.pydata_1776_xarray-4629@sha256:033589865b8522fd28ad477db28dccb4fcfcc3e56174bbc95e7996b2a948135b"
+      ],
+      "size_bytes": 2049761059,
+      "rootfs_layers": [
+        "sha256:beb59027b96ddbf30ac9c80b527668fe7011f4f553fe83f5e59199e9a84fb5ca",
+        "sha256:24df650e8ccc41451cf4f7113e09420f7ec00ca9ae41e8be09c60bc467cdf4fe",
+        "sha256:098cb03ec50e1bd1637b7db5e2696a4d1dc3f1c3811adbbe444f43f631f2e7fd",
+        "sha256:fc3a8fa12509a555b3cea8d1f7457c0837ab8360be78e7a380294e09f96fe2f2",
+        "sha256:a3540f5c375c231bc054e7472d0de5a6d8fe5c96b92948f7655914860647fb54",
+        "sha256:f3684f1a85d5159913e2c41a55a86947882302421241b14b57583633bfc31873",
+        "sha256:8eade9ed4d64b8463e511222b718a4ff55ce8276d3c763ed612262dc767ab7b5",
+        "sha256:50301944a012659250a3193008453fb5ac788e2314568c26dc5b6434304db8cb",
+        "sha256:1ea857d333c262cede557c0f841bb445c35c931cad13d9868cfece28843b6522",
+        "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
+      ]
+    },
+    {
+      "task": "astropy__astropy-14995",
+      "image": "docker.io/swebench/sweb.eval.x86_64.astropy_1776_astropy-14995:latest",
+      "status": "pulled",
+      "disk_before": {
+        "available_bytes": 454991208448,
+        "total_bytes": 3935709487104
+      },
+      "started_utc": "2026-11-14T07:46:02.733755+00:00",
+      "log": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/pull-logs/astropy__astropy-14995.log",
+      "latest_disk": {
+        "available_bytes": 452994437120,
+        "total_bytes": 3935709487104
+      },
+      "finished_utc": "2026-11-14T07:46:19.117254+00:00",
+      "exit_code": 0,
+      "disk_after": {
+        "available_bytes": 452994424832,
+        "total_bytes": 3935709487104
+      },
+      "elapsed_setup_seconds": 16.809664954897016,
+      "image_id": "sha256:e1c746371f8f7132c29768bea9cc1380871c87f6e4404a2282d8d3c582786874",
+      "repo_digests": [
+        "swebench/sweb.eval.x86_64.astropy_1776_astropy-14995@sha256:e1c746371f8f7132c29768bea9cc1380871c87f6e4404a2282d8d3c582786874"
+      ],
+      "size_bytes": 1139262260,
+      "rootfs_layers": [
+        "sha256:beb59027b96ddbf30ac9c80b527668fe7011f4f553fe83f5e59199e9a84fb5ca",
+        "sha256:8b070dae4fd6562cc7272d3392d3e5d0eb54aebbabe7992ea47407c02a7e4ab5",
+        "sha256:e41dda3ddff433b42bc5c7db367e9a89b90e42702b2204ac3748eff0661fed5d",
+        "sha256:77dfb20914dd629938c812a6dbd69d5523e3eca3798e570ceee0b09b0e9f8eeb",
+        "sha256:73f1203e53826763f5480b23ca857212005fd21f7fbfb1df5f40641c278d0802",
+        "sha256:9f91f535caf3186b2a7f093b2f8bc4e3a6605e119e563b7e49fb81415185125d",
+        "sha256:d375fd795e4141dd3ad97d483bfa3e104cdac73eed1a68645442c89b6a3cd1b4",
+        "sha256:d03c9c2b653e9742cf62d63cad9deb085232f2d4d019277da3a16034228e86e8",
+        "sha256:003c732f796727f55b3af6227b881c15be06c8b0af08e18def02b3617e3321d5",
+        "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
+      ]
+    },
+    {
+      "task": "sphinx-doc__sphinx-9281",
+      "image": "docker.io/swebench/sweb.eval.x86_64.sphinx-doc_1776_sphinx-9281:latest",
+      "status": "pulled",
+      "disk_before": {
+        "available_bytes": 452994416640,
+        "total_bytes": 3935709487104
+      },
+      "started_utc": "2026-11-14T07:46:19.965617+00:00",
+      "log": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/pull-logs/sphinx-doc__sphinx-9281.log",
+      "latest_disk": {
+        "available_bytes": 452892741632,
+        "total_bytes": 3935709487104
+      },
+      "finished_utc": "2026-11-14T07:46:25.305424+00:00",
+      "exit_code": 0,
+      "disk_after": {
+        "available_bytes": 452892733440,
+        "total_bytes": 3935709487104
+      },
+      "elapsed_setup_seconds": 5.740732819074765,
+      "image_id": "sha256:08c9e293bbc73d548670319b2d37ef8eef6bf528b995959f361159c505355f2d",
+      "repo_digests": [
+        "swebench/sweb.eval.x86_64.sphinx-doc_1776_sphinx-9281@sha256:08c9e293bbc73d548670319b2d37ef8eef6bf528b995959f361159c505355f2d"
+      ],
+      "size_bytes": 1099714146,
+      "rootfs_layers": [
+        "sha256:beb59027b96ddbf30ac9c80b527668fe7011f4f553fe83f5e59199e9a84fb5ca",
+        "sha256:24df650e8ccc41451cf4f7113e09420f7ec00ca9ae41e8be09c60bc467cdf4fe",
+        "sha256:098cb03ec50e1bd1637b7db5e2696a4d1dc3f1c3811adbbe444f43f631f2e7fd",
+        "sha256:fc3a8fa12509a555b3cea8d1f7457c0837ab8360be78e7a380294e09f96fe2f2",
+        "sha256:a3540f5c375c231bc054e7472d0de5a6d8fe5c96b92948f7655914860647fb54",
+        "sha256:f3684f1a85d5159913e2c41a55a86947882302421241b14b57583633bfc31873",
+        "sha256:3469b42ce1ac55c209bfd25927c21eb684548d55c4628155e7730e67aa976250",
+        "sha256:229dd92b8b9bd5e33383abbdedbf0e121bec9801ce9c7af17dd51e75e81b6658",
+        "sha256:5c20663a978e1becbe3f8eb638605d28208c8ee4b44f55e6f3ce660ba54b179d",
+        "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
+      ]
+    },
+    {
+      "task": "mwaskom__seaborn-3069",
+      "image": "docker.io/swebench/sweb.eval.x86_64.mwaskom_1776_seaborn-3069:latest",
+      "status": "pulled",
+      "disk_before": {
+        "available_bytes": 452892725248,
+        "total_bytes": 3935709487104
+      },
+      "started_utc": "2026-11-14T07:46:26.076254+00:00",
+      "log": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/pull-logs/mwaskom__seaborn-3069.log",
+      "latest_disk": {
+        "available_bytes": 450399035392,
+        "total_bytes": 3935709487104
+      },
+      "finished_utc": "2026-11-14T07:46:48.335710+00:00",
+      "exit_code": 0,
+      "disk_after": {
+        "available_bytes": 450399031296,
+        "total_bytes": 3935709487104
+      },
+      "elapsed_setup_seconds": 22.602758723078296,
+      "image_id": "sha256:10f78850ebb5de5a4bdb70099159131fa819601dc885955d7be6f1009b23b4ea",
+      "repo_digests": [
+        "swebench/sweb.eval.x86_64.mwaskom_1776_seaborn-3069@sha256:10f78850ebb5de5a4bdb70099159131fa819601dc885955d7be6f1009b23b4ea"
+      ],
+      "size_bytes": 1291613971,
+      "rootfs_layers": [
+        "sha256:beb59027b96ddbf30ac9c80b527668fe7011f4f553fe83f5e59199e9a84fb5ca",
+        "sha256:24df650e8ccc41451cf4f7113e09420f7ec00ca9ae41e8be09c60bc467cdf4fe",
+        "sha256:098cb03ec50e1bd1637b7db5e2696a4d1dc3f1c3811adbbe444f43f631f2e7fd",
+        "sha256:fc3a8fa12509a555b3cea8d1f7457c0837ab8360be78e7a380294e09f96fe2f2",
+        "sha256:a3540f5c375c231bc054e7472d0de5a6d8fe5c96b92948f7655914860647fb54",
+        "sha256:f3684f1a85d5159913e2c41a55a86947882302421241b14b57583633bfc31873",
+        "sha256:21c6f44b95dffd065643dbfe9124bfbe0add82215ed84226e80fb5b4712704a0",
+        "sha256:b3528e19d47cf7e2814ca9c32b77fc17e22970b01e2903dcf1adeed37bdaa434",
+        "sha256:e82e637690472857dbfc71579f4363cac3b7c6b6f56b220c63977b0f68ceb95e",
+        "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
+      ]
+    },
+    {
+      "task": "pytest-dev__pytest-6197",
+      "image": "docker.io/swebench/sweb.eval.x86_64.pytest-dev_1776_pytest-6197:latest",
+      "status": "pulled",
+      "disk_before": {
+        "available_bytes": 450399014912,
+        "total_bytes": 3935709487104
+      },
+      "started_utc": "2026-11-14T07:46:49.102612+00:00",
+      "log": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/pull-logs/pytest-dev__pytest-6197.log",
+      "latest_disk": {
+        "available_bytes": 450360897536,
+        "total_bytes": 3935709487104
+      },
+      "finished_utc": "2026-11-14T07:46:54.447215+00:00",
+      "exit_code": 0,
+      "disk_after": {
+        "available_bytes": 450360893440,
+        "total_bytes": 3935709487104
+      },
+      "elapsed_setup_seconds": 5.648840646957979,
+      "image_id": "sha256:5dbfbcf23210a5a0ccdc4dbf1a55c894255b28fe6c56c13c9a4724d6c13bab4e",
+      "repo_digests": [
+        "swebench/sweb.eval.x86_64.pytest-dev_1776_pytest-6197@sha256:5dbfbcf23210a5a0ccdc4dbf1a55c894255b28fe6c56c13c9a4724d6c13bab4e"
+      ],
+      "size_bytes": 1024549481,
+      "rootfs_layers": [
+        "sha256:beb59027b96ddbf30ac9c80b527668fe7011f4f553fe83f5e59199e9a84fb5ca",
+        "sha256:24df650e8ccc41451cf4f7113e09420f7ec00ca9ae41e8be09c60bc467cdf4fe",
+        "sha256:098cb03ec50e1bd1637b7db5e2696a4d1dc3f1c3811adbbe444f43f631f2e7fd",
+        "sha256:fc3a8fa12509a555b3cea8d1f7457c0837ab8360be78e7a380294e09f96fe2f2",
+        "sha256:a3540f5c375c231bc054e7472d0de5a6d8fe5c96b92948f7655914860647fb54",
+        "sha256:f3684f1a85d5159913e2c41a55a86947882302421241b14b57583633bfc31873",
+        "sha256:40cdfad1eaa85c9debcd7fb2ace54f1f16bef3c29201e922dd71c350368cdf50",
+        "sha256:3458ff98034ec573fa2c7fc21cfc72a85db308dc32a4f24648f52a9c824c5858",
+        "sha256:dab023771a73e52ca25af72e6be4375b3d89af4692e6528fb34577290d5eb857",
+        "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
+      ]
+    },
+    {
+      "task": "sympy__sympy-14248",
+      "image": "docker.io/swebench/sweb.eval.x86_64.sympy_1776_sympy-14248:latest",
+      "status": "pulled",
+      "disk_before": {
+        "available_bytes": 450360885248,
+        "total_bytes": 3935709487104
+      },
+      "started_utc": "2026-11-14T07:46:55.114325+00:00",
+      "log": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/pull-logs/sympy__sympy-14248.log",
+      "latest_disk": {
+        "available_bytes": 450213265408,
+        "total_bytes": 3935709487104
+      },
+      "finished_utc": "2026-11-14T07:47:00.523157+00:00",
+      "exit_code": 0,
+      "disk_after": {
+        "available_bytes": 450213244928,
+        "total_bytes": 3935709487104
+      },
+      "elapsed_setup_seconds": 5.6629339111968875,
+      "image_id": "sha256:eb3a63364062801d29fbdf423d80ac39157f00ec4f30a0ded10c332ecb1090fd",
+      "repo_digests": [
+        "swebench/sweb.eval.x86_64.sympy_1776_sympy-14248@sha256:eb3a63364062801d29fbdf423d80ac39157f00ec4f30a0ded10c332ecb1090fd"
+      ],
+      "size_bytes": 1069405443,
+      "rootfs_layers": [
+        "sha256:beb59027b96ddbf30ac9c80b527668fe7011f4f553fe83f5e59199e9a84fb5ca",
+        "sha256:24df650e8ccc41451cf4f7113e09420f7ec00ca9ae41e8be09c60bc467cdf4fe",
+        "sha256:098cb03ec50e1bd1637b7db5e2696a4d1dc3f1c3811adbbe444f43f631f2e7fd",
+        "sha256:fc3a8fa12509a555b3cea8d1f7457c0837ab8360be78e7a380294e09f96fe2f2",
+        "sha256:a3540f5c375c231bc054e7472d0de5a6d8fe5c96b92948f7655914860647fb54",
+        "sha256:f3684f1a85d5159913e2c41a55a86947882302421241b14b57583633bfc31873",
+        "sha256:fe542fe64c3f8a7b726310ec1785fb4a03948f157976e080e06c684396010d13",
+        "sha256:c41677510cfe38564e7bb15dea585ec1b5057f40b29ceaad3b1c733edd8a35a8",
+        "sha256:8e152f6b6eaf917caa138e11d409784f239ad60429962316e7fdd0ced5bd4dc0",
+        "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
+      ]
+    },
+    {
+      "task": "pylint-dev__pylint-4604",
+      "image": "docker.io/swebench/sweb.eval.x86_64.pylint-dev_1776_pylint-4604:latest",
+      "status": "pulled",
+      "disk_before": {
+        "available_bytes": 450213232640,
+        "total_bytes": 3935709487104
+      },
+      "started_utc": "2026-11-14T07:47:01.225407+00:00",
+      "log": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/pull-logs/pylint-dev__pylint-4604.log",
+      "latest_disk": {
+        "available_bytes": 448336572416,
+        "total_bytes": 3935709487104
+      },
+      "finished_utc": "2026-11-14T07:47:18.303633+00:00",
+      "exit_code": 0,
+      "disk_after": {
+        "available_bytes": 448336568320,
+        "total_bytes": 3935709487104
+      },
+      "elapsed_setup_seconds": 17.448324570897967,
+      "image_id": "sha256:df6eb48f445388d0e228108c635625a0cc9f0cf5ed87303e89f75ab6fc3c2b39",
+      "repo_digests": [
+        "swebench/sweb.eval.x86_64.pylint-dev_1776_pylint-4604@sha256:df6eb48f445388d0e228108c635625a0cc9f0cf5ed87303e89f75ab6fc3c2b39"
+      ],
+      "size_bytes": 1085524966,
+      "rootfs_layers": [
+        "sha256:beb59027b96ddbf30ac9c80b527668fe7011f4f553fe83f5e59199e9a84fb5ca",
+        "sha256:24df650e8ccc41451cf4f7113e09420f7ec00ca9ae41e8be09c60bc467cdf4fe",
+        "sha256:098cb03ec50e1bd1637b7db5e2696a4d1dc3f1c3811adbbe444f43f631f2e7fd",
+        "sha256:fc3a8fa12509a555b3cea8d1f7457c0837ab8360be78e7a380294e09f96fe2f2",
+        "sha256:a3540f5c375c231bc054e7472d0de5a6d8fe5c96b92948f7655914860647fb54",
+        "sha256:f3684f1a85d5159913e2c41a55a86947882302421241b14b57583633bfc31873",
+        "sha256:baa513b3dbe878c916cde44191ddbf824e0b606543f56710e573558ebce3230f",
+        "sha256:27ec900cb856331708215feb8e889ce35f625bc494de0a6f5d1dc966a04aae24",
+        "sha256:2fccea26078fbff7bbda74c95774d519d6d34114d2a704353f60ddfb4a7e5287",
+        "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
+      ]
+    },
+    {
+      "task": "scikit-learn__scikit-learn-25102",
+      "image": "docker.io/swebench/sweb.eval.x86_64.scikit-learn_1776_scikit-learn-25102:latest",
+      "status": "pulled",
+      "disk_before": {
+        "available_bytes": 448336556032,
+        "total_bytes": 3935709487104
+      },
+      "started_utc": "2026-11-14T07:47:18.956909+00:00",
+      "log": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/pull-logs/scikit-learn__scikit-learn-25102.log",
+      "latest_disk": {
+        "available_bytes": 443618820096,
+        "total_bytes": 3935709487104
+      },
+      "finished_utc": "2026-11-14T07:47:58.647314+00:00",
+      "exit_code": 0,
+      "disk_after": {
+        "available_bytes": 443618816000,
+        "total_bytes": 3935709487104
+      },
+      "elapsed_setup_seconds": 40.04875096702017,
+      "image_id": "sha256:a867569ffda421d052245801f98064f13460291d06f439b2e6a05ab7c3135d57",
+      "repo_digests": [
+        "swebench/sweb.eval.x86_64.scikit-learn_1776_scikit-learn-25102@sha256:a867569ffda421d052245801f98064f13460291d06f439b2e6a05ab7c3135d57"
+      ],
+      "size_bytes": 1884158649,
+      "rootfs_layers": [
+        "sha256:beb59027b96ddbf30ac9c80b527668fe7011f4f553fe83f5e59199e9a84fb5ca",
+        "sha256:24df650e8ccc41451cf4f7113e09420f7ec00ca9ae41e8be09c60bc467cdf4fe",
+        "sha256:098cb03ec50e1bd1637b7db5e2696a4d1dc3f1c3811adbbe444f43f631f2e7fd",
+        "sha256:fc3a8fa12509a555b3cea8d1f7457c0837ab8360be78e7a380294e09f96fe2f2",
+        "sha256:a3540f5c375c231bc054e7472d0de5a6d8fe5c96b92948f7655914860647fb54",
+        "sha256:f3684f1a85d5159913e2c41a55a86947882302421241b14b57583633bfc31873",
+        "sha256:1f06626445b619d1becaea703eae68075d23e296a12ad89ee10123dd5f5ec2d3",
+        "sha256:85b2c7bb6db9b5eb40ce5d91e8c32a4420a40e9a11fa96e1e737ca89bcd4f74b",
+        "sha256:feccad00a13e7b5cb0d298d89f7df82254d41041506f96dff7227d8be4bf50e0",
+        "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
+      ]
+    },
+    {
+      "task": "django__django-14011",
+      "image": "docker.io/swebench/sweb.eval.x86_64.django_1776_django-14011:latest",
+      "status": "pulled",
+      "disk_before": {
+        "available_bytes": 443618770944,
+        "total_bytes": 3935709487104
+      },
+      "started_utc": "2026-11-14T07:47:59.356942+00:00",
+      "log": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/pull-logs/django__django-14011.log",
+      "latest_disk": {
+        "available_bytes": 441458102272,
+        "total_bytes": 3935709487104
+      },
+      "finished_utc": "2026-11-14T07:48:16.298169+00:00",
+      "exit_code": 0,
+      "disk_after": {
+        "available_bytes": 441458089984,
+        "total_bytes": 3935709487104
+      },
+      "elapsed_setup_seconds": 17.152578009990975,
+      "image_id": "sha256:6b66e8db005518fa6c41fb44132ee515f32fe4e24dd7bc3b340eb9bfaea88e38",
+      "repo_digests": [
+        "swebench/sweb.eval.x86_64.django_1776_django-14011@sha256:6b66e8db005518fa6c41fb44132ee515f32fe4e24dd7bc3b340eb9bfaea88e38"
+      ],
+      "size_bytes": 1192969457,
+      "rootfs_layers": [
+        "sha256:beb59027b96ddbf30ac9c80b527668fe7011f4f553fe83f5e59199e9a84fb5ca",
+        "sha256:24df650e8ccc41451cf4f7113e09420f7ec00ca9ae41e8be09c60bc467cdf4fe",
+        "sha256:098cb03ec50e1bd1637b7db5e2696a4d1dc3f1c3811adbbe444f43f631f2e7fd",
+        "sha256:fc3a8fa12509a555b3cea8d1f7457c0837ab8360be78e7a380294e09f96fe2f2",
+        "sha256:a3540f5c375c231bc054e7472d0de5a6d8fe5c96b92948f7655914860647fb54",
+        "sha256:f3684f1a85d5159913e2c41a55a86947882302421241b14b57583633bfc31873",
+        "sha256:e49a4d6b01430152546bb76935a27d290d6e7bbc653fcf1f3fb6ed24c0de2168",
+        "sha256:8d194f18e1be2fc90185ee56c36d6fa00015771f2b578c5403017a9b2754aeba",
+        "sha256:2a3b12c5c55bbbbd60e41bef29916b3d38e497790b77f59dc1be12516da1116f",
+        "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
+      ]
+    },
+    {
+      "task": "pydata__xarray-3095",
+      "image": "docker.io/swebench/sweb.eval.x86_64.pydata_1776_xarray-3095:latest",
+      "status": "pulled",
+      "disk_before": {
+        "available_bytes": 441457868800,
+        "total_bytes": 3935709487104
+      },
+      "started_utc": "2026-11-14T07:48:16.875251+00:00",
+      "log": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/pull-logs/pydata__xarray-3095.log",
+      "latest_disk": {
+        "available_bytes": 436071493632,
+        "total_bytes": 3935709487104
+      },
+      "finished_utc": "2026-11-14T07:49:07.554964+00:00",
+      "exit_code": 0,
+      "disk_after": {
+        "available_bytes": 436071477248,
+        "total_bytes": 3935709487104
+      },
+      "elapsed_setup_seconds": 50.98712915298529,
+      "image_id": "sha256:ad5af107b0b590bb5002ed8b66226a625d34741b6e7fa008c04c481745a2d2eb",
+      "repo_digests": [
+        "swebench/sweb.eval.x86_64.pydata_1776_xarray-3095@sha256:ad5af107b0b590bb5002ed8b66226a625d34741b6e7fa008c04c481745a2d2eb"
+      ],
+      "size_bytes": 2047302404,
+      "rootfs_layers": [
+        "sha256:beb59027b96ddbf30ac9c80b527668fe7011f4f553fe83f5e59199e9a84fb5ca",
+        "sha256:24df650e8ccc41451cf4f7113e09420f7ec00ca9ae41e8be09c60bc467cdf4fe",
+        "sha256:098cb03ec50e1bd1637b7db5e2696a4d1dc3f1c3811adbbe444f43f631f2e7fd",
+        "sha256:fc3a8fa12509a555b3cea8d1f7457c0837ab8360be78e7a380294e09f96fe2f2",
+        "sha256:a3540f5c375c231bc054e7472d0de5a6d8fe5c96b92948f7655914860647fb54",
+        "sha256:f3684f1a85d5159913e2c41a55a86947882302421241b14b57583633bfc31873",
+        "sha256:46447afe72a169ea1b2424c7940e79f7ee9f6be65ea9cb3855b23827b82283e4",
+        "sha256:3dee919d9834afe72ac660bb6cd091a9ae53c75b7139fb17e0f6f6baeda8de21",
+        "sha256:725adaae7d0e71610dc819440758f3141b5a30f2510e7e4139b0b97a331d5ed3",
+        "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
+      ]
+    },
+    {
+      "task": "astropy__astropy-13579",
+      "image": "docker.io/swebench/sweb.eval.x86_64.astropy_1776_astropy-13579:latest",
+      "status": "pulled",
+      "disk_before": {
+        "available_bytes": 436071469056,
+        "total_bytes": 3935709487104
+      },
+      "started_utc": "2026-11-14T07:49:08.288244+00:00",
+      "log": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/pull-logs/astropy__astropy-13579.log",
+      "latest_disk": {
+        "available_bytes": 435874099200,
+        "total_bytes": 3935709487104
+      },
+      "finished_utc": "2026-11-14T07:49:13.733288+00:00",
+      "exit_code": 0,
+      "disk_after": {
+        "available_bytes": 435874091008,
+        "total_bytes": 3935709487104
+      },
+      "elapsed_setup_seconds": 5.714944108156487,
+      "image_id": "sha256:f3dc11a37649430d6a7a3aac4858477db8f19d9a941f056f875e8e566066ffe3",
+      "repo_digests": [
+        "swebench/sweb.eval.x86_64.astropy_1776_astropy-13579@sha256:f3dc11a37649430d6a7a3aac4858477db8f19d9a941f056f875e8e566066ffe3"
+      ],
+      "size_bytes": 1134312546,
+      "rootfs_layers": [
+        "sha256:beb59027b96ddbf30ac9c80b527668fe7011f4f553fe83f5e59199e9a84fb5ca",
+        "sha256:24df650e8ccc41451cf4f7113e09420f7ec00ca9ae41e8be09c60bc467cdf4fe",
+        "sha256:098cb03ec50e1bd1637b7db5e2696a4d1dc3f1c3811adbbe444f43f631f2e7fd",
+        "sha256:fc3a8fa12509a555b3cea8d1f7457c0837ab8360be78e7a380294e09f96fe2f2",
+        "sha256:a3540f5c375c231bc054e7472d0de5a6d8fe5c96b92948f7655914860647fb54",
+        "sha256:f3684f1a85d5159913e2c41a55a86947882302421241b14b57583633bfc31873",
+        "sha256:859a9de4e56d34784813c7ca41c2ae8810d2b4bb2f53e09004a6f97909cf9e09",
+        "sha256:6ee10ac924dfb8a86ec8c7ba00dc6968b0e5ef858d20b8a12806a6b6af87e8ed",
+        "sha256:e2a28ecdcba1aa50c4f00a4d94ff84f118a6c29b6821240d154e8060b849d755",
+        "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
+      ]
+    },
+    {
+      "task": "sphinx-doc__sphinx-11510",
+      "image": "docker.io/swebench/sweb.eval.x86_64.sphinx-doc_1776_sphinx-11510:latest",
+      "status": "pulled",
+      "disk_before": {
+        "available_bytes": 435874086912,
+        "total_bytes": 3935709487104
+      },
+      "started_utc": "2026-11-14T07:49:14.444176+00:00",
+      "log": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/pull-logs/sphinx-doc__sphinx-11510.log",
+      "latest_disk": {
+        "available_bytes": 433747742720,
+        "total_bytes": 3935709487104
+      },
+      "finished_utc": "2026-11-14T07:49:36.610350+00:00",
+      "exit_code": 0,
+      "disk_after": {
+        "available_bytes": 433747738624,
+        "total_bytes": 3935709487104
+      },
+      "elapsed_setup_seconds": 22.41272429190576,
+      "image_id": "sha256:01bf15e77e5d0f6988c8107bf81a5091900228ca0d160bf677d9b07dd17e1a0f",
+      "repo_digests": [
+        "swebench/sweb.eval.x86_64.sphinx-doc_1776_sphinx-11510@sha256:01bf15e77e5d0f6988c8107bf81a5091900228ca0d160bf677d9b07dd17e1a0f"
+      ],
+      "size_bytes": 1187880743,
+      "rootfs_layers": [
+        "sha256:beb59027b96ddbf30ac9c80b527668fe7011f4f553fe83f5e59199e9a84fb5ca",
+        "sha256:24df650e8ccc41451cf4f7113e09420f7ec00ca9ae41e8be09c60bc467cdf4fe",
+        "sha256:098cb03ec50e1bd1637b7db5e2696a4d1dc3f1c3811adbbe444f43f631f2e7fd",
+        "sha256:fc3a8fa12509a555b3cea8d1f7457c0837ab8360be78e7a380294e09f96fe2f2",
+        "sha256:a3540f5c375c231bc054e7472d0de5a6d8fe5c96b92948f7655914860647fb54",
+        "sha256:f3684f1a85d5159913e2c41a55a86947882302421241b14b57583633bfc31873",
+        "sha256:028dc3ced274b5901d602bd3d5a9ece38317281b3a3f214d2eaf45b286afc883",
+        "sha256:c5059bc59e7cfc18b69e9931974365babca0ab2ac42a0b59bc08f4bd624651c3",
+        "sha256:d23b00b3b9ca092b27380e140f99fb44cb369e3967cdae89d32f591df61b9f49",
+        "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
+      ]
+    },
+    {
+      "task": "psf__requests-6028",
+      "image": "docker.io/swebench/sweb.eval.x86_64.psf_1776_requests-6028:latest",
+      "status": "pulled",
+      "disk_before": {
+        "available_bytes": 433747730432,
+        "total_bytes": 3935709487104
+      },
+      "started_utc": "2026-11-14T07:49:37.344351+00:00",
+      "log": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/pull-logs/psf__requests-6028.log",
+      "latest_disk": {
+        "available_bytes": 432084934656,
+        "total_bytes": 3935709487104
+      },
+      "finished_utc": "2026-11-14T07:49:53.800100+00:00",
+      "exit_code": 0,
+      "disk_after": {
+        "available_bytes": 432084926464,
+        "total_bytes": 3935709487104
+      },
+      "elapsed_setup_seconds": 16.79911488085054,
+      "image_id": "sha256:639088346355ea7076bc6faf2eadb23b1e1f1ed4f34b291e843061b2fc87cbe2",
+      "repo_digests": [
+        "swebench/sweb.eval.x86_64.psf_1776_requests-6028@sha256:639088346355ea7076bc6faf2eadb23b1e1f1ed4f34b291e843061b2fc87cbe2"
+      ],
+      "size_bytes": 1025914923,
+      "rootfs_layers": [
+        "sha256:beb59027b96ddbf30ac9c80b527668fe7011f4f553fe83f5e59199e9a84fb5ca",
+        "sha256:24df650e8ccc41451cf4f7113e09420f7ec00ca9ae41e8be09c60bc467cdf4fe",
+        "sha256:098cb03ec50e1bd1637b7db5e2696a4d1dc3f1c3811adbbe444f43f631f2e7fd",
+        "sha256:fc3a8fa12509a555b3cea8d1f7457c0837ab8360be78e7a380294e09f96fe2f2",
+        "sha256:a3540f5c375c231bc054e7472d0de5a6d8fe5c96b92948f7655914860647fb54",
+        "sha256:f3684f1a85d5159913e2c41a55a86947882302421241b14b57583633bfc31873",
+        "sha256:f1646e0eba0e02b1cc22ff672b7ba6dc50c433aefff67ce705b308e8a12388ab",
+        "sha256:252f98724fcc35c7fe58b95b9a212c9194825e56ae86414f158a63d475391bde",
+        "sha256:2e45cbe93deee4f5fc746b3d5bbc8f9a983f08241c0d685280b1c910685feeed",
+        "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
+      ]
+    },
+    {
+      "task": "matplotlib__matplotlib-25479",
+      "image": "docker.io/swebench/sweb.eval.x86_64.matplotlib_1776_matplotlib-25479:latest",
+      "status": "pulled",
+      "disk_before": {
+        "available_bytes": 432084914176,
+        "total_bytes": 3935709487104
+      },
+      "started_utc": "2026-11-14T07:49:54.487658+00:00",
+      "log": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/pull-logs/matplotlib__matplotlib-25479.log",
+      "latest_disk": {
+        "available_bytes": 423468249088,
+        "total_bytes": 3935709487104
+      },
+      "finished_utc": "2026-11-14T07:51:07.787228+00:00",
+      "exit_code": 0,
+      "disk_after": {
+        "available_bytes": 423468244992,
+        "total_bytes": 3935709487104
+      },
+      "elapsed_setup_seconds": 73.77680860902183,
+      "image_id": "sha256:8671675758c6e88cf80a493fbcd118667b3b20a4444636d3958f569672490eea",
+      "repo_digests": [
+        "swebench/sweb.eval.x86_64.matplotlib_1776_matplotlib-25479@sha256:8671675758c6e88cf80a493fbcd118667b3b20a4444636d3958f569672490eea"
+      ],
+      "size_bytes": 3147250704,
+      "rootfs_layers": [
+        "sha256:beb59027b96ddbf30ac9c80b527668fe7011f4f553fe83f5e59199e9a84fb5ca",
+        "sha256:24df650e8ccc41451cf4f7113e09420f7ec00ca9ae41e8be09c60bc467cdf4fe",
+        "sha256:098cb03ec50e1bd1637b7db5e2696a4d1dc3f1c3811adbbe444f43f631f2e7fd",
+        "sha256:fc3a8fa12509a555b3cea8d1f7457c0837ab8360be78e7a380294e09f96fe2f2",
+        "sha256:a3540f5c375c231bc054e7472d0de5a6d8fe5c96b92948f7655914860647fb54",
+        "sha256:f3684f1a85d5159913e2c41a55a86947882302421241b14b57583633bfc31873",
+        "sha256:eebc781b62cc9ac08a01e716325280c05422ac654f398167c4554fa0a46723c9",
+        "sha256:c70ef11a01f2bef72d4a87046fc69872c8ccca808762c99be80634daa429f419",
+        "sha256:850a6f81602c412ba8e7812522eb0588e186429abf59ebfb694b82c922b9a18e",
+        "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
+      ]
+    },
+    {
+      "task": "sympy__sympy-13878",
+      "image": "docker.io/swebench/sweb.eval.x86_64.sympy_1776_sympy-13878:latest",
+      "status": "pulled",
+      "disk_before": {
+        "available_bytes": 423468224512,
+        "total_bytes": 3935709487104
+      },
+      "started_utc": "2026-11-14T07:51:08.655799+00:00",
+      "log": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/pull-logs/sympy__sympy-13878.log",
+      "latest_disk": {
+        "available_bytes": 423323107328,
+        "total_bytes": 3935709487104
+      },
+      "finished_utc": "2026-11-14T07:51:14.041237+00:00",
+      "exit_code": 0,
+      "disk_after": {
+        "available_bytes": 423323103232,
+        "total_bytes": 3935709487104
+      },
+      "elapsed_setup_seconds": 5.762877021916211,
+      "image_id": "sha256:d0796de4f7c4749e36e32b043edc2c98b3c6f7127691af37c325944726aa7d0a",
+      "repo_digests": [
+        "swebench/sweb.eval.x86_64.sympy_1776_sympy-13878@sha256:d0796de4f7c4749e36e32b043edc2c98b3c6f7127691af37c325944726aa7d0a"
+      ],
+      "size_bytes": 1068645796,
+      "rootfs_layers": [
+        "sha256:beb59027b96ddbf30ac9c80b527668fe7011f4f553fe83f5e59199e9a84fb5ca",
+        "sha256:24df650e8ccc41451cf4f7113e09420f7ec00ca9ae41e8be09c60bc467cdf4fe",
+        "sha256:098cb03ec50e1bd1637b7db5e2696a4d1dc3f1c3811adbbe444f43f631f2e7fd",
+        "sha256:fc3a8fa12509a555b3cea8d1f7457c0837ab8360be78e7a380294e09f96fe2f2",
+        "sha256:a3540f5c375c231bc054e7472d0de5a6d8fe5c96b92948f7655914860647fb54",
+        "sha256:f3684f1a85d5159913e2c41a55a86947882302421241b14b57583633bfc31873",
+        "sha256:fe542fe64c3f8a7b726310ec1785fb4a03948f157976e080e06c684396010d13",
+        "sha256:c41677510cfe38564e7bb15dea585ec1b5057f40b29ceaad3b1c733edd8a35a8",
+        "sha256:3c98838bd4ac668e26903e9b83874043a78dc22669db4c327c138697a4a1ae83",
+        "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
+      ]
+    },
+    {
+      "task": "pydata__xarray-6992",
+      "image": "docker.io/swebench/sweb.eval.x86_64.pydata_1776_xarray-6992:latest",
+      "status": "pulled",
+      "disk_before": {
+        "available_bytes": 423323090944,
+        "total_bytes": 3935709487104
+      },
+      "started_utc": "2026-11-14T07:51:14.751435+00:00",
+      "log": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/pull-logs/pydata__xarray-6992.log",
+      "latest_disk": {
+        "available_bytes": 418400931840,
+        "total_bytes": 3935709487104
+      },
+      "finished_utc": "2026-11-14T07:51:59.638185+00:00",
+      "exit_code": 0,
+      "disk_after": {
+        "available_bytes": 418400923648,
+        "total_bytes": 3935709487104
+      },
+      "elapsed_setup_seconds": 45.23817803617567,
+      "image_id": "sha256:a70eb8c7e98b984c8c9a75c8e165d564d2f0bd16c1717320dbab40f771691112",
+      "repo_digests": [
+        "swebench/sweb.eval.x86_64.pydata_1776_xarray-6992@sha256:a70eb8c7e98b984c8c9a75c8e165d564d2f0bd16c1717320dbab40f771691112"
+      ],
+      "size_bytes": 1929548717,
+      "rootfs_layers": [
+        "sha256:beb59027b96ddbf30ac9c80b527668fe7011f4f553fe83f5e59199e9a84fb5ca",
+        "sha256:24df650e8ccc41451cf4f7113e09420f7ec00ca9ae41e8be09c60bc467cdf4fe",
+        "sha256:098cb03ec50e1bd1637b7db5e2696a4d1dc3f1c3811adbbe444f43f631f2e7fd",
+        "sha256:fc3a8fa12509a555b3cea8d1f7457c0837ab8360be78e7a380294e09f96fe2f2",
+        "sha256:a3540f5c375c231bc054e7472d0de5a6d8fe5c96b92948f7655914860647fb54",
+        "sha256:f3684f1a85d5159913e2c41a55a86947882302421241b14b57583633bfc31873",
+        "sha256:c6a2033670592ff4b51bb1872a276e2caf7239f2503a5120560c4ee9bd44ca5a",
+        "sha256:dedb2dc5ed19589b94297b7fc45b6851f076e2e5318e08f1f67b7dad3f8631bf",
+        "sha256:a5f14c8edea4b982ad00e1fd51d6fc706f0513fadf4fee378a7c6a56331eb0ae",
+        "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
+      ]
+    },
+    {
+      "task": "sphinx-doc__sphinx-7590",
+      "image": "docker.io/swebench/sweb.eval.x86_64.sphinx-doc_1776_sphinx-7590:latest",
+      "status": "pulled",
+      "disk_before": {
+        "available_bytes": 418400690176,
+        "total_bytes": 3935709487104
+      },
+      "started_utc": "2026-11-14T07:52:00.349472+00:00",
+      "log": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/pull-logs/sphinx-doc__sphinx-7590.log",
+      "latest_disk": {
+        "available_bytes": 416522248192,
+        "total_bytes": 3935709487104
+      },
+      "finished_utc": "2026-11-14T07:52:17.414397+00:00",
+      "exit_code": 0,
+      "disk_after": {
+        "available_bytes": 416522240000,
+        "total_bytes": 3935709487104
+      },
+      "elapsed_setup_seconds": 17.24716868600808,
+      "image_id": "sha256:5c86dab7120b83b3bdb4af86743a3910da328029ed92183477fe9865ea76cb2f",
+      "repo_digests": [
+        "swebench/sweb.eval.x86_64.sphinx-doc_1776_sphinx-7590@sha256:5c86dab7120b83b3bdb4af86743a3910da328029ed92183477fe9865ea76cb2f"
+      ],
+      "size_bytes": 1097427344,
+      "rootfs_layers": [
+        "sha256:beb59027b96ddbf30ac9c80b527668fe7011f4f553fe83f5e59199e9a84fb5ca",
+        "sha256:24df650e8ccc41451cf4f7113e09420f7ec00ca9ae41e8be09c60bc467cdf4fe",
+        "sha256:098cb03ec50e1bd1637b7db5e2696a4d1dc3f1c3811adbbe444f43f631f2e7fd",
+        "sha256:fc3a8fa12509a555b3cea8d1f7457c0837ab8360be78e7a380294e09f96fe2f2",
+        "sha256:a3540f5c375c231bc054e7472d0de5a6d8fe5c96b92948f7655914860647fb54",
+        "sha256:f3684f1a85d5159913e2c41a55a86947882302421241b14b57583633bfc31873",
+        "sha256:d9b20771a53edfa2591c29391efe11b1334581d794151ddccd67ebee5aa61c43",
+        "sha256:b3e6d00392355f88af415711dd96712b64d1d904f0d93cfac8af310626b38f4c",
+        "sha256:8a72878be15725faec7aca67dea4384ce87007d8178224ed999f6c45dcf73104",
+        "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
+      ]
+    },
+    {
+      "task": "pytest-dev__pytest-7521",
+      "image": "docker.io/swebench/sweb.eval.x86_64.pytest-dev_1776_pytest-7521:latest",
+      "status": "pulled",
+      "disk_before": {
+        "available_bytes": 416522227712,
+        "total_bytes": 3935709487104
+      },
+      "started_utc": "2026-11-14T07:52:18.110294+00:00",
+      "log": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/pull-logs/pytest-dev__pytest-7521.log",
+      "latest_disk": {
+        "available_bytes": 414862725120,
+        "total_bytes": 3935709487104
+      },
+      "finished_utc": "2026-11-14T07:52:34.579526+00:00",
+      "exit_code": 0,
+      "disk_after": {
+        "available_bytes": 414862712832,
+        "total_bytes": 3935709487104
+      },
+      "elapsed_setup_seconds": 16.828127566957846,
+      "image_id": "sha256:570a5872f1a0250ef52d735285f64dff43ce02ba79f7750e7c4dd9de9c7ebcb5",
+      "repo_digests": [
+        "swebench/sweb.eval.x86_64.pytest-dev_1776_pytest-7521@sha256:570a5872f1a0250ef52d735285f64dff43ce02ba79f7750e7c4dd9de9c7ebcb5"
+      ],
+      "size_bytes": 1026595604,
+      "rootfs_layers": [
+        "sha256:beb59027b96ddbf30ac9c80b527668fe7011f4f553fe83f5e59199e9a84fb5ca",
+        "sha256:24df650e8ccc41451cf4f7113e09420f7ec00ca9ae41e8be09c60bc467cdf4fe",
+        "sha256:098cb03ec50e1bd1637b7db5e2696a4d1dc3f1c3811adbbe444f43f631f2e7fd",
+        "sha256:fc3a8fa12509a555b3cea8d1f7457c0837ab8360be78e7a380294e09f96fe2f2",
+        "sha256:a3540f5c375c231bc054e7472d0de5a6d8fe5c96b92948f7655914860647fb54",
+        "sha256:f3684f1a85d5159913e2c41a55a86947882302421241b14b57583633bfc31873",
+        "sha256:813855c3064386f1e4b61c94732e5d683056ee778eff2d803048f6fe6fe2e743",
+        "sha256:707695c617dda2ee3028254a39cb89a7efa93eb26b7c422c75e54ed6cef1cbc1",
+        "sha256:9b359070be7cd5a928ee9cf35da1b2c5ac84f389ae042cd3e00296ceba9b4cca",
+        "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
+      ]
+    },
+    {
+      "task": "pylint-dev__pylint-4551",
+      "image": "docker.io/swebench/sweb.eval.x86_64.pylint-dev_1776_pylint-4551:latest",
+      "status": "pulled",
+      "disk_before": {
+        "available_bytes": 414862708736,
+        "total_bytes": 3935709487104
+      },
+      "started_utc": "2026-11-14T07:52:35.203267+00:00",
+      "log": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/pull-logs/pylint-dev__pylint-4551.log",
+      "latest_disk": {
+        "available_bytes": 414838980608,
+        "total_bytes": 3935709487104
+      },
+      "finished_utc": "2026-11-14T07:52:40.623452+00:00",
+      "exit_code": 0,
+      "disk_after": {
+        "available_bytes": 414838972416,
+        "total_bytes": 3935709487104
+      },
+      "elapsed_setup_seconds": 5.750493430066854,
+      "image_id": "sha256:910cb070fc5e1c02b715b561c2f5783bb5f5e5935d9a169b4c91bdcfdd015f52",
+      "repo_digests": [
+        "swebench/sweb.eval.x86_64.pylint-dev_1776_pylint-4551@sha256:910cb070fc5e1c02b715b561c2f5783bb5f5e5935d9a169b4c91bdcfdd015f52"
+      ],
+      "size_bytes": 1085482745,
+      "rootfs_layers": [
+        "sha256:beb59027b96ddbf30ac9c80b527668fe7011f4f553fe83f5e59199e9a84fb5ca",
+        "sha256:24df650e8ccc41451cf4f7113e09420f7ec00ca9ae41e8be09c60bc467cdf4fe",
+        "sha256:098cb03ec50e1bd1637b7db5e2696a4d1dc3f1c3811adbbe444f43f631f2e7fd",
+        "sha256:fc3a8fa12509a555b3cea8d1f7457c0837ab8360be78e7a380294e09f96fe2f2",
+        "sha256:a3540f5c375c231bc054e7472d0de5a6d8fe5c96b92948f7655914860647fb54",
+        "sha256:f3684f1a85d5159913e2c41a55a86947882302421241b14b57583633bfc31873",
+        "sha256:baa513b3dbe878c916cde44191ddbf824e0b606543f56710e573558ebce3230f",
+        "sha256:27ec900cb856331708215feb8e889ce35f625bc494de0a6f5d1dc966a04aae24",
+        "sha256:c32aba32b030d2e5435f8ea993366a9f3959b3bc7c239d52fec815a6572be7a4",
+        "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
+      ]
+    },
+    {
+      "task": "scikit-learn__scikit-learn-10908",
+      "image": "docker.io/swebench/sweb.eval.x86_64.scikit-learn_1776_scikit-learn-10908:latest",
+      "status": "pulled",
+      "disk_before": {
+        "available_bytes": 414838956032,
+        "total_bytes": 3935709487104
+      },
+      "started_utc": "2026-11-14T07:52:41.492528+00:00",
+      "log": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/pull-logs/scikit-learn__scikit-learn-10908.log",
+      "latest_disk": {
+        "available_bytes": 414565175296,
+        "total_bytes": 3935709487104
+      },
+      "finished_utc": "2026-11-14T07:52:46.945035+00:00",
+      "exit_code": 0,
+      "disk_after": {
+        "available_bytes": 414565163008,
+        "total_bytes": 3935709487104
+      },
+      "elapsed_setup_seconds": 5.73685146914795,
+      "image_id": "sha256:8727c0f7bfb76c294cfef16c9fe3d0dc9ddf313e7c0fb3e8e9cbc74c4955404c",
+      "repo_digests": [
+        "swebench/sweb.eval.x86_64.scikit-learn_1776_scikit-learn-10908@sha256:8727c0f7bfb76c294cfef16c9fe3d0dc9ddf313e7c0fb3e8e9cbc74c4955404c"
+      ],
+      "size_bytes": 1473772865,
+      "rootfs_layers": [
+        "sha256:beb59027b96ddbf30ac9c80b527668fe7011f4f553fe83f5e59199e9a84fb5ca",
+        "sha256:24df650e8ccc41451cf4f7113e09420f7ec00ca9ae41e8be09c60bc467cdf4fe",
+        "sha256:098cb03ec50e1bd1637b7db5e2696a4d1dc3f1c3811adbbe444f43f631f2e7fd",
+        "sha256:fc3a8fa12509a555b3cea8d1f7457c0837ab8360be78e7a380294e09f96fe2f2",
+        "sha256:a3540f5c375c231bc054e7472d0de5a6d8fe5c96b92948f7655914860647fb54",
+        "sha256:f3684f1a85d5159913e2c41a55a86947882302421241b14b57583633bfc31873",
+        "sha256:36bc17c43f70b347cd3d69820fc95875d5404e64c68f1400a60b6b90d34666cf",
+        "sha256:0ab3624eb7802179d3f5fe124e75e93e0849c00896ee49438de1cceb7eb3903a",
+        "sha256:668c8bf438671e0f3abccdabdc955971b4948c2ef516a6124facbdff47188d3f",
+        "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
+      ]
+    },
+    {
+      "task": "psf__requests-2317",
+      "image": "docker.io/swebench/sweb.eval.x86_64.psf_1776_requests-2317:latest",
+      "status": "pulled",
+      "disk_before": {
+        "available_bytes": 414565154816,
+        "total_bytes": 3935709487104
+      },
+      "started_utc": "2026-11-14T07:52:47.550053+00:00",
+      "log": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/pull-logs/psf__requests-2317.log",
+      "latest_disk": {
+        "available_bytes": 412922228736,
+        "total_bytes": 3935709487104
+      },
+      "finished_utc": "2026-11-14T07:53:05.542977+00:00",
+      "exit_code": 0,
+      "disk_after": {
+        "available_bytes": 412922212352,
+        "total_bytes": 3935709487104
+      },
+      "elapsed_setup_seconds": 19.168042976176366,
+      "image_id": "sha256:c6b5c8846507b5e48e307decca28dbdfa4f5ef17070c1087aacde765e8c4b178",
+      "repo_digests": [
+        "swebench/sweb.eval.x86_64.psf_1776_requests-2317@sha256:c6b5c8846507b5e48e307decca28dbdfa4f5ef17070c1087aacde765e8c4b178"
+      ],
+      "size_bytes": 1015316491,
+      "rootfs_layers": [
+        "sha256:beb59027b96ddbf30ac9c80b527668fe7011f4f553fe83f5e59199e9a84fb5ca",
+        "sha256:8b070dae4fd6562cc7272d3392d3e5d0eb54aebbabe7992ea47407c02a7e4ab5",
+        "sha256:e41dda3ddff433b42bc5c7db367e9a89b90e42702b2204ac3748eff0661fed5d",
+        "sha256:77dfb20914dd629938c812a6dbd69d5523e3eca3798e570ceee0b09b0e9f8eeb",
+        "sha256:73f1203e53826763f5480b23ca857212005fd21f7fbfb1df5f40641c278d0802",
+        "sha256:9f91f535caf3186b2a7f093b2f8bc4e3a6605e119e563b7e49fb81415185125d",
+        "sha256:da89c5f8d8163d0a70e1a350eaf60c7fbe1c3cf6da1263556941892a4771c6d5",
+        "sha256:cdd84a7a9ccd2a649ac70403bbb272d8f8b025f811d1c21b24f93a3f1978f61d",
+        "sha256:accaaa3c8d6d36f585a72054e096081c76a72986394a999e7040c766158b9880",
+        "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
+      ]
+    },
+    {
+      "task": "django__django-16950",
+      "image": "docker.io/swebench/sweb.eval.x86_64.django_1776_django-16950:latest",
+      "status": "pulled",
+      "disk_before": {
+        "available_bytes": 412922195968,
+        "total_bytes": 3935709487104
+      },
+      "started_utc": "2026-11-14T07:53:08.637505+00:00",
+      "log": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/pull-logs/django__django-16950.log",
+      "latest_disk": {
+        "available_bytes": 410609856512,
+        "total_bytes": 3935709487104
+      },
+      "finished_utc": "2026-11-14T07:53:35.303114+00:00",
+      "exit_code": 0,
+      "disk_after": {
+        "available_bytes": 410609848320,
+        "total_bytes": 3935709487104
+      },
+      "elapsed_setup_seconds": 27.02361897705123,
+      "image_id": "sha256:2f226410370995e0d11e181dbb68fb592ec26c0b6bb040727a37453ad3a49a76",
+      "repo_digests": [
+        "swebench/sweb.eval.x86_64.django_1776_django-16950@sha256:2f226410370995e0d11e181dbb68fb592ec26c0b6bb040727a37453ad3a49a76"
+      ],
+      "size_bytes": 1242824614,
+      "rootfs_layers": [
+        "sha256:beb59027b96ddbf30ac9c80b527668fe7011f4f553fe83f5e59199e9a84fb5ca",
+        "sha256:24df650e8ccc41451cf4f7113e09420f7ec00ca9ae41e8be09c60bc467cdf4fe",
+        "sha256:098cb03ec50e1bd1637b7db5e2696a4d1dc3f1c3811adbbe444f43f631f2e7fd",
+        "sha256:fc3a8fa12509a555b3cea8d1f7457c0837ab8360be78e7a380294e09f96fe2f2",
+        "sha256:a3540f5c375c231bc054e7472d0de5a6d8fe5c96b92948f7655914860647fb54",
+        "sha256:f3684f1a85d5159913e2c41a55a86947882302421241b14b57583633bfc31873",
+        "sha256:4f4de427cec19b44170ef369b9664d513c5e7b071d52a2d2f6a6c4557dd69ff3",
+        "sha256:94a5f9969db7263762127afcf951f594d4a487b45ebe42f72fb1fcc268220cd1",
+        "sha256:1555eb688d5e88d82310219f50db63fa2d6db1ea95aec7baa748164ea9b9db00",
+        "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
+      ]
+    },
+    {
+      "task": "matplotlib__matplotlib-26291",
+      "image": "docker.io/swebench/sweb.eval.x86_64.matplotlib_1776_matplotlib-26291:latest",
+      "status": "pulled",
+      "disk_before": {
+        "available_bytes": 410609840128,
+        "total_bytes": 3935709487104
+      },
+      "started_utc": "2026-11-14T07:53:35.959261+00:00",
+      "log": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/pull-logs/matplotlib__matplotlib-26291.log",
+      "latest_disk": {
+        "available_bytes": 407600250880,
+        "total_bytes": 3935709487104
+      },
+      "finished_utc": "2026-11-14T07:54:04.002367+00:00",
+      "exit_code": 0,
+      "disk_after": {
+        "available_bytes": 407600242688,
+        "total_bytes": 3935709487104
+      },
+      "elapsed_setup_seconds": 28.33969777589664,
+      "image_id": "sha256:1b5b3c1164c4f2a4210bec437b5416fb6346560c09b49e17ede58d045e8b8231",
+      "repo_digests": [
+        "swebench/sweb.eval.x86_64.matplotlib_1776_matplotlib-26291@sha256:1b5b3c1164c4f2a4210bec437b5416fb6346560c09b49e17ede58d045e8b8231"
+      ],
+      "size_bytes": 3150311630,
+      "rootfs_layers": [
+        "sha256:beb59027b96ddbf30ac9c80b527668fe7011f4f553fe83f5e59199e9a84fb5ca",
+        "sha256:24df650e8ccc41451cf4f7113e09420f7ec00ca9ae41e8be09c60bc467cdf4fe",
+        "sha256:098cb03ec50e1bd1637b7db5e2696a4d1dc3f1c3811adbbe444f43f631f2e7fd",
+        "sha256:fc3a8fa12509a555b3cea8d1f7457c0837ab8360be78e7a380294e09f96fe2f2",
+        "sha256:a3540f5c375c231bc054e7472d0de5a6d8fe5c96b92948f7655914860647fb54",
+        "sha256:f3684f1a85d5159913e2c41a55a86947882302421241b14b57583633bfc31873",
+        "sha256:eebc781b62cc9ac08a01e716325280c05422ac654f398167c4554fa0a46723c9",
+        "sha256:c70ef11a01f2bef72d4a87046fc69872c8ccca808762c99be80634daa429f419",
+        "sha256:05644283b0f5b499d9a19a291fa812bf10d855824f8fa44ae87c12c701d41223",
+        "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
+      ]
+    },
+    {
+      "task": "astropy__astropy-14598",
+      "image": "docker.io/swebench/sweb.eval.x86_64.astropy_1776_astropy-14598:latest",
+      "status": "pulled",
+      "disk_before": {
+        "available_bytes": 407600234496,
+        "total_bytes": 3935709487104
+      },
+      "started_utc": "2026-11-14T07:54:04.686065+00:00",
+      "log": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/pull-logs/astropy__astropy-14598.log",
+      "latest_disk": {
+        "available_bytes": 407397392384,
+        "total_bytes": 3935709487104
+      },
+      "finished_utc": "2026-11-14T07:54:10.111322+00:00",
+      "exit_code": 0,
+      "disk_after": {
+        "available_bytes": 407397384192,
+        "total_bytes": 3935709487104
+      },
+      "elapsed_setup_seconds": 5.707694662967697,
+      "image_id": "sha256:e6a7291cea12126cd739997769070d60e4ebac363af4065261073750cb617bf3",
+      "repo_digests": [
+        "swebench/sweb.eval.x86_64.astropy_1776_astropy-14598@sha256:e6a7291cea12126cd739997769070d60e4ebac363af4065261073750cb617bf3"
+      ],
+      "size_bytes": 1138257524,
+      "rootfs_layers": [
+        "sha256:beb59027b96ddbf30ac9c80b527668fe7011f4f553fe83f5e59199e9a84fb5ca",
+        "sha256:24df650e8ccc41451cf4f7113e09420f7ec00ca9ae41e8be09c60bc467cdf4fe",
+        "sha256:098cb03ec50e1bd1637b7db5e2696a4d1dc3f1c3811adbbe444f43f631f2e7fd",
+        "sha256:fc3a8fa12509a555b3cea8d1f7457c0837ab8360be78e7a380294e09f96fe2f2",
+        "sha256:a3540f5c375c231bc054e7472d0de5a6d8fe5c96b92948f7655914860647fb54",
+        "sha256:f3684f1a85d5159913e2c41a55a86947882302421241b14b57583633bfc31873",
+        "sha256:859a9de4e56d34784813c7ca41c2ae8810d2b4bb2f53e09004a6f97909cf9e09",
+        "sha256:6ee10ac924dfb8a86ec8c7ba00dc6968b0e5ef858d20b8a12806a6b6af87e8ed",
+        "sha256:4f48764c903e30f22c06412dae688398a54fad50246a1b52d933f7c532423daf",
+        "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
+      ]
+    },
+    {
+      "task": "pytest-dev__pytest-7571",
+      "image": "docker.io/swebench/sweb.eval.x86_64.pytest-dev_1776_pytest-7571:latest",
+      "status": "pulled",
+      "disk_before": {
+        "available_bytes": 407397371904,
+        "total_bytes": 3935709487104
+      },
+      "started_utc": "2026-11-14T07:54:10.839815+00:00",
+      "log": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/pull-logs/pytest-dev__pytest-7571.log",
+      "latest_disk": {
+        "available_bytes": 407354314752,
+        "total_bytes": 3935709487104
+      },
+      "finished_utc": "2026-11-14T07:54:16.136430+00:00",
+      "exit_code": 0,
+      "disk_after": {
+        "available_bytes": 407354310656,
+        "total_bytes": 3935709487104
+      },
+      "elapsed_setup_seconds": 5.71760798804462,
+      "image_id": "sha256:0a1f84cd32e2c8332f90bfad6f3fd16304f25c01384adb4ffd4f7250316bd60a",
+      "repo_digests": [
+        "swebench/sweb.eval.x86_64.pytest-dev_1776_pytest-7571@sha256:0a1f84cd32e2c8332f90bfad6f3fd16304f25c01384adb4ffd4f7250316bd60a"
+      ],
+      "size_bytes": 1026633445,
+      "rootfs_layers": [
+        "sha256:beb59027b96ddbf30ac9c80b527668fe7011f4f553fe83f5e59199e9a84fb5ca",
+        "sha256:24df650e8ccc41451cf4f7113e09420f7ec00ca9ae41e8be09c60bc467cdf4fe",
+        "sha256:098cb03ec50e1bd1637b7db5e2696a4d1dc3f1c3811adbbe444f43f631f2e7fd",
+        "sha256:fc3a8fa12509a555b3cea8d1f7457c0837ab8360be78e7a380294e09f96fe2f2",
+        "sha256:a3540f5c375c231bc054e7472d0de5a6d8fe5c96b92948f7655914860647fb54",
+        "sha256:f3684f1a85d5159913e2c41a55a86947882302421241b14b57583633bfc31873",
+        "sha256:813855c3064386f1e4b61c94732e5d683056ee778eff2d803048f6fe6fe2e743",
+        "sha256:707695c617dda2ee3028254a39cb89a7efa93eb26b7c422c75e54ed6cef1cbc1",
+        "sha256:3b23a02668a815730f386fe48fff5aa0ed1b0b27bc04f6280379f8712ac4861d",
+        "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
+      ]
+    },
+    {
+      "task": "sympy__sympy-18763",
+      "image": "docker.io/swebench/sweb.eval.x86_64.sympy_1776_sympy-18763:latest",
+      "status": "pulled",
+      "disk_before": {
+        "available_bytes": 407354298368,
+        "total_bytes": 3935709487104
+      },
+      "started_utc": "2026-11-14T07:54:16.877800+00:00",
+      "log": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/pull-logs/sympy__sympy-18763.log",
+      "latest_disk": {
+        "available_bytes": 407176540160,
+        "total_bytes": 3935709487104
+      },
+      "finished_utc": "2026-11-14T07:54:22.396559+00:00",
+      "exit_code": 0,
+      "disk_after": {
+        "available_bytes": 407176536064,
+        "total_bytes": 3935709487104
+      },
+      "elapsed_setup_seconds": 5.714359421981499,
+      "image_id": "sha256:4e7342e9dd20eff70d136658fdf6202216ba9c2b155180f511ac338738cce9cc",
+      "repo_digests": [
+        "swebench/sweb.eval.x86_64.sympy_1776_sympy-18763@sha256:4e7342e9dd20eff70d136658fdf6202216ba9c2b155180f511ac338738cce9cc"
+      ],
+      "size_bytes": 1082384776,
+      "rootfs_layers": [
+        "sha256:beb59027b96ddbf30ac9c80b527668fe7011f4f553fe83f5e59199e9a84fb5ca",
+        "sha256:24df650e8ccc41451cf4f7113e09420f7ec00ca9ae41e8be09c60bc467cdf4fe",
+        "sha256:098cb03ec50e1bd1637b7db5e2696a4d1dc3f1c3811adbbe444f43f631f2e7fd",
+        "sha256:fc3a8fa12509a555b3cea8d1f7457c0837ab8360be78e7a380294e09f96fe2f2",
+        "sha256:a3540f5c375c231bc054e7472d0de5a6d8fe5c96b92948f7655914860647fb54",
+        "sha256:f3684f1a85d5159913e2c41a55a86947882302421241b14b57583633bfc31873",
+        "sha256:fe542fe64c3f8a7b726310ec1785fb4a03948f157976e080e06c684396010d13",
+        "sha256:c41677510cfe38564e7bb15dea585ec1b5057f40b29ceaad3b1c733edd8a35a8",
+        "sha256:7d79bced6f986da6f24b4eb24fae10779cebb3ce15e9b3e85dbf6eb9ea107d9a",
+        "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
+      ]
+    },
+    {
+      "task": "pylint-dev__pylint-4970",
+      "image": "docker.io/swebench/sweb.eval.x86_64.pylint-dev_1776_pylint-4970:latest",
+      "status": "pulled",
+      "disk_before": {
+        "available_bytes": 407176519680,
+        "total_bytes": 3935709487104
+      },
+      "started_utc": "2026-11-14T07:54:23.050065+00:00",
+      "log": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/pull-logs/pylint-dev__pylint-4970.log",
+      "latest_disk": {
+        "available_bytes": 405298950144,
+        "total_bytes": 3935709487104
+      },
+      "finished_utc": "2026-11-14T07:54:39.629488+00:00",
+      "exit_code": 0,
+      "disk_after": {
+        "available_bytes": 405298946048,
+        "total_bytes": 3935709487104
+      },
+      "elapsed_setup_seconds": 16.90996257890947,
+      "image_id": "sha256:5d331d487e49480c4098366cd094aae9dd2e8d365f0412174d5e1a2e9a3d5893",
+      "repo_digests": [
+        "swebench/sweb.eval.x86_64.pylint-dev_1776_pylint-4970@sha256:5d331d487e49480c4098366cd094aae9dd2e8d365f0412174d5e1a2e9a3d5893"
+      ],
+      "size_bytes": 1086101802,
+      "rootfs_layers": [
+        "sha256:beb59027b96ddbf30ac9c80b527668fe7011f4f553fe83f5e59199e9a84fb5ca",
+        "sha256:24df650e8ccc41451cf4f7113e09420f7ec00ca9ae41e8be09c60bc467cdf4fe",
+        "sha256:098cb03ec50e1bd1637b7db5e2696a4d1dc3f1c3811adbbe444f43f631f2e7fd",
+        "sha256:fc3a8fa12509a555b3cea8d1f7457c0837ab8360be78e7a380294e09f96fe2f2",
+        "sha256:a3540f5c375c231bc054e7472d0de5a6d8fe5c96b92948f7655914860647fb54",
+        "sha256:f3684f1a85d5159913e2c41a55a86947882302421241b14b57583633bfc31873",
+        "sha256:dca5550cb5946eb6a5904054472ac9830b741e1adca85c07b385303d8991b937",
+        "sha256:35fcf4ef541974effba5145fce41b009107fc581c08b3f3bf9a700a023fa2b88",
+        "sha256:41d18a600832f50c9b726a0a9378202264811b8f946aeddfc554ac0d17fddbeb",
+        "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
+      ]
+    },
+    {
+      "task": "scikit-learn__scikit-learn-13328",
+      "image": "docker.io/swebench/sweb.eval.x86_64.scikit-learn_1776_scikit-learn-13328:latest",
+      "status": "pulled",
+      "disk_before": {
+        "available_bytes": 405298937856,
+        "total_bytes": 3935709487104
+      },
+      "started_utc": "2026-11-14T07:54:40.520938+00:00",
+      "log": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/pull-logs/scikit-learn__scikit-learn-13328.log",
+      "latest_disk": {
+        "available_bytes": 404974538752,
+        "total_bytes": 3935709487104
+      },
+      "finished_utc": "2026-11-14T07:54:45.919173+00:00",
+      "exit_code": 0,
+      "disk_after": {
+        "available_bytes": 404974514176,
+        "total_bytes": 3935709487104
+      },
+      "elapsed_setup_seconds": 5.727744451025501,
+      "image_id": "sha256:4561ea7d239224b3ab1c7d645add8e86c0b435dd158c11c41ed4494d28d855e8",
+      "repo_digests": [
+        "swebench/sweb.eval.x86_64.scikit-learn_1776_scikit-learn-13328@sha256:4561ea7d239224b3ab1c7d645add8e86c0b435dd158c11c41ed4494d28d855e8"
+      ],
+      "size_bytes": 1485809926,
+      "rootfs_layers": [
+        "sha256:beb59027b96ddbf30ac9c80b527668fe7011f4f553fe83f5e59199e9a84fb5ca",
+        "sha256:24df650e8ccc41451cf4f7113e09420f7ec00ca9ae41e8be09c60bc467cdf4fe",
+        "sha256:098cb03ec50e1bd1637b7db5e2696a4d1dc3f1c3811adbbe444f43f631f2e7fd",
+        "sha256:fc3a8fa12509a555b3cea8d1f7457c0837ab8360be78e7a380294e09f96fe2f2",
+        "sha256:a3540f5c375c231bc054e7472d0de5a6d8fe5c96b92948f7655914860647fb54",
+        "sha256:f3684f1a85d5159913e2c41a55a86947882302421241b14b57583633bfc31873",
+        "sha256:36bc17c43f70b347cd3d69820fc95875d5404e64c68f1400a60b6b90d34666cf",
+        "sha256:0ab3624eb7802179d3f5fe124e75e93e0849c00896ee49438de1cceb7eb3903a",
+        "sha256:dc3ee61f74299605d17ff1654faeec78c9918f5df77d7159ad3076a65db426ac",
+        "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
+      ]
+    },
+    {
+      "task": "django__django-14999",
+      "image": "docker.io/swebench/sweb.eval.x86_64.django_1776_django-14999:latest",
+      "status": "pulled",
+      "disk_before": {
+        "available_bytes": 404974510080,
+        "total_bytes": 3935709487104
+      },
+      "started_utc": "2026-11-14T07:54:46.665423+00:00",
+      "log": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/pull-logs/django__django-14999.log",
+      "latest_disk": {
+        "available_bytes": 402748653568,
+        "total_bytes": 3935709487104
+      },
+      "finished_utc": "2026-11-14T07:55:09.276514+00:00",
+      "exit_code": 0,
+      "disk_after": {
+        "available_bytes": 402748616704,
+        "total_bytes": 3935709487104
+      },
+      "elapsed_setup_seconds": 22.952351621817797,
+      "image_id": "sha256:1ca2b627c38a7299c6d0972837ccb260aa9d81c44a7d95effbac1df17f596748",
+      "repo_digests": [
+        "swebench/sweb.eval.x86_64.django_1776_django-14999@sha256:1ca2b627c38a7299c6d0972837ccb260aa9d81c44a7d95effbac1df17f596748"
+      ],
+      "size_bytes": 1208313118,
+      "rootfs_layers": [
+        "sha256:beb59027b96ddbf30ac9c80b527668fe7011f4f553fe83f5e59199e9a84fb5ca",
+        "sha256:8b070dae4fd6562cc7272d3392d3e5d0eb54aebbabe7992ea47407c02a7e4ab5",
+        "sha256:e41dda3ddff433b42bc5c7db367e9a89b90e42702b2204ac3748eff0661fed5d",
+        "sha256:77dfb20914dd629938c812a6dbd69d5523e3eca3798e570ceee0b09b0e9f8eeb",
+        "sha256:73f1203e53826763f5480b23ca857212005fd21f7fbfb1df5f40641c278d0802",
+        "sha256:9f91f535caf3186b2a7f093b2f8bc4e3a6605e119e563b7e49fb81415185125d",
+        "sha256:910462bf931094c80775f5aadf6b4e461f9ec4284e77d28f4f4049e4996ba2ca",
+        "sha256:4048b8815f1003e7c8e5170147c465a00c0d40da6ae6c67635eb40366d5ae46f",
+        "sha256:35233ed166f50d38c59d83546f3f85754b283bc44b9d94f1715c2c21a43829e5",
+        "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
+      ]
+    },
+    {
+      "task": "pydata__xarray-6461",
+      "image": "docker.io/swebench/sweb.eval.x86_64.pydata_1776_xarray-6461:latest",
+      "status": "pulled",
+      "disk_before": {
+        "available_bytes": 402748604416,
+        "total_bytes": 3935709487104
+      },
+      "started_utc": "2026-11-14T07:55:10.024071+00:00",
+      "log": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/pull-logs/pydata__xarray-6461.log",
+      "latest_disk": {
+        "available_bytes": 397863985152,
+        "total_bytes": 3935709487104
+      },
+      "finished_utc": "2026-11-14T07:55:49.950724+00:00",
+      "exit_code": 0,
+      "disk_after": {
+        "available_bytes": 397863976960,
+        "total_bytes": 3935709487104
+      },
+      "elapsed_setup_seconds": 40.29977763397619,
+      "image_id": "sha256:88efae745c9629cc34677c9ff042a8a488c97aae47b915799c4efad2ab603632",
+      "repo_digests": [
+        "swebench/sweb.eval.x86_64.pydata_1776_xarray-6461@sha256:88efae745c9629cc34677c9ff042a8a488c97aae47b915799c4efad2ab603632"
+      ],
+      "size_bytes": 1921138369,
+      "rootfs_layers": [
+        "sha256:beb59027b96ddbf30ac9c80b527668fe7011f4f553fe83f5e59199e9a84fb5ca",
+        "sha256:24df650e8ccc41451cf4f7113e09420f7ec00ca9ae41e8be09c60bc467cdf4fe",
+        "sha256:098cb03ec50e1bd1637b7db5e2696a4d1dc3f1c3811adbbe444f43f631f2e7fd",
+        "sha256:fc3a8fa12509a555b3cea8d1f7457c0837ab8360be78e7a380294e09f96fe2f2",
+        "sha256:a3540f5c375c231bc054e7472d0de5a6d8fe5c96b92948f7655914860647fb54",
+        "sha256:f3684f1a85d5159913e2c41a55a86947882302421241b14b57583633bfc31873",
+        "sha256:c03b927611b8c7feb53b265a5e5a259d01f7311668bdde795fec0addb6236951",
+        "sha256:e030e60518f156678aa0fe58f76244a721382dc828ac6dfc987d9c3aa889b046",
+        "sha256:31da9cac396ce579763770ea495f00d5d03238866d272db4e4ab0686b6f42a11",
+        "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
+      ]
+    },
+    {
+      "task": "astropy__astropy-14309",
+      "image": "docker.io/swebench/sweb.eval.x86_64.astropy_1776_astropy-14309:latest",
+      "status": "pulled",
+      "disk_before": {
+        "available_bytes": 397863964672,
+        "total_bytes": 3935709487104
+      },
+      "started_utc": "2026-11-14T07:55:50.704900+00:00",
+      "log": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/pull-logs/astropy__astropy-14309.log",
+      "latest_disk": {
+        "available_bytes": 397666263040,
+        "total_bytes": 3935709487104
+      },
+      "finished_utc": "2026-11-14T07:55:56.168496+00:00",
+      "exit_code": 0,
+      "disk_after": {
+        "available_bytes": 397666258944,
+        "total_bytes": 3935709487104
+      },
+      "elapsed_setup_seconds": 5.74493326083757,
+      "image_id": "sha256:fdce7843a7aeb4d630df414fc1bf01301cfe07e1389e2b3d7ee61f93f8ea6789",
+      "repo_digests": [
+        "swebench/sweb.eval.x86_64.astropy_1776_astropy-14309@sha256:fdce7843a7aeb4d630df414fc1bf01301cfe07e1389e2b3d7ee61f93f8ea6789"
+      ],
+      "size_bytes": 1136544717,
+      "rootfs_layers": [
+        "sha256:beb59027b96ddbf30ac9c80b527668fe7011f4f553fe83f5e59199e9a84fb5ca",
+        "sha256:24df650e8ccc41451cf4f7113e09420f7ec00ca9ae41e8be09c60bc467cdf4fe",
+        "sha256:098cb03ec50e1bd1637b7db5e2696a4d1dc3f1c3811adbbe444f43f631f2e7fd",
+        "sha256:fc3a8fa12509a555b3cea8d1f7457c0837ab8360be78e7a380294e09f96fe2f2",
+        "sha256:a3540f5c375c231bc054e7472d0de5a6d8fe5c96b92948f7655914860647fb54",
+        "sha256:f3684f1a85d5159913e2c41a55a86947882302421241b14b57583633bfc31873",
+        "sha256:859a9de4e56d34784813c7ca41c2ae8810d2b4bb2f53e09004a6f97909cf9e09",
+        "sha256:6ee10ac924dfb8a86ec8c7ba00dc6968b0e5ef858d20b8a12806a6b6af87e8ed",
+        "sha256:bdded0dcf971c570277dbd4712ad048d88f49b6f5d2ef1979df9b2028ef9e8f1",
+        "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
+      ]
+    },
+    {
+      "task": "sphinx-doc__sphinx-8638",
+      "image": "docker.io/swebench/sweb.eval.x86_64.sphinx-doc_1776_sphinx-8638:latest",
+      "status": "pulled",
+      "disk_before": {
+        "available_bytes": 397666246656,
+        "total_bytes": 3935709487104
+      },
+      "started_utc": "2026-11-14T07:55:56.825183+00:00",
+      "log": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/pull-logs/sphinx-doc__sphinx-8638.log",
+      "latest_disk": {
+        "available_bytes": 395787739136,
+        "total_bytes": 3935709487104
+      },
+      "finished_utc": "2026-11-14T07:56:13.338212+00:00",
+      "exit_code": 0,
+      "disk_after": {
+        "available_bytes": 395787730944,
+        "total_bytes": 3935709487104
+      },
+      "elapsed_setup_seconds": 16.891117038903758,
+      "image_id": "sha256:704547bd5fff87b0485309ce562e5df09edb84525569d72e5786c14c6c8a772c",
+      "repo_digests": [
+        "swebench/sweb.eval.x86_64.sphinx-doc_1776_sphinx-8638@sha256:704547bd5fff87b0485309ce562e5df09edb84525569d72e5786c14c6c8a772c"
+      ],
+      "size_bytes": 1097574355,
+      "rootfs_layers": [
+        "sha256:beb59027b96ddbf30ac9c80b527668fe7011f4f553fe83f5e59199e9a84fb5ca",
+        "sha256:24df650e8ccc41451cf4f7113e09420f7ec00ca9ae41e8be09c60bc467cdf4fe",
+        "sha256:098cb03ec50e1bd1637b7db5e2696a4d1dc3f1c3811adbbe444f43f631f2e7fd",
+        "sha256:fc3a8fa12509a555b3cea8d1f7457c0837ab8360be78e7a380294e09f96fe2f2",
+        "sha256:a3540f5c375c231bc054e7472d0de5a6d8fe5c96b92948f7655914860647fb54",
+        "sha256:f3684f1a85d5159913e2c41a55a86947882302421241b14b57583633bfc31873",
+        "sha256:a753016738ab9f24a8e01cf760fbd4a214335fc889d81da4a58aae09f209bc7d",
+        "sha256:b33e4233454fccac148bfccee2f9a781d38ce9a82eebcdfac286d819dd6b2442",
+        "sha256:344dddcaf3d9be964db6d0a842073b940891723e11df4ddfd563223b5d4ae199",
+        "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
+      ]
+    },
+    {
+      "task": "psf__requests-1921",
+      "image": "docker.io/swebench/sweb.eval.x86_64.psf_1776_requests-1921:latest",
+      "status": "pulled",
+      "disk_before": {
+        "available_bytes": 395787718656,
+        "total_bytes": 3935709487104
+      },
+      "started_utc": "2026-11-14T07:56:14.091114+00:00",
+      "log": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/pull-logs/psf__requests-1921.log",
+      "latest_disk": {
+        "available_bytes": 395774525440,
+        "total_bytes": 3935709487104
+      },
+      "finished_utc": "2026-11-14T07:56:19.458256+00:00",
+      "exit_code": 0,
+      "disk_after": {
+        "available_bytes": 395774513152,
+        "total_bytes": 3935709487104
+      },
+      "elapsed_setup_seconds": 5.727572300937027,
+      "image_id": "sha256:2ee0a4c706f04d2926a1622ec51b53d4ce6010b80d3ee10d414ea2a276c26cc9",
+      "repo_digests": [
+        "swebench/sweb.eval.x86_64.psf_1776_requests-1921@sha256:2ee0a4c706f04d2926a1622ec51b53d4ce6010b80d3ee10d414ea2a276c26cc9"
+      ],
+      "size_bytes": 1014584808,
+      "rootfs_layers": [
+        "sha256:beb59027b96ddbf30ac9c80b527668fe7011f4f553fe83f5e59199e9a84fb5ca",
+        "sha256:24df650e8ccc41451cf4f7113e09420f7ec00ca9ae41e8be09c60bc467cdf4fe",
+        "sha256:098cb03ec50e1bd1637b7db5e2696a4d1dc3f1c3811adbbe444f43f631f2e7fd",
+        "sha256:fc3a8fa12509a555b3cea8d1f7457c0837ab8360be78e7a380294e09f96fe2f2",
+        "sha256:a3540f5c375c231bc054e7472d0de5a6d8fe5c96b92948f7655914860647fb54",
+        "sha256:f3684f1a85d5159913e2c41a55a86947882302421241b14b57583633bfc31873",
+        "sha256:f17ac596f61eb5d3f00dc171508c3c39572f7f8a14bca44afb2cee30f2dff8d9",
+        "sha256:4db169898266e7aae43905577235ef03d1c0d40defe24af146da9c0ee68d11b3",
+        "sha256:245a74ea8423f0f74aed978870b8549e62e27ca849a3fdaab514b886d470202f",
+        "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
+      ]
+    },
+    {
+      "task": "matplotlib__matplotlib-26208",
+      "image": "docker.io/swebench/sweb.eval.x86_64.matplotlib_1776_matplotlib-26208:latest",
+      "status": "pulled",
+      "disk_before": {
+        "available_bytes": 395774509056,
+        "total_bytes": 3935709487104
+      },
+      "started_utc": "2026-11-14T07:56:20.165341+00:00",
+      "log": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/pull-logs/matplotlib__matplotlib-26208.log",
+      "latest_disk": {
+        "available_bytes": 392766681088,
+        "total_bytes": 3935709487104
+      },
+      "finished_utc": "2026-11-14T07:56:48.073061+00:00",
+      "exit_code": 0,
+      "disk_after": {
+        "available_bytes": 392766672896,
+        "total_bytes": 3935709487104
+      },
+      "elapsed_setup_seconds": 28.209029666846618,
+      "image_id": "sha256:b3268fee6c746093c7df3f79be03a358d2b6f6183d0547b99afac28135d5ffd7",
+      "repo_digests": [
+        "swebench/sweb.eval.x86_64.matplotlib_1776_matplotlib-26208@sha256:b3268fee6c746093c7df3f79be03a358d2b6f6183d0547b99afac28135d5ffd7"
+      ],
+      "size_bytes": 3149548648,
+      "rootfs_layers": [
+        "sha256:beb59027b96ddbf30ac9c80b527668fe7011f4f553fe83f5e59199e9a84fb5ca",
+        "sha256:24df650e8ccc41451cf4f7113e09420f7ec00ca9ae41e8be09c60bc467cdf4fe",
+        "sha256:098cb03ec50e1bd1637b7db5e2696a4d1dc3f1c3811adbbe444f43f631f2e7fd",
+        "sha256:fc3a8fa12509a555b3cea8d1f7457c0837ab8360be78e7a380294e09f96fe2f2",
+        "sha256:a3540f5c375c231bc054e7472d0de5a6d8fe5c96b92948f7655914860647fb54",
+        "sha256:f3684f1a85d5159913e2c41a55a86947882302421241b14b57583633bfc31873",
+        "sha256:eebc781b62cc9ac08a01e716325280c05422ac654f398167c4554fa0a46723c9",
+        "sha256:c70ef11a01f2bef72d4a87046fc69872c8ccca808762c99be80634daa429f419",
+        "sha256:1a7bd68d59b6d8d0c443e1e5b1330ee4cc9a941f49738eb213e503c7e5c49a91",
+        "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
+      ]
+    },
+    {
+      "task": "pytest-dev__pytest-10356",
+      "image": "docker.io/swebench/sweb.eval.x86_64.pytest-dev_1776_pytest-10356:latest",
+      "status": "pulled",
+      "disk_before": {
+        "available_bytes": 392766664704,
+        "total_bytes": 3935709487104
+      },
+      "started_utc": "2026-11-14T07:56:48.736157+00:00",
+      "log": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/pull-logs/pytest-dev__pytest-10356.log",
+      "latest_disk": {
+        "available_bytes": 391100489728,
+        "total_bytes": 3935709487104
+      },
+      "finished_utc": "2026-11-14T07:57:05.386483+00:00",
+      "exit_code": 0,
+      "disk_after": {
+        "available_bytes": 391100477440,
+        "total_bytes": 3935709487104
+      },
+      "elapsed_setup_seconds": 16.97058305912651,
+      "image_id": "sha256:363458d4698f5d985f6476d189d3f1cf902253cd9518705fd395516cd30138da",
+      "repo_digests": [
+        "swebench/sweb.eval.x86_64.pytest-dev_1776_pytest-10356@sha256:363458d4698f5d985f6476d189d3f1cf902253cd9518705fd395516cd30138da"
+      ],
+      "size_bytes": 1029236889,
+      "rootfs_layers": [
+        "sha256:beb59027b96ddbf30ac9c80b527668fe7011f4f553fe83f5e59199e9a84fb5ca",
+        "sha256:24df650e8ccc41451cf4f7113e09420f7ec00ca9ae41e8be09c60bc467cdf4fe",
+        "sha256:098cb03ec50e1bd1637b7db5e2696a4d1dc3f1c3811adbbe444f43f631f2e7fd",
+        "sha256:fc3a8fa12509a555b3cea8d1f7457c0837ab8360be78e7a380294e09f96fe2f2",
+        "sha256:a3540f5c375c231bc054e7472d0de5a6d8fe5c96b92948f7655914860647fb54",
+        "sha256:f3684f1a85d5159913e2c41a55a86947882302421241b14b57583633bfc31873",
+        "sha256:4246494d6bb1c12c4762ef2fd9921eb72f2cd1cb8e084e218b814f5c82dc8c14",
+        "sha256:95dbcda09c793a41b102b5bb2acd561df30e5f1d1ea69d97d8fcb84019c1f963",
+        "sha256:6e048e97a219d090f66b6880ed92d7a717bfa61dbf462df5fa69a53cf710ae36",
+        "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
+      ]
+    },
+    {
+      "task": "sympy__sympy-13091",
+      "image": "docker.io/swebench/sweb.eval.x86_64.sympy_1776_sympy-13091:latest",
+      "status": "pulled",
+      "disk_before": {
+        "available_bytes": 391100469248,
+        "total_bytes": 3935709487104
+      },
+      "started_utc": "2026-11-14T07:57:06.076187+00:00",
+      "log": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/pull-logs/sympy__sympy-13091.log",
+      "latest_disk": {
+        "available_bytes": 390971965440,
+        "total_bytes": 3935709487104
+      },
+      "finished_utc": "2026-11-14T07:57:11.493261+00:00",
+      "exit_code": 0,
+      "disk_after": {
+        "available_bytes": 390971961344,
+        "total_bytes": 3935709487104
+      },
+      "elapsed_setup_seconds": 5.697375696152449,
+      "image_id": "sha256:0b025245e81c4ce1d888f3b3088ef220f20661d8241c0c50797ebf3a46d393ac",
+      "repo_digests": [
+        "swebench/sweb.eval.x86_64.sympy_1776_sympy-13091@sha256:0b025245e81c4ce1d888f3b3088ef220f20661d8241c0c50797ebf3a46d393ac"
+      ],
+      "size_bytes": 1063855054,
+      "rootfs_layers": [
+        "sha256:beb59027b96ddbf30ac9c80b527668fe7011f4f553fe83f5e59199e9a84fb5ca",
+        "sha256:24df650e8ccc41451cf4f7113e09420f7ec00ca9ae41e8be09c60bc467cdf4fe",
+        "sha256:098cb03ec50e1bd1637b7db5e2696a4d1dc3f1c3811adbbe444f43f631f2e7fd",
+        "sha256:fc3a8fa12509a555b3cea8d1f7457c0837ab8360be78e7a380294e09f96fe2f2",
+        "sha256:a3540f5c375c231bc054e7472d0de5a6d8fe5c96b92948f7655914860647fb54",
+        "sha256:f3684f1a85d5159913e2c41a55a86947882302421241b14b57583633bfc31873",
+        "sha256:fe542fe64c3f8a7b726310ec1785fb4a03948f157976e080e06c684396010d13",
+        "sha256:c41677510cfe38564e7bb15dea585ec1b5057f40b29ceaad3b1c733edd8a35a8",
+        "sha256:096a1929b0a25fdf14bc2391ad4b0017bb9d89018cd01c22bcdaa0d19b78d47e",
+        "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
+      ]
+    },
+    {
+      "task": "pylint-dev__pylint-4661",
+      "image": "docker.io/swebench/sweb.eval.x86_64.pylint-dev_1776_pylint-4661:latest",
+      "status": "pulled",
+      "disk_before": {
+        "available_bytes": 390971949056,
+        "total_bytes": 3935709487104
+      },
+      "started_utc": "2026-11-14T07:57:12.128619+00:00",
+      "log": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/pull-logs/pylint-dev__pylint-4661.log",
+      "latest_disk": {
+        "available_bytes": 389095432192,
+        "total_bytes": 3935709487104
+      },
+      "finished_utc": "2026-11-14T07:57:28.579440+00:00",
+      "exit_code": 0,
+      "disk_after": {
+        "available_bytes": 389095428096,
+        "total_bytes": 3935709487104
+      },
+      "elapsed_setup_seconds": 16.71470942092128,
+      "image_id": "sha256:92b83a19cbeaac3d64a0efab6cd73011c68f48e1c720b1b64f75b8bb436bf0ee",
+      "repo_digests": [
+        "swebench/sweb.eval.x86_64.pylint-dev_1776_pylint-4661@sha256:92b83a19cbeaac3d64a0efab6cd73011c68f48e1c720b1b64f75b8bb436bf0ee"
+      ],
+      "size_bytes": 1085709916,
+      "rootfs_layers": [
+        "sha256:beb59027b96ddbf30ac9c80b527668fe7011f4f553fe83f5e59199e9a84fb5ca",
+        "sha256:24df650e8ccc41451cf4f7113e09420f7ec00ca9ae41e8be09c60bc467cdf4fe",
+        "sha256:098cb03ec50e1bd1637b7db5e2696a4d1dc3f1c3811adbbe444f43f631f2e7fd",
+        "sha256:fc3a8fa12509a555b3cea8d1f7457c0837ab8360be78e7a380294e09f96fe2f2",
+        "sha256:a3540f5c375c231bc054e7472d0de5a6d8fe5c96b92948f7655914860647fb54",
+        "sha256:f3684f1a85d5159913e2c41a55a86947882302421241b14b57583633bfc31873",
+        "sha256:47b112fc61b08cc429d7452c60f624cf065aeb82fc37db7a65cc2820f4bc0b78",
+        "sha256:a4a90b6467592721f38d2fd74ed45ea520bfb1cc5ddac8e43304828be014b77a",
+        "sha256:436eb764eecc2e203fab0a48c866f4d0e9a970a012a79606aa58a5d378245276",
+        "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
+      ]
+    },
+    {
+      "task": "django__django-14007",
+      "image": "docker.io/swebench/sweb.eval.x86_64.django_1776_django-14007:latest",
+      "status": "pulled",
+      "disk_before": {
+        "available_bytes": 389095411712,
+        "total_bytes": 3935709487104
+      },
+      "started_utc": "2026-11-14T07:57:29.266158+00:00",
+      "log": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/pull-logs/django__django-14007.log",
+      "latest_disk": {
+        "available_bytes": 388837318656,
+        "total_bytes": 3935709487104
+      },
+      "finished_utc": "2026-11-14T07:57:34.721302+00:00",
+      "exit_code": 0,
+      "disk_after": {
+        "available_bytes": 388837310464,
+        "total_bytes": 3935709487104
+      },
+      "elapsed_setup_seconds": 5.727187296142802,
+      "image_id": "sha256:32fb5c7de16d8fe61b08e4a008b602b3a54df8001345fbf9959e2fe9392790b8",
+      "repo_digests": [
+        "swebench/sweb.eval.x86_64.django_1776_django-14007@sha256:32fb5c7de16d8fe61b08e4a008b602b3a54df8001345fbf9959e2fe9392790b8"
+      ],
+      "size_bytes": 1193200166,
+      "rootfs_layers": [
+        "sha256:beb59027b96ddbf30ac9c80b527668fe7011f4f553fe83f5e59199e9a84fb5ca",
+        "sha256:24df650e8ccc41451cf4f7113e09420f7ec00ca9ae41e8be09c60bc467cdf4fe",
+        "sha256:098cb03ec50e1bd1637b7db5e2696a4d1dc3f1c3811adbbe444f43f631f2e7fd",
+        "sha256:fc3a8fa12509a555b3cea8d1f7457c0837ab8360be78e7a380294e09f96fe2f2",
+        "sha256:a3540f5c375c231bc054e7472d0de5a6d8fe5c96b92948f7655914860647fb54",
+        "sha256:f3684f1a85d5159913e2c41a55a86947882302421241b14b57583633bfc31873",
+        "sha256:e49a4d6b01430152546bb76935a27d290d6e7bbc653fcf1f3fb6ed24c0de2168",
+        "sha256:8d194f18e1be2fc90185ee56c36d6fa00015771f2b578c5403017a9b2754aeba",
+        "sha256:0f56214f5586414e7a7efaf00d959510d0c8af6ce703c4bada8fc91a4f82b984",
+        "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
+      ]
+    },
+    {
+      "task": "pydata__xarray-7233",
+      "image": "docker.io/swebench/sweb.eval.x86_64.pydata_1776_xarray-7233:latest",
+      "status": "pulled",
+      "disk_before": {
+        "available_bytes": 388837298176,
+        "total_bytes": 3935709487104
+      },
+      "started_utc": "2026-11-14T07:57:35.388187+00:00",
+      "log": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/pull-logs/pydata__xarray-7233.log",
+      "latest_disk": {
+        "available_bytes": 384146186240,
+        "total_bytes": 3935709487104
+      },
+      "finished_utc": "2026-11-14T07:58:15.034025+00:00",
+      "exit_code": 0,
+      "disk_after": {
+        "available_bytes": 384146182144,
+        "total_bytes": 3935709487104
+      },
+      "elapsed_setup_seconds": 39.97595234494656,
+      "image_id": "sha256:c721ae42fdf376c8ad36dcf63e8e63230052f3ae28cf307df4aeae42bd09aa24",
+      "repo_digests": [
+        "swebench/sweb.eval.x86_64.pydata_1776_xarray-7233@sha256:c721ae42fdf376c8ad36dcf63e8e63230052f3ae28cf307df4aeae42bd09aa24"
+      ],
+      "size_bytes": 1901848566,
+      "rootfs_layers": [
+        "sha256:beb59027b96ddbf30ac9c80b527668fe7011f4f553fe83f5e59199e9a84fb5ca",
+        "sha256:24df650e8ccc41451cf4f7113e09420f7ec00ca9ae41e8be09c60bc467cdf4fe",
+        "sha256:098cb03ec50e1bd1637b7db5e2696a4d1dc3f1c3811adbbe444f43f631f2e7fd",
+        "sha256:fc3a8fa12509a555b3cea8d1f7457c0837ab8360be78e7a380294e09f96fe2f2",
+        "sha256:a3540f5c375c231bc054e7472d0de5a6d8fe5c96b92948f7655914860647fb54",
+        "sha256:f3684f1a85d5159913e2c41a55a86947882302421241b14b57583633bfc31873",
+        "sha256:3a1de623503962be02285ea6e1869e18ba7a254b46ac0b910af6b83de42368d8",
+        "sha256:ee2d5830aab53cbc5bf1633b63445df92b7e4de753422ef3130395dfa9a05fc2",
+        "sha256:5c58abe69c7fca7efa3de3116901208fd36bd7925611c5eea91bdc2d60277024",
+        "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
+      ]
+    },
+    {
+      "task": "astropy__astropy-13398",
+      "image": "docker.io/swebench/sweb.eval.x86_64.astropy_1776_astropy-13398:latest",
+      "status": "pulled",
+      "disk_before": {
+        "available_bytes": 384146169856,
+        "total_bytes": 3935709487104
+      },
+      "started_utc": "2026-11-14T07:58:15.721010+00:00",
+      "log": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/pull-logs/astropy__astropy-13398.log",
+      "latest_disk": {
+        "available_bytes": 382159364096,
+        "total_bytes": 3935709487104
+      },
+      "finished_utc": "2026-11-14T07:58:32.279069+00:00",
+      "exit_code": 0,
+      "disk_after": {
+        "available_bytes": 382159351808,
+        "total_bytes": 3935709487104
+      },
+      "elapsed_setup_seconds": 16.872038959059864,
+      "image_id": "sha256:49cfb8e47c492fac9570ee66f8d5e4a7aa2a2516e18cf5663aa73e5b352b670a",
+      "repo_digests": [
+        "swebench/sweb.eval.x86_64.astropy_1776_astropy-13398@sha256:49cfb8e47c492fac9570ee66f8d5e4a7aa2a2516e18cf5663aa73e5b352b670a"
+      ],
+      "size_bytes": 1134236662,
+      "rootfs_layers": [
+        "sha256:beb59027b96ddbf30ac9c80b527668fe7011f4f553fe83f5e59199e9a84fb5ca",
+        "sha256:24df650e8ccc41451cf4f7113e09420f7ec00ca9ae41e8be09c60bc467cdf4fe",
+        "sha256:098cb03ec50e1bd1637b7db5e2696a4d1dc3f1c3811adbbe444f43f631f2e7fd",
+        "sha256:fc3a8fa12509a555b3cea8d1f7457c0837ab8360be78e7a380294e09f96fe2f2",
+        "sha256:a3540f5c375c231bc054e7472d0de5a6d8fe5c96b92948f7655914860647fb54",
+        "sha256:f3684f1a85d5159913e2c41a55a86947882302421241b14b57583633bfc31873",
+        "sha256:d2c3e918fb6a98f435528f5c41ee3c0f8e8daf02870910240becfb030877727d",
+        "sha256:996d7c6ab1a0ec5d50dc150f2a0af32ab6c23449bbafc13347dbe65771966c40",
+        "sha256:0f1f81f66f173eb4ee3ed894aec7df25385af7882708e65a2dfdd589003fc3c2",
+        "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
+      ]
+    },
+    {
+      "task": "sphinx-doc__sphinx-10323",
+      "image": "docker.io/swebench/sweb.eval.x86_64.sphinx-doc_1776_sphinx-10323:latest",
+      "status": "pulled",
+      "disk_before": {
+        "available_bytes": 382159343616,
+        "total_bytes": 3935709487104
+      },
+      "started_utc": "2026-11-14T07:58:32.968528+00:00",
+      "log": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/pull-logs/sphinx-doc__sphinx-10323.log",
+      "latest_disk": {
+        "available_bytes": 380265566208,
+        "total_bytes": 3935709487104
+      },
+      "finished_utc": "2026-11-14T07:58:49.551612+00:00",
+      "exit_code": 0,
+      "disk_after": {
+        "available_bytes": 380265553920,
+        "total_bytes": 3935709487104
+      },
+      "elapsed_setup_seconds": 16.937090548919514,
+      "image_id": "sha256:b27e055730cb8a826e4e2cf0503d03c6770d537ab29cb6df8caa93ef5db51e8f",
+      "repo_digests": [
+        "swebench/sweb.eval.x86_64.sphinx-doc_1776_sphinx-10323@sha256:b27e055730cb8a826e4e2cf0503d03c6770d537ab29cb6df8caa93ef5db51e8f"
+      ],
+      "size_bytes": 1104928600,
+      "rootfs_layers": [
+        "sha256:beb59027b96ddbf30ac9c80b527668fe7011f4f553fe83f5e59199e9a84fb5ca",
+        "sha256:24df650e8ccc41451cf4f7113e09420f7ec00ca9ae41e8be09c60bc467cdf4fe",
+        "sha256:098cb03ec50e1bd1637b7db5e2696a4d1dc3f1c3811adbbe444f43f631f2e7fd",
+        "sha256:fc3a8fa12509a555b3cea8d1f7457c0837ab8360be78e7a380294e09f96fe2f2",
+        "sha256:a3540f5c375c231bc054e7472d0de5a6d8fe5c96b92948f7655914860647fb54",
+        "sha256:f3684f1a85d5159913e2c41a55a86947882302421241b14b57583633bfc31873",
+        "sha256:ecc787268c5e454819a45b3667f0518c67df3e911cea74ab673c8512c82610cc",
+        "sha256:25423a1dcbc10b6a11e7e87d2652904340a2b64ca31455674e503c3efc6e6281",
+        "sha256:09ce9628b12f436dd8846a1326159eb8374cf6f8ea22d6925afea51965aa892b",
+        "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
+      ]
+    },
+    {
+      "task": "scikit-learn__scikit-learn-25747",
+      "image": "docker.io/swebench/sweb.eval.x86_64.scikit-learn_1776_scikit-learn-25747:latest",
+      "status": "pull_failed",
+      "disk_before": {
+        "available_bytes": 380265541632,
+        "total_bytes": 3935709487104
+      },
+      "started_utc": "2026-11-14T07:58:50.282007+00:00",
+      "log": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/pull-logs/scikit-learn__scikit-learn-25747.log",
+      "latest_disk": {
+        "available_bytes": 380265480192,
+        "total_bytes": 3935709487104
+      },
+      "finished_utc": "2026-11-14T07:58:55.620018+00:00",
+      "exit_code": 1,
+      "disk_after": {
+        "available_bytes": 380265472000,
+        "total_bytes": 3935709487104
+      },
+      "elapsed_setup_seconds": 5.708018521079794
+    },
+    {
+      "task": "matplotlib__matplotlib-23412",
+      "image": "docker.io/swebench/sweb.eval.x86_64.matplotlib_1776_matplotlib-23412:latest",
+      "status": "pending"
+    },
+    {
+      "task": "psf__requests-1724",
+      "image": "docker.io/swebench/sweb.eval.x86_64.psf_1776_requests-1724:latest",
+      "status": "pending"
+    },
+    {
+      "task": "sympy__sympy-12489",
+      "image": "docker.io/swebench/sweb.eval.x86_64.sympy_1776_sympy-12489:latest",
+      "status": "pending"
+    },
+    {
+      "task": "sphinx-doc__sphinx-9461",
+      "image": "docker.io/swebench/sweb.eval.x86_64.sphinx-doc_1776_sphinx-9461:latest",
+      "status": "pending"
+    }
+  ],
+  "limits": {
+    "overall_seconds": 7200,
+    "per_image_seconds": 600,
+    "minimum_free_bytes": 170000000000,
+    "start_headroom_bytes": 32000000000,
+    "inflight_cancel_free_bytes": 180000000000
+  },
+  "disk_method": "Read-only host /var/lib/docker bind, os.statvfs f_bavail; existing local image network none.",
+  "contention_note": "Concurrent CPU HF Astropy controls; Docker pulls/decompression may contend for CPU, RAM and disk. Setup timestamps are not model diagnostic performance evidence.",
+  "authorization_scope": "Official DockerHub pulls only; no builds/tests/evals/GitHub/cleanup.",
+  "finished_utc": "2026-11-14T07:58:55.992336+00:00",
+  "final_disk": {
+    "available_bytes": 380265459712,
+    "total_bytes": 3935709487104
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "epoch": 1794756697.8778245,
+  "owner": "",
+  "source_pins_verified": true,
+  "group_delta": "Down BF16HiFi4 to BFP8LoFi versus P17. Gate/up restored relative to rejected P18. Model-owned serving pool override applied before this run; unrelated to B1 accuracy path."
+}

@@ -1,0 +1,18 @@
+{
+  "status": "candidate_only_host_revalidation",
+  "scope": "HF9 candidate only; no admission, HF model load, network access, inference, TTNN import, or device work.",
+  "repairs": [
+    "Removed duplicate P placeholder constant.",
+    "Pinned exact frozen P source-hashes.json SHA-256 before applying the known stale-admission-row exception.",
+    "Made predecessor-pin resolution branch before fallback-path construction so captured admission/proposal/driver/inventory-exception pins are usable without unknown fallback keys.",
+    "Added exact required P2 admission SHA-256 to candidate admission verification.",
+    "Resolved the call91 native-positive selection prose and corrected the group count to eight."
+  ],
+  "checks": {
+    "driver_py_compile": "pass",
+    "driver_self_test": "pass; mock tests exercise complete P and suffix8192 returned pin maps including nested admission_inventory_exception",
+    "driver_validate_only": "pass; candidate files/hashes/9 cases/8 groups checked without predecessor access or device query",
+    "p_frozen_inventory_pin": "pass; SHA-256 e1254ae95f87360bc214b01757062a8910b5fed95f6e6cfd13244b024cce01ad",
+    "new_hf_manifest_runner_validate_only": "not_completed; process did not return before interruption after prolonged CPU/memory-heavy startup; no inference/model loading reached"
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "status": "passed",
+  "scope": "CPU-only precision_repro_batch --validate-only for both manifests; no TTNN import, model load, or device work.",
+  "checks": [
+    {
+      "mode": "served",
+      "job_count": 1,
+      "stdout": "Validated 1 jobs without importing TTNN",
+      "ttnn_imported": false
+    },
+    {
+      "mode": "full",
+      "job_count": 1,
+      "stdout": "Validated 1 jobs without importing TTNN",
+      "ttnn_imported": false
+    }
+  ],
+  "driver_syntax": "python -m py_compile passed after adding per-mode predecessor hash rechecks",
+  "source_hashes_match": true,
+  "candidate_manifest_hashes_match": true,
+  "driver_hash_pinned": true,
+  "admission_status": "candidate_only_not_admitted",
+  "review_closure_metadata": "refreshed after U final five-row review; no fixture or manifest changes",
+  "predecessor_hash_recheck_before_each_mode": true
+}

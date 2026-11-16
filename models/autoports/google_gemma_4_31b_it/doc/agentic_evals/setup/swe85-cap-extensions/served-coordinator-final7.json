@@ -1,0 +1,82 @@
+{
+  "status": "root_text_and_pinned_prefix_reviewed",
+  "rows": [
+    {
+      "job": "anomaly.sphinx-doc__sphinx-10323.call57.onset.cap512.seed42",
+      "seed": 42,
+      "mode": "served",
+      "verdict": "normal",
+      "reason": "Coherent continuation completes a concrete toolcall; prefix-aware tool syntax and changing script lines do not reproduce native anomaly.",
+      "tokens": 257,
+      "original256_prefix_identical": true,
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/served/anomaly.sphinx-doc__sphinx-10323.call57.onset.cap512.seed42.json",
+      "source_sha256": "5b18cfaf5f1e12e96f6dda9892c30c2c8bd3d1c574b4af602ee6adec39ac5c9f"
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.cap512.seed44",
+      "seed": 44,
+      "mode": "served",
+      "verdict": "normal",
+      "reason": "Prefix ends it; generated apostrophe-s is grammatical. Changing diagnostic reasoning completes with import/build toolcall.",
+      "tokens": 454,
+      "original256_prefix_identical": true,
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/served/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.cap512.seed44.json",
+      "source_sha256": "2a1ee3a825384bfeff63e29d3ded37723dad0e31fa9ad77e2857e30d7336c550"
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap512.seed42",
+      "seed": 42,
+      "mode": "served",
+      "verdict": "normal",
+      "reason": "Coherent continuation completes a concrete toolcall; prefix-aware tool syntax and changing script lines do not reproduce native anomaly.",
+      "tokens": 370,
+      "original256_prefix_identical": true,
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/served/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap512.seed42.json",
+      "source_sha256": "ca0bbea0cb7c692c85124e4bcb72a6b05fdabde08041a37d7dcc5a5a7ddfd3d5"
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap512.seed44",
+      "seed": 44,
+      "mode": "served",
+      "verdict": "normal",
+      "reason": "Coherent continuation completes a concrete toolcall; prefix-aware tool syntax and changing script lines do not reproduce native anomaly.",
+      "tokens": 503,
+      "original256_prefix_identical": true,
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/served/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap512.seed44.json",
+      "source_sha256": "6b6e165cd0e64f16936b3ea7cc423354b32916559451199562c19c23b612b7b5"
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-9461.call184.onset.cap512.seed42",
+      "seed": 42,
+      "mode": "served",
+      "verdict": "inconclusive",
+      "reason": "Varying descriptor/MRO replacement script is still progressing at512; repeated append calls contain distinct code, not a loop. Extend to1024.",
+      "tokens": 512,
+      "original256_prefix_identical": true,
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/served/anomaly.sphinx-doc__sphinx-9461.call184.onset.cap512.seed42.json",
+      "source_sha256": "06ef842e12f1c56099effeadb633fba9874ae264d3285513e0e1cb93662143a1"
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-9461.call184.onset.cap512.seed43",
+      "seed": 43,
+      "mode": "served",
+      "verdict": "inconclusive",
+      "reason": "Varying descriptor/MRO replacement script is still progressing at512; repeated append calls contain distinct code, not a loop. Extend to1024.",
+      "tokens": 512,
+      "original256_prefix_identical": true,
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/served/anomaly.sphinx-doc__sphinx-9461.call184.onset.cap512.seed43.json",
+      "source_sha256": "39eb0a586dec15856a3512741aed9954a277a524d4a5cc334f22b5b46d39f134"
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-9461.call184.onset.cap512.seed44",
+      "seed": 44,
+      "mode": "served",
+      "verdict": "inconclusive",
+      "reason": "Varying descriptor/MRO replacement script is still progressing at512; repeated append calls contain distinct code, not a loop. Extend to1024.",
+      "tokens": 512,
+      "original256_prefix_identical": true,
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/served/anomaly.sphinx-doc__sphinx-9461.call184.onset.cap512.seed44.json",
+      "source_sha256": "397c82d3b649c99cde44c7eebfcbf861252c3deebd7e9eda3d2a996630761a77"
+    }
+  ]
+}

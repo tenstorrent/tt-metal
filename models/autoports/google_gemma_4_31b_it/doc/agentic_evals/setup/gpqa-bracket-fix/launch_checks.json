@@ -1,0 +1,20 @@
+{
+  "checked_unix": 1794660855.8948276,
+  "idle": true,
+  "owner_pids": [
+    200763
+  ],
+  "remaining_server_lifetime_s": 84184.55054545403,
+  "disk_free_bytes": 175551229952,
+  "server_size_source": "setup/extended-launch-sizing/gpqa_server_size_head_bfp8.json",
+  "allocation_reused": true,
+  "reason": "Same live server and KV allocation; original launch allocator measurements still define capacity.12agents=min12poolslots,12hostslots,12tasks; no pool reduction.",
+  "batch": 32,
+  "agents": 12,
+  "prediction_hours": 0.5,
+  "prediction_basis": "One wave12; original198 measured1.48h and affected tasks original max plus preprocessing tail uncertainty; not guarantee, unchanged12h wrapper.",
+  "host_memory": {
+    "MemTotal": 267699728384,
+    "MemAvailable": 144390926336
+  }
+}

@@ -1,0 +1,192 @@
+{
+  "reviewed_unix": 1794726529.700534,
+  "rows": [
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/runs/head_bf16_hifi4/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.seed43.cap2048.json",
+      "sha256": "4dd3fda667b0668fc5c68929fe320cf453097e1b7bea0a173b21aac6d5304cf3",
+      "seed": 43,
+      "tokens": 214,
+      "verdict": "normal",
+      "reason": "Pinned prefix ends bare it; apostrophe-s is grammatical. Varied setup/loading reasoning and canonical command; no repeated-token loop.",
+      "trace_counters_delta": {
+        "model_replays": 213,
+        "sample_replays": 213,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 213,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/runs/head_bf16_hifi4/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.seed44.cap1024.json",
+      "sha256": "c5360a43fed1208de200657ecb455b76ae79f740ecdc53fb3fb9d114606106c3",
+      "seed": 44,
+      "tokens": 985,
+      "verdict": "normal",
+      "reason": "Pinned prefix ends bare it; apostrophe-s is grammatical. Varied setup/loading reasoning and canonical command; no repeated-token loop.",
+      "trace_counters_delta": {
+        "model_replays": 984,
+        "sample_replays": 984,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 984,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/runs/head_bf16_hifi4/anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset.seed42.cap256.json",
+      "sha256": "63f231ba8aebaf53ed1361c98468aa7667f13945565c05495a9aa119e4551044",
+      "seed": 42,
+      "tokens": 48,
+      "verdict": "normal",
+      "reason": "Complete raw text and pinned prefix reviewed: valid command continuation and canonical closure; distinct script lines, no degeneration. Diagnostic normal does not imply a correct patch.",
+      "trace_counters_delta": {
+        "model_replays": 47,
+        "sample_replays": 47,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 47,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/runs/head_bf16_hifi4/anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset.seed43.cap256.json",
+      "sha256": "59ec312ca56da9f5f8a8ca8cfcd951f578c8ebbe113694e4eae42124b71520cc",
+      "seed": 43,
+      "tokens": 4,
+      "verdict": "native",
+      "reason": "Prefix ends call:bash; generation begins newline instead of command argument opener. Missing {command:<|quote|> reproduces malformed tool protocol, despite later closing marker.",
+      "trace_counters_delta": {
+        "model_replays": 3,
+        "sample_replays": 3,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 3,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/runs/head_bf16_hifi4/anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset.seed44.cap256.json",
+      "sha256": "1778680bb5b9d996db9e0284bf21011705f5d786b3704a439fb997507e2fbc91",
+      "seed": 44,
+      "tokens": 69,
+      "verdict": "normal",
+      "reason": "Complete raw text and pinned prefix reviewed: valid command continuation and canonical closure; distinct script lines, no degeneration. Diagnostic normal does not imply a correct patch.",
+      "trace_counters_delta": {
+        "model_replays": 68,
+        "sample_replays": 68,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 68,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/runs/head_bf16_hifi4/anomaly.sphinx-doc__sphinx-11510.call108.onset.seed42.cap256.json",
+      "sha256": "1a2edbde1016bbded3b6877c02133d63ae67aac72f33bdc81d365a7113c7d5b2",
+      "seed": 42,
+      "tokens": 36,
+      "verdict": "normal",
+      "reason": "Complete raw text and pinned prefix reviewed: valid command continuation and canonical closure; distinct script lines, no degeneration. Diagnostic normal does not imply a correct patch.",
+      "trace_counters_delta": {
+        "model_replays": 35,
+        "sample_replays": 35,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 35,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/runs/head_bf16_hifi4/anomaly.sphinx-doc__sphinx-11510.call108.onset.seed43.cap256.json",
+      "sha256": "63996a2a3a0059cbe3c8100fb111e7f32d2382cbeba0b2d2e8bd085660be4a24",
+      "seed": 43,
+      "tokens": 36,
+      "verdict": "normal",
+      "reason": "Complete raw text and pinned prefix reviewed: valid command continuation and canonical closure; distinct script lines, no degeneration. Diagnostic normal does not imply a correct patch.",
+      "trace_counters_delta": {
+        "model_replays": 35,
+        "sample_replays": 35,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 35,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/runs/head_bf16_hifi4/anomaly.sphinx-doc__sphinx-11510.call108.onset.seed44.cap256.json",
+      "sha256": "afbc2eb533cc39075ebc4bb8ecb1475adb17bc166c964a7d897e88250bb0ec91",
+      "seed": 44,
+      "tokens": 36,
+      "verdict": "normal",
+      "reason": "Complete raw text and pinned prefix reviewed: valid command continuation and canonical closure; distinct script lines, no degeneration. Diagnostic normal does not imply a correct patch.",
+      "trace_counters_delta": {
+        "model_replays": 35,
+        "sample_replays": 35,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 35,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/runs/head_bf16_hifi4/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed42.cap1024.json",
+      "sha256": "926b3246441a143d73acf330d93fb31b1d11c1206cd9192b1acd62f4b5cc42bb",
+      "seed": 42,
+      "tokens": 370,
+      "verdict": "normal",
+      "reason": "Complete raw text and pinned prefix reviewed: valid command continuation and canonical closure; distinct script lines, no degeneration. Diagnostic normal does not imply a correct patch.",
+      "trace_counters_delta": {
+        "model_replays": 369,
+        "sample_replays": 369,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 369,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/runs/head_bf16_hifi4/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed43.cap2048.json",
+      "sha256": "c390936cdfd2f72cf9eaccdc68ba4d70cd0466b51989161d7393f92ea4559173",
+      "seed": 43,
+      "tokens": 1084,
+      "verdict": "native",
+      "reason": "Prefix ends call:bash; generation begins newline instead of command argument opener. Missing {command:<|quote|> reproduces malformed tool protocol, despite later closing marker.",
+      "trace_counters_delta": {
+        "model_replays": 1083,
+        "sample_replays": 1083,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 1083,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/runs/head_bf16_hifi4/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed44.cap1024.json",
+      "sha256": "90594a7cebec3e1b59731f422d73e1c168ea7df5c5ec164e4884f2f5951823b5",
+      "seed": 44,
+      "tokens": 506,
+      "verdict": "normal",
+      "reason": "Complete raw text and pinned prefix reviewed: valid command continuation and canonical closure; distinct script lines, no degeneration. Diagnostic normal does not imply a correct patch.",
+      "trace_counters_delta": {
+        "model_replays": 505,
+        "sample_replays": 505,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 505,
+        "captures": 0
+      }
+    }
+  ]
+}

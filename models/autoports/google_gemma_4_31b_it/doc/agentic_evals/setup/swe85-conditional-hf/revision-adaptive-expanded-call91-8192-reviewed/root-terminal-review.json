@@ -1,0 +1,79 @@
+{
+  "status": "all_groups_completed_root_reviewed_with_followups_open",
+  "reviewer": "root",
+  "accepted": true,
+  "utc": "2026-11-15T10:33:35.034087+00:00",
+  "progress_sha256": "4a9363429f50949031da53c13f3156c2bd399f756d227f353babaafd065ec773",
+  "admission_sha256": "74640276fdf5e463fa968d5d188994622759df96f09d4f408e02712b7d09ae66",
+  "candidate_admission_sha256": "74640276fdf5e463fa968d5d188994622759df96f09d4f408e02712b7d09ae66",
+  "launch_sha256": {
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/launch-group-01.json": "72d715ddf08a150cbfda72949bc8e0713e5037ff245ee97d4cdcb7c0ed35276f",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/launch-group-02.json": "611cf5822c0b0a99a48b6a0367a23ceb626567002e9b3a53bf8e8df3128dc8f7",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/launch-group-03.json": "93d04c01eb36d7a11bd984b4dcd798169de415d117e6f658cdfb7580531e9f80",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/launch-group-04.json": "c6521337dd89764fe5a8839a6cd040aced81170cd4e511b9826a7bced185a7b5",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/launch-group-05.json": "db1176a031f84f52a9eafed11e1973db3aef2b0184364917e6c3f1236b69bedd",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/launch-group-06.json": "38927fc2916e99d60706de300e903b7735fefc230f1216a3b2034769a35f497e",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/launch-group-07.json": "e20284698febbae7bf41d3c783f0e37ba74df5aa0708f4146bcdb61b5c118559",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/launch-group-08.json": "9ff71424e76c317cf17c67bc20fd6fc1b78bfd6dc2c4277402541435c910b6e1"
+  },
+  "completion_sha256": {
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/completion-group-01.json": "fc52a3d203e4cc299ce8037dde0bf7c25fdcf36c62e767ef98183c46fcb203fe",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/completion-group-02.json": "e297a2ba0181f1f8fa9c8b9f69d2ea1e68d31b425da587bdbd5faa5415253ebf",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/completion-group-03.json": "43482c49d0073fa1407d0f919451c7349a8314752c1b555eca4785f458081005",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/completion-group-04.json": "d39b7440fd10612ecd8e51d84c02db9ea68c8742325c4a2f4597e3df86c3c967",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/completion-group-05.json": "957d8f1e97def011efef8d7e3aa1024b77f73247d7bcc475b78862bd694e6992",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/completion-group-06.json": "ad828e22fcc086bfac514723cff621d9b1d7cef84ba1de833351e85e5c2f22a5",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/completion-group-07.json": "67edd55881ada416e6e9ebcc37a907228b80d8d438fc2b4bfcc5ac47116e84f3",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/completion-group-08.json": "54c14908183b4c1cee5f986e6321f277fc3b5358486e4d810513000d1643182b"
+  },
+  "output_sha256": {
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/results/seed42-suffix512/anomaly.requests2931.call20.canonicalprefix.optional-suffix512.hf.private.json": "a91e0aff64f340594679d595122c256f280e66e650a512ce34a85d52ed432156",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/results/seed42-suffix512/anomaly.sympy__sympy-14248.call53.onset.optional-suffix512.hf.private.json": "33d3407480d344a1537e40965d584ef95ecae49c5bea9609eacb83cac4783cf3",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/results/seed44-suffix512/anomaly.pytest-dev__pytest-7432.call19.onset.optional-suffix512.hf.private.json": "389d4c9c55f00e544dcacb209814a289e7c61af4dec2ec55ebfc265cd872cb63",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/results/seed44-suffix1024/anomaly.psf__requests-5414.call9.onset.hf.private.json": "4f1a6497eeb57b8754ce74bea702170078d7ce7e93fef610357f785044b2b045",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/results/seed44-suffix2048/anomaly.psf__requests-5414.call11.onset.hf.private.json": "ea3eb180de1ef8898c2565dcb5ffd7700f3e792ccfce8bc279efef80c6dfe9a4",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/results/requests10-cap4096-seed42/anomaly.psf__requests-5414.call10.onset.suffix4096.seed42.hf.private.json": "c4409f7bea3f5af2a80a4f5ee8162e0e282a265ae4b0abb5a5731adff64d275b",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/results/matplotlib86-cap4096-seed43/anomaly.matplotlib__matplotlib-20488.call86.onset.suffix4096.seed43.hf.private.json": "7544c2c7a570e573fa29b8743a75ef5edba01e55de629d35741cc8cb4c59f520",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/results/sphinx70-cap2048-seed43/anomaly.sphinx-doc__sphinx-10323.call70.onset.hf.private.json": "2472008d4ab3ca68d5803944ccf3410c53e603940e62529f062df2e8fdf199a2",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/results/call91-cap8192-seed43/anomaly.call91.canonicalprefix.suffix8192.seed43.hf.private.json": "c42dc1b3206ca95431c91d0468bca2b71dc3386221bc28d12951a6b09cdf8fb9"
+  },
+  "root_group_reviews": {
+    "01": "0c6e547db4f93a2c7bfb8e0278deba56ac643a79c633ade638db045bdc436803",
+    "02": "27fb72254a1ee6149b04d013174a471bcaeab60e69bf982e4fe357c901a0d85a",
+    "03": "7f119e66e90420977079dec6a9d65c09b00b851ba8c7e9ae786ee6188635e071",
+    "04": "c88541915f789412656370cd353ba50dfa62e68e5624c33d4b348901d9227503",
+    "05": "244884fec49742320618150b86258143478976547e05c2196b6a368f9146a3c5",
+    "06": "4f2f0dd6941f59a507139aee30b6013f789bca0a9769d15ba65f696fd8de5a5c",
+    "07": "44e493ccda9f00b75e8ae562c79880fd7da2d5d7beb3262a135a4d56bcae8127",
+    "08": "3261fbdcd51ce4584887196549fb347419bc705d19cee2b2af075f5494b91ffd"
+  },
+  "comparison_identity_audit_sha256": "34513340d63f750edee6b6da703f053ceede407209c28ab5c8572f68e1b87b15",
+  "completed_cases": 9,
+  "completed_groups": 8,
+  "observations": {
+    "caret_loops": 4,
+    "localized_native_contraction": 1,
+    "normal_natural_stops": 3,
+    "progressing_at_cap_HF": 1
+  },
+  "timing": {
+    "sum_group_wall_seconds": 8666.425901889801,
+    "first_launch_to_last_completion_seconds": 9274.011075019836,
+    "between_group_seconds": 607.5851731300354,
+    "forecast_point_seconds": 12477.606195035323,
+    "forecast_range_seconds": [
+      9945.75192241536,
+      29402.646502322757
+    ],
+    "forecast_gate": "root_accepted_low_miss_due_to_four_early_natural_stops",
+    "explanation": "Four cases stopped naturally at307,68,56,55 tokens (four cases); fourcaret cases generated512, and Requests call11generated512stillprogressing. Early natural stops drive lower wall; pergroup2/6/7/8 misses separately accepted. Aggregate forecast included512generation for all9 cases."
+  },
+  "pending_followups": [
+    "Requests5414call11HF same2048prefix seed44 cap1024 mandatory extension",
+    "Matplotlibcall86 fullTT same4096prefix seed43 cap1024 progressing-script extension",
+    "Pytest7432 conditional first-caret HF control",
+    "Requests5414 actual ellipsis branch logit comparison",
+    "Separate Sklearn controls and precision candidates remain open"
+  ],
+  "scope": "Accepts completed serialized execution and scoped semantic review only; not a stage pass or final precision decision. No scored task changes."
+}

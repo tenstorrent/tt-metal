@@ -1,0 +1,23 @@
+{
+  "command": [
+    "timeout",
+    "180",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+    "-m",
+    "pytest",
+    "--noconftest",
+    "-q",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/test_prefill_q_partition_policy.py",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/test_prefill_ccl_phase_policy.py",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/test_prefill_mlp_bf16_block_selection.py",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/test_kv_pool_budget.py",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/test_benchmark_work.py",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/test_collect_candidate_sizing.py",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/test_precision_repro_hf.py",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/test_precision_comparison_cli.py",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/test_remeasure_agentic_rates.py"
+  ],
+  "exit_code": 0,
+  "wall_seconds": 4.659729719161987,
+  "scope": "Host-only unit/regression checks after mandatory formatting; --noconftest excludes repository device fixtures. Tiny synthetic HF model is CPU-only, serialized after TT controls. No checkpoint model or serving benchmark."
+}

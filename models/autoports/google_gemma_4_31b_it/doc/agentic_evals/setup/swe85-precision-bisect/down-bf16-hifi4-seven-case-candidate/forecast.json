@@ -1,0 +1,43 @@
+{
+  "status": "planning_scenarios_candidate_only_not_measurement",
+  "scope": "One serial seven-case batch, one model load; exact P4 fixtures/seeds/caps; one changed projection-group precision policy.",
+  "point_scenario": {
+    "seconds": 454.8605308532715,
+    "assumption": "P5 completes the same 4468 output tokens as P4 and has identical load and compute cost. This is a baseline scenario, not an expected measured result."
+  },
+  "p4_measured_components": {
+    "total_wall_s": 454.8605308532715,
+    "load_wall_s": 141.78374898713082,
+    "sum_case_diagnostic_wall_s": 308.1591029919218,
+    "sum_decode_wall_s": 166.29560214467347,
+    "sum_decode_tokens": 4461,
+    "sum_generated_tokens": 4468,
+    "completion_overhead_s": 4.917678874218836,
+    "cap_sum_tokens": 9472,
+    "completion_sha256": "4244e86608dfda65335067e2fc463f1bcbf2e6ace29b618e26ee9ead14090cb4",
+    "load_sha256": "54b1c4a8f15ba7663bafd3b523a12219bdcff6055c3d53c35ba8751c5e216046"
+  },
+  "same_p4_decode_rate_cap_fill_scenario": {
+    "seconds": 647.9091658476225,
+    "extra_output_tokens_to_all_caps": 5004,
+    "used_slowest_p4_observed_decode_seconds_per_token": 0.038578863907743996,
+    "assumptions": [
+      "P5 reaches every case cap.",
+      "P5 uses P4 load/prefill costs and the slowest observed P4 per-token decode cost.",
+      "Does not model P5 BF16/HiFi4 compute or weight-load delta; this is not an upper bound."
+    ]
+  },
+  "observed_clean_sibling_loads_seconds": {
+    "p1_head_bfp8_hifi2": 138.38867970812134,
+    "p3_down_bfp8_lofi": 137.96008633519523,
+    "p4_down_bfp8_hifi2": 141.78374898713082
+  },
+  "uncertainty": [
+    "P5 has no matched load or decode measurement; BF16 weights and HiFi4 down projection can change model-load and compute time.",
+    "P5 may stop at different output lengths from P4 under the changed precision policy; exact fixture, seed and cap do not fix generated length.",
+    "The point scenario copies P4 measured wall only as a comparison baseline; do not treat it as a calibrated forecast or admission ceiling.",
+    "The cap-fill scenario is a same-P4-throughput stress case only, not an upper bound for P5."
+  ],
+  "deadline_timeout_seconds": 1800,
+  "status_note": "Numerical scenarios expose output, compute, and load uncertainty; root must decide whether this is useful within the remaining stage budget."
+}

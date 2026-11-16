@@ -1,0 +1,21 @@
+{
+  "status": "root_static_driver_review_passed_unadmitted",
+  "reviewer": "root",
+  "utc": "2026-11-15T08:54:59.060561+00:00",
+  "checks": [
+    "Read complete initial507-line driver and final repairs",
+    "Root found missing completion forecast range; repaired and mocked success-to-next-group test added",
+    "Root found forecast-only deadline guard; repaired to require full18060-second hard timeout/grace within admitted deadline",
+    "Explicit --validate-only passed without model/device operation",
+    "Exact input/seed/cap identities, output/runtime checks, terminal records and no-overwrite guards reviewed"
+  ],
+  "candidate_pins": {
+    "run_group.py": "7ac8788a510d75ab459a2e481b9b3f887a967aaec458f30df5e6c6385efc3601",
+    "test_run_group.py": "dedde3ba279b3754b638a460daaf8dcbcef50e4e99631f7a2ee169a9621db095",
+    "driver-contract.json": "3154a43ebaca1a1e2b35348a536bddd8f69599038e1f22a0b50213783bbefbdb",
+    "driver-integrity.json": "6e85f2e9048b95ba04d4491d31c8ea971c3acc2b026d141b037086bd117d4a16",
+    "proposal.json": "e1f4c1470bd6ec1aaeb67177b1cebe57ab15b2421866c74966493d5ecb5775c7",
+    "root-roster-review.json": "1c40faf03d90a278aa971bdb24530ac0c8873eb8d18be0bb68f4d6c402ab4d32"
+  },
+  "not_admission": "Per-group root admission, completed predecessors, owner/RAM checks and deadline fit remain required. No automatic advancement."
+}

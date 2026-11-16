@@ -1,0 +1,97 @@
+{
+  "status": "raw_anchor_validation",
+  "source_manifest_sha256": "57193e4b91af3a31df00f0c92dbc0f2219fbce011e6533594e5244a93a3021ed",
+  "source_manifest_index": 74,
+  "source_manifest_row": {
+    "name": "anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.seed44.cap1024",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.cap1024.seed44.private.json",
+    "branches": [],
+    "free_run_tokens": 1024,
+    "free_run_trials": 1,
+    "source_onset": "anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset",
+    "seed": 44,
+    "cap_source": "second_cap_full"
+  },
+  "extension_row": {
+    "name": "anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.seed44.cap1024.p8_cap2048_extension",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.cap1024.seed44.private.json",
+    "branches": [],
+    "free_run_tokens": 2048,
+    "free_run_trials": 1,
+    "source_onset": "anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset",
+    "seed": 44,
+    "cap_source": "p8_same_fixture_seed_cap_extension"
+  },
+  "P8_result_sha256": "243a04538d770183f966af2758363e396b1cdd9679b666e06f37bb42025e9f1c",
+  "P8_result_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.cap1024.seed44.private.json",
+  "P8_runtime_precision": {
+    "config_id": "stage12_swe85_attention_down_mlp_bfp8_lofi_p8",
+    "weight_groups": {
+      "attention": "bfp8_lofi",
+      "mlp": "bfp8_lofi",
+      "down": "bfp8_lofi",
+      "lm_head": "bfp8_lofi"
+    },
+    "layer_exceptions": {},
+    "compute_fidelities": {
+      "attention": "LoFi",
+      "mlp": "LoFi",
+      "down": "LoFi",
+      "lm_head": "LoFi"
+    },
+    "activation_dtype": "bfloat8_b",
+    "residual_dtype": "bfloat16",
+    "ccl_dtype": {
+      "prefill": "bfloat8_b",
+      "decode": "bfloat16"
+    },
+    "kv_cache_dtype": "bfloat8_b",
+    "logits_dtype": "bfloat16",
+    "sampling_dtype": "bfloat16",
+    "embedding_dtype": "bfloat16",
+    "norm_dtype": "bfloat16",
+    "max_seq_len": 262144
+  },
+  "P8_trial_seed": 44,
+  "P8_generated_tokens": 1024,
+  "P8_terminal_id": 1932,
+  "P8_case_wall": 57.711368364980444,
+  "P8_decode": {
+    "decode_tokens": 1023,
+    "decode_wall_s": 43.82894730498083,
+    "decode_tok_s_user": 23.340738550746433,
+    "trace_counters_before_decode": {
+      "model_replays": 3699,
+      "sample_replays": 3707,
+      "token_refreshes": 0,
+      "position_refreshes": 8,
+      "page_refreshes": 480,
+      "readbacks": 3707,
+      "captures": 3
+    },
+    "trace_counters_after_decode": {
+      "model_replays": 4722,
+      "sample_replays": 4730,
+      "token_refreshes": 0,
+      "position_refreshes": 8,
+      "page_refreshes": 480,
+      "readbacks": 4730,
+      "captures": 3
+    },
+    "trace_counters_delta": {
+      "model_replays": 1023,
+      "sample_replays": 1023,
+      "token_refreshes": 0,
+      "position_refreshes": 0,
+      "page_refreshes": 0,
+      "readbacks": 1023,
+      "captures": 0
+    },
+    "basis": "Batch1 wall from immediately before first _replay to return after last existing synchronous token-out readback; counts completed replay calls, includes host loop gaps, excludes prefill/first token and text decoding. No added device sync or profiler. Traced diagnostic rate, not serving benchmark."
+  },
+  "P8_prompt_ids_count": 47548,
+  "P8_prompt_ids_sha256_canonical_json": "7aaf88be1dd4df81aa4880bf0dd1741f94a99b241903c24f0def9fa78423479b",
+  "P8_expected_prior_output_prefix_sha256_canonical_json": "687e8b20cc33b6e1ceebd34370269c7b355082890154f1bca5c6cfc6dc34b5d2",
+  "P8_load_sha256": "fd83f5e0445667a2559633f2e4e089707d11b7e6067bdbf8692cc11126b88e9b",
+  "P8_load_seconds": 138.1495956981089
+}

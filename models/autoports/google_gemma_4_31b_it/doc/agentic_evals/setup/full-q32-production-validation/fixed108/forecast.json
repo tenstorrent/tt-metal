@@ -1,0 +1,19 @@
+{
+  "forecast_seconds": {
+    "low": 3500,
+    "point": 4316.73,
+    "high": 6000
+  },
+  "timeout_seconds": 6600,
+  "anchors": {
+    "P19_Q32_fixed108_seconds": 3342.1836173534393,
+    "P19_Q32_prefill_and_first_token_seconds": 1601.9326009110082,
+    "P19_Q32_decode_tokens": 28128,
+    "current_full_BF16_load_seconds": 77.67741206008941,
+    "current_full_BF16_long_case_decode_tps": 15.318977345405365
+  },
+  "basis": "Current fullBF16 two-case controls both passed protocol; estimate one measured full load plus P19 observed nondecode time at1.5 allowance plus same decoded token count at measured full long-case diagnostic rate. Output lengths can change; high6000 and timeout6600 include this uncertainty. Diagnostic only, not vLLM forecast.",
+  "extension_reserve_seconds": 1000,
+  "closure_reserve_seconds": 3600,
+  "reason": "FullBF16 restores2P19protocol defects; current full-policy fixed108 evidence is a remaining necessary prerequisite that fits available time. No policy selection/scoredrerun admitted."
+}

@@ -1,0 +1,124 @@
+{
+  "reviewed_unix": 1794723876.4631429,
+  "rows": [
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.seed43.cap1024.json",
+      "sha256": "7affff2a9d0acb5286252bf46921d04004664d014d8fb41997029e22262a141f",
+      "seed": 43,
+      "tokens": 867,
+      "verdict": "normal",
+      "reason": "Full raw text and pinned prefix reviewed; canonical tool syntax and distinct script. Normal means no degenerate morphology, not effective/correct patch: Sphinx9461seed43 is a no-op script.",
+      "trace_counters_delta": {
+        "model_replays": 866,
+        "sample_replays": 866,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 866,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.seed44.cap1024.json",
+      "sha256": "72b91f6f650454960b3e8e85afca0af148412e3c782b4e6fe92b6ee45b87de62",
+      "seed": 44,
+      "tokens": 842,
+      "verdict": "normal",
+      "reason": "Full raw text and pinned prefix reviewed; canonical tool syntax and distinct script. Normal means no degenerate morphology, not effective/correct patch: Sphinx9461seed43 is a no-op script.",
+      "trace_counters_delta": {
+        "model_replays": 841,
+        "sample_replays": 841,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 841,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.sphinx-doc__sphinx-9461.call184.onset.seed42.cap1024.json",
+      "sha256": "9ebd3004bf9653e9148b6e23a76ee48eccfd7266fc0a055611a24f7520e1bc89",
+      "seed": 42,
+      "tokens": 830,
+      "verdict": "normal",
+      "reason": "Full raw text and pinned prefix reviewed; canonical tool syntax and distinct script. Normal means no degenerate morphology, not effective/correct patch: Sphinx9461seed43 is a no-op script.",
+      "trace_counters_delta": {
+        "model_replays": 829,
+        "sample_replays": 829,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 829,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.sphinx-doc__sphinx-9461.call184.onset.seed43.cap2048.json",
+      "sha256": "6d4ab98c2d14ee92bec0f28f9651d8f9359de8fafa1413f7fb107dd542d1a004",
+      "seed": 43,
+      "tokens": 572,
+      "verdict": "normal",
+      "reason": "Full raw text and pinned prefix reviewed; canonical tool syntax and distinct script. Normal means no degenerate morphology, not effective/correct patch: Sphinx9461seed43 is a no-op script.",
+      "trace_counters_delta": {
+        "model_replays": 571,
+        "sample_replays": 571,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 571,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.sphinx-doc__sphinx-9461.call184.onset.seed44.cap1024.json",
+      "sha256": "3049346aa95315e2caa73d762d2da16793538016316c208dbb1c3886cbf05261",
+      "seed": 44,
+      "tokens": 606,
+      "verdict": "normal",
+      "reason": "Full raw text and pinned prefix reviewed; canonical tool syntax and distinct script. Normal means no degenerate morphology, not effective/correct patch: Sphinx9461seed43 is a no-op script.",
+      "trace_counters_delta": {
+        "model_replays": 605,
+        "sample_replays": 605,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 605,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.sympy__sympy-13480.call1.onset.seed42.cap256.json",
+      "sha256": "9aaa542e130652ee38744822d7fd70f5e1f1f8afb28365079071d68072d556df",
+      "seed": 42,
+      "tokens": 158,
+      "verdict": "normal",
+      "reason": "Full raw text and pinned prefix reviewed; canonical tool syntax and distinct script. Normal means no degenerate morphology, not effective/correct patch: Sphinx9461seed43 is a no-op script.",
+      "trace_counters_delta": {
+        "model_replays": 157,
+        "sample_replays": 157,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 157,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.sympy__sympy-13480.call1.onset.seed43.cap256.json",
+      "sha256": "3ffc28dd56e2c87a71374f3258de0338c6c29b48a522f8ee1e46cc828b57b976",
+      "seed": 43,
+      "tokens": 143,
+      "verdict": "normal",
+      "reason": "Full raw text and pinned prefix reviewed; canonical tool syntax and distinct script. Normal means no degenerate morphology, not effective/correct patch: Sphinx9461seed43 is a no-op script.",
+      "trace_counters_delta": {
+        "model_replays": 142,
+        "sample_replays": 142,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 142,
+        "captures": 0
+      }
+    }
+  ]
+}

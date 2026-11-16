@@ -1,0 +1,77 @@
+{
+  "original_path": "progress-summary165.json",
+  "original_sha256": "51a17d35ebf2afa4717b577606eec265ec88b641622d76aed809a795a981adc6",
+  "original_size_bytes": 837272,
+  "top_level_metadata": {
+    "status": "partial",
+    "supplemental_admission_evidence": {
+      "manifest": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-semantic-supplement/admitted-cases.json",
+      "manifest_sha256": "0c3f002916f71403748440f4bde5ccafc00aa8139731859358c73ea1fde7b6bc",
+      "admission": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-semantic-supplement/admission.json",
+      "admission_sha256": "59077f9efca90cd4586d2ba4bb7e8aee120b30699910a8cc922f1d723a0c5697",
+      "review": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/review/swe85-semantic-supplements-review.md",
+      "review_sha256": "e55582319740fe055436237a607559ad5e08ec6b4ee1b69a0254c1826685deef",
+      "preparation": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-semantic-supplement/preparation.json",
+      "preparation_sha256": "e00fc5cff56d67376563db08656fb7cb3d07d1ceea8099524f6bc5a372edb565",
+      "sources": [
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/matplotlib__matplotlib-20488/validated/cases.json",
+          "sha256": "6c45c44712e925cc3e8aed6eeeb0d494bb6ef464ee4ae0f4e370898fb1f0ca6f"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/psf__requests-2931/validated/cases.json",
+          "sha256": "ab3460d2571d6de4018fc38663a4b0f232c5ec2ea64676500a8c7650d47614cd"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/pydata__xarray-3095/validated/supplemental-cases.json",
+          "sha256": "0c7ebc2be7765965ca81f822acecf7242be784653e1cf563bef950bd65628b4c"
+        }
+      ],
+      "runs": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-semantic-supplement/runs",
+      "binding_verified": true
+    },
+    "scope": "Frozen rest85 plus reused pilot83; explicitly selected reviewed supplemental controls included. Agreement and mechanical flags do not resolve anomalies or rule out precision effects. Semantic review pending. Raw tool/channel markers may be canonical runner syntax; native visible-assistant protocol failures require conditioning/channel and tokenizer/parser-aware review.",
+    "expected_jobs": 165,
+    "expected_unique_tasks": 66,
+    "completion_counts": {
+      "served": {
+        "complete": 165
+      },
+      "full": {
+        "complete": 164,
+        "missing": 1
+      }
+    },
+    "verified_comparisons": 164,
+    "completed_unique_tasks": {
+      "served": 66,
+      "full": 66
+    },
+    "timing": {
+      "served": {
+        "completed_case_wall_s_sum": 5645.099116485799,
+        "observed_load_wall_s": {
+          "rest": 140.70528853707947,
+          "reused_pilot": 147.5788567981217,
+          "supplement": 141.38442383194342
+        },
+        "scope": "Diagnostic host wall accounting; not serving rates or elapsed run wall."
+      },
+      "full": {
+        "completed_case_wall_s_sum": 10132.575695175212,
+        "observed_load_wall_s": {
+          "rest": 75.54386684880592,
+          "reused_pilot": 78.37866061693057,
+          "supplement": 76.26346296188422
+        },
+        "scope": "Diagnostic host wall accounting; not serving rates or elapsed run wall."
+      }
+    }
+  },
+  "case_count": 165,
+  "part_paths": [
+    "progress-summary165.cases-000-054.json",
+    "progress-summary165.cases-055-109.json",
+    "progress-summary165.cases-110-164.json"
+  ]
+}

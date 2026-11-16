@@ -1,0 +1,41 @@
+{
+  "status": "candidate_source_hashes_only_no_admission",
+  "source_files": {
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-hifi2-fourcase-followup-candidate/candidate-cases.json": "a87d67811b8027f38b33f217193f1a670f035c27fd0315b5cf4b955f2ec015bc",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-hifi2-fourcase-followup-candidate/down_bfp8_hifi2_precision.json": "118dceaf55f938ac3521684d77953390e1ee5ba0c4cf893c3195b403910b93b8",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-hifi2-fourcase-followup-candidate/down_bfp8_hifi2_build_kwargs.json": "7ed91a1ca7a1765cbc14b1e6e9de9184b4dc7e12a9eabf5c36173672a0b00fbc",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-hifi2-fourcase-followup-candidate/command.json": "63a779e1ef0e44a96e846c183d780b4fc9932e6661f2bf2c64e0e70b72b52a99",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-hifi2-fourcase-followup-candidate/completion.json": "4244e86608dfda65335067e2fc463f1bcbf2e6ace29b618e26ee9ead14090cb4",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-hifi2-fourcase-followup-candidate/launch.json": "9c5117668ee7aa39590142388b31f9ff91714e32c481e5290c1201202de58fd4",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-hifi2-fourcase-followup-candidate/root-terminal-review.json": "3ec9cbd081e335a60bcbb4b32594f9827b38d24a760b6563205c1388bf6f5cef",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-hifi2-fourcase-followup-candidate/runs/down_bfp8_hifi2/load.json": "54b1c4a8f15ba7663bafd3b523a12219bdcff6055c3d53c35ba8751c5e216046",
+    "models/autoports/google_gemma_4_31b_it/tt/precision.py": "2f223a118fe713677b9ce4fb3beb2f563e26af56ef45a98b2e03fad1e25664a9",
+    "models/autoports/google_gemma_4_31b_it/tt/model.py": "c65ed33bb175f63603946eea561a2623cad0b70521428bdf888bd9445457a01e",
+    "models/autoports/google_gemma_4_31b_it/tools/precision_repro_batch.py": "172f5a1dd7a7403847e47b966ae79c306163650a60211418c7c195794ec5c125",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-hifi2-fourcase-followup-candidate/runs/down_bfp8_hifi2/anomaly.pytest-dev__pytest-5787.call65.onset.seed42.p4_hifi2.cap2048.json": "162449658fe54c669afb25cca9334b1a981e626eeab21c54c59556b7d10af085",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-hifi2-fourcase-followup-candidate/runs/down_bfp8_hifi2/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.seed43.p4_hifi2.cap2048.json": "1d21fa373dd247458413bdb9929976e1594eef38d6757bef763645e35883d41e",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-hifi2-fourcase-followup-candidate/runs/down_bfp8_hifi2/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed42.p4_hifi2.cap1024.json": "5eec0d6a6c48779e2df1bebe9058032eb01dba8cabd073da6519a3535b94eb34",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-hifi2-fourcase-followup-candidate/runs/down_bfp8_hifi2/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed43.p4_hifi2.cap2048.json": "147eb5ccdd541a12b031042ce6ac93ce69d54b452c47a35037060e37c43d7b48",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-hifi2-fourcase-followup-candidate/runs/down_bfp8_hifi2/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed44.p4_hifi2.cap1024.json": "23b9652083db4c51708326a72510c5537c4c37c918ad575bcdb22a55f83aa264",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-hifi2-fourcase-followup-candidate/runs/down_bfp8_hifi2/anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.seed44.p4_hifi2.cap1024.json": "dd387b3bdbae320bbcc409a57b7322929c646a13e8d65521adf7df88d30c06e8",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-hifi2-fourcase-followup-candidate/runs/down_bfp8_hifi2/anomaly.sympy__sympy-14711.call1.onset.seed42.p4_hifi2.cap256.json": "d870b3c78d4e64f6dcbb27c612821e9d7bddf9a33972545aedf1df4a89d69b33",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/fixtures/full/anomaly.pytest-dev__pytest-5787.call65.onset.cap2048.seed42.private.json": "346ea388c2e71b88d415e67331f6f1c5de4ee428e641e5159adccef0af382331",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.cap2048.seed43.private.json": "f09f5493bf5e6d1f1bec5f5ce7e4273d0ec9352de1f85ffe780ef897063dec98",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap1024.seed42.private.json": "b4253957ad89651510a0e39ea3aa49373926c9ff2d963a4ee381047b400efac8",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap2048.seed43.private.json": "e4c5081386cd785ccc1216dda888b4c54cc165beb80b035e96daf69c2f119718",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap1024.seed44.private.json": "7c5da63d138e6afa7b539dfed909ee1e8a937c2e168d587023c4421333688780",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.cap1024.seed44.private.json": "14b67b9fcb8ad382713dff99ccb47922690bc5be90131e3adc25a195f3e712d3",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-protocol-scan83-controls/sympy__sympy-14711.call1.onset.private.json": "30151a4ad6ba3f457477b50bbb7d8817b24944e8e57242c10b1f494f4697d6e5",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/load.json": "c2b4c3891093492ac0da8d86ff33b7a8286b4c3433e599c0a04660a1fd83538b",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/load.json": "3c1370e1c8d7a25128ac7e35548f1b77198f3ed0d0c4a1c039687b9c8da3a086"
+  },
+  "candidate_files": {
+    "candidate-cases.json": "c6833471127da15aa28a4c87901d7beac9f3e1b51b85dd6379d163f0a796f5f6",
+    "down_bf16_hifi4_precision.json": "76874449a2026827c2e1c46f51b2e0f894ba02b0ab5924ed6036a2cdd1b30045",
+    "down_bf16_hifi4_build_kwargs.json": "f9ff7e5940d8bafb778d5a73ba7321758c1045416a71fd4ef6b693f65aaa6057",
+    "command.json": "16999999bd3af479148cbc84c5f08a07c7530cb9345bb11353fdd47ac3ebee38",
+    "forecast.json": "26cd68fb0c4c11486638fd4a30ce7407df82f87453ba8f068a0ef43398c21964",
+    "provenance.json": "a9248d09d49bc23af8b1d09c929968667288b5e2e5dba34b53bdb4b6f41d417f"
+  },
+  "note": "No model or device commands invoked; these hashes establish provenance only."
+}

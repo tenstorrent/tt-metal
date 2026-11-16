@@ -1,0 +1,42 @@
+{
+  "status": "independent_review_candidate_only_not_admitted",
+  "scope": "CPU-only fixture and forecast validity review for one seed44 cap1024-to-2048 extension. No launch, device work, or score/stage adjudication.",
+  "fixture_checks": {
+    "source_fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/cap1024-preparation/fixtures/full/anomaly.psf__requests-5414.call11.onset.optional-suffix512.cap1024.seed44.private.json",
+    "source_fixture_sha256": "2327d31bd7c4aef5ff2156ddbafc71dbaa39b4dcd9e74c1705e4937eb154b929",
+    "source_result_sha256": "c6a307602cf3efb6c7c3455ceb70d3837c70da5db382eb14ef0d394222e6a642",
+    "source_coordinator_sha256": "ad5bf432c40cb07df5ded2810899e0cda4589b9e10cf59c2c9fdcbbd5ba26222",
+    "finding": "Candidate prompt IDs, chosen continuation, sampling (temperature 1.0, top_p 0.95, top_k 20), and seed 44 exactly match source fixture. Candidate metadata cites verified source fixture/result/coordinator hashes and changes only cap 1024\u21922048. Manifest has branches=[], one free-running trial, 2048-token cap."
+  },
+  "validation": {
+    "status": "passed",
+    "command": "precision_repro_batch --validate-only",
+    "stdout": "Validated 1 jobs without importing TTNN",
+    "device_work": false
+  },
+  "forecast": {
+    "formula": "Observed source diagnostic prefill/host overhead plus observed decode wall scaled by 2047/1023; add same-mode measured load and explicit first-TF preparation allowance. Range scales variable case work by 0.7x\u20131.7x, fixed load and preparation unchanged.",
+    "prefill_s": 0.2017050909344107,
+    "projected_decode_s": 119.22703354292867,
+    "variable_case_work_s": 119.42873863386308,
+    "load_s": 77.28491996508092,
+    "first_preparation_allowance_s": 16.380446143914014,
+    "total_s": 213.094104742858,
+    "range_s": [
+      177.26548315269906,
+      296.69422178656214
+    ],
+    "allowance_note": "The first-preparation allowance is the prior full-mode first chosen-64 teacher-forcing branch duration, used as a conservative proxy; it is not a measured cap2048 warmup.",
+    "arithmetic": "Recomputed all totals and interval endpoints from source diagnostic measurements; after documenting 0.7x\u20131.7x multipliers, arithmetic matches."
+  },
+  "findings": [],
+  "limitations": [
+    "No output semantic review because candidate has not run.",
+    "This review does not admit the candidate or sign off the stage."
+  ],
+  "reviewed_hashes": {
+    "anomaly.psf__requests-5414.call11.onset.optional-suffix512.cap2048.seed44.private.json": "007fe3e3a0098e9cc52f0a0da473f5cc9572c189381af49b35f82ff425c0337f",
+    "cost-estimate.json": "393f7af7197a532dea924cf3096a5f9eadcd4c543930ab7ecbd6d1cd4af04f0b",
+    "full-candidate-cases.json": "ed951b5640c9a90f7d8f172a9cc49cc429b420cf4a968b01068f43a540639fb2"
+  }
+}

@@ -1,0 +1,34 @@
+{
+  "status": "completed_root_and_independent_triage_reconciled",
+  "reviewer": "root",
+  "accepted": true,
+  "utc": "2026-11-15T08:48:54.277121+00:00",
+  "serial_order": 2,
+  "admission_sha256": "74640276fdf5e463fa968d5d188994622759df96f09d4f408e02712b7d09ae66",
+  "launch_sha256": "611cf5822c0b0a99a48b6a0367a23ceb626567002e9b3a53bf8e8df3128dc8f7",
+  "completion_sha256": "e297a2ba0181f1f8fa9c8b9f69d2ea1e68d31b425da587bdbd5faa5415253ebf",
+  "result_sha256": "389d4c9c55f00e544dcacb209814a289e7c61af4dec2ec55ebfc265cd872cb63",
+  "independent_triage_sha256": "3024bc3a6f678ae497852961ba593a72d97914aeea5e6922b9a2fab842e42442",
+  "superseded_triage_sha256": "7f147f619fc3bb6bf846bbbb1cc324598ada872c4c7db67fc2916fb1faa56391",
+  "verdict": "normal_recovered_continuation",
+  "tokens": 307,
+  "natural_stop_token_id": 50,
+  "forecast_review_sha256": "382eed9fe9dd21ec664b330ce9a2ed97b048d7fb53f076f1007f8313bb675f49",
+  "evidence": "Read complete output, pinned generation_config EOS [1,106,50], and chat_template lines369\u2013370. Finite four traceback frames then coherent reasoning and parser-valid bash handoff; no fabricated result or sustained caret collapse. Initial independent other_anomaly verdict corrected in preserved addendum.",
+  "full_tt_discrepancy": {
+    "full_seed44": "512 caret tokens",
+    "hf_first_token": 236884,
+    "full_tt_first_token": 172109,
+    "hf_probability_of_full_first_token": 0.10442692041397095,
+    "full_tt_probability_of_same_token": 0.09730315467387586,
+    "hf_forced_later_positions": 63,
+    "hf_forced_later_top1_all_172109": true,
+    "hf_forced_later_probability_range": [
+      0.9920097589492798,
+      0.9999771118164062
+    ],
+    "interpretation": "Different RNG sampled different first branch; teacher forcing supports shared conditional repetition path. A conditional reference continuation is being prepared; this does not close equal-incidence or native-context questions."
+  },
+  "score_change": false,
+  "precision_change": false
+}

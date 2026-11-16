@@ -1,0 +1,31 @@
+{
+  "created_utc": "2026-11-15T00:40:35.360810+00:00",
+  "status": "conditional_plan_no_cases_admitted_no_process_started",
+  "runner": "models/autoports/google_gemma_4_31b_it/tools/precision_repro_hf.py",
+  "runner_sha256": "aafe67c88bb5a1eb38b8718570bbddd5749e2a9ecbb9dd19cdb100a49572c03e",
+  "hf_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+  "potential_sources": [
+    "doc/agentic_evals/setup/swe85-persistent-short-controls/runs/full",
+    "doc/agentic_evals/setup/swe85-contraction-short-controls/runs/full"
+  ],
+  "admission": [
+    "Read completed short served/full raw texts with exact conditioning and obtain independent triage; root decides each motif.",
+    "Admit only cases whose identical saved short full-TT input reproduces the native symptom; retain nonreproductions.",
+    "Group manifests by a recorded positive TT seed, since runner --seeds applies to every case; HF RNG is different, seed does not imply identical sampling.",
+    "Verify saved token IDs, sampling1.0/0.95/20, revision and chosen64 TF positions; use unchanged fixtures.",
+    "Check host available memory and no prior HF process; forecast from existing matched-length HF results before each bounded launch.",
+    "Do not overlap HF CPU load with precision speed-ranking or serving measurement; if any overlap occurs label accuracy-only and repeat timing serially."
+  ],
+  "initial_control": {
+    "prompt_tokens": 512,
+    "max_new_tokens": 512,
+    "prefill_chunk": 512,
+    "seeds": "One positive short-TT seed per case group initially; no positive seed is known yet."
+  },
+  "interpretation": [
+    "Same semantic symptom on identical short HF input supports reference reproduction only for that diagnostic, not native equivalence or incidence.",
+    "A coherent or progressing capped HF output is not positive evidence; extend progressing output cap>=2x and test further seeds before closure.",
+    "If HF stays coherent while full TT reliably reproduces, investigate stack with op-level comparison/autofix."
+  ],
+  "performance_scope": "Diagnostic host-wall only; never headline or device performance."
+}

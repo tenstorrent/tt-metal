@@ -1,0 +1,26 @@
+{
+  "status": "host-only preparation review; not admitted or run",
+  "original_manifest": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/candidate-cases.json",
+  "original_count": 108,
+  "original_manifest_sha256": "57193e4b91af3a31df00f0c92dbc0f2219fbce011e6533594e5244a93a3021ed",
+  "fixture_checks": {
+    "fixed108": 108,
+    "conditional_extensions": 5,
+    "distinct_case_paths": 108,
+    "all_seed_values_valid": true,
+    "all_branchless_singletrial": true
+  },
+  "runtime_policy": "The unchanged candidate build_kwargs resolves to the P19 precision file; current code pin is the production MultichipDecoder with HiFi4 Q32 selection. Runtime policy weights, KV/CCL dtype, seeds, prompt IDs, sampling and caps in the fixture manifest are unchanged.",
+  "required_review": [
+    "Compare each generated row by the frozen identity with the old historical output; do not overwrite or claim old Q128 verdict applies.",
+    "Review runtime_precision records for current P19 policy and Q32 geometry across layers, plus representative trace allocation evidence.",
+    "Classify progress at cap from generated text/output counters; only then decide whether any exact conditional extension fixture is needed.",
+    "Do not select P19 until fresh accuracy/qualitative and serving/list requirements are independently satisfied."
+  ],
+  "historical_anchors": {
+    "fixed108_elapsed_seconds": 3580.4716444015503,
+    "five_case_extension_elapsed_seconds": 507.0161921977997
+  },
+  "trace_tracking": "Enabled for Q32 validation; historical P19 fixed108 wall time used tracking disabled/unset, so not directly comparable.",
+  "no_launch": true
+}

@@ -1,0 +1,9 @@
+{
+  "reviewer": "root",
+  "status": "diagnostic_execution_error_not_model_result",
+  "accepted_preservation": true,
+  "completion_sha256": "71d5c340fdefa42e946e5643533d7dd6be26252a8a5d54beacc20d760831b0f3",
+  "elapsed_seconds": 149.65030694007874,
+  "reason": "generate(host_sampling=True) rejects stochastic sampling parameters before branch execution. Diagnostic API misuse; no TTbranch logits or accuracy result. Clean mesh cleanup ran; no reset. Preserve and repair diagnostic only.",
+  "changed": "Repair pending: supported greedy compatibility mode while exact token histories remain forced. Distribution reconstruction settings remain T1/top_p.95/top_k20 hostproxies."
+}

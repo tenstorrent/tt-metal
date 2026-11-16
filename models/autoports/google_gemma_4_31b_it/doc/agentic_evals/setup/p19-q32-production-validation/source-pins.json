@@ -1,0 +1,28 @@
+{
+  "status": "prepared_not_admitted_not_run",
+  "sha256": {
+    "models/autoports/google_gemma_4_31b_it/tt/multichip_decoder.py": "878c61052aee1ddd6f4afc78c4e4bbcda2c894a5a5878d01531f860e97006d99",
+    "models/autoports/google_gemma_4_31b_it/tt/optimized_decoder.py": "24f52653e82392144e880b0677b52cb01f7432a70a966cdd901592cee933e53d",
+    "models/autoports/google_gemma_4_31b_it/tests/test_prefill_q_partition_policy.py": "826a9319e0e0f83147ae9a1184ec83420c712f79d490f83cbbf1599d39a2e2ae",
+    "models/autoports/google_gemma_4_31b_it/tests/run_datatype_candidate.py": "1390350c91b27b4f8563ffa8bd38224f6b06543668ca2a627c2c3ecea756a287",
+    "models/autoports/google_gemma_4_31b_it/tests/optimized_generation_evidence.py": "cc28cd7d48dad476223d3fd954a945236d5f9e818db1fbe14a10140f7dce3384",
+    "models/autoports/google_gemma_4_31b_it/tests/datatype_long_prefix.py": "611f1c60188acd29e93a1977391c40e01631be1835604324f975072edd4ce25b",
+    "models/autoports/google_gemma_4_31b_it/tests/full_generation_evidence.py": "d8da3206fbb5df5be77d1ff6b71694bbcd86ec994058762e111a6c33aba4e8d6",
+    "models/autoports/google_gemma_4_31b_it/tests/run_optimized_full_readiness.py": "29a5cced5c28b93fadcbb62b789675fc541cbf0a669e65ee849078fd0834e27e",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/bf16-hifi4-kv-down-bfp8-accuracy-p19/precision.json": "540760ea34cea22459c9248b4ce8c90ad1b34e000b18e82b70552e45fd766fad",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/p19-acceptance-preparation/resume-build-kwargs.json": "b253ec0c3cd010e97498129b95810aa9d5834ae2a215b31c220805fd5e4e8835",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/attention-down-acceptance/references/aime24.refpt": "1c1a90cada967dc89159edf6e61eb51f2638955ab9defe1cc51939587e99ab45",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/attention-down-acceptance/references/natural.refpt": "861f29370af0ba7e13c77f548e688cceff429846d20a9283697ae77b8b069584",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/p19-resume-investigation/prefill_resume_q32_diagnostic.json": "1363883dcdeb0c138f6e9e15ce2ffafdf55d2711d5785b068f9a37a8f65c5583",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/p19-resume-investigation/q32-resume-completion.json": "be99686a886ac8fea262c998b75298fe4cc822054158829186b464f54dbcf249",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/p19-resume-investigation/run_resume_q32_with_positions.py": "9a4c6b6384b258d001b0f1c62e5fb185a5e4ee6f1d2d4b49c3ec42da53bbd7fc",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/p19-resume-investigation/root-q32-resume-review.json": "4ca974165595d4809c9383bb53c3daf7a433aa441590ba97fe5b90bb8f878d83",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/p19-resume-investigation/p19-attention-partition-256.json": "8eef202ad25c94f9acaae025c05c499a886495baeedba1cdc0c5473a2597907c",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/p19-resume-investigation/root-attention-probe-review.json": "1cca928ecec4df914a2f06ca5bebd8c298df4d151f92023625301903833e83da",
+    "/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime/readiness_check/run_prefill_resume_check.py": "745e881d5065f8388bea0fd057fccad86367d1dc1dfa85c371c48af51f6a4833",
+    "models/autoports/google_gemma_4_31b_it/tt/model.py": "c65ed33bb175f63603946eea561a2623cad0b70521428bdf888bd9445457a01e",
+    "models/autoports/google_gemma_4_31b_it/tt/precision.py": "2f223a118fe713677b9ce4fb3beb2f563e26af56ef45a98b2e03fad1e25664a9",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head_bfp8_hifi2_precision.json": "6ef80afe2b6ae02403eb99fbbabcf3cc6d0d4706ba9b3f67a1c8723e16d3855b"
+  },
+  "notes": "Pins are local content hashes; prior P19 Q128 broad acceptance is historical only. Q32 production validation must use the updated MultichipDecoder source hash below. Includes the model precision-fidelity plumbing and historical head-BFP8/HiFi2 config to verify the retained Q128 branch."
+}

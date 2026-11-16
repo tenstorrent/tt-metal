@@ -1,0 +1,60 @@
+{
+  "status": "independent_cpu_review_candidate_only",
+  "scope": "Review of the expanded eight-case, seven-process conditional HF candidate; no model load, device work, admission, or score decision.",
+  "reviewed_files": {
+    "proposal.json": "78f83a80477b8a9181ad15b2d9f4e83b5bc94047663d27db5f8ff7a2ee38a417",
+    "forecast.json": "85f3d46bd51531155a0734bb63ef7481f760b842a91adcb0c7aca8d739ec2358",
+    "commands.json": "3a9e000e0f609b57fd7ae89e7e32e9d5cf58159e21024f37003f5e97bdb2a222",
+    "cpu-validation.json": "2cdf55d4d83f6eb741cf8d172dffbca143111b70a6a9c84dbd9d91373e17d27d",
+    "source-integrity.json": "2a92b2a40fb238576a7d9bbd2c11325be72fe44470e1f0aab3a96b6e8bcb6bf1",
+    "runner": "aafe67c88bb5a1eb38b8718570bbddd5749e2a9ecbb9dd19cdb100a49572c03e"
+  },
+  "checks": [
+    {
+      "check": "native-positive selection and identity",
+      "result": "pass",
+      "detail": "The eight manifests retain five earlier positives and add Requests call10 seed42 at exact suffix4096, Matplotlib call86 seed43 at exact suffix4096, and Sphinx call70 seed43 at exact suffix2048. The call91 case is excluded consistently with the proposal because no shortened full positive is claimed through suffix4096; the parent suffix8192 probe remains a gate."
+    },
+    {
+      "check": "saved prompt, chosen continuation, and sampling provenance",
+      "result": "pass",
+      "detail": "For all eight fixtures, independently compared prompt_token_ids against the final N IDs of the fixture's pinned source case; all eight were exact. The saved chosen continuation matched the source case and the full-TT chosen forced_token sequence for all eight. All fixtures retain temperature=1.0, top_p=0.95, top_k=20. The selected diagnostic seeds are supplied by each command's --seeds argument; some source fixture metadata still contains its earlier seed42 field, but that field does not override the runner argument. The full-TT source includes each selected seed (42, 43, or 44)."
+    },
+    {
+      "check": "pinned offline HF and process configuration",
+      "result": "pass",
+      "detail": "The command groups use the pinned revision 842da3794eaa0b77d5f08bae87a17459d91ff475, HF_HUB_OFFLINE=1, HF_DATASETS_OFFLINE=1, and 16-thread OMP/MKL/OpenBLAS limits. The runner uses torch.set_num_threads(16), the pinned HF_REVISION, local_files_only=True for tokenizer load, CPU execution, and BF16 reference weights."
+    },
+    {
+      "check": "serial command and forced-token comparison alignment",
+      "result": "pass",
+      "detail": "Seven serial groups keep exact seed/suffix groups separate, use the matching served/full directories, request one 512-token free run, and teacher-force the saved chosen branch (64 positions, or 37 for Sphinx). Runner comparison checks forced_token equality before computing per-position agreement/log-probability deltas."
+    },
+    {
+      "check": "source and manifest hashes",
+      "result": "pass_with_action",
+      "detail": "All eight fixture hashes, all ten TT output hashes, all seven candidate manifest hashes, and the runner hash in source-integrity.json matched current files. The cited semantic-selection evidence files are referenced by path in native-positive-candidates but their content hashes are not recorded in source-integrity.json. Pin these two inputs before admission: setup/swe85-adaptive-suffix4096-candidate/triage-b.json SHA-256 57bbf5305a4fd0b6eeb6a105fc5a5afdf29ab42381b78fb99e74020f0e7594d0 and setup/swe85-adaptive-suffix4096-candidate/contraction-family-adjudication-b.json SHA-256 9ff38abb735a5fe240f468405d9bce73a00af007905b53e08fe13c4651ce0721. This is a reproducibility/provenance completeness item, not a fixture or command mismatch."
+    },
+    {
+      "check": "CPU-only validation",
+      "result": "pass",
+      "detail": "cpu-validation.json records successful --validate-only for all seven groups (return code 0, no model loaded, no network access). The validation record is consistent with the manifests and commands; it is syntax/fixture validation only, not model execution."
+    },
+    {
+      "check": "forecast arithmetic and uncertainty",
+      "result": "pass_with_limitations",
+      "detail": "Recomputed the seven group ranges from the stated per-case envelopes plus one 180-second process margin: total point 10141.0994 s (169.0183 min), total range 8460–23660 s (141.0–394.3333 min), and 1260 s total reload margin. Every group upper sensitivity value is below its timeout (2048 groups 3380<3600 s; 4096 groups 4980<7200 s). Historical 512-prefix median inputs are separately pinned in cost-basis.json. The 1024/2048/4096-prefix cases have no matched HF timing; point values for 2048/4096 are placeholders and their broad ranges are sensitivity assumptions, not measured bounds. The report states this explicitly."
+    }
+  ],
+  "findings": [
+    {
+      "severity": "action_before_admission",
+      "finding": "Hash-pin the two semantic-selection evidence files listed in the source-hash check so the newly added native-positive classifications are fully reproducible from the candidate inventory."
+    },
+    {
+      "severity": "gate_retained",
+      "finding": "Do not treat this review as admission. Wait for root to freeze/admit the native-positive set, all TT queues including call91 suffix8192 to be terminal, zero TT device owners, fresh MemAvailable >=100GB, and no HF/model process; reverify all hashes immediately before any run."
+    }
+  ],
+  "decision": "Candidate configuration is internally consistent for root review, conditional on the provenance action above. No HF execution or score adjudication is authorized by this review."
+}

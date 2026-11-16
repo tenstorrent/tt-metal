@@ -1,0 +1,98 @@
+{
+  "status": "host_only_prepared_not_executed",
+  "skill": "qualitative-check Controls: older HF controls reusable only with unchanged model/revision/tokenizer/template/suite/generation settings",
+  "hf_source": "models/autoports/google_gemma_4_31b_it/doc/datatype_sweep/selected_default/qualitative_hf.json",
+  "hf_source_sha256": "05c2ac233052909c2e785b9d36f819c52e95cecfcfd299eff81a6b1de3a174d6",
+  "source_metadata": {
+    "hf_model": "google/gemma-4-31B-it",
+    "hf_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+    "tokenizer": "GemmaTokenizer",
+    "tokenizer_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+    "chat_template_present": true,
+    "prompt_mode": "chat",
+    "rendering": "apply_chat_template(add_generation_prompt=True,return_dict=False)",
+    "source": "/home/mvasiljevic/.codex-personal-gemma4/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.22/runtime/readiness_check/vllm_prompts.txt",
+    "generation": {
+      "do_sample": false,
+      "max_new_tokens": 128,
+      "eos_token_id": [
+        1,
+        50,
+        106
+      ]
+    },
+    "generation_config_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+    "stop_correction": "Initial text-only constructor inherited eos1; retained exact greedy prefixes end at first pinned generation_config stop ID. Original outputs preserved in qualitative_hf_unstopped.json. Future loader loads pinned GenerationConfig."
+  },
+  "current_hf_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+  "current_tokenizer_class": "GemmaTokenizer",
+  "chat_template_sha256": "ae53464bf3be25802b3a5b37def7fd89667067d7577049b3b2d74c4d8de4c6d4",
+  "current_prompt_source": "/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime/readiness_check/vllm_prompts.txt",
+  "current_prompt_source_sha256": "2ad452c15d8442d3fe641eb968bbd84e3bfe9acb01ddc540f451983c0da3cbbd",
+  "prompt_checks": [
+    {
+      "id": "shared_0",
+      "messages_match": true,
+      "prompt_token_ids_match": true,
+      "prompt_tokens": 21,
+      "saved_hf_generated_tokens": 19,
+      "saved_stop": 106
+    },
+    {
+      "id": "shared_1",
+      "messages_match": true,
+      "prompt_token_ids_match": true,
+      "prompt_tokens": 25,
+      "saved_hf_generated_tokens": 128,
+      "saved_stop": 506
+    },
+    {
+      "id": "shared_2",
+      "messages_match": true,
+      "prompt_token_ids_match": true,
+      "prompt_tokens": 35,
+      "saved_hf_generated_tokens": 128,
+      "saved_stop": 506
+    },
+    {
+      "id": "shared_3",
+      "messages_match": true,
+      "prompt_token_ids_match": true,
+      "prompt_tokens": 21,
+      "saved_hf_generated_tokens": 128,
+      "saved_stop": 5387
+    },
+    {
+      "id": "shared_4",
+      "messages_match": true,
+      "prompt_token_ids_match": true,
+      "prompt_tokens": 27,
+      "saved_hf_generated_tokens": 104,
+      "saved_stop": 106
+    },
+    {
+      "id": "shared_5",
+      "messages_match": true,
+      "prompt_token_ids_match": true,
+      "prompt_tokens": 23,
+      "saved_hf_generated_tokens": 128,
+      "saved_stop": 236743
+    }
+  ],
+  "reuse_256_verdict": "NOT a complete256-token control: metadata explicitly max_new_tokens128, greedy only; shared1/2/3/5 hit128token cap. shared0/4 stopped earlier and can serve complete greedy controls; other four cover shared128-token prefixes only. Sampled TT profile has no matching saved HF sampled control in selected_default.",
+  "reuse_128_verdict": "Same pinned model/revision; current rendered token IDs and messages exactly match all six saved prompts. Saved deterministic greedy normalized stop IDs1/50/106; reuse allowed for unchanged128token greedy comparison, with normalization provenance recorded. It is prior-stage HF reference, not reused stage11/12 eval result.",
+  "later_256_controls": "Stage9 work_log says256greedy/sampled HF controls were generated; readiness_vllm/hf_qualitative_256.log remains, but referenced controls/ directory and JSON outputs are absent in current checkout. A log assertion alone is not substitute control output.",
+  "commands": {
+    "candidate_tt_256": "env PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime READINESS_TRACE_REGION_SIZE=134217728 /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tests.generate_qualitative_tt_control --output-dir models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-phase1-precision/head_bfp8_acceptance/qualitative --max-new-tokens 256 --context 4096 --build-kwargs-file models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/head_bfp8_build_kwargs.json",
+    "candidate_tt_128_matching_control": "env PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime READINESS_TRACE_REGION_SIZE=134217728 /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tests.generate_qualitative_tt_control --output-dir models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-phase1-precision/head_bfp8_acceptance/qualitative128 --max-new-tokens 128 --context 4096 --build-kwargs-file models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/head_bfp8_build_kwargs.json",
+    "candidate_full60_resume": "env PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime READINESS_TRACE_REGION_SIZE=134217728 /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python -m readiness_check.run_prefill_resume_check --model-dir models/autoports/google_gemma_4_31b_it --mesh-device P300x2 --fabric-config FABRIC_1D_RING --lengths 2560,16384 --block-sizes 32,64 --sliding-window 1024 --build-kwargs-file models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/head_bfp8_resume_build_kwargs.json --output models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-phase1-precision/head_bfp8_acceptance/prefill_resume.json"
+  },
+  "resume_contract": "No layer_indices override: Gemma4Model default uses all60. Existing default thresholds remain unchanged. max_seq_len16384 is test allocation, not advertised context change.",
+  "cost_estimate": {
+    "resume_prior_log": "models/autoports/google_gemma_4_31b_it/readiness_vllm/prefill_resume_full_ccl_phase.log",
+    "resume_observed_log_span_seconds": 794.726,
+    "resume_note": "Historical full60 run log spans~13.25min; scheduling estimate only, not current candidate performance. Allow15-25min including load/capture, monitor progress.",
+    "qualitative_note": "At most12*256=3072generatedtokens acrossgreedy+sampled; candidate onset34.25t/s is only rough decode estimate~90s plus model load/prefill/capture. Budget10-20min; not measured qualitative latency."
+  },
+  "changes": "Test runner now accepts explicit --build-kwargs-file, records actual policy/build kwargs. No runtime or selected-default changes."
+}

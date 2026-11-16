@@ -1,0 +1,40 @@
+{
+  "status": "prepared_no_launch_no_admission",
+  "cases": [
+    {
+      "case": "anomaly.requests2931.call20.canonicalprefix.optional-suffix512",
+      "seed": 42,
+      "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-85/anomaly.requests2931.call20.canonicalprefix.suffix512.private.json",
+      "fixture_sha256": "5017461630f07f8232f054ddf6c2b979c4e3bb14370431de6799ca8c4d1d7804",
+      "full_output": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/full/anomaly.requests2931.call20.canonicalprefix.optional-suffix512.json",
+      "full_output_sha256": "14ec7feaac78ac5659f21df7926336c2521648b4c9fb33966d0687610e9dfe98",
+      "motif": "caret-only512tokens",
+      "root": "setup/swe85-persistent-short-controls/full-coordinator.json",
+      "independent": "setup/swe85-persistent-short-controls/triage-d.json"
+    },
+    {
+      "case": "anomaly.sympy__sympy-14248.call53.onset.optional-suffix512",
+      "seed": 42,
+      "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-85/anomaly.sympy__sympy-14248.call53.onset.suffix512.private.json",
+      "fixture_sha256": "91359efd10ca926d39011351f97d53948db58fc4fedd961705ad4c0a462dbad1",
+      "full_output": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/full/anomaly.sympy__sympy-14248.call53.onset.optional-suffix512.json",
+      "full_output_sha256": "c2f99685050adea2459487a86fffcf009129abb1698ca848ef402a1514d219d7",
+      "motif": "caret-only512tokens",
+      "root": "setup/swe85-persistent-short-controls/full-coordinator.json",
+      "independent": "setup/swe85-persistent-short-controls/triage-d.json"
+    },
+    {
+      "case": "anomaly.pytest-dev__pytest-7432.call19.onset.optional-suffix512",
+      "seed": 44,
+      "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-85/anomaly.pytest-dev__pytest-7432.call19.onset.suffix512.private.json",
+      "fixture_sha256": "7ca8039708a12c24acd3c2cfb1c2c51b8946e99df118576545605efad6225bf4",
+      "full_output": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/full/anomaly.pytest-dev__pytest-7432.call19.onset.optional-suffix512.json",
+      "full_output_sha256": "ec50a12e48db7b2446435f2e3f64d5fd158f0dc58988d7788a620815b5abcca4",
+      "motif": "caret-only512tokens",
+      "root": "setup/swe85-persistent-short-controls/full-coordinator.json",
+      "independent": "setup/swe85-persistent-short-controls/triage-d.json"
+    }
+  ],
+  "scope": "Matched exactsuffix512nativecaret positivefullTT; notnativeprompt identity or incidence.",
+  "next": "Merge any eligible contraction controls after review; memory/process preflight and declaredcost beforelaunch. NoHF concurrent with speedranking."
+}

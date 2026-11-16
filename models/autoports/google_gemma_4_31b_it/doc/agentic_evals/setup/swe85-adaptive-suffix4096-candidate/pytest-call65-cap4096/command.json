@@ -1,0 +1,107 @@
+{
+  "status": "candidate_only_not_admitted_not_run",
+  "mode": "full",
+  "timeout_seconds": 3600,
+  "command": [
+    "timeout",
+    "3600",
+    "env",
+    "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+    "READINESS_TRACE_REGION_SIZE=134217728",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+    "-m",
+    "models.autoports.google_gemma_4_31b_it.tools.precision_repro_batch",
+    "--cases",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/pytest-call65-cap4096/full-cases.json",
+    "--build-kwargs-file",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_build_kwargs.json",
+    "--output-dir",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/pytest-call65-cap4096/runs/full"
+  ],
+  "case_count": 1,
+  "manifest_sha256": "2d1ea29c9fcac5846713e3243e2446fb22d36ac9484ed4c3adf5283d3141904d",
+  "output_dir": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/pytest-call65-cap4096/runs/full",
+  "forecast": {
+    "status": "planning estimate only; not serving performance",
+    "case": "anomaly.pytest-dev__pytest-5787.call65.onset.cap4096.seed44",
+    "method": {
+      "source": "Actual completed T full cap2048 seed44 run, exact same prompt, sampling and precision mode.",
+      "projected_decode": "measured source decode wall scaled by ratio of cumulative live sequence contexts for 4095 candidate replays vs 2047 measured replays.",
+      "prefill_host_overhead": "preserve source diagnostic wall minus decode wall; prompt length unchanged.",
+      "fixed_costs": "actual full model-load wall plus one measured first generator trace preparation event from T full log.",
+      "range": "fixed costs plus 0.7x\u20131.7x variable case work; cap projection explicitly assumes full 4095 replay calls."
+    },
+    "prompt_tokens": 53684,
+    "source_cap": 2048,
+    "candidate_cap": 4096,
+    "source_decode_replays": 2047,
+    "candidate_cap_safe_replays": 4095,
+    "source_decode_wall_s": 131.28894865582697,
+    "source_prefill_host_overhead_s": 27.04696852923371,
+    "context_ratio": 2.0379334581706305,
+    "projected_decode_wall_s": 267.55814115375586,
+    "projected_variable_case_s": 294.60510968298956,
+    "model_load": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/runs/full/load.json",
+      "sha256": "2792bf6b72dd79789d05ce3d11b93f0e597e3930731cfc91ca2869b4f47870ff",
+      "wall_s": 75.50516621605493
+    },
+    "trace_preparation": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-execution/full.log",
+      "sha256": "686be58e5a27e7839cb7beb6d86977fdef4e7dc0deb81a031a8f85a659a9ba0c",
+      "event": {
+        "line": 119,
+        "seconds": 12.137120008002967
+      }
+    },
+    "fixed_wall_s": 87.6422862240579,
+    "point_total_s": 382.24739590704746,
+    "range_s": [
+      293.8658630021506,
+      588.4709726851402
+    ],
+    "timeout_seconds": 3600,
+    "source_hashes": [
+      {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/fixtures/full/anomaly.pytest-dev__pytest-5787.call65.onset.cap2048.seed44.private.json",
+        "sha256": "e1d35e0a08dca171114e3856df379fe7070264bce3410b7b4e6097a1a6562085"
+      },
+      {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/runs/full/anomaly.pytest-dev__pytest-5787.call65.onset.cap2048.seed44.json",
+        "sha256": "8d87356ff1f0e6cb835889f799cd9bb4340db6f72b250a8a31e3423c7e497c55"
+      },
+      {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/full-candidate-cases.json",
+        "sha256": "f54ca8d64a9e52b459f7b9f251a1ab7175e3d5a085009e7b23e3eed2bcc39319"
+      },
+      {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/completion-summary.json",
+        "sha256": "8149f12cbcb5a8e4a552e02241d0c3ebd7e3ff686a99bde8d46659c09e506e5b"
+      },
+      {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/runs/full/load.json",
+        "sha256": "2792bf6b72dd79789d05ce3d11b93f0e597e3930731cfc91ca2869b4f47870ff"
+      },
+      {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-execution/full.log",
+        "sha256": "686be58e5a27e7839cb7beb6d86977fdef4e7dc0deb81a031a8f85a659a9ba0c"
+      },
+      {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_build_kwargs.json",
+        "sha256": "ff2b5ed24e0b6a1dee7eb5cd8bd437d17c3df5f8f25567927d239e666f0699f9"
+      },
+      {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_config.json",
+        "sha256": "63ce02f7fa0df993a27daca25eeeb3adca51e15c7c6956d1cef122534ebdc7a9"
+      },
+      {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/pytest-call65-cap4096/pytest-call65.cap4096.seed44.private.json",
+        "sha256": "a383f6456c2dc6a0e08eeb4d17aad8561a2ad783ef92d8642e74218b1963447c"
+      },
+      {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/pytest-call65-cap4096/full-cases.json",
+        "sha256": "2d1ea29c9fcac5846713e3243e2446fb22d36ac9484ed4c3adf5283d3141904d"
+      }
+    ]
+  }
+}

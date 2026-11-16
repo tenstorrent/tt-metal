@@ -1,0 +1,82 @@
+[
+  {
+    "task": "django__django-11299",
+    "repository_head_preserved": true,
+    "resources_and_network_modes_equal": true,
+    "stdout": "862fa64a887251647dc260ade7ac25be5f97328b\nuv 0.7.13\nmini-swe-agent v2.2.8\n- mini\n- mini-e\n- mini-extra\n- mini-swe-agent\n",
+    "exit_code": 0,
+    "no_tests_or_solution_in_image": true
+  },
+  {
+    "task": "astropy__astropy-14096",
+    "repository_head_preserved": true,
+    "resources_and_network_modes_equal": true,
+    "stdout": "06c74e6aeed73a852c2b5e00151240fc2556e8d3\nuv 0.7.13\nmini-swe-agent v2.2.8\n- mini\n- mini-e\n- mini-extra\n- mini-swe-agent\n",
+    "exit_code": 0,
+    "no_tests_or_solution_in_image": true
+  },
+  {
+    "task": "matplotlib__matplotlib-25332",
+    "repository_head_preserved": true,
+    "resources_and_network_modes_equal": true,
+    "stdout": "6c27723157e92ea4612a40b14625ff371ed0245e\nuv 0.7.13\nmini-swe-agent v2.2.8\n- mini\n- mini-e\n- mini-extra\n- mini-swe-agent\n",
+    "exit_code": 0,
+    "no_tests_or_solution_in_image": true
+  },
+  {
+    "task": "sympy__sympy-13551",
+    "repository_head_preserved": true,
+    "resources_and_network_modes_equal": true,
+    "stdout": "d3170dccb47319886311aee1eaca20881c98e64c\nuv 0.7.13\nmini-swe-agent v2.2.8\n- mini\n- mini-e\n- mini-extra\n- mini-swe-agent\n",
+    "exit_code": 0,
+    "no_tests_or_solution_in_image": true
+  },
+  {
+    "task": "scikit-learn__scikit-learn-14629",
+    "repository_head_preserved": true,
+    "resources_and_network_modes_equal": true,
+    "stdout": "eb6f369813728a490ea354f6d137783cc5fd29e9\nuv 0.7.13\nmini-swe-agent v2.2.8\n- mini\n- mini-e\n- mini-extra\n- mini-swe-agent\n",
+    "exit_code": 0,
+    "no_tests_or_solution_in_image": true
+  },
+  {
+    "task": "pydata__xarray-3993",
+    "repository_head_preserved": true,
+    "resources_and_network_modes_equal": true,
+    "stdout": "7f06d401b0218fddc8d127a9c13071f8c55ce982\nuv 0.7.13\nmini-swe-agent v2.2.8\n- mini\n- mini-e\n- mini-extra\n- mini-swe-agent\n",
+    "exit_code": 0,
+    "no_tests_or_solution_in_image": true
+  },
+  {
+    "task": "sphinx-doc__sphinx-9673",
+    "repository_head_preserved": true,
+    "resources_and_network_modes_equal": true,
+    "stdout": "98596d7b42103c98378bad621b08f64e8d81f353\nuv 0.7.13\nmini-swe-agent v2.2.8\n- mini\n- mini-e\n- mini-extra\n- mini-swe-agent\n",
+    "exit_code": 0,
+    "no_tests_or_solution_in_image": true
+  },
+  {
+    "task": "pytest-dev__pytest-5840",
+    "repository_head_preserved": true,
+    "resources_and_network_modes_equal": true,
+    "stdout": "cc2740fea08bf5199f41424ccbfa6b01419580dd\nuv 0.7.13\nmini-swe-agent v2.2.8\n- mini\n- mini-e\n- mini-extra\n- mini-swe-agent\n",
+    "exit_code": 0,
+    "no_tests_or_solution_in_image": true
+  },
+  {
+    "task": "pylint-dev__pylint-6903",
+    "repository_head_preserved": true,
+    "resources_and_network_modes_equal": true,
+    "stdout": "c8e3b39106f17a86aa98beabddf06481079262ac\nuv 0.7.13\nmini-swe-agent v2.2.8\n- mini\n- mini-e\n- mini-extra\n- mini-swe-agent\n",
+    "exit_code": 0,
+    "no_tests_or_solution_in_image": true
+  },
+  {
+    "task": "psf__requests-1142",
+    "repository_head_preserved": true,
+    "resources_and_network_modes_equal": true,
+    "stdout": "546130c8c878adabd16ac5221a36e39e4dab3645\nuv 0.7.13\nmini-swe-agent v2.2.8\n- mini\n- mini-e\n- mini-extra\n- mini-swe-agent\n",
+    "exit_code": 0,
+    "no_tests_or_solution_in_image": true
+  }
+]

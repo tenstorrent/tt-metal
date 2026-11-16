@@ -1,0 +1,7 @@
+{
+  "epoch": 1794756094.0033534,
+  "owner": "",
+  "source_pins_verified": true,
+  "group_delta": "KV BF16 to BFP8 versus passing full BF16 control; other fields unchanged",
+  "alternative": "Did not follow proposed MLP/head restore atop failing P16: independent deltas are nonmonotonic; start from passing baseline to bound the search."
+}

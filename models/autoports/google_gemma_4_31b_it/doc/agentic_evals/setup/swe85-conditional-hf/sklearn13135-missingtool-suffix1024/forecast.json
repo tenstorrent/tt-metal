@@ -1,0 +1,133 @@
+{
+  "status": "planning_proxy_not_measurement",
+  "candidate_context_tokens": 1024,
+  "free_run_cap_tokens": 1024,
+  "chosen_teacher_forced_tokens": 64,
+  "jobs_per_mode": 3,
+  "served_policy": {
+    "config_id": "stage12_head_bfp8_lofi",
+    "build_kwargs_file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/head_bfp8_build_kwargs.json",
+    "build_kwargs_sha256": "2e583fa8bd7aff7c5f8be110835df751924d167243c5a44a68aa5b3d70c6845f",
+    "precision_config": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/head_bfp8_precision_config.json",
+    "precision_config_sha256": "aa0e651fb3fdd7afc285293645c5ca309b2da246619e6e7fb6da86c5d2f28853"
+  },
+  "basis": {
+    "served_head_bfp8_lofi_suffix512_matched_controls": {
+      "directory": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-suffix512-head-bfp8-correction",
+      "admission_sha256": "3135aac12cbe11d97803b166dc3173def8f9bc03a6e8bb786fe015ce3f24bf08",
+      "completion_sha256": "1be9414e4447a6600ea163967ec4fc0601ae9ffbbd47e44ab5e407a1c3ee453e",
+      "root_review_sha256": "777d1a61090d8b827c76fc905b1a884b58270613d976c5eed73d8a41c2319151",
+      "load": {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-suffix512-head-bfp8-correction/runs/load.json",
+        "sha256": "bc5cd7140abd359cb771dac497f8fc8d6981b4fd1c9979c55d4be19b9426e18a",
+        "wall_s": 136.80109735112637
+      },
+      "rows": [
+        {
+          "seed": 42,
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-suffix512-head-bfp8-correction/runs/anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix512.seed42.json",
+          "sha256": "cdba56f4ef6f96c94ca131c312f23ebcd615b72704f81353fbaee6ae93d48a49",
+          "generated_tokens": 512,
+          "diagnostic_total_wall_s": 26.075610586907715,
+          "chosen64_wall_s_including_prefill": 11.578136903000996
+        },
+        {
+          "seed": 43,
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-suffix512-head-bfp8-correction/runs/anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix512.seed43.json",
+          "sha256": "00cc018a2764f67350ba8503451209a16c4f42ad3010af0b4cb17bf392c93de4",
+          "generated_tokens": 512,
+          "diagnostic_total_wall_s": 16.7836549540516,
+          "chosen64_wall_s_including_prefill": 2.283068522810936
+        },
+        {
+          "seed": 44,
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-suffix512-head-bfp8-correction/runs/anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix512.seed44.json",
+          "sha256": "192beeb384d47ca8fad1dfd801ae8f6beb8884f70255d9dad7fa20b8d8c7a1c4",
+          "generated_tokens": 512,
+          "diagnostic_total_wall_s": 16.76420336496085,
+          "chosen64_wall_s_including_prefill": 2.2626914689317346
+        }
+      ],
+      "completion_wall_s": 201.28028845787048
+    },
+    "full_precision_suffix512_matched_controls": {
+      "directory": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512",
+      "admission_sha256": "32fe5e6ccf38aff945424de6b7f3c8e24a7a375cf6a806424bd1097e99bb6194",
+      "completion_sha256": "927e9425adeb62200b42d38c6f7fc367358f8fd02ad1bcbabaf4010fc3f76dec",
+      "load_wall_s": 77.2094789010007,
+      "case_rows": [
+        {
+          "seed": 42,
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/runs/full/anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix512.seed42.json",
+          "sha256": "81cf6fe18b20cfa30b0ddca5b839b9b8ebf57daf2a899708a84d91b3b1523d2b",
+          "generated_tokens": 512,
+          "diagnostic_total_wall_s": 46.0311148900073,
+          "chosen64_wall_s_including_prefill": 16.295047968858853
+        },
+        {
+          "seed": 43,
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/runs/full/anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix512.seed43.json",
+          "sha256": "548b687b902b17b31e874b20054976ea4ca45c0b3c8ecf2ca989885ff8f2f516",
+          "generated_tokens": 512,
+          "diagnostic_total_wall_s": 33.93607678916305,
+          "chosen64_wall_s_including_prefill": 4.185894855996594
+        },
+        {
+          "seed": 44,
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/runs/full/anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix512.seed44.json",
+          "sha256": "bc216e065f572ac48d7dc800a72bb73cdcd037e73c7eb50ed88857d2fd4026d5",
+          "generated_tokens": 85,
+          "diagnostic_total_wall_s": 9.211357190040872,
+          "chosen64_wall_s_including_prefill": 4.188701740000397
+        }
+      ],
+      "completion_wall_s": 171.23748016357422
+    }
+  },
+  "assumptions": [
+    "The served baseline is the selected head-BFP8 LoFi policy, using the corrected exact suffix512 chosen64/cap512 run (three seeds), its measured model load, and its root-reviewed completion.",
+    "The full baseline is exact full-precision suffix512 chosen64/cap512 evidence; each row wall includes its chosen branch and prefill. No second chosen allowance is added.",
+    "The candidate prompt grows from512 to1024 IDs and free-run cap grows from512 to1024; prefill cost is unmeasured and broad context/seed uncertainty is explicit in the range.",
+    "The original full-prompt missing_tool onset was around generated token665; cap1024 allows reaching it if generation continues. Early termination remains possible.",
+    "One model load and three serial jobs per mode. Served then full, separate process loads. The forecast is a planning proxy, not a speed or memory claim."
+  ],
+  "mode_estimates": {
+    "served": {
+      "point_seconds": 280.0,
+      "range_seconds": [
+        220.0,
+        400.0
+      ],
+      "timeout_seconds": 600,
+      "components_estimated_seconds": {
+        "head_bfp8_model_load": 136.80109735112637,
+        "three_case_generation_prefill_chosen_estimate": 115.0,
+        "additional_context_and_seed_uncertainty": 28.2
+      }
+    },
+    "full": {
+      "point_seconds": 280.0,
+      "range_seconds": [
+        210.0,
+        420.0
+      ],
+      "timeout_seconds": 600,
+      "components_estimated_seconds": {
+        "full_model_load": 77.2094789010007,
+        "three_case_generation_prefill_chosen_estimate": 165.0,
+        "additional_context_and_seed_uncertainty": 37.8
+      }
+    }
+  },
+  "combined_point_seconds": 560.0,
+  "combined_range_seconds": [
+    430.0,
+    820.0
+  ],
+  "serial_order": [
+    "served",
+    "full"
+  ],
+  "forecast_review_required": true,
+  "notes": "Conservative ranges deliberately accommodate doubled cap, changed prefill, and seed variation. Root must reconcile each mode against actual elapsed wall and accept any miss before proceeding."
+}

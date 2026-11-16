@@ -1,0 +1,32 @@
+{
+  "status": "prepared_selection_correction_not_admission",
+  "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/extended_projection_trajectory_replay.json",
+  "source_sha256": "c89bedfbb0f39794311737ef696600dc1bcd7b335a79be3a0dd80c41aba1c6c7",
+  "historical_projection_unchanged": true,
+  "inputs": "bringup/agentic_evals/inputs.json",
+  "run_timeout_hours": 12,
+  "planning_margin": 1.25,
+  "selection_rule": "largest existing projected count with raw hours*1.25<=run_timeout_hours; margin applied once",
+  "selected": {
+    "count": 85,
+    "hours": 9.590058417778545,
+    "hours_with_1_25_margin": 11.98757302222318
+  },
+  "first_excluded": {
+    "count": 86,
+    "hours": 9.823558417778546,
+    "hours_with_1_25_margin": 12.279448022223182
+  },
+  "old65": "Historical double-margin selection preserved unchanged.",
+  "list_basis": "Existing65 plus prepared20 in swe85-candidate/tasks.json equals frozen500-order prefix85; candidate file contains additions only, not a full85 run manifest.",
+  "nesting_verified": true,
+  "predicted_hours": 9.590058417778545,
+  "predicted_hours_with_margin": 11.98757302222318,
+  "conditions": [
+    "Complete full85 combined run manifest before launch",
+    "Unchanged stage12_head_bfp8_lofi and policy-specific rates",
+    "Fresh pool/provenance/logging and host disk admission checks",
+    "Synthetic ten-archetype tail extrapolation; not a guaranteed upper bound"
+  ],
+  "validation": "Existing rows only:85 fits,86 exceeds; independent9.6h boundary fits12h with1.25,9.7 excluded; empty feasible set returnsNone. No benchmarks/device."
+}

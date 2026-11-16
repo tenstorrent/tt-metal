@@ -1,0 +1,75 @@
+{
+  "status": "independent_host_review_candidate_only",
+  "scope": "Static inspection of Matplotlib call86 full suffix4096 seed43 cap1024 runner and command; no inference/device access.",
+  "findings": [
+    {
+      "severity": "fixed",
+      "finding": "HF serialization preflight originally recognized precision_repro_hf.py only and missed the currently admitted actual-branch runner.",
+      "change": "Added is_hf_reference_process matching both precision_repro_hf.py and actual_branch_logits.py, plus host regression assertions for both and a non-match.",
+      "references": [
+        "run_cap1024.py:201-219",
+        "test_run_cap1024.py:194-197"
+      ]
+    },
+    {
+      "severity": "fixed",
+      "finding": "command.json postrun guidance still described first-min(512,n) identity, contradicting the runner contract.",
+      "change": "Replaced with len>=512 and exact equality of all first512 IDs.",
+      "references": [
+        "command.json:postrun_checks",
+        "run_cap1024.py:188-190"
+      ]
+    },
+    {
+      "severity": "fixed",
+      "finding": "Timeout diagnostic said 1260s though the child subprocess timeout is1200s.",
+      "change": "Corrected message to report1200s.",
+      "references": [
+        "run_cap1024.py:286-291"
+      ]
+    },
+    {
+      "severity": "pass",
+      "finding": "Prior full result and candidate output compare entire runtime_precision to the pinned full BF16/HiFi4 policy; fixture is exact suffix4096, chosen is64, seed is43, generated free IDs are capped at1024, and prior prefix requires len>=512 plus equality of all512 tokens.",
+      "references": [
+        "run_cap1024.py:121-143",
+        "run_cap1024.py:177-198"
+      ]
+    },
+    {
+      "severity": "pass",
+      "finding": "Command uses pinned case manifest/full build kwargs and offline env; output dir is candidate-local. Child subprocess timeout stays inside supervising driver so the timeout handler can write completion.",
+      "references": [
+        "command.json",
+        "run_cap1024.py:145-155",
+        "run_cap1024.py:276-314"
+      ]
+    },
+    {
+      "severity": "fixed",
+      "finding": "Static admission validation compared repo-relative command.expected_output against an absolute expected path.",
+      "change": "Resolve relative expected_output against repo root while preserving absolute-path acceptance; tested through full verify_candidate on a synthetic admitted host fixture.",
+      "references": [
+        "run_cap1024.py:155-159",
+        "test_run_cap1024.py:154-165"
+      ]
+    }
+  ],
+  "verification": {
+    "host_tests": "11 passed",
+    "py_compile": "passed",
+    "inference_or_device": "not run"
+  },
+  "candidate_hashes": {
+    "run_cap1024.py": "7660cddfc15f6dbfeb7a33dbd377d80a57c71ec1a0f32cbe80918b6826ab39ac",
+    "test_run_cap1024.py": "e12aa590ec4bf4f245109c5fd19650b4c59d5c5a8f61065fd934842bd3ff4b7f",
+    "command.json": "2fdf433ce016404670ac7b2dfe84dd88628f6afd00093643c8456450f69e6dd4",
+    "proposal.json": "b1e7d477a5d0c2a87737d8dcfa7c4a4e3fc66f3cb157e507e18e18bdab055e7b",
+    "cases.json": "f94c5a53507333b8ec730a5f603246ddf8fc5a0bcf55ddd2d6697108a9d8b5c0",
+    "forecast.json": "c2d3d2edfe7cc18432a45ce8d449908bd9ffb1f4842a777bbb9a7836acb29ee1",
+    "source-pins.json": "e8aad1f4c218ba054c4ec959dcb33be9694b7f01800655b192fb357c1228ecee",
+    "runtime-pins.json": "0be338833ced4dd17c7fbd4354bb461fd5d0359058b4513cba4d0dfa7b54857d",
+    "admission-template.json": "3b0b821f737f8708b3741914ede3365cc0fe791d006584a4070bcbc8eb5ddf27"
+  },
+  "admission_note": "No admission.json exists in this candidate directory at review time. Root must bind refreshed driver/test/command hashes if this candidate is later admitted; no admission or active runner was edited."
+}

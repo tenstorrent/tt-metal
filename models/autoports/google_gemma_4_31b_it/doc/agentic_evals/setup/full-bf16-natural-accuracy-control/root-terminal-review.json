@@ -1,0 +1,79 @@
+{
+  "epoch": 1794753652.7198615,
+  "status": "full_precision_accuracy_pass_not_serving_selection",
+  "scores": {
+    "prefill": [
+      {
+        "top1": 0.99,
+        "top5": 1.0,
+        "top100": 1.0,
+        "matches_top1": 99,
+        "matches_top5": 100,
+        "matches_top100": 100,
+        "total": 100,
+        "k": 100
+      }
+    ],
+    "decode": [
+      {
+        "top1": 0.99,
+        "top5": 1.0,
+        "top100": 1.0,
+        "matches_top1": 99,
+        "matches_top5": 100,
+        "matches_top100": 100,
+        "total": 100,
+        "k": 100,
+        "elapsed_s": 5.7175765610300004,
+        "e2e_t/s/u": 17.489927582532513,
+        "ttft_ms": 140.71585796773434,
+        "decode_tokens": 99.0,
+        "decode_elapsed_s": 5.576736727030948,
+        "decode_t/s/u": 17.752317322088746
+      }
+    ],
+    "natural": [
+      {
+        "top1": 0.916015625,
+        "top5": 0.99609375,
+        "top100": 1.0,
+        "matches_top1": 469,
+        "matches_top5": 510,
+        "matches_top100": 512,
+        "total": 512,
+        "k": 100,
+        "elapsed_s": 29.848576160147786,
+        "e2e_t/s/u": 17.153247017644844,
+        "ttft_ms": 201.0484910570085,
+        "decode_tokens": 511.0,
+        "decode_elapsed_s": 29.647438269108534,
+        "decode_t/s/u": 17.235890513091714
+      }
+    ]
+  },
+  "layers": 60,
+  "runtime_policy_verified": true,
+  "trace_counters_verified": true,
+  "forecast_seconds": [
+    180,
+    900
+  ],
+  "elapsed_seconds": 140.54156017303467,
+  "forecast_hit": false,
+  "timing_decomposition": {
+    "mlp-attention-down-accuracy": {
+      "total_s": 187.6457178592682,
+      "tf_s": 30.53914749319665,
+      "trace_preparation_s": 9.701567175798118,
+      "remaining_setup_prefill_teardown_s": 147.40500319027342
+    },
+    "full-bf16-natural-accuracy-control": {
+      "total_s": 140.54156017303467,
+      "tf_s": 47.00050754426047,
+      "trace_preparation_s": 12.100488682975993,
+      "remaining_setup_prefill_teardown_s": 81.4405639457982
+    }
+  },
+  "forecast_miss_explanation": "FullBF16 teacher forcing is slower, but non-TF/non-trace-preparation remainder is substantially shorter than P8. The prior lower bound assumed P8-like setup cost; it was invalid across storage policies. Remainder includes loading, inventory, prefill and teardown; no isolated loader timer or causal speedup is claimed. No repeated measurement needed for diagnostic accuracy.",
+  "next": "BFP8HiFi2 accuracy comparison; no expensive108 or serving changes yet"
+}

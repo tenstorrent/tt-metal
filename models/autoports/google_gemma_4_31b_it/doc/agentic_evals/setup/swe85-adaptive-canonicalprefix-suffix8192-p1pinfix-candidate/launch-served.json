@@ -1,0 +1,48 @@
+{
+  "mode": "served",
+  "command": [
+    "timeout",
+    "1800",
+    "env",
+    "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+    "READINESS_TRACE_REGION_SIZE=134217728",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+    "-m",
+    "models.autoports.google_gemma_4_31b_it.tools.precision_repro_batch",
+    "--cases",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-canonicalprefix-suffix8192-p1pinfix-candidate/served-cases.json",
+    "--build-kwargs-file",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/head_bfp8_build_kwargs.json",
+    "--output-dir",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-canonicalprefix-suffix8192-p1pinfix-candidate/runs/served"
+  ],
+  "start_unix": 1794724426.1540174,
+  "candidate_admission_sha256": "300d69403a28112bc5f2a7225df5327bdb9e577ad9ca96cf754ab304f3538205",
+  "candidate_proposal_sha256": "e506154d52a4fb969d5f142cd9574cbb46db891c56d34d14f0387a28c493848a",
+  "p_gate": {
+    "status": "root_accepted_forecast_miss",
+    "measured_seconds": 2018.038988828659,
+    "forecast_range_seconds": [
+      2515.762556969247,
+      5878.864391854309
+    ],
+    "acceptance_record_sha256": "b33ebae3a3366738541d2983238c18f57cc3841bc539afcc021a85d86fd7c18b"
+  },
+  "p_terminal_hashes": {
+    "queue_sha256": "90eb8cc2ee230f3ed331c93213e8ee316491db73d7dcd80568af597b51c08adc",
+    "completion_sha256": "fa70e146164d0b1b948f3bb969fff7e56b44b8d6cc85912f2dfb814c941675d9",
+    "launch_sha256": "de1e30cac8ce26b64272a88cf95392aed520ad80400df0d61590c789d5e3a4f0",
+    "admission_sha256": "91dc764e6a3a6b1e8a1be51e6eee5fc958c19d1dfcfa3d057b989aa325618cdd",
+    "proposal_sha256": "c95ae189a8a4cd37159f106b5da1d5bfc9c2a84d3dc6009ff52b86101e6ed550",
+    "driver_sha256": "74fe8a4db31949824f4e59cce087da5eecfc272d5e14fb962119b8b1f9f24100",
+    "source_hashes_sha256": "e1254ae95f87360bc214b01757062a8910b5fed95f6e6cfd13244b024cce01ad",
+    "admission_inventory_exception": {
+      "row_key": "admission",
+      "stale_placeholder_sha256": "428bea328fae8fa6e4f6fe21802f3763985d6b5ee819f5beac6c6df3ff1f2b97",
+      "verified_current_admission_sha256": "91dc764e6a3a6b1e8a1be51e6eee5fc958c19d1dfcfa3d057b989aa325618cdd"
+    }
+  },
+  "device_owner_preflight": [],
+  "active_hf_processes": [],
+  "timeout_seconds": 1800
+}

@@ -1,0 +1,39 @@
+{
+  "status": "completed_root_and_independent_triage_reconciled",
+  "modes": {
+    "served": {
+      "counts": {
+        "normal": 1,
+        "native": 1,
+        "other": 1
+      },
+      "wall_seconds": 189.18671536445618,
+      "completion_sha256": "37340afd0077453ee24a913bc0ebe2ff8ddf6cd14c064a3231c3e213cd5dc7b3"
+    },
+    "full": {
+      "counts": {
+        "other": 2,
+        "normal": 1
+      },
+      "wall_seconds": 171.23748016357422,
+      "completion_sha256": "927e9425adeb62200b42d38c6f7fc367358f8fd02ad1bcbabaf4010fc3f76dec"
+    }
+  },
+  "input_suffix_tokens": 512,
+  "chosen_tokens": 64,
+  "free_cap": 512,
+  "seeds": [
+    42,
+    43,
+    44
+  ],
+  "original_full_missing_tool_reproduced": false,
+  "next": "Adapt original suffix to1024, cap1024 to seek original full missing-tool. New full short-loop families42/43 need pinned HF comparisons on same512-ID fixtures; no native-prompt equivalence or score change.",
+  "selected_policy": null,
+  "triage_reconciliation": {
+    "rows": 6,
+    "mismatches": 0,
+    "evidence": "triage-d.json",
+    "reviewed_unix": 1794727973.5000856
+  }
+}

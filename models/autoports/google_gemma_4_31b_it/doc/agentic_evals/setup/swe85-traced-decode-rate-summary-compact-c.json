@@ -1,0 +1,72 @@
+{
+  "status": "host_only_rate_summary_for_root_review",
+  "scope": "Diagnostic traced autoregressive replay only. Not vLLM/serving throughput and no precision/policy conclusion.",
+  "source_inventory": {
+    "path": "setup/swe85-traced-decode-rate-summary-c.json",
+    "sha256": "dfc6acc335963d0ff368f15acd0a48f8925150d39b4995a55f677d914868bd52",
+    "bytes": 142646,
+    "contains_trial_level_rows": true,
+    "panel_rows_p1": 108,
+    "panel_rows_p2": 108,
+    "paired_selected_baseline_rows": 18
+  },
+  "policies": [
+    {
+      "config_id": "stage12_swe85_head_bfp8_hifi2",
+      "role": "P1 head-only BFP8/HiFi2; attention/MLP/down BFP4/LoFi",
+      "trials": 108,
+      "weighted_decode_tok_s": 30.60313651015088,
+      "tokens": 27884,
+      "decode_wall_s": 911.1484370483086,
+      "per_trial_tok_s_range": [
+        27.724564526709102,
+        34.61704928573925
+      ],
+      "trace_counters_valid": true
+    },
+    {
+      "config_id": "stage12_head_bfp8_lofi",
+      "role": "Selected BFP8/LoFi baseline on exact matching prompt IDs, seed and explicit cap only",
+      "paired_trials": 18,
+      "weighted_decode_tok_s": 30.22146575744924,
+      "tokens": 12982,
+      "decode_wall_s": 429.56222256692126,
+      "per_trial_tok_s_range": [
+        28.04927000261103,
+        34.53350669555272
+      ],
+      "matched_p1_rate_tok_s": 30.03946839546656,
+      "unmatched_or_nonexact": 90
+    },
+    {
+      "config_id": "stage12_swe85_head_bf16_hifi4",
+      "role": "P2 head-only BF16/HiFi4; attention/MLP/down remain BFP4/LoFi; descriptive only, excluded from speed ranking",
+      "trials": 108,
+      "weighted_decode_tok_s": 29.643475000932305,
+      "tokens": 30915,
+      "decode_wall_s": 1042.8939251902048,
+      "per_trial_tok_s_range": [
+        27.076951131885075,
+        33.63749816964739
+      ],
+      "trace_counters_valid": true,
+      "exclusion": "Documented host contention invalidates idle-host ranking; distinct generated outputs/lengths prevent apples-to-apples speed interpretation."
+    }
+  ],
+  "comparison_limits": [
+    "Rate is sum traced decode tokens divided by sum traced decode wall. Per-trial traced decode begins after first token and includes synchronous token-out readback; excludes prefill/first token and text decoding.",
+    "Only 18/108 P1 rows had a selected baseline with identical prompt IDs, seed and explicit cap.",
+    "Even exact pairs can diverge in output tokens and length; no causal precision conclusion. P2 host-contended and not speed-ranked."
+  ],
+  "provenance": {
+    "learned_json_sha256": "6e55b3fb4948704d3fe240f514d9c04b8367e872c3aad9566886cf23cc7e74f5",
+    "results_json_sha256": "05b4d907c119b52969c88f02e70ea5a419f6be128b98b19b67844c664e7dc1c0",
+    "REPORT_md_sha256": "96d2dac26d42883202d7667c3c2d30f573395bb6ca19556ef1ffa3e9e0d8e5d1",
+    "p1_completion_sha256": "fa70e146164d0b1b948f3bb969fff7e56b44b8d6cc85912f2dfb814c941675d9",
+    "p1_completion_summary_sha256": "3e235673a01aa0a28ad88d49677ad8099b38dbe6e89d7ce65885365284a8d67f",
+    "p2_completion_sha256": "47896893e57257757d1153dd3ae4df6b05985cd97b0fbb9993739e30145b2880",
+    "p2_completion_summary_sha256": "254b4f17dd02cbd1d448be1a5a8a940847f689028d0f73843a5a6f80eb626eb4",
+    "p2_host_contention_review": "setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/root-forecast-review.json"
+  },
+  "intended_use": "Compact values for REPORT.md / results.json configs_tried bookkeeping; consult linked inventory for exact paths, prompt/cap/seed strata, hashes, and paired rows."
+}

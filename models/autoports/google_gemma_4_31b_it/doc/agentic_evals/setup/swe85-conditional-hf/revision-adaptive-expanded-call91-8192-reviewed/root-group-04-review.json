@@ -1,0 +1,37 @@
+{
+  "status": "completed_initial_cap_root_and_independent_triage_reconciled_extension_required",
+  "reviewer": "root",
+  "accepted": true,
+  "utc": "2026-11-15T09:34:42.337616+00:00",
+  "serial_order": 4,
+  "admission_sha256": "74640276fdf5e463fa968d5d188994622759df96f09d4f408e02712b7d09ae66",
+  "launch_sha256": "c6521337dd89764fe5a8839a6cd040aced81170cd4e511b9826a7bced185a7b5",
+  "completion_sha256": "d39b7440fd10612ecd8e51d84c02db9ea68c8742325c4a2f4597e3df86c3c967",
+  "result_sha256": "ea3eb180de1ef8898c2565dcb5ffd7700f3e792ccfce8bc279efef80c6dfe9a4",
+  "independent_triage_sha256": "bc77da274031c092827ea5669676019aacf1eabc7157aad8a3f4832e8a5dd7f8",
+  "verdict": "inconclusive_progressing_at_cap",
+  "exact_fixture_sha256": "fbe984e026dbe8ef2b9d8a4288056617cbfde5235d1efd4a3bd14038a2db5ad7",
+  "source_slice": [
+    5178,
+    7226
+  ],
+  "seed": 44,
+  "generated_tokens": 512,
+  "requested_tokens": 512,
+  "forecast_gate": "hit",
+  "measured_seconds": 1442.443281173706,
+  "forecast_range_seconds": [
+    980,
+    3380
+  ],
+  "accounting_seconds": {
+    "free_generation": 1377.3435386877973,
+    "runner_total": 1438.3117750179954,
+    "runner_nonfree": 60.968236330198124,
+    "outside_runner": 4.131506155710667
+  },
+  "matched_tt": "Selected and full TT both repeat ellipsis/newline/indentation [1390,107,147], not the saved native caret teacher-forcing branch.",
+  "interpretation": "HF continues coherent URL/IDNA reasoning through the cap. Must extend; no completed normal verdict or failure. Chosen64 caret agreement does not explain actual ellipsis divergence. Same shortened reconstructed suffix only, not native replay.",
+  "followup": "../requests5414-call11-suffix2048-cap1024/proposal.json",
+  "autodebug": "../../swe85-loop-branch-investigation/problem.txt"
+}

@@ -1,0 +1,17 @@
+{
+  "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bf16-hifi4-seven-case-candidate/candidate-cases.json": "c6833471127da15aa28a4c87901d7beac9f3e1b51b85dd6379d163f0a796f5f6",
+  "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bf16-hifi4-seven-case-candidate/fixtures/anomaly.pytest-dev__pytest-5787.call65.onset.cap2048.seed42.private.json": "346ea388c2e71b88d415e67331f6f1c5de4ee428e641e5159adccef0af382331",
+  "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bf16-hifi4-seven-case-candidate/fixtures/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.cap2048.seed43.private.json": "f09f5493bf5e6d1f1bec5f5ce7e4273d0ec9352de1f85ffe780ef897063dec98",
+  "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bf16-hifi4-seven-case-candidate/fixtures/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap1024.seed42.private.json": "b4253957ad89651510a0e39ea3aa49373926c9ff2d963a4ee381047b400efac8",
+  "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bf16-hifi4-seven-case-candidate/fixtures/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap1024.seed44.private.json": "7c5da63d138e6afa7b539dfed909ee1e8a937c2e168d587023c4421333688780",
+  "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bf16-hifi4-seven-case-candidate/fixtures/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap2048.seed43.private.json": "e4c5081386cd785ccc1216dda888b4c54cc165beb80b035e96daf69c2f119718",
+  "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bf16-hifi4-seven-case-candidate/fixtures/anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.cap1024.seed44.private.json": "14b67b9fcb8ad382713dff99ccb47922690bc5be90131e3adc25a195f3e712d3",
+  "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bf16-hifi4-seven-case-candidate/fixtures/sympy__sympy-14711.call1.onset.private.json": "30151a4ad6ba3f457477b50bbb7d8817b24944e8e57242c10b1f494f4697d6e5",
+  "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bf16-hifi4-seven-case-candidate/forecast.json": "26cd68fb0c4c11486638fd4a30ce7407df82f87453ba8f068a0ef43398c21964",
+  "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down_bfp8_lofi_build_kwargs.json": "a46a273d65b6c1a1b4674250cacb3a59a718a4e1650e17efcf2771d379ac6c20",
+  "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down_bfp8_lofi_precision.json": "dfa8406fdbd93dd5f2b29e14b458eff3480ccbf651caedaf011f4473d1e87c83",
+  "models/autoports/google_gemma_4_31b_it/tools/precision_repro_batch.py": "172f5a1dd7a7403847e47b966ae79c306163650a60211418c7c195794ec5c125",
+  "models/autoports/google_gemma_4_31b_it/tt/model.py": "c65ed33bb175f63603946eea561a2623cad0b70521428bdf888bd9445457a01e",
+  "models/autoports/google_gemma_4_31b_it/tt/multichip_decoder.py": "c7a4cb14edfe46649b904c0fbb6f3fec14e123e194b31950adfa76c224d201f6",
+  "models/autoports/google_gemma_4_31b_it/tt/precision.py": "2f223a118fe713677b9ce4fb3beb2f563e26af56ef45a98b2e03fad1e25664a9"
+}

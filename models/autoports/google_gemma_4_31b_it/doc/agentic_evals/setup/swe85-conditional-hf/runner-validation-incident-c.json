@@ -1,0 +1,216 @@
+{
+  "status": "factual_incident_audit_candidate_no_score_decision",
+  "scope": "Read-only reconstruction of three mistaken HF runner invocations, their process observations, persisted partial output, and concurrent P2 state. No rerun or device command.",
+  "cause": "The host validation helper called each saved execution command verbatim. Those command arrays do not include --validate-only. The runner source returns safely at line 67 only when that flag is present; without it, execution continues to the torch/transformers/reference load path at lines 72 onward.",
+  "attempts": [
+    {
+      "attempt": "A_all_groups_first",
+      "group_order": 1,
+      "processes": [
+        479509,
+        479510
+      ],
+      "exact_argv": [
+        "timeout",
+        "3600",
+        "env",
+        "HF_HUB_OFFLINE=1",
+        "HF_DATASETS_OFFLINE=1",
+        "OMP_NUM_THREADS=16",
+        "MKL_NUM_THREADS=16",
+        "OPENBLAS_NUM_THREADS=16",
+        "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tools/precision_repro_hf.py",
+        "--cases",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-candidate/native-positive-candidates-seed42-suffix512.json",
+        "--output",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-candidate/results/seed42-suffix512",
+        "--tokens",
+        "512",
+        "--seeds",
+        "42",
+        "--prefill-chunk",
+        "512",
+        "--compare-dir",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/served",
+        "--compare-dir",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/full"
+      ],
+      "validate_only_flag_present": false,
+      "outer_behavior": "A Python wrapper iterated commands.json groups and used subprocess.run(argv, stdout=PIPE, stderr=PIPE) without appending --validate-only.",
+      "observed": {
+        "absolute_start_utc": null,
+        "absolute_end_utc": null,
+        "elapsed_snapshots_seconds": [
+          69,
+          79,
+          99,
+          102
+        ],
+        "observed_cpu_percent": 1073,
+        "observed_mem_percent": 23.8,
+        "observed_rss_kib": 62391092,
+        "terminated_by": "agent SIGTERM to timeout and child after noticing prolonged CPU/RSS; exact wall timestamp not preserved",
+        "stdout_stderr": "Captured by wrapper pipes and not persisted; no completed return/output was emitted."
+      },
+      "outcome": "attempted actual group1 inference path; weight-load completion and generated tokens are not independently established for this attempt"
+    },
+    {
+      "attempt": "B_all_groups_unbuffered",
+      "group_order": 1,
+      "processes": [
+        479586,
+        479587
+      ],
+      "exact_argv": [
+        "timeout",
+        "3600",
+        "env",
+        "HF_HUB_OFFLINE=1",
+        "HF_DATASETS_OFFLINE=1",
+        "OMP_NUM_THREADS=16",
+        "MKL_NUM_THREADS=16",
+        "OPENBLAS_NUM_THREADS=16",
+        "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tools/precision_repro_hf.py",
+        "--cases",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-candidate/native-positive-candidates-seed42-suffix512.json",
+        "--output",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-candidate/results/seed42-suffix512",
+        "--tokens",
+        "512",
+        "--seeds",
+        "42",
+        "--prefill-chunk",
+        "512",
+        "--compare-dir",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/served",
+        "--compare-dir",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/full"
+      ],
+      "validate_only_flag_present": false,
+      "outer_behavior": "Unbuffered Python wrapper iterated commands.json groups and used subprocess.run(argv, stdout=PIPE, stderr=PIPE) without appending --validate-only; it printed \"validating 1\" before waiting.",
+      "observed": {
+        "start_source": "ps lstart snapshot",
+        "absolute_end_utc": "2026-11-15T06:59:19.833Z",
+        "end_source": "root-recorded stop time epoch 1794725959.833",
+        "observed_cpu_percent": 995,
+        "observed_rss_kib": 62373860,
+        "observed_threads": 62,
+        "stopped_by": "root after live-process discovery",
+        "start_time_observations": {
+          "ps_lstart_utc": "2026-11-15T06:51:41Z",
+          "proc_stat_plus_btime_utc": "2026-11-15T06:50:32.140Z",
+          "discrepancy": "The two start-time observations differ by about69 seconds; the timebase discrepancy is unknown. Preserve both; neither is selected as the exact start."
+        },
+        "root_stop_utc": "2026-11-15T06:59:19.833Z",
+        "elapsed_lower_bound_seconds_from_proc_stat_btime": 527.693,
+        "duration_note": "Do not report a single exact duration. Root captured a 527.693-second lower bound from /proc stat+btime; the independent ps lstart observation conflicts, so exact duration remains unresolved."
+      },
+      "outcome": "The process was observed running the group1 command without --validate-only at high CPU/RSS. The saved partial report proves that CPU BF16 inference occurred during this incident, but this artifact cannot be assigned conclusively to attempt B rather than overlapping attempt A; whether this particular process completed prefill/teacher forcing is not independently established."
+    },
+    {
+      "attempt": "C_group8_only",
+      "group_order": 8,
+      "processes": [
+        479737,
+        479738
+      ],
+      "exact_argv": [
+        "timeout",
+        "7200",
+        "env",
+        "HF_HUB_OFFLINE=1",
+        "HF_DATASETS_OFFLINE=1",
+        "OMP_NUM_THREADS=16",
+        "MKL_NUM_THREADS=16",
+        "OPENBLAS_NUM_THREADS=16",
+        "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tools/precision_repro_hf.py",
+        "--cases",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-candidate/native-positive-candidates-seed43-suffix8192.json",
+        "--output",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-candidate/results/call91-cap8192-seed43",
+        "--tokens",
+        "512",
+        "--seeds",
+        "43",
+        "--prefill-chunk",
+        "512",
+        "--compare-dir",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-canonicalprefix-suffix8192-p1pinfix-candidate/runs/served",
+        "--compare-dir",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-canonicalprefix-suffix8192-p1pinfix-candidate/runs/full"
+      ],
+      "validate_only_flag_present": false,
+      "outer_behavior": "One-group Python wrapper used subprocess.run(saved argv, stdout=PIPE, stderr=PIPE) without appending --validate-only.",
+      "observed": {
+        "absolute_start_utc": null,
+        "absolute_end_utc": null,
+        "elapsed_snapshots_seconds": [
+          163,
+          258
+        ],
+        "observed_cpu_percent_at_163s": 639,
+        "observed_mem_percent_at_163s": 23.7,
+        "interruption": "Ctrl-C raised KeyboardInterrupt in the outer wrapper after about258s; child termination time is unknown. No output directory/file was present at the later audit."
+      },
+      "outcome": "actual command would take the model-load path; whether weight loading or prefill completed is unknown; no persisted inference output found"
+    }
+  ],
+  "persisted_partial_artifact": {
+    "path": "setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-candidate/results/seed42-suffix512/anomaly.requests2931.call20.canonicalprefix.optional-suffix512.hf.private.json",
+    "sha256": "c0fcae77a6dc66cbbb4018dcb76da0dc51aa2a2eeaf67d7c5e2baf7d6e381dcc",
+    "mtime_utc": "2026-11-15T06:51:50.890895+00:00",
+    "status": "partial",
+    "device": "cpu",
+    "weights_dtype": "bfloat16",
+    "prompt_tokens": 512,
+    "teacher_forced_position_count": 64,
+    "free_run_result_count": 0,
+    "interpretation": "Partial result artifact; retain unchanged as incident evidence, do not use as a completed control or score.",
+    "attribution": "The report mtime falls within the combined A/B incident interval. Because A and B used the same group1 output path and no pre-attempt file hash was captured, do not attribute this partial artifact to one specific attempt."
+  },
+  "p2_overlap": {
+    "p2_path": "setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal",
+    "p2_launch_start_unix": 1794724752.719586,
+    "p2_launch_start_utc": "2026-11-15T06:39:12.719586Z",
+    "p2_command": [
+      "timeout",
+      "7200",
+      "env",
+      "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+      "READINESS_TRACE_REGION_SIZE=134217728",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tools.precision_repro_batch",
+      "--cases",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-with-cap4096-pending-v-closure/candidate-cases.json",
+      "--build-kwargs-file",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/head_bf16_hifi4_build_kwargs.json",
+      "--output-dir",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/runs/head_bf16_hifi4"
+    ],
+    "p2_completion_file_present": false,
+    "p2_process_observed_running_during_audit": true,
+    "overlap": "P2 was already running before the first runner attempt and remained running at the root stop observation. Attempt B overlaps P2; exact runner start and duration are unresolved due conflicting process timebases. Attempts A/C absolute intervals were not captured. The partial CPU inference occurred during the incident while P2 was running; P2 host wall/dispatch timing is potentially contaminated, with impact left for root adjudication."
+  },
+  "corrected_root_validation": {
+    "evidence": "Root reports group8 command with --validate-only appended, timeout60, return code0, elapsed0.0832s. This is separate from the mistaken attempts and validates fixture structure only."
+  },
+  "residual_process_check": {
+    "method": "Read-only scan of /proc cmdline/status at audit time for precision_repro_hf.py and run_expanded_after_predecessors.py; no ps/device query used for this final check.",
+    "matching_processes": []
+  },
+  "logs": "The wrapper captured stdout/stderr into pipes and did not write a log file. Attempt A/B wrappers had not returned; attempt C wrapper was interrupted. The partial JSON above is the only saved execution artifact located.",
+  "limitations": [
+    "The output file timestamp is a filesystem observation; it is not sufficient to attribute earlier overwritten content to a specific attempt.",
+    "No model-load completion or free-run generation is claimed for A/C.",
+    "Attempt B proves CPU BF16 reference inference and teacher forcing concurrent with P2; it has no score/adjudication value.",
+    "Attempt B has conflicting start observations: ps lstart 06:51:41Z versus /proc stat+btime 06:50:32.140Z, about69s apart. Root-provided /proc timing supports a 527.693s elapsed lower bound to its stop time; exact duration is unresolved.",
+    "The saved partial report is proven to be from CPU BF16 inference during the incident, but its attribution between overlapping A/B attempts is uncertain because both wrote to the same path and no prior file hash was recorded."
+  ]
+}

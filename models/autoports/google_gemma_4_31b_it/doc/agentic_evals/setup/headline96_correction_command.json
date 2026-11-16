@@ -1,0 +1,33 @@
+{
+  "status": "prepared_not_executed",
+  "argv": [
+    "python_env/bin/python",
+    "models/autoports/google_gemma_4_31b_it/tools/correct_agentic_headline.py",
+    "--measurement",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/head-bfp8-rates/measurement",
+    "--correction",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/head-bfp8-rates/headline96-correction",
+    "--original-rates",
+    "models/autoports/google_gemma_4_31b_it/doc/benchmark/serving_rates.json",
+    "--server-identity",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/head-bfp8-rates/server/perf-b32-server.json",
+    "--expected-precision",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/head_bfp8_precision_config.json",
+    "--stop-file",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/head-bfp8-rates/STOP",
+    "--budget-seconds",
+    "1200"
+  ],
+  "only_row": "b32-c32-i4096-gpqa",
+  "measured_requests": 96,
+  "warmup_requests": 32,
+  "dataset_seed": 4132,
+  "warmup_seed": 4133,
+  "original_duration_seconds": 109.46097369189374,
+  "predicted_measured_duration_range_seconds": [
+    98.51487632270437,
+    125.8801197456778
+  ],
+  "prediction_note": "Duration0.90\u20131.15x prior for matching96-request population; no warmup in this duration. Original decode0.90\u20131.05 and prefill0.85\u20131.05 ranges retained.",
+  "execution_guard": "15-row run must be completed; preserves pre-correction reports and32-request raw row; validates original raw lengths/counts and seeds; correction gets phase collection then replaces only canonical headline and refreshes policy/config reports."
+}

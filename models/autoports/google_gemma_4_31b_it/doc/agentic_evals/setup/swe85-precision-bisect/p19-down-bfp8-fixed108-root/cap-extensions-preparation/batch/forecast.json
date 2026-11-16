@@ -1,0 +1,134 @@
+{
+  "status": "host_forecast_only_not_admitted",
+  "anchors": [
+    {
+      "source_index": 10,
+      "name": "anomaly.matplotlib__matplotlib-20488.call86.onset.seed43.cap512",
+      "prompt_tokens": 46118,
+      "prior_generated_tokens": 256,
+      "new_cap": 512,
+      "seed": 43,
+      "prior_total_free_trial_wall_including_prefill_s": 38.54,
+      "prior_decode_tokens": 255,
+      "prior_decode_wall_s": 14.89,
+      "prior_decode_tokens_per_s": 17.12,
+      "inferred_prefill_plus_first_token_s": 23.65,
+      "extension_prefill_plus_first_token_estimate_s": {
+        "low": 20.1,
+        "point": 23.65,
+        "high": 31.92
+      },
+      "extension_decode_estimate_s": {
+        "low": 30.8,
+        "point": 33.49,
+        "high": 40.37
+      }
+    },
+    {
+      "source_index": 49,
+      "name": "anomaly.sphinx-doc__sphinx-10323.call57.onset.seed43.cap512",
+      "prompt_tokens": 58695,
+      "prior_generated_tokens": 256,
+      "new_cap": 512,
+      "seed": 43,
+      "prior_total_free_trial_wall_including_prefill_s": 48.65,
+      "prior_decode_tokens": 255,
+      "prior_decode_wall_s": 15.22,
+      "prior_decode_tokens_per_s": 16.75,
+      "inferred_prefill_plus_first_token_s": 33.42,
+      "extension_prefill_plus_first_token_estimate_s": {
+        "low": 28.41,
+        "point": 33.42,
+        "high": 45.12
+      },
+      "extension_decode_estimate_s": {
+        "low": 31.48,
+        "point": 34.23,
+        "high": 41.26
+      }
+    },
+    {
+      "source_index": 66,
+      "name": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed42.cap2048",
+      "prompt_tokens": 76441,
+      "prior_generated_tokens": 1024,
+      "new_cap": 2048,
+      "seed": 42,
+      "prior_total_free_trial_wall_including_prefill_s": 113.09,
+      "prior_decode_tokens": 1023,
+      "prior_decode_wall_s": 63.01,
+      "prior_decode_tokens_per_s": 16.24,
+      "inferred_prefill_plus_first_token_s": 50.08,
+      "extension_prefill_plus_first_token_estimate_s": {
+        "low": 42.57,
+        "point": 50.08,
+        "high": 67.61
+      },
+      "extension_decode_estimate_s": {
+        "low": 136.23,
+        "point": 161.46,
+        "high": 208.13
+      }
+    },
+    {
+      "source_index": 74,
+      "name": "anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.seed44.cap2048",
+      "prompt_tokens": 47548,
+      "prior_generated_tokens": 1024,
+      "new_cap": 2048,
+      "seed": 44,
+      "prior_total_free_trial_wall_including_prefill_s": 84.65,
+      "prior_decode_tokens": 1023,
+      "prior_decode_wall_s": 59.93,
+      "prior_decode_tokens_per_s": 17.07,
+      "inferred_prefill_plus_first_token_s": 24.72,
+      "extension_prefill_plus_first_token_estimate_s": {
+        "low": 21.02,
+        "point": 24.72,
+        "high": 33.38
+      },
+      "extension_decode_estimate_s": {
+        "low": 129.57,
+        "point": 153.57,
+        "high": 197.96
+      }
+    },
+    {
+      "source_index": 106,
+      "name": "anomaly.xarray7233-call1.canonicalprefix.seed43.cap1024",
+      "prompt_tokens": 1578,
+      "prior_generated_tokens": 512,
+      "new_cap": 1024,
+      "seed": 43,
+      "prior_total_free_trial_wall_including_prefill_s": 27.98,
+      "prior_decode_tokens": 511,
+      "prior_decode_wall_s": 27.52,
+      "prior_decode_tokens_per_s": 18.57,
+      "inferred_prefill_plus_first_token_s": 0.46,
+      "extension_prefill_plus_first_token_estimate_s": {
+        "low": 0.39,
+        "point": 0.46,
+        "high": 0.62
+      },
+      "extension_decode_estimate_s": {
+        "low": 57.91,
+        "point": 65.08,
+        "high": 79.97
+      }
+    }
+  ],
+  "model_setup_load_s": {
+    "measured_p19": 101.04163398081437,
+    "low": 101.04163398081437,
+    "point": 101.04163398081437,
+    "high": 125.0
+  },
+  "aggregate_s": {
+    "low": 620,
+    "point": 711,
+    "high": 916
+  },
+  "timeout_seconds": 1800,
+  "timeout_margin_over_high_seconds": 884,
+  "basis": "For each row, inferred prompt/first-token residual = original P19 trial wall minus measured decode wall; same prompt, seed, P19 precision and policy. Decode projection scales the measured row rate to the extended cap, with context-growth factors low/point/high +3/12/35% through512, +5/18/45% through1024, +8/28/65% through2048. Add the measured P19 one-model build/load of101.04s (125s high) and report overhead. Host planning estimate only."
+}

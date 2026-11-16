@@ -1,0 +1,139 @@
+{
+  "rows": [
+    {
+      "job": "anomaly.sympy__sympy-13480.call1.onset",
+      "mode": "full",
+      "seed": 42,
+      "verdict": "normal",
+      "evidence": "Prefix ends `I will start by creating a reproduction script to confirm the issue.`. `$.free_running[0].text` is a complete `<|tool_call>call:bash{command:<|\"|>...` bash tool call; its command writes and runs a focused `coth(log(tan(x)))` reproducer. Parser: one valid bash command, generated-only visible content 0, pseudo-call false. Native motif `call:bash` is visible assistant serialization, while this output uses the canonical tool marker and has no malformed visible pseudo-tool.",
+      "confidence": 0.87,
+      "cap_notes": "Complete (150/207/199 tokens of 256); tool response boundary present."
+    },
+    {
+      "job": "anomaly.sympy__sympy-13480.call1.onset",
+      "mode": "full",
+      "seed": 43,
+      "verdict": "normal",
+      "evidence": "Prefix ends `I will start by creating a reproduction script to confirm the issue.`. `$.free_running[1].text` is a complete `<channel|><|tool_call>call:bash{com...` bash tool call; its command writes and runs a focused `coth(log(tan(x)))` reproducer. Parser: one valid bash command, generated-only visible content 0, pseudo-call false. Native motif `call:bash` is visible assistant serialization, while this output uses the canonical tool marker and has no malformed visible pseudo-tool.",
+      "confidence": 0.87,
+      "cap_notes": "Complete (150/207/199 tokens of 256); tool response boundary present."
+    },
+    {
+      "job": "anomaly.sympy__sympy-13480.call1.onset",
+      "mode": "full",
+      "seed": 44,
+      "verdict": "normal",
+      "evidence": "Prefix ends `I will start by creating a reproduction script to confirm the issue.`. `$.free_running[2].text` is a complete `<|tool_call>call:bash{command:<|\"|>...` bash tool call; its command writes and runs a focused `coth(log(tan(x)))` reproducer. Parser: one valid bash command, generated-only visible content 0, pseudo-call false. Native motif `call:bash` is visible assistant serialization, while this output uses the canonical tool marker and has no malformed visible pseudo-tool.",
+      "confidence": 0.87,
+      "cap_notes": "Complete (150/207/199 tokens of 256); tool response boundary present."
+    },
+    {
+      "job": "anomaly.sympy__sympy-13551.call1.onset",
+      "mode": "full",
+      "seed": 42,
+      "verdict": "normal",
+      "evidence": "Prefix ends `I will start by creating a reproduction script to confirm the bug.`. `$.free_running[0].text` is a complete bash call whose command writes/runs a Product substitution reproducer for n=2 and prints the expected value. Parser reports valid bash, generated-only visible content 0, pseudo-call false; canonical marker/arguments do not reproduce native visible-assistant pseudo-tool text.",
+      "confidence": 0.86,
+      "cap_notes": "Complete (221/256 tokens); tool response boundary present."
+    },
+    {
+      "job": "anomaly.sympy__sympy-13551.call1.onset",
+      "mode": "full",
+      "seed": 43,
+      "verdict": "inconclusive",
+      "evidence": "Prefix ends `I will start by creating a reproduction script to confirm the bug.`. `$.free_running[1].text` begins `<channel|><|tool_call>call:bash{command:<|\"|>cat <<'EOF' > reproduce_i` and continues with a product reproducer, but ends at ` {expected_val}\")\n\nif p_subs` before the command finishes; parser extracts a bash call, yet tool-close is absent. The visible canonical marker is not the native malformed assistant pseudo-tool motif. Completion is unresolved at cap.",
+      "confidence": 0.98,
+      "cap_notes": "Reached 256-token cap; no tool-close or response-boundary token; command/heredoc is incomplete. Do not treat parsed prefix as normal."
+    },
+    {
+      "job": "anomaly.sympy__sympy-13551.call1.onset",
+      "mode": "full",
+      "seed": 44,
+      "verdict": "normal",
+      "evidence": "Prefix ends `I will start by creating a reproduction script to confirm the bug.`. `$.free_running[2].text` is a complete bash call whose command writes/runs a Product substitution reproducer for n=2 and prints the expected value. Parser reports valid bash, generated-only visible content 0, pseudo-call false; canonical marker/arguments do not reproduce native visible-assistant pseudo-tool text.",
+      "confidence": 0.86,
+      "cap_notes": "Complete (235/256 tokens); tool response boundary present."
+    },
+    {
+      "job": "anomaly.psf__requests-1921.call1.onset",
+      "mode": "full",
+      "seed": 42,
+      "verdict": "normal",
+      "evidence": "Prefix ends `I will start by exploring the current directory to understand the project structure.`. `$.free_running[0].text` is exactly `<|tool_call>call:bash{command:<|\"|>ls -R<|\"|>}<tool_call|><|tool_response>`: a short, complete canonical bash call to list the repository recursively. Parser reports valid bash, generated-only visible content 0, pseudo-call false. It contains no visible `GetAll-bash`; the native motif is not reproduced.",
+      "confidence": 0.9,
+      "cap_notes": "Complete (15/256 tokens); tool response boundary present."
+    },
+    {
+      "job": "anomaly.psf__requests-1921.call1.onset",
+      "mode": "full",
+      "seed": 43,
+      "verdict": "normal",
+      "evidence": "Prefix ends `I will start by exploring the current directory to understand the project structure.`. `$.free_running[1].text` is exactly `<|tool_call>call:bash{command:<|\"|>ls -R<|\"|>}<tool_call|><|tool_response>`: a short, complete canonical bash call to list the repository recursively. Parser reports valid bash, generated-only visible content 0, pseudo-call false. It contains no visible `GetAll-bash`; the native motif is not reproduced.",
+      "confidence": 0.9,
+      "cap_notes": "Complete (15/256 tokens); tool response boundary present."
+    },
+    {
+      "job": "anomaly.psf__requests-1921.call1.onset",
+      "mode": "full",
+      "seed": 44,
+      "verdict": "normal",
+      "evidence": "Prefix ends `I will start by exploring the current directory to understand the project structure.`. `$.free_running[2].text` is exactly `<channel|><|tool_call>call:bash{command:<|\"|>ls -R<|\"|>}<tool_call|><|tool_response>`: a short, complete canonical bash call to list the repository recursively. Parser reports valid bash, generated-only visible content 0, pseudo-call false. It contains no visible `GetAll-bash`; the native motif is not reproduced.",
+      "confidence": 0.9,
+      "cap_notes": "Complete (16/256 tokens); tool response boundary present."
+    },
+    {
+      "job": "anomaly.sympy__sympy-18763.call1.onset",
+      "mode": "full",
+      "seed": 42,
+      "verdict": "normal",
+      "evidence": "Prefix ends `I will start by creating a reproduction script to confirm the issue.`. `$.free_running[0].text` is a complete canonical bash call creating/running a focused Subs LaTeX reproducer; this seed's command prints the expression and expected parenthesized form. Parser reports valid bash, generated-only visible content 0, pseudo-call false; no malformed visible pseudo-tool appears.",
+      "confidence": 0.85,
+      "cap_notes": "Complete (161/256 tokens); tool response boundary present."
+    },
+    {
+      "job": "anomaly.sympy__sympy-18763.call1.onset",
+      "mode": "full",
+      "seed": 43,
+      "verdict": "normal",
+      "evidence": "Prefix ends `I will start by creating a reproduction script to confirm the issue.`. `$.free_running[1].text` is a complete canonical bash call creating/running a focused Subs LaTeX reproducer; this seed's command checks for parenthesized LaTeX. Parser reports valid bash, generated-only visible content 0, pseudo-call false; no malformed visible pseudo-tool appears.",
+      "confidence": 0.85,
+      "cap_notes": "Complete (182/256 tokens); tool response boundary present."
+    },
+    {
+      "job": "anomaly.sympy__sympy-18763.call1.onset",
+      "mode": "full",
+      "seed": 44,
+      "verdict": "normal",
+      "evidence": "Prefix ends `I will start by creating a reproduction script to confirm the issue.`. `$.free_running[2].text` is a complete canonical bash call creating/running a focused Subs LaTeX reproducer; this seed's command compares the expected output. Parser reports valid bash, generated-only visible content 0, pseudo-call false; no malformed visible pseudo-tool appears.",
+      "confidence": 0.85,
+      "cap_notes": "Complete (179/256 tokens); tool response boundary present."
+    },
+    {
+      "job": "anomaly.pylint-dev__pylint-4551.call1.onset",
+      "mode": "full",
+      "seed": 42,
+      "verdict": "normal",
+      "evidence": "Prefix ends `I need to understand the structure of the repository and where `pyreverse` is located.`. `$.free_running[0].text` is the complete canonical bash command `<channel|><|tool_call>call:bash{command:<|\"|>ls -R<|\"|>}<tool_call|><|tool_response>`. Parser reports valid bash, generated-only visible content 0 and pseudo-call false. Conditioning-aware audit flags inherited literal `thought` at the prefix's reasoning/visible boundary, but generated-only output is clean; it is not new generated text. No visible `GetAll-bash` appears.",
+      "confidence": 0.84,
+      "cap_notes": "Complete (16/256 tokens); tool response boundary present."
+    },
+    {
+      "job": "anomaly.pylint-dev__pylint-4551.call1.onset",
+      "mode": "full",
+      "seed": 43,
+      "verdict": "normal",
+      "evidence": "Prefix ends `I need to understand the structure of the repository and where `pyreverse` is located.`. `$.free_running[1].text` is the complete canonical bash command `<channel|><|tool_call>call:bash{command:<|\"|>ls -R | grep pyreverse<|\"|>}<tool_call|><|tool_response>`. Parser reports valid bash, generated-only visible content 0 and pseudo-call false. Conditioning-aware audit flags inherited literal `thought` at the prefix's reasoning/visible boundary, but generated-only output is clean; it is not new generated text. No visible `GetAll-bash` appears.",
+      "confidence": 0.84,
+      "cap_notes": "Complete (20/256 tokens); tool response boundary present."
+    },
+    {
+      "job": "anomaly.pylint-dev__pylint-4551.call1.onset",
+      "mode": "full",
+      "seed": 44,
+      "verdict": "normal",
+      "evidence": "Prefix ends `I need to understand the structure of the repository and where `pyreverse` is located.`. `$.free_running[2].text` is the complete canonical bash command `<channel|><|tool_call>call:bash{command:<|\"|>ls -la<|\"|>}<tool_call|><|tool_response>`. Parser reports valid bash, generated-only visible content 0 and pseudo-call false. Conditioning-aware audit flags inherited literal `thought` at the prefix's reasoning/visible boundary, but generated-only output is clean; it is not new generated text. No visible `GetAll-bash` appears.",
+      "confidence": 0.84,
+      "cap_notes": "Complete (16/256 tokens); tool response boundary present."
+    }
+  ]
+}

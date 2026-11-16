@@ -1,0 +1,29 @@
+{
+  "task": "sympy__sympy-14711",
+  "reviewer": "coordinator",
+  "native_reward": 1.0,
+  "counted_reward": 1.0,
+  "cause": "pass",
+  "anomaly": true,
+  "analysis": "Vector addition handles other==0 at call43/native86, fixing sum of vectors with zero. Official verifier passes. Root reviewed all54commands: only mpmath dependency installed; /tmp reproduction alone does not fetch targetcode. Python collections compatibility edits preserved. All 54 calls completed without caps or discarded responses. Separately, the supplemental audit identified a localized protocol anomaly in call 1: visible “GetAll-bash” text preceded a valid structured bash tool call. Raw1/native2/chatcmpl-9e6a10ba411fd15d reasoning ends literal thought and visible GetAll-bash precedes valid toolcall. Localized stray protocol anomaly; final valid patch and official reward1 retained.",
+  "network_audit": {
+    "declared_policy": "public",
+    "fetched_solution": false,
+    "basis": "No targetrelease or upstreamsolution download; mpmath only."
+  },
+  "digest": {
+    "calls": 54,
+    "capped": 0,
+    "flagged": 0,
+    "mapping_issues": []
+  },
+  "evidence": [
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe-jobs/swe-extended85-head-bfp8/sympy__sympy-14711__TFMtLWT/agent/mini-swe-agent.trajectory.json",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe-jobs/swe-extended85-head-bfp8/sympy__sympy-14711__TFMtLWT/verifier/test-stdout.txt"
+  ],
+  "at_unix": 1794691505.3768044,
+  "anomaly_calls": [
+    1
+  ],
+  "supplemental_audit": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-extended85-head-bfp8/reply-audit83.json"
+}

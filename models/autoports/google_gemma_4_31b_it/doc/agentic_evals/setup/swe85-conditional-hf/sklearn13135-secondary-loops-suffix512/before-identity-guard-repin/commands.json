@@ -1,0 +1,152 @@
+{
+  "status": "candidate_only_not_admitted_no_launch",
+  "execution_authority": "root_only_after_admission",
+  "source_integrity": {
+    "path": "source-integrity.json",
+    "sha256": "cf5efba0647800b7b401e2d3f1be87e352b7b479b06e96ccac38bcd3eec6f789"
+  },
+  "runner": "models/autoports/google_gemma_4_31b_it/tools/precision_repro_hf.py",
+  "runner_sha256": "aafe67c88bb5a1eb38b8718570bbddd5749e2a9ecbb9dd19cdb100a49572c03e",
+  "model_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+  "offline": true,
+  "sampling": {
+    "temperature": 1.0,
+    "top_p": 0.95,
+    "top_k": 20,
+    "seeds": [
+      42,
+      43
+    ]
+  },
+  "workload": {
+    "prompt_suffix_tokens": 512,
+    "chosen_teacher_forcing_positions": 64,
+    "free_generation_tokens": 512,
+    "trials_per_seed": 1
+  },
+  "groups": [
+    {
+      "serial_order": 1,
+      "seed_group": 42,
+      "manifest": "secondary-loop-seed42.json",
+      "manifest_sha256": "e9ef583e1c26d77bd0366884bea508151df2f13498e9bc7e41fd378a571f8621",
+      "case_count": 1,
+      "case_names": [
+        "anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix512.seed42"
+      ],
+      "output_dir": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-secondary-loops-suffix512/results/seed42-suffix512",
+      "compare_dirs": [
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-suffix512-head-bfp8-correction/runs",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/runs/full"
+      ],
+      "runner_sha256": "aafe67c88bb5a1eb38b8718570bbddd5749e2a9ecbb9dd19cdb100a49572c03e",
+      "timeout_seconds": 3600,
+      "load_model_once_for_group": true,
+      "command": [
+        "timeout",
+        "3600",
+        "env",
+        "HF_HUB_OFFLINE=1",
+        "HF_DATASETS_OFFLINE=1",
+        "OMP_NUM_THREADS=16",
+        "MKL_NUM_THREADS=16",
+        "OPENBLAS_NUM_THREADS=16",
+        "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tools/precision_repro_hf.py",
+        "--cases",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-secondary-loops-suffix512/secondary-loop-seed42.json",
+        "--output",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-secondary-loops-suffix512/results/seed42-suffix512",
+        "--tokens",
+        "512",
+        "--seeds",
+        "42",
+        "--prefill-chunk",
+        "512",
+        "--compare-dir",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-suffix512-head-bfp8-correction/runs",
+        "--compare-dir",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/runs/full"
+      ]
+    },
+    {
+      "serial_order": 2,
+      "seed_group": 43,
+      "manifest": "secondary-loop-seed43.json",
+      "manifest_sha256": "aa1e3a75676a80f0754db46a90e3e4d8f05c8589f156496108ff9551b742e85b",
+      "case_count": 1,
+      "case_names": [
+        "anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix512.seed43"
+      ],
+      "output_dir": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-secondary-loops-suffix512/results/seed43-suffix512",
+      "compare_dirs": [
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-suffix512-head-bfp8-correction/runs",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/runs/full"
+      ],
+      "runner_sha256": "aafe67c88bb5a1eb38b8718570bbddd5749e2a9ecbb9dd19cdb100a49572c03e",
+      "timeout_seconds": 3600,
+      "load_model_once_for_group": true,
+      "command": [
+        "timeout",
+        "3600",
+        "env",
+        "HF_HUB_OFFLINE=1",
+        "HF_DATASETS_OFFLINE=1",
+        "OMP_NUM_THREADS=16",
+        "MKL_NUM_THREADS=16",
+        "OPENBLAS_NUM_THREADS=16",
+        "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tools/precision_repro_hf.py",
+        "--cases",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-secondary-loops-suffix512/secondary-loop-seed43.json",
+        "--output",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-secondary-loops-suffix512/results/seed43-suffix512",
+        "--tokens",
+        "512",
+        "--seeds",
+        "43",
+        "--prefill-chunk",
+        "512",
+        "--compare-dir",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-suffix512-head-bfp8-correction/runs",
+        "--compare-dir",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/runs/full"
+      ]
+    }
+  ],
+  "serial_gates": [
+    "Root must admit this exact package before any command is run.",
+    "No TT queue or other HF process may overlap; root owns sequencing and preflight.",
+    "Run group 2 only after group 1 has completed and its forecast has been reviewed; stop for root review on a forecast miss.",
+    "Use the saved execution command only after explicit admission; these commands were not run for validation."
+  ],
+  "execution_driver": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-secondary-loops-suffix512/run_secondary_hf.py",
+  "execution_driver_sha256": "ae085eb32cb96a9e5b6f96ea4f41c284968a6999a7f59af46e97208e00d706d9",
+  "served_precision_source": {
+    "config_id": "stage12_head_bfp8_lofi",
+    "directory": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-suffix512-head-bfp8-correction",
+    "root_review_sha256": "777d1a61090d8b827c76fc905b1a884b58270613d976c5eed73d8a41c2319151",
+    "results_dir": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-suffix512-head-bfp8-correction/runs"
+  },
+  "serial_execution_policy": {
+    "mode": "one-group-per-invocation",
+    "group1": "Invoke explicitly with --execute --group 1 after root admission.",
+    "group2": "Separate invocation only after raw group1 output and forecast are reviewed by root and root-review-group-01.json is hash-bound to group1 launch/completion/results.",
+    "automatic_next_group": false
+  },
+  "group2_root_review": {
+    "file": "root-review-group-01.json",
+    "required_fields": {
+      "status": "root_reviewed_and_authorized_next_group",
+      "reviewer": "root",
+      "candidate_admission_sha256": "exact current admission.json SHA-256",
+      "launch_sha256": "exact launch-group-01.json SHA-256",
+      "completion_sha256": "exact completion-group-01.json SHA-256",
+      "forecast_gate": "hit or root_accepted_miss",
+      "result_sha256s": "exact completion result_sha256s map"
+    },
+    "if_forecast_miss": "forecast-miss-accepted-group-01.json must bind reviewer=root, accepted=true, exact completion SHA, elapsed seconds, [980,1780] range, admission SHA, and serial_order=1."
+  }
+}

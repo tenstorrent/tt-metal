@@ -1,0 +1,81 @@
+{
+  "status": "completed_served_only",
+  "exit_code": 0,
+  "regime": "CPUHF+Dockerbuilds concurrent; accuracy-only; rates invalid for performance ranking",
+  "cases": [
+    {
+      "prefix_tokens": 512,
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe-astropy-precision/short-prefix-candidates/served/astropy.second.suffix512.json",
+      "teacher_forced_positions": 64,
+      "trials": [
+        {
+          "seed": 42,
+          "generated_tokens": 1024,
+          "flag": true,
+          "tail_zlib_ratio": 0.033417402269861285,
+          "tail_distinct_chars": 28,
+          "semantic_verdict": "degenerate_loop",
+          "semantic_note": "Repeated promise to use super().__getattribute__, with malformed // argument near tail; no useful action emitted."
+        },
+        {
+          "seed": 43,
+          "generated_tokens": 1024,
+          "flag": true,
+          "tail_zlib_ratio": 0.02157894736842105,
+          "tail_distinct_chars": 12,
+          "semantic_verdict": "degenerate_loop",
+          "semantic_note": "Repeated Let us go phrase throughout; no progress."
+        },
+        {
+          "seed": 44,
+          "generated_tokens": 1024,
+          "flag": true,
+          "tail_zlib_ratio": 0.03221770409759149,
+          "tail_distinct_chars": 27,
+          "semantic_verdict": "degenerate_loop",
+          "semantic_note": "Repeated promise to use super().__getattribute__; no actual tool action."
+        }
+      ],
+      "flagged_trials": 3
+    },
+    {
+      "prefix_tokens": 2048,
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe-astropy-precision/short-prefix-candidates/served/astropy.second.suffix2048.json",
+      "teacher_forced_positions": 64,
+      "trials": [
+        {
+          "seed": 42,
+          "generated_tokens": 1024,
+          "flag": true,
+          "tail_zlib_ratio": 0.04035020936429387,
+          "tail_distinct_chars": 29,
+          "semantic_verdict": "degenerate_loop",
+          "semantic_note": "Repeated attribute-access phrase degrades to repeated Wait/I will fragments."
+        },
+        {
+          "seed": 43,
+          "generated_tokens": 1024,
+          "flag": true,
+          "tail_zlib_ratio": 0.02954971857410882,
+          "tail_distinct_chars": 22,
+          "semantic_verdict": "degenerate_loop",
+          "semantic_note": "Repeated promise to act degrades to repeated - l fragments."
+        },
+        {
+          "seed": 44,
+          "generated_tokens": 1024,
+          "flag": true,
+          "tail_zlib_ratio": 0.030534351145038167,
+          "tail_distinct_chars": 21,
+          "semantic_verdict": "degenerate_loop",
+          "semantic_note": "Repeated promises to act and Let us go fragments; no progress."
+        }
+      ],
+      "flagged_trials": 3
+    }
+  ],
+  "owners_after": [],
+  "MemAvailable_after": 113402204160,
+  "interpretation": "Both shortened prefixes reproduce degeneration in all3diagnostic seeds.512is shortest tested reproducing prefix. FullTT/HFcontrols still required; no sharedcause/modelbehavior conclusion yet.",
+  "full_precision_launched": false
+}

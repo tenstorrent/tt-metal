@@ -1,0 +1,74 @@
+{
+  "status": "completed_zero_exit_root_and_independent_review_parser_confirmed",
+  "rows": [
+    {
+      "reviewer": "root",
+      "reviewed_unix": 1794721621.7426567,
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-req5414-cap2048-after-v-candidate/runs/served/anomaly.psf__requests-5414.call10.onset.suffix2048.cap2048.seed42.json",
+      "result_sha256": "efcbee0bfb315b0fb30972031750383d8fb6ae620191d55a921cdad28226c156",
+      "mode": "served",
+      "seed": 42,
+      "generated_tokens": 2048,
+      "verdict": "other",
+      "reason": "Full raw text read: after initially distinct URL reasoning and a fenced bash block without tool call, settles into repeated four-paragraph cycle about modifying file, checking version, applying fix and raising InvalidURL. Affirmative semantic loop, not failure inferred from cap. Original caret burst absent.",
+      "repeated_phrase": "Wait, I'll first check the `requests` version.",
+      "phrase_occurrences": 17,
+      "prefix1024_exact": true,
+      "trace_counters_delta": {
+        "model_replays": 2047,
+        "sample_replays": 2047,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 2047,
+        "captures": 0
+      },
+      "score_changed": false
+    },
+    {
+      "reviewer": "root",
+      "reviewed_unix": 1794721789.8089669,
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-req5414-cap2048-after-v-candidate/runs/full/anomaly.psf__requests-5414.call11.onset.suffix2048.cap2048.seed42.json",
+      "result_sha256": "1ab58b7bb92a7ffdab0bede6798bdac95e0b2e309bbb923653e930cf89c4b466",
+      "mode": "full",
+      "seed": 42,
+      "generated_tokens": 1632,
+      "verdict": "other",
+      "reason": "Read complete raw continuation. Distinct URL/IDNA reasoning, then channel boundary and fenced bash echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT followed by turn terminator, lacking canonical tool-call macro. Missing-tool protocol anomaly; stock parser confirmation requested. No affirmative repetition, no cap-based failure, no executed fix or submission.",
+      "prefix1024_exact": true,
+      "trace_counters_delta": {
+        "model_replays": 1631,
+        "sample_replays": 1631,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 1631,
+        "captures": 0
+      },
+      "score_changed": false
+    }
+  ],
+  "score_changed": false,
+  "modes": {
+    "served": {
+      "wall_seconds": 217.3715841770172,
+      "hours": 0.060380995604727004,
+      "forecast_range_seconds": [
+        209.7909537725815,
+        291.1533418207314
+      ],
+      "forecast_hit": true
+    },
+    "full": {
+      "wall_seconds": 191.9089391231537,
+      "hours": 0.053308038645320466,
+      "forecast_range_seconds": [
+        190.93514277658699,
+        335.96399673337385
+      ],
+      "forecast_hit": true
+    }
+  },
+  "independent_triage": "triage-b.json",
+  "parser_evidence": "full-requests11-seed42-stock-parser-audit-b.json"
+}

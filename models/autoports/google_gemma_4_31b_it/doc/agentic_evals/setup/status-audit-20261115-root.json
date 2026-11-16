@@ -1,0 +1,13 @@
+{
+  "status": "root_applied_canonical_status_audit",
+  "reviewer": "root",
+  "utc": "2026-11-15T10:22:28.146333+00:00",
+  "audit_sha256": "d8b80bf9d15e2c93a0e5be9a8ee3a05d1db615bc53d62efb1a9e32d8ad32e3e0",
+  "corrections": [
+    "Three stale Sklearn512 statuses updated to completed/root-reviewed.",
+    "Stale unadmitted/noHFresult claim replaced with current8/9 cases.",
+    "Report independently reorganized into per-group result/forecast table; AB now described reviewed/prepared."
+  ],
+  "qualification": "Audit proposed wording stopped progressing was corrected to still progressing at cap512; no inference of a stall.",
+  "result_sha256": "0007a929d034dc695ae8aaebc32b005aabdf3177e125345ce464520989cd10dc"
+}

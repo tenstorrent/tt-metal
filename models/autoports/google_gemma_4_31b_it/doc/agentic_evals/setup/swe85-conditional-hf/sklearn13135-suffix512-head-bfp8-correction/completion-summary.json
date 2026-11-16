@@ -1,0 +1,54 @@
+{
+  "status": "completed_root_and_independent_triage_reconciled",
+  "rows": [
+    {
+      "seed": 42,
+      "verdict": "native",
+      "reason": "Immediate extra apostrophe-ve after completed Ive, repeated through cap",
+      "generated_tokens": 512,
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-suffix512-head-bfp8-correction/runs/anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix512.seed42.json",
+      "source_sha256": "cdba56f4ef6f96c94ca131c312f23ebcd615b72704f81353fbaee6ae93d48a49",
+      "runtime_policy": "stage12_head_bfp8_lofi",
+      "fixture_sha256": "5a7ba37c9bbe628df48ee771eda26ddae50445000e69c9afa32fcd662206767c"
+    },
+    {
+      "seed": 43,
+      "verdict": "other",
+      "reason": "Grammatical applied-fix phrase then repeated apostrophe-hyphen fragments through cap",
+      "generated_tokens": 512,
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-suffix512-head-bfp8-correction/runs/anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix512.seed43.json",
+      "source_sha256": "00cc018a2764f67350ba8503451209a16c4f42ad3010af0b4cb17bf392c93de4",
+      "runtime_policy": "stage12_head_bfp8_lofi",
+      "fixture_sha256": "cacc24dd02f9bcbc28aad63bc75ca93d1e0cfaccc45eeecc38958db676fa6d4d"
+    },
+    {
+      "seed": 44,
+      "verdict": "native",
+      "reason": "Immediate extra apostrophe-ve after completed Ive, repeated through cap",
+      "generated_tokens": 512,
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-suffix512-head-bfp8-correction/runs/anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix512.seed44.json",
+      "source_sha256": "192beeb384d47ca8fad1dfd801ae8f6beb8884f70255d9dad7fa20b8d8c7a1c4",
+      "runtime_policy": "stage12_head_bfp8_lofi",
+      "fixture_sha256": "4a94d27b233d885c8a874ab5c9070a0b6c57d4633ccd230367490ffa6379148e"
+    }
+  ],
+  "counts": {
+    "native": 2,
+    "other": 1
+  },
+  "runtime_precision_verified": true,
+  "wall_seconds": 201.28028845787048,
+  "forecast_range_seconds": [
+    160,
+    300
+  ],
+  "forecast": "in_range",
+  "full_reference": "../sklearn13135-missingtool-suffix512/runs/full",
+  "full_counts": {
+    "normal": 1,
+    "other": 2
+  },
+  "no_policy_or_score_change": true,
+  "triage_evidence": "triage-d.json",
+  "triage_sha256": "04195f9c199eac5276e59af247dc20bc7a5965d514ba2f77d7a9f6d56af73de9"
+}

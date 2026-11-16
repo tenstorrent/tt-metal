@@ -1,0 +1,129 @@
+{
+  "command": [
+    "docker",
+    "build",
+    "--pull=false",
+    "-t",
+    "v5-swe-preflight:<task>",
+    "<generated-task>/environment"
+  ],
+  "mistake": "Inferred presence of10 prior successful uv build-cache records meant current10 builds would reuse them. Only requests preliminary build proved cached; batch logs show installer downloads.",
+  "downloads": [
+    {
+      "task": "django__django-11299",
+      "tag": "v5-swe-preflight:django__django-11299",
+      "exit": 0,
+      "cached_uv_step": false,
+      "installer_download_reported": true,
+      "log": "build-django__django-11299.log",
+      "log_file_mtime_unix": 1794613669.3560278
+    },
+    {
+      "task": "astropy__astropy-14096",
+      "tag": "v5-swe-preflight:astropy__astropy-14096",
+      "exit": 0,
+      "cached_uv_step": false,
+      "installer_download_reported": true,
+      "log": "build-astropy__astropy-14096.log",
+      "log_file_mtime_unix": 1794613671.6608412
+    },
+    {
+      "task": "matplotlib__matplotlib-25332",
+      "tag": "v5-swe-preflight:matplotlib__matplotlib-25332",
+      "exit": 0,
+      "cached_uv_step": false,
+      "installer_download_reported": true,
+      "log": "build-matplotlib__matplotlib-25332.log",
+      "log_file_mtime_unix": 1794613674.034592
+    },
+    {
+      "task": "sympy__sympy-13551",
+      "tag": "v5-swe-preflight:sympy__sympy-13551",
+      "exit": 0,
+      "cached_uv_step": false,
+      "installer_download_reported": true,
+      "log": "build-sympy__sympy-13551.log",
+      "log_file_mtime_unix": 1794613676.4283783
+    },
+    {
+      "task": "scikit-learn__scikit-learn-14629",
+      "tag": "v5-swe-preflight:scikit-learn__scikit-learn-14629",
+      "exit": 0,
+      "cached_uv_step": false,
+      "installer_download_reported": true,
+      "log": "build-scikit-learn__scikit-learn-14629.log",
+      "log_file_mtime_unix": 1794613678.8481944
+    },
+    {
+      "task": "pydata__xarray-3993",
+      "tag": "v5-swe-preflight:pydata__xarray-3993",
+      "exit": 0,
+      "cached_uv_step": false,
+      "installer_download_reported": true,
+      "log": "build-pydata__xarray-3993.log",
+      "log_file_mtime_unix": 1794613681.1867588
+    },
+    {
+      "task": "sphinx-doc__sphinx-9673",
+      "tag": "v5-swe-preflight:sphinx-doc__sphinx-9673",
+      "exit": 0,
+      "cached_uv_step": false,
+      "installer_download_reported": true,
+      "log": "build-sphinx-doc__sphinx-9673.log",
+      "log_file_mtime_unix": 1794613683.5977874
+    },
+    {
+      "task": "pytest-dev__pytest-5840",
+      "tag": "v5-swe-preflight:pytest-dev__pytest-5840",
+      "exit": 0,
+      "cached_uv_step": false,
+      "installer_download_reported": true,
+      "log": "build-pytest-dev__pytest-5840.log",
+      "log_file_mtime_unix": 1794613686.0370774
+    },
+    {
+      "task": "pylint-dev__pylint-6903",
+      "tag": "v5-swe-preflight:pylint-dev__pylint-6903",
+      "exit": 0,
+      "cached_uv_step": false,
+      "installer_download_reported": true,
+      "log": "build-pylint-dev__pylint-6903.log",
+      "log_file_mtime_unix": 1794613688.4477766
+    },
+    {
+      "task": "psf__requests-1142",
+      "tag": "v5-swe-preflight:psf__requests-1142",
+      "exit": 0,
+      "cached_uv_step": false,
+      "installer_download_reported": true,
+      "log": "build-psf__requests-1142.log",
+      "log_file_mtime_unix": 1794613690.8728383
+    }
+  ],
+  "contact_claim": "Original Dockerfile fetched astral.sh installer; logs report downloading uv0.7.13. Actual release destination is not logged, so GitHub contact cannot be excluded. No repository fetch/push performed.",
+  "remediation": "Stopped all network-capable readiness builds. Subsequent dependency provisioning and validation uses Docker network none and local cache. Removed two exact invalid network-none BuildKit records 0r6blj75r69velrys1ovlyjuu and kvqf1icu1lho0qsfq93nscjwi; no broad cache prune.",
+  "uv_version_preservation": "Temporary uv0.9.26 used to understand current local package cache during offline preseed; restored uv0.7.13 before main setup verification and final image distribution.",
+  "runtime_metadata_fetch_attempts": [
+    {
+      "observed_at": "2026-11-14T05:53:21.502872+00:00",
+      "run": "swe-phase2-ready",
+      "category": "blocked_library_metadata_fetch_attempt",
+      "container": "b706cddf02b3",
+      "task": "astropy__astropy-14096",
+      "time_in_agent_log": "2026-11-14T05:49:48Z",
+      "log_path_in_container": "/logs/agent/mini-swe-agent.txt",
+      "url": "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json",
+      "observed_result": "SSL UNEXPECTED_EOF_WHILE_READING; retry messages; explicit falling back to local backup. No successful download shown. Egress sidecar healthy/no-network task policy active.",
+      "scope": "Price metadata fetch, not a task solution. This observation does not replace pending full solution-fetch audit.",
+      "future_supported_prevention": {
+        "agent_env": {
+          "LITELLM_LOCAL_MODEL_COST_MAP": "True"
+        },
+        "source": "bringup/artifacts/v5-swe-runtime/root-local/share/uv/tools/mini-swe-agent/lib/python3.12/site-packages/litellm/litellm_core_utils/get_model_cost_map.py",
+        "sha256": "414dd7d7f0b24dff238316eec07aeb647c6e6fc9682d4110d6c3e14c2dd7be9e",
+        "guards": "lines462 and746 return bundled local map when env.lower()==true; source header documents env.",
+        "applied_to_running_job": false
+      }
+    }
+  ]
+}

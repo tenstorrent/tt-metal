@@ -1,0 +1,97 @@
+{
+  "status": "host_wall_forecast_only_not_admitted",
+  "formula": "Per serial process: median of 8 historical incremental 512-prompt/512-generation HF case walls \u00d7 cases +180 s process/model-load margin. Per-case range 800\u20131600 s plus one 180 s margin per process. The 1024-prompt added case has no matched HF timing baseline; same broad range is applied as a conservative provisional envelope because decode dominates observed 512 cases, and this remains an assumption, not a benchmark. For the unmatched 2048-prompt case, point reuses the 512-prompt historical median only as a placeholder; case range widens from 800\u20131600 to 800\u20133200 seconds (2x the prior upper bound) because prompt/prefill cost lacks a matched or isolated timing basis.",
+  "basis_source": "../cost-basis.json",
+  "basis_sha256": "dc16b01ffe4dc12f0148cad0cb6b7fade4f1fce2a00688f964413f4ab3e685c5",
+  "median_incremental_case_s": 1040.1832335699582,
+  "range_per_case_s": [
+    800,
+    1600
+  ],
+  "groups": [
+    {
+      "seed_group": 42,
+      "suffix_source": "exact_saved_suffix512",
+      "case_count": 2,
+      "model_load_margin_s": 180,
+      "point_seconds": 2260.3664671399165,
+      "range_seconds": [
+        1780,
+        3380
+      ],
+      "timeout_seconds": 3600,
+      "cases": [
+        "anomaly.requests2931.call20.canonicalprefix.optional-suffix512",
+        "anomaly.sympy__sympy-14248.call53.onset.optional-suffix512"
+      ]
+    },
+    {
+      "seed_group": 44,
+      "suffix_source": "exact_saved_suffix512",
+      "case_count": 1,
+      "model_load_margin_s": 180,
+      "point_seconds": 1220.1832335699582,
+      "range_seconds": [
+        980,
+        1780
+      ],
+      "timeout_seconds": 3600,
+      "cases": [
+        "anomaly.pytest-dev__pytest-7432.call19.onset.optional-suffix512"
+      ]
+    },
+    {
+      "seed_group": 44,
+      "suffix_source": "exact_saved_suffix1024",
+      "case_count": 1,
+      "model_load_margin_s": 180,
+      "point_seconds": 1220.1832335699582,
+      "range_seconds": [
+        980,
+        1780
+      ],
+      "timeout_seconds": 3600,
+      "cases": [
+        "anomaly.psf__requests-5414.call9.onset"
+      ]
+    },
+    {
+      "seed_group": 44,
+      "suffix_source": "exact_saved_suffix2048",
+      "case_count": 1,
+      "model_load_margin_s": 180,
+      "point_seconds": 1220.1832335699582,
+      "range_seconds": [
+        980,
+        3380
+      ],
+      "timeout_seconds": 3600,
+      "cases": [
+        "anomaly.psf__requests-5414.call11.onset"
+      ],
+      "matched_baseline": false,
+      "uncertainty": "2048 prompt = 4x the 512-token prefix; no matched HF timing or separate prefill component. Point is inherited historical median and should not be read as expected measured duration; upper interval is a deliberately widened sensitivity envelope."
+    }
+  ],
+  "total_point_seconds": 5920.916167849791,
+  "total_point_minutes": 98.68193613082985,
+  "total_range_seconds": [
+    4720,
+    10320
+  ],
+  "total_range_minutes": [
+    78.66666666666667,
+    172.0
+  ],
+  "process_count": 4,
+  "total_reload_margins_s": 720,
+  "serial": true,
+  "timeout_check": "Each group upper bound fits its per-process timeout: 3380s for the new 2048-prefix group, 3380s for seed42/512, 1780s for seed44/512 and seed44/1024.",
+  "limitations": [
+    "Prompt contents and doubled prefill length may shift actual HF wall time; 1024-prompt case has no matched baseline.",
+    "Forecast is diagnostic host wall only, not model performance.",
+    "No HF process launched.",
+    "The new 2048-prompt case has no matched HF timing. Its 800\u20133200s case envelope is a transparent sensitivity range (upper twice the prior 512-case upper), not a measured bound; increased prefill may exceed it. Stop before admission if forecast envelope is not acceptable."
+  ],
+  "revision_of": "revision-adaptive1024"
+}

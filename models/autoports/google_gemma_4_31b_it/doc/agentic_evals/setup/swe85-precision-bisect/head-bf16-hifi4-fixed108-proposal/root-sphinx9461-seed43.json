@@ -1,0 +1,22 @@
+{
+  "reviewed_unix": 1794727031.613395,
+  "rows": [
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/runs/head_bf16_hifi4/anomaly.sphinx-doc__sphinx-9461.call184.onset.seed43.cap2048.json",
+      "sha256": "a036f323d8c9a5f2cb4072e12ec5069845e1dec095bfe8c63f095b416e8e3aa3",
+      "seed": 43,
+      "tokens": 1431,
+      "verdict": "normal",
+      "reason": "Entire1431-token raw continuation and pinned prefix reviewed: canonical opener and closure; comments reconsider patch strategy, then distinct executable replacement/write code. Repeated representations of code serve construction, not a token-loop cycle. No claim patch is correct.",
+      "trace_counters_delta": {
+        "model_replays": 1430,
+        "sample_replays": 1430,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 1430,
+        "captures": 0
+      }
+    }
+  ]
+}

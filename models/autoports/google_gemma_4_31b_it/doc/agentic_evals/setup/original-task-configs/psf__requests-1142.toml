@@ -1,0 +1,33 @@
+schema_version = "1.0"
+
+[task]
+name = "swe-bench/swebench-verified__psf__requests-1142"
+description = "SWE-bench Verified debugging task."
+authors = [
+    { name = "Carlos E. Jimenez" },
+    { name = "John Yang" },
+    { name = "Alexander Wettig" },
+    { name = "Ofir Press" },
+]
+keywords = ["debugging", "swe-bench"]
+
+[metadata]
+difficulty = "<15 min fix"
+category = "debugging"
+
+[verifier]
+network_mode = "public"
+# Overall time budget for the agent's work (seconds)
+timeout_sec = 3000
+
+[agent]
+network_mode = "no-network"
+# Set to same as verifier unless you want to restrict agent time separately
+timeout_sec = 3000
+
+[environment]
+build_timeout_sec = 1800.0
+cpus = 1
+memory_mb = 4096
+storage_mb = 10240
+gpus = 0

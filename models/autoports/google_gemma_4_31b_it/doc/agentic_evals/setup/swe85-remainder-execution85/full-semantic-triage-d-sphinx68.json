@@ -1,0 +1,31 @@
+{
+  "rows": [
+    {
+      "job": "anomaly.sphinx-doc__sphinx-10323.call68.onset",
+      "mode": "full",
+      "seed": 42,
+      "verdict": "normal",
+      "evidence": "Conditioned prompt ends with `I've`; continuation forms coherent prose with no repeated contraction, then issues a valid `git checkout sphinx/directives/code.py` tool call. Seed43 adds brief coherent reasoning before the same valid call.",
+      "confidence": "high",
+      "cap_notes": "Short complete continuation ends at valid tool-response boundary before cap."
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-10323.call68.onset",
+      "mode": "full",
+      "seed": 43,
+      "verdict": "normal",
+      "evidence": "Conditioned prompt ends with `I've`; continuation forms coherent prose with no repeated contraction, then issues a valid `git checkout sphinx/directives/code.py` tool call. Seed43 adds brief coherent reasoning before the same valid call.",
+      "confidence": "high",
+      "cap_notes": "Short complete continuation ends at valid tool-response boundary before cap."
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-10323.call68.onset",
+      "mode": "full",
+      "seed": 44,
+      "verdict": "normal",
+      "evidence": "Conditioned prompt ends with `I've`; continuation forms coherent prose with no repeated contraction, then issues a valid `git checkout sphinx/directives/code.py` tool call. Seed43 adds brief coherent reasoning before the same valid call.",
+      "confidence": "high",
+      "cap_notes": "Short complete continuation ends at valid tool-response boundary before cap."
+    }
+  ]
+}

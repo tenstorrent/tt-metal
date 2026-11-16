@@ -1,0 +1,42 @@
+{
+  "status": "planning_only_after_gates",
+  "candidate_count": 3,
+  "groups": [
+    {
+      "seed_group": 42,
+      "case_count": 2,
+      "median_seconds_per_case": 1040.1832335699582,
+      "per_process_load_margin_seconds": 180,
+      "point_seconds": 2260.3664671399165,
+      "range_seconds": [
+        1780,
+        3380
+      ]
+    },
+    {
+      "seed_group": 44,
+      "case_count": 1,
+      "median_seconds_per_case": 1040.1832335699582,
+      "per_process_load_margin_seconds": 180,
+      "point_seconds": 1220.1832335699582,
+      "range_seconds": [
+        980,
+        1780
+      ]
+    }
+  ],
+  "total_point_seconds": 3480.5497007098747,
+  "total_point_minutes": 58.00916167849791,
+  "total_range_seconds": [
+    2760,
+    5160
+  ],
+  "total_range_minutes": [
+    46.0,
+    86.0
+  ],
+  "formula": "For each serial seed-group process: median matched-length incremental HF wall per case * number of cases + one 180s process/model-load margin. Range uses 800\u20131600 seconds/case plus one 180s margin per process. No overlap with adaptive run, device speed-ranking, or serving measurement.",
+  "basis_file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/cost-basis.json",
+  "basis_sha256": "dc16b01ffe4dc12f0148cad0cb6b7fade4f1fce2a00688f964413f4ab3e685c5",
+  "limitations": "Three current cases only; add any later root-adjudicated native-positive short-TT cases to their matching positive-seed group and recompute. HF seed is a fresh HF RNG trial, not an exact TT sample replay. A progressing or capped result remains inconclusive; consider >=2x extension before closure."
+}

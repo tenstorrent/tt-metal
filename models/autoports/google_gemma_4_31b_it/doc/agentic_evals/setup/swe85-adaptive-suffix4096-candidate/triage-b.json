@@ -1,0 +1,325 @@
+{
+  "status": "incremental_independent_suffix4096_served_raw_text_pinned_prefix_triage",
+  "scope": "All twelve completed served rows reviewed individually from full generated token text and exact assistant prefix. Each 4096-token fixture prompt was verified as the exact source prompt slice. The 4096-token prompt differs from the preceding suffix2048 condition, so no generated-token equality across those prompt lengths is expected or asserted. No generated commands executed, no scores adjudicated.",
+  "tokenizer_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+  "rows": [
+    {
+      "job": "anomaly.call91.canonicalprefix",
+      "mode": "served",
+      "seed": 42,
+      "verdict": "normal",
+      "confidence": "medium",
+      "generated_tokens": 56,
+      "requested_cap_tokens": 512,
+      "result_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/runs/served/anomaly.call91.canonicalprefix.suffix4096.seed42.json",
+      "result_sha256": "7f53e3e2e2a091c7128d21ff8cfdcec099fb58e4851ee94ddafc1e7d44843670",
+      "fixture_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/fixtures/anomaly.call91.canonicalprefix.suffix4096.seed42.served.private.json",
+      "fixture_sha256": "ae41ea6882901a66170d4eb1da286bc864004d02a375ca634d2e5ccc62366d25",
+      "source_case_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-precision/call91/canonicalprefix/case.private.json",
+      "source_case_sha256": "3d32de201c14cf805635d3e38fafc2ff220202aded67b71861e16df4fbdf9180",
+      "assistant_prefix": {
+        "token_count": 178,
+        "ids_sha256": "47614ed8e875349551b9f2f8b279c146774ccb0249f1d5a1180f0fbe2c6e7527",
+        "tail": "the indentation.\ncat <<'EOF' > fix_colors.py\nwith open('lib/matplotlib/colors.py', 'r') as f:\n    lines = f.readlines()\n\n# Fix the IndentationError at 1218-1220\n# and the __call__ method.\n# Since I've"
+      },
+      "generated_text": {
+        "sha256": "ea351f207fcb745b048ba902481798ed6a1bfbe8ee8eba5274f1adfa620760a8",
+        "head": " messed up the file, I'll just use the original content\n# for those parts.\n# But I don't have the original content.\n# I'll just use the correct indentation.\nEOF\npython3 fix_colors.py<|\"|>}<tool_call|><|tool_response>",
+        "tail": " messed up the file, I'll just use the original content\n# for those parts.\n# But I don't have the original content.\n# I'll just use the correct indentation.\nEOF\npython3 fix_colors.py<|\"|>}<tool_call|><|tool_response>"
+      },
+      "evidence": "The generated continuation coherently follows the existing code/script context and reaches a bash tool response. No repeated native motif or distinct malformed insertion is present; diagnostic continuation only, not patch correctness."
+    },
+    {
+      "job": "anomaly.call91.canonicalprefix",
+      "mode": "served",
+      "seed": 43,
+      "verdict": "other_anomaly",
+      "confidence": "high",
+      "generated_tokens": 38,
+      "requested_cap_tokens": 512,
+      "result_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/runs/served/anomaly.call91.canonicalprefix.suffix4096.seed43.json",
+      "result_sha256": "27f7fae378ddd5b117501588bce252cf8e68f25accd3b60b7952e747e19afb28",
+      "fixture_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/fixtures/anomaly.call91.canonicalprefix.suffix4096.seed43.served.private.json",
+      "fixture_sha256": "6caec5b093009522b2380b19a8bd6e62d34490b9ddcaf37d7d19422392bd541f",
+      "source_case_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-precision/call91/canonicalprefix/case.private.json",
+      "source_case_sha256": "3d32de201c14cf805635d3e38fafc2ff220202aded67b71861e16df4fbdf9180",
+      "assistant_prefix": {
+        "token_count": 178,
+        "ids_sha256": "47614ed8e875349551b9f2f8b279c146774ccb0249f1d5a1180f0fbe2c6e7527",
+        "tail": "the indentation.\ncat <<'EOF' > fix_colors.py\nwith open('lib/matplotlib/colors.py', 'r') as f:\n    lines = f.readlines()\n\n# Fix the IndentationError at 1218-1220\n# and the __call__ method.\n# Since I've"
+      },
+      "generated_text": {
+        "sha256": "5447bd15bc3ef0a593a1d9e370b23c0ea295b7622f2f6e07d049a0377f5672a5",
+        "head": " already\u2019ve already messed up the file,\n# I'll just use a very simple version of the file.\nEOF\npython3 fix_colors.py<|\"|>}<tool_call|><|tool_response>",
+        "tail": " already\u2019ve already messed up the file,\n# I'll just use a very simple version of the file.\nEOF\npython3 fix_colors.py<|\"|>}<tool_call|><|tool_response>"
+      },
+      "evidence": "Prefix ends \u201cSince I've\u201d; generated continuation starts \u201c already\u2019ve already\u201d, creating a localized malformed/doubled contraction before coherent script text. This is not a sustained native motif."
+    },
+    {
+      "job": "anomaly.call91.canonicalprefix",
+      "mode": "served",
+      "seed": 44,
+      "verdict": "normal",
+      "confidence": "medium",
+      "generated_tokens": 111,
+      "requested_cap_tokens": 512,
+      "result_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/runs/served/anomaly.call91.canonicalprefix.suffix4096.seed44.json",
+      "result_sha256": "35c67dba68959904229453814285f5eb193d3a2e4aa7e39740ddfe6a767ba813",
+      "fixture_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/fixtures/anomaly.call91.canonicalprefix.suffix4096.seed44.served.private.json",
+      "fixture_sha256": "796f3e9245800c84311dd3ad7f5ae699d2c76f506b3556a9d0b4c643f5cb662c",
+      "source_case_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-precision/call91/canonicalprefix/case.private.json",
+      "source_case_sha256": "3d32de201c14cf805635d3e38fafc2ff220202aded67b71861e16df4fbdf9180",
+      "assistant_prefix": {
+        "token_count": 178,
+        "ids_sha256": "47614ed8e875349551b9f2f8b279c146774ccb0249f1d5a1180f0fbe2c6e7527",
+        "tail": "the indentation.\ncat <<'EOF' > fix_colors.py\nwith open('lib/matplotlib/colors.py', 'r') as f:\n    lines = f.readlines()\n\n# Fix the IndentationError at 1218-1220\n# and the __call__ method.\n# Since I've"
+      },
+      "generated_text": {
+        "sha256": "bcdc55c68550118e99f631de93568acd57620faaa3dad1deaabf3ad577c51bf5",
+        "head": " messed up the file, I'll just replace the content of the file\n# with a fixed version if I can.\n# But I can't.\n# I'll just fix the indentation of the specific lines.\nfor i in range(len(lines)):\n    if 'if self.vmin is None and A.size:' in lines[i]:\n        lines[i] = '        if self.//' # This is not working.\nEOF\npython3 fix_colors.py<|\"|>}<tool_call|><|tool_response>",
+        "tail": "pecific lines.\nfor i in range(len(lines)):\n    if 'if self.vmin is None and A.size:' in lines[i]:\n        lines[i] = '        if self.//' # This is not working.\nEOF\npython3 fix_colors.py<|\"|>}<tool_call|><|tool_response>"
+      },
+      "evidence": "The generated continuation coherently follows the existing code/script context and reaches a bash tool response. No repeated native motif or distinct malformed insertion is present; diagnostic continuation only, not patch correctness."
+    },
+    {
+      "job": "anomaly.matplotlib__matplotlib-20488.call86.onset",
+      "mode": "served",
+      "seed": 42,
+      "verdict": "normal",
+      "confidence": "medium",
+      "generated_tokens": 72,
+      "requested_cap_tokens": 512,
+      "result_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/runs/served/anomaly.matplotlib__matplotlib-20488.call86.onset.suffix4096.seed42.json",
+      "result_sha256": "24c228d030db3e9e3d19b2416e6a93a73aee117db65e4628f5352bd211d9f4cf",
+      "fixture_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/fixtures/anomaly.matplotlib__matplotlib-20488.call86.onset.suffix4096.seed42.served.private.json",
+      "fixture_sha256": "513f9f1e29de8eaa956d70b10cfb15d84fd8fcc7ec114e26966db94d150ea641",
+      "source_case_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-protocol-scan83-controls/matplotlib__matplotlib-20488.call86.onset.private.json",
+      "source_case_sha256": "c11bb5890af7b0166bbbb61c44a3200e58aa3eb4b509403759fbb162ae58d179",
+      "assistant_prefix": {
+        "token_count": 6,
+        "ids_sha256": "e11882ab0000b4ac9e7e4322ceaf79f289446b2b8e6dc08a00b21d05c9d2e412",
+        "tail": "<|channel>thought\nI've"
+      },
+      "generated_text": {
+        "sha256": "0b51ff596fba32c7689192746b03efe4d29ef867bb664ea94da667a2b24b075a",
+        "head": " introduced an `IndentationError` in `lib/matplotlib/colors.py` at line 1219.\nLet me check the file.\n<channel|><|tool_call>call:bash{command:<|\"|>nl -ba lib/matplotlib/colors.py | sed -n '1210,1230p'<|\"|>}<tool_call|><|tool_response>",
+        "tail": "n `IndentationError` in `lib/matplotlib/colors.py` at line 1219.\nLet me check the file.\n<channel|><|tool_call>call:bash{command:<|\"|>nl -ba lib/matplotlib/colors.py | sed -n '1210,1230p'<|\"|>}<tool_call|><|tool_response>"
+      },
+      "evidence": "The generated continuation coherently describes the IndentationError and emits a canonical bash tool call. Prefix boundary \u201cI\u2019ve introduced\u201d is grammatical; no repeated native contraction burst."
+    },
+    {
+      "job": "anomaly.matplotlib__matplotlib-20488.call86.onset",
+      "mode": "served",
+      "seed": 43,
+      "verdict": "other_anomaly",
+      "confidence": "high",
+      "generated_tokens": 238,
+      "requested_cap_tokens": 512,
+      "result_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/runs/served/anomaly.matplotlib__matplotlib-20488.call86.onset.suffix4096.seed43.json",
+      "result_sha256": "0473b2a180e527d9a609a1f28d65cb7770bb3421012c0affa534ac5fa3ef6d56",
+      "fixture_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/fixtures/anomaly.matplotlib__matplotlib-20488.call86.onset.suffix4096.seed43.served.private.json",
+      "fixture_sha256": "a5d83f9ee832bb85a537f6b02f93d5552283b752c77a9cd418a211f97d52b4fd",
+      "source_case_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-protocol-scan83-controls/matplotlib__matplotlib-20488.call86.onset.private.json",
+      "source_case_sha256": "c11bb5890af7b0166bbbb61c44a3200e58aa3eb4b509403759fbb162ae58d179",
+      "assistant_prefix": {
+        "token_count": 6,
+        "ids_sha256": "e11882ab0000b4ac9e7e4322ceaf79f289446b2b8e6dc08a00b21d05c9d2e412",
+        "tail": "<|channel>thought\nI've"
+      },
+      "generated_text": {
+        "sha256": "545a0e0c1d09c2487e41748b4d5cc156997710b7f90f053b5554e38951c29597",
+        "head": "\u2019ve\u2019ve made a total mess of the files. I'll just restore the original files and start over.\nBut I can't restore the original files.\nI'll just fix the indentation error.\n<channel|><|tool_call>call:bash{command:<|\"|>cat <<'EOF' > fix_indent.py\nwith open('lib/matplotlib/colors.py', 'r') as f:\n    lines = f.readlines()\n\nnew_lines = []\ni = 0\nwhile i < len(lines):\n    if 'if self.vmax is None and A.size",
+        "tail": "tion error\n    else:\n        new_lines.append(lines[i])\n    i += 1\n\nwith open('lib/matplotlib/colors. l', 'w') as f: #\u2019s\u2019 to be safe\n    f.writelines(new_lines)\nEOF\npython3 fix_indent.py<|\"|>}<tool_call|><|tool_response>"
+      },
+      "evidence": "Prefix ends \u201cI've\u201d; generation begins with duplicated apostrophe-suffix material (\u201c\u2019ve\u2019ve\u201d for seed43; \u201c've\u2019ve\u2019ve\u201d for seed44) before otherwise coherent file-recovery/code text. Localized malformed contraction is separate from native sustained motif."
+    },
+    {
+      "job": "anomaly.matplotlib__matplotlib-20488.call86.onset",
+      "mode": "served",
+      "seed": 44,
+      "verdict": "other_anomaly",
+      "confidence": "high",
+      "generated_tokens": 138,
+      "requested_cap_tokens": 512,
+      "result_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/runs/served/anomaly.matplotlib__matplotlib-20488.call86.onset.suffix4096.seed44.json",
+      "result_sha256": "3eedba823b3b3f55be41012a0a7f87ef45ca6e748a876c8842020f903e2d7edd",
+      "fixture_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/fixtures/anomaly.matplotlib__matplotlib-20488.call86.onset.suffix4096.seed44.served.private.json",
+      "fixture_sha256": "c5d804e5405e9e6fa0a57c1986030ff017b1f06af282067d920df7c0424d4266",
+      "source_case_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-protocol-scan83-controls/matplotlib__matplotlib-20488.call86.onset.private.json",
+      "source_case_sha256": "c11bb5890af7b0166bbbb61c44a3200e58aa3eb4b509403759fbb162ae58d179",
+      "assistant_prefix": {
+        "token_count": 6,
+        "ids_sha256": "e11882ab0000b4ac9e7e4322ceaf79f289446b2b8e6dc08a00b21d05c9d2e412",
+        "tail": "<|channel>thought\nI've"
+      },
+      "generated_text": {
+        "sha256": "4b98d314280de21b3c25ba66211132cdcb1b22ee6b61de8b9470244a1251b466",
+        "head": "'ve\u2019ve\u2019ve made a total mess of the `lib/matplotlib/colors.py` file.\nI'll just restore the file from the most reliable version.\nSince I can't do that, I'll just use a simple `sed` to fix the indentation error and then I'm done.\nWait, I should just fix the `__call__` method and the indentation error.\nLet's just use a simple `sed` to fix the indentation error.\n<channel|><|tool_call>call:bash{command:",
+        "tail": "method and the indentation error.\nLet's just use a simple `sed` to fix the indentation error.\n<channel|><|tool_call>call:bash{command:<|\"|>sed -i '1219s/^/    /' lib/matplotlib/colors.py<|\"|>}<tool_call|><|tool_response>"
+      },
+      "evidence": "Prefix ends \u201cI've\u201d; generation begins with duplicated apostrophe-suffix material (\u201c\u2019ve\u2019ve\u201d for seed43; \u201c've\u2019ve\u2019ve\u201d for seed44) before otherwise coherent file-recovery/code text. Localized malformed contraction is separate from native sustained motif."
+    },
+    {
+      "job": "anomaly.psf__requests-5414.call10.onset",
+      "mode": "served",
+      "seed": 42,
+      "verdict": "reproduced_native_motif",
+      "confidence": "high",
+      "generated_tokens": 512,
+      "requested_cap_tokens": 512,
+      "result_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/runs/served/anomaly.psf__requests-5414.call10.onset.suffix4096.seed42.json",
+      "result_sha256": "838d6b3173888be66eec79851c6219bd72c4bdfb79b5d4232963d2b12a380491",
+      "fixture_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/fixtures/anomaly.psf__requests-5414.call10.onset.suffix4096.seed42.served.private.json",
+      "fixture_sha256": "4ee5d2a78289bfda82ac535f009035eb0f669082dc4b37b474b11ba6095bdccc",
+      "source_case_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-requests5414-caret-controls/psf__requests-5414.call10.onset.private.json",
+      "source_case_sha256": "38cba2429d022e64133da2c34388d9e88a9b26b82ec58594153692842dccb961",
+      "assistant_prefix": {
+        "token_count": 188,
+        "ids_sha256": "f9f90e7273c96002d73a1b661eff983afc92209ffeeee833eb0f817e934d87f3",
+        "tail": "le>\n    requests.get(\"http://.example.com\")\n  ...\n  File \"/opt/miniconda3/lib/python3.11/site-packages/urllib3/util/connection.py\", line 68, in create_connection\n    return six.raise_from(\n           "
+      },
+      "generated_text": {
+        "sha256": "19af26e5db843b8bea09dbd821835bdef64c3d4cec42bef2c8f104a8cb40d201",
+        "head": "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^",
+        "tail": "eptions.LocationParseError: Failed to parse: '.example.com', label empty or too long\n```\n\nThe issue is that `requests` is not validating the URL's host before passing it to `urllib3`. Specifically, a host starting with a"
+      },
+      "evidence": "Generated continuation is a 512-token uninterrupted caret run after the inherited traceback underline context; this matches the same sustained native caret-degeneration mechanism. The remainder does not close the thought or answer, so the output remains incomplete."
+    },
+    {
+      "job": "anomaly.psf__requests-5414.call10.onset",
+      "mode": "served",
+      "seed": 43,
+      "verdict": "reproduced_native_motif",
+      "confidence": "high",
+      "generated_tokens": 512,
+      "requested_cap_tokens": 512,
+      "result_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/runs/served/anomaly.psf__requests-5414.call10.onset.suffix4096.seed43.json",
+      "result_sha256": "803a0b9cdefee079a11612afeeaf4983c421e2603095d98a33b6db631102ae31",
+      "fixture_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/fixtures/anomaly.psf__requests-5414.call10.onset.suffix4096.seed43.served.private.json",
+      "fixture_sha256": "8ceac6889a1d6e10992f68b52596ce262f4031608317b5a40a32906fc3eb7ca7",
+      "source_case_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-requests5414-caret-controls/psf__requests-5414.call10.onset.private.json",
+      "source_case_sha256": "38cba2429d022e64133da2c34388d9e88a9b26b82ec58594153692842dccb961",
+      "assistant_prefix": {
+        "token_count": 188,
+        "ids_sha256": "f9f90e7273c96002d73a1b661eff983afc92209ffeeee833eb0f817e934d87f3",
+        "tail": "le>\n    requests.get(\"http://.example.com\")\n  ...\n  File \"/opt/miniconda3/lib/python3.11/site-packages/urllib3/util/connection.py\", line 68, in create_connection\n    return six.raise_from(\n           "
+      },
+      "generated_text": {
+        "sha256": "d1ed3a5b5119a1bce1bf266d9af1128e40da4e63b835fc051f3a30aefd546df9",
+        "head": "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^",
+        "tail": "cationParseError: Failed to parse: '.example.com', label empty or too long\n```\n\nThe issue is that `requests` is not properly validating the URL before passing it to `urllib3`. Specifically, `requests` should be raising `"
+      },
+      "evidence": "Generated continuation is a 512-token uninterrupted caret run after the inherited traceback underline context; this matches the same sustained native caret-degeneration mechanism. The remainder does not close the thought or answer, so the output remains incomplete."
+    },
+    {
+      "job": "anomaly.psf__requests-5414.call10.onset",
+      "mode": "served",
+      "seed": 44,
+      "verdict": "reproduced_native_motif",
+      "confidence": "high",
+      "generated_tokens": 512,
+      "requested_cap_tokens": 512,
+      "result_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/runs/served/anomaly.psf__requests-5414.call10.onset.suffix4096.seed44.json",
+      "result_sha256": "b73e821223a7256a7224e2f3e23d300c19e34ea8a05c866fd39a3fbb1638f7d1",
+      "fixture_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/fixtures/anomaly.psf__requests-5414.call10.onset.suffix4096.seed44.served.private.json",
+      "fixture_sha256": "40173399c4c62f8ccb70d4ac349200924e81e89c7453962c13ff4c312ef780e5",
+      "source_case_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-requests5414-caret-controls/psf__requests-5414.call10.onset.private.json",
+      "source_case_sha256": "38cba2429d022e64133da2c34388d9e88a9b26b82ec58594153692842dccb961",
+      "assistant_prefix": {
+        "token_count": 188,
+        "ids_sha256": "f9f90e7273c96002d73a1b661eff983afc92209ffeeee833eb0f817e934d87f3",
+        "tail": "le>\n    requests.get(\"http://.example.com\")\n  ...\n  File \"/opt/miniconda3/lib/python3.11/site-packages/urllib3/util/connection.py\", line 68, in create_connection\n    return six.raise_from(\n           "
+      },
+      "generated_text": {
+        "sha256": "e099feb435a6709372d915dd9206f3e892a3b7588d6f309b467a61378579f8d7",
+        "head": "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^",
+        "tail": "lid.\"\n\nWait, I already found that `requests`'s `prepare_url` doesn't catch `.example.com`.\nBut `requests`'s `prepare_url` *does* check if the host starts with a wildcard `*`:\n```python\n        elif host.startswith(u'*'):"
+      },
+      "evidence": "Generated continuation is a 512-token uninterrupted caret run after the inherited traceback underline context; this matches the same sustained native caret-degeneration mechanism. The remainder does not close the thought or answer, so the output remains incomplete."
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-10323.call70.onset",
+      "mode": "served",
+      "seed": 42,
+      "verdict": "reproduced_native_motif",
+      "confidence": "medium",
+      "generated_tokens": 48,
+      "requested_cap_tokens": 512,
+      "result_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/runs/served/anomaly.sphinx-doc__sphinx-10323.call70.onset.suffix4096.seed42.json",
+      "result_sha256": "a6ec360216bf436f7e4c39b04cbde70ca0f4353e9f39bb2b65aef3e83c3ca094",
+      "fixture_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/fixtures/anomaly.sphinx-doc__sphinx-10323.call70.onset.suffix4096.seed42.served.private.json",
+      "fixture_sha256": "62397a3ddac9e4edd1cfda3c86c390de768d28395ccf3c8edf73a830f3a79be4",
+      "source_case_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-extra-contraction-controls/sphinx-doc__sphinx-10323.call70.onset.private.json",
+      "source_case_sha256": "7d39e2c87e91327f35317968bf2647887a402d0086085ec8f95db8ff5fc2ab64",
+      "assistant_prefix": {
+        "token_count": 164,
+        "ids_sha256": "51c5e91f64b40c72bf79f1eaa94ee93194a6c475d2599c3d2630f4cf35cae87f",
+        "tail": "e `prepend` is `<plugin>`, the result is `<plugin>` (no indentation).\nIf the user wants `    <plugin>`, they'll have to use something like `:prepend:     <plugin>` and we'd need to not strip it.\n\nI've"
+      },
+      "generated_text": {
+        "sha256": "7001fce0403d9c3149a851d3e5f3b5b5ac3825cf3f78018882e884b43b9a776f",
+        "head": " explored all possibilities and\u2019ve\u2019ve\u2019ve concluded it's a `docutils` limitation. I'll just submit.\n<channel|><|tool_call>call:bash{command:<|\"|>python3 reproduce_issue.py<|\"|>}<tool_call|><|tool_response>",
+        "tail": " explored all possibilities and\u2019ve\u2019ve\u2019ve concluded it's a `docutils` limitation. I'll just submit.\n<channel|><|tool_call>call:bash{command:<|\"|>python3 reproduce_issue.py<|\"|>}<tool_call|><|tool_response>"
+      },
+      "evidence": "The generated sentence contains a contiguous triple curly-suffix burst \u201cand\u2019ve\u2019ve\u2019ve\u201d within a repeated contraction pattern, matching the native repeated-contraction degeneration mechanism. It later reaches a canonical tool call; this is motif reproduction only, not task correctness."
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-10323.call70.onset",
+      "mode": "served",
+      "seed": 43,
+      "verdict": "other_anomaly",
+      "confidence": "medium",
+      "generated_tokens": 116,
+      "requested_cap_tokens": 512,
+      "result_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/runs/served/anomaly.sphinx-doc__sphinx-10323.call70.onset.suffix4096.seed43.json",
+      "result_sha256": "bfbd718661ba70c712a02aebea1f93378570721cf44cec131b8fed91c40b833c",
+      "fixture_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/fixtures/anomaly.sphinx-doc__sphinx-10323.call70.onset.suffix4096.seed43.served.private.json",
+      "fixture_sha256": "31791e688141f85e6a7f9f660f81a2ff2ecf69e79f3c621f2af05855e303e315",
+      "source_case_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-extra-contraction-controls/sphinx-doc__sphinx-10323.call70.onset.private.json",
+      "source_case_sha256": "7d39e2c87e91327f35317968bf2647887a402d0086085ec8f95db8ff5fc2ab64",
+      "assistant_prefix": {
+        "token_count": 164,
+        "ids_sha256": "51c5e91f64b40c72bf79f1eaa94ee93194a6c475d2599c3d2630f4cf35cae87f",
+        "tail": "e `prepend` is `<plugin>`, the result is `<plugin>` (no indentation).\nIf the user wants `    <plugin>`, they'll have to use something like `:prepend:     <plugin>` and we'd need to not strip it.\n\nI've"
+      },
+      "generated_text": {
+        "sha256": "81faf9ce77e114e058ecd52649505f119828eedb70e8cc3cb5bcffca1a2706ac",
+        "head": "\u2019ve explored everything. I'll just submit the original code.\n<channel|><|tool_call>call:bash{command:<|\"|>sed -i '223,229c\\            filters = [self.pyobject_//C-style comments not allowed in sed\\n                       self.start_filter,\\n                       self.end_filter,\\n                       self.lines_filter,\\n                       self.prepend_filter,\\n                       self.a",
+        "tail": "        self.lines_filter,\\n                       self.prepend_filter,\\n                       self.append_filter,\\n                       self.dedent_filter]' sphinx/directives/code.py<|\"|>}<tool_call|><|tool_response>"
+      },
+      "evidence": "Prefix ends \u201cI\u2019ve\u201d; generated continuation starts \u201c\u2019ve explored\u201d, making a localized duplicated contraction, then continues into a distinct sed command/tool response. No sustained native burst."
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-10323.call70.onset",
+      "mode": "served",
+      "seed": 44,
+      "verdict": "normal",
+      "confidence": "medium",
+      "generated_tokens": 62,
+      "requested_cap_tokens": 512,
+      "result_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/runs/served/anomaly.sphinx-doc__sphinx-10323.call70.onset.suffix4096.seed44.json",
+      "result_sha256": "953f442e20b071c33de51254d53c88ad0cc86b9418c859ac1845f4de58615fd5",
+      "fixture_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/fixtures/anomaly.sphinx-doc__sphinx-10323.call70.onset.suffix4096.seed44.served.private.json",
+      "fixture_sha256": "6effd6b8eda2e38af845844022c4c02cb7f7638e30851abaf64cacc2dece4263",
+      "source_case_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-extra-contraction-controls/sphinx-doc__sphinx-10323.call70.onset.private.json",
+      "source_case_sha256": "7d39e2c87e91327f35317968bf2647887a402d0086085ec8f95db8ff5fc2ab64",
+      "assistant_prefix": {
+        "token_count": 164,
+        "ids_sha256": "51c5e91f64b40c72bf79f1eaa94ee93194a6c475d2599c3d2630f4cf35cae87f",
+        "tail": "e `prepend` is `<plugin>`, the result is `<plugin>` (no indentation).\nIf the user wants `    <plugin>`, they'll have to use something like `:prepend:     <plugin>` and we'd need to not strip it.\n\nI've"
+      },
+      "generated_text": {
+        "sha256": "660d493adcbe6c91aaac169ccc3ee94b4989bee893813c761ff83fd4c1e7148c",
+        "head": " tried everything. I'll just finish.\n<channel|><|tool_call>call:bash{command:<|\"|>sed -i '223,229c\\            filters = [self.pyobject_filter,\\n                       self.start_//' sphinx/directives/code.py<|\"|>}<tool_call|><|tool_response>",
+        "tail": "l just finish.\n<channel|><|tool_call>call:bash{command:<|\"|>sed -i '223,229c\\            filters = [self.pyobject_filter,\\n                       self.start_//' sphinx/directives/code.py<|\"|>}<tool_call|><|tool_response>"
+      },
+      "evidence": "Generated continuation coherently follows the inherited \u201cI\u2019ve\u201d phrase and produces a distinct bash command; no sustained native contraction/caret mechanism or localized duplicate is apparent."
+    }
+  ],
+  "counts": {
+    "normal": 4,
+    "reproduced_native_motif": 4,
+    "other_anomaly": 4,
+    "inconclusive": 0
+  }
+}

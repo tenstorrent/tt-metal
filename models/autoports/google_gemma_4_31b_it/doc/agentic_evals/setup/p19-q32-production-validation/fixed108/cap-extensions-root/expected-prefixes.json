@@ -1,0 +1,38 @@
+[
+  {
+    "manifest_index": 4,
+    "original_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/p19-q32-production-validation/fixed108/runs/p19_q32/anomaly.call91.canonicalprefix.seed43.cap256.json",
+    "original_result_sha256": "ed4c5d5900f1bd5c89112030c6cd929f604b184bd3a507daaec78b37626aa735",
+    "original_tokens": 256,
+    "original_prefix_sha256": "f0d9f3efe6cf0b0834eeb89968ed68710f45cb689798ade5f22b40024aeffee3",
+    "expected_seed": 43,
+    "job_name": "q32capext.anomaly.call91.canonicalprefix.seed43.cap256.to512",
+    "old_trial_seconds": 36.94653079309501,
+    "old_decode_rate": 17.0556686026437,
+    "new_cap": 512
+  },
+  {
+    "manifest_index": 54,
+    "original_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/p19-q32-production-validation/fixed108/runs/p19_q32/anomaly.sphinx-doc__sphinx-10323.call70.onset.seed42.cap256.json",
+    "original_result_sha256": "8dfb04e0d290f13dee822128b41d12de1944fc7834ea601f840c61fbd0c3d529",
+    "original_tokens": 256,
+    "original_prefix_sha256": "cb997473c906fb0c641fb30369429d80a8ddd79e724b6e36e4eaf51caa9d6933",
+    "expected_seed": 42,
+    "job_name": "q32capext.anomaly.sphinx-doc__sphinx-10323.call70.onset.seed42.cap256.to512",
+    "old_trial_seconds": 55.093617673031986,
+    "old_decode_rate": 16.534690925449997,
+    "new_cap": 512
+  },
+  {
+    "manifest_index": 68,
+    "original_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/p19-q32-production-validation/fixed108/runs/p19_q32/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed44.cap1024.json",
+    "original_result_sha256": "9ddbe31160890bbea94ccb463d6c97e035933cb7c40d8d66ac4b34d29c79587b",
+    "original_tokens": 1024,
+    "original_prefix_sha256": "c48612b867327bcf9828b5aed0c62fb85b9de1a25352e82fc7c3c2caf0423e62",
+    "expected_seed": 44,
+    "job_name": "q32capext.anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed44.cap1024.to2048",
+    "old_trial_seconds": 107.17813577014022,
+    "old_decode_rate": 16.225997576066163,
+    "new_cap": 2048
+  }
+]

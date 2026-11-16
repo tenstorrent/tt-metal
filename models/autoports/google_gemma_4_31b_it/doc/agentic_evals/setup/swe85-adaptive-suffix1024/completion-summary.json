@@ -1,0 +1,71 @@
+{
+  "status": "completed_runs_and_root_review",
+  "scope": "Diagnostic shortened reconstructed prompts; no score/policy change",
+  "runs": {
+    "served": {
+      "exit_code": 0,
+      "measured_hours": 0.10065595832135943,
+      "prediction_range_hit": true,
+      "prediction": {
+        "predicted_hours": 0.11647684925515002,
+        "range_hours": [
+          0.0936468961473385,
+          0.16974673984004357
+        ],
+        "basis": "Corrected forecast includes chosen TF work, same-mode load once and prefill/decode projections. Diagnostic host-wall only."
+      }
+    },
+    "full": {
+      "exit_code": 0,
+      "measured_hours": 0.1373502516746521,
+      "prediction_range_hit": true,
+      "prediction": {
+        "predicted_hours": 0.16031182056826235,
+        "range_hours": [
+          0.11879449826411859,
+          0.25718557261126435
+        ],
+        "basis": "Corrected forecast includes chosen TF work, same-mode load once and prefill/decode projections. Diagnostic host-wall only."
+      }
+    }
+  },
+  "root_rows": {
+    "served": {
+      "counts": {
+        "normal": 4,
+        "other_anomaly": 12,
+        "native_anomaly": 2
+      },
+      "reviewed": 18,
+      "evidence": [
+        "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/served-coordinator-final6.json",
+        "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/served-coordinator-first7.json",
+        "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/served-coordinator-next5.json"
+      ]
+    },
+    "full": {
+      "counts": {
+        "normal": 3,
+        "other_anomaly": 10,
+        "native_anomaly": 3,
+        "inconclusive": 2
+      },
+      "reviewed": 18,
+      "evidence": [
+        "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/full-coordinator-call11.json",
+        "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/full-coordinator-final3.json",
+        "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/full-coordinator-first3.json",
+        "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/full-coordinator-next3.json",
+        "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/full-coordinator-next6.json",
+        "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/parser-adjudication.json"
+      ]
+    }
+  },
+  "followups": [
+    "HF matched Requests5414call9 positive at suffix1024; seed44 positive served and full.",
+    "Two progressing full512 outputs require1024: Requests5414call11seed42,Mpl86seed42.",
+    "Five remaining native motifs need longer prefix investigation; suffix2048 candidate preparation requested."
+  ],
+  "protocol_audit": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/protocol-parser-audit-d.json",
+  "trace_audit": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/trace-counter-audit.json"
+}

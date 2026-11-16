@@ -1,0 +1,33 @@
+{
+  "status": "applied_after_root_review",
+  "reviewer": "root",
+  "reviewed_at_utc": "2026-11-15T08:00:30.303203+00:00",
+  "audit_sha256": "fa7e0ac006697612f3ab95992fd7585df933b9bc5878f14e6720b6b043b8bc5e",
+  "updated_fields": [
+    "anomalies[3].status",
+    "anomalies[3].test",
+    "anomalies[3].changed",
+    "anomalies[3].full_precision.result.status",
+    "anomalies[3].full_precision.result.interpretation",
+    "anomalies[3].missing_reasons.measurements",
+    "anomalies[3].new_sympy14248_controls",
+    "anomalies[3].conditional_short_controls.status",
+    "anomalies[3].additional_followups.status",
+    "anomalies[3].short_controls_progress.status",
+    "anomalies[3].short_controls_progress.conditional_hf",
+    "anomalies[3].short_controls_progress.open",
+    "anomalies[3].short_controls_progress.cap1024_followup.status",
+    "anomalies[3].contraction_short_controls.interpretation",
+    "anomalies[3].short_cap1024_controls.remaining",
+    "anomalies[3].second_cap_controls.next",
+    "anomalies[3].adaptive_suffix2048_controls.changed",
+    "anomalies[3].third_cap_controls.next",
+    "anomalies[3].adaptive_suffix2048_cap1024_controls.next",
+    "anomalies[3].adaptive_suffix4096_controls.interpretation",
+    "anomalies[3].sklearn_suffix512_controls.configuration_correction.status",
+    "anomalies[3].sklearn_suffix512_controls.next",
+    "anomalies[3].sklearn_suffix1024_controls.status"
+  ],
+  "results_sha256": "1980582a4f5ef9afc1a07c2d1b133c94caa93ccef7e73e3b62bd9d386b3d239a",
+  "preserved_snapshot": "setup/results-before-status-reconciliation-20261115T0802.json"
+}

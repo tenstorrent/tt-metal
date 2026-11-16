@@ -1,0 +1,78 @@
+{
+  "type": "additive_correction_preserve_original_triage",
+  "target": "reviewed/triage-b-sphinx10323-call70.json",
+  "original_triage_sha256": "44935b1e464f11fc9cd6d25015082ee406725c6bd3671a4bdf726c222132cfd8",
+  "reason": "The original triage incorrectly said the exact-prefix TT comparator artifacts contained seed42 only. Both artifacts contain three free_running rows; the seed43 row must be selected by row.sampling.seed, not array position.",
+  "corrected_comparison": {
+    "served": {
+      "artifact": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/runs/served/anomaly.sphinx-doc__sphinx-10323.call70.onset.json",
+      "sha256": "1fa9f54e8a4aace416fa70fed3ea9daa36f074e6c5f8ebe00c6550d3aee01f30",
+      "seed": 43,
+      "runtime_precision": "stage12_head_bfp8_lofi",
+      "tokens": 368,
+      "first_tokens": [
+        236858,
+        560,
+        236858,
+        560,
+        30228,
+        784,
+        3835,
+        532
+      ],
+      "last_tokens": [
+        3231,
+        236761,
+        2551,
+        107,
+        52,
+        236783,
+        49,
+        50
+      ],
+      "flag": false,
+      "text_head": "’ve’ve explored all options and found it's a `docutils` limitation. I'll finish the task.\n<channel|><|tool_call>call:bash{command:<|\"|>cat <<'EOF' > reproduction_script.py\nimport os\nimport subprocess\n\ndef run_build():\n    # create a simple sphinx project\n    os.makedirs('docs', exist_ok=True)\n    wi",
+      "text_tail": ")\n    \n    # check the output\n    with open('docs/_build/index.html', 'r') as f:\n        content = f.read()\n        if '    <plugin>' in content:\n            print(\"Success\")\n        else:\n            print(\"Failure\")\n\nrun_build()\nEOF\npython3 reproduction_script.py\n<|\"|>}<tool_call|><|tool_response>",
+      "assessment": "seed43 starts [236858,560,236858,560], producing two repeated suffixes before coherent text and a long script. This is an initial duplicated-contraction motif followed by generated code; do not call every subsequent repeated line a contraction burst without exact morphology."
+    },
+    "full": {
+      "artifact": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/runs/full/anomaly.sphinx-doc__sphinx-10323.call70.onset.json",
+      "sha256": "079baccb97ee11584b68c0e69353c172f1dd976fcbfdf65df71d53d421fd3182",
+      "seed": 43,
+      "runtime_precision": "stage12_bf16_hifi4_diagnostic",
+      "tokens": 52,
+      "first_tokens": [
+        236858,
+        560,
+        30228,
+        784,
+        19977,
+        532,
+        1765,
+        625
+      ],
+      "last_tokens": [
+        3970,
+        236761,
+        2551,
+        107,
+        52,
+        236783,
+        49,
+        50
+      ],
+      "flag": false,
+      "text_head": "’ve explored all possibilities and found it to be a `docutils` limitation.\n<channel|><|tool_call>call:bash{command:<|\"|># Final check of the code\ngrep -n \"filters =\" sphinx/directives/code.py\n<|\"|>}<tool_call|><|tool_response>",
+      "text_tail": "’ve explored all possibilities and found it to be a `docutils` limitation.\n<channel|><|tool_call>call:bash{command:<|\"|># Final check of the code\ngrep -n \"filters =\" sphinx/directives/code.py\n<|\"|>}<tool_call|><|tool_response>",
+      "assessment": "seed43 starts [236858,560,30228,784,19977,532] and produces a coherent short summary plus valid tool handoff; with the matching prefix boundary, it reproduces a localized extra suffix then continues normally, not a sustained loop."
+    },
+    "scope": "Both files include three free_running rows; these selected rows are exact suffix2048, seed43. HF also seed43 but runtime RNGs are not guaranteed identical. HF sampled first token30228 while both TT seed43 rows start236858. HF sampled text remains coherent and contains no duplicated contraction; this only describes this draw, with native seed/output IDs unavailable."
+  },
+  "hash_correction": {
+    "earlier_group6_message_wrong_hash": "feebcee326bad1b086bf1ce757049ebe245dbe7adc24e3bc63ed36a517d215eb is the SHA-256 of the Sphinx call70 suffix4096 seed43 full result, not Matplotlib call86.",
+    "matplotlib_call86_full_suffix4096_seed43_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/runs/full/anomaly.matplotlib__matplotlib-20488.call86.onset.suffix4096.seed43.json",
+    "matplotlib_call86_full_suffix4096_seed43_sha256": "2fc88476353a38633134bcb85d1fbf8624f99d8e55bb8273e42fca2898bc594d",
+    "sphinx_call70_full_suffix4096_seed43_sha256": "feebcee326bad1b086bf1ce757049ebe245dbe7adc24e3bc63ed36a517d215eb",
+    "clarification": "The original triage correctly recorded Matplotlib hash 2fc884...; the later parent note accidentally cited Sphinx hash feebcee... as Matplotlib."
+  }
+}

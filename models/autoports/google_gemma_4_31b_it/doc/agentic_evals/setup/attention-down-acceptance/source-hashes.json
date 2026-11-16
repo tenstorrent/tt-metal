@@ -1,0 +1,5 @@
+{
+  "models/autoports/google_gemma_4_31b_it/tools/stage12_accuracy_references.py": "ae13604faa957e6f4cfa0b7f1fce0b07e93071f26c37deb8abbbad710d42c5eb",
+  "models/autoports/google_gemma_4_31b_it/tests/run_datatype_candidate.py": "f68517e9133e2541949b3786548d0fe5d7ce99b7d021335218ba073b49620a86",
+  "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/attention-down-bfp8-lofi-fixed108-candidate/attention_down_bfp8_lofi_precision.json": "8341f61235a6e7c0ffef07494a95712d6f37702c060b06dd90adac65b0eda4cf"
+}

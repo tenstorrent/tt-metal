@@ -1,0 +1,596 @@
+{
+  "created_unix": 1794778305.0362928,
+  "status": "panel_review_complete_P19_not_accepted",
+  "fixed108_completion": {
+    "start_unix": 1794774086.8710067,
+    "end_unix": 1794777429.054624,
+    "exit_code": 0,
+    "wall_seconds": 3342.1836173534393
+  },
+  "extension_completion": {
+    "start_unix": 1794777592.0556285,
+    "end_unix": 1794777936.6290433,
+    "exit_code": 0,
+    "wall_seconds": 344.57341480255127
+  },
+  "counts_after_required_cap_extensions": {
+    "normal": 86,
+    "reproduced_native_motif": 20,
+    "other_anomaly": 2
+  },
+  "rows": [
+    {
+      "index": 0,
+      "verdict": "normal",
+      "evidence": "triage-d-partial.json"
+    },
+    {
+      "index": 1,
+      "verdict": "normal",
+      "evidence": "triage-d-partial.json"
+    },
+    {
+      "index": 2,
+      "verdict": "normal",
+      "evidence": "triage-d-partial.json"
+    },
+    {
+      "index": 3,
+      "verdict": "normal",
+      "evidence": "triage-d-partial.json"
+    },
+    {
+      "index": 4,
+      "verdict": "normal",
+      "evidence": "triage-d-partial.json",
+      "extension": "cap-extensions-root/independent-review-d.json"
+    },
+    {
+      "index": 5,
+      "verdict": "normal",
+      "evidence": "triage-d-partial.json"
+    },
+    {
+      "index": 6,
+      "verdict": "normal",
+      "evidence": "triage-d-partial.json"
+    },
+    {
+      "index": 7,
+      "verdict": "normal",
+      "evidence": "triage-d-partial.json"
+    },
+    {
+      "index": 8,
+      "verdict": "normal",
+      "evidence": "triage-d-partial.json"
+    },
+    {
+      "index": 9,
+      "verdict": "normal",
+      "evidence": "triage-d-partial.json"
+    },
+    {
+      "index": 10,
+      "verdict": "reproduced_native_motif",
+      "evidence": "triage-d-partial.json"
+    },
+    {
+      "index": 11,
+      "verdict": "normal",
+      "evidence": "triage-d-partial.json"
+    },
+    {
+      "index": 12,
+      "verdict": "normal",
+      "evidence": "triage-d-partial.json"
+    },
+    {
+      "index": 13,
+      "verdict": "normal",
+      "evidence": "triage-d-partial.json"
+    },
+    {
+      "index": 14,
+      "verdict": "normal",
+      "evidence": "triage-d-partial.json"
+    },
+    {
+      "index": 15,
+      "verdict": "reproduced_native_motif",
+      "evidence": "triage-d-partial.json"
+    },
+    {
+      "index": 16,
+      "verdict": "reproduced_native_motif",
+      "evidence": "triage-d-partial.json"
+    },
+    {
+      "index": 17,
+      "verdict": "reproduced_native_motif",
+      "evidence": "triage-d-partial.json"
+    },
+    {
+      "index": 18,
+      "verdict": "reproduced_native_motif",
+      "evidence": "triage-d-partial.json"
+    },
+    {
+      "index": 19,
+      "verdict": "reproduced_native_motif",
+      "evidence": "triage-d-partial.json"
+    },
+    {
+      "index": 20,
+      "verdict": "reproduced_native_motif",
+      "evidence": "triage-d-partial.json"
+    },
+    {
+      "index": 21,
+      "verdict": "reproduced_native_motif",
+      "evidence": "triage-d-partial.json"
+    },
+    {
+      "index": 22,
+      "verdict": "reproduced_native_motif",
+      "evidence": "triage-d-partial.json"
+    },
+    {
+      "index": 23,
+      "verdict": "reproduced_native_motif",
+      "evidence": "triage-d-partial.json"
+    },
+    {
+      "index": 24,
+      "verdict": "normal",
+      "evidence": "triage-d-partial.json"
+    },
+    {
+      "index": 25,
+      "verdict": "normal",
+      "evidence": "triage-d-partial.json"
+    },
+    {
+      "index": 26,
+      "verdict": "normal",
+      "evidence": "triage-d-partial.json"
+    },
+    {
+      "index": 27,
+      "verdict": "normal",
+      "evidence": "triage-d-partial.json"
+    },
+    {
+      "index": 28,
+      "verdict": "normal",
+      "evidence": "triage-d-partial.json"
+    },
+    {
+      "index": 29,
+      "verdict": "normal",
+      "evidence": "triage-d-partial.json"
+    },
+    {
+      "index": 30,
+      "verdict": "normal",
+      "evidence": "triage-d-partial.json"
+    },
+    {
+      "index": 31,
+      "verdict": "normal",
+      "evidence": "triage-d-partial.json"
+    },
+    {
+      "index": 32,
+      "verdict": "normal",
+      "evidence": "triage-d-partial.json"
+    },
+    {
+      "index": 33,
+      "verdict": "normal",
+      "evidence": "triage-d-partial.json"
+    },
+    {
+      "index": 34,
+      "verdict": "normal",
+      "evidence": "triage-d-partial.json"
+    },
+    {
+      "index": 35,
+      "verdict": "normal",
+      "evidence": "triage-d-partial.json"
+    },
+    {
+      "index": 36,
+      "verdict": "reproduced_native_motif",
+      "evidence": "triage-c-slice36-71.json"
+    },
+    {
+      "index": 37,
+      "verdict": "reproduced_native_motif",
+      "evidence": "triage-c-slice36-71.json"
+    },
+    {
+      "index": 38,
+      "verdict": "reproduced_native_motif",
+      "evidence": "triage-c-slice36-71.json"
+    },
+    {
+      "index": 39,
+      "verdict": "normal",
+      "evidence": "triage-c-slice36-71.json"
+    },
+    {
+      "index": 40,
+      "verdict": "normal",
+      "evidence": "triage-c-slice36-71.json"
+    },
+    {
+      "index": 41,
+      "verdict": "normal",
+      "evidence": "triage-c-slice36-71.json"
+    },
+    {
+      "index": 42,
+      "verdict": "reproduced_native_motif",
+      "evidence": "triage-c-slice36-71.json"
+    },
+    {
+      "index": 43,
+      "verdict": "reproduced_native_motif",
+      "evidence": "triage-c-slice36-71.json"
+    },
+    {
+      "index": 44,
+      "verdict": "reproduced_native_motif",
+      "evidence": "triage-c-slice36-71.json"
+    },
+    {
+      "index": 45,
+      "verdict": "normal",
+      "evidence": "triage-c-slice36-71.json"
+    },
+    {
+      "index": 46,
+      "verdict": "normal",
+      "evidence": "triage-c-slice36-71.json"
+    },
+    {
+      "index": 47,
+      "verdict": "normal",
+      "evidence": "triage-c-slice36-71.json"
+    },
+    {
+      "index": 48,
+      "verdict": "normal",
+      "evidence": "triage-c-slice36-71.json"
+    },
+    {
+      "index": 49,
+      "verdict": "normal",
+      "evidence": "triage-c-slice36-71.json"
+    },
+    {
+      "index": 50,
+      "verdict": "normal",
+      "evidence": "triage-c-slice36-71.json"
+    },
+    {
+      "index": 51,
+      "verdict": "normal",
+      "evidence": "triage-c-slice36-71.json"
+    },
+    {
+      "index": 52,
+      "verdict": "normal",
+      "evidence": "triage-c-slice36-71.json"
+    },
+    {
+      "index": 53,
+      "verdict": "normal",
+      "evidence": "triage-c-slice36-71.json"
+    },
+    {
+      "index": 54,
+      "verdict": "other_anomaly",
+      "evidence": "triage-c-slice36-71.json",
+      "extension": "cap-extensions-root/independent-review-c-index54.json"
+    },
+    {
+      "index": 55,
+      "verdict": "reproduced_native_motif",
+      "evidence": "triage-c-slice36-71.json"
+    },
+    {
+      "index": 56,
+      "verdict": "normal",
+      "evidence": "triage-c-slice36-71.json"
+    },
+    {
+      "index": 57,
+      "verdict": "normal",
+      "evidence": "triage-c-slice36-71.json"
+    },
+    {
+      "index": 58,
+      "verdict": "normal",
+      "evidence": "triage-c-slice36-71.json"
+    },
+    {
+      "index": 59,
+      "verdict": "normal",
+      "evidence": "triage-c-slice36-71.json"
+    },
+    {
+      "index": 60,
+      "verdict": "normal",
+      "evidence": "triage-c-slice36-71.json"
+    },
+    {
+      "index": 61,
+      "verdict": "normal",
+      "evidence": "triage-c-slice36-71.json"
+    },
+    {
+      "index": 62,
+      "verdict": "normal",
+      "evidence": "triage-c-slice36-71.json"
+    },
+    {
+      "index": 63,
+      "verdict": "normal",
+      "evidence": "triage-c-slice36-71.json"
+    },
+    {
+      "index": 64,
+      "verdict": "normal",
+      "evidence": "triage-c-slice36-71.json"
+    },
+    {
+      "index": 65,
+      "verdict": "normal",
+      "evidence": "triage-c-slice36-71.json"
+    },
+    {
+      "index": 66,
+      "verdict": "normal",
+      "evidence": "triage-c-slice36-71.json"
+    },
+    {
+      "index": 67,
+      "verdict": "normal",
+      "evidence": "triage-c-slice36-71.json"
+    },
+    {
+      "index": 68,
+      "verdict": "normal",
+      "evidence": "triage-c-slice36-71.json",
+      "extension": "cap-extensions-root/independent-review-d.json"
+    },
+    {
+      "index": 69,
+      "verdict": "normal",
+      "evidence": "triage-c-slice36-71.json"
+    },
+    {
+      "index": 70,
+      "verdict": "normal",
+      "evidence": "triage-c-slice36-71.json"
+    },
+    {
+      "index": 71,
+      "verdict": "normal",
+      "evidence": "triage-c-slice36-71.json"
+    },
+    {
+      "index": 72,
+      "verdict": "normal",
+      "evidence": "triage-b.json"
+    },
+    {
+      "index": 73,
+      "verdict": "normal",
+      "evidence": "triage-b.json"
+    },
+    {
+      "index": 74,
+      "verdict": "normal",
+      "evidence": "triage-b.json"
+    },
+    {
+      "index": 75,
+      "verdict": "normal",
+      "evidence": "triage-b.json"
+    },
+    {
+      "index": 76,
+      "verdict": "normal",
+      "evidence": "triage-b.json"
+    },
+    {
+      "index": 77,
+      "verdict": "normal",
+      "evidence": "triage-b.json"
+    },
+    {
+      "index": 78,
+      "verdict": "normal",
+      "evidence": "triage-b.json"
+    },
+    {
+      "index": 79,
+      "verdict": "normal",
+      "evidence": "triage-b.json"
+    },
+    {
+      "index": 80,
+      "verdict": "normal",
+      "evidence": "triage-b.json"
+    },
+    {
+      "index": 81,
+      "verdict": "normal",
+      "evidence": "triage-b.json"
+    },
+    {
+      "index": 82,
+      "verdict": "normal",
+      "evidence": "triage-b.json"
+    },
+    {
+      "index": 83,
+      "verdict": "normal",
+      "evidence": "triage-b.json"
+    },
+    {
+      "index": 84,
+      "verdict": "normal",
+      "evidence": "triage-b.json"
+    },
+    {
+      "index": 85,
+      "verdict": "normal",
+      "evidence": "triage-b.json"
+    },
+    {
+      "index": 86,
+      "verdict": "normal",
+      "evidence": "triage-b.json"
+    },
+    {
+      "index": 87,
+      "verdict": "normal",
+      "evidence": "triage-b.json"
+    },
+    {
+      "index": 88,
+      "verdict": "normal",
+      "evidence": "triage-b.json"
+    },
+    {
+      "index": 89,
+      "verdict": "other_anomaly",
+      "evidence": "triage-b.json"
+    },
+    {
+      "index": 90,
+      "verdict": "reproduced_native_motif",
+      "evidence": "triage-b.json"
+    },
+    {
+      "index": 91,
+      "verdict": "reproduced_native_motif",
+      "evidence": "triage-b.json"
+    },
+    {
+      "index": 92,
+      "verdict": "reproduced_native_motif",
+      "evidence": "triage-b.json"
+    },
+    {
+      "index": 93,
+      "verdict": "normal",
+      "evidence": "triage-b.json"
+    },
+    {
+      "index": 94,
+      "verdict": "normal",
+      "evidence": "triage-b.json"
+    },
+    {
+      "index": 95,
+      "verdict": "normal",
+      "evidence": "triage-b.json"
+    },
+    {
+      "index": 96,
+      "verdict": "normal",
+      "evidence": "triage-b.json"
+    },
+    {
+      "index": 97,
+      "verdict": "normal",
+      "evidence": "triage-b.json"
+    },
+    {
+      "index": 98,
+      "verdict": "normal",
+      "evidence": "triage-b.json"
+    },
+    {
+      "index": 99,
+      "verdict": "normal",
+      "evidence": "triage-b.json"
+    },
+    {
+      "index": 100,
+      "verdict": "normal",
+      "evidence": "triage-b.json"
+    },
+    {
+      "index": 101,
+      "verdict": "normal",
+      "evidence": "triage-b.json"
+    },
+    {
+      "index": 102,
+      "verdict": "normal",
+      "evidence": "triage-b.json"
+    },
+    {
+      "index": 103,
+      "verdict": "normal",
+      "evidence": "triage-b.json"
+    },
+    {
+      "index": 104,
+      "verdict": "normal",
+      "evidence": "triage-b.json"
+    },
+    {
+      "index": 105,
+      "verdict": "normal",
+      "evidence": "triage-b.json"
+    },
+    {
+      "index": 106,
+      "verdict": "normal",
+      "evidence": "triage-b.json"
+    },
+    {
+      "index": 107,
+      "verdict": "normal",
+      "evidence": "triage-b.json"
+    }
+  ],
+  "review_artifacts": [
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/p19-q32-production-validation/fixed108/triage-d-partial.json",
+      "sha256": "20f898c010a16ecc4d704a7c81017ad51c48b66bd508496e5bc3df3f4ab671f2"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/p19-q32-production-validation/fixed108/triage-c-slice36-71.json",
+      "sha256": "c34878054097390eba6614bb8b86519612c665d43c392bb08d2bea2c1936f823"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/p19-q32-production-validation/fixed108/triage-b.json",
+      "sha256": "43af2b0d3734eb5360c0e40ea3cc028661d298b0d74f15f428d8de4968a6e215"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/p19-q32-production-validation/fixed108/terminal-review-d.json",
+      "sha256": "d720b18a716005a84664debfa4117c87ba848f5c01bef50ebe28cbea4cbe5232"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/p19-q32-production-validation/fixed108/cap-extensions-root/independent-review-d.json",
+      "sha256": "ebd6080e7804b049336bfe979d3ecb7f281916fba66921152aecbc06ce6dea56"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/p19-q32-production-validation/fixed108/cap-extensions-root/independent-review-c-index54.json",
+      "sha256": "01ac694b8e6c594da5d506846a8f08e405aef4a68541cfedbc66500e90218120"
+    }
+  ],
+  "disposition": "P19 remains unselected and does not pass this diagnostic panel. Two protocol anomalies (54and89) are corrected by matched current-Q32 full-BF16 controls. Full-BF16 is not adopted without remaining fullpanel/serving/rates/retained-list validation; current time window has no admitted matched-rate rerun forecast. No task score changes.",
+  "scope": "Diagnostic seed42/43/44 continuations on saved reconstructed histories; normal means no reviewed target degeneration, not task correctness or native RNG equivalence. Eighteen caret continuations plus two localized contraction duplications remain in motif family; full/HF controls are documented with their conditional scope.",
+  "timing": "Fixed1083342.184s fell below3600s low forecast: generated28236vs29713historicaltokens and tracking1vsdisabled differ. No causal speedup claim. Extensions344.573s within340\u2013641s forecast; all3source prefixes exact and natural stops.",
+  "full_precision_controls": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/p19-q32-production-validation/fixed108/full-q32-protocol-controls/root-review.json"
+}

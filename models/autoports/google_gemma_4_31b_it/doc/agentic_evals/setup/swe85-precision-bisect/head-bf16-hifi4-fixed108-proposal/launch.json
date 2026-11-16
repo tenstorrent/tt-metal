@@ -1,0 +1,132 @@
+{
+  "status": "running",
+  "command": [
+    "timeout",
+    "7200",
+    "env",
+    "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+    "READINESS_TRACE_REGION_SIZE=134217728",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+    "-m",
+    "models.autoports.google_gemma_4_31b_it.tools.precision_repro_batch",
+    "--cases",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-with-cap4096-pending-v-closure/candidate-cases.json",
+    "--build-kwargs-file",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/head_bf16_hifi4_build_kwargs.json",
+    "--output-dir",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/runs/head_bf16_hifi4"
+  ],
+  "start_unix": 1794724752.719586,
+  "timeout_seconds": 7200,
+  "candidate_admission_sha256": "74bef162c97e23e882612eb85dae365f32c9da1f13ba4b9b8e1e1f8f582ad1be",
+  "candidate_proposal_sha256": "ddaaa015f62bd731afc6f9f19f37056a0f74d2071023338938420a3a080181a7",
+  "forecast": {
+    "status": "planning_proxy_rebased_on_completed_P1_all108_not_BF16_HIFI4_measurement",
+    "source_baseline": {
+      "completed_trials": 108,
+      "diagnostic_case_total_seconds": 1874.3906799475662,
+      "load_seconds": 138.38867970812134,
+      "process_outside_load_cases_seconds": 5.259629172971472,
+      "decode_seconds": 911.1484370483086,
+      "decode_replays": 27884,
+      "completion_sha256": "fa70e146164d0b1b948f3bb969fff7e56b44b8d6cc85912f2dfb814c941675d9",
+      "forecast_miss_acceptance_sha256": "b33ebae3a3366738541d2983238c18f57cc3841bc539afcc021a85d86fd7c18b",
+      "source": "P1 completed BFP8/HiFi2 run, all108 output rows and root forecast-miss accounting",
+      "manifest_sha256": "57193e4b91af3a31df00f0c92dbc0f2219fbce011e6533594e5244a93a3021ed",
+      "chosen_teacher_forcing_branches": 0,
+      "free_run_trials": 108
+    },
+    "scenarios": {
+      "low": {
+        "generation_multiplier": 1.0,
+        "load_multiplier": 1.0,
+        "outside_load_multiplier": 1.0
+      },
+      "central": {
+        "generation_multiplier": 1.5,
+        "load_multiplier": 1.5,
+        "outside_load_multiplier": 1.0
+      },
+      "high": {
+        "generation_multiplier": 3.0,
+        "load_multiplier": 2.0,
+        "outside_load_multiplier": 2.0
+      }
+    },
+    "forecast_seconds": {
+      "low": 2018.038988828659,
+      "central": 3024.428668656503,
+      "high": 5910.468657604884
+    },
+    "forecast_hours": {
+      "low": 0.5605663857857386,
+      "central": 0.8401190746268064,
+      "high": 1.6417968493346902
+    },
+    "timeout_seconds": 7200,
+    "timeout_margin_seconds_vs_high": 1289.5313423951156,
+    "method": "Apply explicit multipliers to the complete P1 measured case-generation wall, model load, and outside-load/preparation wall. Frozen manifest checks confirm all108 P1 jobs have branches=[] and one free-running trial; the baseline excludes chosen teacher-forcing branches.",
+    "uncertainty": [
+      "BF16/HiFi4 has not been run; high 3x case-generation and 2x load/preparation are conservative planning stress multipliers, not statistical bounds.",
+      "Changing logits can alter sampled trajectories and early-stop lengths, so output work may diverge from P1 despite the same caps; factors approximate that uncertainty, they do not bound it.",
+      "No candidate memory-fit/capacity or serving-speed claim follows from this forecast.",
+      "P1 completed wall was2018.039s against prior [2515.763,5878.864]s; root accepted the exact low forecast miss and provided component accounting.",
+      "The P1 workload has no chosen teacher-forcing branch (0 chosen TF tokens); the candidate panel has the same frozen manifest, so the forecast is a free-run reproduction estimate only."
+    ],
+    "score_changed": false,
+    "admission": "absent_intentionally"
+  },
+  "p1_forecast_gate": {
+    "status": "root_accepted_forecast_miss",
+    "measured_seconds": 2018.038988828659,
+    "forecast_range_seconds": [
+      2515.762556969247,
+      5878.864391854309
+    ]
+  },
+  "x_forecast_gates": {
+    "served": {
+      "status": "forecast_range_hit",
+      "measured_seconds": 186.30404543876648,
+      "forecast_range_seconds": [
+        169.2564974653069,
+        263.7882613848427
+      ]
+    },
+    "full": {
+      "status": "forecast_range_hit",
+      "measured_seconds": 139.90180444717407,
+      "forecast_range_seconds": [
+        136.5467805271037,
+        311.3167601771691
+      ]
+    }
+  },
+  "p1_terminal_hashes": {
+    "queue": "90eb8cc2ee230f3ed331c93213e8ee316491db73d7dcd80568af597b51c08adc",
+    "completion": "fa70e146164d0b1b948f3bb969fff7e56b44b8d6cc85912f2dfb814c941675d9",
+    "launch": "de1e30cac8ce26b64272a88cf95392aed520ad80400df0d61590c789d5e3a4f0",
+    "admission_sha256": "91dc764e6a3a6b1e8a1be51e6eee5fc958c19d1dfcfa3d057b989aa325618cdd",
+    "proposal_sha256": "c95ae189a8a4cd37159f106b5da1d5bfc9c2a84d3dc6009ff52b86101e6ed550",
+    "driver_sha256": "74fe8a4db31949824f4e59cce087da5eecfc272d5e14fb962119b8b1f9f24100",
+    "source_inventory_sha256": "e1254ae95f87360bc214b01757062a8910b5fed95f6e6cfd13244b024cce01ad"
+  },
+  "x_terminal_hashes": {
+    "admission_sha256": "300d69403a28112bc5f2a7225df5327bdb9e577ad9ca96cf754ab304f3538205",
+    "proposal_sha256": "e506154d52a4fb969d5f142cd9574cbb46db891c56d34d14f0387a28c493848a",
+    "driver_sha256": "ccf6e0e36654b16603347450756f9748f2fd4c9f2dbf9bbd942adf787aecee2d",
+    "queue_sha256": "61ec254baf1a1bac9b57f4e0a97ed3824c96ad3c8ef8ac74ee7ef6f4604b8981",
+    "forecast_sha256": "5c1a66e9dbc267492f9e27d3e555c08b1d50d0e21a5ba50faac3f60ab69834d9",
+    "served": {
+      "completion_sha256": "71f6df1a3cc42ba92004afeccb23027e92e2072e4cc5011ddac34f43f3514943",
+      "launch_sha256": "b97955a79eb06e543fe7c2101638a5a9f75463b9a08bd167f688db3564d84861"
+    },
+    "full": {
+      "completion_sha256": "93c1cd7540048e8c62689cd4bf2b5fc57fa8760ffa8a24db092892fb0c54e6af",
+      "launch_sha256": "0365580d55af188fe4b00203843c72a4f44964d713dc7dc13fc0613f298be38a"
+    },
+    "comparison_sha256": "8d098576fdd58a554e8bf5d1e58d27e0d821b3a753dade3b7900d4496f2a8668"
+  },
+  "active_hf_processes": [],
+  "device_owner_preflight": []
+}

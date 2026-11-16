@@ -1,0 +1,15 @@
+{
+  "status": "root_accepted_forecast_miss",
+  "reviewer": "root",
+  "accepted": true,
+  "utc": "2026-11-15T10:28:40.341192+00:00",
+  "completion_sha256": "54c14908183b4c1cee5f986e6321f277fc3b5358486e4d810513000d1643182b",
+  "measured_seconds": 622.6370310783386,
+  "forecast_range_seconds": [
+    1485.7519224153596,
+    5742.646502322758
+  ],
+  "admission_sha256": "74640276fdf5e463fa968d5d188994622759df96f09d4f408e02712b7d09ae66",
+  "serial_order": 8,
+  "explanation": "HF naturally stopped at55/512 tokens with tool-yield EOS50. Free303.499254s, runner618.264762s, outside4.372269s. Low miss reflects early natural stop versus512-token forecast; no timeout or missing terminal output. Semantic review pending; no scored-result change."
+}

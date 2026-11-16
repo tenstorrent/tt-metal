@@ -1,0 +1,773 @@
+{
+  "status": "prepared_not_executed",
+  "prepared_utc": "2026-11-14T12:21:55.658543+00:00",
+  "metadata": {
+    "task": "110",
+    "source_packet": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/gpqa-extended198-head-bfp8/digest/analysis.private/110-1ece0b577e69231f.json",
+    "native_response_id": "chatcmpl-914239b57924aae8",
+    "hf_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+    "sampling": {
+      "temperature": 1.0,
+      "top_p": 0.95,
+      "top_k": 20
+    },
+    "seed": 42,
+    "native_seed": 42,
+    "diagnostic_seeds": [
+      42,
+      43,
+      44
+    ],
+    "native_prompt_tokens": 307,
+    "rendered_prompt_tokens": 307,
+    "native_completion_tokens": 10427,
+    "reconstructed_completion_tokens": 10427,
+    "onset_reasoning_char": 6689,
+    "onset_reply_token_index": 2035,
+    "onset_marker": "Let's re-read choice (A) again:",
+    "onset_basis": "Before renewed choice-A parsing after the same alpha-site conclusion; earlier reasoning already revisits naming. Diagnostic onset is a selected semantic window, not a unique mechanical first-bad-token claim.",
+    "reconstruction": "Pinned native request template plus canonical thought/content markers retokenized. Raw native token IDs unavailable. Count agreement alone cannot prove native sampled-token identity.",
+    "scope": "Chosen64 TF at selected semantic onset, not whole-reply top1; cannot rule out earlier precision effects. No invented corrected reasoning.",
+    "executed": false,
+    "official_score_pending": true
+  },
+  "full_onset_prefix_tokens": 2342,
+  "full_onset_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task110.onset.full.private.json",
+  "full_reply_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task110.full_reply.private.json",
+  "device_controls": {
+    "served": [
+      "timeout",
+      "6600",
+      "env",
+      "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+      "READINESS_TRACE_REGION_SIZE=134217728",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "models/autoports/google_gemma_4_31b_it/tools/precision_repro_batch.py",
+      "--cases",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/cases.json",
+      "--build-kwargs-file",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/head_bfp8_build_kwargs.json",
+      "--output-dir",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/served"
+    ],
+    "full": [
+      "timeout",
+      "6600",
+      "env",
+      "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+      "READINESS_TRACE_REGION_SIZE=134217728",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "models/autoports/google_gemma_4_31b_it/tools/precision_repro_batch.py",
+      "--cases",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/cases.json",
+      "--build-kwargs-file",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_build_kwargs.json",
+      "--output-dir",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/full",
+      "--compare-dir",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/served"
+    ]
+  },
+  "hf_candidate_bounded_argv": [
+    "timeout",
+    "10800",
+    "env",
+    "HF_HUB_OFFLINE=1",
+    "HF_DATASETS_OFFLINE=1",
+    "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+    "models/autoports/google_gemma_4_31b_it/tools/precision_repro_hf.py",
+    "--cases",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/hf_candidate_cases.json",
+    "--output",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/hf_candidate",
+    "--tokens",
+    "512",
+    "--seeds",
+    "42",
+    "--prefill-chunk",
+    "512"
+  ],
+  "hf_gate": "Each task independently: only launch HF after served and full reproduce on identical selected short saved IDs, root authorization and original HF completion/timeout. Candidate manifest contains nine unproven512 cases; filter to reproduced cases, use2048 if only that reproduces. No-flag cannot pass; coherent/inconclusive512 HF requires1024/additional seeds. Positive establishes reference reproduction, not incidence or native-prompt equivalence.",
+  "device_gate": "After GPQA completion and clean server stop, fresh device owner check and host MemAvailable>=80GB. Run served then full serially, stop if first errors. No profiler/watcher.",
+  "decision": "Judge sustained redundant option re-parsing/alpha-site recounting with increasing indentation separately from legitimate finite reasoning. Each case untested; ordinary zlib detector may miss semantic loops.",
+  "sampling_request": {
+    "temperature": 1.0,
+    "top_p": 0.95,
+    "top_k": 20,
+    "seed": 42,
+    "max_tokens": 126976,
+    "chat_template_kwargs": {
+      "enable_thinking": true
+    }
+  },
+  "prompt_count_match": true,
+  "raw_native_ids_available": false,
+  "source_hashes": {
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/gpqa-extended198-head-bfp8/digest/analysis.private/110-1ece0b577e69231f.json": "36fe7f43177256d48b02d402c481a375ca7cf98937fe886ff22e08dbc67046e3",
+    "models/autoports/google_gemma_4_31b_it/tools/precision_repro_batch.py": "172f5a1dd7a7403847e47b966ae79c306163650a60211418c7c195794ec5c125",
+    "models/autoports/google_gemma_4_31b_it/tools/precision_repro_probe.py": "2ffc23b9081d7be78f3a0e911da7c50dd51dbf80de07a8716d600579dad1c25f",
+    "models/autoports/google_gemma_4_31b_it/tools/precision_repro_hf.py": "b8eab29c31193383d6b5c4e5c911f5e81c11bc94cd10c671a2075064d3a12c04",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/cases.json": "fc2b8eaf6bc69a32e114afa6a0e0341e30dd8a6f26cf67903b18ecb6a9578142",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task110.onset.suffix512.private.json": "9e59564d4fdf7b80a2c22d990b68ba581c9a5903cacd12aad265665f018b8115",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task110.onset.suffix2048.private.json": "384a1ad457aac156e5ff2c43bf16627f08300f89894ec356eeddf5d9a16a1578",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/head_bfp8_build_kwargs.json": "2e583fa8bd7aff7c5f8be110835df751924d167243c5a44a68aa5b3d70c6845f",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_build_kwargs.json": "ff2b5ed24e0b6a1dee7eb5cd8bd437d17c3df5f8f25567927d239e666f0699f9",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/hf_candidate_cases.json": "66d2930816277cdece85b31cb7cb5215e925d8d4d9b93c15882e09418e8b4a52",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/gpqa-extended198-head-bfp8/digest/analysis.private/129-aa124e10e1325c4e.json": "1fa595c3c078b0b5004593e991d59198a421e2983facabd31bdfcdd5f783905d",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task129.onset.suffix512.private.json": "ed546140385f31914b69d2e1b437166e439181164db29ae9c6cf40c77c18a49f",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task129.onset.suffix2048.private.json": "7638d0bbf5b2947bc1cbe60b7076fb44bf9a3405afdaeee81a2a9cdcb8aff46e",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/gpqa-extended198-head-bfp8/digest/analysis.private/127-f469c1ffa95d32cc.json": "4c414e4357786de3829c22144ddfce4c0cf8745de929bfc64f3595b5ebb5a20e",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task127.onset.suffix512.private.json": "9358f7b4cd8f88b6be716f05b439bab7f6ff97ccc6cfcaf7bf9e4558caaea5e7",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task127.onset.suffix2048.private.json": "dcd0d62c1ba3be9fa438309e3c3a1cbf61347d2308526e12d9f45b9314304e7c",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/gpqa-extended198-head-bfp8/digest/analysis.private/130-405b5966f982f097.json": "1bbb7c51d3c6ebede2d56d79cd7574f90683c7adf4bd368213b6893fb6e7a394",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task130.onset.suffix512.private.json": "e5392ef8dacd423969e18ddee5c47fc98a3f57babd47f39873b91cc448f227f1",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task130.onset.suffix2048.private.json": "347f00defa069737e3425757ce691e1381514126bbfc5226a44c51343e8b278a",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/gpqa-extended198-head-bfp8/digest/analysis.private/145-2a08a2a919f92563.json": "c83c3b99c0c0c1ce92d5caccd643f4581ad4dc8cb3c31ee4bd4da11e674839d5",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task145.onset.suffix512.private.json": "49509cb3060d9c35706ca2dac139af8efab8de2cb64428ee39206fd6fbdb91c3",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task145.onset.suffix2048.private.json": "c0c8e35b73453278b8f5bbdd5d2160056a8f5cf388069de4f4454193e606d5d0",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/gpqa-extended198-head-bfp8/digest/analysis.private/30-ca3c2d538e5e19f3.json": "04eefe8d82a2e2e5c11dcbe89c3f86f19f351e8df07d1c9e731cc1205db825f1",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task30.onset.suffix512.private.json": "40d866e08ba26e30392a32009afd746123317aa3a372f2c4ec125b3ad6736ac8",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task30.onset.suffix2048.private.json": "a70e4c762533cd8c4eba01e31ad18283314d68aec583998ee78284ce3e6f98c2",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/gpqa-extended198-head-bfp8/digest/analysis.private/48-097ab95d66aaf3d2.json": "8ad55fb4602955260c31dbc226c4514c64a3700364e1fd0042caf617b4f792a3",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task48.onset.suffix512.private.json": "b692aa5767347bfd84812ee16046fc94d639af4aa2abda4d0002ef35107e69f5",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task48.onset.suffix2048.private.json": "6c94f86c665456267b3381215416ba05c08f4651a82da66812d77adfd8e14cfe",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first_wave_cases.json": "1f721248ff90fa56cf1709eafa40dc24394a56bfb45c8d88a574d09ab0ec3cf2",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/gpqa-extended198-head-bfp8/digest/analysis.private/139-cb8649559ab89911.json": "9f2e85ceb4689cc5a6e6f463985979e1950bc6fe1dba0c858b12dc715bf73f5d",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task139.onset.suffix512.private.json": "1d32b1a1562236692f7ab7a5a0b51b6622acf4a29fde529e1ba501e4fa0afcf3",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task139.onset.suffix2048.private.json": "09c251689c403c509afc98723954b0e7c376dbd2503f8299b60c0d6e824dbb60",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/gpqa-extended198-head-bfp8/digest/analysis.private/147-f5dfde3d31b4433c.json": "80c51c99781b76a838d84545b0c489b02cfeb769ce1cfbe9280471183f682426",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task147.onset.suffix512.private.json": "1da2fb6f7c5c59a1ad448044b4bac32b13122d919ea209d5e4753a4d5f7d4635",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task147.onset.suffix2048.private.json": "738fd2fcacfd426e46d6d7b473a49dd27c3444b9c0061e2aa130f9d33e6ef71f"
+  },
+  "cost_budget": "Eighteen cases x3x1024 =55296 generatedtokens/config; at indicative full17tokens/s about3253seconds decode plus model load/prefill/TF/cleanup. Provision65\u201390minutes full, timeout6600 (110minutes). Serial served/full, stop on error. Approximate planning only, not performance claim.",
+  "optional_decisive_manifest": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/decisive_cases.json",
+  "official_score_pending": true,
+  "optional_decisive_controls": {
+    "served": [
+      "timeout",
+      "1800",
+      "env",
+      "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+      "READINESS_TRACE_REGION_SIZE=134217728",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "models/autoports/google_gemma_4_31b_it/tools/precision_repro_batch.py",
+      "--cases",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/decisive_cases.json",
+      "--build-kwargs-file",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/head_bfp8_build_kwargs.json",
+      "--output-dir",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/served-decisive"
+    ],
+    "full": [
+      "timeout",
+      "1800",
+      "env",
+      "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+      "READINESS_TRACE_REGION_SIZE=134217728",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "models/autoports/google_gemma_4_31b_it/tools/precision_repro_batch.py",
+      "--cases",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/decisive_cases.json",
+      "--build-kwargs-file",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_build_kwargs.json",
+      "--output-dir",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/full-decisive",
+      "--compare-dir",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/served-decisive"
+    ]
+  },
+  "token_hashes": {
+    "task110.onset.suffix512.private.json": {
+      "file_sha256": "9e59564d4fdf7b80a2c22d990b68ba581c9a5903cacd12aad265665f018b8115",
+      "prompt_tokens": 512,
+      "prompt_ids_sha256": "84110119dd905f7f3b29060a2bd7afcd87e900cbdf2aa6a06051c4a971ebe296",
+      "continuation_tokens": {
+        "chosen": 64
+      }
+    },
+    "task110.onset.suffix2048.private.json": {
+      "file_sha256": "384a1ad457aac156e5ff2c43bf16627f08300f89894ec356eeddf5d9a16a1578",
+      "prompt_tokens": 2048,
+      "prompt_ids_sha256": "081a9914e0f2f33da63ba9c695b60a5ef4a9c5a30b8f9e270e6aff7c0ec014c0",
+      "continuation_tokens": {
+        "chosen": 64
+      }
+    },
+    "task110.decisive.private.json": {
+      "file_sha256": "8aaaefd8cb4990b21ee4f9f304675c6a64fbf4543f12eb329a9e1a7e4719a4d9",
+      "prompt_tokens": 10731,
+      "prompt_ids_sha256": "8feb563cdcebf1148a1aac4db3e6eaef695cb21f00bfeb8f703d8ea00a4214a5",
+      "continuation_tokens": {
+        "chosen": 3,
+        "correct": 3
+      }
+    },
+    "task110.onset.full.private.json": {
+      "file_sha256": "66d2d1b619c6de1a3b5fa1af014126cc59ff93be18d7a7f22d9933e13d5e001c",
+      "prompt_tokens": 2342,
+      "prompt_ids_sha256": "4a13d036efc99ade71b3f0096e0b1f67b3e0472d1e08417ea68ef2f3e8374c0d",
+      "continuation_tokens": {
+        "chosen": 64
+      }
+    },
+    "task110.full_reply.private.json": {
+      "file_sha256": "0686ab0874a0fccab5111a66f62950f67bc8f447fea8c50ae4aeb99c966335e9",
+      "prompt_tokens": 307,
+      "prompt_ids_sha256": "d61e1aa1308f407bed0a756b9516097e227878a63399931b36cdad335a221f2a",
+      "continuation_tokens": {
+        "chosen": 10427
+      }
+    },
+    "task129.onset.full.private.json": {
+      "file_sha256": "d38c9be0d37db4fc0f335792434abee109ee334c7bdcd00b5b9a58d50f850c79",
+      "prompt_tokens": 1372,
+      "prompt_ids_sha256": "3780b25f5c4c44e4df244c13260533cb6b0f7a6b1d2eb0836fe55c5bd05780e9",
+      "continuation_tokens": {
+        "chosen": 64
+      }
+    },
+    "task129.full_reply.private.json": {
+      "file_sha256": "0c18b09b134925f5eb2193fe36575db3ff8c31896a0e813b6863f994a0f5b9b5",
+      "prompt_tokens": 138,
+      "prompt_ids_sha256": "ff44ee33ba2180087c0f13ad953cf1bea8a454366df45d43452ece3604a0bbde",
+      "continuation_tokens": {
+        "chosen": 7861
+      }
+    },
+    "task129.onset.suffix512.private.json": {
+      "file_sha256": "ed546140385f31914b69d2e1b437166e439181164db29ae9c6cf40c77c18a49f",
+      "prompt_tokens": 512,
+      "prompt_ids_sha256": "00aafcf420c286bb4afd485a925f53d9fc5c717299e6368956c0a5fe57cecab6",
+      "continuation_tokens": {
+        "chosen": 64
+      }
+    },
+    "task129.onset.suffix2048.private.json": {
+      "file_sha256": "7638d0bbf5b2947bc1cbe60b7076fb44bf9a3405afdaeee81a2a9cdcb8aff46e",
+      "prompt_tokens": 1372,
+      "prompt_ids_sha256": "3780b25f5c4c44e4df244c13260533cb6b0f7a6b1d2eb0836fe55c5bd05780e9",
+      "continuation_tokens": {
+        "chosen": 64
+      }
+    },
+    "task127.onset.full.private.json": {
+      "file_sha256": "c3db87187e6136f3c2baf9f85efabd7a10f2c00f9e40706e8e3a6c945b2682e0",
+      "prompt_tokens": 7456,
+      "prompt_ids_sha256": "be3d1160e9f6d4194c6754bed9b7dd3d4b00cbdd698dbe515f0b0f756d6657cd",
+      "continuation_tokens": {
+        "chosen": 64
+      }
+    },
+    "task127.onset.suffix512.private.json": {
+      "file_sha256": "9358f7b4cd8f88b6be716f05b439bab7f6ff97ccc6cfcaf7bf9e4558caaea5e7",
+      "prompt_tokens": 512,
+      "prompt_ids_sha256": "37eb9d8efe41d5cc914a71b58a736dcb52f8774d0cbfed3eec28c27ec5e2edc3",
+      "continuation_tokens": {
+        "chosen": 64
+      }
+    },
+    "task127.full_reply.private.json": {
+      "file_sha256": "b85fd8b7f872f0a113ea52fec561224e53406d82c0755c1855897bb79e80de2b",
+      "prompt_tokens": 2428,
+      "prompt_ids_sha256": "92e22401fcc4529400b9a337fd1fc8c49dbd18dbb5625441b70f169e9a577210",
+      "continuation_tokens": {
+        "chosen": 9781
+      }
+    },
+    "task127.onset.suffix2048.private.json": {
+      "file_sha256": "dcd0d62c1ba3be9fa438309e3c3a1cbf61347d2308526e12d9f45b9314304e7c",
+      "prompt_tokens": 2048,
+      "prompt_ids_sha256": "122cc9af80313a826cd2916a378b40c49445a205152c04cf2293230c1b47be4e",
+      "continuation_tokens": {
+        "chosen": 64
+      }
+    },
+    "task130.onset.suffix512.private.json": {
+      "file_sha256": "e5392ef8dacd423969e18ddee5c47fc98a3f57babd47f39873b91cc448f227f1",
+      "prompt_tokens": 512,
+      "prompt_ids_sha256": "fb3c50b2073eab93882c9f7b67575e8b0a3de586eb84762a0ba89dbecd836ca7",
+      "continuation_tokens": {
+        "chosen": 64
+      }
+    },
+    "task130.full_reply.private.json": {
+      "file_sha256": "29a9d0a9026b983e3005bc77ab771a01c3f2df96beabd0f8dc88eb0771c937a0",
+      "prompt_tokens": 347,
+      "prompt_ids_sha256": "e7e8150b7b3d8951dce7ac3ab1a2b2b608f2394a787ea151455094a3879aafd1",
+      "continuation_tokens": {
+        "chosen": 8498
+      }
+    },
+    "task130.onset.full.private.json": {
+      "file_sha256": "daf140ade4fb6b2f94903a839efc246064bcb90744c6139bcff47e1236024849",
+      "prompt_tokens": 4809,
+      "prompt_ids_sha256": "3548fe90d5a4a1dd56c3b2007798526608a54a40b61e2d5a05d4b4a41648ab89",
+      "continuation_tokens": {
+        "chosen": 64
+      }
+    },
+    "task130.onset.suffix2048.private.json": {
+      "file_sha256": "347f00defa069737e3425757ce691e1381514126bbfc5226a44c51343e8b278a",
+      "prompt_tokens": 2048,
+      "prompt_ids_sha256": "9d110db45e9fd9f6577fd18f092fca24126be9181b5cbf7544e2a31153151dd3",
+      "continuation_tokens": {
+        "chosen": 64
+      }
+    },
+    "task145.onset.full.private.json": {
+      "file_sha256": "3cf29798e815be58edcca2ce8fe1fb4b58f952234a52379281a584438f8b5f00",
+      "prompt_tokens": 5864,
+      "prompt_ids_sha256": "9bc52c154cf02ce0266b596cf7432a21dbafb787a54a4115aa586bc78b0f7cc0",
+      "continuation_tokens": {
+        "chosen": 64
+      }
+    },
+    "task145.full_reply.private.json": {
+      "file_sha256": "3cd9c24ce0aa59803c98f6c651f20a7c37dc46aa9f3e247c35157648ac99fb16",
+      "prompt_tokens": 299,
+      "prompt_ids_sha256": "95edb07d06dcae0a2b983577d01918c6c193610b86dc16ee66b22acf3211e6ec",
+      "continuation_tokens": {
+        "chosen": 6695
+      }
+    },
+    "task145.onset.suffix2048.private.json": {
+      "file_sha256": "c0c8e35b73453278b8f5bbdd5d2160056a8f5cf388069de4f4454193e606d5d0",
+      "prompt_tokens": 2048,
+      "prompt_ids_sha256": "b5ab0eba67eaeb1625b503515cc3fd65055351c1b1fabfcdfccf7befbe6ec715",
+      "continuation_tokens": {
+        "chosen": 64
+      }
+    },
+    "task145.onset.suffix512.private.json": {
+      "file_sha256": "49509cb3060d9c35706ca2dac139af8efab8de2cb64428ee39206fd6fbdb91c3",
+      "prompt_tokens": 512,
+      "prompt_ids_sha256": "dac30532dbe3110bddfbc4d2fe99adc362b9782e5877504b9570212b5fdde98f",
+      "continuation_tokens": {
+        "chosen": 64
+      }
+    },
+    "task30.onset.suffix2048.private.json": {
+      "file_sha256": "a70e4c762533cd8c4eba01e31ad18283314d68aec583998ee78284ce3e6f98c2",
+      "prompt_tokens": 2048,
+      "prompt_ids_sha256": "d51a4c81cfaa0b67812996be3801dd40e2cf10af13cbd121b8935d3a51d15736",
+      "continuation_tokens": {
+        "chosen": 64
+      }
+    },
+    "task30.onset.full.private.json": {
+      "file_sha256": "fc7908cc26aca5ca1ed6825f66cf94391ea08f2575e2058d4c9af7242c73518e",
+      "prompt_tokens": 5069,
+      "prompt_ids_sha256": "c70a4b676c8b80b9cd9af925686e2356361e08415e2cfb0a6db3bff96581bcaa",
+      "continuation_tokens": {
+        "chosen": 64
+      }
+    },
+    "task30.full_reply.private.json": {
+      "file_sha256": "b0729d064abb5508f350d6eb46de47036fa1615744802a3d78eaeeb3e481bb39",
+      "prompt_tokens": 143,
+      "prompt_ids_sha256": "b749157a5e0fed1405a862dba2faaaddb2beab8a1861e356dfb11215240530e2",
+      "continuation_tokens": {
+        "chosen": 7489
+      }
+    },
+    "task30.onset.suffix512.private.json": {
+      "file_sha256": "40d866e08ba26e30392a32009afd746123317aa3a372f2c4ec125b3ad6736ac8",
+      "prompt_tokens": 512,
+      "prompt_ids_sha256": "5aa418fa3b0c5625f07fb8eb28f42dbdc016dfc0bd16a52c8fa04e6f3812a88e",
+      "continuation_tokens": {
+        "chosen": 64
+      }
+    },
+    "task48.onset.suffix2048.private.json": {
+      "file_sha256": "6c94f86c665456267b3381215416ba05c08f4651a82da66812d77adfd8e14cfe",
+      "prompt_tokens": 2048,
+      "prompt_ids_sha256": "bd022da1c3d5d354337c61429ae5edccf0877c0df1504a049aa61b66621d8535",
+      "continuation_tokens": {
+        "chosen": 64
+      }
+    },
+    "task48.onset.suffix512.private.json": {
+      "file_sha256": "b692aa5767347bfd84812ee16046fc94d639af4aa2abda4d0002ef35107e69f5",
+      "prompt_tokens": 512,
+      "prompt_ids_sha256": "a469ead2d59221883638748385890316a26dc8d741b4ee408476c0f113e0e1f0",
+      "continuation_tokens": {
+        "chosen": 64
+      }
+    },
+    "task48.onset.full.private.json": {
+      "file_sha256": "9de7d655585c7259f24dcb4b2704e35cb32b6095d3eab526947c8ac0e150a68b",
+      "prompt_tokens": 3552,
+      "prompt_ids_sha256": "06715087ac3e2717214015a7cb441ef929e03a298ba61b8c8456ac65dabab8d5",
+      "continuation_tokens": {
+        "chosen": 64
+      }
+    },
+    "task48.full_reply.private.json": {
+      "file_sha256": "2c6a5e6cade53b8717418daff7e36cccd287e29e3638dfef00c76d13da808450",
+      "prompt_tokens": 420,
+      "prompt_ids_sha256": "04ce6769e768bb34d9cdd3ba19e2c2812a104b8334e835ab922b5c7585994da3",
+      "continuation_tokens": {
+        "chosen": 12783
+      }
+    },
+    "task139.onset.suffix512.private.json": {
+      "file_sha256": "1d32b1a1562236692f7ab7a5a0b51b6622acf4a29fde529e1ba501e4fa0afcf3",
+      "prompt_tokens": 512,
+      "prompt_ids_sha256": "169ac77e22462ce87075ef24c115884c9ff7a05a2013d6addbc44d0371bed24a",
+      "continuation_tokens": {
+        "chosen": 64
+      }
+    },
+    "task139.onset.suffix2048.private.json": {
+      "file_sha256": "09c251689c403c509afc98723954b0e7c376dbd2503f8299b60c0d6e824dbb60",
+      "prompt_tokens": 2048,
+      "prompt_ids_sha256": "f5f6b613769b8eebb3851ad56c9d65a0844ecdafd1e14bdbedff704aadb5212b",
+      "continuation_tokens": {
+        "chosen": 64
+      }
+    },
+    "task139.full_reply.private.json": {
+      "file_sha256": "9af571af3e5885ceca10467c0c76cf3418899d91eeea638bc75a3f0481f05ffe",
+      "prompt_tokens": 237,
+      "prompt_ids_sha256": "5e9250a66acc6e000719dd50ec7d435480651cfbb790dd744a3f97d121ac2e14",
+      "continuation_tokens": {
+        "chosen": 12886
+      }
+    },
+    "task139.onset.full.private.json": {
+      "file_sha256": "df579754998a3794e7e6611b31d23fa822ced50505c0c21547afe2621d336137",
+      "prompt_tokens": 5185,
+      "prompt_ids_sha256": "ef37a28d19f03cf12aa39bea9cc79b0678ced1e4a6bbc6dee12a4b9ccce7cfa3",
+      "continuation_tokens": {
+        "chosen": 64
+      }
+    },
+    "task147.onset.suffix512.private.json": {
+      "file_sha256": "1da2fb6f7c5c59a1ad448044b4bac32b13122d919ea209d5e4753a4d5f7d4635",
+      "prompt_tokens": 512,
+      "prompt_ids_sha256": "ef9553018b7ae304f1a7ac04cb321ac387d71e168078c0ca5e10f36567c4a3b0",
+      "continuation_tokens": {
+        "chosen": 64
+      }
+    },
+    "task147.full_reply.private.json": {
+      "file_sha256": "75e747fb9a13556065f50af184d43759a6f35ed2d4125833f327190551c41350",
+      "prompt_tokens": 232,
+      "prompt_ids_sha256": "06f9ce2c59eb0b8eae3cac9b51bf03aa778e8220dd1507f5f2746393b93356f7",
+      "continuation_tokens": {
+        "chosen": 20562
+      }
+    },
+    "task147.onset.suffix2048.private.json": {
+      "file_sha256": "738fd2fcacfd426e46d6d7b473a49dd27c3444b9c0061e2aa130f9d33e6ef71f",
+      "prompt_tokens": 2048,
+      "prompt_ids_sha256": "cdf4b6ba3099b577887a8c28b83b57631d8e1f0efbf658b26d131eda520b2526",
+      "continuation_tokens": {
+        "chosen": 64
+      }
+    },
+    "task147.onset.full.private.json": {
+      "file_sha256": "14848345a63f43c307eb7987e8c2da2662e3e45a2c3b66e232abb87aa9b8c37c",
+      "prompt_tokens": 18841,
+      "prompt_ids_sha256": "09da460a21dd36d545eaa45432890de360d2b008b18f339bd40119c5c7ff7034",
+      "continuation_tokens": {
+        "chosen": 64
+      }
+    }
+  },
+  "additional_tasks": {
+    "129": {
+      "metadata": {
+        "task": "129",
+        "source_packet": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/gpqa-extended198-head-bfp8/digest/analysis.private/129-aa124e10e1325c4e.json",
+        "native_response_id": "chatcmpl-a256d542834cd1d8",
+        "hf_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20
+        },
+        "seed": 42,
+        "native_seed": 42,
+        "diagnostic_seeds": [
+          42,
+          43,
+          44
+        ],
+        "native_prompt_tokens": 138,
+        "rendered_prompt_tokens": 138,
+        "native_completion_tokens": 7865,
+        "reconstructed_completion_tokens": 7861,
+        "onset_reasoning_char": 3320,
+        "onset_reply_token_index": 1234,
+        "onset_marker": "\u2019s",
+        "onset_basis": "Immediately before first stray curly-apostrophe-s fragment at reasoning char3320; nearby repeated redshift calculations provide semantic context. This is a reproducible selected window, not proof of first model error.",
+        "reconstruction": "Pinned native request template plus canonical thought/content markers retokenized. Raw native token IDs unavailable. Count agreement alone cannot prove native sampled-token identity.",
+        "scope": "Chosen64 TF at selected semantic onset, not whole-reply top1; cannot rule out earlier precision effects. No invented corrected reasoning.",
+        "executed": false,
+        "official_score_pending": true
+      },
+      "full_onset_prefix_tokens": 1372,
+      "full_onset_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task129.onset.full.private.json",
+      "full_reply_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task129.full_reply.private.json",
+      "semantic_note": "Repeated unchanged wavelength/redshift calculations and1.9/2.4 uncertainty plus stray fragments. Search simulation is native text only; no executed tool/network event.",
+      "reconstruction_limit": "Native prompt count138 matches rendering. Reconstructed reply7861 versus native7865 is4tokens short; unresolved channel/retokenization difference. Raw sampled IDs unavailable; not exact native replay. suffix2048 retains all1372 onset-prefix IDs because prefix is shorter than2048."
+    },
+    "127": {
+      "metadata": {
+        "task": "127",
+        "source_packet": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/gpqa-extended198-head-bfp8/digest/analysis.private/127-f469c1ffa95d32cc.json",
+        "native_response_id": "chatcmpl-b11e2842b7b41695",
+        "hf_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20
+        },
+        "seed": 42,
+        "native_seed": 42,
+        "diagnostic_seeds": [
+          42,
+          43,
+          44
+        ],
+        "native_prompt_tokens": 2428,
+        "rendered_prompt_tokens": 2428,
+        "native_completion_tokens": 9781,
+        "reconstructed_completion_tokens": 9781,
+        "onset_reasoning_char": 12061,
+        "onset_reply_token_index": 5028,
+        "onset_marker": "Let's check the protein sequence:",
+        "onset_basis": "Before renewed protein-motif check and repeated mistranscription/retranslation after character11500. Selected semantic-cycle onset, not unique first-error attribution.",
+        "reconstruction": "Pinned native request template plus canonical thought/content markers retokenized. Raw native token IDs unavailable. Count agreement alone cannot prove native sampled-token identity.",
+        "scope": "Chosen64 TF at selected semantic onset, not whole-reply top1; cannot rule out earlier precision effects. No invented corrected reasoning.",
+        "executed": false,
+        "official_score_pending": true
+      },
+      "full_onset_prefix_tokens": 7456,
+      "full_onset_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task127.onset.full.private.json",
+      "full_reply_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task127.full_reply.private.json",
+      "semantic_note": "Repeated mistranscription of the same motif and retranslation loops, especially reasoningchars12000-end; not attributed solely to sequence-task difficulty."
+    },
+    "130": {
+      "metadata": {
+        "task": "130",
+        "source_packet": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/gpqa-extended198-head-bfp8/digest/analysis.private/130-405b5966f982f097.json",
+        "native_response_id": "chatcmpl-94514a8437f09dc8",
+        "hf_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20
+        },
+        "seed": 42,
+        "native_seed": 42,
+        "diagnostic_seeds": [
+          42,
+          43,
+          44
+        ],
+        "native_prompt_tokens": 347,
+        "rendered_prompt_tokens": 347,
+        "native_completion_tokens": 8498,
+        "reconstructed_completion_tokens": 8498,
+        "onset_reasoning_char": 13539,
+        "onset_reply_token_index": 4462,
+        "onset_marker": "Let me re-read the diene:",
+        "onset_basis": "Before repeated diene-name/symmetry/proton-count reconsideration in the early sustained section. Later NOESY alternatives and normal answer preserved; selected semantic window, not unique first-error attribution.",
+        "reconstruction": "Pinned native request template plus canonical thought/content markers retokenized. Raw native token IDs unavailable. Count agreement alone cannot prove native sampled-token identity.",
+        "scope": "Chosen64 TF at selected semantic onset, not whole-reply top1; cannot rule out earlier precision effects. No invented corrected reasoning.",
+        "executed": false,
+        "official_score_pending": true
+      },
+      "full_onset_prefix_tokens": 4809,
+      "full_onset_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task130.onset.full.private.json",
+      "full_reply_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task130.full_reply.private.json",
+      "semantic_note": "Sustained repeated identical diene-name, symmetry and proton-count reconsideration around reasoningchars12000\u201318000; later alternative NOESY comparisons and normal answer do not remove this accepted anomaly."
+    },
+    "145": {
+      "metadata": {
+        "task": "145",
+        "source_packet": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/gpqa-extended198-head-bfp8/digest/analysis.private/145-2a08a2a919f92563.json",
+        "native_response_id": "chatcmpl-b8d9cd3e55ea6de9",
+        "hf_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20
+        },
+        "seed": 42,
+        "native_seed": 42,
+        "diagnostic_seeds": [
+          42,
+          43,
+          44
+        ],
+        "native_prompt_tokens": 299,
+        "rendered_prompt_tokens": 299,
+        "native_completion_tokens": 6696,
+        "reconstructed_completion_tokens": 6695,
+        "onset_reasoning_char": 17378,
+        "onset_reply_token_index": 5565,
+        "onset_marker": "I\u2019-ve\u2019ve",
+        "onset_basis": "Immediately before explicit malformed I\u2019-ve\u2019ve fragment in repeated syn/anti/priority reconsideration. Concrete fragment boundary chosen over broad semantic cycling; not unique first-error attribution.",
+        "reconstruction": "Pinned native request template plus canonical thought/content markers retokenized. Raw native token IDs unavailable. Count agreement alone cannot prove native sampled-token identity.",
+        "scope": "Chosen64 TF at selected semantic onset, not whole-reply top1; cannot rule out earlier precision effects. No invented corrected reasoning.",
+        "executed": false,
+        "official_score_pending": true
+      },
+      "full_onset_prefix_tokens": 5864,
+      "full_onset_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task145.onset.full.private.json",
+      "full_reply_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task145.full_reply.private.json",
+      "semantic_note": "Repeated syn/anti/priority reconsideration and malformed I\u2019-ve\u2019ve fragment; corrected full-channel triage supersedes initial final-answer-only assessment, both retained.",
+      "reconstruction_limit": "Reconstructed reply is 1tokens short of native count; unresolved retokenization/channel difference. Exact native IDs absent; no exact replay claim."
+    },
+    "30": {
+      "metadata": {
+        "task": "30",
+        "source_packet": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/gpqa-extended198-head-bfp8/digest/analysis.private/30-ca3c2d538e5e19f3.json",
+        "native_response_id": "chatcmpl-a3c0e9ace7577cb2",
+        "hf_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20
+        },
+        "seed": 42,
+        "native_seed": 42,
+        "diagnostic_seeds": [
+          42,
+          43,
+          44
+        ],
+        "native_prompt_tokens": 143,
+        "rendered_prompt_tokens": 143,
+        "native_completion_tokens": 7492,
+        "reconstructed_completion_tokens": 7489,
+        "onset_reasoning_char": 16042,
+        "onset_reply_token_index": 4926,
+        "onset_marker": "Wait! I just had a thought.",
+        "onset_basis": "Before renewed late acid/aldehyde/salt and symmetry hypothesis cycle after character15000. Earlier cycles exist; representative sustained-loop window, not unique first-error attribution.",
+        "reconstruction": "Pinned native request template plus canonical thought/content markers retokenized. Raw native token IDs unavailable. Count agreement alone cannot prove native sampled-token identity.",
+        "scope": "Chosen64 TF at selected semantic onset, not whole-reply top1; cannot rule out earlier precision effects. No invented corrected reasoning.",
+        "executed": false,
+        "official_score_pending": true
+      },
+      "full_onset_prefix_tokens": 5069,
+      "full_onset_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task30.onset.full.private.json",
+      "full_reply_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task30.full_reply.private.json",
+      "semantic_note": "Repeated unchanged acid/aldehyde/salt hypotheses and symmetry cycling; corrected full-channel triage supersedes initial assessment, wrong answer retained.",
+      "reconstruction_limit": "Reconstructed reply is 3tokens short of native count; unresolved retokenization/channel difference. Exact native IDs absent; no exact replay claim."
+    },
+    "48": {
+      "metadata": {
+        "task": "48",
+        "source_packet": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/gpqa-extended198-head-bfp8/digest/analysis.private/48-097ab95d66aaf3d2.json",
+        "native_response_id": "chatcmpl-b36f69468e2e1321",
+        "hf_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20
+        },
+        "seed": 42,
+        "native_seed": 42,
+        "diagnostic_seeds": [
+          42,
+          43,
+          44
+        ],
+        "native_prompt_tokens": 420,
+        "rendered_prompt_tokens": 420,
+        "native_completion_tokens": 12783,
+        "reconstructed_completion_tokens": 12783,
+        "onset_reasoning_char": 8758,
+        "onset_reply_token_index": 3132,
+        "onset_marker": "Wait, let me re-draw:",
+        "onset_basis": "Before renewed broken/new-bond reconstruction cycle around character8000; representative sustained section independently reviewed at8k\u201315k and28k-end, not unique first-error attribution.",
+        "reconstruction": "Pinned native request template plus canonical thought/content markers retokenized. Raw native token IDs unavailable. Count agreement alone cannot prove native sampled-token identity.",
+        "scope": "Chosen64 TF at selected semantic onset, not whole-reply top1; cannot rule out earlier precision effects. No invented corrected reasoning.",
+        "executed": false,
+        "official_score_pending": true
+      },
+      "full_onset_prefix_tokens": 3552,
+      "full_onset_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task48.onset.full.private.json",
+      "full_reply_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task48.full_reply.private.json",
+      "semantic_note": "Sustained identical broken/new-bond reconstruction cycles confirmed by corrected full-channel rereview; later answer retained."
+    },
+    "139": {
+      "metadata": {
+        "task": "139",
+        "source_packet": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/gpqa-extended198-head-bfp8/digest/analysis.private/139-cb8649559ab89911.json",
+        "native_response_id": "chatcmpl-9ff91926c8aa5973",
+        "hf_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20
+        },
+        "seed": 42,
+        "native_seed": 42,
+        "diagnostic_seeds": [
+          42,
+          43,
+          44
+        ],
+        "native_prompt_tokens": 237,
+        "rendered_prompt_tokens": 237,
+        "native_completion_tokens": 12888,
+        "reconstructed_completion_tokens": 12886,
+        "onset_reasoning_char": 13666,
+        "onset_reply_token_index": 4948,
+        "onset_marker": "Let's re-examine the reaction",
+        "onset_basis": "Before renewed candidate/reaction reconsideration in sustained candidate-and-precipitate mismatch cycles around13k\u201318k. Later partialD2Oprogress retained; selected semantic onset not unique first error.",
+        "reconstruction": "Pinned native request template plus canonical thought/content markers retokenized. Raw native token IDs unavailable. Count agreement alone cannot prove native sampled-token identity.",
+        "scope": "Chosen64 TF at selected semantic onset, not whole-reply top1; cannot rule out earlier precision effects. No invented corrected reasoning.",
+        "executed": false,
+        "official_score_pending": true
+      },
+      "full_onset_prefix_tokens": 5185,
+      "full_onset_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task139.onset.full.private.json",
+      "full_reply_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task139.full_reply.private.json",
+      "semantic_note": "Repeated candidate and precipitate mismatch cycles in full reasoning; later partialD2Oprogress does not erase the accepted anomaly."
+    },
+    "147": {
+      "metadata": {
+        "task": "147",
+        "source_packet": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/gpqa-extended198-head-bfp8/digest/analysis.private/147-f5dfde3d31b4433c.json",
+        "native_response_id": "chatcmpl-a2a7fdc9914f930c",
+        "hf_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20
+        },
+        "seed": 42,
+        "native_seed": 42,
+        "diagnostic_seeds": [
+          42,
+          43,
+          44
+        ],
+        "native_prompt_tokens": 232,
+        "rendered_prompt_tokens": 232,
+        "native_completion_tokens": 20562,
+        "reconstructed_completion_tokens": 20562,
+        "onset_reasoning_char": 39463,
+        "onset_reply_token_index": 18609,
+        "onset_marker": "Let me re-calculate the \u03c9F for AmF\u2099 again.",
+        "onset_basis": "Before renewed unchanged AmF6 fraction/A1 contradiction cycle after38000characters; selected concrete recalculate boundary, not unique first-error attribution.",
+        "reconstruction": "Pinned native request template plus canonical thought/content markers retokenized. Raw native token IDs unavailable. Count agreement alone cannot prove native sampled-token identity.",
+        "scope": "Chosen64 TF at selected semantic onset, not whole-reply top1; cannot rule out earlier precision effects. No invented corrected reasoning.",
+        "executed": false,
+        "official_score_pending": true
+      },
+      "full_onset_prefix_tokens": 18841,
+      "full_onset_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task147.onset.full.private.json",
+      "full_reply_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task147.full_reply.private.json",
+      "semantic_note": "Sustained repeated unchanged AmF6 fractions and A1 contradiction near38000-end accepted after full-channel review. Task171 bracket-strip harness infrastructure excluded."
+    }
+  },
+  "prep_version": "v9_tasks30_48_110_127_129_130_139_145_147"
+}

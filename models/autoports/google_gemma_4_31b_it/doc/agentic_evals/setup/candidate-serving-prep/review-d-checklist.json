@@ -1,0 +1,138 @@
+{
+  "current_run_state": {
+    "p16_status": "completed_exit1_natural_accuracy_rejected",
+    "evidence": "setup/all-bfp8-lofi-kv-bf16-accuracy-p16/completion.json and setup/all-bfp8-lofi-kv-bf16-accuracy-p16/run/readiness_accuracy.json",
+    "scores": {
+      "aime_prefill_top1": 0.97,
+      "aime_decode_top1": 0.98,
+      "natural_top1": 0.857421875,
+      "natural_top1_matches": 439,
+      "natural_positions": 512,
+      "natural_top5": 0.9921875,
+      "natural_top100": 1.0
+    },
+    "gate": "Natural top1 >= 0.90; P16 does not pass. No serving acceptance or selection is eligible from P16.",
+    "full_bf16_control": {
+      "natural_top1": 0.916015625,
+      "matches": 469,
+      "positions": 512,
+      "meaning": "accuracy reference control only, not chosen serving policy"
+    },
+    "previously_prepared_attention_down_command": "setup/attention-down-acceptance/commands.json is stale: points to P6 attention+down BFP8-LoFi candidate and old unique output path; P6 is rejected. Do not launch or edit in place."
+  },
+  "runtime_path": {
+    "precision_loader": "tt/precision.py load_precision(None) opens sibling tt/selected_precision_config.json; generator_vllm.initialize_vllm_model constructs Gemma4Model without precision_config, so actual serving policy is this file.",
+    "serving_registration": "generator_vllm emits autoport_registration with module file and full runtime precision; require exact policy and module-path review in launch logs.",
+    "kv_dtype": "model layer cache_dtype is read from precision policy; serving_memory.validate_pool_memory accounts dtype bytes {BF16:2048, BFP8:1088, BFP4:576} per relevant tile; allocator fit is a runtime gate.",
+    "batch_contract": [
+      1,
+      8,
+      16,
+      32
+    ],
+    "operator_stage12_batches": [
+      1,
+      8,
+      32
+    ],
+    "current_runtime_config": "tt/selected_precision_config.json remains stage12_head_bfp8_lofi: BFP4 attention/MLP/down, BFP8-LoFi lm_head, BFP8 KV. It must not be mistaken for P16."
+  },
+  "concrete_prepared_artifact_findings": [
+    {
+      "severity": "blocker_for_P16_or_full_BF16_rate_accounting",
+      "artifact": "setup/swe85-precision-bisect/candidate-serving-prep/benchmark_work_precision_groups.patch",
+      "finding": "Patch generalizes projection weight bytes by attention/MLP/down/head groups but explicitly rejects any KV dtype except bfloat8_b and hardcodes BFP8 bytes in both kv_read_bytes and kv_write_bytes. Thus it cannot model P16 BFP8-LoFi weights + BF16 KV or full BF16 weights + BF16 KV.",
+      "minimal_patch": "Select cache bytes from precision[\"kv_cache_dtype\"] with bfloat8_b -> BFP8_BYTES (1088/1024) and bfloat16 -> 2.0 bytes/element; use the selected value in BOTH KV read and write formulas. Keep weight-group accounting independent. Add host tests proving KV read/write ratio is 2/(1088/1024)=1.8823529411764706 for identical positions, and that total DRAM delta is only those KV terms; preserve current BFP8-KV equality.",
+      "scope": "Work estimate only; it does not replace measured serving rates."
+    },
+    {
+      "severity": "stale_for_serving_admission",
+      "artifact": "setup/candidate-serving-prep/all-bfp8-memory-planning.json",
+      "finding": "Its main all-BFP8 estimate holds P8/BFP8 KV unchanged and assumes the old selected head-BFP8 launch. Its BF16-KV scenario is explicitly hypothetical; it combines P8 B1 inventory and an old B32 allocator ledger. It is not a P16 allocation measurement. Estimate says BF16-KV max 17208 pool IDs, 5 agents at 131072 conservative (14270 IDs), 6 leaves about 110MB, and 3 at full 262144; these are arithmetic only.",
+      "next": "For a candidate that passes natural accuracy, rebuild memory planning from its exact B1 owned-memory inventory plus B1/B8/B32 candidate launch measurements; preserve the 262144 context and explicitly target 131072 working set. No stage11 rate/85-task projection from head-BFP8/BFP8-KV applies."
+    },
+    {
+      "severity": "not_yet_applied",
+      "artifact": "setup/swe85-precision-bisect/candidate-serving-prep/{benchmark_work_precision_groups.patch,kv_pool_ids_override.patch}",
+      "finding": "Both are inert proposals in setup/swe85-precision-bisect/candidate-serving-prep; matching canonical serving source remains unchanged. Tests patch temporary copies. No source/runtime change is evidenced."
+    }
+  ],
+  "pool_and_memory_actions_after_accuracy_pass": [
+    "Use only the passing candidate precision JSON; update the effective tt/selected_precision_config.json only as part of approved selection, then hash/pin it and check autoport_registration reports the entire intended policy. Keep doc/datatype_sweep/selected_precision_config.json and report provenance synchronized if it is used as a record; it is not the serving loader path.",
+    "Apply and test the explicit GEMMA4_KV_POOL_IDS override proposal (or equivalent reviewed model-owned change) so fixed pre-load KV pool sizing can be chosen for B1/B8/B16/B32. Its current minima 8449/10248/12304/16416 are arithmetic for preserving advertised 262144 context after worker output/sliding reserves, not selected pool sizes.",
+    "For BF16 KV, use only a planning seed of about 5 concurrent 131072-token working-set agents; the current hypothetical arithmetic gives 6 as an extremely tight ceiling. At B32 the context-preserving minimum 16416 IDs itself is above the five-agent working-set estimate 14270, so keep max model len=262144 and verify actual post-weight/reserve free and contiguous memory, pool allocation, admission floor, and reserve ledger on launch. Do not claim 5/6 until allocator evidence.",
+    "Validate actual fixed pool and model loading separately at operator stage12 batches 1, 8, 32 (batch16 is supported by adapter but not in stage12 measured batch list unless separately justified). Record memory plan/fits and runtime policy for each; worker admission floor may raise pool above requested IDs. No env pool value overrides the measured-fit guard.",
+    "If P16 fails as it did, do not proceed to serving acceptance based on the all-BF16 control or SWE anomaly panels. Wait for a cumulative policy that independently passes exact AIME+natural accuracy thresholds."
+  ],
+  "acceptance_and_performance_path_after_a_passing_candidate": [
+    {
+      "step": "accuracy_gate",
+      "command_template": "timeout 2400 env HF_HUB_OFFLINE=1 HF_DATASETS_OFFLINE=1 HF_HUB_DISABLE_TELEMETRY=1 OMP_NUM_THREADS=16 MKL_NUM_THREADS=16 OPENBLAS_NUM_THREADS=16 PYTHONPATH=<repo>:<pinned_skill_runtime> READINESS_TRACE_REGION_SIZE=134217728 TT_METAL_TRACE_ALLOC_TRACKING=0 TT_METAL_DEVICE_PROFILER=0 python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tests.run_datatype_candidate --config <passing-policy-json> --id <unique-policy-id> --output-dir <unique-evidence-dir> --reference setup/attention-down-acceptance/references/aime24.refpt --natural-reference setup/attention-down-acceptance/references/natural.refpt --require-accuracy --acceptance",
+      "forecast": "Regenerate from the latest matching policy load, TF, prefill, trace-preparation, context and qualitative timings. Old 300-1800s range in commands.json is attached to rejected P6 and must not be reused without analysis. Existing full-BF16 140.54s accuracy run and P16 278.92s failing run are diagnostic anchors, not a new candidate forecast.",
+      "gate": "Need terminal exit0, exact runtime_policy and trace-counter checks, per-reference AIME/natural >=90% top1, >=98% top5, top100=1.0; then inspect generated outputs and full-context evidence. P16 fails natural top1."
+    },
+    {
+      "step": "batch_and_pool_validation",
+      "command_template": "After B1 candidate acceptance, run the same candidate policy at --batch 8 and --batch 32 with distinct output directories; this runner takes the performance/long-prefix path for batch != 1 and does not rerun accuracy there. Pair with actual server launches at the intended pool settings and capture launch validation, allocator/reserve ledger and registration logs.",
+      "coverage": "Keep max model len at the advertised 262144. Validate relevant measured workload contexts; do not cap context to fit the pool. Stage 12 batch choices are 1, 8, or 32; validate B1 regression and select the smallest batch that supports measured capacity.",
+      "action": "Validate the smallest selected serving batch that holds the measured target concurrency/capacity, with a B1 regression check. B1/B8/B32 are supported choices, not a requirement to launch all three; choose among them from measured pool and workload capacity. Use distinct output directories for any candidate runs. Pair selected-batch validation with actual server launch at intended pool settings and capture launch validation, allocator/reserve ledger and registration logs."
+    },
+    {
+      "step": "work_and_rates",
+      "action": "Extend/test benchmark_work for candidate group labels and cache dtype (above), then measure policy-matched serving rates for actual route/precision at required contexts (4096, typical/working set, >=28K and longest eval context), for chosen batch/concurrency rows. Benchmark model decode-work projection uses executed shapes and precision; cache model is an estimate only. Record memory controller traffic only if directly measured.",
+      "forecast": "Existing 85-task span 3.52h and stage11 rate grid belong to head-BFP8/BFP8-KV. The memory plan explicitly says no policy-matched 85-task replay is supportable yet. Generate fresh rate grid first, replay full fixed85 workload using chosen pool/concurrency, include margins, then compare with remaining phase budget; do not inverse-scale 12 agents to 5."
+    },
+    {
+      "step": "serving_eval",
+      "action": "After acceptance and pool/rates pass, pin the chosen config in the effective loader and every server command; validate local adapter registration; launch serialized serving with measured pool IDs and selected batch, authorized generation override top_k32, temperature 1/top_p .95 unchanged. Phase 1/phase 2 and extended GPQA already passed; a changed precision requires rerunning the full SWE85 validation, not repeating those passed phases. Preserve the 262144 context and report the actual rate/memory evidence and selected batch/capacity.",
+      "historical_config": "learned.json currently carries old head-BFP8 selection, 10 agents at B32 and BFP8 KV from v5 stage12 best_config. It is not transferable to changed precision/KV. Stage12 inputs require extended local run, batch sizes 1/8/32; follow current inputs.json deadline/budget."
+    }
+  ],
+  "forecast_notes": {
+    "prepared_acceptance_range_seconds": [
+      300,
+      1800
+    ],
+    "range_validity": "Only old planning for P6; regenerate candidate-specific forecast after accuracy pass.",
+    "historical_full85_wall_hours": 3.5234534586,
+    "historical_old_projection_hours": 9.590058417778545,
+    "meaning": "Different old serving configuration; not a candidate runtime estimate. The existing planning artifact says policy-matched rates and an exact pool launch are mandatory before projecting a changed-precision SWE85 run.",
+    "historical_full85_wall_provenance": "Canonical full85 wall time from coordinator record; replaces the earlier approximate task-span calculation."
+  },
+  "scope": "CPU/host source and artifact audit only. No changes to runtime, candidate files, tests, acceptance artifacts or active evidence; no TTNN/HF/model/device commands. Not a precision selection or stage signoff.",
+  "source_sha256": {
+    "learned.json": "b84fe5987048745c1ad368d9d45f62042a1844efdb1d6ee89affc140f31d7a62",
+    "agentic_serving.json": "bfadc543c6e216a4287d6b50b63f5bb04bc7d726fb8b0761645488ade8457aa1",
+    "precision.py": "2f223a118fe713677b9ce4fb3beb2f563e26af56ef45a98b2e03fad1e25664a9",
+    "model.py": "c65ed33bb175f63603946eea561a2623cad0b70521428bdf888bd9445457a01e",
+    "generator_vllm.py": "6f1f12aa238bbe2b8499e8aa6201be7fe505de80e2f53457a30a724370885a5a",
+    "kv_pool_budget.py": "d4b426107cb0e003f43cca26294a92dd2fdd4a184638cbd2e5ce0c6c1dd6fbcd",
+    "selected_precision_config.json": "aa0e651fb3fdd7afc285293645c5ca309b2da246619e6e7fb6da86c5d2f28853",
+    "benchmark_work.py": "20ce368b83804c20065f975c2bc4b5e7837176b8ae6f5777713f364ba6e81b26",
+    "run_datatype_candidate.py": "1390350c91b27b4f8563ffa8bd38224f6b06543668ca2a627c2c3ecea756a287",
+    "candidate-serving-prep/README.md": "e20e6217a31ff2df3e45d997eaf04717248d873ea2806945ce935b704c6d7000",
+    "benchmark_work_precision_groups.patch": "46df3e267b31485950f87178553117cc643f84bb9e3cad4001dfd43db65ace5f",
+    "kv_pool_ids_override.patch": "1d2a591bf464a32057813f8ae5690396e5608274bef278c03b5d06bf1e1b432e",
+    "test_benchmark_work_precision_groups.py": "55438108324ef5bfb11e69f23b06e505ce7d159014943c66e5a6f34f9ff6a47a",
+    "test_kv_pool_ids_override.py": "147b144113fb9d0b2680ebac9689c2ecd65f9f9015d45c951aa3d76ce5d985fa",
+    "all-bfp8-memory-planning.json": "7e61a99bf0f47e839bb85648f7756dfc73853041c84e8acdd8529099effd0aed",
+    "attention-down-commands.json": "d54e78957a79416bfa1cf212e88022b3dea6dc1108074dde03036e0787fd9b48",
+    "references.json": "f665053108019dfc020e8c7a4fa654288281e79b2c6504f089f25e834df951df",
+    "reference-terminal-review.json": "dc13db4ff312263ddfe14bb0235c3186c9a780a34f353d7e8c5271bef8f7dca7",
+    "p16-precision.json": "f1354b0b913f8ae490d93a1db78c5e670618eedc84a585350c15bf143f333b14",
+    "p16-command.json": "0383f2cf9002407c449ff6a6c56611a632c3a2a427998163d48f05c6bbcda113",
+    "p16-completion.json": "e9486ba267a13da6bb3f2c08dbb045fa885402fe6737b71c48ec4a252367365f",
+    "p16-readiness.json": "32a550dabe4f1cd25379847202f8a51522f3e63b567b15bd72ac7334230129b9",
+    "full-bf16-review.json": "36d3c443a94a1728fc199da0a5472504070bfa63b61487f0ef1daf0831a55188",
+    "operator-inputs.json": "7fe169cefaf3903e0099bac818fc496b0b1df09f65ad026251989e29557bab50"
+  },
+  "test_execution_note": "The prep tests patch temporary source copies; they do not apply production changes. Run host-only tests after extending the benchmark patch for BF16 KV. The README currently uses a dotted unittest module path through a hyphenated directory; if that invocation does not resolve, use unittest discovery rooted at that directory.",
+  "stage_rerun_scope": {
+    "already_passed": [
+      "phase1",
+      "phase2",
+      "extended GPQA"
+    ],
+    "precision_change_followup": "Rerun the complete SWE85 validation under the selected precision and measured serving capacity; do not rerun already-passed phases/suites solely because precision changed."
+  }
+}

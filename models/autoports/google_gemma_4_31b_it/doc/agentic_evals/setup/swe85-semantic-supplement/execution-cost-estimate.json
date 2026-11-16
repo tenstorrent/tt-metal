@@ -1,0 +1,11 @@
+{
+  "teacher_forced_positions": 2015,
+  "prefill_input_tokens_sum": 153723,
+  "prefills": 7,
+  "served_seconds_estimate": 303.83722533296043,
+  "full_seconds_estimate": 335.3443120149566,
+  "basis": "Completed long-prefix pilot host diagnostic costs, setup/swe85-remainder-cost-gate.json. Linear estimate only; compiler/warmup variance remains. No serving performance claim.",
+  "timeout_seconds_each": 3600,
+  "queue": "setup/run_swe85_supplement_after_remainder.py",
+  "queue_session": 32807
+}

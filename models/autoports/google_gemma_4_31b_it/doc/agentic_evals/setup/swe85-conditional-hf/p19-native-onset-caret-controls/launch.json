@@ -1,0 +1,33 @@
+{
+  "status": "completed",
+  "start_unix": 1794761693.2828577,
+  "argv": [
+    "timeout",
+    "5400",
+    "env",
+    "HF_HUB_OFFLINE=1",
+    "HF_DATASETS_OFFLINE=1",
+    "HF_HUB_DISABLE_TELEMETRY=1",
+    "OMP_NUM_THREADS=16",
+    "MKL_NUM_THREADS=16",
+    "OPENBLAS_NUM_THREADS=16",
+    "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+    "-m",
+    "models.autoports.google_gemma_4_31b_it.tools.precision_repro_hf",
+    "--cases",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/p19-native-onset-caret-controls/cases.json",
+    "--output",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/p19-native-onset-caret-controls/results",
+    "--tokens",
+    "256",
+    "--seeds",
+    "42",
+    "--prefill-chunk",
+    "512"
+  ],
+  "admission_sha256": "9365b9d3e92b59635bf169f8e21019df21733539140e6eb09310fa10084c4564",
+  "end_unix": 1794765434.8674667,
+  "elapsed_seconds": 3741.5846090316772,
+  "process_exit_code": 0
+}

@@ -1,0 +1,145 @@
+{
+  "status": "independent_host_only_review",
+  "scope": "Two protocol-group-bisect arms; no inference or device access.",
+  "arms": [
+    {
+      "arm": "arm-a-kv-bfp8-only",
+      "status": "host_validate_only_passed_no_inference",
+      "cases_path": "setup/full-q32-production-validation/protocol-group-bisect/arm-a-kv-bfp8-only/cases.json",
+      "cases_sha256": "16042fa5fe4f10a4589e2eaffce787cfe86d44321cbf574378a30a68440a6e32",
+      "case_count": 2,
+      "cases": [
+        {
+          "name": "fullq32.anomaly.sphinx-doc__sphinx-10323.call70.onset.seed42.cap256",
+          "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-extra-contraction-controls/sphinx-doc__sphinx-10323.call70.onset.private.json",
+          "seed": 42,
+          "free_run_tokens": 512,
+          "branches": []
+        },
+        {
+          "name": "fullq32.anomaly.sympy__sympy-13878.call1.onset.seed44.cap256",
+          "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.sympy__sympy-13878.call1.onset.seed44.private.json",
+          "seed": 44,
+          "free_run_tokens": 256,
+          "branches": []
+        }
+      ],
+      "command_sha256": "2121a47f8070cd9654b310b95800a153f24ad9b10f6d872cca8bc5d4074bed7b",
+      "source_pins_file_sha256": "47e21d7e9e0dc9d3a6f1da548a9b71ba53a04331dbd9149cfed78143461f180f",
+      "source_pin_count": 12,
+      "source_pin_mismatches": [],
+      "precision_sha256": "3817ced344c62765264f60f6baa4ac3badad6592d892e53a81ffda4276f3d814",
+      "runtime_policy": {
+        "config_id": "stage12_bf16_hifi4_kv_bfp8_protocol_probe",
+        "weight_groups": {
+          "attention": "bf16",
+          "mlp": "bf16",
+          "down": "bf16",
+          "lm_head": "bf16"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "HiFi4",
+          "mlp": "HiFi4",
+          "down": "HiFi4",
+          "lm_head": "HiFi4"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat8_b",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144,
+        "sdpa_compute_fidelity": "HiFi4"
+      },
+      "build_kwargs_sha256": "ad4b6d8063bf44e3b35d13f9f8f51901a63bcc4db22b9a8f46a21301c7c8a185",
+      "forecast": {
+        "forecast_seconds": {
+          "low": 120,
+          "point": 220,
+          "high": 450
+        },
+        "timeout_seconds": 600,
+        "basis": "One full model load and both exact Q32 diagnostic fixtures, anchored to completed full-BF16 two-case control wall151.319s and its load77.677s. This arm preserves the same prompts/seeds and 512/256 generation caps; broader high bound covers changed output lengths, repeated traced decode work, and arm-specific load/cache effects. These are diagnostic wall estimates, not serving rates."
+      },
+      "validation_result": "exit0: Validated 2 jobs without importing TTNN",
+      "run_output_dir_exists": false
+    },
+    {
+      "arm": "arm-b-down-bfp8-lofi-only",
+      "status": "host_validate_only_passed_no_inference",
+      "cases_path": "setup/full-q32-production-validation/protocol-group-bisect/arm-b-down-bfp8-lofi-only/cases.json",
+      "cases_sha256": "16042fa5fe4f10a4589e2eaffce787cfe86d44321cbf574378a30a68440a6e32",
+      "case_count": 2,
+      "cases": [
+        {
+          "name": "fullq32.anomaly.sphinx-doc__sphinx-10323.call70.onset.seed42.cap256",
+          "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-extra-contraction-controls/sphinx-doc__sphinx-10323.call70.onset.private.json",
+          "seed": 42,
+          "free_run_tokens": 512,
+          "branches": []
+        },
+        {
+          "name": "fullq32.anomaly.sympy__sympy-13878.call1.onset.seed44.cap256",
+          "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.sympy__sympy-13878.call1.onset.seed44.private.json",
+          "seed": 44,
+          "free_run_tokens": 256,
+          "branches": []
+        }
+      ],
+      "command_sha256": "cb39ee20a674ef7fe6df21b7a2f804d958359330e240836e02ef7d84f6b69325",
+      "source_pins_file_sha256": "47e21d7e9e0dc9d3a6f1da548a9b71ba53a04331dbd9149cfed78143461f180f",
+      "source_pin_count": 12,
+      "source_pin_mismatches": [],
+      "precision_sha256": "827b7cdfb8e088659dbddb7a210426d5f2fe2a8f6df48caad4941ce0ee5efe0b",
+      "runtime_policy": {
+        "config_id": "stage12_bf16_hifi4_down_bfp8_lofi_protocol_probe",
+        "weight_groups": {
+          "attention": "bf16",
+          "mlp": "bf16",
+          "down": "bfp8_lofi",
+          "lm_head": "bf16"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "HiFi4",
+          "mlp": "HiFi4",
+          "down": "LoFi",
+          "lm_head": "HiFi4"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat16",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144,
+        "sdpa_compute_fidelity": "HiFi4"
+      },
+      "build_kwargs_sha256": "e53d645a56cdb0445cb05b9f4c46063d176560144b35ac729f103d6da6c17804",
+      "forecast": {
+        "forecast_seconds": {
+          "low": 120,
+          "point": 220,
+          "high": 450
+        },
+        "timeout_seconds": 600,
+        "basis": "One full model load and both exact Q32 diagnostic fixtures, anchored to completed full-BF16 two-case control wall151.319s and its load77.677s. This arm preserves the same prompts/seeds and 512/256 generation caps; broader high bound covers changed output lengths, repeated traced decode work, and arm-specific load/cache effects. These are diagnostic wall estimates, not serving rates."
+      },
+      "validation_result": "exit0: Validated 2 jobs without importing TTNN",
+      "run_output_dir_exists": false
+    }
+  ],
+  "conclusion": "Both candidate manifests are valid two-job lists. Arm A changes KV cache only to BFP8; arm B changes down projection only to BFP8/LoFi; other precision groups, activation, residual, CCL, logits, sampler, norms, embedding, max context and HiFi4 attention geometry are full-BF16 baseline. Both output dirs remain absent and package execution authority remains None. Validation used explicit --validate-only and returned before TTNN import."
+}

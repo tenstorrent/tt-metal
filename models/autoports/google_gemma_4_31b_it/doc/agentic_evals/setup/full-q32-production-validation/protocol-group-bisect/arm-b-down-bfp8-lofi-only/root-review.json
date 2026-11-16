@@ -1,0 +1,96 @@
+{
+  "status": "one_protocol_defect_reproduced_not_accepted",
+  "single_delta": "down BF16HiFi4 to BFP8LoFi; KV and allothersfull",
+  "rows": [
+    {
+      "output": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full-q32-production-validation/protocol-group-bisect/arm-b-down-bfp8-lofi-only/runs/fullq32.anomaly.sympy__sympy-13878.call1.onset.seed44.cap256.json",
+      "sha256": "024e5f13bf4d1daeb4846bd086e1ab52bcaaccf51ba5a3e306da80d0db468b8b",
+      "generated_tokens": 19,
+      "stop_id": 50,
+      "verdict": "wrong_closing_tool_marker_as_opener",
+      "decode_timing": {
+        "decode_tokens": 18,
+        "decode_wall_s": 0.9710315889678895,
+        "decode_tok_s_user": 18.536987060464448,
+        "trace_counters_before_decode": {
+          "model_replays": 39,
+          "sample_replays": 41,
+          "token_refreshes": 0,
+          "position_refreshes": 2,
+          "page_refreshes": 120,
+          "readbacks": 41,
+          "captures": 3
+        },
+        "trace_counters_after_decode": {
+          "model_replays": 57,
+          "sample_replays": 59,
+          "token_refreshes": 0,
+          "position_refreshes": 2,
+          "page_refreshes": 120,
+          "readbacks": 59,
+          "captures": 3
+        },
+        "trace_counters_delta": {
+          "model_replays": 18,
+          "sample_replays": 18,
+          "token_refreshes": 0,
+          "position_refreshes": 0,
+          "page_refreshes": 0,
+          "readbacks": 18,
+          "captures": 0
+        },
+        "basis": "Batch1 wall from immediately before first _replay to return after last existing synchronous token-out readback; counts completed replay calls, includes host loop gaps, excludes prefill/first token and text decoding. No added device sync or profiler. Traced diagnostic rate, not serving benchmark."
+      }
+    },
+    {
+      "output": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full-q32-production-validation/protocol-group-bisect/arm-b-down-bfp8-lofi-only/runs/fullq32.anomaly.sphinx-doc__sphinx-10323.call70.onset.seed42.cap256.json",
+      "sha256": "c304c51d8dff8b1620d7b2803398dd42ca882f4139741d7d373f39975e926109",
+      "generated_tokens": 40,
+      "stop_id": 50,
+      "verdict": "correct_tool_boundary_natural_stop",
+      "decode_timing": {
+        "decode_tokens": 39,
+        "decode_wall_s": 2.3604524980764836,
+        "decode_tok_s_user": 16.522255809757166,
+        "trace_counters_before_decode": {
+          "model_replays": 0,
+          "sample_replays": 1,
+          "token_refreshes": 0,
+          "position_refreshes": 1,
+          "page_refreshes": 60,
+          "readbacks": 1,
+          "captures": 3
+        },
+        "trace_counters_after_decode": {
+          "model_replays": 39,
+          "sample_replays": 40,
+          "token_refreshes": 0,
+          "position_refreshes": 1,
+          "page_refreshes": 60,
+          "readbacks": 40,
+          "captures": 3
+        },
+        "trace_counters_delta": {
+          "model_replays": 39,
+          "sample_replays": 39,
+          "token_refreshes": 0,
+          "position_refreshes": 0,
+          "page_refreshes": 0,
+          "readbacks": 39,
+          "captures": 0
+        },
+        "basis": "Batch1 wall from immediately before first _replay to return after last existing synchronous token-out readback; counts completed replay calls, includes host loop gaps, excludes prefill/first token and text decoding. No added device sync or profiler. Traced diagnostic rate, not serving benchmark."
+      }
+    }
+  ],
+  "pins_verified": 160,
+  "completion": {
+    "start_unix": 1794784335.7640977,
+    "end_unix": 1794784504.8001187,
+    "exit_code": 0,
+    "wall_seconds": 169.0360209941864
+  },
+  "forecast_result": "169.036seconds within120-450 range",
+  "inference": "Down-only sufficient to reproduce Sympy marker defect on this fixture. KV-only did not. Sphinx defect only observed in joint P19, not either single-delta arm, so no single-group attribution there.",
+  "next": "FullBF16 resume/broad baseline diagnostics if deadline fits; armA two-case pass insufficient for selection."
+}

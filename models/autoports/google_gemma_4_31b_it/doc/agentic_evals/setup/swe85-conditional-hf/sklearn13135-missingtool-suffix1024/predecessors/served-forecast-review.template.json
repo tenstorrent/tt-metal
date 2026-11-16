@@ -1,0 +1,12 @@
+{
+  "reviewer": "root",
+  "accepted": null,
+  "mode": "served",
+  "forecast_range_seconds": [
+    210.0,
+    390.0
+  ],
+  "reviewed_elapsed_seconds": null,
+  "forecast_status": null,
+  "reason": "Must bind this candidate completion hash, actual admission hash, and exact frozen range; explicitly accept a miss if outside range."
+}

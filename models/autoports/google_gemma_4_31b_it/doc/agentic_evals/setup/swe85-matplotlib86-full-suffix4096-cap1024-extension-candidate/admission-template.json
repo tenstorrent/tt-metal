@@ -1,0 +1,141 @@
+{
+  "status": "root_must_fill_after_review",
+  "reviewer": "root",
+  "accepted": false,
+  "deadline_utc": "2026-11-16T01:15:25Z",
+  "timeout_seconds": 1200,
+  "candidate_pins": {
+    "proposal.json": "<sha256>",
+    "command.json": "<sha256>",
+    "cases.json": "<sha256>",
+    "forecast.json": "<sha256>",
+    "source-pins.json": "<sha256>",
+    "runtime-pins.json": "<sha256>",
+    "admission-template.json": "<sha256>",
+    "run_cap1024.py": "<sha256>",
+    "test_run_cap1024.py": "<sha256>"
+  },
+  "candidate_forecast_review": {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-matplotlib86-full-suffix4096-cap1024-extension-candidate/root-forecast-review.json",
+    "sha256": "<sha256>"
+  },
+  "h9_predecessor": {
+    "progress": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/progress.json",
+      "sha256": "<final-terminal-progress-sha256>"
+    },
+    "terminal_status": "all_groups_completed",
+    "groups": [
+      {
+        "serial_order": 1,
+        "completion": {
+          "path": "<H9 completion-group-01 path>",
+          "sha256": "<sha256>"
+        },
+        "root_review": {
+          "path": "<H9 root-group-01-review path>",
+          "sha256": "<sha256>"
+        }
+      },
+      {
+        "serial_order": 2,
+        "completion": {
+          "path": "<H9 completion-group-02 path>",
+          "sha256": "<sha256>"
+        },
+        "root_review": {
+          "path": "<H9 root-group-02-review path>",
+          "sha256": "<sha256>"
+        }
+      },
+      {
+        "serial_order": 3,
+        "completion": {
+          "path": "<H9 completion-group-03 path>",
+          "sha256": "<sha256>"
+        },
+        "root_review": {
+          "path": "<H9 root-group-03-review path>",
+          "sha256": "<sha256>"
+        }
+      },
+      {
+        "serial_order": 4,
+        "completion": {
+          "path": "<H9 completion-group-04 path>",
+          "sha256": "<sha256>"
+        },
+        "root_review": {
+          "path": "<H9 root-group-04-review path>",
+          "sha256": "<sha256>"
+        }
+      },
+      {
+        "serial_order": 5,
+        "completion": {
+          "path": "<H9 completion-group-05 path>",
+          "sha256": "<sha256>"
+        },
+        "root_review": {
+          "path": "<H9 root-group-05-review path>",
+          "sha256": "<sha256>"
+        }
+      },
+      {
+        "serial_order": 6,
+        "completion": {
+          "path": "<H9 completion-group-06 path>",
+          "sha256": "<sha256>"
+        },
+        "root_review": {
+          "path": "<H9 root-group-06-review path>",
+          "sha256": "<sha256>"
+        }
+      },
+      {
+        "serial_order": 7,
+        "completion": {
+          "path": "<H9 completion-group-07 path>",
+          "sha256": "<sha256>"
+        },
+        "root_review": {
+          "path": "<H9 root-group-07-review path>",
+          "sha256": "<sha256>"
+        }
+      },
+      {
+        "serial_order": 8,
+        "completion": {
+          "path": "<H9 completion-group-08 path>",
+          "sha256": "<sha256>"
+        },
+        "root_review": {
+          "path": "<H9 root-group-08-review path>",
+          "sha256": "<sha256>"
+        }
+      }
+    ],
+    "forecast_miss_acceptances": [
+      {
+        "serial_order": 2,
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/forecast-miss-accepted-group-02.json",
+        "sha256": "<sha256>"
+      },
+      {
+        "serial_order": 6,
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/forecast-miss-accepted-group-06.json",
+        "sha256": "<sha256>"
+      },
+      {
+        "serial_order": 7,
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/forecast-miss-accepted-group-07.json",
+        "sha256": "<sha256>"
+      },
+      {
+        "serial_order": 8,
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/forecast-miss-accepted-group-08.json",
+        "sha256": "<sha256>"
+      }
+    ]
+  }
+}

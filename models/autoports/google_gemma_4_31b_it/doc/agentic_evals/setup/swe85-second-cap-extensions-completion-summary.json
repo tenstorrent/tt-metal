@@ -1,0 +1,1380 @@
+{
+  "status": "completed_second_cap_queue_evidence_summary",
+  "created_utc": "2026-11-15T04:38:54.632730+00:00",
+  "scope": "Host-only aggregation of all admitted served14/full24 cap1024 results and root coordinator adjudications; no score or precision-selection decision.",
+  "admission": {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/admission.json",
+    "sha256": "2b69cc4b881361734ab2a8d097e34d89a129a3b788010451f46f54fe83a0d359"
+  },
+  "manifest_counts": {
+    "served": 14,
+    "full": 24
+  },
+  "invariants": {
+    "all_second_cap_results_present_and_complete": true,
+    "all_root_coordinator_rows_present": true,
+    "all_matched_cap512_prefixes_identical": true,
+    "all_decode_tokens_equal_generated_ids_minus_one": true,
+    "all_model_replay_sample_replay_readback_deltas_equal_generated_ids_minus_one": true,
+    "all_trace_capture_deltas_zero": true
+  },
+  "coordinator_snapshots": [
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/full-coordinator-first4.json",
+      "sha256": "0d294a8184ba2792864feac7224b8a05f6acacba1d99894f297f4868d6b0ff36"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/full-coordinator-pytest-first.json",
+      "sha256": "f7559774e7a04f7d145316f0b4f93c857d8404cdd55e9afdf5457191fbfcd893"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/full-coordinator-pytest-second.json",
+      "sha256": "dad8eea30e1e826be49534a1fdd02babdbde7a72c58cf3171e2ce55e71dc37d8"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/full-coordinator-pytest-third.json",
+      "sha256": "e7aceeb45e978290fcf6291f22698fa6dc8dd017e335578f111df581812d0a83"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/full-coordinator-sklearn13135.json",
+      "sha256": "4e2eddf28b2e3a89dd26d589db61ca52aecb232b882c2c2c56cfea68af330aab"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/full-coordinator-sphinx101.json",
+      "sha256": "2ef3859561877b88428b7d3b0521491c668b612897aed40a2b2920f0ddec78ec"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/full-coordinator-sphinx119-first.json",
+      "sha256": "b196b0787cd83db86fcb6ed8105e1a69e0fd3fe7e8e27ef8294ce006350e82ec"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/full-coordinator-sphinx119-second.json",
+      "sha256": "3c07cc3262fe2ef8ed05d1bd128b5caabcba31c8fa87812b27729cfb9aa7aa68"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/full-coordinator-sphinx119-third.json",
+      "sha256": "acc70266c664d02fdd17dbf4969f6deeea3a186c8e42377a91900d34aae5e88f"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/full-coordinator-sphinx28-first2.json",
+      "sha256": "6ba7f3791b3ea32824c6313dc24125425e08f8a165f20de8756697ec41cb34b4"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/full-coordinator-sphinx86-first2.json",
+      "sha256": "67762113e0df97773cd5691921948f2e2f48078cb089d1ee0781ceb46375a181"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/full-coordinator-sphinx86last95first.json",
+      "sha256": "11ee67940b32853f073bca52ef25a1a7987c0769015351aa5319d6dc352e903a"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/full-coordinator-sphinx9461-first.json",
+      "sha256": "4eeb67ea69f916d3dbea7cf6acb817adfc03638a12ade2633cfb0a0890fed7bd"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/full-coordinator-sphinx9461-second.json",
+      "sha256": "c83f2eee23110780f15eea82662c1f5ad3eb49c89e00adbf2a645600bf45cc57"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/full-coordinator-sphinx95-second.json",
+      "sha256": "3eb82b71546b836d4d2cd500ce16aec1f42070e8ee1fdd6fd2f2a701df6b9766"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/full-coordinator-sphinx95-third.json",
+      "sha256": "f4311df38af9e223f0e88ac31abc83be82e5890fafacd0bc91e2f15c8ee1088b"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/served-coordinator-call95-last2.json",
+      "sha256": "0d14c727e737935529ece74df12c002806d4cc74ae4d6367d3e850e3f1780d8a"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/served-coordinator-final3.json",
+      "sha256": "f9a800969dafeb952f8bc9dd404598aae2730e67c9eec504cf77a6f1d49fcc50"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/served-coordinator-first2.json",
+      "sha256": "7eef01c7ad8a0a41c1648b5f9baa1f622778b3be2013f74f8895adb68bc8f5d1"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/served-coordinator-next2.json",
+      "sha256": "6587ec927580efb56efcee4a405c94a067fd25ea9e815ad2c85dfd4cbb1c53d8"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/served-coordinator-next3.json",
+      "sha256": "2f370ae65c56f4e1fad10d508ee94742a6d14fd54fba30df39a626ca9f5e2b55"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/served-coordinator-sphinx9461-first2.json",
+      "sha256": "afe0e220f588c5b9aff64d7de5752f5e00d52443489f27ce134a46f9af0013b2"
+    }
+  ],
+  "by_mode": {
+    "served": {
+      "trials": 14,
+      "verdict_counts": {
+        "normal": 12,
+        "inconclusive": 2
+      },
+      "generated_id_total": 10897,
+      "root_adjudications": [
+        {
+          "mode": "served",
+          "job": "anomaly.call88.canonicalprefix.cap1024.seed42",
+          "seed": 42,
+          "verdict": "normal",
+          "reason": "Completes advancing patch script with EOF and tool close; differing appended method lines not loops. Inherited prefix contraction is not newly generated. No repair correctness claim.",
+          "generated_ids": 642,
+          "source_cap512_ids": 512,
+          "prefix512_identical": true,
+          "decode_tokens": 641,
+          "trace_deltas": {
+            "model_replays": 641,
+            "sample_replays": 641,
+            "readbacks": 641,
+            "captures": 0
+          },
+          "diagnostic_total_wall_s": 43.96060514007695,
+          "decode_wall_s": 21.322029176866636,
+          "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/runs/served/anomaly.call88.canonicalprefix.cap1024.seed42.json",
+          "result_sha256": "e31ed852131a86df733f3ce714e8999aa97fbf54ec838f3a061fb358531ff878",
+          "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/served/anomaly.call88.canonicalprefix.cap1024.seed42.private.json",
+          "fixture_sha256": "c988d745a874afb35c291ed05c985f01d837aa103696b884a8c14a3d4f4631a4",
+          "cap512_source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/served/anomaly.call88.canonicalprefix.cap512.seed42.json",
+          "cap512_source_result_sha256": "1358e74c8ed61914cd730785fbea34bbb2a40d5d0ba90db52e3960fcabe5f198",
+          "coordinator_snapshots": [
+            {
+              "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/served-coordinator-first2.json",
+              "sha256": "7eef01c7ad8a0a41c1648b5f9baa1f622778b3be2013f74f8895adb68bc8f5d1"
+            }
+          ],
+          "adjudication_reason": "Completes advancing patch script with EOF and tool close; differing appended method lines not loops. Inherited prefix contraction is not newly generated. No repair correctness claim."
+        },
+        {
+          "mode": "served",
+          "job": "anomaly.call88.canonicalprefix.cap1024.seed43",
+          "seed": 43,
+          "verdict": "normal",
+          "reason": "Completes advancing patch script with EOF and tool close; differing appended method lines not loops. Inherited prefix contraction is not newly generated. No repair correctness claim.",
+          "generated_ids": 591,
+          "source_cap512_ids": 512,
+          "prefix512_identical": true,
+          "decode_tokens": 590,
+          "trace_deltas": {
+            "model_replays": 590,
+            "sample_replays": 590,
+            "readbacks": 590,
+            "captures": 0
+          },
+          "diagnostic_total_wall_s": 32.725931013934314,
+          "decode_wall_s": 19.63692995789461,
+          "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/runs/served/anomaly.call88.canonicalprefix.cap1024.seed43.json",
+          "result_sha256": "3e8e63fa92154f00dbd403c98ef8cc94d931ef3ef590b83d39ee6d3ab512aacb",
+          "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/served/anomaly.call88.canonicalprefix.cap1024.seed43.private.json",
+          "fixture_sha256": "9498bca2ffb4369489d685dcdbe0e6a644454203070c5072a7ecda4233f6dd2f",
+          "cap512_source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/served/anomaly.call88.canonicalprefix.cap512.seed43.json",
+          "cap512_source_result_sha256": "3c3603d0653b6b9e74f13a9dfee6339959c9e619194654ea718685555a0b4ddc",
+          "coordinator_snapshots": [
+            {
+              "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/served-coordinator-first2.json",
+              "sha256": "7eef01c7ad8a0a41c1648b5f9baa1f622778b3be2013f74f8895adb68bc8f5d1"
+            }
+          ],
+          "adjudication_reason": "Completes advancing patch script with EOF and tool close; differing appended method lines not loops. Inherited prefix contraction is not newly generated. No repair correctness claim."
+        },
+        {
+          "mode": "served",
+          "job": "anomaly.call88.canonicalprefix.cap1024.seed44",
+          "seed": 44,
+          "verdict": "normal",
+          "reason": "Completes varying patch script, EOF and tool close. No degeneration; repair correctness not inferred.",
+          "generated_ids": 723,
+          "source_cap512_ids": 512,
+          "prefix512_identical": true,
+          "decode_tokens": 722,
+          "trace_deltas": {
+            "model_replays": 722,
+            "sample_replays": 722,
+            "readbacks": 722,
+            "captures": 0
+          },
+          "diagnostic_total_wall_s": 37.11500050011091,
+          "decode_wall_s": 24.0217166361399,
+          "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/runs/served/anomaly.call88.canonicalprefix.cap1024.seed44.json",
+          "result_sha256": "78995f4e279b2e8bfe70877bf9bf29fbcc0d880a87a1685a4ce1c46410e3c00b",
+          "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/served/anomaly.call88.canonicalprefix.cap1024.seed44.private.json",
+          "fixture_sha256": "737937d682358b2e5cf29623f0b1bff7d63af44b3e9b76b86fb0ed1dca036bec",
+          "cap512_source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/served/anomaly.call88.canonicalprefix.cap512.seed44.json",
+          "cap512_source_result_sha256": "ed08caf71aa6fe034369cde0fb3a80e07bd546514a72e939c993c9fff8ad30a7",
+          "coordinator_snapshots": [
+            {
+              "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/served-coordinator-next3.json",
+              "sha256": "2f370ae65c56f4e1fad10d508ee94742a6d14fd54fba30df39a626ca9f5e2b55"
+            }
+          ],
+          "adjudication_reason": "Completes varying patch script, EOF and tool close. No degeneration; repair correctness not inferred."
+        },
+        {
+          "mode": "served",
+          "job": "anomaly.matplotlib__matplotlib-20488.call86.onset.cap1024.seed44",
+          "seed": 44,
+          "verdict": "normal",
+          "reason": "Completes varying patch script, EOF and tool close. No degeneration; repair correctness not inferred.",
+          "generated_ids": 853,
+          "source_cap512_ids": 512,
+          "prefix512_identical": true,
+          "decode_tokens": 852,
+          "trace_deltas": {
+            "model_replays": 852,
+            "sample_replays": 852,
+            "readbacks": 852,
+            "captures": 0
+          },
+          "diagnostic_total_wall_s": 41.144424583995715,
+          "decode_wall_s": 28.261717788875103,
+          "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/runs/served/anomaly.matplotlib__matplotlib-20488.call86.onset.cap1024.seed44.json",
+          "result_sha256": "f89720ee947d00e39ef1aba30319d65018adaee2f6d1154a968ff7fb2c92cb1f",
+          "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/served/anomaly.matplotlib__matplotlib-20488.call86.onset.cap1024.seed44.private.json",
+          "fixture_sha256": "293e6199bf309fd64e0d01abedf532409886a27a209acce69c6bd12a023faf26",
+          "cap512_source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/served/anomaly.matplotlib__matplotlib-20488.call86.onset.cap512.seed44.json",
+          "cap512_source_result_sha256": "afe4963c1bebeabbcaa97e3411d4b3993b89ab4191fec065040c7991e47f72bf",
+          "coordinator_snapshots": [
+            {
+              "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/served-coordinator-next3.json",
+              "sha256": "2f370ae65c56f4e1fad10d508ee94742a6d14fd54fba30df39a626ca9f5e2b55"
+            }
+          ],
+          "adjudication_reason": "Completes varying patch script, EOF and tool close. No degeneration; repair correctness not inferred."
+        },
+        {
+          "mode": "served",
+          "job": "anomaly.pytest-dev__pytest-5787.call65.onset.cap1024.seed43",
+          "seed": 43,
+          "verdict": "inconclusive",
+          "reason": "Advancing serialization/deserialization method construction, cut off mid-code1024; requires2048.",
+          "generated_ids": 1024,
+          "source_cap512_ids": 512,
+          "prefix512_identical": true,
+          "decode_tokens": 1023,
+          "trace_deltas": {
+            "model_replays": 1023,
+            "sample_replays": 1023,
+            "readbacks": 1023,
+            "captures": 0
+          },
+          "diagnostic_total_wall_s": 50.705771192209795,
+          "decode_wall_s": 34.69719773903489,
+          "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/runs/served/anomaly.pytest-dev__pytest-5787.call65.onset.cap1024.seed43.json",
+          "result_sha256": "a17ee90953817cc39ba43767a3264593a2f628bcfda801230fa1dd99bc6ffd7a",
+          "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/served/anomaly.pytest-dev__pytest-5787.call65.onset.cap1024.seed43.private.json",
+          "fixture_sha256": "6f489182de104872fcb88834ac27e8208f2603ae893011f22516336c51ae0274",
+          "cap512_source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/served/anomaly.pytest-dev__pytest-5787.call65.onset.cap512.seed43.json",
+          "cap512_source_result_sha256": "14b065a639e15e19a763c99e643d228dfbcce1da34c7bd7561c77cab2bd001f8",
+          "coordinator_snapshots": [
+            {
+              "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/served-coordinator-next3.json",
+              "sha256": "2f370ae65c56f4e1fad10d508ee94742a6d14fd54fba30df39a626ca9f5e2b55"
+            }
+          ],
+          "adjudication_reason": "Advancing serialization/deserialization method construction, cut off mid-code1024; requires2048."
+        },
+        {
+          "mode": "served",
+          "job": "anomaly.sphinx-doc__sphinx-11510.call28.onset.cap1024.seed44",
+          "seed": 44,
+          "verdict": "normal",
+          "reason": "Completes advancing script with EOF and tool close; call95 opener already in fixed prefix. No degeneration, no correctness claim.",
+          "generated_ids": 604,
+          "source_cap512_ids": 512,
+          "prefix512_identical": true,
+          "decode_tokens": 603,
+          "trace_deltas": {
+            "model_replays": 603,
+            "sample_replays": 603,
+            "readbacks": 603,
+            "captures": 0
+          },
+          "diagnostic_total_wall_s": 24.45291524892673,
+          "decode_wall_s": 18.804920146940276,
+          "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/runs/served/anomaly.sphinx-doc__sphinx-11510.call28.onset.cap1024.seed44.json",
+          "result_sha256": "e9ea5e029cb8ea0b15e3756261021844104ee91267827c3df2cce0c2e1e17481",
+          "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/served/anomaly.sphinx-doc__sphinx-11510.call28.onset.cap1024.seed44.private.json",
+          "fixture_sha256": "d8f30f1f675502566ec61966931a4faac361a1441829d070c4e3a143de397809",
+          "cap512_source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/served/anomaly.sphinx-doc__sphinx-11510.call28.onset.cap512.seed44.json",
+          "cap512_source_result_sha256": "30e226398d8bd26cb6eecc1ed62ef50ba50470a5c4acd34fe4d69d77ec6d3c67",
+          "coordinator_snapshots": [
+            {
+              "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/served-coordinator-next2.json",
+              "sha256": "6587ec927580efb56efcee4a405c94a067fd25ea9e815ad2c85dfd4cbb1c53d8"
+            }
+          ],
+          "adjudication_reason": "Completes advancing script with EOF and tool close; call95 opener already in fixed prefix. No degeneration, no correctness claim."
+        },
+        {
+          "mode": "served",
+          "job": "anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.cap1024.seed42",
+          "seed": 42,
+          "verdict": "normal",
+          "reason": "Completes advancing script with EOF and tool close; call95 opener already in fixed prefix. No degeneration, no correctness claim.",
+          "generated_ids": 829,
+          "source_cap512_ids": 512,
+          "prefix512_identical": true,
+          "decode_tokens": 828,
+          "trace_deltas": {
+            "model_replays": 828,
+            "sample_replays": 828,
+            "readbacks": 828,
+            "captures": 0
+          },
+          "diagnostic_total_wall_s": 45.08774867304601,
+          "decode_wall_s": 28.2100447549019,
+          "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/runs/served/anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.cap1024.seed42.json",
+          "result_sha256": "66c50bae50bff5c5718fe774ce2b00bd91956d67605821837ae1e449d73ce593",
+          "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/served/anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.cap1024.seed42.private.json",
+          "fixture_sha256": "4026f405875e77b777ae6467381f0c518417100c96e19b37b45b20c6ae7a3a0f",
+          "cap512_source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/served/anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.cap512.seed42.json",
+          "cap512_source_result_sha256": "81fd4fa0aebac0e39f9d250af08ffda9cd7172b2a432d8f633fa7d5486b24a07",
+          "coordinator_snapshots": [
+            {
+              "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/served-coordinator-next2.json",
+              "sha256": "6587ec927580efb56efcee4a405c94a067fd25ea9e815ad2c85dfd4cbb1c53d8"
+            }
+          ],
+          "adjudication_reason": "Completes advancing script with EOF and tool close; call95 opener already in fixed prefix. No degeneration, no correctness claim."
+        },
+        {
+          "mode": "served",
+          "job": "anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.cap1024.seed43",
+          "seed": 43,
+          "verdict": "normal",
+          "reason": "Completes debug script and sphinx-build tool call; call:bash opener in fixed prefix, varying code no loop. No repair correctness claim.",
+          "generated_ids": 848,
+          "source_cap512_ids": 512,
+          "prefix512_identical": true,
+          "decode_tokens": 847,
+          "trace_deltas": {
+            "model_replays": 847,
+            "sample_replays": 847,
+            "readbacks": 847,
+            "captures": 0
+          },
+          "diagnostic_total_wall_s": 45.73318495997228,
+          "decode_wall_s": 28.865817467914894,
+          "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/runs/served/anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.cap1024.seed43.json",
+          "result_sha256": "858804b7d1a5636927788689cc1f35a0a1b6d01507b1a0a2dce56a94396bc5fe",
+          "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/served/anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.cap1024.seed43.private.json",
+          "fixture_sha256": "8493369e18a42385ef48333e3114d4150865d03835301c8170016e608f4d5d6d",
+          "cap512_source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/served/anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.cap512.seed43.json",
+          "cap512_source_result_sha256": "acf053da9f08ed26b0545056f3c1a7ae38dfc4eacdc01c9af9c497c32556c1b5",
+          "coordinator_snapshots": [
+            {
+              "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/served-coordinator-call95-last2.json",
+              "sha256": "0d14c727e737935529ece74df12c002806d4cc74ae4d6367d3e850e3f1780d8a"
+            }
+          ],
+          "adjudication_reason": "Completes debug script and sphinx-build tool call; call:bash opener in fixed prefix, varying code no loop. No repair correctness claim."
+        },
+        {
+          "mode": "served",
+          "job": "anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.cap1024.seed44",
+          "seed": 44,
+          "verdict": "normal",
+          "reason": "Completes debug script and sphinx-build tool call; call:bash opener in fixed prefix, varying code no loop. No repair correctness claim.",
+          "generated_ids": 827,
+          "source_cap512_ids": 512,
+          "prefix512_identical": true,
+          "decode_tokens": 826,
+          "trace_deltas": {
+            "model_replays": 826,
+            "sample_replays": 826,
+            "readbacks": 826,
+            "captures": 0
+          },
+          "diagnostic_total_wall_s": 45.005229502916336,
+          "decode_wall_s": 28.132346463156864,
+          "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/runs/served/anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.cap1024.seed44.json",
+          "result_sha256": "1b592fa34daec5e822754bb0d0d767e1fb451a28cf61c368f8df6b5ce495c4a8",
+          "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/served/anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.cap1024.seed44.private.json",
+          "fixture_sha256": "7d956c6677fcab57cbe18edae21dee0b464bfd5930a7180fa658717c7be6c760",
+          "cap512_source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/served/anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.cap512.seed44.json",
+          "cap512_source_result_sha256": "24dcc2b92971125d3aaa913a6183ed1828e716a3517c16981c5856a45102a4f0",
+          "coordinator_snapshots": [
+            {
+              "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/served-coordinator-call95-last2.json",
+              "sha256": "0d14c727e737935529ece74df12c002806d4cc74ae4d6367d3e850e3f1780d8a"
+            }
+          ],
+          "adjudication_reason": "Completes debug script and sphinx-build tool call; call:bash opener in fixed prefix, varying code no loop. No repair correctness claim."
+        },
+        {
+          "mode": "served",
+          "job": "anomaly.sphinx-doc__sphinx-9461.call184.onset.cap1024.seed42",
+          "seed": 42,
+          "verdict": "normal",
+          "reason": "Closes script heredoc and tool call; helper not called, repair correctness not claimed. No loop.",
+          "generated_ids": 651,
+          "source_cap512_ids": 512,
+          "prefix512_identical": true,
+          "decode_tokens": 650,
+          "trace_deltas": {
+            "model_replays": 650,
+            "sample_replays": 650,
+            "readbacks": 650,
+            "captures": 0
+          },
+          "diagnostic_total_wall_s": 47.90373840602115,
+          "decode_wall_s": 23.167958752950653,
+          "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/runs/served/anomaly.sphinx-doc__sphinx-9461.call184.onset.cap1024.seed42.json",
+          "result_sha256": "6031df84a8926ca1309340f38c3a6031fefc466890155bd4a852b85425e3eced",
+          "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/served/anomaly.sphinx-doc__sphinx-9461.call184.onset.cap1024.seed42.private.json",
+          "fixture_sha256": "5b391c6bbb9cee3c0f70c361cdac790583ceb0786eb3c61f167a2b7169f031d8",
+          "cap512_source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/served/anomaly.sphinx-doc__sphinx-9461.call184.onset.cap512.seed42.json",
+          "cap512_source_result_sha256": "06ef842e12f1c56099effeadb633fba9874ae264d3285513e0e1cb93662143a1",
+          "coordinator_snapshots": [
+            {
+              "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/served-coordinator-sphinx9461-first2.json",
+              "sha256": "afe0e220f588c5b9aff64d7de5752f5e00d52443489f27ce134a46f9af0013b2"
+            }
+          ],
+          "adjudication_reason": "Closes script heredoc and tool call; helper not called, repair correctness not claimed. No loop."
+        },
+        {
+          "mode": "served",
+          "job": "anomaly.sphinx-doc__sphinx-9461.call184.onset.cap1024.seed43",
+          "seed": 43,
+          "verdict": "inconclusive",
+          "reason": "Advances through alternative MRO code replacement and index search; cut off while applying lines1024; needs2048.",
+          "generated_ids": 1024,
+          "source_cap512_ids": 512,
+          "prefix512_identical": true,
+          "decode_tokens": 1023,
+          "trace_deltas": {
+            "model_replays": 1023,
+            "sample_replays": 1023,
+            "readbacks": 1023,
+            "captures": 0
+          },
+          "diagnostic_total_wall_s": 61.205126773100346,
+          "decode_wall_s": 36.4503096700646,
+          "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/runs/served/anomaly.sphinx-doc__sphinx-9461.call184.onset.cap1024.seed43.json",
+          "result_sha256": "d6bb4da366a5d92b00a011aa9d85baa4a5573a943c47d2a8d7e4600d35e7ada9",
+          "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/served/anomaly.sphinx-doc__sphinx-9461.call184.onset.cap1024.seed43.private.json",
+          "fixture_sha256": "0f61675840c1bc8ac8f89d6ab5d9f931e752d2fd53aeb2a62400b02e2e24ff1f",
+          "cap512_source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/served/anomaly.sphinx-doc__sphinx-9461.call184.onset.cap512.seed43.json",
+          "cap512_source_result_sha256": "39eb0a586dec15856a3512741aed9954a277a524d4a5cc334f22b5b46d39f134",
+          "coordinator_snapshots": [
+            {
+              "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/served-coordinator-sphinx9461-first2.json",
+              "sha256": "afe0e220f588c5b9aff64d7de5752f5e00d52443489f27ce134a46f9af0013b2"
+            }
+          ],
+          "adjudication_reason": "Advances through alternative MRO code replacement and index search; cut off while applying lines1024; needs2048."
+        },
+        {
+          "mode": "served",
+          "job": "anomaly.sphinx-doc__sphinx-9461.call184.onset.cap1024.seed44",
+          "seed": 44,
+          "verdict": "normal",
+          "reason": "Completes varying script and tool call; xarray comments revisit issue but progress and close, no sustained identical loop. Technical correctness not inferred.",
+          "generated_ids": 606,
+          "source_cap512_ids": 512,
+          "prefix512_identical": true,
+          "decode_tokens": 605,
+          "trace_deltas": {
+            "model_replays": 605,
+            "sample_replays": 605,
+            "readbacks": 605,
+            "captures": 0
+          },
+          "diagnostic_total_wall_s": 46.303668624022976,
+          "decode_wall_s": 21.56220368295908,
+          "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/runs/served/anomaly.sphinx-doc__sphinx-9461.call184.onset.cap1024.seed44.json",
+          "result_sha256": "31a3085456bd7e7ea37c4139990e6d8f709be871832efb5b7b74974955b63680",
+          "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/served/anomaly.sphinx-doc__sphinx-9461.call184.onset.cap1024.seed44.private.json",
+          "fixture_sha256": "552f3e08333444cf6b9ad9f2149e220af543669e05b0896f89f0afa0645dd6b8",
+          "cap512_source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/served/anomaly.sphinx-doc__sphinx-9461.call184.onset.cap512.seed44.json",
+          "cap512_source_result_sha256": "397c82d3b649c99cde44c7eebfcbf861252c3deebd7e9eda3d2a996630761a77",
+          "coordinator_snapshots": [
+            {
+              "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/served-coordinator-final3.json",
+              "sha256": "f9a800969dafeb952f8bc9dd404598aae2730e67c9eec504cf77a6f1d49fcc50"
+            }
+          ],
+          "adjudication_reason": "Completes varying script and tool call; xarray comments revisit issue but progress and close, no sustained identical loop. Technical correctness not inferred."
+        },
+        {
+          "mode": "served",
+          "job": "anomaly.xarray7233-call1.canonicalprefix.cap1024.seed42",
+          "seed": 42,
+          "verdict": "normal",
+          "reason": "Completes varying script and tool call; xarray comments revisit issue but progress and close, no sustained identical loop. Technical correctness not inferred.",
+          "generated_ids": 901,
+          "source_cap512_ids": 512,
+          "prefix512_identical": true,
+          "decode_tokens": 900,
+          "trace_deltas": {
+            "model_replays": 900,
+            "sample_replays": 900,
+            "readbacks": 900,
+            "captures": 0
+          },
+          "diagnostic_total_wall_s": 26.383027706993744,
+          "decode_wall_s": 26.081787446979433,
+          "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/runs/served/anomaly.xarray7233-call1.canonicalprefix.cap1024.seed42.json",
+          "result_sha256": "1547c15592b9534f5385a5696e3bf8f26ba944c03345c3243dd89617f33fc124",
+          "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/served/anomaly.xarray7233-call1.canonicalprefix.cap1024.seed42.private.json",
+          "fixture_sha256": "bc0442142f6d925d292476dbf651b0957dfe0e070ace703938102eddc8b7817a",
+          "cap512_source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/served/anomaly.xarray7233-call1.canonicalprefix.cap512.seed42.json",
+          "cap512_source_result_sha256": "6a746fdcaf3befc90f08eec98f066d6f63e5cce55c33931cff1d9ef2c84a7bba",
+          "coordinator_snapshots": [
+            {
+              "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/served-coordinator-final3.json",
+              "sha256": "f9a800969dafeb952f8bc9dd404598aae2730e67c9eec504cf77a6f1d49fcc50"
+            }
+          ],
+          "adjudication_reason": "Completes varying script and tool call; xarray comments revisit issue but progress and close, no sustained identical loop. Technical correctness not inferred."
+        },
+        {
+          "mode": "served",
+          "job": "anomaly.xarray7233-call1.canonicalprefix.cap1024.seed44",
+          "seed": 44,
+          "verdict": "normal",
+          "reason": "Completes varying script and tool call; xarray comments revisit issue but progress and close, no sustained identical loop. Technical correctness not inferred.",
+          "generated_ids": 774,
+          "source_cap512_ids": 512,
+          "prefix512_identical": true,
+          "decode_tokens": 773,
+          "trace_deltas": {
+            "model_replays": 773,
+            "sample_replays": 773,
+            "readbacks": 773,
+            "captures": 0
+          },
+          "diagnostic_total_wall_s": 22.6911098791752,
+          "decode_wall_s": 22.392741477116942,
+          "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/runs/served/anomaly.xarray7233-call1.canonicalprefix.cap1024.seed44.json",
+          "result_sha256": "2ceb4ec8a67f2ace2543352212db1bdf084b5e50ee5658fb9dabf5b1023d0adc",
+          "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/served/anomaly.xarray7233-call1.canonicalprefix.cap1024.seed44.private.json",
+          "fixture_sha256": "89295e18efe7e474a0d1ef95e63b30987ce0fb4efc21b46a071e2798d9e93cc2",
+          "cap512_source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/served/anomaly.xarray7233-call1.canonicalprefix.cap512.seed44.json",
+          "cap512_source_result_sha256": "03d748d2b941621bc74b851677de99bf495270384706515374d8be367673dab7",
+          "coordinator_snapshots": [
+            {
+              "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/served-coordinator-final3.json",
+              "sha256": "f9a800969dafeb952f8bc9dd404598aae2730e67c9eec504cf77a6f1d49fcc50"
+            }
+          ],
+          "adjudication_reason": "Completes varying script and tool call; xarray comments revisit issue but progress and close, no sustained identical loop. Technical correctness not inferred."
+        }
+      ],
+      "timing_vs_prediction": {
+        "mode": "served",
+        "launch": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/served-launch.json",
+        "launch_sha256": "59efee24ad12ea5db759cfc169eb3f362c5806c4fbe7286e76990f76a9febdd0",
+        "completion": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/served-completion.json",
+        "completion_sha256": "066ecba5413a0bdd14a0d1d90361499c492174fe2d47f1d35660ab6fb47a3e5d",
+        "predicted_hours": 0.2802639232628727,
+        "predicted_range_hours": [
+          0.22319916932476164,
+          0.3753718464930578
+        ],
+        "measured_hours": 0.20019779105981192,
+        "measured_minus_predicted_hours": -0.08006613220306077,
+        "measured_within_predicted_range": false
+      }
+    },
+    "full": {
+      "trials": 24,
+      "verdict_counts": {
+        "normal": 17,
+        "inconclusive": 6,
+        "other": 1
+      },
+      "generated_id_total": 19330,
+      "root_adjudications": [
+        {
+          "mode": "full",
+          "job": "anomaly.call88.canonicalprefix.cap1024.seed42",
+          "seed": 42,
+          "verdict": "normal",
+          "reason": "Completes varying code rewrite with EOF and tool close; incomplete repair or questionable indexing is not degeneration. No task-correctness claim.",
+          "generated_ids": 605,
+          "source_cap512_ids": 512,
+          "prefix512_identical": true,
+          "decode_tokens": 604,
+          "trace_deltas": {
+            "model_replays": 604,
+            "sample_replays": 604,
+            "readbacks": 604,
+            "captures": 0
+          },
+          "diagnostic_total_wall_s": 73.03454263391905,
+          "decode_wall_s": 38.257954271975905,
+          "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/runs/full/anomaly.call88.canonicalprefix.cap1024.seed42.json",
+          "result_sha256": "759c59189f1b94f73f13f12882e10bc647414537336971ec9eb8085f6531a8d5",
+          "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.call88.canonicalprefix.cap1024.seed42.private.json",
+          "fixture_sha256": "72d00a7035ece99112f136dc0bac71e03deead3d78421b037a696f1518b6a8d0",
+          "cap512_source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/full/anomaly.call88.canonicalprefix.cap512.seed42.json",
+          "cap512_source_result_sha256": "684a5523073a360057dc00f9d266056a51308f69011a23ff76a550c1e4ecfc0e",
+          "coordinator_snapshots": [
+            {
+              "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/full-coordinator-first4.json",
+              "sha256": "0d294a8184ba2792864feac7224b8a05f6acacba1d99894f297f4868d6b0ff36"
+            }
+          ],
+          "adjudication_reason": "Completes varying code rewrite with EOF and tool close; incomplete repair or questionable indexing is not degeneration. No task-correctness claim."
+        },
+        {
+          "mode": "full",
+          "job": "anomaly.call88.canonicalprefix.cap1024.seed43",
+          "seed": 43,
+          "verdict": "normal",
+          "reason": "Completes varying code rewrite with EOF and tool close; incomplete repair or questionable indexing is not degeneration. No task-correctness claim.",
+          "generated_ids": 684,
+          "source_cap512_ids": 512,
+          "prefix512_identical": true,
+          "decode_tokens": 683,
+          "trace_deltas": {
+            "model_replays": 683,
+            "sample_replays": 683,
+            "readbacks": 683,
+            "captures": 0
+          },
+          "diagnostic_total_wall_s": 65.84175723511726,
+          "decode_wall_s": 43.26593370991759,
+          "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/runs/full/anomaly.call88.canonicalprefix.cap1024.seed43.json",
+          "result_sha256": "de0847e9a593b1ed595cacae1f9c6720b0b632e73f62d8bbd767e213a9239d55",
+          "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.call88.canonicalprefix.cap1024.seed43.private.json",
+          "fixture_sha256": "98576d3b397f70beb756313aca33a0160aaf9d886a04e931d5e90a71a5eddb23",
+          "cap512_source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/full/anomaly.call88.canonicalprefix.cap512.seed43.json",
+          "cap512_source_result_sha256": "18b9082ede5634fa7addf968924a9c57baceed3c9674f2b193be283bbc8ac28d",
+          "coordinator_snapshots": [
+            {
+              "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/full-coordinator-first4.json",
+              "sha256": "0d294a8184ba2792864feac7224b8a05f6acacba1d99894f297f4868d6b0ff36"
+            }
+          ],
+          "adjudication_reason": "Completes varying code rewrite with EOF and tool close; incomplete repair or questionable indexing is not degeneration. No task-correctness claim."
+        },
+        {
+          "mode": "full",
+          "job": "anomaly.call88.canonicalprefix.cap1024.seed44",
+          "seed": 44,
+          "verdict": "normal",
+          "reason": "Completes varying code rewrite with EOF and tool close; incomplete repair or questionable indexing is not degeneration. No task-correctness claim.",
+          "generated_ids": 750,
+          "source_cap512_ids": 512,
+          "prefix512_identical": true,
+          "decode_tokens": 749,
+          "trace_deltas": {
+            "model_replays": 749,
+            "sample_replays": 749,
+            "readbacks": 749,
+            "captures": 0
+          },
+          "diagnostic_total_wall_s": 70.04992234078236,
+          "decode_wall_s": 47.46190650481731,
+          "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/runs/full/anomaly.call88.canonicalprefix.cap1024.seed44.json",
+          "result_sha256": "9f42d8065b3201d293c4d0bf1b883894d31900b7975dd330538736e150a306c1",
+          "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.call88.canonicalprefix.cap1024.seed44.private.json",
+          "fixture_sha256": "48d347c1cc849a516b05939901c09ecd67250a3f27b1312a606af625416d861f",
+          "cap512_source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/full/anomaly.call88.canonicalprefix.cap512.seed44.json",
+          "cap512_source_result_sha256": "4d543fe0fc6fe667b3e58ea73214cb2cf793180613bbbda4d0a37cc96eee20b2",
+          "coordinator_snapshots": [
+            {
+              "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/full-coordinator-first4.json",
+              "sha256": "0d294a8184ba2792864feac7224b8a05f6acacba1d99894f297f4868d6b0ff36"
+            }
+          ],
+          "adjudication_reason": "Completes varying code rewrite with EOF and tool close; incomplete repair or questionable indexing is not degeneration. No task-correctness claim."
+        },
+        {
+          "mode": "full",
+          "job": "anomaly.call91.canonicalprefix.cap1024.seed44",
+          "seed": 44,
+          "verdict": "normal",
+          "reason": "Completes varying code rewrite with EOF and tool close; incomplete repair or questionable indexing is not degeneration. No task-correctness claim.",
+          "generated_ids": 727,
+          "source_cap512_ids": 512,
+          "prefix512_identical": true,
+          "decode_tokens": 726,
+          "trace_deltas": {
+            "model_replays": 726,
+            "sample_replays": 726,
+            "readbacks": 726,
+            "captures": 0
+          },
+          "diagnostic_total_wall_s": 69.67778813303448,
+          "decode_wall_s": 46.11910939309746,
+          "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/runs/full/anomaly.call91.canonicalprefix.cap1024.seed44.json",
+          "result_sha256": "581eb13aef0d82fcd4da5e4709450625c18803ef0d6ff9d8759d72496699729f",
+          "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.call91.canonicalprefix.cap1024.seed44.private.json",
+          "fixture_sha256": "bd5addc9fb08ed0134bdca3d160c4b8ea472b09c26dc36e12e731f8891539ea7",
+          "cap512_source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/full/anomaly.call91.canonicalprefix.cap512.seed44.json",
+          "cap512_source_result_sha256": "747c9bd5c9674c16c8bfa189824bc5c26d5b9306bddb6c607ea3458a50b36785",
+          "coordinator_snapshots": [
+            {
+              "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/full-coordinator-first4.json",
+              "sha256": "0d294a8184ba2792864feac7224b8a05f6acacba1d99894f297f4868d6b0ff36"
+            }
+          ],
+          "adjudication_reason": "Completes varying code rewrite with EOF and tool close; incomplete repair or questionable indexing is not degeneration. No task-correctness claim."
+        },
+        {
+          "mode": "full",
+          "job": "anomaly.pytest-dev__pytest-5787.call65.onset.cap1024.seed42",
+          "seed": 42,
+          "verdict": "inconclusive",
+          "reason": "Continues distinct serialization then deserialization methods, cut off inside constructor1024; progressing requires2048.",
+          "generated_ids": 1024,
+          "source_cap512_ids": 512,
+          "prefix512_identical": true,
+          "decode_tokens": 1023,
+          "trace_deltas": {
+            "model_replays": 1023,
+            "sample_replays": 1023,
+            "readbacks": 1023,
+            "captures": 0
+          },
+          "diagnostic_total_wall_s": 92.6532811250072,
+          "decode_wall_s": 65.55073256697506,
+          "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/runs/full/anomaly.pytest-dev__pytest-5787.call65.onset.cap1024.seed42.json",
+          "result_sha256": "dbe538e9b2b1b305aca84b2b4be3d09aa2c9ead231a7c5826580505e2b8778b9",
+          "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.pytest-dev__pytest-5787.call65.onset.cap1024.seed42.private.json",
+          "fixture_sha256": "b4227c60daa44f579a37f54090a99dde3280a0627ed4611fcbcdf807f15a0ede",
+          "cap512_source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/full/anomaly.pytest-dev__pytest-5787.call65.onset.cap512.seed42.json",
+          "cap512_source_result_sha256": "71ddff2767dcfbc635843aa34e9c9bec37f31976365a550005fe05b4e89615d0",
+          "coordinator_snapshots": [
+            {
+              "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/full-coordinator-pytest-first.json",
+              "sha256": "f7559774e7a04f7d145316f0b4f93c857d8404cdd55e9afdf5457191fbfcd893"
+            }
+          ],
+          "adjudication_reason": "Continues distinct serialization then deserialization methods, cut off inside constructor1024; progressing requires2048."
+        },
+        {
+          "mode": "full",
+          "job": "anomaly.pytest-dev__pytest-5787.call65.onset.cap1024.seed43",
+          "seed": 43,
+          "verdict": "inconclusive",
+          "reason": "Constructs replacement helper then distinct serialization/deserialization methods; cut off at new loop1024, requires2048.",
+          "generated_ids": 1024,
+          "source_cap512_ids": 512,
+          "prefix512_identical": true,
+          "decode_tokens": 1023,
+          "trace_deltas": {
+            "model_replays": 1023,
+            "sample_replays": 1023,
+            "readbacks": 1023,
+            "captures": 0
+          },
+          "diagnostic_total_wall_s": 92.68206595699303,
+          "decode_wall_s": 65.55005186097696,
+          "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/runs/full/anomaly.pytest-dev__pytest-5787.call65.onset.cap1024.seed43.json",
+          "result_sha256": "84053f3591749c42effd756ee8a308eb47866f1e007612ac225d7334fbdccdd3",
+          "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.pytest-dev__pytest-5787.call65.onset.cap1024.seed43.private.json",
+          "fixture_sha256": "124f09af80f50f70f6308ae2a58a2d4ada46b9ce3204b43c7b814ed17be3959c",
+          "cap512_source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/full/anomaly.pytest-dev__pytest-5787.call65.onset.cap512.seed43.json",
+          "cap512_source_result_sha256": "4360934f655ff0a6f3900c7d5eb63fb1ef09af6403b450bf7954c2c2ca337328",
+          "coordinator_snapshots": [
+            {
+              "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/full-coordinator-pytest-second.json",
+              "sha256": "dad8eea30e1e826be49534a1fdd02babdbde7a72c58cf3171e2ce55e71dc37d8"
+            }
+          ],
+          "adjudication_reason": "Constructs replacement helper then distinct serialization/deserialization methods; cut off at new loop1024, requires2048."
+        },
+        {
+          "mode": "full",
+          "job": "anomaly.pytest-dev__pytest-5787.call65.onset.cap1024.seed44",
+          "seed": 44,
+          "verdict": "inconclusive",
+          "reason": "Constructs method boundaries and distinct serialization method lines; cut off in code1024, requires2048.",
+          "generated_ids": 1024,
+          "source_cap512_ids": 512,
+          "prefix512_identical": true,
+          "decode_tokens": 1023,
+          "trace_deltas": {
+            "model_replays": 1023,
+            "sample_replays": 1023,
+            "readbacks": 1023,
+            "captures": 0
+          },
+          "diagnostic_total_wall_s": 92.66749403998256,
+          "decode_wall_s": 65.55391347594559,
+          "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/runs/full/anomaly.pytest-dev__pytest-5787.call65.onset.cap1024.seed44.json",
+          "result_sha256": "6cff1a06bc27f3d2a2745e7d47feefcbe02e7722d8185ee3e7783ba40fe77774",
+          "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.pytest-dev__pytest-5787.call65.onset.cap1024.seed44.private.json",
+          "fixture_sha256": "cd4a079c43aa220d3a9c92e90ed2b691c90fa5d89061a17203db4629248ff10f",
+          "cap512_source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/full/anomaly.pytest-dev__pytest-5787.call65.onset.cap512.seed44.json",
+          "cap512_source_result_sha256": "884105c2a905f1c27b6cda62d02b6b8f653729e6e97184e580eaff2e9ca2faf9",
+          "coordinator_snapshots": [
+            {
+              "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/full-coordinator-pytest-third.json",
+              "sha256": "e7aceeb45e978290fcf6291f22698fa6dc8dd017e335578f111df581812d0a83"
+            }
+          ],
+          "adjudication_reason": "Constructs method boundaries and distinct serialization method lines; cut off in code1024, requires2048."
+        },
+        {
+          "mode": "full",
+          "job": "anomaly.scikit-learn__scikit-learn-13135.call29.onset.cap1024.seed42",
+          "seed": 42,
+          "verdict": "other",
+          "reason": "Coherent completed summary but submission command is plain prose, no canonical tool call; actual stock parser reports missing_tool with original assistant prefix. Non-native protocol anomaly, no contraction burst. Diagnostic does not change fetched-solution task verdict.",
+          "generated_ids": 665,
+          "source_cap512_ids": 512,
+          "prefix512_identical": true,
+          "decode_tokens": 664,
+          "trace_deltas": {
+            "model_replays": 664,
+            "sample_replays": 664,
+            "readbacks": 664,
+            "captures": 0
+          },
+          "diagnostic_total_wall_s": 46.656397599959746,
+          "decode_wall_s": 40.061754695139825,
+          "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/runs/full/anomaly.scikit-learn__scikit-learn-13135.call29.onset.cap1024.seed42.json",
+          "result_sha256": "08c859a53455468846ed0cd87dfe56233ebc9496ee3c0cfbfb464e88368c422f",
+          "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.scikit-learn__scikit-learn-13135.call29.onset.cap1024.seed42.private.json",
+          "fixture_sha256": "310716fee5157983973aa6183e55fb529fd26179d182398b847ecb142b644b79",
+          "cap512_source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/full/anomaly.scikit-learn__scikit-learn-13135.call29.onset.cap512.seed42.json",
+          "cap512_source_result_sha256": "0c8c1b05d5eb308b5101a9cbfaac37905ce80759d1819a68260e364cd4026b60",
+          "coordinator_snapshots": [
+            {
+              "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/full-coordinator-sklearn13135.json",
+              "sha256": "4e2eddf28b2e3a89dd26d589db61ca52aecb232b882c2c2c56cfea68af330aab"
+            }
+          ],
+          "adjudication_reason": "Coherent completed summary but submission command is plain prose, no canonical tool call; actual stock parser reports missing_tool with original assistant prefix. Non-native protocol anomaly, no contraction burst. Diagnostic does not change fetched-solution task verdict."
+        },
+        {
+          "mode": "full",
+          "job": "anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.cap1024.seed42",
+          "seed": 42,
+          "verdict": "inconclusive",
+          "reason": "Grammatical apostrophe-s after saved prefix it; distinct hypotheses lead to new diagnostic/patch script, cut off during progressing tool construction at1024. Extend2048.",
+          "generated_ids": 1024,
+          "source_cap512_ids": 512,
+          "prefix512_identical": true,
+          "decode_tokens": 1023,
+          "trace_deltas": {
+            "model_replays": 1023,
+            "sample_replays": 1023,
+            "readbacks": 1023,
+            "captures": 0
+          },
+          "diagnostic_total_wall_s": 97.01733303698711,
+          "decode_wall_s": 66.10682421200909,
+          "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/runs/full/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.cap1024.seed42.json",
+          "result_sha256": "d5f8fa19cfd333137d0f993bbd18e0ba6a3fcc7d1a06ab3099080f032101fe7a",
+          "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.cap1024.seed42.private.json",
+          "fixture_sha256": "78344549cf5925ec2b037752e589f2bba107fb21b464e32db5fe05f15d5322a6",
+          "cap512_source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/full/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.cap512.seed42.json",
+          "cap512_source_result_sha256": "b3ba251fdb4c718046989727acfc1c4f2418fdfc47a734ec392fddcf3923117a",
+          "coordinator_snapshots": [
+            {
+              "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/full-coordinator-sphinx101.json",
+              "sha256": "2ef3859561877b88428b7d3b0521491c668b612897aed40a2b2920f0ddec78ec"
+            }
+          ],
+          "adjudication_reason": "Grammatical apostrophe-s after saved prefix it; distinct hypotheses lead to new diagnostic/patch script, cut off during progressing tool construction at1024. Extend2048."
+        },
+        {
+          "mode": "full",
+          "job": "anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.cap1024.seed43",
+          "seed": 43,
+          "verdict": "inconclusive",
+          "reason": "Grammatical apostrophe-s after saved prefix it; distinct hypotheses lead to new diagnostic/patch script, cut off during progressing tool construction at1024. Extend2048.",
+          "generated_ids": 1024,
+          "source_cap512_ids": 512,
+          "prefix512_identical": true,
+          "decode_tokens": 1023,
+          "trace_deltas": {
+            "model_replays": 1023,
+            "sample_replays": 1023,
+            "readbacks": 1023,
+            "captures": 0
+          },
+          "diagnostic_total_wall_s": 96.96164424507879,
+          "decode_wall_s": 66.09545281901956,
+          "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/runs/full/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.cap1024.seed43.json",
+          "result_sha256": "b8fcad86750e14f2232d2c6dcd3630d89d56adf8a03fdb872055fc6660ed42be",
+          "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.cap1024.seed43.private.json",
+          "fixture_sha256": "073203e754a006cd573b89ef7f2b47ce668c0d992562d3dd2f515306b2115fa6",
+          "cap512_source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/full/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.cap512.seed43.json",
+          "cap512_source_result_sha256": "f79dc8a5609cc42429c63840ee855bb30883dafcc080c03a02e63e251ba6411d",
+          "coordinator_snapshots": [
+            {
+              "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/full-coordinator-sphinx101.json",
+              "sha256": "2ef3859561877b88428b7d3b0521491c668b612897aed40a2b2920f0ddec78ec"
+            }
+          ],
+          "adjudication_reason": "Grammatical apostrophe-s after saved prefix it; distinct hypotheses lead to new diagnostic/patch script, cut off during progressing tool construction at1024. Extend2048."
+        },
+        {
+          "mode": "full",
+          "job": "anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.cap1024.seed44",
+          "seed": 44,
+          "verdict": "normal",
+          "reason": "Grammatical apostrophe-s after saved prefix it. Distinct registration/import hypotheses followed by completed grep tool call; no native contraction burst.",
+          "generated_ids": 762,
+          "source_cap512_ids": 512,
+          "prefix512_identical": true,
+          "decode_tokens": 761,
+          "trace_deltas": {
+            "model_replays": 761,
+            "sample_replays": 761,
+            "readbacks": 761,
+            "captures": 0
+          },
+          "diagnostic_total_wall_s": 80.07037803786807,
+          "decode_wall_s": 49.16462322790176,
+          "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/runs/full/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.cap1024.seed44.json",
+          "result_sha256": "7a40c0dec0926034b9143ad5ce8bba4bf0a5f8da48026a04dbf020dbf407dcab",
+          "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.cap1024.seed44.private.json",
+          "fixture_sha256": "6be948416b6cefc2796d256824f3fd6f7c7e46ea001063de32ae75e63d343b09",
+          "cap512_source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/full/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.cap512.seed44.json",
+          "cap512_source_result_sha256": "2dd4aa97047bf51777098282da9982666c6917b92281015946334bdf9c56bf4f",
+          "coordinator_snapshots": [
+            {
+              "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/full-coordinator-sphinx101.json",
+              "sha256": "2ef3859561877b88428b7d3b0521491c668b612897aed40a2b2920f0ddec78ec"
+            }
+          ],
+          "adjudication_reason": "Grammatical apostrophe-s after saved prefix it. Distinct registration/import hypotheses followed by completed grep tool call; no native contraction burst."
+        },
+        {
+          "mode": "full",
+          "job": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap1024.seed42",
+          "seed": 42,
+          "verdict": "normal",
+          "reason": "Pinned prefix ends call:bash. Completes canonical command argument, distinct patch/test statements and tool close. Incorrect checkout/package edit remains semantic task error; no native malformed-tool motif.",
+          "generated_ids": 582,
+          "source_cap512_ids": 512,
+          "prefix512_identical": true,
+          "decode_tokens": 581,
+          "trace_deltas": {
+            "model_replays": 581,
+            "sample_replays": 581,
+            "readbacks": 581,
+            "captures": 0
+          },
+          "diagnostic_total_wall_s": 83.30018741684034,
+          "decode_wall_s": 38.573536473093554,
+          "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/runs/full/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap1024.seed42.json",
+          "result_sha256": "327f227499cf9cc23e9c731f225617f65e042e68483b5ff7052c8f2aef9fb85f",
+          "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap1024.seed42.private.json",
+          "fixture_sha256": "b4253957ad89651510a0e39ea3aa49373926c9ff2d963a4ee381047b400efac8",
+          "cap512_source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/full/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap512.seed42.json",
+          "cap512_source_result_sha256": "e2b642959c7025ede1de4927863e40c349afe4672dcb98809e1f846f40da5dc2",
+          "coordinator_snapshots": [
+            {
+              "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/full-coordinator-sphinx119-first.json",
+              "sha256": "b196b0787cd83db86fcb6ed8105e1a69e0fd3fe7e8e27ef8294ce006350e82ec"
+            }
+          ],
+          "adjudication_reason": "Pinned prefix ends call:bash. Completes canonical command argument, distinct patch/test statements and tool close. Incorrect checkout/package edit remains semantic task error; no native malformed-tool motif."
+        },
+        {
+          "mode": "full",
+          "job": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap1024.seed43",
+          "seed": 43,
+          "verdict": "inconclusive",
+          "reason": "Pinned prefix ends call:bash. Advances distinct script lines then revises weak run-method location logic into class/method search, cut off constructing replacement method at1024. No unchanged token loop; extend2048.",
+          "generated_ids": 1024,
+          "source_cap512_ids": 512,
+          "prefix512_identical": true,
+          "decode_tokens": 1023,
+          "trace_deltas": {
+            "model_replays": 1023,
+            "sample_replays": 1023,
+            "readbacks": 1023,
+            "captures": 0
+          },
+          "diagnostic_total_wall_s": 112.6952867959626,
+          "decode_wall_s": 67.95296320994385,
+          "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/runs/full/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap1024.seed43.json",
+          "result_sha256": "211f4fe67a2826c3b934dba39139c70ef7d0ef8e57037493db713434ce9687c0",
+          "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap1024.seed43.private.json",
+          "fixture_sha256": "64b310bd67a392c4a32219b6201abaeb6272206f792d9dcc290dd0e7d16d7597",
+          "cap512_source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/full/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap512.seed43.json",
+          "cap512_source_result_sha256": "fd94ec9981ba9a6d12cf0c1695a0cad0994a9eb3c0fcd87d8f602666d3a3f707",
+          "coordinator_snapshots": [
+            {
+              "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/full-coordinator-sphinx119-second.json",
+              "sha256": "3c07cc3262fe2ef8ed05d1bd128b5caabcba31c8fa87812b27729cfb9aa7aa68"
+            }
+          ],
+          "adjudication_reason": "Pinned prefix ends call:bash. Advances distinct script lines then revises weak run-method location logic into class/method search, cut off constructing replacement method at1024. No unchanged token loop; extend2048."
+        },
+        {
+          "mode": "full",
+          "job": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap1024.seed44",
+          "seed": 44,
+          "verdict": "normal",
+          "reason": "Pinned prefix ends call:bash. Completes distinct patch-script statements, debug cleanup and reproduction test with canonical tool close. No native malformed tool or token repetition; semantic patch quality not judged by this control.",
+          "generated_ids": 668,
+          "source_cap512_ids": 512,
+          "prefix512_identical": true,
+          "decode_tokens": 667,
+          "trace_deltas": {
+            "model_replays": 667,
+            "sample_replays": 667,
+            "readbacks": 667,
+            "captures": 0
+          },
+          "diagnostic_total_wall_s": 89.0837136011105,
+          "decode_wall_s": 44.29866547789425,
+          "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/runs/full/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap1024.seed44.json",
+          "result_sha256": "dba0f96230dde25ad66a1a3d10b4c8e3a1a77e52cea7e29000d8acedff758915",
+          "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap1024.seed44.private.json",
+          "fixture_sha256": "7c5da63d138e6afa7b539dfed909ee1e8a937c2e168d587023c4421333688780",
+          "cap512_source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/full/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap512.seed44.json",
+          "cap512_source_result_sha256": "b66d7be79d6633ab249243ef2f1cc62014662e820fa7e51515d6250804f93c95",
+          "coordinator_snapshots": [
+            {
+              "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/full-coordinator-sphinx119-third.json",
+              "sha256": "acc70266c664d02fdd17dbf4969f6deeea3a186c8e42377a91900d34aae5e88f"
+            }
+          ],
+          "adjudication_reason": "Pinned prefix ends call:bash. Completes distinct patch-script statements, debug cleanup and reproduction test with canonical tool close. No native malformed tool or token repetition; semantic patch quality not judged by this control."
+        },
+        {
+          "mode": "full",
+          "job": "anomaly.sphinx-doc__sphinx-11510.call28.onset.cap1024.seed42",
+          "seed": 42,
+          "verdict": "normal",
+          "reason": "Pinned prefix is inside bash command after self.arguments[0].; grammatical endswith continuation. Completes distinct source-cache/tempfile method and replacement script with canonical tool close. No degenerate motif; patch correctness is separate.",
+          "generated_ids": 893,
+          "source_cap512_ids": 512,
+          "prefix512_identical": true,
+          "decode_tokens": 892,
+          "trace_deltas": {
+            "model_replays": 892,
+            "sample_replays": 892,
+            "readbacks": 892,
+            "captures": 0
+          },
+          "diagnostic_total_wall_s": 64.82469443115406,
+          "decode_wall_s": 54.531833027955145,
+          "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/runs/full/anomaly.sphinx-doc__sphinx-11510.call28.onset.cap1024.seed42.json",
+          "result_sha256": "214a8b6b96fefdebaf68521b154343541dd4a968826fb916cdc7f7d53b8ad108",
+          "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call28.onset.cap1024.seed42.private.json",
+          "fixture_sha256": "2dfeb0e5b696b9997f100a3ef3eac57ab8db33df3cc0bae4369e292f34711cdb",
+          "cap512_source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/full/anomaly.sphinx-doc__sphinx-11510.call28.onset.cap512.seed42.json",
+          "cap512_source_result_sha256": "6f61026f09522249f075eff633a7bc9674fad3a9c1cf03c8e709d80b9a5966eb",
+          "coordinator_snapshots": [
+            {
+              "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/full-coordinator-sphinx28-first2.json",
+              "sha256": "6ba7f3791b3ea32824c6313dc24125425e08f8a165f20de8756697ec41cb34b4"
+            }
+          ],
+          "adjudication_reason": "Pinned prefix is inside bash command after self.arguments[0].; grammatical endswith continuation. Completes distinct source-cache/tempfile method and replacement script with canonical tool close. No degenerate motif; patch correctness is separate."
+        },
+        {
+          "mode": "full",
+          "job": "anomaly.sphinx-doc__sphinx-11510.call28.onset.cap1024.seed43",
+          "seed": 43,
+          "verdict": "normal",
+          "reason": "Pinned prefix is inside bash command after self.arguments[0].; grammatical endswith continuation. Completes distinct source-cache/tempfile method and replacement script with canonical tool close. No degenerate motif; patch correctness is separate.",
+          "generated_ids": 547,
+          "source_cap512_ids": 512,
+          "prefix512_identical": true,
+          "decode_tokens": 546,
+          "trace_deltas": {
+            "model_replays": 546,
+            "sample_replays": 546,
+            "readbacks": 546,
+            "captures": 0
+          },
+          "diagnostic_total_wall_s": 43.63330094795674,
+          "decode_wall_s": 33.37628207402304,
+          "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/runs/full/anomaly.sphinx-doc__sphinx-11510.call28.onset.cap1024.seed43.json",
+          "result_sha256": "6e8dd6db5b3882a91a4935d5c9dbc4df6432338b7849cbe69c9108865fb1b70a",
+          "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call28.onset.cap1024.seed43.private.json",
+          "fixture_sha256": "ea91bd0ca464c508824ec6106ab987d91d30452dfdbd86d56ea557fb91dd8455",
+          "cap512_source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/full/anomaly.sphinx-doc__sphinx-11510.call28.onset.cap512.seed43.json",
+          "cap512_source_result_sha256": "b272601f8a7de63b61df79ede4b26115df1bb4a19246bf2bbf3c4ef2a81a8960",
+          "coordinator_snapshots": [
+            {
+              "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/full-coordinator-sphinx28-first2.json",
+              "sha256": "6ba7f3791b3ea32824c6313dc24125425e08f8a165f20de8756697ec41cb34b4"
+            }
+          ],
+          "adjudication_reason": "Pinned prefix is inside bash command after self.arguments[0].; grammatical endswith continuation. Completes distinct source-cache/tempfile method and replacement script with canonical tool close. No degenerate motif; patch correctness is separate."
+        },
+        {
+          "mode": "full",
+          "job": "anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.cap1024.seed42",
+          "seed": 42,
+          "verdict": "normal",
+          "reason": "Pinned prefix ends call:bash. Completes distinct method/replacement/test statements and canonical tool close; no repeated-token or malformed-tool motif. Potential recursive implementation is patch error, not observed generation loop.",
+          "generated_ids": 953,
+          "source_cap512_ids": 512,
+          "prefix512_identical": true,
+          "decode_tokens": 952,
+          "trace_deltas": {
+            "model_replays": 952,
+            "sample_replays": 952,
+            "readbacks": 952,
+            "captures": 0
+          },
+          "diagnostic_total_wall_s": 83.42164712701924,
+          "decode_wall_s": 60.41158403409645,
+          "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/runs/full/anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.cap1024.seed42.json",
+          "result_sha256": "886f3f7f8c0511a78a1ebe5ccafbef00c65c7284461b3c24df39c87639bc49e4",
+          "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.cap1024.seed42.private.json",
+          "fixture_sha256": "ca3ccbea7cb65f7fb929521189cde459f36391aa461d248ed5cf3d57f3eff981",
+          "cap512_source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/full/anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.cap512.seed42.json",
+          "cap512_source_result_sha256": "0b2e8beb4f6be4cb8c1abb7fe0a45b7ad92fd17c9c70241c68b90970e20da5b5",
+          "coordinator_snapshots": [
+            {
+              "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/full-coordinator-sphinx86-first2.json",
+              "sha256": "67762113e0df97773cd5691921948f2e2f48078cb089d1ee0781ceb46375a181"
+            }
+          ],
+          "adjudication_reason": "Pinned prefix ends call:bash. Completes distinct method/replacement/test statements and canonical tool close; no repeated-token or malformed-tool motif. Potential recursive implementation is patch error, not observed generation loop."
+        },
+        {
+          "mode": "full",
+          "job": "anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.cap1024.seed43",
+          "seed": 43,
+          "verdict": "normal",
+          "reason": "Pinned prefix ends call:bash. Completes distinct method/replacement/test statements and canonical tool close; no repeated-token or malformed-tool motif. Potential recursive implementation is patch error, not observed generation loop.",
+          "generated_ids": 866,
+          "source_cap512_ids": 512,
+          "prefix512_identical": true,
+          "decode_tokens": 865,
+          "trace_deltas": {
+            "model_replays": 865,
+            "sample_replays": 865,
+            "readbacks": 865,
+            "captures": 0
+          },
+          "diagnostic_total_wall_s": 77.88006164086983,
+          "decode_wall_s": 54.8631576159969,
+          "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/runs/full/anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.cap1024.seed43.json",
+          "result_sha256": "980e05faf39627ff47331abf4e9329ff168b996483800d5853e9694dd3f94eb3",
+          "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.cap1024.seed43.private.json",
+          "fixture_sha256": "24e925807caaf57dbd0eb481fbd956901db36a766ab8e0552039253d0e63bebc",
+          "cap512_source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/full/anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.cap512.seed43.json",
+          "cap512_source_result_sha256": "55d1b1f251642a06f436196f7cd1dcadc57cb8b055fd3b14498c529f1a04b93f",
+          "coordinator_snapshots": [
+            {
+              "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/full-coordinator-sphinx86-first2.json",
+              "sha256": "67762113e0df97773cd5691921948f2e2f48078cb089d1ee0781ceb46375a181"
+            }
+          ],
+          "adjudication_reason": "Pinned prefix ends call:bash. Completes distinct method/replacement/test statements and canonical tool close; no repeated-token or malformed-tool motif. Potential recursive implementation is patch error, not observed generation loop."
+        },
+        {
+          "mode": "full",
+          "job": "anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.cap1024.seed44",
+          "seed": 44,
+          "verdict": "normal",
+          "reason": "Pinned prefix ends call:bash. Completes distinct include/extension logic, file replacement and reproduction statements with canonical close. No unchanged repetition or native malformed-tool motif; semantic wrong package edits remain task-level errors.",
+          "generated_ids": 901,
+          "source_cap512_ids": 512,
+          "prefix512_identical": true,
+          "decode_tokens": 900,
+          "trace_deltas": {
+            "model_replays": 900,
+            "sample_replays": 900,
+            "readbacks": 900,
+            "captures": 0
+          },
+          "diagnostic_total_wall_s": 80.10183022590354,
+          "decode_wall_s": 57.07877036603168,
+          "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/runs/full/anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.cap1024.seed44.json",
+          "result_sha256": "c9d6da4967dde54873f496ee1c78b2785edd674e5cada63ed7eb2de5c4630480",
+          "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.cap1024.seed44.private.json",
+          "fixture_sha256": "14b67b9fcb8ad382713dff99ccb47922690bc5be90131e3adc25a195f3e712d3",
+          "cap512_source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/full/anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.cap512.seed44.json",
+          "cap512_source_result_sha256": "57bc21f9ac53379a5e8e3fd3b36a623ca4dec752d4979213daa963cb4f1c81df",
+          "coordinator_snapshots": [
+            {
+              "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/full-coordinator-sphinx86last95first.json",
+              "sha256": "11ee67940b32853f073bca52ef25a1a7987c0769015351aa5319d6dc352e903a"
+            }
+          ],
+          "adjudication_reason": "Pinned prefix ends call:bash. Completes distinct include/extension logic, file replacement and reproduction statements with canonical close. No unchanged repetition or native malformed-tool motif; semantic wrong package edits remain task-level errors."
+        },
+        {
+          "mode": "full",
+          "job": "anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.cap1024.seed42",
+          "seed": 42,
+          "verdict": "normal",
+          "reason": "Pinned prefix ends call:bash. Completes distinct include/extension logic, file replacement and reproduction statements with canonical close. No unchanged repetition or native malformed-tool motif; semantic wrong package edits remain task-level errors.",
+          "generated_ids": 840,
+          "source_cap512_ids": 512,
+          "prefix512_identical": true,
+          "decode_tokens": 839,
+          "trace_deltas": {
+            "model_replays": 839,
+            "sample_replays": 839,
+            "readbacks": 839,
+            "captures": 0
+          },
+          "diagnostic_total_wall_s": 82.3566884570755,
+          "decode_wall_s": 53.8952231858857,
+          "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/runs/full/anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.cap1024.seed42.json",
+          "result_sha256": "68ae086f49ec9cecf472a909b3564a1d5ef4d1afcd63d0cadf0bc29e5f7c4ddc",
+          "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.cap1024.seed42.private.json",
+          "fixture_sha256": "1ec793a6242ddcb79a68bfb33e3f6e63dba76ba268365c16550906acda07cf36",
+          "cap512_source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/full/anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.cap512.seed42.json",
+          "cap512_source_result_sha256": "c6ecadd40547c63de85c38152cf757a5e6aa03fece7b8589a9be172076596e6b",
+          "coordinator_snapshots": [
+            {
+              "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/full-coordinator-sphinx86last95first.json",
+              "sha256": "11ee67940b32853f073bca52ef25a1a7987c0769015351aa5319d6dc352e903a"
+            }
+          ],
+          "adjudication_reason": "Pinned prefix ends call:bash. Completes distinct include/extension logic, file replacement and reproduction statements with canonical close. No unchanged repetition or native malformed-tool motif; semantic wrong package edits remain task-level errors."
+        },
+        {
+          "mode": "full",
+          "job": "anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.cap1024.seed43",
+          "seed": 43,
+          "verdict": "normal",
+          "reason": "Pinned prefix ends call:bash. Distinct extension/debug/include method and replacement/test commands complete with canonical tool close; no repetition/malformed-tool motif.",
+          "generated_ids": 833,
+          "source_cap512_ids": 512,
+          "prefix512_identical": true,
+          "decode_tokens": 832,
+          "trace_deltas": {
+            "model_replays": 832,
+            "sample_replays": 832,
+            "readbacks": 832,
+            "captures": 0
+          },
+          "diagnostic_total_wall_s": 81.92560695717111,
+          "decode_wall_s": 53.437745082890615,
+          "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/runs/full/anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.cap1024.seed43.json",
+          "result_sha256": "e5b40f851077256c9777d3cbb1e79a7b718f35f532a9d5f08e5c9a1e8e07a9d5",
+          "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.cap1024.seed43.private.json",
+          "fixture_sha256": "c186544e1b085f76357b2c53fb9c5794409b13f7a700777fc7aeb02b3bd30b28",
+          "cap512_source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/full/anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.cap512.seed43.json",
+          "cap512_source_result_sha256": "142eeee86fb5b72cffcf679d15b09341d3844ecfb74e560d772d6ac865535d90",
+          "coordinator_snapshots": [
+            {
+              "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/full-coordinator-sphinx95-second.json",
+              "sha256": "3eb82b71546b836d4d2cd500ce16aec1f42070e8ee1fdd6fd2f2a701df6b9766"
+            }
+          ],
+          "adjudication_reason": "Pinned prefix ends call:bash. Distinct extension/debug/include method and replacement/test commands complete with canonical tool close; no repetition/malformed-tool motif."
+        },
+        {
+          "mode": "full",
+          "job": "anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.cap1024.seed44",
+          "seed": 44,
+          "verdict": "normal",
+          "reason": "Pinned prefix ends call:bash. Completes distinct extension callback, docname handling, temporary include, replacement and build command with canonical close; no repetitive/native malformed tool behavior.",
+          "generated_ids": 827,
+          "source_cap512_ids": 512,
+          "prefix512_identical": true,
+          "decode_tokens": 826,
+          "trace_deltas": {
+            "model_replays": 826,
+            "sample_replays": 826,
+            "readbacks": 826,
+            "captures": 0
+          },
+          "diagnostic_total_wall_s": 81.61804225295782,
+          "decode_wall_s": 53.0790806110017,
+          "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/runs/full/anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.cap1024.seed44.json",
+          "result_sha256": "bab944ce2b248420832e6dcfccc1cd20a494af26096f80f2f457e2ea16164bdb",
+          "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.cap1024.seed44.private.json",
+          "fixture_sha256": "1983cb0cec009541460d10e207452f945bb0b5c35cbb9271b4779678599f06e8",
+          "cap512_source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/full/anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.cap512.seed44.json",
+          "cap512_source_result_sha256": "4e05b7ccf7242153d24af07c9b8ff23cd32dfccd33705a89202a4152e16ee657",
+          "coordinator_snapshots": [
+            {
+              "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/full-coordinator-sphinx95-third.json",
+              "sha256": "f4311df38af9e223f0e88ac31abc83be82e5890fafacd0bc91e2f15c8ee1088b"
+            }
+          ],
+          "adjudication_reason": "Pinned prefix ends call:bash. Completes distinct extension callback, docname handling, temporary include, replacement and build command with canonical close; no repetitive/native malformed tool behavior."
+        },
+        {
+          "mode": "full",
+          "job": "anomaly.sphinx-doc__sphinx-9461.call184.onset.cap1024.seed42",
+          "seed": 42,
+          "verdict": "normal",
+          "reason": "Pinned prefix ends call:bash. Distinct generated replacement-line arguments and filtering close at535; helper is not executed or written back to source, a semantic action issue rather than repetition or cap cutoff.",
+          "generated_ids": 535,
+          "source_cap512_ids": 512,
+          "prefix512_identical": true,
+          "decode_tokens": 534,
+          "trace_deltas": {
+            "model_replays": 534,
+            "sample_replays": 534,
+            "readbacks": 534,
+            "captures": 0
+          },
+          "diagnostic_total_wall_s": 76.18038483010605,
+          "decode_wall_s": 35.206839073915035,
+          "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/runs/full/anomaly.sphinx-doc__sphinx-9461.call184.onset.cap1024.seed42.json",
+          "result_sha256": "22c22099e4e15b642a41e0fb22d80885314dd7dd094daf7235ddf9dfaf983339",
+          "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-9461.call184.onset.cap1024.seed42.private.json",
+          "fixture_sha256": "45d3dc1e5af1f012f825bf7da1ca84e67ff79fc45aac8c144ffc05b241243206",
+          "cap512_source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/full/anomaly.sphinx-doc__sphinx-9461.call184.onset.cap512.seed42.json",
+          "cap512_source_result_sha256": "aa29d23d75545a227bbaa0087bc120b8f25ca93ad67b13d8d483da5ff187db5a",
+          "coordinator_snapshots": [
+            {
+              "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/full-coordinator-sphinx9461-first.json",
+              "sha256": "4eeb67ea69f916d3dbea7cf6acb817adfc03638a12ade2633cfb0a0890fed7bd"
+            }
+          ],
+          "adjudication_reason": "Pinned prefix ends call:bash. Distinct generated replacement-line arguments and filtering close at535; helper is not executed or written back to source, a semantic action issue rather than repetition or cap cutoff."
+        },
+        {
+          "mode": "full",
+          "job": "anomaly.sphinx-doc__sphinx-9461.call184.onset.cap1024.seed43",
+          "seed": 43,
+          "verdict": "normal",
+          "reason": "Pinned prefix ends call:bash. Distinct loop-location and MRO replacement lines, file write and helper execution complete with canonical close. No unchanged repetition/native anomaly.",
+          "generated_ids": 548,
+          "source_cap512_ids": 512,
+          "prefix512_identical": true,
+          "decode_tokens": 547,
+          "trace_deltas": {
+            "model_replays": 547,
+            "sample_replays": 547,
+            "readbacks": 547,
+            "captures": 0
+          },
+          "diagnostic_total_wall_s": 77.06592956697568,
+          "decode_wall_s": 36.04781196708791,
+          "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/runs/full/anomaly.sphinx-doc__sphinx-9461.call184.onset.cap1024.seed43.json",
+          "result_sha256": "56378abfcda81a27667ed00811892df39be861d0a3ebe2d7dc849ef3e00e86b0",
+          "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-9461.call184.onset.cap1024.seed43.private.json",
+          "fixture_sha256": "c1e7fe3a18d6bf2d2eb9deac7ddf435c1931cdb20b2ef2763ce5df88003212d1",
+          "cap512_source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/full/anomaly.sphinx-doc__sphinx-9461.call184.onset.cap512.seed43.json",
+          "cap512_source_result_sha256": "ddbc29482e4ef92f0fb5d7967d7e4c04458ac33e1be393bd8a79c6d189b2c872",
+          "coordinator_snapshots": [
+            {
+              "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/full-coordinator-sphinx9461-second.json",
+              "sha256": "c83f2eee23110780f15eea82662c1f5ad3eb49c89e00adbf2a645600bf45cc57"
+            }
+          ],
+          "adjudication_reason": "Pinned prefix ends call:bash. Distinct loop-location and MRO replacement lines, file write and helper execution complete with canonical close. No unchanged repetition/native anomaly."
+        }
+      ],
+      "timing_vs_prediction": {
+        "mode": "full",
+        "launch": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/full-launch.json",
+        "launch_sha256": "92677b812a7a3dfef2a68926e1b47faf6da8007883d253a02067631c9aa09f41",
+        "completion": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/full-completion.json",
+        "completion_sha256": "8270d32119b65e82e67e9f054bfea72e12453b7b3fb5974dbeb164cf65d9c026",
+        "predicted_hours": 0.692931013294531,
+        "predicted_range_hours": [
+          0.506582457501594,
+          1.0035119396160928
+        ],
+        "measured_hours": 0.553919256594446,
+        "measured_minus_predicted_hours": -0.13901175670008503,
+        "measured_within_predicted_range": true
+      }
+    }
+  }
+}

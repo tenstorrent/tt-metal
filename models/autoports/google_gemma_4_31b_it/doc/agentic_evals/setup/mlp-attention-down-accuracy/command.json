@@ -1,0 +1,47 @@
+{
+  "status": "prepared_not_admitted",
+  "epoch": 1794752543.643437,
+  "argv": [
+    "timeout",
+    "1200",
+    "env",
+    "HF_HUB_OFFLINE=1",
+    "HF_DATASETS_OFFLINE=1",
+    "HF_HUB_DISABLE_TELEMETRY=1",
+    "OMP_NUM_THREADS=16",
+    "MKL_NUM_THREADS=16",
+    "OPENBLAS_NUM_THREADS=16",
+    "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+    "READINESS_TRACE_REGION_SIZE=134217728",
+    "TT_METAL_TRACE_ALLOC_TRACKING=0",
+    "TT_METAL_DEVICE_PROFILER=0",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+    "-m",
+    "models.autoports.google_gemma_4_31b_it.tests.run_datatype_candidate",
+    "--config",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/mlp-attention-down-bfp8-lofi-eleven-case-candidate/mlp_attention_down_bfp8_lofi_precision.json",
+    "--id",
+    "stage12_mlp_attention_down_accuracy",
+    "--output-dir",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/mlp-attention-down-accuracy/run",
+    "--reference",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/attention-down-acceptance/references/aime24.refpt",
+    "--natural-reference",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/attention-down-acceptance/references/natural.refpt",
+    "--require-accuracy",
+    "--accuracy-only"
+  ],
+  "timeout_seconds": 1200,
+  "planning_range_seconds": [
+    180,
+    700
+  ],
+  "planning_basis": "Measured P6full load141s plus prepared trace and400AIME/512natural TF positions. Broad forecast for full60layer candidate, no performance headline; exact costs may differ from sampled tokenout. CPU references nowavailableverified.",
+  "admission_requires": "P8focus terminal androotreview; accuracybar90/98/100unchanged. Stopbeforeexpensiveacceptanceifmiss.",
+  "source_sha256": {
+    "models/autoports/google_gemma_4_31b_it/tests/run_datatype_candidate.py": "f68517e9133e2541949b3786548d0fe5d7ce99b7d021335218ba073b49620a86",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/mlp-attention-down-bfp8-lofi-eleven-case-candidate/mlp_attention_down_bfp8_lofi_precision.json": "de46de8e771defadd786ab8207308fcc3609b15bac144c662dadc20a6d9e343f",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/attention-down-acceptance/references/aime24.refpt": "1c1a90cada967dc89159edf6e61eb51f2638955ab9defe1cc51939587e99ab45",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/attention-down-acceptance/references/natural.refpt": "861f29370af0ba7e13c77f548e688cceff429846d20a9283697ae77b8b069584"
+  }
+}

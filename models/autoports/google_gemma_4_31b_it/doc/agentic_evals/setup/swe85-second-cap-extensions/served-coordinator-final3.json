@@ -1,0 +1,38 @@
+{
+  "status": "root_raw_text_and_pinned_prefix_review",
+  "rows": [
+    {
+      "case": "anomaly.sphinx-doc__sphinx-9461.call184.onset.cap1024.seed44",
+      "mode": "served",
+      "seed": 44,
+      "tokens": 606,
+      "verdict": "normal",
+      "original512_prefix_identical": true,
+      "reason": "Completes varying script and tool call; xarray comments revisit issue but progress and close, no sustained identical loop. Technical correctness not inferred.",
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/runs/served/anomaly.sphinx-doc__sphinx-9461.call184.onset.cap1024.seed44.json",
+      "source_sha256": "31a3085456bd7e7ea37c4139990e6d8f709be871832efb5b7b74974955b63680"
+    },
+    {
+      "case": "anomaly.xarray7233-call1.canonicalprefix.cap1024.seed42",
+      "mode": "served",
+      "seed": 42,
+      "tokens": 901,
+      "verdict": "normal",
+      "original512_prefix_identical": true,
+      "reason": "Completes varying script and tool call; xarray comments revisit issue but progress and close, no sustained identical loop. Technical correctness not inferred.",
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/runs/served/anomaly.xarray7233-call1.canonicalprefix.cap1024.seed42.json",
+      "source_sha256": "1547c15592b9534f5385a5696e3bf8f26ba944c03345c3243dd89617f33fc124"
+    },
+    {
+      "case": "anomaly.xarray7233-call1.canonicalprefix.cap1024.seed44",
+      "mode": "served",
+      "seed": 44,
+      "tokens": 774,
+      "verdict": "normal",
+      "original512_prefix_identical": true,
+      "reason": "Completes varying script and tool call; xarray comments revisit issue but progress and close, no sustained identical loop. Technical correctness not inferred.",
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/runs/served/anomaly.xarray7233-call1.canonicalprefix.cap1024.seed44.json",
+      "source_sha256": "2ceb4ec8a67f2ace2543352212db1bdf084b5e50ee5658fb9dabf5b1023d0adc"
+    }
+  ]
+}

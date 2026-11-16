@@ -1,0 +1,59 @@
+{
+  "created_unix": 1794744563.4933045,
+  "deadline_unix": 1794791725,
+  "status": "planning_not_execution",
+  "serial_order": [
+    "Completed P6fixed1082350.18s withinforecast:80normal20reproduced4other4progressingcaps; rejected. P7ten570.41s withinforecast rejectedwrongopener/missingargumentmarkers,74progressingcap.",
+    "Pinned HF readiness and natural references rebuilt42.11s; fast miss explained. P8focused11 complete10normal/1progressingcap540.87s; P8accuracy rejected natural447/512 below90bar.",
+    "Accuracy round completed: P17 passes471/512; P18gate/up reduction447/512 misses; P19down reduction465/512 passes and is fastest tested short-accuracy passing candidate (18.81 natural traced TFtps); P20attention reduction440/512 misses. P19fixed108 plus extensions complete; no serving/default/score change.",
+    "Before selection: resumedprefill, sharedqualitative, longprefix/contextboundaries andmemory checks; default/vLLMpolicypropagation verified.",
+    "Onlyafterselection: measured launchmemory fit, responselogprobe, remeasureusedSWErows andexact4096/128B1C1headline. Project unchangedSWE85 from currentevidence.",
+    "Admit wholelist rerun only if measured projection andcollection/analysis/reviewmargin fit remainingstagewindow/run_timeout. No listdrop orgrade fabrication.",
+    "Remaining reference controls serial whenbudget permits; allunrunobservations explicitlyuncovered. Unknownverifieroutcomes retainbounds whileoperatorquestionpending.",
+    "Finalreport/compacttelemetry, freshindependentstage-review, fix/rereview, isolate stageownedlocalcheckpoint; neverpush."
+  ],
+  "budget_policy": "Admit each remaining job against harddeadline1794791725 with collection/review reserve. Current precision has no measured P19vLLM rates; do not assume an85task rerun fits. P19acceptance/resume, actual launchmemory and usedrates are required before selection/rerun. Do not spend the window on redundant HFfree-run seeds; unknown verifier outcomes retain bounds pending operator response.",
+  "diagnostic_caps": "Incomplete short diagnostic controls stay inconclusive; they do not turn any scored task into a failure. All scored task cap cases were analyzed as loops/anomalies.",
+  "updated_unix": 1794766656.7467558,
+  "current_execution": "P19 broadacceptance completed1056.035s withinforecast: allaccuracyrepeats pass, AR4096/128B1C1 decode18.505836tps, sharedqualprefixescoherent,32KlabelretrievedwithfencedJSONcaveat,262143/262144boundariespass. Resumecheck running session8380 timeout2700; no selection orscorechange.",
+  "next_reference_question": {
+    "candidate": "swe85-conditional-hf/p19-native-onset-caret-controls/command.json",
+    "status": "completed_root_reviewed",
+    "basis": "HF shortenedcontrols didnotresolve full-reconstructed-onset caret behavior atRequests5414call11 andPytest7432call19; exact saved7K/11Konset inputs with256token cap are a stronger boundedcontrol than adding an imposedfirstcaret.",
+    "forecast_seconds": [
+      3100,
+      3650,
+      4500
+    ],
+    "timeout_seconds": 5400
+  },
+  "current_admission_policy": "One model job at a time; no scores orservingpolicy change on diagnostics. Terminalpanel, capextensions andexactHFscopereview beforecandidateacceptance; actuallaunchsizing andusedrates before whole85 rerun. Originaldeadline1794791725 unchanged. Any unruncoverage remains explicit.",
+  "remaining_reference_strategy": "Host-only proposal minimizes remaining HF20 and Sklearn secondary-loop controls to observed-history conditional windows, deduplicated by prompt and chosen IDs. Matched fullTT probabilities required. Conditional likelihood does not establish free-run incidence. No new job admitted yet.",
+  "next_after_active_hf": "Afterresumeterminalreview, candidateB8servingmemory/rates for measuredwhole85projection; conditional22+2 controls remainunadmitted andmustbeaccountedfor withinremainingbudget.",
+  "prepared_conditional_controls": [
+    {
+      "proposal": "swe85-conditional-hf/full-other-conditional-history-proposal-b/proposal.json",
+      "status": "host_validated_independently_reviewed_not_admitted",
+      "windows": 22,
+      "tt_point_seconds": 197.8,
+      "hf_point_seconds": 2700,
+      "hf_range_seconds": [
+        1500,
+        5000
+      ],
+      "scope": "12onset/10terminal windows; conditionalprobabilities only, nofreeincidence"
+    },
+    {
+      "proposal": "swe85-conditional-hf/sklearn13135-full-missingtool-conditional-history-b/proposal.json",
+      "status": "host_validated_independently_reviewed_provenance_corrected_not_admitted",
+      "windows": 2,
+      "tt_point_seconds": 200,
+      "hf_point_seconds": 2100,
+      "hf_range_seconds": [
+        1800,
+        3000
+      ],
+      "scope": "Originalfullprompt plusactualTTprefix; firstprotocolswitch andterminalunwrappedcommand windows, conditionalonly"
+    }
+  ]
+}

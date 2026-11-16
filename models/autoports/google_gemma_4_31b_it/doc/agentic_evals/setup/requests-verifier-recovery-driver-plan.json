@@ -1,0 +1,104 @@
+{
+  "status": "prepared_cpu_validated_no_verifier_executed",
+  "driver": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/recover_requests_verifier.py",
+  "driver_sha256": "f6659a195ff133b0fac5956aa4324df99ebe68843baac0290ee5e6e78fc86373",
+  "source_manifest": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/requests-recovery-source/manifest.json",
+  "validation": [
+    {
+      "task": "1724",
+      "exit_code": 0,
+      "status": "cpu_validated_not_executed",
+      "reconstructed_files": 1
+    },
+    {
+      "task": "1766",
+      "exit_code": 0,
+      "status": "cpu_validated_not_executed",
+      "reconstructed_files": 6
+    },
+    {
+      "task": "2317",
+      "exit_code": 0,
+      "status": "cpu_validated_not_executed",
+      "reconstructed_files": 8
+    }
+  ],
+  "image_source_extraction": "Root explicitly authorized stopped docker create/cp/remove only. Three pinned images inspected and selected source files copied; no container started, no exec/run/network/device calls. All temporary containers removed.",
+  "all_reconstructed_source_hashes": {
+    "1724": {
+      "requests/models.py": "df9df5429898fb36c538605c4986228ea90d33f38024bc6acad54d97dee0cc17"
+    },
+    "1766": {
+      "requests/auth.py": "5d9bb8f15aa90a8f347428edf6192240fd4bf00653feb3ee0b7e08b5ad78368c",
+      "requests/packages/urllib3/_collections.py": "477c70707f09efef302869e41f16b652f4398caef9b56376bfd0d6ed96bdc533",
+      "requests/structures.py": "5069b57dc916df65b39104e9a395aad01253203c09ce61193e4e3b60e256a6dd",
+      "requests/cookies.py": "823a5bc78000e519d9ae9c8b68b03973a4dc2e966ba2f767001a748b8618bfe1",
+      "requests/sessions.py": "94478b351677c37c05d017ccc8a220b76fd2e0274cc78577c27f74993d1678a6",
+      "reproduce_issue.py": "6eb3c655896535d9eb7a78f4b578be80a8d8f7a938662682a685d58b29a85ee9"
+    },
+    "2317": {
+      "requests/sessions.py": "9235f41ffa4fef2d50757505c50febf94f1db807391c6027df8cb454b4934d66",
+      "requests/packages/urllib3/_collections.py": "df5f41dead6a840ac729cbc39b458ec12480c04270821e54017055ea143fe8ae",
+      "requests/cookies.py": "fb30cbb5ccd4aff042d113592ca72a1edf63620d9a89de30519a30234e4b473f",
+      "requests/structures.py": "a699c17bf3334d190b37a07f719e9244634537f4378c30b66e2445224effc528",
+      "requests/utils.py": "74de6d99cd3844868a3bf57edf7f39f9956098499e8f3196d06baccce11c91ae",
+      "requests/models.py": "7f6f03f7b74acdcdd046556272fe691c9cdba8918d1da0daa601f5f0c0f25a55",
+      "test_logic.py": "99ad90714b6c4f62aef75c00e9c2a059fd6d5970a26584dee72c34da9b67862c",
+      "reproduce_issue.py": "fb0eb35576c599661b84315e46cdbb6be78ff3549d41fc975742c90e85902819"
+    }
+  },
+  "retained_edits": [
+    "1724 models builtin_str method conversion.",
+    "1766 auth qop and nc quoting plus _collections/structures/cookies/sessions compatibility edits, and final native reproduction helper.",
+    "2317 all six tracked files: bytes decoding, Mapping/MutableMapping changes, final utils/models collections.abc aliases with restored attribute expressions; two final native reproduction helpers retained."
+  ],
+  "offline_parser_provenance": {
+    "dockerfiles": [
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/Dockerfile.offline",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-candidate/Dockerfile.offline-linked"
+    ],
+    "cache": "/root/.cache/uv/environments-v2/parser-466021493977ef71",
+    "pins": {
+      "swebench": "4.0.3",
+      "datasets": "2.16.1",
+      "fastcore": "1.10.5"
+    },
+    "verification": "Cache versions asserted before test.sh; original test.sh generates parser unchanged. UV_OFFLINE=1 and UV_PYTHON_DOWNLOADS=never."
+  },
+  "execution": [
+    "Coordinator alone admits each job after worker slot is free; one task per invocation.",
+    "Use --task1724/1766/2317 as separate arguments, --execute and a new --output directory.",
+    "Pinned image ID and git base commit checked before source restore. Base and submitted file hashes checked before/after copying and after verifier; new helper paths required absent initially.",
+    "No bind mounts; docker cp tests/source and outputs. Tests/config hash-pinned unchanged; original complete verifier/parser retained.",
+    "1CPU4GiB30min job; up to60sec cleanup. Original agent inference cost and raw trial artifacts retained."
+  ],
+  "environment_repair_options": {
+    "1766_legacy_pytest": "Explicit --legacy-pytest installs real pytest4.6.11/pluggy0.13.1 strictly offline; missing cached distributions stop recovery before tests. Candidate not yet tested.",
+    "1724": "No dependency changes.",
+    "2317": "No dependency changes.",
+    "tls": "No CA override implemented because actual chain validation is absent. Never verify=False.",
+    "http429": "No endpoint substitutions or mock responses; service may remain rate limited."
+  },
+  "unresolved": [
+    "Exact full source hashes now available; runtime base HEAD and absent helper paths checked before execution.",
+    "No actual CA chain validated; TLS recovery remains unproven.",
+    "HTTP429 may recur and cannot be scored as repaired without complete original verifier results.",
+    "1766 compatible pytest wheel availability and viability unknown.",
+    "Offline original pip install and memory/time fit unknown."
+  ],
+  "not_performed": [
+    "Docker start/run/exec",
+    "verifier execution",
+    "network access",
+    "device use",
+    "score reconciliation",
+    "shared ledger changes"
+  ],
+  "wheel_update": {
+    "manifest": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/verifier-recovery-wheels/manifest.json",
+    "status": "PyPI-only binary wheels downloaded/hash-pinned; no environment installed or Docker started",
+    "requests": "--legacy-pytest now supports1766 and2317; docker cp wheels, --no-index --find-links /wheels with pinned requirements, then Python3.9/version/CLI/legacy raises-string preflight before official tests.",
+    "pylint": "appdirs1.4.4 wheel copied/hash-checked; container network none; --no-index --find-links /wheels.",
+    "runtime_support": "Not yet tested in isolated Python3.9; failure stops before original tests."
+  }
+}

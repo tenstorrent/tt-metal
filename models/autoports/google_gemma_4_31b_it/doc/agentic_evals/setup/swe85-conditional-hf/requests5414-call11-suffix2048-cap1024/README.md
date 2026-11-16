@@ -1,0 +1,11 @@
+# Requests5414 call 11 cap extension candidate
+
+This is an inert, unadmitted CPU HF diagnostic candidate. It reruns the exact 2048-token saved prompt fixture at seed 44 with generation cap 1024; the completed cap-512 result and all source artifacts remain unchanged. The saved cap-512 result ended during coherent IDNA reasoning and is not treated as a failure.
+
+Execution is impossible without an explicit root `admission.json` and the CLI `--execute`. Before starting, the executor checks exact candidate hashes, root admission pins, the root-reviewed terminal primary-HF9 progress/review hashes, the stage deadline for the frozen 3600-second command plus 60-second cleanup grace, no active HF runner, no open TT device owners, at least 100 GiB `MemAvailable`, no STOP sentinel, and no existing output, launch, completion, or runner log. It runs one command only and writes exclusive launch and terminal records. `--validate-only` does not invoke the HF runner, load weights, or touch devices.
+
+Admission must identify this candidate and pin `driver-integrity.json`, driver, tests, proposal, commands, manifest, forecast, source-integrity, and semantic-context hashes. It must also provide `primary_hf9_progress_path` and `primary_hf9_root_review_path` with their exact SHA-256 values, an accepted root review bound to the terminal progress, `stage_deadline_unix`, and an `accepted_runtime_ceiling_seconds` at least 3660 seconds. The executor requires the root HF9 progress to be terminal and the root review to accept it.
+
+A completed result is accepted only if it reports the exact fixture path/hash, saved prompt IDs, 2048 prompt tokens, pinned HF revision, CPU BF16, 512-token prefill chunks, temperature 1.0/top-p 0.95/top-k 20, one seed-44 trial with requested cap 1024, and the saved 64 chosen-token positions. Before claiming a continuation, generated IDs 0–511 must exactly equal those in the saved cap-512 result. A mismatch is recorded as output-validation failure, not an extension.
+
+The chosen 64 positions are from the original caret branch; they do not represent the actual ellipsis branch. Matched served/full TT outputs are separate ellipsis-newline-indentation loop observations. This diagnostic alone cannot establish causal mechanism, native-seed replay, full-response equivalence, or a model-level conclusion.

@@ -1,0 +1,65 @@
+{
+  "status": "execution_complete_all_five_natural_stop_semantic_review_pending",
+  "completion": {
+    "status": "completed",
+    "start_unix": 1794761123.1731646,
+    "end_unix": 1794761630.1893568,
+    "elapsed_seconds": 507.0161921977997,
+    "process_exit_code": 0
+  },
+  "forecast_verdict": "faster_than_low",
+  "forecast_reconciliation": "Forecast620/711/916s priced generation near doubled caps; actual258+326+1632+1191+1003=4410 tokens versus6144 totalcap, all ended naturally. No speed claim from a different generated length; retain all samples.",
+  "rows": [
+    {
+      "source_index": 10,
+      "name": "anomaly.matplotlib__matplotlib-20488.call86.onset.seed43.cap512",
+      "generated_tokens": 258,
+      "cap": 512,
+      "last_token_id": 50,
+      "original_prefix_equal": true,
+      "same_case_policy_sampling": true,
+      "sha256": "2a2f46c8f2cbfccb3eedd355d13e9718ffe7a087be8c96fd0e35313a8bfdbe17"
+    },
+    {
+      "source_index": 49,
+      "name": "anomaly.sphinx-doc__sphinx-10323.call57.onset.seed43.cap512",
+      "generated_tokens": 326,
+      "cap": 512,
+      "last_token_id": 50,
+      "original_prefix_equal": true,
+      "same_case_policy_sampling": true,
+      "sha256": "fb59ed84a4771592416f3604959487ace5faa4ea2eae39889b67465c3cc41cf0"
+    },
+    {
+      "source_index": 66,
+      "name": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed42.cap2048",
+      "generated_tokens": 1632,
+      "cap": 2048,
+      "last_token_id": 50,
+      "original_prefix_equal": true,
+      "same_case_policy_sampling": true,
+      "sha256": "f1fb871c88fd02db4c3455a4444636f93c4ad515b409ea76be0fe937fe914898"
+    },
+    {
+      "source_index": 74,
+      "name": "anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.seed44.cap2048",
+      "generated_tokens": 1191,
+      "cap": 2048,
+      "last_token_id": 50,
+      "original_prefix_equal": true,
+      "same_case_policy_sampling": true,
+      "sha256": "a3c18dfdfaa31649c5bdc5acc6055fd2012959b3e762252c52d529fd2862e0ef"
+    },
+    {
+      "source_index": 106,
+      "name": "anomaly.xarray7233-call1.canonicalprefix.seed43.cap1024",
+      "generated_tokens": 1003,
+      "cap": 1024,
+      "last_token_id": 50,
+      "original_prefix_equal": true,
+      "same_case_policy_sampling": true,
+      "sha256": "11cb8370701c726a8a55a338eccff5132600c5dd910dccab66ba0493fc7ca741"
+    }
+  ],
+  "scores_changed": false
+}

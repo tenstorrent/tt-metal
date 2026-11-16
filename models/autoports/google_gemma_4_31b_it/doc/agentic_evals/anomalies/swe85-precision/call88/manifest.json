@@ -1,0 +1,36 @@
+{
+  "status": "prepared_not_executed",
+  "task": "matplotlib__matplotlib-20488",
+  "native_response_id": "chatcmpl-b94619e0f18340df",
+  "call_number": 88,
+  "raw_reply_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-extended85-head-bfp8/live-tasks/matplotlib__matplotlib-20488-first/responses.private.log",
+  "fragment": "it's\u2019s\u2019s defined",
+  "reply_char_offset": 228,
+  "native_prompt_tokens": 46900,
+  "native_completion_tokens": 792,
+  "reconstructed_full_prompt_tokens": 42344,
+  "diagnostic_prompt_tokens": 512,
+  "teacher_forcing_positions": 64,
+  "sampling": {
+    "temperature": 1.0,
+    "top_p": 0.95,
+    "top_k": 20
+  },
+  "revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+  "private_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-precision/call88/matplotlib.first.suffix512.private.json",
+  "private_case_sha256": "9fd767fe7167134a247d79b14d09377039305097ed524f7574a82c0c974ca6c9",
+  "tokenization_note": "Conversation reconstructed from trajectory and raw server replies. vLLM reasoning was mapped into assistant text with an explicit <|think|> marker and the tool-call argument was represented as plain text; native structured tool-call/channel serialization is not reproduced token-for-token. Only final 512 rendered prompt tokens retained, removing earlier context. Native prompt token count is a comparison target, not expected to match diagnostic suffix length. Chosen 64 positions teacher-force the saved command argument from anomaly onset, not the native full completion.",
+  "reproduction_claim": "none; commands intentionally not run",
+  "native_prompt_token_count_mismatch": {
+    "native_prompt_tokens": 46900,
+    "reconstructed_full_prompt_tokens": 42344,
+    "difference_reconstructed_minus_native": -4556,
+    "diagnostic_prompt_tokens": 512,
+    "explanation": "The reconstruction count differs because original tool-call/channel messages were represented as plain text; the diagnostic then intentionally keeps only the last 512 tokens."
+  },
+  "completion_count_note": {
+    "native_full_completion_tokens": 792,
+    "chosen_teacher_forcing_positions": 64,
+    "explanation": "Native count covers reasoning plus structured tool-call generation; the 64 chosen tokens cover only the saved tool argument starting at the typo. Raw token IDs were not logged."
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "rows": [
+    {
+      "job": "anomaly.sphinx-doc__sphinx-10323.call70.onset",
+      "mode": "full",
+      "seed": 42,
+      "verdict": "normal",
+      "evidence": "Conditioned prompt ends `I've`. Generated suffix begins `already tried`, yielding coherent `I've already...` reasoning and a valid structured submit tool call; no duplicated contraction.",
+      "confidence": "high",
+      "cap_notes": "Short complete continuation ends at valid tool-response boundary before cap."
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-10323.call70.onset",
+      "mode": "full",
+      "seed": 43,
+      "verdict": "reproduced_native_motif",
+      "evidence": "Conditioned prompt ends `I've`. Generated suffix begins `\u2019ve tried`, yielding duplicated `I've\u2019ve` and matching fixture native contraction motif; it then submits via valid structured tool call.",
+      "confidence": "high",
+      "cap_notes": "Short complete continuation ends at valid tool-response boundary before cap."
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-10323.call70.onset",
+      "mode": "full",
+      "seed": 44,
+      "verdict": "normal",
+      "evidence": "Conditioned prompt ends `I've`. Generated suffix begins `already tried`, yielding coherent `I've already...` reasoning and a valid structured submit tool call; no duplicated contraction.",
+      "confidence": "high",
+      "cap_notes": "Short complete continuation ends at valid tool-response boundary before cap."
+    }
+  ]
+}

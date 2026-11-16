@@ -1,0 +1,130 @@
+{
+  "status": "provisional_planning_proxy_p6_seven_terminal_root_semantic_review_pending",
+  "scope": "Fixed108 full-mode one-load panel; byte-identical P3 manifest. Planning only, no P6 108-panel runtime or precision selection implied. Final forecast should be refreshed after root semantic review of P6 seven-case run and before any launch decision.",
+  "p3_fixed108_observation": {
+    "completion": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/completion.json",
+    "completion_sha256": "0f4b67270fbca7ed37ae3ebb360c3e4f8ff675ea74f8814b4d09ab3ae7246782",
+    "manifest_sha256": "57193e4b91af3a31df00f0c92dbc0f2219fbce011e6533594e5244a93a3021ed",
+    "rows": 108,
+    "elapsed_seconds": 2140.1934437209275,
+    "load_sha256": "3c1370e1c8d7a25128ac7e35548f1b77198f3ed0d0c4a1c039687b9c8da3a086",
+    "load_seconds": 137.96008633519523,
+    "generated_tokens": 29061,
+    "decode_tokens": 28953,
+    "decode_seconds": 1017.3925147645641,
+    "weighted_decode_tokens_per_second": 28.458043065807345,
+    "nondecode_nonload_seconds": 984.8408426211681
+  },
+  "p6_completed_seven_case_observation": {
+    "completion": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/attention-down-bfp8-lofi-seven-case-candidate/completion.json",
+    "completion_sha256": "455f63ffa1697c4f2e6ff52264b542b1083c02b8d3901b086b15a44b48dbb66d",
+    "exit_code": 0,
+    "elapsed_seconds": 519.0206434726715,
+    "load_sha256": "934ee695e8b0c8964c0a353d09e81a62ece2e3ee567e50b6290892b7eeea19a2",
+    "load_seconds": 143.19578505982645,
+    "rows": [
+      {
+        "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/attention-down-bfp8-lofi-seven-case-candidate/runs/attention_down_bfp8_lofi/anomaly.sympy__sympy-14711.call1.onset.seed42.p6_attention_down_bfp8_lofi.cap256.json",
+        "sha256": "9d177536c99c875a1c8b5b30b3ace9d6a365b8783ac47fe752119d85044aebd7",
+        "task": "sympy__sympy-14711",
+        "call": 1,
+        "seed": 42,
+        "generated_tokens": 139,
+        "decode_tokens": 138,
+        "decode_wall_s": 4.6801479500718415,
+        "decode_tok_s_user": 29.48624733068143
+      },
+      {
+        "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/attention-down-bfp8-lofi-seven-case-candidate/runs/attention_down_bfp8_lofi/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed44.p6_attention_down_bfp8_lofi.cap1024.json",
+        "sha256": "58f395024dff57d4bf5b89f1ba3ffca36263e5beffa7f609bc611923caaf0d57",
+        "task": "sphinx-doc__sphinx-11510",
+        "call": 119,
+        "seed": 44,
+        "generated_tokens": 507,
+        "decode_tokens": 506,
+        "decode_wall_s": 20.77608523191884,
+        "decode_tok_s_user": 24.354925114699615
+      },
+      {
+        "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/attention-down-bfp8-lofi-seven-case-candidate/runs/attention_down_bfp8_lofi/anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.seed44.p6_attention_down_bfp8_lofi.cap1024.json",
+        "sha256": "508bc39521e653b1122ed0f69046abb8c7a6290034bd59872a8ace55f07c4c9e",
+        "task": "sphinx-doc__sphinx-11510",
+        "call": 86,
+        "seed": 44,
+        "generated_tokens": 1007,
+        "decode_tokens": 1006,
+        "decode_wall_s": 38.57267236802727,
+        "decode_tok_s_user": 26.08064047006163
+      },
+      {
+        "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/attention-down-bfp8-lofi-seven-case-candidate/runs/attention_down_bfp8_lofi/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed42.p6_attention_down_bfp8_lofi.cap1024.json",
+        "sha256": "4e9508c54d83e212569348b8b805d8b0fade733a9bc3caa3f48df10e4c9d0fd6",
+        "task": "sphinx-doc__sphinx-11510",
+        "call": 119,
+        "seed": 42,
+        "generated_tokens": 771,
+        "decode_tokens": 770,
+        "decode_wall_s": 31.61438648495823,
+        "decode_tok_s_user": 24.3560000876929
+      },
+      {
+        "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/attention-down-bfp8-lofi-seven-case-candidate/runs/attention_down_bfp8_lofi/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.seed43.p6_attention_down_bfp8_lofi.cap2048.json",
+        "sha256": "a42e2488a7acddada09a5c58933e49bb61a9acedceebfd67af5b32d715a0b651",
+        "task": "sphinx-doc__sphinx-11510",
+        "call": 101,
+        "seed": 43,
+        "generated_tokens": 1574,
+        "decode_tokens": 1573,
+        "decode_wall_s": 62.051493470789865,
+        "decode_tok_s_user": 25.349913628436266
+      },
+      {
+        "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/attention-down-bfp8-lofi-seven-case-candidate/runs/attention_down_bfp8_lofi/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed43.p6_attention_down_bfp8_lofi.cap2048.json",
+        "sha256": "273ba61163db37e146c88a4672fef89f08cce6c5592000480739eade4b79aa5d",
+        "task": "sphinx-doc__sphinx-11510",
+        "call": 119,
+        "seed": 43,
+        "generated_tokens": 546,
+        "decode_tokens": 545,
+        "decode_wall_s": 22.373166017001495,
+        "decode_tok_s_user": 24.35953854657188
+      },
+      {
+        "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/attention-down-bfp8-lofi-seven-case-candidate/runs/attention_down_bfp8_lofi/anomaly.pytest-dev__pytest-5787.call65.onset.seed42.p6_attention_down_bfp8_lofi.cap2048.json",
+        "sha256": "9123a2120e846ec0fa67b8e5fc6e9be28f645fc0d9f81e8ed99a45fd6fa55f0a",
+        "task": "pytest-dev__pytest-5787",
+        "call": 65,
+        "seed": 42,
+        "generated_tokens": 234,
+        "decode_tokens": 233,
+        "decode_wall_s": 9.060962879098952,
+        "decode_tok_s_user": 25.714706384843968
+      }
+    ],
+    "sum_generated_tokens": 4778,
+    "sum_decode_tokens": 4771,
+    "sum_decode_seconds": 189.1289144018665,
+    "weighted_decode_tokens_per_second": 25.226179799575455,
+    "slowest_rate_ge500_tokens": 24.354925114699615,
+    "matched_P3_generated_tokens": 3605,
+    "P6_over_P3_matched_seven_output_ratio": 1.325381414701803,
+    "semantic_status": "Root semantic review pending; these outputs are currently used only for timing sensitivity."
+  },
+  "scenarios_seconds": {
+    "low_same_P3_decode_token_count_at_P6_weighted_rate": 2275.772837841808,
+    "central_P3_count_scaled_by_matched_seven_output_ratio_at_P6_weighted_rate": 2649.22486960842,
+    "high_central_token_count_plus20pct_at_slowest_P6_rate_ge500": 3018.7639242326313
+  },
+  "planning_range_seconds": [
+    2275.772837841808,
+    3018.7639242326313
+  ],
+  "timeout_seconds": 9000,
+  "method": "Use measured P3 fixed108 nondecode/nonload component, replace P3 load with measured P6 seven-case load, and model decode with completed P6 seven-case weighted rate. Central scales the P3 token count by the exact seven-case generated-token ratio P6/P3; high adds20% token sensitivity and uses the slowest P6 >=500-token row rate. This deliberately exposes output-length and rate variance and is not a statistical interval or upper bound.",
+  "uncertainty": [
+    "Seven selected anomalies do not guarantee representative rate or output scaling across the 108-case panel.",
+    "P6 outputs changed substantially for call101; this selected-set output ratio may overstate or understate full-panel output.",
+    "P3 and P6 traces are diagnostic host wall, not serving throughput.",
+    "Root semantic review and stage-budget decision are pending; do not infer candidate acceptance from normal seven-case observations."
+  ]
+}

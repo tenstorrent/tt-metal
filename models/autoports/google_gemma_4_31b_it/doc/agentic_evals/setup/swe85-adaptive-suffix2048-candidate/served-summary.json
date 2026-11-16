@@ -1,0 +1,14 @@
+{
+  "status": "served_complete_full_running",
+  "counts": {
+    "normal": 4,
+    "other": 3,
+    "native": 7,
+    "inconclusive": 1
+  },
+  "reviewed": 15,
+  "measured_hours": 0.09367709080378214,
+  "prediction_range_hit": true,
+  "trace_counter_audit": "pass",
+  "score_change": false
+}

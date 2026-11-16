@@ -1,0 +1,66 @@
+{
+  "status": "candidate_only_not_admitted_not_run",
+  "source_prompt_policy": "Exact same 2048 prompt_token_ids from U cap1024 fixture and original suffix2048 fixture; no recropping or rendering.",
+  "rows": [
+    {
+      "name": "anomaly.psf__requests-5414.call10.onset.suffix2048.cap2048.seed42",
+      "mode": "served",
+      "seed": 42,
+      "previous_cap": 1024,
+      "candidate_cap": 2048,
+      "root_verdict": "inconclusive",
+      "source_result_sha256": "84168fff11b5ad2c8a1c3fa9ec9d6a76d78f832aa938e674ac43a71a8bbfe421",
+      "source_coordinator_sha256": "6d165ac6e0a247c7351af03f904c8db96932dac394630a0284b6b7c3f81a016a",
+      "prompt_ids_equal_to_original_suffix2048": true,
+      "chosen_continuation_preserved": true,
+      "sampling_preserved": true
+    },
+    {
+      "name": "anomaly.psf__requests-5414.call11.onset.suffix2048.cap2048.seed42",
+      "mode": "full",
+      "seed": 42,
+      "previous_cap": 1024,
+      "candidate_cap": 2048,
+      "root_verdict": "inconclusive",
+      "source_result_sha256": "bbe10ef469c6473e26d18e3d1be8c9a3dfaa5e1ff64f9bed8eff8e1c5a725867",
+      "source_coordinator_sha256": "2cd7018e95b78de54850d1127fc540485f1e9eb6722720117676d4690365602a",
+      "prompt_ids_equal_to_original_suffix2048": true,
+      "chosen_continuation_preserved": true,
+      "sampling_preserved": true
+    }
+  ],
+  "not_included": [
+    {
+      "case": "full Requests call11 seed43",
+      "verdict": "other",
+      "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/full-call11-seed43-adjudication-correction.json",
+      "evidence_sha256": "6f75679d6c13213bbf1c0bd2096630a53fe04b0c1be01b20c8754ab81c2615e5",
+      "reason": "Localized stray own in malformed traceback; the correction supersedes the earlier inconclusive classification for current interpretation. Original pinned record remains immutable."
+    },
+    {
+      "case": "full Requests call10 seed43",
+      "verdict": "other",
+      "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-execution-candidate/full-requests10-stock-parser-audit-b.json",
+      "evidence_sha256": "57b50238af241c598918b8eb427ad9ccd7b7be655c0c41265dca43238e9cedc3",
+      "reason": "Stock parser confirms missing structured tool call after fenced bash; not an inconclusive progressing cap."
+    },
+    {
+      "case": "full Requests call10 seed44",
+      "verdict": "other",
+      "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-execution-candidate/full-requests10-stock-parser-audit-b.json",
+      "evidence_sha256": "57b50238af241c598918b8eb427ad9ccd7b7be655c0c41265dca43238e9cedc3",
+      "reason": "Stock parser confirms missing structured tool call after fenced bash; not an inconclusive progressing cap."
+    }
+  ],
+  "U_root_review_closure": {
+    "summary": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-execution-candidate/completion-summary.json",
+    "summary_sha256": "b727f5bb2893b24caddf665f1e0a4ee991abd8b8a2edb08caa8438e9fa9e9eb5",
+    "full_call11_seed43_correction": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/full-call11-seed43-adjudication-correction.json",
+    "correction_sha256": "6f75679d6c13213bbf1c0bd2096630a53fe04b0c1be01b20c8754ab81c2615e5",
+    "call10_full_seed43_44_parser_audit": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-execution-candidate/full-requests10-stock-parser-audit-b.json",
+    "parser_audit_sha256": "57b50238af241c598918b8eb427ad9ccd7b7be655c0c41265dca43238e9cedc3",
+    "call11_full_seed43_stray_confirmation": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-execution-candidate/full-requests11-seed43-independent-addendum-b.json",
+    "stray_confirmation_sha256": "7bd646ee5cbd7115b43a8cf82547f74c72e13c39db6e5e88ce4c2de6ab125eb9",
+    "status": "all five U rows root-reviewed; original pinned N records unchanged"
+  }
+}

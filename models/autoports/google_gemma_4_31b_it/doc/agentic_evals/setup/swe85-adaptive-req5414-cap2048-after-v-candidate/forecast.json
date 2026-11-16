@@ -1,0 +1,112 @@
+{
+  "status": "planning estimate only; not serving performance",
+  "source_prompt_tokens": 2048,
+  "candidate_prompt_tokens": 2048,
+  "source_cap": 1024,
+  "candidate_cap": 2048,
+  "free_run_tokens": 2048,
+  "candidate_cap_safe_decode_replays": 2047,
+  "range_variable_work_multipliers": [
+    0.7,
+    1.7
+  ],
+  "same_prompt_policy": "Preserve the measured source prefill/first-token host overhead because candidate prompt IDs are unchanged.",
+  "decode_formula": "Scale source decode wall by sum(P+i for i=0..2046) / sum(P+i for i=0..1022), P=2048; candidate cap-safe decode calls are 2047.",
+  "modes": {
+    "served": {
+      "jobs": 1,
+      "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-candidate/fixtures/served/anomaly.psf__requests-5414.call10.onset.suffix2048.cap1024.seed42.private.json",
+      "source_case_sha256": "6e4c48b0c32701a0e95f6bccd463129418012c02d48d0c426fe1b14f6ec4bea2",
+      "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-execution-candidate/runs/served/anomaly.psf__requests-5414.call10.onset.suffix2048.cap1024.seed42.json",
+      "source_result_sha256": "84168fff11b5ad2c8a1c3fa9ec9d6a76d78f832aa938e674ac43a71a8bbfe421",
+      "source_coordinator": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-execution-candidate/served-coordinator-requests10-seed42.json",
+      "source_coordinator_sha256": "6d165ac6e0a247c7351af03f904c8db96932dac394630a0284b6b7c3f81a016a",
+      "prompt_tokens": 2048,
+      "source_cap": 1024,
+      "candidate_cap": 2048,
+      "source_free_output_tokens": 1024,
+      "source_decode_replays": 1023,
+      "candidate_cap_safe_decode_replays": 2047,
+      "source_diagnostic_wall_s": 39.763102618046105,
+      "source_decode_wall_s": 29.68558655306697,
+      "source_prefill_host_overhead_s": 10.077516064979136,
+      "cumulative_context_ratio": 2.4013294079852336,
+      "projected_decode_wall_s": 71.28487198317072,
+      "projected_variable_case_s": 81.36238804814985,
+      "load_source": {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-execution-candidate/runs/served/load.json",
+        "sha256": "18c8f4249798687e95f11c6c766e5394182618d007a22d0eca18efa1e08e73f1",
+        "wall_s": 143.124832194997
+      },
+      "trace_preparation_source": {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-execution-candidate/served.log",
+        "sha256": "ccefb17a60a72e5cabbb0ec7b2f559f26c88780d4836fbc5af7f5249ac3eb6e6",
+        "event": {
+          "line": 119,
+          "seconds": 9.71244994387962
+        }
+      },
+      "fixed_load_plus_preparation_s": 152.83728213887662,
+      "point_total_s": 234.19967018702647,
+      "range_s": [
+        209.7909537725815,
+        291.1533418207314
+      ],
+      "method": "Same 2048-token prompt; scale measured 1023 replay decode wall by summed live-context ratio to 2047 cap-safe replay calls. Keep same-prompt source prefill/first-token host overhead unchanged. Add measured same-mode load and one measured first generator trace preparation proxy. Bounds fixed +0.7x to fixed +1.7x variable."
+    },
+    "full": {
+      "jobs": 1,
+      "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-candidate/fixtures/full/anomaly.psf__requests-5414.call11.onset.suffix2048.cap1024.seed42.private.json",
+      "source_case_sha256": "906674f12d643a2d5825f6f6d0747ba70cdfd8b7e7764b3ac7ff267ff82db53f",
+      "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-execution-candidate/runs/full/anomaly.psf__requests-5414.call11.onset.suffix2048.cap1024.seed42.json",
+      "source_result_sha256": "bbe10ef469c6473e26d18e3d1be8c9a3dfaa5e1ff64f9bed8eff8e1c5a725867",
+      "source_coordinator": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-execution-candidate/full-coordinator-requests11-seed42.json",
+      "source_coordinator_sha256": "2cd7018e95b78de54850d1127fc540485f1e9eb6722720117676d4690365602a",
+      "prompt_tokens": 2048,
+      "source_cap": 1024,
+      "candidate_cap": 2048,
+      "source_free_output_tokens": 1024,
+      "source_decode_replays": 1023,
+      "candidate_cap_safe_decode_replays": 2047,
+      "source_diagnostic_wall_s": 60.779891468118876,
+      "source_decode_wall_s": 60.12074106815271,
+      "source_prefill_host_overhead_s": 0.6591503999661654,
+      "cumulative_context_ratio": 2.4013294079852336,
+      "projected_decode_wall_s": 144.36970355682067,
+      "projected_variable_case_s": 145.02885395678683,
+      "load_source": {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-execution-candidate/runs/full/load.json",
+        "sha256": "1fd85b5a7e2bfbbf2f9603aeb58643dabee7ef532007699c39bfa0ea44d1763b",
+        "wall_s": 77.29604255291633
+      },
+      "trace_preparation_source": {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-execution-candidate/full.log",
+        "sha256": "08011cb72030ae8229a009a0b6089cfd820610814356bcc151751066a939278e",
+        "event": {
+          "line": 119,
+          "seconds": 12.118902453919873
+        }
+      },
+      "fixed_load_plus_preparation_s": 89.4149450068362,
+      "point_total_s": 234.44379896362304,
+      "range_s": [
+        190.93514277658699,
+        335.96399673337385
+      ],
+      "method": "Same 2048-token prompt; scale measured 1023 replay decode wall by summed live-context ratio to 2047 cap-safe replay calls. Keep same-prompt source prefill/first-token host overhead unchanged. Add measured same-mode load and one measured first generator trace preparation proxy. Bounds fixed +0.7x to fixed +1.7x variable."
+    }
+  },
+  "totals": {
+    "point_s": 468.6434691506495,
+    "range_s": [
+      400.72609654916846,
+      627.1173385541052
+    ],
+    "point_hours": 0.13017874143073596,
+    "range_hours": [
+      0.11131280459699124,
+      0.17419926070947367
+    ]
+  },
+  "uncertainty": "Linear live-context scaling is a planning proxy; actual decode wall can differ with kernel behavior and sequence buckets."
+}

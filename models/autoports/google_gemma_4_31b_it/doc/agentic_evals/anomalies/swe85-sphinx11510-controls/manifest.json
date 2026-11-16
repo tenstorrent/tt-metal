@@ -1,0 +1,118 @@
+{
+  "status": "prepared_CPU_only_not_executed",
+  "tasks": [
+    "sphinx-doc__sphinx-11510"
+  ],
+  "cases": [
+    {
+      "task": "sphinx-doc__sphinx-11510",
+      "call": 28,
+      "response_id": "chatcmpl-92478fb2b052def2",
+      "private_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-sphinx11510-controls/sphinx-doc__sphinx-11510.call28.onset.private.json",
+      "private_case_sha256": "27d9b5a053a0a02b97cd38585870c83a8b4dfd1c8da2acdcec68071bf592e57e",
+      "raw_packet": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-sphinx11510/sphinx-doc__sphinx-11510.call28.packet.private.json",
+      "raw_packet_sha256": "4f69e905c05f1ff5562cb51e134929bf4058a3cf18cb19e2d3af1f94e3faaeea",
+      "native_prompt_tokens": 25045,
+      "reconstructed_request_prompt_tokens": 25044,
+      "native_reply_tokens": 307,
+      "reconstructed_reply_tokens": 309,
+      "conditioning_tokens": 25118,
+      "onset_positions": 64,
+      "onset_token_index": 74,
+      "motif": "sC-",
+      "evidence": "Localized stray token in emitted command, immediately self-corrected in same reply. Supplemental anomaly suspect; no task-score or precision causation claim.",
+      "limitations": "Exact request body with historical JSON tool arguments deserialized for pinned template. Reply reconstructed as canonical thought header, complete saved reasoning, channel boundary, complete visible content, canonical tool-call macros from pinned template, native stop ID. No native token IDs: generated whitespace/order/protocol spelling cannot be recovered uniquely; counts and hashes are evidence, not identity proof. Canonicalization of malformed tool names is not proof of exact malformed native bytes.",
+      "native_message_indices": [
+        56
+      ],
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "native_seed": null,
+      "diagnostic_seeds": [
+        42,
+        43,
+        44
+      ]
+    },
+    {
+      "task": "sphinx-doc__sphinx-11510",
+      "call": 108,
+      "response_id": "chatcmpl-a798be89519072ac",
+      "private_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-sphinx11510-controls/sphinx-doc__sphinx-11510.call108.onset.private.json",
+      "private_case_sha256": "6efd3333b509e5dc6fe9c28b96829c345056cb2dc88538f0324b5fbce8ecb724",
+      "raw_packet": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-sphinx11510/sphinx-doc__sphinx-11510.call108.packet.private.json",
+      "raw_packet_sha256": "e5e3de235176d45e325700e4325675d0494a669f9f73170f691ae59d4c02add4",
+      "native_prompt_tokens": 61765,
+      "reconstructed_request_prompt_tokens": 61764,
+      "native_reply_tokens": 846,
+      "reconstructed_reply_tokens": 848,
+      "conditioning_tokens": 62453,
+      "onset_positions": 64,
+      "onset_token_index": 689,
+      "motif": "singkat",
+      "evidence": "Localized stray token in emitted command, immediately self-corrected in same reply. Supplemental anomaly suspect; no task-score or precision causation claim.",
+      "limitations": "Exact request body with historical JSON tool arguments deserialized for pinned template. Reply reconstructed as canonical thought header, complete saved reasoning, channel boundary, complete visible content, canonical tool-call macros from pinned template, native stop ID. No native token IDs: generated whitespace/order/protocol spelling cannot be recovered uniquely; counts and hashes are evidence, not identity proof. Canonicalization of malformed tool names is not proof of exact malformed native bytes.",
+      "native_message_indices": [
+        211
+      ],
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "native_seed": null,
+      "diagnostic_seeds": [
+        42,
+        43,
+        44
+      ]
+    }
+  ],
+  "cpu_validation": [
+    {
+      "mode": "served",
+      "config": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/head_bfp8_build_kwargs.json",
+      "config_sha256": "2e583fa8bd7aff7c5f8be110835df751924d167243c5a44a68aa5b3d70c6845f",
+      "exit_code": 0,
+      "stdout": "Validated 2 jobs without importing TTNN"
+    },
+    {
+      "mode": "full",
+      "config": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_build_kwargs.json",
+      "config_sha256": "ff2b5ed24e0b6a1dee7eb5cd8bd437d17c3df5f8f25567927d239e666f0699f9",
+      "exit_code": 0,
+      "stdout": "Validated 2 jobs without importing TTNN"
+    }
+  ],
+  "commands_staged_only": {
+    "served": [
+      "python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tools.precision_repro_batch",
+      "--cases",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-sphinx11510-controls/cases.json",
+      "--build-kwargs-file",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/head_bfp8_build_kwargs.json",
+      "--output-dir",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-sphinx11510-controls/served"
+    ],
+    "full": [
+      "python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tools.precision_repro_batch",
+      "--cases",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-sphinx11510-controls/cases.json",
+      "--build-kwargs-file",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_build_kwargs.json",
+      "--output-dir",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-sphinx11510-controls/full",
+      "--compare-dir",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-sphinx11510-controls/served"
+    ]
+  },
+  "no_inference": true,
+  "phase_scope": "Anomaly controls independent of later wrong-action controls; no score or corrected answer claim."
+}

@@ -1,0 +1,74 @@
+{
+  "status": "prepared_not_admitted",
+  "reference": {
+    "argv": [
+      "timeout",
+      "1800",
+      "env",
+      "HF_HUB_OFFLINE=1",
+      "HF_DATASETS_OFFLINE=1",
+      "HF_HUB_DISABLE_TELEMETRY=1",
+      "OMP_NUM_THREADS=16",
+      "MKL_NUM_THREADS=16",
+      "OPENBLAS_NUM_THREADS=16",
+      "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tools.stage12_accuracy_references",
+      "--output-dir",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/attention-down-acceptance/references",
+      "--execute"
+    ],
+    "planning_range_seconds": [
+      120,
+      900
+    ],
+    "planning_basis": "Historical full HF100-token generate+logit reference287.324s; new job reuses saved exact continuation IDs and recomputes logits on261 and1024 tokens in a single HF load. Broad CPU batch-forward planning range, not measured performance.",
+    "timeout_seconds": 1800
+  },
+  "candidate": {
+    "argv": [
+      "timeout",
+      "2400",
+      "env",
+      "HF_HUB_OFFLINE=1",
+      "HF_DATASETS_OFFLINE=1",
+      "HF_HUB_DISABLE_TELEMETRY=1",
+      "OMP_NUM_THREADS=16",
+      "MKL_NUM_THREADS=16",
+      "OPENBLAS_NUM_THREADS=16",
+      "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+      "READINESS_TRACE_REGION_SIZE=134217728",
+      "TT_METAL_TRACE_ALLOC_TRACKING=0",
+      "TT_METAL_DEVICE_PROFILER=0",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_datatype_candidate",
+      "--config",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/attention-down-bfp8-lofi-fixed108-candidate/attention_down_bfp8_lofi_precision.json",
+      "--id",
+      "stage12_attention_down_bfp8_lofi",
+      "--output-dir",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/attention-down-acceptance/candidate",
+      "--reference",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/attention-down-acceptance/references/aime24.refpt",
+      "--natural-reference",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/attention-down-acceptance/references/natural.refpt",
+      "--require-accuracy",
+      "--acceptance"
+    ],
+    "planning_range_seconds": [
+      300,
+      1800
+    ],
+    "planning_basis": "P6 load141\u2013143s; readiness400 plus natural512 traced predictions ~40s; fixed4096/128 token-out repeats ~25s; six short qualitative and32K prefix plus two262K context boundaries dominate uncertain remainder. Early accuracy rejection will shorten this job and be reported.",
+    "timeout_seconds": 2400
+  },
+  "constraints": [
+    "Wait for fixed108 terminal and triage before candidate admission.",
+    "Reference generation may follow terminal fixed108 even when precision decision is pending; serialize CPU HF with TT.",
+    "Do not overwrite previous reference or candidate evidence.",
+    "Do not select default from this plan; inspect actual accuracy, outputs and context artifacts."
+  ],
+  "prepared_epoch": 1794749537.504346
+}

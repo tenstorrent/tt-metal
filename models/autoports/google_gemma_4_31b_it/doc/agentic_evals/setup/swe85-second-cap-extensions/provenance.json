@@ -1,0 +1,1000 @@
+{
+  "status": "candidate_only_not_admitted",
+  "source_directory": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions",
+  "selection": "Only coordinator rows with verdict=inconclusive and tokens=512; fresh glob on every invocation.",
+  "exclusions": [
+    "Do not select provisional sklearn other-anomaly rows unless a later coordinator adjudicates them inconclusive.",
+    "Previously admitted swe85-cap-extensions queue is not modified."
+  ],
+  "duplicate_policy": "Deduplicate by mode+source_job+seed; same result hash is a duplicate, conflicting result hashes are a hard error.",
+  "cases": [
+    {
+      "mode": "full",
+      "job": "anomaly.call88.canonicalprefix.cap1024.seed43",
+      "seed": 43,
+      "source_job": "anomaly.call88.canonicalprefix",
+      "verdict": "inconclusive",
+      "adjudication_reason": "Conditioned code comment continues into varying Norm method replacement. Repeated append calls carry distinct source lines; still progressing at512, extend1024.",
+      "coordinator": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/full-coordinator-call88rest2.json",
+      "coordinator_sha256": "7134acc02c8965cbf302777b272cdbc5e33e0781b45e069adace6c3706f79d9b",
+      "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/full/anomaly.call88.canonicalprefix.cap512.seed43.json",
+      "source_result_sha256": "18b9082ede5634fa7addf968924a9c57baceed3c9674f2b193be283bbc8ac28d",
+      "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/fixtures/full/anomaly.call88.canonicalprefix.cap512.seed43.private.json",
+      "source_case_sha256": "3eb151a6be67b90215c06f39cc8acf210d99109ed816bd4884ba6f0f3a29fd91",
+      "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.call88.canonicalprefix.cap1024.seed43.private.json",
+      "fixture_sha256": "98576d3b397f70beb756313aca33a0160aaf9d886a04e931d5e90a71a5eddb23",
+      "prompt_token_count": 47038,
+      "continuation_lengths": {
+        "chosen": 64
+      },
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "seed_policy": "one free run with seed matching this reviewed source trial"
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.call88.canonicalprefix.cap1024.seed44",
+      "seed": 44,
+      "source_job": "anomaly.call88.canonicalprefix",
+      "verdict": "inconclusive",
+      "adjudication_reason": "Conditioned code comment continues into varying Norm method replacement. Repeated append calls carry distinct source lines; still progressing at512, extend1024.",
+      "coordinator": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/full-coordinator-call88rest2.json",
+      "coordinator_sha256": "7134acc02c8965cbf302777b272cdbc5e33e0781b45e069adace6c3706f79d9b",
+      "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/full/anomaly.call88.canonicalprefix.cap512.seed44.json",
+      "source_result_sha256": "4d543fe0fc6fe667b3e58ea73214cb2cf793180613bbbda4d0a37cc96eee20b2",
+      "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/fixtures/full/anomaly.call88.canonicalprefix.cap512.seed44.private.json",
+      "source_case_sha256": "54af7712a08f4919da80bb3248a6313dec9a4f4a021f8c7cd7555c281835cc42",
+      "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.call88.canonicalprefix.cap1024.seed44.private.json",
+      "fixture_sha256": "48d347c1cc849a516b05939901c09ecd67250a3f27b1312a606af625416d861f",
+      "prompt_token_count": 47038,
+      "continuation_lengths": {
+        "chosen": 64
+      },
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "seed_policy": "one free run with seed matching this reviewed source trial"
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.call91.canonicalprefix.cap1024.seed44",
+      "seed": 44,
+      "source_job": "anomaly.call91.canonicalprefix",
+      "verdict": "inconclusive",
+      "adjudication_reason": "Conditioned comment Since I’ve continues grammatically, followed by changing indentation/method repair code. No doubled contraction; progressing at512, needs1024.",
+      "coordinator": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/full-coordinator-call91.json",
+      "coordinator_sha256": "1c5c3b74f5c17e511f32734098f9d38bbaa780d964325280d8707adc897d1bdc",
+      "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/full/anomaly.call91.canonicalprefix.cap512.seed44.json",
+      "source_result_sha256": "747c9bd5c9674c16c8bfa189824bc5c26d5b9306bddb6c607ea3458a50b36785",
+      "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/fixtures/full/anomaly.call91.canonicalprefix.cap512.seed44.private.json",
+      "source_case_sha256": "c25fd57d2dae1374a4c4b240579caedfceb3e7ed12ab834d2eade010c2068fcd",
+      "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.call91.canonicalprefix.cap1024.seed44.private.json",
+      "fixture_sha256": "bd5addc9fb08ed0134bdca3d160c4b8ea472b09c26dc36e12e731f8891539ea7",
+      "prompt_token_count": 48411,
+      "continuation_lengths": {
+        "chosen": 64
+      },
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "seed_policy": "one free run with seed matching this reviewed source trial"
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.call88.canonicalprefix.cap1024.seed42",
+      "seed": 42,
+      "source_job": "anomaly.call88.canonicalprefix",
+      "verdict": "inconclusive",
+      "adjudication_reason": "Varying method body and replacement script progresses to512; needs1024.",
+      "coordinator": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/full-coordinator-next2.json",
+      "coordinator_sha256": "1f542d4cae6044697ff1e9a8acd772ace34670f1afae51464c902e1a66cb60d8",
+      "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/full/anomaly.call88.canonicalprefix.cap512.seed42.json",
+      "source_result_sha256": "684a5523073a360057dc00f9d266056a51308f69011a23ff76a550c1e4ecfc0e",
+      "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/fixtures/full/anomaly.call88.canonicalprefix.cap512.seed42.private.json",
+      "source_case_sha256": "53779e454626343faca396163f372ed18ec36b14458b65b1795d9b80fd36432e",
+      "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.call88.canonicalprefix.cap1024.seed42.private.json",
+      "fixture_sha256": "72d00a7035ece99112f136dc0bac71e03deead3d78421b037a696f1518b6a8d0",
+      "prompt_token_count": 47038,
+      "continuation_lengths": {
+        "chosen": 64
+      },
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "seed_policy": "one free run with seed matching this reviewed source trial"
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.scikit-learn__scikit-learn-13135.call29.onset.cap1024.seed42",
+      "seed": 42,
+      "source_job": "anomaly.scikit-learn__scikit-learn-13135.call29.onset",
+      "verdict": "inconclusive",
+      "adjudication_reason": "Coherent final explanation advances into illustrative numerical example, cut mid-list at512; needs1024. Native doubled contraction absent.",
+      "coordinator": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/full-coordinator-next3.json",
+      "coordinator_sha256": "b315eae0ee679beddef2840dc7ff8e733c9978f5430d5167e95198dec93b8aa9",
+      "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/full/anomaly.scikit-learn__scikit-learn-13135.call29.onset.cap512.seed42.json",
+      "source_result_sha256": "0c8c1b05d5eb308b5101a9cbfaac37905ce80759d1819a68260e364cd4026b60",
+      "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/fixtures/full/anomaly.scikit-learn__scikit-learn-13135.call29.onset.cap512.seed42.private.json",
+      "source_case_sha256": "b2bc1faecef939654bf2a604c330cceff4a8ea7d2858fb422e9acff931f1dabe",
+      "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.scikit-learn__scikit-learn-13135.call29.onset.cap1024.seed42.private.json",
+      "fixture_sha256": "310716fee5157983973aa6183e55fb529fd26179d182398b847ecb142b644b79",
+      "prompt_token_count": 17395,
+      "continuation_lengths": {
+        "chosen": 64
+      },
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "seed_policy": "one free run with seed matching this reviewed source trial"
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.sphinx-doc__sphinx-11510.call28.onset.cap1024.seed42",
+      "seed": 42,
+      "source_job": "anomaly.sphinx-doc__sphinx-11510.call28.onset",
+      "verdict": "inconclusive",
+      "adjudication_reason": "Changing replacement script continues conditioned partial command at cap; needs1024.",
+      "coordinator": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/full-coordinator-next3.json",
+      "coordinator_sha256": "b315eae0ee679beddef2840dc7ff8e733c9978f5430d5167e95198dec93b8aa9",
+      "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/full/anomaly.sphinx-doc__sphinx-11510.call28.onset.cap512.seed42.json",
+      "source_result_sha256": "6f61026f09522249f075eff633a7bc9674fad3a9c1cf03c8e709d80b9a5966eb",
+      "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call28.onset.cap512.seed42.private.json",
+      "source_case_sha256": "c46fa4ffad14851a3136b7205e4c4e25c3cb793ea8e0c265392f891c4c42da2e",
+      "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call28.onset.cap1024.seed42.private.json",
+      "fixture_sha256": "2dfeb0e5b696b9997f100a3ef3eac57ab8db33df3cc0bae4369e292f34711cdb",
+      "prompt_token_count": 25118,
+      "continuation_lengths": {
+        "chosen": 64
+      },
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "seed_policy": "one free run with seed matching this reviewed source trial"
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.sphinx-doc__sphinx-11510.call28.onset.cap1024.seed43",
+      "seed": 43,
+      "source_job": "anomaly.sphinx-doc__sphinx-11510.call28.onset",
+      "verdict": "inconclusive",
+      "adjudication_reason": "Changing replacement script continues conditioned partial command at cap; needs1024.",
+      "coordinator": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/full-coordinator-next3.json",
+      "coordinator_sha256": "b315eae0ee679beddef2840dc7ff8e733c9978f5430d5167e95198dec93b8aa9",
+      "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/full/anomaly.sphinx-doc__sphinx-11510.call28.onset.cap512.seed43.json",
+      "source_result_sha256": "b272601f8a7de63b61df79ede4b26115df1bb4a19246bf2bbf3c4ef2a81a8960",
+      "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call28.onset.cap512.seed43.private.json",
+      "source_case_sha256": "621365487b0a1f532c7710e6d2264f2b79bcbf44f910ba8710df948675f242a6",
+      "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call28.onset.cap1024.seed43.private.json",
+      "fixture_sha256": "ea91bd0ca464c508824ec6106ab987d91d30452dfdbd86d56ea557fb91dd8455",
+      "prompt_token_count": 25118,
+      "continuation_lengths": {
+        "chosen": 64
+      },
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "seed_policy": "one free run with seed matching this reviewed source trial"
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap1024.seed42",
+      "seed": 42,
+      "source_job": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset",
+      "verdict": "inconclusive",
+      "adjudication_reason": "After canonical call:bash, varying patch script continues into implementation or cleanup/testing at512. No malformed tool-name or repetitive collapse; extend1024.",
+      "coordinator": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/full-coordinator-protocol119final3.json",
+      "coordinator_sha256": "c2a304e835264cd56cac6d39a86c0b27f6cc57c8919b30932cad980783f4a46c",
+      "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/full/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap512.seed42.json",
+      "source_result_sha256": "e2b642959c7025ede1de4927863e40c349afe4672dcb98809e1f846f40da5dc2",
+      "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap512.seed42.private.json",
+      "source_case_sha256": "3a6b0c57f83a1ba0897b504e1e7cb570559126c40e4ad12a148b8080c50682b8",
+      "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap1024.seed42.private.json",
+      "fixture_sha256": "b4253957ad89651510a0e39ea3aa49373926c9ff2d963a4ee381047b400efac8",
+      "prompt_token_count": 76441,
+      "continuation_lengths": {
+        "chosen": 64
+      },
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "seed_policy": "one free run with seed matching this reviewed source trial"
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap1024.seed43",
+      "seed": 43,
+      "source_job": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset",
+      "verdict": "inconclusive",
+      "adjudication_reason": "After canonical call:bash, varying patch script continues into implementation or cleanup/testing at512. No malformed tool-name or repetitive collapse; extend1024.",
+      "coordinator": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/full-coordinator-protocol119final3.json",
+      "coordinator_sha256": "c2a304e835264cd56cac6d39a86c0b27f6cc57c8919b30932cad980783f4a46c",
+      "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/full/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap512.seed43.json",
+      "source_result_sha256": "fd94ec9981ba9a6d12cf0c1695a0cad0994a9eb3c0fcd87d8f602666d3a3f707",
+      "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap512.seed43.private.json",
+      "source_case_sha256": "4fee21f0bb1623ca61a52629e30ac0beae3f77581213970d77cdcbf9eff421b7",
+      "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap1024.seed43.private.json",
+      "fixture_sha256": "64b310bd67a392c4a32219b6201abaeb6272206f792d9dcc290dd0e7d16d7597",
+      "prompt_token_count": 76441,
+      "continuation_lengths": {
+        "chosen": 64
+      },
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "seed_policy": "one free run with seed matching this reviewed source trial"
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap1024.seed44",
+      "seed": 44,
+      "source_job": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset",
+      "verdict": "inconclusive",
+      "adjudication_reason": "After canonical call:bash, varying patch script continues into implementation or cleanup/testing at512. No malformed tool-name or repetitive collapse; extend1024.",
+      "coordinator": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/full-coordinator-protocol119final3.json",
+      "coordinator_sha256": "c2a304e835264cd56cac6d39a86c0b27f6cc57c8919b30932cad980783f4a46c",
+      "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/full/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap512.seed44.json",
+      "source_result_sha256": "b66d7be79d6633ab249243ef2f1cc62014662e820fa7e51515d6250804f93c95",
+      "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap512.seed44.private.json",
+      "source_case_sha256": "14d9b8ff9cf911edba111eccd2156f1a1dca13861e2164c65fe554056749b6eb",
+      "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap1024.seed44.private.json",
+      "fixture_sha256": "7c5da63d138e6afa7b539dfed909ee1e8a937c2e168d587023c4421333688780",
+      "prompt_token_count": 76441,
+      "continuation_lengths": {
+        "chosen": 64
+      },
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "seed_policy": "one free run with seed matching this reviewed source trial"
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.cap1024.seed42",
+      "seed": 42,
+      "source_job": "anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset",
+      "verdict": "inconclusive",
+      "adjudication_reason": "Prefix ends canonical call:bash; generated command contains distinct source-read/temp-file handling and is still progressing at512. No malformed tool-name reproduction; extend1024.",
+      "coordinator": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/full-coordinator-protocol86first.json",
+      "coordinator_sha256": "034f799297fd454f6f38eaa6b4be0cffd6f4ef2655e9dc567112f0368de979db",
+      "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/full/anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.cap512.seed42.json",
+      "source_result_sha256": "0b2e8beb4f6be4cb8c1abb7fe0a45b7ad92fd17c9c70241c68b90970e20da5b5",
+      "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.cap512.seed42.private.json",
+      "source_case_sha256": "f24115f027a19f574e3df1665d7d2c3b272c0f85d9199ab1926f6dedaa90c356",
+      "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.cap1024.seed42.private.json",
+      "fixture_sha256": "ca3ccbea7cb65f7fb929521189cde459f36391aa461d248ed5cf3d57f3eff981",
+      "prompt_token_count": 47548,
+      "continuation_lengths": {
+        "chosen": 64
+      },
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "seed_policy": "one free run with seed matching this reviewed source trial"
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.cap1024.seed43",
+      "seed": 43,
+      "source_job": "anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset",
+      "verdict": "inconclusive",
+      "adjudication_reason": "Canonical conditioned call:bash continues into distinct source-read and temporary-file implementation. Still advancing at512, needs1024; no native malformed tool-name reproduction.",
+      "coordinator": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/full-coordinator-protocol86rest2.json",
+      "coordinator_sha256": "7621312796b428df6e528c0df7affbfe96edf21a7340bd13899f673434ca2df5",
+      "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/full/anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.cap512.seed43.json",
+      "source_result_sha256": "55d1b1f251642a06f436196f7cd1dcadc57cb8b055fd3b14498c529f1a04b93f",
+      "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.cap512.seed43.private.json",
+      "source_case_sha256": "8c8a6586a1c173dc971f16232f33f15936bde672840bffa81333101e8918afe6",
+      "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.cap1024.seed43.private.json",
+      "fixture_sha256": "24e925807caaf57dbd0eb481fbd956901db36a766ab8e0552039253d0e63bebc",
+      "prompt_token_count": 47548,
+      "continuation_lengths": {
+        "chosen": 64
+      },
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "seed_policy": "one free run with seed matching this reviewed source trial"
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.cap1024.seed44",
+      "seed": 44,
+      "source_job": "anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset",
+      "verdict": "inconclusive",
+      "adjudication_reason": "Canonical conditioned call:bash continues into distinct source-read and temporary-file implementation. Still advancing at512, needs1024; no native malformed tool-name reproduction.",
+      "coordinator": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/full-coordinator-protocol86rest2.json",
+      "coordinator_sha256": "7621312796b428df6e528c0df7affbfe96edf21a7340bd13899f673434ca2df5",
+      "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/full/anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.cap512.seed44.json",
+      "source_result_sha256": "57bc21f9ac53379a5e8e3fd3b36a623ca4dec752d4979213daa963cb4f1c81df",
+      "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.cap512.seed44.private.json",
+      "source_case_sha256": "9d453e9ff53238cba6d68b71332b435066b1cb4cb5959302e7c9852a9fcd7d4f",
+      "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.cap1024.seed44.private.json",
+      "fixture_sha256": "14b67b9fcb8ad382713dff99ccb47922690bc5be90131e3adc25a195f3e712d3",
+      "prompt_token_count": 47548,
+      "continuation_lengths": {
+        "chosen": 64
+      },
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "seed_policy": "one free run with seed matching this reviewed source trial"
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.cap1024.seed42",
+      "seed": 42,
+      "source_job": "anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset",
+      "verdict": "inconclusive",
+      "adjudication_reason": "Canonical conditioned call:bash continues into changing extension and Include implementation, mid-return at512. No malformed tool-name; extend1024.",
+      "coordinator": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/full-coordinator-protocol95first.json",
+      "coordinator_sha256": "6cbd503933518446eb2bc44dac869cb7b5a9765a9b9d7b232093a59b3ba88dca",
+      "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/full/anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.cap512.seed42.json",
+      "source_result_sha256": "c6ecadd40547c63de85c38152cf757a5e6aa03fece7b8589a9be172076596e6b",
+      "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.cap512.seed42.private.json",
+      "source_case_sha256": "bfe185462a4f605a37f6c54fe05cb1465ef4f5a429b522a7578e593347db4888",
+      "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.cap1024.seed42.private.json",
+      "fixture_sha256": "1ec793a6242ddcb79a68bfb33e3f6e63dba76ba268365c16550906acda07cf36",
+      "prompt_token_count": 55438,
+      "continuation_lengths": {
+        "chosen": 64
+      },
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "seed_policy": "one free run with seed matching this reviewed source trial"
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.cap1024.seed43",
+      "seed": 43,
+      "source_job": "anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset",
+      "verdict": "inconclusive",
+      "adjudication_reason": "Canonical call:bash prefix continues into changing extension and Include source-read implementation, reaching cleanup code at512. No malformed tool-name; progressing, extend1024.",
+      "coordinator": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/full-coordinator-protocol95rest2.json",
+      "coordinator_sha256": "1ac1f092718f5d1e998501275bd02969be76b4b77938a4749146dedd37cce555",
+      "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/full/anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.cap512.seed43.json",
+      "source_result_sha256": "142eeee86fb5b72cffcf679d15b09341d3844ecfb74e560d772d6ac865535d90",
+      "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.cap512.seed43.private.json",
+      "source_case_sha256": "523ef5cb9d5e24a13f55ca6a5dd5f94b0901b7a31c52f005deaa07a364913222",
+      "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.cap1024.seed43.private.json",
+      "fixture_sha256": "c186544e1b085f76357b2c53fb9c5794409b13f7a700777fc7aeb02b3bd30b28",
+      "prompt_token_count": 55438,
+      "continuation_lengths": {
+        "chosen": 64
+      },
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "seed_policy": "one free run with seed matching this reviewed source trial"
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.cap1024.seed44",
+      "seed": 44,
+      "source_job": "anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset",
+      "verdict": "inconclusive",
+      "adjudication_reason": "Canonical call:bash prefix continues into changing extension and Include source-read implementation, reaching cleanup code at512. No malformed tool-name; progressing, extend1024.",
+      "coordinator": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/full-coordinator-protocol95rest2.json",
+      "coordinator_sha256": "1ac1f092718f5d1e998501275bd02969be76b4b77938a4749146dedd37cce555",
+      "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/full/anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.cap512.seed44.json",
+      "source_result_sha256": "4e05b7ccf7242153d24af07c9b8ff23cd32dfccd33705a89202a4152e16ee657",
+      "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.cap512.seed44.private.json",
+      "source_case_sha256": "c19de56c40b03597a1cb4925d2db2ed2484c20ef9fdd0f9bc6b652ac5e427193",
+      "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.cap1024.seed44.private.json",
+      "fixture_sha256": "1983cb0cec009541460d10e207452f945bb0b5c35cbb9271b4779678599f06e8",
+      "prompt_token_count": 55438,
+      "continuation_lengths": {
+        "chosen": 64
+      },
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "seed_policy": "one free run with seed matching this reviewed source trial"
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.pytest-dev__pytest-5787.call65.onset.cap1024.seed42",
+      "seed": 42,
+      "source_job": "anomaly.pytest-dev__pytest-5787.call65.onset",
+      "verdict": "inconclusive",
+      "adjudication_reason": "Continues conditioned comment I will grammatically and writes distinct serialization/method-replacement code. No doubled contraction; still progressing at512, extend1024.",
+      "coordinator": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/full-coordinator-pytest3.json",
+      "coordinator_sha256": "fa2b277f114d3ec79ec8b4da7ab9e6512900cba3be03229c07f67c1b543966c5",
+      "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/full/anomaly.pytest-dev__pytest-5787.call65.onset.cap512.seed42.json",
+      "source_result_sha256": "71ddff2767dcfbc635843aa34e9c9bec37f31976365a550005fe05b4e89615d0",
+      "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/fixtures/full/anomaly.pytest-dev__pytest-5787.call65.onset.cap512.seed42.private.json",
+      "source_case_sha256": "a2e4a2d0a9c30344afd41894a321846686982ff507ed3f1b9d5dd9d480d539e6",
+      "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.pytest-dev__pytest-5787.call65.onset.cap1024.seed42.private.json",
+      "fixture_sha256": "b4227c60daa44f579a37f54090a99dde3280a0627ed4611fcbcdf807f15a0ede",
+      "prompt_token_count": 53684,
+      "continuation_lengths": {
+        "chosen": 64
+      },
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "seed_policy": "one free run with seed matching this reviewed source trial"
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.pytest-dev__pytest-5787.call65.onset.cap1024.seed43",
+      "seed": 43,
+      "source_job": "anomaly.pytest-dev__pytest-5787.call65.onset",
+      "verdict": "inconclusive",
+      "adjudication_reason": "Continues conditioned comment I will grammatically and writes distinct serialization/method-replacement code. No doubled contraction; still progressing at512, extend1024.",
+      "coordinator": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/full-coordinator-pytest3.json",
+      "coordinator_sha256": "fa2b277f114d3ec79ec8b4da7ab9e6512900cba3be03229c07f67c1b543966c5",
+      "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/full/anomaly.pytest-dev__pytest-5787.call65.onset.cap512.seed43.json",
+      "source_result_sha256": "4360934f655ff0a6f3900c7d5eb63fb1ef09af6403b450bf7954c2c2ca337328",
+      "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/fixtures/full/anomaly.pytest-dev__pytest-5787.call65.onset.cap512.seed43.private.json",
+      "source_case_sha256": "cdd5b1da74112bcd8d1ff91c71eb71185332b5a42f2ca5af15fda1247b428d34",
+      "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.pytest-dev__pytest-5787.call65.onset.cap1024.seed43.private.json",
+      "fixture_sha256": "124f09af80f50f70f6308ae2a58a2d4ada46b9ce3204b43c7b814ed17be3959c",
+      "prompt_token_count": 53684,
+      "continuation_lengths": {
+        "chosen": 64
+      },
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "seed_policy": "one free run with seed matching this reviewed source trial"
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.pytest-dev__pytest-5787.call65.onset.cap1024.seed44",
+      "seed": 44,
+      "source_job": "anomaly.pytest-dev__pytest-5787.call65.onset",
+      "verdict": "inconclusive",
+      "adjudication_reason": "Continues conditioned comment I will grammatically and writes distinct serialization/method-replacement code. No doubled contraction; still progressing at512, extend1024.",
+      "coordinator": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/full-coordinator-pytest3.json",
+      "coordinator_sha256": "fa2b277f114d3ec79ec8b4da7ab9e6512900cba3be03229c07f67c1b543966c5",
+      "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/full/anomaly.pytest-dev__pytest-5787.call65.onset.cap512.seed44.json",
+      "source_result_sha256": "884105c2a905f1c27b6cda62d02b6b8f653729e6e97184e580eaff2e9ca2faf9",
+      "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/fixtures/full/anomaly.pytest-dev__pytest-5787.call65.onset.cap512.seed44.private.json",
+      "source_case_sha256": "b3513f3bd6d270d9d4b65d7b62e7b487ad041eeb0c1e112da2ee7778b30de8f5",
+      "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.pytest-dev__pytest-5787.call65.onset.cap1024.seed44.private.json",
+      "fixture_sha256": "cd4a079c43aa220d3a9c92e90ed2b691c90fa5d89061a17203db4629248ff10f",
+      "prompt_token_count": 53684,
+      "continuation_lengths": {
+        "chosen": 64
+      },
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "seed_policy": "one free run with seed matching this reviewed source trial"
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.cap1024.seed42",
+      "seed": 42,
+      "source_job": "anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset",
+      "verdict": "inconclusive",
+      "adjudication_reason": "Prefix ends it, so apostrophe-s is grammatical. Explores distinct loading/cache/directive registration/timing/parser hypotheses; no unchanged cycle established, still progressing at512. Extend1024.",
+      "coordinator": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/full-coordinator-sphinx101first.json",
+      "coordinator_sha256": "259897b013cbec08282b9d106303d9ea99da237063c6717c8b6b24352c1fc7c1",
+      "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/full/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.cap512.seed42.json",
+      "source_result_sha256": "b3ba251fdb4c718046989727acfc1c4f2418fdfc47a734ec392fddcf3923117a",
+      "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.cap512.seed42.private.json",
+      "source_case_sha256": "5db1e4b3cbed93ccc61555607e56bc504f02406efd9d73a0f3e19108ff6230c4",
+      "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.cap1024.seed42.private.json",
+      "fixture_sha256": "78344549cf5925ec2b037752e589f2bba107fb21b464e32db5fe05f15d5322a6",
+      "prompt_token_count": 58982,
+      "continuation_lengths": {
+        "chosen": 64
+      },
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "seed_policy": "one free run with seed matching this reviewed source trial"
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.cap1024.seed43",
+      "seed": 43,
+      "source_job": "anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset",
+      "verdict": "inconclusive",
+      "adjudication_reason": "Prefix ends it, apostrophe-s grammatical. Explores loading/registration distinction then advances to direct docutils implementation and accessing app; progressing at512, extend1024.",
+      "coordinator": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/full-coordinator-sphinx101seed43.json",
+      "coordinator_sha256": "6d3737a8dd5d6a4416cb3d7d2356e7efbb076bdff71efeac6e80d66d5edbc9ed",
+      "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/full/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.cap512.seed43.json",
+      "source_result_sha256": "f79dc8a5609cc42429c63840ee855bb30883dafcc080c03a02e63e251ba6411d",
+      "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.cap512.seed43.private.json",
+      "source_case_sha256": "385f43eba61bad6418fdcf358fafe36b4d0a8914723fc27e6246c34e3f8566f2",
+      "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.cap1024.seed43.private.json",
+      "fixture_sha256": "073203e754a006cd573b89ef7f2b47ce668c0d992562d3dd2f515306b2115fa6",
+      "prompt_token_count": 58982,
+      "continuation_lengths": {
+        "chosen": 64
+      },
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "seed_policy": "one free run with seed matching this reviewed source trial"
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.cap1024.seed44",
+      "seed": 44,
+      "source_job": "anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset",
+      "verdict": "inconclusive",
+      "adjudication_reason": "Prefix ends it, grammatical apostrophe-s. Reconsiders registration observations but introduces super-call/overwrite/reader/import hypotheses; no unchanged extended cycle yet. Capped512 remains inconclusive, extend1024.",
+      "coordinator": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/full-coordinator-sphinx101seed44.json",
+      "coordinator_sha256": "e59d92bcba62c332df747cbd4e71230b90964b58de7c5cb12a00c3367071cfaf",
+      "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/full/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.cap512.seed44.json",
+      "source_result_sha256": "2dd4aa97047bf51777098282da9982666c6917b92281015946334bdf9c56bf4f",
+      "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.cap512.seed44.private.json",
+      "source_case_sha256": "79c8915ea3528eafc8f357dc0d32956296a5543ad27d990d4fddbc9d86d1fc2e",
+      "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.cap1024.seed44.private.json",
+      "fixture_sha256": "6be948416b6cefc2796d256824f3fd6f7c7e46ea001063de32ae75e63d343b09",
+      "prompt_token_count": 58982,
+      "continuation_lengths": {
+        "chosen": 64
+      },
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "seed_policy": "one free run with seed matching this reviewed source trial"
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.sphinx-doc__sphinx-9461.call184.onset.cap1024.seed42",
+      "seed": 42,
+      "source_job": "anomaly.sphinx-doc__sphinx-9461.call184.onset",
+      "verdict": "inconclusive",
+      "adjudication_reason": "After canonical call:bash, writes changing descriptor/MRO replacement and file-update code. Still progressing at512; no malformed tool-name or repetitive collapse, extend1024.",
+      "coordinator": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/full-coordinator-sphinx9461first2.json",
+      "coordinator_sha256": "3449b7eaa806aeee6edcc9e5d2f095722132db38442c5db464e8b7744a44bec9",
+      "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/full/anomaly.sphinx-doc__sphinx-9461.call184.onset.cap512.seed42.json",
+      "source_result_sha256": "aa29d23d75545a227bbaa0087bc120b8f25ca93ad67b13d8d483da5ff187db5a",
+      "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-9461.call184.onset.cap512.seed42.private.json",
+      "source_case_sha256": "898a754e2b6e835d5f1cea02a502e80d0e51fc12dbce0e805439bc6e9f9b037a",
+      "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-9461.call184.onset.cap1024.seed42.private.json",
+      "fixture_sha256": "45d3dc1e5af1f012f825bf7da1ca84e67ff79fc45aac8c144ffc05b241243206",
+      "prompt_token_count": 71843,
+      "continuation_lengths": {
+        "chosen": 64
+      },
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "seed_policy": "one free run with seed matching this reviewed source trial"
+    },
+    {
+      "mode": "full",
+      "job": "anomaly.sphinx-doc__sphinx-9461.call184.onset.cap1024.seed43",
+      "seed": 43,
+      "source_job": "anomaly.sphinx-doc__sphinx-9461.call184.onset",
+      "verdict": "inconclusive",
+      "adjudication_reason": "After canonical call:bash, writes changing descriptor/MRO replacement and file-update code. Still progressing at512; no malformed tool-name or repetitive collapse, extend1024.",
+      "coordinator": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/full-coordinator-sphinx9461first2.json",
+      "coordinator_sha256": "3449b7eaa806aeee6edcc9e5d2f095722132db38442c5db464e8b7744a44bec9",
+      "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/full/anomaly.sphinx-doc__sphinx-9461.call184.onset.cap512.seed43.json",
+      "source_result_sha256": "ddbc29482e4ef92f0fb5d7967d7e4c04458ac33e1be393bd8a79c6d189b2c872",
+      "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-9461.call184.onset.cap512.seed43.private.json",
+      "source_case_sha256": "f45ec2fe64ae121be564c1f22dc055ff2f1ee635cb45c1c5df66682120e24a96",
+      "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-9461.call184.onset.cap1024.seed43.private.json",
+      "fixture_sha256": "c1e7fe3a18d6bf2d2eb9deac7ddf435c1931cdb20b2ef2763ce5df88003212d1",
+      "prompt_token_count": 71843,
+      "continuation_lengths": {
+        "chosen": 64
+      },
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "seed_policy": "one free run with seed matching this reviewed source trial"
+    },
+    {
+      "mode": "served",
+      "job": "anomaly.sphinx-doc__sphinx-9461.call184.onset.cap1024.seed42",
+      "seed": 42,
+      "source_job": "anomaly.sphinx-doc__sphinx-9461.call184.onset",
+      "verdict": "inconclusive",
+      "adjudication_reason": "Varying descriptor/MRO replacement script is still progressing at512; repeated append calls contain distinct code, not a loop. Extend to1024.",
+      "coordinator": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/served-coordinator-final7.json",
+      "coordinator_sha256": "b5a7e6116bfc971f16696b7f242fb4ec9fc1659179118659ffd66a662f840aac",
+      "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/served/anomaly.sphinx-doc__sphinx-9461.call184.onset.cap512.seed42.json",
+      "source_result_sha256": "06ef842e12f1c56099effeadb633fba9874ae264d3285513e0e1cb93662143a1",
+      "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/fixtures/served/anomaly.sphinx-doc__sphinx-9461.call184.onset.cap512.seed42.private.json",
+      "source_case_sha256": "aba5c44c35fe091c9a32a3bb8e57574b750313242f486ae0752410bb7d72de25",
+      "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/served/anomaly.sphinx-doc__sphinx-9461.call184.onset.cap1024.seed42.private.json",
+      "fixture_sha256": "5b391c6bbb9cee3c0f70c361cdac790583ceb0786eb3c61f167a2b7169f031d8",
+      "prompt_token_count": 71843,
+      "continuation_lengths": {
+        "chosen": 64
+      },
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "seed_policy": "one free run with seed matching this reviewed source trial"
+    },
+    {
+      "mode": "served",
+      "job": "anomaly.sphinx-doc__sphinx-9461.call184.onset.cap1024.seed43",
+      "seed": 43,
+      "source_job": "anomaly.sphinx-doc__sphinx-9461.call184.onset",
+      "verdict": "inconclusive",
+      "adjudication_reason": "Varying descriptor/MRO replacement script is still progressing at512; repeated append calls contain distinct code, not a loop. Extend to1024.",
+      "coordinator": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/served-coordinator-final7.json",
+      "coordinator_sha256": "b5a7e6116bfc971f16696b7f242fb4ec9fc1659179118659ffd66a662f840aac",
+      "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/served/anomaly.sphinx-doc__sphinx-9461.call184.onset.cap512.seed43.json",
+      "source_result_sha256": "39eb0a586dec15856a3512741aed9954a277a524d4a5cc334f22b5b46d39f134",
+      "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/fixtures/served/anomaly.sphinx-doc__sphinx-9461.call184.onset.cap512.seed43.private.json",
+      "source_case_sha256": "afba488745332c545674ef1a2a0a694337bb102ad9fc90bad38d26d09525b2b5",
+      "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/served/anomaly.sphinx-doc__sphinx-9461.call184.onset.cap1024.seed43.private.json",
+      "fixture_sha256": "0f61675840c1bc8ac8f89d6ab5d9f931e752d2fd53aeb2a62400b02e2e24ff1f",
+      "prompt_token_count": 71843,
+      "continuation_lengths": {
+        "chosen": 64
+      },
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "seed_policy": "one free run with seed matching this reviewed source trial"
+    },
+    {
+      "mode": "served",
+      "job": "anomaly.sphinx-doc__sphinx-9461.call184.onset.cap1024.seed44",
+      "seed": 44,
+      "source_job": "anomaly.sphinx-doc__sphinx-9461.call184.onset",
+      "verdict": "inconclusive",
+      "adjudication_reason": "Varying descriptor/MRO replacement script is still progressing at512; repeated append calls contain distinct code, not a loop. Extend to1024.",
+      "coordinator": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/served-coordinator-final7.json",
+      "coordinator_sha256": "b5a7e6116bfc971f16696b7f242fb4ec9fc1659179118659ffd66a662f840aac",
+      "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/served/anomaly.sphinx-doc__sphinx-9461.call184.onset.cap512.seed44.json",
+      "source_result_sha256": "397c82d3b649c99cde44c7eebfcbf861252c3deebd7e9eda3d2a996630761a77",
+      "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/fixtures/served/anomaly.sphinx-doc__sphinx-9461.call184.onset.cap512.seed44.private.json",
+      "source_case_sha256": "c5ae27fbf4158feb881ce8d18c75d4d30dfae4e66869ed988e64da1c8cc43ef2",
+      "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/served/anomaly.sphinx-doc__sphinx-9461.call184.onset.cap1024.seed44.private.json",
+      "fixture_sha256": "552f3e08333444cf6b9ad9f2149e220af543669e05b0896f89f0afa0645dd6b8",
+      "prompt_token_count": 71843,
+      "continuation_lengths": {
+        "chosen": 64
+      },
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "seed_policy": "one free run with seed matching this reviewed source trial"
+    },
+    {
+      "mode": "served",
+      "job": "anomaly.xarray7233-call1.canonicalprefix.cap1024.seed42",
+      "seed": 42,
+      "source_job": "anomaly.xarray7233-call1.canonicalprefix",
+      "verdict": "inconclusive",
+      "adjudication_reason": "Still writing a varying reproduction script at512; needs1024.",
+      "coordinator": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/served-coordinator-first6.json",
+      "coordinator_sha256": "b09ec8ca251066f4266e2834ea72c33fa30785f0ac988d87dceba35278352fb7",
+      "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/served/anomaly.xarray7233-call1.canonicalprefix.cap512.seed42.json",
+      "source_result_sha256": "6a746fdcaf3befc90f08eec98f066d6f63e5cce55c33931cff1d9ef2c84a7bba",
+      "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/fixtures/served/anomaly.xarray7233-call1.canonicalprefix.cap512.seed42.private.json",
+      "source_case_sha256": "c79a321984fb8753808628da793a3363cc21b315c74b61005bac4c40fdb8dd60",
+      "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/served/anomaly.xarray7233-call1.canonicalprefix.cap1024.seed42.private.json",
+      "fixture_sha256": "bc0442142f6d925d292476dbf651b0957dfe0e070ace703938102eddc8b7817a",
+      "prompt_token_count": 1578,
+      "continuation_lengths": {
+        "chosen": 64
+      },
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "seed_policy": "one free run with seed matching this reviewed source trial"
+    },
+    {
+      "mode": "served",
+      "job": "anomaly.xarray7233-call1.canonicalprefix.cap1024.seed44",
+      "seed": 44,
+      "source_job": "anomaly.xarray7233-call1.canonicalprefix",
+      "verdict": "inconclusive",
+      "adjudication_reason": "Still writing a varying reproduction script at512; needs1024.",
+      "coordinator": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/served-coordinator-first6.json",
+      "coordinator_sha256": "b09ec8ca251066f4266e2834ea72c33fa30785f0ac988d87dceba35278352fb7",
+      "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/served/anomaly.xarray7233-call1.canonicalprefix.cap512.seed44.json",
+      "source_result_sha256": "03d748d2b941621bc74b851677de99bf495270384706515374d8be367673dab7",
+      "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/fixtures/served/anomaly.xarray7233-call1.canonicalprefix.cap512.seed44.private.json",
+      "source_case_sha256": "8b82a867e7d3caff96ec056a6558e25da1289e6a39cf0ab599d65f81352367bc",
+      "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/served/anomaly.xarray7233-call1.canonicalprefix.cap1024.seed44.private.json",
+      "fixture_sha256": "89295e18efe7e474a0d1ef95e63b30987ce0fb4efc21b46a071e2798d9e93cc2",
+      "prompt_token_count": 1578,
+      "continuation_lengths": {
+        "chosen": 64
+      },
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "seed_policy": "one free run with seed matching this reviewed source trial"
+    },
+    {
+      "mode": "served",
+      "job": "anomaly.sphinx-doc__sphinx-11510.call28.onset.cap1024.seed44",
+      "seed": 44,
+      "source_job": "anomaly.sphinx-doc__sphinx-11510.call28.onset",
+      "verdict": "inconclusive",
+      "adjudication_reason": "Still writing a varying patch script at512, needs1024.",
+      "coordinator": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/served-coordinator-next3.json",
+      "coordinator_sha256": "4a80e6e1c2f6d49132d4fea9325f3f090cc346b4e93b0b7b4ad1cd99aa77fc78",
+      "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/served/anomaly.sphinx-doc__sphinx-11510.call28.onset.cap512.seed44.json",
+      "source_result_sha256": "30e226398d8bd26cb6eecc1ed62ef50ba50470a5c4acd34fe4d69d77ec6d3c67",
+      "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/fixtures/served/anomaly.sphinx-doc__sphinx-11510.call28.onset.cap512.seed44.private.json",
+      "source_case_sha256": "918809423bd081602ac0731f9f1162118cdaf7a3f02e4df612ca10f301c7458b",
+      "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/served/anomaly.sphinx-doc__sphinx-11510.call28.onset.cap1024.seed44.private.json",
+      "fixture_sha256": "d8f30f1f675502566ec61966931a4faac361a1441829d070c4e3a143de397809",
+      "prompt_token_count": 25118,
+      "continuation_lengths": {
+        "chosen": 64
+      },
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "seed_policy": "one free run with seed matching this reviewed source trial"
+    },
+    {
+      "mode": "served",
+      "job": "anomaly.call88.canonicalprefix.cap1024.seed44",
+      "seed": 44,
+      "source_job": "anomaly.call88.canonicalprefix",
+      "verdict": "inconclusive",
+      "adjudication_reason": "Varying patch-script construction still progressing at512, needs1024.",
+      "coordinator": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/served-coordinator-nextscript3.json",
+      "coordinator_sha256": "1853edd4b6f049f55c986c0aa1f0eb4b9ed331680dce23ad89a569d116f21916",
+      "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/served/anomaly.call88.canonicalprefix.cap512.seed44.json",
+      "source_result_sha256": "ed08caf71aa6fe034369cde0fb3a80e07bd546514a72e939c993c9fff8ad30a7",
+      "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/fixtures/served/anomaly.call88.canonicalprefix.cap512.seed44.private.json",
+      "source_case_sha256": "2cb5e4d976b3894e578b4d20a5a889baa70b0731884b59f7b661c8e98011b170",
+      "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/served/anomaly.call88.canonicalprefix.cap1024.seed44.private.json",
+      "fixture_sha256": "737937d682358b2e5cf29623f0b1bff7d63af44b3e9b76b86fb0ed1dca036bec",
+      "prompt_token_count": 47038,
+      "continuation_lengths": {
+        "chosen": 64
+      },
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "seed_policy": "one free run with seed matching this reviewed source trial"
+    },
+    {
+      "mode": "served",
+      "job": "anomaly.pytest-dev__pytest-5787.call65.onset.cap1024.seed43",
+      "seed": 43,
+      "source_job": "anomaly.pytest-dev__pytest-5787.call65.onset",
+      "verdict": "inconclusive",
+      "adjudication_reason": "Varying patch-script construction still progressing at512, needs1024.",
+      "coordinator": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/served-coordinator-nextscript3.json",
+      "coordinator_sha256": "1853edd4b6f049f55c986c0aa1f0eb4b9ed331680dce23ad89a569d116f21916",
+      "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/served/anomaly.pytest-dev__pytest-5787.call65.onset.cap512.seed43.json",
+      "source_result_sha256": "14b065a639e15e19a763c99e643d228dfbcce1da34c7bd7561c77cab2bd001f8",
+      "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/fixtures/served/anomaly.pytest-dev__pytest-5787.call65.onset.cap512.seed43.private.json",
+      "source_case_sha256": "9853315f1cb7ecd482253689f4b45394c39a6a82349a3ad068ce962b69ce1442",
+      "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/served/anomaly.pytest-dev__pytest-5787.call65.onset.cap1024.seed43.private.json",
+      "fixture_sha256": "6f489182de104872fcb88834ac27e8208f2603ae893011f22516336c51ae0274",
+      "prompt_token_count": 53684,
+      "continuation_lengths": {
+        "chosen": 64
+      },
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "seed_policy": "one free run with seed matching this reviewed source trial"
+    },
+    {
+      "mode": "served",
+      "job": "anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.cap1024.seed42",
+      "seed": 42,
+      "source_job": "anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset",
+      "verdict": "inconclusive",
+      "adjudication_reason": "Continues conditioned call:bash with command argument and varying replacement/patch scripts; still progressing at512, needs1024. No malformed toolname introduced in continuation.",
+      "coordinator": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/served-coordinator-protocol95.json",
+      "coordinator_sha256": "852dc52d5f60165af249c62a9f3e5063de8f9332557d1c8eaebe3667662eefd9",
+      "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/served/anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.cap512.seed42.json",
+      "source_result_sha256": "81fd4fa0aebac0e39f9d250af08ffda9cd7172b2a432d8f633fa7d5486b24a07",
+      "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/fixtures/served/anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.cap512.seed42.private.json",
+      "source_case_sha256": "4d985d26a8864659a0cbe57f724dde11834bed5ee2e6fe3bbda27e5a736113dd",
+      "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/served/anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.cap1024.seed42.private.json",
+      "fixture_sha256": "4026f405875e77b777ae6467381f0c518417100c96e19b37b45b20c6ae7a3a0f",
+      "prompt_token_count": 55438,
+      "continuation_lengths": {
+        "chosen": 64
+      },
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "seed_policy": "one free run with seed matching this reviewed source trial"
+    },
+    {
+      "mode": "served",
+      "job": "anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.cap1024.seed43",
+      "seed": 43,
+      "source_job": "anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset",
+      "verdict": "inconclusive",
+      "adjudication_reason": "Continues conditioned call:bash with command argument and varying replacement/patch scripts; still progressing at512, needs1024. No malformed toolname introduced in continuation.",
+      "coordinator": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/served-coordinator-protocol95.json",
+      "coordinator_sha256": "852dc52d5f60165af249c62a9f3e5063de8f9332557d1c8eaebe3667662eefd9",
+      "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/served/anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.cap512.seed43.json",
+      "source_result_sha256": "acf053da9f08ed26b0545056f3c1a7ae38dfc4eacdc01c9af9c497c32556c1b5",
+      "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/fixtures/served/anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.cap512.seed43.private.json",
+      "source_case_sha256": "d1f7df716beaf44b78b8307a763c955bf1c08f35bc36e7a7c328c8da744870a2",
+      "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/served/anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.cap1024.seed43.private.json",
+      "fixture_sha256": "8493369e18a42385ef48333e3114d4150865d03835301c8170016e608f4d5d6d",
+      "prompt_token_count": 55438,
+      "continuation_lengths": {
+        "chosen": 64
+      },
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "seed_policy": "one free run with seed matching this reviewed source trial"
+    },
+    {
+      "mode": "served",
+      "job": "anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.cap1024.seed44",
+      "seed": 44,
+      "source_job": "anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset",
+      "verdict": "inconclusive",
+      "adjudication_reason": "Continues conditioned call:bash with command argument and varying replacement/patch scripts; still progressing at512, needs1024. No malformed toolname introduced in continuation.",
+      "coordinator": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/served-coordinator-protocol95.json",
+      "coordinator_sha256": "852dc52d5f60165af249c62a9f3e5063de8f9332557d1c8eaebe3667662eefd9",
+      "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/served/anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.cap512.seed44.json",
+      "source_result_sha256": "24dcc2b92971125d3aaa913a6183ed1828e716a3517c16981c5856a45102a4f0",
+      "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/fixtures/served/anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.cap512.seed44.private.json",
+      "source_case_sha256": "194bff883b064fcad56e4e2034186035fc3774872107cb6f87aca44c00fcc634",
+      "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/served/anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.cap1024.seed44.private.json",
+      "fixture_sha256": "7d956c6677fcab57cbe18edae21dee0b464bfd5930a7180fa658717c7be6c760",
+      "prompt_token_count": 55438,
+      "continuation_lengths": {
+        "chosen": 64
+      },
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "seed_policy": "one free run with seed matching this reviewed source trial"
+    },
+    {
+      "mode": "served",
+      "job": "anomaly.call88.canonicalprefix.cap1024.seed42",
+      "seed": 42,
+      "source_job": "anomaly.call88.canonicalprefix",
+      "verdict": "inconclusive",
+      "adjudication_reason": "Varying patch-script construction advances, still incomplete at512; needs1024. Similar new_lines.append statements have different code arguments, not a degenerate token loop.",
+      "coordinator": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/served-coordinator-script3.json",
+      "coordinator_sha256": "842d42004493544a13e46522263f6702079cc0c0edd490692b9e523353b31fd8",
+      "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/served/anomaly.call88.canonicalprefix.cap512.seed42.json",
+      "source_result_sha256": "1358e74c8ed61914cd730785fbea34bbb2a40d5d0ba90db52e3960fcabe5f198",
+      "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/fixtures/served/anomaly.call88.canonicalprefix.cap512.seed42.private.json",
+      "source_case_sha256": "8b465b284f467e4164b522e09c49279b38a02a3a49a4290f1da82d7d0395b3c7",
+      "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/served/anomaly.call88.canonicalprefix.cap1024.seed42.private.json",
+      "fixture_sha256": "c988d745a874afb35c291ed05c985f01d837aa103696b884a8c14a3d4f4631a4",
+      "prompt_token_count": 47038,
+      "continuation_lengths": {
+        "chosen": 64
+      },
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "seed_policy": "one free run with seed matching this reviewed source trial"
+    },
+    {
+      "mode": "served",
+      "job": "anomaly.call88.canonicalprefix.cap1024.seed43",
+      "seed": 43,
+      "source_job": "anomaly.call88.canonicalprefix",
+      "verdict": "inconclusive",
+      "adjudication_reason": "Varying patch-script construction advances, still incomplete at512; needs1024. Similar new_lines.append statements have different code arguments, not a degenerate token loop.",
+      "coordinator": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/served-coordinator-script3.json",
+      "coordinator_sha256": "842d42004493544a13e46522263f6702079cc0c0edd490692b9e523353b31fd8",
+      "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/served/anomaly.call88.canonicalprefix.cap512.seed43.json",
+      "source_result_sha256": "3c3603d0653b6b9e74f13a9dfee6339959c9e619194654ea718685555a0b4ddc",
+      "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/fixtures/served/anomaly.call88.canonicalprefix.cap512.seed43.private.json",
+      "source_case_sha256": "08f609909410411dde6ddbcc4bac2d743bc171cb7b3b115a46bd9f0b8afa0cd2",
+      "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/served/anomaly.call88.canonicalprefix.cap1024.seed43.private.json",
+      "fixture_sha256": "9498bca2ffb4369489d685dcdbe0e6a644454203070c5072a7ecda4233f6dd2f",
+      "prompt_token_count": 47038,
+      "continuation_lengths": {
+        "chosen": 64
+      },
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "seed_policy": "one free run with seed matching this reviewed source trial"
+    },
+    {
+      "mode": "served",
+      "job": "anomaly.matplotlib__matplotlib-20488.call86.onset.cap1024.seed44",
+      "seed": 44,
+      "source_job": "anomaly.matplotlib__matplotlib-20488.call86.onset",
+      "verdict": "inconclusive",
+      "adjudication_reason": "Varying patch-script construction advances, still incomplete at512; needs1024. Similar new_lines.append statements have different code arguments, not a degenerate token loop.",
+      "coordinator": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/served-coordinator-script3.json",
+      "coordinator_sha256": "842d42004493544a13e46522263f6702079cc0c0edd490692b9e523353b31fd8",
+      "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/served/anomaly.matplotlib__matplotlib-20488.call86.onset.cap512.seed44.json",
+      "source_result_sha256": "afe4963c1bebeabbcaa97e3411d4b3993b89ab4191fec065040c7991e47f72bf",
+      "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/fixtures/served/anomaly.matplotlib__matplotlib-20488.call86.onset.cap512.seed44.private.json",
+      "source_case_sha256": "ccfb039b31e80e67e5ca2151d5591354ff379f083c8b8b65a87b058977ec73bd",
+      "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/served/anomaly.matplotlib__matplotlib-20488.call86.onset.cap1024.seed44.private.json",
+      "fixture_sha256": "293e6199bf309fd64e0d01abedf532409886a27a209acce69c6bd12a023faf26",
+      "prompt_token_count": 46118,
+      "continuation_lengths": {
+        "chosen": 64
+      },
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "seed_policy": "one free run with seed matching this reviewed source trial"
+    }
+  ]
+}

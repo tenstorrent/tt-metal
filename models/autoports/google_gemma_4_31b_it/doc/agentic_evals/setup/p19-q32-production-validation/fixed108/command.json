@@ -1,0 +1,38 @@
+{
+  "status": "prepared_not_admitted_not_run",
+  "argv": [
+    "timeout",
+    "7200",
+    "env",
+    "HF_HUB_OFFLINE=1",
+    "HF_DATASETS_OFFLINE=1",
+    "HF_HUB_DISABLE_TELEMETRY=1",
+    "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+    "READINESS_TRACE_REGION_SIZE=134217728",
+    "OMP_NUM_THREADS=16",
+    "MKL_NUM_THREADS=16",
+    "OPENBLAS_NUM_THREADS=16",
+    "TT_METAL_TRACE_ALLOC_TRACKING=1",
+    "TT_METAL_DEVICE_PROFILER=0",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+    "-m",
+    "models.autoports.google_gemma_4_31b_it.tools.precision_repro_batch",
+    "--cases",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/candidate-cases.json",
+    "--build-kwargs-file",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/build_kwargs.json",
+    "--output-dir",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/p19-q32-production-validation/fixed108/runs/p19_q32"
+  ],
+  "timeout_seconds": 7200,
+  "output_dir": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/p19-q32-production-validation/fixed108/runs/p19_q32",
+  "trace_allocation_tracking": 1,
+  "scope": "Exact frozen P19 fixed108 identity: original manifest, prompt fixtures, chosen-token/sampling records, seeds42/43/44 and caps. Only runtime source geometry changes to HiFi4 Q32; no serving benchmark or score update.",
+  "requires": [
+    "Production Q32 resume gate passes",
+    "Production Q32 broad P19 accuracy/acceptance gate passes",
+    "HF22 terminal and all TT/HF owners zero",
+    "Root checks remaining deadline supports7200s and rechecks all hashes/owner state before admission",
+    "Review all108 outputs; preserve old P19 Q128 outputs unchanged"
+  ]
+}

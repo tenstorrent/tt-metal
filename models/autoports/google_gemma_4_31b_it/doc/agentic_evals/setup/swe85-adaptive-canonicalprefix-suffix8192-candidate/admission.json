@@ -1,0 +1,9 @@
+{
+  "status": "admitted",
+  "proposal_sha256": "066c0ae1ccb03bd6b12cebe41b1a1214b4c74c21451bd615214aefa8061828a4",
+  "driver_sha256": "61996590520ae8cc49358e80f03b57dcf40fa15fc08d41d0acbda87ba08a4097",
+  "expected_p_admission_sha256": "91dc764e6a3a6b1e8a1be51e6eee5fc958c19d1dfcfa3d057b989aa325618cdd",
+  "note": "Root must explicitly replace status with admitted after independent review. This placeholder does not authorize execution; the inert driver refuses to proceed unless status is admitted and both hashes match.",
+  "admitted_unix": 1794722659.6336203,
+  "coordinator_review": "root-review.json; launch only after Pterminalzero and forecastgate; scope6diagnostic continuations no score change"
+}

@@ -1,0 +1,26 @@
+{
+  "status": "root_reviewed_short_branch_capture_complete_later_loop_unresolved",
+  "reviewer": "root",
+  "at_unix": 1794743081.252436,
+  "analysis_sha256": "77fa999450a1c02b493569103655c6fff0ed2e9c2d713b85a79fdcb734af2591",
+  "completions": {
+    "hf": "dff38a2ba09fe83b85ec13a7d2663e01d22cd783b16de3c550dadb3892bf0e85",
+    "tt-selected": "048166b9584f831631c37dfde278b7085680daebf0169ba727bf8f4a299505af",
+    "tt-full": "8b24a2ac2eba7e8aee8d4246d1274ce834cf9225491995fe76b70009b4a8286a",
+    "compare": "b2c94b6ddab14e7a8986535a4cef24a2774579e84fd27a22efcc06470c544954"
+  },
+  "wall_seconds": {
+    "hf": 163.2542417049408,
+    "tt_selected": 159.04888367652893,
+    "tt_full": 97.29416108131409,
+    "compare": 16.012291193008423
+  },
+  "finding": "HF and fullTT prefer138 at first shared branch; selectedTT prefers147 strongly. Supports precision-sensitive branching, not sampler/stack causal proof.",
+  "limits": [
+    "Two forced cycles only; later loop reinforcement unmeasured",
+    "Host softmax/topk/topp reconstruction not actual stochastic sampler execution",
+    "HF and TT prefill execution differ; exact conditioning IDs match",
+    "FullTT changes multiple precision axes; group causality requires bisect"
+  ],
+  "next": "Mandatory original HF1024cap extension and later-loop conditional reference/full captures; no scored result change."
+}

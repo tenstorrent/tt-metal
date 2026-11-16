@@ -1,0 +1,822 @@
+{
+  "status": "complete_host_only_diagnostic_triage",
+  "source_index": "setup/swe85-remainder-execution85/completed-anomaly-review-index.json",
+  "selection": "First eight distinct job names in index trial order; all three served seeds for each.",
+  "trial_count": 24,
+  "limitations": [
+    "Judgments use actual free_running[i].text and index parser observations.",
+    "Raw special tool markers and valid structured bash calls alone are not anomalies.",
+    "Separate coherent tool calls are not treated as within-response repetition.",
+    "No inference about full precision or native token equivalence."
+  ],
+  "trials": [
+    {
+      "job": "anomaly.sympy__sympy-13480.call1.onset",
+      "mode": "served",
+      "seed": 42,
+      "verdict": "normal",
+      "quote": "<|tool_call>call:bash{command:<|\"|>",
+      "field_pointer": "$.free_running[0].text",
+      "native_motif": "call:bash",
+      "parser_observation": {
+        "structured_tool_count": 1,
+        "missing_tool": false,
+        "malformed_name": false,
+        "invalid_arguments": false,
+        "tools": [
+          {
+            "name": "bash",
+            "expected_bash": true,
+            "valid_json": true,
+            "valid_command_schema": true,
+            "argument_keys": [
+              "command"
+            ]
+          }
+        ],
+        "visible_content_chars": 0,
+        "visible_content_head": "",
+        "reasoning_chars": 0,
+        "visible_GetAll_bash": false,
+        "visible_pseudo_call": false,
+        "reasoning_literal_thought_tail": false
+      },
+      "generated_tokens": 157,
+      "requested_cap": 256,
+      "at_requested_cap": false,
+      "confidence": "high",
+      "basis": "Generated text is a valid structured bash tool call; the raw call marker is expected and is not itself anomalous."
+    },
+    {
+      "job": "anomaly.sympy__sympy-13480.call1.onset",
+      "mode": "served",
+      "seed": 43,
+      "verdict": "normal",
+      "quote": "<|tool_call>call:bash{command:<|\"|>",
+      "field_pointer": "$.free_running[1].text",
+      "native_motif": "call:bash",
+      "parser_observation": {
+        "structured_tool_count": 1,
+        "missing_tool": false,
+        "malformed_name": false,
+        "invalid_arguments": false,
+        "tools": [
+          {
+            "name": "bash",
+            "expected_bash": true,
+            "valid_json": true,
+            "valid_command_schema": true,
+            "argument_keys": [
+              "command"
+            ]
+          }
+        ],
+        "visible_content_chars": 0,
+        "visible_content_head": "",
+        "reasoning_chars": 0,
+        "visible_GetAll_bash": false,
+        "visible_pseudo_call": false,
+        "reasoning_literal_thought_tail": false
+      },
+      "generated_tokens": 143,
+      "requested_cap": 256,
+      "at_requested_cap": false,
+      "confidence": "high",
+      "basis": "Generated text is a valid structured bash tool call; the raw call marker is expected and is not itself anomalous."
+    },
+    {
+      "job": "anomaly.sympy__sympy-13480.call1.onset",
+      "mode": "served",
+      "seed": 44,
+      "verdict": "normal",
+      "quote": "<|tool_call>call:bash{command:<|\"|>",
+      "field_pointer": "$.free_running[2].text",
+      "native_motif": "call:bash",
+      "parser_observation": {
+        "structured_tool_count": 1,
+        "missing_tool": false,
+        "malformed_name": false,
+        "invalid_arguments": false,
+        "tools": [
+          {
+            "name": "bash",
+            "expected_bash": true,
+            "valid_json": true,
+            "valid_command_schema": true,
+            "argument_keys": [
+              "command"
+            ]
+          }
+        ],
+        "visible_content_chars": 0,
+        "visible_content_head": "",
+        "reasoning_chars": 0,
+        "visible_GetAll_bash": false,
+        "visible_pseudo_call": false,
+        "reasoning_literal_thought_tail": false
+      },
+      "generated_tokens": 164,
+      "requested_cap": 256,
+      "at_requested_cap": false,
+      "confidence": "high",
+      "basis": "Generated text is a valid structured bash tool call; the raw call marker is expected and is not itself anomalous."
+    },
+    {
+      "job": "anomaly.sympy__sympy-13551.call1.onset",
+      "mode": "served",
+      "seed": 42,
+      "verdict": "reproduced_native_motif",
+      "quote": "call:bash{command:<|\"|>cat",
+      "field_pointer": "$.free_running[0].text",
+      "native_motif": "call:bash",
+      "parser_observation": {
+        "structured_tool_count": 0,
+        "missing_tool": true,
+        "malformed_name": false,
+        "invalid_arguments": false,
+        "tools": [],
+        "visible_content_chars": 368,
+        "visible_content_head": "call:bash{command:<|\"|>cat <<'EOF' > reproduce_issue.py\nfrom sympy import *\nfrom sympy.abc import n, k\n\np = Product(n + ",
+        "reasoning_chars": 0,
+        "visible_GetAll_bash": false,
+        "visible_pseudo_call": true,
+        "reasoning_literal_thought_tail": false
+      },
+      "generated_tokens": 171,
+      "requested_cap": 256,
+      "at_requested_cap": false,
+      "confidence": "high",
+      "basis": "Generated-only text contains the native visible pseudo-call form, and the stock parser reports no structured tool and visible_pseudo_call=true."
+    },
+    {
+      "job": "anomaly.sympy__sympy-13551.call1.onset",
+      "mode": "served",
+      "seed": 43,
+      "verdict": "normal",
+      "quote": "<|tool_call>call:bash{command:<|\"|>cat",
+      "field_pointer": "$.free_running[1].text",
+      "native_motif": "call:bash",
+      "parser_observation": {
+        "structured_tool_count": 1,
+        "missing_tool": false,
+        "malformed_name": false,
+        "invalid_arguments": false,
+        "tools": [
+          {
+            "name": "bash",
+            "expected_bash": true,
+            "valid_json": true,
+            "valid_command_schema": true,
+            "argument_keys": [
+              "command"
+            ]
+          }
+        ],
+        "visible_content_chars": 73,
+        "visible_content_head": "Unlimited-sized-bash-command-allowed-here-so-I-will-just-write-the-script",
+        "reasoning_chars": 0,
+        "visible_GetAll_bash": false,
+        "visible_pseudo_call": false,
+        "reasoning_literal_thought_tail": false
+      },
+      "generated_tokens": 184,
+      "requested_cap": 256,
+      "at_requested_cap": false,
+      "confidence": "high",
+      "basis": "Generated text is a valid structured bash tool call; the raw call marker is expected and is not itself anomalous."
+    },
+    {
+      "job": "anomaly.sympy__sympy-13551.call1.onset",
+      "mode": "served",
+      "seed": 44,
+      "verdict": "normal",
+      "quote": "<|tool_call>call:bash{command:<|\"|>cat",
+      "field_pointer": "$.free_running[2].text",
+      "native_motif": "call:bash",
+      "parser_observation": {
+        "structured_tool_count": 1,
+        "missing_tool": false,
+        "malformed_name": false,
+        "invalid_arguments": false,
+        "tools": [
+          {
+            "name": "bash",
+            "expected_bash": true,
+            "valid_json": true,
+            "valid_command_schema": true,
+            "argument_keys": [
+              "command"
+            ]
+          }
+        ],
+        "visible_content_chars": 0,
+        "visible_content_head": "",
+        "reasoning_chars": 0,
+        "visible_GetAll_bash": false,
+        "visible_pseudo_call": false,
+        "reasoning_literal_thought_tail": false
+      },
+      "generated_tokens": 162,
+      "requested_cap": 256,
+      "at_requested_cap": false,
+      "confidence": "high",
+      "basis": "Generated text is a valid structured bash tool call; the raw call marker is expected and is not itself anomalous."
+    },
+    {
+      "job": "anomaly.psf__requests-1921.call1.onset",
+      "mode": "served",
+      "seed": 42,
+      "verdict": "normal",
+      "quote": "<|tool_call>call:bash{command:<|\"|>ls -R",
+      "field_pointer": "$.free_running[0].text",
+      "native_motif": "GetAll-bash",
+      "parser_observation": {
+        "structured_tool_count": 1,
+        "missing_tool": false,
+        "malformed_name": false,
+        "invalid_arguments": false,
+        "tools": [
+          {
+            "name": "bash",
+            "expected_bash": true,
+            "valid_json": true,
+            "valid_command_schema": true,
+            "argument_keys": [
+              "command"
+            ]
+          }
+        ],
+        "visible_content_chars": 0,
+        "visible_content_head": "",
+        "reasoning_chars": 0,
+        "visible_GetAll_bash": false,
+        "visible_pseudo_call": false,
+        "reasoning_literal_thought_tail": false
+      },
+      "generated_tokens": 16,
+      "requested_cap": 256,
+      "at_requested_cap": false,
+      "confidence": "high",
+      "basis": "Generated text is a valid structured bash tool call; the raw call marker is expected and is not itself anomalous."
+    },
+    {
+      "job": "anomaly.psf__requests-1921.call1.onset",
+      "mode": "served",
+      "seed": 43,
+      "verdict": "other_anomaly",
+      "quote": "nobleman",
+      "field_pointer": "$.free_running[1].text",
+      "native_motif": "GetAll-bash",
+      "parser_observation": {
+        "structured_tool_count": 1,
+        "missing_tool": false,
+        "malformed_name": false,
+        "invalid_arguments": false,
+        "tools": [
+          {
+            "name": "bash",
+            "expected_bash": true,
+            "valid_json": true,
+            "valid_command_schema": true,
+            "argument_keys": [
+              "command"
+            ]
+          }
+        ],
+        "visible_content_chars": 8,
+        "visible_content_head": "nobleman",
+        "reasoning_chars": 0,
+        "visible_GetAll_bash": false,
+        "visible_pseudo_call": false,
+        "reasoning_literal_thought_tail": false
+      },
+      "generated_tokens": 22,
+      "requested_cap": 256,
+      "at_requested_cap": false,
+      "confidence": "high",
+      "basis": "Generated-only text contains an anomalous visible pseudo-call or malformed reasoning/repetition artifact, but not the indexed native motif."
+    },
+    {
+      "job": "anomaly.psf__requests-1921.call1.onset",
+      "mode": "served",
+      "seed": 44,
+      "verdict": "inconclusive",
+      "quote": "<tool_call|><|tool_response>",
+      "field_pointer": "$.free_running[2].text",
+      "native_motif": "GetAll-bash",
+      "parser_observation": {
+        "structured_tool_count": 0,
+        "missing_tool": true,
+        "malformed_name": false,
+        "invalid_arguments": false,
+        "tools": [],
+        "visible_content_chars": 0,
+        "visible_content_head": "",
+        "reasoning_chars": 0,
+        "visible_GetAll_bash": false,
+        "visible_pseudo_call": false,
+        "reasoning_literal_thought_tail": false
+      },
+      "generated_tokens": 3,
+      "requested_cap": 256,
+      "at_requested_cap": false,
+      "confidence": "low",
+      "basis": "Output is too short or reaches the generation cap before the semantic/tool behavior can be judged reliably."
+    },
+    {
+      "job": "anomaly.sympy__sympy-18763.call1.onset",
+      "mode": "served",
+      "seed": 42,
+      "verdict": "normal",
+      "quote": "<|tool_call>call:bash{command:<|\"|>cat",
+      "field_pointer": "$.free_running[0].text",
+      "native_motif": "call:bash",
+      "parser_observation": {
+        "structured_tool_count": 1,
+        "missing_tool": false,
+        "malformed_name": false,
+        "invalid_arguments": false,
+        "tools": [
+          {
+            "name": "bash",
+            "expected_bash": true,
+            "valid_json": true,
+            "valid_command_schema": true,
+            "argument_keys": [
+              "command"
+            ]
+          }
+        ],
+        "visible_content_chars": 0,
+        "visible_content_head": "",
+        "reasoning_chars": 0,
+        "visible_GetAll_bash": false,
+        "visible_pseudo_call": false,
+        "reasoning_literal_thought_tail": false
+      },
+      "generated_tokens": 78,
+      "requested_cap": 256,
+      "at_requested_cap": false,
+      "confidence": "high",
+      "basis": "Generated text is a valid structured bash tool call; the raw call marker is expected and is not itself anomalous."
+    },
+    {
+      "job": "anomaly.sympy__sympy-18763.call1.onset",
+      "mode": "served",
+      "seed": 43,
+      "verdict": "reproduced_native_motif",
+      "quote": "call:bash{command:<|\"|>cat",
+      "field_pointer": "$.free_running[1].text",
+      "native_motif": "call:bash",
+      "parser_observation": {
+        "structured_tool_count": 0,
+        "missing_tool": true,
+        "malformed_name": false,
+        "invalid_arguments": false,
+        "tools": [],
+        "visible_content_chars": 247,
+        "visible_content_head": "call:bash{command:<|\"|>cat <<'EOF' > reproduce_issue.py\nfrom sympy import Subs, latex\nfrom sympy.abc import x, y\n\nexpr =",
+        "reasoning_chars": 0,
+        "visible_GetAll_bash": false,
+        "visible_pseudo_call": true,
+        "reasoning_literal_thought_tail": false
+      },
+      "generated_tokens": 91,
+      "requested_cap": 256,
+      "at_requested_cap": false,
+      "confidence": "high",
+      "basis": "Generated-only text contains the native visible pseudo-call form, and the stock parser reports no structured tool and visible_pseudo_call=true."
+    },
+    {
+      "job": "anomaly.sympy__sympy-18763.call1.onset",
+      "mode": "served",
+      "seed": 44,
+      "verdict": "normal",
+      "quote": "<|tool_call>call:bash{command:<|\"|>cat",
+      "field_pointer": "$.free_running[2].text",
+      "native_motif": "call:bash",
+      "parser_observation": {
+        "structured_tool_count": 1,
+        "missing_tool": false,
+        "malformed_name": false,
+        "invalid_arguments": false,
+        "tools": [
+          {
+            "name": "bash",
+            "expected_bash": true,
+            "valid_json": true,
+            "valid_command_schema": true,
+            "argument_keys": [
+              "command"
+            ]
+          }
+        ],
+        "visible_content_chars": 0,
+        "visible_content_head": "",
+        "reasoning_chars": 0,
+        "visible_GetAll_bash": false,
+        "visible_pseudo_call": false,
+        "reasoning_literal_thought_tail": false
+      },
+      "generated_tokens": 90,
+      "requested_cap": 256,
+      "at_requested_cap": false,
+      "confidence": "high",
+      "basis": "Generated text is a valid structured bash tool call; the raw call marker is expected and is not itself anomalous."
+    },
+    {
+      "job": "anomaly.pylint-dev__pylint-4551.call1.onset",
+      "mode": "served",
+      "seed": 42,
+      "verdict": "other_anomaly",
+      "quote": "call:bash{command:<|\"|>ls -R | grep pyreverse",
+      "field_pointer": "$.free_running[0].text",
+      "native_motif": "GetAll-bash",
+      "parser_observation": {
+        "structured_tool_count": 0,
+        "missing_tool": true,
+        "malformed_name": false,
+        "invalid_arguments": false,
+        "tools": [],
+        "visible_content_chars": 51,
+        "visible_content_head": "call:bash{command:<|\"|>ls -R | grep pyreverse<|\"|>}",
+        "reasoning_chars": 0,
+        "visible_GetAll_bash": false,
+        "visible_pseudo_call": true,
+        "reasoning_literal_thought_tail": false
+      },
+      "generated_tokens": 20,
+      "requested_cap": 256,
+      "at_requested_cap": false,
+      "confidence": "high",
+      "basis": "Generated-only text contains an anomalous visible pseudo-call or malformed reasoning/repetition artifact, but not the indexed native motif."
+    },
+    {
+      "job": "anomaly.pylint-dev__pylint-4551.call1.onset",
+      "mode": "served",
+      "seed": 43,
+      "verdict": "other_anomaly",
+      "quote": "call:bash{command:<|\"|>ls -R | grep pyreverse",
+      "field_pointer": "$.free_running[1].text",
+      "native_motif": "GetAll-bash",
+      "parser_observation": {
+        "structured_tool_count": 0,
+        "missing_tool": true,
+        "malformed_name": false,
+        "invalid_arguments": false,
+        "tools": [],
+        "visible_content_chars": 52,
+        "visible_content_head": "Ccall:bash{command:<|\"|>ls -R | grep pyreverse<|\"|>}",
+        "reasoning_chars": 0,
+        "visible_GetAll_bash": false,
+        "visible_pseudo_call": true,
+        "reasoning_literal_thought_tail": false
+      },
+      "generated_tokens": 21,
+      "requested_cap": 256,
+      "at_requested_cap": false,
+      "confidence": "high",
+      "basis": "Generated-only text contains an anomalous visible pseudo-call or malformed reasoning/repetition artifact, but not the indexed native motif."
+    },
+    {
+      "job": "anomaly.pylint-dev__pylint-4551.call1.onset",
+      "mode": "served",
+      "seed": 44,
+      "verdict": "other_anomaly",
+      "quote": "call:bash{command:<|\"|>ls -R | grep pyreverse",
+      "field_pointer": "$.free_running[2].text",
+      "native_motif": "GetAll-bash",
+      "parser_observation": {
+        "structured_tool_count": 0,
+        "missing_tool": true,
+        "malformed_name": false,
+        "invalid_arguments": false,
+        "tools": [],
+        "visible_content_chars": 51,
+        "visible_content_head": "call:bash{command:<|\"|>ls -R | grep pyreverse<|\"|>}",
+        "reasoning_chars": 0,
+        "visible_GetAll_bash": false,
+        "visible_pseudo_call": true,
+        "reasoning_literal_thought_tail": false
+      },
+      "generated_tokens": 20,
+      "requested_cap": 256,
+      "at_requested_cap": false,
+      "confidence": "high",
+      "basis": "Generated-only text contains an anomalous visible pseudo-call or malformed reasoning/repetition artifact, but not the indexed native motif."
+    },
+    {
+      "job": "anomaly.sympy__sympy-14711.call1.onset",
+      "mode": "served",
+      "seed": 42,
+      "verdict": "normal",
+      "quote": "<|tool_call>call:bash{command:<|\"|>cat",
+      "field_pointer": "$.free_running[0].text",
+      "native_motif": "this.thought",
+      "parser_observation": {
+        "structured_tool_count": 1,
+        "missing_tool": false,
+        "malformed_name": false,
+        "invalid_arguments": false,
+        "tools": [
+          {
+            "name": "bash",
+            "expected_bash": true,
+            "valid_json": true,
+            "valid_command_schema": true,
+            "argument_keys": [
+              "command"
+            ]
+          }
+        ],
+        "visible_content_chars": 68,
+        "visible_content_head": "I will start by creating a reproduction script to confirm the issue.",
+        "reasoning_chars": 0,
+        "visible_GetAll_bash": false,
+        "visible_pseudo_call": false,
+        "reasoning_literal_thought_tail": false
+      },
+      "generated_tokens": 139,
+      "requested_cap": 256,
+      "at_requested_cap": false,
+      "confidence": "high",
+      "basis": "Generated text is a valid structured bash tool call; the raw call marker is expected and is not itself anomalous."
+    },
+    {
+      "job": "anomaly.sympy__sympy-14711.call1.onset",
+      "mode": "served",
+      "seed": 43,
+      "verdict": "other_anomaly",
+      "quote": "call:bash{command:<|\"|>cat",
+      "field_pointer": "$.free_running[1].text",
+      "native_motif": "this.thought",
+      "parser_observation": {
+        "structured_tool_count": 0,
+        "missing_tool": true,
+        "malformed_name": false,
+        "invalid_arguments": false,
+        "tools": [],
+        "visible_content_chars": 405,
+        "visible_content_head": "I will start by creating a reproduction script to confirm the issue.\n\ncall:bash{command:<|\"|>cat <<'EOF' > reproduce_iss",
+        "reasoning_chars": 0,
+        "visible_GetAll_bash": false,
+        "visible_pseudo_call": true,
+        "reasoning_literal_thought_tail": false
+      },
+      "generated_tokens": 119,
+      "requested_cap": 256,
+      "at_requested_cap": false,
+      "confidence": "high",
+      "basis": "Generated-only text contains an anomalous visible pseudo-call or malformed reasoning/repetition artifact, but not the indexed native motif."
+    },
+    {
+      "job": "anomaly.sympy__sympy-14711.call1.onset",
+      "mode": "served",
+      "seed": 44,
+      "verdict": "other_anomaly",
+      "quote": "therapeutics\n<|channel>thought\nWait, I should not use \"therapeutics\" as a command.",
+      "field_pointer": "$.free_running[2].text",
+      "native_motif": "this.thought",
+      "parser_observation": {
+        "structured_tool_count": 0,
+        "missing_tool": true,
+        "malformed_name": false,
+        "invalid_arguments": false,
+        "tools": [],
+        "visible_content_chars": 166,
+        "visible_content_head": "I will start by reproducing the issue with a script.\n\n therapeutics\n those\n those\n those\n those\n those\n those\n those\n th",
+        "reasoning_chars": 724,
+        "visible_GetAll_bash": false,
+        "visible_pseudo_call": false,
+        "reasoning_literal_thought_tail": true
+      },
+      "generated_tokens": 256,
+      "requested_cap": 256,
+      "at_requested_cap": true,
+      "confidence": "high",
+      "basis": "Generated-only text contains an anomalous visible pseudo-call or malformed reasoning/repetition artifact, but not the indexed native motif."
+    },
+    {
+      "job": "anomaly.xarray7233-call1.canonicalprefix",
+      "mode": "served",
+      "seed": 42,
+      "verdict": "inconclusive",
+      "quote": "<|tool_call>call:bash{command:<|\"|>cat <<'EOF' > reproduce_issue.py",
+      "field_pointer": "$.free_running[0].text",
+      "native_motif": "call:bash{command:<|\"|>",
+      "parser_observation": {
+        "structured_tool_count": 1,
+        "missing_tool": false,
+        "malformed_name": false,
+        "invalid_arguments": false,
+        "tools": [
+          {
+            "name": "bash",
+            "expected_bash": true,
+            "valid_json": true,
+            "valid_command_schema": true,
+            "argument_keys": [
+              "command"
+            ]
+          }
+        ],
+        "visible_content_chars": 0,
+        "visible_content_head": "",
+        "reasoning_chars": 0,
+        "visible_GetAll_bash": false,
+        "visible_pseudo_call": false,
+        "reasoning_literal_thought_tail": false
+      },
+      "generated_tokens": 256,
+      "requested_cap": 256,
+      "at_requested_cap": true,
+      "confidence": "low",
+      "basis": "Output is too short or reaches the generation cap before the semantic/tool behavior can be judged reliably."
+    },
+    {
+      "job": "anomaly.xarray7233-call1.canonicalprefix",
+      "mode": "served",
+      "seed": 43,
+      "verdict": "inconclusive",
+      "quote": "<|tool_call>call:bash{command:<|\"|>cat <<'EOF' > reproduce_issue.py",
+      "field_pointer": "$.free_running[1].text",
+      "native_motif": "call:bash{command:<|\"|>",
+      "parser_observation": {
+        "structured_tool_count": 1,
+        "missing_tool": false,
+        "malformed_name": false,
+        "invalid_arguments": false,
+        "tools": [
+          {
+            "name": "bash",
+            "expected_bash": true,
+            "valid_json": true,
+            "valid_command_schema": true,
+            "argument_keys": [
+              "command"
+            ]
+          }
+        ],
+        "visible_content_chars": 0,
+        "visible_content_head": "",
+        "reasoning_chars": 0,
+        "visible_GetAll_bash": false,
+        "visible_pseudo_call": false,
+        "reasoning_literal_thought_tail": false
+      },
+      "generated_tokens": 256,
+      "requested_cap": 256,
+      "at_requested_cap": true,
+      "confidence": "low",
+      "basis": "Output is too short or reaches the generation cap before the semantic/tool behavior can be judged reliably."
+    },
+    {
+      "job": "anomaly.xarray7233-call1.canonicalprefix",
+      "mode": "served",
+      "seed": 44,
+      "verdict": "inconclusive",
+      "quote": "<|tool_call>call:bash{command:<|\"|>cat <<'EOF' > reproduce_issue.py",
+      "field_pointer": "$.free_running[2].text",
+      "native_motif": "call:bash{command:<|\"|>",
+      "parser_observation": {
+        "structured_tool_count": 1,
+        "missing_tool": false,
+        "malformed_name": false,
+        "invalid_arguments": false,
+        "tools": [
+          {
+            "name": "bash",
+            "expected_bash": true,
+            "valid_json": true,
+            "valid_command_schema": true,
+            "argument_keys": [
+              "command"
+            ]
+          }
+        ],
+        "visible_content_chars": 0,
+        "visible_content_head": "",
+        "reasoning_chars": 0,
+        "visible_GetAll_bash": false,
+        "visible_pseudo_call": false,
+        "reasoning_literal_thought_tail": false
+      },
+      "generated_tokens": 256,
+      "requested_cap": 256,
+      "at_requested_cap": true,
+      "confidence": "low",
+      "basis": "Output is too short or reaches the generation cap before the semantic/tool behavior can be judged reliably."
+    },
+    {
+      "job": "anomaly.sympy__sympy-13878.call1.onset",
+      "mode": "served",
+      "seed": 42,
+      "verdict": "normal",
+      "quote": "<|tool_call>call:bash{command:<|\"|>ls -R sympy/stats",
+      "field_pointer": "$.free_running[0].text",
+      "native_motif": "call:bash",
+      "parser_observation": {
+        "structured_tool_count": 1,
+        "missing_tool": false,
+        "malformed_name": false,
+        "invalid_arguments": false,
+        "tools": [
+          {
+            "name": "bash",
+            "expected_bash": true,
+            "valid_json": true,
+            "valid_command_schema": true,
+            "argument_keys": [
+              "command"
+            ]
+          }
+        ],
+        "visible_content_chars": 0,
+        "visible_content_head": "",
+        "reasoning_chars": 0,
+        "visible_GetAll_bash": false,
+        "visible_pseudo_call": false,
+        "reasoning_literal_thought_tail": false
+      },
+      "generated_tokens": 19,
+      "requested_cap": 256,
+      "at_requested_cap": false,
+      "confidence": "high",
+      "basis": "Generated text is a valid structured bash tool call; the raw call marker is expected and is not itself anomalous."
+    },
+    {
+      "job": "anomaly.sympy__sympy-13878.call1.onset",
+      "mode": "served",
+      "seed": 43,
+      "verdict": "normal",
+      "quote": "<|tool_call>call:bash{command:<|\"|>ls -R sympy/stats",
+      "field_pointer": "$.free_running[1].text",
+      "native_motif": "call:bash",
+      "parser_observation": {
+        "structured_tool_count": 1,
+        "missing_tool": false,
+        "malformed_name": false,
+        "invalid_arguments": false,
+        "tools": [
+          {
+            "name": "bash",
+            "expected_bash": true,
+            "valid_json": true,
+            "valid_command_schema": true,
+            "argument_keys": [
+              "command"
+            ]
+          }
+        ],
+        "visible_content_chars": 0,
+        "visible_content_head": "",
+        "reasoning_chars": 0,
+        "visible_GetAll_bash": false,
+        "visible_pseudo_call": false,
+        "reasoning_literal_thought_tail": false
+      },
+      "generated_tokens": 18,
+      "requested_cap": 256,
+      "at_requested_cap": false,
+      "confidence": "high",
+      "basis": "Generated text is a valid structured bash tool call; the raw call marker is expected and is not itself anomalous."
+    },
+    {
+      "job": "anomaly.sympy__sympy-13878.call1.onset",
+      "mode": "served",
+      "seed": 44,
+      "verdict": "normal",
+      "quote": "<|tool_call>call:bash{command:<|\"|>find sympy/stats -name \"*.py\"",
+      "field_pointer": "$.free_running[2].text",
+      "native_motif": "call:bash",
+      "parser_observation": {
+        "structured_tool_count": 1,
+        "missing_tool": false,
+        "malformed_name": false,
+        "invalid_arguments": false,
+        "tools": [
+          {
+            "name": "bash",
+            "expected_bash": true,
+            "valid_json": true,
+            "valid_command_schema": true,
+            "argument_keys": [
+              "command"
+            ]
+          }
+        ],
+        "visible_content_chars": 0,
+        "visible_content_head": "",
+        "reasoning_chars": 0,
+        "visible_GetAll_bash": false,
+        "visible_pseudo_call": false,
+        "reasoning_literal_thought_tail": false
+      },
+      "generated_tokens": 22,
+      "requested_cap": 256,
+      "at_requested_cap": false,
+      "confidence": "high",
+      "basis": "Generated text is a valid structured bash tool call; the raw call marker is expected and is not itself anomalous."
+    }
+  ]
+}

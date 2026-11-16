@@ -1,0 +1,41 @@
+[
+  {
+    "name": "task195.onset",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-phase1-precision/task195.onset.private.json",
+    "free_run_tokens": 1024,
+    "free_run_trials": 3
+  },
+  {
+    "name": "task7.decisive",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-phase1-precision/task7.decisive.private.json"
+  },
+  {
+    "name": "task93.decisive",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-phase1-precision/task93.decisive.private.json"
+  },
+  {
+    "name": "task167.decisive",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-phase1-precision/task167.decisive.private.json"
+  },
+  {
+    "name": "task7.full_reply",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-phase1-precision/task7.full_reply.private.json",
+    "branches": [
+      "chosen"
+    ]
+  },
+  {
+    "name": "task93.full_reply",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-phase1-precision/task93.full_reply.private.json",
+    "branches": [
+      "chosen"
+    ]
+  },
+  {
+    "name": "task167.full_reply",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-phase1-precision/task167.full_reply.private.json",
+    "branches": [
+      "chosen"
+    ]
+  }
+]

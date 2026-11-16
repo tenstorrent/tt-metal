@@ -1,0 +1,25 @@
+{
+  "status": "predecessors_succeeded_read_only_preflight_passed_candidate_not_admitted_or_launched",
+  "checked_utc": "2026-11-15T05:52:46.902509+00:00",
+  "W": {
+    "queue_sha256": "2594f66cde95f8abf610da3789227eaf2fc3f4255741faab2ad46a6e03c6198e",
+    "queue_status": "all_req5414_cap2048_extensions_completed",
+    "queue_exit_code": 0,
+    "served_completion_sha256": "3f175c3c145309ab5e0224fe00128f1ea3db012d1c278d56b550e2ea7a01fc30",
+    "served_exit_code": 0,
+    "full_completion_sha256": "0d03333b568effd3c708110d50a87966c9b2574daadac62a61241e6b991ea08c",
+    "full_exit_code": 0
+  },
+  "V": {
+    "queue_sha256": "d8bc2e70dd02fe44a474bf2144fe64d5b1e1258f2dd0eb20af2e9c334eb0bb36",
+    "queue_status": "all_suffix4096_jobs_completed",
+    "queue_exit_code": 0,
+    "full_completion_sha256": "56ae2df18384155c16eb3a45416e46fda059ba8d334a6b7cc41362e5f04f245e",
+    "full_exit_code": 0,
+    "pytest_call65_seed44_verdict": "normal"
+  },
+  "device_owners": [],
+  "active_hf_runner_processes": [],
+  "launch_performed": false,
+  "admission_status": "candidate_only_not_admitted"
+}

@@ -1,0 +1,28 @@
+{
+  "status": "reviewed",
+  "rows": [
+    {
+      "job": "anomaly.psf__requests-5414.call11.onset.optional-suffix512.cap2048",
+      "mode": "full",
+      "seed": 44,
+      "verdict": "other_anomaly",
+      "evidence": "Full 2048-token continuation advances through distinct URL-validation hypotheses rather than repeating an unchanged paragraph, but it repeatedly presents unexecuted shell/Python checks as if they produced concrete output (version commands, traceback, idna/socket/urlparse results). Those invented outputs are a separate semantic/protocol anomaly; the native caret motif is absent. Pinned conditioning ends in the saved traceback context, and generated IDs[0:1024] exactly match the prior cap1024 sample. No generated command was executed.",
+      "confidence": "high",
+      "token_count": 2048,
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/cap1024-preparation/cap2048-preparation/runs/full/anomaly.psf__requests-5414.call11.onset.optional-suffix512.cap2048.seed44.json",
+      "source_sha256": "af75c19503c28dbfc26616fbd24f20331b987681a271c7d4b769eb2d04910dd3",
+      "generated_text_field": "$.free_running[0].text",
+      "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/cap1024-preparation/cap2048-preparation/anomaly.psf__requests-5414.call11.onset.optional-suffix512.cap2048.seed44.private.json",
+      "conditioning_field": "$.prompt_token_ids",
+      "conditioning_prompt_token_count": 512,
+      "conditioning_prompt_token_ids_sha256": "3d89a854eee7b7437f041ae07ac20d12ec2e75080078c0a5e2f075952284a78d",
+      "conditioning_decoded_tail": ": `echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT`\nwithout any other command.<turn|>\n<|turn>model\n<|channel>thought\nOkay, I've analyzed the issue.\nThe user is reporting that `requests.get(\"http://.example.com\")` raises a `UnicodeError` (specifically `urllib3.exceptions.LocationParseError` which seems to wrap it or be related) instead of `requests.exceptions.InvalidURL`.\n\nWait, in my reproduction script:\n```python\nimport requests\nimport traceback\n\ntry:\n    requests.get(\"http://.example.com\")\nexcept Exception:\n    traceback.print_exc()\n```\nThe output was:\n```\nTraceback (most recent call last):\n  File \"/testbed/reproduce_issue.py\", line 5, in <module>\n    requests.get(\"http://.example.com\")\n  ...\n  File \"/opt/miniconda3/lib/python3.11/site-packages/urllib3/util/connection.py\", line 68, in create_connection\n    return six.raise_from(\n           ",
+      "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/cap1024-preparation/runs/full/anomaly.psf__requests-5414.call11.onset.optional-suffix512.cap1024.seed44.json",
+      "source_result_sha256": "c6a307602cf3efb6c7c3455ceb70d3837c70da5db382eb14ef0d394222e6a642",
+      "source_cap_token_count": 1024,
+      "source_token_ids_match_through_1024": true,
+      "native_motif": "long caret run; not present in generated continuation",
+      "cap_notes": "Reached 2048 while analysis remains unresolved and the final sentence is truncated; the visible fabricated command/output claims already support other_anomaly. No claim of completed task."
+    }
+  ]
+}

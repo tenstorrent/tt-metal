@@ -1,0 +1,112 @@
+{
+  "status": "prepared_CPU_only_not_executed",
+  "task": "pytest-dev__pytest-5787",
+  "cases": [
+    {
+      "call": 1,
+      "response_id": "chatcmpl-aae6af73868fdb9f",
+      "private_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-pytest5787-controls/pytest-dev__pytest-5787.call1.onset.private.json",
+      "private_case_sha256": "198ec73ad83296c21c93e0484d12b52717c6803b9ae7ea0131dcfac76f6ae3af",
+      "raw_packet": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-update2/pytest-dev__pytest-5787.call1.packet.private.json",
+      "raw_packet_sha256": "295e835987498b9c1baf1d300d9082d1ff2dd59d6bc2d4597d872598e81ff483",
+      "native_prompt_tokens": 1819,
+      "reconstructed_request_prompt_tokens": 1818,
+      "native_reply_tokens": 9804,
+      "reconstructed_reply_tokens": 9690,
+      "conditioning_tokens": 9606,
+      "onset_positions": 64,
+      "onset_token_index": 7788,
+      "motif": "GetAll-bash",
+      "evidence": "Visible content emits GetAll-bash instead of structured tool call and simulates repeated bash/tool exchanges. First response omitted from native assistant transcript; server response recovered via request/task mapping. Canonical reasoning field contains simulated thought exchanges too; parser-flattened ordering cannot locate the first native generated anomaly exactly.",
+      "limitations": "Exact request body with historical JSON tool arguments deserialized for pinned template. Reply reconstructed as canonical thought header, complete saved reasoning, channel boundary, complete visible content, canonical tool-call macros from pinned template, native stop ID. No native token IDs: generated whitespace/order/protocol spelling cannot be recovered uniquely; counts and hashes are evidence, not identity proof. Canonicalization of malformed tool names is not proof of exact malformed native bytes.",
+      "native_message_indices": [],
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "native_seed": null,
+      "diagnostic_seeds": [
+        42,
+        43,
+        44
+      ]
+    },
+    {
+      "call": 65,
+      "response_id": "chatcmpl-aa45ec60cf4fb4bf",
+      "private_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-pytest5787-controls/pytest-dev__pytest-5787.call65.onset.private.json",
+      "private_case_sha256": "d4470a4dd919a2e81683e8d17339d2a237ab7399409b70ed45e8bf5c9127a2e6",
+      "raw_packet": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-update2/pytest-dev__pytest-5787.call65.packet.private.json",
+      "raw_packet_sha256": "ad4b1235311a68670536ce7d9b35363b9f3733b9cb2ebc5509729866700df12f",
+      "native_prompt_tokens": 53503,
+      "reconstructed_request_prompt_tokens": 53502,
+      "native_reply_tokens": 1905,
+      "reconstructed_reply_tokens": 1907,
+      "conditioning_tokens": 53684,
+      "onset_positions": 64,
+      "onset_token_index": 182,
+      "motif": "I will\u2019ll",
+      "evidence": "At native message129 tool command comment, duplicated curly apostrophe/contraction in I will\u2019ll; nearby a a string duplication lies in same short window. Localized text anomaly per root, not whole-reply collapse or proven cause of invalid source edit.",
+      "limitations": "Exact request body with historical JSON tool arguments deserialized for pinned template. Reply reconstructed as canonical thought header, complete saved reasoning, channel boundary, complete visible content, canonical tool-call macros from pinned template, native stop ID. No native token IDs: generated whitespace/order/protocol spelling cannot be recovered uniquely; counts and hashes are evidence, not identity proof. Canonicalization of malformed tool names is not proof of exact malformed native bytes.",
+      "native_message_indices": [
+        129
+      ],
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "native_seed": null,
+      "diagnostic_seeds": [
+        42,
+        43,
+        44
+      ]
+    }
+  ],
+  "cpu_validation": [
+    {
+      "mode": "served",
+      "config": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/head_bfp8_build_kwargs.json",
+      "config_sha256": "2e583fa8bd7aff7c5f8be110835df751924d167243c5a44a68aa5b3d70c6845f",
+      "exit_code": 0,
+      "stdout": "Validated 2 jobs without importing TTNN"
+    },
+    {
+      "mode": "full",
+      "config": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_build_kwargs.json",
+      "config_sha256": "ff2b5ed24e0b6a1dee7eb5cd8bd437d17c3df5f8f25567927d239e666f0699f9",
+      "exit_code": 0,
+      "stdout": "Validated 2 jobs without importing TTNN"
+    }
+  ],
+  "commands_staged_only": {
+    "served": [
+      "python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tools.precision_repro_batch",
+      "--cases",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-pytest5787-controls/cases.json",
+      "--build-kwargs-file",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/head_bfp8_build_kwargs.json",
+      "--output-dir",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-pytest5787-controls/served"
+    ],
+    "full": [
+      "python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tools.precision_repro_batch",
+      "--cases",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-pytest5787-controls/cases.json",
+      "--build-kwargs-file",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_build_kwargs.json",
+      "--output-dir",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-pytest5787-controls/full",
+      "--compare-dir",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-pytest5787-controls/served"
+    ]
+  },
+  "no_inference": true,
+  "phase_scope": "Anomaly controls independent of fetched-solution score; no score or corrected answer claim."
+}

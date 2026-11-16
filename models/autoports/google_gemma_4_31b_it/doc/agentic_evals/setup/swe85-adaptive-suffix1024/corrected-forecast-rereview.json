@@ -1,0 +1,7 @@
+{
+  "reviewer": "/root/swe85_full_controls_d",
+  "status": "clean forecast arithmetic and source checks",
+  "forecast_sha256": "d5023017973310de7c88848f0f859a19fec4ebdf99bb72d7c3ab63a23df5df82",
+  "source": "Independent reviewer messages 2026-11-15, preserved by coordinator",
+  "checks": "All36 per-trial formula values,6case sums/mode,0.7/1.7 ranges,one max load,64/37 chosen counts, historical hash. No stage signoff."
+}

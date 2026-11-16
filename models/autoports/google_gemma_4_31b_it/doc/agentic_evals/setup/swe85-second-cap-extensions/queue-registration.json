@@ -1,0 +1,6 @@
+{
+  "exec_session_id": 83233,
+  "driver": "setup/run_swe85_secondcap_after_adaptive.py",
+  "status": "queued",
+  "waits_for": "setup/swe85-adaptive-suffix1024/full-completion.json"
+}

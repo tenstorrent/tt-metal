@@ -1,0 +1,43 @@
+{
+  "start_unix": 1794652536.2948663,
+  "argv": [
+    "timeout",
+    "10800",
+    "env",
+    "HF_HUB_OFFLINE=1",
+    "HF_DATASETS_OFFLINE=1",
+    "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+    "models/autoports/google_gemma_4_31b_it/tools/precision_repro_hf.py",
+    "--cases",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe-astropy-precision/short-hf-batch/cases.json",
+    "--output",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe-astropy-precision/short-hf-batch/results",
+    "--tokens",
+    "512",
+    "--seeds",
+    "42",
+    "--prefill-chunk",
+    "512"
+  ],
+  "head": "67f50e0d140100d3c478829fd056fba83c0cdfb2",
+  "source_sha256": {
+    "models/autoports/google_gemma_4_31b_it/tools/precision_repro_hf.py": "b8eab29c31193383d6b5c4e5c911f5e81c11bc94cd10c671a2075064d3a12c04",
+    "models/autoports/google_gemma_4_31b_it/tests/generate_full_reference.py": "30f69ad0db3ce951aa1a6dc8deb1900ea33d5cdd578f8aff36cefc33056e5d7d",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe-astropy-precision/short-hf-batch/cases.json": "577123dd26686f6688c71f269800606b2f050b152a98c813ec75af0374bde2e6",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe-astropy-precision/first-short-prefix-candidates/astropy.first.suffix512.private.json": "edaa1687f22e43316120ef9daa3b93c5b2bc7b5c145239f648e9f31d240ae271",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe-astropy-precision/short-prefix-candidates/astropy.second.suffix512.private.json": "d2b890b2343fc4350cadfa9154ab65e0dc79bbf793cba83ab926570e6ade4321"
+  },
+  "memory_available_bytes": 150176448512,
+  "regime": "CPU HF with overlapping Docker preparations; no concurrent TT or serving. Accuracy-only diagnostics; timings not usable for performance ranking.",
+  "status": "finished",
+  "timeout_seconds": 10800,
+  "timeout_pid": 183326,
+  "exit_code": 0,
+  "end_unix": 1794654974.6853917,
+  "regime_original_claim": "CPU HF only; no concurrent TT, Docker builds or serving jobs; diagnostic cost only",
+  "regime_correction": {
+    "written_utc": "2026-11-14T11:17:07.842236+00:00",
+    "basis": "Coordinator confirmed Docker preparations overlapped CPU HF; original launch claim retained verbatim."
+  }
+}

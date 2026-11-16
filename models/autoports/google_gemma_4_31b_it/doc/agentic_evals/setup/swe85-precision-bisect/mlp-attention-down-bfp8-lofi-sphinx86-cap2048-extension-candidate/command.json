@@ -1,0 +1,36 @@
+{
+  "status": "inert_candidate_only_not_admitted_not_run",
+  "mode": "full",
+  "case_count": 1,
+  "timeout_seconds": 900,
+  "model_loads": 1,
+  "argv": [
+    "timeout",
+    "900",
+    "env",
+    "HF_HUB_OFFLINE=1",
+    "HF_DATASETS_OFFLINE=1",
+    "HF_HUB_DISABLE_TELEMETRY=1",
+    "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+    "READINESS_TRACE_REGION_SIZE=134217728",
+    "OMP_NUM_THREADS=16",
+    "MKL_NUM_THREADS=16",
+    "OPENBLAS_NUM_THREADS=16",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+    "-m",
+    "models.autoports.google_gemma_4_31b_it.tools.precision_repro_batch",
+    "--cases",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/mlp-attention-down-bfp8-lofi-sphinx86-cap2048-extension-candidate/candidate-cases.json",
+    "--build-kwargs-file",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/mlp-attention-down-bfp8-lofi-sphinx86-cap2048-extension-candidate/mlp_attention_down_bfp8_lofi_build_kwargs.json",
+    "--output-dir",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/mlp-attention-down-bfp8-lofi-sphinx86-cap2048-extension-candidate/runs/mlp_attention_down_bfp8_lofi_cap2048"
+  ],
+  "environment_overrides": {
+    "HF_HUB_OFFLINE": "1",
+    "HF_DATASETS_OFFLINE": "1",
+    "HF_HUB_DISABLE_TELEMETRY": "1"
+  },
+  "scope": "One exact fixture and seed from fixed108 P3 manifest index74; only free-run cap changes 1024→2048 under same P8 policy.",
+  "must_not_execute_until": "Root review/decision and explicit admission; no admission exists."
+}

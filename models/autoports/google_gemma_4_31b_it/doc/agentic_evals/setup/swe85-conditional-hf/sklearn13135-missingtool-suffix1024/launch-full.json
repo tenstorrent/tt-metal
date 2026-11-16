@@ -1,0 +1,69 @@
+{
+  "status": "running",
+  "mode": "full",
+  "command": [
+    "timeout",
+    "600",
+    "env",
+    "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+    "READINESS_TRACE_REGION_SIZE=134217728",
+    "OMP_NUM_THREADS=16",
+    "MKL_NUM_THREADS=16",
+    "OPENBLAS_NUM_THREADS=16",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+    "-m",
+    "models.autoports.google_gemma_4_31b_it.tools.precision_repro_batch",
+    "--cases",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix1024/full-cases.json",
+    "--build-kwargs-file",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_build_kwargs.json",
+    "--output-dir",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix1024/runs/full"
+  ],
+  "started_unix": 1794729025.3114336,
+  "timeout_seconds": 600,
+  "candidate_admission_sha256": "2e635a1169648396cf6abd95a6a3f3918808a45f0918431702fae2f5ff3ba308",
+  "candidate_proposal_sha256": "10e422ad856c716d2a4558335519e378b42b32ad7031dfce08b4ab7bab815e92",
+  "manifest_sha256": "187c9ed825433ff71b4575c2a9b9917676bfd86763323606f30f204a5df8bd3a",
+  "runner_sha256": "172f5a1dd7a7403847e47b966ae79c306163650a60211418c7c195794ec5c125",
+  "forecast": {
+    "point_seconds": 280.0,
+    "range_seconds": [
+      210.0,
+      420.0
+    ],
+    "timeout_seconds": 600,
+    "components_estimated_seconds": {
+      "full_model_load": 77.2094789010007,
+      "three_case_generation_prefill_chosen_estimate": 165.0,
+      "additional_context_and_seed_uncertainty": 37.8
+    }
+  },
+  "predecessor_gates": {
+    "p2": {
+      "admission_sha256": "74bef162c97e23e882612eb85dae365f32c9da1f13ba4b9b8e1e1f8f582ad1be",
+      "completion_sha256": "47896893e57257757d1153dd3ae4df6b05985cd97b0fbb9993739e30145b2880",
+      "queue_sha256": "a3e38a94d97c827735d1f16a868b721dc669984ae26ef0ee42d0c5de2a847e86",
+      "forecast_status": "in_range",
+      "forecast_review_sha256": "5d27739c8f376feba9ce6fd76e96b37029be4467d32ced410d4504c72d60ea0b",
+      "elapsed_seconds": 2469.2918775081635,
+      "forecast_bounds_seconds": [
+        2018.038988828659,
+        5910.468657604884
+      ]
+    },
+    "sklearn": {
+      "review_sha256": "fb2d19557904be5611df096feafebf6024a39dd4677f119fe4bbb8e04c438d21",
+      "predecessor_pins_sha256": "027e8243768fcc05e8465f1910dd83a579d7b9a01f9c316c9676fe338cd9e114",
+      "status": "matched_TT_next_then_conditional_HF",
+      "hf_followup": "deferred_until_matched_TT"
+    },
+    "earlier_mode": {
+      "served_completion_sha256": "b0485e6d7f64bfe2e2905c98f8bc493fd5a2db92e59522f58ac2dd972c32cf26",
+      "served_launch_sha256": "3190211a0278cbedcce057b52c76d26145335c8f3f6f958f6ea9b1cd67d7ea34",
+      "served_review_sha256": "23f623c3c5564b2dbf2ceb808adbe6cc3b59c91dfa09f0b7f47d1834ab0a4ad9"
+    }
+  },
+  "active_hf_processes": [],
+  "device_owner_preflight": []
+}

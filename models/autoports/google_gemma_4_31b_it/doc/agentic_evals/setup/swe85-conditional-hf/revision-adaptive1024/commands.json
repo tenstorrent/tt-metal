@@ -1,0 +1,148 @@
+{
+  "status": "proposed_unadmitted_no_launch",
+  "gate": "After root freezes native-positive set from pending cap2048 probe: require all TT diagnostic queues complete (including the short cap2048 probe and any later adaptive queue), zero TT device owners, fresh MemAvailable >=100GB, and no HF/model process; then recheck manifest/source hashes before any admission.",
+  "offline": "Commands set HF_HUB_OFFLINE=1/HF_DATASETS_OFFLINE=1; pinned runner uses local_files_only=True.",
+  "cpu_threads": "runner load_reference calls torch.set_num_threads(16); commands also cap OMP/MKL/OpenBLAS to16.",
+  "serial_execution": "Three separate serial CPU processes are intentional: seed42/suffix512 two cases, seed44/suffix512 one case, seed44/suffix1024 one case. Never overlap; each process pays one reference/model-load margin.",
+  "groups": [
+    {
+      "seed_group": 42,
+      "suffix_source": "exact_saved_suffix512",
+      "cases": [
+        "anomaly.requests2931.call20.canonicalprefix.optional-suffix512",
+        "anomaly.sympy__sympy-14248.call53.onset.optional-suffix512"
+      ],
+      "command": [
+        "timeout",
+        "3600",
+        "env",
+        "HF_HUB_OFFLINE=1",
+        "HF_DATASETS_OFFLINE=1",
+        "OMP_NUM_THREADS=16",
+        "MKL_NUM_THREADS=16",
+        "OPENBLAS_NUM_THREADS=16",
+        "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tools/precision_repro_hf.py",
+        "--cases",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive1024/native-positive-candidates-seed42-suffix512.json",
+        "--output",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive1024/results/seed42-suffix512",
+        "--tokens",
+        "512",
+        "--seeds",
+        "42",
+        "--prefill-chunk",
+        "512",
+        "--compare-dir",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/served",
+        "--compare-dir",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/full"
+      ],
+      "compare_dirs": [
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/served",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/full"
+      ],
+      "output_dir": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive1024/results/seed42-suffix512",
+      "timeout_seconds": 3600,
+      "serial_order": 1,
+      "loads_model_once_for_group": true,
+      "manifest": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive1024/native-positive-candidates-seed42-suffix512.json",
+      "manifest_sha256": "16b10f6da567a27cff6f7ef0bfb40be6acbbe4487dddff68f0b684baed77e842",
+      "case_count": 2
+    },
+    {
+      "seed_group": 44,
+      "suffix_source": "exact_saved_suffix512",
+      "cases": [
+        "anomaly.pytest-dev__pytest-7432.call19.onset.optional-suffix512"
+      ],
+      "command": [
+        "timeout",
+        "3600",
+        "env",
+        "HF_HUB_OFFLINE=1",
+        "HF_DATASETS_OFFLINE=1",
+        "OMP_NUM_THREADS=16",
+        "MKL_NUM_THREADS=16",
+        "OPENBLAS_NUM_THREADS=16",
+        "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tools/precision_repro_hf.py",
+        "--cases",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive1024/native-positive-candidates-seed44-suffix512.json",
+        "--output",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive1024/results/seed44-suffix512",
+        "--tokens",
+        "512",
+        "--seeds",
+        "44",
+        "--prefill-chunk",
+        "512",
+        "--compare-dir",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/served",
+        "--compare-dir",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/full"
+      ],
+      "compare_dirs": [
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/served",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/full"
+      ],
+      "output_dir": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive1024/results/seed44-suffix512",
+      "timeout_seconds": 3600,
+      "serial_order": 2,
+      "loads_model_once_for_group": true,
+      "manifest": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive1024/native-positive-candidates-seed44-suffix512.json",
+      "manifest_sha256": "db7fd3763b4b0606edb4773ef53d0217a6723d1cc06df824842020b25c8a262e",
+      "case_count": 1
+    },
+    {
+      "seed_group": 44,
+      "suffix_source": "exact_saved_suffix1024",
+      "cases": [
+        "anomaly.psf__requests-5414.call9.onset"
+      ],
+      "command": [
+        "timeout",
+        "3600",
+        "env",
+        "HF_HUB_OFFLINE=1",
+        "HF_DATASETS_OFFLINE=1",
+        "OMP_NUM_THREADS=16",
+        "MKL_NUM_THREADS=16",
+        "OPENBLAS_NUM_THREADS=16",
+        "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tools/precision_repro_hf.py",
+        "--cases",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive1024/native-positive-candidates-seed44-suffix1024.json",
+        "--output",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive1024/results/seed44-suffix1024",
+        "--tokens",
+        "512",
+        "--seeds",
+        "44",
+        "--prefill-chunk",
+        "512",
+        "--compare-dir",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/served",
+        "--compare-dir",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/full"
+      ],
+      "compare_dirs": [
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/served",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/full"
+      ],
+      "output_dir": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive1024/results/seed44-suffix1024",
+      "timeout_seconds": 3600,
+      "serial_order": 3,
+      "loads_model_once_for_group": true,
+      "manifest": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive1024/native-positive-candidates-seed44-suffix1024.json",
+      "manifest_sha256": "d5cff440b07e98ac652ffc8890929717f2318b9d0f5e6453a449251c2d303224",
+      "case_count": 1
+    }
+  ],
+  "runner_sha256": "aafe67c88bb5a1eb38b8718570bbddd5749e2a9ecbb9dd19cdb100a49572c03e",
+  "revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+  "comparison_rule": "Each compare-dir contains files for every case in that group only; separate suffix families to prevent mismatched filenames/forced token IDs. HF sampling remains a new reference RNG trial."
+}

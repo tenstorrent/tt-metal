@@ -1,0 +1,17 @@
+{
+  "status": "candidate_only_not_admitted",
+  "execution_authority": "root_owned_no_execute_until_root_explicitly_admits_this_exact_candidate",
+  "proposal_sha256": "ca8549349562de66a14b187b647b374d32554f45da44733e4a1f2bb6d8b96414",
+  "commands_sha256": "c265bee496925a1897c98cfb25ca8cf93135df2d583493a8cfd0a4bcff1b2383",
+  "source_integrity_sha256": "cf5efba0647800b7b401e2d3f1be87e352b7b479b06e96ccac38bcd3eec6f789",
+  "forecast_sha256": "e5962ee880ae51627e85dda1610342bef8155556850211846424ee473054504b",
+  "runner_sha256": "aafe67c88bb5a1eb38b8718570bbddd5749e2a9ecbb9dd19cdb100a49572c03e",
+  "manifest_sha256s": {
+    "secondary-loop-seed42.json": "e9ef583e1c26d77bd0366884bea508151df2f13498e9bc7e41fd378a571f8621",
+    "secondary-loop-seed43.json": "aa1e3a75676a80f0754db46a90e3e4d8f05c8589f156496108ff9551b742e85b"
+  },
+  "note": "Candidate-only placeholder refreshed to corrected selected BFP8/LoFi served results and one-group root-gated driver. No HF runner invocation.",
+  "driver_sha256": "ae085eb32cb96a9e5b6f96ea4f41c284968a6999a7f59af46e97208e00d706d9",
+  "corrected_served_arm_admission_sha256": "3135aac12cbe11d97803b166dc3173def8f9bc03a6e8bb786fe015ce3f24bf08",
+  "corrected_served_arm_root_review_sha256": "777d1a61090d8b827c76fc905b1a884b58270613d976c5eed73d8a41c2319151"
+}

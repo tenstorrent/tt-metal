@@ -1,0 +1,189 @@
+{
+  "status": "prepared_CPU_only_not_executed",
+  "tasks": [
+    "matplotlib__matplotlib-20488",
+    "sphinx-doc__sphinx-9461",
+    "sympy__sympy-14711"
+  ],
+  "cases": [
+    {
+      "task": "matplotlib__matplotlib-20488",
+      "call": 82,
+      "response_id": "chatcmpl-b99664aff311024a",
+      "private_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-protocol-scan83-controls/matplotlib__matplotlib-20488.call82.onset.private.json",
+      "private_case_sha256": "e89e80916d35a6acbbedaa4a14e693bbc381e976191406bbf122db0fadc532ca",
+      "raw_packet": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/protocol-scan83-archive/matplotlib__matplotlib-20488.call82.packet.private.json",
+      "raw_packet_sha256": "31ae2efcf06897183db0262f5c787b2ae88d120ca20b3a0470f7aae867965e1c",
+      "native_prompt_tokens": 44338,
+      "reconstructed_request_prompt_tokens": 44337,
+      "native_reply_tokens": 181,
+      "reconstructed_reply_tokens": 183,
+      "conditioning_tokens": 44428,
+      "onset_positions": 64,
+      "onset_token_index": 91,
+      "motif": "I've\u2019ve",
+      "evidence": "Localized duplicate contraction in reasoning; distinct response from existing raw88/91 controls.",
+      "limitations": "Exact request body with historical JSON tool arguments deserialized for pinned template. Reply reconstructed as canonical thought header, complete saved reasoning, channel boundary, complete visible content, canonical tool-call macros from pinned template, native stop ID. No native token IDs: generated whitespace/order/protocol spelling cannot be recovered uniquely; counts and hashes are evidence, not identity proof. Canonicalization of malformed tool names is not proof of exact malformed native bytes.",
+      "native_message_indices": [
+        164
+      ],
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "native_seed": null,
+      "diagnostic_seeds": [
+        42,
+        43,
+        44
+      ]
+    },
+    {
+      "task": "matplotlib__matplotlib-20488",
+      "call": 86,
+      "response_id": "chatcmpl-aab46840cb312ffd",
+      "private_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-protocol-scan83-controls/matplotlib__matplotlib-20488.call86.onset.private.json",
+      "private_case_sha256": "c11bb5890af7b0166bbbb61c44a3200e58aa3eb4b509403759fbb162ae58d179",
+      "raw_packet": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/protocol-scan83-archive/matplotlib__matplotlib-20488.call86.packet.private.json",
+      "raw_packet_sha256": "674e39f234ccb1c10a265def5263f22152fb5e11ad5c29c6843866e37e29c6d5",
+      "native_prompt_tokens": 46113,
+      "reconstructed_request_prompt_tokens": 46112,
+      "native_reply_tokens": 218,
+      "reconstructed_reply_tokens": 220,
+      "conditioning_tokens": 46118,
+      "onset_positions": 64,
+      "onset_token_index": 6,
+      "motif": "I've\u2019ve",
+      "evidence": "Repeated contraction suffixes in reasoning; distinct response from existing raw88/91 controls.",
+      "limitations": "Exact request body with historical JSON tool arguments deserialized for pinned template. Reply reconstructed as canonical thought header, complete saved reasoning, channel boundary, complete visible content, canonical tool-call macros from pinned template, native stop ID. No native token IDs: generated whitespace/order/protocol spelling cannot be recovered uniquely; counts and hashes are evidence, not identity proof. Canonicalization of malformed tool names is not proof of exact malformed native bytes.",
+      "native_message_indices": [
+        172
+      ],
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "native_seed": null,
+      "diagnostic_seeds": [
+        42,
+        43,
+        44
+      ]
+    },
+    {
+      "task": "sphinx-doc__sphinx-9461",
+      "call": 184,
+      "response_id": "chatcmpl-80fe7f87395c1dc1",
+      "private_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-protocol-scan83-controls/sphinx-doc__sphinx-9461.call184.onset.private.json",
+      "private_case_sha256": "4334a4d9557ddbd3e9fd41ff8caaa073d270ae45c2498827c511a23ae60caac3",
+      "raw_packet": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/protocol-scan83-archive/sphinx-doc__sphinx-9461.call184.packet.private.json",
+      "raw_packet_sha256": "dd32201c1a3ba44dbcfd317478fbec34effbadc66ca95199d992a3fe690aeed3",
+      "native_prompt_tokens": 71428,
+      "reconstructed_request_prompt_tokens": 71427,
+      "native_reply_tokens": 731,
+      "reconstructed_reply_tokens": 637,
+      "conditioning_tokens": 71843,
+      "onset_positions": 64,
+      "onset_token_index": 416,
+      "motif": "bash,command:",
+      "evidence": "Malformed function name embeds comma/command/shell source, discarded from native trajectory. Canonical name serialization is reconstructed, native delimiter/order unknown.",
+      "limitations": "Exact request body with historical JSON tool arguments deserialized for pinned template. Reply reconstructed as canonical thought header, complete saved reasoning, channel boundary, complete visible content, canonical tool-call macros from pinned template, native stop ID. No native token IDs: generated whitespace/order/protocol spelling cannot be recovered uniquely; counts and hashes are evidence, not identity proof. Canonicalization of malformed tool names is not proof of exact malformed native bytes.",
+      "native_message_indices": [],
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "native_seed": null,
+      "diagnostic_seeds": [
+        42,
+        43,
+        44
+      ]
+    },
+    {
+      "task": "sympy__sympy-14711",
+      "call": 1,
+      "response_id": "chatcmpl-9e6a10ba411fd15d",
+      "private_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-protocol-scan83-controls/sympy__sympy-14711.call1.onset.private.json",
+      "private_case_sha256": "30151a4ad6ba3f457477b50bbb7d8817b24944e8e57242c10b1f494f4697d6e5",
+      "raw_packet": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/protocol-scan83-archive/sympy__sympy-14711.call1.packet.private.json",
+      "raw_packet_sha256": "779037311ecd8acecccd7e5b6590eb6e2a9ff8461712512b8d23c629693f2c08",
+      "native_prompt_tokens": 1154,
+      "reconstructed_request_prompt_tokens": 1153,
+      "native_reply_tokens": 324,
+      "reconstructed_reply_tokens": 319,
+      "conditioning_tokens": 1351,
+      "onset_positions": 64,
+      "onset_token_index": 198,
+      "motif": "this.thought",
+      "evidence": "First stray literal thought at end of reasoning before visible GetAll-bash; valid structured bash tool also present. Canonical parser-field order is assumed, not exact generated-stream evidence. Passed task score unchanged.",
+      "limitations": "Exact request body with historical JSON tool arguments deserialized for pinned template. Reply reconstructed as canonical thought header, complete saved reasoning, channel boundary, complete visible content, canonical tool-call macros from pinned template, native stop ID. No native token IDs: generated whitespace/order/protocol spelling cannot be recovered uniquely; counts and hashes are evidence, not identity proof. Canonicalization of malformed tool names is not proof of exact malformed native bytes.",
+      "native_message_indices": [
+        2
+      ],
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "native_seed": null,
+      "diagnostic_seeds": [
+        42,
+        43,
+        44
+      ]
+    }
+  ],
+  "cpu_validation": [
+    {
+      "mode": "served",
+      "config": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/head_bfp8_build_kwargs.json",
+      "config_sha256": "2e583fa8bd7aff7c5f8be110835df751924d167243c5a44a68aa5b3d70c6845f",
+      "exit_code": 0,
+      "stdout": "Validated 4 jobs without importing TTNN"
+    },
+    {
+      "mode": "full",
+      "config": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_build_kwargs.json",
+      "config_sha256": "ff2b5ed24e0b6a1dee7eb5cd8bd437d17c3df5f8f25567927d239e666f0699f9",
+      "exit_code": 0,
+      "stdout": "Validated 4 jobs without importing TTNN"
+    }
+  ],
+  "commands_staged_only": {
+    "served": [
+      "python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tools.precision_repro_batch",
+      "--cases",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-protocol-scan83-controls/cases.json",
+      "--build-kwargs-file",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/head_bfp8_build_kwargs.json",
+      "--output-dir",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-protocol-scan83-controls/served"
+    ],
+    "full": [
+      "python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tools.precision_repro_batch",
+      "--cases",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-protocol-scan83-controls/cases.json",
+      "--build-kwargs-file",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_build_kwargs.json",
+      "--output-dir",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-protocol-scan83-controls/full",
+      "--compare-dir",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-protocol-scan83-controls/served"
+    ]
+  },
+  "no_inference": true,
+  "phase_scope": "Anomaly controls independent of later wrong-action controls; no score or corrected answer claim.",
+  "admission": "Separate candidate fixtures only; root rosters/results/pending untouched, no inference or score change.",
+  "matplotlib_existing_response_ids": {
+    "88": "chatcmpl-b94619e0f18340df",
+    "91": "chatcmpl-ace39fa0a8684d0d"
+  }
+}

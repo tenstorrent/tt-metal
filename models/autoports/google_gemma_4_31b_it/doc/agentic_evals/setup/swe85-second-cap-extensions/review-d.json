@@ -1,0 +1,54 @@
+{
+  "status": "reviewed_fixture_validity_and_forecast_only; no admission_or_stage_signoff",
+  "scope": "Independent CPU-only review of refreshed second-cap extension fixtures, selection provenance, runner validation record, and cost forecast. No fixture edits, commands that import TTNN, or device launch.",
+  "selection": {
+    "expected_source_rule": "All unique coordinator rows in setup/swe85-cap-extensions with verdict=inconclusive and tokens=512, deduplicated by mode/source_job/seed.",
+    "result": "Exact match across the current coordinator files: 14 served and 24 full selected; all 38 source result/fixture/coordinator SHA-256 references in provenance verified.",
+    "fixture_checks": "Every candidate preserved its cap512 source prompt_token_ids, chosen continuation IDs, sampling values, and matched seed. Candidate metadata records previous_cap=512/new_cap=1024. Both execution manifests use branches=[], free_run_tokens=1024, free_run_trials=1.",
+    "source_hashes": "Each provenance source case/result/coordinator hash, candidate fixture hash, and cap-extension source_case_sha256 was checked against disk."
+  },
+  "cpu_validation": {
+    "status": "passed as recorded",
+    "checks": "Served runner validate-only returned 0 for 14 jobs; full returned 0 for 24 jobs; stdout states validation without importing TTNN.",
+    "no_device_work_performed": true
+  },
+  "forecast": {
+    "formula_rechecked": "Per selected source free run: overhead = diagnostic_wall_s_including_prefill - decode_wall_s; projected decode = decode_wall_s * 1023 / decode_tokens (511 for all rows); case work = overhead + projected decode. Add max same-mode measured model load once and fixed 180 s first-preparation allowance. Range scales case-work sum by 0.7 and 1.5, then adds the same fixed load/preparation.",
+    "served": {
+      "jobs": 14,
+      "case_work_sum_s": 684.7770472573328,
+      "load_s": 144.17307648900896,
+      "first_preparation_allowance_s": 180,
+      "total_s": 1008.9501237463418,
+      "range_s": [
+        803.5170095691419,
+        1351.3386473750081
+      ]
+    },
+    "full": {
+      "jobs": 24,
+      "case_work_sum_s": 2236.1826695152436,
+      "load_s": 78.36897834506817,
+      "first_preparation_allowance_s": 180,
+      "total_s": 2494.5516478603117,
+      "range_s": [
+        1823.6968470057386,
+        3612.6429826179337
+      ]
+    },
+    "first_preparation_assumption": "The 180 s allowance is counted once as a fixed planning margin; it is not a measured second-cap warmup duration. The forecast labels itself planning-only, so this is an explicit assumption rather than a measured performance claim.",
+    "timeout_note": "The full upper estimate is 12.643 s above 3600 s; a 5400 s full timeout retains headroom over the stated forecast interval."
+  },
+  "findings": [],
+  "limitations": [
+    "Preparation validity review only; no semantic review of second-cap output because it has not run.",
+    "No admission or stage signoff."
+  ],
+  "reviewed_hashes": {
+    "provenance.json": "71e9d731b2a634eeee2633630682ec7edc950537e716fdf619070cb603562d1a",
+    "served-candidate-cases.json": "cb3539c6840e49ebb706137a976d7270a5311dace69f706a630cb87108d7035b",
+    "full-candidate-cases.json": "7a0be64c09c0bccf55a5a5adefc759bdc441184e4bd93a2077c08ee674ee7899",
+    "cost-estimate.json": "e02d1e23e92665d6fd5a39808cabc1385ddc04f0749f32ab5561a53084c1271f",
+    "host-validation.json": "4274dccc3f42886299c5f6d50836821ff17432e7c35f5723a9db7283e2a67776"
+  }
+}

@@ -1,0 +1,326 @@
+[
+  {
+    "name": "anomaly.sympy__sympy-13480.call1.onset",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-sympy13480-controls/sympy__sympy-13480.call1.onset.private.json",
+    "branches": [
+      "chosen"
+    ],
+    "free_run_tokens": 256,
+    "free_run_trials": 3
+  },
+  {
+    "name": "anomaly.sympy__sympy-13551.call1.onset",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-sympy13551-controls/sympy__sympy-13551.call1.onset.private.json",
+    "branches": [
+      "chosen"
+    ],
+    "free_run_tokens": 256,
+    "free_run_trials": 3
+  },
+  {
+    "name": "anomaly.psf__requests-1921.call1.onset",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-getall-call1-controls/psf__requests-1921.call1.onset.private.json",
+    "branches": [
+      "chosen"
+    ],
+    "free_run_tokens": 256,
+    "free_run_trials": 3
+  },
+  {
+    "name": "anomaly.sympy__sympy-18763.call1.onset",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-18763-7432-controls/sympy__sympy-18763.call1.onset.private.json",
+    "branches": [
+      "chosen"
+    ],
+    "free_run_tokens": 256,
+    "free_run_trials": 3
+  },
+  {
+    "name": "anomaly.pylint-dev__pylint-4551.call1.onset",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-getall-call1-controls/pylint-dev__pylint-4551.call1.onset.private.json",
+    "branches": [
+      "chosen"
+    ],
+    "free_run_tokens": 256,
+    "free_run_trials": 3
+  },
+  {
+    "name": "anomaly.sympy__sympy-14711.call1.onset",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-protocol-scan83-controls/sympy__sympy-14711.call1.onset.private.json",
+    "branches": [
+      "chosen"
+    ],
+    "free_run_tokens": 256,
+    "free_run_trials": 3
+  },
+  {
+    "name": "anomaly.xarray7233-call1.canonicalprefix",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-precision/xarray7233-call1/canonicalprefix/case.private.json",
+    "branches": [
+      "chosen"
+    ],
+    "free_run_tokens": 256,
+    "free_run_trials": 3
+  },
+  {
+    "name": "anomaly.sympy__sympy-13878.call1.onset",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-sympy13878-controls/sympy__sympy-13878.call1.onset.private.json",
+    "branches": [
+      "chosen"
+    ],
+    "free_run_tokens": 256,
+    "free_run_trials": 3
+  },
+  {
+    "name": "anomaly.sympy__sympy-18763.call10.onset",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-18763-7432-controls/sympy__sympy-18763.call10.onset.private.json",
+    "branches": [
+      "chosen"
+    ],
+    "free_run_tokens": 256,
+    "free_run_trials": 3
+  },
+  {
+    "name": "anomaly.psf__requests-5414.call10.onset",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-requests5414-caret-controls/psf__requests-5414.call10.onset.private.json",
+    "branches": [
+      "chosen"
+    ],
+    "free_run_tokens": 256,
+    "free_run_trials": 3
+  },
+  {
+    "name": "anomaly.psf__requests-5414.call11.onset",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-requests5414-caret-controls/psf__requests-5414.call11.onset.private.json",
+    "branches": [
+      "chosen"
+    ],
+    "free_run_tokens": 256,
+    "free_run_trials": 3
+  },
+  {
+    "name": "anomaly.psf__requests-5414.call9.onset",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-requests5414-caret-controls/psf__requests-5414.call9.onset.private.json",
+    "branches": [
+      "chosen"
+    ],
+    "free_run_tokens": 256,
+    "free_run_trials": 3
+  },
+  {
+    "name": "anomaly.requests2931.call20.canonicalprefix",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-precision/requests2931-call20/canonicalprefix/case.private.json",
+    "branches": [
+      "chosen"
+    ],
+    "free_run_tokens": 256,
+    "free_run_trials": 3
+  },
+  {
+    "name": "anomaly.pytest-dev__pytest-5787.call1.onset",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-pytest5787-controls/pytest-dev__pytest-5787.call1.onset.private.json",
+    "branches": [
+      "chosen"
+    ],
+    "free_run_tokens": 256,
+    "free_run_trials": 3
+  },
+  {
+    "name": "anomaly.pytest-dev__pytest-7432.call19.onset",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-18763-7432-controls/pytest-dev__pytest-7432.call19.onset.private.json",
+    "branches": [
+      "chosen"
+    ],
+    "free_run_tokens": 256,
+    "free_run_trials": 3
+  },
+  {
+    "name": "anomaly.pytest10356-call14.canonicalprefix",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-precision/pytest10356-call14/canonicalprefix/case.private.json",
+    "branches": [
+      "chosen"
+    ],
+    "free_run_tokens": 256,
+    "free_run_trials": 3
+  },
+  {
+    "name": "anomaly.scikit-learn__scikit-learn-13135.call29.onset",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-extra-contraction-controls/scikit-learn__scikit-learn-13135.call29.onset.private.json",
+    "branches": [
+      "chosen"
+    ],
+    "free_run_tokens": 256,
+    "free_run_trials": 3
+  },
+  {
+    "name": "anomaly.sphinx-doc__sphinx-11510.call28.onset",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-sphinx11510-controls/sphinx-doc__sphinx-11510.call28.onset.private.json",
+    "branches": [
+      "chosen"
+    ],
+    "free_run_tokens": 256,
+    "free_run_trials": 3
+  },
+  {
+    "name": "anomaly.sympy__sympy-14248.call53.onset",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-sympy14248-caret-controls/sympy__sympy-14248.call53.onset.private.json",
+    "branches": [
+      "chosen"
+    ],
+    "free_run_tokens": 256,
+    "free_run_trials": 3
+  },
+  {
+    "name": "anomaly.xarray3095-call53.canonicalprefix",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-precision/xarray3095-call53/canonicalprefix/case.private.json",
+    "branches": [
+      "chosen"
+    ],
+    "free_run_tokens": 256,
+    "free_run_trials": 3
+  },
+  {
+    "name": "anomaly.pylint-dev__pylint-4604.call45.onset",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-extra-contraction-controls/pylint-dev__pylint-4604.call45.onset.private.json",
+    "branches": [
+      "chosen"
+    ],
+    "free_run_tokens": 256,
+    "free_run_trials": 3
+  },
+  {
+    "name": "anomaly.matplotlib__matplotlib-20488.call82.onset",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-protocol-scan83-controls/matplotlib__matplotlib-20488.call82.onset.private.json",
+    "branches": [
+      "chosen"
+    ],
+    "free_run_tokens": 256,
+    "free_run_trials": 3
+  },
+  {
+    "name": "anomaly.matplotlib__matplotlib-20488.call86.onset",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-protocol-scan83-controls/matplotlib__matplotlib-20488.call86.onset.private.json",
+    "branches": [
+      "chosen"
+    ],
+    "free_run_tokens": 256,
+    "free_run_trials": 3
+  },
+  {
+    "name": "anomaly.call88.canonicalprefix",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-precision/call88/canonicalprefix/case.private.json",
+    "branches": [
+      "chosen"
+    ],
+    "free_run_tokens": 256,
+    "free_run_trials": 3
+  },
+  {
+    "name": "anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-sphinx11510-protocol-controls/sphinx-doc__sphinx-11510.call86.onset.private.json",
+    "branches": [
+      "chosen"
+    ],
+    "free_run_tokens": 256,
+    "free_run_trials": 3
+  },
+  {
+    "name": "anomaly.call91.canonicalprefix",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-precision/call91/canonicalprefix/case.private.json",
+    "branches": [
+      "chosen"
+    ],
+    "free_run_tokens": 256,
+    "free_run_trials": 3
+  },
+  {
+    "name": "anomaly.pytest-dev__pytest-5787.call65.onset",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-pytest5787-controls/pytest-dev__pytest-5787.call65.onset.private.json",
+    "branches": [
+      "chosen"
+    ],
+    "free_run_tokens": 256,
+    "free_run_trials": 3
+  },
+  {
+    "name": "anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-sphinx11510-protocol-controls/sphinx-doc__sphinx-11510.call95.onset.private.json",
+    "branches": [
+      "chosen"
+    ],
+    "free_run_tokens": 256,
+    "free_run_trials": 3
+  },
+  {
+    "name": "anomaly.sphinx-doc__sphinx-10323.call57.onset",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-extra-contraction-controls/sphinx-doc__sphinx-10323.call57.onset.private.json",
+    "branches": [
+      "chosen"
+    ],
+    "free_run_tokens": 256,
+    "free_run_trials": 3
+  },
+  {
+    "name": "anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-sphinx11510-contraction101-controls/sphinx-doc__sphinx-11510.call101.onset.private.json",
+    "branches": [
+      "chosen"
+    ],
+    "free_run_tokens": 256,
+    "free_run_trials": 3
+  },
+  {
+    "name": "anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-sphinx11510-protocol-controls/sphinx-doc__sphinx-11510.call101.onset.private.json",
+    "branches": [
+      "chosen"
+    ],
+    "free_run_tokens": 256,
+    "free_run_trials": 3
+  },
+  {
+    "name": "anomaly.sphinx-doc__sphinx-11510.call108.onset",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-sphinx11510-controls/sphinx-doc__sphinx-11510.call108.onset.private.json",
+    "branches": [
+      "chosen"
+    ],
+    "free_run_tokens": 256,
+    "free_run_trials": 3
+  },
+  {
+    "name": "anomaly.sphinx-doc__sphinx-10323.call68.onset",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-sphinx10323-controls/sphinx-doc__sphinx-10323.call68.onset.private.json",
+    "branches": [
+      "chosen"
+    ],
+    "free_run_tokens": 256,
+    "free_run_trials": 3
+  },
+  {
+    "name": "anomaly.sphinx-doc__sphinx-10323.call70.onset",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-extra-contraction-controls/sphinx-doc__sphinx-10323.call70.onset.private.json",
+    "branches": [
+      "chosen"
+    ],
+    "free_run_tokens": 256,
+    "free_run_trials": 3
+  },
+  {
+    "name": "anomaly.sphinx-doc__sphinx-9461.call184.onset",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-protocol-scan83-controls/sphinx-doc__sphinx-9461.call184.onset.private.json",
+    "branches": [
+      "chosen"
+    ],
+    "free_run_tokens": 256,
+    "free_run_trials": 3
+  },
+  {
+    "name": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-sphinx11510-protocol-controls/sphinx-doc__sphinx-11510.call119.onset.private.json",
+    "branches": [
+      "chosen"
+    ],
+    "free_run_tokens": 256,
+    "free_run_trials": 3
+  }
+]

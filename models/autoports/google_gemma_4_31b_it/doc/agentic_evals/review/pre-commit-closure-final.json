@@ -1,0 +1,8 @@
+{
+  "exit_code": 0,
+  "files": 2194,
+  "wall_seconds": 1.97172212600708,
+  "changed_files": [],
+  "scope": "Final canonical reconciliation and review included; offline cached repository hooks.",
+  "log": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/review/pre-commit-closure-final.log"
+}

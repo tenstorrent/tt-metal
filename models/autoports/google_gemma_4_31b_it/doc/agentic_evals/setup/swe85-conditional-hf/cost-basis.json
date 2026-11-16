@@ -1,0 +1,62 @@
+{
+  "status": "forecast_basis_only_no_admission",
+  "scope": "512-token prompt,512-token initial HF free continuation,chosen64 teacher forcing. Prior runner total_wall_s is cumulative from shared model load; differences used, never sums of cumulative times.",
+  "source_runs": [
+    {
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/results-seed42/task110.onset.suffix512.hf.private.json",
+      "sha256": "e9630f725bc6e06f245581df73d1052b33f38f1d112a34292259fe2174c19955",
+      "cumulative_wall_s": 1040.9491271490697,
+      "incremental_wall_s": 1040.9491271490697
+    },
+    {
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/results-seed42/task129.onset.suffix512.hf.private.json",
+      "sha256": "4168f23a08c1401a98ef8d431748295865f64efd8dfc44140316b2634d17f323",
+      "cumulative_wall_s": 2083.1052121161483,
+      "incremental_wall_s": 1042.1560849670786
+    },
+    {
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/results-seed42/task127.onset.suffix512.hf.private.json",
+      "sha256": "c81992e3fb7933d925f67f4c663bd5a028181cbf04c4bf8a47ac7e49c4775883",
+      "cumulative_wall_s": 3122.522552106995,
+      "incremental_wall_s": 1039.4173399908468
+    },
+    {
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/results-seed42/task130.onset.suffix512.hf.private.json",
+      "sha256": "a83843523f4809386a714c82b03850719a1b6a6a476efbd778463fbbc5d206a7",
+      "cumulative_wall_s": 4160.931156195002,
+      "incremental_wall_s": 1038.4086040880065
+    },
+    {
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/results-seed42/task145.onset.suffix512.hf.private.json",
+      "sha256": "4b5e45439b42749e9e8ace2f7ffb3ce0ff6b8f92b0654c2c1160b76c43de19db",
+      "cumulative_wall_s": 5198.0347312500235,
+      "incremental_wall_s": 1037.1035750550218
+    },
+    {
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/results-seed42/task30.onset.suffix512.hf.private.json",
+      "sha256": "5ead39af38b766849020368ebde875cabb634ff2ddb37e417182f1bc66d7435e",
+      "cumulative_wall_s": 6242.272907759063,
+      "incremental_wall_s": 1044.2381765090395
+    },
+    {
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/results-seed42/task48.onset.suffix512.hf.private.json",
+      "sha256": "87752935495b37993d04288a5b362bc85ddd96c23fa97c329d96049ca407a868",
+      "cumulative_wall_s": 7280.867431387072,
+      "incremental_wall_s": 1038.5945236280095
+    },
+    {
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/results-seed42/task139.onset.suffix512.hf.private.json",
+      "sha256": "c608b5079b6a5dff81b735f2561ac58ed7f58686439705b8f277b8f56cdc7753",
+      "cumulative_wall_s": 8322.225056060124,
+      "incremental_wall_s": 1041.3576246730518
+    }
+  ],
+  "median_incremental_s": 1040.1832335699582,
+  "range_per_case_s": [
+    800,
+    1600
+  ],
+  "batch_load_margin_s": 180,
+  "formula": "point_seconds=median_incremental_s*case_count+180; range_seconds=[800*case_count+180,1600*case_count+180]",
+  "limitations": "Different prompt contents and host load can change time; no cases admitted and memory check required at launch."
+}

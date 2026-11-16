@@ -1,0 +1,466 @@
+{
+  "status": "candidate_only_not_admitted_not_run",
+  "objective": "Compare HF reference on exact saved prompt IDs, actual sampled seed, and original free-generation cap for 14 unique full-mode diagnostic-other result files without exact HF coverage.",
+  "scope_limit": "Sampled-output comparison only; no score/cause decision; same-file trials at other seeds are not covered.",
+  "selection": {
+    "inventory_rows_total": 55,
+    "full_mode_inventory_rows": 28,
+    "distinct_full_mode_result_files_by_sha256": 16,
+    "deduplicate_key": "source_result_sha256",
+    "selected_result_files": 14,
+    "excluded_unique_result_files": [
+      {
+        "reason": "original long-context Sklearn13135 missing_tool sample handled separately; distinct from suffix512 secondary-loop SKHF cases",
+        "source_result_sha256": "08c859a53455468846ed0cd87dfe56233ebc9496ee3c0cfbfb464e88368c422f",
+        "inventory_rows": [
+          9,
+          11
+        ],
+        "job": "anomaly.scikit-learn__scikit-learn-13135.call29.onset",
+        "seed": 42,
+        "prompt_tokens": 17395,
+        "cap": 1024
+      },
+      {
+        "reason": "already exact HF9 prompt+seed+cap candidate match; do not duplicate",
+        "source_result_sha256": "079baccb97ee11584b68c0e69353c172f1dd976fcbfdf65df71d53d421fd3182",
+        "inventory_rows": [
+          39
+        ],
+        "job": "anomaly.sphinx-doc__sphinx-10323.call70.onset",
+        "seed": 43,
+        "prompt_tokens": 2048,
+        "cap": 512
+      }
+    ],
+    "inventory_rows_with_same_file_other_seeds_preserved_as_not_covered": true
+  },
+  "workload": {
+    "cases": 14,
+    "groups": 8,
+    "seed_rule": "Use one actual seed represented by the reviewed inventory row for each distinct file; no other seed coverage implied.",
+    "prompt_rule": "Exact saved prompt_token_ids with no render, retokenize, shortening, or padding.",
+    "chosen_rule": "min(64, exact saved chosen length); preserve37 where source has37.",
+    "cap_rule": "Original source cap512/1024/2048; one trial.",
+    "revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+    "offline": true,
+    "threads": 16,
+    "serial": true
+  },
+  "cases": [
+    {
+      "name": "other-r02-anomaly-psf-requests-5414-call11-o-s42-p2048-c2048",
+      "case_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-req5414-cap2048-after-v-candidate/fixtures/full/anomaly.psf__requests-5414.call11.onset.suffix2048.cap2048.seed42.private.json",
+      "case_sha256": "64c16cb0741ab60771f71f2d4900bd8acc0e12c5259d6aa7d4ec6e6041bd76b5",
+      "source_result_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-req5414-cap2048-after-v-candidate/runs/full/anomaly.psf__requests-5414.call11.onset.suffix2048.cap2048.seed42.json",
+      "source_result_sha256": "1ab58b7bb92a7ffdab0bede6798bdac95e0b2e309bbb923653e930cf89c4b466",
+      "source_inventory_rows_same_result_file": [
+        2,
+        52
+      ],
+      "covered_inventory_rows_exact_seed_cap": [
+        2,
+        52
+      ],
+      "same_file_other_seed_or_cap_refs_not_covered": [],
+      "job": "anomaly.psf__requests-5414.call11.onset",
+      "mode": "full",
+      "seed": 42,
+      "prompt_token_count": 2048,
+      "prompt_token_ids_sha256": "55fea04ac956c00e84884f04bf7e287a85e9d1a2b90794040070751161c968f0",
+      "source_chosen_token_count": 64,
+      "chosen_teacher_forcing_positions": 64,
+      "free_generation_cap_tokens": 2048,
+      "source_generated_token_count_for_this_seed": 1632,
+      "source_was_at_cap_for_this_seed": false,
+      "semantic_or_parser_evidence": "Read complete raw continuation. Distinct URL/IDNA reasoning, then channel boundary and fenced bash echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT followed by turn terminator, lacking canonical tool-call macro. Missing-tool protocol anomaly; stock parser confirmation requested. No affirmative repetition, no cap-based failure, no executed fix or submission.",
+      "input_rule": "Exact saved prompt_token_ids, no rerender/truncation/reconstruction. Root-reviewed sampled seed and original source cap; chosen positions use exact saved continuation up to64; one new trial."
+    },
+    {
+      "name": "other-r03-anomaly-psf-requests-5414-call10-o-s42-p2048-c512",
+      "case_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/fixtures/anomaly.psf__requests-5414.call10.onset.suffix2048.private.json",
+      "case_sha256": "4cb0ce0c350d029b506ecd31cd5df6a6f0a02a0c49f56761a478f7a1f6b4c781",
+      "source_result_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/runs/full/anomaly.psf__requests-5414.call10.onset.json",
+      "source_result_sha256": "1f34cd733be27e7e4c655da4dcf0fba30ac7c06fc83cca3753973dbae03263ff",
+      "source_inventory_rows_same_result_file": [
+        3,
+        36
+      ],
+      "covered_inventory_rows_exact_seed_cap": [
+        3,
+        36
+      ],
+      "same_file_other_seed_or_cap_refs_not_covered": [],
+      "job": "anomaly.psf__requests-5414.call10.onset",
+      "mode": "full",
+      "seed": 42,
+      "prompt_token_count": 2048,
+      "prompt_token_ids_sha256": "3fef6c6ee07f2a50e043b306b65ed88ec4052e0b8e95ca93149c952f059509d3",
+      "source_chosen_token_count": 64,
+      "chosen_teacher_forcing_positions": 64,
+      "free_generation_cap_tokens": 512,
+      "source_generated_token_count_for_this_seed": 500,
+      "source_was_at_cap_for_this_seed": false,
+      "semantic_or_parser_evidence": "Coherent host-validation analysis ends with fenced JSON command rather than canonical tool invocation; pinned stock parser with actual request and assistant prefix extracts no structured tool calls. Confirmed missing_tool protocol anomaly, no native ellipsis burst.",
+      "input_rule": "Exact saved prompt_token_ids, no rerender/truncation/reconstruction. Root-reviewed sampled seed and original source cap; chosen positions use exact saved continuation up to64; one new trial."
+    },
+    {
+      "name": "other-r04-anomaly-psf-requests-5414-call11-o-s43-p2048-c1024",
+      "case_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-candidate/fixtures/full/anomaly.psf__requests-5414.call11.onset.suffix2048.cap1024.seed43.private.json",
+      "case_sha256": "d2f703cc3d29b89d2edbabfe9036ed36c070c095b362b0d5808b106997a40cef",
+      "source_result_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-execution-candidate/runs/full/anomaly.psf__requests-5414.call11.onset.suffix2048.cap1024.seed43.json",
+      "source_result_sha256": "c149400e2e974fbefcdfae71c8fd2c7179b4c711e44bc6c330eb6ebacf5294d7",
+      "source_inventory_rows_same_result_file": [
+        4,
+        43
+      ],
+      "covered_inventory_rows_exact_seed_cap": [
+        4,
+        43
+      ],
+      "same_file_other_seed_or_cap_refs_not_covered": [],
+      "job": "anomaly.psf__requests-5414.call11.onset",
+      "mode": "full",
+      "seed": 43,
+      "prompt_token_count": 2048,
+      "prompt_token_ids_sha256": "55fea04ac956c00e84884f04bf7e287a85e9d1a2b90794040070751161c968f0",
+      "source_chosen_token_count": 64,
+      "chosen_teacher_forcing_positions": 64,
+      "free_generation_cap_tokens": 1024,
+      "source_generated_token_count_for_this_seed": 1024,
+      "source_was_at_cap_for_this_seed": true,
+      "semantic_or_parser_evidence": "Prefix ends existing traceback return six.raise_from. Generated own immediately before urllib3.exceptions.LocationParseError is an unrelated stray word in traceback text. Later reasoning varies and reaches cap, but the affirmative stray-token anomaly is independent of that cap; no native sustained ellipsis motif. Prior512 root review missed this localized token; immutable source remains, independent correction review requested.",
+      "input_rule": "Exact saved prompt_token_ids, no rerender/truncation/reconstruction. Root-reviewed sampled seed and original source cap; chosen positions use exact saved continuation up to64; one new trial."
+    },
+    {
+      "name": "other-r06-anomaly-call91-canonicalprefix-s42-p4096-c512",
+      "case_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/fixtures/anomaly.call91.canonicalprefix.suffix4096.seed42.full.private.json",
+      "case_sha256": "3c0b7d82cc4f4e627cc65415002c9e5113237c3e83c66fbaaa4813a2f48726e4",
+      "source_result_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/runs/full/anomaly.call91.canonicalprefix.suffix4096.seed42.json",
+      "source_result_sha256": "395c749ff59a128749ec3606ada859cca84798e9be3cc73a67bbeac539eee3b4",
+      "source_inventory_rows_same_result_file": [
+        6,
+        49
+      ],
+      "covered_inventory_rows_exact_seed_cap": [
+        6,
+        49
+      ],
+      "same_file_other_seed_or_cap_refs_not_covered": [],
+      "job": "anomaly.call91.canonicalprefix",
+      "mode": "full",
+      "seed": 42,
+      "prompt_token_count": 4096,
+      "prompt_token_ids_sha256": "599ff7baf303265cf5e084f020d9f7937e5ead8f34fdbef82cc0127c0267c5c7",
+      "source_chosen_token_count": 64,
+      "chosen_teacher_forcing_positions": 64,
+      "free_generation_cap_tokens": 512,
+      "source_generated_token_count_for_this_seed": 39,
+      "source_was_at_cap_for_this_seed": false,
+      "semantic_or_parser_evidence": "Conditioned Since Ive + really messed it up is grammatical, but the invented phrase a's la's la's l's logic is localized nonsensical token repetition before command close. Not the original duplicated-ve motif.",
+      "input_rule": "Exact saved prompt_token_ids, no rerender/truncation/reconstruction. Root-reviewed sampled seed and original source cap; chosen positions use exact saved continuation up to64; one new trial."
+    },
+    {
+      "name": "other-r07-anomaly-sphinx-doc-sphinx-10323-ca-s44-p4096-c512",
+      "case_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/fixtures/anomaly.sphinx-doc__sphinx-10323.call70.onset.suffix4096.seed44.full.private.json",
+      "case_sha256": "05f781687dd299562714596868b1744ebca8300330e730a23db118e841d27f40",
+      "source_result_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/runs/full/anomaly.sphinx-doc__sphinx-10323.call70.onset.suffix4096.seed44.json",
+      "source_result_sha256": "c193e6752a5481dd12dfc3e5942b8d687e15bd58f4660dddc252ec6dd49aead0",
+      "source_inventory_rows_same_result_file": [
+        7,
+        50
+      ],
+      "covered_inventory_rows_exact_seed_cap": [
+        7,
+        50
+      ],
+      "same_file_other_seed_or_cap_refs_not_covered": [],
+      "job": "anomaly.sphinx-doc__sphinx-10323.call70.onset",
+      "mode": "full",
+      "seed": 44,
+      "prompt_token_count": 4096,
+      "prompt_token_ids_sha256": "40a8ba37dc728b1e0a0197fe434ed9d2b5982433ac98e01f1b2cd27ab92afec5",
+      "source_chosen_token_count": 37,
+      "chosen_teacher_forcing_positions": 37,
+      "free_generation_cap_tokens": 512,
+      "source_generated_token_count_for_this_seed": 512,
+      "source_was_at_cap_for_this_seed": true,
+      "semantic_or_parser_evidence": "Canonical tool starts after grammatical Ive tried, then hundreds of C/ fragments repeat inside sed replacement until512. Affirmative token loop, not the original contraction motif; not a cap-based task failure.",
+      "input_rule": "Exact saved prompt_token_ids, no rerender/truncation/reconstruction. Root-reviewed sampled seed and original source cap; chosen positions use exact saved continuation up to64; one new trial."
+    },
+    {
+      "name": "other-r13-anomaly-psf-requests-5414-call10-o-s42-p1024-c512",
+      "case_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/fixtures/anomaly.psf__requests-5414.call10.onset.suffix1024.private.json",
+      "case_sha256": "2d8bee7e1640381dcb31e7213e9f3d4ae020303e3e8c1bdb0f750f1714f5e3a2",
+      "source_result_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/full/anomaly.psf__requests-5414.call10.onset.json",
+      "source_result_sha256": "09a4a0cf9159ccdafa8913902f0b53f63c337f33720ea559228c51877a4f90dd",
+      "source_inventory_rows_same_result_file": [
+        13,
+        14,
+        15
+      ],
+      "covered_inventory_rows_exact_seed_cap": [
+        13
+      ],
+      "same_file_other_seed_or_cap_refs_not_covered": [
+        14,
+        15
+      ],
+      "job": "anomaly.psf__requests-5414.call10.onset",
+      "mode": "full",
+      "seed": 42,
+      "prompt_token_count": 1024,
+      "prompt_token_ids_sha256": "1779ea98a42edb0f4e4102b567522c6ec2b25e4f81a88c148e2a9f3ac04f3a6c",
+      "source_chosen_token_count": 64,
+      "chosen_teacher_forcing_positions": 64,
+      "free_generation_cap_tokens": 512,
+      "source_generated_token_count_for_this_seed": 512,
+      "source_was_at_cap_for_this_seed": true,
+      "semantic_or_parser_evidence": "Unbounded repeated indented _create_connection calls.",
+      "input_rule": "Exact saved prompt_token_ids, no rerender/truncation/reconstruction. Root-reviewed sampled seed and original source cap; chosen positions use exact saved continuation up to64; one new trial."
+    },
+    {
+      "name": "other-r16-anomaly-psf-requests-5414-call11-o-s44-p1024-c512",
+      "case_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/fixtures/anomaly.psf__requests-5414.call11.onset.suffix1024.private.json",
+      "case_sha256": "069a6794c0474028161f64153453577e07bc1cbde4690d0e77cef0286214ab65",
+      "source_result_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/full/anomaly.psf__requests-5414.call11.onset.json",
+      "source_result_sha256": "6a22257dbe5b30dec221560fc555e6331e83891872d9e274b89be6b293718b82",
+      "source_inventory_rows_same_result_file": [
+        16,
+        19
+      ],
+      "covered_inventory_rows_exact_seed_cap": [
+        16
+      ],
+      "same_file_other_seed_or_cap_refs_not_covered": [
+        19
+      ],
+      "job": "anomaly.psf__requests-5414.call11.onset",
+      "mode": "full",
+      "seed": 44,
+      "prompt_token_count": 1024,
+      "prompt_token_ids_sha256": "4625c1c415385637a34f99ed1d9922854765d3e23c7ede68cf627c92bfb4a20f",
+      "source_chosen_token_count": 64,
+      "chosen_teacher_forcing_positions": 64,
+      "free_generation_cap_tokens": 512,
+      "source_generated_token_count_for_this_seed": 512,
+      "source_was_at_cap_for_this_seed": true,
+      "semantic_or_parser_evidence": "Repeats None argument lines without bound.",
+      "input_rule": "Exact saved prompt_token_ids, no rerender/truncation/reconstruction. Root-reviewed sampled seed and original source cap; chosen positions use exact saved continuation up to64; one new trial."
+    },
+    {
+      "name": "other-r20-anomaly-sphinx-doc-sphinx-10323-ca-s42-p1024-c512",
+      "case_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/fixtures/anomaly.sphinx-doc__sphinx-10323.call70.onset.suffix1024.private.json",
+      "case_sha256": "8d6aaf26c98664977dad85a0771fceb905582caa5b5700f1d2cd0f66f755f051",
+      "source_result_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/full/anomaly.sphinx-doc__sphinx-10323.call70.onset.json",
+      "source_result_sha256": "a441ba44ab8294f359c1ea864d045cc4e6fb5d123930684db4b02ee3c1749f77",
+      "source_inventory_rows_same_result_file": [
+        20,
+        21,
+        22
+      ],
+      "covered_inventory_rows_exact_seed_cap": [
+        20
+      ],
+      "same_file_other_seed_or_cap_refs_not_covered": [
+        21,
+        22
+      ],
+      "job": "anomaly.sphinx-doc__sphinx-10323.call70.onset",
+      "mode": "full",
+      "seed": 42,
+      "prompt_token_count": 1024,
+      "prompt_token_ids_sha256": "02ac4ec34fed94d58ef3cd68a516c2f2abd12da80453e0cfeeb6635c55012778",
+      "source_chosen_token_count": 37,
+      "chosen_teacher_forcing_positions": 37,
+      "free_generation_cap_tokens": 512,
+      "source_generated_token_count_for_this_seed": 200,
+      "source_was_at_cap_for_this_seed": false,
+      "semantic_or_parser_evidence": "Stock parser confirms missing structured bash tool.",
+      "input_rule": "Exact saved prompt_token_ids, no rerender/truncation/reconstruction. Root-reviewed sampled seed and original source cap; chosen positions use exact saved continuation up to64; one new trial."
+    },
+    {
+      "name": "other-r27-anomaly-matplotlib-matplotlib-2048-s43-p1024-c512",
+      "case_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/fixtures/anomaly.matplotlib__matplotlib-20488.call86.onset.suffix1024.private.json",
+      "case_sha256": "56a0d881cd7c275743511dd2ac716c2755c913cbc014e7c9c1dd0713ce46a283",
+      "source_result_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/full/anomaly.matplotlib__matplotlib-20488.call86.onset.json",
+      "source_result_sha256": "a2dc3012fc83468f00dd3dfc66c82c940c093b5b2c6c72c4a7a1bfd09631e7a9",
+      "source_inventory_rows_same_result_file": [
+        27,
+        28
+      ],
+      "covered_inventory_rows_exact_seed_cap": [
+        27
+      ],
+      "same_file_other_seed_or_cap_refs_not_covered": [
+        28
+      ],
+      "job": "anomaly.matplotlib__matplotlib-20488.call86.onset",
+      "mode": "full",
+      "seed": 43,
+      "prompt_token_count": 1024,
+      "prompt_token_ids_sha256": "640a9ea157bdebc13e93b32a8b2bae5e39c7737b8334b8de7bdfe891b3961e6b",
+      "source_chosen_token_count": 64,
+      "chosen_teacher_forcing_positions": 64,
+      "free_generation_cap_tokens": 512,
+      "source_generated_token_count_for_this_seed": 512,
+      "source_was_at_cap_for_this_seed": true,
+      "semantic_or_parser_evidence": "Repeated unchanged proposed replacement paragraphs.",
+      "input_rule": "Exact saved prompt_token_ids, no rerender/truncation/reconstruction. Root-reviewed sampled seed and original source cap; chosen positions use exact saved continuation up to64; one new trial."
+    },
+    {
+      "name": "other-r35-anomaly-psf-requests-5414-call11-o-s42-p1024-c1024",
+      "case_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024-progressing-candidate/fixtures/anomaly.psf__requests-5414.call11.onset.suffix1024.cap1024.seed42.private.json",
+      "case_sha256": "7ea1fe684ccda8d471948d9decc4350fb2efa70d3257eba5a63d0f124313369a",
+      "source_result_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024-progressing-candidate/runs/full/anomaly.psf__requests-5414.call11.onset.suffix1024.cap1024.seed42.json",
+      "source_result_sha256": "e68faadf21170a73cde0c3fa445ba88efc216fd76be711ccb2ab5d9050680409",
+      "source_inventory_rows_same_result_file": [
+        35
+      ],
+      "covered_inventory_rows_exact_seed_cap": [
+        35
+      ],
+      "same_file_other_seed_or_cap_refs_not_covered": [],
+      "job": "anomaly.psf__requests-5414.call11.onset.suffix1024.cap1024.seed42",
+      "mode": "full",
+      "seed": 42,
+      "prompt_token_count": 1024,
+      "prompt_token_ids_sha256": "4625c1c415385637a34f99ed1d9922854765d3e23c7ede68cf627c92bfb4a20f",
+      "source_chosen_token_count": 64,
+      "chosen_teacher_forcing_positions": 64,
+      "free_generation_cap_tokens": 1024,
+      "source_generated_token_count_for_this_seed": 733,
+      "source_was_at_cap_for_this_seed": false,
+      "semantic_or_parser_evidence": "Coherent diagnostic reasoning completes but emitted call:bash: JSON-style macro parses as disallowed bash: and lacks string command. Affirmative protocol anomaly, native ellipsis burst absent, no cap-based failure.",
+      "input_rule": "Exact saved prompt_token_ids, no rerender/truncation/reconstruction. Root-reviewed sampled seed and original source cap; chosen positions use exact saved continuation up to64; one new trial."
+    },
+    {
+      "name": "other-r41-models-autoports-google-gemma-4-31-s43-p2048-c1024",
+      "case_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-candidate/fixtures/full/anomaly.psf__requests-5414.call10.onset.suffix2048.cap1024.seed43.private.json",
+      "case_sha256": "3c0862e806b31c9059065202c03fc559279a036957d53e853c4cf5460ba19dee",
+      "source_result_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-execution-candidate/runs/full/anomaly.psf__requests-5414.call10.onset.suffix2048.cap1024.seed43.json",
+      "source_result_sha256": "5c4660236e54304af472b9ae8d1c572d663bfbf0ede40ac9a17cb9551a2f3a0e",
+      "source_inventory_rows_same_result_file": [
+        41
+      ],
+      "covered_inventory_rows_exact_seed_cap": [
+        41
+      ],
+      "same_file_other_seed_or_cap_refs_not_covered": [],
+      "job": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-candidate/fixtures/full/anomaly.psf__requests-5414.call10.onset.suffix2048.cap1024.seed43.private.json",
+      "mode": "full",
+      "seed": 43,
+      "prompt_token_count": 2048,
+      "prompt_token_ids_sha256": "3fef6c6ee07f2a50e043b306b65ed88ec4052e0b8e95ca93149c952f059509d3",
+      "source_chosen_token_count": 64,
+      "chosen_teacher_forcing_positions": 64,
+      "free_generation_cap_tokens": 1024,
+      "source_generated_token_count_for_this_seed": 975,
+      "source_was_at_cap_for_this_seed": false,
+      "semantic_or_parser_evidence": "Coherent URL/IDNA reasoning ends with fenced bash after channel separator, without canonical call:bash tool opening. Conditioned prefix is thought+traceback, not an open tool call. Missing-tool protocol anomaly; stock parser confirms zero structured tool calls. No sustained native ellipsis motif.",
+      "input_rule": "Exact saved prompt_token_ids, no rerender/truncation/reconstruction. Root-reviewed sampled seed and original source cap; chosen positions use exact saved continuation up to64; one new trial."
+    },
+    {
+      "name": "other-r42-models-autoports-google-gemma-4-31-s44-p2048-c1024",
+      "case_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-candidate/fixtures/full/anomaly.psf__requests-5414.call10.onset.suffix2048.cap1024.seed44.private.json",
+      "case_sha256": "2115c3bdecbfc57e014b8c779edca64f4601a0470b0e68d8c516a5e9e28490cf",
+      "source_result_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-execution-candidate/runs/full/anomaly.psf__requests-5414.call10.onset.suffix2048.cap1024.seed44.json",
+      "source_result_sha256": "123f151deade6d8ceb86ef7103a1c32c4176606b84109368ca2ba80f869be8c6",
+      "source_inventory_rows_same_result_file": [
+        42
+      ],
+      "covered_inventory_rows_exact_seed_cap": [
+        42
+      ],
+      "same_file_other_seed_or_cap_refs_not_covered": [],
+      "job": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-candidate/fixtures/full/anomaly.psf__requests-5414.call10.onset.suffix2048.cap1024.seed44.private.json",
+      "mode": "full",
+      "seed": 44,
+      "prompt_token_count": 2048,
+      "prompt_token_ids_sha256": "3fef6c6ee07f2a50e043b306b65ed88ec4052e0b8e95ca93149c952f059509d3",
+      "source_chosen_token_count": 64,
+      "chosen_teacher_forcing_positions": 64,
+      "free_generation_cap_tokens": 1024,
+      "source_generated_token_count_for_this_seed": 626,
+      "source_was_at_cap_for_this_seed": false,
+      "semantic_or_parser_evidence": "Coherent URL/IDNA reasoning ends with fenced bash after channel separator, without canonical call:bash tool opening. Conditioned prefix is thought+traceback, not an open tool call. Missing-tool protocol anomaly; stock parser confirms zero structured tool calls. No sustained native ellipsis motif.",
+      "input_rule": "Exact saved prompt_token_ids, no rerender/truncation/reconstruction. Root-reviewed sampled seed and original source cap; chosen positions use exact saved continuation up to64; one new trial."
+    },
+    {
+      "name": "other-r54-anomaly-psf-requests-5414-call11-o-s43-p512-c1024",
+      "case_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/cap1024-preparation/fixtures/full/anomaly.psf__requests-5414.call11.onset.optional-suffix512.cap1024.seed43.private.json",
+      "case_sha256": "1850ce0f5b3b322ac4b147aacefc1c1a6fe342a9d7440354dda7c659a96c07c2",
+      "source_result_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/cap1024-preparation/runs/full/anomaly.psf__requests-5414.call11.onset.optional-suffix512.cap1024.seed43.json",
+      "source_result_sha256": "6b56467f234fa62463361f3c4fcec86a25582c6956cbd534bbf60b8f98789477",
+      "source_inventory_rows_same_result_file": [
+        54
+      ],
+      "covered_inventory_rows_exact_seed_cap": [
+        54
+      ],
+      "same_file_other_seed_or_cap_refs_not_covered": [],
+      "job": "anomaly.psf__requests-5414.call11.onset.optional-suffix512.cap1024.seed43",
+      "mode": "full",
+      "seed": 43,
+      "prompt_token_count": 512,
+      "prompt_token_ids_sha256": "3d89a854eee7b7437f041ae07ac20d12ec2e75080078c0a5e2f075952284a78d",
+      "source_chosen_token_count": 64,
+      "chosen_teacher_forcing_positions": 64,
+      "free_generation_cap_tokens": 1024,
+      "source_generated_token_count_for_this_seed": 1024,
+      "source_was_at_cap_for_this_seed": true,
+      "semantic_or_parser_evidence": "Fabricated fenced bash/output exchange includes package versions and a second traceback, despite tool-required prefix. No commands executed and no canonical tool boundary; distinct protocol anomaly, nativecaret absent. Capped task completion remains unresolved.",
+      "input_rule": "Exact saved prompt_token_ids, no rerender/truncation/reconstruction. Root-reviewed sampled seed and original source cap; chosen positions use exact saved continuation up to64; one new trial."
+    },
+    {
+      "name": "other-r55-anomaly-psf-requests-5414-call11-o-s44-p512-c2048",
+      "case_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/cap1024-preparation/cap2048-preparation/anomaly.psf__requests-5414.call11.onset.optional-suffix512.cap2048.seed44.private.json",
+      "case_sha256": "007fe3e3a0098e9cc52f0a0da473f5cc9572c189381af49b35f82ff425c0337f",
+      "source_result_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/cap1024-preparation/cap2048-preparation/runs/full/anomaly.psf__requests-5414.call11.onset.optional-suffix512.cap2048.seed44.json",
+      "source_result_sha256": "af75c19503c28dbfc26616fbd24f20331b987681a271c7d4b769eb2d04910dd3",
+      "source_inventory_rows_same_result_file": [
+        55
+      ],
+      "covered_inventory_rows_exact_seed_cap": [
+        55
+      ],
+      "same_file_other_seed_or_cap_refs_not_covered": [],
+      "job": "anomaly.psf__requests-5414.call11.onset.optional-suffix512.cap2048.seed44",
+      "mode": "full",
+      "seed": 44,
+      "prompt_token_count": 512,
+      "prompt_token_ids_sha256": "3d89a854eee7b7437f041ae07ac20d12ec2e75080078c0a5e2f075952284a78d",
+      "source_chosen_token_count": 64,
+      "chosen_teacher_forcing_positions": 64,
+      "free_generation_cap_tokens": 2048,
+      "source_generated_token_count_for_this_seed": 2048,
+      "source_was_at_cap_for_this_seed": true,
+      "semantic_or_parser_evidence": "Repeated diagnosis with fabricated output, not native ellipsis/caret burst. Hypotheses vary, so this is not a proof that all reasoning stopped: however multiple unexecuted checks are presented as observed results (idna.IDNAError, socket.gaierror, urlparse ParseResult), following repeated requests.get/code examples without tool boundaries. This affirmative protocol anomaly closes this diagnostic question independently of the cap. No task failure or completion is inferred from the cap; no score change.",
+      "input_rule": "Exact saved prompt_token_ids, no rerender/truncation/reconstruction. Root-reviewed sampled seed and original source cap; chosen positions use exact saved continuation up to64; one new trial."
+    }
+  ],
+  "source_integrity": {
+    "path": "source-integrity.json",
+    "sha256": "3fbc73b5eeed1ebf9c852b49d36ac59d5f2a10ee31701e823b6031889da47789"
+  },
+  "commands": {
+    "path": "commands.json",
+    "sha256": "88d1997c6be8fa0db7868aef764cfa507685a4b9827d7f52fbfaf743146a7da2"
+  },
+  "forecast": {
+    "path": "forecast.json",
+    "sha256": "7751453f688419e8e3209f6dff1dd3c850abe99b5d261328f65c2e3c7d41ab8f"
+  },
+  "postprocess_map": "postprocess-map.json",
+  "future_gates": [
+    "root admission of exact hashes",
+    "HF9 and SKHF terminal",
+    "no active HF process and zero TT owners",
+    "MemAvailable >=100 GiB",
+    "recheck hashes and deadline before each group",
+    "one group per invocation; STOP/review between groups",
+    "18000s hard timeout per group",
+    "validate complete outputs and exact case/seed/cap before semantic comparison"
+  ],
+  "execution": "No runner invocation/model load/TTNN import/device access."
+}

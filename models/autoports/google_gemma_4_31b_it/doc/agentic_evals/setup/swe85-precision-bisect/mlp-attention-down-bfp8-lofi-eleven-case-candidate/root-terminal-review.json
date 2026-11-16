@@ -1,0 +1,493 @@
+{
+  "status": "focused_panel_no_detected_precision_anomaly_one_progressing_cap",
+  "epoch": 1794753180.2247667,
+  "completion": {
+    "start_epoch": 1794752525.5282836,
+    "end_epoch": 1794753066.4026566,
+    "elapsed_seconds": 540.874372959137,
+    "exit_code": 0
+  },
+  "forecast_seconds": [
+    500,
+    1800
+  ],
+  "forecast_hit": true,
+  "rows": [
+    {
+      "index": 0,
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/mlp-attention-down-bfp8-lofi-eleven-case-candidate/runs/mlp_attention_down_bfp8_lofi/anomaly.call88.canonicalprefix.seed42.p8_mlp_bfp8_lofi.cap1024.json",
+      "sha256": "0fea9d3726f27c45f890edc8ff77ada29b56e05c02d1dcec1ece0db8c4d19ce6",
+      "tokens": 588,
+      "last_token": 50,
+      "cap": 1024,
+      "flag": false,
+      "verdict": "normal_continuation",
+      "decode_timing": {
+        "decode_tokens": 587,
+        "decode_wall_s": 25.098021542886272,
+        "decode_tok_s_user": 23.38829771888446,
+        "trace_counters_before_decode": {
+          "model_replays": 0,
+          "sample_replays": 1,
+          "token_refreshes": 0,
+          "position_refreshes": 1,
+          "page_refreshes": 60,
+          "readbacks": 1,
+          "captures": 3
+        },
+        "trace_counters_after_decode": {
+          "model_replays": 587,
+          "sample_replays": 588,
+          "token_refreshes": 0,
+          "position_refreshes": 1,
+          "page_refreshes": 60,
+          "readbacks": 588,
+          "captures": 3
+        },
+        "trace_counters_delta": {
+          "model_replays": 587,
+          "sample_replays": 587,
+          "token_refreshes": 0,
+          "position_refreshes": 0,
+          "page_refreshes": 0,
+          "readbacks": 587,
+          "captures": 0
+        },
+        "basis": "Batch1 wall from immediately before first _replay to return after last existing synchronous token-out readback; counts completed replay calls, includes host loop gaps, excludes prefill/first token and text decoding. No added device sync or profiler. Traced diagnostic rate, not serving benchmark."
+      }
+    },
+    {
+      "index": 1,
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/mlp-attention-down-bfp8-lofi-eleven-case-candidate/runs/mlp_attention_down_bfp8_lofi/anomaly.pytest-dev__pytest-5787.call1.onset.seed44.p8_mlp_bfp8_lofi.cap256.json",
+      "sha256": "57ae81535c790fbe5ad0bdbaf0ccb1bf1c4cba4eb2b6c015a158692ed033473f",
+      "tokens": 15,
+      "last_token": 50,
+      "cap": 256,
+      "flag": false,
+      "verdict": "normal_continuation",
+      "decode_timing": {
+        "decode_tokens": 14,
+        "decode_wall_s": 0.5489071840420365,
+        "decode_tok_s_user": 25.505222753520837,
+        "trace_counters_before_decode": {
+          "model_replays": 587,
+          "sample_replays": 589,
+          "token_refreshes": 0,
+          "position_refreshes": 2,
+          "page_refreshes": 120,
+          "readbacks": 589,
+          "captures": 3
+        },
+        "trace_counters_after_decode": {
+          "model_replays": 601,
+          "sample_replays": 603,
+          "token_refreshes": 0,
+          "position_refreshes": 2,
+          "page_refreshes": 120,
+          "readbacks": 603,
+          "captures": 3
+        },
+        "trace_counters_delta": {
+          "model_replays": 14,
+          "sample_replays": 14,
+          "token_refreshes": 0,
+          "position_refreshes": 0,
+          "page_refreshes": 0,
+          "readbacks": 14,
+          "captures": 0
+        },
+        "basis": "Batch1 wall from immediately before first _replay to return after last existing synchronous token-out readback; counts completed replay calls, includes host loop gaps, excludes prefill/first token and text decoding. No added device sync or profiler. Traced diagnostic rate, not serving benchmark."
+      }
+    },
+    {
+      "index": 2,
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/mlp-attention-down-bfp8-lofi-eleven-case-candidate/runs/mlp_attention_down_bfp8_lofi/anomaly.pytest-dev__pytest-5787.call65.onset.seed42.p8_mlp_bfp8_lofi.cap2048.json",
+      "sha256": "00aa284c4bcbc1fa0fa4b3c5e59700b5b4714a065e629f67dbb9e4725e729763",
+      "tokens": 136,
+      "last_token": 50,
+      "cap": 2048,
+      "flag": false,
+      "verdict": "normal_continuation",
+      "decode_timing": {
+        "decode_tokens": 135,
+        "decode_wall_s": 5.857364542083815,
+        "decode_tok_s_user": 23.047908155631447,
+        "trace_counters_before_decode": {
+          "model_replays": 601,
+          "sample_replays": 604,
+          "token_refreshes": 0,
+          "position_refreshes": 3,
+          "page_refreshes": 180,
+          "readbacks": 604,
+          "captures": 3
+        },
+        "trace_counters_after_decode": {
+          "model_replays": 736,
+          "sample_replays": 739,
+          "token_refreshes": 0,
+          "position_refreshes": 3,
+          "page_refreshes": 180,
+          "readbacks": 739,
+          "captures": 3
+        },
+        "trace_counters_delta": {
+          "model_replays": 135,
+          "sample_replays": 135,
+          "token_refreshes": 0,
+          "position_refreshes": 0,
+          "page_refreshes": 0,
+          "readbacks": 135,
+          "captures": 0
+        },
+        "basis": "Batch1 wall from immediately before first _replay to return after last existing synchronous token-out readback; counts completed replay calls, includes host loop gaps, excludes prefill/first token and text decoding. No added device sync or profiler. Traced diagnostic rate, not serving benchmark."
+      }
+    },
+    {
+      "index": 3,
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/mlp-attention-down-bfp8-lofi-eleven-case-candidate/runs/mlp_attention_down_bfp8_lofi/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.seed43.p8_mlp_bfp8_lofi.cap2048.json",
+      "sha256": "843e440c02116fa2dd7e5b7d816f9db34f313826e717270d4871174860de2156",
+      "tokens": 1116,
+      "last_token": 50,
+      "cap": 2048,
+      "flag": false,
+      "verdict": "normal_continuation",
+      "decode_timing": {
+        "decode_tokens": 1115,
+        "decode_wall_s": 48.97650704719126,
+        "decode_tok_s_user": 22.766017162588646,
+        "trace_counters_before_decode": {
+          "model_replays": 736,
+          "sample_replays": 740,
+          "token_refreshes": 0,
+          "position_refreshes": 4,
+          "page_refreshes": 240,
+          "readbacks": 740,
+          "captures": 3
+        },
+        "trace_counters_after_decode": {
+          "model_replays": 1851,
+          "sample_replays": 1855,
+          "token_refreshes": 0,
+          "position_refreshes": 4,
+          "page_refreshes": 240,
+          "readbacks": 1855,
+          "captures": 3
+        },
+        "trace_counters_delta": {
+          "model_replays": 1115,
+          "sample_replays": 1115,
+          "token_refreshes": 0,
+          "position_refreshes": 0,
+          "page_refreshes": 0,
+          "readbacks": 1115,
+          "captures": 0
+        },
+        "basis": "Batch1 wall from immediately before first _replay to return after last existing synchronous token-out readback; counts completed replay calls, includes host loop gaps, excludes prefill/first token and text decoding. No added device sync or profiler. Traced diagnostic rate, not serving benchmark."
+      }
+    },
+    {
+      "index": 4,
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/mlp-attention-down-bfp8-lofi-eleven-case-candidate/runs/mlp_attention_down_bfp8_lofi/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed42.p8_mlp_bfp8_lofi.cap1024.json",
+      "sha256": "28dd4a6db91a7291da76664716ca2df3d4dc801d87266247da99df2adb147cec",
+      "tokens": 617,
+      "last_token": 50,
+      "cap": 1024,
+      "flag": false,
+      "verdict": "normal_continuation",
+      "decode_timing": {
+        "decode_tokens": 616,
+        "decode_wall_s": 28.053686778992414,
+        "decode_tok_s_user": 21.957898256042498,
+        "trace_counters_before_decode": {
+          "model_replays": 1851,
+          "sample_replays": 1856,
+          "token_refreshes": 0,
+          "position_refreshes": 5,
+          "page_refreshes": 300,
+          "readbacks": 1856,
+          "captures": 3
+        },
+        "trace_counters_after_decode": {
+          "model_replays": 2467,
+          "sample_replays": 2472,
+          "token_refreshes": 0,
+          "position_refreshes": 5,
+          "page_refreshes": 300,
+          "readbacks": 2472,
+          "captures": 3
+        },
+        "trace_counters_delta": {
+          "model_replays": 616,
+          "sample_replays": 616,
+          "token_refreshes": 0,
+          "position_refreshes": 0,
+          "page_refreshes": 0,
+          "readbacks": 616,
+          "captures": 0
+        },
+        "basis": "Batch1 wall from immediately before first _replay to return after last existing synchronous token-out readback; counts completed replay calls, includes host loop gaps, excludes prefill/first token and text decoding. No added device sync or profiler. Traced diagnostic rate, not serving benchmark."
+      }
+    },
+    {
+      "index": 5,
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/mlp-attention-down-bfp8-lofi-eleven-case-candidate/runs/mlp_attention_down_bfp8_lofi/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed43.p8_mlp_bfp8_lofi.cap2048.json",
+      "sha256": "8f1e16f4728958fe1e04d5aa9a488c4ab1c4727e9a9efcb3fd28447a55691b4e",
+      "tokens": 565,
+      "last_token": 50,
+      "cap": 2048,
+      "flag": false,
+      "verdict": "normal_continuation",
+      "decode_timing": {
+        "decode_tokens": 564,
+        "decode_wall_s": 25.691511375131086,
+        "decode_tok_s_user": 21.95277622109619,
+        "trace_counters_before_decode": {
+          "model_replays": 2467,
+          "sample_replays": 2473,
+          "token_refreshes": 0,
+          "position_refreshes": 6,
+          "page_refreshes": 360,
+          "readbacks": 2473,
+          "captures": 3
+        },
+        "trace_counters_after_decode": {
+          "model_replays": 3031,
+          "sample_replays": 3037,
+          "token_refreshes": 0,
+          "position_refreshes": 6,
+          "page_refreshes": 360,
+          "readbacks": 3037,
+          "captures": 3
+        },
+        "trace_counters_delta": {
+          "model_replays": 564,
+          "sample_replays": 564,
+          "token_refreshes": 0,
+          "position_refreshes": 0,
+          "page_refreshes": 0,
+          "readbacks": 564,
+          "captures": 0
+        },
+        "basis": "Batch1 wall from immediately before first _replay to return after last existing synchronous token-out readback; counts completed replay calls, includes host loop gaps, excludes prefill/first token and text decoding. No added device sync or profiler. Traced diagnostic rate, not serving benchmark."
+      }
+    },
+    {
+      "index": 6,
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/mlp-attention-down-bfp8-lofi-eleven-case-candidate/runs/mlp_attention_down_bfp8_lofi/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed44.p8_mlp_bfp8_lofi.cap1024.json",
+      "sha256": "62051e1f97916da7919f2a3d43ddcb3d7662acd82b895aa7253741ca0e7eec44",
+      "tokens": 669,
+      "last_token": 50,
+      "cap": 1024,
+      "flag": false,
+      "verdict": "normal_continuation",
+      "decode_timing": {
+        "decode_tokens": 668,
+        "decode_wall_s": 30.440764153841883,
+        "decode_tok_s_user": 21.94425858115959,
+        "trace_counters_before_decode": {
+          "model_replays": 3031,
+          "sample_replays": 3038,
+          "token_refreshes": 0,
+          "position_refreshes": 7,
+          "page_refreshes": 420,
+          "readbacks": 3038,
+          "captures": 3
+        },
+        "trace_counters_after_decode": {
+          "model_replays": 3699,
+          "sample_replays": 3706,
+          "token_refreshes": 0,
+          "position_refreshes": 7,
+          "page_refreshes": 420,
+          "readbacks": 3706,
+          "captures": 3
+        },
+        "trace_counters_delta": {
+          "model_replays": 668,
+          "sample_replays": 668,
+          "token_refreshes": 0,
+          "position_refreshes": 0,
+          "page_refreshes": 0,
+          "readbacks": 668,
+          "captures": 0
+        },
+        "basis": "Batch1 wall from immediately before first _replay to return after last existing synchronous token-out readback; counts completed replay calls, includes host loop gaps, excludes prefill/first token and text decoding. No added device sync or profiler. Traced diagnostic rate, not serving benchmark."
+      }
+    },
+    {
+      "index": 7,
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/mlp-attention-down-bfp8-lofi-eleven-case-candidate/runs/mlp_attention_down_bfp8_lofi/anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.seed44.p8_mlp_bfp8_lofi.cap1024.json",
+      "sha256": "243a04538d770183f966af2758363e396b1cdd9679b666e06f37bb42025e9f1c",
+      "tokens": 1024,
+      "last_token": 1932,
+      "cap": 1024,
+      "flag": false,
+      "verdict": "progressing_cap_extension_required",
+      "decode_timing": {
+        "decode_tokens": 1023,
+        "decode_wall_s": 43.82894730498083,
+        "decode_tok_s_user": 23.340738550746433,
+        "trace_counters_before_decode": {
+          "model_replays": 3699,
+          "sample_replays": 3707,
+          "token_refreshes": 0,
+          "position_refreshes": 8,
+          "page_refreshes": 480,
+          "readbacks": 3707,
+          "captures": 3
+        },
+        "trace_counters_after_decode": {
+          "model_replays": 4722,
+          "sample_replays": 4730,
+          "token_refreshes": 0,
+          "position_refreshes": 8,
+          "page_refreshes": 480,
+          "readbacks": 4730,
+          "captures": 3
+        },
+        "trace_counters_delta": {
+          "model_replays": 1023,
+          "sample_replays": 1023,
+          "token_refreshes": 0,
+          "position_refreshes": 0,
+          "page_refreshes": 0,
+          "readbacks": 1023,
+          "captures": 0
+        },
+        "basis": "Batch1 wall from immediately before first _replay to return after last existing synchronous token-out readback; counts completed replay calls, includes host loop gaps, excludes prefill/first token and text decoding. No added device sync or profiler. Traced diagnostic rate, not serving benchmark."
+      }
+    },
+    {
+      "index": 8,
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/mlp-attention-down-bfp8-lofi-eleven-case-candidate/runs/mlp_attention_down_bfp8_lofi/anomaly.sympy__sympy-13551.call1.onset.seed43.p8_mlp_bfp8_lofi.cap512.json",
+      "sha256": "e14a806d11d23af3a310932890ba6c734acd01e5babc78f60bb0650e4e70ca26",
+      "tokens": 286,
+      "last_token": 50,
+      "cap": 512,
+      "flag": false,
+      "verdict": "normal_continuation",
+      "decode_timing": {
+        "decode_tokens": 285,
+        "decode_wall_s": 10.946832892950624,
+        "decode_tok_s_user": 26.03492743399143,
+        "trace_counters_before_decode": {
+          "model_replays": 4722,
+          "sample_replays": 4731,
+          "token_refreshes": 0,
+          "position_refreshes": 9,
+          "page_refreshes": 540,
+          "readbacks": 4731,
+          "captures": 3
+        },
+        "trace_counters_after_decode": {
+          "model_replays": 5007,
+          "sample_replays": 5016,
+          "token_refreshes": 0,
+          "position_refreshes": 9,
+          "page_refreshes": 540,
+          "readbacks": 5016,
+          "captures": 3
+        },
+        "trace_counters_delta": {
+          "model_replays": 285,
+          "sample_replays": 285,
+          "token_refreshes": 0,
+          "position_refreshes": 0,
+          "page_refreshes": 0,
+          "readbacks": 285,
+          "captures": 0
+        },
+        "basis": "Batch1 wall from immediately before first _replay to return after last existing synchronous token-out readback; counts completed replay calls, includes host loop gaps, excludes prefill/first token and text decoding. No added device sync or profiler. Traced diagnostic rate, not serving benchmark."
+      }
+    },
+    {
+      "index": 9,
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/mlp-attention-down-bfp8-lofi-eleven-case-candidate/runs/mlp_attention_down_bfp8_lofi/anomaly.sympy__sympy-14711.call1.onset.seed42.p8_mlp_bfp8_lofi.cap256.json",
+      "sha256": "3fb1d584d3d5ce07739d9cd74fe6441601dfdb4efd55d89b424df942e0198b9c",
+      "tokens": 139,
+      "last_token": 50,
+      "cap": 256,
+      "flag": false,
+      "verdict": "normal_continuation",
+      "decode_timing": {
+        "decode_tokens": 138,
+        "decode_wall_s": 5.2999319629743695,
+        "decode_tok_s_user": 26.03807010431001,
+        "trace_counters_before_decode": {
+          "model_replays": 5007,
+          "sample_replays": 5017,
+          "token_refreshes": 0,
+          "position_refreshes": 10,
+          "page_refreshes": 600,
+          "readbacks": 5017,
+          "captures": 3
+        },
+        "trace_counters_after_decode": {
+          "model_replays": 5145,
+          "sample_replays": 5155,
+          "token_refreshes": 0,
+          "position_refreshes": 10,
+          "page_refreshes": 600,
+          "readbacks": 5155,
+          "captures": 3
+        },
+        "trace_counters_delta": {
+          "model_replays": 138,
+          "sample_replays": 138,
+          "token_refreshes": 0,
+          "position_refreshes": 0,
+          "page_refreshes": 0,
+          "readbacks": 138,
+          "captures": 0
+        },
+        "basis": "Batch1 wall from immediately before first _replay to return after last existing synchronous token-out readback; counts completed replay calls, includes host loop gaps, excludes prefill/first token and text decoding. No added device sync or profiler. Traced diagnostic rate, not serving benchmark."
+      }
+    },
+    {
+      "index": 10,
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/mlp-attention-down-bfp8-lofi-eleven-case-candidate/runs/mlp_attention_down_bfp8_lofi/anomaly.sympy__sympy-18763.call1.onset.seed42.p8_mlp_bfp8_lofi.cap256.json",
+      "sha256": "621482db18c8ba187331b172075bcc45d8f0a6078f3661a9ec959e17a4ee71b1",
+      "tokens": 122,
+      "last_token": 50,
+      "cap": 256,
+      "flag": false,
+      "verdict": "normal_continuation",
+      "decode_timing": {
+        "decode_tokens": 121,
+        "decode_wall_s": 4.646777634974569,
+        "decode_tok_s_user": 26.039550308858757,
+        "trace_counters_before_decode": {
+          "model_replays": 5145,
+          "sample_replays": 5156,
+          "token_refreshes": 0,
+          "position_refreshes": 11,
+          "page_refreshes": 660,
+          "readbacks": 5156,
+          "captures": 3
+        },
+        "trace_counters_after_decode": {
+          "model_replays": 5266,
+          "sample_replays": 5277,
+          "token_refreshes": 0,
+          "position_refreshes": 11,
+          "page_refreshes": 660,
+          "readbacks": 5277,
+          "captures": 3
+        },
+        "trace_counters_delta": {
+          "model_replays": 121,
+          "sample_replays": 121,
+          "token_refreshes": 0,
+          "position_refreshes": 0,
+          "page_refreshes": 0,
+          "readbacks": 121,
+          "captures": 0
+        },
+        "basis": "Batch1 wall from immediately before first _replay to return after last existing synchronous token-out readback; counts completed replay calls, includes host loop gaps, excludes prefill/first token and text decoding. No added device sync or profiler. Traced diagnostic rate, not serving benchmark."
+      }
+    }
+  ],
+  "selected": false,
+  "next": "Cheap independent accuracy check before full108. Fixed74 cap extension required; no acceptance decision until resolved.",
+  "scope": "serial full60layer traced tokenout diagnostic, not vLLM headline or device timing"
+}

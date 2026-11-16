@@ -1,0 +1,219 @@
+{
+  "status": "CPU source reconstruction/application/syntax only; all semantic execution pending",
+  "snapshot_utc": "2026-11-14T20:52:45.761036+00:00",
+  "reviewed_coordinators": 81,
+  "coordinator_wrong_tasks": 25,
+  "wrong_tasks_with_candidate": 25,
+  "candidate_cases": 32,
+  "prepared_task_calls": [
+    {
+      "task": "astropy__astropy-13398",
+      "call": 17,
+      "manifest": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/astropy__astropy-13398/manifest.json",
+      "semantic": "pending"
+    },
+    {
+      "task": "astropy__astropy-14096",
+      "call": 23,
+      "manifest": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/astropy__astropy-14096/manifest.json",
+      "semantic": "pending"
+    },
+    {
+      "task": "astropy__astropy-14598",
+      "call": 33,
+      "manifest": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/astropy__astropy-14598/manifest.json",
+      "semantic": "pending"
+    },
+    {
+      "task": "django__django-14007",
+      "call": 31,
+      "manifest": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/django__django-14007/manifest.json",
+      "semantic": "pending"
+    },
+    {
+      "task": "django__django-14011",
+      "call": 33,
+      "manifest": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/django__django-14011/manifest.json",
+      "semantic": "pending"
+    },
+    {
+      "task": "django__django-15037",
+      "call": 19,
+      "manifest": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/django__django-15037/manifest.json",
+      "semantic": "pending"
+    },
+    {
+      "task": "django__django-16950",
+      "call": 80,
+      "manifest": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/django__django-16950/manifest.json",
+      "semantic": "pending"
+    },
+    {
+      "task": "matplotlib__matplotlib-25479",
+      "call": 34,
+      "manifest": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/matplotlib__matplotlib-25479/manifest.json",
+      "semantic": "pending"
+    },
+    {
+      "task": "mwaskom__seaborn-3069",
+      "call": 50,
+      "manifest": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/mwaskom__seaborn-3069/manifest.json",
+      "semantic": "pending"
+    },
+    {
+      "task": "mwaskom__seaborn-3187",
+      "call": 64,
+      "manifest": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/mwaskom__seaborn-3187/manifest.json",
+      "semantic": "pending"
+    },
+    {
+      "task": "psf__requests-1142",
+      "call": 31,
+      "manifest": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/psf__requests-1142/manifest.json",
+      "semantic": "pending"
+    },
+    {
+      "task": "psf__requests-1921",
+      "call": 34,
+      "manifest": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/psf__requests-1921/manifest.json",
+      "semantic": "pending"
+    },
+    {
+      "task": "pydata__xarray-3993",
+      "call": 18,
+      "manifest": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/pydata__xarray-3993/manifest.json",
+      "semantic": "pending"
+    },
+    {
+      "task": "pydata__xarray-6992",
+      "call": 16,
+      "manifest": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/pydata__xarray-6992/manifest.json",
+      "semantic": "pending"
+    },
+    {
+      "task": "pylint-dev__pylint-4551",
+      "call": 35,
+      "manifest": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/pylint-dev__pylint-4551/manifest.json",
+      "semantic": "pending"
+    },
+    {
+      "task": "pylint-dev__pylint-4661",
+      "call": 19,
+      "manifest": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/pylint-dev__pylint-4661/manifest.json",
+      "semantic": "pending"
+    },
+    {
+      "task": "pylint-dev__pylint-4970",
+      "call": 51,
+      "manifest": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/pylint-dev__pylint-4970/manifest.json",
+      "semantic": "pending"
+    },
+    {
+      "task": "pylint-dev__pylint-4970",
+      "call": 55,
+      "manifest": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/pylint-dev__pylint-4970-call55/manifest.json",
+      "semantic": "pending"
+    },
+    {
+      "task": "pylint-dev__pylint-6386",
+      "call": 33,
+      "manifest": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/pylint-dev__pylint-6386/manifest.json",
+      "semantic": "pending"
+    },
+    {
+      "task": "pylint-dev__pylint-8898",
+      "call": 44,
+      "manifest": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/pylint-dev__pylint-8898/manifest.json",
+      "semantic": "pending"
+    },
+    {
+      "task": "pytest-dev__pytest-10356",
+      "call": 45,
+      "manifest": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/pytest-dev__pytest-10356/manifest.json",
+      "semantic": "pending"
+    },
+    {
+      "task": "pytest-dev__pytest-5840",
+      "call": 15,
+      "manifest": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/pytest-dev__pytest-5840/manifest.json",
+      "semantic": "pending"
+    },
+    {
+      "task": "pytest-dev__pytest-6197",
+      "call": 35,
+      "manifest": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/pytest-dev__pytest-6197/manifest.json",
+      "semantic": "pending"
+    },
+    {
+      "task": "pytest-dev__pytest-7432",
+      "call": 34,
+      "manifest": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/pytest-dev__pytest-7432/manifest.json",
+      "semantic": "pending"
+    },
+    {
+      "task": "scikit-learn__scikit-learn-10908",
+      "call": 34,
+      "manifest": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/scikit-learn__scikit-learn-10908/manifest.json",
+      "semantic": "pending"
+    },
+    {
+      "task": "scikit-learn__scikit-learn-14983",
+      "call": 43,
+      "manifest": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/scikit-learn__scikit-learn-14983/manifest.json",
+      "semantic": "pending"
+    },
+    {
+      "task": "sphinx-doc__sphinx-10323",
+      "call": 68,
+      "manifest": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/sphinx-doc__sphinx-10323/manifest.json",
+      "semantic": "pending"
+    },
+    {
+      "task": "sphinx-doc__sphinx-7590",
+      "call": 44,
+      "manifest": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/sphinx-doc__sphinx-7590/manifest.json",
+      "semantic": "pending"
+    },
+    {
+      "task": "sphinx-doc__sphinx-9461",
+      "call": 76,
+      "manifest": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/sphinx-doc__sphinx-9461/manifest.json",
+      "semantic": "pending"
+    },
+    {
+      "task": "sympy__sympy-12489",
+      "call": 34,
+      "manifest": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/sympy__sympy-12489/manifest.json",
+      "semantic": "pending"
+    },
+    {
+      "task": "sympy__sympy-13091",
+      "call": 22,
+      "manifest": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/sympy__sympy-13091/manifest.json",
+      "semantic": "pending"
+    },
+    {
+      "task": "sympy__sympy-18763",
+      "call": 20,
+      "manifest": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/sympy__sympy-18763/manifest.json",
+      "semantic": "pending"
+    }
+  ],
+  "explicit_gaps": [],
+  "gap_resolution": {
+    "psf__requests-1142": "Native initial ls proves build/lib exists at entry. Stopped-image build/lib models.py recovered size20789 matches native pre-copy listing and hash equals image tracked source. Restore52 and compat edit56 reproduced; no inferred unknown build step. Native logs do not include cryptographic source hash.",
+    "mwaskom__seaborn-3069": "Replayed exact audited sed/whitespace source operations only. Failed message74 has no file write. Literal assignments92 extracted with AST, not arbitrary agent Python execution. Native numbered source slices95/99 match exactly.",
+    "scikit-learn__scikit-learn-10908": "Actual pre34 erroneous text.py ABC import retained in precall. Candidate now repairs concrete defaultdict/namedtuple imports in text.py and all three call34 target files while using ABC module only for abstract classes. Task reference fix additional; no import/test execution claim."
+  },
+  "cpu_validation": {
+    "state_relative_patch_dry_runs": 32,
+    "shell_syntax": 32,
+    "semantic_tests_run": 0
+  },
+  "limitations": [
+    "Source state file-scoped; original dependency installations and untracked reproducer/config state not fully reconstructed.",
+    "Canonical reply token identity unproven; native IDs null and count gaps retained.",
+    "Counterfactual actions condition on original possibly faulty reasoning.",
+    "References are offline forced targets, never scored model inputs."
+  ]
+}

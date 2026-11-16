@@ -1,0 +1,27 @@
+{
+  "status": "static_reference_review_not_admitted",
+  "epoch": 1794750807.5910468,
+  "checks": [
+    "Pinned HF and tokenizer revision identical; local-files-only tokenizer plus offline environment",
+    "Full60layers direct HF text reference; no old TT score reuse",
+    "AIME saved exact100-token continuation logits recomputed with proper causal shift",
+    "Natural1024-token span split512prefix/512scored targets; book continuation stress, not chat-quality judgment",
+    "One CPU model load serialized after TT panel; source files statically inspected; no model execution"
+  ],
+  "source_sha256": {
+    "models/autoports/google_gemma_4_31b_it/tools/stage12_accuracy_references.py": "ae13604faa957e6f4cfa0b7f1fce0b07e93071f26c37deb8abbbad710d42c5eb",
+    "models/autoports/google_gemma_4_31b_it/tests/generate_full_reference.py": "30f69ad0db3ce951aa1a6dc8deb1900ea33d5cdd578f8aff36cefc33056e5d7d",
+    "models/autoports/google_gemma_4_31b_it/tt/weights.py": "bca69b111c9c9cbf9bc620c3dc6bee873abdecdd75f08d5b8b93638e881868cd",
+    "models/autoports/google_gemma_4_31b_it/doc/optimized_full_model/reference_metadata.json": "20bb9d9af0468ee55fa90b08392137945c3deaf6812f0834e1f0ff8baf9d9f3d",
+    "models/autoports/google_gemma_4_31b_it/doc/optimized_full_model/aime24_prompt.json": "578790e2d9e5d7fad6d187bc6d733699c3514218ea5a42ca2bf9d25d7afdd4dd",
+    "models/tt_transformers/tests/tale-of-two-cities.txt.bz2": "25d33cc39a17a4a576712e29056053cd8f818f1288e7b2a8abd668225e630e1e",
+    "/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime/readiness_check/generate.py": "d8014f9fb34c94893e2daf1e502a3eec13de64ac8e176e6ef3af08f4f3cd2500",
+    "/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime/readiness_check/schema.py": "1d3e0a89b8718fafafc12ce05d458e011072f77a51ec3fb4a1c7f67bd7b68617"
+  },
+  "future_admission_requires": [
+    "TT panel terminal; no live device/model owner",
+    "At least100GiB host available memory",
+    "Timeout1800+closure margin fits stage deadline",
+    "No existing reference completion; source pins rechecked"
+  ]
+}

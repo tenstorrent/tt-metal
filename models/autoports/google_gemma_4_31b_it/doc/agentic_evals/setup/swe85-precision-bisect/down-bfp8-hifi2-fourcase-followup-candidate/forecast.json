@@ -1,0 +1,140 @@
+{
+  "status": "planning_proxy_from_same_case_P3_timings_not_measurement",
+  "scope": "Seven targeted outputs only; exact fixture, prompt IDs, seed, sampling and cap retained from P3 manifest.",
+  "question": "After P3 down BFP8 LoFi results, test down BFP8 HiFi2 on the seven selected unresolved observations; no claim of fix or selection.",
+  "policy_delta": {
+    "changed_only": {
+      "down": {
+        "from": [
+          "bfp8_lofi",
+          "LoFi"
+        ],
+        "to": [
+          "bfp8",
+          "HiFi2"
+        ]
+      }
+    },
+    "other_policy_fields_identical": true,
+    "candidate_policy_sha256": "118dceaf55f938ac3521684d77953390e1ee5ba0c4cf893c3195b403910b93b8",
+    "p3_policy_sha256": "769f6b5d975c3a4b252c01668ded02f32c61c43819117a95868249b4b1fd7350"
+  },
+  "timing_basis": {
+    "p3_results": [
+      {
+        "manifest_index": 33,
+        "job": "anomaly.pytest-dev__pytest-5787.call65.onset",
+        "seed": 42,
+        "cap": 2048,
+        "fixture_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/fixtures/full/anomaly.pytest-dev__pytest-5787.call65.onset.cap2048.seed42.private.json",
+        "fixture_sha256": "346ea388c2e71b88d415e67331f6f1c5de4ee428e641e5159adccef0af382331",
+        "p3_result_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.pytest-dev__pytest-5787.call65.onset.seed42.cap2048.json",
+        "p3_result_sha256": "00ad34d68ea214cd51c8a3d3872b0cb02357ca40afd733296c384553b5a6df0a",
+        "p3_verdict": "other_anomaly",
+        "p3_generated_tokens": 160,
+        "p3_diagnostic_total_wall_s": 21.871423503849655,
+        "p3_runtime_precision_sha256": "769f6b5d975c3a4b252c01668ded02f32c61c43819117a95868249b4b1fd7350"
+      },
+      {
+        "manifest_index": 58,
+        "job": "anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset",
+        "seed": 43,
+        "cap": 2048,
+        "fixture_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.cap2048.seed43.private.json",
+        "fixture_sha256": "f09f5493bf5e6d1f1bec5f5ce7e4273d0ec9352de1f85ffe780ef897063dec98",
+        "p3_result_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.seed43.cap2048.json",
+        "p3_result_sha256": "9998f0613978430ddb7b6428a0c38efffd3b00e482763afef0ef79efc46478e7",
+        "p3_verdict": "other_anomaly",
+        "p3_generated_tokens": 329,
+        "p3_diagnostic_total_wall_s": 30.322419377975166,
+        "p3_runtime_precision_sha256": "769f6b5d975c3a4b252c01668ded02f32c61c43819117a95868249b4b1fd7350"
+      },
+      {
+        "manifest_index": 66,
+        "job": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset",
+        "seed": 42,
+        "cap": 1024,
+        "fixture_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap1024.seed42.private.json",
+        "fixture_sha256": "b4253957ad89651510a0e39ea3aa49373926c9ff2d963a4ee381047b400efac8",
+        "p3_result_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed42.cap1024.json",
+        "p3_result_sha256": "cf64a6afad9c1e7bf59c07d2bf3c4bae92e6b19664470931de7b3cd43e3a13d9",
+        "p3_verdict": "other_anomaly",
+        "p3_generated_tokens": 812,
+        "p3_diagnostic_total_wall_s": 58.36516250902787,
+        "p3_runtime_precision_sha256": "769f6b5d975c3a4b252c01668ded02f32c61c43819117a95868249b4b1fd7350"
+      },
+      {
+        "manifest_index": 67,
+        "job": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset",
+        "seed": 43,
+        "cap": 2048,
+        "fixture_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap2048.seed43.private.json",
+        "fixture_sha256": "e4c5081386cd785ccc1216dda888b4c54cc165beb80b035e96daf69c2f119718",
+        "p3_result_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed43.cap2048.json",
+        "p3_result_sha256": "aa575216e43dd4295eafdd70f56a0975a5c3aa39a8583be5a19c0ec8fb8dcf9a",
+        "p3_verdict": "other_anomaly",
+        "p3_generated_tokens": 549,
+        "p3_diagnostic_total_wall_s": 48.239312693011016,
+        "p3_runtime_precision_sha256": "769f6b5d975c3a4b252c01668ded02f32c61c43819117a95868249b4b1fd7350"
+      },
+      {
+        "manifest_index": 68,
+        "job": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset",
+        "seed": 44,
+        "cap": 1024,
+        "fixture_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap1024.seed44.private.json",
+        "fixture_sha256": "7c5da63d138e6afa7b539dfed909ee1e8a937c2e168d587023c4421333688780",
+        "p3_result_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed44.cap1024.json",
+        "p3_result_sha256": "1e544f50ef08db3968395a0eb93c1fd70e0db9cded4d68bc19170150cc4bb88f",
+        "p3_verdict": "other_anomaly",
+        "p3_generated_tokens": 497,
+        "p3_diagnostic_total_wall_s": 46.20707752602175,
+        "p3_runtime_precision_sha256": "769f6b5d975c3a4b252c01668ded02f32c61c43819117a95868249b4b1fd7350"
+      },
+      {
+        "manifest_index": 74,
+        "job": "anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset",
+        "seed": 44,
+        "cap": 1024,
+        "fixture_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.cap1024.seed44.private.json",
+        "fixture_sha256": "14b67b9fcb8ad382713dff99ccb47922690bc5be90131e3adc25a195f3e712d3",
+        "p3_result_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.seed44.cap1024.json",
+        "p3_result_sha256": "106ff303e561e8b902878b8c427189c37c712263efd387201d4e69a13eece1b8",
+        "p3_verdict": "reproduced_native_motif",
+        "p3_generated_tokens": 1024,
+        "p3_diagnostic_total_wall_s": 50.21226896485314,
+        "p3_runtime_precision_sha256": "769f6b5d975c3a4b252c01668ded02f32c61c43819117a95868249b4b1fd7350"
+      },
+      {
+        "manifest_index": 93,
+        "job": "anomaly.sympy__sympy-14711.call1.onset",
+        "seed": 42,
+        "cap": 256,
+        "fixture_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-protocol-scan83-controls/sympy__sympy-14711.call1.onset.private.json",
+        "fixture_sha256": "30151a4ad6ba3f457477b50bbb7d8817b24944e8e57242c10b1f494f4697d6e5",
+        "p3_result_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sympy__sympy-14711.call1.onset.seed42.cap256.json",
+        "p3_result_sha256": "2797688e84de68063b6144df5df1de309d853aae9b0314a0f1c246ef98f293be",
+        "p3_verdict": "other_anomaly",
+        "p3_generated_tokens": 234,
+        "p3_diagnostic_total_wall_s": 7.59274564194493,
+        "p3_runtime_precision_sha256": "769f6b5d975c3a4b252c01668ded02f32c61c43819117a95868249b4b1fd7350"
+      }
+    ],
+    "observed_p3_trial_sum_seconds": 262.8104102166835,
+    "one_model_load_proxy_seconds": 138.38867970812134,
+    "load_proxy_source": "P1 fixed108 clean measured load time; not measured for this P4 arm",
+    "sum_plus_load_seconds": 401.19908992480487
+  },
+  "scenarios_seconds": {
+    "low": 401.19908992480487,
+    "central": 541.6187713984866,
+    "high": 722.1583618646488
+  },
+  "timeout_seconds": 1800,
+  "uncertainty": [
+    "HiFi2 may change runtime and generated token counts; caps remain as in P3.",
+    "Multipliers are planning allowances, not measured confidence bounds.",
+    "Only one load for seven serial samples; no full108 implication.",
+    "Do not launch until P3 is terminal and root reviews the updated candidate."
+  ]
+}

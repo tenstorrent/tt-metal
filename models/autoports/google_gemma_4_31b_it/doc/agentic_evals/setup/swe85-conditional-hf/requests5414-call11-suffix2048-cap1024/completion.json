@@ -1,0 +1,62 @@
+{
+  "candidate_admission_sha256": "2a4d1f498e0cb9d749dc17a4411eef03da7e30a14064d6de3a695332c42515b3",
+  "child_exit_code": 0,
+  "command": [
+    "timeout",
+    "3600",
+    "env",
+    "HF_HUB_OFFLINE=1",
+    "HF_DATASETS_OFFLINE=1",
+    "OMP_NUM_THREADS=16",
+    "MKL_NUM_THREADS=16",
+    "OPENBLAS_NUM_THREADS=16",
+    "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tools/precision_repro_hf.py",
+    "--cases",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/requests5414-call11-suffix2048-cap1024/manifest.json",
+    "--output",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/requests5414-call11-suffix2048-cap1024/runs",
+    "--tokens",
+    "1024",
+    "--seeds",
+    "44",
+    "--prefill-chunk",
+    "512"
+  ],
+  "driver_exit_code": 0,
+  "elapsed_seconds": 2951.4917900562286,
+  "finished_unix": 1794746519.5542216,
+  "forecast_point_seconds": 2819.7868198615033,
+  "forecast_range_seconds": [
+    2475.450935189554,
+    3508.458589205402
+  ],
+  "forecast_sha256": "65c0c7a7325e58379b8b5f89f8546074422e949c4e2fc6c5ca6d60d52132a2fb",
+  "launch_sha256": "c24c222458fa37ddbb23ac4f66bdf3fd44784610474754b729b3e3bdd997baae",
+  "output_validation_status": "passed",
+  "preflight": {
+    "active_hf_processes": [],
+    "device_owners": [],
+    "mem_available_bytes": 130464182272,
+    "required_mem_available_bytes": 107374182400
+  },
+  "primary_hf9_terminal_review": {
+    "progress_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/progress.json",
+    "progress_sha256": "4a9363429f50949031da53c13f3156c2bd399f756d227f353babaafd065ec773",
+    "root_review_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/root-terminal-review.json",
+    "root_review_sha256": "e7109b54dafdd7f8507703b7f0c31795ee2678b56f9a543a1ef2d0b4f6f36cd5"
+  },
+  "result": {
+    "extension_tokens": 512,
+    "generated_tokens": 1024,
+    "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/requests5414-call11-suffix2048-cap1024/runs/anomaly.psf__requests-5414.call11.onset.hf.private.json",
+    "prior_512_prefix_match": true,
+    "requested_tokens": 1024,
+    "seed": 44,
+    "sha256": "d93fed6e376703e49812966b5b25b6217ddc117730ef27653ee659bfa3f2cfa2"
+  },
+  "runner_log_sha256": "c4e14578443bc6fc0f58fb711ac6c1e200f7ec6e6a2a6d8512412aa85c2a098a",
+  "started_unix": 1794743568.0617983,
+  "status": "completed"
+}

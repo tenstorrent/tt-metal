@@ -1,0 +1,178 @@
+[
+  {
+    "name": "astropy__astropy-13579.fetch-next-action",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/astropy__astropy-13579/action_counterfactual.candidate.private.json",
+    "branches": [
+      "chosen",
+      "correct"
+    ]
+  },
+  {
+    "name": "astropy__astropy-7336.fetch-next-action",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/astropy__astropy-7336/action_counterfactual.candidate.private.json",
+    "branches": [
+      "chosen",
+      "correct"
+    ]
+  },
+  {
+    "name": "astropy__astropy-8872.fetch-next-action",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/astropy__astropy-8872/action_counterfactual.candidate.private.json",
+    "branches": [
+      "chosen",
+      "correct"
+    ]
+  },
+  {
+    "name": "matplotlib__matplotlib-25332.fetch-next-action",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/matplotlib__matplotlib-25332/action_counterfactual.candidate.private.json",
+    "branches": [
+      "chosen",
+      "correct"
+    ]
+  },
+  {
+    "name": "matplotlib__matplotlib-25960.fetch-next-action",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/matplotlib__matplotlib-25960/action_counterfactual.candidate.private.json",
+    "branches": [
+      "chosen",
+      "correct"
+    ]
+  },
+  {
+    "name": "matplotlib__matplotlib-26208.fetch-next-action",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/matplotlib__matplotlib-26208/action_counterfactual.candidate.private.json",
+    "branches": [
+      "chosen",
+      "correct"
+    ]
+  },
+  {
+    "name": "matplotlib__matplotlib-26291.fetch-next-action",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/matplotlib__matplotlib-26291/action_counterfactual.candidate.private.json",
+    "branches": [
+      "chosen",
+      "correct"
+    ]
+  },
+  {
+    "name": "pydata__xarray-4687.fetch-next-action",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/pydata__xarray-4687/action_counterfactual.candidate.private.json",
+    "branches": [
+      "chosen",
+      "correct"
+    ]
+  },
+  {
+    "name": "pydata__xarray-7233.fetch-next-action",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/pydata__xarray-7233/action_counterfactual.candidate.private.json",
+    "branches": [
+      "chosen",
+      "correct"
+    ]
+  },
+  {
+    "name": "pylint-dev__pylint-4604.fetch-next-action",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/pylint-dev__pylint-4604/action_counterfactual.candidate.private.json",
+    "branches": [
+      "chosen",
+      "correct"
+    ]
+  },
+  {
+    "name": "pytest-dev__pytest-5787.fetch-next-action",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/pytest-dev__pytest-5787/action_counterfactual.candidate.private.json",
+    "branches": [
+      "chosen",
+      "correct"
+    ]
+  },
+  {
+    "name": "scikit-learn__scikit-learn-13135.fetch-next-action",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/scikit-learn__scikit-learn-13135/action_counterfactual.candidate.private.json",
+    "branches": [
+      "chosen",
+      "correct"
+    ]
+  },
+  {
+    "name": "scikit-learn__scikit-learn-13328.fetch-next-action",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/scikit-learn__scikit-learn-13328/action_counterfactual.candidate.private.json",
+    "branches": [
+      "chosen",
+      "correct"
+    ]
+  },
+  {
+    "name": "scikit-learn__scikit-learn-14053.fetch-next-action",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/scikit-learn__scikit-learn-14053/action_counterfactual.candidate.private.json",
+    "branches": [
+      "chosen",
+      "correct"
+    ]
+  },
+  {
+    "name": "scikit-learn__scikit-learn-14629.fetch-next-action",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/scikit-learn__scikit-learn-14629/action_counterfactual.candidate.private.json",
+    "branches": [
+      "chosen",
+      "correct"
+    ]
+  },
+  {
+    "name": "scikit-learn__scikit-learn-25102.fetch-next-action",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/scikit-learn__scikit-learn-25102/action_counterfactual.candidate.private.json",
+    "branches": [
+      "chosen",
+      "correct"
+    ]
+  },
+  {
+    "name": "scikit-learn__scikit-learn-25747.fetch-next-action",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/scikit-learn__scikit-learn-25747/action_counterfactual.candidate.private.json",
+    "branches": [
+      "chosen",
+      "correct"
+    ]
+  },
+  {
+    "name": "sphinx-doc__sphinx-10614.fetch-next-action",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/sphinx-doc__sphinx-10614/action_counterfactual.candidate.private.json",
+    "branches": [
+      "chosen",
+      "correct"
+    ]
+  },
+  {
+    "name": "sphinx-doc__sphinx-8638.fetch-next-action",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/sphinx-doc__sphinx-8638/action_counterfactual.candidate.private.json",
+    "branches": [
+      "chosen",
+      "correct"
+    ]
+  },
+  {
+    "name": "sympy__sympy-13480.fetch-next-action",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/sympy__sympy-13480/action_counterfactual.candidate.private.json",
+    "branches": [
+      "chosen",
+      "correct"
+    ]
+  },
+  {
+    "name": "sympy__sympy-13551.fetch-next-action",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/sympy__sympy-13551/action_counterfactual.candidate.private.json",
+    "branches": [
+      "chosen",
+      "correct"
+    ]
+  },
+  {
+    "name": "sympy__sympy-13878.fetch-next-action",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/sympy__sympy-13878/action_counterfactual.candidate.private.json",
+    "branches": [
+      "chosen",
+      "correct"
+    ]
+  }
+]

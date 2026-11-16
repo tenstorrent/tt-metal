@@ -1,0 +1,18 @@
+{
+  "status": "admitted",
+  "candidate": "Sklearn13135 suffix1024 served/full paired diagnostic",
+  "proposal_sha256": "10e422ad856c716d2a4558335519e378b42b32ad7031dfce08b4ab7bab815e92",
+  "driver_sha256": "cb3dd0a84aa4261f196d262265985450c0ea9df5e4abe416d3ffe8cb5dd57ddd",
+  "source_inventory_sha256": "5bd9fa0fc893005a58c095f874f271b4f076fcf3175b0ef33b373f482d340276",
+  "commands_sha256": "b4dba8e21a801d468afb2c90ee0b55566eeee4dcfd4a5f081f659639f5081c50",
+  "forecast_sha256": "ef84397e6e61adbdad8f71eaf697001dd458069a466701aeec66a1f1df21f9ab",
+  "artifact_hashes_sha256": "bbe0b74d8215c98b19ec1d041b8af097872dfa9398301a88f75e9c19ea5d04db",
+  "stop_file_required_until_explicit_root_admission": true,
+  "predecessor_completion_sha256": "9ff7139d71c3ee2163624f8f41324896bcc74a2127ee2d5c16774fab054bbb21",
+  "note": "Root must review and create admission.json; this template does not authorize execution.",
+  "predecessor_bfp8_served_admission_sha256": "3135aac12cbe11d97803b166dc3173def8f9bc03a6e8bb786fe015ce3f24bf08",
+  "predecessor_bfp8_served_completion_sha256": "1be9414e4447a6600ea163967ec4fc0601ae9ffbbd47e44ab5e407a1c3ee453e",
+  "reviewer": "root",
+  "admitted_unix": 1794728833.3165932,
+  "runtime_policy_chain_verified": true
+}

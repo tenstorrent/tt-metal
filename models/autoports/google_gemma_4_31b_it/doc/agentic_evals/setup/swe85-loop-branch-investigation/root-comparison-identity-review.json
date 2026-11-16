@@ -1,0 +1,9 @@
+{
+  "status": "root_verified_five_complete_results_ten_comparisons",
+  "utc": "2026-11-15T09:53:47.359058+00:00",
+  "reviewer": "root",
+  "audit_sha256": "0e482b7c4057bdff076f4891f0240d1209889103def6bb5c23e1aab707a18670",
+  "comparisons": 10,
+  "verified": "Root independently reread HF/TT result hashes, exact prompt conditioning, case hash, row indices/forced IDs and actual compared filename for all ten.",
+  "excluded": "Current group5 partial TF checkpoint has no completed free result; not a historical incident and not a sixth completed reference."
+}

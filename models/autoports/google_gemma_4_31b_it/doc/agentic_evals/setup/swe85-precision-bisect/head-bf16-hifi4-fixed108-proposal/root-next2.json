@@ -1,0 +1,39 @@
+{
+  "reviewed_unix": 1794725128.6517618,
+  "rows": [
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/runs/head_bf16_hifi4/anomaly.call91.canonicalprefix.seed44.cap1024.json",
+      "sha256": "de5b527c5c3b76970feded0954cd0756e3d69abe053311e699f1e3cc6482c725",
+      "seed": 44,
+      "tokens": 1024,
+      "verdict": "native",
+      "reason": "Root read text: extra apostrophe-ve after completed Ive degenerates into repeated apostrophe-s through1024. Affirmative token loop, not inconclusive cap.",
+      "trace_counters_delta": {
+        "model_replays": 1023,
+        "sample_replays": 1023,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 1023,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/runs/head_bf16_hifi4/anomaly.matplotlib__matplotlib-20488.call82.onset.seed42.cap512.json",
+      "sha256": "76b90f3b3284c490f59f6b1785aef63341845d24acbc6ed014c13fbe2e08fb00",
+      "seed": 42,
+      "tokens": 235,
+      "verdict": "normal",
+      "reason": "Root read entire235-token continuation: grammatical messed-up continuation and canonical no-op script. No anomaly observed; no patch success claim.",
+      "trace_counters_delta": {
+        "model_replays": 234,
+        "sample_replays": 234,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 234,
+        "captures": 0
+      }
+    }
+  ]
+}

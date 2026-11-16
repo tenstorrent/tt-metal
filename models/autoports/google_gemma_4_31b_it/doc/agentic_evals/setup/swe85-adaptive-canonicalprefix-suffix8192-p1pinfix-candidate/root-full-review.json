@@ -1,0 +1,63 @@
+{
+  "reviewed_unix": 1794724780.8865871,
+  "rows": [
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-canonicalprefix-suffix8192-p1pinfix-candidate/runs/full/anomaly.call91.canonicalprefix.suffix8192.seed42.json",
+      "sha256": "9e2522c91cdba316f7fce5881a139718e34added64eaccc41e2f94624003e889",
+      "seed": 42,
+      "tokens": 169,
+      "verdict": "normal",
+      "reason": "Full raw text and same pinned8192suffix boundary reviewed; grammatical continuation, canonical toolclose. Short/no-op code may not fix task; no task correctness claim.",
+      "trace_counters_delta": {
+        "model_replays": 168,
+        "sample_replays": 168,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 168,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-canonicalprefix-suffix8192-p1pinfix-candidate/runs/full/anomaly.call91.canonicalprefix.suffix8192.seed43.json",
+      "sha256": "10610713eed42214a5faf48fe4c33bd5be7a9041dc5034e762490b951c69b82b",
+      "seed": 43,
+      "tokens": 53,
+      "verdict": "native",
+      "reason": "Immediate extra apostrophe-ve units after completed Ive, native contraction family.",
+      "trace_counters_delta": {
+        "model_replays": 52,
+        "sample_replays": 52,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 52,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-canonicalprefix-suffix8192-p1pinfix-candidate/runs/full/anomaly.call91.canonicalprefix.suffix8192.seed44.json",
+      "sha256": "23852a4086dbbca01a80903bbea374ada27d897e3e31e5aef95044ecefcbedd6",
+      "seed": 44,
+      "tokens": 54,
+      "verdict": "normal",
+      "reason": "Full raw text and same pinned8192suffix boundary reviewed; grammatical continuation, canonical toolclose. Short/no-op code may not fix task; no task correctness claim.",
+      "trace_counters_delta": {
+        "model_replays": 53,
+        "sample_replays": 53,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 53,
+        "captures": 0
+      }
+    }
+  ],
+  "counts": {
+    "normal": 2,
+    "native": 1
+  },
+  "elapsed_seconds": 139.90180444717407,
+  "forecast_range_hit": true,
+  "scope": "Exact shortened input comparison, no native prompt identity or incidence claim; seed43 positive to matching HFcontrol."
+}

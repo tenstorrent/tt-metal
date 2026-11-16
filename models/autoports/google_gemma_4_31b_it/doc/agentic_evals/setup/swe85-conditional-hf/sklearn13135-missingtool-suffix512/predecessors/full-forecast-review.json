@@ -1,0 +1,12 @@
+{
+  "reviewer": "root",
+  "accepted": true,
+  "forecast_status": "in_range",
+  "completion_sha256": "927e9425adeb62200b42d38c6f7fc367358f8fd02ad1bcbabaf4010fc3f76dec",
+  "forecast_range_seconds": [
+    159.54,
+    276.54
+  ],
+  "measured_seconds": 171.23748016357422,
+  "reason": "Actual171.237s within frozen range; diagnostic only, no serving-speed claim."
+}

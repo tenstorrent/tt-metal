@@ -1,0 +1,40 @@
+{
+  "exit_code": 1,
+  "wall_seconds": 0.9449501037597656,
+  "files": 1721,
+  "scope": "Historical non-Python evidence only. Active146 source/fixture pins and canonical/review/livevalidation documents excluded.",
+  "snapshot_manifest": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/stage12-artifact-hook-current-snapshot/manifest.json",
+  "changed": [
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/gpqa_provisional_reverse_validation.json",
+      "before_sha256": "687ee8c6eb470788c10682ba7e2bb238badba1c46c0afde9ceafd055ccbf865b",
+      "after_sha256": "60071ce47319d3c495e7374462c16a38fcd1e79624be95de5806cb044afc1abc"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/offline-verifier-build/config.json",
+      "before_sha256": "df5cae7d9b1c0da40a117e93534ec47f68b2349dfa48a2e9144a53fd59639393",
+      "after_sha256": "c4f8b170da7b1314e1c3a53d05ebea70e79331f2c1370d85587215c0a98206a5"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-loop-branch-investigation/precision-repro-hf-identity-guard-proposal.md",
+      "before_sha256": "b8ac7bf0f741746c19ffd87a60c6662acc80bca1dbf2af2c1f37c75c366b24d1",
+      "after_sha256": "92eebf63848d0aa000e5092aa2ea416a4b59d6ace2f75a548ab1287903503d91"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/attention-hifi2-down-lofi-ten-case-candidate/triage-c.json",
+      "before_sha256": "bf843c6ecddc1c6a674ab4c97cc31d3ff67cceadcfc2dc83b2c07561fdb57f5c",
+      "after_sha256": "edcd2830099c375a85c6ff74d85e7b459d7f4c66ea7062a4fa687241dfd99bed"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/attention-hifi2-down-lofi-ten-case-candidate/triage-c.json.pre-correction-20261115.json",
+      "before_sha256": "08465f5271e98264ae8af3713d540a3a0d60244151f655d4b015b8d2bfc047bc",
+      "after_sha256": "875e059946318ad77627742a967e644cd1382eeca7f4fdb9441df4974772b233"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-cap-extension-candidate/merged9/launch.json",
+      "before_sha256": "4e3a447f63d3c1ce9bfe2a5d6d6add3fa63a9ed5c37b1131311b597f59f2e73e",
+      "after_sha256": "c1e36a5b85bb9a725a5660da1ce3f919477a42951180426c590f7b9721965154"
+    }
+  ],
+  "log": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/review/pre-commit-artifacts-pass1.log"
+}

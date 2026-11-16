@@ -1,0 +1,84 @@
+{
+  "task": "48",
+  "artifact": "semantic-triage of served suffix512 free-running continuations",
+  "source": "anomalies/gpqa-extended-precision/first-wave-served/task48.onset.suffix512.json",
+  "source_metadata": "anomalies/gpqa-extended-precision/task48.onset.suffix512.private.json",
+  "original_comparison": {
+    "triage": "current/gpqa-extended198-head-bfp8/digest/48.triage.json",
+    "coordinator": "current/gpqa-extended198-head-bfp8/digest/coordinator.json",
+    "original_semantic_pattern": "The original full reasoning made progress on another reaction, but repeatedly reconstructed the same disputed diyne atom mapping, alternated incompatible ring/product descriptions, and revisited methyl placement and ethylidene naming without resolving the conflict. The coordinator accepted this sustained semantic cycle, including representative sections around chars 8000-15000 and 28000-end. Original call ended with stop; it was uncapped and the text detector did not flag it.",
+    "comparison_limit": "These are short free-running continuations from a diagnostic suffix prompt, not the original native completion. They show whether the selected suffix/onset can continue the same semantic cycle; they do not reproduce the original task context or establish an effect on the official answer."
+  },
+  "judgments": [
+    {
+      "seed": 42,
+      "semantic_anomaly": true,
+      "mechanical_flag": true,
+      "detector_flag": true,
+      "text_chars": 3165,
+      "semantic_spans": [
+        {
+          "char_range": [
+            0,
+            3165
+          ],
+          "paraphrase": "The continuation alternates the same assertion that the diyne gives a diethylidenecyclobutane with the same check for another reaction. Neither step adds a new mapping, reaction, or resolution; the two lines repeat throughout the output."
+        }
+      ],
+      "basis": "Sustained no-new-information semantic cycle matching the unresolved product/reaction revisiting in the original. The repeated prose itself is mechanically well-formed; mechanical_flag mirrors the source stored flag and is not the basis for semantic classification.",
+      "observed_malformed_text": false
+    },
+    {
+      "seed": 43,
+      "semantic_anomaly": true,
+      "detector_flag": false,
+      "text_chars": 1516,
+      "semantic_spans": [
+        {
+          "char_range": [
+            0,
+            752
+          ],
+          "paraphrase": "Before the malformed tail begins, the continuation cycles three times between the generic [3,3]-shift/divinylcyclobutane product label, the same substrate-specific diethylidenecyclobutane assertion, and a repeated check for another reaction. It presents no new atom mapping or resolution of the distinction."
+        }
+      ],
+      "mechanical_spans": [
+        {
+          "char_range": [
+            752,
+            1516
+          ],
+          "paraphrase": "A malformed delimiter-like fragment begins in the middle of the word \"Let's\" and is followed by a long run of repeated C-C text. This is a separate mechanical/text-generation artifact."
+        }
+      ],
+      "basis": "The coherent prefix already contains a sustained semantic cycle before the observed malformed fragment. The malformed suffix is recorded as a text observation separately from mechanical_flag, which mirrors the source stored flag. The continuation is truncated by the diagnostic token budget; the artifact and truncation do not establish why it occurred.",
+      "observed_malformed_text": true,
+      "mechanical_flag": false
+    },
+    {
+      "seed": 44,
+      "semantic_anomaly": true,
+      "mechanical_flag": false,
+      "detector_flag": false,
+      "text_chars": 2772,
+      "semantic_spans": [
+        {
+          "char_range": [
+            0,
+            2772
+          ],
+          "paraphrase": "The output repeatedly asserts that the [3,3] shift gives a divinylcyclobutane, then restates that this substrate should give a diethylidenecyclobutane. It cycles between these incompatible descriptions without reconciling them or adding a new derivation."
+        }
+      ],
+      "basis": "Sustained unresolved contradiction and repetition match the original semantic pattern. The text is mechanically legible. mechanical_flag mirrors the source stored flag, which does not negate the semantic evidence.",
+      "observed_malformed_text": false
+    }
+  ],
+  "limitations": [
+    "The private metadata says the prompt is an exact suffix of 512 reconstructed tokens with 3040 earlier tokens removed; the changed position origin means this is not the original prompt.",
+    "The private metadata records reconstructed/native completion token-count agreement, while raw native sampled token IDs are unavailable; count agreement alone does not prove token identity.",
+    "The saved diagnostic includes a chosen teacher-forced continuation and three free-running continuations. This triage evaluates only the complete saved free_running[].text outputs; it does not infer free-running behavior from the teacher-forced continuation.",
+    "The diagnostic outputs are token-budget truncated and not complete model responses. Seed 43 also contains a malformed tail; semantic classification uses only its coherent prefix.",
+    "No claim is made about official correctness, score, prevalence, precision causality, or the reason for any observed text pattern. A missing stored flag is not treated as a pass."
+  ]
+}

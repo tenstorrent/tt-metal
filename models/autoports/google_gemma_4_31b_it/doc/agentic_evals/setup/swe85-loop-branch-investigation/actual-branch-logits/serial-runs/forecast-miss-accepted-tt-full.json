@@ -1,0 +1,14 @@
+{
+  "status": "root_accepted_forecast_miss",
+  "reviewer": "root",
+  "accepted": true,
+  "completion_sha256": "8b24a2ac2eba7e8aee8d4246d1274ce834cf9225491995fe76b70009b4a8286a",
+  "at_unix": 1794742659.9734461,
+  "elapsed_seconds": 97.29416108131409,
+  "forecast_range_seconds": [
+    200,
+    430
+  ],
+  "reason": "Low-side planning miss: all14 rows completed and full-policy/branch/tensor identities validated. This short capture does not have ordinary free-generation length or sampling-loop costs used by the broad planning proxy. Component load/cache timings were not measured, so no causal speed attribution or precision speed-ranking claim.",
+  "next": "Permit saved-logit comparisons; no inference."
+}

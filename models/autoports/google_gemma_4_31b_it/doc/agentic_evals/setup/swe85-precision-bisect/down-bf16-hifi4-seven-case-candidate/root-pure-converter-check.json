@@ -1,0 +1,32 @@
+{
+  "scope": "AST-extracted exact pure argument converter, no parser package or model import; supporting evidence only, full pipeline followup required",
+  "source_sha256": "c974f47dc39ab7276da1e4ae38c4010e3f5411481f75e3879e29f47b2fd08df7",
+  "canonical_control": true,
+  "valid_json_control": {
+    "\"command\"": "\"echo ok\""
+  },
+  "rows": [
+    {
+      "result": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed42.p5_downbf16_hifi4.cap1024.json",
+      "has_string_command": false,
+      "keys": [
+        "\"command\"",
+        "'r') as f",
+        "]\\nfor line in lines",
+        "\\\"app\\\") and env.app",
+        "] is the path to the included file\\n')\\n        new_lines.append('                import os as os_mod\\n')\\n        new_lines.append('                path = self.arguments[0]\\n')\\n        new_lines.append('                # This is a bit of a guess, but we want the rel_path from source dir\\n')\\n        new_lines.append('                # In Sphinx, the document source is in settings._source\\n')\\n        new_lines.append('                source_dir = os.path.dirname(self.state.document.settings.get(\\'_source\\\", \\\"\\\"))\\n')\\n        new_lines.append('                if source_dir"
+      ]
+    },
+    {
+      "result": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed44.p5_downbf16_hifi4.cap1024.json",
+      "has_string_command": false,
+      "keys": [
+        "\"command\"",
+        "'r') as f",
+        "]\\nfor line in lines",
+        "but then apply source-read event.\\n        new_lines.append(line)\\n        new_lines.append(\\\"        # Sphinx integration",
+        "'app') and env.app"
+      ]
+    }
+  ]
+}

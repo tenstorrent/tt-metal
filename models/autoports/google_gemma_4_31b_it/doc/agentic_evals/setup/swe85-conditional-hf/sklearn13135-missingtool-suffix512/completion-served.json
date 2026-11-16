@@ -1,0 +1,79 @@
+{
+  "status": "completed",
+  "mode": "served",
+  "command": [
+    "timeout",
+    "600",
+    "env",
+    "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+    "READINESS_TRACE_REGION_SIZE=134217728",
+    "OMP_NUM_THREADS=16",
+    "MKL_NUM_THREADS=16",
+    "OPENBLAS_NUM_THREADS=16",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+    "-m",
+    "models.autoports.google_gemma_4_31b_it.tools.precision_repro_batch",
+    "--cases",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/served-cases.json",
+    "--build-kwargs-file",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/served_build_kwargs.json",
+    "--output-dir",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/runs/served"
+  ],
+  "started_unix": 1794727511.843091,
+  "timeout_seconds": 600,
+  "candidate_admission_sha256": "32fe5e6ccf38aff945424de6b7f3c8e24a7a375cf6a806424bd1097e99bb6194",
+  "candidate_proposal_sha256": "afae82ad53bb768661d781d4da108b527ee0b1cd2f4f55cc23563b51fbf654e0",
+  "manifest_sha256": "a93796ce41a985492fc2e5075f4463186fa9fc258a2095f9728b5f9eff3b9bdf",
+  "runner_sha256": "172f5a1dd7a7403847e47b966ae79c306163650a60211418c7c195794ec5c125",
+  "forecast": {
+    "point_seconds": 219.31,
+    "range_seconds": [
+      194.71,
+      281.71
+    ],
+    "timeout_seconds": 600
+  },
+  "predecessor_gates": {
+    "p2": {
+      "admission_sha256": "74bef162c97e23e882612eb85dae365f32c9da1f13ba4b9b8e1e1f8f582ad1be",
+      "completion_sha256": "47896893e57257757d1153dd3ae4df6b05985cd97b0fbb9993739e30145b2880",
+      "queue_sha256": "a3e38a94d97c827735d1f16a868b721dc669984ae26ef0ee42d0c5de2a847e86",
+      "forecast_status": "in_range",
+      "forecast_review_sha256": "5d27739c8f376feba9ce6fd76e96b37029be4467d32ced410d4504c72d60ea0b",
+      "elapsed_seconds": 2469.2918775081635,
+      "forecast_bounds_seconds": [
+        2018.038988828659,
+        5910.468657604884
+      ]
+    },
+    "sklearn": {
+      "review_sha256": "c015eb3bb495b92f047b6ae896e280c1fe3d64d8d2f89ea2437aa1a96f651748",
+      "status": "matched_TT_next_then_conditional_HF",
+      "hf_followup": "deferred_until_matched_TT"
+    },
+    "earlier_mode": null
+  },
+  "active_hf_processes": [],
+  "device_owner_preflight": [],
+  "ended_unix": 1794727701.0298064,
+  "elapsed_seconds": 189.18671536445618,
+  "exit_code": 0,
+  "outputs": [
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/runs/served/anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix512.seed42.json",
+      "sha256": "923e900812390a6cfe76172d3a34a9e9f02858ace8f6206d6d564e12baa53fd5",
+      "free_run_tokens": 87
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/runs/served/anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix512.seed43.json",
+      "sha256": "15488420a35897b7c8898161d743e349aaeda40d182ffcb100044183fed77125",
+      "free_run_tokens": 512
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/runs/served/anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix512.seed44.json",
+      "sha256": "c9e2b3ba0cd30c5811201e1a79d7141beef49a9409b4df1eadb51e6bb84192fc",
+      "free_run_tokens": 512
+    }
+  ]
+}

@@ -1,0 +1,114 @@
+[
+  {
+    "id": "b32-c32-i22420-gpqa",
+    "original_requests": 32,
+    "plan_requests": 32,
+    "original_seed": 7002,
+    "candidate_seed": 7002,
+    "same_counts_and_seed": true
+  },
+  {
+    "id": "b32-c32-i28672-gpqa",
+    "original_requests": 32,
+    "plan_requests": 32,
+    "original_seed": 7004,
+    "candidate_seed": 7004,
+    "same_counts_and_seed": true
+  },
+  {
+    "id": "b32-c1-i4096-gpqa",
+    "original_requests": 2,
+    "plan_requests": 2,
+    "original_seed": 7010,
+    "candidate_seed": 7010,
+    "same_counts_and_seed": true
+  },
+  {
+    "id": "b32-c1-i22420-gpqa",
+    "original_requests": 2,
+    "plan_requests": 2,
+    "original_seed": 7012,
+    "candidate_seed": 7012,
+    "same_counts_and_seed": true
+  },
+  {
+    "id": "b32-c1-i28672-gpqa",
+    "original_requests": 2,
+    "plan_requests": 2,
+    "original_seed": 7014,
+    "candidate_seed": 7014,
+    "same_counts_and_seed": true
+  },
+  {
+    "id": "b32-c1-i131072-gpqa",
+    "original_requests": 2,
+    "plan_requests": 2,
+    "original_seed": 7016,
+    "candidate_seed": 7016,
+    "same_counts_and_seed": true
+  },
+  {
+    "id": "b32-c1-i262016-gpqa",
+    "original_requests": 2,
+    "plan_requests": 2,
+    "original_seed": 7018,
+    "candidate_seed": 7018,
+    "same_counts_and_seed": true
+  },
+  {
+    "id": "b32-c32-i4096-swe",
+    "original_requests": 32,
+    "plan_requests": 32,
+    "original_seed": 7020,
+    "candidate_seed": 7020,
+    "same_counts_and_seed": true
+  },
+  {
+    "id": "b32-c32-i22420-swe",
+    "original_requests": 32,
+    "plan_requests": 32,
+    "original_seed": 7022,
+    "candidate_seed": 7022,
+    "same_counts_and_seed": true
+  },
+  {
+    "id": "b32-c32-i28672-swe",
+    "original_requests": 32,
+    "plan_requests": 32,
+    "original_seed": 7024,
+    "candidate_seed": 7024,
+    "same_counts_and_seed": true
+  },
+  {
+    "id": "b32-c1-i4096-swe",
+    "original_requests": 2,
+    "plan_requests": 2,
+    "original_seed": 7030,
+    "candidate_seed": 7030,
+    "same_counts_and_seed": true
+  },
+  {
+    "id": "b32-c1-i22420-swe",
+    "original_requests": 2,
+    "plan_requests": 2,
+    "original_seed": 7032,
+    "candidate_seed": 7032,
+    "same_counts_and_seed": true
+  },
+  {
+    "id": "b32-c1-i28672-swe",
+    "original_requests": 2,
+    "plan_requests": 2,
+    "original_seed": 7034,
+    "candidate_seed": 7034,
+    "same_counts_and_seed": true
+  },
+  {
+    "id": "b32-c1-i131072-swe",
+    "original_requests": 2,
+    "plan_requests": 2,
+    "original_seed": 7036,
+    "candidate_seed": 7036,
+    "same_counts_and_seed": true
+  }
+]

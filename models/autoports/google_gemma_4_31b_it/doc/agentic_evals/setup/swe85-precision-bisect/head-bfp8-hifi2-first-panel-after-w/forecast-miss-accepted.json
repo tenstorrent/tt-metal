@@ -1,0 +1,33 @@
+{
+  "status": "root_accepted_forecast_miss",
+  "reviewer": "root",
+  "accepted": true,
+  "completion_sha256": "fa70e146164d0b1b948f3bb969fff7e56b44b8d6cc85912f2dfb814c941675d9",
+  "measured_seconds": 2018.038988828659,
+  "forecast_range_seconds": [
+    2515.762556969247,
+    5878.864391854309
+  ],
+  "admission_sha256": "91dc764e6a3a6b1e8a1be51e6eee5fc958c19d1dfcfa3d057b989aa325618cdd",
+  "forecast_point_seconds": 3524.693107434766,
+  "actual": {
+    "trials": 108,
+    "load_seconds": 138.38867970812134,
+    "diagnostic_case_total_seconds": 1874.3906799475662,
+    "free_prefill_generation_seconds": 1874.3109066351317,
+    "decode_seconds": 911.1484370483086,
+    "decode_replays": 27884,
+    "non_decode_free_seconds": 963.1624695868231,
+    "case_setup_seconds": 0.0797733124345541,
+    "process_outside_load_cases_seconds": 5.259629172971472,
+    "aggregate_diagnostic_decode_tps": 30.60313651015088
+  },
+  "forecast": {
+    "case_seconds": 3363.101834885062,
+    "decode_seconds": 2102.541527135748,
+    "non_decode_case_seconds": 1260.5603077493142,
+    "load_and_preparation_seconds": 161.59127254970372
+  },
+  "explanation": "Low miss: the forecast reused mostly full-BF16 diagnostic timings and conservative cap projections. This candidate retains BFP4 body and finishes many continuations earlier. Actual component accounting reconciles the complete process wall; aggregate token-out diagnostic decode rate includes host loop/readback and is not vLLM serving performance. No accuracy acceptance or serving-rate update implied.",
+  "reviewed_unix": 1794724059.4691918
+}

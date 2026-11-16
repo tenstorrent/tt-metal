@@ -1,0 +1,21 @@
+{
+  "status": "candidate_prepared_not_admitted",
+  "created_utc_epoch": 1794770304.674757,
+  "sequence": [
+    "resume-command.json",
+    "acceptance-command.json"
+  ],
+  "reason": "Resume gate should establish production-path correctness before the broad fresh-path suite. Root owns admission and device launch.",
+  "source_pins": "source-pins.json",
+  "source_pins_sha256": "baf2b605b9ed94169dc1a3b4c8580f3c245a68407345fb15a72f1456789d40e5",
+  "commands": {
+    "resume-command.json": "8ba184adaafaffe838d5f7c918c39a1e3e54f7a2f366b49ecdf9f900506e299b",
+    "acceptance-command.json": "0c172da175872f64b783a8c5753ce296f08f3e330a23f65c47d7475ef0fdb7d4"
+  },
+  "limitations": [
+    "No runtime command executed by this preparation.",
+    "Q32 changes fresh-path attention arithmetic; historical Q128 accuracy, qualitative, fixed108 and serving evidence do not validate this geometry.",
+    "No precision selection, default change, score update, or performance claim."
+  ],
+  "review_sha256": "825031b0a0ead84a01759676b512ca7e0746bef5ba94dd6abfe51a1fa3b83f02"
+}

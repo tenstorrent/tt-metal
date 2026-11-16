@@ -1,0 +1,1 @@
+{"instance_id": "synthetic-offline-verifier", "repo": "psf/requests", "version": "1.1", "FAIL_TO_PASS": ["synthetic_case"], "PASS_TO_PASS": []}

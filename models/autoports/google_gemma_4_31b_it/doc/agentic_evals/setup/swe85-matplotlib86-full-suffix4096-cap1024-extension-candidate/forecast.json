@@ -1,0 +1,51 @@
+{
+  "status": "planning proxy only; inert candidate; not launched; not serving performance",
+  "source_measurements": {
+    "same_context_full_512_result": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/runs/full/anomaly.matplotlib__matplotlib-20488.call86.onset.suffix4096.seed43.json",
+      "sha256": "2fc88476353a38633134bcb85d1fbf8624f99d8e55bb8273e42fca2898bc594d",
+      "prompt_tokens": 4096,
+      "seed": 43,
+      "chosen_tokens": 64,
+      "free_tokens": 512,
+      "decode_replays": 511,
+      "chosen_tf_wall_s": 5.4693439160473645,
+      "free_diagnostic_wall_s": 31.483623042004183,
+      "decode_wall_s": 30.13014394394122,
+      "diagnostic_total_wall_s": 36.956497124861926
+    },
+    "same_mode_load": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/runs/full/load.json",
+      "sha256": "344ce5eba8fdafebade63d23e140c3634e163d3c090222b9f794936fdbbad899",
+      "wall_s": 77.52210676879622
+    },
+    "first_generator_trace_proxy": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-followups-execution/suffix2048-full.log",
+      "sha256": "67a5ddc5db1e423bdda2787214180a2b29b96b6881e7a7148888ca2e501cb62d",
+      "event_line": 119,
+      "wall_s": 12.361038153991103,
+      "caveat": "trace preparation proxy measured in prior same-mode suffix2048 followup log; actual candidate could vary"
+    }
+  },
+  "calculation": {
+    "target_cap": 1024,
+    "projected_decode_replays": 1023,
+    "decode_context_scaling": "measured full suffix4096 seed43 decode wall scaled by sum(4096+i), i=0..1022, divided by the same sum for the 511 observed replays",
+    "decode_context_ratio": 2.11974618606695,
+    "projected_decode_wall_s": 63.868257710817616,
+    "first_free_prefill_and_first_token_proxy_s": 1.3534790980629623,
+    "fixed_load_plus_trace_proxy_s": 89.88314492278732,
+    "chosen_teacher_forcing_wall_s": 5.4693439160473645,
+    "variable_work_point_s": 70.69108072492794,
+    "range_multiplier_on_variable_work": [
+      0.7,
+      1.7
+    ],
+    "forecast_point_wall_s": 160.57422564771525,
+    "forecast_range_wall_s": [
+      139.36690143023688,
+      210.05798215516484
+    ],
+    "uncertainty": "Linear sum-of-context scaling and prior trace-preparation proxy are planning assumptions; a longer cap can change kernel behavior, and natural EOS may stop before 1024. The upper bound assumes all 1023 decode replays."
+  }
+}

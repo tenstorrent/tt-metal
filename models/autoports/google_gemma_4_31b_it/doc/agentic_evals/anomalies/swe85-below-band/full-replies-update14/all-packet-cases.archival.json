@@ -1,0 +1,37 @@
+[
+  {
+    "name": "pytest-dev__pytest-7432.call19",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-update14/pytest-dev__pytest-7432.call19.case.private.json",
+    "branches": [
+      "chosen"
+    ]
+  },
+  {
+    "name": "pytest-dev__pytest-7432.call34",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-update14/pytest-dev__pytest-7432.call34.case.private.json",
+    "branches": [
+      "chosen"
+    ]
+  },
+  {
+    "name": "sympy__sympy-18763.call1",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-update14/sympy__sympy-18763.call1.case.private.json",
+    "branches": [
+      "chosen"
+    ]
+  },
+  {
+    "name": "sympy__sympy-18763.call10",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-update14/sympy__sympy-18763.call10.case.private.json",
+    "branches": [
+      "chosen"
+    ]
+  },
+  {
+    "name": "sympy__sympy-18763.call20",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-update14/sympy__sympy-18763.call20.case.private.json",
+    "branches": [
+      "chosen"
+    ]
+  }
+]

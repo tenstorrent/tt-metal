@@ -1,0 +1,585 @@
+{
+  "status": "completed_cpu_only_stock_gemma4_parser_audit",
+  "scope": "Focused adaptive-suffix1024 completed outputs requested by coordinator; no verdict adjudication.",
+  "created_utc": "2026-11-15T03:58:33.659269+00:00",
+  "tokenizer_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+  "context_reconstruction": "For each source onset fixture, take exact intersection of candidate suffix and source assistant continuation: original prompt IDs starting at max(source_prompt_len-1024, original request-prompt token count). Decode those assistant-context IDs and concatenate decoded generated IDs; pass both concatenated IDs and text to the installed stock Gemma4Parser. The preceding user/request portion of the suffix is not supplied as assistant output. A generated-only parse is retained as diagnostic.",
+  "parser_inputs": {
+    "request_body": "raw_packet.raw_request_body parsed as ChatCompletionRequest",
+    "tool_mode": "enable_auto_tools=True",
+    "tokenizer_snapshot": "/home/mvasiljevic/.cache/huggingface/hub/models--google--gemma-4-31B-it/snapshots/842da3794eaa0b77d5f08bae87a17459d91ff475",
+    "tokenizer_files_sha256": {
+      "python_env/lib/python3.10/site-packages/vllm/parser/gemma4.py": "c974f47dc39ab7276da1e4ae38c4010e3f5411481f75e3879e29f47b2fd08df7",
+      "python_env/lib/python3.10/site-packages/vllm/parser/engine/parser_engine.py": "d1075deeb25b4872e92752d7ef0598a07a747afaf2afc56058ec30c6dc1da89a",
+      "python_env/lib/python3.10/site-packages/vllm/parser/engine/adapters.py": "7a77bcb86e2129762f4199ee726398a4850b9e207893fc4295f2b759bcfeeb36",
+      "python_env/lib/python3.10/site-packages/vllm/tool_parsers/gemma4_engine_tool_parser.py": "02f31bdcc4d8527440daebb4f4e3e74c83a6010eb56cd33fe7522bea8f51bc65",
+      "python_env/lib/python3.10/site-packages/vllm/reasoning/gemma4_engine_reasoning_parser.py": "3e9adef8ae56ee993fbaee43e82aa36216fb71251ee2de14dc9f8b326220a594",
+      "/home/mvasiljevic/.cache/huggingface/hub/models--google--gemma-4-31B-it/snapshots/842da3794eaa0b77d5f08bae87a17459d91ff475/tokenizer.json": "cc8d3a0ce36466ccc1278bf987df5f71db1719b9ca6b4118264f45cb627bfe0f",
+      "/home/mvasiljevic/.cache/huggingface/hub/models--google--gemma-4-31B-it/snapshots/842da3794eaa0b77d5f08bae87a17459d91ff475/tokenizer_config.json": "9f4fec4b1dc6ecddf8f4a92e9caea5971c0e67d81309f3f9066a2bee8c362633",
+      "/home/mvasiljevic/.cache/huggingface/hub/models--google--gemma-4-31B-it/snapshots/842da3794eaa0b77d5f08bae87a17459d91ff475/chat_template.jinja": "ae53464bf3be25802b3a5b37def7fd89667067d7577049b3b2d74c4d8de4c6d4"
+    }
+  },
+  "case_mode_count": 8,
+  "reviewed_trial_count": 11,
+  "counts_by_mode": {
+    "served": {
+      "reviewed_trials": 5,
+      "accepted_bash_command": 2,
+      "missing_tool": 3,
+      "invalid_tool_or_arguments": 0
+    },
+    "full": {
+      "reviewed_trials": 6,
+      "accepted_bash_command": 1,
+      "missing_tool": 4,
+      "invalid_tool_or_arguments": 1
+    }
+  },
+  "rows": [
+    {
+      "job": "anomaly.call91.canonicalprefix",
+      "mode": "full",
+      "seed": 42,
+      "result_sha256": "9ca5ad50c2d6a88f9d777afd8c2e0f9e01b5ab9b6e66f021dc0fe60871e60cc8",
+      "fixture_sha256": "02f743ca2733228f18d81f9c91f50309bbe248648a93a137e7681ebd2e1ad589",
+      "source_onset_fixture_sha256": "3d32de201c14cf805635d3e38fafc2ff220202aded67b71861e16df4fbdf9180",
+      "source_full_reply_case_sha256": "62e3bcae8970a06f16fd33b9e6053e3201126cd1349758f6060036b4df6a100e",
+      "raw_packet_sha256": "66a2b677e34ef4a62ca2ae02ea5a9e06a0f8bfa91c68aac34842e29e883884f7",
+      "candidate_prompt_ids_sha256": "1d1698209eddefb76c31378756b8395e5d8040fa4d27c0c379e2c0551c12bc22",
+      "candidate_prompt_tokens": 1024,
+      "source_prompt_tokens": 48411,
+      "request_boundary_token_index": 48233,
+      "suffix_start_token_index": 47387,
+      "assistant_prefix_start_token_index": 48233,
+      "assistant_context_ids": 178,
+      "assistant_context_tail": "s.py\nwith open('lib/matplotlib/colors.py', 'r') as f:\n    lines = f.readlines()\n\n# Fix the IndentationError at 1218-1220\n# and the __call__ method.\n# Since I've",
+      "generated_token_count": 27,
+      "generated_token_ids_sha256": "cf217f18a9dd50c04874634c45873cc643fd591401695f5f822e7e3257972dd7",
+      "generated_text_sha256": "61bc6d530ef2e40a81c69d8d92aedc570e88d26363360783050ea7186b136174",
+      "generated_text_head": " already messed up the file, I'll just start over.\nEOF\npython3 fix_colors.py<|\"|>}<tool_call|><|tool_response>",
+      "generated_text_tail": " already messed up the file, I'll just start over.\nEOF\npython3 fix_colors.py<|\"|>}<tool_call|><|tool_response>",
+      "generated_tool_close_marker_present": true,
+      "stock_parser_full_assistant_context": {
+        "status": "allowed_bash_command",
+        "calls": [
+          {
+            "tool_name": "bash",
+            "name_is_bash": true,
+            "arguments_json": true,
+            "argument_keys": [
+              "command"
+            ],
+            "command_is_string": true,
+            "command_preview": "sed -i '1218,1220s/^/        /' lib/matplotlib/colors.py\nsed -i '1219,1221s/^/            /' lib/matplotlib/colors.py\n# No, this is not working.\n# I'll just use a simple python script to rewrite the file and fix the inde"
+          }
+        ],
+        "reasoning_chars": 67,
+        "content_chars": 0,
+        "reasoning_head": "I'll just use `sed` to fix the indentation of those specific lines.",
+        "content_head": ""
+      },
+      "full_parse_error": null,
+      "stock_parser_generated_only_diagnostic": {
+        "status": "missing_tool",
+        "calls": [],
+        "reasoning_chars": 0,
+        "content_chars": 82,
+        "reasoning_head": "",
+        "content_head": " already messed up the file, I'll just start over.\nEOF\npython3 fix_colors.py<|\"|>}"
+      },
+      "generated_only_parse_error": null,
+      "runner_flag_unadjudicated": false
+    },
+    {
+      "job": "anomaly.call91.canonicalprefix",
+      "mode": "served",
+      "seed": 42,
+      "result_sha256": "4291808df0b2ba86956bd4924a8b60e7afcdd7809666f321c8b47ea5803da3eb",
+      "fixture_sha256": "02f743ca2733228f18d81f9c91f50309bbe248648a93a137e7681ebd2e1ad589",
+      "source_onset_fixture_sha256": "3d32de201c14cf805635d3e38fafc2ff220202aded67b71861e16df4fbdf9180",
+      "source_full_reply_case_sha256": "62e3bcae8970a06f16fd33b9e6053e3201126cd1349758f6060036b4df6a100e",
+      "raw_packet_sha256": "66a2b677e34ef4a62ca2ae02ea5a9e06a0f8bfa91c68aac34842e29e883884f7",
+      "candidate_prompt_ids_sha256": "1d1698209eddefb76c31378756b8395e5d8040fa4d27c0c379e2c0551c12bc22",
+      "candidate_prompt_tokens": 1024,
+      "source_prompt_tokens": 48411,
+      "request_boundary_token_index": 48233,
+      "suffix_start_token_index": 47387,
+      "assistant_prefix_start_token_index": 48233,
+      "assistant_context_ids": 178,
+      "assistant_context_tail": "s.py\nwith open('lib/matplotlib/colors.py', 'r') as f:\n    lines = f.readlines()\n\n# Fix the IndentationError at 1218-1220\n# and the __call__ method.\n# Since I've",
+      "generated_token_count": 58,
+      "generated_token_ids_sha256": "820245d3a47c87d6065f3b0a3ecb93f1e191a7cc3d0b8d08a8d04246f37a1453",
+      "generated_text_sha256": "4c94797b2021f5cd154205c813ea6020deebc41f4bf6c2559e40704be91d8842",
+      "generated_text_head": " already modified the file, I'll just fix those lines.\n# I'll just read the file and replace the problematic lines with the correct ones.\n# But I don't have the original file.\nEOF\npython3 fix_colors.py<|\"|>}<tool_call|><",
+      "generated_text_tail": "ed the file, I'll just fix those lines.\n# I'll just read the file and replace the problematic lines with the correct ones.\n# But I don't have the original file.\nEOF\npython3 fix_colors.py<|\"|>}<tool_call|><|tool_response>",
+      "generated_tool_close_marker_present": true,
+      "stock_parser_full_assistant_context": {
+        "status": "allowed_bash_command",
+        "calls": [
+          {
+            "tool_name": "bash",
+            "name_is_bash": true,
+            "arguments_json": true,
+            "argument_keys": [
+              "command"
+            ],
+            "command_is_string": true,
+            "command_preview": "sed -i '1218,1220s/^/        /' lib/matplotlib/colors.py\nsed -i '1219,1221s/^/            /' lib/matplotlib/colors.py\n# No, this is not working.\n# I'll just use a simple python script to rewrite the file and fix the inde"
+          }
+        ],
+        "reasoning_chars": 67,
+        "content_chars": 0,
+        "reasoning_head": "I'll just use `sed` to fix the indentation of those specific lines.",
+        "content_head": ""
+      },
+      "full_parse_error": null,
+      "stock_parser_generated_only_diagnostic": {
+        "status": "missing_tool",
+        "calls": [],
+        "reasoning_chars": 0,
+        "content_chars": 207,
+        "reasoning_head": "",
+        "content_head": " already modified the file, I'll just fix those lines.\n# I'll just read the file and replace the problematic lines with the correct ones.\n# But I don't have the"
+      },
+      "generated_only_parse_error": null,
+      "runner_flag_unadjudicated": false
+    },
+    {
+      "job": "anomaly.matplotlib__matplotlib-20488.call86.onset",
+      "mode": "served",
+      "seed": 44,
+      "result_sha256": "0aea28389faa2da5325d78a67b05beadd6c6dd2178fab7e4f56e6f34cef9ca34",
+      "fixture_sha256": "56a0d881cd7c275743511dd2ac716c2755c913cbc014e7c9c1dd0713ce46a283",
+      "source_onset_fixture_sha256": "c11bb5890af7b0166bbbb61c44a3200e58aa3eb4b509403759fbb162ae58d179",
+      "source_full_reply_case_sha256": "4a75ac4eb6b90458a6320fc967e5dd011677932e5852ce58e9e293708dc599f3",
+      "raw_packet_sha256": "674e39f234ccb1c10a265def5263f22152fb5e11ad5c29c6843866e37e29c6d5",
+      "candidate_prompt_ids_sha256": "640a9ea157bdebc13e93b32a8b2bae5e39c7737b8334b8de7bdfe891b3961e6b",
+      "candidate_prompt_tokens": 1024,
+      "source_prompt_tokens": 46118,
+      "request_boundary_token_index": 46112,
+      "suffix_start_token_index": 45094,
+      "assistant_prefix_start_token_index": 46112,
+      "assistant_context_ids": 6,
+      "assistant_context_tail": "<|channel>thought\nI've",
+      "generated_token_count": 82,
+      "generated_token_ids_sha256": "b88fce33524f45d777a0386597fa8767e6ef8609ff43b6303665d2e1dcae2083",
+      "generated_text_sha256": "74b671cc492473b74e02a3126ed2ce61cd8354005cae3a52923f12ab764b7bab",
+      "generated_text_head": " tried to fix the issue, but it seems like I've introduced an `IndentationError` in `matplotlib/colors.py`. Let's examine the code and fix the indentation.\n<channel|><|tool_call>call:bash{command:<|\"|>grep -C 5 \"if self.",
+      "generated_text_tail": "ib/colors.py`. Let's examine the code and fix the indentation.\n<channel|><|tool_call>call:bash{command:<|\"|>grep -C 5 \"if self.vmax is None and A.size:\" /testbed/lib/matplotlib/colors.py<|\"|>}<tool_call|><|tool_response>",
+      "generated_tool_close_marker_present": true,
+      "stock_parser_full_assistant_context": {
+        "status": "allowed_bash_command",
+        "calls": [
+          {
+            "tool_name": "bash",
+            "name_is_bash": true,
+            "arguments_json": true,
+            "argument_keys": [
+              "command"
+            ],
+            "command_is_string": true,
+            "command_preview": "grep -C 5 \"if self.vmax is None and A.size:\" /testbed/lib/matplotlib/colors.py"
+          }
+        ],
+        "reasoning_chars": 159,
+        "content_chars": 0,
+        "reasoning_head": "I've tried to fix the issue, but it seems like I've introduced an `IndentationError` in `matplotlib/colors.py`. Let's examine the code and fix the indentation.",
+        "content_head": ""
+      },
+      "full_parse_error": null,
+      "stock_parser_generated_only_diagnostic": {
+        "status": "allowed_bash_command",
+        "calls": [
+          {
+            "tool_name": "bash",
+            "name_is_bash": true,
+            "arguments_json": true,
+            "argument_keys": [
+              "command"
+            ],
+            "command_is_string": true,
+            "command_preview": "grep -C 5 \"if self.vmax is None and A.size:\" /testbed/lib/matplotlib/colors.py"
+          }
+        ],
+        "reasoning_chars": 155,
+        "content_chars": 0,
+        "reasoning_head": " tried to fix the issue, but it seems like I've introduced an `IndentationError` in `matplotlib/colors.py`. Let's examine the code and fix the indentation.",
+        "content_head": ""
+      },
+      "generated_only_parse_error": null,
+      "runner_flag_unadjudicated": false
+    },
+    {
+      "job": "anomaly.psf__requests-5414.call10.onset",
+      "mode": "full",
+      "seed": 44,
+      "result_sha256": "09a4a0cf9159ccdafa8913902f0b53f63c337f33720ea559228c51877a4f90dd",
+      "fixture_sha256": "2d8bee7e1640381dcb31e7213e9f3d4ae020303e3e8c1bdb0f750f1714f5e3a2",
+      "source_onset_fixture_sha256": "38cba2429d022e64133da2c34388d9e88a9b26b82ec58594153692842dccb961",
+      "source_full_reply_case_sha256": "3da38a4c4fcb3d3260267e62b1028e61acfd3f782f8f1b3396486170bd79af8a",
+      "raw_packet_sha256": "79dcdd8f52f6cbd15265e96f11bb9b51ac682718ff927a8f28461404748e22c5",
+      "candidate_prompt_ids_sha256": "1779ea98a42edb0f4e4102b567522c6ec2b25e4f81a88c148e2a9f3ac04f3a6c",
+      "candidate_prompt_tokens": 1024,
+      "source_prompt_tokens": 7057,
+      "request_boundary_token_index": 6869,
+      "suffix_start_token_index": 6033,
+      "assistant_prefix_start_token_index": 6869,
+      "assistant_context_ids": 188,
+      "assistant_context_tail": "m\")\n  ...\n  File \"/opt/miniconda3/lib/python3.11/site-packages/urllib3/util/connection.py\", line 68, in create_connection\n    return six.raise_from(\n           ",
+      "generated_token_count": 328,
+      "generated_token_ids_sha256": "3acd24fa8cd192a39b911b7dcac18fbed72c6ed2a9b743099229ec334a1aa904",
+      "generated_text_sha256": "0a3bbc9e9d3d5201ca6bdddb01373d53fbe337022603d4476b5732a99cebeea3",
+      "generated_text_head": "urllib3.exceptions.LocationParseError(\"Invalid URL %r\" % url),\n           exc,\n          )\nurllib3.exceptions.LocationParseError: Invalid URL 'http://.example.com'\n```\n\nThe target is to raise `requests.exceptions.Invalid",
+      "generated_text_tail": "validURL:\\n    print(\\\"Caught expected InvalidURL\\\")\\nexcept Exception as e:\\n    print(f\\\"Caught unexpected exception: {type(e).__name__}: {e}\\\")\\nEOF\\npython reproduce_issue.py\"\n        }\n      }\n    }\n  ]\n}\n```<turn|>",
+      "generated_tool_close_marker_present": false,
+      "stock_parser_full_assistant_context": {
+        "status": "missing_tool",
+        "calls": [],
+        "reasoning_chars": 1221,
+        "content_chars": 540,
+        "reasoning_head": "Okay, I've analyzed the issue. The user is reporting that `requests.get(\"http://.example.com\")` raises a `UnicodeError` (actually `urllib3.exceptions.LocationPa",
+        "content_head": "```json\n{\n  \"tool_calls\": [\n    {\n      \"id\": \"call_0\",\n      \"type\": \"function\",\n      \"function\": {\n        \"name\": \"bash\",\n        \"arguments\": {\n          \""
+      },
+      "full_parse_error": null,
+      "stock_parser_generated_only_diagnostic": {
+        "status": "missing_tool",
+        "calls": [],
+        "reasoning_chars": 588,
+        "content_chars": 540,
+        "reasoning_head": "urllib3.exceptions.LocationParseError(\"Invalid URL %r\" % url),\n           exc,\n          )\nurllib3.exceptions.LocationParseError: Invalid URL 'http://.example.c",
+        "content_head": "```json\n{\n  \"tool_calls\": [\n    {\n      \"id\": \"call_0\",\n      \"type\": \"function\",\n      \"function\": {\n        \"name\": \"bash\",\n        \"arguments\": {\n          \""
+      },
+      "generated_only_parse_error": null,
+      "runner_flag_unadjudicated": false
+    },
+    {
+      "job": "anomaly.psf__requests-5414.call10.onset",
+      "mode": "served",
+      "seed": 44,
+      "result_sha256": "90e92015185c5b1b89afbbcd5d11660140b2dee258d055d40dd1025fe36b2476",
+      "fixture_sha256": "2d8bee7e1640381dcb31e7213e9f3d4ae020303e3e8c1bdb0f750f1714f5e3a2",
+      "source_onset_fixture_sha256": "38cba2429d022e64133da2c34388d9e88a9b26b82ec58594153692842dccb961",
+      "source_full_reply_case_sha256": "3da38a4c4fcb3d3260267e62b1028e61acfd3f782f8f1b3396486170bd79af8a",
+      "raw_packet_sha256": "79dcdd8f52f6cbd15265e96f11bb9b51ac682718ff927a8f28461404748e22c5",
+      "candidate_prompt_ids_sha256": "1779ea98a42edb0f4e4102b567522c6ec2b25e4f81a88c148e2a9f3ac04f3a6c",
+      "candidate_prompt_tokens": 1024,
+      "source_prompt_tokens": 7057,
+      "request_boundary_token_index": 6869,
+      "suffix_start_token_index": 6033,
+      "assistant_prefix_start_token_index": 6869,
+      "assistant_context_ids": 188,
+      "assistant_context_tail": "m\")\n  ...\n  File \"/opt/miniconda3/lib/python3.11/site-packages/urllib3/util/connection.py\", line 68, in create_connection\n    return six.raise_from(\n           ",
+      "generated_token_count": 193,
+      "generated_token_ids_sha256": "c1432779fb2e43ebd753901902fb392e269007a23ab873369df8ba6beff066a3",
+      "generated_text_sha256": "f9f19acaad982f9c75cc2b3cc066f93b21c325f5a8484942b0ad557269fc0d65",
+      "generated_text_head": "# ...\n           # (internal urllib3/urllib3/util/connection.py)\n           # (LocationParseError)\n```\n\nThe goal is to raise `requests.exceptions.InvalidURL` when `urllib3` raises `LocationParseError` during the `request",
+      "generated_text_tail": "s.get(\\\"http://.example.com\\\")\\nexcept Exception as e:\\n    print(f\\\"Caught expected exception: {type(e).__name__} - {e}\\\")\\n    import traceback\\n    traceback.print_exc()\\nEOF\\npython3 reproduce_issue.py\\n\"}\n```<turn|>",
+      "generated_tool_close_marker_present": false,
+      "stock_parser_full_assistant_context": {
+        "status": "missing_tool",
+        "calls": [],
+        "reasoning_chars": 986,
+        "content_chars": 302,
+        "reasoning_head": "Okay, I've analyzed the issue. The user is reporting that `requests.get(\"http://.example.com\")` raises a `UnicodeError` (actually `urllib3.exceptions.LocationPa",
+        "content_head": "```bash\n{\"command\": \"cat <<EOF > reproduce_issue.py\\nimport requests\\n\\ntry:\\n    requests.get(\\\"http://.example.com\\\")\\nexcept Exception as e:\\n    print(f\\\"Ca"
+      },
+      "full_parse_error": null,
+      "stock_parser_generated_only_diagnostic": {
+        "status": "missing_tool",
+        "calls": [],
+        "reasoning_chars": 353,
+        "content_chars": 302,
+        "reasoning_head": "# ...\n           # (internal urllib3/urllib3/util/connection.py)\n           # (LocationParseError)\n```\n\nThe goal is to raise `requests.exceptions.InvalidURL` wh",
+        "content_head": "```bash\n{\"command\": \"cat <<EOF > reproduce_issue.py\\nimport requests\\n\\ntry:\\n    requests.get(\\\"http://.example.com\\\")\\nexcept Exception as e:\\n    print(f\\\"Ca"
+      },
+      "generated_only_parse_error": null,
+      "runner_flag_unadjudicated": false
+    },
+    {
+      "job": "anomaly.psf__requests-5414.call11.onset",
+      "mode": "full",
+      "seed": 43,
+      "result_sha256": "6a22257dbe5b30dec221560fc555e6331e83891872d9e274b89be6b293718b82",
+      "fixture_sha256": "069a6794c0474028161f64153453577e07bc1cbde4690d0e77cef0286214ab65",
+      "source_onset_fixture_sha256": "50cbd0eb4e62c843a1ec8ac800a580135c3abc5dc2154d6be0a7e39d0c37ed6f",
+      "source_full_reply_case_sha256": "b6944878a9f1746dc765815a00c3564382889269d6ab081c10728dc1c0e081c0",
+      "raw_packet_sha256": "86ac061588351e26715c75a959acdb7e2a17593821991317a6d14a11e4ad9b78",
+      "candidate_prompt_ids_sha256": "4625c1c415385637a34f99ed1d9922854765d3e23c7ede68cf627c92bfb4a20f",
+      "candidate_prompt_tokens": 1024,
+      "source_prompt_tokens": 7226,
+      "request_boundary_token_index": 7003,
+      "suffix_start_token_index": 6202,
+      "assistant_prefix_start_token_index": 7003,
+      "assistant_context_ids": 223,
+      "assistant_context_tail": "m\")\n  ...\n  File \"/opt/miniconda3/lib/python3.11/site-packages/urllib3/util/connection.py\", line 68, in create_connection\n    return six.raise_from(\n           ",
+      "generated_token_count": 124,
+      "generated_token_ids_sha256": "8c078a0febd5d7577aae3b6e222e1adff8885813da761bee3bea405010d28588",
+      "generated_text_sha256": "122ee2dce68f3984ec4aacfba27bfbf2b2bdcc16744f3c425b073019753f216c",
+      "generated_text_head": "...\n           urllib3.exceptions.LocationParseError: Location '.example.com' is not a valid host\n```\nWait, `urllib3.exceptions.LocationParseError` is raised.\nThe user wants `requests.exceptions.InvalidURL` to be raised ",
+      "generated_text_tail": "Let's investigate where `requests` handles the URL and where it fails to catch this.\n\nI will start by exploring the codebase.<channel|><|tool_call>call:bash:{\"command\":\"ls -R | grep requests\"}<tool_call|><|tool_response>",
+      "generated_tool_close_marker_present": true,
+      "stock_parser_full_assistant_context": {
+        "status": "invalid_tool_or_arguments",
+        "calls": [
+          {
+            "tool_name": "bash:",
+            "name_is_bash": false,
+            "arguments_json": true,
+            "argument_keys": [
+              "\"command\""
+            ],
+            "command_is_string": false,
+            "command_preview": null
+          }
+        ],
+        "reasoning_chars": 1165,
+        "content_chars": 0,
+        "reasoning_head": "Okay, I've analyzed the issue.\nThe user is reporting that `requests.get(\"http://.example.com\")` raises a `UnicodeError` (specifically `urllib3.exceptions.Locati",
+        "content_head": ""
+      },
+      "full_parse_error": null,
+      "stock_parser_generated_only_diagnostic": {
+        "status": "invalid_tool_or_arguments",
+        "calls": [
+          {
+            "tool_name": "bash:",
+            "name_is_bash": false,
+            "arguments_json": true,
+            "argument_keys": [
+              "\"command\""
+            ],
+            "command_is_string": false,
+            "command_preview": null
+          }
+        ],
+        "reasoning_chars": 428,
+        "content_chars": 0,
+        "reasoning_head": "...\n           urllib3.exceptions.LocationParseError: Location '.example.com' is not a valid host\n```\nWait, `urllib3.exceptions.LocationParseError` is raised.\nT",
+        "content_head": ""
+      },
+      "generated_only_parse_error": null,
+      "runner_flag_unadjudicated": false
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-10323.call70.onset",
+      "mode": "full",
+      "seed": 42,
+      "result_sha256": "a441ba44ab8294f359c1ea864d045cc4e6fb5d123930684db4b02ee3c1749f77",
+      "fixture_sha256": "8d6aaf26c98664977dad85a0771fceb905582caa5b5700f1d2cd0f66f755f051",
+      "source_onset_fixture_sha256": "7d39e2c87e91327f35317968bf2647887a402d0086085ec8f95db8ff5fc2ab64",
+      "source_full_reply_case_sha256": "7c25c04a62bb0bb82a0262be482a31908ee3e3a7483115edb58edcf23ed1a1f0",
+      "raw_packet_sha256": "68db34d2fbd2afa478014fb2a2da1d07d87d58d86ebcc4d5bc49cb9aff54676d",
+      "candidate_prompt_ids_sha256": "02ac4ec34fed94d58ef3cd68a516c2f2abd12da80453e0cfeeb6635c55012778",
+      "candidate_prompt_tokens": 1024,
+      "source_prompt_tokens": 65779,
+      "request_boundary_token_index": 65615,
+      "suffix_start_token_index": 64755,
+      "assistant_prefix_start_token_index": 65615,
+      "assistant_context_ids": 164,
+      "assistant_context_tail": " `<plugin>` (no indentation).\nIf the user wants `    <plugin>`, they'll have to use something like `:prepend:     <plugin>` and we'd need to not strip it.\n\nI've",
+      "generated_token_count": 200,
+      "generated_token_ids_sha256": "662458f0b9d67bd6591161a3f29dfc724346f85289328c4a55036a2096ada4a7",
+      "generated_text_sha256": "16be909353f968a66eee7122bb097d7fe8921cf23f7d41253ef44f924e9244be",
+      "generated_text_head": " tried everything and I'll just leave the code as it was.\n<channel|>The issue described—where leading whitespace is stripped from prepended content in `LiteralInclude`—appears to be a fundamental limitation of how `docut",
+      "generated_text_tail": ", and the stripping of leading whitespace from prepended content is a side effect of the `docutils` option processing pipeline.\n\nTherefore, no further changes have been made to the `LiteralInclude` implementation.<turn|>",
+      "generated_tool_close_marker_present": false,
+      "stock_parser_full_assistant_context": {
+        "status": "missing_tool",
+        "calls": [],
+        "reasoning_chars": 684,
+        "content_chars": 996,
+        "reasoning_head": "I don't see anything that looks like it would preserve leading whitespace.\n\nGiven the constraints, I will conclude that the issue is a limitation of `docutils` ",
+        "content_head": "The issue described—where leading whitespace is stripped from prepended content in `LiteralInclude`—appears to be a fundamental limitation of how `docutils` han"
+      },
+      "full_parse_error": null,
+      "stock_parser_generated_only_diagnostic": {
+        "status": "missing_tool",
+        "calls": [],
+        "reasoning_chars": 57,
+        "content_chars": 996,
+        "reasoning_head": " tried everything and I'll just leave the code as it was.",
+        "content_head": "The issue described—where leading whitespace is stripped from prepended content in `LiteralInclude`—appears to be a fundamental limitation of how `docutils` han"
+      },
+      "generated_only_parse_error": null,
+      "runner_flag_unadjudicated": false
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-10323.call70.onset",
+      "mode": "full",
+      "seed": 43,
+      "result_sha256": "a441ba44ab8294f359c1ea864d045cc4e6fb5d123930684db4b02ee3c1749f77",
+      "fixture_sha256": "8d6aaf26c98664977dad85a0771fceb905582caa5b5700f1d2cd0f66f755f051",
+      "source_onset_fixture_sha256": "7d39e2c87e91327f35317968bf2647887a402d0086085ec8f95db8ff5fc2ab64",
+      "source_full_reply_case_sha256": "7c25c04a62bb0bb82a0262be482a31908ee3e3a7483115edb58edcf23ed1a1f0",
+      "raw_packet_sha256": "68db34d2fbd2afa478014fb2a2da1d07d87d58d86ebcc4d5bc49cb9aff54676d",
+      "candidate_prompt_ids_sha256": "02ac4ec34fed94d58ef3cd68a516c2f2abd12da80453e0cfeeb6635c55012778",
+      "candidate_prompt_tokens": 1024,
+      "source_prompt_tokens": 65779,
+      "request_boundary_token_index": 65615,
+      "suffix_start_token_index": 64755,
+      "assistant_prefix_start_token_index": 65615,
+      "assistant_context_ids": 164,
+      "assistant_context_tail": " `<plugin>` (no indentation).\nIf the user wants `    <plugin>`, they'll have to use something like `:prepend:     <plugin>` and we'd need to not strip it.\n\nI've",
+      "generated_token_count": 207,
+      "generated_token_ids_sha256": "14d660264494f6ebe2a9376a963c11fd90b9cc026309d2a4c896b6851c94a9a1",
+      "generated_text_sha256": "90a39bbd7a8f0dacaeacc170b92290ab14fa73fc68ba81993244809b15663c53",
+      "generated_text_head": " already checked this, and it seems like a limitation of `docutils`.\n\nI'll just submit.<channel|>The issue regarding the stripping of leading whitespace when using the `:prepend:` option in `LiteralInclude` appears to be",
+      "generated_text_tail": " current architecture of `docutils`, this behavior is consistent with its standard processing. Therefore, this is treated as a limitation of the library rather than an error in the `LiteralInclude` implementation.<turn|>",
+      "generated_tool_close_marker_present": false,
+      "stock_parser_full_assistant_context": {
+        "status": "missing_tool",
+        "calls": [],
+        "reasoning_chars": 714,
+        "content_chars": 954,
+        "reasoning_head": "I don't see anything that looks like it would preserve leading whitespace.\n\nGiven the constraints, I will conclude that the issue is a limitation of `docutils` ",
+        "content_head": "The issue regarding the stripping of leading whitespace when using the `:prepend:` option in `LiteralInclude` appears to be a limitation of how `docutils` handl"
+      },
+      "full_parse_error": null,
+      "stock_parser_generated_only_diagnostic": {
+        "status": "missing_tool",
+        "calls": [],
+        "reasoning_chars": 87,
+        "content_chars": 954,
+        "reasoning_head": " already checked this, and it seems like a limitation of `docutils`.\n\nI'll just submit.",
+        "content_head": "The issue regarding the stripping of leading whitespace when using the `:prepend:` option in `LiteralInclude` appears to be a limitation of how `docutils` handl"
+      },
+      "generated_only_parse_error": null,
+      "runner_flag_unadjudicated": false
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-10323.call70.onset",
+      "mode": "full",
+      "seed": 44,
+      "result_sha256": "a441ba44ab8294f359c1ea864d045cc4e6fb5d123930684db4b02ee3c1749f77",
+      "fixture_sha256": "8d6aaf26c98664977dad85a0771fceb905582caa5b5700f1d2cd0f66f755f051",
+      "source_onset_fixture_sha256": "7d39e2c87e91327f35317968bf2647887a402d0086085ec8f95db8ff5fc2ab64",
+      "source_full_reply_case_sha256": "7c25c04a62bb0bb82a0262be482a31908ee3e3a7483115edb58edcf23ed1a1f0",
+      "raw_packet_sha256": "68db34d2fbd2afa478014fb2a2da1d07d87d58d86ebcc4d5bc49cb9aff54676d",
+      "candidate_prompt_ids_sha256": "02ac4ec34fed94d58ef3cd68a516c2f2abd12da80453e0cfeeb6635c55012778",
+      "candidate_prompt_tokens": 1024,
+      "source_prompt_tokens": 65779,
+      "request_boundary_token_index": 65615,
+      "suffix_start_token_index": 64755,
+      "assistant_prefix_start_token_index": 65615,
+      "assistant_context_ids": 164,
+      "assistant_context_tail": " `<plugin>` (no indentation).\nIf the user wants `    <plugin>`, they'll have to use something like `:prepend:     <plugin>` and we'd need to not strip it.\n\nI've",
+      "generated_token_count": 191,
+      "generated_token_ids_sha256": "b2d524d4d8b70aac63b137113bcce0bae810a21bf08b6e6b0ee9c312783298f8",
+      "generated_text_sha256": "f43d133c7f042dd3566af1f15ff4ba0094999ccb50b8dc5b8c1762d31b9b9181",
+      "generated_text_head": " spent a lot of time on this and I'll just leave the code as it was and submit.\n<channel|>Based on the investigation, the issue where leading whitespace is stripped from prepended content in `LiteralInclude` is a limitat",
+      "generated_text_tail": " options and integrates with `docutils`' content processing.\n\nGiven the constraints and the complexity of implementing a fix that doesn't break existing functionality, the current implementation remains unchanged.<turn|>",
+      "generated_tool_close_marker_present": false,
+      "stock_parser_full_assistant_context": {
+        "status": "missing_tool",
+        "calls": [],
+        "reasoning_chars": 706,
+        "content_chars": 897,
+        "reasoning_head": "I don't see anything that looks like it would preserve leading whitespace.\n\nGiven the constraints, I will conclude that the issue is a limitation of `docutils` ",
+        "content_head": "Based on the investigation, the issue where leading whitespace is stripped from prepended content in `LiteralInclude` is a limitation of how options and content"
+      },
+      "full_parse_error": null,
+      "stock_parser_generated_only_diagnostic": {
+        "status": "missing_tool",
+        "calls": [],
+        "reasoning_chars": 79,
+        "content_chars": 897,
+        "reasoning_head": " spent a lot of time on this and I'll just leave the code as it was and submit.",
+        "content_head": "Based on the investigation, the issue where leading whitespace is stripped from prepended content in `LiteralInclude` is a limitation of how options and content"
+      },
+      "generated_only_parse_error": null,
+      "runner_flag_unadjudicated": false
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-10323.call70.onset",
+      "mode": "served",
+      "seed": 42,
+      "result_sha256": "ce633f522c58657f78738d741d04aaca2e58704a8ea0aac93fa8b71440cb2187",
+      "fixture_sha256": "8d6aaf26c98664977dad85a0771fceb905582caa5b5700f1d2cd0f66f755f051",
+      "source_onset_fixture_sha256": "7d39e2c87e91327f35317968bf2647887a402d0086085ec8f95db8ff5fc2ab64",
+      "source_full_reply_case_sha256": "7c25c04a62bb0bb82a0262be482a31908ee3e3a7483115edb58edcf23ed1a1f0",
+      "raw_packet_sha256": "68db34d2fbd2afa478014fb2a2da1d07d87d58d86ebcc4d5bc49cb9aff54676d",
+      "candidate_prompt_ids_sha256": "02ac4ec34fed94d58ef3cd68a516c2f2abd12da80453e0cfeeb6635c55012778",
+      "candidate_prompt_tokens": 1024,
+      "source_prompt_tokens": 65779,
+      "request_boundary_token_index": 65615,
+      "suffix_start_token_index": 64755,
+      "assistant_prefix_start_token_index": 65615,
+      "assistant_context_ids": 164,
+      "assistant_context_tail": " `<plugin>` (no indentation).\nIf the user wants `    <plugin>`, they'll have to use something like `:prepend:     <plugin>` and we'd need to not strip it.\n\nI've",
+      "generated_token_count": 122,
+      "generated_token_ids_sha256": "6621625e997841461939e34ba09c32fb7a5a3f18d3341162bc8b7a7681042551",
+      "generated_text_sha256": "bac42760a2042d5130613af2a19bdad35ba35f67f71758d0d0aad5c002fa43a0",
+      "generated_text_head": " spent enough time on this and I'll just leave it.\n<channel|>- The issue is that `LiteralInclude` strips leading whitespace from the `prepend` option, which is problematic when a user wants to include a plugin with a spe",
+      "generated_text_tail": "n `docutils` and not something that can be easily fixed within `LiteralInclude` without a major rewrite of the option handling logic.\n- Therefore, the current behavior is maintained as a limitation of the library.<turn|>",
+      "generated_tool_close_marker_present": false,
+      "stock_parser_full_assistant_context": {
+        "status": "missing_tool",
+        "calls": [],
+        "reasoning_chars": 677,
+        "content_chars": 531,
+        "reasoning_head": "I don't see anything that looks like it would preserve leading whitespace.\n\nGiven the constraints, I will conclude that the issue is a limitation of `docutils` ",
+        "content_head": "- The issue is that `LiteralInclude` strips leading whitespace from the `prepend` option, which is problematic when a user wants to include a plugin with a spec"
+      },
+      "full_parse_error": null,
+      "stock_parser_generated_only_diagnostic": {
+        "status": "missing_tool",
+        "calls": [],
+        "reasoning_chars": 50,
+        "content_chars": 531,
+        "reasoning_head": " spent enough time on this and I'll just leave it.",
+        "content_head": "- The issue is that `LiteralInclude` strips leading whitespace from the `prepend` option, which is problematic when a user wants to include a plugin with a spec"
+      },
+      "generated_only_parse_error": null,
+      "runner_flag_unadjudicated": false
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-10323.call70.onset",
+      "mode": "served",
+      "seed": 43,
+      "result_sha256": "ce633f522c58657f78738d741d04aaca2e58704a8ea0aac93fa8b71440cb2187",
+      "fixture_sha256": "8d6aaf26c98664977dad85a0771fceb905582caa5b5700f1d2cd0f66f755f051",
+      "source_onset_fixture_sha256": "7d39e2c87e91327f35317968bf2647887a402d0086085ec8f95db8ff5fc2ab64",
+      "source_full_reply_case_sha256": "7c25c04a62bb0bb82a0262be482a31908ee3e3a7483115edb58edcf23ed1a1f0",
+      "raw_packet_sha256": "68db34d2fbd2afa478014fb2a2da1d07d87d58d86ebcc4d5bc49cb9aff54676d",
+      "candidate_prompt_ids_sha256": "02ac4ec34fed94d58ef3cd68a516c2f2abd12da80453e0cfeeb6635c55012778",
+      "candidate_prompt_tokens": 1024,
+      "source_prompt_tokens": 65779,
+      "request_boundary_token_index": 65615,
+      "suffix_start_token_index": 64755,
+      "assistant_prefix_start_token_index": 65615,
+      "assistant_context_ids": 164,
+      "assistant_context_tail": " `<plugin>` (no indentation).\nIf the user wants `    <plugin>`, they'll have to use something like `:prepend:     <plugin>` and we'd need to not strip it.\n\nI've",
+      "generated_token_count": 154,
+      "generated_token_ids_sha256": "0a218827cb63ee4e7548d2b314bc7a23548268548d48b4b430c128d0294c37c1",
+      "generated_text_sha256": "c487af22a6a890ceb5dfa398b65907c0ffbd116bdfdd786c780620d4f8a6fe9d",
+      "generated_text_head": " already checked this, and it's a limitation of `docutils`.\n\nI'll just submit.<channel|>To resolve the issue where leading whitespace in the `prepend` option was stripped, we found that this behavior is inherent to how `",
+      "generated_text_tail": " fixed within `LiteralInclude` without a significant rewrite of how options are handled.\n\nThe current implementation remains as it was, as the behavior is consistent with `docutils`' own handling of option values.<turn|>",
+      "generated_tool_close_marker_present": false,
+      "stock_parser_full_assistant_context": {
+        "status": "missing_tool",
+        "calls": [],
+        "reasoning_chars": 705,
+        "content_chars": 661,
+        "reasoning_head": "I don't see anything that looks like it would preserve leading whitespace.\n\nGiven the constraints, I will conclude that the issue is a limitation of `docutils` ",
+        "content_head": "To resolve the issue where leading whitespace in the `prepend` option was stripped, we found that this behavior is inherent to how `docutils` handles options. I"
+      },
+      "full_parse_error": null,
+      "stock_parser_generated_only_diagnostic": {
+        "status": "missing_tool",
+        "calls": [],
+        "reasoning_chars": 78,
+        "content_chars": 661,
+        "reasoning_head": " already checked this, and it's a limitation of `docutils`.\n\nI'll just submit.",
+        "content_head": "To resolve the issue where leading whitespace in the `prepend` option was stripped, we found that this behavior is inherent to how `docutils` handles options. I"
+      },
+      "generated_only_parse_error": null,
+      "runner_flag_unadjudicated": false
+    }
+  ],
+  "classification_rules": [
+    "allowed_bash_command requires the actual parser to produce a tool named exactly bash with JSON object arguments containing a string command.",
+    "If there are no stock-parser structured calls, status is missing_tool; marker-like visible text is not treated as a parsed call.",
+    "If calls are extracted but name or argument shape fails the expected schema, status is invalid_tool_or_arguments.",
+    "This audit reports parser extraction only; it does not infer semantic correctness or adjudicate anomaly reproduction. Raw special tokens are retained in token decoding."
+  ]
+}

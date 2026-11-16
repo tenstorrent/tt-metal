@@ -1,0 +1,14 @@
+{
+  "forecast_seconds": {
+    "low": 2100,
+    "point": 3100,
+    "high": 5400
+  },
+  "anchors": {
+    "P3_fixed108_seconds": 2140.1934437209275,
+    "P6_fixed108_seconds": 2350.1810986995697,
+    "P19_accuracy_seconds": 164.47631669044495,
+    "P19_natural_traced_teacher_forcing_tps": 18.81038575928119
+  },
+  "basis": "Same108 workload as clean P3/P6. Judgmental allowance for higher-precision attention/gate-up and different generated lengths; no measured serving multiplier. P19 TF is diagnostic context, not linearly extrapolated to panel. Point3100 and high5400 allow substantial prefill/decode growth; reconcile any miss before next run."
+}

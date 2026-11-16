@@ -1,0 +1,9 @@
+{
+  "reviewer": "root",
+  "reviewed_unix": 1794722659.633544,
+  "status": "pass_after_corrections",
+  "fixture_checks": "All6 exactoriginal[-8192:] IDs/chosen/sampling/seeds independently verified; both3jobmanifests retain512freecap/chosen64.",
+  "forecast": "Read perseedVactualbasis and arithmetic, lower/point/upper explicit context uncertainty.",
+  "driver": "Root read complete wrapper; correctedROOTparents7 (script depth), assert runcontract exists, and immutableadmissionstatuspermode. Pforecastmiss requiresrootanalysisacceptance. Serialowners/HFguard/predecessorpins/timeouts1800 present.",
+  "no_device_work": true
+}

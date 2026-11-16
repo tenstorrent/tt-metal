@@ -1,0 +1,53 @@
+{
+  "status": "candidate_only_not_admitted_not_run",
+  "scope": "One serial selected-BFP8-served/full matched diagnostic for Sklearn13135 call29, seeds42/43/44. Exact source prompt_token_ids[-2048:], chosen64, free-run cap1024; one trial per seed. Served policy is stage12_head_bfp8_lofi; full is BF16/HiFi4 diagnostic.",
+  "question": "After suffix512 and suffix1024 controls naturally stopped before the original full missing_tool onset665, does a 2048-token source suffix permit a matched continuation to reach and reproduce that protocol anomaly?",
+  "input": {
+    "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-extra-contraction-controls/scikit-learn__scikit-learn-13135.call29.onset.private.json",
+    "source_sha256": "1403d7a48b7ecca8ec2095479c77a871caa3add09bedd7f6830d36315a883bd2",
+    "original_prompt_tokens": 17395,
+    "suffix_tokens": 2048,
+    "suffix_start_index": 15347,
+    "suffix_end_index_exclusive": 17395,
+    "suffix_ids_sha256": "5996ad81c092a622ae3305be3e9fd453b7f6ecaba66c80f1e319f28e212fb544",
+    "chosen_tokens": 64,
+    "chosen_ids_sha256": "8d4c97e7413b5ed9bf57c4a1f8ae56a386fb8c52b5588db4f765eb55f36a7e3e",
+    "seeds": [
+      42,
+      43,
+      44
+    ],
+    "free_run_cap_tokens": 1024
+  },
+  "mode_policies": {
+    "served": "stage12_head_bfp8_lofi from setup/head_bfp8_build_kwargs.json and head_bfp8_precision_config.json",
+    "full": "stage12_bf16_hifi4_diagnostic from setup/full_precision_build_kwargs.json and full_precision_config.json"
+  },
+  "predecessors": {
+    "P2_admission_sha256": "74bef162c97e23e882612eb85dae365f32c9da1f13ba4b9b8e1e1f8f582ad1be",
+    "P2_completion_sha256": "47896893e57257757d1153dd3ae4df6b05985cd97b0fbb9993739e30145b2880",
+    "P2_root_forecast_review_sha256": "5d27739c8f376feba9ce6fd76e96b37029be4467d32ced410d4504c72d60ea0b",
+    "SK1024_admission_sha256": "2e635a1169648396cf6abd95a6a3f3918808a45f0918431702fae2f5ff3ba308",
+    "SK1024_completion_summary_sha256": "ecbbc26c4f42b9ca977e06f881c9301eecbb3ed59a0336ccfdcfad5bd05e6781",
+    "SK1024_root_served_review_sha256": "2ee7c06425277e37c938256fd508c60a855838227058ec5047260a5a0f8b87ff",
+    "SK1024_root_full_review_sha256": "8736f9c042e98cdeea4b4d158b739b48e46c5ab73b369f87091d1a733f6ccc6b"
+  },
+  "mandatory_gates": [
+    "Root must separately review/admit the exact candidate; this proposal grants no execution authority. STOP_BEFORE_LAUNCH stays until explicit root admission.",
+    "Require P2 and suffix1024 predecessor exact pinned completion/admission/reviews plus their root forecast acceptances; verify actual output runtime_precision matches selected served BFP8 and full BF16/HiFi4 policies.",
+    "Require exact root-authored serial-HF clearance confirming primary HF9 and Sklearn secondary-loop HF batch are terminal/root-reviewed, with no active HF process before either mode.",
+    "One explicit mode per command; served first. Full requires successful served exit and root acceptance/reconciliation of the served elapsed-vs-frozen forecast.",
+    "Preflight must confirm zero device owners and no active HF process. Use STOP and a bounded per-mode timeout. Never overlap TT with HF.",
+    "Execution output guard: all three expected result files and load record must exist; verify seeds, prompt-token counts/hashes, generated-token count<=1024, exit status, and runtime_precision before marking completion.",
+    "Forecast review required separately for served and full. Misses require root acceptance bound to exact completion hash, measured elapsed, and frozen range before next mode."
+  ],
+  "no_claims": [
+    "A 2048-token suffix is not the original full17395-token conditioning context.",
+    "A diagnostic anomaly does not establish task failure, model causality, or serving-policy acceptance.",
+    "No HF or TT command has been launched from this package; no score or policy change."
+  ],
+  "forecast_file": "forecast.json",
+  "commands_file": "commands.json",
+  "source_inventory_file": "source-hashes.json",
+  "prefix_provenance": "prefix-provenance.json"
+}

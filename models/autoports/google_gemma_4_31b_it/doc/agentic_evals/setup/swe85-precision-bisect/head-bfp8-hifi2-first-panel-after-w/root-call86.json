@@ -1,0 +1,56 @@
+{
+  "reviewed_unix": 1794723592.8468094,
+  "rows": [
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.seed42.cap1024.json",
+      "sha256": "d741cee4980f77d0dc13a8bfed202b5070830fded95008d0cb909eb9eab866fb",
+      "seed": 42,
+      "tokens": 1024,
+      "verdict": "native",
+      "reason": "Pinned prefix ends call:bash; generated newline/script omits argument-object opener. All full raw texts checked. Seeds42/43 cap1024 are anomalous from first tokens, not rejected for cap; seed44 ends1017 with orphan closing marker.",
+      "trace_counters_delta": {
+        "model_replays": 1023,
+        "sample_replays": 1023,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 1023,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.seed43.cap1024.json",
+      "sha256": "d7f93e7600349739ae08673fc11b255980d0e2f84da2eb06a75f5881a0c49b50",
+      "seed": 43,
+      "tokens": 1024,
+      "verdict": "native",
+      "reason": "Pinned prefix ends call:bash; generated newline/script omits argument-object opener. All full raw texts checked. Seeds42/43 cap1024 are anomalous from first tokens, not rejected for cap; seed44 ends1017 with orphan closing marker.",
+      "trace_counters_delta": {
+        "model_replays": 1023,
+        "sample_replays": 1023,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 1023,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.seed44.cap1024.json",
+      "sha256": "ed2490569719b858fcce5fdead791da231c16c573fe0e8d85b89e4cda563a554",
+      "seed": 44,
+      "tokens": 1017,
+      "verdict": "native",
+      "reason": "Pinned prefix ends call:bash; generated newline/script omits argument-object opener. All full raw texts checked. Seeds42/43 cap1024 are anomalous from first tokens, not rejected for cap; seed44 ends1017 with orphan closing marker.",
+      "trace_counters_delta": {
+        "model_replays": 1016,
+        "sample_replays": 1016,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 1016,
+        "captures": 0
+      }
+    }
+  ]
+}

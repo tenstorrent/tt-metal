@@ -1,0 +1,12 @@
+{
+  "status": "pending_root_review",
+  "reviewer": "root",
+  "accepted": false,
+  "completion_sha256": "fill_after_P2",
+  "admission_sha256": "74bef162c97e23e882612eb85dae365f32c9da1f13ba4b9b8e1e1f8f582ad1be",
+  "forecast_status": "in_range_or_accepted_miss",
+  "forecast_range_seconds": ["copy exact low", "copy exact high"],
+  "reviewed_elapsed_seconds": "copy exact completion elapsed_seconds",
+  "contention_disclosed": true,
+  "speed_ranking_used": false
+}

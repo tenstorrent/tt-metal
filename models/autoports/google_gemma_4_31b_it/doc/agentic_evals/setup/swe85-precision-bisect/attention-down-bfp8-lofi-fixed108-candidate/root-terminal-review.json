@@ -1,0 +1,1124 @@
+{
+  "status": "completed_rejected_new_regressions",
+  "epoch": 1794751650.9346254,
+  "rows": [
+    {
+      "index": 0,
+      "name": "anomaly.call88.canonicalprefix.seed42.cap1024",
+      "sha256": "c837befa7470197d993695868fbd52d713e984584b13ff965ab2f72e96a5d531",
+      "tokens": 1024,
+      "cap": 1024,
+      "last_token": 537,
+      "decode_tokens": 1023,
+      "decode_wall_s": 39.15126796695404
+    },
+    {
+      "index": 1,
+      "name": "anomaly.call88.canonicalprefix.seed43.cap1024",
+      "sha256": "8e4604c004f97d5e09f1935b1d309fc104acf5bf5519e1c38966b749ce75bd10",
+      "tokens": 628,
+      "cap": 1024,
+      "last_token": 50,
+      "decode_tokens": 627,
+      "decode_wall_s": 23.995541956974193
+    },
+    {
+      "index": 2,
+      "name": "anomaly.call88.canonicalprefix.seed44.cap1024",
+      "sha256": "f4a9593ff0c86722deb3047d81ac65e1730b8a6515f641360c59c736502d42ee",
+      "tokens": 653,
+      "cap": 1024,
+      "last_token": 50,
+      "decode_tokens": 652,
+      "decode_wall_s": 24.949731114087626
+    },
+    {
+      "index": 3,
+      "name": "anomaly.call91.canonicalprefix.seed42.cap256",
+      "sha256": "54bdff702aa71d57b5f6af3fac5836416450fe8fb922f606943a614eddf65e7a",
+      "tokens": 32,
+      "cap": 256,
+      "last_token": 50,
+      "decode_tokens": 31,
+      "decode_wall_s": 1.1900661550462246
+    },
+    {
+      "index": 4,
+      "name": "anomaly.call91.canonicalprefix.seed43.cap256",
+      "sha256": "815f682a0b3d0df536a67d195b062fa6ff8528b01b5d70a7f35bba0b887889de",
+      "tokens": 51,
+      "cap": 256,
+      "last_token": 50,
+      "decode_tokens": 50,
+      "decode_wall_s": 1.9194273489993066
+    },
+    {
+      "index": 5,
+      "name": "anomaly.call91.canonicalprefix.seed44.cap1024",
+      "sha256": "539d83347e092b33fafcfd67d007e1206d854610b4e3a19d1152b794b7abde9c",
+      "tokens": 56,
+      "cap": 1024,
+      "last_token": 50,
+      "decode_tokens": 55,
+      "decode_wall_s": 2.1099949358031154
+    },
+    {
+      "index": 6,
+      "name": "anomaly.matplotlib__matplotlib-20488.call82.onset.seed42.cap512",
+      "sha256": "5753a2c0339e3af5b47f5e3a65c5f08ecbd08fafc06c62cc111957fc4c1cbcc0",
+      "tokens": 45,
+      "cap": 512,
+      "last_token": 50,
+      "decode_tokens": 44,
+      "decode_wall_s": 1.6716473170090467
+    },
+    {
+      "index": 7,
+      "name": "anomaly.matplotlib__matplotlib-20488.call82.onset.seed43.cap256",
+      "sha256": "c6089139e1c8e3bdedd1fddce0b77992ee6bdb17470ca5472cf0ac52835ba680",
+      "tokens": 90,
+      "cap": 256,
+      "last_token": 50,
+      "decode_tokens": 89,
+      "decode_wall_s": 3.3801902348641306
+    },
+    {
+      "index": 8,
+      "name": "anomaly.matplotlib__matplotlib-20488.call82.onset.seed44.cap256",
+      "sha256": "63cf070926581c31c7decbe5f732d558d549d7c2b07ff3c0157f1d58f9966997",
+      "tokens": 94,
+      "cap": 256,
+      "last_token": 50,
+      "decode_tokens": 93,
+      "decode_wall_s": 3.5341693540103734
+    },
+    {
+      "index": 9,
+      "name": "anomaly.matplotlib__matplotlib-20488.call86.onset.seed42.cap256",
+      "sha256": "6099f5ac9277134c0cb76ac29a7fdf526bdd79231dc5337d4bb2705464f954ab",
+      "tokens": 145,
+      "cap": 256,
+      "last_token": 50,
+      "decode_tokens": 144,
+      "decode_wall_s": 5.505960333161056
+    },
+    {
+      "index": 10,
+      "name": "anomaly.matplotlib__matplotlib-20488.call86.onset.seed43.cap256",
+      "sha256": "74c995a2f9d7ec5567134d65ccbae18f5c6aa1fedb0078f6eb0c45cf8ddc0272",
+      "tokens": 105,
+      "cap": 256,
+      "last_token": 50,
+      "decode_tokens": 104,
+      "decode_wall_s": 3.9700611841399223
+    },
+    {
+      "index": 11,
+      "name": "anomaly.matplotlib__matplotlib-20488.call86.onset.seed44.cap1024",
+      "sha256": "6cf16d18818f8ae2c701a3ba6ee5e59058b9aa1234ab2e7bad5c6769202a8df3",
+      "tokens": 127,
+      "cap": 1024,
+      "last_token": 50,
+      "decode_tokens": 126,
+      "decode_wall_s": 4.808177578030154
+    },
+    {
+      "index": 12,
+      "name": "anomaly.psf__requests-1921.call1.onset.seed42.cap256",
+      "sha256": "363531a1958cd7a601b834f154c1850e12290144828c6cdac37a01c261278046",
+      "tokens": 16,
+      "cap": 256,
+      "last_token": 50,
+      "decode_tokens": 15,
+      "decode_wall_s": 0.5086440739687532
+    },
+    {
+      "index": 13,
+      "name": "anomaly.psf__requests-1921.call1.onset.seed43.cap256",
+      "sha256": "63c5b97ad95905cf766c814257e72eb4ab752e4f492ccf43b5ec257e1d3ae36b",
+      "tokens": 16,
+      "cap": 256,
+      "last_token": 50,
+      "decode_tokens": 15,
+      "decode_wall_s": 0.5090198470279574
+    },
+    {
+      "index": 14,
+      "name": "anomaly.psf__requests-1921.call1.onset.seed44.cap256",
+      "sha256": "4b6915f9c4e8240652f85f7f4dd50728c4276847ba9096ad25f8433cc6c17934",
+      "tokens": 16,
+      "cap": 256,
+      "last_token": 50,
+      "decode_tokens": 15,
+      "decode_wall_s": 0.5089302600827068
+    },
+    {
+      "index": 15,
+      "name": "anomaly.psf__requests-5414.call10.onset.seed42.cap256",
+      "sha256": "81ba0b0dae43779077ba5bf102117330a85227452c5aa075d4d1324fc81bc9e7",
+      "tokens": 256,
+      "cap": 256,
+      "last_token": 172109,
+      "decode_tokens": 255,
+      "decode_wall_s": 8.793203789973632
+    },
+    {
+      "index": 16,
+      "name": "anomaly.psf__requests-5414.call10.onset.seed43.cap256",
+      "sha256": "34d4c6df348519ef4a41c0e1e12363febf2a3609e54a48ca2c1aee8694868709",
+      "tokens": 256,
+      "cap": 256,
+      "last_token": 172109,
+      "decode_tokens": 255,
+      "decode_wall_s": 8.791864946018904
+    },
+    {
+      "index": 17,
+      "name": "anomaly.psf__requests-5414.call10.onset.seed44.cap256",
+      "sha256": "9dacb88c4eb9c6ee40f5cdd8d844b52f1ce0bfc6256b1d86ee1e563fc64c25fc",
+      "tokens": 256,
+      "cap": 256,
+      "last_token": 172109,
+      "decode_tokens": 255,
+      "decode_wall_s": 8.786852531135082
+    },
+    {
+      "index": 18,
+      "name": "anomaly.psf__requests-5414.call11.onset.seed42.cap256",
+      "sha256": "a8c4a8f3f77af3a669abbc606b715a66aa4a46e6fd6070960ecd577afa4b4a29",
+      "tokens": 256,
+      "cap": 256,
+      "last_token": 172109,
+      "decode_tokens": 255,
+      "decode_wall_s": 8.791340473806486
+    },
+    {
+      "index": 19,
+      "name": "anomaly.psf__requests-5414.call11.onset.seed43.cap256",
+      "sha256": "360da2398d4ad8575958226d898433d70bd0df3212746eec2a73b03a097a3aa6",
+      "tokens": 256,
+      "cap": 256,
+      "last_token": 172109,
+      "decode_tokens": 255,
+      "decode_wall_s": 8.792348226066679
+    },
+    {
+      "index": 20,
+      "name": "anomaly.psf__requests-5414.call11.onset.seed44.cap256",
+      "sha256": "c1f5b8baa9e36825db326d9fd195fd0024a74e4f357eb0146463500389888448",
+      "tokens": 256,
+      "cap": 256,
+      "last_token": 172109,
+      "decode_tokens": 255,
+      "decode_wall_s": 8.793178928783163
+    },
+    {
+      "index": 21,
+      "name": "anomaly.psf__requests-5414.call9.onset.seed42.cap256",
+      "sha256": "79b23a2c10db72c2f204f8c569badaefb453acdde011dd3e2c471382b1d96cd1",
+      "tokens": 256,
+      "cap": 256,
+      "last_token": 172109,
+      "decode_tokens": 255,
+      "decode_wall_s": 8.828919674968347
+    },
+    {
+      "index": 22,
+      "name": "anomaly.psf__requests-5414.call9.onset.seed43.cap256",
+      "sha256": "a1868befdf9e3d8bc3aaef30fbb7fc384eb400181ea63bb6565b93ec2f888fb7",
+      "tokens": 256,
+      "cap": 256,
+      "last_token": 172109,
+      "decode_tokens": 255,
+      "decode_wall_s": 8.81821938091889
+    },
+    {
+      "index": 23,
+      "name": "anomaly.psf__requests-5414.call9.onset.seed44.cap256",
+      "sha256": "c16caedd84ae0fba4204dc74bd6f904ebbdfdd2c0a8be4c0447714c5367507b8",
+      "tokens": 256,
+      "cap": 256,
+      "last_token": 172109,
+      "decode_tokens": 255,
+      "decode_wall_s": 8.820083570899442
+    },
+    {
+      "index": 24,
+      "name": "anomaly.pylint-dev__pylint-4551.call1.onset.seed42.cap256",
+      "sha256": "f36704de3ac7ac87eaaae27148c21e0d9ecdfa4f79fdd38af02a2fbeb177ca15",
+      "tokens": 16,
+      "cap": 256,
+      "last_token": 50,
+      "decode_tokens": 15,
+      "decode_wall_s": 0.5088429218158126
+    },
+    {
+      "index": 25,
+      "name": "anomaly.pylint-dev__pylint-4551.call1.onset.seed43.cap256",
+      "sha256": "1d1a076cdc6ab8f83395f23ac8dc158432ef9dcfcc1b9807a1333d134d7ea77c",
+      "tokens": 28,
+      "cap": 256,
+      "last_token": 50,
+      "decode_tokens": 27,
+      "decode_wall_s": 0.916037216084078
+    },
+    {
+      "index": 26,
+      "name": "anomaly.pylint-dev__pylint-4551.call1.onset.seed44.cap256",
+      "sha256": "a23482bb7f6c2c540026046bdcfd1ee25941d0de09d57e159329cbb1009e5505",
+      "tokens": 16,
+      "cap": 256,
+      "last_token": 50,
+      "decode_tokens": 15,
+      "decode_wall_s": 0.508581232978031
+    },
+    {
+      "index": 27,
+      "name": "anomaly.pylint-dev__pylint-4604.call45.onset.seed42.cap256",
+      "sha256": "93f447eb446e4bba6308e8ea9f2451c9f532a0b07a3f7b4282e1483e07b342da",
+      "tokens": 51,
+      "cap": 256,
+      "last_token": 50,
+      "decode_tokens": 50,
+      "decode_wall_s": 1.8643760320264846
+    },
+    {
+      "index": 28,
+      "name": "anomaly.pylint-dev__pylint-4604.call45.onset.seed43.cap256",
+      "sha256": "fcf21e4554efb2df09620dcdc7c482ba8f9e952e95cdc86b10bf0b1f6463baf2",
+      "tokens": 51,
+      "cap": 256,
+      "last_token": 50,
+      "decode_tokens": 50,
+      "decode_wall_s": 1.8648831329774112
+    },
+    {
+      "index": 29,
+      "name": "anomaly.pylint-dev__pylint-4604.call45.onset.seed44.cap256",
+      "sha256": "2ec57ebefc63ef3700fd1e108197f9cf46c761b307ef49eb2eee59c58ce14e93",
+      "tokens": 50,
+      "cap": 256,
+      "last_token": 50,
+      "decode_tokens": 49,
+      "decode_wall_s": 1.8277432259637862
+    },
+    {
+      "index": 30,
+      "name": "anomaly.pytest-dev__pytest-5787.call1.onset.seed42.cap256",
+      "sha256": "0d0c24af3909f9db7805ea79ad16ee96ddb87cde038b295c6078317174858959",
+      "tokens": 16,
+      "cap": 256,
+      "last_token": 50,
+      "decode_tokens": 15,
+      "decode_wall_s": 0.5204592652153224
+    },
+    {
+      "index": 31,
+      "name": "anomaly.pytest-dev__pytest-5787.call1.onset.seed43.cap256",
+      "sha256": "79fbaa1cb2c7003d85cc19f35de926ea6b081fad8169bb039e1f08fa8841357c",
+      "tokens": 15,
+      "cap": 256,
+      "last_token": 50,
+      "decode_tokens": 14,
+      "decode_wall_s": 0.48562692012637854
+    },
+    {
+      "index": 32,
+      "name": "anomaly.pytest-dev__pytest-5787.call1.onset.seed44.cap256",
+      "sha256": "b4df5ea53ff31e9dd55f97b1da8adb9130a0857af0fa62779d63397b28a31395",
+      "tokens": 256,
+      "cap": 256,
+      "last_token": 236761,
+      "decode_tokens": 255,
+      "decode_wall_s": 8.850247229915112
+    },
+    {
+      "index": 33,
+      "name": "anomaly.pytest-dev__pytest-5787.call65.onset.seed42.cap2048",
+      "sha256": "0cd845d49916ff162270ae353984bfa37452b9609bb1c7a298c4593c54bc91da",
+      "tokens": 234,
+      "cap": 2048,
+      "last_token": 50,
+      "decode_tokens": 233,
+      "decode_wall_s": 9.056899419985712
+    },
+    {
+      "index": 34,
+      "name": "anomaly.pytest-dev__pytest-5787.call65.onset.seed43.cap2048",
+      "sha256": "373d6fbb12200fb72ba354817d53fd799883527a02f52557e97d2015f558774e",
+      "tokens": 2048,
+      "cap": 2048,
+      "last_token": 144,
+      "decode_tokens": 2047,
+      "decode_wall_s": 79.77766216290183
+    },
+    {
+      "index": 35,
+      "name": "anomaly.pytest-dev__pytest-5787.call65.onset.seed44.cap4096",
+      "sha256": "9341692bf4b1a331e858ec15b67e5d3a0f90858e70ab3be7c214079b449c2414",
+      "tokens": 1916,
+      "cap": 4096,
+      "last_token": 50,
+      "decode_tokens": 1915,
+      "decode_wall_s": 74.6132655669935
+    },
+    {
+      "index": 36,
+      "name": "anomaly.pytest-dev__pytest-7432.call19.onset.seed42.cap256",
+      "sha256": "c4ad01d795594e34f5ddf9ac841985168fc75abc436e590c05bac9360dcff95d",
+      "tokens": 256,
+      "cap": 256,
+      "last_token": 172109,
+      "decode_tokens": 255,
+      "decode_wall_s": 8.885918335057795
+    },
+    {
+      "index": 37,
+      "name": "anomaly.pytest-dev__pytest-7432.call19.onset.seed43.cap256",
+      "sha256": "557cc620e5b6ef449eefb5b230f15ade89dd90b3a439459ca7748e04ba631104",
+      "tokens": 256,
+      "cap": 256,
+      "last_token": 172109,
+      "decode_tokens": 255,
+      "decode_wall_s": 8.883597634965554
+    },
+    {
+      "index": 38,
+      "name": "anomaly.pytest-dev__pytest-7432.call19.onset.seed44.cap256",
+      "sha256": "b105eb9f02d5e2ec49240a6080156a4ace05909852f3d27dee29d95ae94c6f70",
+      "tokens": 256,
+      "cap": 256,
+      "last_token": 172109,
+      "decode_tokens": 255,
+      "decode_wall_s": 8.883870274061337
+    },
+    {
+      "index": 39,
+      "name": "anomaly.pytest10356-call14.canonicalprefix.seed42.cap256",
+      "sha256": "79512228dfc5cec854b42c551f7c016b5d6c882519df9f5897266523e7911cf5",
+      "tokens": 33,
+      "cap": 256,
+      "last_token": 50,
+      "decode_tokens": 32,
+      "decode_wall_s": 1.1162287588231266
+    },
+    {
+      "index": 40,
+      "name": "anomaly.pytest10356-call14.canonicalprefix.seed43.cap256",
+      "sha256": "aa33ec8ad6b7a4b30b1de5cbe5ca1fbdcc3efae3fd195ca19d437a3f77f0b685",
+      "tokens": 34,
+      "cap": 256,
+      "last_token": 50,
+      "decode_tokens": 33,
+      "decode_wall_s": 1.1510478048585355
+    },
+    {
+      "index": 41,
+      "name": "anomaly.pytest10356-call14.canonicalprefix.seed44.cap256",
+      "sha256": "729ea91ad5fd8b23d47daf915362c4f0f06d9f26fe57eefc344d46a8f17badca",
+      "tokens": 34,
+      "cap": 256,
+      "last_token": 50,
+      "decode_tokens": 33,
+      "decode_wall_s": 1.1511592301540077
+    },
+    {
+      "index": 42,
+      "name": "anomaly.requests2931.call20.canonicalprefix.seed42.cap256",
+      "sha256": "e852f6bf789d2bdd727a3bf306dc0a49004aecb05fa375be59fa93f7442c7bd3",
+      "tokens": 256,
+      "cap": 256,
+      "last_token": 172109,
+      "decode_tokens": 255,
+      "decode_wall_s": 8.830275644082576
+    },
+    {
+      "index": 43,
+      "name": "anomaly.requests2931.call20.canonicalprefix.seed43.cap256",
+      "sha256": "40ad84c4592740a0d0572c0b94100df0a6132616f38bc243d11987090a2505f2",
+      "tokens": 256,
+      "cap": 256,
+      "last_token": 172109,
+      "decode_tokens": 255,
+      "decode_wall_s": 8.822101505938917
+    },
+    {
+      "index": 44,
+      "name": "anomaly.requests2931.call20.canonicalprefix.seed44.cap256",
+      "sha256": "71968f3b1a434b2a7a4f27a6428e0bddec12829fda192e2ca1594c243bb8580a",
+      "tokens": 256,
+      "cap": 256,
+      "last_token": 172109,
+      "decode_tokens": 255,
+      "decode_wall_s": 8.82550391415134
+    },
+    {
+      "index": 45,
+      "name": "anomaly.scikit-learn__scikit-learn-13135.call29.onset.seed42.cap1024",
+      "sha256": "9283e81b27947ab1373c760a9eafb577e9f9e1beb407fd4a0f6a8d4091987ed5",
+      "tokens": 188,
+      "cap": 1024,
+      "last_token": 50,
+      "decode_tokens": 187,
+      "decode_wall_s": 6.644806205062196
+    },
+    {
+      "index": 46,
+      "name": "anomaly.scikit-learn__scikit-learn-13135.call29.onset.seed43.cap512",
+      "sha256": "52f3f2199f1a71d54d8ead0612336ac0ced75944678337c39997e2ec046e56b4",
+      "tokens": 404,
+      "cap": 512,
+      "last_token": 50,
+      "decode_tokens": 403,
+      "decode_wall_s": 14.294924286892638
+    },
+    {
+      "index": 47,
+      "name": "anomaly.scikit-learn__scikit-learn-13135.call29.onset.seed44.cap512",
+      "sha256": "84d9890af95c3288afb177ff5d6c17d6508bbcc1cd7410ee2fe43b732e29af28",
+      "tokens": 177,
+      "cap": 512,
+      "last_token": 50,
+      "decode_tokens": 176,
+      "decode_wall_s": 6.241662055021152
+    },
+    {
+      "index": 48,
+      "name": "anomaly.sphinx-doc__sphinx-10323.call57.onset.seed42.cap512",
+      "sha256": "58a57539e18748692028acbbcaab219c7e28cc11febea2c4eed406b7910bd00e",
+      "tokens": 203,
+      "cap": 512,
+      "last_token": 50,
+      "decode_tokens": 202,
+      "decode_wall_s": 7.946847293060273
+    },
+    {
+      "index": 49,
+      "name": "anomaly.sphinx-doc__sphinx-10323.call57.onset.seed43.cap256",
+      "sha256": "3f23af6014db27e5e8354334c06aa304f96be507e163f41614cdf291d90aa4c2",
+      "tokens": 55,
+      "cap": 256,
+      "last_token": 50,
+      "decode_tokens": 54,
+      "decode_wall_s": 2.124348348006606
+    },
+    {
+      "index": 50,
+      "name": "anomaly.sphinx-doc__sphinx-10323.call57.onset.seed44.cap512",
+      "sha256": "85d8cc61532f4690cfb62506ff4367dd0315d798eb8833109eb235938f1fb7a7",
+      "tokens": 331,
+      "cap": 512,
+      "last_token": 50,
+      "decode_tokens": 330,
+      "decode_wall_s": 12.99165177415125
+    },
+    {
+      "index": 51,
+      "name": "anomaly.sphinx-doc__sphinx-10323.call68.onset.seed42.cap256",
+      "sha256": "30bdae1270393c6cc8692ae748fc2024ddccbeb937f430985eb0819a695e735e",
+      "tokens": 113,
+      "cap": 256,
+      "last_token": 50,
+      "decode_tokens": 112,
+      "decode_wall_s": 4.470035341801122
+    },
+    {
+      "index": 52,
+      "name": "anomaly.sphinx-doc__sphinx-10323.call68.onset.seed43.cap256",
+      "sha256": "9c0c89e866bbef0181a1e6a1d5ccbb2513979ff45ed8012e8477b9a00d47c8f3",
+      "tokens": 131,
+      "cap": 256,
+      "last_token": 50,
+      "decode_tokens": 130,
+      "decode_wall_s": 5.186441564001143
+    },
+    {
+      "index": 53,
+      "name": "anomaly.sphinx-doc__sphinx-10323.call68.onset.seed44.cap256",
+      "sha256": "5d3371620e565ccd12d8ac59a13f7d93c16ca6c0856886526c6e122705a98e1a",
+      "tokens": 174,
+      "cap": 256,
+      "last_token": 50,
+      "decode_tokens": 173,
+      "decode_wall_s": 6.905387678882107
+    },
+    {
+      "index": 54,
+      "name": "anomaly.sphinx-doc__sphinx-10323.call70.onset.seed42.cap256",
+      "sha256": "1f0a6e820197dca9b80bc680cd7bf6d9349081980f2694624a8661a80ee5a8e0",
+      "tokens": 40,
+      "cap": 256,
+      "last_token": 50,
+      "decode_tokens": 39,
+      "decode_wall_s": 1.5613429301884025
+    },
+    {
+      "index": 55,
+      "name": "anomaly.sphinx-doc__sphinx-10323.call70.onset.seed43.cap256",
+      "sha256": "e23f5b37e4850325af0a7b024061838508d5b559dc8253b96b010377723ac223",
+      "tokens": 38,
+      "cap": 256,
+      "last_token": 50,
+      "decode_tokens": 37,
+      "decode_wall_s": 1.4797175638377666
+    },
+    {
+      "index": 56,
+      "name": "anomaly.sphinx-doc__sphinx-10323.call70.onset.seed44.cap256",
+      "sha256": "e69a4b8515d4cf4e441f03f6ee2e83b1959ce261ad5f3d7e70f31f008638e77a",
+      "tokens": 53,
+      "cap": 256,
+      "last_token": 50,
+      "decode_tokens": 52,
+      "decode_wall_s": 2.0821845799218863
+    },
+    {
+      "index": 57,
+      "name": "anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.seed42.cap2048",
+      "sha256": "2f89d649bf687026246d9f1bbfc162302dcb5b994e826f2f5b2f6454a6f65563",
+      "tokens": 1146,
+      "cap": 2048,
+      "last_token": 50,
+      "decode_tokens": 1145,
+      "decode_wall_s": 45.14272482297383
+    },
+    {
+      "index": 58,
+      "name": "anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.seed43.cap2048",
+      "sha256": "f5effcb7f2009f106913a70a4ce50c89ebb7826af5660afa9a0dc4c30b5bd109",
+      "tokens": 1574,
+      "cap": 2048,
+      "last_token": 50,
+      "decode_tokens": 1573,
+      "decode_wall_s": 62.041002981131896
+    },
+    {
+      "index": 59,
+      "name": "anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.seed44.cap1024",
+      "sha256": "757cfda00c80a4b63a7538b16fa2b8374231142ebaf086e1a28a7c9e6dcce016",
+      "tokens": 352,
+      "cap": 1024,
+      "last_token": 50,
+      "decode_tokens": 351,
+      "decode_wall_s": 13.824234246043488
+    },
+    {
+      "index": 60,
+      "name": "anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset.seed42.cap256",
+      "sha256": "d2585485095e7021ab39b9c51430a90dad5f8ec35fb2d85ebef4827ce3bc994f",
+      "tokens": 53,
+      "cap": 256,
+      "last_token": 50,
+      "decode_tokens": 52,
+      "decode_wall_s": 2.051418168004602
+    },
+    {
+      "index": 61,
+      "name": "anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset.seed43.cap256",
+      "sha256": "0c149af86d57d4285c7fcfaa6895369f4119791de5767a68d02531b6a3cdf948",
+      "tokens": 102,
+      "cap": 256,
+      "last_token": 50,
+      "decode_tokens": 101,
+      "decode_wall_s": 3.989620289998129
+    },
+    {
+      "index": 62,
+      "name": "anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset.seed44.cap256",
+      "sha256": "8765dcf50b1a85df59c024994b5b375b35d86834b840c258d50de1f2fa2e904e",
+      "tokens": 108,
+      "cap": 256,
+      "last_token": 50,
+      "decode_tokens": 107,
+      "decode_wall_s": 4.221891107968986
+    },
+    {
+      "index": 63,
+      "name": "anomaly.sphinx-doc__sphinx-11510.call108.onset.seed42.cap256",
+      "sha256": "687efe5eaf32cb93ee27d9a999dcae995cbf1794aa5a660dd061ffe045b50be4",
+      "tokens": 36,
+      "cap": 256,
+      "last_token": 50,
+      "decode_tokens": 35,
+      "decode_wall_s": 1.390039033954963
+    },
+    {
+      "index": 64,
+      "name": "anomaly.sphinx-doc__sphinx-11510.call108.onset.seed43.cap256",
+      "sha256": "6d624ea6a28fade5d86c988c94a12d509f1cc47d6087c79b5cd1be966080cc13",
+      "tokens": 36,
+      "cap": 256,
+      "last_token": 50,
+      "decode_tokens": 35,
+      "decode_wall_s": 1.389621616108343
+    },
+    {
+      "index": 65,
+      "name": "anomaly.sphinx-doc__sphinx-11510.call108.onset.seed44.cap256",
+      "sha256": "0c25fed6e1653e160bd465c1741148d2a0e9d263486e11d4268964e4c78198fa",
+      "tokens": 36,
+      "cap": 256,
+      "last_token": 50,
+      "decode_tokens": 35,
+      "decode_wall_s": 1.3895277429837734
+    },
+    {
+      "index": 66,
+      "name": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed42.cap1024",
+      "sha256": "1d11e70a68c28ea1ef593cca082e9cc5412cc6998234206a4ce1354b75ec1d98",
+      "tokens": 771,
+      "cap": 1024,
+      "last_token": 50,
+      "decode_tokens": 770,
+      "decode_wall_s": 31.60812647198327
+    },
+    {
+      "index": 67,
+      "name": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed43.cap2048",
+      "sha256": "b1b849397a6f723fe9c846cf387ed3466953994f61a27decdb742888765343a4",
+      "tokens": 546,
+      "cap": 2048,
+      "last_token": 50,
+      "decode_tokens": 545,
+      "decode_wall_s": 22.36949969199486
+    },
+    {
+      "index": 68,
+      "name": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed44.cap1024",
+      "sha256": "0550c0237b02b8942dcb3532c15cc1336326e53dbf235e9faf62c2af99617e57",
+      "tokens": 507,
+      "cap": 1024,
+      "last_token": 50,
+      "decode_tokens": 506,
+      "decode_wall_s": 20.783485708991066
+    },
+    {
+      "index": 69,
+      "name": "anomaly.sphinx-doc__sphinx-11510.call28.onset.seed42.cap1024",
+      "sha256": "f981a79aab9167401c834a96acecf80eeb09a3add7df741e47515e2e991d2752",
+      "tokens": 572,
+      "cap": 1024,
+      "last_token": 50,
+      "decode_tokens": 571,
+      "decode_wall_s": 20.67208544211462
+    },
+    {
+      "index": 70,
+      "name": "anomaly.sphinx-doc__sphinx-11510.call28.onset.seed43.cap1024",
+      "sha256": "342b2434cb2bec02c9e987b5ee483ca291d0cda96584b14fbfa548fb1b410a33",
+      "tokens": 740,
+      "cap": 1024,
+      "last_token": 50,
+      "decode_tokens": 739,
+      "decode_wall_s": 26.76314398017712
+    },
+    {
+      "index": 71,
+      "name": "anomaly.sphinx-doc__sphinx-11510.call28.onset.seed44.cap1024",
+      "sha256": "e7cc64f4ef05b7247bafc918a85cbcffdd2f9b287f2b2e9a061494184b6c29cd",
+      "tokens": 517,
+      "cap": 1024,
+      "last_token": 50,
+      "decode_tokens": 516,
+      "decode_wall_s": 18.67857062909752
+    },
+    {
+      "index": 72,
+      "name": "anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.seed42.cap1024",
+      "sha256": "4532bec8caf9c2dbdcb7477ddcfe7d48a9ef16869b7206683f9f0e4893f820d3",
+      "tokens": 357,
+      "cap": 1024,
+      "last_token": 50,
+      "decode_tokens": 356,
+      "decode_wall_s": 13.63759786193259
+    },
+    {
+      "index": 73,
+      "name": "anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.seed43.cap1024",
+      "sha256": "ddde281783f2c08b0878bf7b5fc6d3a453bc50eb44b83af552f1d6aaf5fd5650",
+      "tokens": 1024,
+      "cap": 1024,
+      "last_token": 16594,
+      "decode_tokens": 1023,
+      "decode_wall_s": 39.222036151913926
+    },
+    {
+      "index": 74,
+      "name": "anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.seed44.cap1024",
+      "sha256": "cf179e0d057b899ef22ab0eadce10861eea8630f382f2fa32d7ca978ab8c8cf2",
+      "tokens": 1007,
+      "cap": 1024,
+      "last_token": 50,
+      "decode_tokens": 1006,
+      "decode_wall_s": 38.58953142189421
+    },
+    {
+      "index": 75,
+      "name": "anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.seed42.cap1024",
+      "sha256": "250a381e77794262c4acb5f9c9e0fa2b309e0c903a4612e56e6ba439bc5d6741",
+      "tokens": 846,
+      "cap": 1024,
+      "last_token": 50,
+      "decode_tokens": 845,
+      "decode_wall_s": 33.00746719003655
+    },
+    {
+      "index": 76,
+      "name": "anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.seed43.cap1024",
+      "sha256": "62fd31f123b18c1d8bb79ebf5dd577e473adca2a69990a58bd6657ceb4c068c8",
+      "tokens": 807,
+      "cap": 1024,
+      "last_token": 50,
+      "decode_tokens": 806,
+      "decode_wall_s": 31.4984318849165
+    },
+    {
+      "index": 77,
+      "name": "anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.seed44.cap1024",
+      "sha256": "56cddf7a03566ea7435a64fea9a71a35fa4b2e4df48047a18af3d94714fe09ff",
+      "tokens": 810,
+      "cap": 1024,
+      "last_token": 50,
+      "decode_tokens": 809,
+      "decode_wall_s": 31.61930618295446
+    },
+    {
+      "index": 78,
+      "name": "anomaly.sphinx-doc__sphinx-9461.call184.onset.seed42.cap1024",
+      "sha256": "78490270aee0da10d6c53874bdbb31df96f86e9cc9c2184870e83f499a02eb1c",
+      "tokens": 637,
+      "cap": 1024,
+      "last_token": 50,
+      "decode_tokens": 636,
+      "decode_wall_s": 25.823769250884652
+    },
+    {
+      "index": 79,
+      "name": "anomaly.sphinx-doc__sphinx-9461.call184.onset.seed43.cap2048",
+      "sha256": "80a188b75d6e227a20bd50464f030edb30d179cdb1c435829e057840b305585c",
+      "tokens": 582,
+      "cap": 2048,
+      "last_token": 50,
+      "decode_tokens": 581,
+      "decode_wall_s": 23.603755374904722
+    },
+    {
+      "index": 80,
+      "name": "anomaly.sphinx-doc__sphinx-9461.call184.onset.seed44.cap1024",
+      "sha256": "3b8a4003155f4db1a2b6a2bda5618da6fe38860f3db85b78238a30194561d663",
+      "tokens": 469,
+      "cap": 1024,
+      "last_token": 50,
+      "decode_tokens": 468,
+      "decode_wall_s": 19.002169223036617
+    },
+    {
+      "index": 81,
+      "name": "anomaly.sympy__sympy-13480.call1.onset.seed42.cap256",
+      "sha256": "1e3f09c4741bc7d31b34dfc159c0118f8ae5a7fdee47e6b1e362a44f67d9a896",
+      "tokens": 195,
+      "cap": 256,
+      "last_token": 50,
+      "decode_tokens": 194,
+      "decode_wall_s": 6.574875412974507
+    },
+    {
+      "index": 82,
+      "name": "anomaly.sympy__sympy-13480.call1.onset.seed43.cap256",
+      "sha256": "b876cce2edc7a2a9b2897744a1dd6bfb1c7eefb2ef25b6be4f37f9c370d15a27",
+      "tokens": 197,
+      "cap": 256,
+      "last_token": 50,
+      "decode_tokens": 196,
+      "decode_wall_s": 6.645470114890486
+    },
+    {
+      "index": 83,
+      "name": "anomaly.sympy__sympy-13480.call1.onset.seed44.cap256",
+      "sha256": "886e5fc24f79c2fd944eaf24304ff782d26949a80877318ae97559898535eefa",
+      "tokens": 180,
+      "cap": 256,
+      "last_token": 50,
+      "decode_tokens": 179,
+      "decode_wall_s": 6.067023755051196
+    },
+    {
+      "index": 84,
+      "name": "anomaly.sympy__sympy-13551.call1.onset.seed42.cap256",
+      "sha256": "3f81e96c541b3283f5dc4aef69b1d14a7e32b8d4add6aa6e74b3f0270b059ad5",
+      "tokens": 238,
+      "cap": 256,
+      "last_token": 50,
+      "decode_tokens": 237,
+      "decode_wall_s": 8.034107088111341
+    },
+    {
+      "index": 85,
+      "name": "anomaly.sympy__sympy-13551.call1.onset.seed43.cap512",
+      "sha256": "386db3c3d65a2edcebdca6c2d693d51fa39a74a0625b0953afb5cb837d7ed4c4",
+      "tokens": 205,
+      "cap": 512,
+      "last_token": 50,
+      "decode_tokens": 204,
+      "decode_wall_s": 6.926664280006662
+    },
+    {
+      "index": 86,
+      "name": "anomaly.sympy__sympy-13551.call1.onset.seed44.cap256",
+      "sha256": "74d841bed72d36bd2128cad6e5f03d54aa90ddbff445d049badf4edfd610307a",
+      "tokens": 158,
+      "cap": 256,
+      "last_token": 50,
+      "decode_tokens": 157,
+      "decode_wall_s": 5.321656292071566
+    },
+    {
+      "index": 87,
+      "name": "anomaly.sympy__sympy-13878.call1.onset.seed42.cap256",
+      "sha256": "ecb026eb8710b1c0b05b65f7e4c6aa52ea63348150e90d7d6863f9cbac386c41",
+      "tokens": 21,
+      "cap": 256,
+      "last_token": 50,
+      "decode_tokens": 20,
+      "decode_wall_s": 0.679518906865269
+    },
+    {
+      "index": 88,
+      "name": "anomaly.sympy__sympy-13878.call1.onset.seed43.cap256",
+      "sha256": "7ab2a78f7b1a7133f2ff42e3e5428a876c4cdc3cd7630d240f7e89acebfdd0b0",
+      "tokens": 19,
+      "cap": 256,
+      "last_token": 50,
+      "decode_tokens": 18,
+      "decode_wall_s": 0.6112355529330671
+    },
+    {
+      "index": 89,
+      "name": "anomaly.sympy__sympy-13878.call1.onset.seed44.cap256",
+      "sha256": "0972bb1bd5f97d930d2f1f96a24219b6d1034fdfe150420f7d6a0b2893fda7d9",
+      "tokens": 18,
+      "cap": 256,
+      "last_token": 50,
+      "decode_tokens": 17,
+      "decode_wall_s": 0.5768940509296954
+    },
+    {
+      "index": 90,
+      "name": "anomaly.sympy__sympy-14248.call53.onset.seed42.cap256",
+      "sha256": "3b3fff31b0dda4ab2864d9f75102acee0d0b01dc8440d109a7110d1a1a089cd6",
+      "tokens": 256,
+      "cap": 256,
+      "last_token": 172109,
+      "decode_tokens": 255,
+      "decode_wall_s": 9.404151203110814
+    },
+    {
+      "index": 91,
+      "name": "anomaly.sympy__sympy-14248.call53.onset.seed43.cap256",
+      "sha256": "f36fb28d695c830cd466165a97ba37c375d7b6cfc96ce86070ee41add0b3f08c",
+      "tokens": 256,
+      "cap": 256,
+      "last_token": 172109,
+      "decode_tokens": 255,
+      "decode_wall_s": 9.402359445113689
+    },
+    {
+      "index": 92,
+      "name": "anomaly.sympy__sympy-14248.call53.onset.seed44.cap256",
+      "sha256": "5beedace2d202482def2d2019f208b175f23d21ecc97e251495a3dde6e0ed179",
+      "tokens": 256,
+      "cap": 256,
+      "last_token": 172109,
+      "decode_tokens": 255,
+      "decode_wall_s": 9.412723243003711
+    },
+    {
+      "index": 93,
+      "name": "anomaly.sympy__sympy-14711.call1.onset.seed42.cap256",
+      "sha256": "b4ffd31b9ae9f80916a9127d6a20b26a5c9981c0a01a62caca30c070999ce23c",
+      "tokens": 139,
+      "cap": 256,
+      "last_token": 50,
+      "decode_tokens": 138,
+      "decode_wall_s": 4.681460157036781
+    },
+    {
+      "index": 94,
+      "name": "anomaly.sympy__sympy-14711.call1.onset.seed43.cap256",
+      "sha256": "75965d07f45f5d7c979b396423d75cea9b78bd5f6f0ea8420da979353115844c",
+      "tokens": 141,
+      "cap": 256,
+      "last_token": 50,
+      "decode_tokens": 140,
+      "decode_wall_s": 4.748822964960709
+    },
+    {
+      "index": 95,
+      "name": "anomaly.sympy__sympy-14711.call1.onset.seed44.cap256",
+      "sha256": "8329795352dc38602e97f70ce6d70d99c37769a34b777eeee45e1bbb2f90266c",
+      "tokens": 130,
+      "cap": 256,
+      "last_token": 50,
+      "decode_tokens": 129,
+      "decode_wall_s": 4.376955010928214
+    },
+    {
+      "index": 96,
+      "name": "anomaly.sympy__sympy-18763.call1.onset.seed42.cap256",
+      "sha256": "256a62ba5eac70cdc56231184abb34bcdb5bc67d1454f5f463df59b8bb3017be",
+      "tokens": 256,
+      "cap": 256,
+      "last_token": 236929,
+      "decode_tokens": 255,
+      "decode_wall_s": 8.643668187083676
+    },
+    {
+      "index": 97,
+      "name": "anomaly.sympy__sympy-18763.call1.onset.seed43.cap256",
+      "sha256": "928b768a02daa90a9f9efef2c16fc94385f8e12dc3e658179d7e939309f36230",
+      "tokens": 94,
+      "cap": 256,
+      "last_token": 50,
+      "decode_tokens": 93,
+      "decode_wall_s": 3.1531458131503314
+    },
+    {
+      "index": 98,
+      "name": "anomaly.sympy__sympy-18763.call1.onset.seed44.cap256",
+      "sha256": "0bf4e707bc5f114d6da53f1641a0a8d3994dd0498a509811cdf378cf36d24b45",
+      "tokens": 179,
+      "cap": 256,
+      "last_token": 50,
+      "decode_tokens": 178,
+      "decode_wall_s": 6.032989781117067
+    },
+    {
+      "index": 99,
+      "name": "anomaly.sympy__sympy-18763.call10.onset.seed42.cap256",
+      "sha256": "6ccdaeb640899924667f0008f1c368c9966c78676a2736836c874bca4e1d0bae",
+      "tokens": 22,
+      "cap": 256,
+      "last_token": 50,
+      "decode_tokens": 21,
+      "decode_wall_s": 0.7213311698287725
+    },
+    {
+      "index": 100,
+      "name": "anomaly.sympy__sympy-18763.call10.onset.seed43.cap256",
+      "sha256": "985ec024a809a39bfdde5a6d4794db10edcaa50b75a77e4c80b0aa65fa411c19",
+      "tokens": 23,
+      "cap": 256,
+      "last_token": 50,
+      "decode_tokens": 22,
+      "decode_wall_s": 0.7554438570514321
+    },
+    {
+      "index": 101,
+      "name": "anomaly.sympy__sympy-18763.call10.onset.seed44.cap256",
+      "sha256": "d62bc266be024d3e32e533f46148029024c4a15f5cc96d0810a2e7ad784a2398",
+      "tokens": 23,
+      "cap": 256,
+      "last_token": 50,
+      "decode_tokens": 22,
+      "decode_wall_s": 0.7558333398774266
+    },
+    {
+      "index": 102,
+      "name": "anomaly.xarray3095-call53.canonicalprefix.seed42.cap256",
+      "sha256": "62920584b79afabe8f376dc3e5d1b8b561a0cc82445690f0b41932e880a23fb0",
+      "tokens": 34,
+      "cap": 256,
+      "last_token": 50,
+      "decode_tokens": 33,
+      "decode_wall_s": 1.2182323229499161
+    },
+    {
+      "index": 103,
+      "name": "anomaly.xarray3095-call53.canonicalprefix.seed43.cap256",
+      "sha256": "0fb62f1e17f6c602190f3450ee4a3c4bb98077917ff48cce7fb4e64c0d3ee355",
+      "tokens": 34,
+      "cap": 256,
+      "last_token": 50,
+      "decode_tokens": 33,
+      "decode_wall_s": 1.217781877843663
+    },
+    {
+      "index": 104,
+      "name": "anomaly.xarray3095-call53.canonicalprefix.seed44.cap256",
+      "sha256": "265e3f63bc366a3799d9ae9ee7c9752a2514aa20d7d8489c440e3263f35a3a7a",
+      "tokens": 34,
+      "cap": 256,
+      "last_token": 50,
+      "decode_tokens": 33,
+      "decode_wall_s": 1.2191808060742915
+    },
+    {
+      "index": 105,
+      "name": "anomaly.xarray7233-call1.canonicalprefix.seed42.cap1024",
+      "sha256": "77f8960c780e70e60870fcd1bb4687ea5d1171c189527ac724918b36dfca7ecc",
+      "tokens": 1024,
+      "cap": 1024,
+      "last_token": 236764,
+      "decode_tokens": 1023,
+      "decode_wall_s": 34.77176705189049
+    },
+    {
+      "index": 106,
+      "name": "anomaly.xarray7233-call1.canonicalprefix.seed43.cap512",
+      "sha256": "5662226e3785dfe9be9d58ab7767b09c289a1a1384ce8c4605ff17e13cc0a857",
+      "tokens": 512,
+      "cap": 512,
+      "last_token": 236825,
+      "decode_tokens": 511,
+      "decode_wall_s": 17.356848008930683
+    },
+    {
+      "index": 107,
+      "name": "anomaly.xarray7233-call1.canonicalprefix.seed44.cap1024",
+      "sha256": "510b6617f4dc5b38d33478afbd6db205262c6aabbb6b9630f753d9f0ed63112b",
+      "tokens": 873,
+      "cap": 1024,
+      "last_token": 50,
+      "decode_tokens": 872,
+      "decode_wall_s": 29.62205689190887
+    }
+  ],
+  "elapsed_seconds": 2350.1810986995697,
+  "forecast_range_seconds": [
+    2275.7728378,
+    3018.7639242
+  ],
+  "forecast_hit": true,
+  "runtime_policy_exact_all108": true,
+  "diagnostic_decode_tokens": 32687,
+  "diagnostic_decode_wall_s": 1227.4537712943275,
+  "diagnostic_decode_tok_s_user": 26.6299234760851,
+  "timing_scope": "Serial traced diagnostic host-wall decode; varying outputs prevent matched speed comparison; not vLLM/device time",
+  "selected": false,
+  "regressions": [
+    0,
+    32,
+    85,
+    96
+  ],
+  "triage_pending": null,
+  "triage_sha256": {
+    "triage-b-attribution-corrected.json": "152afd34a8e3838e0cae1463d4a05438103c9f8b3cbc372e58ff32eaed882bf3",
+    "triage-c.json": "89fc84e2792208aaf811c171ddd7035f5051e74bdc943e6c2364bf92b28b19ba",
+    "triage-d.json": "4038340583c00d73ee757bd594daa63f702978a2a9ab46d5f4dad86003e2a087"
+  },
+  "classification": {
+    "other_anomaly": 4,
+    "normal": 80,
+    "reproduced_native_motif": 20,
+    "inconclusive": 4
+  },
+  "true_full_controls_correction": "root-full-controls-correction.json",
+  "remaining_progressing_caps": [
+    34,
+    73,
+    105,
+    106
+  ],
+  "row96_full_control": "P6full/row96-full-control.json"
+}

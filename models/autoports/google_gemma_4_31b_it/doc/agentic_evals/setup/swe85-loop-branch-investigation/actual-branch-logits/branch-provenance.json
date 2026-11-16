@@ -1,0 +1,33 @@
+{
+  "full": {
+    "first_six_token_ids": [
+      1390,
+      107,
+      147,
+      1390,
+      107,
+      147
+    ],
+    "observation": "Exact first six generated tokens from matched full-TT seed-44 run; repeated loop history.",
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/runs/full/anomaly.psf__requests-5414.call11.onset.json",
+    "seed": 44,
+    "sha256": "a967659d1f4edd7b726a36c976168ae767957b9821ffc4a2a31640d594e7a885",
+    "token_field": "free_running[].token_ids"
+  },
+  "hf": {
+    "first_six_token_ids": [
+      1390,
+      107,
+      138,
+      556,
+      58982,
+      236800
+    ],
+    "observation": "Exact first six generated tokens from pinned HF seed-44 conditional result.",
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/results/seed44-suffix2048/anomaly.psf__requests-5414.call11.onset.hf.private.json",
+    "seed": 44,
+    "sha256": "ea3eb180de1ef8898c2565dcb5ffd7700f3e792ccfce8bc279efef80c6dfe9a4",
+    "token_field": "results[].generated_token_ids"
+  },
+  "status": "observed_seed44_prefixes_pinned"
+}

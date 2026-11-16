@@ -1,0 +1,89 @@
+{
+  "status": "completed_cpu_only_stock_gemma4_parser_audit_no_score_adjudication",
+  "created_utc": "2026-11-15T04:24:10.225678+00:00",
+  "job": "anomaly.scikit-learn__scikit-learn-13135.call29.onset",
+  "mode": "full",
+  "seed": 42,
+  "scope": "Parse the saved completed 665-token full-mode seed42 response conditioned only on its original saved assistant prefix, using the captured request and its actual tool schema. Parser finding only; no score or stage decision.",
+  "source_identity": {
+    "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/runs/full/anomaly.scikit-learn__scikit-learn-13135.call29.onset.cap1024.seed42.json",
+    "result_sha256": "08c859a53455468846ed0cd87dfe56233ebc9496ee3c0cfbfb464e88368c422f",
+    "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.scikit-learn__scikit-learn-13135.call29.onset.cap1024.seed42.private.json",
+    "fixture_sha256": "310716fee5157983973aa6183e55fb529fd26179d182398b847ecb142b644b79",
+    "original_full_reply_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/double-contraction-archive/scikit-learn__scikit-learn-13135.call29.case.private.json",
+    "original_full_reply_case_sha256": "2f3cec7baa26eab2c23a74c79d1f48295ec3ca73c470d76cfecb2ce366ad7bfc",
+    "raw_packet": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/double-contraction-archive/scikit-learn__scikit-learn-13135.call29.packet.private.json",
+    "raw_packet_sha256": "2e781c74647c56680489ee85d01158e8409aebe52546dda5559bfd1a98aec9b2",
+    "raw_request_body_sha256": "859fa4295fd324b25912059a8ef40a91f5bc22b120da9e9d913ad3d197ffe420"
+  },
+  "tokenizer": {
+    "revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+    "snapshot": "/home/mvasiljevic/.cache/huggingface/hub/models--google--gemma-4-31B-it/snapshots/842da3794eaa0b77d5f08bae87a17459d91ff475",
+    "tokenizer_json_sha256": "cc8d3a0ce36466ccc1278bf987df5f71db1719b9ca6b4118264f45cb627bfe0f",
+    "tokenizer_config_sha256": "9f4fec4b1dc6ecddf8f4a92e9caea5971c0e67d81309f3f9066a2bee8c362633",
+    "chat_template_sha256": "ae53464bf3be25802b3a5b37def7fd89667067d7577049b3b2d74c4d8de4c6d4"
+  },
+  "parser_implementation_hashes": {
+    "python_env/lib/python3.10/site-packages/vllm/parser/gemma4.py": "c974f47dc39ab7276da1e4ae38c4010e3f5411481f75e3879e29f47b2fd08df7",
+    "python_env/lib/python3.10/site-packages/vllm/parser/engine/parser_engine.py": "d1075deeb25b4872e92752d7ef0598a07a747afaf2afc56058ec30c6dc1da89a",
+    "python_env/lib/python3.10/site-packages/vllm/parser/engine/adapters.py": "7a77bcb86e2129762f4199ee726398a4850b9e207893fc4295f2b759bcfeeb36",
+    "python_env/lib/python3.10/site-packages/vllm/tool_parsers/gemma4_engine_tool_parser.py": "02f31bdcc4d8527440daebb4f4e3e74c83a6010eb56cd33fe7522bea8f51bc65",
+    "python_env/lib/python3.10/site-packages/vllm/reasoning/gemma4_engine_reasoning_parser.py": "3e9adef8ae56ee993fbaee43e82aa36216fb71251ee2de14dc9f8b326220a594"
+  },
+  "context_reconstruction": {
+    "method": "assistant_prefix_ids = onset_fixture.prompt_token_ids[len(original_full_reply_case.prompt_token_ids):]; concatenate exactly those decoded assistant-context IDs with the saved generated IDs. The user/request prompt is used only to instantiate ChatCompletionRequest and provide tools; it is not passed as model output.",
+    "original_request_prompt_tokens": 17375,
+    "onset_fixture_prompt_tokens": 17395,
+    "assistant_prefix_token_count": 20,
+    "assistant_prefix_ids_sha256": "77cd583739f8bf6b7e09ef7e93648898215ac91a24145ca8704df551d3e083fb",
+    "assistant_prefix_text": "<|channel>thought\nPerfect. Now the fix is applied to the source code.\nSince I've",
+    "generated_token_count": 665,
+    "generated_ids_sha256": "fd8b19de98439fb2d9678d1f43f3319adb780a456d88da9614a2d00be4fde512",
+    "generated_text_sha256": "c067a14a65a6d22563647f0f5153fae35ee79856c8772bac4d4e3ac553d39914",
+    "generated_text_head": " already reproduced the issue using the logic from the source code and verified that sorting the centers fixes it, and I've also seen that the current version of scikit-learn already has this fix, I'm confident in the solution.\nFinal check: did I miss anything?\nThe issue is specifically about `strategy='kmeans'` and `bin_edges` not being sorted.\nSorting the centers ensures that the midpoints between them (the bin edges) are also sorted.\nThis is exactly what's needed for `np.digitize`.\n\nI'll just",
+    "generated_text_tail": "# Reproduction of the bug (before fix):\n# X = np.array([0, 0.5, 2, 3, 9, 10]).reshape(-1, 1)\n# centers = [ 0.25, 3. , 10. , 2. , 9. ] # unsorted\n# bin_edges = [ 0. , 1.625, 6.5, 6. , 5.5, 10. ] # unsorted -> ValueError in np.digitize\n\n# After fix:\n# centers = [ 0.25, 2. , 3. , 9. , 10. ] # sorted\n# bin_edges = [ 0. , 1.125, 2.5, 6. , 9.5, 10. ] # sorted -> Works!\n```\n\nThe change was applied to `/testbed/sklearn/preprocessing/_discretization.py`.\n\necho COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT<turn|>",
+    "generated_contains_tool_call_opener_token": false,
+    "generated_token_ids_contain_tool_call_opener": 0
+  },
+  "request_tools": [
+    {
+      "type": "function",
+      "name": "bash",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string",
+            "description": "The bash command to execute"
+          }
+        },
+        "required": [
+          "command"
+        ]
+      }
+    }
+  ],
+  "stock_parser": {
+    "enable_auto_tools": true,
+    "assistant_input_sha256": "83b913d4ffa3bc5992a1ab570431012f55f8cb32dec251cf9272cc39f10e5c6e",
+    "reasoning_chars": 816,
+    "content_chars": 1512,
+    "content_head": "I have analyzed the issue and identified the cause. In `KBinsDiscretizer` with `strategy='kmeans'`, the bin edges are calculated as the midpoints between the cluster centers returned by `KMeans`. However, `KMeans` does not guarantee that the centers are returned in sorted order. When the centers are unsorted, the resulting bin edges are also unsorted, which causes `np.digitize` to raise a `ValueEr",
+    "structured_tool_calls": [],
+    "verdict": "missing_tool",
+    "parser_error": null
+  },
+  "native_reference_observation": {
+    "structured_tool_names": [
+      "bash"
+    ],
+    "content_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "content_head": "",
+    "note": "Reference metadata only; this audit does not adjudicate native-versus-generated anomaly or score."
+  },
+  "limitations": [
+    "Current installed non-streaming Gemma4Parser interpretation only; historical server parser/stream behavior is not proven identical.",
+    "No native token IDs are available for exact byte/token equivalence.",
+    "This is protocol-parser evidence only, not semantic correctness, action correctness, or score adjudication."
+  ]
+}

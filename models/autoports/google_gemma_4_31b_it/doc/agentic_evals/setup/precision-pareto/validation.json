@@ -1,0 +1,20 @@
+{
+  "status": "passed",
+  "row_count": 14,
+  "all_natural_references_identical": true,
+  "natural_reference_sha256": "861f29370af0ba7e13c77f548e688cceff429846d20a9283697ae77b8b069584",
+  "all_rows_512_tokens": true,
+  "all_rows_traced": true,
+  "catalog_runtime_policy_id_mismatches": [],
+  "candidate_rows": 1,
+  "selected_config": null,
+  "measurement_scope": "Historical measurements before the HiFi4 Q32 correction; not post-fix validation.",
+  "geometry_note": "The precision rows use policy-specific historical Q geometry; Q size is not uniform across candidates, and this plot does not claim every point used Q128.",
+  "generated_files": [
+    "stage12-natural512-pareto.json",
+    "stage12-natural512-pareto.csv",
+    "stage12-natural512-pareto.md",
+    "top1_perf_pareto.png",
+    "top5_perf_pareto.png"
+  ]
+}

@@ -1,0 +1,652 @@
+{
+  "status": "candidate_only_not_admitted_not_run",
+  "objective": "Test HF on the 20 distinct full-mode source-result-hash+seed observations remaining after exact HF9 and separately handled original Sklearn exclusion.",
+  "not_new_defects": "The roster contains repeated observations/seeds from existing jobs. Twenty observations are not twenty independent task defects. Patterns and task jobs may recur; infer no coverage of another seed unless that exact identity is in this roster.",
+  "dedup": {
+    "inventory_rows_full": 28,
+    "distinct_result_file_hashes": 16,
+    "distinct_result_hash_seed_pairs": 22,
+    "excluded_pairs": [
+      {
+        "reason": "original 17k-token Sklearn13135 missing_tool output handled separately in SK attribution work",
+        "source_result_sha256": "08c859a53455468846ed0cd87dfe56233ebc9496ee3c0cfbfb464e88368c422f",
+        "seed": 42,
+        "inventory_rows": [
+          9,
+          11
+        ],
+        "job": "anomaly.scikit-learn__scikit-learn-13135.call29.onset",
+        "prompt_token_count": 17395,
+        "cap": 1024
+      },
+      {
+        "reason": "exact HF9 prompt-ID+seed+cap candidate already exists; excluded from duplicate work",
+        "source_result_sha256": "079baccb97ee11584b68c0e69353c172f1dd976fcbfdf65df71d53d421fd3182",
+        "seed": 43,
+        "inventory_rows": [
+          39
+        ],
+        "job": "anomaly.sphinx-doc__sphinx-10323.call70.onset",
+        "prompt_token_count": 2048,
+        "cap": 512
+      }
+    ],
+    "candidate_pairs": 20,
+    "exact_prompt_seed_cap_identity_count": 20,
+    "identity_sha256": "SHA256(prompt_token_ids_sha256 + \":\" + seed + \":\" + original_cap)",
+    "duplicate_inventory_references_retained": true
+  },
+  "execution_unit": "Each fixed seed+cap group can be admitted individually by root after cost review. STOP between groups. Choosing a subset is partial coverage only.",
+  "workload": {
+    "observations": [
+      {
+        "name": "fullother-01-anomaly-psf-requests-5414-call11-s42-p2048-c2048",
+        "case_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-req5414-cap2048-after-v-candidate/fixtures/full/anomaly.psf__requests-5414.call11.onset.suffix2048.cap2048.seed42.private.json",
+        "case_sha256": "64c16cb0741ab60771f71f2d4900bd8acc0e12c5259d6aa7d4ec6e6041bd76b5",
+        "source_result_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-req5414-cap2048-after-v-candidate/runs/full/anomaly.psf__requests-5414.call11.onset.suffix2048.cap2048.seed42.json",
+        "source_result_sha256": "1ab58b7bb92a7ffdab0bede6798bdac95e0b2e309bbb923653e930cf89c4b466",
+        "source_inventory_rows_for_result_seed": [
+          2,
+          52
+        ],
+        "same_result_file_other_seed_refs_not_covered": [],
+        "source_job": "anomaly.psf__requests-5414.call11.onset",
+        "mode": "full",
+        "actual_sample_seed": 42,
+        "prompt_tokens": 2048,
+        "prompt_token_ids_sha256": "55fea04ac956c00e84884f04bf7e287a85e9d1a2b90794040070751161c968f0",
+        "exact_prompt_seed_cap_identity_sha256": "8ed5d623c0c5d2666ff4197aaba7bf3188390fd029cce2956e2dea9ff7cd3181",
+        "source_chosen_tokens": 64,
+        "chosen_teacher_forcing_positions": 64,
+        "original_free_generation_cap": 2048,
+        "source_trial_generated_tokens": 1632,
+        "source_trial_reached_cap": false,
+        "evidence": "Read complete raw continuation. Distinct URL/IDNA reasoning, then channel boundary and fenced bash echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT followed by turn terminator, lacking canonical tool-call macro. Missing-tool protocol anomaly; stock parser confirmation requested. No affirmative repetition, no cap-based failure, no executed fix or submission.",
+        "inventory_verdict": "other_anomaly",
+        "not_new_defect_note": "A seed-specific observation, not automatically a distinct task defect. Other seeds sharing a source result file remain separate and are only included where explicitly listed."
+      },
+      {
+        "name": "fullother-02-anomaly-psf-requests-5414-call10-s42-p2048-c512",
+        "case_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/fixtures/anomaly.psf__requests-5414.call10.onset.suffix2048.private.json",
+        "case_sha256": "4cb0ce0c350d029b506ecd31cd5df6a6f0a02a0c49f56761a478f7a1f6b4c781",
+        "source_result_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/runs/full/anomaly.psf__requests-5414.call10.onset.json",
+        "source_result_sha256": "1f34cd733be27e7e4c655da4dcf0fba30ac7c06fc83cca3753973dbae03263ff",
+        "source_inventory_rows_for_result_seed": [
+          3,
+          36
+        ],
+        "same_result_file_other_seed_refs_not_covered": [],
+        "source_job": "anomaly.psf__requests-5414.call10.onset",
+        "mode": "full",
+        "actual_sample_seed": 42,
+        "prompt_tokens": 2048,
+        "prompt_token_ids_sha256": "3fef6c6ee07f2a50e043b306b65ed88ec4052e0b8e95ca93149c952f059509d3",
+        "exact_prompt_seed_cap_identity_sha256": "a208c26a7909af9bfbe33c969f448d9c8785b02f87251629b011d770e9dabc12",
+        "source_chosen_tokens": 64,
+        "chosen_teacher_forcing_positions": 64,
+        "original_free_generation_cap": 512,
+        "source_trial_generated_tokens": 500,
+        "source_trial_reached_cap": false,
+        "evidence": "Coherent host-validation analysis ends with fenced JSON command rather than canonical tool invocation; pinned stock parser with actual request and assistant prefix extracts no structured tool calls. Confirmed missing_tool protocol anomaly, no native ellipsis burst.",
+        "inventory_verdict": "other_anomaly",
+        "not_new_defect_note": "A seed-specific observation, not automatically a distinct task defect. Other seeds sharing a source result file remain separate and are only included where explicitly listed."
+      },
+      {
+        "name": "fullother-03-anomaly-psf-requests-5414-call11-s43-p2048-c1024",
+        "case_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-candidate/fixtures/full/anomaly.psf__requests-5414.call11.onset.suffix2048.cap1024.seed43.private.json",
+        "case_sha256": "d2f703cc3d29b89d2edbabfe9036ed36c070c095b362b0d5808b106997a40cef",
+        "source_result_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-execution-candidate/runs/full/anomaly.psf__requests-5414.call11.onset.suffix2048.cap1024.seed43.json",
+        "source_result_sha256": "c149400e2e974fbefcdfae71c8fd2c7179b4c711e44bc6c330eb6ebacf5294d7",
+        "source_inventory_rows_for_result_seed": [
+          4,
+          43
+        ],
+        "same_result_file_other_seed_refs_not_covered": [],
+        "source_job": "anomaly.psf__requests-5414.call11.onset",
+        "mode": "full",
+        "actual_sample_seed": 43,
+        "prompt_tokens": 2048,
+        "prompt_token_ids_sha256": "55fea04ac956c00e84884f04bf7e287a85e9d1a2b90794040070751161c968f0",
+        "exact_prompt_seed_cap_identity_sha256": "535f37b9b85e9c2d823909accb13df38596dce07c9fe533bfba3656c20ee32f2",
+        "source_chosen_tokens": 64,
+        "chosen_teacher_forcing_positions": 64,
+        "original_free_generation_cap": 1024,
+        "source_trial_generated_tokens": 1024,
+        "source_trial_reached_cap": true,
+        "evidence": "Prefix ends existing traceback return six.raise_from. Generated own immediately before urllib3.exceptions.LocationParseError is an unrelated stray word in traceback text. Later reasoning varies and reaches cap, but the affirmative stray-token anomaly is independent of that cap; no native sustained ellipsis motif. Prior512 root review missed this localized token; immutable source remains, independent correction review requested.",
+        "inventory_verdict": "other_anomaly",
+        "not_new_defect_note": "A seed-specific observation, not automatically a distinct task defect. Other seeds sharing a source result file remain separate and are only included where explicitly listed."
+      },
+      {
+        "name": "fullother-04-anomaly-call91-canonicalprefix-s42-p4096-c512",
+        "case_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/fixtures/anomaly.call91.canonicalprefix.suffix4096.seed42.full.private.json",
+        "case_sha256": "3c0b7d82cc4f4e627cc65415002c9e5113237c3e83c66fbaaa4813a2f48726e4",
+        "source_result_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/runs/full/anomaly.call91.canonicalprefix.suffix4096.seed42.json",
+        "source_result_sha256": "395c749ff59a128749ec3606ada859cca84798e9be3cc73a67bbeac539eee3b4",
+        "source_inventory_rows_for_result_seed": [
+          6,
+          49
+        ],
+        "same_result_file_other_seed_refs_not_covered": [],
+        "source_job": "anomaly.call91.canonicalprefix",
+        "mode": "full",
+        "actual_sample_seed": 42,
+        "prompt_tokens": 4096,
+        "prompt_token_ids_sha256": "599ff7baf303265cf5e084f020d9f7937e5ead8f34fdbef82cc0127c0267c5c7",
+        "exact_prompt_seed_cap_identity_sha256": "0b00596c07de1bd059555230aae5fcfed292e64adb026de4858fd9beaefe2d61",
+        "source_chosen_tokens": 64,
+        "chosen_teacher_forcing_positions": 64,
+        "original_free_generation_cap": 512,
+        "source_trial_generated_tokens": 39,
+        "source_trial_reached_cap": false,
+        "evidence": "Conditioned Since Ive + really messed it up is grammatical, but the invented phrase a's la's la's l's logic is localized nonsensical token repetition before command close. Not the original duplicated-ve motif.",
+        "inventory_verdict": "other_anomaly",
+        "not_new_defect_note": "A seed-specific observation, not automatically a distinct task defect. Other seeds sharing a source result file remain separate and are only included where explicitly listed."
+      },
+      {
+        "name": "fullother-05-anomaly-sphinx-doc-sphinx-10323--s44-p4096-c512",
+        "case_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/fixtures/anomaly.sphinx-doc__sphinx-10323.call70.onset.suffix4096.seed44.full.private.json",
+        "case_sha256": "05f781687dd299562714596868b1744ebca8300330e730a23db118e841d27f40",
+        "source_result_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/runs/full/anomaly.sphinx-doc__sphinx-10323.call70.onset.suffix4096.seed44.json",
+        "source_result_sha256": "c193e6752a5481dd12dfc3e5942b8d687e15bd58f4660dddc252ec6dd49aead0",
+        "source_inventory_rows_for_result_seed": [
+          7,
+          50
+        ],
+        "same_result_file_other_seed_refs_not_covered": [],
+        "source_job": "anomaly.sphinx-doc__sphinx-10323.call70.onset",
+        "mode": "full",
+        "actual_sample_seed": 44,
+        "prompt_tokens": 4096,
+        "prompt_token_ids_sha256": "40a8ba37dc728b1e0a0197fe434ed9d2b5982433ac98e01f1b2cd27ab92afec5",
+        "exact_prompt_seed_cap_identity_sha256": "cd8f593ac4f07a1435b105469b4a0b3b0cd6c5a43a68ff6bfac0a61efefcc854",
+        "source_chosen_tokens": 37,
+        "chosen_teacher_forcing_positions": 37,
+        "original_free_generation_cap": 512,
+        "source_trial_generated_tokens": 512,
+        "source_trial_reached_cap": true,
+        "evidence": "Canonical tool starts after grammatical Ive tried, then hundreds of C/ fragments repeat inside sed replacement until512. Affirmative token loop, not the original contraction motif; not a cap-based task failure.",
+        "inventory_verdict": "other_anomaly",
+        "not_new_defect_note": "A seed-specific observation, not automatically a distinct task defect. Other seeds sharing a source result file remain separate and are only included where explicitly listed."
+      },
+      {
+        "name": "fullother-06-anomaly-psf-requests-5414-call10-s42-p1024-c512",
+        "case_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/fixtures/anomaly.psf__requests-5414.call10.onset.suffix1024.private.json",
+        "case_sha256": "2d8bee7e1640381dcb31e7213e9f3d4ae020303e3e8c1bdb0f750f1714f5e3a2",
+        "source_result_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/full/anomaly.psf__requests-5414.call10.onset.json",
+        "source_result_sha256": "09a4a0cf9159ccdafa8913902f0b53f63c337f33720ea559228c51877a4f90dd",
+        "source_inventory_rows_for_result_seed": [
+          13
+        ],
+        "same_result_file_other_seed_refs_not_covered": [
+          {
+            "inventory_row": 14,
+            "seed": 43
+          },
+          {
+            "inventory_row": 15,
+            "seed": 44
+          }
+        ],
+        "source_job": "anomaly.psf__requests-5414.call10.onset",
+        "mode": "full",
+        "actual_sample_seed": 42,
+        "prompt_tokens": 1024,
+        "prompt_token_ids_sha256": "1779ea98a42edb0f4e4102b567522c6ec2b25e4f81a88c148e2a9f3ac04f3a6c",
+        "exact_prompt_seed_cap_identity_sha256": "0054e8a41a4a9620a6c203c30bf7bbcf31df25f1155732b97c8e01c2a06e5706",
+        "source_chosen_tokens": 64,
+        "chosen_teacher_forcing_positions": 64,
+        "original_free_generation_cap": 512,
+        "source_trial_generated_tokens": 512,
+        "source_trial_reached_cap": true,
+        "evidence": "Unbounded repeated indented _create_connection calls.",
+        "inventory_verdict": "other_anomaly",
+        "not_new_defect_note": "A seed-specific observation, not automatically a distinct task defect. Other seeds sharing a source result file remain separate and are only included where explicitly listed."
+      },
+      {
+        "name": "fullother-07-anomaly-psf-requests-5414-call10-s43-p1024-c512",
+        "case_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/fixtures/anomaly.psf__requests-5414.call10.onset.suffix1024.private.json",
+        "case_sha256": "2d8bee7e1640381dcb31e7213e9f3d4ae020303e3e8c1bdb0f750f1714f5e3a2",
+        "source_result_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/full/anomaly.psf__requests-5414.call10.onset.json",
+        "source_result_sha256": "09a4a0cf9159ccdafa8913902f0b53f63c337f33720ea559228c51877a4f90dd",
+        "source_inventory_rows_for_result_seed": [
+          14
+        ],
+        "same_result_file_other_seed_refs_not_covered": [
+          {
+            "inventory_row": 13,
+            "seed": 42
+          },
+          {
+            "inventory_row": 15,
+            "seed": 44
+          }
+        ],
+        "source_job": "anomaly.psf__requests-5414.call10.onset",
+        "mode": "full",
+        "actual_sample_seed": 43,
+        "prompt_tokens": 1024,
+        "prompt_token_ids_sha256": "1779ea98a42edb0f4e4102b567522c6ec2b25e4f81a88c148e2a9f3ac04f3a6c",
+        "exact_prompt_seed_cap_identity_sha256": "96b888228b3391771f7f04de5f6ea5a85a444f666754b27399d152ee4c97f3ef",
+        "source_chosen_tokens": 64,
+        "chosen_teacher_forcing_positions": 64,
+        "original_free_generation_cap": 512,
+        "source_trial_generated_tokens": 512,
+        "source_trial_reached_cap": true,
+        "evidence": "Malformed fenced JSON pseudo-tool sequence repeats python command without canonical response boundaries.",
+        "inventory_verdict": "other_anomaly",
+        "not_new_defect_note": "A seed-specific observation, not automatically a distinct task defect. Other seeds sharing a source result file remain separate and are only included where explicitly listed."
+      },
+      {
+        "name": "fullother-08-anomaly-psf-requests-5414-call10-s44-p1024-c512",
+        "case_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/fixtures/anomaly.psf__requests-5414.call10.onset.suffix1024.private.json",
+        "case_sha256": "2d8bee7e1640381dcb31e7213e9f3d4ae020303e3e8c1bdb0f750f1714f5e3a2",
+        "source_result_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/full/anomaly.psf__requests-5414.call10.onset.json",
+        "source_result_sha256": "09a4a0cf9159ccdafa8913902f0b53f63c337f33720ea559228c51877a4f90dd",
+        "source_inventory_rows_for_result_seed": [
+          15
+        ],
+        "same_result_file_other_seed_refs_not_covered": [
+          {
+            "inventory_row": 13,
+            "seed": 42
+          },
+          {
+            "inventory_row": 14,
+            "seed": 43
+          }
+        ],
+        "source_job": "anomaly.psf__requests-5414.call10.onset",
+        "mode": "full",
+        "actual_sample_seed": 44,
+        "prompt_tokens": 1024,
+        "prompt_token_ids_sha256": "1779ea98a42edb0f4e4102b567522c6ec2b25e4f81a88c148e2a9f3ac04f3a6c",
+        "exact_prompt_seed_cap_identity_sha256": "ae42db0864850be545e20b97e5bf937ef2868fc5203a04c9a61877be9ac176c4",
+        "source_chosen_tokens": 64,
+        "chosen_teacher_forcing_positions": 64,
+        "original_free_generation_cap": 512,
+        "source_trial_generated_tokens": 328,
+        "source_trial_reached_cap": false,
+        "evidence": "Coherent plan ends in fenced tool_calls JSON instead of canonical tool call; distinct protocol anomaly.",
+        "inventory_verdict": "other_anomaly",
+        "not_new_defect_note": "A seed-specific observation, not automatically a distinct task defect. Other seeds sharing a source result file remain separate and are only included where explicitly listed."
+      },
+      {
+        "name": "fullother-09-anomaly-psf-requests-5414-call11-s44-p1024-c512",
+        "case_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/fixtures/anomaly.psf__requests-5414.call11.onset.suffix1024.private.json",
+        "case_sha256": "069a6794c0474028161f64153453577e07bc1cbde4690d0e77cef0286214ab65",
+        "source_result_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/full/anomaly.psf__requests-5414.call11.onset.json",
+        "source_result_sha256": "6a22257dbe5b30dec221560fc555e6331e83891872d9e274b89be6b293718b82",
+        "source_inventory_rows_for_result_seed": [
+          16
+        ],
+        "same_result_file_other_seed_refs_not_covered": [
+          {
+            "inventory_row": 19,
+            "seed": 43
+          }
+        ],
+        "source_job": "anomaly.psf__requests-5414.call11.onset",
+        "mode": "full",
+        "actual_sample_seed": 44,
+        "prompt_tokens": 1024,
+        "prompt_token_ids_sha256": "4625c1c415385637a34f99ed1d9922854765d3e23c7ede68cf627c92bfb4a20f",
+        "exact_prompt_seed_cap_identity_sha256": "38c3ad4dd409bd2760c23e7f0ffc15d6c1da12e1522572a35610e2728ce186fc",
+        "source_chosen_tokens": 64,
+        "chosen_teacher_forcing_positions": 64,
+        "original_free_generation_cap": 512,
+        "source_trial_generated_tokens": 512,
+        "source_trial_reached_cap": true,
+        "evidence": "Repeats None argument lines without bound.",
+        "inventory_verdict": "other_anomaly",
+        "not_new_defect_note": "A seed-specific observation, not automatically a distinct task defect. Other seeds sharing a source result file remain separate and are only included where explicitly listed."
+      },
+      {
+        "name": "fullother-10-anomaly-psf-requests-5414-call11-s43-p1024-c512",
+        "case_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/fixtures/anomaly.psf__requests-5414.call11.onset.suffix1024.private.json",
+        "case_sha256": "069a6794c0474028161f64153453577e07bc1cbde4690d0e77cef0286214ab65",
+        "source_result_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/full/anomaly.psf__requests-5414.call11.onset.json",
+        "source_result_sha256": "6a22257dbe5b30dec221560fc555e6331e83891872d9e274b89be6b293718b82",
+        "source_inventory_rows_for_result_seed": [
+          19
+        ],
+        "same_result_file_other_seed_refs_not_covered": [
+          {
+            "inventory_row": 16,
+            "seed": 44
+          }
+        ],
+        "source_job": "anomaly.psf__requests-5414.call11.onset",
+        "mode": "full",
+        "actual_sample_seed": 43,
+        "prompt_tokens": 1024,
+        "prompt_token_ids_sha256": "4625c1c415385637a34f99ed1d9922854765d3e23c7ede68cf627c92bfb4a20f",
+        "exact_prompt_seed_cap_identity_sha256": "32bcaebe65d85c292d51514202326a383382d2744227c15af900705c5f6acd83",
+        "source_chosen_tokens": 64,
+        "chosen_teacher_forcing_positions": 64,
+        "original_free_generation_cap": 512,
+        "source_trial_generated_tokens": 124,
+        "source_trial_reached_cap": false,
+        "evidence": "Stock parser extracts invalid bash: name and malformed argument key, not allowed bash(command).",
+        "inventory_verdict": "other_anomaly",
+        "not_new_defect_note": "A seed-specific observation, not automatically a distinct task defect. Other seeds sharing a source result file remain separate and are only included where explicitly listed."
+      },
+      {
+        "name": "fullother-11-anomaly-sphinx-doc-sphinx-10323--s42-p1024-c512",
+        "case_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/fixtures/anomaly.sphinx-doc__sphinx-10323.call70.onset.suffix1024.private.json",
+        "case_sha256": "8d6aaf26c98664977dad85a0771fceb905582caa5b5700f1d2cd0f66f755f051",
+        "source_result_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/full/anomaly.sphinx-doc__sphinx-10323.call70.onset.json",
+        "source_result_sha256": "a441ba44ab8294f359c1ea864d045cc4e6fb5d123930684db4b02ee3c1749f77",
+        "source_inventory_rows_for_result_seed": [
+          20
+        ],
+        "same_result_file_other_seed_refs_not_covered": [
+          {
+            "inventory_row": 21,
+            "seed": 43
+          },
+          {
+            "inventory_row": 22,
+            "seed": 44
+          }
+        ],
+        "source_job": "anomaly.sphinx-doc__sphinx-10323.call70.onset",
+        "mode": "full",
+        "actual_sample_seed": 42,
+        "prompt_tokens": 1024,
+        "prompt_token_ids_sha256": "02ac4ec34fed94d58ef3cd68a516c2f2abd12da80453e0cfeeb6635c55012778",
+        "exact_prompt_seed_cap_identity_sha256": "56e6921e0a13ac147ec20a6df1174603eed4138f8c891bd75ba9fee68ce2ea9c",
+        "source_chosen_tokens": 37,
+        "chosen_teacher_forcing_positions": 37,
+        "original_free_generation_cap": 512,
+        "source_trial_generated_tokens": 200,
+        "source_trial_reached_cap": false,
+        "evidence": "Stock parser confirms missing structured bash tool.",
+        "inventory_verdict": "other_anomaly",
+        "not_new_defect_note": "A seed-specific observation, not automatically a distinct task defect. Other seeds sharing a source result file remain separate and are only included where explicitly listed."
+      },
+      {
+        "name": "fullother-12-anomaly-sphinx-doc-sphinx-10323--s43-p1024-c512",
+        "case_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/fixtures/anomaly.sphinx-doc__sphinx-10323.call70.onset.suffix1024.private.json",
+        "case_sha256": "8d6aaf26c98664977dad85a0771fceb905582caa5b5700f1d2cd0f66f755f051",
+        "source_result_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/full/anomaly.sphinx-doc__sphinx-10323.call70.onset.json",
+        "source_result_sha256": "a441ba44ab8294f359c1ea864d045cc4e6fb5d123930684db4b02ee3c1749f77",
+        "source_inventory_rows_for_result_seed": [
+          21
+        ],
+        "same_result_file_other_seed_refs_not_covered": [
+          {
+            "inventory_row": 20,
+            "seed": 42
+          },
+          {
+            "inventory_row": 22,
+            "seed": 44
+          }
+        ],
+        "source_job": "anomaly.sphinx-doc__sphinx-10323.call70.onset",
+        "mode": "full",
+        "actual_sample_seed": 43,
+        "prompt_tokens": 1024,
+        "prompt_token_ids_sha256": "02ac4ec34fed94d58ef3cd68a516c2f2abd12da80453e0cfeeb6635c55012778",
+        "exact_prompt_seed_cap_identity_sha256": "efbf7c9a06a2ed2c024f35b1d810a7dd43a9eb3cb0c8da5955977a188be4c8e8",
+        "source_chosen_tokens": 37,
+        "chosen_teacher_forcing_positions": 37,
+        "original_free_generation_cap": 512,
+        "source_trial_generated_tokens": 207,
+        "source_trial_reached_cap": false,
+        "evidence": "Stock parser confirms missing structured bash tool.",
+        "inventory_verdict": "other_anomaly",
+        "not_new_defect_note": "A seed-specific observation, not automatically a distinct task defect. Other seeds sharing a source result file remain separate and are only included where explicitly listed."
+      },
+      {
+        "name": "fullother-13-anomaly-sphinx-doc-sphinx-10323--s44-p1024-c512",
+        "case_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/fixtures/anomaly.sphinx-doc__sphinx-10323.call70.onset.suffix1024.private.json",
+        "case_sha256": "8d6aaf26c98664977dad85a0771fceb905582caa5b5700f1d2cd0f66f755f051",
+        "source_result_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/full/anomaly.sphinx-doc__sphinx-10323.call70.onset.json",
+        "source_result_sha256": "a441ba44ab8294f359c1ea864d045cc4e6fb5d123930684db4b02ee3c1749f77",
+        "source_inventory_rows_for_result_seed": [
+          22
+        ],
+        "same_result_file_other_seed_refs_not_covered": [
+          {
+            "inventory_row": 20,
+            "seed": 42
+          },
+          {
+            "inventory_row": 21,
+            "seed": 43
+          }
+        ],
+        "source_job": "anomaly.sphinx-doc__sphinx-10323.call70.onset",
+        "mode": "full",
+        "actual_sample_seed": 44,
+        "prompt_tokens": 1024,
+        "prompt_token_ids_sha256": "02ac4ec34fed94d58ef3cd68a516c2f2abd12da80453e0cfeeb6635c55012778",
+        "exact_prompt_seed_cap_identity_sha256": "07877a3a944fbd823eea3aea3dba7d6b0258bc1b27053d94567e49f5a23d19a9",
+        "source_chosen_tokens": 37,
+        "chosen_teacher_forcing_positions": 37,
+        "original_free_generation_cap": 512,
+        "source_trial_generated_tokens": 191,
+        "source_trial_reached_cap": false,
+        "evidence": "Stock parser confirms missing structured bash tool.",
+        "inventory_verdict": "other_anomaly",
+        "not_new_defect_note": "A seed-specific observation, not automatically a distinct task defect. Other seeds sharing a source result file remain separate and are only included where explicitly listed."
+      },
+      {
+        "name": "fullother-14-anomaly-matplotlib-matplotlib-20-s43-p1024-c512",
+        "case_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/fixtures/anomaly.matplotlib__matplotlib-20488.call86.onset.suffix1024.private.json",
+        "case_sha256": "56a0d881cd7c275743511dd2ac716c2755c913cbc014e7c9c1dd0713ce46a283",
+        "source_result_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/full/anomaly.matplotlib__matplotlib-20488.call86.onset.json",
+        "source_result_sha256": "a2dc3012fc83468f00dd3dfc66c82c940c093b5b2c6c72c4a7a1bfd09631e7a9",
+        "source_inventory_rows_for_result_seed": [
+          27
+        ],
+        "same_result_file_other_seed_refs_not_covered": [
+          {
+            "inventory_row": 28,
+            "seed": 44
+          }
+        ],
+        "source_job": "anomaly.matplotlib__matplotlib-20488.call86.onset",
+        "mode": "full",
+        "actual_sample_seed": 43,
+        "prompt_tokens": 1024,
+        "prompt_token_ids_sha256": "640a9ea157bdebc13e93b32a8b2bae5e39c7737b8334b8de7bdfe891b3961e6b",
+        "exact_prompt_seed_cap_identity_sha256": "06aa790b9a94a45d0afcfe7059a531fc6a1a692a376649818b845a29b5dff2aa",
+        "source_chosen_tokens": 64,
+        "chosen_teacher_forcing_positions": 64,
+        "original_free_generation_cap": 512,
+        "source_trial_generated_tokens": 512,
+        "source_trial_reached_cap": true,
+        "evidence": "Repeated unchanged proposed replacement paragraphs.",
+        "inventory_verdict": "other_anomaly",
+        "not_new_defect_note": "A seed-specific observation, not automatically a distinct task defect. Other seeds sharing a source result file remain separate and are only included where explicitly listed."
+      },
+      {
+        "name": "fullother-15-anomaly-matplotlib-matplotlib-20-s44-p1024-c512",
+        "case_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/fixtures/anomaly.matplotlib__matplotlib-20488.call86.onset.suffix1024.private.json",
+        "case_sha256": "56a0d881cd7c275743511dd2ac716c2755c913cbc014e7c9c1dd0713ce46a283",
+        "source_result_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/full/anomaly.matplotlib__matplotlib-20488.call86.onset.json",
+        "source_result_sha256": "a2dc3012fc83468f00dd3dfc66c82c940c093b5b2c6c72c4a7a1bfd09631e7a9",
+        "source_inventory_rows_for_result_seed": [
+          28
+        ],
+        "same_result_file_other_seed_refs_not_covered": [
+          {
+            "inventory_row": 27,
+            "seed": 43
+          }
+        ],
+        "source_job": "anomaly.matplotlib__matplotlib-20488.call86.onset",
+        "mode": "full",
+        "actual_sample_seed": 44,
+        "prompt_tokens": 1024,
+        "prompt_token_ids_sha256": "640a9ea157bdebc13e93b32a8b2bae5e39c7737b8334b8de7bdfe891b3961e6b",
+        "exact_prompt_seed_cap_identity_sha256": "16d063d319aee52d965ec53374b24b3fc4e07c9ac340d80b6b876c60957e78ff",
+        "source_chosen_tokens": 64,
+        "chosen_teacher_forcing_positions": 64,
+        "original_free_generation_cap": 512,
+        "source_trial_generated_tokens": 512,
+        "source_trial_reached_cap": true,
+        "evidence": "Alternating identical new-lines/old-lines indentation sentences throughout tail.",
+        "inventory_verdict": "other_anomaly",
+        "not_new_defect_note": "A seed-specific observation, not automatically a distinct task defect. Other seeds sharing a source result file remain separate and are only included where explicitly listed."
+      },
+      {
+        "name": "fullother-16-anomaly-psf-requests-5414-call11-s42-p1024-c1024",
+        "case_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024-progressing-candidate/fixtures/anomaly.psf__requests-5414.call11.onset.suffix1024.cap1024.seed42.private.json",
+        "case_sha256": "7ea1fe684ccda8d471948d9decc4350fb2efa70d3257eba5a63d0f124313369a",
+        "source_result_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024-progressing-candidate/runs/full/anomaly.psf__requests-5414.call11.onset.suffix1024.cap1024.seed42.json",
+        "source_result_sha256": "e68faadf21170a73cde0c3fa445ba88efc216fd76be711ccb2ab5d9050680409",
+        "source_inventory_rows_for_result_seed": [
+          35
+        ],
+        "same_result_file_other_seed_refs_not_covered": [],
+        "source_job": "anomaly.psf__requests-5414.call11.onset.suffix1024.cap1024.seed42",
+        "mode": "full",
+        "actual_sample_seed": 42,
+        "prompt_tokens": 1024,
+        "prompt_token_ids_sha256": "4625c1c415385637a34f99ed1d9922854765d3e23c7ede68cf627c92bfb4a20f",
+        "exact_prompt_seed_cap_identity_sha256": "261d17145d4a1a366cfd262f74a47db65779178859dfd9a2686fed6cdb5d8017",
+        "source_chosen_tokens": 64,
+        "chosen_teacher_forcing_positions": 64,
+        "original_free_generation_cap": 1024,
+        "source_trial_generated_tokens": 733,
+        "source_trial_reached_cap": false,
+        "evidence": "Coherent diagnostic reasoning completes but emitted call:bash: JSON-style macro parses as disallowed bash: and lacks string command. Affirmative protocol anomaly, native ellipsis burst absent, no cap-based failure.",
+        "inventory_verdict": "other",
+        "not_new_defect_note": "A seed-specific observation, not automatically a distinct task defect. Other seeds sharing a source result file remain separate and are only included where explicitly listed."
+      },
+      {
+        "name": "fullother-17-models-autoports-google-gemma-4--s43-p2048-c1024",
+        "case_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-candidate/fixtures/full/anomaly.psf__requests-5414.call10.onset.suffix2048.cap1024.seed43.private.json",
+        "case_sha256": "3c0862e806b31c9059065202c03fc559279a036957d53e853c4cf5460ba19dee",
+        "source_result_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-execution-candidate/runs/full/anomaly.psf__requests-5414.call10.onset.suffix2048.cap1024.seed43.json",
+        "source_result_sha256": "5c4660236e54304af472b9ae8d1c572d663bfbf0ede40ac9a17cb9551a2f3a0e",
+        "source_inventory_rows_for_result_seed": [
+          41
+        ],
+        "same_result_file_other_seed_refs_not_covered": [],
+        "source_job": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-candidate/fixtures/full/anomaly.psf__requests-5414.call10.onset.suffix2048.cap1024.seed43.private.json",
+        "mode": "full",
+        "actual_sample_seed": 43,
+        "prompt_tokens": 2048,
+        "prompt_token_ids_sha256": "3fef6c6ee07f2a50e043b306b65ed88ec4052e0b8e95ca93149c952f059509d3",
+        "exact_prompt_seed_cap_identity_sha256": "46e5ecb5afd882cea850be8e8c34bfef37647a6867d6bd476024d8adb6bd4820",
+        "source_chosen_tokens": 64,
+        "chosen_teacher_forcing_positions": 64,
+        "original_free_generation_cap": 1024,
+        "source_trial_generated_tokens": 975,
+        "source_trial_reached_cap": false,
+        "evidence": "Coherent URL/IDNA reasoning ends with fenced bash after channel separator, without canonical call:bash tool opening. Conditioned prefix is thought+traceback, not an open tool call. Missing-tool protocol anomaly; stock parser confirms zero structured tool calls. No sustained native ellipsis motif.",
+        "inventory_verdict": "other",
+        "not_new_defect_note": "A seed-specific observation, not automatically a distinct task defect. Other seeds sharing a source result file remain separate and are only included where explicitly listed."
+      },
+      {
+        "name": "fullother-18-models-autoports-google-gemma-4--s44-p2048-c1024",
+        "case_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-candidate/fixtures/full/anomaly.psf__requests-5414.call10.onset.suffix2048.cap1024.seed44.private.json",
+        "case_sha256": "2115c3bdecbfc57e014b8c779edca64f4601a0470b0e68d8c516a5e9e28490cf",
+        "source_result_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-execution-candidate/runs/full/anomaly.psf__requests-5414.call10.onset.suffix2048.cap1024.seed44.json",
+        "source_result_sha256": "123f151deade6d8ceb86ef7103a1c32c4176606b84109368ca2ba80f869be8c6",
+        "source_inventory_rows_for_result_seed": [
+          42
+        ],
+        "same_result_file_other_seed_refs_not_covered": [],
+        "source_job": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-candidate/fixtures/full/anomaly.psf__requests-5414.call10.onset.suffix2048.cap1024.seed44.private.json",
+        "mode": "full",
+        "actual_sample_seed": 44,
+        "prompt_tokens": 2048,
+        "prompt_token_ids_sha256": "3fef6c6ee07f2a50e043b306b65ed88ec4052e0b8e95ca93149c952f059509d3",
+        "exact_prompt_seed_cap_identity_sha256": "e09823a7ca3a70f87fbaf5195f1e082de1fcc4dc40b4224145a29cd5cb983209",
+        "source_chosen_tokens": 64,
+        "chosen_teacher_forcing_positions": 64,
+        "original_free_generation_cap": 1024,
+        "source_trial_generated_tokens": 626,
+        "source_trial_reached_cap": false,
+        "evidence": "Coherent URL/IDNA reasoning ends with fenced bash after channel separator, without canonical call:bash tool opening. Conditioned prefix is thought+traceback, not an open tool call. Missing-tool protocol anomaly; stock parser confirms zero structured tool calls. No sustained native ellipsis motif.",
+        "inventory_verdict": "other",
+        "not_new_defect_note": "A seed-specific observation, not automatically a distinct task defect. Other seeds sharing a source result file remain separate and are only included where explicitly listed."
+      },
+      {
+        "name": "fullother-19-anomaly-psf-requests-5414-call11-s43-p512-c1024",
+        "case_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/cap1024-preparation/fixtures/full/anomaly.psf__requests-5414.call11.onset.optional-suffix512.cap1024.seed43.private.json",
+        "case_sha256": "1850ce0f5b3b322ac4b147aacefc1c1a6fe342a9d7440354dda7c659a96c07c2",
+        "source_result_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/cap1024-preparation/runs/full/anomaly.psf__requests-5414.call11.onset.optional-suffix512.cap1024.seed43.json",
+        "source_result_sha256": "6b56467f234fa62463361f3c4fcec86a25582c6956cbd534bbf60b8f98789477",
+        "source_inventory_rows_for_result_seed": [
+          54
+        ],
+        "same_result_file_other_seed_refs_not_covered": [],
+        "source_job": "anomaly.psf__requests-5414.call11.onset.optional-suffix512.cap1024.seed43",
+        "mode": "full",
+        "actual_sample_seed": 43,
+        "prompt_tokens": 512,
+        "prompt_token_ids_sha256": "3d89a854eee7b7437f041ae07ac20d12ec2e75080078c0a5e2f075952284a78d",
+        "exact_prompt_seed_cap_identity_sha256": "9b3c027a658ac78cbc16af7fedcca94bd983bcba4bef10e1a070f11a2795758d",
+        "source_chosen_tokens": 64,
+        "chosen_teacher_forcing_positions": 64,
+        "original_free_generation_cap": 1024,
+        "source_trial_generated_tokens": 1024,
+        "source_trial_reached_cap": true,
+        "evidence": "Fabricated fenced bash/output exchange includes package versions and a second traceback, despite tool-required prefix. No commands executed and no canonical tool boundary; distinct protocol anomaly, nativecaret absent. Capped task completion remains unresolved.",
+        "inventory_verdict": "other_anomaly",
+        "not_new_defect_note": "A seed-specific observation, not automatically a distinct task defect. Other seeds sharing a source result file remain separate and are only included where explicitly listed."
+      },
+      {
+        "name": "fullother-20-anomaly-psf-requests-5414-call11-s44-p512-c2048",
+        "case_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/cap1024-preparation/cap2048-preparation/anomaly.psf__requests-5414.call11.onset.optional-suffix512.cap2048.seed44.private.json",
+        "case_sha256": "007fe3e3a0098e9cc52f0a0da473f5cc9572c189381af49b35f82ff425c0337f",
+        "source_result_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/cap1024-preparation/cap2048-preparation/runs/full/anomaly.psf__requests-5414.call11.onset.optional-suffix512.cap2048.seed44.json",
+        "source_result_sha256": "af75c19503c28dbfc26616fbd24f20331b987681a271c7d4b769eb2d04910dd3",
+        "source_inventory_rows_for_result_seed": [
+          55
+        ],
+        "same_result_file_other_seed_refs_not_covered": [],
+        "source_job": "anomaly.psf__requests-5414.call11.onset.optional-suffix512.cap2048.seed44",
+        "mode": "full",
+        "actual_sample_seed": 44,
+        "prompt_tokens": 512,
+        "prompt_token_ids_sha256": "3d89a854eee7b7437f041ae07ac20d12ec2e75080078c0a5e2f075952284a78d",
+        "exact_prompt_seed_cap_identity_sha256": "24b61c51d407a2772132460dd0d5545e624b7f6d3578087fcd264ea44f9b8665",
+        "source_chosen_tokens": 64,
+        "chosen_teacher_forcing_positions": 64,
+        "original_free_generation_cap": 2048,
+        "source_trial_generated_tokens": 2048,
+        "source_trial_reached_cap": true,
+        "evidence": "Repeated diagnosis with fabricated output, not native ellipsis/caret burst. Hypotheses vary, so this is not a proof that all reasoning stopped: however multiple unexecuted checks are presented as observed results (idna.IDNAError, socket.gaierror, urlparse ParseResult), following repeated requests.get/code examples without tool boundaries. This affirmative protocol anomaly closes this diagnostic question independently of the cap. No task failure or completion is inferred from the cap; no score change.",
+        "inventory_verdict": "other",
+        "not_new_defect_note": "A seed-specific observation, not automatically a distinct task defect. Other seeds sharing a source result file remain separate and are only included where explicitly listed."
+      }
+    ],
+    "groups": 8,
+    "revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+    "offline": true,
+    "threads": 16,
+    "serial": true,
+    "chosen": "min(64, exact saved sequence), preserve37 where applicable",
+    "cap": "actual source cap only; no extension"
+  },
+  "source_integrity": {
+    "path": "source-integrity.json",
+    "sha256": "4a2ec157bc834c0c9fc9a2f2900ccc82339e5e058e7ec927efec45e017f0aa31"
+  },
+  "commands": {
+    "path": "commands.json",
+    "sha256": "9e3acdf87bba6741df8696348ff911755748e0222849ad59ca65f3c8ad908fb6"
+  },
+  "forecast": {
+    "path": "forecast.json",
+    "sha256": "dd1965cefce35324a08a0c95aa6b98a6d750024b81cbccee5451b90a9e0f7750"
+  },
+  "output_map": "output-map.json",
+  "gates_for_any_future_group": [
+    "root admission of exact hashes for that group",
+    "HF9/SKHF queue terminal",
+    "no active HF process, zero TT owners, MemAvailable >=100GiB",
+    "recheck all pins and remaining deadline before group",
+    "18000s hard timeout",
+    "validate complete output case/seed/cap"
+  ],
+  "execution": "No runner command, model load, TTNN import, or device access."
+}

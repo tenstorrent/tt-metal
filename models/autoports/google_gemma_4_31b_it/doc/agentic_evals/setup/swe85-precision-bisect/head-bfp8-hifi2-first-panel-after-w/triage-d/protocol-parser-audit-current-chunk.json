@@ -1,0 +1,1727 @@
+{
+  "status": "partial_completed_outputs_CPU_stock_nonstreaming_parser_only",
+  "created_utc": "2026-11-15T06:25:36.813308+00:00",
+  "manifest_sha256": "40a1c9fc4e2aeda9f61cf48c8b6c48594f66856751e1ddb8bc7c7bd65fac45f8",
+  "protocol_jobs_selected": 12,
+  "selected_jobs": [
+    "anomaly.sphinx-doc__sphinx-9461.call184.onset.seed42.cap1024",
+    "anomaly.sphinx-doc__sphinx-9461.call184.onset.seed43.cap2048",
+    "anomaly.sphinx-doc__sphinx-9461.call184.onset.seed44.cap1024",
+    "anomaly.sympy__sympy-13480.call1.onset.seed42.cap256",
+    "anomaly.sympy__sympy-13480.call1.onset.seed43.cap256",
+    "anomaly.sympy__sympy-13480.call1.onset.seed44.cap256",
+    "anomaly.sympy__sympy-13551.call1.onset.seed42.cap256",
+    "anomaly.sympy__sympy-13551.call1.onset.seed43.cap512",
+    "anomaly.sympy__sympy-13551.call1.onset.seed44.cap256",
+    "anomaly.sympy__sympy-13878.call1.onset.seed42.cap256",
+    "anomaly.sympy__sympy-13878.call1.onset.seed43.cap256",
+    "anomaly.sympy__sympy-13878.call1.onset.seed44.cap256"
+  ],
+  "completed_case_modes": 12,
+  "completed_trials": 12,
+  "pending": [
+    {
+      "job": "anomaly.sphinx-doc__sphinx-9461.call184.onset.seed42.cap1024",
+      "mode": "full"
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-9461.call184.onset.seed43.cap2048",
+      "mode": "full"
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-9461.call184.onset.seed44.cap1024",
+      "mode": "full"
+    },
+    {
+      "job": "anomaly.sympy__sympy-13480.call1.onset.seed42.cap256",
+      "mode": "full"
+    },
+    {
+      "job": "anomaly.sympy__sympy-13480.call1.onset.seed43.cap256",
+      "mode": "full"
+    },
+    {
+      "job": "anomaly.sympy__sympy-13480.call1.onset.seed44.cap256",
+      "mode": "full"
+    },
+    {
+      "job": "anomaly.sympy__sympy-13551.call1.onset.seed42.cap256",
+      "mode": "full"
+    },
+    {
+      "job": "anomaly.sympy__sympy-13551.call1.onset.seed43.cap512",
+      "mode": "full"
+    },
+    {
+      "job": "anomaly.sympy__sympy-13551.call1.onset.seed44.cap256",
+      "mode": "full"
+    },
+    {
+      "job": "anomaly.sympy__sympy-13878.call1.onset.seed42.cap256",
+      "mode": "full"
+    },
+    {
+      "job": "anomaly.sympy__sympy-13878.call1.onset.seed43.cap256",
+      "mode": "full"
+    },
+    {
+      "job": "anomaly.sympy__sympy-13878.call1.onset.seed44.cap256",
+      "mode": "full"
+    }
+  ],
+  "errors": [],
+  "sources_sha256": {
+    "python_env/lib/python3.10/site-packages/vllm/parser/gemma4.py": "c974f47dc39ab7276da1e4ae38c4010e3f5411481f75e3879e29f47b2fd08df7",
+    "python_env/lib/python3.10/site-packages/vllm/parser/engine/parser_engine.py": "d1075deeb25b4872e92752d7ef0598a07a747afaf2afc56058ec30c6dc1da89a",
+    "python_env/lib/python3.10/site-packages/vllm/parser/engine/adapters.py": "7a77bcb86e2129762f4199ee726398a4850b9e207893fc4295f2b759bcfeeb36",
+    "python_env/lib/python3.10/site-packages/vllm/tool_parsers/gemma4_engine_tool_parser.py": "02f31bdcc4d8527440daebb4f4e3e74c83a6010eb56cd33fe7522bea8f51bc65",
+    "python_env/lib/python3.10/site-packages/vllm/reasoning/gemma4_engine_reasoning_parser.py": "3e9adef8ae56ee993fbaee43e82aa36216fb71251ee2de14dc9f8b326220a594",
+    "/home/mvasiljevic/.cache/huggingface/hub/models--google--gemma-4-31B-it/snapshots/842da3794eaa0b77d5f08bae87a17459d91ff475/chat_template.jinja": "ae53464bf3be25802b3a5b37def7fd89667067d7577049b3b2d74c4d8de4c6d4",
+    "/home/mvasiljevic/.cache/huggingface/hub/models--google--gemma-4-31B-it/snapshots/842da3794eaa0b77d5f08bae87a17459d91ff475/tokenizer.json": "cc8d3a0ce36466ccc1278bf987df5f71db1719b9ca6b4118264f45cb627bfe0f",
+    "/home/mvasiljevic/.cache/huggingface/hub/models--google--gemma-4-31B-it/snapshots/842da3794eaa0b77d5f08bae87a17459d91ff475/tokenizer_config.json": "9f4fec4b1dc6ecddf8f4a92e9caea5971c0e67d81309f3f9066a2bee8c362633",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/audit_swe85_protocol_outputs.py": "c049003433ff2fa694206e7f5942a9551f8473763d4d3788c0aeeaa1e35417e9"
+  },
+  "rows": [
+    {
+      "job": "anomaly.sphinx-doc__sphinx-9461.call184.onset.seed42.cap1024",
+      "mode": "served",
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/triage-d/protocol-audit-input-current-chunk/runs/served/anomaly.sphinx-doc__sphinx-9461.call184.onset.seed42.cap1024.json",
+      "result_sha256": "9ebd3004bf9653e9148b6e23a76ee48eccfd7266fc0a055611a24f7520e1bc89",
+      "fixture_sha256": "45d3dc1e5af1f012f825bf7da1ca84e67ff79fc45aac8c144ffc05b241243206",
+      "packet_sha256": "dd32201c1a3ba44dbcfd317478fbec34effbadc66ca95199d992a3fe690aeed3",
+      "assistant_prefix_token_count": 416,
+      "assistant_prefix_tail_ids": [
+        1164,
+        59162,
+        1024,
+        506,
+        587,
+        2073,
+        532,
+        2426,
+        2165,
+        1269,
+        3074,
+        1269,
+        236929,
+        236751,
+        236761,
+        101,
+        48,
+        6639,
+        236787,
+        42422
+      ],
+      "assistant_prefix_tail": "`.\nActually, if it's in the MRO, it must be in one of the `__dict__`s.\nSo we can just iterate over the MRO and check `__dict__`s.<channel|><|tool_call>call:bash",
+      "native": {
+        "response_id": "chatcmpl-80fe7f87395c1dc1",
+        "structured_tool_names": [
+          "bash,command:<|\"|>cat <<'EOF' > fix_importer_final.py\nwith open"
+        ],
+        "content_only_current_parser": {
+          "structured_tool_count": 0,
+          "missing_tool": true,
+          "malformed_name": false,
+          "invalid_arguments": false,
+          "tools": [],
+          "visible_content_chars": 0,
+          "visible_content_head": "",
+          "reasoning_chars": 0,
+          "visible_GetAll_bash": false,
+          "visible_pseudo_call": false,
+          "reasoning_literal_thought_tail": false
+        },
+        "canonical_full_reply_current_parser": {
+          "structured_tool_count": 1,
+          "missing_tool": false,
+          "malformed_name": true,
+          "invalid_arguments": true,
+          "tools": [
+            {
+              "name": "bash,command:<|\"|>cat <<'EOF' > fix_importer_final.py\nwith open",
+              "expected_bash": false,
+              "valid_json": true,
+              "valid_command_schema": false,
+              "argument_keys": [
+                "'sphinx/ext/autodoc/importer.py', 'r') as f",
+                "] = Attribute(name, directly_defined, value)' in lines[i] or 'members[name] = ObjectMember(name, value, class_=subject)' in lines[i]",
+                "] and lines[i].startswith('    for')",
+                "len(lines))"
+              ]
+            }
+          ],
+          "visible_content_chars": 0,
+          "visible_content_head": "",
+          "reasoning_chars": 1375,
+          "visible_GetAll_bash": false,
+          "visible_pseudo_call": false,
+          "reasoning_literal_thought_tail": false
+        }
+      },
+      "trials": [
+        {
+          "seed": 42,
+          "tokens": 830,
+          "at_requested_token_cap": false,
+          "generated_has_tool_close_token": true,
+          "generated_last_id": 50,
+          "generated_head_ids": [
+            236782,
+            7674,
+            236787,
+            52,
+            9307,
+            2986,
+            236789,
+            98395,
+            236789,
+            1890,
+            7562,
+            236779
+          ],
+          "generated_text_head": "{command:<|\"|>cat <<'EOF' > fix_importer_final.py\nimport collections\n\ndef fix_get_object_members():\n",
+          "generated_text_tail": "on3 fix_importer_final.py\n<|\"|>}<tool_call|><|tool_response>",
+          "conditioning_plus_generated": {
+            "structured_tool_count": 1,
+            "missing_tool": false,
+            "malformed_name": false,
+            "invalid_arguments": false,
+            "tools": [
+              {
+                "name": "bash",
+                "expected_bash": true,
+                "valid_json": true,
+                "valid_command_schema": true,
+                "argument_keys": [
+                  "command"
+                ]
+              }
+            ],
+            "visible_content_chars": 0,
+            "visible_content_head": "",
+            "reasoning_chars": 1375,
+            "visible_GetAll_bash": false,
+            "visible_pseudo_call": false,
+            "reasoning_literal_thought_tail": false
+          },
+          "generated_only": {
+            "structured_tool_count": 0,
+            "missing_tool": true,
+            "malformed_name": false,
+            "invalid_arguments": false,
+            "tools": [],
+            "visible_content_chars": 3217,
+            "visible_content_head": "{command:<|\"|>cat <<'EOF' > fix_importer_final.py\nimport collections\n\ndef fix_get_object_members():\n    with open('sphin",
+            "reasoning_chars": 0,
+            "visible_GetAll_bash": false,
+            "visible_pseudo_call": false,
+            "reasoning_literal_thought_tail": false
+          },
+          "mechanical_flag_from_runner": false,
+          "mechanical_repetition_not_adjudicated_by_parser": true
+        }
+      ]
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-9461.call184.onset.seed43.cap2048",
+      "mode": "served",
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/triage-d/protocol-audit-input-current-chunk/runs/served/anomaly.sphinx-doc__sphinx-9461.call184.onset.seed43.cap2048.json",
+      "result_sha256": "6d4ab98c2d14ee92bec0f28f9651d8f9359de8fafa1413f7fb107dd542d1a004",
+      "fixture_sha256": "afa85f0f7abc73e7c3c71da8900e5910d5d8484630eebf6925ffe2995a24dbb6",
+      "packet_sha256": "dd32201c1a3ba44dbcfd317478fbec34effbadc66ca95199d992a3fe690aeed3",
+      "assistant_prefix_token_count": 416,
+      "assistant_prefix_tail_ids": [
+        1164,
+        59162,
+        1024,
+        506,
+        587,
+        2073,
+        532,
+        2426,
+        2165,
+        1269,
+        3074,
+        1269,
+        236929,
+        236751,
+        236761,
+        101,
+        48,
+        6639,
+        236787,
+        42422
+      ],
+      "assistant_prefix_tail": "`.\nActually, if it's in the MRO, it must be in one of the `__dict__`s.\nSo we can just iterate over the MRO and check `__dict__`s.<channel|><|tool_call>call:bash",
+      "native": {
+        "response_id": "chatcmpl-80fe7f87395c1dc1",
+        "structured_tool_names": [
+          "bash,command:<|\"|>cat <<'EOF' > fix_importer_final.py\nwith open"
+        ],
+        "content_only_current_parser": {
+          "structured_tool_count": 0,
+          "missing_tool": true,
+          "malformed_name": false,
+          "invalid_arguments": false,
+          "tools": [],
+          "visible_content_chars": 0,
+          "visible_content_head": "",
+          "reasoning_chars": 0,
+          "visible_GetAll_bash": false,
+          "visible_pseudo_call": false,
+          "reasoning_literal_thought_tail": false
+        },
+        "canonical_full_reply_current_parser": {
+          "structured_tool_count": 1,
+          "missing_tool": false,
+          "malformed_name": true,
+          "invalid_arguments": true,
+          "tools": [
+            {
+              "name": "bash,command:<|\"|>cat <<'EOF' > fix_importer_final.py\nwith open",
+              "expected_bash": false,
+              "valid_json": true,
+              "valid_command_schema": false,
+              "argument_keys": [
+                "'sphinx/ext/autodoc/importer.py', 'r') as f",
+                "] = Attribute(name, directly_defined, value)' in lines[i] or 'members[name] = ObjectMember(name, value, class_=subject)' in lines[i]",
+                "] and lines[i].startswith('    for')",
+                "len(lines))"
+              ]
+            }
+          ],
+          "visible_content_chars": 0,
+          "visible_content_head": "",
+          "reasoning_chars": 1375,
+          "visible_GetAll_bash": false,
+          "visible_pseudo_call": false,
+          "reasoning_literal_thought_tail": false
+        }
+      },
+      "trials": [
+        {
+          "seed": 43,
+          "tokens": 572,
+          "at_requested_token_cap": false,
+          "generated_has_tool_close_token": true,
+          "generated_last_id": 50,
+          "generated_head_ids": [
+            236782,
+            7674,
+            236787,
+            52,
+            9307,
+            2986,
+            236789,
+            98395,
+            236789,
+            1890,
+            7562,
+            236779
+          ],
+          "generated_text_head": "{command:<|\"|>cat <<'EOF' > fix_importer_final.py\nimport collections\n\ndef replace_get_object_members",
+          "generated_text_tail": "on3 fix_importer_final.py\n<|\"|>}<tool_call|><|tool_response>",
+          "conditioning_plus_generated": {
+            "structured_tool_count": 1,
+            "missing_tool": false,
+            "malformed_name": false,
+            "invalid_arguments": false,
+            "tools": [
+              {
+                "name": "bash",
+                "expected_bash": true,
+                "valid_json": true,
+                "valid_command_schema": true,
+                "argument_keys": [
+                  "command"
+                ]
+              }
+            ],
+            "visible_content_chars": 0,
+            "visible_content_head": "",
+            "reasoning_chars": 1375,
+            "visible_GetAll_bash": false,
+            "visible_pseudo_call": false,
+            "reasoning_literal_thought_tail": false
+          },
+          "generated_only": {
+            "structured_tool_count": 0,
+            "missing_tool": true,
+            "malformed_name": false,
+            "invalid_arguments": false,
+            "tools": [],
+            "visible_content_chars": 2091,
+            "visible_content_head": "{command:<|\"|>cat <<'EOF' > fix_importer_final.py\nimport collections\n\ndef replace_get_object_members(content):\n    # Fin",
+            "reasoning_chars": 0,
+            "visible_GetAll_bash": false,
+            "visible_pseudo_call": false,
+            "reasoning_literal_thought_tail": false
+          },
+          "mechanical_flag_from_runner": false,
+          "mechanical_repetition_not_adjudicated_by_parser": true
+        }
+      ]
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-9461.call184.onset.seed44.cap1024",
+      "mode": "served",
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/triage-d/protocol-audit-input-current-chunk/runs/served/anomaly.sphinx-doc__sphinx-9461.call184.onset.seed44.cap1024.json",
+      "result_sha256": "3049346aa95315e2caa73d762d2da16793538016316c208dbb1c3886cbf05261",
+      "fixture_sha256": "552f3e08333444cf6b9ad9f2149e220af543669e05b0896f89f0afa0645dd6b8",
+      "packet_sha256": "dd32201c1a3ba44dbcfd317478fbec34effbadc66ca95199d992a3fe690aeed3",
+      "assistant_prefix_token_count": 416,
+      "assistant_prefix_tail_ids": [
+        1164,
+        59162,
+        1024,
+        506,
+        587,
+        2073,
+        532,
+        2426,
+        2165,
+        1269,
+        3074,
+        1269,
+        236929,
+        236751,
+        236761,
+        101,
+        48,
+        6639,
+        236787,
+        42422
+      ],
+      "assistant_prefix_tail": "`.\nActually, if it's in the MRO, it must be in one of the `__dict__`s.\nSo we can just iterate over the MRO and check `__dict__`s.<channel|><|tool_call>call:bash",
+      "native": {
+        "response_id": "chatcmpl-80fe7f87395c1dc1",
+        "structured_tool_names": [
+          "bash,command:<|\"|>cat <<'EOF' > fix_importer_final.py\nwith open"
+        ],
+        "content_only_current_parser": {
+          "structured_tool_count": 0,
+          "missing_tool": true,
+          "malformed_name": false,
+          "invalid_arguments": false,
+          "tools": [],
+          "visible_content_chars": 0,
+          "visible_content_head": "",
+          "reasoning_chars": 0,
+          "visible_GetAll_bash": false,
+          "visible_pseudo_call": false,
+          "reasoning_literal_thought_tail": false
+        },
+        "canonical_full_reply_current_parser": {
+          "structured_tool_count": 1,
+          "missing_tool": false,
+          "malformed_name": true,
+          "invalid_arguments": true,
+          "tools": [
+            {
+              "name": "bash,command:<|\"|>cat <<'EOF' > fix_importer_final.py\nwith open",
+              "expected_bash": false,
+              "valid_json": true,
+              "valid_command_schema": false,
+              "argument_keys": [
+                "'sphinx/ext/autodoc/importer.py', 'r') as f",
+                "] = Attribute(name, directly_defined, value)' in lines[i] or 'members[name] = ObjectMember(name, value, class_=subject)' in lines[i]",
+                "] and lines[i].startswith('    for')",
+                "len(lines))"
+              ]
+            }
+          ],
+          "visible_content_chars": 0,
+          "visible_content_head": "",
+          "reasoning_chars": 1375,
+          "visible_GetAll_bash": false,
+          "visible_pseudo_call": false,
+          "reasoning_literal_thought_tail": false
+        }
+      },
+      "trials": [
+        {
+          "seed": 44,
+          "tokens": 606,
+          "at_requested_token_cap": false,
+          "generated_has_tool_close_token": true,
+          "generated_last_id": 50,
+          "generated_head_ids": [
+            236782,
+            7674,
+            236787,
+            52,
+            9307,
+            2986,
+            236789,
+            98395,
+            236789,
+            1890,
+            7562,
+            236779
+          ],
+          "generated_text_head": "{command:<|\"|>cat <<'EOF' > fix_importer_final.py\nimport collections\n\nwith open('sphinx/ext/autodoc/",
+          "generated_text_tail": "on3 fix_importer_final.py\n<|\"|>}<tool_call|><|tool_response>",
+          "conditioning_plus_generated": {
+            "structured_tool_count": 1,
+            "missing_tool": false,
+            "malformed_name": false,
+            "invalid_arguments": false,
+            "tools": [
+              {
+                "name": "bash",
+                "expected_bash": true,
+                "valid_json": true,
+                "valid_command_schema": true,
+                "argument_keys": [
+                  "command"
+                ]
+              }
+            ],
+            "visible_content_chars": 0,
+            "visible_content_head": "",
+            "reasoning_chars": 1375,
+            "visible_GetAll_bash": false,
+            "visible_pseudo_call": false,
+            "reasoning_literal_thought_tail": false
+          },
+          "generated_only": {
+            "structured_tool_count": 0,
+            "missing_tool": true,
+            "malformed_name": false,
+            "invalid_arguments": false,
+            "tools": [],
+            "visible_content_chars": 2122,
+            "visible_content_head": "{command:<|\"|>cat <<'EOF' > fix_importer_final.py\nimport collections\n\nwith open('sphinx/ext/autodoc/importer.py', 'r') a",
+            "reasoning_chars": 0,
+            "visible_GetAll_bash": false,
+            "visible_pseudo_call": false,
+            "reasoning_literal_thought_tail": false
+          },
+          "mechanical_flag_from_runner": false,
+          "mechanical_repetition_not_adjudicated_by_parser": true
+        }
+      ]
+    },
+    {
+      "job": "anomaly.sympy__sympy-13480.call1.onset.seed42.cap256",
+      "mode": "served",
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/triage-d/protocol-audit-input-current-chunk/runs/served/anomaly.sympy__sympy-13480.call1.onset.seed42.cap256.json",
+      "result_sha256": "9aaa542e130652ee38744822d7fd70f5e1f1f8afb28365079071d68072d556df",
+      "fixture_sha256": "0ff8f259c62590aaa1fa0b6874d2d5fdb5e1b5f686c5558142fa1e8dbaccc91f",
+      "packet_sha256": "68cd399ad5ce0abf3e2168129f40fa82020426be96ee02091be3b6088348ca4e",
+      "assistant_prefix_token_count": 167,
+      "assistant_prefix_tail_ids": [
+        684,
+        119364,
+        506,
+        4186,
+        236761,
+        101,
+        236777,
+        795,
+        1502,
+        684,
+        7107,
+        496,
+        32029,
+        8948,
+        531,
+        9128,
+        506,
+        4186,
+        236761,
+        108
+      ],
+      "assistant_prefix_tail": "t defined in the `eval` method of `coth`.\n\nLet's start by reproducing the issue.<channel|>I will start by creating a reproduction script to confirm the issue.\n\n",
+      "native": {
+        "response_id": "chatcmpl-b0164d1761da22d6",
+        "structured_tool_names": [],
+        "content_only_current_parser": {
+          "structured_tool_count": 0,
+          "missing_tool": true,
+          "malformed_name": false,
+          "invalid_arguments": false,
+          "tools": [],
+          "visible_content_chars": 553,
+          "visible_content_head": "I will start by creating a reproduction script to confirm the issue.\n\ncall:bash{command:<|\"|>cat <<'EOF' > reproduce_iss",
+          "reasoning_chars": 0,
+          "visible_GetAll_bash": false,
+          "visible_pseudo_call": true,
+          "reasoning_literal_thought_tail": false
+        },
+        "canonical_full_reply_current_parser": {
+          "structured_tool_count": 0,
+          "missing_tool": true,
+          "malformed_name": false,
+          "invalid_arguments": false,
+          "tools": [],
+          "visible_content_chars": 553,
+          "visible_content_head": "I will start by creating a reproduction script to confirm the issue.\n\ncall:bash{command:<|\"|>cat <<'EOF' > reproduce_iss",
+          "reasoning_chars": 516,
+          "visible_GetAll_bash": false,
+          "visible_pseudo_call": true,
+          "reasoning_literal_thought_tail": false
+        }
+      },
+      "trials": [
+        {
+          "seed": 42,
+          "tokens": 158,
+          "at_requested_token_cap": false,
+          "generated_has_tool_close_token": true,
+          "generated_last_id": 50,
+          "generated_head_ids": [
+            101,
+            48,
+            6639,
+            236787,
+            42422,
+            236782,
+            7674,
+            236787,
+            52,
+            9307,
+            2986,
+            236789
+          ],
+          "generated_text_head": "<channel|><|tool_call>call:bash{command:<|\"|>cat <<'EOF' > reproduce_issue.py\nfrom sympy import Symb",
+          "generated_text_tail": "ython3 reproduce_issue.py\n<|\"|>}<tool_call|><|tool_response>",
+          "conditioning_plus_generated": {
+            "structured_tool_count": 1,
+            "missing_tool": false,
+            "malformed_name": false,
+            "invalid_arguments": false,
+            "tools": [
+              {
+                "name": "bash",
+                "expected_bash": true,
+                "valid_json": true,
+                "valid_command_schema": true,
+                "argument_keys": [
+                  "command"
+                ]
+              }
+            ],
+            "visible_content_chars": 68,
+            "visible_content_head": "I will start by creating a reproduction script to confirm the issue.",
+            "reasoning_chars": 516,
+            "visible_GetAll_bash": false,
+            "visible_pseudo_call": false,
+            "reasoning_literal_thought_tail": false
+          },
+          "generated_only": {
+            "structured_tool_count": 1,
+            "missing_tool": false,
+            "malformed_name": false,
+            "invalid_arguments": false,
+            "tools": [
+              {
+                "name": "bash",
+                "expected_bash": true,
+                "valid_json": true,
+                "valid_command_schema": true,
+                "argument_keys": [
+                  "command"
+                ]
+              }
+            ],
+            "visible_content_chars": 0,
+            "visible_content_head": "",
+            "reasoning_chars": 0,
+            "visible_GetAll_bash": false,
+            "visible_pseudo_call": false,
+            "reasoning_literal_thought_tail": false
+          },
+          "mechanical_flag_from_runner": false,
+          "mechanical_repetition_not_adjudicated_by_parser": true
+        }
+      ]
+    },
+    {
+      "job": "anomaly.sympy__sympy-13480.call1.onset.seed43.cap256",
+      "mode": "served",
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/triage-d/protocol-audit-input-current-chunk/runs/served/anomaly.sympy__sympy-13480.call1.onset.seed43.cap256.json",
+      "result_sha256": "3ffc28dd56e2c87a71374f3258de0338c6c29b48a522f8ee1e46cc828b57b976",
+      "fixture_sha256": "b49edc6f6717909718addf7ed6cc8065e8b588db9be07b4c66cea0f3b3951b78",
+      "packet_sha256": "68cd399ad5ce0abf3e2168129f40fa82020426be96ee02091be3b6088348ca4e",
+      "assistant_prefix_token_count": 167,
+      "assistant_prefix_tail_ids": [
+        684,
+        119364,
+        506,
+        4186,
+        236761,
+        101,
+        236777,
+        795,
+        1502,
+        684,
+        7107,
+        496,
+        32029,
+        8948,
+        531,
+        9128,
+        506,
+        4186,
+        236761,
+        108
+      ],
+      "assistant_prefix_tail": "t defined in the `eval` method of `coth`.\n\nLet's start by reproducing the issue.<channel|>I will start by creating a reproduction script to confirm the issue.\n\n",
+      "native": {
+        "response_id": "chatcmpl-b0164d1761da22d6",
+        "structured_tool_names": [],
+        "content_only_current_parser": {
+          "structured_tool_count": 0,
+          "missing_tool": true,
+          "malformed_name": false,
+          "invalid_arguments": false,
+          "tools": [],
+          "visible_content_chars": 553,
+          "visible_content_head": "I will start by creating a reproduction script to confirm the issue.\n\ncall:bash{command:<|\"|>cat <<'EOF' > reproduce_iss",
+          "reasoning_chars": 0,
+          "visible_GetAll_bash": false,
+          "visible_pseudo_call": true,
+          "reasoning_literal_thought_tail": false
+        },
+        "canonical_full_reply_current_parser": {
+          "structured_tool_count": 0,
+          "missing_tool": true,
+          "malformed_name": false,
+          "invalid_arguments": false,
+          "tools": [],
+          "visible_content_chars": 553,
+          "visible_content_head": "I will start by creating a reproduction script to confirm the issue.\n\ncall:bash{command:<|\"|>cat <<'EOF' > reproduce_iss",
+          "reasoning_chars": 516,
+          "visible_GetAll_bash": false,
+          "visible_pseudo_call": true,
+          "reasoning_literal_thought_tail": false
+        }
+      },
+      "trials": [
+        {
+          "seed": 43,
+          "tokens": 143,
+          "at_requested_token_cap": false,
+          "generated_has_tool_close_token": true,
+          "generated_last_id": 50,
+          "generated_head_ids": [
+            101,
+            48,
+            6639,
+            236787,
+            42422,
+            236782,
+            7674,
+            236787,
+            52,
+            9307,
+            2986,
+            236789
+          ],
+          "generated_text_head": "<channel|><|tool_call>call:bash{command:<|\"|>cat <<'EOF' > reproduce_issue.py\nfrom sympy import Symb",
+          "generated_text_tail": "ython3 reproduce_issue.py\n<|\"|>}<tool_call|><|tool_response>",
+          "conditioning_plus_generated": {
+            "structured_tool_count": 1,
+            "missing_tool": false,
+            "malformed_name": false,
+            "invalid_arguments": false,
+            "tools": [
+              {
+                "name": "bash",
+                "expected_bash": true,
+                "valid_json": true,
+                "valid_command_schema": true,
+                "argument_keys": [
+                  "command"
+                ]
+              }
+            ],
+            "visible_content_chars": 68,
+            "visible_content_head": "I will start by creating a reproduction script to confirm the issue.",
+            "reasoning_chars": 516,
+            "visible_GetAll_bash": false,
+            "visible_pseudo_call": false,
+            "reasoning_literal_thought_tail": false
+          },
+          "generated_only": {
+            "structured_tool_count": 1,
+            "missing_tool": false,
+            "malformed_name": false,
+            "invalid_arguments": false,
+            "tools": [
+              {
+                "name": "bash",
+                "expected_bash": true,
+                "valid_json": true,
+                "valid_command_schema": true,
+                "argument_keys": [
+                  "command"
+                ]
+              }
+            ],
+            "visible_content_chars": 0,
+            "visible_content_head": "",
+            "reasoning_chars": 0,
+            "visible_GetAll_bash": false,
+            "visible_pseudo_call": false,
+            "reasoning_literal_thought_tail": false
+          },
+          "mechanical_flag_from_runner": false,
+          "mechanical_repetition_not_adjudicated_by_parser": true
+        }
+      ]
+    },
+    {
+      "job": "anomaly.sympy__sympy-13480.call1.onset.seed44.cap256",
+      "mode": "served",
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/triage-d/protocol-audit-input-current-chunk/runs/served/anomaly.sympy__sympy-13480.call1.onset.seed44.cap256.json",
+      "result_sha256": "e644045c5681256b096014a1dbd44766517cd76172e81b15022f33bf1f8e5099",
+      "fixture_sha256": "a742fcf1c22680f2a044f851fcf77b978f97fb850f546367fe229ed6e793df7d",
+      "packet_sha256": "68cd399ad5ce0abf3e2168129f40fa82020426be96ee02091be3b6088348ca4e",
+      "assistant_prefix_token_count": 167,
+      "assistant_prefix_tail_ids": [
+        684,
+        119364,
+        506,
+        4186,
+        236761,
+        101,
+        236777,
+        795,
+        1502,
+        684,
+        7107,
+        496,
+        32029,
+        8948,
+        531,
+        9128,
+        506,
+        4186,
+        236761,
+        108
+      ],
+      "assistant_prefix_tail": "t defined in the `eval` method of `coth`.\n\nLet's start by reproducing the issue.<channel|>I will start by creating a reproduction script to confirm the issue.\n\n",
+      "native": {
+        "response_id": "chatcmpl-b0164d1761da22d6",
+        "structured_tool_names": [],
+        "content_only_current_parser": {
+          "structured_tool_count": 0,
+          "missing_tool": true,
+          "malformed_name": false,
+          "invalid_arguments": false,
+          "tools": [],
+          "visible_content_chars": 553,
+          "visible_content_head": "I will start by creating a reproduction script to confirm the issue.\n\ncall:bash{command:<|\"|>cat <<'EOF' > reproduce_iss",
+          "reasoning_chars": 0,
+          "visible_GetAll_bash": false,
+          "visible_pseudo_call": true,
+          "reasoning_literal_thought_tail": false
+        },
+        "canonical_full_reply_current_parser": {
+          "structured_tool_count": 0,
+          "missing_tool": true,
+          "malformed_name": false,
+          "invalid_arguments": false,
+          "tools": [],
+          "visible_content_chars": 553,
+          "visible_content_head": "I will start by creating a reproduction script to confirm the issue.\n\ncall:bash{command:<|\"|>cat <<'EOF' > reproduce_iss",
+          "reasoning_chars": 516,
+          "visible_GetAll_bash": false,
+          "visible_pseudo_call": true,
+          "reasoning_literal_thought_tail": false
+        }
+      },
+      "trials": [
+        {
+          "seed": 44,
+          "tokens": 147,
+          "at_requested_token_cap": false,
+          "generated_has_tool_close_token": true,
+          "generated_last_id": 50,
+          "generated_head_ids": [
+            101,
+            48,
+            6639,
+            236787,
+            42422,
+            236782,
+            7674,
+            236787,
+            52,
+            9307,
+            2986,
+            236789
+          ],
+          "generated_text_head": "<channel|><|tool_call>call:bash{command:<|\"|>cat <<'EOF' > reproduce_issue.py\nfrom sympy import Symb",
+          "generated_text_tail": "ython3 reproduce_issue.py\n<|\"|>}<tool_call|><|tool_response>",
+          "conditioning_plus_generated": {
+            "structured_tool_count": 1,
+            "missing_tool": false,
+            "malformed_name": false,
+            "invalid_arguments": false,
+            "tools": [
+              {
+                "name": "bash",
+                "expected_bash": true,
+                "valid_json": true,
+                "valid_command_schema": true,
+                "argument_keys": [
+                  "command"
+                ]
+              }
+            ],
+            "visible_content_chars": 68,
+            "visible_content_head": "I will start by creating a reproduction script to confirm the issue.",
+            "reasoning_chars": 516,
+            "visible_GetAll_bash": false,
+            "visible_pseudo_call": false,
+            "reasoning_literal_thought_tail": false
+          },
+          "generated_only": {
+            "structured_tool_count": 1,
+            "missing_tool": false,
+            "malformed_name": false,
+            "invalid_arguments": false,
+            "tools": [
+              {
+                "name": "bash",
+                "expected_bash": true,
+                "valid_json": true,
+                "valid_command_schema": true,
+                "argument_keys": [
+                  "command"
+                ]
+              }
+            ],
+            "visible_content_chars": 0,
+            "visible_content_head": "",
+            "reasoning_chars": 0,
+            "visible_GetAll_bash": false,
+            "visible_pseudo_call": false,
+            "reasoning_literal_thought_tail": false
+          },
+          "mechanical_flag_from_runner": false,
+          "mechanical_repetition_not_adjudicated_by_parser": true
+        }
+      ]
+    },
+    {
+      "job": "anomaly.sympy__sympy-13551.call1.onset.seed42.cap256",
+      "mode": "served",
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/triage-d/protocol-audit-input-current-chunk/runs/served/anomaly.sympy__sympy-13551.call1.onset.seed42.cap256.json",
+      "result_sha256": "47840f1b97ae55ec4b46ee90895b0fc1ef203b83780d1cf861ea1383fc3e2bf2",
+      "fixture_sha256": "f2806c4d025cc3a6da053df45a4bfcd6c3dba23bf2c31d7e892b78a957ae767b",
+      "packet_sha256": "dd37fe2cc164d8ceffdd43862c25847b06790257b719894698f4b1d0a7964ab6",
+      "assistant_prefix_token_count": 159,
+      "assistant_prefix_tail_ids": [
+        38449,
+        672,
+        4186,
+        1171,
+        236761,
+        101,
+        236777,
+        795,
+        1502,
+        684,
+        7107,
+        496,
+        32029,
+        8948,
+        531,
+        9128,
+        506,
+        13582,
+        236761,
+        108
+      ],
+      "assistant_prefix_tail": "wever, the current implementation returns `9/2`.\nLet's reproduce this issue first.<channel|>I will start by creating a reproduction script to confirm the bug.\n\n",
+      "native": {
+        "response_id": "chatcmpl-979a5d825d6a968b",
+        "structured_tool_names": [],
+        "content_only_current_parser": {
+          "structured_tool_count": 0,
+          "missing_tool": true,
+          "malformed_name": false,
+          "invalid_arguments": false,
+          "tools": [],
+          "visible_content_chars": 417,
+          "visible_content_head": "I will start by creating a reproduction script to confirm the bug.\n\ncall:bash{command:<|\"|>cat <<'EOF' > reproduce_issue",
+          "reasoning_chars": 0,
+          "visible_GetAll_bash": false,
+          "visible_pseudo_call": true,
+          "reasoning_literal_thought_tail": false
+        },
+        "canonical_full_reply_current_parser": {
+          "structured_tool_count": 0,
+          "missing_tool": true,
+          "malformed_name": false,
+          "invalid_arguments": false,
+          "tools": [],
+          "visible_content_chars": 417,
+          "visible_content_head": "I will start by creating a reproduction script to confirm the bug.\n\ncall:bash{command:<|\"|>cat <<'EOF' > reproduce_issue",
+          "reasoning_chars": 347,
+          "visible_GetAll_bash": false,
+          "visible_pseudo_call": true,
+          "reasoning_literal_thought_tail": false
+        }
+      },
+      "trials": [
+        {
+          "seed": 42,
+          "tokens": 171,
+          "at_requested_token_cap": false,
+          "generated_has_tool_close_token": true,
+          "generated_last_id": 50,
+          "generated_head_ids": [
+            101,
+            49,
+            6639,
+            236787,
+            42422,
+            236782,
+            7674,
+            236787,
+            52,
+            9307,
+            2986,
+            236789
+          ],
+          "generated_text_head": "<channel|><tool_call|>call:bash{command:<|\"|>cat <<'EOF' > reproduce_issue.py\nfrom sympy import *\nfr",
+          "generated_text_tail": "ython3 reproduce_issue.py\n<|\"|>}<tool_call|><|tool_response>",
+          "conditioning_plus_generated": {
+            "structured_tool_count": 0,
+            "missing_tool": true,
+            "malformed_name": false,
+            "invalid_arguments": false,
+            "tools": [],
+            "visible_content_chars": 436,
+            "visible_content_head": "I will start by creating a reproduction script to confirm the bug.\n\ncall:bash{command:<|\"|>cat <<'EOF' > reproduce_issue",
+            "reasoning_chars": 347,
+            "visible_GetAll_bash": false,
+            "visible_pseudo_call": true,
+            "reasoning_literal_thought_tail": false
+          },
+          "generated_only": {
+            "structured_tool_count": 0,
+            "missing_tool": true,
+            "malformed_name": false,
+            "invalid_arguments": false,
+            "tools": [],
+            "visible_content_chars": 368,
+            "visible_content_head": "call:bash{command:<|\"|>cat <<'EOF' > reproduce_issue.py\nfrom sympy import *\nfrom sympy.abc import n, k\n\np = Product(n + ",
+            "reasoning_chars": 0,
+            "visible_GetAll_bash": false,
+            "visible_pseudo_call": true,
+            "reasoning_literal_thought_tail": false
+          },
+          "mechanical_flag_from_runner": false,
+          "mechanical_repetition_not_adjudicated_by_parser": true
+        }
+      ]
+    },
+    {
+      "job": "anomaly.sympy__sympy-13551.call1.onset.seed43.cap512",
+      "mode": "served",
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/triage-d/protocol-audit-input-current-chunk/runs/served/anomaly.sympy__sympy-13551.call1.onset.seed43.cap512.json",
+      "result_sha256": "ad916368a0250683e1744e722ea50bd50a0ae20aa3473bb117804208d992a05d",
+      "fixture_sha256": "c24b4e24ae4091674d614870cd826c09be6cde322415f347ac1c6cfafac0f1c7",
+      "packet_sha256": "dd37fe2cc164d8ceffdd43862c25847b06790257b719894698f4b1d0a7964ab6",
+      "assistant_prefix_token_count": 159,
+      "assistant_prefix_tail_ids": [
+        38449,
+        672,
+        4186,
+        1171,
+        236761,
+        101,
+        236777,
+        795,
+        1502,
+        684,
+        7107,
+        496,
+        32029,
+        8948,
+        531,
+        9128,
+        506,
+        13582,
+        236761,
+        108
+      ],
+      "assistant_prefix_tail": "wever, the current implementation returns `9/2`.\nLet's reproduce this issue first.<channel|>I will start by creating a reproduction script to confirm the bug.\n\n",
+      "native": {
+        "response_id": "chatcmpl-979a5d825d6a968b",
+        "structured_tool_names": [],
+        "content_only_current_parser": {
+          "structured_tool_count": 0,
+          "missing_tool": true,
+          "malformed_name": false,
+          "invalid_arguments": false,
+          "tools": [],
+          "visible_content_chars": 417,
+          "visible_content_head": "I will start by creating a reproduction script to confirm the bug.\n\ncall:bash{command:<|\"|>cat <<'EOF' > reproduce_issue",
+          "reasoning_chars": 0,
+          "visible_GetAll_bash": false,
+          "visible_pseudo_call": true,
+          "reasoning_literal_thought_tail": false
+        },
+        "canonical_full_reply_current_parser": {
+          "structured_tool_count": 0,
+          "missing_tool": true,
+          "malformed_name": false,
+          "invalid_arguments": false,
+          "tools": [],
+          "visible_content_chars": 417,
+          "visible_content_head": "I will start by creating a reproduction script to confirm the bug.\n\ncall:bash{command:<|\"|>cat <<'EOF' > reproduce_issue",
+          "reasoning_chars": 347,
+          "visible_GetAll_bash": false,
+          "visible_pseudo_call": true,
+          "reasoning_literal_thought_tail": false
+        }
+      },
+      "trials": [
+        {
+          "seed": 43,
+          "tokens": 162,
+          "at_requested_token_cap": false,
+          "generated_has_tool_close_token": true,
+          "generated_last_id": 50,
+          "generated_head_ids": [
+            101,
+            85784,
+            236772,
+            51128,
+            236772,
+            42422,
+            107,
+            100,
+            45518,
+            107,
+            101,
+            48
+          ],
+          "generated_text_head": "<channel|> Unlimited-budget-bash\n<|channel>thought\n<channel|><|tool_call>call:bash{command:<|\"|>cat ",
+          "generated_text_tail": "ython3 reproduce_issue.py\n<|\"|>}<tool_call|><|tool_response>",
+          "conditioning_plus_generated": {
+            "structured_tool_count": 1,
+            "missing_tool": false,
+            "malformed_name": false,
+            "invalid_arguments": false,
+            "tools": [
+              {
+                "name": "bash",
+                "expected_bash": true,
+                "valid_json": true,
+                "valid_command_schema": true,
+                "argument_keys": [
+                  "command"
+                ]
+              }
+            ],
+            "visible_content_chars": 90,
+            "visible_content_head": "I will start by creating a reproduction script to confirm the bug.\n\n Unlimited-budget-bash",
+            "reasoning_chars": 354,
+            "visible_GetAll_bash": false,
+            "visible_pseudo_call": false,
+            "reasoning_literal_thought_tail": true
+          },
+          "generated_only": {
+            "structured_tool_count": 1,
+            "missing_tool": false,
+            "malformed_name": false,
+            "invalid_arguments": false,
+            "tools": [
+              {
+                "name": "bash",
+                "expected_bash": true,
+                "valid_json": true,
+                "valid_command_schema": true,
+                "argument_keys": [
+                  "command"
+                ]
+              }
+            ],
+            "visible_content_chars": 21,
+            "visible_content_head": "Unlimited-budget-bash",
+            "reasoning_chars": 0,
+            "visible_GetAll_bash": false,
+            "visible_pseudo_call": false,
+            "reasoning_literal_thought_tail": false
+          },
+          "mechanical_flag_from_runner": false,
+          "mechanical_repetition_not_adjudicated_by_parser": true
+        }
+      ]
+    },
+    {
+      "job": "anomaly.sympy__sympy-13551.call1.onset.seed44.cap256",
+      "mode": "served",
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/triage-d/protocol-audit-input-current-chunk/runs/served/anomaly.sympy__sympy-13551.call1.onset.seed44.cap256.json",
+      "result_sha256": "10cceae759a97f9819a06c3175b42f3d5f6c240f9abe60e85e31e8a3696e60e3",
+      "fixture_sha256": "fd88dd296c45ee44bfbb687431647551c8a2661a9142b28110ec47aeff4a7362",
+      "packet_sha256": "dd37fe2cc164d8ceffdd43862c25847b06790257b719894698f4b1d0a7964ab6",
+      "assistant_prefix_token_count": 159,
+      "assistant_prefix_tail_ids": [
+        38449,
+        672,
+        4186,
+        1171,
+        236761,
+        101,
+        236777,
+        795,
+        1502,
+        684,
+        7107,
+        496,
+        32029,
+        8948,
+        531,
+        9128,
+        506,
+        13582,
+        236761,
+        108
+      ],
+      "assistant_prefix_tail": "wever, the current implementation returns `9/2`.\nLet's reproduce this issue first.<channel|>I will start by creating a reproduction script to confirm the bug.\n\n",
+      "native": {
+        "response_id": "chatcmpl-979a5d825d6a968b",
+        "structured_tool_names": [],
+        "content_only_current_parser": {
+          "structured_tool_count": 0,
+          "missing_tool": true,
+          "malformed_name": false,
+          "invalid_arguments": false,
+          "tools": [],
+          "visible_content_chars": 417,
+          "visible_content_head": "I will start by creating a reproduction script to confirm the bug.\n\ncall:bash{command:<|\"|>cat <<'EOF' > reproduce_issue",
+          "reasoning_chars": 0,
+          "visible_GetAll_bash": false,
+          "visible_pseudo_call": true,
+          "reasoning_literal_thought_tail": false
+        },
+        "canonical_full_reply_current_parser": {
+          "structured_tool_count": 0,
+          "missing_tool": true,
+          "malformed_name": false,
+          "invalid_arguments": false,
+          "tools": [],
+          "visible_content_chars": 417,
+          "visible_content_head": "I will start by creating a reproduction script to confirm the bug.\n\ncall:bash{command:<|\"|>cat <<'EOF' > reproduce_issue",
+          "reasoning_chars": 347,
+          "visible_GetAll_bash": false,
+          "visible_pseudo_call": true,
+          "reasoning_literal_thought_tail": false
+        }
+      },
+      "trials": [
+        {
+          "seed": 44,
+          "tokens": 162,
+          "at_requested_token_cap": false,
+          "generated_has_tool_close_token": true,
+          "generated_last_id": 50,
+          "generated_head_ids": [
+            101,
+            48,
+            6639,
+            236787,
+            42422,
+            236782,
+            7674,
+            236787,
+            52,
+            9307,
+            2986,
+            236789
+          ],
+          "generated_text_head": "<channel|><|tool_call>call:bash{command:<|\"|>cat <<'EOF' > reproduce_bug.py\nfrom sympy import *\nfrom",
+          "generated_text_tail": "\npython3 reproduce_bug.py\n<|\"|>}<tool_call|><|tool_response>",
+          "conditioning_plus_generated": {
+            "structured_tool_count": 1,
+            "missing_tool": false,
+            "malformed_name": false,
+            "invalid_arguments": false,
+            "tools": [
+              {
+                "name": "bash",
+                "expected_bash": true,
+                "valid_json": true,
+                "valid_command_schema": true,
+                "argument_keys": [
+                  "command"
+                ]
+              }
+            ],
+            "visible_content_chars": 66,
+            "visible_content_head": "I will start by creating a reproduction script to confirm the bug.",
+            "reasoning_chars": 347,
+            "visible_GetAll_bash": false,
+            "visible_pseudo_call": false,
+            "reasoning_literal_thought_tail": false
+          },
+          "generated_only": {
+            "structured_tool_count": 1,
+            "missing_tool": false,
+            "malformed_name": false,
+            "invalid_arguments": false,
+            "tools": [
+              {
+                "name": "bash",
+                "expected_bash": true,
+                "valid_json": true,
+                "valid_command_schema": true,
+                "argument_keys": [
+                  "command"
+                ]
+              }
+            ],
+            "visible_content_chars": 0,
+            "visible_content_head": "",
+            "reasoning_chars": 0,
+            "visible_GetAll_bash": false,
+            "visible_pseudo_call": false,
+            "reasoning_literal_thought_tail": false
+          },
+          "mechanical_flag_from_runner": false,
+          "mechanical_repetition_not_adjudicated_by_parser": true
+        }
+      ]
+    },
+    {
+      "job": "anomaly.sympy__sympy-13878.call1.onset.seed42.cap256",
+      "mode": "served",
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/triage-d/protocol-audit-input-current-chunk/runs/served/anomaly.sympy__sympy-13878.call1.onset.seed42.cap256.json",
+      "result_sha256": "3a7f08fdbb22d181a8610543dfeae46e3a0a27597a6b5ebc72c2b84971d387b1",
+      "fixture_sha256": "8e2cae61d60bb364c79e2e651b3d3ffd992c094e14923ae258c9810d12da0439",
+      "packet_sha256": "9c2b69c2df80a8303ff3bda6b8f3f05a39b5bd67e8ea8065006e5b8721d66d5c",
+      "assistant_prefix_token_count": 212,
+      "assistant_prefix_tail_ids": [
+        506,
+        2165,
+        204616,
+        236786,
+        23251,
+        236929,
+        12229,
+        531,
+        29888,
+        506,
+        22414,
+        529,
+        506,
+        22145,
+        6950,
+        528,
+        506,
+        4186,
+        236761,
+        108
+      ],
+      "assistant_prefix_tail": "`sympy/stats` directory.<channel|>I will start by exploring the `sympy/stats` directory to locate the definitions of the distributions mentioned in the issue.\n\n",
+      "native": {
+        "response_id": "chatcmpl-881faa7b535e5d5b",
+        "structured_tool_names": [],
+        "content_only_current_parser": {
+          "structured_tool_count": 0,
+          "missing_tool": true,
+          "malformed_name": false,
+          "invalid_arguments": false,
+          "tools": [],
+          "visible_content_chars": 172,
+          "visible_content_head": "I will start by exploring the `sympy/stats` directory to locate the definitions of the distributions mentioned in the is",
+          "reasoning_chars": 0,
+          "visible_GetAll_bash": false,
+          "visible_pseudo_call": true,
+          "reasoning_literal_thought_tail": false
+        },
+        "canonical_full_reply_current_parser": {
+          "structured_tool_count": 0,
+          "missing_tool": true,
+          "malformed_name": false,
+          "invalid_arguments": false,
+          "tools": [],
+          "visible_content_chars": 172,
+          "visible_content_head": "I will start by exploring the `sympy/stats` directory to locate the definitions of the distributions mentioned in the is",
+          "reasoning_chars": 684,
+          "visible_GetAll_bash": false,
+          "visible_pseudo_call": true,
+          "reasoning_literal_thought_tail": false
+        }
+      },
+      "trials": [
+        {
+          "seed": 42,
+          "tokens": 19,
+          "at_requested_token_cap": false,
+          "generated_has_tool_close_token": true,
+          "generated_last_id": 50,
+          "generated_head_ids": [
+            101,
+            48,
+            6639,
+            236787,
+            42422,
+            236782,
+            7674,
+            236787,
+            52,
+            5629,
+            753,
+            236794
+          ],
+          "generated_text_head": "<channel|><|tool_call>call:bash{command:<|\"|>ls -R sympy/stats<|\"|>}<tool_call|><|tool_response>",
+          "generated_text_tail": "and:<|\"|>ls -R sympy/stats<|\"|>}<tool_call|><|tool_response>",
+          "conditioning_plus_generated": {
+            "structured_tool_count": 1,
+            "missing_tool": false,
+            "malformed_name": false,
+            "invalid_arguments": false,
+            "tools": [
+              {
+                "name": "bash",
+                "expected_bash": true,
+                "valid_json": true,
+                "valid_command_schema": true,
+                "argument_keys": [
+                  "command"
+                ]
+              }
+            ],
+            "visible_content_chars": 124,
+            "visible_content_head": "I will start by exploring the `sympy/stats` directory to locate the definitions of the distributions mentioned in the is",
+            "reasoning_chars": 684,
+            "visible_GetAll_bash": false,
+            "visible_pseudo_call": false,
+            "reasoning_literal_thought_tail": false
+          },
+          "generated_only": {
+            "structured_tool_count": 1,
+            "missing_tool": false,
+            "malformed_name": false,
+            "invalid_arguments": false,
+            "tools": [
+              {
+                "name": "bash",
+                "expected_bash": true,
+                "valid_json": true,
+                "valid_command_schema": true,
+                "argument_keys": [
+                  "command"
+                ]
+              }
+            ],
+            "visible_content_chars": 0,
+            "visible_content_head": "",
+            "reasoning_chars": 0,
+            "visible_GetAll_bash": false,
+            "visible_pseudo_call": false,
+            "reasoning_literal_thought_tail": false
+          },
+          "mechanical_flag_from_runner": false,
+          "mechanical_repetition_not_adjudicated_by_parser": true
+        }
+      ]
+    },
+    {
+      "job": "anomaly.sympy__sympy-13878.call1.onset.seed43.cap256",
+      "mode": "served",
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/triage-d/protocol-audit-input-current-chunk/runs/served/anomaly.sympy__sympy-13878.call1.onset.seed43.cap256.json",
+      "result_sha256": "d119e8e8f57f83d6e74db49054434966723d6cecc1e9675d9df662030eedba1b",
+      "fixture_sha256": "a137fb3ba6d6665f4fd4e259d6ea30d57b9530f1eda089ae40ddd03ec8602e28",
+      "packet_sha256": "9c2b69c2df80a8303ff3bda6b8f3f05a39b5bd67e8ea8065006e5b8721d66d5c",
+      "assistant_prefix_token_count": 212,
+      "assistant_prefix_tail_ids": [
+        506,
+        2165,
+        204616,
+        236786,
+        23251,
+        236929,
+        12229,
+        531,
+        29888,
+        506,
+        22414,
+        529,
+        506,
+        22145,
+        6950,
+        528,
+        506,
+        4186,
+        236761,
+        108
+      ],
+      "assistant_prefix_tail": "`sympy/stats` directory.<channel|>I will start by exploring the `sympy/stats` directory to locate the definitions of the distributions mentioned in the issue.\n\n",
+      "native": {
+        "response_id": "chatcmpl-881faa7b535e5d5b",
+        "structured_tool_names": [],
+        "content_only_current_parser": {
+          "structured_tool_count": 0,
+          "missing_tool": true,
+          "malformed_name": false,
+          "invalid_arguments": false,
+          "tools": [],
+          "visible_content_chars": 172,
+          "visible_content_head": "I will start by exploring the `sympy/stats` directory to locate the definitions of the distributions mentioned in the is",
+          "reasoning_chars": 0,
+          "visible_GetAll_bash": false,
+          "visible_pseudo_call": true,
+          "reasoning_literal_thought_tail": false
+        },
+        "canonical_full_reply_current_parser": {
+          "structured_tool_count": 0,
+          "missing_tool": true,
+          "malformed_name": false,
+          "invalid_arguments": false,
+          "tools": [],
+          "visible_content_chars": 172,
+          "visible_content_head": "I will start by exploring the `sympy/stats` directory to locate the definitions of the distributions mentioned in the is",
+          "reasoning_chars": 684,
+          "visible_GetAll_bash": false,
+          "visible_pseudo_call": true,
+          "reasoning_literal_thought_tail": false
+        }
+      },
+      "trials": [
+        {
+          "seed": 43,
+          "tokens": 18,
+          "at_requested_token_cap": false,
+          "generated_has_tool_close_token": true,
+          "generated_last_id": 50,
+          "generated_head_ids": [
+            48,
+            6639,
+            236787,
+            42422,
+            236782,
+            7674,
+            236787,
+            52,
+            5629,
+            753,
+            236794,
+            228510
+          ],
+          "generated_text_head": "<|tool_call>call:bash{command:<|\"|>ls -R sympy/stats<|\"|>}<tool_call|><|tool_response>",
+          "generated_text_tail": "and:<|\"|>ls -R sympy/stats<|\"|>}<tool_call|><|tool_response>",
+          "conditioning_plus_generated": {
+            "structured_tool_count": 1,
+            "missing_tool": false,
+            "malformed_name": false,
+            "invalid_arguments": false,
+            "tools": [
+              {
+                "name": "bash",
+                "expected_bash": true,
+                "valid_json": true,
+                "valid_command_schema": true,
+                "argument_keys": [
+                  "command"
+                ]
+              }
+            ],
+            "visible_content_chars": 124,
+            "visible_content_head": "I will start by exploring the `sympy/stats` directory to locate the definitions of the distributions mentioned in the is",
+            "reasoning_chars": 684,
+            "visible_GetAll_bash": false,
+            "visible_pseudo_call": false,
+            "reasoning_literal_thought_tail": false
+          },
+          "generated_only": {
+            "structured_tool_count": 1,
+            "missing_tool": false,
+            "malformed_name": false,
+            "invalid_arguments": false,
+            "tools": [
+              {
+                "name": "bash",
+                "expected_bash": true,
+                "valid_json": true,
+                "valid_command_schema": true,
+                "argument_keys": [
+                  "command"
+                ]
+              }
+            ],
+            "visible_content_chars": 0,
+            "visible_content_head": "",
+            "reasoning_chars": 0,
+            "visible_GetAll_bash": false,
+            "visible_pseudo_call": false,
+            "reasoning_literal_thought_tail": false
+          },
+          "mechanical_flag_from_runner": false,
+          "mechanical_repetition_not_adjudicated_by_parser": true
+        }
+      ]
+    },
+    {
+      "job": "anomaly.sympy__sympy-13878.call1.onset.seed44.cap256",
+      "mode": "served",
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/triage-d/protocol-audit-input-current-chunk/runs/served/anomaly.sympy__sympy-13878.call1.onset.seed44.cap256.json",
+      "result_sha256": "4380cbab6d5e027ce7ad9c07709c7c799a6bc3706f07a686b09c36a83fd0dbd3",
+      "fixture_sha256": "884cc1eebec08f3511e27e1b989fa0a779bf750611494cbbdd7b33937ac54420",
+      "packet_sha256": "9c2b69c2df80a8303ff3bda6b8f3f05a39b5bd67e8ea8065006e5b8721d66d5c",
+      "assistant_prefix_token_count": 212,
+      "assistant_prefix_tail_ids": [
+        506,
+        2165,
+        204616,
+        236786,
+        23251,
+        236929,
+        12229,
+        531,
+        29888,
+        506,
+        22414,
+        529,
+        506,
+        22145,
+        6950,
+        528,
+        506,
+        4186,
+        236761,
+        108
+      ],
+      "assistant_prefix_tail": "`sympy/stats` directory.<channel|>I will start by exploring the `sympy/stats` directory to locate the definitions of the distributions mentioned in the issue.\n\n",
+      "native": {
+        "response_id": "chatcmpl-881faa7b535e5d5b",
+        "structured_tool_names": [],
+        "content_only_current_parser": {
+          "structured_tool_count": 0,
+          "missing_tool": true,
+          "malformed_name": false,
+          "invalid_arguments": false,
+          "tools": [],
+          "visible_content_chars": 172,
+          "visible_content_head": "I will start by exploring the `sympy/stats` directory to locate the definitions of the distributions mentioned in the is",
+          "reasoning_chars": 0,
+          "visible_GetAll_bash": false,
+          "visible_pseudo_call": true,
+          "reasoning_literal_thought_tail": false
+        },
+        "canonical_full_reply_current_parser": {
+          "structured_tool_count": 0,
+          "missing_tool": true,
+          "malformed_name": false,
+          "invalid_arguments": false,
+          "tools": [],
+          "visible_content_chars": 172,
+          "visible_content_head": "I will start by exploring the `sympy/stats` directory to locate the definitions of the distributions mentioned in the is",
+          "reasoning_chars": 684,
+          "visible_GetAll_bash": false,
+          "visible_pseudo_call": true,
+          "reasoning_literal_thought_tail": false
+        }
+      },
+      "trials": [
+        {
+          "seed": 44,
+          "tokens": 22,
+          "at_requested_token_cap": false,
+          "generated_has_tool_close_token": true,
+          "generated_last_id": 50,
+          "generated_head_ids": [
+            101,
+            48,
+            6639,
+            236787,
+            42422,
+            236782,
+            7674,
+            236787,
+            52,
+            4114,
+            228510,
+            236786
+          ],
+          "generated_text_head": "<channel|><|tool_call>call:bash{command:<|\"|>find sympy/stats -name \"*.py\"<|\"|>}<tool_call|><|tool_r",
+          "generated_text_tail": "d sympy/stats -name \"*.py\"<|\"|>}<tool_call|><|tool_response>",
+          "conditioning_plus_generated": {
+            "structured_tool_count": 1,
+            "missing_tool": false,
+            "malformed_name": false,
+            "invalid_arguments": false,
+            "tools": [
+              {
+                "name": "bash",
+                "expected_bash": true,
+                "valid_json": true,
+                "valid_command_schema": true,
+                "argument_keys": [
+                  "command"
+                ]
+              }
+            ],
+            "visible_content_chars": 124,
+            "visible_content_head": "I will start by exploring the `sympy/stats` directory to locate the definitions of the distributions mentioned in the is",
+            "reasoning_chars": 684,
+            "visible_GetAll_bash": false,
+            "visible_pseudo_call": false,
+            "reasoning_literal_thought_tail": false
+          },
+          "generated_only": {
+            "structured_tool_count": 1,
+            "missing_tool": false,
+            "malformed_name": false,
+            "invalid_arguments": false,
+            "tools": [
+              {
+                "name": "bash",
+                "expected_bash": true,
+                "valid_json": true,
+                "valid_command_schema": true,
+                "argument_keys": [
+                  "command"
+                ]
+              }
+            ],
+            "visible_content_chars": 0,
+            "visible_content_head": "",
+            "reasoning_chars": 0,
+            "visible_GetAll_bash": false,
+            "visible_pseudo_call": false,
+            "reasoning_literal_thought_tail": false
+          },
+          "mechanical_flag_from_runner": false,
+          "mechanical_repetition_not_adjudicated_by_parser": true
+        }
+      ]
+    }
+  ],
+  "rules": [
+    "Expected structured tool is bash with JSON mapping containing string command. Missing tool, malformed function name and invalid arguments are separate outcomes.",
+    "Missing tool at token cap may be incomplete; inspect completion/stop and channel context before declaring reproduction.",
+    "Valid structured call does not excuse visible GetAll-bash, stray thought, repetition, wrong actions or other semantic anomalies. Mechanical repetition is not assessed by this parser.",
+    "Raw special-marker display alone is not reproduction: runner decodes skip_special_tokens=False. Compare actual channel-aware structured results with native response body.",
+    "Native token IDs and exact historical stream absent. Canonical reconstruction/current nonstreaming parse is not proof of historical stream/parser equivalence or full-model correctness.",
+    "Full-prefix findings may include fixed inherited anomalous text. Compare generated-only findings and exact prefix before attributing anomaly to new sampling. A capped parser-extracted call is not necessarily complete/executable; tool-close-token presence is recorded separately."
+  ],
+  "partial_counts": {
+    "served": {
+      "case_modes": 12,
+      "trials": 12,
+      "missing_tool": 1,
+      "malformed_name": 0,
+      "invalid_arguments": 0,
+      "capped_trials": 0
+    },
+    "full": {
+      "case_modes": 0,
+      "trials": 0,
+      "missing_tool": 0,
+      "malformed_name": 0,
+      "invalid_arguments": 0,
+      "capped_trials": 0
+    }
+  }
+}

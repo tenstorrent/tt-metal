@@ -1,0 +1,40 @@
+{
+  "status": "frozen_candidate_command_not_admitted_not_run",
+  "mode": "pinned_hf_cpu",
+  "argv": [
+    "timeout",
+    "2400",
+    "env",
+    "HF_HUB_OFFLINE=1",
+    "HF_DATASETS_OFFLINE=1",
+    "OMP_NUM_THREADS=16",
+    "MKL_NUM_THREADS=16",
+    "OPENBLAS_NUM_THREADS=16",
+    "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tools/precision_repro_hf.py",
+    "--cases",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/pytest7432-first-caret-conditional/candidate-cases.json",
+    "--output",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/pytest7432-first-caret-conditional/runs",
+    "--tokens",
+    "512",
+    "--seeds",
+    "44",
+    "--prefill-chunk",
+    "512"
+  ],
+  "timeout_seconds": 2400,
+  "seed": [
+    44
+  ],
+  "requested_free_tokens": 512,
+  "prefill_chunk": 512,
+  "sampling": {
+    "temperature": 1.0,
+    "top_p": 0.95,
+    "top_k": 20
+  },
+  "output_dir": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/pytest7432-first-caret-conditional/runs",
+  "note": "Command is prepared only. No inference is authorized or performed by this candidate-preparation task."
+}

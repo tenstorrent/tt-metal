@@ -1,0 +1,133 @@
+{
+  "status": "completed_forecast_hit",
+  "start_unix": 1794739756.0603528,
+  "timeout_seconds": 1200,
+  "deadline_unix": 1794791725.0,
+  "candidate_admission_sha256": "3e06c4314219729fc2758c7f55b99787e7bf09d8119a4f96c767563a7471ccbf",
+  "candidate_pins": {
+    "proposal.json": "b1e7d477a5d0c2a87737d8dcfa7c4a4e3fc66f3cb157e507e18e18bdab055e7b",
+    "command.json": "2fdf433ce016404670ac7b2dfe84dd88628f6afd00093643c8456450f69e6dd4",
+    "cases.json": "f94c5a53507333b8ec730a5f603246ddf8fc5a0bcf55ddd2d6697108a9d8b5c0",
+    "forecast.json": "c2d3d2edfe7cc18432a45ce8d449908bd9ffb1f4842a777bbb9a7836acb29ee1",
+    "source-pins.json": "e8aad1f4c218ba054c4ec959dcb33be9694b7f01800655b192fb357c1228ecee",
+    "runtime-pins.json": "0be338833ced4dd17c7fbd4354bb461fd5d0359058b4513cba4d0dfa7b54857d",
+    "admission-template.json": "3b0b821f737f8708b3741914ede3365cc0fe791d006584a4070bcbc8eb5ddf27",
+    "run_cap1024.py": "7660cddfc15f6dbfeb7a33dbd377d80a57c71ec1a0f32cbe80918b6826ab39ac",
+    "test_run_cap1024.py": "e12aa590ec4bf4f245109c5fd19650b4c59d5c5a8f61065fd934842bd3ff4b7f"
+  },
+  "hf9_predecessor": {
+    "progress_sha256": "4a9363429f50949031da53c13f3156c2bd399f756d227f353babaafd065ec773",
+    "groups": [
+      {
+        "serial_order": 1,
+        "completion_sha256": "fc52a3d203e4cc299ce8037dde0bf7c25fdcf36c62e767ef98183c46fcb203fe",
+        "root_review_sha256": "0c6e547db4f93a2c7bfb8e0278deba56ac643a79c633ade638db045bdc436803"
+      },
+      {
+        "serial_order": 2,
+        "completion_sha256": "e297a2ba0181f1f8fa9c8b9f69d2ea1e68d31b425da587bdbd5faa5415253ebf",
+        "root_review_sha256": "27fb72254a1ee6149b04d013174a471bcaeab60e69bf982e4fe357c901a0d85a"
+      },
+      {
+        "serial_order": 3,
+        "completion_sha256": "43482c49d0073fa1407d0f919451c7349a8314752c1b555eca4785f458081005",
+        "root_review_sha256": "7f119e66e90420977079dec6a9d65c09b00b851ba8c7e9ae786ee6188635e071"
+      },
+      {
+        "serial_order": 4,
+        "completion_sha256": "d39b7440fd10612ecd8e51d84c02db9ea68c8742325c4a2f4597e3df86c3c967",
+        "root_review_sha256": "c88541915f789412656370cd353ba50dfa62e68e5624c33d4b348901d9227503"
+      },
+      {
+        "serial_order": 5,
+        "completion_sha256": "957d8f1e97def011efef8d7e3aa1024b77f73247d7bcc475b78862bd694e6992",
+        "root_review_sha256": "244884fec49742320618150b86258143478976547e05c2196b6a368f9146a3c5"
+      },
+      {
+        "serial_order": 6,
+        "completion_sha256": "ad828e22fcc086bfac514723cff621d9b1d7cef84ba1de833351e85e5c2f22a5",
+        "root_review_sha256": "4f2f0dd6941f59a507139aee30b6013f789bca0a9769d15ba65f696fd8de5a5c"
+      },
+      {
+        "serial_order": 7,
+        "completion_sha256": "67edd55881ada416e6e9ebcc37a907228b80d8d438fc2b4bfcc5ac47116e84f3",
+        "root_review_sha256": "44e493ccda9f00b75e8ae562c79880fd7da2d5d7beb3262a135a4d56bcae8127"
+      },
+      {
+        "serial_order": 8,
+        "completion_sha256": "54c14908183b4c1cee5f986e6321f277fc3b5358486e4d810513000d1643182b",
+        "root_review_sha256": "3261fbdcd51ce4584887196549fb347419bc705d19cee2b2af075f5494b91ffd"
+      }
+    ]
+  },
+  "forecast_review_sha256": "1bf1f0222c61c0ce8ba890b9154ea6ff4e7c3ad051acd50a5ce4402164e586b3",
+  "hf_processes": [],
+  "device_owners": [],
+  "command": [
+    "env",
+    "HF_HUB_OFFLINE=1",
+    "HF_DATASETS_OFFLINE=1",
+    "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+    "READINESS_TRACE_REGION_SIZE=134217728",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+    "-m",
+    "models.autoports.google_gemma_4_31b_it.tools.precision_repro_batch",
+    "--cases",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-matplotlib86-full-suffix4096-cap1024-extension-candidate/cases.json",
+    "--build-kwargs-file",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_build_kwargs.json",
+    "--output-dir",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-matplotlib86-full-suffix4096-cap1024-extension-candidate/runs/full"
+  ],
+  "end_unix": 1794739912.0800261,
+  "elapsed_seconds": 156.01967024803162,
+  "process_exit_code": 0,
+  "child_error": null,
+  "output_validation_error": null,
+  "outputs": {
+    "result_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-matplotlib86-full-suffix4096-cap1024-extension-candidate/runs/full/anomaly.matplotlib__matplotlib-20488.call86.onset.suffix4096.cap1024.seed43.json",
+    "result_sha256": "b755bcb874a29740452873df8ab052a8d318ebd3ae980c67134c562449913a02",
+    "result_tokens": 930,
+    "load_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-matplotlib86-full-suffix4096-cap1024-extension-candidate/runs/full/load.json",
+    "load_sha256": "3b64c0537cf6c81983352a563273f0b06bc5da8e36d064cc402e0b01bdc1695f",
+    "runtime_precision": {
+      "config_id": "stage12_bf16_hifi4_diagnostic",
+      "weight_groups": {
+        "attention": "bf16",
+        "mlp": "bf16",
+        "down": "bf16",
+        "lm_head": "bf16"
+      },
+      "layer_exceptions": {},
+      "compute_fidelities": {
+        "attention": "HiFi4",
+        "mlp": "HiFi4",
+        "down": "HiFi4",
+        "lm_head": "HiFi4"
+      },
+      "activation_dtype": "bfloat16",
+      "residual_dtype": "bfloat16",
+      "ccl_dtype": {
+        "prefill": "bfloat16",
+        "decode": "bfloat16"
+      },
+      "kv_cache_dtype": "bfloat16",
+      "logits_dtype": "bfloat16",
+      "sampling_dtype": "bfloat16",
+      "embedding_dtype": "bfloat16",
+      "norm_dtype": "bfloat16",
+      "max_seq_len": 262144,
+      "sdpa_compute_fidelity": "HiFi4"
+    },
+    "prefix_identity_tokens": 512
+  },
+  "log_sha256": "9728769897d9bf838fa1b413aa51149e084032d2af4b199037071c22b3c97be1",
+  "forecast_gate": {
+    "status": "range_hit",
+    "measured_seconds": 156.01967024803162,
+    "forecast_range_wall_s": [
+      139.36690143023688,
+      210.05798215516484
+    ]
+  }
+}

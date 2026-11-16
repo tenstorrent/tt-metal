@@ -1,0 +1,16 @@
+{
+  "status": "exact_original_token_suffix_fixture",
+  "source_fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-extra-contraction-controls/scikit-learn__scikit-learn-13135.call29.onset.private.json",
+  "source_fixture_sha256": "1403d7a48b7ecca8ec2095479c77a871caa3add09bedd7f6830d36315a883bd2",
+  "original_prompt_token_count": 17395,
+  "original_prompt_token_ids_sha256": "433e40a88bd54227618ffb028a3d4322df14ebee37ff03a52c0986d5154df69a",
+  "suffix_length_tokens": 1024,
+  "suffix_start_index": 16371,
+  "suffix_end_index_exclusive": 17395,
+  "suffix_token_ids_sha256": "c8f91bde8c1ae6815872224613fb6e63b366f09ef4fde8ab1bc1c213267179fc",
+  "chosen_token_count": 64,
+  "chosen_token_ids_sha256": "8d4c97e7413b5ed9bf57c4a1f8ae56a386fb8c52b5588db4f765eb55f36a7e3e",
+  "rendering": "No re-encoding: fixture prompt IDs are copied directly from source prompt_token_ids[-1024:].",
+  "source_missing_tool_original_full_tokens": 665,
+  "cap_reason": "Free-run cap1024 allows the original full-prompt missing_tool onset at token665 to be reached."
+}

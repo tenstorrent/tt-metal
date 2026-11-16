@@ -1,0 +1,103 @@
+{
+  "task": "127",
+  "artifact": "first-wave-full/task127.onset.suffix512.json",
+  "scope": "Host-only semantic review of all three stored free-running texts. The separate chosen teacher-forced continuation was not assessed.",
+  "range_convention": "Character ranges are zero-based and half-open.",
+  "context": {
+    "source_packet": "current/gpqa-extended198-head-bfp8/digest/analysis.private/127-f469c1ffa95d32cc.json",
+    "original_triage": "current/gpqa-extended198-head-bfp8/digest/127.triage.json",
+    "prior_verdict": "looping_actions",
+    "prior_confidence": "high",
+    "prior_status": "provisional; not official score evidence",
+    "onset": "The private onset record selects the renewed protein-sequence check around reasoning character 12,061, after repeated mistranscription/retranslation begins after about character 11,500. It explicitly treats this as an estimated semantic-cycle onset, not a uniquely attributed first error.",
+    "prompt_limit": "The diagnostic starts from the exact 512-token suffix of reconstructed IDs, removing 6,944 earlier tokens and changing the position origin. It is not the original native prompt.",
+    "reconstruction_limit": "Native raw token IDs are unavailable. Matching reconstructed and native completion token counts do not prove identity with the native sampled sequence.",
+    "original_triage_pattern": "The native triage describes changing translations and reading frames for unchanged A/B bases, then incompatible residue interpretations of the same TGGATT region, without new sequence evidence; native response stopped normally and the saved digest flag was not set."
+  },
+  "pattern_comparison": {
+    "common_pattern": "All three continuations fixate on the A/B sequence difference around the same GCC-versus-GTC codon and fail to reach a stable, supported sequence comparison. Their local behavior matches the broad cycling signature described in the original triage.",
+    "between_seeds": "Seed 42 repeatedly retranslates the same local bases and restates the same Ala-versus-Val difference. Seed 43 makes several distinct checks first (C versus D, B versus C/D, other shared regions, and the beginning), which count as progress; later it reopens and repeats the same sequence comparison without adding a new discriminator. Seed 44 quickly collapses into repeated identical requests to look for other differences, without performing another check.",
+    "relation_to_original": "The three short continuations reproduce a local semantic-cycle pattern after the selected onset. They start from the selected suffix itself, so this is evidence of repeated behavior under this diagnostic prompt, not an independent reproduction of the full native answer path."
+  },
+  "seeds": [
+    {
+      "seed": 42,
+      "semantic_anomaly": true,
+      "mechanical_flag": false,
+      "observed_malformed_text": false,
+      "text_chars": 2515,
+      "semantic_ranges": [
+        {
+          "chars": [
+            0,
+            2515
+          ],
+          "paraphrase": "The continuation repeatedly compares the same A and B excerpts, translates the same GCC/Ala and GTC/Val codons and neighboring codons, then restates that Ala versus Val is the only difference. The same comparison-and-translation cycle recurs several times without a new candidate check or resolution."
+        }
+      ],
+      "text_ending": "The stored text ends after restarting the comparison and opening an A excerpt with an ellipsis. This is a mid-thought output-cap cutoff, not malformed text.",
+      "basis": "The loop is sustained across nearly the entire continuation; repetition is not inferred from the terminal cutoff."
+    },
+    {
+      "seed": 43,
+      "semantic_anomaly": true,
+      "mechanical_flag": false,
+      "observed_malformed_text": false,
+      "text_chars": 2470,
+      "semantic_ranges": [
+        {
+          "chars": [
+            0,
+            1350
+          ],
+          "paraphrase": "The response checks C/D and then B/C/D at the selected region, checks other shared regions and the beginning, and narrows the observed difference to A versus the other candidates. These are distinct candidate checks and count as progress, even though they do not establish a complete answer."
+        },
+        {
+          "chars": [
+            1350,
+            2470
+          ],
+          "paraphrase": "After those checks, the response restarts the same A/B/C/D comparison, repeats the same GCC-versus-GTC explanation, and says it will double-check A again. It begins reproducing the already compared excerpts again, without a new discriminating check before the text ends."
+        }
+      ],
+      "text_ending": "The text stops while copying the already reviewed C excerpt. This is consistent with the output cap; the incomplete excerpt is not itself malformed.",
+      "basis": "The initial narrowing is credited as progress. The later extended return to the same unchanged excerpt and difference, with no new check, is sustained enough to support a semantic anomaly despite the cap ending."
+    },
+    {
+      "seed": 44,
+      "semantic_anomaly": true,
+      "mechanical_flag": false,
+      "observed_malformed_text": false,
+      "text_chars": 2858,
+      "semantic_ranges": [
+        {
+          "chars": [
+            0,
+            2858
+          ],
+          "paraphrase": "After briefly calling A versus V a small difference, the response repeats the same sentence that the listed candidates are very similar and asks to find other differences dozens of times. It does not carry out a new candidate comparison or move toward a resolved analysis."
+        }
+      ],
+      "text_ending": "The final repeated sentence is cut off mid-word at the output limit. This boundary truncation is not itself malformed text.",
+      "basis": "A long unchanged prompt is repeated throughout the output, with no new candidate check; the stopping cutoff is not used as anomaly evidence."
+    }
+  ],
+  "limits": [
+    "Each saved mechanical digest flag is false and is reported unchanged; semantic judgments are separate host-review labels.",
+    "These are three diagnostic free-running continuations capped at 1,024 tokens each, not scored task responses or population estimates.",
+    "The diagnostic uses a traced teacher-forced setup with host logit readbacks and is not serving-performance evidence.",
+    "The selected onset and suffix prompt cannot establish when the original native response first went wrong, prove a precision cause, or recover the original sampled token path.",
+    "No correctness judgment about the GPQA answer is made from these truncated local continuations."
+  ],
+  "coordinator_correction_notes": {
+    "seed43": {
+      "semantic_anomaly": "inconclusive",
+      "basis": "Coordinator read entire continuation: distinct other-region and beginning checks followed by approximately one recheck; insufficient sustained unchanged cycle for confident anomaly. Original reviewer recommendation preserved."
+    },
+    "accepted_any_anomaly_seeds": [
+      42,
+      44
+    ],
+    "official_scoring_status": "Completed; original prior_status provisional is a historical snapshot only."
+  }
+}

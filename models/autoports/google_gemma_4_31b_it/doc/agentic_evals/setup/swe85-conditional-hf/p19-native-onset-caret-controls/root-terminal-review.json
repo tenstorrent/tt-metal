@@ -1,0 +1,130 @@
+{
+  "status": "completed_reference_motif_controls_no_policy_selection",
+  "reviewed_unix": 1794765485.9757414,
+  "completion": {
+    "status": "completed",
+    "start_unix": 1794761693.2828577,
+    "end_unix": 1794765434.8674667,
+    "elapsed_seconds": 3741.5846090316772,
+    "process_exit_code": 0
+  },
+  "forecast_seconds": {
+    "low": 3100,
+    "point": 3650,
+    "high": 4500
+  },
+  "forecast_result": "within_range",
+  "records": [
+    {
+      "task": "psf__requests-5414",
+      "call": 11,
+      "status": "complete",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-requests5414-caret-controls/psf__requests-5414.call11.onset.private.json",
+      "case_sha256": "50cbd0eb4e62c843a1ec8ac800a580135c3abc5dc2154d6be0a7e39d0c37ed6f",
+      "hf_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/p19-native-onset-caret-controls/results/anomaly.psf__requests-5414.call11.onset.seed42.cap256.hf.private.json",
+      "hf_result_sha256": "6e2644ac37e50c804bc5b8547deb087662d46a3b3cb61b715143897fe95c3f23",
+      "full_tt_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/anomaly.psf__requests-5414.call11.onset.json",
+      "full_tt_result_sha256": "f02de92f04d37c6202ac72b60baebcc4b393610a63f13ad6425ba0d6fa109fd6",
+      "identity": {
+        "hf_case_sha256": "50cbd0eb4e62c843a1ec8ac800a580135c3abc5dc2154d6be0a7e39d0c37ed6f",
+        "tt_case_sha256": null,
+        "tt_case_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-requests5414-caret-controls/psf__requests-5414.call11.onset.private.json",
+        "case_prompt_ids_verified": true,
+        "conditioning_token_ids_verified": true,
+        "position_window": [
+          0,
+          63
+        ],
+        "explicit_window_checked": false
+      },
+      "seed": 42,
+      "generated_tokens": 256,
+      "unique_tokens": 1,
+      "caret_characters": 1024,
+      "characters": 1024,
+      "natural_stop": false,
+      "detector_flag": true,
+      "detector_minimum_met": true,
+      "manual_classification": "caret_repetition_at_diagnostic_cap",
+      "scope": "Saved reconstructed full onset prompt, not exact native IDs/RNG; no scored-task replacement. Requests exact caret-only result; Pytest traceback fragment followed by sustained caret repetition.",
+      "teacher_forced_positions": 64,
+      "top1_agreement": 1.0,
+      "mean_chosen_logprob_delta_hf_minus_tt": 0.0019201232007617364,
+      "max_abs_chosen_logprob_delta": 0.058528557419776917,
+      "position6": {
+        "hf": {
+          "position": 6,
+          "forced_token": 172109,
+          "top1_token": 172109,
+          "forced_token_logprob": -0.02249463088810444,
+          "forced_token_probability": 0.9777565002441406,
+          "top1_probability": 0.9777565002441406
+        },
+        "tt": {
+          "position": 6,
+          "forced_token": 172109,
+          "top1_token": 172109,
+          "forced_token_logprob": -0.03784584626555443,
+          "forced_token_probability": 0.9628613591194153,
+          "top1_probability": 0.9628613591194153
+        }
+      }
+    },
+    {
+      "task": "pytest-dev__pytest-7432",
+      "call": 19,
+      "status": "complete",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-18763-7432-controls/pytest-dev__pytest-7432.call19.onset.private.json",
+      "case_sha256": "436bf8f06cebc27f9ac206ab4c85c655b2c707145be67b8341f14288370807f5",
+      "hf_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/p19-native-onset-caret-controls/results/anomaly.pytest-dev__pytest-7432.call19.onset.seed42.cap256.hf.private.json",
+      "hf_result_sha256": "6ccdd49c513f3c8258977245d0a65ee808a6c233d76c97c118a1b42d405f3fa5",
+      "full_tt_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/anomaly.pytest-dev__pytest-7432.call19.onset.json",
+      "full_tt_result_sha256": "62dc8a7a0d36eaadf188803d4e1d08372a099dccb41aaa09ca7119710dfe2f07",
+      "identity": {
+        "hf_case_sha256": "436bf8f06cebc27f9ac206ab4c85c655b2c707145be67b8341f14288370807f5",
+        "tt_case_sha256": null,
+        "tt_case_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-18763-7432-controls/pytest-dev__pytest-7432.call19.onset.private.json",
+        "case_prompt_ids_verified": true,
+        "conditioning_token_ids_verified": true,
+        "position_window": [
+          0,
+          63
+        ],
+        "explicit_window_checked": false
+      },
+      "seed": 42,
+      "generated_tokens": 256,
+      "unique_tokens": 42,
+      "caret_characters": 825,
+      "characters": 969,
+      "natural_stop": false,
+      "detector_flag": false,
+      "detector_minimum_met": false,
+      "manual_classification": "caret_repetition_at_diagnostic_cap",
+      "scope": "Saved reconstructed full onset prompt, not exact native IDs/RNG; no scored-task replacement. Requests exact caret-only result; Pytest traceback fragment followed by sustained caret repetition.",
+      "teacher_forced_positions": 64,
+      "top1_agreement": 1.0,
+      "mean_chosen_logprob_delta_hf_minus_tt": 0.031013609840302436,
+      "max_abs_chosen_logprob_delta": 1.4330604076385498,
+      "position6": {
+        "hf": {
+          "position": 6,
+          "forced_token": 172109,
+          "top1_token": 236884,
+          "forced_token_logprob": -0.9742364883422852,
+          "forced_token_probability": 0.3774804472923279,
+          "top1_probability": 0.6223600506782532
+        },
+        "tt": {
+          "position": 6,
+          "forced_token": 172109,
+          "top1_token": 236884,
+          "forced_token_logprob": -2.407296895980835,
+          "forced_token_probability": 0.09005840122699738,
+          "top1_probability": 0.9095576405525208
+        }
+      }
+    }
+  ],
+  "root_disposition": "Both saved full onset cases reproduce sustained carets in pinned CPUHF BF16. This controls these diagnostic phenotypes as reference-compatible; probability differences and unavailable native token IDs/RNG remain explicit. P19 remains unselected pending broader acceptance/resume/serving checks. No scores changed."
+}

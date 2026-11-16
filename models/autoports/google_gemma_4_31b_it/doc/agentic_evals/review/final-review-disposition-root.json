@@ -1,0 +1,12 @@
+{
+  "recorded_unix": 1794786778.8372433,
+  "verdict": "more-work-needed",
+  "review": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/review/stage12-final-review.md",
+  "review_sha256": "482a5ff7eb753dc54959c16700c4e073dd216036676cc720b459bd3df7b286d5",
+  "owner_response": "Accepted. Completed full-BF16 diagnostic prerequisites remain recorded; no replacement serving policy or scored result is claimed. Remaining candidate/serving/rate/list work requires the proposed additional local window.",
+  "proposal": "continuation-proposal.json",
+  "score_reporting": "SWE85 not passed yet:23 confirmed successes,3 unknown outcomes retained in85 denominator; null point score,23\u201326/85 bounds.",
+  "gate": "review/final-gate-check.json; exit2 due unknown score.solved, not concealed or fabricated",
+  "checkpoint": "Evidence-only local checkpoint; not a clean-pass or release commit.",
+  "canonical_reconciliation": "Independently rereviewed after final status corrections; unchanged more-work-needed verdict."
+}

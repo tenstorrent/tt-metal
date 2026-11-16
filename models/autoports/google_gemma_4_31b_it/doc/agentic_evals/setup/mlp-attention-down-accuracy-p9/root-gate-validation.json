@@ -1,0 +1,13 @@
+{
+  "epoch": 1794753786.2089996,
+  "source_sha256": "1390350c91b27b4f8563ffa8bd38224f6b06543668ca2a627c2c3ecea756a287",
+  "tests": [
+    "real_full_control_pass",
+    "decode_model_replays_rejected",
+    "natural_model_replays_rejected",
+    "prefill_captures_rejected",
+    "decode_captures_rejected",
+    "natural_captures_rejected"
+  ],
+  "notes": "Applied simpler equivalent helper: required counter keys (missing is error), no unnecessary restriction to one natural entry. Prefill included in bar."
+}

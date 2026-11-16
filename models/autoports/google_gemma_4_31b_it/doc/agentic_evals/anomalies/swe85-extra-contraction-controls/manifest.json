@@ -1,0 +1,186 @@
+{
+  "status": "prepared_CPU_only_not_executed",
+  "tasks": [
+    "pylint-dev__pylint-4604",
+    "scikit-learn__scikit-learn-13135",
+    "sphinx-doc__sphinx-10323"
+  ],
+  "cases": [
+    {
+      "task": "sphinx-doc__sphinx-10323",
+      "call": 57,
+      "response_id": "chatcmpl-ab249e8d6699e086",
+      "private_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-extra-contraction-controls/sphinx-doc__sphinx-10323.call57.onset.private.json",
+      "private_case_sha256": "9870b7562fa8d43d828bf29c4da37d7bfd294a39809044e442a628e7d418d404",
+      "raw_packet": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/double-contraction-archive/sphinx-doc__sphinx-10323.call57.packet.private.json",
+      "raw_packet_sha256": "8d5e7f4eac63a0f3985f02f5ea66b1b26730d175a3481d40e0b534f45f540afc",
+      "native_prompt_tokens": 58656,
+      "reconstructed_request_prompt_tokens": 58655,
+      "native_reply_tokens": 361,
+      "reconstructed_reply_tokens": 363,
+      "conditioning_tokens": 58695,
+      "onset_positions": 64,
+      "onset_token_index": 40,
+      "motif": "I've\u2019ve",
+      "evidence": "Localized duplicated contraction in reasoning: repeated apostrophe and suffix. Supplementary localized anomaly; no causal claim about task failure. Exact response-ID/native-index mapping retained; native token IDs unavailable.",
+      "limitations": "Exact request body with historical JSON tool arguments deserialized for pinned template. Reply reconstructed as canonical thought header, complete saved reasoning, channel boundary, complete visible content, canonical tool-call macros from pinned template, native stop ID. No native token IDs: generated whitespace/order/protocol spelling cannot be recovered uniquely; counts and hashes are evidence, not identity proof. Canonicalization of malformed tool names is not proof of exact malformed native bytes.",
+      "native_message_indices": [
+        114
+      ],
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "native_seed": null,
+      "diagnostic_seeds": [
+        42,
+        43,
+        44
+      ]
+    },
+    {
+      "task": "sphinx-doc__sphinx-10323",
+      "call": 70,
+      "response_id": "chatcmpl-91332654bd9d56a6",
+      "private_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-extra-contraction-controls/sphinx-doc__sphinx-10323.call70.onset.private.json",
+      "private_case_sha256": "7d39e2c87e91327f35317968bf2647887a402d0086085ec8f95db8ff5fc2ab64",
+      "raw_packet": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/double-contraction-archive/sphinx-doc__sphinx-10323.call70.packet.private.json",
+      "raw_packet_sha256": "68db34d2fbd2afa478014fb2a2da1d07d87d58d86ebcc4d5bc49cb9aff54676d",
+      "native_prompt_tokens": 65616,
+      "reconstructed_request_prompt_tokens": 65615,
+      "native_reply_tokens": 199,
+      "reconstructed_reply_tokens": 201,
+      "conditioning_tokens": 65779,
+      "onset_positions": 37,
+      "onset_token_index": 164,
+      "motif": "I've've",
+      "evidence": "Localized duplicated contraction in reasoning: repeated apostrophe and suffix. Supplementary localized anomaly; no causal claim about task failure. Exact response-ID/native-index mapping retained; native token IDs unavailable.",
+      "limitations": "Exact request body with historical JSON tool arguments deserialized for pinned template. Reply reconstructed as canonical thought header, complete saved reasoning, channel boundary, complete visible content, canonical tool-call macros from pinned template, native stop ID. No native token IDs: generated whitespace/order/protocol spelling cannot be recovered uniquely; counts and hashes are evidence, not identity proof. Canonicalization of malformed tool names is not proof of exact malformed native bytes.",
+      "native_message_indices": [
+        140
+      ],
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "native_seed": null,
+      "diagnostic_seeds": [
+        42,
+        43,
+        44
+      ]
+    },
+    {
+      "task": "scikit-learn__scikit-learn-13135",
+      "call": 29,
+      "response_id": "chatcmpl-a6c457a425ce9536",
+      "private_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-extra-contraction-controls/scikit-learn__scikit-learn-13135.call29.onset.private.json",
+      "private_case_sha256": "1403d7a48b7ecca8ec2095479c77a871caa3add09bedd7f6830d36315a883bd2",
+      "raw_packet": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/double-contraction-archive/scikit-learn__scikit-learn-13135.call29.packet.private.json",
+      "raw_packet_sha256": "2e781c74647c56680489ee85d01158e8409aebe52546dda5559bfd1a98aec9b2",
+      "native_prompt_tokens": 17376,
+      "reconstructed_request_prompt_tokens": 17375,
+      "native_reply_tokens": 510,
+      "reconstructed_reply_tokens": 512,
+      "conditioning_tokens": 17395,
+      "onset_positions": 64,
+      "onset_token_index": 20,
+      "motif": "I've\u2019ve",
+      "evidence": "Localized duplicated contraction in reasoning: repeated apostrophe and suffix. Supplementary localized anomaly; no causal claim about task failure. Exact response-ID/native-index mapping retained; native token IDs unavailable.",
+      "limitations": "Exact request body with historical JSON tool arguments deserialized for pinned template. Reply reconstructed as canonical thought header, complete saved reasoning, channel boundary, complete visible content, canonical tool-call macros from pinned template, native stop ID. No native token IDs: generated whitespace/order/protocol spelling cannot be recovered uniquely; counts and hashes are evidence, not identity proof. Canonicalization of malformed tool names is not proof of exact malformed native bytes.",
+      "native_message_indices": [
+        58
+      ],
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "native_seed": null,
+      "diagnostic_seeds": [
+        42,
+        43,
+        44
+      ]
+    },
+    {
+      "task": "pylint-dev__pylint-4604",
+      "call": 45,
+      "response_id": "chatcmpl-9570ea8290cddfe6",
+      "private_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-extra-contraction-controls/pylint-dev__pylint-4604.call45.onset.private.json",
+      "private_case_sha256": "ce0cbc8b5fd000b397c01d2e62b16764bccf0bfd113b7e7ce884b992f2a8a42b",
+      "raw_packet": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/double-contraction-archive/pylint-dev__pylint-4604.call45.packet.private.json",
+      "raw_packet_sha256": "b4f476bfea80f5cdecdc74e4cfc89ad51a31426d811eeca79e541a33b4bde2d4",
+      "native_prompt_tokens": 37011,
+      "reconstructed_request_prompt_tokens": 37010,
+      "native_reply_tokens": 99,
+      "reconstructed_reply_tokens": 101,
+      "conditioning_tokens": 37057,
+      "onset_positions": 54,
+      "onset_token_index": 47,
+      "motif": "it's\u2019s",
+      "evidence": "Localized duplicated contraction in reasoning: repeated apostrophe and suffix. Supplementary localized anomaly; no causal claim about task failure. Exact response-ID/native-index mapping retained; native token IDs unavailable.",
+      "limitations": "Exact request body with historical JSON tool arguments deserialized for pinned template. Reply reconstructed as canonical thought header, complete saved reasoning, channel boundary, complete visible content, canonical tool-call macros from pinned template, native stop ID. No native token IDs: generated whitespace/order/protocol spelling cannot be recovered uniquely; counts and hashes are evidence, not identity proof. Canonicalization of malformed tool names is not proof of exact malformed native bytes.",
+      "native_message_indices": [
+        90
+      ],
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "native_seed": null,
+      "diagnostic_seeds": [
+        42,
+        43,
+        44
+      ]
+    }
+  ],
+  "cpu_validation": [
+    {
+      "mode": "served",
+      "config": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/head_bfp8_build_kwargs.json",
+      "config_sha256": "2e583fa8bd7aff7c5f8be110835df751924d167243c5a44a68aa5b3d70c6845f",
+      "exit_code": 0,
+      "stdout": "Validated 4 jobs without importing TTNN"
+    },
+    {
+      "mode": "full",
+      "config": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_build_kwargs.json",
+      "config_sha256": "ff2b5ed24e0b6a1dee7eb5cd8bd437d17c3df5f8f25567927d239e666f0699f9",
+      "exit_code": 0,
+      "stdout": "Validated 4 jobs without importing TTNN"
+    }
+  ],
+  "commands_staged_only": {
+    "served": [
+      "python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tools.precision_repro_batch",
+      "--cases",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-extra-contraction-controls/cases.json",
+      "--build-kwargs-file",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/head_bfp8_build_kwargs.json",
+      "--output-dir",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-extra-contraction-controls/served"
+    ],
+    "full": [
+      "python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tools.precision_repro_batch",
+      "--cases",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-extra-contraction-controls/cases.json",
+      "--build-kwargs-file",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_build_kwargs.json",
+      "--output-dir",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-extra-contraction-controls/full",
+      "--compare-dir",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-extra-contraction-controls/served"
+    ]
+  },
+  "no_inference": true,
+  "phase_scope": "Anomaly controls independent of later wrong-action controls; no score or corrected answer claim."
+}

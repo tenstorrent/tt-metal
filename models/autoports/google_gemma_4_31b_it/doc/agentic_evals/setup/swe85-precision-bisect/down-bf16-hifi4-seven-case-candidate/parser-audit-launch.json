@@ -1,0 +1,17 @@
+{
+  "start_unix": 1794748804.4956417,
+  "argv": [
+    "timeout",
+    "180",
+    "env",
+    "VLLM_PLUGINS=",
+    "HF_HUB_OFFLINE=1",
+    "HF_DATASETS_OFFLINE=1",
+    "HF_HUB_DISABLE_TELEMETRY=1",
+    "python_env/bin/python",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bf16-hifi4-seven-case-candidate/audit_p5_gemma4_parser.py",
+    "--execute"
+  ],
+  "source_sha256": "6b717191dccdab9594c09543acb747bd353f743f8f332d2942a3a03d3a49c02f",
+  "device_owner_check_returncode": 1
+}

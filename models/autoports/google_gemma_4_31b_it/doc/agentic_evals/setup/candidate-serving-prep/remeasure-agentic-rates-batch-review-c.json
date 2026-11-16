@@ -1,0 +1,124 @@
+{
+  "status": "review_complete_no_scoped_defect_found",
+  "scope": "Host-only review of batch selector, baseline/workload identity, batch-specific evidence filenames, and pre-run forecasts; no helper invocation, server, profiler, model or device work.",
+  "files": {
+    "helper": {
+      "path": "models/autoports/google_gemma_4_31b_it/tools/remeasure_agentic_rates.py",
+      "sha256": "88a8231c07276198004bd297237c05841d75d501e46b7b9cc350c8356db091f3",
+      "relevant_lines": {
+        "batch_row_selection": "44-54",
+        "identity_and_forecast": "64-99",
+        "batch_filenames": "124-155",
+        "cli_identity_and_selection": "202-238",
+        "per_row_prediction_before_client": "251-315"
+      }
+    },
+    "tests": {
+      "path": "models/autoports/google_gemma_4_31b_it/tests/test_remeasure_agentic_rates.py",
+      "sha256": "0d1802eb453d33af6cf889a9238f4c4af00585b0bb8121efcca9eebefa1f1585",
+      "relevant_lines": {
+        "batch_filenames_and_reporting": "31-60",
+        "prewritten_forecast_guard": "132-148",
+        "batch_selection_rejections": "199-211"
+      }
+    },
+    "stage11_baseline": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/benchmark/serving_rates-stage11-head_bfp4.json",
+      "sha256": "d69d30aa6186e399e699f59b7300403d74d6f71dcddce54004d970cc9781af1e",
+      "config_id": "head_bfp4",
+      "validated_batches": [
+        1,
+        8,
+        32
+      ],
+      "rows_by_batch": {
+        "1": {
+          "rows": 10,
+          "gpqa_rows": 5,
+          "swe_rows": 5,
+          "all_row_ids_in_plan": true,
+          "matching_identity_fields": true,
+          "missing_ids": [],
+          "mismatches": []
+        },
+        "8": {
+          "rows": 14,
+          "gpqa_rows": 7,
+          "swe_rows": 7,
+          "all_row_ids_in_plan": true,
+          "matching_identity_fields": true,
+          "missing_ids": [],
+          "mismatches": []
+        },
+        "32": {
+          "rows": 15,
+          "gpqa_rows": 8,
+          "swe_rows": 7,
+          "all_row_ids_in_plan": true,
+          "matching_identity_fields": true,
+          "missing_ids": [],
+          "mismatches": []
+        }
+      }
+    },
+    "active_head8_rates": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/benchmark/serving_rates.json",
+      "sha256": "7717b0132fc696b2eb20e496b14566e9829fb9ed0dc6ae3c31f3668970d2962d",
+      "config_id": "stage12_head_bfp8_lofi",
+      "rows": 15,
+      "validated_batches": [
+        32
+      ],
+      "rows_by_batch": {
+        "1": 0,
+        "8": 0,
+        "32": 15
+      }
+    },
+    "plan": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/benchmark/plan.json",
+      "sha256": "80914ad1ac423febc168586290070c6c3e884f784469c2acbeb28491b8d50546",
+      "rows": 55
+    }
+  },
+  "checks": [
+    {
+      "result": "pass",
+      "detail": "Selection filters only original measured GPQA/SWE rows at the requested batch, with optional suite/row narrowing; absent, duplicate, or over-batch-concurrency selections fail before output creation."
+    },
+    {
+      "result": "pass",
+      "detail": "For all39 stage11 measured rows, id/batch/concurrency/input length/output length/sampling match the current plan; measured request population is copied from the actual baseline row rather than stale plan request count."
+    },
+    {
+      "result": "pass",
+      "detail": "Fresh identity must match candidate precision, requested max_num_seqs, and full context; live observer check verifies all60 layers, precision, and device count."
+    },
+    {
+      "result": "pass",
+      "detail": "Batch-specific file naming propagates to batch server identity, client raw files, server metadata, collector concurrency, and validated_batches."
+    },
+    {
+      "result": "pass",
+      "detail": "Per-row forecast is persisted before benchmark clients start; prewritten body-change forecast is required when attention/MLP/down group changes, and forecast basis/ranges are validated."
+    },
+    {
+      "result": "pass",
+      "detail": "Helper has no server launcher or profiler start path. It requires a fresh server-identity file and sends bounded readiness/client requests to that already-running server; collector marks device_profiler_enabled=false."
+    },
+    {
+      "result": "pass",
+      "detail": "Output directory uses exist_ok=false; run/row stop and timeout bounds remain in force."
+    }
+  ],
+  "usage_boundary": {
+    "severity": "note",
+    "detail": "Default original-rates path is the active head-BFP8 file with only15 B32 rows. Batch1/8 requests need --original-rates doc/benchmark/serving_rates-stage11-head_bfp4.json, which has10 B1 (5 GPQA/5 SWE) and14 B8 (7/7) rows. The selector rejects empty batch1/8 default selections rather than silently substituting rows. These are old head-BFP4 baseline rows and the comparison must retain that identity."
+  },
+  "test_evidence": "Root reports21 combined host rate/accounting tests passed; this review did not rerun tests.",
+  "findings": [],
+  "limitations": [
+    "This review checks the helper and saved workload artifacts, not the eventual server launch identity or measured outputs.",
+    "Forecast validity remains candidate-specific; a forecast range is a prospective bound and should not be described as a measured speed claim."
+  ]
+}

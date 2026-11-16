@@ -1,0 +1,50 @@
+{
+  "status": "admitted",
+  "epoch": 1794756094.000302,
+  "argv": [
+    "timeout",
+    "1200",
+    "env",
+    "HF_HUB_OFFLINE=1",
+    "HF_DATASETS_OFFLINE=1",
+    "HF_HUB_DISABLE_TELEMETRY=1",
+    "OMP_NUM_THREADS=16",
+    "MKL_NUM_THREADS=16",
+    "OPENBLAS_NUM_THREADS=16",
+    "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+    "READINESS_TRACE_REGION_SIZE=134217728",
+    "TT_METAL_TRACE_ALLOC_TRACKING=0",
+    "TT_METAL_DEVICE_PROFILER=0",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+    "-m",
+    "models.autoports.google_gemma_4_31b_it.tests.run_datatype_candidate",
+    "--config",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/bf16-hifi4-kv-bfp8-accuracy-p17/precision.json",
+    "--id",
+    "stage12_bf16_hifi4_kv_bfp8_p17",
+    "--output-dir",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/bf16-hifi4-kv-bfp8-accuracy-p17/run",
+    "--reference",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/attention-down-acceptance/references/aime24.refpt",
+    "--natural-reference",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/attention-down-acceptance/references/natural.refpt",
+    "--require-accuracy",
+    "--accuracy-only"
+  ],
+  "timeout_seconds": 1200,
+  "planning_range_seconds": [
+    130,
+    550
+  ],
+  "planning_basis": "Full BF16 control140.54s, recent controls169-279s. Only KV dtype reduced to BFP8 from passing full-BF16 policy. Cumulative search now starts at passing baseline; no assumption that independent group accuracy deltas add.",
+  "admission_requires": "Satisfiedbyadmission.json; no automaticfollowon",
+  "source_sha256": {
+    "models/autoports/google_gemma_4_31b_it/tests/run_datatype_candidate.py": "1390350c91b27b4f8563ffa8bd38224f6b06543668ca2a627c2c3ecea756a287",
+    "models/autoports/google_gemma_4_31b_it/tt/optimized_decoder.py": "24f52653e82392144e880b0677b52cb01f7432a70a966cdd901592cee933e53d",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/mlp-attention-down-bfp8-lofi-eleven-case-candidate/mlp_attention_down_bfp8_lofi_precision.json": "de46de8e771defadd786ab8207308fcc3609b15bac144c662dadc20a6d9e343f",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/attention-down-acceptance/references/aime24.refpt": "1c1a90cada967dc89159edf6e61eb51f2638955ab9defe1cc51939587e99ab45",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/attention-down-acceptance/references/natural.refpt": "861f29370af0ba7e13c77f548e688cceff429846d20a9283697ae77b8b069584",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/bf16-hifi4-kv-bfp8-accuracy-p17/precision.json": "8c44463aef2387a51def5f27698a2909f92efaa4572011a78293d1edb9b4c100",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_config.json": "63ce02f7fa0df993a27daca25eeeb3adca51e15c7c6956d1cef122534ebdc7a9"
+  }
+}

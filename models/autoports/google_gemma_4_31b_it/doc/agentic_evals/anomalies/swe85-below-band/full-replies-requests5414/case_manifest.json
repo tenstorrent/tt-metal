@@ -1,0 +1,122 @@
+{
+  "status": "prepared_not_executed_correct_branches_pending",
+  "snapshot_utc": "2026-11-14T21:33:50.792928+00:00",
+  "reviewed_coordinators": 0,
+  "failed_tasks": 1,
+  "prepared_cases": 2,
+  "excluded_unresolved_infrastructure": [],
+  "gaps": [
+    {
+      "task": "psf__requests-5414",
+      "call": 9,
+      "response_id": "chatcmpl-91c75e62ddd62388",
+      "error": "No native integer stop ID"
+    },
+    {
+      "task": "psf__requests-5414",
+      "call": 10,
+      "response_id": "chatcmpl-824ab2369457908e",
+      "error": "No native integer stop ID"
+    },
+    {
+      "task": "psf__requests-5414",
+      "call": 11,
+      "response_id": "chatcmpl-a21872dffd22e1db",
+      "error": "No native integer stop ID"
+    }
+  ],
+  "cases": [
+    {
+      "task": "psf__requests-5414",
+      "call": 23,
+      "response_id": "chatcmpl-b21146d26511b106",
+      "cause": "wrong attempted edit23 and final overbroad IDNA30; caret-loop anomalies9/10/11",
+      "native_trajectory": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe-jobs/swe-extended85-head-bfp8/psf__requests-5414__SJbMQJT/agent/mini-swe-agent.trajectory.json",
+      "native_message_indices": [
+        43
+      ],
+      "request_source": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/post-gpqa-controls-head-bfp8/server/server-b32/server.log",
+      "response_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-extended85-head-bfp8/live-tasks/psf__requests-5414-first/responses.private.log",
+      "native_prompt_tokens": 13013,
+      "native_completion_tokens": 641,
+      "action_excerpt": "tool bash {\"command\": \"cat <<'EOF' > apply_fix.py\\nimport sys\\n\\nwith open('/testbed/requests/models.py', 'r') as f:\\n    lines = f.readlines()\\n\\nnew_lines = [",
+      "anomaly": false,
+      "request_line": 168608,
+      "response_line": 23,
+      "request_sha256": "e6a215ea659cbf0ff15852713aa391f30c2742986658970e62a32d88db668d48",
+      "native_response_sha256": "8d8a62791c483a98b126a3210d7c0b0f44a6f34cf1bcb0938f1e1805f86e8404",
+      "hf_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+      "template_sha256": "ae53464bf3be25802b3a5b37def7fd89667067d7577049b3b2d74c4d8de4c6d4",
+      "reconstructed_prompt_tokens": 13012,
+      "reconstructed_completion_tokens": 643,
+      "prompt_token_count_gap": -1,
+      "completion_token_count_gap": 2,
+      "native_prompt_ids_available": false,
+      "native_output_ids_available": false,
+      "correct_branch": "pending validated pre-call state; not constructed",
+      "scope": "Full original reply reconstruction, no truncation. Agreement only, not completed precision attempt.",
+      "reconstruction": "Exact request body with historical JSON tool arguments deserialized for pinned template. Reply reconstructed as canonical thought header, complete saved reasoning, channel boundary, complete visible content, canonical tool-call macros from pinned template, native stop ID. No native token IDs: generated whitespace/order/protocol spelling cannot be recovered uniquely; counts and hashes are evidence, not identity proof. Canonicalization of malformed tool names is not proof of exact malformed native bytes.",
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "native_seed": null,
+      "executed": false,
+      "private_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-requests5414/psf__requests-5414.call23.case.private.json",
+      "private_case_sha256": "de5fc4b6ee4dd1ca24d81e6b6dff475b141a5517461f9698b39ea64ac581f86e",
+      "private_packet": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-requests5414/psf__requests-5414.call23.packet.private.json",
+      "private_packet_sha256": "a661f5171a5429b95524efd3f50b201c3a5f52abab2d0ad6fdf184244b0275c1"
+    },
+    {
+      "task": "psf__requests-5414",
+      "call": 30,
+      "response_id": "chatcmpl-97e7a658758973a8",
+      "cause": "wrong attempted edit23 and final overbroad IDNA30; caret-loop anomalies9/10/11",
+      "native_trajectory": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe-jobs/swe-extended85-head-bfp8/psf__requests-5414__SJbMQJT/agent/mini-swe-agent.trajectory.json",
+      "native_message_indices": [
+        57
+      ],
+      "request_source": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/post-gpqa-controls-head-bfp8/server/server-b32/server.log",
+      "response_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-extended85-head-bfp8/live-tasks/psf__requests-5414-first/responses.private.log",
+      "native_prompt_tokens": 16018,
+      "native_completion_tokens": 439,
+      "action_excerpt": "tool bash {\"command\": \"cat <<'EOF' > apply_fix_final.py\\nimport sys\\n\\nwith open('/testbed/requests/models.py', 'r') as f:\\n    content = f.read()\\n\\nold_block ",
+      "anomaly": false,
+      "request_line": 170760,
+      "response_line": 30,
+      "request_sha256": "ae73aecc2bfd0275890f4fe9ab07947b0941b5a4c055e3901cde21eccc8ddb88",
+      "native_response_sha256": "a482e3b4fc0d1f60166c349e62480d19643653ec45a26427cfcd85666a8326f3",
+      "hf_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+      "template_sha256": "ae53464bf3be25802b3a5b37def7fd89667067d7577049b3b2d74c4d8de4c6d4",
+      "reconstructed_prompt_tokens": 16017,
+      "reconstructed_completion_tokens": 441,
+      "prompt_token_count_gap": -1,
+      "completion_token_count_gap": 2,
+      "native_prompt_ids_available": false,
+      "native_output_ids_available": false,
+      "correct_branch": "pending validated pre-call state; not constructed",
+      "scope": "Full original reply reconstruction, no truncation. Agreement only, not completed precision attempt.",
+      "reconstruction": "Exact request body with historical JSON tool arguments deserialized for pinned template. Reply reconstructed as canonical thought header, complete saved reasoning, channel boundary, complete visible content, canonical tool-call macros from pinned template, native stop ID. No native token IDs: generated whitespace/order/protocol spelling cannot be recovered uniquely; counts and hashes are evidence, not identity proof. Canonicalization of malformed tool names is not proof of exact malformed native bytes.",
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "native_seed": null,
+      "executed": false,
+      "private_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-requests5414/psf__requests-5414.call30.case.private.json",
+      "private_case_sha256": "c9999c0492ae85110732fcec749f322bbbaa0812c447931ff8ff98a41b13a45f",
+      "private_packet": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-requests5414/psf__requests-5414.call30.packet.private.json",
+      "private_packet_sha256": "0e0aeaf53a0bc829b16153f1fc9c23d0fb1398390bca21970ed49cd747e5f0ac"
+    }
+  ],
+  "mapping_qualifications": {
+    "pylint-dev__pylint-4970": "Both call51 initial attempt and call55 actual insertion prepared; root identifies55 as actual edit. Do not label51 executed insertion.",
+    "pytest-dev__pytest-5840": "Call15 writes replacement script,16 executes it; both saved for decision/execution comparison.",
+    "matplotlib__matplotlib-20488": "Call29 earliest destructive rewrite identified by triage;88/91 separate anomalous repetitions. Root must ratify29 semantic first-bad status.",
+    "pydata__xarray-3095": "Recovered malformed53 native ID omitted; triage maps to message106 FormatError. First semantic wrong-edit call still unresolved.",
+    "pytest-dev__pytest-10356": "Recovered malformed14; semantic wrong-action identification requires separate adjudication.",
+    "pydata__xarray-7233": "Call1 protocol anomaly,4 fetched-release scoring violation; both preserved."
+  }
+}

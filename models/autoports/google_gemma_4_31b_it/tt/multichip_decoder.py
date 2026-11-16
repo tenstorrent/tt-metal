@@ -207,7 +207,16 @@ class MultichipDecoder(OptimizedDecoder):
             "mlp.gate_proj": {"cores": 28, "block": 6, "readers": 1},
             "mlp.up_proj": {"cores": 28, "block": 6, "readers": 1},
             "mlp.down_proj": {"cores": 8, "block": 7, "readers": 2},
-            "prefill_q": 64 if cache_dtype == ttnn.bfloat16 and not obj.sliding_window else 128,
+            # HiFi4 prefill uses the non-streaming FP32 accumulation path. Keep
+            # its query partitions at 32 for resumable-prefill equivalence;
+            # lower-fidelity policies retain their established cache geometry.
+            "prefill_q": (
+                32
+                if sdpa_fidelity == ttnn.MathFidelity.HiFi4
+                else 64
+                if cache_dtype == ttnn.bfloat16 and not obj.sliding_window
+                else 128
+            ),
             "prefill_k": 128,
         }
         if not candidate_baseline:
@@ -389,16 +398,12 @@ class MultichipDecoder(OptimizedDecoder):
         return self.prefill_ccl_padding[key]
 
     def _reduce_output(self, out, name):
-        phase = (
-            self.prefill_ccl_phase
-            if not self.decoding and self.prefill_ccl_bfp8 and self.topology == ttnn.Topology.Ring
-            else 0
-        )
+        phase = self.prefill_ccl_phase if not self.decoding and self.topology == ttnn.Topology.Ring else 0
         rows = out.shape[2]
         if phase:
             # Ring reduction alternates direction every eight output tiles.
             # TP4 has 42 tiles per tile row: parity repeats every eight tile
-            # rows (256 tokens). Preserve absolute row parity and BF8 rounding
+            # rows (256 tokens). Preserve absolute row parity and intermediate rounding
             # across continuation offsets by prepending zero rows before CCL.
             out = ttnn.concat([self._prefill_ccl_zero_rows(out.shape[0], phase, out.dtype), out], dim=2)
         out = ttnn.experimental.reduce_scatter_minimal_async(
@@ -430,14 +435,14 @@ class MultichipDecoder(OptimizedDecoder):
         """
         if self.decoding or max_rows < 32 or max_rows > 1024 or max_rows % 32:
             raise ValueError("Prefill CCL preparation needs 32..1024 aligned rows outside decode")
-        if not self.prefill_ccl_bfp8 or self.topology != ttnn.Topology.Ring:
+        if self.topology != ttnn.Topology.Ring:
             return self.prefill_ccl_padding
         previous = self.prefill_ccl_phase
         try:
             for rows in range(32, max_rows + 1, 32):
                 source = ttnn.zeros(
                     (batch, 1, rows, self.hidden),
-                    dtype=ttnn.bfloat8_b,
+                    dtype=ttnn.bfloat8_b if self.prefill_ccl_bfp8 else self.residual_dtype,
                     layout=ttnn.TILE_LAYOUT,
                     device=self.mesh_device,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,

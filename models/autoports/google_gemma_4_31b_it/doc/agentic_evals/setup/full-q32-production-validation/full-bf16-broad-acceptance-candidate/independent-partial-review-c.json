@@ -1,0 +1,152 @@
+{
+  "status": "partial_independent_output_review_context_boundary_pending",
+  "scope": "Read-only review of broad-acceptance component outputs currently atomically present. The broad run is still active; context-boundary completion and terminal review are pending. No device/model execution.",
+  "directory": "setup/full-q32-production-validation/full-bf16-broad-acceptance-candidate/run",
+  "source_sha256": {
+    "runtime_policy.json": "5a3e5294314c738f54deffa346303953481e802561660692b4b3c58c8d8ed7a8",
+    "readiness_accuracy.json": "9e5b1cc8dc75452a88f365867000db37f29034c6b9955f202fd02c090791333e",
+    "performance_b1.json": "f094f940fbea4ee184b53f12925e2c640282b0923339453d8ec8c0e29f040892",
+    "long_prefix.json": "c2b410c7c772d9c30027f3f9cbe5faf59b5cc51696d9a233364bb3a6893a719c",
+    "qualitative_prompt_format.json": "16e4bfd8857e67ee9ca39297c8521b30e8ceacf0c848783e83b1192ef331cb9c",
+    "memory.json": "a69f5cdb8f79ebbcd7521fb035a1677a904c71486d81b87096723d99e34133e6",
+    "aime24_prompt.json": "578790e2d9e5d7fad6d187bc6d733699c3514218ea5a42ca2bf9d25d7afdd4dd",
+    "qualitative_tt.json": "da645d9c8e56e9cac05a2cf8da575b0773880edf7b7dfc67c1c51f5b50ef0cfb",
+    "qualitative_hf.json": "05c2ac233052909c2e785b9d36f819c52e95cecfcfd299eff81a6b1de3a174d6",
+    "source_manifest.json": "e1f6d17953919bb87ac82dc52b0a40f343ff1ee1c30a76849f069cabe7ac8fc4"
+  },
+  "runtime_policy": {
+    "config_id": "stage12_bf16_hifi4_diagnostic",
+    "weights": {
+      "attention": "bf16",
+      "mlp": "bf16",
+      "down": "bf16",
+      "lm_head": "bf16"
+    },
+    "compute_fidelities": {
+      "attention": "HiFi4",
+      "mlp": "HiFi4",
+      "down": "HiFi4",
+      "lm_head": "HiFi4"
+    },
+    "kv_cache_dtype": "bfloat16",
+    "max_seq_len": 262144,
+    "runtime_policy_recorded": "full BF16/HiFi4 with BF16 KV under Q32; config/runtime evidence agrees."
+  },
+  "accuracy": {
+    "scope": "full60layers",
+    "reference_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+    "prefill_top1": 0.98,
+    "prefill_top5": 1.0,
+    "prefill_top100": 1.0,
+    "natural_top1": 0.9375,
+    "natural_top5": 1.0,
+    "natural_top100": 1.0,
+    "natural_tokens": 512,
+    "decode_repeat_top1": 0.98,
+    "decode_repeat_top5": 1.0,
+    "teacher_forcing_repeat_count": 3,
+    "assessment": "Numbers match recorded full60-layer accuracy artifact; natural output is 480/512 top1 and512/512 top5. Stage-level threshold/root disposition is pending."
+  },
+  "diagnostic_performance": {
+    "source": "autoregressive",
+    "batch_size": 1,
+    "input_tokens": 4096,
+    "generated_tokens": 128,
+    "concurrent_requests": 1,
+    "reported_decode_tps": 16.982449546294834,
+    "sample_count": 3,
+    "qualification": "Single-request diagnostic timing; not vLLM serving throughput or a serving-rate row."
+  },
+  "context_check": {
+    "prompt_tokens": 32083,
+    "generation_cap": 128,
+    "expected_label": "ORCHID-742",
+    "label_present": true,
+    "completion": "```json\n{\n  \"deployment_label\": \"ORCHID-742\"\n}\n```<turn|>",
+    "status": "component result present but final context-boundary trial still pending per root; do not claim maximum-context acceptance yet."
+  },
+  "qualitative": {
+    "tt_examples": 6,
+    "hf_examples": 6,
+    "matching_ids": true,
+    "rows": [
+      {
+        "id": "shared_0",
+        "tt_generated_tokens": 19,
+        "tt_last_token_id": 106,
+        "hf_generated_tokens": 19,
+        "hf_last_token_id": 106,
+        "first_divergence_index": null,
+        "judgment": "natural_stop_complete_response",
+        "semantic_review": "Complete, coherent three-line haiku; TT and HF completions are identical."
+      },
+      {
+        "id": "shared_1",
+        "tt_generated_tokens": 128,
+        "tt_last_token_id": 506,
+        "hf_generated_tokens": 128,
+        "hf_last_token_id": 506,
+        "first_divergence_index": 21,
+        "judgment": "cap_bounded_prefix_not_completed_answer",
+        "semantic_review": "Coherent explanation with supervised-learning example; cap ends mid-sentence. TT wording differs from HF at a synonym/phrase, not a protocol or semantic failure."
+      },
+      {
+        "id": "shared_2",
+        "tt_generated_tokens": 128,
+        "tt_last_token_id": 506,
+        "hf_generated_tokens": 128,
+        "hf_last_token_id": 506,
+        "first_divergence_index": 42,
+        "judgment": "cap_bounded_prefix_not_completed_answer",
+        "semantic_review": "Coherent story opening; cap ends mid-sentence. TT/HF differences are punctuation/orthography in observed prefix; no completed story claim."
+      },
+      {
+        "id": "shared_3",
+        "tt_generated_tokens": 128,
+        "tt_last_token_id": 5387,
+        "hf_generated_tokens": 128,
+        "hf_last_token_id": 5387,
+        "first_divergence_index": null,
+        "judgment": "cap_bounded_prefix_not_completed_answer",
+        "semantic_review": "Coherent thermodynamics explanation; cap ends mid-example. Not a completed answer."
+      },
+      {
+        "id": "shared_4",
+        "tt_generated_tokens": 104,
+        "tt_last_token_id": 106,
+        "hf_generated_tokens": 104,
+        "hf_last_token_id": 106,
+        "first_divergence_index": null,
+        "judgment": "natural_stop_complete_response",
+        "semantic_review": "Complete, coherent translation response offering formal and informal French variants; TT and HF completions are identical."
+      },
+      {
+        "id": "shared_5",
+        "tt_generated_tokens": 128,
+        "tt_last_token_id": 144,
+        "hf_generated_tokens": 128,
+        "hf_last_token_id": 236743,
+        "first_divergence_index": 65,
+        "judgment": "cap_bounded_prefix_not_completed_answer",
+        "semantic_review": "Coherent Fibonacci explanation and code prefix; cap ends before the function body is complete. Not an executable/completed solution claim."
+      }
+    ],
+    "counts": {
+      "natural_stops_under_cap": 2,
+      "cap_bounded_128_token_prefixes": 4
+    },
+    "overall": "Two responses stop naturally (haiku, French translation) and are coherent/complete for their prompts. Four outputs stop at the 128-token cap and are coherent observed prefixes, but end mid-sentence, mid-example/story, or before code completion; they must not be counted as completed answers. HF comparison is qualitative at the saved prefixes; bounded HF and TT both share the same cap."
+  },
+  "memory": {
+    "source_file": "memory.json",
+    "allocator_bytes": 23863046144,
+    "unattributed_allocator_bytes": 885248,
+    "assessment": "Memory accounting artifact present; read in context of saved broad run, no additional inference."
+  },
+  "review_findings": [
+    "Broad accuracy artifact records prefill 98/100 top1, natural 480/512 top1 and 512/512 top5; top100 is 100% in each.",
+    "The two naturally stopped qualitative responses are coherent and align exactly with HF; four remaining outputs are 128-token bounded prefixes, not completed task answers.",
+    "Long-prefix component contains 32,083 prompt tokens and the expected ORCHID-742 label, but the designated context-boundary completion remains pending.",
+    "No broad terminal verdict until completion and root review are available."
+  ]
+}

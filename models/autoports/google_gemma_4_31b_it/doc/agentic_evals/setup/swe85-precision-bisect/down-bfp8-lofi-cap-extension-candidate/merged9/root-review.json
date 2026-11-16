@@ -1,0 +1,36 @@
+{
+  "status": "root_reviewed_for_serial_launch",
+  "reviewer": "root",
+  "at_unix": 1794742775.2862854,
+  "cases": 9,
+  "manifest_indices": [
+    15,
+    18,
+    34,
+    43,
+    48,
+    62,
+    72,
+    73,
+    82
+  ],
+  "exact_original_fixtures_seeds_sampling": true,
+  "caps_doubled": true,
+  "expected_policy_sha256": "769f6b5d975c3a4b252c01668ded02f32c61c43819117a95868249b4b1fd7350",
+  "p3_terminal_review_sha256": "534f98a5177c28734810e48daa6c543859cd8168b4d645fe8a840689d63ec2f9",
+  "pins": {
+    "command.json": "669b82b0cdd4f909215634e3832ab57056de3f17434bc2250b117bb4cb79fae1",
+    "forecast.json": "de05420faa248905e9675c1276ea4818bae2b9f07fe83c64e63daa4822d20b23",
+    "cases.json": "19c307904d26f7c594c9835d6d4226bc11236f4f0ca8411a1cf58e7585a747c6",
+    "prefixes.json": "812b3a218deeb249132e5c634578c088efeafcff7e0fe654cdc81c030cf2f628"
+  },
+  "forecast": {
+    "point_seconds": 640.0003207179305,
+    "range_seconds": [
+      480.0002405384479,
+      896.0004490051027
+    ],
+    "basis": "One measured P3 load plus exact prior nine case diagnostic_total_wall_s and extra cap tokens divided by each measured traced decode rate. Fresh full reruns, not in-place continuation. Bounds planning allowances, outputs may terminate early.",
+    "timeout_seconds": 1800
+  }
+}

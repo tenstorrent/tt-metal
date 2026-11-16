@@ -1,0 +1,27 @@
+{
+  "status": "host_static_validation_passed_candidate_only",
+  "checks": {
+    "source_result_hash_exact": true,
+    "same_exact_fixture_prompt_hash": true,
+    "same_prompt_id_hash": true,
+    "same_chosen64_hash": true,
+    "seed_preserved": true,
+    "prior_cap_512": true,
+    "new_cap_1024": true,
+    "prior_output_reached_cap": true,
+    "candidate_status_unadmitted_unrun": true,
+    "native_sampling_defaults_preserved": true,
+    "candidate_name_matches_original_case": true,
+    "original_result_unchanged": true
+  },
+  "measured_reference": {
+    "group_wall_s": 1442.443281173706,
+    "runner_wall_s": 1438.3117750179954,
+    "free_run_wall_s": 1377.3435386877973,
+    "runner_nonfree_bundle_s": 60.968236330198124,
+    "group_wrapper_overhead_s": 4.131506155710667
+  },
+  "no_runner_execution": true,
+  "no_device_work": true,
+  "no_output_directory_created": true
+}

@@ -1,0 +1,52 @@
+{
+  "status": "root_adjudicated",
+  "rows": [
+    {
+      "case": "anomaly.psf__requests-5414.call11.onset",
+      "mode": "full",
+      "seed": 43,
+      "tokens": 124,
+      "verdict": "other_anomaly",
+      "exact_native_motif": false,
+      "reason": "Stock parser extracts invalid bash: name and malformed argument key, not allowed bash(command).",
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/full/anomaly.psf__requests-5414.call11.onset.json",
+      "source_sha256": "6a22257dbe5b30dec221560fc555e6331e83891872d9e274b89be6b293718b82"
+    },
+    {
+      "case": "anomaly.sphinx-doc__sphinx-10323.call70.onset",
+      "mode": "full",
+      "seed": 42,
+      "tokens": 200,
+      "verdict": "other_anomaly",
+      "exact_native_motif": false,
+      "reason": "Stock parser confirms missing structured bash tool.",
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/full/anomaly.sphinx-doc__sphinx-10323.call70.onset.json",
+      "source_sha256": "a441ba44ab8294f359c1ea864d045cc4e6fb5d123930684db4b02ee3c1749f77"
+    },
+    {
+      "case": "anomaly.sphinx-doc__sphinx-10323.call70.onset",
+      "mode": "full",
+      "seed": 43,
+      "tokens": 207,
+      "verdict": "other_anomaly",
+      "exact_native_motif": false,
+      "reason": "Stock parser confirms missing structured bash tool.",
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/full/anomaly.sphinx-doc__sphinx-10323.call70.onset.json",
+      "source_sha256": "a441ba44ab8294f359c1ea864d045cc4e6fb5d123930684db4b02ee3c1749f77"
+    },
+    {
+      "case": "anomaly.sphinx-doc__sphinx-10323.call70.onset",
+      "mode": "full",
+      "seed": 44,
+      "tokens": 191,
+      "verdict": "other_anomaly",
+      "exact_native_motif": false,
+      "reason": "Stock parser confirms missing structured bash tool.",
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/full/anomaly.sphinx-doc__sphinx-10323.call70.onset.json",
+      "source_sha256": "a441ba44ab8294f359c1ea864d045cc4e6fb5d123930684db4b02ee3c1749f77"
+    }
+  ],
+  "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/protocol-parser-audit-d.json",
+  "audit_sha256": "9c26d9a42a2cd9f32c5d3be78e179dd8e2caec1d895db4e433118dc7d6bf06c0",
+  "caveat": "Current stock nonstreaming parser on reconstructed assistant context, not proof of original historical token stream."
+}

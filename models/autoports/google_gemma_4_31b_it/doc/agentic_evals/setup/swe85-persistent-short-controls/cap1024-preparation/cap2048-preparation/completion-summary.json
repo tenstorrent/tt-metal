@@ -1,0 +1,23 @@
+{
+  "status": "completed",
+  "rows": [
+    {
+      "case": "anomaly.psf__requests-5414.call11.onset.optional-suffix512.cap2048.seed44",
+      "mode": "full",
+      "seed": 44,
+      "tokens": 2048,
+      "verdict": "other",
+      "reason": "Repeated diagnosis with fabricated output, not native ellipsis/caret burst. Hypotheses vary, so this is not a proof that all reasoning stopped: however multiple unexecuted checks are presented as observed results (idna.IDNAError, socket.gaierror, urlparse ParseResult), following repeated requests.get/code examples without tool boundaries. This affirmative protocol anomaly closes this diagnostic question independently of the cap. No task failure or completion is inferred from the cap; no score change.",
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/cap1024-preparation/cap2048-preparation/runs/full/anomaly.psf__requests-5414.call11.onset.optional-suffix512.cap2048.seed44.json",
+      "source_sha256": "af75c19503c28dbfc26616fbd24f20331b987681a271c7d4b769eb2d04910dd3",
+      "original1024_prefix_identical": true,
+      "trace_counters_pass": true,
+      "triage": "triage-b.json",
+      "native_motif_reproduced": false
+    }
+  ],
+  "measured_hours": 0.05953025201956431,
+  "prediction_range_hit": true,
+  "score_change": false,
+  "limitation": "Short reconstructed512-token prefix; no native identity/incidence claim; capped sample not called a completed task."
+}

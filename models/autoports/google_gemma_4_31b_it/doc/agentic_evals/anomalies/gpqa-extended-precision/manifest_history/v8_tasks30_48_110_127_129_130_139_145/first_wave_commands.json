@@ -1,0 +1,52 @@
+{
+  "status": "prepared_not_executed",
+  "prep_version": "v8_tasks30_48_110_127_129_130_139_145",
+  "tasks": [
+    30,
+    48,
+    110,
+    127,
+    129,
+    130,
+    139,
+    145
+  ],
+  "selection": "512 suffix first;2048 fallback only for independently nonreproducing tasks, from full manifest. Never assume all candidates reproduce.",
+  "device_controls": {
+    "served": [
+      "timeout",
+      "3600",
+      "env",
+      "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+      "READINESS_TRACE_REGION_SIZE=134217728",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "models/autoports/google_gemma_4_31b_it/tools/precision_repro_batch.py",
+      "--cases",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first_wave_cases.json",
+      "--build-kwargs-file",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/head_bfp8_build_kwargs.json",
+      "--output-dir",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first-wave-served"
+    ],
+    "full": [
+      "timeout",
+      "3600",
+      "env",
+      "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+      "READINESS_TRACE_REGION_SIZE=134217728",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "models/autoports/google_gemma_4_31b_it/tools/precision_repro_batch.py",
+      "--cases",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first_wave_cases.json",
+      "--build-kwargs-file",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_build_kwargs.json",
+      "--output-dir",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first-wave-full",
+      "--compare-dir",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first-wave-served"
+    ]
+  },
+  "budget": "8tasks x3x1024=24576tokens/config; indicative full17tps gives1446s decode plusload/prefill/TF. Provision30\u201345min; timeout3600. Planning estimate only.",
+  "manifest_sha256": "a01f11e4619b09b23b99df8c7d1c6ce07cf769558c96676041f8d86392eeb53c",
+  "full_wave_commands": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/commands.json"
+}

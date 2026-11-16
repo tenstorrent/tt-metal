@@ -1,0 +1,12 @@
+{
+  "status": "pending_root_review",
+  "reviewer": "root",
+  "accepted": false,
+  "admission_sha256": "pending",
+  "progress_sha256": "pending",
+  "launch_sha256": {},
+  "completion_sha256": {},
+  "output_sha256": {},
+  "sk_evidence_sha256": {},
+  "note": "Root must verify all eight serial HF groups completed successfully and bind each actual launch, completion, and output hash plus current progress and exact SK evidence."
+}

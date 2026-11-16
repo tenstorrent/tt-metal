@@ -1,0 +1,213 @@
+{
+  "status": "integration_procedure_only_candidate_not_admitted",
+  "scope": "How reviewed 512-cap-progress rows map into the already fixed 108-job head_bfp8_hifi2 panel. Do not alter the frozen proposal-c candidate-cases.json; make a versioned refreshed panel only after served and full cap reviews finish.",
+  "fixed_panel": {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-c/candidate-cases.json",
+    "sha256": "6300ef8d51a63fd600fa8b963e6b4b516d9f262301ef034e6f51bd47dc78fef2",
+    "job_count": 108,
+    "case_count": 36,
+    "seed_count": 3,
+    "current_cap_counts": {
+      "256": 72,
+      "512": 36,
+      "1024": 0
+    },
+    "one_job_per_source_onset_seed": true
+  },
+  "current_refresh": {
+    "second_cap_served_jobs": 14,
+    "second_cap_full_jobs": 0,
+    "second_cap_rows": [
+      {
+        "mode": "served",
+        "source_onset": "anomaly.call88.canonicalprefix",
+        "seed": 42,
+        "current_cap": 512,
+        "current_job": "anomaly.call88.canonicalprefix.seed42.cap512",
+        "current_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/fixtures/full/anomaly.call88.canonicalprefix.cap512.seed42.private.json",
+        "candidate_1024_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/served/anomaly.call88.canonicalprefix.cap1024.seed42.private.json",
+        "candidate_1024_fixture_sha256": "c988d745a874afb35c291ed05c985f01d837aa103696b884a8c14a3d4f4631a4",
+        "exact_prompt_continuation_sampling_seed_match": true
+      },
+      {
+        "mode": "served",
+        "source_onset": "anomaly.call88.canonicalprefix",
+        "seed": 43,
+        "current_cap": 512,
+        "current_job": "anomaly.call88.canonicalprefix.seed43.cap512",
+        "current_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/fixtures/full/anomaly.call88.canonicalprefix.cap512.seed43.private.json",
+        "candidate_1024_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/served/anomaly.call88.canonicalprefix.cap1024.seed43.private.json",
+        "candidate_1024_fixture_sha256": "9498bca2ffb4369489d685dcdbe0e6a644454203070c5072a7ecda4233f6dd2f",
+        "exact_prompt_continuation_sampling_seed_match": true
+      },
+      {
+        "mode": "served",
+        "source_onset": "anomaly.call88.canonicalprefix",
+        "seed": 44,
+        "current_cap": 512,
+        "current_job": "anomaly.call88.canonicalprefix.seed44.cap512",
+        "current_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/fixtures/full/anomaly.call88.canonicalprefix.cap512.seed44.private.json",
+        "candidate_1024_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/served/anomaly.call88.canonicalprefix.cap1024.seed44.private.json",
+        "candidate_1024_fixture_sha256": "737937d682358b2e5cf29623f0b1bff7d63af44b3e9b76b86fb0ed1dca036bec",
+        "exact_prompt_continuation_sampling_seed_match": true
+      },
+      {
+        "mode": "served",
+        "source_onset": "anomaly.matplotlib__matplotlib-20488.call86.onset",
+        "seed": 44,
+        "current_cap": 512,
+        "current_job": "anomaly.matplotlib__matplotlib-20488.call86.onset.seed44.cap512",
+        "current_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/fixtures/served/anomaly.matplotlib__matplotlib-20488.call86.onset.cap512.seed44.private.json",
+        "candidate_1024_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/served/anomaly.matplotlib__matplotlib-20488.call86.onset.cap1024.seed44.private.json",
+        "candidate_1024_fixture_sha256": "293e6199bf309fd64e0d01abedf532409886a27a209acce69c6bd12a023faf26",
+        "exact_prompt_continuation_sampling_seed_match": true
+      },
+      {
+        "mode": "served",
+        "source_onset": "anomaly.pytest-dev__pytest-5787.call65.onset",
+        "seed": 43,
+        "current_cap": 512,
+        "current_job": "anomaly.pytest-dev__pytest-5787.call65.onset.seed43.cap512",
+        "current_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/fixtures/full/anomaly.pytest-dev__pytest-5787.call65.onset.cap512.seed43.private.json",
+        "candidate_1024_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/served/anomaly.pytest-dev__pytest-5787.call65.onset.cap1024.seed43.private.json",
+        "candidate_1024_fixture_sha256": "6f489182de104872fcb88834ac27e8208f2603ae893011f22516336c51ae0274",
+        "exact_prompt_continuation_sampling_seed_match": true
+      },
+      {
+        "mode": "served",
+        "source_onset": "anomaly.sphinx-doc__sphinx-11510.call28.onset",
+        "seed": 44,
+        "current_cap": 512,
+        "current_job": "anomaly.sphinx-doc__sphinx-11510.call28.onset.seed44.cap512",
+        "current_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call28.onset.cap512.seed44.private.json",
+        "candidate_1024_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/served/anomaly.sphinx-doc__sphinx-11510.call28.onset.cap1024.seed44.private.json",
+        "candidate_1024_fixture_sha256": "d8f30f1f675502566ec61966931a4faac361a1441829d070c4e3a143de397809",
+        "exact_prompt_continuation_sampling_seed_match": true
+      },
+      {
+        "mode": "served",
+        "source_onset": "anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset",
+        "seed": 42,
+        "current_cap": 512,
+        "current_job": "anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.seed42.cap512",
+        "current_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.cap512.seed42.private.json",
+        "candidate_1024_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/served/anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.cap1024.seed42.private.json",
+        "candidate_1024_fixture_sha256": "4026f405875e77b777ae6467381f0c518417100c96e19b37b45b20c6ae7a3a0f",
+        "exact_prompt_continuation_sampling_seed_match": true
+      },
+      {
+        "mode": "served",
+        "source_onset": "anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset",
+        "seed": 43,
+        "current_cap": 512,
+        "current_job": "anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.seed43.cap512",
+        "current_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.cap512.seed43.private.json",
+        "candidate_1024_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/served/anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.cap1024.seed43.private.json",
+        "candidate_1024_fixture_sha256": "8493369e18a42385ef48333e3114d4150865d03835301c8170016e608f4d5d6d",
+        "exact_prompt_continuation_sampling_seed_match": true
+      },
+      {
+        "mode": "served",
+        "source_onset": "anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset",
+        "seed": 44,
+        "current_cap": 512,
+        "current_job": "anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.seed44.cap512",
+        "current_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.cap512.seed44.private.json",
+        "candidate_1024_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/served/anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.cap1024.seed44.private.json",
+        "candidate_1024_fixture_sha256": "7d956c6677fcab57cbe18edae21dee0b464bfd5930a7180fa658717c7be6c760",
+        "exact_prompt_continuation_sampling_seed_match": true
+      },
+      {
+        "mode": "served",
+        "source_onset": "anomaly.sphinx-doc__sphinx-9461.call184.onset",
+        "seed": 42,
+        "current_cap": 512,
+        "current_job": "anomaly.sphinx-doc__sphinx-9461.call184.onset.seed42.cap512",
+        "current_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-9461.call184.onset.cap512.seed42.private.json",
+        "candidate_1024_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/served/anomaly.sphinx-doc__sphinx-9461.call184.onset.cap1024.seed42.private.json",
+        "candidate_1024_fixture_sha256": "5b391c6bbb9cee3c0f70c361cdac790583ceb0786eb3c61f167a2b7169f031d8",
+        "exact_prompt_continuation_sampling_seed_match": true
+      },
+      {
+        "mode": "served",
+        "source_onset": "anomaly.sphinx-doc__sphinx-9461.call184.onset",
+        "seed": 43,
+        "current_cap": 512,
+        "current_job": "anomaly.sphinx-doc__sphinx-9461.call184.onset.seed43.cap512",
+        "current_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-9461.call184.onset.cap512.seed43.private.json",
+        "candidate_1024_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/served/anomaly.sphinx-doc__sphinx-9461.call184.onset.cap1024.seed43.private.json",
+        "candidate_1024_fixture_sha256": "0f61675840c1bc8ac8f89d6ab5d9f931e752d2fd53aeb2a62400b02e2e24ff1f",
+        "exact_prompt_continuation_sampling_seed_match": true
+      },
+      {
+        "mode": "served",
+        "source_onset": "anomaly.sphinx-doc__sphinx-9461.call184.onset",
+        "seed": 44,
+        "current_cap": 512,
+        "current_job": "anomaly.sphinx-doc__sphinx-9461.call184.onset.seed44.cap512",
+        "current_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-9461.call184.onset.cap512.seed44.private.json",
+        "candidate_1024_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/served/anomaly.sphinx-doc__sphinx-9461.call184.onset.cap1024.seed44.private.json",
+        "candidate_1024_fixture_sha256": "552f3e08333444cf6b9ad9f2149e220af543669e05b0896f89f0afa0645dd6b8",
+        "exact_prompt_continuation_sampling_seed_match": true
+      },
+      {
+        "mode": "served",
+        "source_onset": "anomaly.xarray7233-call1.canonicalprefix",
+        "seed": 42,
+        "current_cap": 512,
+        "current_job": "anomaly.xarray7233-call1.canonicalprefix.seed42.cap512",
+        "current_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/fixtures/full/anomaly.xarray7233-call1.canonicalprefix.cap512.seed42.private.json",
+        "candidate_1024_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/served/anomaly.xarray7233-call1.canonicalprefix.cap1024.seed42.private.json",
+        "candidate_1024_fixture_sha256": "bc0442142f6d925d292476dbf651b0957dfe0e070ace703938102eddc8b7817a",
+        "exact_prompt_continuation_sampling_seed_match": true
+      },
+      {
+        "mode": "served",
+        "source_onset": "anomaly.xarray7233-call1.canonicalprefix",
+        "seed": 44,
+        "current_cap": 512,
+        "current_job": "anomaly.xarray7233-call1.canonicalprefix.seed44.cap512",
+        "current_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/fixtures/full/anomaly.xarray7233-call1.canonicalprefix.cap512.seed44.private.json",
+        "candidate_1024_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/served/anomaly.xarray7233-call1.canonicalprefix.cap1024.seed44.private.json",
+        "candidate_1024_fixture_sha256": "89295e18efe7e474a0d1ef95e63b30987ce0fb4efc21b46a071e2798d9e93cc2",
+        "exact_prompt_continuation_sampling_seed_match": true
+      }
+    ],
+    "current_served_pairs_all_map_to_existing_cap512_panel_rows": true,
+    "all_compared_exact_prompt_continuation_sampling_seed": true,
+    "full_first_review_is_normal_and_excluded": "The available full-coordinator-first1 row is normal, so it is not selected. Full33 reviews remain pending."
+  },
+  "incorporation_after_reviews": [
+    "Rerun setup/prepare_swe85_second_cap_extensions.py only after each new served/full coordinator snapshot is saved; it selects only reviewed inconclusive rows at the current 512 cap and stops if the second-cap destination is admitted.",
+    "Wait for both modes\u2019 cap reviews to finish. Build a versioned refreshed candidate manifest from the original 108 jobs; never append jobs.",
+    "Join extension rows to panel rows by (source_onset, seed), not row position or case path. Require exactly one fixed-panel row per key.",
+    "For each selected 1024 extension, replace that existing row\u2019s case, free_run_tokens=1024, and job/name suffix with cap1024; preserve source_onset, seed, branches=[], free_run_trials=1, sampling, prompt IDs, and chosen IDs. Rows without a reviewed 1024 extension retain their prior 256/512 fixture and cap.",
+    "Deduplicate served/full extension fixtures by source_onset+seed. When prompt IDs, chosen continuations, sampling, and metadata seed hash-identically, prefer the full fixture as proposal-c already does for equal-cap rows. If any of those differ, stop and obtain explicit semantic adjudication; never silently prefer one.",
+    "Assert final count remains 108, 36 distinct onsets, three rows per onset for seeds 42/43/44, one row per onset+seed, and cap counts sum to 108. Regenerate panel provenance, fixture hashes, cost estimate, and CPU-only --validate-only report in a new versioned candidate directory."
+  ],
+  "do_not": [
+    "Do not change the frozen proposal-c manifest or any admitted/frozen queue files.",
+    "Do not treat an inconclusive result at 512 as an observed anomaly or score change.",
+    "Do not incorporate the provisional sklearn judgment unless later coordinator adjudication explicitly makes it eligible."
+  ],
+  "source_refs": {
+    "current_served_coordinator_files": [
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/served-coordinator-final7.json",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/served-coordinator-first6.json",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/served-coordinator-next3.json",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/served-coordinator-nextscript3.json",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/served-coordinator-protocol95.json",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/served-coordinator-script3.json"
+    ],
+    "current_full_coordinator_files": [
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/full-coordinator-first1.json",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/full-coordinator-xarray3.json"
+    ],
+    "second_cap_served_manifest": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/served-candidate-cases.json",
+    "second_cap_full_manifest": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/full-candidate-cases.json",
+    "second_cap_provenance": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/provenance.json",
+    "second_cap_cost": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/cost-estimate.json",
+    "proposal_readme": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-c/README.md",
+    "proposal_provenance": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-c/candidate-input-provenance.json"
+  }
+}

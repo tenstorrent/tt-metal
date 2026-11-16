@@ -1,0 +1,116 @@
+{
+  "status": "host_only_historical_call_rescheduling_sensitivity_not_acceptance_forecast",
+  "created_utc": "2026-11-15T19:00:47.847034+00:00",
+  "source": {
+    "prior_sensitivity_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/candidate-serving-prep/p19-measured-call-rescheduling-b.json",
+    "prior_sensitivity_sha256": "ca72fb66ef333fd49596e9cfcce15c2425ff3847f8ab105d1f9889d0eafcd589",
+    "call_ledger_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-extended85-head-bfp8/collected-final/calls.json",
+    "call_ledger_sha256": "2d3016eb651e188bd88758782b5b3df6b4e16868e3039868717144a9fb956dda",
+    "task_count": 85,
+    "calls": 4427,
+    "original_agents": 12,
+    "original_rescheduling_validation": {
+      "agents": 12,
+      "multiplier": 1.0,
+      "wall_s": 12684.27,
+      "wall_hours": 3.5234
+    },
+    "observed_aggregate_call_wall_s": 114364.753,
+    "observed_outside_gaps_s": 4623.85,
+    "outside_trials_s": 3.4214460849761963
+  },
+  "multiplier_clarification": {
+    "defined_as": "multiplicative factor applied to each task\u2019s measured sum of server-call wall duration; task-level outside gaps remain unchanged.",
+    "prior_0_8_0_6_0_45": "These shorten measured service durations by 20%, 40%, and 55% respectively; they imply nominal service-throughput increases of 1.25x, 1.67x, and 2.22x under an inverse-duration interpretation. They were hypothetical faster scenarios, not P19-measured results.",
+    "new_scenarios": "1.0 preserves measured call duration; 1.5 and 2.0 model respectively 50% and 100% longer service durations (nominal inverse-duration factors 0.667x and 0.5x).",
+    "rate_caveat": "The P19 AR B1 acceptance rate 18.505836 tokens/s and selected-policy vLLM B1 rate 34.770637 tokens/s are different serving/measurement regimes. Neither their ratio nor either rate calibrates per-call times in this 4,427-call ledger. The ledger also lacks per-request prefill/decode decomposition and concurrency-specific B8 service rates."
+  },
+  "scenarios": [
+    {
+      "agents": 7,
+      "call_duration_multiplier": 1.0,
+      "duration_semantics": "observed duration baseline",
+      "projected_wall_s": 19833.776,
+      "projected_wall_hours": 5.5094
+    },
+    {
+      "agents": 7,
+      "call_duration_multiplier": 1.5,
+      "duration_semantics": "50% longer call duration; nominal inverse-duration throughput factor 0.667",
+      "projected_wall_s": 29374.935,
+      "projected_wall_hours": 8.1597
+    },
+    {
+      "agents": 7,
+      "call_duration_multiplier": 2.0,
+      "duration_semantics": "100% longer call duration; nominal inverse-duration throughput factor 0.5",
+      "projected_wall_s": 38867.074,
+      "projected_wall_hours": 10.7964
+    },
+    {
+      "agents": 8,
+      "call_duration_multiplier": 1.0,
+      "duration_semantics": "observed duration baseline",
+      "projected_wall_s": 17813.389,
+      "projected_wall_hours": 4.9482
+    },
+    {
+      "agents": 8,
+      "call_duration_multiplier": 1.5,
+      "duration_semantics": "50% longer call duration; nominal inverse-duration throughput factor 0.667",
+      "projected_wall_s": 26404.959,
+      "projected_wall_hours": 7.3347
+    },
+    {
+      "agents": 8,
+      "call_duration_multiplier": 2.0,
+      "duration_semantics": "100% longer call duration; nominal inverse-duration throughput factor 0.5",
+      "projected_wall_s": 35017.516,
+      "projected_wall_hours": 9.7271
+    }
+  ],
+  "deadline_feasibility_as_of": {
+    "now_utc": "2026-11-15T19:00:47.847034+00:00",
+    "deadline_utc": "2026-11-16T01:15:25+00:00",
+    "remaining_seconds": 22477.153,
+    "remaining_hours": 6.2437,
+    "reserved_work": {
+      "HF22_timeout_s": 5400,
+      "HF_Sklearn_timeout_s": 3600,
+      "closure_reserve_s": 1800,
+      "candidate_validation_min_s": 1500
+    },
+    "total_reserved_seconds": 12300,
+    "remaining_for_candidate_execution_seconds": 10177.153,
+    "remaining_for_candidate_execution_hours": 2.827,
+    "comparison": "All 7- and 8-agent scenarios exceed the remaining execution allowance before fixed HF/closure/validation reserves. Even the observed-duration 8-agent replay requires 4.95h vs about 2.84h available for the candidate. Scenarios are historical sensitivity only; this does not predict actual P19 B8 wall time or imply admission."
+  },
+  "limitations": [
+    "Same frozen task order and indivisible task-level queues as prior simulation; outside gaps are held at observed durations.",
+    "No modeling of changed output lengths, request mix, prefill/decode composition, batching, or context-dependent service rates.",
+    "Do not use AR/vLLM rate ratios to scale the historical call ledger.",
+    "Any actual candidate run requires a fresh forecast from its matched B8 measured per-call rows and a fresh deadline/owner check."
+  ],
+  "rate_evidence": {
+    "p19_ar_acceptance": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/p19-acceptance-preparation/run/performance_b1.json",
+      "sha256": "5d46877af53b03399b39c829c75220e212d5973d52b55bbb4b7a080ea6cc7ed8",
+      "decode_tps": 18.505836278014602,
+      "scope": "B1 full-model autoregressive acceptance measurement; not vLLM serving rate"
+    },
+    "selected_policy_vllm": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/headline-head-bfp8-b1/summary.json",
+      "sha256": "fb84588d4c80d445768032709dd9cb22ac56a37e25264a9eceab6405ba944939",
+      "decode_tps_user": 34.77063666910312,
+      "scope": "4096 input, 128 output, B1/C1 vLLM serving headline; not the P19 B8 SWE workload"
+    },
+    "p19_candidate_readiness_snapshot": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/candidate-serving-prep/p19-b8-b1-prelaunch-forecast-admission-b.json",
+      "sha256": "64449493709574d854c483a2959503d7a9d5306afc60f1e5c7488c78b96a64d0",
+      "status": "host_only_forecast_and_admission_calculation_not_admitted_not_run",
+      "serving_authorized": false,
+      "blocker": "Root reports the P19 prefill-resume gate failed 10/14 cases; no selection, serving launch, B8 memory probe, or P19 rate measurement is authorized until diagnosis and acceptance/resume disposition.",
+      "note": "This is the referenced forecast/admission snapshot; no SWE admission or P19 B8 rate measurement is asserted by this scenario file."
+    }
+  }
+}

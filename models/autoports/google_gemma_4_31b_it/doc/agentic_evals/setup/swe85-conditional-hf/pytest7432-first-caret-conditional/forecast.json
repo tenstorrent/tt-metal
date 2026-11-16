@@ -1,0 +1,33 @@
+{
+  "status": "planning_forecast_not_measured",
+  "basis": {
+    "proxy_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/results/seed42-suffix512/anomaly.requests2931.call20.canonicalprefix.optional-suffix512.hf.private.json",
+    "proxy_sha256": "a91e0aff64f340594679d595122c256f280e66e650a512ce34a85d52ed432156",
+    "seed": 42,
+    "prompt_tokens": 512,
+    "generated_tokens": 512,
+    "free_run_wall_s": 1032.3833539891057,
+    "one_case_total_wall_s": 1051.8399178220425,
+    "non_free_overhead_s": 19.45656383293681,
+    "interpretation": "Same pinned-HF offline runner, one 512-token seed44 trial. Proxy is the first H9 case, so total includes CPU model load/prefill/teacher-forced work before its free generation."
+  },
+  "formula": {
+    "point_seconds": 1051.84,
+    "free_work_multiplier_range": [
+      0.8,
+      1.2
+    ],
+    "overhead_range_seconds": [
+      16.0,
+      30.0
+    ],
+    "low_seconds": 841.907,
+    "high_seconds": 1268.86
+  },
+  "timeout_seconds": 2400,
+  "limitations": [
+    "Planning range only; the post-first-token prompt is one token longer and can stop at a different point.",
+    "If the HF sample naturally stops before512, record the natural token count; this is not a cap-completion or equal-incidence test.",
+    "This one conditioned seed is causal follow-up evidence only, not an incidence estimate, stage score, or replacement for the existing HF result."
+  ]
+}

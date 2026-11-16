@@ -1,0 +1,78 @@
+{
+  "status": "host_wall_forecast_only_not_admitted",
+  "formula": "Per serial process: median of 8 historical incremental 512-prompt/512-generation HF case walls × cases +180 s process/model-load margin. Per-case range 800–1600 s plus one 180 s margin per process. The 1024-prompt added case has no matched HF timing baseline; same broad range is applied as a conservative provisional envelope because decode dominates observed 512 cases, and this remains an assumption, not a benchmark.",
+  "basis_source": "../cost-basis.json",
+  "basis_sha256": "dc16b01ffe4dc12f0148cad0cb6b7fade4f1fce2a00688f964413f4ab3e685c5",
+  "median_incremental_case_s": 1040.1832335699582,
+  "range_per_case_s": [
+    800,
+    1600
+  ],
+  "groups": [
+    {
+      "seed_group": 42,
+      "suffix_source": "exact_saved_suffix512",
+      "case_count": 2,
+      "model_load_margin_s": 180,
+      "point_seconds": 2260.3664671399165,
+      "range_seconds": [
+        1780,
+        3380
+      ],
+      "timeout_seconds": 3600,
+      "cases": [
+        "anomaly.requests2931.call20.canonicalprefix.optional-suffix512",
+        "anomaly.sympy__sympy-14248.call53.onset.optional-suffix512"
+      ]
+    },
+    {
+      "seed_group": 44,
+      "suffix_source": "exact_saved_suffix512",
+      "case_count": 1,
+      "model_load_margin_s": 180,
+      "point_seconds": 1220.1832335699582,
+      "range_seconds": [
+        980,
+        1780
+      ],
+      "timeout_seconds": 3600,
+      "cases": [
+        "anomaly.pytest-dev__pytest-7432.call19.onset.optional-suffix512"
+      ]
+    },
+    {
+      "seed_group": 44,
+      "suffix_source": "exact_saved_suffix1024",
+      "case_count": 1,
+      "model_load_margin_s": 180,
+      "point_seconds": 1220.1832335699582,
+      "range_seconds": [
+        980,
+        1780
+      ],
+      "timeout_seconds": 3600,
+      "cases": [
+        "anomaly.psf__requests-5414.call9.onset"
+      ]
+    }
+  ],
+  "total_point_seconds": 4700.732934279833,
+  "total_point_minutes": 78.34554890466389,
+  "total_range_seconds": [
+    3740,
+    6940
+  ],
+  "total_range_minutes": [
+    62.333333333333336,
+    115.66666666666667
+  ],
+  "process_count": 3,
+  "total_reload_margins_s": 540,
+  "serial": true,
+  "timeout_check": "Group upper bounds fit each 3600 s timeout (3380,1780,1780 s).",
+  "limitations": [
+    "Prompt contents and doubled prefill length may shift actual HF wall time; 1024-prompt case has no matched baseline.",
+    "Forecast is diagnostic host wall only, not model performance.",
+    "No HF process launched."
+  ]
+}

@@ -1,0 +1,81 @@
+--- a/benchmark_work.py
++++ b/benchmark_work.py
+@@ -50,29 +50,54 @@
+     }
+ 
+ 
++def _precision_bytes(label):
++    # Compute fidelity labels affect arithmetic, not the stored weight width.
++    return {
++        "bfp4": BFP4_BYTES,
++        "bfp4_hifi2": BFP4_BYTES,
++        "bfp8": BFP8_BYTES,
++        "bfp8_lofi": BFP8_BYTES,
++        "bf16": 2,
++    }[label]
++
++
++def projection_group_elements(d, kv, shared, *, physical=False):
++    """Useful physical elements for decoder attention, gate/up, and down weights."""
++    hidden_out = 5632 if physical else H
++    intermediate = 22528 if physical else I
++    attention = H * (32 * d + kv * d * (1 if shared else 2)) + hidden_out * 32 * d
++    mlp = 2 * H * intermediate
++    down = hidden_out * intermediate
++    return {"attention": attention, "mlp": mlp, "down": down}
++
++
+ def decode_work(positions, batch_size, precision=None):
+     positions = [int(p) for p in positions if int(p) >= 0]
+     # Weights are TP-sharded: sum full-model elements once, not four copies.
+-    head_bytes = BFP4_BYTES
++    groups = {"attention": "bfp4", "mlp": "bfp4", "down": "bfp4", "lm_head": "bfp4"}
+     if precision is not None:
+-        groups = precision["weight_groups"]
++        supplied = precision["weight_groups"]
+         if (
+-            any(groups[k] != "bfp4" for k in ("attention", "mlp", "down"))
++            set(supplied) != set(groups)
+             or precision["layer_exceptions"]
+             or precision["kv_cache_dtype"] != "bfloat8_b"
+         ):
+-            raise ValueError("Work model supports unchanged BFP4 decoder/BFP8 KV with head-only precision changes")
+-        head_bytes = {
+-            "bfp4": BFP4_BYTES,
+-            "bfp4_hifi2": BFP4_BYTES,
+-            "bfp8": BFP8_BYTES,
+-            "bfp8_lofi": BFP8_BYTES,
+-            "bf16": 2,
+-        }[groups["lm_head"]]
+-    weights = (
+-        BFP4_BYTES * sum(n * projection_elements(d, kv, shared, physical=True) for n, d, kv, _, shared in LAYERS)
+-        + head_bytes * H * V
+-    )
++            raise ValueError("Work model requires four supported weight groups, no layer exceptions, and BFP8 KV")
++        groups.update(supplied)
++    # Validate labels even when the input has no decoder positions.
++    weight_bytes = {name: _precision_bytes(label) for name, label in groups.items()}
++    if all(groups[name] == "bfp4" for name in ("attention", "mlp", "down")):
++        # Preserve the established BFP4 decoder arithmetic exactly for old rows.
++        decoder_weights = BFP4_BYTES * sum(
++            n * projection_elements(d, kv, shared, physical=True) for n, d, kv, _, shared in LAYERS
++        )
++    else:
++        decoder_weights = sum(
++            weight_bytes[group] * n * projection_group_elements(d, kv, shared, physical=True)[group]
++            for n, d, kv, _, shared in LAYERS
++            for group in ("attention", "mlp", "down")
++        )
++    weights = decoder_weights + weight_bytes["lm_head"] * H * V
+     kv_read = sum(
+         n * 2 * kv * d * BFP8_BYTES * sum(min(p + 1, window) if window else p + 1 for p in positions)
+         for n, d, kv, window, _ in LAYERS
+@@ -102,7 +127,7 @@
+ ASSUMPTIONS = {
+     "architecture": "60 dense layers: 50 sliding_attention (32 Q,16 KV,dim256,window1024), 10 full_attention (32 Q,4 KV,dim512,K=V shared projection); hidden5376, intermediate21504, vocab262144; TP4",
+     "prefill": "Useful dense projection and causal/sliding QK+AV multiply-adds only; one LM head row per nonempty adapter prefill row. Padding, softmax, norm, GELU and rotary arithmetic omitted from useful-FLOP numerator; all remain in wall-time denominator.",
+-    "weights": "Decoder BFP4_B 576bytes/1024elements; head uses observed precision (BFP4=576, BFP8=1088 bytes/1024elements, BF16=2bytes/element). Physical MLP intermediate22528 and output5632 padding from multichip_decoder.py; full TP-sharded weights read once per decode replay, not once per user. Observed compute fidelities retained in observer identity.",
++    "weights": "Decode weight bytes use the observed attention, MLP gate/up, down, and lm_head weight_groups independently: BFP4/BFP4_HiFi2=576bytes/1024elements, BFP8/BFP8_LoFi=1088bytes/1024elements, BF16=2bytes/element; fidelity suffixes do not change storage width. Group element counts use physical MLP intermediate22528 and output5632 padding from multichip_decoder.py; full TP-sharded weights are summed once per decode replay, not once per user. Layer exceptions are unsupported. This is modeled DRAM traffic, not a hardware counter.",
+     "kv": "BFP8_B 1088bytes/1024elements; estimated one K and V read per attended token and write per active row; global K=V projection shared but attention consumes both K and V. Cache reuse, SDPA tile rounding and repeated reads are not measured.",
+     "other_dram": "Includes replicated BF16 norm weights, approximate residual/collective staging, embedding and logits; one physical32-row tile for all supported decode batches. L1 reuse and exact temporary/CCL traffic unknown. This is modeled DRAM traffic, not a hardware counter; no claim of exact utilization.",
+     "sources": [

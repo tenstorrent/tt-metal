@@ -1,0 +1,9 @@
+{
+  "status": "root_static_review_passed",
+  "reviewed_unix": 1794729255.2169232,
+  "driver_sha256": "ae085eb32cb96a9e5b6f96ea4f41c284968a6999a7f59af46e97208e00d706d9",
+  "proposal_sha256": "ca8549349562de66a14b187b647b374d32554f45da44733e4a1f2bb6d8b96414",
+  "source_integrity_sha256": "cf5efba0647800b7b401e2d3f1be87e352b7b479b06e96ccac38bcd3eec6f789",
+  "execution": "Not admitted; queued after primary9caseHF. No runtime preflight/inference run.",
+  "validation_error_handling": "Corrected: child code retained separately, nonzero CLI on child failure or validation error; read complete_validation and main. Hostmocks0/2/7 recorded."
+}

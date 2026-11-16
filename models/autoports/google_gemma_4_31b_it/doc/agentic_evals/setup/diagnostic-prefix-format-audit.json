@@ -1,0 +1,1748 @@
+{
+  "status": "cpu_static_audit_complete_no_inference",
+  "revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+  "scope": "Previous GPQA extended and phase2 Astropy diagnostic input artifacts and completed TT report conditioning; excludes phase1 precision selection.",
+  "finding": "No incorrect assistant <|think|> serialization found in audited GPQA extended or Astropy controls. Existing full prefixes use canonical thought markers; executed short suffix controls often intentionally contain no chat/channel boundary. No completed results need withdrawal for the SWE85 prefix-construction defect.",
+  "template_contract": {
+    "source": "Pinned locally cached tokenizer.chat_template",
+    "assistant_reasoning_lines": "238-242: <|channel>thought\\n + reasoning + \\n<channel|>",
+    "generation_prefix_lines": "381-388: tool-response may already open thought channel",
+    "marker_token_ids": {
+      "<|think|>": 98,
+      "<|channel>": 100,
+      "<channel|>": 101
+    }
+  },
+  "counts": {
+    "case_artifacts": 45,
+    "gpqa_case_artifacts": 37,
+    "astropy_case_artifacts": 8,
+    "completed_tt_reports_checked": 30,
+    "incorrect_assistant_think_cases": 0
+  },
+  "completed_claim_limits": [
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/tt-controls-summary.json",
+      "fields": [
+        "scope",
+        "cases.*.served.coordinator_decision",
+        "cases.*.full.coordinator_decision",
+        "cases.*.chosen64_tf_comparison",
+        "cases.*.tf_limit"
+      ],
+      "required_interpretation": "Already scoped: nine suffix512 diagnostic cases, selected64 TF positions and three short continuations. Positive diagnostic repetition and served/full agreement do not establish native-prompt equivalence, incidence, or exclude earlier precision drift. Preserve these qualifications; no prefix-format correction required."
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe-astropy-precision/tt-controls-summary.json",
+      "fields": [
+        "qualitative_interpretation",
+        "short_prefix_tt_semantics",
+        "hf_reference_status.long_prefix",
+        "hf_reference_status.short_prefix_batch.limits"
+      ],
+      "required_interpretation": "Preserve distinction between short reconstructed-input HF/TT model behavior and native request behavior. Long HF run completed TF only, no free sample. Empty thought channel in first Astropy reconstruction is an assumption from omitted reasoning text and count2; original one-token request mismatch remains unresolved. No new wrong-think correction required."
+    }
+  ],
+  "recommended_corrective_controls": {
+    "mandatory_for_wrong_think_issue": [],
+    "if_native_equivalence_claim_is_needed": "Recover exact request and render pinned full assistant, check conditioning is canonical prefix, retain missing native-token caveat, and use matched served/full/HF full-context diagnostic. This audit does not authorize or run any new inference."
+  },
+  "case_audit": [
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task110.decisive.private.json",
+      "field": "prompt_token_ids",
+      "sha256": "8aaaefd8cb4990b21ee4f9f304675c6a64fbf4543f12eb329a9e1a7e4719a4d9",
+      "tokens": 10731,
+      "special_marker_positions": [
+        {
+          "marker": "<|think|>",
+          "count": 1,
+          "last_positions": [
+            4
+          ]
+        },
+        {
+          "marker": "<|channel>",
+          "count": 1,
+          "last_positions": [
+            307
+          ]
+        },
+        {
+          "marker": "<channel|>",
+          "count": 1,
+          "last_positions": [
+            9996
+          ]
+        },
+        {
+          "marker": "<|turn>",
+          "count": 3,
+          "last_positions": [
+            1,
+            8,
+            304
+          ]
+        },
+        {
+          "marker": "<turn|>",
+          "count": 2,
+          "last_positions": [
+            6,
+            302
+          ]
+        }
+      ],
+      "assistant_think_after_last_model_turn": false,
+      "has_model_turn": true,
+      "has_canonical_thought_open": true,
+      "has_canonical_thought_close": true
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task110.full_reply.private.json",
+      "field": "prompt_token_ids",
+      "sha256": "0686ab0874a0fccab5111a66f62950f67bc8f447fea8c50ae4aeb99c966335e9",
+      "tokens": 307,
+      "special_marker_positions": [
+        {
+          "marker": "<|think|>",
+          "count": 1,
+          "last_positions": [
+            4
+          ]
+        },
+        {
+          "marker": "<|turn>",
+          "count": 3,
+          "last_positions": [
+            1,
+            8,
+            304
+          ]
+        },
+        {
+          "marker": "<turn|>",
+          "count": 2,
+          "last_positions": [
+            6,
+            302
+          ]
+        }
+      ],
+      "assistant_think_after_last_model_turn": false,
+      "has_model_turn": true,
+      "has_canonical_thought_open": false,
+      "has_canonical_thought_close": false
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task110.onset.full.private.json",
+      "field": "prompt_token_ids",
+      "sha256": "66d2d1b619c6de1a3b5fa1af014126cc59ff93be18d7a7f22d9933e13d5e001c",
+      "tokens": 2342,
+      "special_marker_positions": [
+        {
+          "marker": "<|think|>",
+          "count": 1,
+          "last_positions": [
+            4
+          ]
+        },
+        {
+          "marker": "<|channel>",
+          "count": 1,
+          "last_positions": [
+            307
+          ]
+        },
+        {
+          "marker": "<|turn>",
+          "count": 3,
+          "last_positions": [
+            1,
+            8,
+            304
+          ]
+        },
+        {
+          "marker": "<turn|>",
+          "count": 2,
+          "last_positions": [
+            6,
+            302
+          ]
+        }
+      ],
+      "assistant_think_after_last_model_turn": false,
+      "has_model_turn": true,
+      "has_canonical_thought_open": true,
+      "has_canonical_thought_close": false
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task110.onset.suffix2048.private.json",
+      "field": "prompt_token_ids",
+      "sha256": "384a1ad457aac156e5ff2c43bf16627f08300f89894ec356eeddf5d9a16a1578",
+      "tokens": 2048,
+      "special_marker_positions": [
+        {
+          "marker": "<|channel>",
+          "count": 1,
+          "last_positions": [
+            13
+          ]
+        },
+        {
+          "marker": "<|turn>",
+          "count": 1,
+          "last_positions": [
+            10
+          ]
+        },
+        {
+          "marker": "<turn|>",
+          "count": 1,
+          "last_positions": [
+            8
+          ]
+        }
+      ],
+      "assistant_think_after_last_model_turn": false,
+      "has_model_turn": true,
+      "has_canonical_thought_open": true,
+      "has_canonical_thought_close": false
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task110.onset.suffix512.private.json",
+      "field": "prompt_token_ids",
+      "sha256": "9e59564d4fdf7b80a2c22d990b68ba581c9a5903cacd12aad265665f018b8115",
+      "tokens": 512,
+      "special_marker_positions": [],
+      "assistant_think_after_last_model_turn": false,
+      "has_model_turn": false,
+      "has_canonical_thought_open": false,
+      "has_canonical_thought_close": false
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task127.full_reply.private.json",
+      "field": "prompt_token_ids",
+      "sha256": "b85fd8b7f872f0a113ea52fec561224e53406d82c0755c1855897bb79e80de2b",
+      "tokens": 2428,
+      "special_marker_positions": [
+        {
+          "marker": "<|think|>",
+          "count": 1,
+          "last_positions": [
+            4
+          ]
+        },
+        {
+          "marker": "<|turn>",
+          "count": 3,
+          "last_positions": [
+            1,
+            8,
+            2425
+          ]
+        },
+        {
+          "marker": "<turn|>",
+          "count": 2,
+          "last_positions": [
+            6,
+            2423
+          ]
+        }
+      ],
+      "assistant_think_after_last_model_turn": false,
+      "has_model_turn": true,
+      "has_canonical_thought_open": false,
+      "has_canonical_thought_close": false
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task127.onset.full.private.json",
+      "field": "prompt_token_ids",
+      "sha256": "c3db87187e6136f3c2baf9f85efabd7a10f2c00f9e40706e8e3a6c945b2682e0",
+      "tokens": 7456,
+      "special_marker_positions": [
+        {
+          "marker": "<|think|>",
+          "count": 1,
+          "last_positions": [
+            4
+          ]
+        },
+        {
+          "marker": "<|channel>",
+          "count": 1,
+          "last_positions": [
+            2428
+          ]
+        },
+        {
+          "marker": "<|turn>",
+          "count": 3,
+          "last_positions": [
+            1,
+            8,
+            2425
+          ]
+        },
+        {
+          "marker": "<turn|>",
+          "count": 2,
+          "last_positions": [
+            6,
+            2423
+          ]
+        }
+      ],
+      "assistant_think_after_last_model_turn": false,
+      "has_model_turn": true,
+      "has_canonical_thought_open": true,
+      "has_canonical_thought_close": false
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task127.onset.suffix2048.private.json",
+      "field": "prompt_token_ids",
+      "sha256": "dcd0d62c1ba3be9fa438309e3c3a1cbf61347d2308526e12d9f45b9314304e7c",
+      "tokens": 2048,
+      "special_marker_positions": [],
+      "assistant_think_after_last_model_turn": false,
+      "has_model_turn": false,
+      "has_canonical_thought_open": false,
+      "has_canonical_thought_close": false
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task127.onset.suffix512.private.json",
+      "field": "prompt_token_ids",
+      "sha256": "9358f7b4cd8f88b6be716f05b439bab7f6ff97ccc6cfcaf7bf9e4558caaea5e7",
+      "tokens": 512,
+      "special_marker_positions": [],
+      "assistant_think_after_last_model_turn": false,
+      "has_model_turn": false,
+      "has_canonical_thought_open": false,
+      "has_canonical_thought_close": false
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task129.full_reply.private.json",
+      "field": "prompt_token_ids",
+      "sha256": "0c18b09b134925f5eb2193fe36575db3ff8c31896a0e813b6863f994a0f5b9b5",
+      "tokens": 138,
+      "special_marker_positions": [
+        {
+          "marker": "<|think|>",
+          "count": 1,
+          "last_positions": [
+            4
+          ]
+        },
+        {
+          "marker": "<|turn>",
+          "count": 3,
+          "last_positions": [
+            1,
+            8,
+            135
+          ]
+        },
+        {
+          "marker": "<turn|>",
+          "count": 2,
+          "last_positions": [
+            6,
+            133
+          ]
+        }
+      ],
+      "assistant_think_after_last_model_turn": false,
+      "has_model_turn": true,
+      "has_canonical_thought_open": false,
+      "has_canonical_thought_close": false
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task129.onset.full.private.json",
+      "field": "prompt_token_ids",
+      "sha256": "d38c9be0d37db4fc0f335792434abee109ee334c7bdcd00b5b9a58d50f850c79",
+      "tokens": 1372,
+      "special_marker_positions": [
+        {
+          "marker": "<|think|>",
+          "count": 1,
+          "last_positions": [
+            4
+          ]
+        },
+        {
+          "marker": "<|channel>",
+          "count": 1,
+          "last_positions": [
+            138
+          ]
+        },
+        {
+          "marker": "<|turn>",
+          "count": 3,
+          "last_positions": [
+            1,
+            8,
+            135
+          ]
+        },
+        {
+          "marker": "<turn|>",
+          "count": 2,
+          "last_positions": [
+            6,
+            133
+          ]
+        }
+      ],
+      "assistant_think_after_last_model_turn": false,
+      "has_model_turn": true,
+      "has_canonical_thought_open": true,
+      "has_canonical_thought_close": false
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task129.onset.suffix2048.private.json",
+      "field": "prompt_token_ids",
+      "sha256": "7638d0bbf5b2947bc1cbe60b7076fb44bf9a3405afdaeee81a2a9cdcb8aff46e",
+      "tokens": 1372,
+      "special_marker_positions": [
+        {
+          "marker": "<|think|>",
+          "count": 1,
+          "last_positions": [
+            4
+          ]
+        },
+        {
+          "marker": "<|channel>",
+          "count": 1,
+          "last_positions": [
+            138
+          ]
+        },
+        {
+          "marker": "<|turn>",
+          "count": 3,
+          "last_positions": [
+            1,
+            8,
+            135
+          ]
+        },
+        {
+          "marker": "<turn|>",
+          "count": 2,
+          "last_positions": [
+            6,
+            133
+          ]
+        }
+      ],
+      "assistant_think_after_last_model_turn": false,
+      "has_model_turn": true,
+      "has_canonical_thought_open": true,
+      "has_canonical_thought_close": false
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task129.onset.suffix512.private.json",
+      "field": "prompt_token_ids",
+      "sha256": "ed546140385f31914b69d2e1b437166e439181164db29ae9c6cf40c77c18a49f",
+      "tokens": 512,
+      "special_marker_positions": [],
+      "assistant_think_after_last_model_turn": false,
+      "has_model_turn": false,
+      "has_canonical_thought_open": false,
+      "has_canonical_thought_close": false
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task130.full_reply.private.json",
+      "field": "prompt_token_ids",
+      "sha256": "29a9d0a9026b983e3005bc77ab771a01c3f2df96beabd0f8dc88eb0771c937a0",
+      "tokens": 347,
+      "special_marker_positions": [
+        {
+          "marker": "<|think|>",
+          "count": 1,
+          "last_positions": [
+            4
+          ]
+        },
+        {
+          "marker": "<|turn>",
+          "count": 3,
+          "last_positions": [
+            1,
+            8,
+            344
+          ]
+        },
+        {
+          "marker": "<turn|>",
+          "count": 2,
+          "last_positions": [
+            6,
+            342
+          ]
+        }
+      ],
+      "assistant_think_after_last_model_turn": false,
+      "has_model_turn": true,
+      "has_canonical_thought_open": false,
+      "has_canonical_thought_close": false
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task130.onset.full.private.json",
+      "field": "prompt_token_ids",
+      "sha256": "daf140ade4fb6b2f94903a839efc246064bcb90744c6139bcff47e1236024849",
+      "tokens": 4809,
+      "special_marker_positions": [
+        {
+          "marker": "<|think|>",
+          "count": 1,
+          "last_positions": [
+            4
+          ]
+        },
+        {
+          "marker": "<|channel>",
+          "count": 1,
+          "last_positions": [
+            347
+          ]
+        },
+        {
+          "marker": "<|turn>",
+          "count": 3,
+          "last_positions": [
+            1,
+            8,
+            344
+          ]
+        },
+        {
+          "marker": "<turn|>",
+          "count": 2,
+          "last_positions": [
+            6,
+            342
+          ]
+        }
+      ],
+      "assistant_think_after_last_model_turn": false,
+      "has_model_turn": true,
+      "has_canonical_thought_open": true,
+      "has_canonical_thought_close": false
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task130.onset.suffix2048.private.json",
+      "field": "prompt_token_ids",
+      "sha256": "347f00defa069737e3425757ce691e1381514126bbfc5226a44c51343e8b278a",
+      "tokens": 2048,
+      "special_marker_positions": [],
+      "assistant_think_after_last_model_turn": false,
+      "has_model_turn": false,
+      "has_canonical_thought_open": false,
+      "has_canonical_thought_close": false
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task130.onset.suffix512.private.json",
+      "field": "prompt_token_ids",
+      "sha256": "e5392ef8dacd423969e18ddee5c47fc98a3f57babd47f39873b91cc448f227f1",
+      "tokens": 512,
+      "special_marker_positions": [],
+      "assistant_think_after_last_model_turn": false,
+      "has_model_turn": false,
+      "has_canonical_thought_open": false,
+      "has_canonical_thought_close": false
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task139.full_reply.private.json",
+      "field": "prompt_token_ids",
+      "sha256": "9af571af3e5885ceca10467c0c76cf3418899d91eeea638bc75a3f0481f05ffe",
+      "tokens": 237,
+      "special_marker_positions": [
+        {
+          "marker": "<|think|>",
+          "count": 1,
+          "last_positions": [
+            4
+          ]
+        },
+        {
+          "marker": "<|turn>",
+          "count": 3,
+          "last_positions": [
+            1,
+            8,
+            234
+          ]
+        },
+        {
+          "marker": "<turn|>",
+          "count": 2,
+          "last_positions": [
+            6,
+            232
+          ]
+        }
+      ],
+      "assistant_think_after_last_model_turn": false,
+      "has_model_turn": true,
+      "has_canonical_thought_open": false,
+      "has_canonical_thought_close": false
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task139.onset.full.private.json",
+      "field": "prompt_token_ids",
+      "sha256": "df579754998a3794e7e6611b31d23fa822ced50505c0c21547afe2621d336137",
+      "tokens": 5185,
+      "special_marker_positions": [
+        {
+          "marker": "<|think|>",
+          "count": 1,
+          "last_positions": [
+            4
+          ]
+        },
+        {
+          "marker": "<|channel>",
+          "count": 1,
+          "last_positions": [
+            237
+          ]
+        },
+        {
+          "marker": "<|turn>",
+          "count": 3,
+          "last_positions": [
+            1,
+            8,
+            234
+          ]
+        },
+        {
+          "marker": "<turn|>",
+          "count": 2,
+          "last_positions": [
+            6,
+            232
+          ]
+        }
+      ],
+      "assistant_think_after_last_model_turn": false,
+      "has_model_turn": true,
+      "has_canonical_thought_open": true,
+      "has_canonical_thought_close": false
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task139.onset.suffix2048.private.json",
+      "field": "prompt_token_ids",
+      "sha256": "09c251689c403c509afc98723954b0e7c376dbd2503f8299b60c0d6e824dbb60",
+      "tokens": 2048,
+      "special_marker_positions": [],
+      "assistant_think_after_last_model_turn": false,
+      "has_model_turn": false,
+      "has_canonical_thought_open": false,
+      "has_canonical_thought_close": false
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task139.onset.suffix512.private.json",
+      "field": "prompt_token_ids",
+      "sha256": "1d32b1a1562236692f7ab7a5a0b51b6622acf4a29fde529e1ba501e4fa0afcf3",
+      "tokens": 512,
+      "special_marker_positions": [],
+      "assistant_think_after_last_model_turn": false,
+      "has_model_turn": false,
+      "has_canonical_thought_open": false,
+      "has_canonical_thought_close": false
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task145.full_reply.private.json",
+      "field": "prompt_token_ids",
+      "sha256": "3cd9c24ce0aa59803c98f6c651f20a7c37dc46aa9f3e247c35157648ac99fb16",
+      "tokens": 299,
+      "special_marker_positions": [
+        {
+          "marker": "<|think|>",
+          "count": 1,
+          "last_positions": [
+            4
+          ]
+        },
+        {
+          "marker": "<|turn>",
+          "count": 3,
+          "last_positions": [
+            1,
+            8,
+            296
+          ]
+        },
+        {
+          "marker": "<turn|>",
+          "count": 2,
+          "last_positions": [
+            6,
+            294
+          ]
+        }
+      ],
+      "assistant_think_after_last_model_turn": false,
+      "has_model_turn": true,
+      "has_canonical_thought_open": false,
+      "has_canonical_thought_close": false
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task145.onset.full.private.json",
+      "field": "prompt_token_ids",
+      "sha256": "3cf29798e815be58edcca2ce8fe1fb4b58f952234a52379281a584438f8b5f00",
+      "tokens": 5864,
+      "special_marker_positions": [
+        {
+          "marker": "<|think|>",
+          "count": 1,
+          "last_positions": [
+            4
+          ]
+        },
+        {
+          "marker": "<|channel>",
+          "count": 1,
+          "last_positions": [
+            299
+          ]
+        },
+        {
+          "marker": "<|turn>",
+          "count": 3,
+          "last_positions": [
+            1,
+            8,
+            296
+          ]
+        },
+        {
+          "marker": "<turn|>",
+          "count": 2,
+          "last_positions": [
+            6,
+            294
+          ]
+        }
+      ],
+      "assistant_think_after_last_model_turn": false,
+      "has_model_turn": true,
+      "has_canonical_thought_open": true,
+      "has_canonical_thought_close": false
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task145.onset.suffix2048.private.json",
+      "field": "prompt_token_ids",
+      "sha256": "c0c8e35b73453278b8f5bbdd5d2160056a8f5cf388069de4f4454193e606d5d0",
+      "tokens": 2048,
+      "special_marker_positions": [],
+      "assistant_think_after_last_model_turn": false,
+      "has_model_turn": false,
+      "has_canonical_thought_open": false,
+      "has_canonical_thought_close": false
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task145.onset.suffix512.private.json",
+      "field": "prompt_token_ids",
+      "sha256": "49509cb3060d9c35706ca2dac139af8efab8de2cb64428ee39206fd6fbdb91c3",
+      "tokens": 512,
+      "special_marker_positions": [],
+      "assistant_think_after_last_model_turn": false,
+      "has_model_turn": false,
+      "has_canonical_thought_open": false,
+      "has_canonical_thought_close": false
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task147.full_reply.private.json",
+      "field": "prompt_token_ids",
+      "sha256": "75e747fb9a13556065f50af184d43759a6f35ed2d4125833f327190551c41350",
+      "tokens": 232,
+      "special_marker_positions": [
+        {
+          "marker": "<|think|>",
+          "count": 1,
+          "last_positions": [
+            4
+          ]
+        },
+        {
+          "marker": "<|turn>",
+          "count": 3,
+          "last_positions": [
+            1,
+            8,
+            229
+          ]
+        },
+        {
+          "marker": "<turn|>",
+          "count": 2,
+          "last_positions": [
+            6,
+            227
+          ]
+        }
+      ],
+      "assistant_think_after_last_model_turn": false,
+      "has_model_turn": true,
+      "has_canonical_thought_open": false,
+      "has_canonical_thought_close": false
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task147.onset.full.private.json",
+      "field": "prompt_token_ids",
+      "sha256": "14848345a63f43c307eb7987e8c2da2662e3e45a2c3b66e232abb87aa9b8c37c",
+      "tokens": 18841,
+      "special_marker_positions": [
+        {
+          "marker": "<|think|>",
+          "count": 1,
+          "last_positions": [
+            4
+          ]
+        },
+        {
+          "marker": "<|channel>",
+          "count": 1,
+          "last_positions": [
+            232
+          ]
+        },
+        {
+          "marker": "<|turn>",
+          "count": 3,
+          "last_positions": [
+            1,
+            8,
+            229
+          ]
+        },
+        {
+          "marker": "<turn|>",
+          "count": 2,
+          "last_positions": [
+            6,
+            227
+          ]
+        }
+      ],
+      "assistant_think_after_last_model_turn": false,
+      "has_model_turn": true,
+      "has_canonical_thought_open": true,
+      "has_canonical_thought_close": false
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task147.onset.suffix2048.private.json",
+      "field": "prompt_token_ids",
+      "sha256": "738fd2fcacfd426e46d6d7b473a49dd27c3444b9c0061e2aa130f9d33e6ef71f",
+      "tokens": 2048,
+      "special_marker_positions": [],
+      "assistant_think_after_last_model_turn": false,
+      "has_model_turn": false,
+      "has_canonical_thought_open": false,
+      "has_canonical_thought_close": false
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task147.onset.suffix512.private.json",
+      "field": "prompt_token_ids",
+      "sha256": "1da2fb6f7c5c59a1ad448044b4bac32b13122d919ea209d5e4753a4d5f7d4635",
+      "tokens": 512,
+      "special_marker_positions": [],
+      "assistant_think_after_last_model_turn": false,
+      "has_model_turn": false,
+      "has_canonical_thought_open": false,
+      "has_canonical_thought_close": false
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task30.full_reply.private.json",
+      "field": "prompt_token_ids",
+      "sha256": "b0729d064abb5508f350d6eb46de47036fa1615744802a3d78eaeeb3e481bb39",
+      "tokens": 143,
+      "special_marker_positions": [
+        {
+          "marker": "<|think|>",
+          "count": 1,
+          "last_positions": [
+            4
+          ]
+        },
+        {
+          "marker": "<|turn>",
+          "count": 3,
+          "last_positions": [
+            1,
+            8,
+            140
+          ]
+        },
+        {
+          "marker": "<turn|>",
+          "count": 2,
+          "last_positions": [
+            6,
+            138
+          ]
+        }
+      ],
+      "assistant_think_after_last_model_turn": false,
+      "has_model_turn": true,
+      "has_canonical_thought_open": false,
+      "has_canonical_thought_close": false
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task30.onset.full.private.json",
+      "field": "prompt_token_ids",
+      "sha256": "fc7908cc26aca5ca1ed6825f66cf94391ea08f2575e2058d4c9af7242c73518e",
+      "tokens": 5069,
+      "special_marker_positions": [
+        {
+          "marker": "<|think|>",
+          "count": 1,
+          "last_positions": [
+            4
+          ]
+        },
+        {
+          "marker": "<|channel>",
+          "count": 1,
+          "last_positions": [
+            143
+          ]
+        },
+        {
+          "marker": "<|turn>",
+          "count": 3,
+          "last_positions": [
+            1,
+            8,
+            140
+          ]
+        },
+        {
+          "marker": "<turn|>",
+          "count": 2,
+          "last_positions": [
+            6,
+            138
+          ]
+        }
+      ],
+      "assistant_think_after_last_model_turn": false,
+      "has_model_turn": true,
+      "has_canonical_thought_open": true,
+      "has_canonical_thought_close": false
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task30.onset.suffix2048.private.json",
+      "field": "prompt_token_ids",
+      "sha256": "a70e4c762533cd8c4eba01e31ad18283314d68aec583998ee78284ce3e6f98c2",
+      "tokens": 2048,
+      "special_marker_positions": [],
+      "assistant_think_after_last_model_turn": false,
+      "has_model_turn": false,
+      "has_canonical_thought_open": false,
+      "has_canonical_thought_close": false
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task30.onset.suffix512.private.json",
+      "field": "prompt_token_ids",
+      "sha256": "40d866e08ba26e30392a32009afd746123317aa3a372f2c4ec125b3ad6736ac8",
+      "tokens": 512,
+      "special_marker_positions": [],
+      "assistant_think_after_last_model_turn": false,
+      "has_model_turn": false,
+      "has_canonical_thought_open": false,
+      "has_canonical_thought_close": false
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task48.full_reply.private.json",
+      "field": "prompt_token_ids",
+      "sha256": "2c6a5e6cade53b8717418daff7e36cccd287e29e3638dfef00c76d13da808450",
+      "tokens": 420,
+      "special_marker_positions": [
+        {
+          "marker": "<|think|>",
+          "count": 1,
+          "last_positions": [
+            4
+          ]
+        },
+        {
+          "marker": "<|turn>",
+          "count": 3,
+          "last_positions": [
+            1,
+            8,
+            417
+          ]
+        },
+        {
+          "marker": "<turn|>",
+          "count": 2,
+          "last_positions": [
+            6,
+            415
+          ]
+        }
+      ],
+      "assistant_think_after_last_model_turn": false,
+      "has_model_turn": true,
+      "has_canonical_thought_open": false,
+      "has_canonical_thought_close": false
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task48.onset.full.private.json",
+      "field": "prompt_token_ids",
+      "sha256": "9de7d655585c7259f24dcb4b2704e35cb32b6095d3eab526947c8ac0e150a68b",
+      "tokens": 3552,
+      "special_marker_positions": [
+        {
+          "marker": "<|think|>",
+          "count": 1,
+          "last_positions": [
+            4
+          ]
+        },
+        {
+          "marker": "<|channel>",
+          "count": 1,
+          "last_positions": [
+            420
+          ]
+        },
+        {
+          "marker": "<|turn>",
+          "count": 3,
+          "last_positions": [
+            1,
+            8,
+            417
+          ]
+        },
+        {
+          "marker": "<turn|>",
+          "count": 2,
+          "last_positions": [
+            6,
+            415
+          ]
+        }
+      ],
+      "assistant_think_after_last_model_turn": false,
+      "has_model_turn": true,
+      "has_canonical_thought_open": true,
+      "has_canonical_thought_close": false
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task48.onset.suffix2048.private.json",
+      "field": "prompt_token_ids",
+      "sha256": "6c94f86c665456267b3381215416ba05c08f4651a82da66812d77adfd8e14cfe",
+      "tokens": 2048,
+      "special_marker_positions": [],
+      "assistant_think_after_last_model_turn": false,
+      "has_model_turn": false,
+      "has_canonical_thought_open": false,
+      "has_canonical_thought_close": false
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task48.onset.suffix512.private.json",
+      "field": "prompt_token_ids",
+      "sha256": "b692aa5767347bfd84812ee16046fc94d639af4aa2abda4d0002ef35107e69f5",
+      "tokens": 512,
+      "special_marker_positions": [],
+      "assistant_think_after_last_model_turn": false,
+      "has_model_turn": false,
+      "has_canonical_thought_open": false,
+      "has_canonical_thought_close": false
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe-astropy-precision/astropy.one_cycle.private.json",
+      "field": "prompt_token_ids",
+      "sha256": "1a8f94e3a3f41e286e4dbeabe566a48473f6f724eb7945e6a47f2a4aca937bf2",
+      "tokens": 19243,
+      "special_marker_positions": [
+        {
+          "marker": "<|think|>",
+          "count": 1,
+          "last_positions": [
+            4
+          ]
+        },
+        {
+          "marker": "<|channel>",
+          "count": 1,
+          "last_positions": [
+            11360
+          ]
+        },
+        {
+          "marker": "<channel|>",
+          "count": 1,
+          "last_positions": [
+            11363
+          ]
+        },
+        {
+          "marker": "<|turn>",
+          "count": 5,
+          "last_positions": [
+            1121,
+            11203,
+            11357
+          ]
+        },
+        {
+          "marker": "<turn|>",
+          "count": 4,
+          "last_positions": [
+            1119,
+            11201,
+            11355
+          ]
+        }
+      ],
+      "assistant_think_after_last_model_turn": false,
+      "has_model_turn": true,
+      "has_canonical_thought_open": true,
+      "has_canonical_thought_close": true
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe-astropy-precision/astropy.onset.private.json",
+      "field": "prompt_token_ids",
+      "sha256": "4eeb77b8e5a94966a2a54a60f60fc617d425e6e7982f4f719b4e46b45e651b24",
+      "tokens": 19223,
+      "special_marker_positions": [
+        {
+          "marker": "<|think|>",
+          "count": 1,
+          "last_positions": [
+            4
+          ]
+        },
+        {
+          "marker": "<|channel>",
+          "count": 1,
+          "last_positions": [
+            11360
+          ]
+        },
+        {
+          "marker": "<channel|>",
+          "count": 1,
+          "last_positions": [
+            11363
+          ]
+        },
+        {
+          "marker": "<|turn>",
+          "count": 5,
+          "last_positions": [
+            1121,
+            11203,
+            11357
+          ]
+        },
+        {
+          "marker": "<turn|>",
+          "count": 4,
+          "last_positions": [
+            1119,
+            11201,
+            11355
+          ]
+        }
+      ],
+      "assistant_think_after_last_model_turn": false,
+      "has_model_turn": true,
+      "has_canonical_thought_open": true,
+      "has_canonical_thought_close": true
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe-astropy-precision/first-short-prefix-candidates/astropy.first.suffix2048.private.json",
+      "field": "prompt_token_ids",
+      "sha256": "7510a23b155b90fcad861f5067ed07569fb30d998cc7b82423d47615700909e3",
+      "tokens": 2048,
+      "special_marker_positions": [],
+      "assistant_think_after_last_model_turn": false,
+      "has_model_turn": false,
+      "has_canonical_thought_open": false,
+      "has_canonical_thought_close": false
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe-astropy-precision/first-short-prefix-candidates/astropy.first.suffix512.private.json",
+      "field": "prompt_token_ids",
+      "sha256": "edaa1687f22e43316120ef9daa3b93c5b2bc7b5c145239f648e9f31d240ae271",
+      "tokens": 512,
+      "special_marker_positions": [],
+      "assistant_think_after_last_model_turn": false,
+      "has_model_turn": false,
+      "has_canonical_thought_open": false,
+      "has_canonical_thought_close": false
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe-astropy-precision/second-call/astropy.one_cycle.private.json",
+      "field": "prompt_token_ids",
+      "sha256": "2102e6d121cc307567c1736a97a608148b0ee8600aa7ae19fe0567c408257696",
+      "tokens": 17613,
+      "special_marker_positions": [
+        {
+          "marker": "<|think|>",
+          "count": 1,
+          "last_positions": [
+            4
+          ]
+        },
+        {
+          "marker": "<|channel>",
+          "count": 1,
+          "last_positions": [
+            11494
+          ]
+        },
+        {
+          "marker": "<channel|>",
+          "count": 1,
+          "last_positions": [
+            11497
+          ]
+        },
+        {
+          "marker": "<|turn>",
+          "count": 6,
+          "last_positions": [
+            11203,
+            11357,
+            11491
+          ]
+        },
+        {
+          "marker": "<turn|>",
+          "count": 5,
+          "last_positions": [
+            11201,
+            11355,
+            11489
+          ]
+        }
+      ],
+      "assistant_think_after_last_model_turn": false,
+      "has_model_turn": true,
+      "has_canonical_thought_open": true,
+      "has_canonical_thought_close": true
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe-astropy-precision/second-call/astropy.onset.private.json",
+      "field": "prompt_token_ids",
+      "sha256": "1c97de4327f44ed6a0e9d6f48b50cdfbb854cf268e88504b8a01ac2597f35ffa",
+      "tokens": 17601,
+      "special_marker_positions": [
+        {
+          "marker": "<|think|>",
+          "count": 1,
+          "last_positions": [
+            4
+          ]
+        },
+        {
+          "marker": "<|channel>",
+          "count": 1,
+          "last_positions": [
+            11494
+          ]
+        },
+        {
+          "marker": "<channel|>",
+          "count": 1,
+          "last_positions": [
+            11497
+          ]
+        },
+        {
+          "marker": "<|turn>",
+          "count": 6,
+          "last_positions": [
+            11203,
+            11357,
+            11491
+          ]
+        },
+        {
+          "marker": "<turn|>",
+          "count": 5,
+          "last_positions": [
+            11201,
+            11355,
+            11489
+          ]
+        }
+      ],
+      "assistant_think_after_last_model_turn": false,
+      "has_model_turn": true,
+      "has_canonical_thought_open": true,
+      "has_canonical_thought_close": true
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe-astropy-precision/short-prefix-candidates/astropy.second.suffix2048.private.json",
+      "field": "prompt_token_ids",
+      "sha256": "ab18973ec0f898a74ce68bc9290aa1666416f5aea92119f58567a748765a16f0",
+      "tokens": 2048,
+      "special_marker_positions": [],
+      "assistant_think_after_last_model_turn": false,
+      "has_model_turn": false,
+      "has_canonical_thought_open": false,
+      "has_canonical_thought_close": false
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe-astropy-precision/short-prefix-candidates/astropy.second.suffix512.private.json",
+      "field": "prompt_token_ids",
+      "sha256": "d2b890b2343fc4350cadfa9154ab65e0dc79bbf793cba83ab926570e6ade4321",
+      "tokens": 512,
+      "special_marker_positions": [],
+      "assistant_think_after_last_model_turn": false,
+      "has_model_turn": false,
+      "has_canonical_thought_open": false,
+      "has_canonical_thought_close": false
+    }
+  ],
+  "full_reply_continuation_openings": [
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task110.full_reply.private.json",
+      "field": "continuations.chosen",
+      "first_token_ids": [
+        100,
+        45518,
+        107,
+        236829
+      ],
+      "has_think_token_98": false
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task127.full_reply.private.json",
+      "field": "continuations.chosen",
+      "first_token_ids": [
+        100,
+        45518,
+        107,
+        236829
+      ],
+      "has_think_token_98": false
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task129.full_reply.private.json",
+      "field": "continuations.chosen",
+      "first_token_ids": [
+        100,
+        45518,
+        107,
+        236829
+      ],
+      "has_think_token_98": false
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task130.full_reply.private.json",
+      "field": "continuations.chosen",
+      "first_token_ids": [
+        100,
+        45518,
+        107,
+        236829
+      ],
+      "has_think_token_98": false
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task139.full_reply.private.json",
+      "field": "continuations.chosen",
+      "first_token_ids": [
+        100,
+        45518,
+        107,
+        236829
+      ],
+      "has_think_token_98": false
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task145.full_reply.private.json",
+      "field": "continuations.chosen",
+      "first_token_ids": [
+        100,
+        45518,
+        107,
+        818
+      ],
+      "has_think_token_98": false
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task147.full_reply.private.json",
+      "field": "continuations.chosen",
+      "first_token_ids": [
+        100,
+        45518,
+        107,
+        236829
+      ],
+      "has_think_token_98": false
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task30.full_reply.private.json",
+      "field": "continuations.chosen",
+      "first_token_ids": [
+        100,
+        45518,
+        107,
+        236829
+      ],
+      "has_think_token_98": false
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task48.full_reply.private.json",
+      "field": "continuations.chosen",
+      "first_token_ids": [
+        100,
+        45518,
+        107,
+        236829
+      ],
+      "has_think_token_98": false
+    }
+  ],
+  "completed_tt_conditioning_checks": [
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first-wave-full/task110.onset.suffix512.json",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task110.onset.suffix512.private.json",
+      "fields_checked": [
+        "case",
+        "continuations.*.conditioning_token_ids"
+      ],
+      "conditioning_matches_saved_case": {
+        "chosen": true
+      }
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first-wave-full/task127.onset.suffix512.json",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task127.onset.suffix512.private.json",
+      "fields_checked": [
+        "case",
+        "continuations.*.conditioning_token_ids"
+      ],
+      "conditioning_matches_saved_case": {
+        "chosen": true
+      }
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first-wave-full/task129.onset.suffix512.json",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task129.onset.suffix512.private.json",
+      "fields_checked": [
+        "case",
+        "continuations.*.conditioning_token_ids"
+      ],
+      "conditioning_matches_saved_case": {
+        "chosen": true
+      }
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first-wave-full/task130.onset.suffix512.json",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task130.onset.suffix512.private.json",
+      "fields_checked": [
+        "case",
+        "continuations.*.conditioning_token_ids"
+      ],
+      "conditioning_matches_saved_case": {
+        "chosen": true
+      }
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first-wave-full/task139.onset.suffix512.json",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task139.onset.suffix512.private.json",
+      "fields_checked": [
+        "case",
+        "continuations.*.conditioning_token_ids"
+      ],
+      "conditioning_matches_saved_case": {
+        "chosen": true
+      }
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first-wave-full/task145.onset.suffix512.json",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task145.onset.suffix512.private.json",
+      "fields_checked": [
+        "case",
+        "continuations.*.conditioning_token_ids"
+      ],
+      "conditioning_matches_saved_case": {
+        "chosen": true
+      }
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first-wave-full/task147.onset.suffix512.json",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task147.onset.suffix512.private.json",
+      "fields_checked": [
+        "case",
+        "continuations.*.conditioning_token_ids"
+      ],
+      "conditioning_matches_saved_case": {
+        "chosen": true
+      }
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first-wave-full/task30.onset.suffix512.json",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task30.onset.suffix512.private.json",
+      "fields_checked": [
+        "case",
+        "continuations.*.conditioning_token_ids"
+      ],
+      "conditioning_matches_saved_case": {
+        "chosen": true
+      }
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first-wave-full/task48.onset.suffix512.json",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task48.onset.suffix512.private.json",
+      "fields_checked": [
+        "case",
+        "continuations.*.conditioning_token_ids"
+      ],
+      "conditioning_matches_saved_case": {
+        "chosen": true
+      }
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first-wave-served/task110.onset.suffix512.json",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task110.onset.suffix512.private.json",
+      "fields_checked": [
+        "case",
+        "continuations.*.conditioning_token_ids"
+      ],
+      "conditioning_matches_saved_case": {
+        "chosen": true
+      }
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first-wave-served/task127.onset.suffix512.json",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task127.onset.suffix512.private.json",
+      "fields_checked": [
+        "case",
+        "continuations.*.conditioning_token_ids"
+      ],
+      "conditioning_matches_saved_case": {
+        "chosen": true
+      }
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first-wave-served/task129.onset.suffix512.json",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task129.onset.suffix512.private.json",
+      "fields_checked": [
+        "case",
+        "continuations.*.conditioning_token_ids"
+      ],
+      "conditioning_matches_saved_case": {
+        "chosen": true
+      }
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first-wave-served/task130.onset.suffix512.json",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task130.onset.suffix512.private.json",
+      "fields_checked": [
+        "case",
+        "continuations.*.conditioning_token_ids"
+      ],
+      "conditioning_matches_saved_case": {
+        "chosen": true
+      }
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first-wave-served/task139.onset.suffix512.json",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task139.onset.suffix512.private.json",
+      "fields_checked": [
+        "case",
+        "continuations.*.conditioning_token_ids"
+      ],
+      "conditioning_matches_saved_case": {
+        "chosen": true
+      }
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first-wave-served/task145.onset.suffix512.json",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task145.onset.suffix512.private.json",
+      "fields_checked": [
+        "case",
+        "continuations.*.conditioning_token_ids"
+      ],
+      "conditioning_matches_saved_case": {
+        "chosen": true
+      }
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first-wave-served/task147.onset.suffix512.json",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task147.onset.suffix512.private.json",
+      "fields_checked": [
+        "case",
+        "continuations.*.conditioning_token_ids"
+      ],
+      "conditioning_matches_saved_case": {
+        "chosen": true
+      }
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first-wave-served/task30.onset.suffix512.json",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task30.onset.suffix512.private.json",
+      "fields_checked": [
+        "case",
+        "continuations.*.conditioning_token_ids"
+      ],
+      "conditioning_matches_saved_case": {
+        "chosen": true
+      }
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first-wave-served/task48.onset.suffix512.json",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task48.onset.suffix512.private.json",
+      "fields_checked": [
+        "case",
+        "continuations.*.conditioning_token_ids"
+      ],
+      "conditioning_matches_saved_case": {
+        "chosen": true
+      }
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe-astropy-precision/first-short-prefix-candidates/full/astropy.first.suffix2048.json",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe-astropy-precision/first-short-prefix-candidates/astropy.first.suffix2048.private.json",
+      "fields_checked": [
+        "case",
+        "continuations.*.conditioning_token_ids"
+      ],
+      "conditioning_matches_saved_case": {
+        "chosen": true
+      }
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe-astropy-precision/first-short-prefix-candidates/full/astropy.first.suffix512.json",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe-astropy-precision/first-short-prefix-candidates/astropy.first.suffix512.private.json",
+      "fields_checked": [
+        "case",
+        "continuations.*.conditioning_token_ids"
+      ],
+      "conditioning_matches_saved_case": {
+        "chosen": true
+      }
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe-astropy-precision/first-short-prefix-candidates/served/astropy.first.suffix2048.json",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe-astropy-precision/first-short-prefix-candidates/astropy.first.suffix2048.private.json",
+      "fields_checked": [
+        "case",
+        "continuations.*.conditioning_token_ids"
+      ],
+      "conditioning_matches_saved_case": {
+        "chosen": true
+      }
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe-astropy-precision/first-short-prefix-candidates/served/astropy.first.suffix512.json",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe-astropy-precision/first-short-prefix-candidates/astropy.first.suffix512.private.json",
+      "fields_checked": [
+        "case",
+        "continuations.*.conditioning_token_ids"
+      ],
+      "conditioning_matches_saved_case": {
+        "chosen": true
+      }
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe-astropy-precision/full/astropy.onset.json",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe-astropy-precision/astropy.onset.private.json",
+      "fields_checked": [
+        "case",
+        "continuations.*.conditioning_token_ids"
+      ],
+      "conditioning_matches_saved_case": {
+        "chosen": true
+      }
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe-astropy-precision/full/astropy.second.onset.json",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe-astropy-precision/second-call/astropy.onset.private.json",
+      "fields_checked": [
+        "case",
+        "continuations.*.conditioning_token_ids"
+      ],
+      "conditioning_matches_saved_case": {
+        "chosen": true
+      }
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe-astropy-precision/served/astropy.onset.json",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe-astropy-precision/astropy.onset.private.json",
+      "fields_checked": [
+        "case",
+        "continuations.*.conditioning_token_ids"
+      ],
+      "conditioning_matches_saved_case": {
+        "chosen": true
+      }
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe-astropy-precision/served/astropy.second.onset.json",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe-astropy-precision/second-call/astropy.onset.private.json",
+      "fields_checked": [
+        "case",
+        "continuations.*.conditioning_token_ids"
+      ],
+      "conditioning_matches_saved_case": {
+        "chosen": true
+      }
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe-astropy-precision/short-prefix-candidates/full/astropy.second.suffix2048.json",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe-astropy-precision/short-prefix-candidates/astropy.second.suffix2048.private.json",
+      "fields_checked": [
+        "case",
+        "continuations.*.conditioning_token_ids"
+      ],
+      "conditioning_matches_saved_case": {
+        "chosen": true
+      }
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe-astropy-precision/short-prefix-candidates/full/astropy.second.suffix512.json",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe-astropy-precision/short-prefix-candidates/astropy.second.suffix512.private.json",
+      "fields_checked": [
+        "case",
+        "continuations.*.conditioning_token_ids"
+      ],
+      "conditioning_matches_saved_case": {
+        "chosen": true
+      }
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe-astropy-precision/short-prefix-candidates/served/astropy.second.suffix2048.json",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe-astropy-precision/short-prefix-candidates/astropy.second.suffix2048.private.json",
+      "fields_checked": [
+        "case",
+        "continuations.*.conditioning_token_ids"
+      ],
+      "conditioning_matches_saved_case": {
+        "chosen": true
+      }
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe-astropy-precision/short-prefix-candidates/served/astropy.second.suffix512.json",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe-astropy-precision/short-prefix-candidates/astropy.second.suffix512.private.json",
+      "fields_checked": [
+        "case",
+        "continuations.*.conditioning_token_ids"
+      ],
+      "conditioning_matches_saved_case": {
+        "chosen": true
+      }
+    }
+  ],
+  "preserved_artifacts": true,
+  "device_network_or_inference_used": false
+}

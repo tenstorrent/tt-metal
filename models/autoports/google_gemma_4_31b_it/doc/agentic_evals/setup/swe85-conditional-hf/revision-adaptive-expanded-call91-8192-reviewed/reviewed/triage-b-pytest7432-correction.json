@@ -1,0 +1,54 @@
+{
+  "job": "anomaly.pytest-dev__pytest-7432.call19.onset",
+  "mode": "conditional_hf_cpu_short_suffix512",
+  "seed": 44,
+  "supersedes": "triage-b-pytest7432.json verdict only; original record is preserved as the initial assessment",
+  "verdict": "normal",
+  "correction": "The earlier other_anomaly assessment treated the final <|tool_response> token as a model-fabricated tool result. It is instead the normal standalone tool-yield EOS for a generated tool call. No command or tool output was executed or claimed.",
+  "evidence": {
+    "hf_result": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/results/seed44-suffix512/anomaly.pytest-dev__pytest-7432.call19.onset.optional-suffix512.hf.private.json",
+      "sha256": "389d4c9c55f00e544dcacb209814a289e7c61af4dec2ec55ebfc265cd872cb63",
+      "trial_tokens": 307,
+      "natural_stop": true,
+      "last_token_ids_and_spellings": [[49, "<tool_call|>"], [50, "<|tool_response>"]],
+      "generated_text_shape": "one caret plus four repeated traceback blocks, followed by coherent reasoning and a bash inspection call; no sustained caret-only loop",
+      "matched_tt_seed44": {
+        "served_tokens": 464,
+        "served_shape": "finite repeated traceback frames, coherent reasoning, structured bash call",
+        "full_tokens": 512,
+        "full_shape": "caret-only through the requested cap"
+      }
+    },
+    "pinned_generation_config": {
+      "path": "/home/mvasiljevic/.cache/huggingface/hub/models--google--gemma-4-31B-it/snapshots/842da3794eaa0b77d5f08bae87a17459d91ff475/generation_config.json",
+      "sha256": "d4226bbe3117d2d253ba4609720ba82c6c4ce4627a9a6ae05387c78983ac03de",
+      "eos_token_id": [1, 106, 50],
+      "transformers_version": "5.5.0.dev0"
+    },
+    "pinned_tokenizer": {
+      "revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+      "observed_eos_token_id": [1, 106, 50],
+      "observed_token_50": "<|tool_response>",
+      "guard": "Tokenizer-only inspection; import guard rejected ttnn/tt_lib imports. No model inference or device access."
+    },
+    "pinned_chat_template": {
+      "path": "/home/mvasiljevic/.cache/huggingface/hub/models--google--gemma-4-31B-it/snapshots/842da3794eaa0b77d5f08bae87a17459d91ff475/chat_template.jinja",
+      "sha256": "ae53464bf3be25802b3a5b37def7fd89667067d7577049b3b2d74c4d8de4c6d4",
+      "rule": "When the previous message type is tool_call and there is no tool response, template emits `<|tool_response>` as the handoff boundary."
+    },
+    "stock_parser": {
+      "parser": "vLLM Gemma4Parser, CPU-only; TTNN import guard active",
+      "parsed_output": "one structured bash call with command `cat src/_pytest/assertion/rewrite.py | sed -n '150,170p'`; no visible assistant content",
+      "meaning": "The call is recognized; the parser does not execute it. The final token is a yield/EOS boundary, not evidence of a fabricated tool result."
+    },
+    "matched_context": {
+      "fixture_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-85/anomaly.pytest-dev__pytest-7432.call19.onset.suffix512.private.json",
+      "fixture_sha256": "7ca8039708a12c24acd3c2cfb1c2c51b8946e99df118576545605efad6225bf4",
+      "exact_suffix_identity": "fixture prompt IDs equal the final 512 IDs of source case SHA 436bf8f06cebc27f9ac206ab4c85c655b2c707145be67b8341f14288370807f5",
+      "shortened_prompt_caveat": "This uses only source reconstructed prompt IDs [10583:11095], not the full native context; native IDs and native seed are unavailable."
+    }
+  },
+  "confidence": "high that this suffix continuation naturally recovers to a valid tool handoff rather than reproducing the sustained caret collapse; this does not establish full-context HF/TT equivalence",
+  "cap_notes": "Natural stop at 307/512 tokens occurs on token 50, which the pinned generation config explicitly lists as EOS and the tokenizer decodes as `<|tool_response>`. Four finite repeated traceback blocks are not a sustained collapse; coherent reasoning and a parser-recognized tool call follow. The matched full TT seed44 remains caret-only through 512, while served seed44 also recovers into a tool call. Teacher-forced selected-caret probability at position 0 is 0.10442692 while token 236884 (`^`) is top1 at 0.32165754 and is the sampled first token; full TT top1 agreement on the selected teacher-forced continuation is 1.0 and the first selected-token logprob delta HF−TT is 0.070656. Native seed is unavailable, so this first-branch divergence is a caveat rather than evidence of a stack defect."
+}

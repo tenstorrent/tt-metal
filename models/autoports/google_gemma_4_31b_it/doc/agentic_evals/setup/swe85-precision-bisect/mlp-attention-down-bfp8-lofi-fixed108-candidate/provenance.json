@@ -1,0 +1,15 @@
+{
+  "status": "host_prepared_inert_candidate",
+  "case_manifest_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/candidate-cases.json",
+  "case_manifest_source_sha256": "57193e4b91af3a31df00f0c92dbc0f2219fbce011e6533594e5244a93a3021ed",
+  "case_count": 108,
+  "candidate_manifest_byte_identical_to_P3": true,
+  "P8_policy_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/mlp-attention-down-bfp8-lofi-eleven-case-candidate/mlp_attention_down_bfp8_lofi_precision.json",
+  "P8_policy_sha256": "de46de8e771defadd786ab8207308fcc3609b15bac144c662dadc20a6d9e343f",
+  "forecast_point_seconds": 4048.2511687577617,
+  "forecast_range_seconds": [
+    2140.2,
+    8100.0
+  ],
+  "no_admission_or_execution": true
+}

@@ -1,0 +1,44 @@
+{
+  "scope": "Literal artifact references in results and learned; excludes descriptive prose, globs and planned placeholders",
+  "checked": 720,
+  "missing": [
+    {
+      "field": "learned.json.best_config.swe_bench_verified.config.source_manifest",
+      "path": "current/server-observed/configuration-b32.json"
+    },
+    {
+      "field": "learned.json.best_config.swe_bench_verified.config.sizing_evidence",
+      "path": "current/swe_sizing_prior.json"
+    },
+    {
+      "field": "learned.json.best_config.swe_bench_verified.evidence[0]",
+      "path": "current/swe-phase2/collected.recovered.json"
+    },
+    {
+      "field": "learned.json.best_config.swe_bench_verified.evidence[1]",
+      "path": "current/swe_command.json"
+    },
+    {
+      "field": "learned.json.best_config.swe_bench_verified.explained_hours_evidence",
+      "path": "current/swe-approximate-replay.json"
+    },
+    {
+      "field": "learned.json.prior_run_best_config.r1_gpqa_diamond.config.source_manifest",
+      "path": "current/server-observed/configuration-b32.json"
+    },
+    {
+      "field": "learned.json.prior_run_best_config.r1_gpqa_diamond.config.sizing_evidence",
+      "path": "current/gpqa_off_sizing.json"
+    },
+    {
+      "field": "learned.json.prior_run_best_config.r1_gpqa_diamond.evidence[0]",
+      "path": "current/gpqa-thinking-off/collected.json"
+    },
+    {
+      "field": "learned.json.prior_run_best_config.r1_gpqa_diamond.evidence[1]",
+      "path": "current/gpqa-off-command.json"
+    }
+  ],
+  "resolution": "All nine missing links belonged to carried-over v4 learned evidence. Historical SWE entry moved to prior_run_best_config, and both prior-run suites explicitly marked historical_only with unavailable relative-path provenance. Current best SWE now references v5 phase2-ready; no old measurements reused.",
+  "current_evidence_missing_from_this_audit": []
+}

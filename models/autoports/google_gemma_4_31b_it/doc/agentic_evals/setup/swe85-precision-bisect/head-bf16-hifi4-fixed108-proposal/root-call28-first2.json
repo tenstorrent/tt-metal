@@ -1,0 +1,39 @@
+{
+  "reviewed_unix": 1794726596.8456888,
+  "rows": [
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/runs/head_bf16_hifi4/anomaly.sphinx-doc__sphinx-11510.call28.onset.seed42.cap1024.json",
+      "sha256": "a97ef8d36de23f80bda03ed734b5cc83a33912f3f2261cc1307e026d52e724ce",
+      "seed": 42,
+      "tokens": 469,
+      "verdict": "normal",
+      "reason": "Complete script raw text reviewed; continues saved partial Python expression and closes canonical shell call. Second rendering in seed43 is applying code via sed, not token-loop degeneration. Does not imply patch correctness.",
+      "trace_counters_delta": {
+        "model_replays": 468,
+        "sample_replays": 468,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 468,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/runs/head_bf16_hifi4/anomaly.sphinx-doc__sphinx-11510.call28.onset.seed43.cap1024.json",
+      "sha256": "a94b768e55c7f7c3516c51ec578c95e61434f5af1d92162aa77626ce069db7d5",
+      "seed": 43,
+      "tokens": 511,
+      "verdict": "normal",
+      "reason": "Complete script raw text reviewed; continues saved partial Python expression and closes canonical shell call. Second rendering in seed43 is applying code via sed, not token-loop degeneration. Does not imply patch correctness.",
+      "trace_counters_delta": {
+        "model_replays": 510,
+        "sample_replays": 510,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 510,
+        "captures": 0
+      }
+    }
+  ]
+}

@@ -1,0 +1,39 @@
+{
+  "reviewed_unix": 1794722274.6416178,
+  "rows": [
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.call88.canonicalprefix.seed42.cap1024.json",
+      "sha256": "e812ea8acd3f719182b2a233e58cb9f7cbec1eb219d6ccda869cc72ac08c8424",
+      "seed": 42,
+      "tokens": 688,
+      "verdict": "normal",
+      "reason": "Root read full generated script and pinned canonical open bash prefix ending and it-is contraction; continuation grammatical. Distinct method body rewrite and close, no new repeated contraction or stray tokens. Existing odd a-s Norm wording is already in conditioned prompt; not generated anomaly. No executed-command or patch-correctness claim.",
+      "trace_counters_delta": {
+        "model_replays": 687,
+        "sample_replays": 687,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 687,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.call88.canonicalprefix.seed43.cap1024.json",
+      "sha256": "a70c9e50746d6179219064a7a5c44530a569160e37e631e2c514c6299d30705e",
+      "seed": 43,
+      "tokens": 660,
+      "verdict": "normal",
+      "reason": "Root read full generated script and pinned canonical open bash prefix ending and it-is contraction; continuation grammatical. Distinct method body rewrite and close, no new repeated contraction or stray tokens. Existing odd a-s Norm wording is already in conditioned prompt; not generated anomaly. No executed-command or patch-correctness claim.",
+      "trace_counters_delta": {
+        "model_replays": 659,
+        "sample_replays": 659,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 659,
+        "captures": 0
+      }
+    }
+  ]
+}

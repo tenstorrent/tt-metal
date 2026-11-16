@@ -1,0 +1,14 @@
+{
+  "status": "PASS_fixture_validity_only_not_execution_admission",
+  "cases": 36,
+  "source_length_min": 1175,
+  "source_length_max": 76441,
+  "missing_sources": 0,
+  "sources_at_most512": 0,
+  "teacher_forcing_positions": 2019,
+  "candidate_manifest_sha256": "06ac265b5bedf25f66790b3750ba47458999914d2aa93ff09a08dc2de97a86df",
+  "candidate_cases_sha256": "7eed047a0fb8ffa351351d69055b209a630502c27298b9120b7d79c5e57b530c",
+  "admitted85_manifest_sha256": "f2aeb0bfe40bce8c102ceba564c41ca164a138d90d9fd25adc5993b6c3d8eb81",
+  "source_roster_sha256": "68b2daf68328e5f1bca508e78fa58439aa6ea149bf0a0fa1980f8abf2890fe80",
+  "learned_sha256": "4430915143d5cdaa5c0ce2e1d6802ad122659bbbf7e56eb9a3601c245db6f09f"
+}

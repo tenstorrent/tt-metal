@@ -1,0 +1,226 @@
+{
+  "reviewed_unix": 1794723975.5338955,
+  "rows": [
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.sympy__sympy-13480.call1.onset.seed44.cap256.json",
+      "sha256": "e644045c5681256b096014a1dbd44766517cd76172e81b15022f33bf1f8e5099",
+      "seed": 44,
+      "tokens": 147,
+      "verdict": "normal",
+      "reason": "Full raw text and pinned prefix checked; canonical bash invocation and coherent distinct continuation; no correctness claim.",
+      "trace_counters_delta": {
+        "model_replays": 146,
+        "sample_replays": 146,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 146,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.sympy__sympy-13551.call1.onset.seed42.cap256.json",
+      "sha256": "47840f1b97ae55ec4b46ee90895b0fc1ef203b83780d1cf861ea1383fc3e2bf2",
+      "seed": 42,
+      "tokens": 171,
+      "verdict": "native",
+      "reason": "Closing tool marker used as opener, so serialized call:bash lacks structured call; original missing-tool protocol family; parser audit pending.",
+      "trace_counters_delta": {
+        "model_replays": 170,
+        "sample_replays": 170,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 170,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.sympy__sympy-13551.call1.onset.seed43.cap512.json",
+      "sha256": "ad916368a0250683e1744e722ea50bd50a0ae20aa3473bb117804208d992a05d",
+      "seed": 43,
+      "tokens": 162,
+      "verdict": "other",
+      "reason": "Stray Unlimited-budget-bash before otherwise canonical tool; distinct from original serialized missing-tool motif.",
+      "trace_counters_delta": {
+        "model_replays": 161,
+        "sample_replays": 161,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 161,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.sympy__sympy-13551.call1.onset.seed44.cap256.json",
+      "sha256": "10cceae759a97f9819a06c3175b42f3d5f6c240f9abe60e85e31e8a3696e60e3",
+      "seed": 44,
+      "tokens": 162,
+      "verdict": "normal",
+      "reason": "Full raw text and pinned prefix checked; canonical bash invocation and coherent distinct continuation; no correctness claim.",
+      "trace_counters_delta": {
+        "model_replays": 161,
+        "sample_replays": 161,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 161,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.sympy__sympy-13878.call1.onset.seed42.cap256.json",
+      "sha256": "3a7f08fdbb22d181a8610543dfeae46e3a0a27597a6b5ebc72c2b84971d387b1",
+      "seed": 42,
+      "tokens": 19,
+      "verdict": "normal",
+      "reason": "Full raw text and pinned prefix checked; canonical bash invocation and coherent distinct continuation; no correctness claim.",
+      "trace_counters_delta": {
+        "model_replays": 18,
+        "sample_replays": 18,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 18,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.sympy__sympy-13878.call1.onset.seed43.cap256.json",
+      "sha256": "d119e8e8f57f83d6e74db49054434966723d6cecc1e9675d9df662030eedba1b",
+      "seed": 43,
+      "tokens": 18,
+      "verdict": "normal",
+      "reason": "Full raw text and pinned prefix checked; canonical bash invocation and coherent distinct continuation; no correctness claim.",
+      "trace_counters_delta": {
+        "model_replays": 17,
+        "sample_replays": 17,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 17,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.sympy__sympy-13878.call1.onset.seed44.cap256.json",
+      "sha256": "4380cbab6d5e027ce7ad9c07709c7c799a6bc3706f07a686b09c36a83fd0dbd3",
+      "seed": 44,
+      "tokens": 22,
+      "verdict": "normal",
+      "reason": "Full raw text and pinned prefix checked; canonical bash invocation and coherent distinct continuation; no correctness claim.",
+      "trace_counters_delta": {
+        "model_replays": 21,
+        "sample_replays": 21,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 21,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.sympy__sympy-14248.call53.onset.seed42.cap256.json",
+      "sha256": "a4ddf9a02e42c89bb339a0177465fea9808c6f3729c96f6be317f34c964e1c96",
+      "seed": 42,
+      "tokens": 256,
+      "verdict": "native",
+      "reason": "Pure caret collapse continuing native traceback motif:256tokens/1024carets, not cap-only failure.",
+      "trace_counters_delta": {
+        "model_replays": 255,
+        "sample_replays": 255,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 255,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.sympy__sympy-14248.call53.onset.seed43.cap256.json",
+      "sha256": "5f7488f71fe2682708ecd830eac69225e5eaa863df7fbcbaf72e6f58efacc1d2",
+      "seed": 43,
+      "tokens": 256,
+      "verdict": "native",
+      "reason": "Pure caret collapse continuing native traceback motif:256tokens/1024carets, not cap-only failure.",
+      "trace_counters_delta": {
+        "model_replays": 255,
+        "sample_replays": 255,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 255,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.sympy__sympy-14248.call53.onset.seed44.cap256.json",
+      "sha256": "ddfcc833bdba9ac4336acaf79861c3bfe2f822ef44f7127be957680221c3b55c",
+      "seed": 44,
+      "tokens": 256,
+      "verdict": "native",
+      "reason": "Pure caret collapse continuing native traceback motif:256tokens/1024carets, not cap-only failure.",
+      "trace_counters_delta": {
+        "model_replays": 255,
+        "sample_replays": 255,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 255,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.sympy__sympy-14711.call1.onset.seed42.cap256.json",
+      "sha256": "001963dc3ab42452eb0981d86df440a3bf20d0c5f1c8b16cc71bb1dbc95eb930",
+      "seed": 42,
+      "tokens": 139,
+      "verdict": "normal",
+      "reason": "Full raw text and pinned prefix checked; canonical bash invocation and coherent distinct continuation; no correctness claim.",
+      "trace_counters_delta": {
+        "model_replays": 138,
+        "sample_replays": 138,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 138,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.sympy__sympy-14711.call1.onset.seed43.cap256.json",
+      "sha256": "201388167a517607c7ce73425ade3ff9da0d64cb5e4534ed1ce1b91560896c75",
+      "seed": 43,
+      "tokens": 119,
+      "verdict": "other",
+      "reason": "Closing tool marker used as opener; different from native literal thought/GetAll-bash onset; parser audit pending.",
+      "trace_counters_delta": {
+        "model_replays": 118,
+        "sample_replays": 118,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 118,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.sympy__sympy-14711.call1.onset.seed44.cap256.json",
+      "sha256": "0877c53199e1457052f92408598e19e3a02ab67825f07ef8b75df420b99fe1cd",
+      "seed": 44,
+      "tokens": 117,
+      "verdict": "other",
+      "reason": "Closing tool marker used as opener; different from native literal thought/GetAll-bash onset; parser audit pending.",
+      "trace_counters_delta": {
+        "model_replays": 116,
+        "sample_replays": 116,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 116,
+        "captures": 0
+      }
+    }
+  ]
+}

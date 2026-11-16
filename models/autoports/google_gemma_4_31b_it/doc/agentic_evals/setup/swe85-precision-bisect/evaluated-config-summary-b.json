@@ -1,0 +1,796 @@
+{
+  "status": "supporting_evidence_consolidation_not_final_review",
+  "created_utc": "2026-11-15",
+  "scope": "Read-only evidence reconciliation of precision arms. Policy values are taken from saved runtime_precision or pinned policy files. Decode rates are traced diagnostic weighted token-out rates, not vLLM/serving performance and not precision rankings. P2 was host-contended; P6 fixed108 remains in progress; P7 is inert. Scores and defaults are not changed.",
+  "rate_definition": "sum of saved free_running.decode_timing.decode_tokens divided by sum of decode_wall_s across listed result rows.",
+  "arms": [
+    {
+      "label": "P1_head_bfp8_hifi2",
+      "status": "completed_108_trial_panel",
+      "mode": "full",
+      "policy": {
+        "config_id": "stage12_swe85_head_bfp8_hifi2",
+        "weight_groups": {
+          "attention": "bfp4",
+          "mlp": "bfp4",
+          "down": "bfp4",
+          "lm_head": "bfp8"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "LoFi",
+          "mlp": "LoFi",
+          "down": "LoFi",
+          "lm_head": "HiFi2"
+        },
+        "activation_dtype": "bfloat8_b",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat8_b",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat8_b",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144
+      },
+      "policy_file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-with-cap4096-pending-v-closure/head_bfp8_hifi2_precision.json",
+      "policy_file_sha256": "6ef80afe2b6ae02403eb99fbbabcf3cc6d0d4706ba9b3f67a1c8723e16d3855b",
+      "policy_sha256_canonical_observed": "d20dac2f193ea104fdf0eb4736a44fe7896798932ec0763c1f37235e317a5b29",
+      "manifest_or_case_file": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-with-cap4096-pending-v-closure/candidate-cases.json",
+      "manifest_or_case_file_sha256": "57193e4b91af3a31df00f0c92dbc0f2219fbce011e6533594e5244a93a3021ed",
+      "completion_file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/completion.json",
+      "completion_file_sha256": "fa70e146164d0b1b948f3bb969fff7e56b44b8d6cc85912f2dfb814c941675d9",
+      "elapsed_seconds": 2018.038988828659,
+      "observed_output_files": 108,
+      "free_running_trials": 108,
+      "generated_tokens": 27992,
+      "diagnostic_decode_tokens": 27884,
+      "diagnostic_decode_wall_seconds": 911.1484370483086,
+      "weighted_diagnostic_decode_tokens_per_second": 30.60313651015088,
+      "model_load_wall_seconds": 138.38867970812134,
+      "load_file_sha256": "c2b4c3891093492ac0da8d86ff33b7a8286b4c3433e599c0a04660a1fd83538b",
+      "verdict_counts": {
+        "normal": 58,
+        "reproduced_native_motif": 37,
+        "other_anomaly": 13,
+        "inconclusive": 0
+      },
+      "review_artifacts": [
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/completion-summary.json",
+          "sha256": "3e235673a01aa0a28ad88d49677ad8099b38dbe6e89d7ce65885365284a8d67f"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/forecast-miss-accepted.json",
+          "sha256": "b33ebae3a3366738541d2983238c18f57cc3841bc539afcc021a85d86fd7c18b"
+        }
+      ],
+      "qualification": "Root and independent semantic triage reconciled. Clean timing run; traced diagnostic decode rate only, not serving/vLLM throughput.",
+      "raw_runtime_precision_consistent": true,
+      "runtime_precision_variants": 1,
+      "result_path_sample": [
+        "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.call88.canonicalprefix.seed42.cap1024.json",
+        "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.call88.canonicalprefix.seed43.cap1024.json",
+        "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.call88.canonicalprefix.seed44.cap1024.json"
+      ],
+      "policy_file_matches_observed_runtime": true
+    },
+    {
+      "label": "P2_head_bf16_hifi4",
+      "status": "completed_108_trial_panel",
+      "mode": "full",
+      "policy": {
+        "config_id": "stage12_swe85_head_bf16_hifi4",
+        "weight_groups": {
+          "attention": "bfp4",
+          "mlp": "bfp4",
+          "down": "bfp4",
+          "lm_head": "bf16"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "LoFi",
+          "mlp": "LoFi",
+          "down": "LoFi",
+          "lm_head": "HiFi4"
+        },
+        "activation_dtype": "bfloat8_b",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat8_b",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat8_b",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144
+      },
+      "policy_file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/head_bf16_hifi4_precision.json",
+      "policy_file_sha256": "12fa7be99e88bb9661b41e464a9d56d8160b2aefe2fb05a5d3b439dbcedfe6ee",
+      "policy_sha256_canonical_observed": "c5cc31b643b3889ff2bb789618317126272f77804be49062f5d28d496ff43b05",
+      "manifest_or_case_file": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-with-cap4096-pending-v-closure/candidate-cases.json",
+      "manifest_or_case_file_sha256": "57193e4b91af3a31df00f0c92dbc0f2219fbce011e6533594e5244a93a3021ed",
+      "completion_file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/completion.json",
+      "completion_file_sha256": "47896893e57257757d1153dd3ae4df6b05985cd97b0fbb9993739e30145b2880",
+      "elapsed_seconds": 2469.2918775081635,
+      "observed_output_files": 108,
+      "free_running_trials": 108,
+      "generated_tokens": 31023,
+      "diagnostic_decode_tokens": 30915,
+      "diagnostic_decode_wall_seconds": 1042.8939251902048,
+      "weighted_diagnostic_decode_tokens_per_second": 29.643475000932305,
+      "model_load_wall_seconds": 139.51283346884884,
+      "load_file_sha256": "bb2e328999373e00884431f8e10dbc7266fb06bcecacc9f577bb06190d58071d",
+      "verdict_counts": {
+        "normal": 60,
+        "reproduced_native_motif": 35,
+        "other_anomaly": 13,
+        "inconclusive": 0
+      },
+      "review_artifacts": [
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/completion-summary.json",
+          "sha256": "254b4f17dd02cbd1d448be1a5a8a940847f689028d0f73843a5a6f80eb626eb4"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/host-contention-incident.json",
+          "sha256": "1e38ae6af03df79db790ea2c711c24d5af0a4880cfb3124db8b285b2c1dbe750"
+        }
+      ],
+      "qualification": "Root and independent semantic triage reconciled. Unexpected HF CPU process overlapped this run; retain wall/rate as observed diagnostics only, not uncontended precision ranking.",
+      "raw_runtime_precision_consistent": true,
+      "runtime_precision_variants": 1,
+      "result_path_sample": [
+        "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/runs/head_bf16_hifi4/anomaly.call88.canonicalprefix.seed42.cap1024.json",
+        "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/runs/head_bf16_hifi4/anomaly.call88.canonicalprefix.seed43.cap1024.json",
+        "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/runs/head_bf16_hifi4/anomaly.call88.canonicalprefix.seed44.cap1024.json"
+      ],
+      "policy_file_matches_observed_runtime": true
+    },
+    {
+      "label": "P3_down_bfp8_lofi_fixed108",
+      "status": "completed_108_trial_panel_plus_nine_cap_extensions",
+      "mode": "full",
+      "policy": {
+        "config_id": "stage12_swe85_down_bfp8_lofi_isolated_served_head_bfp8_lofi",
+        "weight_groups": {
+          "attention": "bfp4",
+          "mlp": "bfp4",
+          "down": "bfp8_lofi",
+          "lm_head": "bfp8_lofi"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "LoFi",
+          "mlp": "LoFi",
+          "down": "LoFi",
+          "lm_head": "LoFi"
+        },
+        "activation_dtype": "bfloat8_b",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat8_b",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat8_b",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144
+      },
+      "policy_file": "down-bfp8-lofi-isolated-fixed108-proposal/down_bfp8_lofi_isolated_precision.json",
+      "policy_file_sha256": null,
+      "policy_sha256_canonical_observed": "45beca08f516c6d09091d459ca53f130d8833b1ff970d74dc76b3aa1a38701e7",
+      "manifest_or_case_file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/candidate-cases.json",
+      "manifest_or_case_file_sha256": "57193e4b91af3a31df00f0c92dbc0f2219fbce011e6533594e5244a93a3021ed",
+      "completion_file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/completion.json",
+      "completion_file_sha256": "0f4b67270fbca7ed37ae3ebb360c3e4f8ff675ea74f8814b4d09ab3ae7246782",
+      "elapsed_seconds": 2140.1934437209275,
+      "observed_output_files": 108,
+      "free_running_trials": 108,
+      "generated_tokens": 29061,
+      "diagnostic_decode_tokens": 28953,
+      "diagnostic_decode_wall_seconds": 1017.3925147645641,
+      "weighted_diagnostic_decode_tokens_per_second": 28.458043065807345,
+      "model_load_wall_seconds": 137.96008633519523,
+      "load_file_sha256": "3c1370e1c8d7a25128ac7e35548f1b77198f3ed0d0c4a1c039687b9c8da3a086",
+      "verdict_counts": {
+        "normal": 76,
+        "inconclusive": 9,
+        "reproduced_native_motif": 17,
+        "other_anomaly": 6
+      },
+      "review_artifacts": [
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/root-initial108-adjudication.json",
+          "sha256": "0b810c4e96c31da5b99fcc62b5a9865177d327b9df18b4baa1ee900fa9c8d7d1"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-cap-extension-candidate/merged9/triage-b.json",
+          "sha256": "cb11b13f92a3ab7e90bab99221016a05e90681465c131ae763acc68af4125436"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-cap-extension-candidate/merged9/triage-cd.json",
+          "sha256": "b5870270fb2e2ab474b0a2afa9ca1cc075b9e4fdeb3987e75953472304c7e689"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-cap-extension-candidate/merged9/completion.json",
+          "sha256": "e83f641d4d6557204c78c96201c4076a94da3c6282f1ac014abdb119bda3da6a"
+        }
+      ],
+      "qualification": "Base108 counts from root adjudication. Nine correlated same-prompt/seed cap extensions yield five normal, one native, three still inconclusive; overlay resolves six original progressing rows to effective 81 normal/18 native/6 other/3 inconclusive over base108. Do not treat extra cap runs as independent case-seeds.",
+      "raw_runtime_precision_consistent": true,
+      "runtime_precision_variants": 1,
+      "result_path_sample": [
+        "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.call88.canonicalprefix.seed42.cap1024.json",
+        "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.call88.canonicalprefix.seed43.cap1024.json",
+        "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.call88.canonicalprefix.seed44.cap1024.json"
+      ],
+      "policy_file_matches_observed_runtime": true
+    },
+    {
+      "label": "P4_down_bfp8_hifi2_seven_cases",
+      "status": "completed_rejected_not_selected",
+      "mode": "full",
+      "policy": {
+        "config_id": "stage12_swe85_down_bfp8_hifi2_fourcase_followup",
+        "weight_groups": {
+          "attention": "bfp4",
+          "mlp": "bfp4",
+          "down": "bfp8",
+          "lm_head": "bfp8_lofi"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "LoFi",
+          "mlp": "LoFi",
+          "down": "HiFi2",
+          "lm_head": "LoFi"
+        },
+        "activation_dtype": "bfloat8_b",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat8_b",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat8_b",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144
+      },
+      "policy_file": "down-bfp8-hifi2-fourcase-followup-candidate/down_bfp8_hifi2_precision.json",
+      "policy_file_sha256": null,
+      "policy_sha256_canonical_observed": "0a60051befab5563a3fa1c1a304470dbbf85bc0c5a801e19344de5f609941794",
+      "manifest_or_case_file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-hifi2-fourcase-followup-candidate/candidate-cases.json",
+      "manifest_or_case_file_sha256": "a87d67811b8027f38b33f217193f1a670f035c27fd0315b5cf4b955f2ec015bc",
+      "completion_file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-hifi2-fourcase-followup-candidate/completion.json",
+      "completion_file_sha256": "4244e86608dfda65335067e2fc463f1bcbf2e6ace29b618e26ee9ead14090cb4",
+      "elapsed_seconds": 454.8605308532715,
+      "observed_output_files": 7,
+      "free_running_trials": 7,
+      "generated_tokens": 4468,
+      "diagnostic_decode_tokens": 4461,
+      "diagnostic_decode_wall_seconds": 166.29560214467347,
+      "weighted_diagnostic_decode_tokens_per_second": 26.825724447715878,
+      "model_load_wall_seconds": 141.78374898713082,
+      "load_file_sha256": "54b1c4a8f15ba7663bafd3b523a12219bdcff6055c3d53c35ba8751c5e216046",
+      "verdict_counts": {
+        "normal": 4,
+        "reproduced_native_motif": 1,
+        "other_anomaly": 2,
+        "inconclusive": 0
+      },
+      "review_artifacts": [
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-hifi2-fourcase-followup-candidate/root-terminal-review.json",
+          "sha256": "33472876e328f12840ce594a92ed9fb8e0dc9c46f22c9a07694ec14e0de628ef"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-hifi2-fourcase-followup-candidate/triage-d.json",
+          "sha256": "5a754dfd081bcab538ebc83a2f105c880d39b105e6d09faaf53f1f76be7f510c"
+        }
+      ],
+      "qualification": "Seven-case panel despite \u201cfourcase\u201d directory name. Root rejected broader arm after three affirmative protocol/argument anomalies.",
+      "raw_runtime_precision_consistent": true,
+      "runtime_precision_variants": 1,
+      "result_path_sample": [
+        "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-hifi2-fourcase-followup-candidate/runs/down_bfp8_hifi2/anomaly.pytest-dev__pytest-5787.call65.onset.seed42.p4_hifi2.cap2048.json",
+        "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-hifi2-fourcase-followup-candidate/runs/down_bfp8_hifi2/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.seed43.p4_hifi2.cap2048.json",
+        "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-hifi2-fourcase-followup-candidate/runs/down_bfp8_hifi2/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed42.p4_hifi2.cap1024.json"
+      ],
+      "policy_file_matches_observed_runtime": true
+    },
+    {
+      "label": "P5_down_bf16_hifi4_seven_cases",
+      "status": "completed_not_selected_protocol_anomalies",
+      "mode": "full",
+      "policy": {
+        "config_id": "stage12_swe85_down_bf16_hifi4_seven_case",
+        "weight_groups": {
+          "attention": "bfp4",
+          "mlp": "bfp4",
+          "down": "bf16",
+          "lm_head": "bfp8_lofi"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "LoFi",
+          "mlp": "LoFi",
+          "down": "HiFi4",
+          "lm_head": "LoFi"
+        },
+        "activation_dtype": "bfloat8_b",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat8_b",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat8_b",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144
+      },
+      "policy_file": "down-bf16-hifi4-seven-case-candidate/down_bf16_hifi4_precision.json",
+      "policy_file_sha256": null,
+      "policy_sha256_canonical_observed": "99d355b9fb11c91122bf8db505227d5e617a0828a9a89378d1c0eff687597666",
+      "manifest_or_case_file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bf16-hifi4-seven-case-candidate/candidate-cases.json",
+      "manifest_or_case_file_sha256": "c6833471127da15aa28a4c87901d7beac9f3e1b51b85dd6379d163f0a796f5f6",
+      "completion_file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bf16-hifi4-seven-case-candidate/completion.json",
+      "completion_file_sha256": "573b597e4940fc91fe169ba75baf24ddab39b16c487b58efcf629f15fa3b2f3c",
+      "elapsed_seconds": 473.22194647789,
+      "observed_output_files": 7,
+      "free_running_trials": 7,
+      "generated_tokens": 4460,
+      "diagnostic_decode_tokens": 4453,
+      "diagnostic_decode_wall_seconds": 188.1481506631244,
+      "weighted_diagnostic_decode_tokens_per_second": 23.667519368675645,
+      "model_load_wall_seconds": 120.1148060199339,
+      "load_file_sha256": "049968950b76c0a518029d2627d0dfc1494d3f0381e718fb30f503c4cd35de7c",
+      "verdict_counts": {
+        "normal": 3,
+        "reproduced_native_motif": 0,
+        "other_anomaly": 3,
+        "inconclusive": 1
+      },
+      "review_artifacts": [
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bf16-hifi4-seven-case-candidate/root-terminal-review.json",
+          "sha256": "23df7240410d2985bab370f7eb48e8c0ea232381a2fc5179871b7c8974d79897"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bf16-hifi4-seven-case-candidate/triage-d.json",
+          "sha256": "be9cd53b5d9b3ef87a9b7652c286a8efb0ae9fd2ef1f250a354688a934156d55"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bf16-hifi4-seven-case-candidate/p5-gemma4-parser-audit.json",
+          "sha256": "ea58f75b90f67aeb60b620b2ac6ff30820de41e7b7740a1be5382386baf48ea6"
+        }
+      ],
+      "qualification": "Seven full-mode controls. Pinned parser audit confirms quoted JSON keys do not produce required command:string schema; three other protocol anomalies, one progressing cap row, three normal.",
+      "raw_runtime_precision_consistent": true,
+      "runtime_precision_variants": 1,
+      "result_path_sample": [
+        "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bf16-hifi4-seven-case-candidate/runs/down_bf16_hifi4/anomaly.pytest-dev__pytest-5787.call65.onset.seed42.p5_downbf16_hifi4.cap2048.json",
+        "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bf16-hifi4-seven-case-candidate/runs/down_bf16_hifi4/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.seed43.p5_downbf16_hifi4.cap2048.json",
+        "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bf16-hifi4-seven-case-candidate/runs/down_bf16_hifi4/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed42.p5_downbf16_hifi4.cap1024.json"
+      ],
+      "policy_file_matches_observed_runtime": true
+    },
+    {
+      "label": "P6_attention_down_bfp8_lofi_seven_cases",
+      "status": "completed_seven_case_gate_passed_not_selected_awaiting_fixed108",
+      "mode": "full",
+      "policy": {
+        "config_id": "stage12_swe85_attention_down_bfp8_lofi_p6",
+        "weight_groups": {
+          "attention": "bfp8_lofi",
+          "mlp": "bfp4",
+          "down": "bfp8_lofi",
+          "lm_head": "bfp8_lofi"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "LoFi",
+          "mlp": "LoFi",
+          "down": "LoFi",
+          "lm_head": "LoFi"
+        },
+        "activation_dtype": "bfloat8_b",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat8_b",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat8_b",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144
+      },
+      "policy_file": "attention-down-bfp8-lofi-seven-case-candidate/attention_down_bfp8_lofi_precision.json",
+      "policy_file_sha256": null,
+      "policy_sha256_canonical_observed": "ee1b819ea51f1774d19b213e64ae6c8d3610a0da85bfee437536e912d8fef79a",
+      "manifest_or_case_file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/attention-down-bfp8-lofi-seven-case-candidate/candidate-cases.json",
+      "manifest_or_case_file_sha256": "fcda93f673eab59cbe2c85f93e36cab57f81676d0919c6d4c6e8045c6d45b50c",
+      "completion_file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/attention-down-bfp8-lofi-seven-case-candidate/completion.json",
+      "completion_file_sha256": "455f63ffa1697c4f2e6ff52264b542b1083c02b8d3901b086b15a44b48dbb66d",
+      "elapsed_seconds": 519.0206434726715,
+      "observed_output_files": 7,
+      "free_running_trials": 7,
+      "generated_tokens": 4778,
+      "diagnostic_decode_tokens": 4771,
+      "diagnostic_decode_wall_seconds": 189.1289144018665,
+      "weighted_diagnostic_decode_tokens_per_second": 25.226179799575455,
+      "model_load_wall_seconds": 143.19578505982645,
+      "load_file_sha256": "934ee695e8b0c8964c0a353d09e81a62ece2e3ee567e50b6290892b7eeea19a2",
+      "verdict_counts": {
+        "normal": 7,
+        "reproduced_native_motif": 0,
+        "other_anomaly": 0,
+        "inconclusive": 0
+      },
+      "review_artifacts": [
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/attention-down-bfp8-lofi-seven-case-candidate/root-terminal-review.json",
+          "sha256": "b3b849bcf7da8c5c61839bca14a303b67c6bf580f616f9a4e934bd22f30f1c95"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/attention-down-bfp8-lofi-seven-case-candidate/triage-d.json",
+          "sha256": "a2d56266934115838ba989c7dd92a764e75c49cb17a639f0d782c97d77068210"
+        }
+      ],
+      "qualification": "Seven-case semantic triage: all seven normal. Root review requires fixed108 follow-up; parser pipeline was not run against these raw P6 outputs, so protocol evidence is manual.",
+      "raw_runtime_precision_consistent": true,
+      "runtime_precision_variants": 1,
+      "result_path_sample": [
+        "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/attention-down-bfp8-lofi-seven-case-candidate/runs/attention_down_bfp8_lofi/anomaly.pytest-dev__pytest-5787.call65.onset.seed42.p6_attention_down_bfp8_lofi.cap2048.json",
+        "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/attention-down-bfp8-lofi-seven-case-candidate/runs/attention_down_bfp8_lofi/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.seed43.p6_attention_down_bfp8_lofi.cap2048.json",
+        "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/attention-down-bfp8-lofi-seven-case-candidate/runs/attention_down_bfp8_lofi/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed42.p6_attention_down_bfp8_lofi.cap1024.json"
+      ],
+      "policy_file_matches_observed_runtime": true
+    },
+    {
+      "label": "P6_attention_down_bfp8_lofi_full108_partial",
+      "status": "in_progress_partial_outputs_not_complete",
+      "mode": "full",
+      "policy": {
+        "config_id": "stage12_swe85_attention_down_bfp8_lofi_fixed108",
+        "weight_groups": {
+          "attention": "bfp8_lofi",
+          "mlp": "bfp4",
+          "down": "bfp8_lofi",
+          "lm_head": "bfp8_lofi"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "LoFi",
+          "mlp": "LoFi",
+          "down": "LoFi",
+          "lm_head": "LoFi"
+        },
+        "activation_dtype": "bfloat8_b",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat8_b",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat8_b",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144
+      },
+      "policy_file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/attention-down-bfp8-lofi-fixed108-candidate/attention_down_bfp8_lofi_precision.json",
+      "policy_file_sha256": "8341f61235a6e7c0ffef07494a95712d6f37702c060b06dd90adac65b0eda4cf",
+      "policy_sha256_canonical_observed": "00c6a27e6c5f0a568e7f8a59bc9b0ec64e48a9ce85d82804b98be9556d456ccf",
+      "manifest_file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/attention-down-bfp8-lofi-fixed108-candidate/candidate-cases.json",
+      "manifest_sha256": "57193e4b91af3a31df00f0c92dbc0f2219fbce011e6533594e5244a93a3021ed",
+      "completion_file": null,
+      "completion_file_sha256": null,
+      "elapsed_seconds": null,
+      "observed_output_files": 106,
+      "raw_output_manifest_indices": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+        25,
+        26,
+        27,
+        28,
+        29,
+        30,
+        31,
+        32,
+        33,
+        34,
+        35,
+        36,
+        37,
+        38,
+        39,
+        40,
+        41,
+        42,
+        43,
+        44,
+        45,
+        46,
+        47,
+        48,
+        49,
+        50,
+        51,
+        52,
+        53,
+        54,
+        55,
+        56,
+        57,
+        58,
+        59,
+        60,
+        61,
+        62,
+        63,
+        64,
+        65,
+        66,
+        67,
+        68,
+        69,
+        70,
+        71,
+        72,
+        73,
+        74,
+        75,
+        76,
+        77,
+        78,
+        79,
+        80,
+        81,
+        82,
+        83,
+        84,
+        85,
+        86,
+        87,
+        88,
+        89,
+        90,
+        91,
+        92,
+        93,
+        94,
+        95,
+        96,
+        97,
+        98,
+        99,
+        100,
+        101,
+        102,
+        103,
+        104,
+        105
+      ],
+      "free_running_trials": 106,
+      "generated_tokens": 31410,
+      "diagnostic_decode_tokens": 31304,
+      "diagnostic_decode_wall_seconds": 1180.474866393488,
+      "weighted_diagnostic_decode_tokens_per_second": 26.518141886102157,
+      "model_load_wall_seconds": 141.02525434992276,
+      "load_file_sha256": "373de362dfd7998f7a9eae82048bf5503c398a96c3896df32a9574e928b644aa",
+      "reviewed_rows": 72,
+      "reviewed_verdict_counts": {
+        "normal": 52,
+        "reproduced_native_motif": 17,
+        "other_anomaly": 2,
+        "inconclusive": 1
+      },
+      "available_but_unreviewed_output_indices": [
+        72,
+        73,
+        74,
+        75,
+        76,
+        77,
+        78,
+        79,
+        80,
+        81,
+        82,
+        83,
+        84,
+        85,
+        86,
+        87,
+        88,
+        89,
+        90,
+        91,
+        92,
+        93,
+        94,
+        95,
+        96,
+        97,
+        98,
+        99,
+        100,
+        101,
+        102,
+        103,
+        104,
+        105
+      ],
+      "not_yet_emitted_indices": [
+        106,
+        107
+      ],
+      "triage_artifacts": [
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/attention-down-bfp8-lofi-fixed108-candidate/triage-b.json",
+          "sha256": "363c650d5928b8547da5207686bd605e9a854b87961938c4a000cdabe19d6cfe"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/attention-down-bfp8-lofi-fixed108-candidate/triage-c.json",
+          "sha256": "89fc84e2792208aaf811c171ddd7035f5051e74bdc943e6c2364bf92b28b19ba"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/attention-down-bfp8-lofi-fixed108-candidate/triage-d.json",
+          "sha256": "415252c129773589f8511274ca6c765b5594244b3bb0bd4c9d3acaf1e7eca291"
+        }
+      ],
+      "qualification": "Snapshot contains raw results through currently present manifest indices; output metrics are partial observed diagnostics. The 66 reviewed B/C rows and 11 available-but-unreviewed rows are distinct; no final panel wall or verdict count.",
+      "policy_file_matches_observed_runtime": true,
+      "runtime_precision_variants": 1,
+      "raw_result_inventory_sha256_canonical_json": "184d6d1a272340c13f71e37b951e73d0468e79a00addadda277355b72d24adc4",
+      "raw_result_inventory_count": 106,
+      "partial_panel_snapshot_note": "Raw output inventory captured during this consolidation; later rows may land while the panel runs."
+    },
+    {
+      "label": "P7_attention_bfp8_hifi2_down_bfp8_lofi_nine_case_candidate",
+      "status": "prepared_inert_not_admitted_not_run",
+      "mode": "full",
+      "policy": {
+        "config_id": "stage12_swe85_attention_bfp8_hifi2_down_bfp8_lofi_p7",
+        "weight_groups": {
+          "attention": "bfp8",
+          "mlp": "bfp4",
+          "down": "bfp8_lofi",
+          "lm_head": "bfp8_lofi"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "HiFi2",
+          "mlp": "LoFi",
+          "down": "LoFi",
+          "lm_head": "LoFi"
+        },
+        "activation_dtype": "bfloat8_b",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat8_b",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat8_b",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144
+      },
+      "policy_file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/attention-hifi2-down-lofi-nine-case-candidate/attention_hifi2_down_lofi_precision.json",
+      "policy_file_sha256": "622daf9b6670fd6412eb3cb7a3f6fadccd494f56aee206fa76eff259b7ea29f4",
+      "manifest_file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/attention-hifi2-down-lofi-nine-case-candidate/candidate-cases.json",
+      "manifest_sha256": "a3419c7386cf4f2a6f1eefd85ebaf6253ac250a6b7faad3c6bdaa9714452d50e",
+      "proposed_trials": 9,
+      "observed_output_files": 0,
+      "free_running_trials": 0,
+      "elapsed_seconds": null,
+      "weighted_diagnostic_decode_tokens_per_second": null,
+      "verdict_counts": null,
+      "forecast_seconds": [
+        450,
+        1200
+      ],
+      "forecast_point_seconds": 591.6953694897238,
+      "source_hashes_file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/attention-hifi2-down-lofi-nine-case-candidate/source-hashes.json",
+      "source_hashes_sha256": "7edaab39d729b605bf635f0f21bd0e347ce7ffceedc359d179a383bac9f76c65",
+      "qualification": "Planning candidate only; no runtime result or selection exists.",
+      "policy_file_matches_observed_runtime": null
+    }
+  ],
+  "p3_extension_overlay": {
+    "base108_counts": {
+      "normal": 76,
+      "inconclusive": 9,
+      "reproduced_native_motif": 17,
+      "other_anomaly": 6
+    },
+    "additional_correlated_cap_extension_trials": 9,
+    "extension_verdict_counts": {
+      "normal": 5,
+      "reproduced_native_motif": 1,
+      "other_anomaly": 0,
+      "inconclusive": 3
+    },
+    "effective_counts_over_original108_after_overlay": {
+      "normal": 81,
+      "reproduced_native_motif": 18,
+      "other_anomaly": 6,
+      "inconclusive": 3
+    },
+    "extension_completion_seconds": 503.0153603553772,
+    "extension_completion_sha256": "e83f641d4d6557204c78c96201c4076a94da3c6282f1ac014abdb119bda3da6a",
+    "root_initial_adjudication_sha256": "0b810c4e96c31da5b99fcc62b5a9865177d327b9df18b4baa1ee900fa9c8d7d1",
+    "extension_run_diagnostic_timing": {
+      "result_files": 9,
+      "free_running_trials": 9,
+      "generated_tokens": 7438,
+      "decode_tokens": 7429,
+      "decode_wall_seconds": 261.5657000169158,
+      "weighted_diagnostic_decode_tokens_per_second": 28.40204200902319,
+      "scope": "Nine additional cap-extension runs, correlated with their matching original case/seed prefixes; not independent coverage."
+    }
+  },
+  "p5_root_terminal_hash_audit": {
+    "root_terminal_review_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bf16-hifi4-seven-case-candidate/root-terminal-review.json",
+    "root_terminal_review_sha256": "23df7240410d2985bab370f7eb48e8c0ea232381a2fc5179871b7c8974d79897",
+    "root_pinned_triage_sha256": "91d4bac1a33345fe3134625502f8ee5fc4e0f715173be790e6c800d59eb3e054",
+    "current_triage_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bf16-hifi4-seven-case-candidate/triage-d.json",
+    "current_triage_sha256": "be9cd53b5d9b3ef87a9b7652c286a8efb0ae9fd2ef1f250a354688a934156d55",
+    "triage_hash_matches": false,
+    "root_pinned_parser_audit_sha256": "ea58f75b90f67aeb60b620b2ac6ff30820de41e7b7740a1be5382386baf48ea6",
+    "current_parser_audit_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bf16-hifi4-seven-case-candidate/p5-gemma4-parser-audit.json",
+    "current_parser_audit_sha256": "ea58f75b90f67aeb60b620b2ac6ff30820de41e7b7740a1be5382386baf48ea6",
+    "parser_hash_matches": true,
+    "disposition": "Terminal-review triage pin does not match current triage-d.json bytes; parser-audit pin matches. No source/root record edited.",
+    "triage_stale_reason": "The referenced 91d4\u2026 digest does not match any current JSON under the P5 candidate; the current triage-d.json is be9cd5\u2026."
+  },
+  "scope_notes": [
+    "P1 and P2 each contain 108 full free-run trials. P3 has 108 base trials plus nine cap-extension runs that verify and extend matching prior prefixes; those are correlated extensions, not new independent case-seed coverage.",
+    "P4, P5 and P6-seven are seven-case panels; P4 directory name says fourcase but manifest/results contain seven.",
+    "P6-full partial raw files and triage-reviewed rows are reported separately; absent completion means elapsed_seconds is null.",
+    "P7 contains nine proposed trials and no results.",
+    "P5 root-terminal-review.json currently pins triage SHA 91d4bac1\u2026, while current triage-d.json SHA is be9cd53b\u2026; parser audit file SHA ea58f75b\u2026 matches. This is reported as stale metadata; no root review file was edited.",
+    "At this file-inventory snapshot, P6 full108 had 106 raw rows at manifest indices 0\u2013105; 72 were semantically reviewed in triage B/C, and the rest are kept unreviewed. Panel completion/elapsed is not yet recorded."
+  ],
+  "no_selection_or_score_change": true
+}

@@ -1,0 +1,50 @@
+{
+  "status": "conditional_candidate_unadmitted_no_launch",
+  "revision_of": "revision-adaptive1024 + N full native-positive suffix2048 case",
+  "selection": {
+    "retained_suffix512_cases": 3,
+    "retained_suffix1024_cases": 1,
+    "added_suffix2048_cases": 1,
+    "added_case": "anomaly.psf__requests-5414.call11.onset",
+    "positive_seed": 44,
+    "positive_evidence": "N full root review records all512 generated IDs as repeated ellipsis/indent/newline; served seed44 independently repeats same cycle on the same exact suffix2048 fixture.",
+    "existing_matched_cases_retained": 4
+  },
+  "workload": {
+    "generation_tokens": 512,
+    "teacher_forcing_positions": 64,
+    "sampling": {
+      "temperature": 1.0,
+      "top_p": 0.95,
+      "top_k": 20
+    },
+    "reference_seeds_are_diagnostic": true,
+    "hf_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+    "prefill_chunk": 512
+  },
+  "execution": "Four serial offline CPU processes, split by exact seed group and suffix source; no TT or HF overlap.",
+  "mandatory_prelaunch_gates": [
+    "Root must freeze the native-positive set after the pending cap2048 probe; no admission before then.",
+    "All TT queues complete, including the short cap2048 probe and any later adaptive runs.",
+    "Zero active TT device owners.",
+    "Fresh host MemAvailable >=100GB.",
+    "No HF/model process running.",
+    "Reverify candidate, run, runner and command hashes."
+  ],
+  "forecast_file": "forecast.json",
+  "commands_file": "commands.json",
+  "manifests": [
+    "native-positive-candidates-seed42-suffix512.json",
+    "native-positive-candidates-seed44-suffix512.json",
+    "native-positive-candidates-seed44-suffix1024.json",
+    "native-positive-candidates-seed44-suffix2048.json"
+  ],
+  "validation": "cpu-validation.json: all four manifest groups passed runner --validate-only; no model loaded.",
+  "manifest_sha256s": {
+    "native-positive-candidates-seed42-suffix512.json": "3ee6b4e9c15a7bee52da5b083bba00f5c334acb9f4062e6b92eaad5861e8c6cf",
+    "native-positive-candidates-seed44-suffix512.json": "7635a0b1f75bfc8edb430bcfd33ec03926f8e863434878476f3d8cc5a83d5a0b",
+    "native-positive-candidates-seed44-suffix1024.json": "b9602b3c8ba1a97f7f64a73e7ac2e502edd12d6e6ccb1212a9dec39ec6c1a4a1",
+    "native-positive-candidates-seed44-suffix2048.json": "8be05cbc74c014acefe3372df69386534f31330b7276bdac0bed35e154fbd5c2"
+  },
+  "forecast_note": "No matched HF baseline for suffix2048. Provisional point reuses 512-prefix median; range expands to 800\u20133200s case wall plus180s process allowance. All estimates remain host-wall planning only."
+}

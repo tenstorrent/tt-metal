@@ -1,0 +1,9 @@
+{
+  "status": "full_completed",
+  "queued_unix": 1794693110.9101217,
+  "stop_file": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/STOP_BEFORE_FULL",
+  "rule": "No active device job is signaled; stop file only prevents next launch.",
+  "start_unix": 1794698655.9097002,
+  "end_unix": 1794708690.4390616,
+  "exit_code": 0
+}

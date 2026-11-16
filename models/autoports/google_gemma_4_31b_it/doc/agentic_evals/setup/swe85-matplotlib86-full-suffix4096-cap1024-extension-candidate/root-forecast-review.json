@@ -1,0 +1,10 @@
+{
+  "reviewer": "root",
+  "accepted": true,
+  "forecast_sha256": "c2d3d2edfe7cc18432a45ce8d449908bd9ffb1f4842a777bbb9a7836acb29ee1",
+  "forecast_range_wall_s": [
+    139.36690143023688,
+    210.05798215516484
+  ],
+  "basis": "Same-context full512 measured decode and load; sum-of-context scaling to1023 replay steps plus trace proxy. Planning only; natural stop can miss low. Root inspected full policy/fixture/seed/prefix512 validation; independent review and11host tests retained."
+}

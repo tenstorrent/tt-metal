@@ -1,0 +1,37 @@
+{
+  "status": "implemented_host_tests_passed",
+  "scope": "Model-owned fixed KV pool sizing and launch log metadata. Host-only source/test validation; no TTNN import, model inference or device launch.",
+  "changes": [
+    "Added GEMMA4_KV_POOL_IDS for batches 1, 8, 16, and 32 at max_model_len 262144, with canonical positive decimal validation and context-preserving per-batch minimum IDs.",
+    "The synthetic worker token budget subtracts one 32-token output reserve and eight 1024-token sliding-window reserves per sequence, so the pinned worker heuristic reconstructs the requested pool ID count.",
+    "The legacy GEMMA4_B8_KV_POOL_IDS=20480 path and its other-batch behavior remain unchanged; simultaneous legacy and new overrides are rejected.",
+    "serving_pool_budget logging reports requested/effective pool IDs, source, synthetic budget, total tokens with reserves, minimum, and reserve components.",
+    "The existing validate_pool_memory fit check and runtime error remain in place; requested IDs do not bypass measured allocator free-memory validation."
+  ],
+  "tests": {
+    "command": "python_env/bin/python -m unittest models.autoports.google_gemma_4_31b_it.tests.test_kv_pool_budget -v",
+    "result": "10 tests passed",
+    "test_file": "models/autoports/google_gemma_4_31b_it/tests/test_kv_pool_budget.py",
+    "coverage": [
+      "old defaults and B8 legacy constants",
+      "valid override at B1/B8/B16/B32",
+      "worker reserve cancellation and exact pool reconstruction",
+      "malformed, conflicting, unsupported-batch/context and subminimum override rejection",
+      "unchanged allocator-fit guard"
+    ],
+    "imports": "Test dynamically loads kv_pool_budget.py and inspects generator_vllm.py as text; no TTNN import."
+  },
+  "preserved": {
+    "selected_precision_config_edited": false,
+    "inert_reviewed_patch_preserved": true,
+    "serving_rate_or_memory_measurement_made": false,
+    "hardware_capacity_claimed": false
+  },
+  "source_sha256": {
+    "kv_pool_budget": "67739175d88efe9e02cdbd5b5b559b4bac047ab7e57d7dc24ac47cff888ba081",
+    "generator_vllm": "5a19558b9b28b6a5586cc985bedebdd88671ba07b453ced2890935552937b734",
+    "production_host_test": "f8d3225d54007035b9436e0297ae8500af758d1af39a06ebe5c964e2b85df2fe",
+    "applied_from_reviewed_patch": "1d2a591bf464a32057813f8ae5690396e5608274bef278c03b5d06bf1e1b432e",
+    "test_design_reference": "147b144113fb9d0b2680ebac9689c2ecd65f9f9015d45c951aa3d76ce5d985fa"
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "status": "passed_host_only_no_predecessor_execution",
+  "checks": [
+    "syntax compile",
+    "candidate --validate-only",
+    "candidate --self-test",
+    "P source pins including exact stale admission exception",
+    "X admission/proposal/driver/candidate/fixture pins",
+    "P2 terminal record gate mocked success and mismatched command rejection",
+    "P2 source inventory recursively verified host-only"
+  ],
+  "p2_pin": {
+    "directory": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal",
+    "admission_sha256": "74bef162c97e23e882612eb85dae365f32c9da1f13ba4b9b8e1e1f8f582ad1be",
+    "proposal_sha256": "ddaaa015f62bd731afc6f9f19f37056a0f74d2071023338938420a3a080181a7",
+    "driver_sha256": "2bcfdcc1f018f2398212de0cd94119030dfe54b5dcc9f1578478b1771ecb1836",
+    "source_inventory_sha256": "d8d039fa8fefb072264bc902bc798dd260e00371151eda74b204a5c74a5418ad",
+    "forecast_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/runtime-estimate.json",
+    "forecast_sha256": "55e6d1800078e1d5a10660db196a3075d7892fac6a8efe5c7626198264837f81",
+    "required_queue_status": "completed",
+    "required_completion_exit_code": 0,
+    "forecast_miss_record": "forecast-miss-accepted.json"
+  },
+  "no_model_load": true,
+  "no_TTNN_import": true,
+  "no_device_query": true,
+  "no_HF_launch": true,
+  "driver_sha256": "da05e12d28c27927267843530cfc0c467a4a7d22cd3f376f5ec4e64ee06af91a"
+}

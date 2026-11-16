@@ -1,0 +1,132 @@
+{
+  "job": "anomaly.psf__requests-5414.call11.onset",
+  "mode": "conditional_hf_cpu_adaptive_suffix2048",
+  "seed": 44,
+  "verdict": "inconclusive",
+  "evidence": {
+    "hf_result": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/results/seed44-suffix2048/anomaly.psf__requests-5414.call11.onset.hf.private.json",
+      "sha256": "ea3eb180de1ef8898c2565dcb5ffd7700f3e792ccfce8bc279efef80c6dfe9a4",
+      "status": "complete",
+      "case_sha256": "fbe984e026dbe8ef2b9d8a4288056617cbfde5235d1efd4a3bd14038a2db5ad7",
+      "revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+      "device": "cpu",
+      "prompt_tokens": 2048,
+      "prompt_source": "Saved prompt_token_ids, no chat rerender",
+      "results[0].seed": 44,
+      "results[0].generated_tokens": 512,
+      "results[0].streamed_generated_tokens": 512,
+      "results[0].requested_tokens": 512,
+      "results[0].text_chars": 1844,
+      "results[0].unique_generated_token_ids": 200,
+      "results[0].tail_ratio": 0.4522776572668113,
+      "results[0].tail_distinct": 66,
+      "results[0].flag": false,
+      "results[0].wall_s": 1377.3435386877973,
+      "total_wall_s": 1438.3117750179954,
+      "case_metadata.task": "psf__requests-5414",
+      "case_metadata.call": 11,
+      "case_metadata.motif": "^^^^",
+      "case_metadata.onset_token_index": 223,
+      "case_metadata.native_completion_tokens": 32768,
+      "case_metadata.native_seed": null,
+      "case_metadata.sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      }
+    },
+    "fixture": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/fixtures/anomaly.psf__requests-5414.call11.onset.suffix2048.private.json",
+      "sha256": "fbe984e026dbe8ef2b9d8a4288056617cbfde5235d1efd4a3bd14038a2db5ad7",
+      "prompt_ids": 2048,
+      "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-requests5414-caret-controls/psf__requests-5414.call11.onset.private.json",
+      "source_case_sha256": "50cbd0eb4e62c843a1ec8ac800a580135c3abc5dc2154d6be0a7e39d0c37ed6f",
+      "source_prompt_ids": 7226,
+      "exact_slice": "source prompt_token_ids[5178:7226]",
+      "suffix_ids_match_source": true,
+      "source_metadata_native_prompt_tokens": 7004,
+      "source_metadata_reconstructed_prompt_tokens": 7003,
+      "scope_caveat": "This uses only the final 2048 IDs of reconstructed source context, not full native context. Native prompt/output IDs and native seed are unavailable; this is a shortened diagnostic, not exact native replay."
+    },
+    "matched_tt": {
+      "served": {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/runs/served/anomaly.psf__requests-5414.call11.onset.json",
+        "sha256": "fe2ed3734685fbc806bc3ce821a77e21f9b390cb838fc223daf8d6090cc8d039",
+        "seed": 44,
+        "tokens": 512,
+        "text_shape": "repeating ellipsis/newline/indentation blocks",
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20
+        },
+        "runtime_precision": {
+          "config_id": "stage12_head_bfp8_lofi",
+          "weight_groups": {
+            "attention": "bfp4",
+            "mlp": "bfp4",
+            "down": "bfp4",
+            "lm_head": "bfp8_lofi"
+          },
+          "compute_fidelities": {
+            "attention": "LoFi",
+            "mlp": "LoFi",
+            "down": "LoFi",
+            "lm_head": "LoFi"
+          }
+        },
+        "repeating_token_ids": [
+          1390,
+          107,
+          147
+        ],
+        "token_occurrences_in_512": {
+          "1390": 171,
+          "107": 171,
+          "147": 170
+        }
+      },
+      "full": {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/runs/full/anomaly.psf__requests-5414.call11.onset.json",
+        "sha256": "a967659d1f4edd7b726a36c976168ae767957b9821ffc4a2a31640d594e7a885",
+        "seed": 44,
+        "tokens": 512,
+        "text_shape": "repeating ellipsis/newline/indentation blocks",
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20
+        },
+        "runtime_precision": {
+          "config_id": "stage12_bf16_hifi4_diagnostic",
+          "weight_groups": {
+            "attention": "bf16",
+            "mlp": "bf16",
+            "down": "bf16",
+            "lm_head": "bf16"
+          },
+          "compute_fidelities": {
+            "attention": "HiFi4",
+            "mlp": "HiFi4",
+            "down": "HiFi4",
+            "lm_head": "HiFi4"
+          }
+        },
+        "repeating_token_ids": [
+          1390,
+          107,
+          147
+        ],
+        "token_occurrences_in_512": {
+          "1390": 171,
+          "107": 171,
+          "147": 170
+        }
+      }
+    },
+    "branch_and_semantics": "HF produces a coherent URL/IDNA explanation: it inspects the `.example.com` host, reasons through ASCII and urllib3 validation, and ends while discussing the invalid hostname. It is still advancing at token512; there is no sustained caret loop or ellipsis/newline/indentation loop in this HF sample. The matched TT seed44 controls instead repeat token IDs [1390,107,147] (ellipsis/newline/indentation), with occurrences 171/171/170 in 512 tokens. HF chosen teacher-forcing position0 is caret ID172109 with probability 8.347239599970635e-06; top1 is ID1390 (the ellipsis branch) with probability 0.9939388036727905. The next forced caret positions become strongly self-reinforcing, so this HF free run did not test the actual matched-TT ellipsis loop branch. The HF result TT comparison reports top1 agreement1.0 across64 forced chosen positions, but position0 chosen-token logprob deltas are -4.2841 vs served and +1.6348 vs full; that does not change the sampled-branch mismatch. No task-success or native-equivalence claim."
+  },
+  "confidence": "high that this sample is coherent and progressing through the cap rather than reproducing the matched TT ellipsis loop; inconclusive about what the HF continuation does beyond token512",
+  "cap_notes": "The reply reaches 512/512 tokens while continuing its URL/IDNA discussion, so retain as progressing_at_cap and resolve with a longer cap. HF weights are CPU BF16; matched served TT uses BFP8-LoFi lm_head and BFP4-LoFi other groups, while full TT uses BF16/HiFi4 throughout. The same diagnostic seed44 and temperature1.0/top_p0.95/top_k20 were used, but HF and TT RNGs differ and the HF sampled first token diverges from the selected 64-token caret branch. Trial wall1377.343539s, runner cumulative1438.311775s, group wall1442.443281s; group wall is within the 980\u20133380 forecast. No inference/device work or generated-command execution was performed."
+}

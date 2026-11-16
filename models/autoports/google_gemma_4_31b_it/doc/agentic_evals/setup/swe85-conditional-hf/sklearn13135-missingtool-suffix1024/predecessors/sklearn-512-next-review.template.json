@@ -1,0 +1,19 @@
+{
+  "reviewer": "root",
+  "accepted": null,
+  "status": "matched_TT_next_then_conditional_HF",
+  "hf_followup": "deferred_until_matched_TT",
+  "candidate": "Sklearn13135 call29 exact original prompt suffix1024, seeds42/43/44, served/full, chosen64, free-run cap1024",
+  "predecessor_directory": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512",
+  "predecessor_admission_sha256": "32fe5e6ccf38aff945424de6b7f3c8e24a7a375cf6a806424bd1097e99bb6194",
+  "predecessor_completion_summary_sha256": "9ff7139d71c3ee2163624f8f41324896bcc74a2127ee2d5c16774fab054bbb21",
+  "predecessor_served_completion_sha256": "37340afd0077453ee24a913bc0ebe2ff8ddf6cd14c064a3231c3e213cd5dc7b3",
+  "predecessor_full_completion_sha256": "927e9425adeb62200b42d38c6f7fc367358f8fd02ad1bcbabaf4010fc3f76dec",
+  "predecessor_served_review_sha256": "4f9e333a9c4d6c94009c9718dfbf0c279d4185f8e2f151636274645ec154654d",
+  "predecessor_full_review_sha256": "50073a981e1dcfb8446d10bc1c1c7e012cbfa53a8700cca79b952cb12f549fbd",
+  "predecessor_triage_sha256": "ef7d0994f7067d540f7fbd986e8e9769d9440f470e00a8c57125a7458517f7a2",
+  "original_full_missing_tool_reproduced_at_suffix512": false,
+  "decision_question": "Accept serial suffix1024 TT probe; determine whether original full-prompt missing_tool is reproducible once cap reaches665.",
+  "reason": "The original full-prompt seed42 missing_tool appeared after665 generated tokens. Matched suffix512 cap results did not reproduce it, so suffix1024/cap1024 allows that onset region to be sampled without claiming original-context equivalence.",
+  "serialization": "Served first; root reviews served timing before full. No HF/model process or device owner at either launch. HF remains deferred until matched TT evidence."
+}

@@ -1,0 +1,9 @@
+[
+  {
+    "name": "sympy__sympy-14248.call53",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-sympy14248-caps/sympy__sympy-14248.call53.case.private.json",
+    "branches": [
+      "chosen"
+    ]
+  }
+]

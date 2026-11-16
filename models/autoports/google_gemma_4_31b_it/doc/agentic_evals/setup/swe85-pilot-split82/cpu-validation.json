@@ -1,0 +1,29 @@
+{
+  "status": "schema_only_no_model_import",
+  "checks": [
+    {
+      "part": "pilot",
+      "mode": "served",
+      "exit_code": 0,
+      "stdout": "Validated 1 jobs without importing TTNN"
+    },
+    {
+      "part": "pilot",
+      "mode": "full",
+      "exit_code": 0,
+      "stdout": "Validated 1 jobs without importing TTNN"
+    },
+    {
+      "part": "rest",
+      "mode": "served",
+      "exit_code": 0,
+      "stdout": "Validated 136 jobs without importing TTNN"
+    },
+    {
+      "part": "rest",
+      "mode": "full",
+      "exit_code": 0,
+      "stdout": "Validated 136 jobs without importing TTNN"
+    }
+  ]
+}

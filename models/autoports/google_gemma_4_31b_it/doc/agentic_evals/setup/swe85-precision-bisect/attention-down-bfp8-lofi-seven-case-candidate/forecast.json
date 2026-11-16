@@ -1,0 +1,37 @@
+{
+  "status": "planning_only_candidate_not_measurement",
+  "scope": "Seven exact prompts/seeds/caps, one serial full diagnostic model load. This is a planning scenario for P6 attention bfp8_lofi + down bfp8_lofi; no P6 speed or output behavior measured.",
+  "basis": {
+    "p4_reference_forecast_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bf16-hifi4-seven-case-candidate/forecast.json",
+    "p4_reference_forecast_sha256": "26cd68fb0c4c11486638fd4a30ce7407df82f87453ba8f068a0ef43398c21964",
+    "p4_measured_wall_seconds": 454.8605308532715,
+    "p4_load_wall_seconds": 141.78374898713082,
+    "p4_sum_case_wall_seconds": 308.1591029919218,
+    "p4_sum_decode_wall_seconds": 166.29560214467347,
+    "p4_generated_tokens": 4468,
+    "p4_cap_sum_tokens": 9472,
+    "p4_completion_overhead_seconds": 4.917678874218836,
+    "p4_slowest_observed_decode_seconds_per_token": 0.038578863907743996,
+    "p3_baseline_precision_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down_bfp8_lofi_precision.json",
+    "p3_baseline_precision_sha256": "dfa8406fdbd93dd5f2b29e14b458eff3480ccbf651caedaf011f4473d1e87c83",
+    "additional_tokens_to_cap_fill_scenario": 5004
+  },
+  "scenarios": {
+    "same_workload_transfer_seconds": 454.8605308532715,
+    "same_p4_decode_rate_cap_fill_seconds": 647.909,
+    "planning_low_seconds": 350,
+    "planning_high_seconds": 1200
+  },
+  "planning_range_seconds": [
+    350,
+    1200
+  ],
+  "range_assumptions": [
+    "Low end allows a modest decode improvement from down HiFi2 to LoFi while retaining one load and output lengths near P4.",
+    "High end allows materially slower attention from BFP8 weight traffic plus longer sampled outputs; the P4 same-rate cap-fill sensitivity is 647.9s, then the envelope allows further policy/load/output variation.",
+    "P4 cap-fill estimate is not an upper bound for P6; different policy can alter weights, compute, prefill/decode, and output lengths.",
+    "P4 seven-case run is the sole quantitative timing anchor; P5 outputs/triage are intentionally not used as timing evidence while root review is pending."
+  ],
+  "forecast_gate_candidate_seconds": 1800,
+  "decision_note": "Root should review P5 terminal output/triage and stage deadline before deciding whether a P6 run is worth the time. This is not an admission or launch."
+}

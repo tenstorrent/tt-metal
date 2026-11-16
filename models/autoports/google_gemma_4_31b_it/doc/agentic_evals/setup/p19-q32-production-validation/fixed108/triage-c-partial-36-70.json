@@ -1,0 +1,1391 @@
+{
+  "schema_version": 1,
+  "status": "partial_indices36_38_reviewed_indices39_71_pending",
+  "captured_at_utc": "2026-11-15T17:11:00Z",
+  "scope": {
+    "manifest": "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/candidate-cases.json",
+    "manifest_sha256": "57193e4b91af3a31df00f0c92dbc0f2219fbce011e6533594e5244a93a3021ed",
+    "indices_in_assigned_slice": [
+      36,
+      71
+    ],
+    "completed_reviewed_indices": [
+      36,
+      37,
+      38,
+      39,
+      40,
+      41,
+      42,
+      43,
+      44,
+      45,
+      46,
+      47,
+      48,
+      49,
+      50,
+      51,
+      52,
+      53,
+      54,
+      55,
+      56,
+      57,
+      58,
+      59,
+      60,
+      61,
+      62,
+      63,
+      64,
+      65,
+      66,
+      67,
+      68,
+      69,
+      70
+    ],
+    "pending_indices": [
+      71
+    ],
+    "tokenizer_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+    "tokenizer_path": "/home/mvasiljevic/.cache/huggingface/hub/models--google--gemma-4-31B-it/snapshots/842da3794eaa0b77d5f08bae87a17459d91ff475/tokenizer.json"
+  },
+  "runtime_policy": "stage12_bf16_hifi4_kv_down_bfp8_p19 with production HiFi4 Q32 prefill geometry; output rows are diagnostic generations, not serving-performance measurements.",
+  "full_control_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/anomaly.pytest-dev__pytest-7432.call19.onset.json",
+  "rows": [
+    {
+      "manifest_index": 36,
+      "job": "pytest-dev__pytest-7432.call19.onset",
+      "seed": 42,
+      "cap": 256,
+      "verdict": "reproduced_native_motif",
+      "confidence": "high",
+      "identity": {
+        "case_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-18763-7432-controls/pytest-dev__pytest-7432.call19.onset.private.json",
+        "case_sha256": "436bf8f06cebc27f9ac206ab4c85c655b2c707145be67b8341f14288370807f5",
+        "prompt_tokens": 11095,
+        "result_path": "setup/p19-q32-production-validation/fixed108/runs/p19_q32/anomaly.pytest-dev__pytest-7432.call19.onset.seed42.cap256.json",
+        "result_sha256": "cbe0e0e17433a9c90214123cad2406bb3437155f20afb6d2492593d4331e65a7",
+        "result_case_matches_fixture": true,
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 42
+        },
+        "generated_tokens": 256,
+        "runtime_precision": "stage12_bf16_hifi4_kv_down_bfp8_p19"
+      },
+      "prompt_tail_decoded": "\", line 161, in exec_module\n    source_stat, co = _rewrite_test(fn, self.config)\n                      ",
+      "text_evidence": "The output begins with a plausible traceback continuation, then repeats the caret character across the terminal line through the 256-token cap. This is the saved native motif (sustained caret run), not a normal traceback tail.",
+      "comparisons": {
+        "all_group_full_bf16_hifi4_path": "setup/swe85-pilot-split85/runs/rest/full/anomaly.pytest-dev__pytest-7432.call19.onset.json",
+        "full_result_sha256": "62dc8a7a0d36eaadf188803d4e1d08372a099dccb41aaa09ca7119710dfe2f07",
+        "full_seed_matches_exact_generated_ids": true,
+        "full_runtime_precision": "stage12_bf16_hifi4_diagnostic",
+        "p19_q128_result": "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.pytest-dev__pytest-7432.call19.onset.seed42.cap256.json",
+        "p19_q128_result_sha256": "ec7088f6b0b9405fdeb20193f0247390757b18c620261ff5bf8a0fce70a4b706",
+        "p19_q128_exact_generated_ids": true,
+        "hf_conditional_result": "setup/swe85-conditional-hf/p19-native-onset-caret-controls/results/anomaly.pytest-dev__pytest-7432.call19.onset.seed42.cap256.hf.private.json",
+        "hf_result_sha256": "6ccdd49c513f3c8258977245d0a65ee808a6c233d76c97c118a1b42d405f3fa5",
+        "hf_case_and_generated_ids_match": true
+      },
+      "cap_notes": "Completed at its 256-token diagnostic cap with the anomaly already visible; no cap extension is needed to classify this reproduced motif. This does not imply native seed/RNG replay or task-success equivalence."
+    },
+    {
+      "manifest_index": 37,
+      "job": "pytest-dev__pytest-7432.call19.onset",
+      "seed": 43,
+      "cap": 256,
+      "verdict": "reproduced_native_motif",
+      "confidence": "high",
+      "identity": {
+        "case_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.pytest-dev__pytest-7432.call19.onset.seed43.private.json",
+        "case_sha256": "2eaad18936f926fc558cc1f2361399238e80897e4cf3b1b849fc28fa620edc2a",
+        "prompt_tokens": 11095,
+        "result_path": "setup/p19-q32-production-validation/fixed108/runs/p19_q32/anomaly.pytest-dev__pytest-7432.call19.onset.seed43.cap256.json",
+        "result_sha256": "afa612ef1c65a11ea4f75c1be1a1462cfb341f6e4682a7cf9bc367f508b4d5b2",
+        "result_case_matches_fixture": true,
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 43
+        },
+        "generated_tokens": 256,
+        "runtime_precision": "stage12_bf16_hifi4_kv_down_bfp8_p19"
+      },
+      "prompt_tail_decoded": "\", line 161, in exec_module\n    source_stat, co = _rewrite_test(fn, self.config)\n                      ",
+      "text_evidence": "The output begins with a plausible traceback continuation, then repeats the caret character across the terminal line through the 256-token cap. This is the saved native motif (sustained caret run), not a normal traceback tail.",
+      "comparisons": {
+        "all_group_full_bf16_hifi4_path": "setup/swe85-pilot-split85/runs/rest/full/anomaly.pytest-dev__pytest-7432.call19.onset.json",
+        "full_result_sha256": "62dc8a7a0d36eaadf188803d4e1d08372a099dccb41aaa09ca7119710dfe2f07",
+        "full_seed_matches_exact_generated_ids": true,
+        "full_runtime_precision": "stage12_bf16_hifi4_diagnostic",
+        "p19_q128_result": "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.pytest-dev__pytest-7432.call19.onset.seed43.cap256.json",
+        "p19_q128_result_sha256": "a367898432d1c5cc0c13ec6eeaea4e80b10e392df21b085556abc9872698d7bb",
+        "p19_q128_exact_generated_ids": true,
+        "hf_conditional_result": null,
+        "hf_result_sha256": null,
+        "hf_case_and_generated_ids_match": null
+      },
+      "cap_notes": "Completed at its 256-token diagnostic cap with the anomaly already visible; no cap extension is needed to classify this reproduced motif. This does not imply native seed/RNG replay or task-success equivalence."
+    },
+    {
+      "manifest_index": 38,
+      "job": "pytest-dev__pytest-7432.call19.onset",
+      "seed": 44,
+      "cap": 256,
+      "verdict": "reproduced_native_motif",
+      "confidence": "high",
+      "identity": {
+        "case_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.pytest-dev__pytest-7432.call19.onset.seed44.private.json",
+        "case_sha256": "5dbb2f59dbc730651a720f58734568c2dc6a5839aef74be2be5d66b99c6f8eb5",
+        "prompt_tokens": 11095,
+        "result_path": "setup/p19-q32-production-validation/fixed108/runs/p19_q32/anomaly.pytest-dev__pytest-7432.call19.onset.seed44.cap256.json",
+        "result_sha256": "574c9d339ead9dfa34f60223adca4dce1aa2869c5f246630ff40d0326c35cf2c",
+        "result_case_matches_fixture": true,
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 44
+        },
+        "generated_tokens": 256,
+        "runtime_precision": "stage12_bf16_hifi4_kv_down_bfp8_p19"
+      },
+      "prompt_tail_decoded": "\", line 161, in exec_module\n    source_stat, co = _rewrite_test(fn, self.config)\n                      ",
+      "text_evidence": "The output begins with a plausible traceback continuation, then repeats the caret character across the terminal line through the 256-token cap. This is the saved native motif (sustained caret run), not a normal traceback tail.",
+      "comparisons": {
+        "all_group_full_bf16_hifi4_path": "setup/swe85-pilot-split85/runs/rest/full/anomaly.pytest-dev__pytest-7432.call19.onset.json",
+        "full_result_sha256": "62dc8a7a0d36eaadf188803d4e1d08372a099dccb41aaa09ca7119710dfe2f07",
+        "full_seed_matches_exact_generated_ids": true,
+        "full_runtime_precision": "stage12_bf16_hifi4_diagnostic",
+        "p19_q128_result": "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.pytest-dev__pytest-7432.call19.onset.seed44.cap256.json",
+        "p19_q128_result_sha256": "82c3e07f27b68ef21efb13143fdabf09c7d9709a343dec885a236c20eaf33e0e",
+        "p19_q128_exact_generated_ids": true,
+        "hf_conditional_result": null,
+        "hf_result_sha256": null,
+        "hf_case_and_generated_ids_match": null
+      },
+      "cap_notes": "Completed at its 256-token diagnostic cap with the anomaly already visible; no cap extension is needed to classify this reproduced motif. This does not imply native seed/RNG replay or task-success equivalence."
+    },
+    {
+      "manifest_index": 39,
+      "job": "anomaly.pytest10356-call14.canonicalprefix",
+      "seed": 42,
+      "cap": 256,
+      "verdict": "normal",
+      "confidence": "high",
+      "identity": {
+        "case_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-precision/pytest10356-call14/canonicalprefix/case.private.json",
+        "case_sha256": "07b45f8cd1bf0b42a6b7114dbf180eb5a1b0e4a31a80c1d3817660b24d50f71e",
+        "prompt_tokens": 11309,
+        "result_path": "setup/p19-q32-production-validation/fixed108/runs/p19_q32/anomaly.pytest10356-call14.canonicalprefix.seed42.cap256.json",
+        "result_sha256": "dd0f2c82873130127f0ae0200ed44a333f3ae4528f44e4723f3379abe26a1b85",
+        "result_case_matches_fixture": true,
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 42
+        },
+        "generated_tokens": 35,
+        "runtime_precision": "stage12_bf16_hifi4_kv_down_bfp8_p19"
+      },
+      "prompt_tail_decoded": " [])\\n\"\n}<|\"|>}<tool_response|><|channel>thought\nThat's not much. Let's search for `pytestmark` without `getattr`.\n<channel|><|tool_call>call:",
+      "text_evidence": "A short natural continuation produces a syntactically canonical bash tool call to grep for pytestmark and ends with a tool handoff before the 256-token cap. The inherited prompt is a prior thought followed by call:bash; generated opener supplies the required command field.",
+      "comparisons": {
+        "all_group_full_bf16_hifi4_path": "setup/swe85-pilot-split85/runs/rest/full/anomaly.pytest10356-call14.canonicalprefix.json",
+        "full_result_sha256": "82ea62cfd69a48647332bf72ef380d6a9b53655459c1e80d9f15d281a146433f",
+        "full_runtime_precision": "stage12_bf16_hifi4_diagnostic",
+        "same_seed_full_case_path_matches_fixture": true,
+        "full_exact_generated_ids_match": true,
+        "p19_q128_result": "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.pytest10356-call14.canonicalprefix.seed42.cap256.json",
+        "p19_q128_result_sha256": "823fcb13fe7f8b4cdff909481590f86f12e034293f8fd2502123cf4639e8723c",
+        "p19_q128_exact_generated_ids_match": true
+      },
+      "cap_notes": "No continuation requested: this row naturally completed a valid tool handoff before its cap."
+    },
+    {
+      "manifest_index": 40,
+      "job": "anomaly.pytest10356-call14.canonicalprefix",
+      "seed": 43,
+      "cap": 256,
+      "verdict": "normal",
+      "confidence": "high",
+      "identity": {
+        "case_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.pytest10356-call14.canonicalprefix.seed43.private.json",
+        "case_sha256": "7016a37129adb51c3d72523a404fa16afa1df64ccda3d55409db8c9d2cf13572",
+        "prompt_tokens": 11309,
+        "result_path": "setup/p19-q32-production-validation/fixed108/runs/p19_q32/anomaly.pytest10356-call14.canonicalprefix.seed43.cap256.json",
+        "result_sha256": "e444a017177490a4470c5b25f77b5308cc2a015c6eaeb9c107df41d071608faf",
+        "result_case_matches_fixture": true,
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 43
+        },
+        "generated_tokens": 33,
+        "runtime_precision": "stage12_bf16_hifi4_kv_down_bfp8_p19"
+      },
+      "prompt_tail_decoded": " [])\\n\"\n}<|\"|>}<tool_response|><|channel>thought\nThat's not much. Let's search for `pytestmark` without `getattr`.\n<channel|><|tool_call>call:",
+      "text_evidence": "A short natural continuation produces a syntactically canonical bash tool call to grep for pytestmark and ends with a tool handoff before the 256-token cap. The inherited prompt is a prior thought followed by call:bash; generated opener supplies the required command field.",
+      "comparisons": {
+        "all_group_full_bf16_hifi4_path": "setup/swe85-pilot-split85/runs/rest/full/anomaly.pytest10356-call14.canonicalprefix.json",
+        "full_result_sha256": "82ea62cfd69a48647332bf72ef380d6a9b53655459c1e80d9f15d281a146433f",
+        "full_runtime_precision": "stage12_bf16_hifi4_diagnostic",
+        "same_seed_full_case_path_matches_fixture": false,
+        "full_exact_generated_ids_match": true,
+        "p19_q128_result": "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.pytest10356-call14.canonicalprefix.seed43.cap256.json",
+        "p19_q128_result_sha256": "9ec762e65884b49bc3137de75901361d77e538e12b217235e4ab407dfbfce8fc",
+        "p19_q128_exact_generated_ids_match": true
+      },
+      "cap_notes": "No continuation requested: this row naturally completed a valid tool handoff before its cap."
+    },
+    {
+      "manifest_index": 41,
+      "job": "anomaly.pytest10356-call14.canonicalprefix",
+      "seed": 44,
+      "cap": 256,
+      "verdict": "normal",
+      "confidence": "high",
+      "identity": {
+        "case_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.pytest10356-call14.canonicalprefix.seed44.private.json",
+        "case_sha256": "c987819b73937b9fedd8c6198958b49b41f87c9c3720881bf1cf5f14d46dc50c",
+        "prompt_tokens": 11309,
+        "result_path": "setup/p19-q32-production-validation/fixed108/runs/p19_q32/anomaly.pytest10356-call14.canonicalprefix.seed44.cap256.json",
+        "result_sha256": "4194be461f7c392f24cb8be162eb7180763e6e606fad380e5333cb5c5a5c69cd",
+        "result_case_matches_fixture": true,
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 44
+        },
+        "generated_tokens": 33,
+        "runtime_precision": "stage12_bf16_hifi4_kv_down_bfp8_p19"
+      },
+      "prompt_tail_decoded": " [])\\n\"\n}<|\"|>}<tool_response|><|channel>thought\nThat's not much. Let's search for `pytestmark` without `getattr`.\n<channel|><|tool_call>call:",
+      "text_evidence": "A short natural continuation produces a syntactically canonical bash tool call to grep for pytestmark and ends with a tool handoff before the 256-token cap. The inherited prompt is a prior thought followed by call:bash; generated opener supplies the required command field.",
+      "comparisons": {
+        "all_group_full_bf16_hifi4_path": "setup/swe85-pilot-split85/runs/rest/full/anomaly.pytest10356-call14.canonicalprefix.json",
+        "full_result_sha256": "82ea62cfd69a48647332bf72ef380d6a9b53655459c1e80d9f15d281a146433f",
+        "full_runtime_precision": "stage12_bf16_hifi4_diagnostic",
+        "same_seed_full_case_path_matches_fixture": false,
+        "full_exact_generated_ids_match": false,
+        "p19_q128_result": "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.pytest10356-call14.canonicalprefix.seed44.cap256.json",
+        "p19_q128_result_sha256": "ffc87c65ba7be33fef5e6ea0e1d05ec3e057e331e64f9fcd650a2f6a9d01a349",
+        "p19_q128_exact_generated_ids_match": false
+      },
+      "cap_notes": "No continuation requested: this row naturally completed a valid tool handoff before its cap."
+    },
+    {
+      "manifest_index": 42,
+      "job": "anomaly.requests2931.call20.canonicalprefix",
+      "seed": 42,
+      "cap": 256,
+      "verdict": "reproduced_native_motif",
+      "confidence": "high",
+      "identity": {
+        "case_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-precision/requests2931-call20/canonicalprefix/case.private.json",
+        "case_sha256": "7f527603e08f61f5516745fc2fab496c6ae7020985372c8f71fd0459895c10f0",
+        "prompt_tokens": 8580,
+        "result_path": "setup/p19-q32-production-validation/fixed108/runs/p19_q32/anomaly.requests2931.call20.canonicalprefix.seed42.cap256.json",
+        "result_sha256": "ecd6e7226e173531500fcfceaa021d4300e818ab8821eec2befb4f390c1202a5",
+        "result_case_matches_fixture": true,
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 42
+        },
+        "generated_tokens": 256,
+        "runtime_precision": "stage12_bf16_hifi4_kv_down_bfp8_p19"
+      },
+      "prompt_tail_decoded": " line 120, in put\n    return request('put', url, data=data, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^",
+      "text_evidence": "The traceback continues coherently, then an uninterrupted caret run occupies the final generated region through cap256 (one seed begins with carets before the first traceback line). This is the documented Requests traceback caret motif; the exact all-group full control has the same caret-loop family, with seed43 token-identical.",
+      "comparisons": {
+        "all_group_full_bf16_hifi4_path": "setup/swe85-pilot-split85/runs/rest/full/anomaly.requests2931.call20.canonicalprefix.json",
+        "full_result_sha256": "b01fc94e30e4257457c3123c6cb843b5dca13adbd5cecede30b6e11c076ca67d",
+        "full_runtime_precision": "stage12_bf16_hifi4_diagnostic",
+        "same_seed_full_case_path_matches_fixture": true,
+        "full_exact_generated_ids_match": false,
+        "p19_q128_result": "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.requests2931.call20.canonicalprefix.seed42.cap256.json",
+        "p19_q128_result_sha256": "85b67f6a97dc0eddbf6a05f57dc23df96832f778b118136f040413e1575d7840",
+        "p19_q128_exact_generated_ids_match": true
+      },
+      "cap_notes": "Anomaly is already present at the cap and matches the saved motif; no cap extension is needed to classify it."
+    },
+    {
+      "manifest_index": 43,
+      "job": "anomaly.requests2931.call20.canonicalprefix",
+      "seed": 43,
+      "cap": 256,
+      "verdict": "reproduced_native_motif",
+      "confidence": "high",
+      "identity": {
+        "case_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.requests2931.call20.canonicalprefix.seed43.private.json",
+        "case_sha256": "46c8f0e924d5231eb779bab85611942cdc2aa1add396842d50c7559f64ddd359",
+        "prompt_tokens": 8580,
+        "result_path": "setup/p19-q32-production-validation/fixed108/runs/p19_q32/anomaly.requests2931.call20.canonicalprefix.seed43.cap256.json",
+        "result_sha256": "6dc386b995935c7d78ced48f75a9528df6a4f065a2cac368c03105051662243f",
+        "result_case_matches_fixture": true,
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 43
+        },
+        "generated_tokens": 256,
+        "runtime_precision": "stage12_bf16_hifi4_kv_down_bfp8_p19"
+      },
+      "prompt_tail_decoded": " line 120, in put\n    return request('put', url, data=data, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^",
+      "text_evidence": "The traceback continues coherently, then an uninterrupted caret run occupies the final generated region through cap256 (one seed begins with carets before the first traceback line). This is the documented Requests traceback caret motif; the exact all-group full control has the same caret-loop family, with seed43 token-identical.",
+      "comparisons": {
+        "all_group_full_bf16_hifi4_path": "setup/swe85-pilot-split85/runs/rest/full/anomaly.requests2931.call20.canonicalprefix.json",
+        "full_result_sha256": "b01fc94e30e4257457c3123c6cb843b5dca13adbd5cecede30b6e11c076ca67d",
+        "full_runtime_precision": "stage12_bf16_hifi4_diagnostic",
+        "same_seed_full_case_path_matches_fixture": false,
+        "full_exact_generated_ids_match": true,
+        "p19_q128_result": "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.requests2931.call20.canonicalprefix.seed43.cap256.json",
+        "p19_q128_result_sha256": "c6cfc81950b93a9b3d9f38411c0c1509379339d23fa48aac9502126ff8ee6985",
+        "p19_q128_exact_generated_ids_match": true
+      },
+      "cap_notes": "Anomaly is already present at the cap and matches the saved motif; no cap extension is needed to classify it."
+    },
+    {
+      "manifest_index": 44,
+      "job": "anomaly.requests2931.call20.canonicalprefix",
+      "seed": 44,
+      "cap": 256,
+      "verdict": "reproduced_native_motif",
+      "confidence": "high",
+      "identity": {
+        "case_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.requests2931.call20.canonicalprefix.seed44.private.json",
+        "case_sha256": "971939b876f462ed4002ba8757826708e6e3d19a20d9496298f61c49af698d40",
+        "prompt_tokens": 8580,
+        "result_path": "setup/p19-q32-production-validation/fixed108/runs/p19_q32/anomaly.requests2931.call20.canonicalprefix.seed44.cap256.json",
+        "result_sha256": "41aa6a9227cfc204ee0ba8256ee9094ef4d3673e93bd2ca1af1575943305d39a",
+        "result_case_matches_fixture": true,
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 44
+        },
+        "generated_tokens": 256,
+        "runtime_precision": "stage12_bf16_hifi4_kv_down_bfp8_p19"
+      },
+      "prompt_tail_decoded": " line 120, in put\n    return request('put', url, data=data, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^",
+      "text_evidence": "The traceback continues coherently, then an uninterrupted caret run occupies the final generated region through cap256 (one seed begins with carets before the first traceback line). This is the documented Requests traceback caret motif; the exact all-group full control has the same caret-loop family, with seed43 token-identical.",
+      "comparisons": {
+        "all_group_full_bf16_hifi4_path": "setup/swe85-pilot-split85/runs/rest/full/anomaly.requests2931.call20.canonicalprefix.json",
+        "full_result_sha256": "b01fc94e30e4257457c3123c6cb843b5dca13adbd5cecede30b6e11c076ca67d",
+        "full_runtime_precision": "stage12_bf16_hifi4_diagnostic",
+        "same_seed_full_case_path_matches_fixture": false,
+        "full_exact_generated_ids_match": false,
+        "p19_q128_result": "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.requests2931.call20.canonicalprefix.seed44.cap256.json",
+        "p19_q128_result_sha256": "8e7e612a50d96da98c0db8701d5d8d84081232e5ff69a00025aae066a4720a53",
+        "p19_q128_exact_generated_ids_match": false
+      },
+      "cap_notes": "Anomaly is already present at the cap and matches the saved motif; no cap extension is needed to classify it."
+    },
+    {
+      "manifest_index": 45,
+      "job": "anomaly.scikit-learn__scikit-learn-13135.call29.onset",
+      "seed": 42,
+      "cap": 1024,
+      "verdict": "normal",
+      "confidence": "high",
+      "identity": {
+        "case_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.scikit-learn__scikit-learn-13135.call29.onset.cap1024.seed42.private.json",
+        "case_sha256": "310716fee5157983973aa6183e55fb529fd26179d182398b847ecb142b644b79",
+        "prompt_tokens": 17395,
+        "result_path": "setup/p19-q32-production-validation/fixed108/runs/p19_q32/anomaly.scikit-learn__scikit-learn-13135.call29.onset.seed42.cap1024.json",
+        "result_sha256": "92b8ac88e590e17f020b10311806baf52103d29b6ddcee4c2edda12c35862f69",
+        "result_case_matches_fixture": true,
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 42
+        },
+        "generated_tokens": 262,
+        "runtime_precision": "stage12_bf16_hifi4_kv_down_bfp8_p19"
+      },
+      "prompt_tail_decoded": "180\\t\\n\"\n}<|\"|>}<tool_response|><|channel>thought\n<|channel>thought\nPerfect. Now the fix is applied to the source code.\nSince I've",
+      "text_evidence": "The inherited prompt ends in “I’ve”; the generated continuation begins with a grammatically consistent completion (“already…” / “reproduced…”), completes the explanation, and emits a canonical bash call followed by tool handoff before the cap. No duplicated-contraction symptom appears.",
+      "comparisons": {
+        "all_group_full_bf16_hifi4_path": "setup/swe85-pilot-split85/runs/rest/full/anomaly.scikit-learn__scikit-learn-13135.call29.onset.json",
+        "full_result_sha256": "4a8b768621690557bd8c07c6568923b2c2c0265a18153d82490b1ea9328c1275",
+        "full_runtime_precision": "stage12_bf16_hifi4_diagnostic",
+        "same_seed_full_case_path_matches_fixture": false,
+        "full_exact_generated_ids_match": false,
+        "p19_q128_result": "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.scikit-learn__scikit-learn-13135.call29.onset.seed42.cap1024.json",
+        "p19_q128_result_sha256": "54930cedf54c2a329a59b4f5a340ebc708fcd5559b20808cad5d1afc22b79eff",
+        "p19_q128_exact_generated_ids_match": false
+      },
+      "cap_notes": "No continuation requested: this row naturally completed a valid tool handoff before its cap."
+    },
+    {
+      "manifest_index": 46,
+      "job": "anomaly.scikit-learn__scikit-learn-13135.call29.onset",
+      "seed": 43,
+      "cap": 512,
+      "verdict": "normal",
+      "confidence": "high",
+      "identity": {
+        "case_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/fixtures/full/anomaly.scikit-learn__scikit-learn-13135.call29.onset.cap512.seed43.private.json",
+        "case_sha256": "68419746ea6b9dbfcf4a871f7caa486dcfff6991cec45c0d511aab69876adeb2",
+        "prompt_tokens": 17395,
+        "result_path": "setup/p19-q32-production-validation/fixed108/runs/p19_q32/anomaly.scikit-learn__scikit-learn-13135.call29.onset.seed43.cap512.json",
+        "result_sha256": "6c463a170ea5ed9c6731b2cab178614d264c66f8d8b57446e7b7ba17ed25ca72",
+        "result_case_matches_fixture": true,
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 43
+        },
+        "generated_tokens": 362,
+        "runtime_precision": "stage12_bf16_hifi4_kv_down_bfp8_p19"
+      },
+      "prompt_tail_decoded": "180\\t\\n\"\n}<|\"|>}<tool_response|><|channel>thought\n<|channel>thought\nPerfect. Now the fix is applied to the source code.\nSince I've",
+      "text_evidence": "The inherited prompt ends in “I’ve”; the generated continuation begins with a grammatically consistent completion (“already…” / “reproduced…”), completes the explanation, and emits a canonical bash call followed by tool handoff before the cap. No duplicated-contraction symptom appears.",
+      "comparisons": {
+        "all_group_full_bf16_hifi4_path": "setup/swe85-pilot-split85/runs/rest/full/anomaly.scikit-learn__scikit-learn-13135.call29.onset.json",
+        "full_result_sha256": "4a8b768621690557bd8c07c6568923b2c2c0265a18153d82490b1ea9328c1275",
+        "full_runtime_precision": "stage12_bf16_hifi4_diagnostic",
+        "same_seed_full_case_path_matches_fixture": false,
+        "full_exact_generated_ids_match": false,
+        "p19_q128_result": "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.scikit-learn__scikit-learn-13135.call29.onset.seed43.cap512.json",
+        "p19_q128_result_sha256": "c4ea21291317f89f422a1f3164e8dbbc927c8759c4d7d913700f7b23db0e6012",
+        "p19_q128_exact_generated_ids_match": false
+      },
+      "cap_notes": "No continuation requested: this row naturally completed a valid tool handoff before its cap."
+    },
+    {
+      "manifest_index": 47,
+      "job": "anomaly.scikit-learn__scikit-learn-13135.call29.onset",
+      "seed": 44,
+      "cap": 512,
+      "verdict": "normal",
+      "confidence": "high",
+      "identity": {
+        "case_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/fixtures/served/anomaly.scikit-learn__scikit-learn-13135.call29.onset.cap512.seed44.private.json",
+        "case_sha256": "dc59c14755d834d03e13b1b9d60981c10a93e68d68375db6198fdea1df67bc78",
+        "prompt_tokens": 17395,
+        "result_path": "setup/p19-q32-production-validation/fixed108/runs/p19_q32/anomaly.scikit-learn__scikit-learn-13135.call29.onset.seed44.cap512.json",
+        "result_sha256": "ea39f7a49dd6ac828b58806bb6330bb6bbec9b4aca19c46a8f9731d023f88109",
+        "result_case_matches_fixture": true,
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 44
+        },
+        "generated_tokens": 206,
+        "runtime_precision": "stage12_bf16_hifi4_kv_down_bfp8_p19"
+      },
+      "prompt_tail_decoded": "180\\t\\n\"\n}<|\"|>}<tool_response|><|channel>thought\n<|channel>thought\nPerfect. Now the fix is applied to the source code.\nSince I've",
+      "text_evidence": "The inherited prompt ends in “I’ve”; the generated continuation begins with a grammatically consistent completion (“already…” / “reproduced…”), completes the explanation, and emits a canonical bash call followed by tool handoff before the cap. No duplicated-contraction symptom appears.",
+      "comparisons": {
+        "all_group_full_bf16_hifi4_path": "setup/swe85-pilot-split85/runs/rest/full/anomaly.scikit-learn__scikit-learn-13135.call29.onset.json",
+        "full_result_sha256": "4a8b768621690557bd8c07c6568923b2c2c0265a18153d82490b1ea9328c1275",
+        "full_runtime_precision": "stage12_bf16_hifi4_diagnostic",
+        "same_seed_full_case_path_matches_fixture": false,
+        "full_exact_generated_ids_match": false,
+        "p19_q128_result": "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.scikit-learn__scikit-learn-13135.call29.onset.seed44.cap512.json",
+        "p19_q128_result_sha256": "72f3c48bfdd852473242d0fd01ec62cad7205572263f0abfbf0c831eba2755bc",
+        "p19_q128_exact_generated_ids_match": false
+      },
+      "cap_notes": "No continuation requested: this row naturally completed a valid tool handoff before its cap."
+    },
+    {
+      "manifest_index": 48,
+      "job": "anomaly.sphinx-doc__sphinx-10323.call57.onset",
+      "seed": 42,
+      "cap": 512,
+      "verdict": "normal",
+      "confidence": "high",
+      "identity": {
+        "case_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-10323.call57.onset.cap512.seed42.private.json",
+        "case_sha256": "73900395540b408c3bdb3689ef5561eed2d4d9a1976a6a1b19ec1545e6d0eb2a",
+        "prompt_tokens": 58695,
+        "result_path": "setup/p19-q32-production-validation/fixed108/runs/p19_q32/anomaly.sphinx-doc__sphinx-10323.call57.onset.seed42.cap512.json",
+        "result_sha256": "9472468a08d3c8c956f88e882b0c449c46f9d991bcb1fc89a3c4d4ab32f2eecf",
+        "result_case_matches_fixture": true,
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 42
+        },
+        "generated_tokens": 197,
+        "runtime_precision": "stage12_bf16_hifi4_kv_down_bfp8_p19"
+      },
+      "prompt_tail_decoded": " got a new warning: `'/testbed/src/index.rst:6: WARNING: 'list' object is not callable'`.\nThis is because I've",
+      "text_evidence": "The inherited prompt ends with “because I’ve”; generated text starts “moved…”, completing “I’ve moved” grammatically, proceeds coherently, and emits a canonical bash call followed by tool handoff at197 tokens, before cap512. No duplicated-contraction symptom appears.",
+      "comparisons": {
+        "all_group_full_bf16_hifi4_path": "setup/swe85-pilot-split85/runs/rest/full/anomaly.sphinx-doc__sphinx-10323.call57.onset.json",
+        "full_result_sha256": "1063260ce5a9bb63b7209fc68fa8677bfa2383e5eb8d2898b05b1e2ee1db962c",
+        "full_runtime_precision": "stage12_bf16_hifi4_diagnostic",
+        "same_seed_full_case_path_matches_fixture": false,
+        "full_exact_generated_ids_match": false,
+        "p19_q128_result": "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-10323.call57.onset.seed42.cap512.json",
+        "p19_q128_result_sha256": "f0c4ae83cf08a2bcdc8adc062f00e437c4aaf516f02896fc67959b08134f1da1",
+        "p19_q128_exact_generated_ids_match": false
+      },
+      "cap_notes": "No continuation requested: this row naturally completed a valid tool handoff before its cap."
+    },
+    {
+      "manifest_index": 49,
+      "job": "anomaly.sphinx-doc__sphinx-10323.call57.onset",
+      "seed": 43,
+      "cap": 256,
+      "verdict": "normal",
+      "confidence": "high",
+      "identity": {
+        "case_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.sphinx-doc__sphinx-10323.call57.onset.seed43.private.json",
+        "case_sha256": "f92ea14c2024b7c89722784a2f1d8e8551e470f4cd281f974e3b9e691f6a8523",
+        "prompt_tokens": 58695,
+        "result_path": "setup/p19-q32-production-validation/fixed108/runs/p19_q32/anomaly.sphinx-doc__sphinx-10323.call57.onset.seed43.cap256.json",
+        "result_sha256": "66a303c7b65b1da28a9f5598f2be63498db9bf471c9870288f9a7c6d798d2941",
+        "result_case_matches_fixture": true,
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 43
+        },
+        "generated_tokens": 239,
+        "runtime_precision": "stage12_bf16_hifi4_kv_down_bfp8_p19"
+      },
+      "prompt_tail_decoded": " got a new warning: `'/testbed/src/index.rst:6: WARNING: 'list' object is not callable'`.\nThis is because I've",
+      "text_evidence": "The prompt ends in the contraction “I’ve”; generated “probably introduced…” forms a grammatical continuation (“I’ve probably introduced…”), then gives coherent debugging reasoning and a canonical bash call. It ends by handing off at239/256 tokens. The duplicated-contraction motif is absent.",
+      "comparisons": {
+        "all_group_full_bf16_hifi4_path": "setup/swe85-pilot-split85/runs/rest/full/anomaly.sphinx-doc__sphinx-10323.call57.onset.json",
+        "full_result_sha256": "1063260ce5a9bb63b7209fc68fa8677bfa2383e5eb8d2898b05b1e2ee1db962c",
+        "full_runtime_precision": "stage12_bf16_hifi4_diagnostic",
+        "same_seed_full_case_path_matches_fixture": false,
+        "full_exact_generated_ids_match": false,
+        "p19_q128_result": "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-10323.call57.onset.seed43.cap256.json",
+        "p19_q128_result_sha256": "8563ed7f5806f8d002b291d1a4f88858c44ea2f22b98561b2444ce1f34ff57e6",
+        "p19_q128_exact_generated_ids_match": false
+      },
+      "cap_notes": "Naturally completed a valid tool handoff before cap; no extension required."
+    },
+    {
+      "manifest_index": 50,
+      "job": "anomaly.sphinx-doc__sphinx-10323.call57.onset",
+      "seed": 44,
+      "cap": 512,
+      "verdict": "normal",
+      "confidence": "high",
+      "identity": {
+        "case_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-10323.call57.onset.cap512.seed44.private.json",
+        "case_sha256": "09926a71feec07d7cde94dd30e60a80e65d0b7a14a973fdf18f8fbcefb20c357",
+        "prompt_tokens": 58695,
+        "result_path": "setup/p19-q32-production-validation/fixed108/runs/p19_q32/anomaly.sphinx-doc__sphinx-10323.call57.onset.seed44.cap512.json",
+        "result_sha256": "17104d5e06ad07cb3d60684ccf610aada55e8e6ce89dc52a75a8c48eeae32dfc",
+        "result_case_matches_fixture": true,
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 44
+        },
+        "generated_tokens": 65,
+        "runtime_precision": "stage12_bf16_hifi4_kv_down_bfp8_p19"
+      },
+      "prompt_tail_decoded": " got a new warning: `'/testbed/src/index.rst:6: WARNING: 'list' object is not callable'`.\nThis is because I've",
+      "text_evidence": "The prompt ends in “I’ve”; generated “moved…” forms the grammatical continuation “I’ve moved…”, followed by a coherent diagnostic thought and canonical bash call; terminal handoff occurs at65/512. No duplicated-contraction motif.",
+      "comparisons": {
+        "all_group_full_bf16_hifi4_path": "setup/swe85-pilot-split85/runs/rest/full/anomaly.sphinx-doc__sphinx-10323.call57.onset.json",
+        "full_result_sha256": "1063260ce5a9bb63b7209fc68fa8677bfa2383e5eb8d2898b05b1e2ee1db962c",
+        "full_runtime_precision": "stage12_bf16_hifi4_diagnostic",
+        "same_seed_full_case_path_matches_fixture": false,
+        "full_exact_generated_ids_match": false,
+        "p19_q128_result": "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-10323.call57.onset.seed44.cap512.json",
+        "p19_q128_result_sha256": "f44e6fd2f8861f90bd1af32ae35c13b963076952ed4397e79008d222345d01a1",
+        "p19_q128_exact_generated_ids_match": false
+      },
+      "cap_notes": "Naturally completed a valid tool handoff before cap; no extension required."
+    },
+    {
+      "manifest_index": 51,
+      "job": "anomaly.sphinx-doc__sphinx-10323.call68.onset",
+      "seed": 42,
+      "cap": 256,
+      "verdict": "normal",
+      "confidence": "high",
+      "identity": {
+        "case_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-sphinx10323-controls/sphinx-doc__sphinx-10323.call68.onset.private.json",
+        "case_sha256": "2d726d2a43b0678df8fb3d931ffda87277954bf9599424c4140394c669cfa103",
+        "prompt_tokens": 64509,
+        "result_path": "setup/p19-q32-production-validation/fixed108/runs/p19_q32/anomaly.sphinx-doc__sphinx-10323.call68.onset.seed42.cap256.json",
+        "result_sha256": "17649b1375148ac426cd374ecaf206b8b4cc65fa3eb08702c5a739bb31d86280",
+        "result_case_matches_fixture": true,
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 42
+        },
+        "generated_tokens": 38,
+        "runtime_precision": "stage12_bf16_hifi4_kv_down_bfp8_p19"
+      },
+      "prompt_tail_decoded": " indentation back to the prepended and appended lines? No, that's not right.\n\nI'll just restore the original order and finish the task, as I've",
+      "text_evidence": "The prompt ends “as I’ve”; generated “analyzed/determined…” completes that phrase grammatically, continues briefly and makes a canonical bash call to restore the source file, followed by tool handoff before cap. The native duplicated-contraction motif is absent.",
+      "comparisons": {
+        "all_group_full_bf16_hifi4_path": "setup/swe85-pilot-split85/runs/rest/full/anomaly.sphinx-doc__sphinx-10323.call68.onset.json",
+        "full_result_sha256": "dfc0c88d0e622243ecf215c5c25e330b29d9a15723f505f1ccf9fabc61cfb040",
+        "full_runtime_precision": "stage12_bf16_hifi4_diagnostic",
+        "same_seed_full_case_path_matches_fixture": true,
+        "full_exact_generated_ids_match": true,
+        "p19_q128_result": "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-10323.call68.onset.seed42.cap256.json",
+        "p19_q128_result_sha256": "ea08e66380cd47ab5d216d9367f7a42d40c07ed4560924703a2dba0d8d3e5bc9",
+        "p19_q128_exact_generated_ids_match": true
+      },
+      "cap_notes": "Naturally completed a valid tool handoff before cap; no extension required."
+    },
+    {
+      "manifest_index": 52,
+      "job": "anomaly.sphinx-doc__sphinx-10323.call68.onset",
+      "seed": 43,
+      "cap": 256,
+      "verdict": "normal",
+      "confidence": "high",
+      "identity": {
+        "case_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.sphinx-doc__sphinx-10323.call68.onset.seed43.private.json",
+        "case_sha256": "268ebac1198fcc7951fda3d5c9760ced4b941c45b4fde336cafea68ca187eb51",
+        "prompt_tokens": 64509,
+        "result_path": "setup/p19-q32-production-validation/fixed108/runs/p19_q32/anomaly.sphinx-doc__sphinx-10323.call68.onset.seed43.cap256.json",
+        "result_sha256": "d53a4935f799dd9a0e8ae5bfd511d2f5a8c1ba5799d8a1f0de9c792ff9789079",
+        "result_case_matches_fixture": true,
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 43
+        },
+        "generated_tokens": 77,
+        "runtime_precision": "stage12_bf16_hifi4_kv_down_bfp8_p19"
+      },
+      "prompt_tail_decoded": " indentation back to the prepended and appended lines? No, that's not right.\n\nI'll just restore the original order and finish the task, as I've",
+      "text_evidence": "The prompt ends “as I’ve”; generated “analyzed/determined…” completes that phrase grammatically, continues briefly and makes a canonical bash call to restore the source file, followed by tool handoff before cap. The native duplicated-contraction motif is absent.",
+      "comparisons": {
+        "all_group_full_bf16_hifi4_path": "setup/swe85-pilot-split85/runs/rest/full/anomaly.sphinx-doc__sphinx-10323.call68.onset.json",
+        "full_result_sha256": "dfc0c88d0e622243ecf215c5c25e330b29d9a15723f505f1ccf9fabc61cfb040",
+        "full_runtime_precision": "stage12_bf16_hifi4_diagnostic",
+        "same_seed_full_case_path_matches_fixture": false,
+        "full_exact_generated_ids_match": true,
+        "p19_q128_result": "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-10323.call68.onset.seed43.cap256.json",
+        "p19_q128_result_sha256": "4c6422a609064ffbef0e763cd46a2801391b0c4607b7f7bbf0f3ee4f6a9d368a",
+        "p19_q128_exact_generated_ids_match": false
+      },
+      "cap_notes": "Naturally completed a valid tool handoff before cap; no extension required."
+    },
+    {
+      "manifest_index": 53,
+      "job": "anomaly.sphinx-doc__sphinx-10323.call68.onset",
+      "seed": 44,
+      "cap": 256,
+      "verdict": "normal",
+      "confidence": "high",
+      "identity": {
+        "case_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.sphinx-doc__sphinx-10323.call68.onset.seed44.private.json",
+        "case_sha256": "a4cbaf72f69ca7e7b5fc0a5d3150a75e6211fc46992d8bc044ff89db3bb60251",
+        "prompt_tokens": 64509,
+        "result_path": "setup/p19-q32-production-validation/fixed108/runs/p19_q32/anomaly.sphinx-doc__sphinx-10323.call68.onset.seed44.cap256.json",
+        "result_sha256": "a688fddebc47a5588390a5957d5c8b4a70fdae195a90101f72100d22b80c60d3",
+        "result_case_matches_fixture": true,
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 44
+        },
+        "generated_tokens": 38,
+        "runtime_precision": "stage12_bf16_hifi4_kv_down_bfp8_p19"
+      },
+      "prompt_tail_decoded": " indentation back to the prepended and appended lines? No, that's not right.\n\nI'll just restore the original order and finish the task, as I've",
+      "text_evidence": "The prompt ends “as I’ve”; generated “analyzed/determined…” completes that phrase grammatically, continues briefly and makes a canonical bash call to restore the source file, followed by tool handoff before cap. The native duplicated-contraction motif is absent.",
+      "comparisons": {
+        "all_group_full_bf16_hifi4_path": "setup/swe85-pilot-split85/runs/rest/full/anomaly.sphinx-doc__sphinx-10323.call68.onset.json",
+        "full_result_sha256": "dfc0c88d0e622243ecf215c5c25e330b29d9a15723f505f1ccf9fabc61cfb040",
+        "full_runtime_precision": "stage12_bf16_hifi4_diagnostic",
+        "same_seed_full_case_path_matches_fixture": false,
+        "full_exact_generated_ids_match": true,
+        "p19_q128_result": "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-10323.call68.onset.seed44.cap256.json",
+        "p19_q128_result_sha256": "64f1f6c912966a4feaaf5c24bd748df8b2737e3fa34d723e647991c2a02ff413",
+        "p19_q128_exact_generated_ids_match": true
+      },
+      "cap_notes": "Naturally completed a valid tool handoff before cap; no extension required."
+    },
+    {
+      "manifest_index": 54,
+      "job": "anomaly.sphinx-doc__sphinx-10323.call70.onset",
+      "seed": 42,
+      "cap": 256,
+      "verdict": "inconclusive",
+      "confidence": "high",
+      "identity": {
+        "case_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-extra-contraction-controls/sphinx-doc__sphinx-10323.call70.onset.private.json",
+        "case_sha256": "7d39e2c87e91327f35317968bf2647887a402d0086085ec8f95db8ff5fc2ab64",
+        "prompt_tokens": 65779,
+        "result_path": "setup/p19-q32-production-validation/fixed108/runs/p19_q32/anomaly.sphinx-doc__sphinx-10323.call70.onset.seed42.cap256.json",
+        "result_sha256": "8dfb04e0d290f13dee822128b41d12de1944fc7834ea601f840c61fbd0c3d529",
+        "result_case_matches_fixture": true,
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 42
+        },
+        "generated_tokens": 256,
+        "runtime_precision": "stage12_bf16_hifi4_kv_down_bfp8_p19"
+      },
+      "prompt_tail_decoded": " user wants `    <plugin>`, they'll have to use something like `:prepend:     <plugin>` and we'd need to not strip it.\n\nI've",
+      "text_evidence": "The inherited prompt ends with “I’ve”, and generated text continues coherently as “already tried that…”. It is still mid-explanation at the 256-token cap, with no natural stop or sustained loop. Same exact case/seed all-group full-BF16 and P19 Q128 references stop naturally at 64 and40 tokens respectively with a different branch, so this capped Q32 output cannot yet be classified as normal or as an anomaly. Extend this exact seed/case to512 before disposition.",
+      "comparisons": {
+        "all_group_full_bf16_hifi4_path": "setup/swe85-pilot-split85/runs/rest/full/anomaly.sphinx-doc__sphinx-10323.call70.onset.json",
+        "full_result_sha256": "581abc9eafc039e5507b874dabba86b859204f29b1a9a14e45a28dd8d7efa995",
+        "full_runtime_precision": "stage12_bf16_hifi4_diagnostic",
+        "same_seed_full_case_path_matches_fixture": true,
+        "full_generated_tokens": 64,
+        "full_exact_generated_ids_match": false,
+        "p19_q128_result": "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-10323.call70.onset.seed42.cap256.json",
+        "p19_q128_result_sha256": "5675101bf0ae32fb7de58cc05c94ed042a51735e12e3a57a6a14275487841993",
+        "p19_q128_generated_tokens": 40,
+        "p19_q128_exact_generated_ids_match": false
+      },
+      "cap_notes": "Progressing at cap256; proposed fair continuation cap512, preserving exact fixture, seed, sampling, and generated 256-token prefix."
+    },
+    {
+      "manifest_index": 55,
+      "job": "anomaly.sphinx-doc__sphinx-10323.call70.onset",
+      "seed": 43,
+      "cap": 256,
+      "verdict": "reproduced_native_motif",
+      "confidence": "high",
+      "identity": {
+        "case_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.sphinx-doc__sphinx-10323.call70.onset.seed43.private.json",
+        "case_sha256": "52f78b1aa3daba1691172b565090fd48487e2a5a9290b2811c3d4e16cd4a0526",
+        "prompt_tokens": 65779,
+        "result_path": "setup/p19-q32-production-validation/fixed108/runs/p19_q32/anomaly.sphinx-doc__sphinx-10323.call70.onset.seed43.cap256.json",
+        "result_sha256": "46d483bbe8840e32406d84e5671d4a977d6257801bd4e515f0a626e8730fa1ed",
+        "result_case_matches_fixture": true,
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 43
+        },
+        "generated_tokens": 39,
+        "runtime_precision": "stage12_bf16_hifi4_kv_down_bfp8_p19"
+      },
+      "prompt_tail_decoded": " user wants `    <plugin>`, they'll have to use something like `:prepend:     <plugin>` and we'd need to not strip it.\n\nI've",
+      "text_evidence": "Inherited prompt ends with “I’ve”; generated text begins with curly-apostrophe “’ve”, making the concatenation “I’ve’ve …” and reproducing the documented localized duplicated-contraction motif. It then completes a tool-call handoff at39 tokens.",
+      "comparisons": {
+        "all_group_full_bf16_hifi4_path": "setup/swe85-pilot-split85/runs/rest/full/anomaly.sphinx-doc__sphinx-10323.call70.onset.json",
+        "full_result_sha256": "581abc9eafc039e5507b874dabba86b859204f29b1a9a14e45a28dd8d7efa995",
+        "full_runtime_precision": "stage12_bf16_hifi4_diagnostic",
+        "same_seed_full_case_path_matches_fixture": false,
+        "full_generated_tokens": 39,
+        "full_exact_generated_ids_match": true,
+        "p19_q128_result": "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-10323.call70.onset.seed43.cap256.json",
+        "p19_q128_result_sha256": "5d27e822041fdeaeb8970d4796744efba66f293f4b7dc639a3337b2bb9bd2dc6",
+        "p19_q128_generated_tokens": 39,
+        "p19_q128_exact_generated_ids_match": true
+      },
+      "cap_notes": "Anomaly is already visible at39 tokens and naturally terminates; no cap extension is needed."
+    },
+    {
+      "manifest_index": 56,
+      "job": "sphinx-doc__sphinx-10323.call70.onset",
+      "seed": 44,
+      "cap": 256,
+      "verdict": "normal",
+      "confidence": "high",
+      "identity": {
+        "case_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.sphinx-doc__sphinx-10323.call70.onset.seed44.private.json",
+        "case_sha256": "e6905c26f7b592712e8e7c536babe496e7410b2bd5914677ad89e2c3ff699763",
+        "prompt_tokens": 65779,
+        "result_path": "setup/p19-q32-production-validation/fixed108/runs/p19_q32/anomaly.sphinx-doc__sphinx-10323.call70.onset.seed44.cap256.json",
+        "result_sha256": "dd9e8cd15ea17075c591d9032d01aad88ca9b9fc7e38826a08ce8bfb187e57ed",
+        "result_case_matches_fixture": true,
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 44
+        },
+        "generated_tokens": 47,
+        "runtime_precision": "stage12_bf16_hifi4_kv_down_bfp8_p19"
+      },
+      "prompt_tail_decoded": " user wants `    <plugin>`, they'll have to use something like `:prepend:     <plugin>` and we'd need to not strip it.\n\nI've",
+      "text_evidence": "The inherited prompt ends in “I’ve”; the generated continuation begins “already tried that…”, a grammatical completion rather than a duplicated suffix. It concludes with a valid canonical bash tool handoff after47 tokens. The full native-source metadata’s “I’ve’ve” motif is not present in the generated continuation.",
+      "comparisons": {
+        "all_group_full_bf16_hifi4_path": "setup/swe85-pilot-split85/runs/rest/full/anomaly.sphinx-doc__sphinx-10323.call70.onset.json",
+        "full_result_sha256": "581abc9eafc039e5507b874dabba86b859204f29b1a9a14e45a28dd8d7efa995",
+        "full_runtime_precision": "stage12_bf16_hifi4_diagnostic",
+        "same_seed_full_case_path_matches_fixture": false,
+        "full_exact_generated_ids_match": false,
+        "p19_q128_result": "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-10323.call70.onset.seed44.cap256.json",
+        "p19_q128_result_sha256": "d0c4bf78f914d8533d0a8fbe9238f9cc95fa5d83df819ebd02baa83b496510fa",
+        "p19_q128_exact_generated_ids_match": false
+      },
+      "cap_notes": "Natural tool handoff before cap256; no extension needed."
+    },
+    {
+      "manifest_index": 57,
+      "job": "sphinx-doc__sphinx-11510.call101.contraction.onset",
+      "seed": 42,
+      "cap": 2048,
+      "verdict": "normal",
+      "confidence": "high",
+      "identity": {
+        "case_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.cap2048.seed42.private.json",
+        "case_sha256": "020694b001269c7998c8e36753d830f23a5d6700a1842526dc098bd459c3ca64",
+        "prompt_tokens": 58982,
+        "result_path": "setup/p19-q32-production-validation/fixed108/runs/p19_q32/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.seed42.cap2048.json",
+        "result_sha256": "a4ded4507d5c488c817fa32b2e787deae22ca7f8aca872e3a95133516071e289",
+        "result_case_matches_fixture": true,
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 42
+        },
+        "generated_tokens": 1887,
+        "runtime_precision": "stage12_bf16_hifi4_kv_down_bfp8_p19"
+      },
+      "prompt_tail_decoded": "m seeing \"Processing index\" and \"Modified index\" in the logs, it means `source-read` was called for `index.rst`.\n\nLet's try to put a print in `sphinx/directives/__init__.py`'s `setup` or something to see if it",
+      "text_evidence": "The prompt ends “to see if it”; generation begins “’s being loaded”, completing the grammatical “to see if it’s being loaded”. The long continuation stays coherent, then emits a properly opened bash tool call (verified in the decoded output at character2258) and terminates its handoff at1887/2048 tokens. No repeated-contraction pattern appears anywhere in the decoded text.",
+      "comparisons": {
+        "all_group_full_bf16_hifi4_path": "setup/swe85-pilot-split85/runs/rest/full/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.json",
+        "full_result_sha256": "56ca8669e2f71df9240ee9d5f1f70efede8407541dd67e236ea80a4e782862e0",
+        "full_runtime_precision": "stage12_bf16_hifi4_diagnostic",
+        "same_seed_full_case_path_matches_fixture": false,
+        "full_generated_tokens": 256,
+        "full_exact_generated_ids_match": false,
+        "p19_q128_result": "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.seed42.cap2048.json",
+        "p19_q128_result_sha256": "da909d81a3111621cba2a904448363e49961a150d090c0ee60bfdcef4ffd099b",
+        "p19_q128_generated_tokens": 290,
+        "p19_q128_exact_generated_ids_match": false
+      },
+      "cap_notes": "Natural valid bash handoff at1887, below cap2048; no extension needed."
+    },
+    {
+      "manifest_index": 58,
+      "job": "anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset",
+      "seed": 43,
+      "cap": 2048,
+      "verdict": "normal",
+      "confidence": "high",
+      "identity": {
+        "case_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.cap2048.seed43.private.json",
+        "case_sha256": "f09f5493bf5e6d1f1bec5f5ce7e4273d0ec9352de1f85ffe780ef897063dec98",
+        "prompt_tokens": 58982,
+        "result_path": "setup/p19-q32-production-validation/fixed108/runs/p19_q32/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.seed43.cap2048.json",
+        "result_sha256": "8b822119b61f7b6f0fcaf819ffbe55a540da1039064410f62e2e85af5309c6b0",
+        "result_case_matches_fixture": true,
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 43
+        },
+        "generated_tokens": 197,
+        "runtime_precision": "stage12_bf16_hifi4_kv_down_bfp8_p19"
+      },
+      "prompt_tail_decoded": ", if I'm seeing \"Processing index\" and \"Modified index\" in the logs, it means `source-read` was called for `index.rst`.\n\nLet's try to put a print in `sphinx/directives/__init__.py`'s `setup` or something to see if it",
+      "text_evidence": "The inherited text ends “…to see if it”; generation begins “’s loaded”, yielding the grammatical phrase “see if it’s loaded”, and ends with a valid bash tool handoff well below cap. No duplicated-contraction motif is present.",
+      "comparisons": {
+        "all_group_full_bf16_hifi4_path": "setup/swe85-pilot-split85/runs/rest/full/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.json",
+        "full_result_sha256": "56ca8669e2f71df9240ee9d5f1f70efede8407541dd67e236ea80a4e782862e0",
+        "full_runtime_precision": "stage12_bf16_hifi4_diagnostic",
+        "same_seed_full_case_path_matches_fixture": false,
+        "full_exact_generated_ids_match": false,
+        "p19_q128_result": "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.seed43.cap2048.json",
+        "p19_q128_result_sha256": "7f3ba7d5c4c1af658a622f51773512a9b06ecac0160dfcbf4d70bf3f1c08c99a",
+        "p19_q128_exact_generated_ids_match": false
+      },
+      "cap_notes": "Valid natural tool handoff before cap; no extension required."
+    },
+    {
+      "manifest_index": 59,
+      "job": "anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset",
+      "seed": 44,
+      "cap": 1024,
+      "verdict": "normal",
+      "confidence": "high",
+      "identity": {
+        "case_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.cap1024.seed44.private.json",
+        "case_sha256": "6be948416b6cefc2796d256824f3fd6f7c7e46ea001063de32ae75e63d343b09",
+        "prompt_tokens": 58982,
+        "result_path": "setup/p19-q32-production-validation/fixed108/runs/p19_q32/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.seed44.cap1024.json",
+        "result_sha256": "50f64bd0787c068bf662f03775b1c0db7a356d4355a45dc86b094e6b82983ac8",
+        "result_case_matches_fixture": true,
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 44
+        },
+        "generated_tokens": 172,
+        "runtime_precision": "stage12_bf16_hifi4_kv_down_bfp8_p19"
+      },
+      "prompt_tail_decoded": ", if I'm seeing \"Processing index\" and \"Modified index\" in the logs, it means `source-read` was called for `index.rst`.\n\nLet's try to put a print in `sphinx/directives/__init__.py`'s `setup` or something to see if it",
+      "text_evidence": "The inherited text ends “…to see if it”; generation begins “’s loaded”, yielding the grammatical phrase “see if it’s loaded”, and ends with a valid bash tool handoff well below cap. No duplicated-contraction motif is present.",
+      "comparisons": {
+        "all_group_full_bf16_hifi4_path": "setup/swe85-pilot-split85/runs/rest/full/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.json",
+        "full_result_sha256": "56ca8669e2f71df9240ee9d5f1f70efede8407541dd67e236ea80a4e782862e0",
+        "full_runtime_precision": "stage12_bf16_hifi4_diagnostic",
+        "same_seed_full_case_path_matches_fixture": false,
+        "full_exact_generated_ids_match": false,
+        "p19_q128_result": "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.seed44.cap1024.json",
+        "p19_q128_result_sha256": "256cc2157e9b590752bc0034b7054e1a46e3d767cc115eef7bdead0abd8f5686",
+        "p19_q128_exact_generated_ids_match": false
+      },
+      "cap_notes": "Valid natural tool handoff before cap; no extension required."
+    },
+    {
+      "manifest_index": 60,
+      "job": "anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset",
+      "seed": 42,
+      "cap": 256,
+      "verdict": "normal",
+      "confidence": "high",
+      "identity": {
+        "case_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-sphinx11510-protocol-controls/sphinx-doc__sphinx-11510.call101.onset.private.json",
+        "case_sha256": "e940e736fad1b9ac133cd217d6163ea3ba1cdb01380471e0a9b77a35afb9f1c2",
+        "prompt_tokens": 59716,
+        "result_path": "setup/p19-q32-production-validation/fixed108/runs/p19_q32/anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset.seed42.cap256.json",
+        "result_sha256": "31b1eb6b38a744423cbe02c63078f33086ecae692c83197ebab07d1dcc670682",
+        "result_case_matches_fixture": true,
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 42
+        },
+        "generated_tokens": 85,
+        "runtime_precision": "stage12_bf16_hifi4_kv_down_bfp8_p19"
+      },
+      "prompt_tail_decoded": ".state.document` is the current document.\nIn Sphinx, `self.state.document` is an instance of `sphinx.addnodes.document`.\nDoes `sphinx.addnodes.document` have a reference to the `app` object?\n\nLet's check.<channel|><|tool_call>call:bash",
+      "text_evidence": "The inherited prompt already ends with the open protocol prefix `<|tool_call>call:bash`; generated text starts with `{command:…`, which is a valid argument fragment, then closes the command and hands off. This is not malformed protocol; it naturally completes below cap.",
+      "comparisons": {
+        "all_group_full_bf16_hifi4_path": "setup/swe85-pilot-split85/runs/rest/full/anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset.json",
+        "full_result_sha256": "7659b62affcde464547dd94e576bc1a6df9657b51d2b8ac3026294bbdc103692",
+        "full_runtime_precision": "stage12_bf16_hifi4_diagnostic",
+        "same_seed_full_case_path_matches_fixture": true,
+        "full_exact_generated_ids_match": false,
+        "p19_q128_result": "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset.seed42.cap256.json",
+        "p19_q128_result_sha256": "83631d60341fe9de0755089c3a06200d97f8149773d15b277320ade9fd5edbc7",
+        "p19_q128_exact_generated_ids_match": false
+      },
+      "cap_notes": "Valid natural tool handoff before cap; no extension required."
+    },
+    {
+      "manifest_index": 61,
+      "job": "anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset",
+      "seed": 43,
+      "cap": 256,
+      "verdict": "normal",
+      "confidence": "high",
+      "identity": {
+        "case_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset.seed43.private.json",
+        "case_sha256": "73525af6b566b8589b8960fc3c511484ec1e652068be470efbc9ac943c45fdab",
+        "prompt_tokens": 59716,
+        "result_path": "setup/p19-q32-production-validation/fixed108/runs/p19_q32/anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset.seed43.cap256.json",
+        "result_sha256": "74273a3e85eadf3fa688d2528393495c81a0ee993c24c7fd247cfed8efc30236",
+        "result_case_matches_fixture": true,
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 43
+        },
+        "generated_tokens": 57,
+        "runtime_precision": "stage12_bf16_hifi4_kv_down_bfp8_p19"
+      },
+      "prompt_tail_decoded": ".state.document` is the current document.\nIn Sphinx, `self.state.document` is an instance of `sphinx.addnodes.document`.\nDoes `sphinx.addnodes.document` have a reference to the `app` object?\n\nLet's check.<channel|><|tool_call>call:bash",
+      "text_evidence": "The inherited prompt already ends with the open protocol prefix `<|tool_call>call:bash`; generated text starts with `{command:…`, which is a valid argument fragment, then closes the command and hands off. This is not malformed protocol; it naturally completes below cap.",
+      "comparisons": {
+        "all_group_full_bf16_hifi4_path": "setup/swe85-pilot-split85/runs/rest/full/anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset.json",
+        "full_result_sha256": "7659b62affcde464547dd94e576bc1a6df9657b51d2b8ac3026294bbdc103692",
+        "full_runtime_precision": "stage12_bf16_hifi4_diagnostic",
+        "same_seed_full_case_path_matches_fixture": false,
+        "full_exact_generated_ids_match": false,
+        "p19_q128_result": "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset.seed43.cap256.json",
+        "p19_q128_result_sha256": "5cc5331b7f2a1ca8b51c71ff2e7878edc374fe1916bfe7d9cf4fa1bc3939084c",
+        "p19_q128_exact_generated_ids_match": false
+      },
+      "cap_notes": "Valid natural tool handoff before cap; no extension required."
+    },
+    {
+      "manifest_index": 62,
+      "job": "anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset",
+      "seed": 44,
+      "cap": 256,
+      "verdict": "normal",
+      "confidence": "high",
+      "identity": {
+        "case_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset.seed44.private.json",
+        "case_sha256": "11dc81f7659740d2f14dfefbdd68af8dd5b2ded451e79a07775cdc180674f269",
+        "prompt_tokens": 59716,
+        "result_path": "setup/p19-q32-production-validation/fixed108/runs/p19_q32/anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset.seed44.cap256.json",
+        "result_sha256": "294a0e8b493fe5b296667dd002bc1b0c89f7a130687ae7602b2079173689689e",
+        "result_case_matches_fixture": true,
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 44
+        },
+        "generated_tokens": 47,
+        "runtime_precision": "stage12_bf16_hifi4_kv_down_bfp8_p19"
+      },
+      "prompt_tail_decoded": ".state.document` is the current document.\nIn Sphinx, `self.state.document` is an instance of `sphinx.addnodes.document`.\nDoes `sphinx.addnodes.document` have a reference to the `app` object?\n\nLet's check.<channel|><|tool_call>call:bash",
+      "text_evidence": "The inherited prompt already ends with the open protocol prefix `<|tool_call>call:bash`; generated text starts with `{command:…`, which is a valid argument fragment, then closes the command and hands off. This is not malformed protocol; it naturally completes below cap.",
+      "comparisons": {
+        "all_group_full_bf16_hifi4_path": "setup/swe85-pilot-split85/runs/rest/full/anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset.json",
+        "full_result_sha256": "7659b62affcde464547dd94e576bc1a6df9657b51d2b8ac3026294bbdc103692",
+        "full_runtime_precision": "stage12_bf16_hifi4_diagnostic",
+        "same_seed_full_case_path_matches_fixture": false,
+        "full_exact_generated_ids_match": true,
+        "p19_q128_result": "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset.seed44.cap256.json",
+        "p19_q128_result_sha256": "4b9bcef243fe187f3b467df9b86c76e9a8d4137e386998b8a42a96916ce7fa8e",
+        "p19_q128_exact_generated_ids_match": true
+      },
+      "cap_notes": "Valid natural tool handoff before cap; no extension required."
+    },
+    {
+      "manifest_index": 63,
+      "job": "sphinx-doc__sphinx-11510.call108.onset",
+      "seed": 42,
+      "cap": 256,
+      "verdict": "normal",
+      "confidence": "high",
+      "identity": {
+        "case_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-sphinx11510-controls/sphinx-doc__sphinx-11510.call108.onset.private.json",
+        "case_sha256": "6efd3333b509e5dc6fe9c28b96829c345056cb2dc88538f0324b5fbce8ecb724",
+        "prompt_tokens": 62453,
+        "result_path": "setup/p19-q32-production-validation/fixed108/runs/p19_q32/anomaly.sphinx-doc__sphinx-11510.call108.onset.seed42.cap256.json",
+        "result_sha256": "ca96244c498ba175eeca6866a95996df8a9f5f7d09a48914a574d37cd28250af",
+        "result_case_matches_fixture": true,
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 42
+        },
+        "generated_tokens": 36,
+        "runtime_precision": "stage12_bf16_hifi4_kv_down_bfp8_p19"
+      },
+      "prompt_tail_decoded": "/other.py`:\n```python\ndirectives.register_directive('include', Include)\n```\nThis should override the docutils one.\n\nBut why is my `DEBUG: Including ...` print not showing up?\nMaybe it's because `super().run()` is called and that's where it's handled?\nNo, my print is at the beginning of `run()`.\n\nLet me check if `Include.run` is even called.\nI'll add a print to the very top of the `Include` class.<channel|><|tool_call>call:bash{command:<|\"|>sed -i 's/class Include(BaseInclude, SphinxDirective):/class Include(BaseInclude, SphinxDirective):\\n    def __init__(self, *args, **kwargs):\\n        print(\"DEBUG: Include.__init__ called\")\\n        super().__init__(*args, **kwargs)/' /opt/miniconda3/lib/python3",
+      "text_evidence": "The prompt already contains an open bash tool call and a command string insertion script. The generated fragment begins “.11/site-packages…” to complete the inherited Python version path, then adds build/test commands and closes the existing quoted command/tool handoff. It is a valid continuation of the inherited tool-call argument, not malformed protocol. The native onset metadata records a separate stray “singkat” token; that token does not occur in the decoded continuation. Natural handoff at36/256.",
+      "comparisons": {
+        "all_group_full_bf16_hifi4_path": "setup/swe85-pilot-split85/runs/rest/full/anomaly.sphinx-doc__sphinx-11510.call108.onset.json",
+        "full_result_sha256": "e90613cb3080d85ed7daf67359973e4aea63834afa3a856b4eff741210c5bece",
+        "full_runtime_precision": "stage12_bf16_hifi4_diagnostic",
+        "same_seed_full_case_path_matches_fixture": true,
+        "full_exact_generated_ids_match": true,
+        "p19_q128_result": "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-11510.call108.onset.seed42.cap256.json",
+        "p19_q128_result_sha256": "0f0ddabd04b0e9a21c55fed757018ca194b19a34a382fa0f9d5d9308408fe993",
+        "p19_q128_exact_generated_ids_match": true
+      },
+      "cap_notes": "Natural tool handoff before cap256; no extension required."
+    },
+    {
+      "manifest_index": 64,
+      "job": "sphinx-doc__sphinx-11510.call108.onset",
+      "seed": 43,
+      "cap": 256,
+      "verdict": "normal",
+      "confidence": "high",
+      "identity": {
+        "case_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.sphinx-doc__sphinx-11510.call108.onset.seed43.private.json",
+        "case_sha256": "b7bb67776073a6a6e7a14dc735af6f9398354e0d99bab7eb8c3d899a7c5da519",
+        "prompt_tokens": 62453,
+        "result_path": "setup/p19-q32-production-validation/fixed108/runs/p19_q32/anomaly.sphinx-doc__sphinx-11510.call108.onset.seed43.cap256.json",
+        "result_sha256": "b7ac4bdfabde23d92d5c8e06a722f61148edfdd15e2ee7b2fa845f0cee7fe162",
+        "result_case_matches_fixture": true,
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 43
+        },
+        "generated_tokens": 36,
+        "runtime_precision": "stage12_bf16_hifi4_kv_down_bfp8_p19"
+      },
+      "prompt_tail_decoded": "/other.py`:\n```python\ndirectives.register_directive('include', Include)\n```\nThis should override the docutils one.\n\nBut why is my `DEBUG: Including ...` print not showing up?\nMaybe it's because `super().run()` is called and that's where it's handled?\nNo, my print is at the beginning of `run()`.\n\nLet me check if `Include.run` is even called.\nI'll add a print to the very top of the `Include` class.<channel|><|tool_call>call:bash{command:<|\"|>sed -i 's/class Include(BaseInclude, SphinxDirective):/class Include(BaseInclude, SphinxDirective):\\n    def __init__(self, *args, **kwargs):\\n        print(\"DEBUG: Include.__init__ called\")\\n        super().__init__(*args, **kwargs)/' /opt/miniconda3/lib/python3",
+      "text_evidence": "The prompt already contains an open bash tool call and a command string insertion script. The generated fragment begins “.11/site-packages…” to complete the inherited Python version path, then adds build/test commands and closes the existing quoted command/tool handoff. It is a valid continuation of the inherited tool-call argument, not malformed protocol. The native onset metadata records a separate stray “singkat” token; that token does not occur in the decoded continuation. Natural handoff at36/256.",
+      "comparisons": {
+        "all_group_full_bf16_hifi4_path": "setup/swe85-pilot-split85/runs/rest/full/anomaly.sphinx-doc__sphinx-11510.call108.onset.json",
+        "full_result_sha256": "e90613cb3080d85ed7daf67359973e4aea63834afa3a856b4eff741210c5bece",
+        "full_runtime_precision": "stage12_bf16_hifi4_diagnostic",
+        "same_seed_full_case_path_matches_fixture": false,
+        "full_exact_generated_ids_match": true,
+        "p19_q128_result": "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-11510.call108.onset.seed43.cap256.json",
+        "p19_q128_result_sha256": "791aaae7f2d27788e86f8ce7dc8044fd63f65c7272c1e277f381eb5e365a4e74",
+        "p19_q128_exact_generated_ids_match": true
+      },
+      "cap_notes": "Natural tool handoff before cap256; no extension required."
+    },
+    {
+      "manifest_index": 65,
+      "job": "sphinx-doc__sphinx-11510.call108.onset",
+      "seed": 44,
+      "cap": 256,
+      "verdict": "normal",
+      "confidence": "high",
+      "identity": {
+        "case_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.sphinx-doc__sphinx-11510.call108.onset.seed44.private.json",
+        "case_sha256": "cab7d7acbcc4e910cbdef7993f8c39c0cfebfaa367030191b6c0b5e0519d8e24",
+        "prompt_tokens": 62453,
+        "result_path": "setup/p19-q32-production-validation/fixed108/runs/p19_q32/anomaly.sphinx-doc__sphinx-11510.call108.onset.seed44.cap256.json",
+        "result_sha256": "f9bc6382183c3c59173a8af961dde5a6f9c8f34b42c17df1b31443e7f1cdf29f",
+        "result_case_matches_fixture": true,
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 44
+        },
+        "generated_tokens": 36,
+        "runtime_precision": "stage12_bf16_hifi4_kv_down_bfp8_p19"
+      },
+      "prompt_tail_decoded": "/other.py`:\n```python\ndirectives.register_directive('include', Include)\n```\nThis should override the docutils one.\n\nBut why is my `DEBUG: Including ...` print not showing up?\nMaybe it's because `super().run()` is called and that's where it's handled?\nNo, my print is at the beginning of `run()`.\n\nLet me check if `Include.run` is even called.\nI'll add a print to the very top of the `Include` class.<channel|><|tool_call>call:bash{command:<|\"|>sed -i 's/class Include(BaseInclude, SphinxDirective):/class Include(BaseInclude, SphinxDirective):\\n    def __init__(self, *args, **kwargs):\\n        print(\"DEBUG: Include.__init__ called\")\\n        super().__init__(*args, **kwargs)/' /opt/miniconda3/lib/python3",
+      "text_evidence": "The prompt already contains an open bash tool call and a command string insertion script. The generated fragment begins “.11/site-packages…” to complete the inherited Python version path, then adds build/test commands and closes the existing quoted command/tool handoff. It is a valid continuation of the inherited tool-call argument, not malformed protocol. The native onset metadata records a separate stray “singkat” token; that token does not occur in the decoded continuation. Natural handoff at36/256.",
+      "comparisons": {
+        "all_group_full_bf16_hifi4_path": "setup/swe85-pilot-split85/runs/rest/full/anomaly.sphinx-doc__sphinx-11510.call108.onset.json",
+        "full_result_sha256": "e90613cb3080d85ed7daf67359973e4aea63834afa3a856b4eff741210c5bece",
+        "full_runtime_precision": "stage12_bf16_hifi4_diagnostic",
+        "same_seed_full_case_path_matches_fixture": false,
+        "full_exact_generated_ids_match": true,
+        "p19_q128_result": "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-11510.call108.onset.seed44.cap256.json",
+        "p19_q128_result_sha256": "fced4b09b150e42f6475d4f2afd267a3dd8df34de3fec3faf0b2011de360baca",
+        "p19_q128_exact_generated_ids_match": true
+      },
+      "cap_notes": "Natural tool handoff before cap256; no extension required."
+    },
+    {
+      "manifest_index": 66,
+      "job": "sphinx-doc__sphinx-11510.call119.protocol.onset",
+      "seed": 42,
+      "cap": 1024,
+      "verdict": "normal",
+      "confidence": "medium",
+      "identity": {
+        "case_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap1024.seed42.private.json",
+        "case_sha256": "b4253957ad89651510a0e39ea3aa49373926c9ff2d963a4ee381047b400efac8",
+        "prompt_tokens": 76441,
+        "result_path": "setup/p19-q32-production-validation/fixed108/runs/p19_q32/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed42.cap1024.json",
+        "result_sha256": "60903f27edeef5cf7a8cec88ba9b9c39e50324f70993add81e1a97e22fd64329",
+        "result_case_matches_fixture": true,
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 42
+        },
+        "generated_tokens": 570,
+        "runtime_precision": "stage12_bf16_hifi4_kv_down_bfp8_p19"
+      },
+      "prompt_tail_decoded": "state.document.settings['env'].app`\nAnd then `app.emit('source-read', ...)`\n\nLet's implement this in `docutils/parsers/rst/directives/misc.py`.<channel|><|tool_call>call:bash",
+      "text_evidence": "The continuation begins with a valid bash argument fragment `{command:` after the prompt’s existing `call:bash` opener. It is a coherent heredoc script through a natural 570-token stop; it does not continue the malformed tool-name/newline motif or repeat a caret/suffix loop. The decoded tail shows tool-boundary tokens after the argument close; token spelling alone does not imply execution or protocol failure, and no tool was run.",
+      "comparisons": {
+        "all_group_full_bf16_hifi4_path": "setup/swe85-pilot-split85/runs/rest/full/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.json",
+        "full_result_sha256": "a37b39be0e17b017557ae8b583a2172f4b1ce0aa1cd5e292af02024d7f8053cc",
+        "full_seed_matches_exact_generated_ids": false,
+        "full_generated_tokens": 256,
+        "p19_q128_result": "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed42.cap1024.json",
+        "p19_q128_result_sha256": "e4878adb1a16e1615880e90a21769012a4274e88436d859024fb7fec7d899d42",
+        "p19_q128_exact_generated_ids": false,
+        "p19_q128_generated_tokens": 1024
+      },
+      "cap_notes": "Natural stop at 570 tokens (below the 1024 cap); no cap extension is indicated. This reconstructed conditioning fixture is not a native-token replay, and diagnostic outputs do not establish task success or native RNG equivalence."
+    },
+    {
+      "manifest_index": 67,
+      "job": "sphinx-doc__sphinx-11510.call119.protocol.onset",
+      "seed": 43,
+      "cap": 2048,
+      "verdict": "normal",
+      "confidence": "medium",
+      "identity": {
+        "case_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap2048.seed43.private.json",
+        "case_sha256": "e4c5081386cd785ccc1216dda888b4c54cc165beb80b035e96daf69c2f119718",
+        "prompt_tokens": 76441,
+        "result_path": "setup/p19-q32-production-validation/fixed108/runs/p19_q32/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed43.cap2048.json",
+        "result_sha256": "9fb303477379e5bfca38cd7f2a85e7e250723224ce0a36a5a7ef38a8c480fc93",
+        "result_case_matches_fixture": true,
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 43
+        },
+        "generated_tokens": 887,
+        "runtime_precision": "stage12_bf16_hifi4_kv_down_bfp8_p19"
+      },
+      "prompt_tail_decoded": "state.document.settings['env'].app`\nAnd then `app.emit('source-read', ...)`\n\nLet's implement this in `docutils/parsers/rst/directives/misc.py`.<channel|><|tool_call>call:bash",
+      "text_evidence": "The continuation begins with a bash argument fragment after the prompt’s existing `call:bash` opener and gives a coherent, complete heredoc patch script ending at a tool handoff. It stops naturally after 887 tokens, below the 2048 cap; no visible malformed tool-name/newline, caret run, or repeated suffix occurs. No command was executed.",
+      "comparisons": {
+        "all_group_full_bf16_hifi4_path": "setup/swe85-pilot-split85/runs/rest/full/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.json",
+        "full_result_sha256": "a37b39be0e17b017557ae8b583a2172f4b1ce0aa1cd5e292af02024d7f8053cc",
+        "full_seed_matches_exact_generated_ids": false,
+        "full_generated_tokens": 256,
+        "p19_q128_result": "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed43.cap2048.json",
+        "p19_q128_result_sha256": "ca3cbf0de39bbedc4340737108381c1c6f97336cc26230bb7678ca3c9f3fa92e",
+        "p19_q128_exact_generated_ids": false,
+        "p19_q128_generated_tokens": 522
+      },
+      "cap_notes": "Natural stop before the 2048 cap; no cap extension is indicated. Reconstructed continuation and seed are not native RNG replay or task-success evidence."
+    },
+    {
+      "manifest_index": 68,
+      "job": "sphinx-doc__sphinx-11510.call119.protocol.onset",
+      "seed": 44,
+      "cap": 1024,
+      "verdict": "inconclusive",
+      "confidence": "medium",
+      "identity": {
+        "case_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap1024.seed44.private.json",
+        "case_sha256": "7c5da63d138e6afa7b539dfed909ee1e8a937c2e168d587023c4421333688780",
+        "prompt_tokens": 76441,
+        "result_path": "setup/p19-q32-production-validation/fixed108/runs/p19_q32/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed44.cap1024.json",
+        "result_sha256": "9ddbe31160890bbea94ccb463d6c97e035933cb7c40d8d66ac4b34d29c79587b",
+        "result_case_matches_fixture": true,
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 44
+        },
+        "generated_tokens": 1024,
+        "runtime_precision": "stage12_bf16_hifi4_kv_down_bfp8_p19"
+      },
+      "prompt_tail_decoded": "state.document.settings['env'].app`\nAnd then `app.emit('source-read', ...)`\n\nLet's implement this in `docutils/parsers/rst/directives/misc.py`.<channel|><|tool_call>call:bash",
+      "text_evidence": "The generated bash argument begins coherently with a script replacing the docutils Include method. It remains syntactically in-progress at the 1024-token cap; the tail is still method source, with no natural tool handoff, repeated caret tail, or repeated short suffix. This is an unfinished continuation, not evidence of a failure or a normal completed response.",
+      "comparisons": {
+        "all_group_full_bf16_hifi4_path": "setup/swe85-pilot-split85/runs/rest/full/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.json",
+        "full_result_sha256": "a37b39be0e17b017557ae8b583a2172f4b1ce0aa1cd5e292af02024d7f8053cc",
+        "full_seed_matches_exact_generated_ids": false,
+        "full_generated_tokens": 256,
+        "p19_q128_result": "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed44.cap1024.json",
+        "p19_q128_result_sha256": "fc6f184c1ea1f8a2f6ceda48993ec01e30debbc634c8ce3f96274f94e352b5a6",
+        "p19_q128_exact_generated_ids": false,
+        "p19_q128_generated_tokens": 577
+      },
+      "cap_notes": "Still progressing at cap1024. Request exact fair cap extension to2048 with identical fixture, seed44, and sampling; do not count the current output as anomaly reproduction or normal completion. Native token history/RNG and task success are not established."
+    },
+    {
+      "manifest_index": 69,
+      "job": "sphinx-doc__sphinx-11510.call28.onset",
+      "seed": 42,
+      "cap": 1024,
+      "verdict": "normal",
+      "confidence": "high",
+      "identity": {
+        "case_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call28.onset.cap1024.seed42.private.json",
+        "case_sha256": "2dfeb0e5b696b9997f100a3ef3eac57ab8db33df3cc0bae4369e292f34711cdb",
+        "prompt_tokens": 25118,
+        "result_path": "setup/p19-q32-production-validation/fixed108/runs/p19_q32/anomaly.sphinx-doc__sphinx-11510.call28.onset.seed42.cap1024.json",
+        "result_sha256": "2cf8c11ff566c8e9a3836b249de1507dec77cb5f5e7907a7748c94b719a47fc0",
+        "result_case_matches_fixture": true,
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 42
+        },
+        "generated_tokens": 619,
+        "runtime_precision": "stage12_bf16_hifi4_kv_down_bfp8_p19"
+      },
+      "prompt_tail_decoded": " with the new implementation\ncat <<'EOF' > replacement_include.py\n    def run(self) -> List[Node]:\n        if self.arguments[0].startswith('<') and \\\n           self.arguments[0].",
+      "text_evidence": "The conditioning ends in the middle of a Python `if` expression (`self.arguments[0].`); generated text continues the same method coherently with `endswith(...)`, then follows the existing Sphinx Include logic. It reaches a natural tool handoff after a complete patch script (619 tokens for seed42; 567 for seed43), below the 1024 cap. No repeated native suffix or malformed tool boundary appears; no command was executed.",
+      "comparisons": {
+        "all_group_full_bf16_hifi4_path": "setup/swe85-pilot-split85/runs/rest/full/anomaly.sphinx-doc__sphinx-11510.call28.onset.json",
+        "full_result_sha256": "c1fb8adc8ada9b5b12dbb083ca24fb318af2b99c445f9030170a78fbe717cf3d",
+        "full_seed_matches_exact_generated_ids": false,
+        "full_generated_tokens": 256,
+        "p19_q128_result": "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-11510.call28.onset.seed42.cap1024.json",
+        "p19_q128_result_sha256": "db982ca64d8409e8e9aa7979efa60c2d1fd2e24231cbb6be59c6738cba8905e3",
+        "p19_q128_exact_generated_ids": false,
+        "p19_q128_generated_tokens": 646
+      },
+      "cap_notes": "Natural completion before the 1024 cap; no extension needed. Diagnostic sample is not native RNG replay or task-success evidence."
+    },
+    {
+      "manifest_index": 70,
+      "job": "sphinx-doc__sphinx-11510.call28.onset",
+      "seed": 43,
+      "cap": 1024,
+      "verdict": "normal",
+      "confidence": "high",
+      "identity": {
+        "case_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call28.onset.cap1024.seed43.private.json",
+        "case_sha256": "ea91bd0ca464c508824ec6106ab987d91d30452dfdbd86d56ea557fb91dd8455",
+        "prompt_tokens": 25118,
+        "result_path": "setup/p19-q32-production-validation/fixed108/runs/p19_q32/anomaly.sphinx-doc__sphinx-11510.call28.onset.seed43.cap1024.json",
+        "result_sha256": "53b9394f371e59b1cb2ed14080415728da90af3cb6b0610e72c7045e7049ad5e",
+        "result_case_matches_fixture": true,
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 43
+        },
+        "generated_tokens": 567,
+        "runtime_precision": "stage12_bf16_hifi4_kv_down_bfp8_p19"
+      },
+      "prompt_tail_decoded": " with the new implementation\ncat <<'EOF' > replacement_include.py\n    def run(self) -> List[Node]:\n        if self.arguments[0].startswith('<') and \\\n           self.arguments[0].",
+      "text_evidence": "The conditioning ends in the middle of a Python `if` expression (`self.arguments[0].`); generated text continues the same method coherently with `endswith(...)`, then follows the existing Sphinx Include logic. It reaches a natural tool handoff after a complete patch script (619 tokens for seed42; 567 for seed43), below the 1024 cap. No repeated native suffix or malformed tool boundary appears; no command was executed.",
+      "comparisons": {
+        "all_group_full_bf16_hifi4_path": "setup/swe85-pilot-split85/runs/rest/full/anomaly.sphinx-doc__sphinx-11510.call28.onset.json",
+        "full_result_sha256": "c1fb8adc8ada9b5b12dbb083ca24fb318af2b99c445f9030170a78fbe717cf3d",
+        "full_seed_matches_exact_generated_ids": false,
+        "full_generated_tokens": 256,
+        "p19_q128_result": "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-11510.call28.onset.seed43.cap1024.json",
+        "p19_q128_result_sha256": "55e455004d91f1cd6c1ffa66018d241ea9a9afd010e66c10ac207bb29719b946",
+        "p19_q128_exact_generated_ids": false,
+        "p19_q128_generated_tokens": 511
+      },
+      "cap_notes": "Natural completion before the 1024 cap; no extension needed. Diagnostic sample is not native RNG replay or task-success evidence."
+    }
+  ],
+  "partial_counts": {
+    "normal": 26,
+    "reproduced_native_motif": 7,
+    "other_anomaly": 0,
+    "inconclusive": 2
+  },
+  "limitations": "Only completed outputs were reviewed. No model/device work, score change, native RNG replay, task-correctness inference, or canonical record update. All-group full comparisons are exact case-path/fixture/seed controls. Exact token identity is reported separately; motif classification relies on decoded text, not requiring identical sampled sequence.",
+  "cap_extensions_needed_so_far": [
+    {
+      "manifest_index": 54,
+      "job": "sphinx-doc__sphinx-10323.call70.onset",
+      "seed": 42,
+      "old_cap": 256,
+      "proposed_cap": 512,
+      "reason": "coherent but still progressing at cap; matching full and P19 Q128 same-seed branches natural-stop earlier on a different answer, leaving outcome unresolved"
+    },
+    {
+      "manifest_index": 68,
+      "job": "sphinx-doc__sphinx-11510.call119.protocol.onset",
+      "seed": 44,
+      "old_cap": 1024,
+      "proposed_cap": 2048,
+      "reason": "coherent script source remains in progress at cap; no natural stop or repeated native motif, so fair extension is needed to resolve continuation"
+    }
+  ]
+}

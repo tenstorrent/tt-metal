@@ -1,0 +1,17 @@
+{
+  "at_utc": "2026-11-14T20:28:07.221805+00:00",
+  "completed": 75,
+  "active_other_workers": [
+    "sympy__sympy-23262__al4s2nx__env-main-1",
+    "sympy__sympy-18763__knobqhx__env-main-1",
+    "sympy__sympy-14711__tfmtlwt__env-main-1",
+    "sympy__sympy-14248__ppcuzwn__env-main-1",
+    "sympy__sympy-13878__orslfge__env-main-1",
+    "sympy__sympy-13551__arth9qz__env-main-1",
+    "sphinx-doc__sphinx-9461__gnaszxn__env-main-1",
+    "sphinx-doc__sphinx-11510__mnhh3gw__env-main-1",
+    "pytest-dev__pytest-7432__om4kwo3__env-main-1",
+    "psf__requests-5414__sjbmqjt__env-main-1"
+  ],
+  "max_workers": 12
+}

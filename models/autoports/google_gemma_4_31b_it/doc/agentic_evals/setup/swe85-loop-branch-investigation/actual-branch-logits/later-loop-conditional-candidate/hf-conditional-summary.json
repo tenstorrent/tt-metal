@@ -1,0 +1,186 @@
+{
+  "status": "interim_hf_only_tt_comparison_pending",
+  "scope": "Forced30-token history; conditional probabilities, not free-running incidence or task correctness",
+  "rows": [
+    {
+      "index": 0,
+      "expected_token": 1390,
+      "raw_probability": 0.9941202852784284,
+      "host_bf16_top_p_proxy": 1.0
+    },
+    {
+      "index": 1,
+      "expected_token": 107,
+      "raw_probability": 0.999515784717513,
+      "host_bf16_top_p_proxy": 1.0
+    },
+    {
+      "index": 2,
+      "expected_token": 147,
+      "raw_probability": 0.27379927297402246,
+      "host_bf16_top_p_proxy": 0.28695397132498135
+    },
+    {
+      "index": 3,
+      "expected_token": 1390,
+      "raw_probability": 0.8039966232955255,
+      "host_bf16_top_p_proxy": 0.8175744761936437
+    },
+    {
+      "index": 4,
+      "expected_token": 107,
+      "raw_probability": 0.999575553761012,
+      "host_bf16_top_p_proxy": 1.0
+    },
+    {
+      "index": 5,
+      "expected_token": 147,
+      "raw_probability": 0.19514717500830142,
+      "host_bf16_top_p_proxy": 0.19898104251690577
+    },
+    {
+      "index": 6,
+      "expected_token": 1390,
+      "raw_probability": 0.9939966319390608,
+      "host_bf16_top_p_proxy": 1.0
+    },
+    {
+      "index": 7,
+      "expected_token": 107,
+      "raw_probability": 0.998984865141162,
+      "host_bf16_top_p_proxy": 1.0
+    },
+    {
+      "index": 8,
+      "expected_token": 147,
+      "raw_probability": 0.97282914679573,
+      "host_bf16_top_p_proxy": 1.0
+    },
+    {
+      "index": 9,
+      "expected_token": 1390,
+      "raw_probability": 0.9918147394132454,
+      "host_bf16_top_p_proxy": 1.0
+    },
+    {
+      "index": 10,
+      "expected_token": 107,
+      "raw_probability": 0.9976998716186745,
+      "host_bf16_top_p_proxy": 1.0
+    },
+    {
+      "index": 11,
+      "expected_token": 147,
+      "raw_probability": 0.9832288335184717,
+      "host_bf16_top_p_proxy": 1.0
+    },
+    {
+      "index": 12,
+      "expected_token": 1390,
+      "raw_probability": 0.9982310304756256,
+      "host_bf16_top_p_proxy": 1.0
+    },
+    {
+      "index": 13,
+      "expected_token": 107,
+      "raw_probability": 0.9992197378325645,
+      "host_bf16_top_p_proxy": 1.0
+    },
+    {
+      "index": 14,
+      "expected_token": 147,
+      "raw_probability": 0.9944063782654909,
+      "host_bf16_top_p_proxy": 1.0
+    },
+    {
+      "index": 15,
+      "expected_token": 1390,
+      "raw_probability": 0.9995456267795335,
+      "host_bf16_top_p_proxy": 1.0
+    },
+    {
+      "index": 16,
+      "expected_token": 107,
+      "raw_probability": 0.9995738337602154,
+      "host_bf16_top_p_proxy": 1.0
+    },
+    {
+      "index": 17,
+      "expected_token": 147,
+      "raw_probability": 0.9887521527268163,
+      "host_bf16_top_p_proxy": 1.0
+    },
+    {
+      "index": 18,
+      "expected_token": 1390,
+      "raw_probability": 0.9996375756366859,
+      "host_bf16_top_p_proxy": 1.0
+    },
+    {
+      "index": 19,
+      "expected_token": 107,
+      "raw_probability": 0.9994058204122023,
+      "host_bf16_top_p_proxy": 1.0
+    },
+    {
+      "index": 20,
+      "expected_token": 147,
+      "raw_probability": 0.9941512124587878,
+      "host_bf16_top_p_proxy": 1.0
+    },
+    {
+      "index": 21,
+      "expected_token": 1390,
+      "raw_probability": 0.9998675253189321,
+      "host_bf16_top_p_proxy": 1.0
+    },
+    {
+      "index": 22,
+      "expected_token": 107,
+      "raw_probability": 0.999473740545624,
+      "host_bf16_top_p_proxy": 1.0
+    },
+    {
+      "index": 23,
+      "expected_token": 147,
+      "raw_probability": 0.995572187019015,
+      "host_bf16_top_p_proxy": 1.0
+    },
+    {
+      "index": 24,
+      "expected_token": 1390,
+      "raw_probability": 0.9998629378496364,
+      "host_bf16_top_p_proxy": 1.0
+    },
+    {
+      "index": 25,
+      "expected_token": 107,
+      "raw_probability": 0.9996679795650393,
+      "host_bf16_top_p_proxy": 1.0
+    },
+    {
+      "index": 26,
+      "expected_token": 147,
+      "raw_probability": 0.9987864970653864,
+      "host_bf16_top_p_proxy": 1.0
+    },
+    {
+      "index": 27,
+      "expected_token": 1390,
+      "raw_probability": 0.999919135048368,
+      "host_bf16_top_p_proxy": 1.0
+    },
+    {
+      "index": 28,
+      "expected_token": 107,
+      "raw_probability": 0.9998978004024774,
+      "host_bf16_top_p_proxy": 1.0
+    },
+    {
+      "index": 29,
+      "expected_token": 147,
+      "raw_probability": 0.998164758531965,
+      "host_bf16_top_p_proxy": 1.0
+    }
+  ]
+}

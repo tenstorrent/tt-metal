@@ -1,0 +1,9 @@
+{
+  "verdict": "other_anomaly_with_progressing_cap",
+  "seed": 44,
+  "case": "Requests5414call11",
+  "reason": "Independent review identifies fabricated claimed rerun output without executed tool evidence. Root agrees; task completion still unresolved at1024 with advancing text, so2048 continuation retained.",
+  "supersedes_interpretation": "full-coordinator.json seed44 inconclusive alone",
+  "preserves_source_snapshot": true,
+  "score_change": false
+}

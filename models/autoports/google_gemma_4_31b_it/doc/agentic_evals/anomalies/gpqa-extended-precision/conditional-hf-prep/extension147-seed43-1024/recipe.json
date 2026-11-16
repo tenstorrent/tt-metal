@@ -1,0 +1,67 @@
+{
+  "status": "completed",
+  "prepared_utc": "2026-11-14T16:35:05.703473+00:00",
+  "reason": "Coordinator read the full512-token continuation and accepted fresh review as inconclusive: distinct candidate/fraction calculation before clue rechecks. Extend identical saved input, seed43 and sampling to1024; preserve original and compare overlapping IDs.",
+  "bounded_argv": [
+    "timeout",
+    "3600",
+    "env",
+    "HF_HUB_OFFLINE=1",
+    "HF_DATASETS_OFFLINE=1",
+    "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+    "models/autoports/google_gemma_4_31b_it/tools/precision_repro_hf.py",
+    "--cases",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/extension147-seed43-1024/cases-seed43.json",
+    "--output",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/extension147-seed43-1024/results-seed43",
+    "--tokens",
+    "1024",
+    "--seeds",
+    "43",
+    "--prefill-chunk",
+    "512",
+    "--compare-dir",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first-wave-served",
+    "--compare-dir",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first-wave-full"
+  ],
+  "bounded_command": "timeout 3600 env HF_HUB_OFFLINE=1 HF_DATASETS_OFFLINE=1 PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python models/autoports/google_gemma_4_31b_it/tools/precision_repro_hf.py --cases models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/extension147-seed43-1024/cases-seed43.json --output models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/extension147-seed43-1024/results-seed43 --tokens 1024 --seeds 43 --prefill-chunk 512 --compare-dir models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first-wave-served --compare-dir models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first-wave-full",
+  "cases": [
+    {
+      "name": "task147.onset.suffix512",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task147.onset.suffix512.private.json"
+    }
+  ],
+  "case_sha256": {
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task147.onset.suffix512.private.json": "1da2fb6f7c5c59a1ad448044b4bac32b13122d919ea209d5e4753a4d5f7d4635"
+  },
+  "sampling": {
+    "temperature": 1.0,
+    "top_p": 0.95,
+    "top_k": 20,
+    "generated_tokens": 1024,
+    "prompt_tokens": 512,
+    "seed": 43
+  },
+  "revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+  "launch_gates": [
+    "Current HF batch finished and process released; no concurrent HF checkpoint process or TT/server model work.",
+    "Fresh MemAvailable >=100GB check immediately before load; record host/process evidence and actual launch identity.",
+    "3600-second timeout; preserve partial outputs; timeout is not negative control."
+  ],
+  "preserved_original": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/results-task147-seed43/task147.onset.suffix512.hf.private.json",
+  "limitations": "Semanticpositive establishesHFreference reproduction forthat savedtruncatedinput only, not equalincidence/nativeprompt. Noautomaticflagcannotpass. Coherent/inconclusive512output requires1024/additionalseeds orfurtherinvestigation beforeclosure. ShortTFnotwhole-replyaccuracy.",
+  "future_additions": "Only coordinator-directed additional inconclusive cases; do not modify active manifests.",
+  "post_run_validation": "Compare first512 generated token IDs against preserved seed43/512 result; record exact equality or first mismatch/count, do not assume identical path. Full new continuation requires fresh semantic review.",
+  "overlap_validation": "Compare first512 generated token IDs against preserved seed43/512 result; record exact equality or first mismatch/count, do not assume identical path. Full new continuation requires fresh semantic review.",
+  "coordinator_admitted_unix": 1794674133.4672616,
+  "coordinator_evidence": "../results-task147-seed43/task147.onset.suffix512.coordinator.json",
+  "post_extension_decision": {
+    "positive": "Only sustained semantic degeneration established by full-text review closes the shortened-input reference reproduction; terminal cap truncation alone never does.",
+    "coherent_at_matching_1024_cap": "A coherent HF continuation without the TT anomaly does not establish model behavior for that case. Follow datatype-sweep step3 with stack/numerical investigation; do not search extra seeds merely until a degenerate sample appears.",
+    "ambiguous": "If the longer text still cannot distinguish ongoing progress from sustained repetition, preserve the inconclusive result and record a specific evidence-based next diagnostic. No policy or eval score change from an inconclusive control.",
+    "overlap": "Compare first512 generated IDs to original. Differences invalidate a claim that this is the identical sampled continuation, even with matching input/seed/settings; retain both runs and describe the actual relationship."
+  },
+  "launch": "results-seed43/launch.json"
+}

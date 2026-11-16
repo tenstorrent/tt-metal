@@ -1,0 +1,450 @@
+{
+  "count_audited": 198,
+  "rows_with_brackets": [
+    {
+      "doc_id": 8,
+      "record_id": "rec2fsnzUuvNtUYK8",
+      "question_sha256": "fc081c2fbb63be5006154edbddcd4d1654207c4f1ad333e12f9bc19972753482",
+      "fields_changed": [
+        "Incorrect Answer 3",
+        "Correct Answer"
+      ],
+      "removed_span_lengths": [
+        [
+          22
+        ],
+        [
+          23
+        ]
+      ],
+      "raw_unique_choices": 4,
+      "old_unique_choices": 4
+    },
+    {
+      "doc_id": 24,
+      "record_id": "recBGxVySx1pkrO1i",
+      "question_sha256": "d49aa1d9efc38f6409c199c3e2706ec44f5d20d25b0e7d41f40b9c46668ed1e0",
+      "fields_changed": [
+        "Incorrect Answer 1",
+        "Incorrect Answer 2"
+      ],
+      "removed_span_lengths": [
+        [
+          5
+        ],
+        [
+          5
+        ]
+      ],
+      "raw_unique_choices": 4,
+      "old_unique_choices": 4
+    },
+    {
+      "doc_id": 27,
+      "record_id": "recCJJOeBGERaHYax",
+      "question_sha256": "b690990e73efd994587057d6ed5ae270235b0ec6bd4e98df3fc472f01c179765",
+      "fields_changed": [
+        "Incorrect Answer 1"
+      ],
+      "removed_span_lengths": [
+        [
+          15
+        ]
+      ],
+      "raw_unique_choices": 4,
+      "old_unique_choices": 4
+    },
+    {
+      "doc_id": 32,
+      "record_id": "recEmTBhx2hgw6tPQ",
+      "question_sha256": "e1448af5dcb7e4a7a5cf31dd231d4a2b2a3829ce3dabc5d7da48a195c1b39112",
+      "fields_changed": [
+        "Incorrect Answer 1",
+        "Incorrect Answer 2"
+      ],
+      "removed_span_lengths": [
+        [
+          3
+        ],
+        [
+          3
+        ]
+      ],
+      "raw_unique_choices": 4,
+      "old_unique_choices": 4
+    },
+    {
+      "doc_id": 64,
+      "record_id": "recOvqPKUtyy9ISA1",
+      "question_sha256": "58604895b423acc46c4efaa28ed2e4d6eaf2d93d55c7ad3766cffce3719ddf62",
+      "fields_changed": [
+        "Incorrect Answer 1",
+        "Incorrect Answer 2",
+        "Incorrect Answer 3",
+        "Correct Answer"
+      ],
+      "removed_span_lengths": [
+        [
+          3
+        ],
+        [
+          7
+        ],
+        [
+          3
+        ],
+        [
+          7
+        ]
+      ],
+      "raw_unique_choices": 4,
+      "old_unique_choices": 4
+    },
+    {
+      "doc_id": 76,
+      "record_id": "recUOePh79cp4T2Bg",
+      "question_sha256": "f634534b5e2327dcc39982a4da6dff404f299e9759a0ac957b0f6017fbe7586e",
+      "fields_changed": [
+        "Incorrect Answer 1",
+        "Incorrect Answer 2",
+        "Incorrect Answer 3",
+        "Correct Answer"
+      ],
+      "removed_span_lengths": [
+        [
+          5,
+          14
+        ],
+        [
+          5,
+          14
+        ],
+        [
+          5,
+          14
+        ],
+        [
+          5,
+          14
+        ]
+      ],
+      "raw_unique_choices": 4,
+      "old_unique_choices": 4
+    },
+    {
+      "doc_id": 81,
+      "record_id": "recWxGU8Q4YReJ1tb",
+      "question_sha256": "8efc35cf270e2b051ad9ae732723df9c7261cecaf1410edf2c43f3ca7aa749cc",
+      "fields_changed": [
+        "Incorrect Answer 1",
+        "Incorrect Answer 2",
+        "Incorrect Answer 3",
+        "Correct Answer"
+      ],
+      "removed_span_lengths": [
+        [
+          6,
+          5,
+          6,
+          6,
+          5,
+          6,
+          6,
+          5,
+          5,
+          6
+        ],
+        [
+          6,
+          6,
+          6,
+          6,
+          6,
+          5,
+          5,
+          6,
+          6,
+          5
+        ],
+        [
+          6,
+          6,
+          6,
+          6,
+          5,
+          6,
+          5,
+          6,
+          6,
+          6
+        ],
+        [
+          5,
+          6,
+          6,
+          6,
+          6,
+          5,
+          6,
+          5,
+          6,
+          5
+        ]
+      ],
+      "raw_unique_choices": 4,
+      "old_unique_choices": 4
+    },
+    {
+      "doc_id": 97,
+      "record_id": "recakFKZioXUuldcd",
+      "question_sha256": "ec22f627211f722949e6d36efcb583b2f796830a38cf5cf5dcba4f727562d975",
+      "fields_changed": [
+        "Incorrect Answer 1",
+        "Incorrect Answer 3",
+        "Correct Answer"
+      ],
+      "removed_span_lengths": [
+        [
+          7
+        ],
+        [
+          7
+        ],
+        [
+          7
+        ]
+      ],
+      "raw_unique_choices": 4,
+      "old_unique_choices": 4
+    },
+    {
+      "doc_id": 118,
+      "record_id": "reck4G4xxv3YnpbtQ",
+      "question_sha256": "083aa3572345d938b0c707cfb8c710aea73759344b234ada78ed36f1ec66eb0d",
+      "fields_changed": [
+        "Incorrect Answer 1",
+        "Incorrect Answer 2",
+        "Incorrect Answer 3",
+        "Correct Answer"
+      ],
+      "removed_span_lengths": [
+        [
+          5,
+          5
+        ],
+        [
+          5,
+          5
+        ],
+        [
+          9,
+          3
+        ],
+        [
+          3
+        ]
+      ],
+      "raw_unique_choices": 4,
+      "old_unique_choices": 4
+    },
+    {
+      "doc_id": 171,
+      "record_id": "recINGR1z01Fh1Z3A",
+      "question_sha256": "e6fd9b7cea6cbcd53eabc57f63ae367008b2774a1092f55e23e78b7eafbdbafa",
+      "fields_changed": [
+        "Incorrect Answer 1",
+        "Incorrect Answer 2",
+        "Incorrect Answer 3",
+        "Correct Answer"
+      ],
+      "removed_span_lengths": [
+        [
+          27
+        ],
+        [
+          24
+        ],
+        [
+          12
+        ],
+        [
+          24
+        ]
+      ],
+      "raw_unique_choices": 4,
+      "old_unique_choices": 1
+    },
+    {
+      "doc_id": 177,
+      "record_id": "recReg13iV2HwJTaA",
+      "question_sha256": "6cec89b2019b24f8e8c4001cade388815345ae403b5d5fc687cf7fdccbcc6ce1",
+      "fields_changed": [
+        "Incorrect Answer 1",
+        "Incorrect Answer 2",
+        "Incorrect Answer 3",
+        "Correct Answer"
+      ],
+      "removed_span_lengths": [
+        [
+          14
+        ],
+        [
+          14
+        ],
+        [
+          14
+        ],
+        [
+          14
+        ]
+      ],
+      "raw_unique_choices": 4,
+      "old_unique_choices": 4
+    },
+    {
+      "doc_id": 185,
+      "record_id": "recb80OwMgNnceA9t",
+      "question_sha256": "a40790d78d4f5d39a5d3645a19b71fd4214c540a0267b37a6e2c4e94f79a4633",
+      "fields_changed": [
+        "Incorrect Answer 1",
+        "Incorrect Answer 2",
+        "Incorrect Answer 3",
+        "Correct Answer"
+      ],
+      "removed_span_lengths": [
+        [
+          3
+        ],
+        [
+          3
+        ],
+        [
+          3
+        ],
+        [
+          3
+        ]
+      ],
+      "raw_unique_choices": 4,
+      "old_unique_choices": 4
+    }
+  ],
+  "affected_ids": [
+    8,
+    24,
+    27,
+    32,
+    64,
+    76,
+    81,
+    97,
+    118,
+    171,
+    177,
+    185
+  ],
+  "substantive_choice_loss_count": 12,
+  "unaffected_count": 186,
+  "categories": {
+    "chemical_structure_or_stereochemistry": [
+      8,
+      24,
+      27,
+      32,
+      64,
+      76,
+      81,
+      97,
+      118,
+      185
+    ],
+    "mathematical_expression": [
+      171,
+      177
+    ]
+  },
+  "native_proof": [
+    {
+      "doc_id": 8,
+      "native_statement_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/gpqa-extended198-head-bfp8/digest/statements.private/8-43938e1ca4c01dc8.json",
+      "native_statement_sha256": "f8a4a5d2b1b34a6d5d250e24b664569259ac1495202499247e5b02e9498d4156",
+      "four_choices_parsed": true,
+      "altered_choice_texts_confirmed": true
+    },
+    {
+      "doc_id": 24,
+      "native_statement_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/gpqa-extended198-head-bfp8/digest/statements.private/24-23f23532823fad6e.json",
+      "native_statement_sha256": "35425aca766485198cfe23774699bd6f7b7fb0081b072916b247d2d1a15bdf8d",
+      "four_choices_parsed": true,
+      "altered_choice_texts_confirmed": true
+    },
+    {
+      "doc_id": 27,
+      "native_statement_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/gpqa-extended198-head-bfp8/digest/statements.private/27-16a151095214f699.json",
+      "native_statement_sha256": "11f9153742e3cc8e317fca42399dbc1f7ec801436efceb7e4e5c7b5c61dea6a3",
+      "four_choices_parsed": true,
+      "altered_choice_texts_confirmed": true
+    },
+    {
+      "doc_id": 32,
+      "native_statement_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/gpqa-extended198-head-bfp8/digest/statements.private/32-5868f0c8c7a3bd73.json",
+      "native_statement_sha256": "daab5819db37e3063c26d35f8751c40cf2ca966a997d47c451075bba3b025ecb",
+      "four_choices_parsed": true,
+      "altered_choice_texts_confirmed": true
+    },
+    {
+      "doc_id": 64,
+      "native_statement_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/gpqa-extended198-head-bfp8/digest/statements.private/64-e72cf244c302c2ca.json",
+      "native_statement_sha256": "fd2cb8c9a7d6683a679c03f90cf7d04d5964fe0fd325358d50729a2aa233dfc4",
+      "four_choices_parsed": true,
+      "altered_choice_texts_confirmed": true
+    },
+    {
+      "doc_id": 76,
+      "native_statement_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/gpqa-extended198-head-bfp8/digest/statements.private/76-cb858a2e43ae1232.json",
+      "native_statement_sha256": "54d36d204e5607b6e95205ab23807354bc8d37a800791531536070662d946f0a",
+      "four_choices_parsed": true,
+      "altered_choice_texts_confirmed": true
+    },
+    {
+      "doc_id": 81,
+      "native_statement_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/gpqa-extended198-head-bfp8/digest/statements.private/81-fc67a0da2a67c239.json",
+      "native_statement_sha256": "e9671373ad063357ece8c1450ef47c1b9316cb46589485cc22cc1f6903e5feb1",
+      "four_choices_parsed": true,
+      "altered_choice_texts_confirmed": true
+    },
+    {
+      "doc_id": 97,
+      "native_statement_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/gpqa-extended198-head-bfp8/digest/statements.private/97-1d16e86bc903327c.json",
+      "native_statement_sha256": "c8b3a187675b88af9fc2ae05f9e29caceb3096093ba85c425e93751314ccd201",
+      "four_choices_parsed": true,
+      "altered_choice_texts_confirmed": true
+    },
+    {
+      "doc_id": 118,
+      "native_statement_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/gpqa-extended198-head-bfp8/digest/statements.private/118-04541443628cfc72.json",
+      "native_statement_sha256": "02162015431d4eee5abb861fc44b0136e0ee3cd42f7f9e50dee35e9f4a9e8b16",
+      "four_choices_parsed": true,
+      "altered_choice_texts_confirmed": true
+    },
+    {
+      "doc_id": 171,
+      "native_statement_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/gpqa-extended198-head-bfp8/digest/statements.private/171-1ada142c16d8da0e.json",
+      "native_statement_sha256": "1f7b7b9b3cbc9e70789b45bc97028d4cd6757d819c78f83d72a8e09f024dcb72",
+      "four_choices_parsed": true,
+      "altered_choice_texts_confirmed": true
+    },
+    {
+      "doc_id": 177,
+      "native_statement_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/gpqa-extended198-head-bfp8/digest/statements.private/177-ee79409ac599864f.json",
+      "native_statement_sha256": "63978e4fc9be5d64b74cc460f0d383ec7dcbe709e46edebde1d979562307ea65",
+      "four_choices_parsed": true,
+      "altered_choice_texts_confirmed": true
+    }
+  ],
+  "native_pending_ids": [
+    185
+  ],
+  "native_pending_reason": "No completed exact native statement packet found for185 at audit time; source-level full198 audit still establishes its substantive alteration.",
+  "original_source_matches_installed": true
+}

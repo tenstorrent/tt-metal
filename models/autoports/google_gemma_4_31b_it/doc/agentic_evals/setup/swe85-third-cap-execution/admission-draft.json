@@ -1,0 +1,420 @@
+{
+  "status": "admitted",
+  "scope": "Third-cap 2048-token diagnostic extensions only; no anomaly acceptance or score implications.",
+  "serial_order": [
+    "served",
+    "full"
+  ],
+  "prerequisite": {
+    "completion_path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-followups-execution/suffix2048-full-completion.json",
+    "required_exit_code": 0,
+    "must_be_created_by_reviewed_adaptive_followups_driver": true
+  },
+  "preflight": {
+    "require_device_owner_list_empty_before_each_job": true,
+    "stop_file_checked_before_each_job": true,
+    "all_source_and_fixture_hashes_rechecked_before_each_job": true,
+    "do_not_launch_next_job_if_prior_exit_nonzero": true
+  },
+  "jobs": [
+    {
+      "name": "served",
+      "command": [
+        "timeout",
+        "3600",
+        "env",
+        "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+        "READINESS_TRACE_REGION_SIZE=134217728",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+        "-m",
+        "models.autoports.google_gemma_4_31b_it.tools.precision_repro_batch",
+        "--cases",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/served-candidate-cases.json",
+        "--build-kwargs-file",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/head_bfp8_build_kwargs.json",
+        "--output-dir",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/runs/served"
+      ],
+      "timeout_seconds": 3600,
+      "output_dir": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/runs/served",
+      "prediction": {
+        "point_seconds": 344.7164177833997,
+        "range_seconds": [
+          289.7788742132909,
+          472.9040194469869
+        ],
+        "point_hours": 0.09575456049538882,
+        "range_hours": [
+          0.08049413172591414,
+          0.13136222762416302
+        ]
+      },
+      "hashes": [
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_build_kwargs.json",
+          "sha256": "ff2b5ed24e0b6a1dee7eb5cd8bd437d17c3df5f8f25567927d239e666f0699f9"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/head_bfp8_build_kwargs.json",
+          "sha256": "2e583fa8bd7aff7c5f8be110835df751924d167243c5a44a68aa5b3d70c6845f"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/full/load.json",
+          "sha256": "cc5db79ed82d3c92c96961657d53aa8f5903c9cf5c9aabada9ed1e66bb82fafa"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/served/load.json",
+          "sha256": "82e21dc216777029ea6a6590fa3210955c012a23bc744906638797adae0266fb"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/full/anomaly.psf__requests-5414.call10.onset.optional-suffix512.json",
+          "sha256": "78d21a5ed066928895adc25a37c2474ffff6c716d4d261f164162fd7058f2922"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/load.json",
+          "sha256": "6fa1c06ad0cbd8a0b7033d0cd3bef542b62412704c92841b2b8df7b38348dbda"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/load.json",
+          "sha256": "b5ed68750af790c5531343cda33e373bc6eeeea0b210de1d98e6d2b8a963c5a6"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions-completion-summary.json",
+          "sha256": "6ce535335c172e3194b0f6a024b5e2133c0eee9245bd6c7db2008bb741184c84"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.pytest-dev__pytest-5787.call65.onset.cap1024.seed42.private.json",
+          "sha256": "b4227c60daa44f579a37f54090a99dde3280a0627ed4611fcbcdf807f15a0ede"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.pytest-dev__pytest-5787.call65.onset.cap1024.seed43.private.json",
+          "sha256": "124f09af80f50f70f6308ae2a58a2d4ada46b9ce3204b43c7b814ed17be3959c"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.pytest-dev__pytest-5787.call65.onset.cap1024.seed44.private.json",
+          "sha256": "cd4a079c43aa220d3a9c92e90ed2b691c90fa5d89061a17203db4629248ff10f"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.cap1024.seed42.private.json",
+          "sha256": "78344549cf5925ec2b037752e589f2bba107fb21b464e32db5fe05f15d5322a6"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.cap1024.seed43.private.json",
+          "sha256": "073203e754a006cd573b89ef7f2b47ce668c0d992562d3dd2f515306b2115fa6"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap1024.seed43.private.json",
+          "sha256": "64b310bd67a392c4a32219b6201abaeb6272206f792d9dcc290dd0e7d16d7597"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/served/anomaly.pytest-dev__pytest-5787.call65.onset.cap1024.seed43.private.json",
+          "sha256": "6f489182de104872fcb88834ac27e8208f2603ae893011f22516336c51ae0274"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/served/anomaly.sphinx-doc__sphinx-9461.call184.onset.cap1024.seed43.private.json",
+          "sha256": "0f61675840c1bc8ac8f89d6ab5d9f931e752d2fd53aeb2a62400b02e2e24ff1f"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/full-coordinator-pytest-first.json",
+          "sha256": "f7559774e7a04f7d145316f0b4f93c857d8404cdd55e9afdf5457191fbfcd893"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/full-coordinator-pytest-second.json",
+          "sha256": "dad8eea30e1e826be49534a1fdd02babdbde7a72c58cf3171e2ce55e71dc37d8"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/full-coordinator-pytest-third.json",
+          "sha256": "e7aceeb45e978290fcf6291f22698fa6dc8dd017e335578f111df581812d0a83"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/full-coordinator-sphinx101.json",
+          "sha256": "2ef3859561877b88428b7d3b0521491c668b612897aed40a2b2920f0ddec78ec"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/full-coordinator-sphinx119-second.json",
+          "sha256": "3c07cc3262fe2ef8ed05d1bd128b5caabcba31c8fa87812b27729cfb9aa7aa68"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/runs/full/anomaly.pytest-dev__pytest-5787.call65.onset.cap1024.seed42.json",
+          "sha256": "dbe538e9b2b1b305aca84b2b4be3d09aa2c9ead231a7c5826580505e2b8778b9"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/runs/full/anomaly.pytest-dev__pytest-5787.call65.onset.cap1024.seed43.json",
+          "sha256": "84053f3591749c42effd756ee8a308eb47866f1e007612ac225d7334fbdccdd3"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/runs/full/anomaly.pytest-dev__pytest-5787.call65.onset.cap1024.seed44.json",
+          "sha256": "6cff1a06bc27f3d2a2745e7d47feefcbe02e7722d8185ee3e7783ba40fe77774"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/runs/full/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.cap1024.seed42.json",
+          "sha256": "d5f8fa19cfd333137d0f993bbd18e0ba6a3fcc7d1a06ab3099080f032101fe7a"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/runs/full/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.cap1024.seed43.json",
+          "sha256": "b8fcad86750e14f2232d2c6dcd3630d89d56adf8a03fdb872055fc6660ed42be"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/runs/full/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap1024.seed43.json",
+          "sha256": "211f4fe67a2826c3b934dba39139c70ef7d0ef8e57037493db713434ce9687c0"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/runs/full/load.json",
+          "sha256": "a2b50e88657034bf4cfd4c2eca4d4de4deca1e8de4f0274c9da6b7ee8927b351"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/runs/served/anomaly.pytest-dev__pytest-5787.call65.onset.cap1024.seed43.json",
+          "sha256": "a17ee90953817cc39ba43767a3264593a2f628bcfda801230fa1dd99bc6ffd7a"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/runs/served/anomaly.sphinx-doc__sphinx-9461.call184.onset.cap1024.seed43.json",
+          "sha256": "d6bb4da366a5d92b00a011aa9d85baa4a5573a943c47d2a8d7e4600d35e7ada9"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/runs/served/load.json",
+          "sha256": "bec3d00810fdfc212367c7ef5115fd0c01e2b1353965632b5b4c2ea1da2b14ad"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/served-coordinator-next3.json",
+          "sha256": "2f370ae65c56f4e1fad10d508ee94742a6d14fd54fba30df39a626ca9f5e2b55"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/served-coordinator-sphinx9461-first2.json",
+          "sha256": "afe0e220f588c5b9aff64d7de5752f5e00d52443489f27ce134a46f9af0013b2"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/coordinator-scan-summary.json",
+          "sha256": "2b1773f7a0a0a4e764a5c38602c2f1a9a3ca5be0a207fe47588e62e850118b22"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/cost-estimate.json",
+          "sha256": "c6dddb98b3d2d6a5e0aa3ccbda7a52188821fdf9e5a12b9ae8b429764cb988ee"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/full-candidate-cases.json",
+          "sha256": "f54ca8d64a9e52b459f7b9f251a1ab7175e3d5a085009e7b23e3eed2bcc39319"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/host-validation.json",
+          "sha256": "b88ac67fa21fe99f4aba752456379b6325957449c89a7af1071c2fbf5b714a80"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/provenance.json",
+          "sha256": "afd4026b93f0217efb682c14ef1e9e5084e55b75a8e540466709e79ab75a7370"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/review-d.json",
+          "sha256": "5750454d5be11aa1569a60365c4c155917b55d4c93428debd182d9e90c43875b"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/served-candidate-cases.json",
+          "sha256": "f56bca31596c368f3e909497d32744a0ece4f44cb68d23c4cd71ff15e1a6d82a"
+        }
+      ]
+    },
+    {
+      "name": "full",
+      "command": [
+        "timeout",
+        "3600",
+        "env",
+        "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+        "READINESS_TRACE_REGION_SIZE=134217728",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+        "-m",
+        "models.autoports.google_gemma_4_31b_it.tools.precision_repro_batch",
+        "--cases",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/full-candidate-cases.json",
+        "--build-kwargs-file",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_build_kwargs.json",
+        "--output-dir",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/runs/full"
+      ],
+      "timeout_seconds": 3600,
+      "output_dir": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/runs/full",
+      "prediction": {
+        "point_seconds": 1076.6161561194108,
+        "range_seconds": [
+          782.0561366302821,
+          1763.9228682607109
+        ],
+        "point_hours": 0.299060043366503,
+        "range_hours": [
+          0.21723781573063392,
+          0.4899785745168641
+        ]
+      },
+      "hashes": [
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_build_kwargs.json",
+          "sha256": "ff2b5ed24e0b6a1dee7eb5cd8bd437d17c3df5f8f25567927d239e666f0699f9"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/head_bfp8_build_kwargs.json",
+          "sha256": "2e583fa8bd7aff7c5f8be110835df751924d167243c5a44a68aa5b3d70c6845f"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/full/load.json",
+          "sha256": "cc5db79ed82d3c92c96961657d53aa8f5903c9cf5c9aabada9ed1e66bb82fafa"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/served/load.json",
+          "sha256": "82e21dc216777029ea6a6590fa3210955c012a23bc744906638797adae0266fb"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/full/anomaly.psf__requests-5414.call10.onset.optional-suffix512.json",
+          "sha256": "78d21a5ed066928895adc25a37c2474ffff6c716d4d261f164162fd7058f2922"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/load.json",
+          "sha256": "6fa1c06ad0cbd8a0b7033d0cd3bef542b62412704c92841b2b8df7b38348dbda"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/load.json",
+          "sha256": "b5ed68750af790c5531343cda33e373bc6eeeea0b210de1d98e6d2b8a963c5a6"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions-completion-summary.json",
+          "sha256": "6ce535335c172e3194b0f6a024b5e2133c0eee9245bd6c7db2008bb741184c84"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.pytest-dev__pytest-5787.call65.onset.cap1024.seed42.private.json",
+          "sha256": "b4227c60daa44f579a37f54090a99dde3280a0627ed4611fcbcdf807f15a0ede"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.pytest-dev__pytest-5787.call65.onset.cap1024.seed43.private.json",
+          "sha256": "124f09af80f50f70f6308ae2a58a2d4ada46b9ce3204b43c7b814ed17be3959c"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.pytest-dev__pytest-5787.call65.onset.cap1024.seed44.private.json",
+          "sha256": "cd4a079c43aa220d3a9c92e90ed2b691c90fa5d89061a17203db4629248ff10f"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.cap1024.seed42.private.json",
+          "sha256": "78344549cf5925ec2b037752e589f2bba107fb21b464e32db5fe05f15d5322a6"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.cap1024.seed43.private.json",
+          "sha256": "073203e754a006cd573b89ef7f2b47ce668c0d992562d3dd2f515306b2115fa6"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap1024.seed43.private.json",
+          "sha256": "64b310bd67a392c4a32219b6201abaeb6272206f792d9dcc290dd0e7d16d7597"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/served/anomaly.pytest-dev__pytest-5787.call65.onset.cap1024.seed43.private.json",
+          "sha256": "6f489182de104872fcb88834ac27e8208f2603ae893011f22516336c51ae0274"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/served/anomaly.sphinx-doc__sphinx-9461.call184.onset.cap1024.seed43.private.json",
+          "sha256": "0f61675840c1bc8ac8f89d6ab5d9f931e752d2fd53aeb2a62400b02e2e24ff1f"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/full-coordinator-pytest-first.json",
+          "sha256": "f7559774e7a04f7d145316f0b4f93c857d8404cdd55e9afdf5457191fbfcd893"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/full-coordinator-pytest-second.json",
+          "sha256": "dad8eea30e1e826be49534a1fdd02babdbde7a72c58cf3171e2ce55e71dc37d8"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/full-coordinator-pytest-third.json",
+          "sha256": "e7aceeb45e978290fcf6291f22698fa6dc8dd017e335578f111df581812d0a83"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/full-coordinator-sphinx101.json",
+          "sha256": "2ef3859561877b88428b7d3b0521491c668b612897aed40a2b2920f0ddec78ec"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/full-coordinator-sphinx119-second.json",
+          "sha256": "3c07cc3262fe2ef8ed05d1bd128b5caabcba31c8fa87812b27729cfb9aa7aa68"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/runs/full/anomaly.pytest-dev__pytest-5787.call65.onset.cap1024.seed42.json",
+          "sha256": "dbe538e9b2b1b305aca84b2b4be3d09aa2c9ead231a7c5826580505e2b8778b9"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/runs/full/anomaly.pytest-dev__pytest-5787.call65.onset.cap1024.seed43.json",
+          "sha256": "84053f3591749c42effd756ee8a308eb47866f1e007612ac225d7334fbdccdd3"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/runs/full/anomaly.pytest-dev__pytest-5787.call65.onset.cap1024.seed44.json",
+          "sha256": "6cff1a06bc27f3d2a2745e7d47feefcbe02e7722d8185ee3e7783ba40fe77774"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/runs/full/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.cap1024.seed42.json",
+          "sha256": "d5f8fa19cfd333137d0f993bbd18e0ba6a3fcc7d1a06ab3099080f032101fe7a"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/runs/full/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.cap1024.seed43.json",
+          "sha256": "b8fcad86750e14f2232d2c6dcd3630d89d56adf8a03fdb872055fc6660ed42be"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/runs/full/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap1024.seed43.json",
+          "sha256": "211f4fe67a2826c3b934dba39139c70ef7d0ef8e57037493db713434ce9687c0"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/runs/full/load.json",
+          "sha256": "a2b50e88657034bf4cfd4c2eca4d4de4deca1e8de4f0274c9da6b7ee8927b351"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/runs/served/anomaly.pytest-dev__pytest-5787.call65.onset.cap1024.seed43.json",
+          "sha256": "a17ee90953817cc39ba43767a3264593a2f628bcfda801230fa1dd99bc6ffd7a"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/runs/served/anomaly.sphinx-doc__sphinx-9461.call184.onset.cap1024.seed43.json",
+          "sha256": "d6bb4da366a5d92b00a011aa9d85baa4a5573a943c47d2a8d7e4600d35e7ada9"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/runs/served/load.json",
+          "sha256": "bec3d00810fdfc212367c7ef5115fd0c01e2b1353965632b5b4c2ea1da2b14ad"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/served-coordinator-next3.json",
+          "sha256": "2f370ae65c56f4e1fad10d508ee94742a6d14fd54fba30df39a626ca9f5e2b55"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/served-coordinator-sphinx9461-first2.json",
+          "sha256": "afe0e220f588c5b9aff64d7de5752f5e00d52443489f27ce134a46f9af0013b2"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/coordinator-scan-summary.json",
+          "sha256": "2b1773f7a0a0a4e764a5c38602c2f1a9a3ca5be0a207fe47588e62e850118b22"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/cost-estimate.json",
+          "sha256": "c6dddb98b3d2d6a5e0aa3ccbda7a52188821fdf9e5a12b9ae8b429764cb988ee"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/full-candidate-cases.json",
+          "sha256": "f54ca8d64a9e52b459f7b9f251a1ab7175e3d5a085009e7b23e3eed2bcc39319"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/host-validation.json",
+          "sha256": "b88ac67fa21fe99f4aba752456379b6325957449c89a7af1071c2fbf5b714a80"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/provenance.json",
+          "sha256": "afd4026b93f0217efb682c14ef1e9e5084e55b75a8e540466709e79ab75a7370"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/review-d.json",
+          "sha256": "5750454d5be11aa1569a60365c4c155917b55d4c93428debd182d9e90c43875b"
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/served-candidate-cases.json",
+          "sha256": "f56bca31596c368f3e909497d32744a0ece4f44cb68d23c4cd71ff15e1a6d82a"
+        }
+      ]
+    }
+  ],
+  "serial_point_seconds": 1421.3325739028105,
+  "serial_range_seconds": [
+    1071.835010843573,
+    2236.826887707698
+  ],
+  "driver_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-execution/run_swe85_third_cap.py",
+  "driver_sha256": "582c703e7a1bf2e26380dd615de6b146ed67afd98901c475120fe5b4db4011df",
+  "admitted_unix": 1794717884.537913,
+  "coordinator_review": "Root checked exact eight progressing1024 sources, CPU validation, reviewed forecast, serial predecessor exit0, frozen hashes and ownerzero checks. No precision or task-score decision."
+}

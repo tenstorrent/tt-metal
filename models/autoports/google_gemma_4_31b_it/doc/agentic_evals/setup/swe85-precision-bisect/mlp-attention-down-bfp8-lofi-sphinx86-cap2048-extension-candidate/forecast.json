@@ -1,0 +1,45 @@
+{
+  "status": "inert_planning_proxy_no_admission",
+  "mode": "full",
+  "cases": 1,
+  "model_loads": 1,
+  "timeout_seconds": 900,
+  "scope": "Rerun the exact P8 Sphinx11510 call86 seed44 prompt/fixture from P3 fixed108 index74 with generation cap extended from1024 to2048. Not a continuation from generated token1024; expected original 1024-token output prefix is pinned for comparison.",
+  "measured_P8_1024_anchor": {
+    "manifest_index": 74,
+    "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/mlp-attention-down-bfp8-lofi-eleven-case-candidate/runs/mlp_attention_down_bfp8_lofi/anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.seed44.p8_mlp_bfp8_lofi.cap1024.json",
+    "result_sha256": "243a04538d770183f966af2758363e396b1cdd9679b666e06f37bb42025e9f1c",
+    "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.cap1024.seed44.private.json",
+    "fixture_sha256": "14b67b9fcb8ad382713dff99ccb47922690bc5be90131e3adc25a195f3e712d3",
+    "seed": 44,
+    "requested_cap": 1024,
+    "generated_tokens": 1024,
+    "terminal_token_id": 1932,
+    "prompt_token_ids_count": 47548,
+    "prompt_ids_sha256_canonical_json": "7aaf88be1dd4df81aa4880bf0dd1741f94a99b241903c24f0def9fa78423479b",
+    "runtime_precision_exactly_matches_P8_policy": true,
+    "diagnostic_case_wall_s_including_prefill": 57.711368364980444,
+    "decode_tokens": 1023,
+    "decode_wall_s": 43.82894730498083,
+    "decode_tok_s_user": 23.340738550746433,
+    "expected_prior_token_prefix_len": 1024,
+    "expected_prior_token_prefix_sha256_canonical_json": "687e8b20cc33b6e1ceebd34370269c7b355082890154f1bca5c6cfc6dc34b5d2"
+  },
+  "P8_load_record": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/mlp-attention-down-bfp8-lofi-eleven-case-candidate/runs/mlp_attention_down_bfp8_lofi/load.json",
+  "P8_load_sha256": "fd83f5e0445667a2559633f2e4e089707d11b7e6067bdbf8692cc11126b88e9b",
+  "P8_load_seconds": 138.1495956981089,
+  "extra_1024_decode_seconds_at_observed_P8_rate": 43.8717908507335,
+  "estimated_case_wall_seconds": 101.58315921571395,
+  "estimated_postload_runner_overhead_seconds": 4.981016912730411,
+  "point_scenario_seconds": 244.71377182655326,
+  "planning_range_seconds": [
+    190,
+    450
+  ],
+  "method": "Case-wall point adds one further 1024-token decode block at the measured cap1024 P8 decode rate to the observed P8 cap1024 case wall. Adds the measured P8 model-load time and focused-panel post-load overhead. Generation restarts from the exact prompt/seed under a 2048 cap; this is not incremental continuation. Wide envelope allows changed trajectory/throughput and load/runner variation.",
+  "not_claimed": [
+    "No P8 cap2048 output yet.",
+    "No guarantee of exact same first1024 unless verified on result.",
+    "No task correctness or causal precision claim."
+  ]
+}

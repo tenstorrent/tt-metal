@@ -1,0 +1,151 @@
+{
+  "status": "recommendations_only_not_validated_cases",
+  "at_utc": "2026-11-14T19:40:52.461759+00:00",
+  "contract": "For every final failed task: decisive action call, full chosen-reply served/full TT top1 agreement, probability of chosen and independently supported correct continuation. Short onset windows do not replace this.",
+  "coverage_gate": "Rebuild final task roster from coordinator adjudications and resolved infra reruns. Existing snapshot has30 failures; current ongoing run is not final. Every failed task needs a case or an explicit unresolved gap.",
+  "artifact_schema": {
+    "task": "instance ID",
+    "score_provenance": {
+      "coordinator_path": "path",
+      "coordinator_sha256": "hash",
+      "native_reward": "number/null",
+      "counted_reward": "number",
+      "cause": "wrong/fetched_solution/anomaly"
+    },
+    "call_provenance": {
+      "call_index": "int",
+      "response_id": "str",
+      "native_message_index": "int/null with omission mapping evidence",
+      "request_source": "path:line",
+      "request_sha256": "str",
+      "response_source": "path:line",
+      "first_wrong_action_evidence": [
+        "root",
+        "triage",
+        "native trajectory"
+      ]
+    },
+    "precall_state": {
+      "base_commit": "exact task base",
+      "state_manifest": "private path listing files and hashes",
+      "reconstruction_method": "base archive plus audited deterministic prior edits; never blindly execute agent commands",
+      "state_available": false,
+      "missing_state_evidence": []
+    },
+    "serialization": {
+      "hf_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+      "prompt_ids_source": "native or reconstructed",
+      "chosen_ids_source": "native or reconstructed",
+      "native_prompt_tokens": "int",
+      "native_reply_tokens": "int",
+      "reconstructed_prompt_tokens": "int",
+      "reconstructed_reply_tokens": "int",
+      "tool_protocol_roundtrip_verified": false,
+      "stop_id": "native stop_reason",
+      "limitations": []
+    },
+    "full_reply_case": {
+      "prompt_token_ids": [
+        "integers"
+      ],
+      "continuations": {
+        "chosen": [
+          "entire original reply IDs"
+        ],
+        "correct": [
+          "complete independently validated alternative action reply IDs"
+        ]
+      },
+      "metadata": {
+        "sampling": "exact native settings",
+        "seed": "native or unavailable",
+        "correct_semantic_scope": "counterfactual validated action; not unique model continuation"
+      }
+    },
+    "correct_action_evidence": {
+      "source_paths": [],
+      "gold_reference_read": false,
+      "base_patch_applies_to_precall_state": null,
+      "candidate_action": "private artifact path, null until authored",
+      "candidate_action_sha256": null,
+      "syntax_validation": "pending",
+      "execution_validation": "pending",
+      "task_test_validation": "pending",
+      "validation_state_sha256": null,
+      "independent_review": "pending",
+      "valid_as_correct_branch": false
+    },
+    "diagnostic_results": {
+      "served_config": "path/hash/runtime policy",
+      "full_config": "path/hash/runtime policy",
+      "chosen_full_reply_top1_agreement": null,
+      "chosen_sequence_log_probability_served": null,
+      "chosen_sequence_log_probability_full": null,
+      "correct_sequence_log_probability_served": null,
+      "correct_sequence_log_probability_full": null,
+      "branch_lengths": {},
+      "per_position_artifacts": []
+    }
+  },
+  "construction_protocol": [
+    "Lock first wrong action from root plus triage and native request/response; action can be policy violation even if native tests pass. Correct action need not be whole task solution, but must fix the identified local decision without violating task rules.",
+    "Freeze scored trajectories/results before any reference-derived diagnostic artifact is made. Keep private diagnostics outside task mounts, agent input histories, scored task containers and future scored prompts; never send proposed corrections or verifier feedback to agents.",
+    "Recover exact pre-call state from existing saved base/source archives and audited prior file edits. Tool transcript alone often omits files, package/environment state and command side effects. Do not pretend it fully reconstructs a filesystem. Extract available source snapshots only; if unavailable, mark state verification blocked.",
+    "In isolated offline work directory, inspect reference tests/patch only after scored run is frozen. Reference patch is a candidate source, never an action to paste automatically: derive state-relative hunks and check that they preserve prior relevant changes. No gold source in model prompt; gold-informed action exists solely as forced diagnostic target.",
+    "Author one semantically correct tool action with exact tool schema and natural executable command. Validate target paths, command syntax, before/after file hashes and patch application against reconstructed state. Then validate relevant requested behavior plus affected regressions in an offline isolated test environment when execution is authorized. Passing apply-check alone is not correctness.",
+    "For fetched release, validate a local-only alternative action appropriate to the actual dependency/source state. Avoid merely substituting pip install -e .: build isolation can fetch packages, editable installation can fail, and target source may already be contaminated. Identify what the install sought to accomplish and verify local action does so.",
+    "Keep entire original chosen reply as chosen branch from exact original prompt. Construct correct action branch from same prompt, with full tool-protocol serialization. If original reasoning is retained, explicitly report inconsistency with corrected action; preferable primary action-only conditional case can share original reasoning prefix, but this does not replace full chosen-reply case.",
+    "Use TWO linked cases if needed: full_reply with original prompt and full chosen reply for over-reply agreement; action_counterfactual with common prompt plus unchanged original pre-action reasoning, chosen action suffix and verified correct action suffix. This computes probabilities conditional on original reasoning, not probability of an independently solved trajectory. Report that distinction prominently. A full correct reply with invented reasoning is not ground truth.",
+    "After token reconstruction and native-count checks, run existing batch/probe --validate-only. Require exact same prompt and branch IDs for served/full comparisons; keep separate branch lengths. Full-reply job branches=[chosen]; action_counterfactual branches=[chosen,correct]. Both existing runners support this without model/harness modifications.",
+    "After root-authorized serialized hardware window, run all full replies plus correct-action cases through served and BF16/HiFi4 TT configs. Preserve per-position distributions. No truncated aggregate, no serving performance claims from host-logit TF. Resolve disagreement per Anomalies bisection; do not classify missing correct branches as passed."
+  ],
+  "representatives": [
+    {
+      "task": "pytest-dev__pytest-6197",
+      "call": 35,
+      "response_id": "chatcmpl-a07735f98d303f28",
+      "native_trajectory": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe-jobs/swe-extended85-head-bfp8/pytest-dev__pytest-6197__Pnrmukw/agent/mini-swe-agent.trajectory.json",
+      "native_message_indices": [
+        70
+      ],
+      "observed_action": "tool bash {\"command\": \"sed -i 's/parent.config.getini(\\\\\\\"python_files\\\\\\\") + \\\\[\\\"__init__.py\\\"\\\\]/parent.config.getini(\\\\\\\"python_files\\\\\\\")/' src/_pytest/pyt",
+      "root_finding": "Removes unconditional __init__.py from collection filename patterns at call35/message70. Eager import tests pass but package-parent structure regresses: test_pkgfile expects Package parent and gets Session. Official1 failed147 passed1 xfailed. Normal submission, no caps or degeneration.",
+      "proposed_action_status": "not authored or validated",
+      "correct_construction": "Preserve package-parent structure while avoiding eager __init__.py import. Call35 globally removes unconditional __init__.py pattern; prior message69 gives grep context only, insufficient full source state. Obtain pre-call python.py/main.py and test evidence; derive a narrow collection action, then test eager import regression AND Test_getinitialnodes::test_pkgfile. Do not assert reference base patch applies.",
+      "available_offline_reference": [
+        "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-extended85-head-bfp8/live-tasks/pytest-dev__pytest-6197-first/digest/pytest-dev__pytest-6197.triage.json",
+        "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-extended85-head-bfp8/live-tasks/pytest-dev__pytest-6197-first/coordinator.json",
+        "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-candidate/tasks85-offline-verifier/pytest-dev__pytest-6197/tests/config.json",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe-jobs/swe-extended85-head-bfp8/pytest-dev__pytest-6197__Pnrmukw/verifier/test-stdout.txt"
+      ],
+      "gold_content_read": false
+    },
+    {
+      "task": "astropy__astropy-7336",
+      "call": 18,
+      "response_id": "chatcmpl-91bec7f77b2a77d7",
+      "native_trajectory": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe-jobs/swe-extended85-head-bfp8/astropy__astropy-7336__T7X4LzU/agent/mini-swe-agent.trajectory.json",
+      "native_message_indices": [
+        36
+      ],
+      "observed_action": "tool bash {\"command\": \"pip install astropy\\n\"}",
+      "root_finding": "Local patch was already made at message34 before the later-release fetch; no claim it was copied from the release. Fetch and execution still violate the specified scoring rule. NumPy dependency installation separately allowed.",
+      "proposed_action_status": "not authored or validated",
+      "correct_construction": "Call17 had already edited units/decorators.py; call18 installs later Astropy8.0.2. Native verifier pass does not validate the forbidden action. Alternative should verify or install local checkout using available dependencies, preserving local patch; inspect source/build/dependency state before selecting command. A simple fabricated no-op, gold patch, or pip substitution is not validated correct continuation.",
+      "available_offline_reference": [
+        "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-extended85-head-bfp8/live-tasks/astropy__astropy-7336-first/digest/astropy__astropy-7336.triage.json",
+        "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-extended85-head-bfp8/live-tasks/astropy__astropy-7336-first/coordinator.json",
+        "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-candidate/tasks85-offline-verifier/astropy__astropy-7336/tests/config.json",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe-jobs/swe-extended85-head-bfp8/astropy__astropy-7336__T7X4LzU/verifier/test-stdout.txt"
+      ],
+      "gold_content_read": false
+    }
+  ],
+  "scientific_limits": [
+    "An offline action verified to pass a local test is one correct continuation, not unique ground truth nor proof of all future agent success.",
+    "Same original reasoning can favor wrong action; teacher-forced correct action probability conditional on that reasoning does not measure full corrected reasoning generation.",
+    "Different branch lengths make raw sequence probability comparison length-sensitive. Report sequence sums, lengths and per-token values; do not choose convenient length normalization as success probability.",
+    "Native token IDs unavailable and tool serialization may not be uniquely invertible. Preserve raw request/response and reconstruction count mismatch; exact-text recovery cannot establish exact sampled IDs.",
+    "Current CPU/no-Docker constraint cannot validate dependency-sensitive action execution. Without accessible pre-call source state and offline tests, correct branch remains unresolved rather than invented."
+  ]
+}

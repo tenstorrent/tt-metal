@@ -1,0 +1,23 @@
+{
+  "status": "root_accepted_forecast_miss",
+  "reviewer": "root",
+  "accepted": true,
+  "serial_order": 2,
+  "completion_sha256": "e297a2ba0181f1f8fa9c8b9f69d2ea1e68d31b425da587bdbd5faa5415253ebf",
+  "measured_seconds": 635.7128233909607,
+  "forecast_range_seconds": [
+    980,
+    1780
+  ],
+  "admission_sha256": "74640276fdf5e463fa968d5d188994622759df96f09d4f408e02712b7d09ae66",
+  "utc": "2026-11-15T08:41:48.778229+00:00",
+  "reason": "Natural stop at 307/512 tokens rather than cap-length continuation; no time/cap truncation. Free generation 612.353732 s, runner total 631.668696 s, outer wall 635.712823 s. This accepts runtime accounting only; semantic triage remains open and full-TT caret collapse is not yet explained.",
+  "accounting_seconds": {
+    "free_generation": 612.353732440155,
+    "runner_total": 631.6686964069959,
+    "runner_nonfree": 19.314963966840878,
+    "outside_runner": 4.044126983964816
+  },
+  "result_sha256": "389d4c9c55f00e544dcacb209814a289e7c61af4dec2ec55ebfc265cd872cb63",
+  "next_group_authorized_under_existing_admission": true
+}

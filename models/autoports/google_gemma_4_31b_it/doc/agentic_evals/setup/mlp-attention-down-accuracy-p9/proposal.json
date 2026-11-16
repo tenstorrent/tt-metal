@@ -1,0 +1,60 @@
+{
+  "status": "prepared_unadmitted_after_full_precision_control",
+  "candidate": "P9 accuracy-only precision-isolation check",
+  "question": "Does changing only attention, MLP, down, and LM-head projection compute fidelity from LoFi to HiFi2 at BFP8 storage clear the natural-text top1 threshold while holding the references and all other precision/runtime settings fixed?",
+  "p8_baseline_result": {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/mlp-attention-down-accuracy/run/readiness_accuracy.json",
+    "sha256": "ac9b331c0f92828534e2e029f951c8fa7b49de4602e56de3fac52d09692f7544",
+    "natural_top1": 0.873046875,
+    "aime_prefill_top1": 0.98,
+    "aime_decode_top1": 0.98
+  },
+  "candidate_config": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/mlp-attention-down-accuracy-p9/p9_bfp8_hifi2_precision.json",
+  "candidate_config_sha256": "a9f913f8d8a61de5e8bb4899bdeafe63531be84e98b968b88504995db53ee218",
+  "policy_delta": {
+    "weight_groups": {
+      "attention": "bfp8",
+      "mlp": "bfp8",
+      "down": "bfp8",
+      "lm_head": "bfp8"
+    },
+    "compute_fidelities": {
+      "attention": "HiFi2",
+      "mlp": "HiFi2",
+      "down": "HiFi2",
+      "lm_head": "HiFi2"
+    },
+    "all_other_fields": "identical to P8 config"
+  },
+  "references": {
+    "aime24": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/attention-down-acceptance/references/aime24.refpt",
+      "sha256": "1c1a90cada967dc89159edf6e61eb51f2638955ab9defe1cc51939587e99ab45"
+    },
+    "natural": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/attention-down-acceptance/references/natural.refpt",
+      "sha256": "861f29370af0ba7e13c77f548e688cceff429846d20a9283697ae77b8b069584"
+    }
+  },
+  "command_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/mlp-attention-down-accuracy-p9/command.json",
+  "command_sha256": "1a09b57367174ac0aedbd5d99ea654e9811c2582065a0e167a61d0d5e772b3ea",
+  "runner_sha256": "f68517e9133e2541949b3786548d0fe5d7ce99b7d021335218ba073b49620a86",
+  "unapplied_gate_patch": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/mlp-attention-down-accuracy-p9/accuracy-gate.patch",
+  "unapplied_gate_patch_sha256": "f2bda9a77b320ff9a79eeaede9ede8c5917a60eb688c78c53968aabc33e9d4f5",
+  "forecast_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/mlp-attention-down-accuracy-p9/forecast.json",
+  "forecast_sha256": "197d4cda4c1dba7f57c322c8e6dcdf396b9c03e46c845a2c776b0a25967ca231",
+  "acceptance": "Not admitted or run. Root may decide after reviewing the completed full-precision control and the host-validated unapplied accuracy-gate patch.",
+  "full_precision_control": {
+    "completion_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full-bf16-natural-accuracy-control/completion.json",
+    "completion_sha256": "15ad24f81c2078c33ab0d1f2537306f97312b0bda0a824e37fb12175ff77d572",
+    "root_review_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full-bf16-natural-accuracy-control/root-terminal-review.json",
+    "root_review_sha256": "36d3c443a94a1728fc199da0a5472504070bfa63b61487f0ef1daf0831a55188",
+    "result_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full-bf16-natural-accuracy-control/run/readiness_accuracy.json",
+    "result_sha256": "45455e8dc3e42f85a2eb11cfbf606684f298a26ae01f667a3b62fe1a8229d41d",
+    "runtime_policy_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full-bf16-natural-accuracy-control/run/runtime_policy.json",
+    "runtime_policy_sha256": "5a3e5294314c738f54deffa346303953481e802561660692b4b3c58c8d8ed7a8",
+    "status": "exit0; 60 layers; full BF16/HiFi4 verified; natural top1=469/512=0.916015625, top5=510/512, top100=512/512; trace counters 297 and 511 replays, captures0"
+  },
+  "host_validation_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/mlp-attention-down-accuracy-p9/host-validation.json",
+  "host_validation_sha256": "f49bfaa052445cb6b484bc50db69677aff0bd2cd61a2c88edd5d8cddeee5a998"
+}

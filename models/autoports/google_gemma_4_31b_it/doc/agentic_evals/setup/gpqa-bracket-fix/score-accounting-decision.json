@@ -1,0 +1,20 @@
+{
+  "recorded_unix": 1794660629.1799319,
+  "before_rerun": true,
+  "affected": [
+    8,
+    24,
+    27,
+    32,
+    64,
+    76,
+    81,
+    97,
+    118,
+    171,
+    177,
+    185
+  ],
+  "rule": "All12 malformed-prompt executions classified infrastructure failures independent of metric. Corrected12 replace original12 unconditionally, including regressions; unaffected186 preserved. Original198 and corrected12 aggregates retained separately. No best-of selection.",
+  "fixed10_overlap": []
+}

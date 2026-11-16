@@ -1,0 +1,12 @@
+{
+  "status": "root prelaunch decision; no candidate admitted or selected",
+  "utc": "2026-11-15T03:16:03.586051+00:00",
+  "panel": "All36 onset cases x seeds42/43/44 retained (108). Use latest per-row semantic assessments, preserving historical snapshots.",
+  "precision_sensitive_gate": "All15 original served-anomalous/full-normal rows must complete without semantic anomaly, not only the4 native-motif rows. A progressing cap is inconclusive, never a pass.",
+  "regression_gate": "Review all108 candidate outputs with pinned prefixes; any new anomaly on a baseline-normal row prevents candidate acceptance until investigated. Retain the reverse baseline-normal/full-anomalous row; full TT is not globally passing.",
+  "persistent_gate": "Persistent full-TT anomalies need matched shortened TT/HF investigations or stack repair. HF-positive shortened controls establish reference behavior only for those inputs, not native incidence or global precision equivalence. No blanket waiver for other anomalies.",
+  "limits": "Use common maximum required cap per onset/seed across compared arms; preserve earlier256/512 evidence and verify token-prefix consistency in extensions. Still-progressing caps extend>=2x within phase budget.",
+  "selection": "All fixed-panel and persistent-symptom evidence must be resolved before selecting fastest measured passing configuration. Keep runtime validation, serial traced diagnostic timing, cumulative repair arms as indicated. Selected config requires used vLLM row remeasurement and entire85-list rerun.",
+  "source": "acceptance-audit-c.json and plan.json",
+  "not_claimed": "No passing candidate, speed ranking, score change, or completion."
+}

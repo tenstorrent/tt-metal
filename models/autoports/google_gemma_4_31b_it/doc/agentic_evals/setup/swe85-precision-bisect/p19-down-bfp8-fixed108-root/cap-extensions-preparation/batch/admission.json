@@ -1,0 +1,18 @@
+{
+  "status": "admitted",
+  "time_unix": 1794761114.3607407,
+  "deadline_unix": 1794791725,
+  "remaining_seconds": 30610.63925933838,
+  "timeout_seconds": 1800,
+  "closure_reserve_seconds": 900,
+  "source_pins_verified": 27,
+  "command_sha256": "bd9ba9b90abd7e9cabea1d676cf508b0c967de9961db11044696d4ce346addd1",
+  "device_owner_returncode": 1,
+  "device_owner_stdout": "",
+  "host_memory_bytes": {
+    "MemTotal": 267699728384,
+    "MemAvailable": 122373963776
+  },
+  "scope": "Five diagnostic P19 cap extensions, unchanged prompts/seeds/precision. No score/default changes.",
+  "parent_execution_review": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/root-execution-review.json"
+}

@@ -1,0 +1,1238 @@
+{
+  "created_utc": "2026-11-15T02:21:46.293981+00:00",
+  "status": "complete_numerical_comparison_not_precision_acceptance",
+  "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/completed-summary165.json",
+  "source_sha256": "392e5a4934accb1c19022df1387fbf5e6c823398ed583e7f7466a1b7be4759c3",
+  "completed_whole_reply_controls": 68,
+  "expected_whole_reply_controls": 68,
+  "forced_tokens": 27922,
+  "token_weighted_top1_agreement": 0.9579901153212521,
+  "median_case_top1_agreement": 0.9546136022897642,
+  "interpretation": "Descriptive teacher-forced numerical comparison, not semantic correctness or autoregressive performance. Correct-action and anomaly evidence must be interpreted separately. One-token reconstructed-prompt gap remains documented; no native-token identity claim.",
+  "rows_sorted_by_agreement": [
+    {
+      "name": "fullreply.pytest-dev__pytest-10356.call14",
+      "task": "pytest-dev__pytest-10356",
+      "tokens": 56,
+      "top1_agreement": 0.8928571428571429,
+      "full_minus_served_mean_log_probability": 0.06392192989046462,
+      "source_case_sha256": "8d17dc747ee414221522e0ce87c20f6eb364984d1c88646501fe742a0fe1d4a6",
+      "evidence": {
+        "served": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.pytest-dev__pytest-10356.call14.json",
+          "sha256": "04189772ba9cd49a6a947cc4b1ec2ca3bab30b0534177a48752d9ff74cf13b43"
+        },
+        "full": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.pytest-dev__pytest-10356.call14.json",
+          "sha256": "6f3fcaf196f1107ec7f81506cf028ebf1fcf822b8475fb5b39472126ccfda6ef"
+        }
+      }
+    },
+    {
+      "name": "fullreply.sympy__sympy-13551.call12",
+      "task": "sympy__sympy-13551",
+      "tokens": 77,
+      "top1_agreement": 0.8961038961038961,
+      "full_minus_served_mean_log_probability": -0.13789367241539896,
+      "source_case_sha256": "dcaab5e1ddd8dd661b9a57e412bd4691f7f2021c05e76c668f96b5ab98b13c57",
+      "evidence": {
+        "served": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.sympy__sympy-13551.call12.json",
+          "sha256": "ee196a04876ea20c25198805e635e05b107f82f30ff797395902240eae8d8bde"
+        },
+        "full": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.sympy__sympy-13551.call12.json",
+          "sha256": "5d4604ff17a0096cdfb8589afaaf2dc461132ecde9c386325c3d26f7a6da0ed8"
+        }
+      }
+    },
+    {
+      "name": "fullreply.django__django-16950.call80",
+      "task": "django__django-16950",
+      "tokens": 68,
+      "top1_agreement": 0.8970588235294118,
+      "full_minus_served_mean_log_probability": -0.0282771660127975,
+      "source_case_sha256": "8905c521fec5033aa7ad06de897038849f8189a2eac9d4087bcea04e1f5d6587",
+      "evidence": {
+        "served": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.django__django-16950.call80.json",
+          "sha256": "5e07158678daeea8f257515323220323da1234f87cefe111d7af9beb96b37398"
+        },
+        "full": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.django__django-16950.call80.json",
+          "sha256": "15440eff9ba6653f637d5c12d7381b5cf05dee54bcfbda823a7f83ab832e4d14"
+        }
+      }
+    },
+    {
+      "name": "fullreply.pydata__xarray-7233.call4",
+      "task": "pydata__xarray-7233",
+      "tokens": 162,
+      "top1_agreement": 0.9012345679012346,
+      "full_minus_served_mean_log_probability": -0.05244833864496298,
+      "source_case_sha256": "0e3a91ece2ee9b5144ca8775cd9537146769c3f3db10ceaa65d2198e63c24771",
+      "evidence": {
+        "served": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.pydata__xarray-7233.call4.json",
+          "sha256": "6cf138f2ee3976cbdab1bcae8bca464ab75a8b0607c02819a33171427374c862"
+        },
+        "full": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.pydata__xarray-7233.call4.json",
+          "sha256": "b6217026b9f28fc8e6cfb5f65132f2e29fb4753b731d1ed83caa1688c3a94292"
+        }
+      }
+    },
+    {
+      "name": "fullreply.sphinx-doc__sphinx-10323.call68",
+      "task": "sphinx-doc__sphinx-10323",
+      "tokens": 480,
+      "top1_agreement": 0.9041666666666667,
+      "full_minus_served_mean_log_probability": -0.09534814981850677,
+      "source_case_sha256": "d2926b96f9684f47384458d31fec325704b2e3becebee5f944d8a475ba69c654",
+      "evidence": {
+        "served": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split83/runs/pilot/served/fullreply.sphinx-doc__sphinx-10323.call68.json",
+          "sha256": "5f8305be6f0ccd933c705f61918e82db32dde6c187a3df0ae5c2301694131cfc"
+        },
+        "full": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split83/runs/pilot/full/fullreply.sphinx-doc__sphinx-10323.call68.json",
+          "sha256": "15e6c17ee79c7734c332d0ec1aa3a8998acf384133bc889bd24fff78edfccf1b"
+        }
+      }
+    },
+    {
+      "name": "fullreply.astropy__astropy-8872.call8",
+      "task": "astropy__astropy-8872",
+      "tokens": 118,
+      "top1_agreement": 0.9067796610169492,
+      "full_minus_served_mean_log_probability": -0.06823283587328502,
+      "source_case_sha256": "fb7660a7969561337729493f3f964015a63cda775d85c62ba1d0366f5eb668f6",
+      "evidence": {
+        "served": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.astropy__astropy-8872.call8.json",
+          "sha256": "c5053c5616a0aec5db7167cf6d66913aa2fbc04bf5c2dfaee109c9102a5437e0"
+        },
+        "full": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.astropy__astropy-8872.call8.json",
+          "sha256": "571a5a33f01ec5ab6cc4b0eebadfdab65218247ac024da2ecb8d2c50486fa2f8"
+        }
+      }
+    },
+    {
+      "name": "fullreply.matplotlib__matplotlib-25332.call2",
+      "task": "matplotlib__matplotlib-25332",
+      "tokens": 97,
+      "top1_agreement": 0.9072164948453608,
+      "full_minus_served_mean_log_probability": -0.04551197612246147,
+      "source_case_sha256": "d9840e6e4b4b5f818bcc27b1ccb37a95d084ae15812de36666dc41637b1e0cd1",
+      "evidence": {
+        "served": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.matplotlib__matplotlib-25332.call2.json",
+          "sha256": "ec6df143add204074e30f5f64902d00cfc7407b0a6f7994aab1547272b81fc3e"
+        },
+        "full": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.matplotlib__matplotlib-25332.call2.json",
+          "sha256": "86d53509d0a4eb5739843a0f4793c65f55ef64f1d4e169c48e483fb88be79994"
+        }
+      }
+    },
+    {
+      "name": "fullreply.scikit-learn__scikit-learn-14629.call8",
+      "task": "scikit-learn__scikit-learn-14629",
+      "tokens": 55,
+      "top1_agreement": 0.9090909090909091,
+      "full_minus_served_mean_log_probability": -0.021780479962132983,
+      "source_case_sha256": "843751344d41422d346cacb05f00bbc870a610751e8c2a778eb2f760e50b5056",
+      "evidence": {
+        "served": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.scikit-learn__scikit-learn-14629.call8.json",
+          "sha256": "4b93c71f99a12c7d79e975cbe9a251b3cc0523d893bf1ed95292be4b96830324"
+        },
+        "full": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.scikit-learn__scikit-learn-14629.call8.json",
+          "sha256": "056ed3c1d83ae474c47ee4282b498527fc7920641a8a63ebead9e0380cef7fa8"
+        }
+      }
+    },
+    {
+      "name": "fullreply.pylint-dev__pylint-4604.call8",
+      "task": "pylint-dev__pylint-4604",
+      "tokens": 103,
+      "top1_agreement": 0.912621359223301,
+      "full_minus_served_mean_log_probability": -0.1269102984960767,
+      "source_case_sha256": "30890fefb010ca4e6ec573bf28a88206b3d64b0297648862cbc36b100e0b0a1a",
+      "evidence": {
+        "served": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.pylint-dev__pylint-4604.call8.json",
+          "sha256": "9788dfb7b3f397b78135af674617102792988b81423be86508b73b26bd6bab8a"
+        },
+        "full": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.pylint-dev__pylint-4604.call8.json",
+          "sha256": "71e7c1c1ad021553e2120d34a140bd54866e0369b1a2aa7fcce53374fed5f4ac"
+        }
+      }
+    },
+    {
+      "name": "fullreply.astropy__astropy-14096.call23",
+      "task": "astropy__astropy-14096",
+      "tokens": 725,
+      "top1_agreement": 0.9131034482758621,
+      "full_minus_served_mean_log_probability": -0.10603964463023419,
+      "source_case_sha256": "d14048b5af9a857c576641112f5708343871913db9c8be8fcc73e2522bd0314f",
+      "evidence": {
+        "served": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.astropy__astropy-14096.call23.json",
+          "sha256": "fb5c561d89e53859a7b7b9a311d1bc23ac5c825d444ca70acb6d918f9c0ea39e"
+        },
+        "full": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.astropy__astropy-14096.call23.json",
+          "sha256": "5a8e2bc74960ff8a8bcacf51b7f2096b0f4cc5d7bc762ec89358cb0900d8ba51"
+        }
+      }
+    },
+    {
+      "name": "fullreply.pydata__xarray-4687.call39",
+      "task": "pydata__xarray-4687",
+      "tokens": 95,
+      "top1_agreement": 0.9157894736842105,
+      "full_minus_served_mean_log_probability": -0.02681270958013538,
+      "source_case_sha256": "aef7ccecbbef4c9a09cdd1317613f93e9cf431e32b1a67dc3d507d7a3e6e84a3",
+      "evidence": {
+        "served": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.pydata__xarray-4687.call39.json",
+          "sha256": "fbefc62e7a2353e6c1f9a7565836a99640e031c15a79bec55bdafc1493c5ff6d"
+        },
+        "full": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.pydata__xarray-4687.call39.json",
+          "sha256": "30a3689ce4d21de10394f467a576058ab80caf65e4ee7a9f0f3056728cc5642c"
+        }
+      }
+    },
+    {
+      "name": "fullreply.astropy__astropy-7336.call18",
+      "task": "astropy__astropy-7336",
+      "tokens": 479,
+      "top1_agreement": 0.918580375782881,
+      "full_minus_served_mean_log_probability": -0.10974376246698095,
+      "source_case_sha256": "1054cc464c0237ed62d48564788d77e703e638a53babbd1a1503f9df4b728371",
+      "evidence": {
+        "served": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.astropy__astropy-7336.call18.json",
+          "sha256": "8045ff809aaf090e4add9ff2f5ada5458e42f588a7b9911570d2a9a068e52b9f"
+        },
+        "full": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.astropy__astropy-7336.call18.json",
+          "sha256": "6b9a2d6283e30727d660edb35daf27ff637eaebf46d35bda4815fc42357aa06c"
+        }
+      }
+    },
+    {
+      "name": "fullreply.pylint-dev__pylint-4970.call51",
+      "task": "pylint-dev__pylint-4970",
+      "tokens": 628,
+      "top1_agreement": 0.9219745222929936,
+      "full_minus_served_mean_log_probability": -0.08912783780433114,
+      "source_case_sha256": "7a07421ab539c96fa4cf99f340a83a789a6c97fcf78773e9238d98dfcc4003bb",
+      "evidence": {
+        "served": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.pylint-dev__pylint-4970.call51.json",
+          "sha256": "cf31dd2185ce6d8d1d452a07389bd15e2cdd4206eb34d0534f0e293e9fb549aa"
+        },
+        "full": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.pylint-dev__pylint-4970.call51.json",
+          "sha256": "bd9a007edd5326afebccc7562e7c7af2f21983978c74727fa32c20c19b21ad2b"
+        }
+      }
+    },
+    {
+      "name": "fullreply.scikit-learn__scikit-learn-13135.call9",
+      "task": "scikit-learn__scikit-learn-13135",
+      "tokens": 218,
+      "top1_agreement": 0.9220183486238532,
+      "full_minus_served_mean_log_probability": -0.10409565196512187,
+      "source_case_sha256": "03deb91ce1434f6c8677466d5d3fda625749a0b7f7c58ea254fcdffef5bde95d",
+      "evidence": {
+        "served": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.scikit-learn__scikit-learn-13135.call9.json",
+          "sha256": "85d3820c38c335fd9079f791f5b5037b017b15398f31f98ccc088ab9d23f0321"
+        },
+        "full": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.scikit-learn__scikit-learn-13135.call9.json",
+          "sha256": "f2e3e572da76c6fb27abc60001743d152d591015226547cad159229269ce794c"
+        }
+      }
+    },
+    {
+      "name": "fullreply.pytest-dev__pytest-5787.call12",
+      "task": "pytest-dev__pytest-5787",
+      "tokens": 160,
+      "top1_agreement": 0.925,
+      "full_minus_served_mean_log_probability": -0.06583956837249065,
+      "source_case_sha256": "ff0dcfd58e6f6d0d679d8cef7fc0858cf2e86c1c34540cc89d93959a3d051c13",
+      "evidence": {
+        "served": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.pytest-dev__pytest-5787.call12.json",
+          "sha256": "2c20554f192146e70151ee4ac26d32257e1c47fee54940ced740d412eaf25406"
+        },
+        "full": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.pytest-dev__pytest-5787.call12.json",
+          "sha256": "b85ab6fc9d885d2b67756d4c957f5694d728d7cde72f3276956e68068b8d85f5"
+        }
+      }
+    },
+    {
+      "name": "fullreply.sympy__sympy-13878.call29",
+      "task": "sympy__sympy-13878",
+      "tokens": 41,
+      "top1_agreement": 0.926829268292683,
+      "full_minus_served_mean_log_probability": -0.09629988018515845,
+      "source_case_sha256": "81381621f069f56a0f25c560deea4d019f0ec2e2d52b8e3101e89113635ea2a4",
+      "evidence": {
+        "served": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.sympy__sympy-13878.call29.json",
+          "sha256": "72fd7c9596d23265845f6f27a06689b96fe63295a57df308f1b9969ec7d4417f"
+        },
+        "full": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.sympy__sympy-13878.call29.json",
+          "sha256": "e108ed72f85fdc95e53b177aee6e230ca889c9e09e9c3e6dd476e45695c4bec0"
+        }
+      }
+    },
+    {
+      "name": "fullreply.scikit-learn__scikit-learn-14053.call13",
+      "task": "scikit-learn__scikit-learn-14053",
+      "tokens": 197,
+      "top1_agreement": 0.9289340101522843,
+      "full_minus_served_mean_log_probability": -0.06683629631589635,
+      "source_case_sha256": "d6ce273fd15f0b5300d967144e9c392cd26322665e41312a22d3d488bd01eda3",
+      "evidence": {
+        "served": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.scikit-learn__scikit-learn-14053.call13.json",
+          "sha256": "f5b566e4e0f1af392750f4431f1efc702c8721db82476cdf560e81fa9252b7d8"
+        },
+        "full": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.scikit-learn__scikit-learn-14053.call13.json",
+          "sha256": "629f6241a7ea887be75f6550ec69a5495875e19627cc2f6feae5b6871c46800f"
+        }
+      }
+    },
+    {
+      "name": "fullreply.scikit-learn__scikit-learn-25102.call5",
+      "task": "scikit-learn__scikit-learn-25102",
+      "tokens": 145,
+      "top1_agreement": 0.9310344827586207,
+      "full_minus_served_mean_log_probability": -0.0866300558224414,
+      "source_case_sha256": "2e35ff5a63ff08b4fd5d5b391c1f4d9ac021303d38520e17073107b2b1c87c8e",
+      "evidence": {
+        "served": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.scikit-learn__scikit-learn-25102.call5.json",
+          "sha256": "0a7cdddc800c3ddb77daf21b96fbe47925a4efb95b94ca678b19fb5452a514f1"
+        },
+        "full": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.scikit-learn__scikit-learn-25102.call5.json",
+          "sha256": "b1507a25372d19aecae2fac6d64057fcbf3761b64fe1832acb7982027e8262f0"
+        }
+      }
+    },
+    {
+      "name": "fullreply.sympy__sympy-14248.call79",
+      "task": "sympy__sympy-14248",
+      "tokens": 190,
+      "top1_agreement": 0.9315789473684211,
+      "full_minus_served_mean_log_probability": -0.06388345757762026,
+      "source_case_sha256": "cf85df09d8452c4bc7b28a177082172dd535220abcc0a8ae9217064522b5ffca",
+      "evidence": {
+        "served": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.sympy__sympy-14248.call79.json",
+          "sha256": "b8669f4439bb32f6dfeb3993f15c3183ced12d4f22011fd3f3299d85cceb3801"
+        },
+        "full": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.sympy__sympy-14248.call79.json",
+          "sha256": "4d5836d69e65e34bf734e5e7a3d38726fba5d4b981dc483319948f4e409cb65d"
+        }
+      }
+    },
+    {
+      "name": "fullreply.astropy__astropy-14598.call33",
+      "task": "astropy__astropy-14598",
+      "tokens": 1354,
+      "top1_agreement": 0.9372230428360414,
+      "full_minus_served_mean_log_probability": -0.06767958974148383,
+      "source_case_sha256": "1fcccd2c81aa39196618287abc61b59eccc0f6cf2fa6624c6c6e1fe70081f496",
+      "evidence": {
+        "served": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.astropy__astropy-14598.call33.json",
+          "sha256": "ca15d60c21c652e344fc55e66d13b0fa9b74223993ad7004b3bb7e17930785bd"
+        },
+        "full": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.astropy__astropy-14598.call33.json",
+          "sha256": "2fb7031b9bfba55310a092897478365fa603d8b9c2ab26c5af64de4b4a6c9cca"
+        }
+      }
+    },
+    {
+      "name": "fullreply.pydata__xarray-3095.call53",
+      "task": "pydata__xarray-3095",
+      "tokens": 850,
+      "top1_agreement": 0.9376470588235294,
+      "full_minus_served_mean_log_probability": -0.05845865980354083,
+      "source_case_sha256": "cdefa2d1ceb55ca29bbad1dda5c9502104bbce256969081381bad9fbfe0bfdd4",
+      "evidence": {
+        "served": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.pydata__xarray-3095.call53.json",
+          "sha256": "5868c31628cba85b058c643d44118a5d86f028b3bbf06325ca02d2d073ae7337"
+        },
+        "full": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.pydata__xarray-3095.call53.json",
+          "sha256": "d684b362ca4ea1be4366bc9197457b550056ff02580fb73ad2e6ec68de2a6303"
+        }
+      }
+    },
+    {
+      "name": "fullreply.pytest-dev__pytest-6197.call35",
+      "task": "pytest-dev__pytest-6197",
+      "tokens": 131,
+      "top1_agreement": 0.9389312977099237,
+      "full_minus_served_mean_log_probability": -0.01940220762105718,
+      "source_case_sha256": "67799b495a43b73671dca02af3da7d741b8dbcc8059294f6ccae8138bc2021a9",
+      "evidence": {
+        "served": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.pytest-dev__pytest-6197.call35.json",
+          "sha256": "d42cead6ee05250ff7eea5590390699a9e0dcb95b007027825f07084df031146"
+        },
+        "full": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.pytest-dev__pytest-6197.call35.json",
+          "sha256": "fa4525c893d220216193bbc0f435b20bd9b6c30cd72f25dd940868444b7cefb6"
+        }
+      }
+    },
+    {
+      "name": "fullreply.sphinx-doc__sphinx-9461.call76",
+      "task": "sphinx-doc__sphinx-9461",
+      "tokens": 116,
+      "top1_agreement": 0.9396551724137931,
+      "full_minus_served_mean_log_probability": -0.10857949967054112,
+      "source_case_sha256": "a672eb1fc419c438455e4ce05f6b814c41c0e54723905115d09ee9087eb0a25b",
+      "evidence": {
+        "served": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.sphinx-doc__sphinx-9461.call76.json",
+          "sha256": "0a3090ddaaa9864598c60adb3f2657b6d0f0af8b6efbe0933d4fdf2ab98f97eb"
+        },
+        "full": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.sphinx-doc__sphinx-9461.call76.json",
+          "sha256": "141cbdfa79a5b0b97bc936e9d5ac09ca50a064ddb8c8675473fe6dc8ef4612a4"
+        }
+      }
+    },
+    {
+      "name": "fullreply.pylint-dev__pylint-4970.call55",
+      "task": "pylint-dev__pylint-4970",
+      "tokens": 600,
+      "top1_agreement": 0.9416666666666667,
+      "full_minus_served_mean_log_probability": -0.06952567182512501,
+      "source_case_sha256": "87af55c486f6660e4f149d66a13170383424a31a002fdd5cd730aa100be130d1",
+      "evidence": {
+        "served": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.pylint-dev__pylint-4970.call55.json",
+          "sha256": "895b2a9a63d4797655220155f6708abb49ebbaee6ac4f3db0e0c4b91d12f95ae"
+        },
+        "full": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.pylint-dev__pylint-4970.call55.json",
+          "sha256": "0b27ba15412b97b13953f7d9ea9d930a77f9ce9669acc7a7d87728c7d86488bd"
+        }
+      }
+    },
+    {
+      "name": "fullreply.mwaskom__seaborn-3069.call50",
+      "task": "mwaskom__seaborn-3069",
+      "tokens": 805,
+      "top1_agreement": 0.9428571428571428,
+      "full_minus_served_mean_log_probability": -0.043198899675916114,
+      "source_case_sha256": "9d7c73bd086c2ccd28c6a62990d32262488a599486958ef9d1bd3568550449ff",
+      "evidence": {
+        "served": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.mwaskom__seaborn-3069.call50.json",
+          "sha256": "b3d93f67b1540cb38f95727810f48f56bbde029201c81c6360d0ad7e6c064370"
+        },
+        "full": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.mwaskom__seaborn-3069.call50.json",
+          "sha256": "1bc276a01f393a3f2dd88076d953be068f1cc72aace8c0942561fba0f832f6f1"
+        }
+      }
+    },
+    {
+      "name": "fullreply.matplotlib__matplotlib-20488.call91",
+      "task": "matplotlib__matplotlib-20488",
+      "tokens": 265,
+      "top1_agreement": 0.9433962264150944,
+      "full_minus_served_mean_log_probability": -0.04389959407795838,
+      "source_case_sha256": "62e3bcae8970a06f16fd33b9e6053e3201126cd1349758f6060036b4df6a100e",
+      "evidence": {
+        "served": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.matplotlib__matplotlib-20488.call91.json",
+          "sha256": "431b0255e6cfef939abc580642d9cf728cb92ddae707be1c911b42fe0913acc7"
+        },
+        "full": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.matplotlib__matplotlib-20488.call91.json",
+          "sha256": "d8e2de193bee772b8d3def2f0d17b3a985f9cc7eff6973e625e80a124dacc68a"
+        }
+      }
+    },
+    {
+      "name": "fullreply.sympy__sympy-13480.call9",
+      "task": "sympy__sympy-13480",
+      "tokens": 130,
+      "top1_agreement": 0.9461538461538461,
+      "full_minus_served_mean_log_probability": -0.09264923972034379,
+      "source_case_sha256": "0b082e188ab4e74e9ee023069ae7fed94047bb7af52bcb72a43691881f5b8739",
+      "evidence": {
+        "served": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.sympy__sympy-13480.call9.json",
+          "sha256": "465df9a1d1454076923e13da6c2cf09e1790b6c51b822c2ee2614c958e5721ef"
+        },
+        "full": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.sympy__sympy-13480.call9.json",
+          "sha256": "2f4fb284dbe266ea5c7c821ee5d00017eb985b6725e418b26cc038ddc7a2f5f0"
+        }
+      }
+    },
+    {
+      "name": "fullreply.sphinx-doc__sphinx-11510.call24",
+      "task": "sphinx-doc__sphinx-11510",
+      "tokens": 1021,
+      "top1_agreement": 0.9480901077375122,
+      "full_minus_served_mean_log_probability": -0.03407427559564351,
+      "source_case_sha256": "f82dd70aeb57ef2b317946bf23dc71e5f5580ead0be1a4a742a3676bb64a21da",
+      "evidence": {
+        "served": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.sphinx-doc__sphinx-11510.call24.json",
+          "sha256": "94d3b06760fdeba409c0ce828fd8ef2d5f4671f6471253bed491cefbcfb8f154"
+        },
+        "full": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.sphinx-doc__sphinx-11510.call24.json",
+          "sha256": "b68a1c08886903c84ac7ab5830325a7bf407ce20eabd09060c6782d8480a563c"
+        }
+      }
+    },
+    {
+      "name": "fullreply.pytest-dev__pytest-7432.call34",
+      "task": "pytest-dev__pytest-7432",
+      "tokens": 61,
+      "top1_agreement": 0.9508196721311475,
+      "full_minus_served_mean_log_probability": -0.061870638772163616,
+      "source_case_sha256": "c3455293de10aa65856920d3c44cf0bf37963a6723562015be9b3f9d64916ec5",
+      "evidence": {
+        "served": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.pytest-dev__pytest-7432.call34.json",
+          "sha256": "8f150df496c47db8107e6cd512e8d79e9d4c0c1704c62a51ad96ea0a1603361c"
+        },
+        "full": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.pytest-dev__pytest-7432.call34.json",
+          "sha256": "665526389542494fd4d66ac25c2d1d4484c3c70bccc0c945f655c5a38e51cecf"
+        }
+      }
+    },
+    {
+      "name": "fullreply.django__django-15037.call19",
+      "task": "django__django-15037",
+      "tokens": 1038,
+      "top1_agreement": 0.9508670520231214,
+      "full_minus_served_mean_log_probability": -0.0828467994002379,
+      "source_case_sha256": "d6ea38fc8bdfe01394cfc55bb1338969bb9213f3d9ad0cdebe7e4c6a50482eef",
+      "evidence": {
+        "served": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.django__django-15037.call19.json",
+          "sha256": "b8b6ce83266bf799217ec1b6703989de72cc1c59a1eaf9dff82b67de9d784adb"
+        },
+        "full": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.django__django-15037.call19.json",
+          "sha256": "0936589953fc81b5615f380525459e08b2556f6920626199ca4676b981c46c28"
+        }
+      }
+    },
+    {
+      "name": "fullreply.pydata__xarray-6992.call16",
+      "task": "pydata__xarray-6992",
+      "tokens": 897,
+      "top1_agreement": 0.9520624303232998,
+      "full_minus_served_mean_log_probability": -0.0399693369808993,
+      "source_case_sha256": "d4e14b0c4b07b0a53b78addf31aff853a849a2afab5115e88e7fc0122d150665",
+      "evidence": {
+        "served": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.pydata__xarray-6992.call16.json",
+          "sha256": "8146717b9b8b371658d07584246e844d7c632ee17610966bfc729ab604bb7f37"
+        },
+        "full": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.pydata__xarray-6992.call16.json",
+          "sha256": "54f48a14d68f2311419164682124816519cd720ca0b31376821b168e4e2a8445"
+        }
+      }
+    },
+    {
+      "name": "fullreply.matplotlib__matplotlib-25479.call34",
+      "task": "matplotlib__matplotlib-25479",
+      "tokens": 299,
+      "top1_agreement": 0.9531772575250836,
+      "full_minus_served_mean_log_probability": -0.039232425330753294,
+      "source_case_sha256": "8e63c3c452fc1db1b2b843a3f443c1bc05ef6b674d9d7172da9911b364c6396f",
+      "evidence": {
+        "served": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.matplotlib__matplotlib-25479.call34.json",
+          "sha256": "d6a52386036f2bde122d33b43a662b103c723bf697af5579489eb6a616712a03"
+        },
+        "full": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.matplotlib__matplotlib-25479.call34.json",
+          "sha256": "c8dcbb46bc69338b27314a5291b1d1b5b1f7bd1e160ef3b4822c1241b4d3f314"
+        }
+      }
+    },
+    {
+      "name": "fullreply.psf__requests-5414.call23",
+      "task": "psf__requests-5414",
+      "tokens": 643,
+      "top1_agreement": 0.9533437013996889,
+      "full_minus_served_mean_log_probability": -0.07687842948923464,
+      "source_case_sha256": "de5fc4b6ee4dd1ca24d81e6b6dff475b141a5517461f9698b39ea64ac581f86e",
+      "evidence": {
+        "served": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.psf__requests-5414.call23.json",
+          "sha256": "091916ad129cacd793dbd5c8987771a4d0aba2741b71483a8fb1e15df7b2f886"
+        },
+        "full": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.psf__requests-5414.call23.json",
+          "sha256": "94f20881ec1f118e3df98afed39e2e202326ea2ad4947a55faf7f2b150ddaa69"
+        }
+      }
+    },
+    {
+      "name": "fullreply.matplotlib__matplotlib-25960.call3",
+      "task": "matplotlib__matplotlib-25960",
+      "tokens": 87,
+      "top1_agreement": 0.9540229885057471,
+      "full_minus_served_mean_log_probability": -0.02708068717067334,
+      "source_case_sha256": "5c2c6ecc79c0e675cd3ce5784f4081e71e4fac7592da000565aac20742da4d0d",
+      "evidence": {
+        "served": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.matplotlib__matplotlib-25960.call3.json",
+          "sha256": "755c57048ae42043b4192ead3edb685bb48bf11800083df64686b7ee65dbc018"
+        },
+        "full": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.matplotlib__matplotlib-25960.call3.json",
+          "sha256": "f9045a55c9be02c2a6a19ada418c161d325dd34835b1baf23b7ff61be3c84867"
+        }
+      }
+    },
+    {
+      "name": "fullreply.matplotlib__matplotlib-20488.call29",
+      "task": "matplotlib__matplotlib-20488",
+      "tokens": 759,
+      "top1_agreement": 0.9552042160737813,
+      "full_minus_served_mean_log_probability": -0.04160890385672957,
+      "source_case_sha256": "e9fb08017dc56414fe1b3d37bcf919ada778e18727ca6669c00c789258f9717d",
+      "evidence": {
+        "served": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.matplotlib__matplotlib-20488.call29.json",
+          "sha256": "52824adb1e436f05925b3c97e371a0eaff9994ca0a709d107ebc2e2a142c9502"
+        },
+        "full": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.matplotlib__matplotlib-20488.call29.json",
+          "sha256": "87a1ae7796468c0b236628809f8ab074c26868fef595004c4a1fff94d3310f12"
+        }
+      }
+    },
+    {
+      "name": "fullreply.pytest-dev__pytest-10356.call45",
+      "task": "pytest-dev__pytest-10356",
+      "tokens": 961,
+      "top1_agreement": 0.9552549427679501,
+      "full_minus_served_mean_log_probability": -0.03140411547736157,
+      "source_case_sha256": "71b4198bd82e5035cd242d09b9fa150160085b9717ac34508ba928bca7a9fd05",
+      "evidence": {
+        "served": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.pytest-dev__pytest-10356.call45.json",
+          "sha256": "f9b8ec21d9df2ea9e79e9fca5b58b060d8072e4d2bcda782adb01f2952338eba"
+        },
+        "full": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.pytest-dev__pytest-10356.call45.json",
+          "sha256": "170796e64a032a8b5d68537fd85863a5d40b067b5d5c349a6a26d769a17803c2"
+        }
+      }
+    },
+    {
+      "name": "fullreply.scikit-learn__scikit-learn-14983.call43",
+      "task": "scikit-learn__scikit-learn-14983",
+      "tokens": 879,
+      "top1_agreement": 0.9579067121729238,
+      "full_minus_served_mean_log_probability": -0.05625323367856887,
+      "source_case_sha256": "13aff76658e545f0534c23c2b39b0f5496106d05ad15878b0080a2d20b0653f5",
+      "evidence": {
+        "served": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.scikit-learn__scikit-learn-14983.call43.json",
+          "sha256": "982248e9895c72a0aa7ccba109d02c32e0e0dd6a100ec6d557e0353b2f477107"
+        },
+        "full": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.scikit-learn__scikit-learn-14983.call43.json",
+          "sha256": "db98c1b67415102578984a11e6e8f167f8fbf92526e34026c665e608d1fe5e58"
+        }
+      }
+    },
+    {
+      "name": "fullreply.django__django-14007.call31",
+      "task": "django__django-14007",
+      "tokens": 272,
+      "top1_agreement": 0.9595588235294118,
+      "full_minus_served_mean_log_probability": -0.04138049783130777,
+      "source_case_sha256": "7b15b6ec309f10c52ed79ec37177ce80a671c9ab2a2ba3554f3a545d744c3ca3",
+      "evidence": {
+        "served": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.django__django-14007.call31.json",
+          "sha256": "0213a2d9367cca760ddd3f46f02e9af2722a9be962752512ea42a7ac138d0a7f"
+        },
+        "full": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.django__django-14007.call31.json",
+          "sha256": "dfe71a01855701b9db5d3857d5b94b3ce91708580a6b3d90d6b58086d03c46aa"
+        }
+      }
+    },
+    {
+      "name": "fullreply.scikit-learn__scikit-learn-10908.call34",
+      "task": "scikit-learn__scikit-learn-10908",
+      "tokens": 224,
+      "top1_agreement": 0.9598214285714286,
+      "full_minus_served_mean_log_probability": -0.038027996094610446,
+      "source_case_sha256": "96f9a6466d9c0306ae8d936faa84abc1c885cc33a6cfb0fb5e96dc8ed693fc43",
+      "evidence": {
+        "served": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.scikit-learn__scikit-learn-10908.call34.json",
+          "sha256": "37bc7329af1477e6b2decf49ec7d2d1cc3653eeb86ef80bceea648d2e2e5fd91"
+        },
+        "full": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.scikit-learn__scikit-learn-10908.call34.json",
+          "sha256": "3b0418d0b3812d4b24f04cfb1f07d964ca7d8e40b7bf68485c030caecca01361"
+        }
+      }
+    },
+    {
+      "name": "fullreply.pylint-dev__pylint-6386.call33",
+      "task": "pylint-dev__pylint-6386",
+      "tokens": 305,
+      "top1_agreement": 0.9606557377049181,
+      "full_minus_served_mean_log_probability": -0.02873205462096979,
+      "source_case_sha256": "a82a21f6a3819b53a5ec63996d9394d929c7b61db604d7e6d766a4e62c71d284",
+      "evidence": {
+        "served": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.pylint-dev__pylint-6386.call33.json",
+          "sha256": "f4ab9d8e17d22fa5b74e35b6dca11ca529acc209973e5bcbf52f69b3934bbc3d"
+        },
+        "full": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.pylint-dev__pylint-6386.call33.json",
+          "sha256": "a2fb38002f566e600f448f1d531f55eeb112575a239afa5138d4179e343ad5e7"
+        }
+      }
+    },
+    {
+      "name": "fullreply.pydata__xarray-3993.call18",
+      "task": "pydata__xarray-3993",
+      "tokens": 623,
+      "top1_agreement": 0.9614767255216693,
+      "full_minus_served_mean_log_probability": -0.023647118482029227,
+      "source_case_sha256": "fc12eef0076484c50c4c00c7659365df34b4e6c91e3a87433750db7b9f57d3cc",
+      "evidence": {
+        "served": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.pydata__xarray-3993.call18.json",
+          "sha256": "f49b4e8e3a29e3fecad459809c1bce6e897651aab77ac7d0d7a5aa0fa2555b7c"
+        },
+        "full": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.pydata__xarray-3993.call18.json",
+          "sha256": "10b8bfec6c0cc8a4553f554826f82507e34dde116180fd511131f2ce4b3ed43e"
+        }
+      }
+    },
+    {
+      "name": "fullreply.sympy__sympy-18763.call20",
+      "task": "sympy__sympy-18763",
+      "tokens": 81,
+      "top1_agreement": 0.9629629629629629,
+      "full_minus_served_mean_log_probability": -0.13135188654929006,
+      "source_case_sha256": "fcbe5be0b9d8a938cc982190b75779802fc09fee9e407e74b1e76431d002b6e1",
+      "evidence": {
+        "served": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.sympy__sympy-18763.call20.json",
+          "sha256": "24ffe4adeae49d49710d677a7c3e6e9e20f264c112f315c2e3a4c8e21c02e663"
+        },
+        "full": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.sympy__sympy-18763.call20.json",
+          "sha256": "8031212e1afeac8690da661be5f3a867e1cbdcbb546c44af05e3c6b4523e5e9c"
+        }
+      }
+    },
+    {
+      "name": "fullreply.matplotlib__matplotlib-26291.call3",
+      "task": "matplotlib__matplotlib-26291",
+      "tokens": 61,
+      "top1_agreement": 0.9672131147540983,
+      "full_minus_served_mean_log_probability": -0.14134425850211912,
+      "source_case_sha256": "373ff202b24c77784009c738e7f3ac41108076c2fdd8e9e54e10dc34334795f2",
+      "evidence": {
+        "served": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.matplotlib__matplotlib-26291.call3.json",
+          "sha256": "6cd42f0969f5241b0da4657cfb66f288e27e0ebd1937e20364a60295efb45394"
+        },
+        "full": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.matplotlib__matplotlib-26291.call3.json",
+          "sha256": "cff0b351f867d392c1919253b7060654e2170d169d8ac5b2a61e4e7f2a6aa475"
+        }
+      }
+    },
+    {
+      "name": "fullreply.pytest-dev__pytest-5840.call16",
+      "task": "pytest-dev__pytest-5840",
+      "tokens": 122,
+      "top1_agreement": 0.9672131147540983,
+      "full_minus_served_mean_log_probability": -0.07223582585418865,
+      "source_case_sha256": "8b3be62cfb797a1d3e7f007b44751ef8cc9114dc7dbc2bbac789af89e811c6e4",
+      "evidence": {
+        "served": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.pytest-dev__pytest-5840.call16.json",
+          "sha256": "f698c25055f5e51a966ae32231cafc0f375be8523f563c63d9ccaf3fcfc87e15"
+        },
+        "full": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.pytest-dev__pytest-5840.call16.json",
+          "sha256": "2f23c241d12ee9fb927bf98fd602dd087c687ad587db62c2c9400126deedc438"
+        }
+      }
+    },
+    {
+      "name": "fullreply.sympy__sympy-13091.call22",
+      "task": "sympy__sympy-13091",
+      "tokens": 524,
+      "top1_agreement": 0.9675572519083969,
+      "full_minus_served_mean_log_probability": -0.05042297951174206,
+      "source_case_sha256": "78ebcc7f7f303d098cfcca5c86ce83a149c9e723a60d2a9e7ac724cd387002f1",
+      "evidence": {
+        "served": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.sympy__sympy-13091.call22.json",
+          "sha256": "c95f49487b192da09762fc8e929ee34219ef052a5d379ea5fbc0b0b67d9c6949"
+        },
+        "full": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.sympy__sympy-13091.call22.json",
+          "sha256": "746b1087922ee82e46466ea4561d12fdafeb9054c4b343368febe047851da084"
+        }
+      }
+    },
+    {
+      "name": "fullreply.django__django-14011.call33",
+      "task": "django__django-14011",
+      "tokens": 436,
+      "top1_agreement": 0.9678899082568807,
+      "full_minus_served_mean_log_probability": -0.04641574092912906,
+      "source_case_sha256": "4c11588c48f52dd6692f7f5c50f55d75145b75796601a8e1b8b93a0b34bad2b4",
+      "evidence": {
+        "served": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.django__django-14011.call33.json",
+          "sha256": "252f1ff3e51be0fa567af281380080202c421cc6dfccdca8bea5322f139b4e87"
+        },
+        "full": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.django__django-14011.call33.json",
+          "sha256": "ac48e7a149fe31cd355a28d76f5e81744b0f383ec9130de5ec422303f169e5b0"
+        }
+      }
+    },
+    {
+      "name": "fullreply.sympy__sympy-12489.call34",
+      "task": "sympy__sympy-12489",
+      "tokens": 204,
+      "top1_agreement": 0.9705882352941176,
+      "full_minus_served_mean_log_probability": -0.025854783736286028,
+      "source_case_sha256": "96d4abbd8bf09a643cd4a11de9041879286bd4d9623f93e8b1d8341b2b80b0bd",
+      "evidence": {
+        "served": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.sympy__sympy-12489.call34.json",
+          "sha256": "8648763b5b7419f2ef6edfbcd2e624cdf83b7c08bd6c5b54927a3f48c1997fe6"
+        },
+        "full": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.sympy__sympy-12489.call34.json",
+          "sha256": "51ccae114b6215eea1279c0849ea658ca5bd97e160411376da88016cc11ba7b1"
+        }
+      }
+    },
+    {
+      "name": "fullreply.sphinx-doc__sphinx-8638.call3",
+      "task": "sphinx-doc__sphinx-8638",
+      "tokens": 36,
+      "top1_agreement": 0.9722222222222222,
+      "full_minus_served_mean_log_probability": -0.05335361409171884,
+      "source_case_sha256": "7967f6a303b542d9ba19d628c7e2ccb69c6135ad70beb7009eeee917836c01e2",
+      "evidence": {
+        "served": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.sphinx-doc__sphinx-8638.call3.json",
+          "sha256": "a18508210f8c3e29ba54ec9186e70ff145affb5ff553c8b2198f63bc8fd08376"
+        },
+        "full": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.sphinx-doc__sphinx-8638.call3.json",
+          "sha256": "62cdee40b0612340399fa5d3ca1cec24fcaed74440d27028f582a8ec6c6c0590"
+        }
+      }
+    },
+    {
+      "name": "fullreply.pydata__xarray-7233.call1",
+      "task": "pydata__xarray-7233",
+      "tokens": 366,
+      "top1_agreement": 0.9726775956284153,
+      "full_minus_served_mean_log_probability": -0.01267261173078658,
+      "source_case_sha256": "334eb1af41ea36bb7cab64436f3daea5d053c5a5a694be99c0952b6582bd197d",
+      "evidence": {
+        "served": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.pydata__xarray-7233.call1.json",
+          "sha256": "955010246eacd02c7546932c25ba8806e2cf9c6079270cc2ff20266c7b6afcff"
+        },
+        "full": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.pydata__xarray-7233.call1.json",
+          "sha256": "7f2985033876583b539f85d88dd231e2e05e83fd2ede11ffa060a4e106920edc"
+        }
+      }
+    },
+    {
+      "name": "fullreply.sympy__sympy-14248.call50",
+      "task": "sympy__sympy-14248",
+      "tokens": 245,
+      "top1_agreement": 0.9755102040816327,
+      "full_minus_served_mean_log_probability": -0.019628572910978612,
+      "source_case_sha256": "5ee988805e15ef3052cd9a59c8fb2f73e65de112a15ef00b649fbb02a4fb1708",
+      "evidence": {
+        "served": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.sympy__sympy-14248.call50.json",
+          "sha256": "33850ba6090ee4975d8809ff150023ae06f648a7f272e41388da0a44030b0393"
+        },
+        "full": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.sympy__sympy-14248.call50.json",
+          "sha256": "9e09c10bbfd17206655814c8b7733192015d3c00225161afe32a08fff2a078a2"
+        }
+      }
+    },
+    {
+      "name": "fullreply.matplotlib__matplotlib-20488.call88",
+      "task": "matplotlib__matplotlib-20488",
+      "tokens": 794,
+      "top1_agreement": 0.9760705289672544,
+      "full_minus_served_mean_log_probability": -0.03522257237313501,
+      "source_case_sha256": "d47a568ee9098cfac1284de4d061a77ff02e614de8b17b464bf63483d80d3fc6",
+      "evidence": {
+        "served": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.matplotlib__matplotlib-20488.call88.json",
+          "sha256": "6d20a4cd7bb64a912d9f56a9250858d0004c7d9da47e99378e74e23349295c1f"
+        },
+        "full": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.matplotlib__matplotlib-20488.call88.json",
+          "sha256": "5a302729d395ee77c10051e2dc4e4b0c7c5e1448e6d0228d4c42f32959df1e05"
+        }
+      }
+    },
+    {
+      "name": "fullreply.matplotlib__matplotlib-26208.call3",
+      "task": "matplotlib__matplotlib-26208",
+      "tokens": 45,
+      "top1_agreement": 0.9777777777777777,
+      "full_minus_served_mean_log_probability": -0.05031168394808468,
+      "source_case_sha256": "f74486505b083dc4de7c84357b427651a2cd08f601bbb50e01d2abe1867a9014",
+      "evidence": {
+        "served": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.matplotlib__matplotlib-26208.call3.json",
+          "sha256": "7d53b123bead5a0a5d498c9546f6a6f110a82bc28ddab13a1280665ccaeba44b"
+        },
+        "full": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.matplotlib__matplotlib-26208.call3.json",
+          "sha256": "cf108f34961f5bdb4e13556673ba27ee23ccab77ae837b77c1112817d9e16543"
+        }
+      }
+    },
+    {
+      "name": "fullreply.scikit-learn__scikit-learn-25747.call3",
+      "task": "scikit-learn__scikit-learn-25747",
+      "tokens": 46,
+      "top1_agreement": 0.9782608695652174,
+      "full_minus_served_mean_log_probability": 0.051399048931747286,
+      "source_case_sha256": "cfb6af0cbea4d97c2729db1265e3c2b5c1500081a3a18f67b0f1750bb72fa121",
+      "evidence": {
+        "served": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.scikit-learn__scikit-learn-25747.call3.json",
+          "sha256": "e1820dbf86d7cf88b2ae0bc51952543498ec54560914939fbe6c018995cb203a"
+        },
+        "full": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.scikit-learn__scikit-learn-25747.call3.json",
+          "sha256": "d23dcd96d799d3345a5d5b76e115b697838134d3bfe1058378565daa408fe5f9"
+        }
+      }
+    },
+    {
+      "name": "fullreply.astropy__astropy-13579.call3",
+      "task": "astropy__astropy-13579",
+      "tokens": 49,
+      "top1_agreement": 0.9795918367346939,
+      "full_minus_served_mean_log_probability": -0.006920679472667864,
+      "source_case_sha256": "15deadcd6d9c2ef3dcab9898083e5bb4540646924f5a7d5047de3bfc93882c54",
+      "evidence": {
+        "served": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.astropy__astropy-13579.call3.json",
+          "sha256": "62cb268b7af3bf15d8ace7c9f3a766fe60cbc549f9bdb8f5edc653f65dcf7b8a"
+        },
+        "full": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.astropy__astropy-13579.call3.json",
+          "sha256": "5dac0c6f8b40903d37a59528039bf104a40700d4221e010b4d4bcc5a71bb05fc"
+        }
+      }
+    },
+    {
+      "name": "fullreply.pylint-dev__pylint-8898.call44",
+      "task": "pylint-dev__pylint-8898",
+      "tokens": 591,
+      "top1_agreement": 0.9796954314720813,
+      "full_minus_served_mean_log_probability": -0.06795926007179645,
+      "source_case_sha256": "dab875c767a6a05d28c64800b6aeabef6f960f28aa1b2c7eed95813c218ab1a5",
+      "evidence": {
+        "served": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.pylint-dev__pylint-8898.call44.json",
+          "sha256": "3d657b8804a923c05d616182114dc7d20d93a254abe0b0aa316fb904e15ba797"
+        },
+        "full": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.pylint-dev__pylint-8898.call44.json",
+          "sha256": "9632ae7d496bb448c4c4bccfe0b357330c88ebed3ba6b9534ba488bb8c035d4b"
+        }
+      }
+    },
+    {
+      "name": "fullreply.psf__requests-2931.call29",
+      "task": "psf__requests-2931",
+      "tokens": 159,
+      "top1_agreement": 0.9811320754716981,
+      "full_minus_served_mean_log_probability": -0.06598620240206352,
+      "source_case_sha256": "dd1ea48276e896332173d8548986db103cbbf54316f2b500b8e6375ac3494fde",
+      "evidence": {
+        "served": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.psf__requests-2931.call29.json",
+          "sha256": "a35822d4bb6942f229330d898677be6e8a4f3b93bf715e8e07a0dbbab4ef1562"
+        },
+        "full": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.psf__requests-2931.call29.json",
+          "sha256": "bcb3cbbbda02d26f9f9f7b327d62b678f1f6d32cf93f3ba089906ea13ede42a8"
+        }
+      }
+    },
+    {
+      "name": "fullreply.pytest-dev__pytest-5840.call15",
+      "task": "pytest-dev__pytest-5840",
+      "tokens": 2247,
+      "top1_agreement": 0.9813084112149533,
+      "full_minus_served_mean_log_probability": -0.029084419302424436,
+      "source_case_sha256": "b02374d8dff1ae43754183de37661c20bcaef735f86e33e18f93d00ddf68c3ed",
+      "evidence": {
+        "served": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.pytest-dev__pytest-5840.call15.json",
+          "sha256": "ae85a91f373e70b57bdb25cf188b02386ed295db8d5d94c603793aca7e4e5af9"
+        },
+        "full": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.pytest-dev__pytest-5840.call15.json",
+          "sha256": "e4308b0da129d937220016749aaf679b7a4f0c85f9ef4d7016a067bdaf42ba5e"
+        }
+      }
+    },
+    {
+      "name": "fullreply.pylint-dev__pylint-4551.call35",
+      "task": "pylint-dev__pylint-4551",
+      "tokens": 1201,
+      "top1_agreement": 0.9833472106577852,
+      "full_minus_served_mean_log_probability": -0.035250458699944816,
+      "source_case_sha256": "2ac9e9aa4e07b399a38a79dc7424ced5a2926fd2e3bde5beaa129813b6ea7918",
+      "evidence": {
+        "served": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.pylint-dev__pylint-4551.call35.json",
+          "sha256": "b220dee14fb153e38ccd8f6022980bc48cc6d1c17ab0671bdfcc2439aba0fc6f"
+        },
+        "full": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.pylint-dev__pylint-4551.call35.json",
+          "sha256": "7569d44a3addde06e7ecdc50a6ca6f40fbe6af29003b93e50dc9c8088c38d124"
+        }
+      }
+    },
+    {
+      "name": "fullreply.psf__requests-5414.call30",
+      "task": "psf__requests-5414",
+      "tokens": 441,
+      "top1_agreement": 0.9841269841269841,
+      "full_minus_served_mean_log_probability": -0.02566148296815335,
+      "source_case_sha256": "c9999c0492ae85110732fcec749f322bbbaa0812c447931ff8ff98a41b13a45f",
+      "evidence": {
+        "served": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.psf__requests-5414.call30.json",
+          "sha256": "bf2ad600b4b490c526dcbdd694f3a4e61c451ac0e3c194d2dfef9986f5becea4"
+        },
+        "full": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.psf__requests-5414.call30.json",
+          "sha256": "5c3caf0f4c9fb3fb0cd780855d258f47b695fa9a8ce53fbf580a21fce162ed48"
+        }
+      }
+    },
+    {
+      "name": "fullreply.sphinx-doc__sphinx-7590.call44",
+      "task": "sphinx-doc__sphinx-7590",
+      "tokens": 252,
+      "top1_agreement": 0.9841269841269841,
+      "full_minus_served_mean_log_probability": -0.009860610100826929,
+      "source_case_sha256": "b6e860df4802afee4a152a0d2eae7dc36c033042a455b83d896813eb77b1f552",
+      "evidence": {
+        "served": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.sphinx-doc__sphinx-7590.call44.json",
+          "sha256": "fff247434e4f4c3586bdfebc9a6b52db2225935c53df2bad4a060cc855874295"
+        },
+        "full": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.sphinx-doc__sphinx-7590.call44.json",
+          "sha256": "edd4666fe75ac65417ec1bc0243160906aa468a0a6f1e370371c16d56826f272"
+        }
+      }
+    },
+    {
+      "name": "fullreply.psf__requests-1921.call34",
+      "task": "psf__requests-1921",
+      "tokens": 140,
+      "top1_agreement": 0.9857142857142858,
+      "full_minus_served_mean_log_probability": -0.010412822081017431,
+      "source_case_sha256": "a3e836f06719d78ff9365231e40c9ca06cf571a9f4658805a96e20685add9c17",
+      "evidence": {
+        "served": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.psf__requests-1921.call34.json",
+          "sha256": "2027caffd9afe7d2b73ea1aebc48a05566fd8d3e3391184f2355c1bf46742daf"
+        },
+        "full": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.psf__requests-1921.call34.json",
+          "sha256": "a3be58acf2eabb4286921b2660cdd39969d03a54f36b609d1279f4bd77e625c4"
+        }
+      }
+    },
+    {
+      "name": "fullreply.astropy__astropy-13398.call17",
+      "task": "astropy__astropy-13398",
+      "tokens": 928,
+      "top1_agreement": 0.9870689655172413,
+      "full_minus_served_mean_log_probability": -0.014591294140128896,
+      "source_case_sha256": "86349f14e7463b534dc8892a717c22842cf57d041935375cdb23b765d0b911a4",
+      "evidence": {
+        "served": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.astropy__astropy-13398.call17.json",
+          "sha256": "c6ad4967068ca6e126896799cd1ebfea8782ef36dd3edbad80786e15ac95bfd2"
+        },
+        "full": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.astropy__astropy-13398.call17.json",
+          "sha256": "2b7773f12e8e339b1b7d560807ea8ad38b39d1fea70bc8ec31c2a7604266b33d"
+        }
+      }
+    },
+    {
+      "name": "fullreply.psf__requests-1142.call31",
+      "task": "psf__requests-1142",
+      "tokens": 353,
+      "top1_agreement": 0.9886685552407932,
+      "full_minus_served_mean_log_probability": -0.010026859887965166,
+      "source_case_sha256": "69fa9eb2bb5d09ce7c1c4854d00750f202213499c7ffb63244eedfbc0c46e3dd",
+      "evidence": {
+        "served": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.psf__requests-1142.call31.json",
+          "sha256": "dee78475a9ed65180c1ba9a335e4e8b94fd56fedb87074b691461c938d91cd5e"
+        },
+        "full": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.psf__requests-1142.call31.json",
+          "sha256": "a4fd669585f483ce7ac8d09176ec40947540a921f3f4bd4fcefd3dfdd47137d7"
+        }
+      }
+    },
+    {
+      "name": "fullreply.pydata__xarray-3095.call48",
+      "task": "pydata__xarray-3095",
+      "tokens": 124,
+      "top1_agreement": 0.9919354838709677,
+      "full_minus_served_mean_log_probability": -0.036988134866309655,
+      "source_case_sha256": "fea345f794179eedf32c86cbd577c78c9cd05a94118cfbe898edb1af586b91f8",
+      "evidence": {
+        "served": {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-semantic-supplement/runs/served/fullreply.pydata__xarray-3095.call48.json",
+          "sha256": "ded48a981da5b59bda7a35eb0f1d18d8e8fa7c7b79224d95b9b01494660e8a5c"
+        },
+        "full": {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-semantic-supplement/runs/full/fullreply.pydata__xarray-3095.call48.json",
+          "sha256": "be277734e9e587dc6061dd5c828a47be16769926de6afd9e24a3fb1a5695d38d"
+        }
+      }
+    },
+    {
+      "name": "fullreply.pylint-dev__pylint-4661.call19",
+      "task": "pylint-dev__pylint-4661",
+      "tokens": 1961,
+      "top1_agreement": 0.9938806731259562,
+      "full_minus_served_mean_log_probability": -0.015151594585973352,
+      "source_case_sha256": "41a4eddee9319c32d181e058305504f13ff65a801b6f4c5147fb8b9f0b881dac",
+      "evidence": {
+        "served": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.pylint-dev__pylint-4661.call19.json",
+          "sha256": "1f027c8884150f98e43abe0e2b95d64fafb67d219b595a3df348dcb85637b22f"
+        },
+        "full": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.pylint-dev__pylint-4661.call19.json",
+          "sha256": "ddf282b052b255c7d6b2f4b591c570129db95ea4c4ee10c4eec8a238477bc61a"
+        }
+      }
+    },
+    {
+      "name": "fullreply.scikit-learn__scikit-learn-13328.call3",
+      "task": "scikit-learn__scikit-learn-13328",
+      "tokens": 50,
+      "top1_agreement": 1.0,
+      "full_minus_served_mean_log_probability": -0.04600831580277827,
+      "source_case_sha256": "8a5b9cef528aa9b00753f8234fd9d6b05015013d341955c93a984661734447e8",
+      "evidence": {
+        "served": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.scikit-learn__scikit-learn-13328.call3.json",
+          "sha256": "ccc7eefe82381d3ac9e30c4bf2206f5643a30741693c4797b28e69bfcd2e35ad"
+        },
+        "full": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.scikit-learn__scikit-learn-13328.call3.json",
+          "sha256": "61af01ab136f5265a5bc3cbbbbd67af832ab0b773a4c43b044c2170ec557b70c"
+        }
+      }
+    },
+    {
+      "name": "fullreply.sphinx-doc__sphinx-10614.call12",
+      "task": "sphinx-doc__sphinx-10614",
+      "tokens": 25,
+      "top1_agreement": 1.0,
+      "full_minus_served_mean_log_probability": -0.05088848758982664,
+      "source_case_sha256": "5d8bf88e5368b8aba3e47d2b43ac32b0b39623c77978eb1145fc84fbc45d7846",
+      "evidence": {
+        "served": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.sphinx-doc__sphinx-10614.call12.json",
+          "sha256": "29dcf399c8b2ecd77573ef558ec75e16a152ec643907dc303fb6472a70945bd7"
+        },
+        "full": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.sphinx-doc__sphinx-10614.call12.json",
+          "sha256": "f42608907a671db9b4ed14606f178c5efcc351357b6127ff628765eccb736f52"
+        }
+      }
+    },
+    {
+      "name": "fullreply.mwaskom__seaborn-3187.call64",
+      "task": "mwaskom__seaborn-3187",
+      "tokens": 27,
+      "top1_agreement": 1.0,
+      "full_minus_served_mean_log_probability": 0.06105685952242552,
+      "source_case_sha256": "194876dcf2e5141e51023d4901cb8063ce9db22aafed60849c836fe09d2e5d42",
+      "evidence": {
+        "served": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/fullreply.mwaskom__seaborn-3187.call64.json",
+          "sha256": "5afe184095c7c99798ea3b3c8551e1c7698e793c79cb4ef03383476b7b952846"
+        },
+        "full": {
+          "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/fullreply.mwaskom__seaborn-3187.call64.json",
+          "sha256": "6ad485ee27e5b30cbf6f2046c106c578a9d76b24c470782e10c4bf5056f512a3"
+        }
+      }
+    }
+  ]
+}

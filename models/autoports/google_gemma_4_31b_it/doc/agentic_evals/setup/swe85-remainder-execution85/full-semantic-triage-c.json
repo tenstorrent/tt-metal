@@ -1,0 +1,110 @@
+[
+  {
+    "job": "anomaly.pytest-dev__pytest-7432.call19.onset",
+    "mode": "full",
+    "seed": 42,
+    "verdict": "reproduced_native_motif",
+    "evidence": "$.free_running[0].text begins with 25 carets, then a coherent traceback frame for _pytest/assertion/rewrite.py line 360 and compile(); it continues into a long caret run (final 180+ chars are carets), matching the native simulated-traceback caret-run anomaly. Fixture prompt ends with the rewrite traceback line, establishing this as generated continuation.",
+    "confidence": "high",
+    "cap_notes": "Generated text reached the 256-token requested cap; repeated carets establish the anomaly, while the cap truncates its extent."
+  },
+  {
+    "job": "anomaly.pytest-dev__pytest-7432.call19.onset",
+    "mode": "full",
+    "seed": 43,
+    "verdict": "reproduced_native_motif",
+    "evidence": "$.free_running[1].text begins with 25 carets, then a coherent traceback frame for _pytest/assertion/rewrite.py line 360 and compile(); it continues into a long caret run (final 180+ chars are carets), matching the native simulated-traceback caret-run anomaly. Fixture prompt ends with the rewrite traceback line, establishing this as generated continuation.",
+    "confidence": "high",
+    "cap_notes": "Generated text reached the 256-token requested cap; repeated carets establish the anomaly, while the cap truncates its extent."
+  },
+  {
+    "job": "anomaly.pytest-dev__pytest-7432.call19.onset",
+    "mode": "full",
+    "seed": 44,
+    "verdict": "reproduced_native_motif",
+    "evidence": "$.free_running[2].text begins with 25 carets, then a coherent traceback frame for _pytest/assertion/rewrite.py line 360 and compile(); it continues into a long caret run (final 180+ chars are carets), matching the native simulated-traceback caret-run anomaly. Fixture prompt ends with the rewrite traceback line, establishing this as generated continuation.",
+    "confidence": "high",
+    "cap_notes": "Generated text reached the 256-token requested cap; repeated carets establish the anomaly, while the cap truncates its extent."
+  },
+  {
+    "job": "anomaly.pytest10356-call14.canonicalprefix",
+    "mode": "full",
+    "seed": 42,
+    "verdict": "normal",
+    "evidence": "Fixture prompt decodes to a context ending in `call:` (open tool-call prefix). $.free_running[0].text supplies `bash{command:...}` and a grep command followed by argument/tool boundaries; this is a valid bash call completion, not the malformed function-name motif.",
+    "confidence": "high",
+    "cap_notes": "Generated text ended at 35 tokens, below the 256-token cap."
+  },
+  {
+    "job": "anomaly.pytest10356-call14.canonicalprefix",
+    "mode": "full",
+    "seed": 43,
+    "verdict": "normal",
+    "evidence": "Fixture prompt decodes to a context ending in `call:` (open tool-call prefix). $.free_running[1].text supplies `bash{command:...}` and a grep command followed by argument/tool boundaries; this is a valid bash call completion, not the malformed function-name motif.",
+    "confidence": "high",
+    "cap_notes": "Generated text ended at 35 tokens, below the 256-token cap."
+  },
+  {
+    "job": "anomaly.pytest10356-call14.canonicalprefix",
+    "mode": "full",
+    "seed": 44,
+    "verdict": "normal",
+    "evidence": "Fixture prompt decodes to a context ending in `call:` (open tool-call prefix). $.free_running[2].text supplies `bash{command:...}` and a grep command followed by argument/tool boundaries; this is a valid bash call completion, not the malformed function-name motif.",
+    "confidence": "high",
+    "cap_notes": "Generated text ended at 35 tokens, below the 256-token cap."
+  },
+  {
+    "job": "anomaly.scikit-learn__scikit-learn-13135.call29.onset",
+    "mode": "full",
+    "seed": 42,
+    "verdict": "inconclusive",
+    "evidence": "Fixture prompt ends with normal `Since I've`; $.free_running[0].text continues coherently (` already reproduced...`) and contains no duplicated-apostrophe contraction. The visible generated portion does not reproduce native `I've’ve`.",
+    "confidence": "medium",
+    "cap_notes": "Generated text reached the 256-token cap; unseen continuation could still contain the localized motif."
+  },
+  {
+    "job": "anomaly.scikit-learn__scikit-learn-13135.call29.onset",
+    "mode": "full",
+    "seed": 43,
+    "verdict": "inconclusive",
+    "evidence": "Fixture prompt ends with normal `Since I've`; $.free_running[1].text continues coherently (` already reproduced...`) and contains no duplicated-apostrophe contraction. The visible generated portion does not reproduce native `I've’ve`.",
+    "confidence": "medium",
+    "cap_notes": "Generated text reached the 256-token cap; unseen continuation could still contain the localized motif."
+  },
+  {
+    "job": "anomaly.scikit-learn__scikit-learn-13135.call29.onset",
+    "mode": "full",
+    "seed": 44,
+    "verdict": "normal",
+    "evidence": "Fixture prompt ends with normal `Since I've`; $.free_running[2].text continues coherently, ends in a structured bash call, and contains no duplicated-apostrophe contraction (`I've’ve`).",
+    "confidence": "high",
+    "cap_notes": "Generated text ended at 88 tokens, below the 256-token cap."
+  },
+  {
+    "job": "anomaly.sphinx-doc__sphinx-11510.call28.onset",
+    "mode": "full",
+    "seed": 42,
+    "verdict": "inconclusive",
+    "evidence": "$.free_running[0].text continues the expected heredoc code for the include workaround; no `sC-` stray token appears in the visible generated portion. No reproduction is observed so far.",
+    "confidence": "medium",
+    "cap_notes": "Generated text reached the 256-token cap while the heredoc continues; classify inconclusive because the sampled reply is truncated."
+  },
+  {
+    "job": "anomaly.sphinx-doc__sphinx-11510.call28.onset",
+    "mode": "full",
+    "seed": 43,
+    "verdict": "inconclusive",
+    "evidence": "$.free_running[1].text continues the expected heredoc code for the include workaround; no `sC-` stray token appears in the visible generated portion. No reproduction is observed so far.",
+    "confidence": "medium",
+    "cap_notes": "Generated text reached the 256-token cap while the heredoc continues; classify inconclusive because the sampled reply is truncated."
+  },
+  {
+    "job": "anomaly.sphinx-doc__sphinx-11510.call28.onset",
+    "mode": "full",
+    "seed": 44,
+    "verdict": "inconclusive",
+    "evidence": "$.free_running[2].text continues the expected heredoc code for the include workaround; no `sC-` stray token appears in the visible generated portion. No reproduction is observed so far.",
+    "confidence": "medium",
+    "cap_notes": "Generated text reached the 256-token cap while the heredoc continues; classify inconclusive because the sampled reply is truncated."
+  }
+]

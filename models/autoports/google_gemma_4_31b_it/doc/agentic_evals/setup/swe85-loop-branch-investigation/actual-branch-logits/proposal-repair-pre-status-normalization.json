@@ -1,0 +1,77 @@
+{
+  "branch_provenance": {
+    "path": "branch-provenance.json",
+    "sha256": "fcd8f39e4e607655d404eb820800cfd4f83cb8f1c5be2e5f52cb6211e9703691",
+    "statement": "The TT branch is the exact first six generated IDs from full-TT seed 44; the HF branch is the exact first six generated IDs from pinned HF seed 44."
+  },
+  "branches": {
+    "earliest_divergence_index": 2,
+    "hf_seed44_ellipsis_history": [
+      1390,
+      107,
+      138,
+      556,
+      58982,
+      236800
+    ],
+    "path": "branches.json",
+    "sha256": "532e3f0ff8deec26cc89feb967d68fa18b6ec0221a2521de02c7dcc71c209ebc",
+    "tt_seed44_loop_history": [
+      1390,
+      107,
+      147,
+      1390,
+      107,
+      147
+    ]
+  },
+  "capture": {
+    "logit_files": "Private local .pt under outputs/; never sent to telemetry",
+    "row0_input": "P[-1]",
+    "row1_input": 1390,
+    "row2_input": 107,
+    "rows_per_branch": 7,
+    "summaries": "Top32/ranks/raw full-vocabulary softmax, top-k20-only distribution, and separate host-proxy nominal HF top_p=0.95 and BF16-rounded top_p=0.94921875 nucleus distributions; selected target IDs [138,147,1390,107,556,172109]."
+  },
+  "command_sha256": "eaed7f8b7d20c6ea3720afac9dc8f14d6b0d4b9e5bf5461fae3bc49efec2693c",
+  "comparison": "Saved-logit comparison reports PCC/error, raw-softmax TV, top-20 support overlap, and distinct strict-top-k20 and nucleus TVs at nominal p=0.95 and BF16-scalar p=0.94921875. These support/probability metrics are host proxies, not exact HF or device support.",
+  "fixture": {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-loop-branch-investigation/actual-branch-logits/fixture/anomaly.psf__requests-5414.call11.onset.suffix2048.private.json",
+    "prompt_tokens": 2048,
+    "sha256": "fbe984e026dbe8ef2b9d8a4288056617cbfde5235d1efd4a3bd14038a2db5ad7",
+    "source_exact_byte_copy": true
+  },
+  "forecast_sha256": "584fd8a1c90e71cd30a858e07b1c3e9f106860c686ae7c8128591ebcd87b0ccf",
+  "interpretation_limits": [
+    "Forced-history logits do not establish native branch incidence or equal random streams.",
+    "TT capture uses host_sampling compatibility mode with temperature=0 and top_k=1 because generator.generate rejects stochastic host sampling. The callback forces each recorded continuation token; the greedy result is not used to select the branch history.",
+    "Raw logits are the captured evidence. T=1, top_k=20, top_p=0.95 distributions are reconstructed host proxies from those logits, not the sampling settings used during capture and not exact HF/device sampler supports.",
+    "The diagnostic does not reveal the device sampler candidate mapping, probability quantization, PRNG state, or stochastic draw.",
+    "No implementation defect, causal bug, answer quality, or performance conclusion is claimed."
+  ],
+  "modes": {
+    "hf": {
+      "device": "CPU",
+      "prefill": "Same as precision_repro_hf.py: chunk P[:-1] at512, then single-token calls P[-1] and forced branch tokens",
+      "reference": "pinned HF revision 842da3794eaa0b77d5f08bae87a17459d91ff475",
+      "weights_dtype": "bfloat16"
+    },
+    "tt-full": {
+      "build_kwargs": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_build_kwargs.json",
+      "config_id": "stage12_bf16_hifi4_diagnostic"
+    },
+    "tt-selected": {
+      "build_kwargs": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/head_bfp8_build_kwargs.json",
+      "config_id": "stage12_head_bfp8_lofi"
+    }
+  },
+  "question": "On the exact shared 2048-token suffix, how do pinned HF CPU BF16, existing selected TT, and full BF16/HiFi4 TT logits compare on the actual [1390,107] shared history and its two seed-44 observed continuations?",
+  "requirements_before_any_execution": [
+    "Root review of the standalone tool, fixture, exact command and forecast.",
+    "Keep the three model runs serial; never overlap HF with TT and serialize TT device ownership under the root device operator.",
+    "Keep all .pt and report outputs local under this investigation outputs directory."
+  ],
+  "source_pins_sha256": "c064842ef0fb247609005ba4f0ba58b71b5b21ce9a66ef5334d7d9fd9ef388d3",
+  "status": "candidate_tool_revision_pending_root_rereview_after_attempt1_guard_failure",
+  "tool_sha256": "fa2eaf9f66a6a36c57385351a0b3e838edeabac4644c77c98aa81a817e3e3d5e"
+}

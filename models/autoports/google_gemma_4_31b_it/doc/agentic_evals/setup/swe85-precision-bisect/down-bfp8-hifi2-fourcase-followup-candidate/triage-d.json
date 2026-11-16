@@ -1,0 +1,1362 @@
+{
+  "status": "independent_host_only_semantic_triage_complete",
+  "scope": "Seven full-mode down_bfp8_hifi2 cases; read-only result review. Semantic diagnostic only, not precision selection, score evidence, patch correctness, or stage signoff.",
+  "created_utc": "2026-11-15",
+  "learned_sha256": "12dd7549c0818a7d5753221a4ba0856f38c7aec2dfc7e371e557bdac4193a17e",
+  "candidate_cases_sha256": "a87d67811b8027f38b33f217193f1a670f035c27fd0315b5cf4b955f2ec015bc",
+  "provenance_sha256": "912844d6fdebebd50c6ea63e19726dfa9899c470c67e4c96f4acd8795932c620",
+  "precision_config_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-hifi2-fourcase-followup-candidate/down_bfp8_hifi2_precision.json",
+  "precision_config_sha256": "118dceaf55f938ac3521684d77953390e1ee5ba0c4cf893c3195b403910b93b8",
+  "pinned_tokenizer_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+  "tokenizer_json_sha256": "cc8d3a0ce36466ccc1278bf987df5f71db1719b9ca6b4118264f45cb627bfe0f",
+  "parser_note": "Used pinned vLLM Gemma4Parser with exact fixture request packet and assistant conditioning prefix reconstructed as fixture prompt IDs after source_full_reply_case prompt count. Alternate JSON tool serialization is accepted only when parser returns a bash call with a string command field. Parser results are protocol evidence, not proof a command succeeds.",
+  "summary": {
+    "rows": 7,
+    "verdict_counts": {
+      "normal": 4,
+      "reproduced_native_motif": 1,
+      "other_anomaly": 2,
+      "inconclusive": 0
+    },
+    "cap_hit_rows": [
+      74,
+      93
+    ],
+    "natural_stop_rows": [
+      33,
+      58,
+      66,
+      67,
+      68
+    ]
+  },
+  "pending": [],
+  "rows": [
+    {
+      "candidate_name": "anomaly.pytest-dev__pytest-5787.call65.onset.seed42.p4_hifi2.cap2048",
+      "source_P3_manifest_index": 33,
+      "job": "anomaly.pytest-dev__pytest-5787.call65.onset",
+      "mode": "full",
+      "seed": 42,
+      "requested_cap": 2048,
+      "free_run_tokens": 129,
+      "stopped_at_cap": false,
+      "diagnostic_total_wall_s": 31.20280715310946,
+      "fixture_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/fixtures/full/anomaly.pytest-dev__pytest-5787.call65.onset.cap2048.seed42.private.json",
+      "fixture_sha256": "346ea388c2e71b88d415e67331f6f1c5de4ee428e641e5159adccef0af382331",
+      "prompt_token_count": 53684,
+      "prompt_ids_sha256_canonical_json": "12d162f275d91cf035d93b6d9f598c1e91195266be1975c75fe93e99b3000938",
+      "assistant_conditioning_prefix_token_count": 182,
+      "assistant_conditioning_prefix_ids_sha256_canonical_json": "2462fe11ae981416cffe362b0c1386a60c24c8b420af133cd3b162e91288839c",
+      "assistant_conditioning_prefix_tail": "s a simplified version of the fix\n# In _to_json, we add the chain serialization\n# In _from_json, we add the chain deserialization\n\n# Let's just use a more robust way to replace the methods.\n# I'll use a simple replacement for now.\n\n# I will",
+      "assistant_conditioning_prefix_tail_ids": [
+        3723,
+        236764,
+        692,
+        1138,
+        506,
+        7797,
+        131743,
+        1854,
+        108,
+        236865,
+        3792,
+        236789,
+        236751,
+        1164,
+        1161,
+        496,
+        919,
+        16317,
+        1595,
+        531,
+        9883,
+        506,
+        4615,
+        236761,
+        107,
+        236865,
+        564,
+        236789,
+        859,
+        1161,
+        496,
+        3606,
+        14268,
+        573,
+        1492,
+        236761,
+        108,
+        236865,
+        564,
+        795
+      ],
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 42
+      },
+      "runtime_precision": {
+        "config_id": "stage12_swe85_down_bfp8_hifi2_fourcase_followup",
+        "weight_groups": {
+          "attention": "bfp4",
+          "mlp": "bfp4",
+          "down": "bfp8",
+          "lm_head": "bfp8_lofi"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "LoFi",
+          "mlp": "LoFi",
+          "down": "HiFi2",
+          "lm_head": "LoFi"
+        },
+        "activation_dtype": "bfloat8_b",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat8_b",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat8_b",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144
+      },
+      "runtime_precision_matches_candidate_config": true,
+      "runtime_precision_sha256_canonical_json": "c42c4a70e167d97e139e167d18b53e8b00a959efc7946a746f244e03522bffa3",
+      "result_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-hifi2-fourcase-followup-candidate/runs/down_bfp8_hifi2/anomaly.pytest-dev__pytest-5787.call65.onset.seed42.p4_hifi2.cap2048.json",
+      "result_sha256": "162449658fe54c669afb25cca9334b1a981e626eeab21c54c59556b7d10af085",
+      "generated_token_ids_sha256_canonical_json": "43736e830bc4b6e0da28fd1e8cc472f8e0ad27519d78487f49089a981c5e8915",
+      "generated_text_sha256_utf8": "67c6fc0676faf16e56b5ae52158db5b869b443b75c19dc35a104bb1465581162",
+      "generated_text_head": " find the start and end of _to_json and _from_json.\n# Then I will replace them with the updated versions.\n\n# However, since I don't have a perfect way to do this with a script,\n# I will use sed to add the chain serializa",
+      "generated_text_tail": " add the 'chain' to the returned dict in disassembled_report.\n# and also handle the chain in _to_json.\n\n# Actually, I'll just use sed to replace the lines.\nEOF\npython3 modify_reports.py\n<|\"|>}<tool_call|><|tool_response>",
+      "decode_timing": {
+        "decode_tokens": 128,
+        "decode_wall_s": 4.655783806927502,
+        "decode_tok_s_user": 27.492685508623566,
+        "trace_counters_before_decode": {
+          "model_replays": 0,
+          "sample_replays": 1,
+          "token_refreshes": 0,
+          "position_refreshes": 1,
+          "page_refreshes": 60,
+          "readbacks": 1,
+          "captures": 3
+        },
+        "trace_counters_after_decode": {
+          "model_replays": 128,
+          "sample_replays": 129,
+          "token_refreshes": 0,
+          "position_refreshes": 1,
+          "page_refreshes": 60,
+          "readbacks": 129,
+          "captures": 3
+        },
+        "trace_counters_delta": {
+          "model_replays": 128,
+          "sample_replays": 128,
+          "token_refreshes": 0,
+          "position_refreshes": 0,
+          "page_refreshes": 0,
+          "readbacks": 128,
+          "captures": 0
+        },
+        "basis": "Batch1 wall from immediately before first _replay to return after last existing synchronous token-out readback; counts completed replay calls, includes host loop gaps, excludes prefill/first token and text decoding. No added device sync or profiler. Traced diagnostic rate, not serving benchmark."
+      },
+      "p3_comparison": {
+        "result_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.pytest-dev__pytest-5787.call65.onset.seed42.cap2048.json",
+        "result_sha256": "00ad34d68ea214cd51c8a3d3872b0cb02357ca40afd733296c384553b5a6df0a",
+        "fixture_sha256": "346ea388c2e71b88d415e67331f6f1c5de4ee428e641e5159adccef0af382331",
+        "verdict": "other_anomaly",
+        "generated_tokens": 160,
+        "generated_text_sha256_utf8": "2a0cde408b4d14971a6557f0d06ed476f3ce984b576036351a7b9a864ac54245",
+        "text_head": " use a simpler approach: I'll just replace the methods with a a more complete version.\n# But since I don't want to break anything, I'll be careful.\n\n# Actually, I'll just use the o",
+        "text_tail": " do the replacements using a string replace for the specific blocks.\n# This is still risky.\n\n# Maybe I can just use sed to insert the lines.\n\nEOF\n<|\"|>}<tool_call|><|tool_response>",
+        "runtime_precision_sha256": "769f6b5d975c3a4b252c01668ded02f32c61c43819117a95868249b4b1fd7350"
+      },
+      "pinned_gemma_parser": {
+        "request_packet_sha256": "ad4b1235311a68670536ce7d9b35363b9f3733b9cb2ebc5509729866700df12f",
+        "parser_source": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/lib/python3.10/site-packages/vllm/parser/gemma4.py",
+        "parser_source_sha256": "c974f47dc39ab7276da1e4ae38c4010e3f5411481f75e3879e29f47b2fd08df7",
+        "prefix_only": {
+          "calls": [
+            {
+              "tool_name": "bash",
+              "valid_json_command_object": true,
+              "argument_keys": [
+                "command"
+              ],
+              "argument_chars": 505,
+              "argument_head": "{\"command\": \"cat <<'EOF' > modify_reports.py\\nimport os\\n\\nwith open('src/_pytest/reports.py', 'r') as f:\\n    content = f.read()\\n\\n# Find _to_json and _from_json and modify them.\\n# This is a bit risky, so I'll just re"
+            }
+          ],
+          "visible_content_chars": 0,
+          "reasoning_chars": 107
+        },
+        "generated_only": {
+          "calls": [],
+          "visible_content_chars": 445,
+          "reasoning_chars": 0
+        },
+        "conditioned_prefix_plus_generation": {
+          "calls": [
+            {
+              "tool_name": "bash",
+              "valid_json_command_object": true,
+              "argument_keys": [
+                "command"
+              ],
+              "argument_chars": 956,
+              "argument_head": "{\"command\": \"cat <<'EOF' > modify_reports.py\\nimport os\\n\\nwith open('src/_pytest/reports.py', 'r') as f:\\n    content = f.read()\\n\\n# Find _to_json and _from_json and modify them.\\n# This is a bit risky, so I'll just re"
+            }
+          ],
+          "visible_content_chars": 0,
+          "reasoning_chars": 107
+        }
+      },
+      "verdict": "normal",
+      "confidence": "medium",
+      "evidence": "The inherited assistant context is already inside a bash command; this continuation supplies the remaining command (python3 modify_reports.py), which the pinned Gemma parser accepts as a bash command with a string command field. Natural stop at 129/2048; no repeated text or protocol defect observed. Patch success is outside scope.",
+      "cap_notes": "Natural completion before requested cap."
+    },
+    {
+      "candidate_name": "anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.seed43.p4_hifi2.cap2048",
+      "source_P3_manifest_index": 58,
+      "job": "anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset",
+      "mode": "full",
+      "seed": 43,
+      "requested_cap": 2048,
+      "free_run_tokens": 487,
+      "stopped_at_cap": false,
+      "diagnostic_total_wall_s": 36.47136038984172,
+      "fixture_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.cap2048.seed43.private.json",
+      "fixture_sha256": "f09f5493bf5e6d1f1bec5f5ce7e4273d0ec9352de1f85ffe780ef897063dec98",
+      "prompt_token_count": 58982,
+      "prompt_ids_sha256_canonical_json": "a4c9e18717ee53ddbf5ced65964c1f28ac089b26e6b489bd9aa52b303e021a45",
+      "assistant_conditioning_prefix_token_count": 599,
+      "assistant_conditioning_prefix_ids_sha256_canonical_json": "526caf80acc6c4a7758a2593c2de809dfc974f1a06ef8f10138b74baca4d8752",
+      "assistant_conditioning_prefix_tail": "s being processed.\n\nWait, if I'm seeing \"Processing index\" and \"Modified index\" in the logs, it means `source-read` was called for `index.rst`.\n\nLet's try to put a print in `sphinx/directives/__init__.py`'s `setup` or something to see if it",
+      "assistant_conditioning_prefix_tail_ids": [
+        1399,
+        236929,
+        691,
+        2760,
+        573,
+        2165,
+        2662,
+        236761,
+        97271,
+        21233,
+        108,
+        6481,
+        236789,
+        236751,
+        2056,
+        531,
+        2247,
+        496,
+        1887,
+        528,
+        2165,
+        136282,
+        236786,
+        175686,
+        68536,
+        2949,
+        42436,
+        2551,
+        236929,
+        236789,
+        236751,
+        2165,
+        21449,
+        236929,
+        653,
+        2613,
+        531,
+        1460,
+        768,
+        625
+      ],
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 43
+      },
+      "runtime_precision": {
+        "config_id": "stage12_swe85_down_bfp8_hifi2_fourcase_followup",
+        "weight_groups": {
+          "attention": "bfp4",
+          "mlp": "bfp4",
+          "down": "bfp8",
+          "lm_head": "bfp8_lofi"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "LoFi",
+          "mlp": "LoFi",
+          "down": "HiFi2",
+          "lm_head": "LoFi"
+        },
+        "activation_dtype": "bfloat8_b",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat8_b",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat8_b",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144
+      },
+      "runtime_precision_matches_candidate_config": true,
+      "runtime_precision_sha256_canonical_json": "c42c4a70e167d97e139e167d18b53e8b00a959efc7946a746f244e03522bffa3",
+      "result_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-hifi2-fourcase-followup-candidate/runs/down_bfp8_hifi2/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.seed43.p4_hifi2.cap2048.json",
+      "result_sha256": "1d21fa373dd247458413bdb9929976e1594eef38d6757bef763645e35883d41e",
+      "generated_token_ids_sha256_canonical_json": "2324ec4c3dfb4af37c86185a0f0259dd3d24983ddeb391e60ebbb86a893d8bf7",
+      "generated_text_sha256_utf8": "572dcf0bdb5faeed229c6bde51d80c3b34bfde1345c984af1e620b1bc2047dd9",
+      "generated_text_head": "'s loaded.\nActually, let's just put a print at the top of `sphinx/directives/other.py`.\nI already did that: `sed -i '1i print(\"HELLO FROM OTHER.PY\")' /opt/miniconda3/lib/python3.11/site-packages/sphinx/directives/other.p",
+      "generated_text_tail": "e::/\" reproduction/index.rst\n\n# Test again\nrm -rf reproduction/build\ncd reproduction && sphinx-build . build\nif grep -Rq \"REPLACE_ME\" build/*.html; then echo \"BAD\"; else echo \"GOOD\"; fi\n<|\"|>}<tool_call|><|tool_response>",
+      "decode_timing": {
+        "decode_tokens": 486,
+        "decode_wall_s": 17.914205041946843,
+        "decode_tok_s_user": 27.129308772675714,
+        "trace_counters_before_decode": {
+          "model_replays": 128,
+          "sample_replays": 130,
+          "token_refreshes": 0,
+          "position_refreshes": 2,
+          "page_refreshes": 120,
+          "readbacks": 130,
+          "captures": 3
+        },
+        "trace_counters_after_decode": {
+          "model_replays": 614,
+          "sample_replays": 616,
+          "token_refreshes": 0,
+          "position_refreshes": 2,
+          "page_refreshes": 120,
+          "readbacks": 616,
+          "captures": 3
+        },
+        "trace_counters_delta": {
+          "model_replays": 486,
+          "sample_replays": 486,
+          "token_refreshes": 0,
+          "position_refreshes": 0,
+          "page_refreshes": 0,
+          "readbacks": 486,
+          "captures": 0
+        },
+        "basis": "Batch1 wall from immediately before first _replay to return after last existing synchronous token-out readback; counts completed replay calls, includes host loop gaps, excludes prefill/first token and text decoding. No added device sync or profiler. Traced diagnostic rate, not serving benchmark."
+      },
+      "p3_comparison": {
+        "result_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.seed43.cap2048.json",
+        "result_sha256": "9998f0613978430ddb7b6428a0c38efffd3b00e482763afef0ef79efc46478e7",
+        "fixture_sha256": "f09f5493bf5e6d1f1bec5f5ce7e4273d0ec9352de1f85ffe780ef897063dec98",
+        "verdict": "other_anomaly",
+        "generated_tokens": 329,
+        "generated_text_sha256_utf8": "d8d51a469b39e91e3a4b8f7fb53c2a507ed03a1136bec162b29eb13bd12f114c",
+        "text_head": "'s loaded.\nActually, I already put a print in `sphinx/directives/other.py`'s `setup` and it was NOT printed.\nWait, no, I put it in `setup` but `setup` is called during `setup_exten",
+        "text_tail": "args)' /opt/miniconda3/lib/python3.11/site-packages/sphinx/directives/other.py\n\nrm -rf reproduction/build\ncd reproduction && sphinx-build . build\n<|\"|>}<tool_call|><|tool_response>",
+        "runtime_precision_sha256": "769f6b5d975c3a4b252c01668ded02f32c61c43819117a95868249b4b1fd7350"
+      },
+      "pinned_gemma_parser": {
+        "request_packet_sha256": "98773875fa1b8fc3c8f181916e07052cfdf0ece8af0fa9bd17a4fe6468ede98a",
+        "parser_source": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/lib/python3.10/site-packages/vllm/parser/gemma4.py",
+        "parser_source_sha256": "c974f47dc39ab7276da1e4ae38c4010e3f5411481f75e3879e29f47b2fd08df7",
+        "prefix_only": {
+          "calls": [],
+          "visible_content_chars": 0,
+          "reasoning_chars": 2072
+        },
+        "generated_only": {
+          "calls": [
+            {
+              "tool_name": "bash",
+              "valid_json_command_object": true,
+              "argument_keys": [
+                "command"
+              ],
+              "argument_chars": 543,
+              "argument_head": "{\"command\": \"# Change the directive name to 'sphinx-include'\\nsed -i \\\"s/directives.register_directive('include', Include)/directives.register_directive('sphinx-include', Include)/\\\" /opt/miniconda3/lib/python3.11/site-p"
+            }
+          ],
+          "visible_content_chars": 0,
+          "reasoning_chars": 1144
+        },
+        "conditioned_prefix_plus_generation": {
+          "calls": [
+            {
+              "tool_name": "bash",
+              "valid_json_command_object": true,
+              "argument_keys": [
+                "command"
+              ],
+              "argument_chars": 543,
+              "argument_head": "{\"command\": \"# Change the directive name to 'sphinx-include'\\nsed -i \\\"s/directives.register_directive('include', Include)/directives.register_directive('sphinx-include', Include)/\\\" /opt/miniconda3/lib/python3.11/site-p"
+            }
+          ],
+          "visible_content_chars": 0,
+          "reasoning_chars": 3216
+        }
+      },
+      "verdict": "normal",
+      "confidence": "medium",
+      "evidence": "The prefix ends with the ordinary unfinished phrase “see if it”; generated “'s loaded” completes “it’s loaded,” not a duplicated contraction. The continuation adds a parser-valid bash command and coherent diagnostic steps; no repetition observed. No patch-correctness claim.",
+      "cap_notes": "Natural completion before requested cap."
+    },
+    {
+      "candidate_name": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed42.p4_hifi2.cap1024",
+      "source_P3_manifest_index": 66,
+      "job": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset",
+      "mode": "full",
+      "seed": 42,
+      "requested_cap": 1024,
+      "free_run_tokens": 558,
+      "stopped_at_cap": false,
+      "diagnostic_total_wall_s": 48.99936493905261,
+      "fixture_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap1024.seed42.private.json",
+      "fixture_sha256": "b4253957ad89651510a0e39ea3aa49373926c9ff2d963a4ee381047b400efac8",
+      "prompt_token_count": 76441,
+      "prompt_ids_sha256_canonical_json": "5e8c9025218ae22d2ae1491e4ff24e3aacdf82ad5d2985c6e2792168270c6808",
+      "assistant_conditioning_prefix_token_count": 669,
+      "assistant_conditioning_prefix_ids_sha256_canonical_json": "054c2865c544312b194d0a4a517a0e07db28d7876cea65603009900203befeab",
+      "assistant_conditioning_prefix_tail": "app` exists!\n\nSo in `docutils Include.run`, I can do:\n`app = self.state.document.settings['env'].app`\nAnd then `app.emit('source-read', ...)`\n\nLet's implement this in `docutils/parsers/rst/directives/misc.py`.<channel|><|tool_call>call:bash",
+      "assistant_conditioning_prefix_tail_ids": [
+        107,
+        3133,
+        1299,
+        2165,
+        1110,
+        236761,
+        24256,
+        1033,
+        6265,
+        236772,
+        1399,
+        963,
+        3729,
+        54557,
+        108,
+        6481,
+        236789,
+        236751,
+        4144,
+        672,
+        528,
+        2165,
+        8929,
+        13364,
+        236786,
+        197662,
+        236786,
+        97271,
+        236786,
+        175686,
+        236786,
+        74716,
+        236761,
+        2551,
+        21233,
+        101,
+        48,
+        6639,
+        236787,
+        42422
+      ],
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 42
+      },
+      "runtime_precision": {
+        "config_id": "stage12_swe85_down_bfp8_hifi2_fourcase_followup",
+        "weight_groups": {
+          "attention": "bfp4",
+          "mlp": "bfp4",
+          "down": "bfp8",
+          "lm_head": "bfp8_lofi"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "LoFi",
+          "mlp": "LoFi",
+          "down": "HiFi2",
+          "lm_head": "LoFi"
+        },
+        "activation_dtype": "bfloat8_b",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat8_b",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat8_b",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144
+      },
+      "runtime_precision_matches_candidate_config": true,
+      "runtime_precision_sha256_canonical_json": "c42c4a70e167d97e139e167d18b53e8b00a959efc7946a746f244e03522bffa3",
+      "result_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-hifi2-fourcase-followup-candidate/runs/down_bfp8_hifi2/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed42.p4_hifi2.cap1024.json",
+      "result_sha256": "5eec0d6a6c48779e2df1bebe9058032eb01dba8cabd073da6519a3535b94eb34",
+      "generated_token_ids_sha256_canonical_json": "0f59d845424e1c04d37cf52c35d5d654c60e0bda3b5c6421266082fc451adaf4",
+      "generated_text_sha256_utf8": "8203ddd46e4eb136de641adc068806d26ba82fafb0f59dd5dc572a09451c4842",
+      "generated_text_head": "{command:<|\"|>cat <<'EOF' > patch_docutils.py\nimport os\n\nfile_path = '/opt/miniconda3/lib/python3.11/site-packages/docutils/parsers/rst/directives/misc.py'\nwith open(file_path, 'r') as f:\n    lines = f.readlines()\n\nnew_l",
+      "generated_text_tail": "oduction/build\ncd reproduction && sphinx-build . build\nif grep -Rq \"REPLACE_ME\" build/*.html; then echo \"BAD\"; else echo \"GOOD\"; fi\ngrep -Rq \"REPLACED\" build/*.html | sed 's/^/FOUND: /'\n<|\"|>}<tool_call|><|tool_response>",
+      "decode_timing": {
+        "decode_tokens": 557,
+        "decode_wall_s": 21.462420054944232,
+        "decode_tok_s_user": 25.952338952181005,
+        "trace_counters_before_decode": {
+          "model_replays": 614,
+          "sample_replays": 617,
+          "token_refreshes": 0,
+          "position_refreshes": 3,
+          "page_refreshes": 180,
+          "readbacks": 617,
+          "captures": 3
+        },
+        "trace_counters_after_decode": {
+          "model_replays": 1171,
+          "sample_replays": 1174,
+          "token_refreshes": 0,
+          "position_refreshes": 3,
+          "page_refreshes": 180,
+          "readbacks": 1174,
+          "captures": 3
+        },
+        "trace_counters_delta": {
+          "model_replays": 557,
+          "sample_replays": 557,
+          "token_refreshes": 0,
+          "position_refreshes": 0,
+          "page_refreshes": 0,
+          "readbacks": 557,
+          "captures": 0
+        },
+        "basis": "Batch1 wall from immediately before first _replay to return after last existing synchronous token-out readback; counts completed replay calls, includes host loop gaps, excludes prefill/first token and text decoding. No added device sync or profiler. Traced diagnostic rate, not serving benchmark."
+      },
+      "p3_comparison": {
+        "result_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed42.cap1024.json",
+        "result_sha256": "cf64a6afad9c1e7bf59c07d2bf3c4bae92e6b19664470931de7b3cd43e3a13d9",
+        "fixture_sha256": "b4253957ad89651510a0e39ea3aa49373926c9ff2d963a4ee381047b400efac8",
+        "verdict": "other_anomaly",
+        "generated_tokens": 812,
+        "generated_text_sha256_utf8": "d32fda62a0dbdda840092b390402027860d5a3f2a163e08dbbf4eb2060603b3d",
+        "text_head": "\n{\n  \"command\": \"cat <<'EOF' > patch_docutils_include.py\\nimport os\\n\\nfile_path = '/opt/miniconda3/lib/python3.11/site-packages/docutils/parsers/rst/directives/misc.py'\\nwith open",
+        "text_tail": " rawtext = include_file.read()\\\\n')\\n    else:\\n        new_lines.append(line)\\n\\nwith open(file_path, 'w') as f:\\n    f.writelines(new_lines)\\n\\\"\\n\"\n}\n<tool_call|><|tool_response>",
+        "runtime_precision_sha256": "769f6b5d975c3a4b252c01668ded02f32c61c43819117a95868249b4b1fd7350"
+      },
+      "pinned_gemma_parser": {
+        "request_packet_sha256": "aabe6570f4836e7706e6f2fc140d5ae2b30a2a0358dd531b5abd3ed85fe150e5",
+        "parser_source": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/lib/python3.10/site-packages/vllm/parser/gemma4.py",
+        "parser_source_sha256": "c974f47dc39ab7276da1e4ae38c4010e3f5411481f75e3879e29f47b2fd08df7",
+        "prefix_only": {
+          "calls": [
+            {
+              "tool_name": "bash",
+              "valid_json_command_object": false,
+              "argument_keys": [],
+              "argument_chars": 2,
+              "argument_head": "{}"
+            }
+          ],
+          "visible_content_chars": 0,
+          "reasoning_chars": 2269
+        },
+        "generated_only": {
+          "calls": [],
+          "visible_content_chars": 1831,
+          "reasoning_chars": 0
+        },
+        "conditioned_prefix_plus_generation": {
+          "calls": [
+            {
+              "tool_name": "bash",
+              "valid_json_command_object": true,
+              "argument_keys": [
+                "command"
+              ],
+              "argument_chars": 1894,
+              "argument_head": "{\"command\": \"cat <<'EOF' > patch_docutils.py\\nimport os\\n\\nfile_path = '/opt/miniconda3/lib/python3.11/site-packages/docutils/parsers/rst/directives/misc.py'\\nwith open(file_path, 'r') as f:\\n    lines = f.readlines()\\n\\"
+            }
+          ],
+          "visible_content_chars": 0,
+          "reasoning_chars": 2269
+        }
+      },
+      "verdict": "normal",
+      "confidence": "high",
+      "evidence": "The prefix contains an incomplete bash call; generated output opens canonical {command:<|”|>… form, and the actual pinned parser recognizes one bash tool with a string command. Stops naturally at 558/1024; no malformed protocol or repeated text.",
+      "cap_notes": "Natural completion before requested cap."
+    },
+    {
+      "candidate_name": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed43.p4_hifi2.cap2048",
+      "source_P3_manifest_index": 67,
+      "job": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset",
+      "mode": "full",
+      "seed": 43,
+      "requested_cap": 2048,
+      "free_run_tokens": 1345,
+      "stopped_at_cap": false,
+      "diagnostic_total_wall_s": 79.39935859595425,
+      "fixture_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap2048.seed43.private.json",
+      "fixture_sha256": "e4c5081386cd785ccc1216dda888b4c54cc165beb80b035e96daf69c2f119718",
+      "prompt_token_count": 76441,
+      "prompt_ids_sha256_canonical_json": "5e8c9025218ae22d2ae1491e4ff24e3aacdf82ad5d2985c6e2792168270c6808",
+      "assistant_conditioning_prefix_token_count": 669,
+      "assistant_conditioning_prefix_ids_sha256_canonical_json": "054c2865c544312b194d0a4a517a0e07db28d7876cea65603009900203befeab",
+      "assistant_conditioning_prefix_tail": "app` exists!\n\nSo in `docutils Include.run`, I can do:\n`app = self.state.document.settings['env'].app`\nAnd then `app.emit('source-read', ...)`\n\nLet's implement this in `docutils/parsers/rst/directives/misc.py`.<channel|><|tool_call>call:bash",
+      "assistant_conditioning_prefix_tail_ids": [
+        107,
+        3133,
+        1299,
+        2165,
+        1110,
+        236761,
+        24256,
+        1033,
+        6265,
+        236772,
+        1399,
+        963,
+        3729,
+        54557,
+        108,
+        6481,
+        236789,
+        236751,
+        4144,
+        672,
+        528,
+        2165,
+        8929,
+        13364,
+        236786,
+        197662,
+        236786,
+        97271,
+        236786,
+        175686,
+        236786,
+        74716,
+        236761,
+        2551,
+        21233,
+        101,
+        48,
+        6639,
+        236787,
+        42422
+      ],
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 43
+      },
+      "runtime_precision": {
+        "config_id": "stage12_swe85_down_bfp8_hifi2_fourcase_followup",
+        "weight_groups": {
+          "attention": "bfp4",
+          "mlp": "bfp4",
+          "down": "bfp8",
+          "lm_head": "bfp8_lofi"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "LoFi",
+          "mlp": "LoFi",
+          "down": "HiFi2",
+          "lm_head": "LoFi"
+        },
+        "activation_dtype": "bfloat8_b",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat8_b",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat8_b",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144
+      },
+      "runtime_precision_matches_candidate_config": true,
+      "runtime_precision_sha256_canonical_json": "c42c4a70e167d97e139e167d18b53e8b00a959efc7946a746f244e03522bffa3",
+      "result_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-hifi2-fourcase-followup-candidate/runs/down_bfp8_hifi2/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed43.p4_hifi2.cap2048.json",
+      "result_sha256": "147eb5ccdd541a12b031042ce6ac93ce69d54b452c47a35037060e37c43d7b48",
+      "generated_token_ids_sha256_canonical_json": "a4aa0f0cc9a113a2f5819dd4b13bc90b322c1afcd56bca137c199586383a5bef",
+      "generated_text_sha256_utf8": "68d01deb8f0d8f3c5de0b82480adab7fec9be67cbfa41135da3ebe1f9fde78ed",
+      "generated_text_head": "\n{\n  \"command\": \"cat <<'EOF' > patch_docutils_include.py\\nimport os\\n\\nfile_path = '/opt/miniconda3/lib/python3.11/site-packages/docutils/parsers/rst/directives/misc.py'\\nwith open(file_path, 'r') as f:\\n    lines = f.re",
+      "generated_text_tail": "# Now the original run() continues\\n')\\n    else:\\n        new_lines.append(line)\\n\\nwith open(file_path, 'w') as f:\\n    f.writelines(new_lines)\\nEOF\n\npython3 patch_docutils_include.py\n<|\"|>}<tool_call|><|tool_response>",
+      "decode_timing": {
+        "decode_tokens": 1344,
+        "decode_wall_s": 51.849993092007935,
+        "decode_tok_s_user": 25.920929200801798,
+        "trace_counters_before_decode": {
+          "model_replays": 1171,
+          "sample_replays": 1175,
+          "token_refreshes": 0,
+          "position_refreshes": 4,
+          "page_refreshes": 240,
+          "readbacks": 1175,
+          "captures": 3
+        },
+        "trace_counters_after_decode": {
+          "model_replays": 2515,
+          "sample_replays": 2519,
+          "token_refreshes": 0,
+          "position_refreshes": 4,
+          "page_refreshes": 240,
+          "readbacks": 2519,
+          "captures": 3
+        },
+        "trace_counters_delta": {
+          "model_replays": 1344,
+          "sample_replays": 1344,
+          "token_refreshes": 0,
+          "position_refreshes": 0,
+          "page_refreshes": 0,
+          "readbacks": 1344,
+          "captures": 0
+        },
+        "basis": "Batch1 wall from immediately before first _replay to return after last existing synchronous token-out readback; counts completed replay calls, includes host loop gaps, excludes prefill/first token and text decoding. No added device sync or profiler. Traced diagnostic rate, not serving benchmark."
+      },
+      "p3_comparison": {
+        "result_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed43.cap2048.json",
+        "result_sha256": "aa575216e43dd4295eafdd70f56a0975a5c3aa39a8583be5a19c0ec8fb8dcf9a",
+        "fixture_sha256": "e4c5081386cd785ccc1216dda888b4c54cc165beb80b035e96daf69c2f119718",
+        "verdict": "other_anomaly",
+        "generated_tokens": 549,
+        "generated_text_sha256_utf8": "3421681a1eb9805f6e89fa9d409bc2f93bad2ef3101e16e80e9f0f39d07ec37a",
+        "text_head": "\n{\n  \"command\": \"cat <<'EOF' > patch_docutils_include.py\\nimport os\\n\\nfile_path = '/opt/miniconda3/lib/python3.11/site-packages/docutils/parsers/rst/directives/misc.py'\\nwith open",
+        "text_tail": "nes(new_lines)\\nEOF\\n\\n# Wait, the python script above has a syntax error because of indentations and quotes.\\n# Let me rewrite it more carefully.\\n\"\n}\n<tool_call|><|tool_response>",
+        "runtime_precision_sha256": "769f6b5d975c3a4b252c01668ded02f32c61c43819117a95868249b4b1fd7350"
+      },
+      "pinned_gemma_parser": {
+        "request_packet_sha256": "aabe6570f4836e7706e6f2fc140d5ae2b30a2a0358dd531b5abd3ed85fe150e5",
+        "parser_source": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/lib/python3.10/site-packages/vllm/parser/gemma4.py",
+        "parser_source_sha256": "c974f47dc39ab7276da1e4ae38c4010e3f5411481f75e3879e29f47b2fd08df7",
+        "prefix_only": {
+          "calls": [
+            {
+              "tool_name": "bash",
+              "valid_json_command_object": false,
+              "argument_keys": [],
+              "argument_chars": 2,
+              "argument_head": "{}"
+            }
+          ],
+          "visible_content_chars": 0,
+          "reasoning_chars": 2269
+        },
+        "generated_only": {
+          "calls": [],
+          "visible_content_chars": 4503,
+          "reasoning_chars": 0
+        },
+        "conditioned_prefix_plus_generation": {
+          "calls": [
+            {
+              "tool_name": "bash",
+              "valid_json_command_object": false,
+              "argument_keys": [
+                "\"command\"",
+                "'r') as f",
+                "]\\nfor line in lines",
+                "\\\"app\\\") and env.app",
+                "]\\n')\\n        new_lines.append('                # Remove < > if present\\n')\\n        new_lines.append('                if rel_path.startswith(\\u0027<\\u0027) and rel_path.endswith(\\u0027>\\u0027)",
+                "]\\n')\\n        new_lines.append('                docname = os.path.splitext(rel_path)[0].replace(os.path.sep, \\u0027/\\u0027)\\n')\\n        new_lines.append('                \\n')\\n        new_lines.append('                # We need to read the file content to pass it to source-read\\n')\\n        new_lines.append('                # We can try to read it from the same path as the current file\\n')\\n        new_lines.append('                # This is tricky because we don't have the source dir here.\\n')\\n        new_lines.append('                # But we can just let the event be emitted and let extensions handle it\\n')\\n        new_lines.append('                # if they have the file path. But source-read expects the content.\\n')\\n        new_lines.append('                # So we must read the file.\\n')\\n        new_lines.append('                # Let us try to read it using the path provided in arguments\\n')\\n        new_lines.append('                # but we must resolve it relative to the current document.\\n')\\n        new_lines.append('                # The current document path is in settings[\\'_source\\']\\n')\\n        new_lines.append('                source_dir = os.path.dirname(self.state.document.settings.get(\\'_source\\', \\u0027\\u0027))\\n')\\n        new_lines.append('                full_path = os.path.join(source_dir, rel_path)\\n')\\n        new_lines.append('                if os.path.exists(full_path)",
+                "\\u0027r\\u0027, encoding=\\u0027utf-8\\u0027) as f",
+                "]\\n')\\n        new_lines.append('                    env.app.emit(\\u0027source-read\\u0027, docname, source)\\n')\\n        new_lines.append('                    # Now we replace the file content with the modified one\\n')\\n        new_lines.append('                    import tempfile\\n')\\n        new_lines.append('                    with tempfile.NamedTemporaryFile(mode=\\u0027w\\u0027, encoding=\\u0027utf-8\\u0027, delete=False) as tmp",
+                "])\\n')\\n        new_lines.append('                        tmp_path = tmp.name\\n')\\n        new_lines.append('                    self.arguments[0] = tmp_path\\n')\\n        new_lines.append('                    # We must ensure the temp file is deleted after run()\\n')\\n        new_lines.append('                    # This is hard in a directive. Let us just hope for the best\\n')\\n        new_lines.append('                    # or use a different way to store it.\\n')\\n        new_lines.append('        except Exception as e",
+                "}\\\")\\n')\\n        new_lines.append('            pass\\n')\\n        new_lines.append('        \\n        new_lines.append('    # Now the original run() continues\\n')\\n    else",
+                "'w') as f"
+              ],
+              "argument_chars": 4708,
+              "argument_head": "{\"\\\"command\\\"\": \"\\\"cat <<'EOF' > patch_docutils_include.py\\\\nimport os\\\\n\\\\nfile_path = '/opt/miniconda3/lib/python3.11/site-packages/docutils/parsers/rst/directives/misc.py'\\\\nwith open(file_path\", \"'r') as f\": \"\\\\n    "
+            }
+          ],
+          "visible_content_chars": 0,
+          "reasoning_chars": 2269
+        }
+      },
+      "verdict": "other_anomaly",
+      "confidence": "high",
+      "evidence": "Although JSON-style serialization is supported in principle, this generated JSON-like continuation parses through the conditioned open bash call into malformed argument keys and no string command field. This is invalid tool arguments, not a penalty for JSON spelling alone. Stops naturally at 1345/2048.",
+      "cap_notes": "Natural completion before requested cap."
+    },
+    {
+      "candidate_name": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed44.p4_hifi2.cap1024",
+      "source_P3_manifest_index": 68,
+      "job": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset",
+      "mode": "full",
+      "seed": 44,
+      "requested_cap": 1024,
+      "free_run_tokens": 669,
+      "stopped_at_cap": false,
+      "diagnostic_total_wall_s": 53.303603573003784,
+      "fixture_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap1024.seed44.private.json",
+      "fixture_sha256": "7c5da63d138e6afa7b539dfed909ee1e8a937c2e168d587023c4421333688780",
+      "prompt_token_count": 76441,
+      "prompt_ids_sha256_canonical_json": "5e8c9025218ae22d2ae1491e4ff24e3aacdf82ad5d2985c6e2792168270c6808",
+      "assistant_conditioning_prefix_token_count": 669,
+      "assistant_conditioning_prefix_ids_sha256_canonical_json": "054c2865c544312b194d0a4a517a0e07db28d7876cea65603009900203befeab",
+      "assistant_conditioning_prefix_tail": "app` exists!\n\nSo in `docutils Include.run`, I can do:\n`app = self.state.document.settings['env'].app`\nAnd then `app.emit('source-read', ...)`\n\nLet's implement this in `docutils/parsers/rst/directives/misc.py`.<channel|><|tool_call>call:bash",
+      "assistant_conditioning_prefix_tail_ids": [
+        107,
+        3133,
+        1299,
+        2165,
+        1110,
+        236761,
+        24256,
+        1033,
+        6265,
+        236772,
+        1399,
+        963,
+        3729,
+        54557,
+        108,
+        6481,
+        236789,
+        236751,
+        4144,
+        672,
+        528,
+        2165,
+        8929,
+        13364,
+        236786,
+        197662,
+        236786,
+        97271,
+        236786,
+        175686,
+        236786,
+        74716,
+        236761,
+        2551,
+        21233,
+        101,
+        48,
+        6639,
+        236787,
+        42422
+      ],
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 44
+      },
+      "runtime_precision": {
+        "config_id": "stage12_swe85_down_bfp8_hifi2_fourcase_followup",
+        "weight_groups": {
+          "attention": "bfp4",
+          "mlp": "bfp4",
+          "down": "bfp8",
+          "lm_head": "bfp8_lofi"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "LoFi",
+          "mlp": "LoFi",
+          "down": "HiFi2",
+          "lm_head": "LoFi"
+        },
+        "activation_dtype": "bfloat8_b",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat8_b",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat8_b",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144
+      },
+      "runtime_precision_matches_candidate_config": true,
+      "runtime_precision_sha256_canonical_json": "c42c4a70e167d97e139e167d18b53e8b00a959efc7946a746f244e03522bffa3",
+      "result_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-hifi2-fourcase-followup-candidate/runs/down_bfp8_hifi2/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed44.p4_hifi2.cap1024.json",
+      "result_sha256": "23b9652083db4c51708326a72510c5537c4c37c918ad575bcdb22a55f83aa264",
+      "generated_token_ids_sha256_canonical_json": "0cdbacc26af681af8a71edce9eb5bee95075b0ee5558c41004157f496f9f9469",
+      "generated_text_sha256_utf8": "1574e6d6bd66ac25c8bd3442647add60fef4006aa2475f39163a00656af625f0",
+      "generated_text_head": "{command:<|\"|>cat <<'EOF' > patch_docutils_include.py\nimport os\n\nfile_path = '/opt/miniconda3/lib/python3.11/site-packages/docutils/parsers/rst/directives/misc.py'\nwith open(file_path, 'r') as f:\n    lines = f.readlines(",
+      "generated_text_tail": "oduction/build\ncd reproduction && sphinx-build . build\nif grep -Rq \"REPLACE_ME\" build/*.html; then echo \"BAD\"; else echo \"GOOD\"; fi\ngrep -Rq \"REPLACED\" build/*.html | sed 's/^/FOUND: /'\n<|\"|>}<tool_call|><|tool_response>",
+      "decode_timing": {
+        "decode_tokens": 668,
+        "decode_wall_s": 25.743254374945536,
+        "decode_tok_s_user": 25.94854520996875,
+        "trace_counters_before_decode": {
+          "model_replays": 2515,
+          "sample_replays": 2520,
+          "token_refreshes": 0,
+          "position_refreshes": 5,
+          "page_refreshes": 300,
+          "readbacks": 2520,
+          "captures": 3
+        },
+        "trace_counters_after_decode": {
+          "model_replays": 3183,
+          "sample_replays": 3188,
+          "token_refreshes": 0,
+          "position_refreshes": 5,
+          "page_refreshes": 300,
+          "readbacks": 3188,
+          "captures": 3
+        },
+        "trace_counters_delta": {
+          "model_replays": 668,
+          "sample_replays": 668,
+          "token_refreshes": 0,
+          "position_refreshes": 0,
+          "page_refreshes": 0,
+          "readbacks": 668,
+          "captures": 0
+        },
+        "basis": "Batch1 wall from immediately before first _replay to return after last existing synchronous token-out readback; counts completed replay calls, includes host loop gaps, excludes prefill/first token and text decoding. No added device sync or profiler. Traced diagnostic rate, not serving benchmark."
+      },
+      "p3_comparison": {
+        "result_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed44.cap1024.json",
+        "result_sha256": "1e544f50ef08db3968395a0eb93c1fd70e0db9cded4d68bc19170150cc4bb88f",
+        "fixture_sha256": "7c5da63d138e6afa7b539dfed909ee1e8a937c2e168d587023c4421333688780",
+        "verdict": "other_anomaly",
+        "generated_tokens": 497,
+        "generated_text_sha256_utf8": "c178c8dfad19d58252e97219518edff4ddbed8da77c87af9017c84f13be5e932",
+        "text_head": "\n{\n  \"command\": \"cat <<'EOF' > patch_docutils_include.py\\nimport os\\n\\nfile_path = '/opt/miniconda3/lib/python3.11/site-packages/docutils/parsers/rst/directives/misc.py'\\nwith open",
+        "text_tail": "   else:\\n        new_lines.append(line)\\n\\nwith open(file_path, 'w') as f:\\n    f.writelines(new_lines)\\nEOF\\n\\npython3 patch_docutils_include.py\\n\"\n}\n<tool_call|><|tool_response>",
+        "runtime_precision_sha256": "769f6b5d975c3a4b252c01668ded02f32c61c43819117a95868249b4b1fd7350"
+      },
+      "pinned_gemma_parser": {
+        "request_packet_sha256": "aabe6570f4836e7706e6f2fc140d5ae2b30a2a0358dd531b5abd3ed85fe150e5",
+        "parser_source": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/lib/python3.10/site-packages/vllm/parser/gemma4.py",
+        "parser_source_sha256": "c974f47dc39ab7276da1e4ae38c4010e3f5411481f75e3879e29f47b2fd08df7",
+        "prefix_only": {
+          "calls": [
+            {
+              "tool_name": "bash",
+              "valid_json_command_object": false,
+              "argument_keys": [],
+              "argument_chars": 2,
+              "argument_head": "{}"
+            }
+          ],
+          "visible_content_chars": 0,
+          "reasoning_chars": 2269
+        },
+        "generated_only": {
+          "calls": [],
+          "visible_content_chars": 2289,
+          "reasoning_chars": 0
+        },
+        "conditioned_prefix_plus_generation": {
+          "calls": [
+            {
+              "tool_name": "bash",
+              "valid_json_command_object": true,
+              "argument_keys": [
+                "command"
+              ],
+              "argument_chars": 2365,
+              "argument_head": "{\"command\": \"cat <<'EOF' > patch_docutils_include.py\\nimport os\\n\\nfile_path = '/opt/miniconda3/lib/python3.11/site-packages/docutils/parsers/rst/directives/misc.py'\\nwith open(file_path, 'r') as f:\\n    lines = f.readli"
+            }
+          ],
+          "visible_content_chars": 0,
+          "reasoning_chars": 2269
+        }
+      },
+      "verdict": "normal",
+      "confidence": "high",
+      "evidence": "The prefix contains an incomplete bash call; generated output opens canonical Gemma command syntax and the pinned parser extracts one bash call with a string command. Stops naturally at 669/1024; no lexical loop or protocol error observed.",
+      "cap_notes": "Natural completion before requested cap."
+    },
+    {
+      "candidate_name": "anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.seed44.p4_hifi2.cap1024",
+      "source_P3_manifest_index": 74,
+      "job": "anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset",
+      "mode": "full",
+      "seed": 44,
+      "requested_cap": 1024,
+      "free_run_tokens": 1024,
+      "stopped_at_cap": true,
+      "diagnostic_total_wall_s": 50.480610717087984,
+      "fixture_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.cap1024.seed44.private.json",
+      "fixture_sha256": "14b67b9fcb8ad382713dff99ccb47922690bc5be90131e3adc25a195f3e712d3",
+      "prompt_token_count": 47548,
+      "prompt_ids_sha256_canonical_json": "7aaf88be1dd4df81aa4880bf0dd1741f94a99b241903c24f0def9fa78423479b",
+      "assistant_conditioning_prefix_token_count": 716,
+      "assistant_conditioning_prefix_ids_sha256_canonical_json": "debf58ba4ef9a1209e889c97243afad71b049615f3ccedb84b5286b3d5bc11f2",
+      "assistant_conditioning_prefix_tail": "ccess the document via `self.state.document`. In Sphinx, the document is a `sphinx.addnodes.document`, which has a reference to the environment, and the environment has a reference to the app.\n\nLet's try this!<channel|><|tool_call>call:bash",
+      "assistant_conditioning_prefix_tail_ids": [
+        563,
+        496,
+        2165,
+        136282,
+        236761,
+        1282,
+        21856,
+        236761,
+        7565,
+        8347,
+        837,
+        815,
+        496,
+        5577,
+        531,
+        506,
+        3453,
+        236764,
+        532,
+        506,
+        3453,
+        815,
+        496,
+        5577,
+        531,
+        506,
+        850,
+        236761,
+        108,
+        6481,
+        236789,
+        236751,
+        2056,
+        672,
+        236888,
+        101,
+        48,
+        6639,
+        236787,
+        42422
+      ],
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 44
+      },
+      "runtime_precision": {
+        "config_id": "stage12_swe85_down_bfp8_hifi2_fourcase_followup",
+        "weight_groups": {
+          "attention": "bfp4",
+          "mlp": "bfp4",
+          "down": "bfp8",
+          "lm_head": "bfp8_lofi"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "LoFi",
+          "mlp": "LoFi",
+          "down": "HiFi2",
+          "lm_head": "LoFi"
+        },
+        "activation_dtype": "bfloat8_b",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat8_b",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat8_b",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144
+      },
+      "runtime_precision_matches_candidate_config": true,
+      "runtime_precision_sha256_canonical_json": "c42c4a70e167d97e139e167d18b53e8b00a959efc7946a746f244e03522bffa3",
+      "result_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-hifi2-fourcase-followup-candidate/runs/down_bfp8_hifi2/anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.seed44.p4_hifi2.cap1024.json",
+      "result_sha256": "dd387b3bdbae320bbcc409a57b7322929c646a13e8d65521adf7df88d30c06e8",
+      "generated_token_ids_sha256_canonical_json": "6df2dac6505a2cbed8194b8335a67bf5454fcef92b985dafeefece5411dadbaf",
+      "generated_text_sha256_utf8": "9f83277e9b0420ebe0f33826584b875f670b97c75dfaf1dd340a5bb64e0704da",
+      "generated_text_head": "\n# We will modify docutils's Include.run to emit the 'source-read' event if possible.\n# First, let's find where we can get the app object.\n# In docutils directives, self.state.document is the document.\n# In Sphinx, docum",
+      "generated_text_tail": "t the fix into the original file.\n# The fix should be inserted after the rawtext is read.\n# The line is: rawtext = include_file.read()\n# Let's find that line.\nLINE_NUM=$(grep -n \"rawtext = include_file.read()\" /opt/minic",
+      "decode_timing": {
+        "decode_tokens": 1023,
+        "decode_wall_s": 36.658705934882164,
+        "decode_tok_s_user": 27.906058708596593,
+        "trace_counters_before_decode": {
+          "model_replays": 3183,
+          "sample_replays": 3189,
+          "token_refreshes": 0,
+          "position_refreshes": 6,
+          "page_refreshes": 360,
+          "readbacks": 3189,
+          "captures": 3
+        },
+        "trace_counters_after_decode": {
+          "model_replays": 4206,
+          "sample_replays": 4212,
+          "token_refreshes": 0,
+          "position_refreshes": 6,
+          "page_refreshes": 360,
+          "readbacks": 4212,
+          "captures": 3
+        },
+        "trace_counters_delta": {
+          "model_replays": 1023,
+          "sample_replays": 1023,
+          "token_refreshes": 0,
+          "position_refreshes": 0,
+          "page_refreshes": 0,
+          "readbacks": 1023,
+          "captures": 0
+        },
+        "basis": "Batch1 wall from immediately before first _replay to return after last existing synchronous token-out readback; counts completed replay calls, includes host loop gaps, excludes prefill/first token and text decoding. No added device sync or profiler. Traced diagnostic rate, not serving benchmark."
+      },
+      "p3_comparison": {
+        "result_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.seed44.cap1024.json",
+        "result_sha256": "106ff303e561e8b902878b8c427189c37c712263efd387201d4e69a13eece1b8",
+        "fixture_sha256": "14b67b9fcb8ad382713dff99ccb47922690bc5be90131e3adc25a195f3e712d3",
+        "verdict": "reproduced_native_motif",
+        "generated_tokens": 1024,
+        "generated_text_sha256_utf8": "75ad5f0c595b513959227dc144ec0b425f87a0fcea98a683bbac1851b340f865",
+        "text_head": "\n# We need to modify docutils's Include.run to emit the source-read event.\n# Since it's a docutils directive, we can access the sphinx app through the document.\n\ncat <<'EOF' > repl",
+        "text_tail": "roblems with \\\"%s\\\" directive path:\\\\n\\u0027\n                              \\u0027Cannot encode input file path \\\"%s\\\" \\u0027\n                              \\u0027(wrong locale?).\\u0",
+        "runtime_precision_sha256": "769f6b5d975c3a4b252c01668ded02f32c61c43819117a95868249b4b1fd7350"
+      },
+      "pinned_gemma_parser": {
+        "request_packet_sha256": "9d2f492cd7aa7f4656945dd141efee5bdab373b5fbf05c0acb16110be195a045",
+        "parser_source": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/lib/python3.10/site-packages/vllm/parser/gemma4.py",
+        "parser_source_sha256": "c974f47dc39ab7276da1e4ae38c4010e3f5411481f75e3879e29f47b2fd08df7",
+        "prefix_only": {
+          "calls": [
+            {
+              "tool_name": "bash",
+              "valid_json_command_object": false,
+              "argument_keys": [],
+              "argument_chars": 2,
+              "argument_head": "{}"
+            }
+          ],
+          "visible_content_chars": 0,
+          "reasoning_chars": 2551
+        },
+        "generated_only": {
+          "calls": [],
+          "visible_content_chars": 4035,
+          "reasoning_chars": 0
+        },
+        "conditioned_prefix_plus_generation": {
+          "calls": [
+            {
+              "tool_name": "bash\n# We will modify docutils's Include.run to emit the 'source-read' event if possible.\n# First, let's find where we can get the app object.\n# In docutils directives, self.state.document is the document.\n# In Sphinx, document.env is the BuildEnvironment, and env.app is the Sphinx app.\n\ncat <<'EOF' > replacement_docutils_include.py\n    def run",
+              "valid_json_command_object": false,
+              "argument_keys": [
+                "self)",
+                "])\n        if path.startswith('<') and path.endswith('>')",
+                "path[1",
+                "])\n        path = os.path.normpath(os.path.join(source_dir, path))\n        path = utils.relative_path(None, path)\n        path = nodes.reprunicode(path)\n        encoding = self.options.get(\n            'encoding', self.state.document.settings.input_encoding)\n        e_handler=self.state.document.settings.input_encoding_error_handler\n        tab_width = self.options.get(\n            'tab-width', self.state.document.settings.tab_width)\n        try",
+                "encoding=encoding,\n                                        error_handler=e_handler)\n        except UnicodeEncodeError as error",
+                "SafeString(path)))\n        except IOError as error",
+                "ErrorString(error)))\n\n        # Get to-be-included content\n        startline = self.options.get('start-line', None)\n        endline = self.options.get('end-line', None)\n        try",
+                "])\n            else",
+                "ErrorString(error)))\n        \n        # --- START OF FIX ---\n        # Try to emit 'source-read' event if we are running inside Sphinx\n        try",
+                "self.state.document is a sphinx.addnodes.document\n            # which has a 'env' attribute.\n            env = getattr(self.state.document, 'env', None)\n            if env is not None",
+                "'app', None)\n                if app is not None",
+                "'docname', None)\n                    if docname is None",
+                "]\n                    app.emit('source-read', docname, source)\n                    rawtext = source[0]\n        except Exception",
+                "so we need the rest of it.\nEOF\n\n# Since the run method is long, I'll just use sed to insert the fix into the original file.\n# The fix should be inserted after the rawtext is read.\n# The line is"
+              ],
+              "argument_chars": 3628,
+              "argument_head": "{\"self)\": \"# Original docutils Include.run\\n        if not self.state.document.settings.file_insertion_enabled:\\n            raise self.warning('\\\"%s\\\" directive disabled.' % self.name)\\n        source = self.state_machi"
+            }
+          ],
+          "visible_content_chars": 0,
+          "reasoning_chars": 2551
+        }
+      },
+      "verdict": "reproduced_native_motif",
+      "confidence": "high",
+      "evidence": "The inherited prefix ends in an open call:bash, but generation starts with raw newline/comment/script text rather than the required command argument opener. The pinned parser turns the continuation into a malformed tool name/arguments (no command field), matching the original malformed-protocol phenotype. This onset is affirmative even though generation reaches the 1024 cap.",
+      "cap_notes": "Affirmative anomaly is not downgraded for reaching cap; later continuation remains unresolved."
+    },
+    {
+      "candidate_name": "anomaly.sympy__sympy-14711.call1.onset.seed42.p4_hifi2.cap256",
+      "source_P3_manifest_index": 93,
+      "job": "anomaly.sympy__sympy-14711.call1.onset",
+      "mode": "full",
+      "seed": 42,
+      "requested_cap": 256,
+      "free_run_tokens": 256,
+      "stopped_at_cap": true,
+      "diagnostic_total_wall_s": 8.301997623872012,
+      "fixture_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-protocol-scan83-controls/sympy__sympy-14711.call1.onset.private.json",
+      "fixture_sha256": "30151a4ad6ba3f457477b50bbb7d8817b24944e8e57242c10b1f494f4697d6e5",
+      "prompt_token_count": 1351,
+      "prompt_ids_sha256_canonical_json": "63b8b0d7bffacf896c9173a5d24ffd2d1f07b2ec57def9862e1936f66120b086",
+      "assistant_conditioning_prefix_token_count": 198,
+      "assistant_conditioning_prefix_ids_sha256_canonical_json": "7ecf0228cfc4ecbec5f9dc2120d4fec2d5f08aa2ce86ad0a9e954f81f976c37b",
+      "assistant_conditioning_prefix_tail": "check_vector(other)`.\n`_check_vector(other)` raises `TypeError` if `other` is not an instance of `Vector`.\n\nWhen we do `0 * N.x`, the result might not be a `Vector` object but maybe a scalar 0 (or a sympy.Integer(0)).\n\nLet's reproduce this.",
+      "assistant_conditioning_prefix_tail_ids": [
+        776,
+        2165,
+        236771,
+        808,
+        646,
+        236761,
+        236781,
+        8347,
+        506,
+        1354,
+        2473,
+        711,
+        577,
+        496,
+        2165,
+        10860,
+        236929,
+        2495,
+        840,
+        7463,
+        496,
+        26579,
+        236743,
+        236771,
+        568,
+        504,
+        496,
+        228510,
+        236761,
+        11980,
+        236769,
+        236771,
+        11287,
+        108,
+        6481,
+        236789,
+        236751,
+        38449,
+        672,
+        236761
+      ],
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 42
+      },
+      "runtime_precision": {
+        "config_id": "stage12_swe85_down_bfp8_hifi2_fourcase_followup",
+        "weight_groups": {
+          "attention": "bfp4",
+          "mlp": "bfp4",
+          "down": "bfp8",
+          "lm_head": "bfp8_lofi"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "LoFi",
+          "mlp": "LoFi",
+          "down": "HiFi2",
+          "lm_head": "LoFi"
+        },
+        "activation_dtype": "bfloat8_b",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat8_b",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat8_b",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144
+      },
+      "runtime_precision_matches_candidate_config": true,
+      "runtime_precision_sha256_canonical_json": "c42c4a70e167d97e139e167d18b53e8b00a959efc7946a746f244e03522bffa3",
+      "result_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-hifi2-fourcase-followup-candidate/runs/down_bfp8_hifi2/anomaly.sympy__sympy-14711.call1.onset.seed42.p4_hifi2.cap256.json",
+      "result_sha256": "d870b3c78d4e64f6dcbb27c612821e9d7bddf9a33972545aedf1df4a89d69b33",
+      "generated_token_ids_sha256_canonical_json": "59ddd9659eebe2f292c913273caed75d1f670ce179f7e6b138515f29f03438be",
+      "generated_text_sha256_utf8": "12c69063fc49a35f67b3707c6c939fc79a8a425279d241757618e26551a059a0",
+      "generated_text_head": "<channel|>I will start by reproducing the issue with a script.\n\n<channel|> genomic-bash\n```bash\ncat <<'EOF' > reproduce_issue.py\nfrom sympy.physics.vector import ReferenceFrame, Vector\nfrom sympy import symbols\n\nN = Refe",
+      "generated_text_tail": "ll start by finding where `sympy` is installed and then looking at `sympy/physics/vector/vector.py`.<channel|>I will find the location of the `sympy` package and read the relevant parts of `sympy/physics/vector/vector.py",
+      "decode_timing": {
+        "decode_tokens": 255,
+        "decode_wall_s": 8.011239839019254,
+        "decode_tok_s_user": 31.830279098374543,
+        "trace_counters_before_decode": {
+          "model_replays": 4206,
+          "sample_replays": 4213,
+          "token_refreshes": 0,
+          "position_refreshes": 7,
+          "page_refreshes": 420,
+          "readbacks": 4213,
+          "captures": 3
+        },
+        "trace_counters_after_decode": {
+          "model_replays": 4461,
+          "sample_replays": 4468,
+          "token_refreshes": 0,
+          "position_refreshes": 7,
+          "page_refreshes": 420,
+          "readbacks": 4468,
+          "captures": 3
+        },
+        "trace_counters_delta": {
+          "model_replays": 255,
+          "sample_replays": 255,
+          "token_refreshes": 0,
+          "position_refreshes": 0,
+          "page_refreshes": 0,
+          "readbacks": 255,
+          "captures": 0
+        },
+        "basis": "Batch1 wall from immediately before first _replay to return after last existing synchronous token-out readback; counts completed replay calls, includes host loop gaps, excludes prefill/first token and text decoding. No added device sync or profiler. Traced diagnostic rate, not serving benchmark."
+      },
+      "p3_comparison": {
+        "result_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sympy__sympy-14711.call1.onset.seed42.cap256.json",
+        "result_sha256": "2797688e84de68063b6144df5df1de309d853aae9b0314a0f1c246ef98f293be",
+        "fixture_sha256": "30151a4ad6ba3f457477b50bbb7d8817b24944e8e57242c10b1f494f4697d6e5",
+        "verdict": "other_anomaly",
+        "generated_tokens": 234,
+        "generated_text_sha256_utf8": "40395ec53a9f4662a9064d88bf9dab43550994e47422b30690f75db66a25cae8",
+        "text_head": "<channel|>I will start by reproducing the issue with a script.\n\n<channel|> teclado\n<|channel>thought\nThe user provided a snippet that has a small bug (N is not defined before being",
+        "text_tail": " that's the case. (Actually I didn't run it yet, I just wrote the script).<channel|><|tool_call>call:bash{command:<|\"|>python3 reproduce_issue.py\n<|\"|>}<tool_call|><|tool_response>",
+        "runtime_precision_sha256": "769f6b5d975c3a4b252c01668ded02f32c61c43819117a95868249b4b1fd7350"
+      },
+      "pinned_gemma_parser": {
+        "request_packet_sha256": "779037311ecd8acecccd7e5b6590eb6e2a9ff8461712512b8d23c629693f2c08",
+        "parser_source": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/lib/python3.10/site-packages/vllm/parser/gemma4.py",
+        "parser_source_sha256": "c974f47dc39ab7276da1e4ae38c4010e3f5411481f75e3879e29f47b2fd08df7",
+        "prefix_only": {
+          "calls": [],
+          "visible_content_chars": 0,
+          "reasoning_chars": 657
+        },
+        "generated_only": {
+          "calls": [],
+          "visible_content_chars": 584,
+          "reasoning_chars": 335
+        },
+        "conditioned_prefix_plus_generation": {
+          "calls": [],
+          "visible_content_chars": 584,
+          "reasoning_chars": 1000
+        }
+      },
+      "verdict": "other_anomaly",
+      "confidence": "medium",
+      "evidence": "The continuation emits a pseudo-channel/tool label genomic-bash followed by a fenced shell snippet, but the exact-context pinned Gemma parser extracts no structured tool call. It differs from P3’s stray teclado word, so this is not the exact native motif. Output reaches 256/256 mid-investigation; later tool behavior remains unresolved, but the pseudo-tool onset is already present.",
+      "cap_notes": "Affirmative anomaly is not downgraded for reaching cap; later continuation remains unresolved."
+    }
+  ],
+  "host_parser_environment_note": "The CPU-only vLLM parser interpreter emitted its ttnn.CONFIG startup diagnostic while importing the environment; no model construction, inference, device query, or device command was performed."
+}

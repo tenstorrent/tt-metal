@@ -1,0 +1,57 @@
+{
+  "status": "host_only_admission_audit_not_selection",
+  "time": {
+    "raw_at_most10h": {
+      "count": 92,
+      "hours": 9.963658417778545,
+      "hours_with_1_25_margin": 12.454573022223181
+    },
+    "raw_times1_25_at_most12h": {
+      "count": 85,
+      "hours": 9.590058417778545,
+      "hours_with_1_25_margin": 11.98757302222318
+    },
+    "current65": {
+      "count": 65,
+      "hours": 7.889758417778546,
+      "hours_with_1_25_margin": 9.862198022223183
+    },
+    "finding": "65 applies25% inflation against an already buffered10h target, effectively requiring raw<=8h. This is more conservative than raw<=10h or raw*1.25<=12h; not the largest time-feasible count under either requested rule."
+  },
+  "disk": {
+    "measured_free_bytes": 219141693440,
+    "reserve_bytes": 170000000000,
+    "growth_headroom_bytes": 49141693440,
+    "source": "swe65-candidate/all65-build-readiness.json",
+    "paired_pull_plus_build_costs_count": 55,
+    "mean_bytes": 4566408396.8,
+    "median_bytes": 4367642624,
+    "maximum_bytes": 11259342848,
+    "sum_bytes": 251152461824,
+    "estimated_additional_count_mean": 10,
+    "estimated_additional_count_median": 11,
+    "estimated_additional_count_max_observed": 4,
+    "estimated_total_count_mean": 75,
+    "estimated_total_count_max_observed": 69,
+    "existing_pull_start_headroom_bytes": 32000000000,
+    "can_start_one_more_under_existing_guard": true,
+    "caveat": "Disk deltas include concurrent host activity and shared-layer effects; not guaranteed task costs. No new disk query or image fetch. Runtime reserve retained once; unknown future images may cost more than observed maximum.",
+    "estimated_growth_to85_mean_bytes": 91328167936.0,
+    "estimated_growth_to92_mean_bytes": 123293026713.6,
+    "incremental_cost_sources": [
+      "swe65-candidate/pull_manifest.json",
+      "swe65-candidate/pull_retry_20261114T0958Z.json",
+      "swe65-candidate/build_manifest.json",
+      "swe65-candidate/build_remaining5_manifest.json"
+    ]
+  },
+  "frozen_order": {
+    "sha256": "0d971599ad5e63ae06614f5cf47ade8ee68861e92fd4125bfadd6d8ff06ae88f",
+    "count": 500,
+    "first65_verified": true,
+    "rule": "Preserve fixed10 order. Repeatedly choose remaining task minimizing current repo representation, then current within-repo difficulty representation, then SHA256(seed|repo), then SHA256(seed|instance_id). Only official instance ID/repo/difficulty metadata used; no scores, trajectories, or patch content used. Future lists are prefixes of same500 ordering.",
+    "additional_task_ids_selected": false
+  },
+  "assessment": "65 is a prepared lower bound, not demonstrated largest feasible list. Time permits85 with25%/12h margin or92 withraw10h; disk mean extrapolation does not support20/27 extra images. Existing disk guard allows at least attempting another serial preparation, so65 cannot honestly be called a measured hard disk maximum. Coordinator should either extend frozen-order prefix under disk guards until physical bound is demonstrated, or explicitly justify a conservative count with stated uncertainty; do not retrospectively claim65 is largest.",
+  "no_artifacts_modified_except_this_audit": true
+}

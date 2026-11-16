@@ -1,0 +1,277 @@
+{
+  "status": "host_only_gate_preparation_no_admission_no_source_changes",
+  "reviewed_at_utc": "2026-11-15",
+  "scope": "P3 predecessor gate adequacy against selected-BFP8 SK correction, completed SK1024 served/full evidence, and admitted/running H9 HF batch.",
+  "p3_candidate": {
+    "proposal": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/proposal.json",
+      "sha256": "eaaa904d4a64c144d4a7e539f9646b0bd32a86aee48f7de700a4caf239ee7939",
+      "exists": true
+    },
+    "driver": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/run_serial_candidate.py",
+      "sha256": "2ab86beb5c9e04369fb8d8d8a775f6ebc9083603c05f2c2669579f2ed8f2825b",
+      "exists": true
+    },
+    "source_inventory": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/source-hashes.json",
+      "sha256": "39e7ce4ec6470f280ce0ff9aa7fff86312e652b3509e6718fe489b557ebfc9f8",
+      "exists": true
+    },
+    "precision": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/down_bfp8_lofi_isolated_precision.json",
+      "sha256": "769f6b5d975c3a4b252c01668ded02f32c61c43819117a95868249b4b1fd7350",
+      "exists": true
+    },
+    "fixed108_manifest": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/candidate-cases.json",
+      "sha256": "57193e4b91af3a31df00f0c92dbc0f2219fbce011e6533594e5244a93a3021ed",
+      "exists": true
+    },
+    "inventory_pin_mismatches": [],
+    "baseline_config_sha256": "aa0e651fb3fdd7afc285293645c5ca309b2da246619e6e7fb6da86c5d2f28853",
+    "precision_delta_fields": {
+      "weight_groups": {
+        "baseline": {
+          "attention": "bfp4",
+          "mlp": "bfp4",
+          "down": "bfp4",
+          "lm_head": "bfp8_lofi"
+        },
+        "candidate": {
+          "attention": "bfp4",
+          "mlp": "bfp4",
+          "down": "bfp8_lofi",
+          "lm_head": "bfp8_lofi"
+        }
+      }
+    },
+    "finding": "P3 precision currently preserves selected stage12_head_bfp8_lofi fields and changes only down weight group BFP4 -> BFP8 LoFi; down LoFi fidelity and served lm_head BFP8 LoFi remain. 20/20 source inventory pins match. This gate refresh must preserve this exact policy and unchanged fixed108 manifest."
+  },
+  "current_sk_evidence": {
+    "selected_bfp8_suffix512_correction": {
+      "admission": {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-suffix512-head-bfp8-correction/admission.json",
+        "sha256": "3135aac12cbe11d97803b166dc3173def8f9bc03a6e8bb786fe015ce3f24bf08",
+        "exists": true
+      },
+      "completion": {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-suffix512-head-bfp8-correction/completion.json",
+        "sha256": "1be9414e4447a6600ea163967ec4fc0601ae9ffbbd47e44ab5e407a1c3ee453e",
+        "exists": true
+      },
+      "root_review": {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-suffix512-head-bfp8-correction/root-review.json",
+        "sha256": "777d1a61090d8b827c76fc905b1a884b58270613d976c5eed73d8a41c2319151",
+        "exists": true
+      },
+      "independent_triage": {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-suffix512-head-bfp8-correction/triage-d.json",
+        "sha256": "04195f9c199eac5276e59af247dc20bc7a5965d514ba2f77d7a9f6d56af73de9",
+        "exists": true
+      },
+      "admission_status": "root_admitted",
+      "root_review_status": "completed_root_reviewed",
+      "counts": {
+        "native": 2,
+        "other": 1
+      },
+      "runtime": "BFP8 selected served arm; seed42 and44 native contraction boundary, seed43 other punctuation loop."
+    },
+    "matched_suffix1024": {
+      "admission": {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix1024/admission.json",
+        "sha256": "2e635a1169648396cf6abd95a6a3f3918808a45f0918431702fae2f5ff3ba308",
+        "exists": true
+      },
+      "served_completion": {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix1024/completion-served.json",
+        "sha256": "b0485e6d7f64bfe2e2905c98f8bc493fd5a2db92e59522f58ac2dd972c32cf26",
+        "exists": true
+      },
+      "full_completion": {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix1024/completion-full.json",
+        "sha256": "c28b61d76a152ef27c7cc92da987ccd80a36cdcea16eb48ef6933a792ce752b9",
+        "exists": true
+      },
+      "completion_summary": {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix1024/completion-summary.json",
+        "sha256": "ecbbc26c4f42b9ca977e06f881c9301eecbb3ed59a0336ccfdcfad5bd05e6781",
+        "exists": true
+      },
+      "served_root_review": {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix1024/root-served-review.json",
+        "sha256": "2ee7c06425277e37c938256fd508c60a855838227058ec5047260a5a0f8b87ff",
+        "exists": true
+      },
+      "full_root_review": {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix1024/root-full-review.json",
+        "sha256": "8736f9c042e98cdeea4b4d158b739b48e46c5ab73b369f87091d1a733f6ccc6b",
+        "exists": true
+      },
+      "served_independent_triage": {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix1024/triage-d-served.json",
+        "sha256": "5f48a80b44ce6086390e541eade5c4d9f878e00ef8c6e829d7a1b18d29b04b7b",
+        "exists": true
+      },
+      "full_independent_triage": {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix1024/triage-d-full.json",
+        "sha256": "7c5d1a20673ca8036f94fe8f30b5b6ae145a3038fa4f0ccae904030f2ec48791",
+        "exists": true
+      },
+      "served_manifest": {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix1024/served-cases.json",
+        "sha256": "c3c08106351241387b4c2a10a5bfedfb69b5bce340a36616929d863500ce5f13",
+        "exists": true
+      },
+      "full_manifest": {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix1024/full-cases.json",
+        "sha256": "187c9ed825433ff71b4575c2a9b9917676bfd86763323606f30f204a5df8bd3a",
+        "exists": true
+      },
+      "summary": {
+        "status": "completed_root_and_independent_triage_reconciled",
+        "served": {
+          "counts": {
+            "normal": 2,
+            "native": 1
+          },
+          "wall_seconds": 166.36522507667542
+        },
+        "full": {
+          "counts": {
+            "normal": 3
+          },
+          "wall_seconds": 117.3222713470459
+        },
+        "forecast": "both low misses accounted for early natural stops",
+        "original_full_missing_tool_reproduced": false,
+        "next": "HF9 queued now; prepare longer2048prefix test for original missingtool after HF serial block. Separate HF512secondary2 pending.",
+        "score_or_policy_change": false,
+        "triage_hashes": {
+          "served": "5f48a80b44ce6086390e541eade5c4d9f878e00ef8c6e829d7a1b18d29b04b7b",
+          "full": "7c5d1a20673ca8036f94fe8f30b5b6ae145a3038fa4f0ccae904030f2ec48791"
+        }
+      },
+      "interpretation": "served: 2 normal, seed44 native contraction; full BF16: 3 normal. All terminate at49–63 tokens, well before original missing-tool onset ~665. This does not settle later-onset behavior; no HF requirement may be marked complete merely from this short-ending result."
+    }
+  },
+  "current_h9": {
+    "directory": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed",
+    "admission": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/admission.json",
+      "sha256": "74640276fdf5e463fa968d5d188994622759df96f09d4f408e02712b7d09ae66",
+      "exists": true
+    },
+    "progress": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/progress.json",
+      "sha256": "6e8d750a3f8a7657f552669b0233a1835e30b0f4ffcb4880477743a397f70bae",
+      "exists": true
+    },
+    "root_static_review": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/root-static-review.json",
+      "sha256": "26815154b9c0f4ad629bb24c356539fb8e8313fdc2791218ad28a61071e709c6",
+      "exists": true
+    },
+    "root_prelaunch_serialization": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/root-prelaunch-serialization.json",
+      "sha256": "256273858bac976037e7c9334c7a54c10cc787f73365109e04cb743de702ed86",
+      "exists": true
+    },
+    "progress_status": "group_running",
+    "groups": [
+      {
+        "serial_order": 1,
+        "status": "running",
+        "launch_sha256": "72d715ddf08a150cbfda72949bc8e0713e5037ff245ee97d4cdcb7c0ed35276f"
+      }
+    ],
+    "terminal_records_present": [
+      [
+        "completion.json",
+        false
+      ],
+      [
+        "completion-summary.json",
+        false
+      ],
+      [
+        "root-results-review.json",
+        false
+      ],
+      [
+        "root-final-review.json",
+        false
+      ]
+    ],
+    "scope_caveat": "H9 admitted/root-static-reviewed but still group_running; static review is not completed-output semantic review. Its nine case names are other SWE85 controls, not sklearn13135 call29. It may be a global serialization prerequisite, but cannot substitute for an SK-specific HF follow-up record."
+  },
+  "p3_gate_findings": [
+    {
+      "severity": "blocking stale reference",
+      "detail": "P3 driver hardcodes SK to sklearn13135-missingtool-suffix512, whose served arm is the old BFP4 output and whose full arm is BF16. It does not bind or validate the corrected selected-BFP8 suffix512 evidence or the newer suffix1024 pair. The P3 predecessor sklearn-serial-review.json is currently absent."
+    },
+    {
+      "severity": "blocking weak HF evidence",
+      "detail": "P3 check_sk_serial accepts hf_followup enum completed/not_required and a root accepted boolean. It binds only the old SK admission/completion hashes; it has no required hf evidence path/hash, HF candidate admission/completion/result inventory, or root HF output-review hash. A status string alone could falsely clear a completed follow-up."
+    },
+    {
+      "severity": "HF serialization",
+      "detail": "H9 progress is group_running. Before any P3 execution, require H9 terminal success/root output review and no active HF process; H9 evidence is global and not SK-specific."
+    }
+  ],
+  "exact_future_records_before_p3_admission": [
+    {
+      "record": "P3/predecessors/sklearn-serial-review.json",
+      "required_fields": [
+        "reviewer=root",
+        "accepted=true",
+        "status=terminal adjudication",
+        "sk_corrected_bfp8_admission_sha256",
+        "sk_corrected_bfp8_completion_sha256",
+        "sk_corrected_bfp8_root_review_sha256",
+        "sk_corrected_bfp8_triage_sha256",
+        "sk1024_admission_sha256",
+        "sk1024_served_completion_sha256",
+        "sk1024_full_completion_sha256",
+        "sk1024_served_root_review_sha256",
+        "sk1024_full_root_review_sha256",
+        "sk1024_completion_summary_sha256",
+        "sk1024_served_triage_sha256",
+        "sk1024_full_triage_sha256",
+        "exact result hashes or a hash-bound output inventory",
+        "hf_followup decision and decision evidence"
+      ],
+      "purpose": "Root adjudication must bind to exact corrected selected-BFP8 and suffix1024 completed artifacts, not old suffix512/BFP4 path."
+    },
+    {
+      "record": "P3/predecessors/hf-followup-evidence.json (or equivalent root decision record)",
+      "required_fields": [
+        "decision=completed or not_required",
+        "reviewer=root",
+        "accepted=true",
+        "decision_basis_hashes referencing the exact SK records above",
+        "if completed: HF candidate admission hash, pinned manifest/source-inventory/driver hashes, terminal completion/group hashes, output inventory hash, and root semantic-review hash",
+        "if not_required: explicit scope/reason plus the exact SK evidence hashes used to decide follow-up is unnecessary"
+      ],
+      "purpose": "Ensure no HF status enum can stand in for evidence; `completed` must identify actual HF results, and `not_required` must be a root decision tied to reviewed evidence."
+    },
+    {
+      "record": "H9 terminal evidence package",
+      "required_fields": [
+        "admission/proposal/driver/source-integrity hashes",
+        "progress terminal status and every group launch/completion with exit0",
+        "all result file hashes/output inventory",
+        "root semantic review hash and completion summary hash",
+        "no active HF process at P3 launch"
+      ],
+      "purpose": "H9 is currently group_running. Require its terminal review as global serialization only if P3 is queued behind it; do not count it as SK-specific HF evidence."
+    }
+  ],
+  "proposed_minimal_driver_patch_text_not_applied": "Replace check_sk_serial()'s SK path with the current corrected selected-BFP8 correction + suffix1024 evidence; require each admitted candidate and completion to match their frozen command/manifests and exit0; require root review files to bind completion/admission hashes; verify result inventory hashes and runtime_precision (`stage12_head_bfp8_lofi` for corrected served, `stage12_bf16_hifi4_diagnostic` for suffix1024 full). Then replace `hf_followup in ('completed','not_required')` with: `decision = review['hf_followup']`; if completed, require a root HF evidence-record path+SHA, load it, require accepted root review and exact HF admission/terminal completion/result-inventory hashes; if not_required, require a separately hash-bound root decision record with explicit reason and hashes of the exact SK corrected/1024 evidence considered. In either case require the P3 predecessor review to hash-bind those records. Retain active-HF/no-owner checks. Do not modify the P3 precision config or P1/P2 pins.",
+  "not_done": [
+    "No candidate or canonical evidence files other than this report were changed.",
+    "No admission was created and no inference/device/HF execution was run.",
+    "No P1/P2 artifacts or pins were modified."
+  ]
+}

@@ -1,0 +1,5 @@
+{
+  "at_unix": 1794772980.4535596,
+  "status": "not_launched",
+  "reason": "Initial root guard rejected an existing output directory. Inspection proved it empty; next admission allows an existing empty directory only. No model launched or output overwritten."
+}

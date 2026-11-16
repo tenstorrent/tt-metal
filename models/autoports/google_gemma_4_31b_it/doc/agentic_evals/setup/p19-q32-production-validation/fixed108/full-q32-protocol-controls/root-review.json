@@ -1,0 +1,116 @@
+{
+  "status": "complete_two_protocol_controls_pass_not_policy_selection",
+  "created_unix": 1794778396.2325296,
+  "completion": {
+    "start_unix": 1794778199.1387768,
+    "end_unix": 1794778350.4580486,
+    "exit_code": 0,
+    "wall_seconds": 151.31927180290222
+  },
+  "all_source_pins_match": true,
+  "source_pin_count": 13,
+  "rows": [
+    {
+      "index": 54,
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/p19-q32-production-validation/fixed108/full-q32-protocol-controls/runs/fullq32.anomaly.sphinx-doc__sphinx-10323.call70.onset.seed42.cap256.json",
+      "result_sha256": "455d24443acd739c76d949c067d7309164d51ecfdd188b416c24d2cd31831d54",
+      "generated_tokens": 64,
+      "terminal_token": 50,
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 42
+      },
+      "valid_tool_opener_present": true,
+      "decode_timing": {
+        "decode_tokens": 63,
+        "decode_wall_s": 4.112546064890921,
+        "decode_tok_s_user": 15.318977345405365,
+        "trace_counters_before_decode": {
+          "model_replays": 0,
+          "sample_replays": 1,
+          "token_refreshes": 0,
+          "position_refreshes": 1,
+          "page_refreshes": 60,
+          "readbacks": 1,
+          "captures": 3
+        },
+        "trace_counters_after_decode": {
+          "model_replays": 63,
+          "sample_replays": 64,
+          "token_refreshes": 0,
+          "position_refreshes": 1,
+          "page_refreshes": 60,
+          "readbacks": 64,
+          "captures": 3
+        },
+        "trace_counters_delta": {
+          "model_replays": 63,
+          "sample_replays": 63,
+          "token_refreshes": 0,
+          "position_refreshes": 0,
+          "page_refreshes": 0,
+          "readbacks": 63,
+          "captures": 0
+        },
+        "basis": "Batch1 wall from immediately before first _replay to return after last existing synchronous token-out readback; counts completed replay calls, includes host loop gaps, excludes prefill/first token and text decoding. No added device sync or profiler. Traced diagnostic rate, not serving benchmark."
+      },
+      "verdict": "protocol_restored_in_matched_full_BF16_Q32_control",
+      "scope": "Only protocol restoration, not correct patch or evaluation success."
+    },
+    {
+      "index": 89,
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/p19-q32-production-validation/fixed108/full-q32-protocol-controls/runs/fullq32.anomaly.sympy__sympy-13878.call1.onset.seed44.cap256.json",
+      "result_sha256": "119de5e58c4dcdabe39091f332fc9e4e468b452b30b72ae3573e41c5833009c9",
+      "generated_tokens": 19,
+      "terminal_token": 50,
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 44
+      },
+      "valid_tool_opener_present": true,
+      "decode_timing": {
+        "decode_tokens": 18,
+        "decode_wall_s": 1.0567234221380204,
+        "decode_tok_s_user": 17.033785400139443,
+        "trace_counters_before_decode": {
+          "model_replays": 63,
+          "sample_replays": 65,
+          "token_refreshes": 0,
+          "position_refreshes": 2,
+          "page_refreshes": 120,
+          "readbacks": 65,
+          "captures": 3
+        },
+        "trace_counters_after_decode": {
+          "model_replays": 81,
+          "sample_replays": 83,
+          "token_refreshes": 0,
+          "position_refreshes": 2,
+          "page_refreshes": 120,
+          "readbacks": 83,
+          "captures": 3
+        },
+        "trace_counters_delta": {
+          "model_replays": 18,
+          "sample_replays": 18,
+          "token_refreshes": 0,
+          "position_refreshes": 0,
+          "page_refreshes": 0,
+          "readbacks": 18,
+          "captures": 0
+        },
+        "basis": "Batch1 wall from immediately before first _replay to return after last existing synchronous token-out readback; counts completed replay calls, includes host loop gaps, excludes prefill/first token and text decoding. No added device sync or profiler. Traced diagnostic rate, not serving benchmark."
+      },
+      "verdict": "protocol_restored_in_matched_full_BF16_Q32_control",
+      "scope": "Only protocol restoration, not correct patch or evaluation success."
+    }
+  ],
+  "forecast_disposition": "faster_than_low170s; actual151.319s. Both continuations stop early (64+19 tokens vs768 cap envelope), so this forecast miss is not a speed gain claim.",
+  "model_load_seconds": 77.67741206008941,
+  "policy_selection": null,
+  "remaining_requirements": "Full-BF16 current fullpanel/broad acceptance, measured-free-memory serving validation, matched vLLM rates and retained85-task rerun are not completed or admitted. No task score changes."
+}

@@ -1,0 +1,211 @@
+{
+  "status": "historical_contract_annotated_fresh_candidate_launch_measured",
+  "chosen": "stage12_head_bfp8_lofi",
+  "commit": "fdac20ba",
+  "current_supported_context": 262144,
+  "kv_layout_dtype_unchanged": true,
+  "decoder_activation_and_output_shapes_unchanged": true,
+  "lm_head_shape_per_device": [
+    5376,
+    65536
+  ],
+  "tile_count": 344064,
+  "bfp4_tile_bytes": 576,
+  "bfp8_tile_bytes": 1088,
+  "old_head_bytes": 198180864,
+  "new_head_bytes": 374341632,
+  "increase_bytes_per_device": 176160768,
+  "increase_mib_per_device": 168,
+  "capacity_estimates": [
+    {
+      "batch": 1,
+      "old_measured_lm_head_bytes": 198180864,
+      "new_head_bytes_analytic": 374341632,
+      "delta_bytes": 176160768,
+      "old_measured_free_after_prepare": 24483010560,
+      "estimated_new_free_after_prepare": 24306849792,
+      "old_headroom_after_transient_budget": 23677704192,
+      "estimated_new_headroom_after_transient_budget": 23501543424
+    },
+    {
+      "batch": 32,
+      "old_measured_lm_head_bytes": 198180864,
+      "new_head_bytes_analytic": 374341632,
+      "delta_bytes": 176160768,
+      "old_measured_free_after_prepare": 8971736576,
+      "estimated_new_free_after_prepare": 8795575808,
+      "old_headroom_after_transient_budget": 8166430208,
+      "estimated_new_headroom_after_transient_budget": 7990269440
+    },
+    {
+      "batch": 16,
+      "old_measured_lm_head_bytes": 198180864,
+      "new_head_bytes_analytic": 374341632,
+      "delta_bytes": 176160768,
+      "old_measured_free_after_prepare": 18272434176,
+      "estimated_new_free_after_prepare": 18096273408,
+      "old_headroom_after_transient_budget": 17467127808,
+      "estimated_new_headroom_after_transient_budget": 17290967040
+    },
+    {
+      "batch": 8,
+      "old_measured_lm_head_bytes": 198180864,
+      "new_head_bytes_analytic": 374341632,
+      "delta_bytes": 176160768,
+      "old_measured_free_after_prepare": 22922889216,
+      "estimated_new_free_after_prepare": 22746728448,
+      "old_headroom_after_transient_budget": 22117582848,
+      "estimated_new_headroom_after_transient_budget": 21941422080
+    }
+  ],
+  "required_updates": [
+    "Keep historical stage08 measured rows explicitly associated with head_bfp4; do not rewrite estimates as measurements.",
+    "Add selected stage12 precision annotation and new candidate launch allocator/free-pool observation; fresh fixed-pool sizing must account for168MiB extra head/device.",
+    "Update full_model_plan.model_weights_rope_ccl_bytes_per_device analytic6419826688->6595987456 or replace with new measured ledger.",
+    "Retain262144capability and unchangedKV arithmetic; stage08 boundary execution is historical, not a freshheadBFP8boundaryrun.",
+    "Clarify stage08 transient reserve explanation now describes historical head shrink; unchanged activation/output layouts support retaining prior transient reserve analytically, pending allocator validation."
+  ],
+  "notes": "Arithmetic alone does not prove new server fixed-pool fit/fragmentation; candidate launch must validate free bytes and reserve. No capability reduction justified.",
+  "fresh_measured_evidence": {
+    "precision": {
+      "config_id": "stage12_head_bfp8_lofi",
+      "weight_groups": {
+        "attention": "bfp4",
+        "mlp": "bfp4",
+        "down": "bfp4",
+        "lm_head": "bfp8_lofi"
+      },
+      "layer_exceptions": {},
+      "compute_fidelities": {
+        "attention": "LoFi",
+        "mlp": "LoFi",
+        "down": "LoFi",
+        "lm_head": "LoFi"
+      },
+      "activation_dtype": "bfloat8_b",
+      "residual_dtype": "bfloat16",
+      "ccl_dtype": {
+        "prefill": "bfloat8_b",
+        "decode": "bfloat16"
+      },
+      "kv_cache_dtype": "bfloat8_b",
+      "logits_dtype": "bfloat16",
+      "sampling_dtype": "bfloat16",
+      "embedding_dtype": "bfloat16",
+      "norm_dtype": "bfloat16",
+      "max_seq_len": 262144
+    },
+    "launch_implementation_commit": "fdac20baa579586be87b906938be843fd1ddeb03",
+    "host_only_followup_commit": "662f278c",
+    "observed_identity": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/head-bfp8-rates/server/perf-b32-server.json",
+    "launch_memory_evidence": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/head-bfp8-rates/server/server-b32/server.log",
+    "context_tokens": 262144,
+    "capability_reduction": null,
+    "context_boundary_validation": "Historical stage08 full-context execution remains historical; this new launch advertises262144 and validates allocator fit, not a fresh headBFP8 boundary-accuracy run.",
+    "lm_head_bytes_per_device": 374341632,
+    "lm_head_increase_bytes_per_device": 176160768,
+    "model_weights_rope_ccl_bytes_per_device": 6595987456,
+    "model_bytes_basis": "Fresh pre-KV shared mesh allocator total replicated per device; equals historical6419826688+176160768.",
+    "pool_validation": {
+      "event": "serving_pool_launch_validation",
+      "pool_sizing": "fixed",
+      "pool_sizing_reason": "Stock plugin fixes its pool before loading weights; this launch validates its existing pool against measured shared-mesh allocator free space, not adaptive sizing.",
+      "measurement_basis": "One shared mesh allocator measurement applied uniformly to participating devices; these are not independent physical allocator samples. KV uses replicated ttnn.zeros on the mesh with equal shape/dtype on every device.",
+      "per_device": [
+        {
+          "device_id": 0,
+          "free_bytes": 27448525824,
+          "contiguous_free_bytes": 27212209152,
+          "pool_bytes": 25691422720,
+          "reserve_bytes": 1015693824
+        },
+        {
+          "device_id": 1,
+          "free_bytes": 27448525824,
+          "contiguous_free_bytes": 27212209152,
+          "pool_bytes": 25691422720,
+          "reserve_bytes": 1015693824
+        },
+        {
+          "device_id": 2,
+          "free_bytes": 27448525824,
+          "contiguous_free_bytes": 27212209152,
+          "pool_bytes": 25691422720,
+          "reserve_bytes": 1015693824
+        },
+        {
+          "device_id": 3,
+          "free_bytes": 27448525824,
+          "contiguous_free_bytes": 27212209152,
+          "pool_bytes": 25691422720,
+          "reserve_bytes": 1015693824
+        }
+      ],
+      "page_map_bytes": 62914560,
+      "prepared_reserve_bytes": 147472896,
+      "transient_reserve_bytes": 805306368,
+      "reserve_evidence": "doc/agentic_serving.json ledger; doc/optimized_vllm/memory_comparison.json; transient reserve is analytical, not a full-stack measured peak",
+      "trace_reserve_already_excluded": true,
+      "fits": true,
+      "remaining_bytes_after_reserves": 505092608
+    },
+    "startup_memory": {
+      "before_serving_cache": {
+        "event": "serving_memory",
+        "phase": "before_serving_cache",
+        "allocator": {
+          "num_banks": 8,
+          "total_bytes_allocated_per_bank": 824498432,
+          "total_bytes_per_bank": 4255564160,
+          "total_bytes_free_per_bank": 3431065728,
+          "largest_contiguous_bytes_free_per_bank": 3401526144
+        },
+        "program_cache_entries": 20,
+        "generator_counters": null
+      },
+      "after_serving_cache": {
+        "event": "serving_memory",
+        "phase": "after_serving_cache",
+        "allocator": {
+          "num_banks": 8,
+          "total_bytes_allocated_per_bank": 4043790592,
+          "total_bytes_per_bank": 4255564160,
+          "total_bytes_free_per_bank": 211773568,
+          "largest_contiguous_bytes_free_per_bank": 190098304
+        },
+        "program_cache_entries": 20,
+        "generator_counters": null
+      },
+      "after_serving_prepare": {
+        "event": "serving_memory",
+        "phase": "after_serving_prepare",
+        "allocator": {
+          "num_banks": 8,
+          "total_bytes_allocated_per_bank": 4062224704,
+          "total_bytes_per_bank": 4255564160,
+          "total_bytes_free_per_bank": 193339456,
+          "largest_contiguous_bytes_free_per_bank": 181232512
+        },
+        "program_cache_entries": 3180,
+        "generator_counters": {
+          "model_replays": 0,
+          "sample_replays": 0,
+          "token_refreshes": 0,
+          "position_refreshes": 0,
+          "page_refreshes": 0,
+          "readbacks": 0,
+          "captures": 3
+        }
+      }
+    },
+    "ten_agents_gpqa_swe_feasible_at_working_set": true,
+    "working_set_tokens": 131072,
+    "full_context_capacity_agents": 7,
+    "precision_audit": "agentic_evals/setup/head_bfp8_context_memory_audit.json",
+    "sizing_artifacts": [
+      "agentic_evals/setup/gpqa_server_size_head_bfp8.json",
+      "agentic_evals/setup/swe_server_size_head_bfp8.json"
+    ]
+  },
+  "required_updates_resolution": "Historical rows/numerics retained; context_contract.stage12_selected_serving_memory records current measured6595987456-byte pre-KV allocator, +168MiB head and fixed-pool validation. No boundary-accuracy claim added."
+}

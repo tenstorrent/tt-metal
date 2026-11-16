@@ -1,0 +1,207 @@
+{
+  "status": "full_complete_independent_triage",
+  "mode": "full",
+  "completion": {
+    "status": "completed",
+    "exit_code": 0,
+    "elapsed_seconds": 117.3222713470459,
+    "sha256": "c28b61d76a152ef27c7cc92da987ccd80a36cdcea16eb48ef6933a792ce752b9"
+  },
+  "source_motif": "Original full-prompt missing-tool onset is recorded around generated token665. Exact conditioning is the saved original prompt_token_ids[-1024:], decoded using pinned tokenizer; all prefixes end `Since I've`.",
+  "prefix_provenance": {
+    "status": "exact_original_token_suffix_fixture",
+    "source_fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-extra-contraction-controls/scikit-learn__scikit-learn-13135.call29.onset.private.json",
+    "source_fixture_sha256": "1403d7a48b7ecca8ec2095479c77a871caa3add09bedd7f6830d36315a883bd2",
+    "original_prompt_token_count": 17395,
+    "original_prompt_token_ids_sha256": "433e40a88bd54227618ffb028a3d4322df14ebee37ff03a52c0986d5154df69a",
+    "suffix_length_tokens": 1024,
+    "suffix_start_index": 16371,
+    "suffix_end_index_exclusive": 17395,
+    "suffix_token_ids_sha256": "c8f91bde8c1ae6815872224613fb6e63b366f09ef4fde8ab1bc1c213267179fc",
+    "chosen_token_count": 64,
+    "chosen_token_ids_sha256": "8d4c97e7413b5ed9bf57c4a1f8ae56a386fb8c52b5588db4f765eb55f36a7e3e",
+    "rendering": "No re-encoding: fixture prompt IDs are copied directly from source prompt_token_ids[-1024:].",
+    "source_missing_tool_original_full_tokens": 665,
+    "cap_reason": "Free-run cap1024 allows the original full-prompt missing_tool onset at token665 to be reached."
+  },
+  "tokenizer": {
+    "revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+    "sha256": "cc8d3a0ce36466ccc1278bf987df5f71db1719b9ca6b4118264f45cb627bfe0f"
+  },
+  "rows": [
+    {
+      "seed": 42,
+      "verdict": "normal",
+      "interpretation": "No anomaly or missing-tool onset observed; complete generated text is a coherent ordinary bash tool call but stops far before the original onset around generated token665. This is not evidence about behavior at that later onset.",
+      "result": "setup/swe85-conditional-hf/sklearn13135-missingtool-suffix1024/runs/full/anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix1024.seed42.json",
+      "result_sha256": "87a890a9c9be56ab308638320e68efef4bcf62738e6484c99b48025f7e3bb86a",
+      "fixture": "setup/swe85-conditional-hf/sklearn13135-missingtool-suffix1024/fixtures/full/anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix1024.seed42.private.json",
+      "fixture_sha256": "ba906a834680190e4f2e57520ed64e8a6d8bdf6f84e17557f2245d76cef66c28",
+      "prefix_tokens": 1024,
+      "prefix_ids_sha256": "c8f91bde8c1ae6815872224613fb6e63b366f09ef4fde8ab1bc1c213267179fc",
+      "prefix_tail": "t\\n   178\\t        self.bin_edges_ = bin_edges\\n   179\\t        self.n_bins_ = n_bins\\n   180\\t\\n\"\n}<|\"|>}<tool_response|><|channel>thought\n<|channel>thought\nPerfect. Now the fix is applied to the source code.\nSince I've",
+      "generated_tokens": 55,
+      "cap": 1024,
+      "reached_cap": false,
+      "diagnostic_total_wall_s": 20.363902910845354,
+      "runtime_precision": {
+        "config_id": "stage12_bf16_hifi4_diagnostic",
+        "weight_groups": {
+          "attention": "bf16",
+          "mlp": "bf16",
+          "down": "bf16",
+          "lm_head": "bf16"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "HiFi4",
+          "mlp": "HiFi4",
+          "down": "HiFi4",
+          "lm_head": "HiFi4"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat16",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144,
+        "sdpa_compute_fidelity": "HiFi4"
+      },
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 42
+      },
+      "generated_text_full": " applied the fix to the source code, the tests should now pass.\nLet's run the tests.\n<channel|><|tool_call>call:bash{command:<|\"|>pytest /testbed/sklearn/preprocessing/tests/test_discretization.py\n<|\"|>}<tool_call|><|tool_response>",
+      "generated_text_sha256": "d69f3d4ad49bb47cafff73a68eba897c95fbc54c1ccfb525acb1998eb35a39da",
+      "structured_call_observation": "Visible canonical <|tool_call> call:bash with JSON command argument opener; no malformed-name or missing-argument symptom, and generated text includes tool-call close followed by tool-response marker."
+    },
+    {
+      "seed": 43,
+      "verdict": "normal",
+      "interpretation": "No anomaly or missing-tool onset observed; complete generated text is a coherent ordinary bash tool call but stops far before the original onset around generated token665. This is not evidence about behavior at that later onset.",
+      "result": "setup/swe85-conditional-hf/sklearn13135-missingtool-suffix1024/runs/full/anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix1024.seed43.json",
+      "result_sha256": "bf9904d66e42455d6086a273cc360d1128313bddc48b5cb39fdbdb6bba7296fe",
+      "fixture": "setup/swe85-conditional-hf/sklearn13135-missingtool-suffix1024/fixtures/full/anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix1024.seed43.private.json",
+      "fixture_sha256": "2803012130c230c1a497f7f380c6411bb04f8d261a18769d7a8b8d9ca112a327",
+      "prefix_tokens": 1024,
+      "prefix_ids_sha256": "c8f91bde8c1ae6815872224613fb6e63b366f09ef4fde8ab1bc1c213267179fc",
+      "prefix_tail": "t\\n   178\\t        self.bin_edges_ = bin_edges\\n   179\\t        self.n_bins_ = n_bins\\n   180\\t\\n\"\n}<|\"|>}<tool_response|><|channel>thought\n<|channel>thought\nPerfect. Now the fix is applied to the source code.\nSince I've",
+      "generated_tokens": 58,
+      "cap": 1024,
+      "reached_cap": false,
+      "diagnostic_total_wall_s": 8.068820086074993,
+      "runtime_precision": {
+        "config_id": "stage12_bf16_hifi4_diagnostic",
+        "weight_groups": {
+          "attention": "bf16",
+          "mlp": "bf16",
+          "down": "bf16",
+          "lm_head": "bf16"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "HiFi4",
+          "mlp": "HiFi4",
+          "down": "HiFi4",
+          "lm_head": "HiFi4"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat16",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144,
+        "sdpa_compute_fidelity": "HiFi4"
+      },
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 43
+      },
+      "generated_text_full": " already run the tests and they're passing, I'll double-check the tests one last time to ensure the fix doesn't break anything.\n<channel|><|tool_call>call:bash{command:<|\"|>pytest /testbed/tests/test_preprocessing.py\n<|\"|>}<tool_call|><|tool_response>",
+      "generated_text_sha256": "d22e0ef028081dea74d7a3a4af6822c56c1e9f31ca8639b7e006be84fabc3377",
+      "structured_call_observation": "Visible canonical <|tool_call> call:bash with JSON command argument opener; no malformed-name or missing-argument symptom, and generated text includes tool-call close followed by tool-response marker."
+    },
+    {
+      "seed": 44,
+      "verdict": "normal",
+      "interpretation": "No anomaly or missing-tool onset observed; complete generated text is a coherent ordinary bash tool call but stops far before the original onset around generated token665. This is not evidence about behavior at that later onset.",
+      "result": "setup/swe85-conditional-hf/sklearn13135-missingtool-suffix1024/runs/full/anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix1024.seed44.json",
+      "result_sha256": "98ad4b80dd992417a0e87ddaed615cd1ca0ed8d48126253fe3283b6bc68511b2",
+      "fixture": "setup/swe85-conditional-hf/sklearn13135-missingtool-suffix1024/fixtures/full/anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix1024.seed44.private.json",
+      "fixture_sha256": "462f88157a4a6118feca84aacab667bd91e2cc7f7e0067735525cccae8de3d1a",
+      "prefix_tokens": 1024,
+      "prefix_ids_sha256": "c8f91bde8c1ae6815872224613fb6e63b366f09ef4fde8ab1bc1c213267179fc",
+      "prefix_tail": "t\\n   178\\t        self.bin_edges_ = bin_edges\\n   179\\t        self.n_bins_ = n_bins\\n   180\\t\\n\"\n}<|\"|>}<tool_response|><|channel>thought\n<|channel>thought\nPerfect. Now the fix is applied to the source code.\nSince I've",
+      "generated_tokens": 63,
+      "cap": 1024,
+      "reached_cap": false,
+      "diagnostic_total_wall_s": 8.366743657970801,
+      "runtime_precision": {
+        "config_id": "stage12_bf16_hifi4_diagnostic",
+        "weight_groups": {
+          "attention": "bf16",
+          "mlp": "bf16",
+          "down": "bf16",
+          "lm_head": "bf16"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "HiFi4",
+          "mlp": "HiFi4",
+          "down": "HiFi4",
+          "lm_head": "HiFi4"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat16",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144,
+        "sdpa_compute_fidelity": "HiFi4"
+      },
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 44
+      },
+      "generated_text_full": " applied the fix to the source code, any future tests that use this code will now pass.\nLet's run the tests again to confirm.\n<channel|><|tool_call>call:bash{command:<|\"|>pytest /testbed/sklearn/preprocessing/tests/test_discretization.py\n<|\"|>}<tool_call|><|tool_response>",
+      "generated_text_sha256": "0f692faa86864ccba58e534f96303e69dc24cd73641989a411b9dee95c25118e",
+      "structured_call_observation": "Visible canonical <|tool_call> call:bash with JSON command argument opener; no malformed-name or missing-argument symptom, and generated text includes tool-call close followed by tool-response marker."
+    }
+  ],
+  "summary": {
+    "normal": 3,
+    "reproduced_native_motif": 0,
+    "other_anomaly": 0,
+    "inconclusive": 0,
+    "not_reached_original_missing_tool_onset": 3
+  },
+  "comparison": {
+    "old_full_suffix512_valid_control": "Old full BF16 suffix512 outputs were seeds42/43 other loops, seed44 normal; these suffix1024 outputs are three normal early-ending tool calls and do not reach the onset.",
+    "selected_bfp8_served_suffix1024": "Served seed44 reproduces extra `’ve` at the completed `I've` boundary; full outputs 42-44 have no such onset.",
+    "limits": "No correctness/task outcome or policy conclusion; absence of late onset in early-terminating samples is not evidence about continuation to token665."
+  }
+}

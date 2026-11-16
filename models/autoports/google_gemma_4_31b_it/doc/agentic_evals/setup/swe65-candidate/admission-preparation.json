@@ -1,0 +1,48 @@
+{
+  "status": "candidate_not_admitted",
+  "tasks": 65,
+  "fixed10_included": true,
+  "repos": {
+    "django/django": 6,
+    "astropy/astropy": 6,
+    "matplotlib/matplotlib": 6,
+    "sympy/sympy": 7,
+    "scikit-learn/scikit-learn": 6,
+    "pydata/xarray": 6,
+    "sphinx-doc/sphinx": 7,
+    "pytest-dev/pytest": 6,
+    "pylint-dev/pylint": 6,
+    "psf/requests": 6,
+    "pallets/flask": 1,
+    "mwaskom/seaborn": 2
+  },
+  "official_images_cached": 10,
+  "derived_images_cached": 10,
+  "missing_images": 55,
+  "available_disk_GB": 474.091061248,
+  "empirical_official_unique_growth_GB": {
+    "mean": 78.6115,
+    "low": 55.77,
+    "high": 174.24
+  },
+  "dependency_disk_if_no_layer_sharing_GB": 63.24999999999999,
+  "sandbox_reserve_12x10GiB_GB": 128.84901888,
+  "additional_host_reserve_GB": 50,
+  "conservative_empirical_total_GB": 416.33901888,
+  "disk_caveat": "Observed current image unique sizes reflect cached layer sharing; unseen base environments may add much more. Full-image-size upper scenario10.8GB*55=594GB exceeds available disk. Inspect/pull serially and re-evaluate available disk; no cleanup authorized and no guaranteed fit.",
+  "run_hours_projected_with_margin": 9.862198022223183,
+  "projection_margin": 1.25,
+  "setup_cost": "55 image transfers unknown size/time; observed derived build path tens of seconds per cached image suggests roughly0.2\u20130.7h serial local build work, excluding transfer/first-new-repo validation. This is an estimate, not new measured throughput.",
+  "admission_gates": [
+    "agentic phases pass after anomaly/precision resolution",
+    "remeasure used rates if selected precision changes; reproject65",
+    "server resource/pool assessment at launch",
+    "all55 official digests and derived offline checks",
+    "fresh job name and response-logging check"
+  ],
+  "no_network_evidence": "Task generation monkeypatch socket.connect denied; dataset loader resolves local cached snapshot; no Docker pull/build performed during this preparation.",
+  "generation_shim": "Only SWEBenchAdapter._build_image_map replaced in host process with official TestSpec.instance_image_key over namespace=swebench arch=x86_64 instance_id tag=latest. Avoids irrelevant network environment construction; source files unchanged. Original/fixed generation uses unchanged generate_task methods.",
+  "fixed10_equivalence": "All10 original generated instruction/config/test.sh hashes equal existing fixed10; all65 original-vs-fixed only parser block/image selector differ.",
+  "manifest_sha256": "0d971599ad5e63ae06614f5cf47ade8ee68861e92fd4125bfadd6d8ff06ae88f",
+  "definitions_evidence": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/definition-equivalence.json"
+}

@@ -1,0 +1,23 @@
+{
+  "status": "candidate_prepared_not_admitted",
+  "commands": [
+    "command.json"
+  ],
+  "forecast": "forecast.json",
+  "conditional_extensions": "conditional-cap-extensions.json",
+  "review": "review-d.json",
+  "source_pins": "source-pins.json",
+  "created_utc_epoch": 1794770931.7954974,
+  "command_sha256": "ae477d3facbd4e9047b1645b910557fedbc0c8340279525fd57ac2f770a58402",
+  "forecast_sha256": "b82ac05a48fc4c0349bcd9cbf0082746eb3de3f1f38926e2eec6ce8d68ffe58a",
+  "conditional-cap-extensions_sha256": "d881637d6061421a4d865656a2b63bcc121dff19cb0d492e30a5d13dc7d57d72",
+  "review-d_sha256": "c35c21c5dd14a27e339f9db8638302d1fe4fb2c7656741db6f45ee00da2d8367",
+  "source-pins_sha256": "a2a751a1dd9c4fa53297986679d8939293a03ad1eed69c809d45825ab45cd588",
+  "requires": [
+    "Production Q32 resume gate completes and is reviewed as pass",
+    "Production Q32 broad P19 accuracy/acceptance completes and is reviewed as pass",
+    "Root verifies all source hashes, remaining deadline supports7200s, and all HF/TT owners are zero",
+    "Run the exact108 manifest once into a fresh output path; review before considering any conditional extension",
+    "No default-policy change or commit is part of this candidate"
+  ]
+}

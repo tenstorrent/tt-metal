@@ -1,0 +1,222 @@
+{
+  "status": "served_complete_independent_triage",
+  "mode": "served",
+  "completion": {
+    "status": "completed",
+    "exit_code": 0,
+    "elapsed_seconds": 166.36522507667542,
+    "sha256": "b0485e6d7f64bfe2e2905c98f8bc493fd5a2db92e59522f58ac2dd972c32cf26"
+  },
+  "source_motif": "original full prompt has a missing-tool onset around generated token665; this prefix is the exact original prompt_token_ids[-1024:] ending at Since I’ve. No native prompt token identity claim beyond this saved fixture.",
+  "prefix_provenance": {
+    "status": "exact_original_token_suffix_fixture",
+    "source_fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-extra-contraction-controls/scikit-learn__scikit-learn-13135.call29.onset.private.json",
+    "source_fixture_sha256": "1403d7a48b7ecca8ec2095479c77a871caa3add09bedd7f6830d36315a883bd2",
+    "original_prompt_token_count": 17395,
+    "original_prompt_token_ids_sha256": "433e40a88bd54227618ffb028a3d4322df14ebee37ff03a52c0986d5154df69a",
+    "suffix_length_tokens": 1024,
+    "suffix_start_index": 16371,
+    "suffix_end_index_exclusive": 17395,
+    "suffix_token_ids_sha256": "c8f91bde8c1ae6815872224613fb6e63b366f09ef4fde8ab1bc1c213267179fc",
+    "chosen_token_count": 64,
+    "chosen_token_ids_sha256": "8d4c97e7413b5ed9bf57c4a1f8ae56a386fb8c52b5588db4f765eb55f36a7e3e",
+    "rendering": "No re-encoding: fixture prompt IDs are copied directly from source prompt_token_ids[-1024:].",
+    "source_missing_tool_original_full_tokens": 665,
+    "cap_reason": "Free-run cap1024 allows the original full-prompt missing_tool onset at token665 to be reached."
+  },
+  "tokenizer": {
+    "revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+    "sha256": "cc8d3a0ce36466ccc1278bf987df5f71db1719b9ca6b4118264f45cb627bfe0f"
+  },
+  "rows": [
+    {
+      "seed": 42,
+      "verdict": "normal",
+      "interpretation": "No anomaly observed; this trial completed an ordinary tool call well before original token-665 missing-tool onset, so it does not test the later onset.",
+      "result": "setup/swe85-conditional-hf/sklearn13135-missingtool-suffix1024/runs/served/anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix1024.seed42.json",
+      "result_sha256": "f76236278e2369a2c946556de8495e2621e3fa188604cf6812fe39bd54698080",
+      "fixture": "setup/swe85-conditional-hf/sklearn13135-missingtool-suffix1024/fixtures/served/anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix1024.seed42.private.json",
+      "fixture_sha256": "8d0913e0eaf9fc7a0a49af5a9b46105b5a883ff5648a61c281d5dde5a3539723",
+      "prefix_tokens": 1024,
+      "prefix_ids_sha256": "c8f91bde8c1ae6815872224613fb6e63b366f09ef4fde8ab1bc1c213267179fc",
+      "prefix_tail": "t\\n   178\\t        self.bin_edges_ = bin_edges\\n   179\\t        self.n_bins_ = n_bins\\n   180\\t\\n\"\n}<|\"|>}<tool_response|><|channel>thought\n<|channel>thought\nPerfect. Now the fix is applied to the source code.\nSince I've",
+      "generated_tokens": 49,
+      "cap": 1024,
+      "reached_cap": false,
+      "diagnostic_total_wall_s": 13.981550008058548,
+      "runtime_precision": {
+        "config_id": "stage12_head_bfp8_lofi",
+        "weight_groups": {
+          "attention": "bfp4",
+          "mlp": "bfp4",
+          "down": "bfp4",
+          "lm_head": "bfp8_lofi"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "LoFi",
+          "mlp": "LoFi",
+          "down": "LoFi",
+          "lm_head": "LoFi"
+        },
+        "activation_dtype": "bfloat8_b",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat8_b",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat8_b",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144
+      },
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 42
+      },
+      "generated_text_full": " fixed the source code, I can now run the tests and they should pass.\n<channel|><|tool_call>call:bash{command:<|\"|>pytest /testbed/sklearn/preprocessing/tests/test_discretization.py\n<|\"|>}<tool_call|><|tool_response>",
+      "generated_text_sha256": "2f74bd917b109c4032b5e59b2ace4f57f6c0a0ae8eebf70841891e36bac34d6b"
+    },
+    {
+      "seed": 43,
+      "verdict": "normal",
+      "interpretation": "No anomaly observed; this trial completed an ordinary tool call well before original token-665 missing-tool onset, so it does not test the later onset.",
+      "result": "setup/swe85-conditional-hf/sklearn13135-missingtool-suffix1024/runs/served/anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix1024.seed43.json",
+      "result_sha256": "d4395ad90aaa77f8b5a95dba24b205231bb188d468e090d45b152e2b8ff66330",
+      "fixture": "setup/swe85-conditional-hf/sklearn13135-missingtool-suffix1024/fixtures/served/anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix1024.seed43.private.json",
+      "fixture_sha256": "4ebcf847089b988595cece33b28d357f1ac1135f047299361210ee6d0d318a82",
+      "prefix_tokens": 1024,
+      "prefix_ids_sha256": "c8f91bde8c1ae6815872224613fb6e63b366f09ef4fde8ab1bc1c213267179fc",
+      "prefix_tail": "t\\n   178\\t        self.bin_edges_ = bin_edges\\n   179\\t        self.n_bins_ = n_bins\\n   180\\t\\n\"\n}<|\"|>}<tool_response|><|channel>thought\n<|channel>thought\nPerfect. Now the fix is applied to the source code.\nSince I've",
+      "generated_tokens": 54,
+      "cap": 1024,
+      "reached_cap": false,
+      "diagnostic_total_wall_s": 4.095129535999149,
+      "runtime_precision": {
+        "config_id": "stage12_head_bfp8_lofi",
+        "weight_groups": {
+          "attention": "bfp4",
+          "mlp": "bfp4",
+          "down": "bfp4",
+          "lm_head": "bfp8_lofi"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "LoFi",
+          "mlp": "LoFi",
+          "down": "LoFi",
+          "lm_head": "LoFi"
+        },
+        "activation_dtype": "bfloat8_b",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat8_b",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat8_b",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144
+      },
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 43
+      },
+      "generated_text_full": " already modified the source code, I'll just proceed to run the tests.\n<channel|><|tool_call>call:bash{command:<|\"|>/usr/bin/pytest /testbed/sklearn/preprocessing/tests/test_discretization.py\n<|\"|>}<tool_call|><|tool_response>",
+      "generated_text_sha256": "9e625bf5d52757fa019d9e4421e9f53848ad974f7ba9df0e2be013c5bdaaa4d6"
+    },
+    {
+      "seed": 44,
+      "verdict": "reproduced_native_motif",
+      "interpretation": "Exact boundary motif: pinned prefix ends `Since I've`, and generation starts `’ve fixed...`; this is an immediate extra contraction suffix, followed by an otherwise coherent valid bash tool call. The valid later call does not erase the onset anomaly.",
+      "result": "setup/swe85-conditional-hf/sklearn13135-missingtool-suffix1024/runs/served/anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix1024.seed44.json",
+      "result_sha256": "c2c9da7b1edf8fe99f957de26a2942a04c29e03fb2000dcf50a56aaec545c47a",
+      "fixture": "setup/swe85-conditional-hf/sklearn13135-missingtool-suffix1024/fixtures/served/anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix1024.seed44.private.json",
+      "fixture_sha256": "a9b55c083151416745e91d0c8ce3f6295f84ef164df1847fca05531a52c12b1b",
+      "prefix_tokens": 1024,
+      "prefix_ids_sha256": "c8f91bde8c1ae6815872224613fb6e63b366f09ef4fde8ab1bc1c213267179fc",
+      "prefix_tail": "t\\n   178\\t        self.bin_edges_ = bin_edges\\n   179\\t        self.n_bins_ = n_bins\\n   180\\t\\n\"\n}<|\"|>}<tool_response|><|channel>thought\n<|channel>thought\nPerfect. Now the fix is applied to the source code.\nSince I've",
+      "generated_tokens": 58,
+      "cap": 1024,
+      "reached_cap": false,
+      "diagnostic_total_wall_s": 4.20220507401973,
+      "runtime_precision": {
+        "config_id": "stage12_head_bfp8_lofi",
+        "weight_groups": {
+          "attention": "bfp4",
+          "mlp": "bfp4",
+          "down": "bfp4",
+          "lm_head": "bfp8_lofi"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "LoFi",
+          "mlp": "LoFi",
+          "down": "LoFi",
+          "lm_head": "LoFi"
+        },
+        "activation_dtype": "bfloat8_b",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat8_b",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat8_b",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144
+      },
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 44
+      },
+      "generated_text_full": "’ve fixed the source code, I should be able to run the tests and they should pass.\n<channel|><|tool_call>call:bash{command:<|\"|>/usr/bin/pytest /testbed/sklearn/preprocessing/tests/test_discretization.py\n<|\"|>}<tool_call|><|tool_response>",
+      "generated_text_sha256": "47e266772e22d590da7eb5409b67a58894ca3c97957cbfe319af0fb0f841c3e1",
+      "initial_verdict_before_boundary_reconciliation": "normal",
+      "boundary_reconciliation": {
+        "prefix_last_text": "Since I've",
+        "first_generated_token_ids": [
+          236858,
+          560,
+          6530,
+          506,
+          3738,
+          3393,
+          236764,
+          564,
+          1374,
+          577,
+          2735,
+          531
+        ],
+        "first_generated_decoded": "’ve fixed the source",
+        "review_note": "Corrected initial reading after direct inspection of exact decoded prefix tail and first generated token IDs."
+      }
+    }
+  ],
+  "summary": {
+    "normal": 2,
+    "reproduced_native_motif": 1,
+    "other_anomaly": 0,
+    "inconclusive": 0,
+    "not_reached_original_missing_tool_onset": 3
+  },
+  "comparison": "Seeds42/43 terminate normally after coherent tool calls at49/54 tokens, before original missing-tool onset ~665. Seed44 reproduces the original contraction at the boundary (`Since I've` + `’ve fixed...`) before a valid tool call; this is an observed native motif, distinct from the later missing-tool protocol onset. No task correctness or policy conclusion.",
+  "independent_reconciliation": {
+    "reviewer": "root and independent boundary reread",
+    "reason": "Seed44 begins with the extra `’ve` suffix against the pinned completed `I've`; immediate boundary is native motif even though the remaining output/tool call is coherent.",
+    "prior_triage_preserved": true
+  }
+}

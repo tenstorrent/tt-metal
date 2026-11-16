@@ -1,0 +1,517 @@
+{
+  "status": "proposed_unadmitted_no_launch",
+  "gate": "Candidate only, unadmitted, no HF model launch. Wait for P1, X suffix8192, and P2 BF16/HiFi4 panel terminal-success plus accepted forecast gates; verify zero device owners, fresh MemAvailable >=100GB, and no HF/model process before any future launch.",
+  "offline": "Commands set HF_HUB_OFFLINE=1/HF_DATASETS_OFFLINE=1; pinned runner uses local_files_only=True.",
+  "cpu_threads": "runner load_reference calls torch.set_num_threads(16); commands also cap OMP/MKL/OpenBLAS to16.",
+  "serial_execution": "Eight serial offline CPU processes; added call91 exact 8192-prefix native-positive seed43 as group8. No model execution/admission in this preparation.",
+  "runner_sha256": "aafe67c88bb5a1eb38b8718570bbddd5749e2a9ecbb9dd19cdb100a49572c03e",
+  "revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+  "comparison_rule": "Each compare-dir contains files for every case in that group only; separate suffix families to prevent mismatched filenames/forced token IDs. HF sampling remains a new reference RNG trial.",
+  "groups": [
+    {
+      "seed_group": 42,
+      "suffix_source": "exact_saved_suffix512",
+      "cases": [
+        "anomaly.requests2931.call20.canonicalprefix.optional-suffix512",
+        "anomaly.sympy__sympy-14248.call53.onset.optional-suffix512"
+      ],
+      "command": [
+        "timeout",
+        "3600",
+        "env",
+        "HF_HUB_OFFLINE=1",
+        "HF_DATASETS_OFFLINE=1",
+        "OMP_NUM_THREADS=16",
+        "MKL_NUM_THREADS=16",
+        "OPENBLAS_NUM_THREADS=16",
+        "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tools/precision_repro_hf.py",
+        "--cases",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-candidate/native-positive-candidates-seed42-suffix512.json",
+        "--output",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-candidate/results/seed42-suffix512",
+        "--tokens",
+        "512",
+        "--seeds",
+        "42",
+        "--prefill-chunk",
+        "512",
+        "--compare-dir",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/served",
+        "--compare-dir",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/full"
+      ],
+      "compare_dirs": [
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/served",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/full"
+      ],
+      "output_dir": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-candidate/results/seed42-suffix512",
+      "timeout_seconds": 3600,
+      "serial_order": 1,
+      "loads_model_once_for_group": true,
+      "manifest": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-candidate/native-positive-candidates-seed42-suffix512.json",
+      "manifest_sha256": "3ee6b4e9c15a7bee52da5b083bba00f5c334acb9f4062e6b92eaad5861e8c6cf",
+      "case_count": 2
+    },
+    {
+      "seed_group": 44,
+      "suffix_source": "exact_saved_suffix512",
+      "cases": [
+        "anomaly.pytest-dev__pytest-7432.call19.onset.optional-suffix512"
+      ],
+      "command": [
+        "timeout",
+        "3600",
+        "env",
+        "HF_HUB_OFFLINE=1",
+        "HF_DATASETS_OFFLINE=1",
+        "OMP_NUM_THREADS=16",
+        "MKL_NUM_THREADS=16",
+        "OPENBLAS_NUM_THREADS=16",
+        "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tools/precision_repro_hf.py",
+        "--cases",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-candidate/native-positive-candidates-seed44-suffix512.json",
+        "--output",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-candidate/results/seed44-suffix512",
+        "--tokens",
+        "512",
+        "--seeds",
+        "44",
+        "--prefill-chunk",
+        "512",
+        "--compare-dir",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/served",
+        "--compare-dir",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/full"
+      ],
+      "compare_dirs": [
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/served",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/full"
+      ],
+      "output_dir": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-candidate/results/seed44-suffix512",
+      "timeout_seconds": 3600,
+      "serial_order": 2,
+      "loads_model_once_for_group": true,
+      "manifest": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-candidate/native-positive-candidates-seed44-suffix512.json",
+      "manifest_sha256": "7635a0b1f75bfc8edb430bcfd33ec03926f8e863434878476f3d8cc5a83d5a0b",
+      "case_count": 1
+    },
+    {
+      "seed_group": 44,
+      "suffix_source": "exact_saved_suffix1024",
+      "cases": [
+        "anomaly.psf__requests-5414.call9.onset"
+      ],
+      "command": [
+        "timeout",
+        "3600",
+        "env",
+        "HF_HUB_OFFLINE=1",
+        "HF_DATASETS_OFFLINE=1",
+        "OMP_NUM_THREADS=16",
+        "MKL_NUM_THREADS=16",
+        "OPENBLAS_NUM_THREADS=16",
+        "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tools/precision_repro_hf.py",
+        "--cases",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-candidate/native-positive-candidates-seed44-suffix1024.json",
+        "--output",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-candidate/results/seed44-suffix1024",
+        "--tokens",
+        "512",
+        "--seeds",
+        "44",
+        "--prefill-chunk",
+        "512",
+        "--compare-dir",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/served",
+        "--compare-dir",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/full"
+      ],
+      "compare_dirs": [
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/served",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/full"
+      ],
+      "output_dir": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-candidate/results/seed44-suffix1024",
+      "timeout_seconds": 3600,
+      "serial_order": 3,
+      "loads_model_once_for_group": true,
+      "manifest": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-candidate/native-positive-candidates-seed44-suffix1024.json",
+      "manifest_sha256": "b9602b3c8ba1a97f7f64a73e7ac2e502edd12d6e6ccb1212a9dec39ec6c1a4a1",
+      "case_count": 1
+    },
+    {
+      "seed_group": 44,
+      "suffix_source": "exact_saved_suffix2048",
+      "cases": [
+        "anomaly.psf__requests-5414.call11.onset"
+      ],
+      "command": [
+        "timeout",
+        "3600",
+        "env",
+        "HF_HUB_OFFLINE=1",
+        "HF_DATASETS_OFFLINE=1",
+        "OMP_NUM_THREADS=16",
+        "MKL_NUM_THREADS=16",
+        "OPENBLAS_NUM_THREADS=16",
+        "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tools/precision_repro_hf.py",
+        "--cases",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-candidate/native-positive-candidates-seed44-suffix2048.json",
+        "--output",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-candidate/results/seed44-suffix2048",
+        "--tokens",
+        "512",
+        "--seeds",
+        "44",
+        "--prefill-chunk",
+        "512",
+        "--compare-dir",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/runs/served",
+        "--compare-dir",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/runs/full"
+      ],
+      "compare_dirs": [
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/runs/served",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/runs/full"
+      ],
+      "output_dir": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-candidate/results/seed44-suffix2048",
+      "timeout_seconds": 3600,
+      "serial_order": 4,
+      "loads_model_once_for_group": true,
+      "manifest": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-candidate/native-positive-candidates-seed44-suffix2048.json",
+      "manifest_sha256": "8be05cbc74c014acefe3372df69386534f31330b7276bdac0bed35e154fbd5c2",
+      "case_count": 1,
+      "prediction": {
+        "point_seconds": 1220.1832335699582,
+        "range_seconds": [
+          980,
+          3380
+        ],
+        "point_hours": 0.3389397871027662,
+        "range_hours": [
+          0.2722222222222222,
+          0.9388888888888889
+        ],
+        "basis": "Unmatched 2048-token prompt; provisional point retains historical 512-prompt median incremental case wall, while range expands the old 800\u20131600 case interval to 800\u20133200 to expose prefix-length/prefill uncertainty. No isolated prefill timing supports a tighter estimate."
+      }
+    },
+    {
+      "seed_group": 42,
+      "suffix_source": "exact_saved_suffix4096",
+      "cases": [
+        "anomaly.psf__requests-5414.call10.onset.suffix4096.seed42"
+      ],
+      "command": [
+        "timeout",
+        "7200",
+        "env",
+        "HF_HUB_OFFLINE=1",
+        "HF_DATASETS_OFFLINE=1",
+        "OMP_NUM_THREADS=16",
+        "MKL_NUM_THREADS=16",
+        "OPENBLAS_NUM_THREADS=16",
+        "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tools/precision_repro_hf.py",
+        "--cases",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-candidate/native-positive-candidates-seed42-suffix4096.json",
+        "--output",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-candidate/results/requests10-cap4096-seed42",
+        "--tokens",
+        "512",
+        "--seeds",
+        "42",
+        "--prefill-chunk",
+        "512",
+        "--compare-dir",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/runs/served",
+        "--compare-dir",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/runs/full"
+      ],
+      "compare_dirs": [
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/runs/served",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/runs/full"
+      ],
+      "output_dir": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-candidate/results/requests10-cap4096-seed42",
+      "timeout_seconds": 7200,
+      "serial_order": 5,
+      "loads_model_once_for_group": true,
+      "manifest": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-candidate/native-positive-candidates-seed42-suffix4096.json",
+      "manifest_sha256": "13667fc0b8c2c1dab6a1d276c24dd1e66eb763efdfae2f09539b70851079dac8",
+      "case_count": 1,
+      "prediction": {
+        "point_seconds": 1220.1832335699582,
+        "range_seconds": [
+          980,
+          3380
+        ],
+        "point_hours": 0.3389397871027662,
+        "range_hours": [
+          0.2722222222222222,
+          0.9388888888888889
+        ],
+        "basis": "Unmatched 2048-token prompt; provisional point retains historical 512-prompt median incremental case wall, while range expands the old 800\u20131600 case interval to 800\u20133200 to expose prefix-length/prefill uncertainty. No isolated prefill timing supports a tighter estimate."
+      }
+    },
+    {
+      "seed_group": 43,
+      "suffix_source": "exact_saved_suffix4096",
+      "cases": [
+        "anomaly.matplotlib__matplotlib-20488.call86.onset.suffix4096.seed43"
+      ],
+      "command": [
+        "timeout",
+        "7200",
+        "env",
+        "HF_HUB_OFFLINE=1",
+        "HF_DATASETS_OFFLINE=1",
+        "OMP_NUM_THREADS=16",
+        "MKL_NUM_THREADS=16",
+        "OPENBLAS_NUM_THREADS=16",
+        "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tools/precision_repro_hf.py",
+        "--cases",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-candidate/native-positive-candidates-seed43-suffix4096.json",
+        "--output",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-candidate/results/matplotlib86-cap4096-seed43",
+        "--tokens",
+        "512",
+        "--seeds",
+        "43",
+        "--prefill-chunk",
+        "512",
+        "--compare-dir",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/runs/served",
+        "--compare-dir",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/runs/full"
+      ],
+      "compare_dirs": [
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/runs/served",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/runs/full"
+      ],
+      "output_dir": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-candidate/results/matplotlib86-cap4096-seed43",
+      "timeout_seconds": 7200,
+      "serial_order": 6,
+      "loads_model_once_for_group": true,
+      "manifest": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-candidate/native-positive-candidates-seed43-suffix4096.json",
+      "manifest_sha256": "0dea5abb26a89e862306a89acdbef3a8c2c9e990defc60313b90795d47a857d2",
+      "case_count": 1,
+      "prediction": {
+        "point_seconds": 1220.1832335699582,
+        "range_seconds": [
+          980,
+          3380
+        ],
+        "point_hours": 0.3389397871027662,
+        "range_hours": [
+          0.2722222222222222,
+          0.9388888888888889
+        ],
+        "basis": "Unmatched 2048-token prompt; provisional point retains historical 512-prompt median incremental case wall, while range expands the old 800\u20131600 case interval to 800\u20133200 to expose prefix-length/prefill uncertainty. No isolated prefill timing supports a tighter estimate."
+      }
+    },
+    {
+      "seed_group": 43,
+      "suffix_source": "exact_saved_suffix2048",
+      "cases": [
+        "anomaly.sphinx-doc__sphinx-10323.call70.onset"
+      ],
+      "command": [
+        "timeout",
+        "3600",
+        "env",
+        "HF_HUB_OFFLINE=1",
+        "HF_DATASETS_OFFLINE=1",
+        "OMP_NUM_THREADS=16",
+        "MKL_NUM_THREADS=16",
+        "OPENBLAS_NUM_THREADS=16",
+        "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tools/precision_repro_hf.py",
+        "--cases",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-candidate/native-positive-candidates-seed43-suffix2048.json",
+        "--output",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-candidate/results/sphinx70-cap2048-seed43",
+        "--tokens",
+        "512",
+        "--seeds",
+        "43",
+        "--prefill-chunk",
+        "512",
+        "--compare-dir",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/runs/served",
+        "--compare-dir",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/runs/full"
+      ],
+      "compare_dirs": [
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/runs/served",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/runs/full"
+      ],
+      "output_dir": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-candidate/results/sphinx70-cap2048-seed43",
+      "timeout_seconds": 3600,
+      "serial_order": 7,
+      "loads_model_once_for_group": true,
+      "manifest": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-candidate/native-positive-candidates-seed43-suffix2048.json",
+      "manifest_sha256": "2f8afa3ee25882068428f09fc072eb85f0768f176c32f659fedd00f86ae6f9c8",
+      "case_count": 1,
+      "prediction": {
+        "point_seconds": 1220.1832335699582,
+        "range_seconds": [
+          980,
+          3380
+        ],
+        "point_hours": 0.3389397871027662,
+        "range_hours": [
+          0.2722222222222222,
+          0.9388888888888889
+        ],
+        "basis": "Unmatched 2048-token prompt; provisional point retains historical 512-prompt median incremental case wall, while range expands the old 800\u20131600 case interval to 800\u20133200 to expose prefix-length/prefill uncertainty. No isolated prefill timing supports a tighter estimate."
+      }
+    },
+    {
+      "seed_group": 43,
+      "suffix_source": "exact_saved_suffix8192",
+      "cases": [
+        "anomaly.call91.canonicalprefix.suffix8192.seed43"
+      ],
+      "command": [
+        "timeout",
+        "7200",
+        "env",
+        "HF_HUB_OFFLINE=1",
+        "HF_DATASETS_OFFLINE=1",
+        "OMP_NUM_THREADS=16",
+        "MKL_NUM_THREADS=16",
+        "OPENBLAS_NUM_THREADS=16",
+        "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tools/precision_repro_hf.py",
+        "--cases",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-candidate/native-positive-candidates-seed43-suffix8192.json",
+        "--output",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-candidate/results/call91-cap8192-seed43",
+        "--tokens",
+        "512",
+        "--seeds",
+        "43",
+        "--prefill-chunk",
+        "512",
+        "--compare-dir",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-canonicalprefix-suffix8192-p1pinfix-candidate/runs/served",
+        "--compare-dir",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-canonicalprefix-suffix8192-p1pinfix-candidate/runs/full"
+      ],
+      "compare_dirs": [
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-canonicalprefix-suffix8192-p1pinfix-candidate/runs/served",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-canonicalprefix-suffix8192-p1pinfix-candidate/runs/full"
+      ],
+      "output_dir": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-candidate/results/call91-cap8192-seed43",
+      "timeout_seconds": 7200,
+      "serial_order": 8,
+      "loads_model_once_for_group": true,
+      "manifest": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-candidate/native-positive-candidates-seed43-suffix8192.json",
+      "manifest_sha256": "24f689147e562376c157df2d80613f05525de8b9c174a3bcfd44ad8101277f65",
+      "case_count": 1,
+      "prediction": {
+        "point_seconds": 2336.5067936155738,
+        "range_seconds": [
+          1485.7519224153596,
+          5742.646502322758
+        ],
+        "point_hours": 0.6490296648932149,
+        "range_hours": [
+          0.41270886733759987,
+          1.595179583978544
+        ],
+        "timeout_seconds": 7200,
+        "basis": "call91 exact 8192-prefix sensitivity formula in call91-8192-cost-basis.json; no 8192 HF timing. Range is scenario-only, excludes possible long-context decode slowdown; timeout is hard cap, not an upper forecast bound."
+      }
+    }
+  ],
+  "source_integrity": {
+    "path": "source-integrity.json",
+    "sha256": "8930bc8196f4df36d186741d933d0ae1710dccc9b1552f9538648cc261ae1312"
+  },
+  "driver": {
+    "path": "run_expanded_after_predecessors.py",
+    "default": "inert unless --execute is supplied after root admission",
+    "pause_files": [
+      "STOP_BEFORE_LAUNCH",
+      "STOP_BETWEEN_GROUPS"
+    ],
+    "resume": "--resume accepts successful group-boundary checkpoints only",
+    "forecast_miss_behavior": "Blocks initial launch and each next serial group on an unaccepted forecast miss; records measured wall time and range."
+  },
+  "predecessor_gates": {
+    "P": {
+      "directory": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w",
+      "admission_sha256": "91dc764e6a3a6b1e8a1be51e6eee5fc958c19d1dfcfa3d057b989aa325618cdd",
+      "queue_status": "completed",
+      "required_exit_code": 0,
+      "completion": "completion.json"
+    },
+    "suffix8192": {
+      "directory": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-canonicalprefix-suffix8192-p1pinfix-candidate",
+      "admission_sha256": "300d69403a28112bc5f2a7225df5327bdb9e577ad9ca96cf754ab304f3538205",
+      "queue_status": "all_suffix8192_modes_completed"
+    },
+    "runtime_preflight_each_group": {
+      "device_owners": 0,
+      "active_hf_model_processes": 0,
+      "mem_available_min_bytes": 107374182400,
+      "serial_only": true
+    },
+    "forecast_misses": {
+      "requirement": "P and suffix8192 served/full elapsed_seconds must be within their frozen forecast ranges before HF starts and be revalidated before every group.",
+      "acceptance_status": "root_accepted_forecast_miss",
+      "acceptance_bindings": [
+        "reviewer=root",
+        "accepted=true",
+        "completion_sha256",
+        "measured_seconds",
+        "forecast_range_seconds",
+        "admission_sha256"
+      ],
+      "suffix8192_acceptance_files": [
+        "forecast-miss-accepted-served.json",
+        "forecast-miss-accepted-full.json"
+      ],
+      "hf_group_acceptance_file_pattern": "forecast-miss-accepted-group-NN.json",
+      "hf_group_extra_binding": "serial_order",
+      "behavior": "Pause after an out-of-range completed HF group; no next group until the exact hash-bound root acceptance is present."
+    },
+    "P2": {
+      "directory": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal",
+      "admission_sha256": "74bef162c97e23e882612eb85dae365f32c9da1f13ba4b9b8e1e1f8f582ad1be",
+      "proposal_sha256": "ddaaa015f62bd731afc6f9f19f37056a0f74d2071023338938420a3a080181a7",
+      "driver_sha256": "2bcfdcc1f018f2398212de0cd94119030dfe54b5dcc9f1578478b1771ecb1836",
+      "source_inventory_sha256": "d8d039fa8fefb072264bc902bc798dd260e00371151eda74b204a5c74a5418ad",
+      "queue_status": "completed",
+      "completion_exit_code": 0,
+      "forecast_range_source": "runtime-estimate.json forecast_seconds.low/high",
+      "forecast_miss_record": "forecast-miss-accepted.json"
+    },
+    "X_call91_positive": {
+      "directory": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-canonicalprefix-suffix8192-p1pinfix-candidate",
+      "admission_sha256": "300d69403a28112bc5f2a7225df5327bdb9e577ad9ca96cf754ab304f3538205",
+      "queue_status": "all_suffix8192_modes_completed",
+      "root_full_review_sha256": "6cfaba4136a3b38834e4aa8408074a8a89bbddcaa9277fb11565abb6d12fa90c",
+      "full_seed43_result_sha256": "10610713eed42214a5faf48fe4c33bd5be7a9041dc5034e762490b951c69b82b",
+      "served_seed43_result_sha256": "724d4df0cbc71b53938da054e4bb4345f4946ae4559ac3dc2e54fedbda1c4123"
+    }
+  },
+  "execution_driver": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-candidate/run_expanded_after_predecessors.py",
+  "execution_driver_sha256": "9511250e40fb64627e2273a6b8c209b7cfab0cdf11c3530ed7f703f8542dc34a",
+  "additional_predecessor_pending": {
+    "name": "P2 BF16/HiFi4 fixed108 panel",
+    "status": "awaiting root/B final execution path and admitted SHA; HF candidate cannot be admitted or executed until exact P2 terminal-success is pinned"
+  }
+}

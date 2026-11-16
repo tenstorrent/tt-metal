@@ -1,0 +1,37 @@
+{
+  "status": "host_only_implementation_and_tests_passed",
+  "scope": "Model-owned analytical decode-work estimate only. No serving-rate output or hardware traffic claim; no TT imports, HF loads, inference, or device commands.",
+  "implemented": [
+    "Computes physical attention, MLP gate/up, and down projection element counts and applies per-group storage width; lm_head width remains independent.",
+    "Preserves the established BFP4 decoder arithmetic branch exactly for baseline and head-only policies.",
+    "Accounts for BFP8 KV (1088/1024 bytes per element) and BF16 KV (2 bytes per element) in both estimated reads and writes.",
+    "Rejects incomplete/extra weight groups, unsupported labels/cache dtypes, and layer exceptions."
+  ],
+  "tests": {
+    "command": "python_env/bin/python -m unittest models.autoports.google_gemma_4_31b_it.tests.test_benchmark_work -v",
+    "result": "9 tests passed",
+    "coverage": [
+      "baseline/head-only weight arithmetic and unchanged non-weight terms",
+      "per-group bytes and projection element reconstruction",
+      "BF16 KV read and write scaling at 2/(1088/1024)=1.8823529411764706",
+      "all-BF16 weight+KV input",
+      "unsupported exceptions/groups/labels/cache dtype",
+      "existing prefill and phase-accounting tests"
+    ],
+    "imports": "Host-only benchmark_work and accounting modules; no ttnn import."
+  },
+  "runtime_isolation": {
+    "serving_runtime_edited": false,
+    "precision_or_serving_defaults_edited": false,
+    "active_accuracy_runner_edited": false,
+    "accuracy_runner_uses_this_estimator": "No. The reviewed runner performs model accuracy/runtime checks and does not execute tools/benchmark_work.py.",
+    "rates_or_candidate_selection_changed": false
+  },
+  "source_sha256": {
+    "implementation": "0fd668dcba7e9b7bc036f2cfa89186f2032d683e414059a5028a6b3ab9a92650",
+    "host_tests": "b02300d256f47f048d304c769ef79064ae123299606c1078a883bbe7a474aefa",
+    "accuracy_runner": "1390350c91b27b4f8563ffa8bd38224f6b06543668ca2a627c2c3ecea756a287",
+    "reviewed_proposal_patch": "46df3e267b31485950f87178553117cc643f84bb9e3cad4001dfd43db65ace5f",
+    "reviewed_memory_planning": "7e61a99bf0f47e839bb85648f7756dfc73853041c84e8acdd8529099effd0aed"
+  }
+}

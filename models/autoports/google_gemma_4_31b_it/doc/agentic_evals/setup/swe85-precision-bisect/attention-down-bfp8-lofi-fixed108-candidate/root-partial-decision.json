@@ -1,0 +1,17 @@
+{
+  "status": "not_acceptable_on_partial_evidence_panel_continues",
+  "indices": [
+    0,
+    32
+  ],
+  "root_visible_output_check": "Index0 sustained repeated l tokens through1024 cap; index32 pseudo-tool narration with quoted JSON and malformed channel delimiters through256 cap. Affirmative anomalies, not failures solely for reaching cap.",
+  "comparison": "Matching P3 and P2 HEAD-ONLY BF16/HiFi4 controls terminate normally. P2 body remains BFP4/LoFi and is not full precision. Exact prompt/seed matches are retained. Actual all-group full-precision comparison is being located separately; the P6 regression versus P3 remains established.",
+  "triage_sha256": "78b315e4e8bc325d738b7ef6e1684ef6ebdc046cdb1a918641feaf1cd42fadac",
+  "next": "Finish bounded active panel; prepare attentionBFP8HiFi2 comparison holding other groups unchanged. No selection/server/rate change.",
+  "triage_snapshot": "triage-b-at-partial-decision.json",
+  "attribution_correction": {
+    "epoch": 1794751814.903584,
+    "previous_sha256": "966fac50f300269fccd379f4b5404fbc45bba2d6f6911a053de0e31caf6862a0",
+    "reason": "Root runtime inspection found P2 had been mislabeled fullBF16; bodyweightgroups are BFP4, only lm_head BF16HiFi4."
+  }
+}

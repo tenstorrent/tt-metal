@@ -1,0 +1,29 @@
+{
+  "created_unix": 1794786642.5281467,
+  "branch": "v5-extended-run",
+  "parent_commit": "8a68d14dbf6788609fe0356d2a8c67e2b37b08d1",
+  "stage_status": "not_passed_yet",
+  "purpose": "Local evidence checkpoint required by the operator; not a stage clean-pass or release commit.",
+  "isolation": "Only explicit curated stage-owned paths will be committed; unrelated staged benchmark report and stage_usage remain unchanged.",
+  "checks": [
+    "post-format-host-tests.json",
+    "pre-commit-python-final.json",
+    "pre-commit-artifacts-final.json",
+    "pre-commit-final-curated.json",
+    "final-gate-check.json",
+    "stage12-final-review.md"
+  ],
+  "pending": [
+    "final status-label reconciliation",
+    "local evidence checkpoint and SHA record"
+  ],
+  "telemetry_packet": "/home/mvasiljevic/v5-agentic/logs/telemetry/packets/11ae0f9c-df27-4fdd-95fe-cf14076f2e61.json",
+  "review_verdict": "more-work-needed; continuation authorization required",
+  "commit_message": "Record stage 12 evaluation and precision-repair evidence (not passed yet)",
+  "not_in_commit": [
+    "unrelated staged benchmark report and stage_usage",
+    "raw run logs and private outputs",
+    "copied task source/workspaces",
+    "model weights, tensors and credentials"
+  ]
+}

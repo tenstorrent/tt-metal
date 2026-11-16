@@ -1,0 +1,801 @@
+{
+  "status": "cpu_only_stock_gemma4parser_full_prefix_plus_p2_generated_outputs",
+  "created_utc": "2026-11-15T07:21:59.989077+00:00",
+  "note": "The full-prefix audits use the exact P1 request/source prefix and P2 free-running token IDs; run files were only staged under /tmp for the existing guarded parser script. No TTNN imported.",
+  "source_audits": [
+    {
+      "source": "/tmp/p2-sympy-parser-audit.json",
+      "sha256": "530ae796609e61997a4a5f08301e141e72ab12a9def8afd708feadca5e4fabbd",
+      "selected_jobs": [
+        "anomaly.sympy__sympy-13551.call1.onset",
+        "anomaly.sympy__sympy-18763.call1.onset",
+        "anomaly.sympy__sympy-14711.call1.onset"
+      ],
+      "completed_trials": 9,
+      "errors": []
+    },
+    {
+      "source": "/tmp/p2-13878-parser-audit.json",
+      "sha256": "a25b51bc765a6df0a7368f643b6a16bd3e772118a50b5ad911c8206954fee4db",
+      "selected_jobs": [
+        "anomaly.sympy__sympy-13878.call1.onset"
+      ],
+      "completed_trials": 3,
+      "errors": []
+    }
+  ],
+  "rows": [
+    {
+      "seed": 42,
+      "tokens": 168,
+      "at_requested_token_cap": false,
+      "generated_has_tool_close_token": true,
+      "generated_last_id": 50,
+      "generated_head_ids": [
+        101,
+        49,
+        6639,
+        236787,
+        42422,
+        236782,
+        7674,
+        236787,
+        52,
+        9307,
+        2986,
+        236789
+      ],
+      "generated_text_head": "<channel|><tool_call|>call:bash{command:<|\"|>cat <<'EOF' > reproduce_issue.py\nfrom sympy import *\nfr",
+      "generated_text_tail": "ython3 reproduce_issue.py\n<|\"|>}<tool_call|><|tool_response>",
+      "conditioning_plus_generated": {
+        "structured_tool_count": 0,
+        "missing_tool": true,
+        "malformed_name": false,
+        "invalid_arguments": false,
+        "tools": [],
+        "visible_content_chars": 471,
+        "visible_content_head": "I will start by creating a reproduction script to confirm the bug.\n\ncall:bash{command:<|\"|>cat <<'EOF' > reproduce_issue",
+        "reasoning_chars": 347,
+        "visible_GetAll_bash": false,
+        "visible_pseudo_call": true,
+        "reasoning_literal_thought_tail": false
+      },
+      "generated_only": {
+        "structured_tool_count": 0,
+        "missing_tool": true,
+        "malformed_name": false,
+        "invalid_arguments": false,
+        "tools": [],
+        "visible_content_chars": 403,
+        "visible_content_head": "call:bash{command:<|\"|>cat <<'EOF' > reproduce_issue.py\nfrom sympy import *\nfrom sympy.abc import n, k\n\np = Product(n + ",
+        "reasoning_chars": 0,
+        "visible_GetAll_bash": false,
+        "visible_pseudo_call": true,
+        "reasoning_literal_thought_tail": false
+      },
+      "mechanical_flag_from_runner": false,
+      "mechanical_repetition_not_adjudicated_by_parser": true
+    },
+    {
+      "seed": 43,
+      "tokens": 162,
+      "at_requested_token_cap": false,
+      "generated_has_tool_close_token": true,
+      "generated_last_id": 50,
+      "generated_head_ids": [
+        101,
+        85784,
+        236772,
+        51128,
+        236772,
+        42422,
+        107,
+        100,
+        45518,
+        107,
+        101,
+        48
+      ],
+      "generated_text_head": "<channel|> Unlimited-budget-bash\n<|channel>thought\n<channel|><|tool_call>call:bash{command:<|\"|>cat ",
+      "generated_text_tail": "ython3 reproduce_issue.py\n<|\"|>}<tool_call|><|tool_response>",
+      "conditioning_plus_generated": {
+        "structured_tool_count": 1,
+        "missing_tool": false,
+        "malformed_name": false,
+        "invalid_arguments": false,
+        "tools": [
+          {
+            "name": "bash",
+            "expected_bash": true,
+            "valid_json": true,
+            "valid_command_schema": true,
+            "argument_keys": [
+              "command"
+            ]
+          }
+        ],
+        "visible_content_chars": 90,
+        "visible_content_head": "I will start by creating a reproduction script to confirm the bug.\n\n Unlimited-budget-bash",
+        "reasoning_chars": 354,
+        "visible_GetAll_bash": false,
+        "visible_pseudo_call": false,
+        "reasoning_literal_thought_tail": true
+      },
+      "generated_only": {
+        "structured_tool_count": 1,
+        "missing_tool": false,
+        "malformed_name": false,
+        "invalid_arguments": false,
+        "tools": [
+          {
+            "name": "bash",
+            "expected_bash": true,
+            "valid_json": true,
+            "valid_command_schema": true,
+            "argument_keys": [
+              "command"
+            ]
+          }
+        ],
+        "visible_content_chars": 21,
+        "visible_content_head": "Unlimited-budget-bash",
+        "reasoning_chars": 0,
+        "visible_GetAll_bash": false,
+        "visible_pseudo_call": false,
+        "reasoning_literal_thought_tail": false
+      },
+      "mechanical_flag_from_runner": false,
+      "mechanical_repetition_not_adjudicated_by_parser": true
+    },
+    {
+      "seed": 44,
+      "tokens": 162,
+      "at_requested_token_cap": false,
+      "generated_has_tool_close_token": true,
+      "generated_last_id": 50,
+      "generated_head_ids": [
+        101,
+        48,
+        6639,
+        236787,
+        42422,
+        236782,
+        7674,
+        236787,
+        52,
+        9307,
+        2986,
+        236789
+      ],
+      "generated_text_head": "<channel|><|tool_call>call:bash{command:<|\"|>cat <<'EOF' > reproduce_bug.py\nfrom sympy import *\nfrom",
+      "generated_text_tail": "\npython3 reproduce_bug.py\n<|\"|>}<tool_call|><|tool_response>",
+      "conditioning_plus_generated": {
+        "structured_tool_count": 1,
+        "missing_tool": false,
+        "malformed_name": false,
+        "invalid_arguments": false,
+        "tools": [
+          {
+            "name": "bash",
+            "expected_bash": true,
+            "valid_json": true,
+            "valid_command_schema": true,
+            "argument_keys": [
+              "command"
+            ]
+          }
+        ],
+        "visible_content_chars": 66,
+        "visible_content_head": "I will start by creating a reproduction script to confirm the bug.",
+        "reasoning_chars": 347,
+        "visible_GetAll_bash": false,
+        "visible_pseudo_call": false,
+        "reasoning_literal_thought_tail": false
+      },
+      "generated_only": {
+        "structured_tool_count": 1,
+        "missing_tool": false,
+        "malformed_name": false,
+        "invalid_arguments": false,
+        "tools": [
+          {
+            "name": "bash",
+            "expected_bash": true,
+            "valid_json": true,
+            "valid_command_schema": true,
+            "argument_keys": [
+              "command"
+            ]
+          }
+        ],
+        "visible_content_chars": 0,
+        "visible_content_head": "",
+        "reasoning_chars": 0,
+        "visible_GetAll_bash": false,
+        "visible_pseudo_call": false,
+        "reasoning_literal_thought_tail": false
+      },
+      "mechanical_flag_from_runner": false,
+      "mechanical_repetition_not_adjudicated_by_parser": true
+    },
+    {
+      "seed": 42,
+      "tokens": 78,
+      "at_requested_token_cap": false,
+      "generated_has_tool_close_token": true,
+      "generated_last_id": 50,
+      "generated_head_ids": [
+        48,
+        6639,
+        236787,
+        42422,
+        236782,
+        7674,
+        236787,
+        52,
+        9307,
+        2986,
+        236789,
+        98395
+      ],
+      "generated_text_head": "<|tool_call>call:bash{command:<|\"|>cat <<'EOF' > reproduce_issue.py\nfrom sympy import Subs\nfrom symp",
+      "generated_text_tail": "ython3 reproduce_issue.py\n<|\"|>}<tool_call|><|tool_response>",
+      "conditioning_plus_generated": {
+        "structured_tool_count": 1,
+        "missing_tool": false,
+        "malformed_name": false,
+        "invalid_arguments": false,
+        "tools": [
+          {
+            "name": "bash",
+            "expected_bash": true,
+            "valid_json": true,
+            "valid_command_schema": true,
+            "argument_keys": [
+              "command"
+            ]
+          }
+        ],
+        "visible_content_chars": 68,
+        "visible_content_head": "I will start by creating a reproduction script to confirm the issue.",
+        "reasoning_chars": 544,
+        "visible_GetAll_bash": false,
+        "visible_pseudo_call": false,
+        "reasoning_literal_thought_tail": false
+      },
+      "generated_only": {
+        "structured_tool_count": 1,
+        "missing_tool": false,
+        "malformed_name": false,
+        "invalid_arguments": false,
+        "tools": [
+          {
+            "name": "bash",
+            "expected_bash": true,
+            "valid_json": true,
+            "valid_command_schema": true,
+            "argument_keys": [
+              "command"
+            ]
+          }
+        ],
+        "visible_content_chars": 0,
+        "visible_content_head": "",
+        "reasoning_chars": 0,
+        "visible_GetAll_bash": false,
+        "visible_pseudo_call": false,
+        "reasoning_literal_thought_tail": false
+      },
+      "mechanical_flag_from_runner": false,
+      "mechanical_repetition_not_adjudicated_by_parser": true
+    },
+    {
+      "seed": 43,
+      "tokens": 91,
+      "at_requested_token_cap": false,
+      "generated_has_tool_close_token": true,
+      "generated_last_id": 50,
+      "generated_head_ids": [
+        101,
+        49,
+        6639,
+        236787,
+        42422,
+        236782,
+        7674,
+        236787,
+        52,
+        9307,
+        2986,
+        236789
+      ],
+      "generated_text_head": "<channel|><tool_call|>call:bash{command:<|\"|>cat <<'EOF' > reproduce_issue.py\nfrom sympy import Subs",
+      "generated_text_tail": "ython3 reproduce_issue.py\n<|\"|>}<tool_call|><|tool_response>",
+      "conditioning_plus_generated": {
+        "structured_tool_count": 0,
+        "missing_tool": true,
+        "malformed_name": false,
+        "invalid_arguments": false,
+        "tools": [],
+        "visible_content_chars": 317,
+        "visible_content_head": "I will start by creating a reproduction script to confirm the issue.\n\ncall:bash{command:<|\"|>cat <<'EOF' > reproduce_iss",
+        "reasoning_chars": 544,
+        "visible_GetAll_bash": false,
+        "visible_pseudo_call": true,
+        "reasoning_literal_thought_tail": false
+      },
+      "generated_only": {
+        "structured_tool_count": 0,
+        "missing_tool": true,
+        "malformed_name": false,
+        "invalid_arguments": false,
+        "tools": [],
+        "visible_content_chars": 247,
+        "visible_content_head": "call:bash{command:<|\"|>cat <<'EOF' > reproduce_issue.py\nfrom sympy import Subs, latex\nfrom sympy.abc import x, y\n\nexpr =",
+        "reasoning_chars": 0,
+        "visible_GetAll_bash": false,
+        "visible_pseudo_call": true,
+        "reasoning_literal_thought_tail": false
+      },
+      "mechanical_flag_from_runner": false,
+      "mechanical_repetition_not_adjudicated_by_parser": true
+    },
+    {
+      "seed": 44,
+      "tokens": 90,
+      "at_requested_token_cap": false,
+      "generated_has_tool_close_token": true,
+      "generated_last_id": 50,
+      "generated_head_ids": [
+        48,
+        6639,
+        236787,
+        42422,
+        236782,
+        7674,
+        236787,
+        52,
+        9307,
+        2986,
+        236789,
+        98395
+      ],
+      "generated_text_head": "<|tool_call>call:bash{command:<|\"|>cat <<'EOF' > reproduce_issue.py\nfrom sympy import Subs, latex\nfr",
+      "generated_text_tail": "ython3 reproduce_issue.py\n<|\"|>}<tool_call|><|tool_response>",
+      "conditioning_plus_generated": {
+        "structured_tool_count": 1,
+        "missing_tool": false,
+        "malformed_name": false,
+        "invalid_arguments": false,
+        "tools": [
+          {
+            "name": "bash",
+            "expected_bash": true,
+            "valid_json": true,
+            "valid_command_schema": true,
+            "argument_keys": [
+              "command"
+            ]
+          }
+        ],
+        "visible_content_chars": 68,
+        "visible_content_head": "I will start by creating a reproduction script to confirm the issue.",
+        "reasoning_chars": 544,
+        "visible_GetAll_bash": false,
+        "visible_pseudo_call": false,
+        "reasoning_literal_thought_tail": false
+      },
+      "generated_only": {
+        "structured_tool_count": 1,
+        "missing_tool": false,
+        "malformed_name": false,
+        "invalid_arguments": false,
+        "tools": [
+          {
+            "name": "bash",
+            "expected_bash": true,
+            "valid_json": true,
+            "valid_command_schema": true,
+            "argument_keys": [
+              "command"
+            ]
+          }
+        ],
+        "visible_content_chars": 0,
+        "visible_content_head": "",
+        "reasoning_chars": 0,
+        "visible_GetAll_bash": false,
+        "visible_pseudo_call": false,
+        "reasoning_literal_thought_tail": false
+      },
+      "mechanical_flag_from_runner": false,
+      "mechanical_repetition_not_adjudicated_by_parser": true
+    },
+    {
+      "seed": 42,
+      "tokens": 139,
+      "at_requested_token_cap": false,
+      "generated_has_tool_close_token": true,
+      "generated_last_id": 50,
+      "generated_head_ids": [
+        101,
+        236777,
+        795,
+        1502,
+        684,
+        7107,
+        496,
+        32029,
+        8948,
+        531,
+        9128,
+        506
+      ],
+      "generated_text_head": "<channel|>I will start by creating a reproduction script to confirm the issue.\n\n<channel|><|tool_cal",
+      "generated_text_tail": "ython3 reproduce_issue.py\n<|\"|>}<tool_call|><|tool_response>",
+      "conditioning_plus_generated": {
+        "structured_tool_count": 1,
+        "missing_tool": false,
+        "malformed_name": false,
+        "invalid_arguments": false,
+        "tools": [
+          {
+            "name": "bash",
+            "expected_bash": true,
+            "valid_json": true,
+            "valid_command_schema": true,
+            "argument_keys": [
+              "command"
+            ]
+          }
+        ],
+        "visible_content_chars": 68,
+        "visible_content_head": "I will start by creating a reproduction script to confirm the issue.",
+        "reasoning_chars": 657,
+        "visible_GetAll_bash": false,
+        "visible_pseudo_call": false,
+        "reasoning_literal_thought_tail": false
+      },
+      "generated_only": {
+        "structured_tool_count": 1,
+        "missing_tool": false,
+        "malformed_name": false,
+        "invalid_arguments": false,
+        "tools": [
+          {
+            "name": "bash",
+            "expected_bash": true,
+            "valid_json": true,
+            "valid_command_schema": true,
+            "argument_keys": [
+              "command"
+            ]
+          }
+        ],
+        "visible_content_chars": 68,
+        "visible_content_head": "I will start by creating a reproduction script to confirm the issue.",
+        "reasoning_chars": 0,
+        "visible_GetAll_bash": false,
+        "visible_pseudo_call": false,
+        "reasoning_literal_thought_tail": false
+      },
+      "mechanical_flag_from_runner": false,
+      "mechanical_repetition_not_adjudicated_by_parser": true
+    },
+    {
+      "seed": 43,
+      "tokens": 119,
+      "at_requested_token_cap": false,
+      "generated_has_tool_close_token": true,
+      "generated_last_id": 50,
+      "generated_head_ids": [
+        101,
+        236777,
+        795,
+        1502,
+        684,
+        7107,
+        496,
+        32029,
+        8948,
+        531,
+        9128,
+        506
+      ],
+      "generated_text_head": "<channel|>I will start by creating a reproduction script to confirm the issue.\n\n<channel|><tool_call",
+      "generated_text_tail": "ython3 reproduce_issue.py\n<|\"|>}<tool_call|><|tool_response>",
+      "conditioning_plus_generated": {
+        "structured_tool_count": 0,
+        "missing_tool": true,
+        "malformed_name": false,
+        "invalid_arguments": false,
+        "tools": [],
+        "visible_content_chars": 405,
+        "visible_content_head": "I will start by creating a reproduction script to confirm the issue.\n\ncall:bash{command:<|\"|>cat <<'EOF' > reproduce_iss",
+        "reasoning_chars": 657,
+        "visible_GetAll_bash": false,
+        "visible_pseudo_call": true,
+        "reasoning_literal_thought_tail": false
+      },
+      "generated_only": {
+        "structured_tool_count": 0,
+        "missing_tool": true,
+        "malformed_name": false,
+        "invalid_arguments": false,
+        "tools": [],
+        "visible_content_chars": 405,
+        "visible_content_head": "I will start by creating a reproduction script to confirm the issue.\n\ncall:bash{command:<|\"|>cat <<'EOF' > reproduce_iss",
+        "reasoning_chars": 0,
+        "visible_GetAll_bash": false,
+        "visible_pseudo_call": true,
+        "reasoning_literal_thought_tail": false
+      },
+      "mechanical_flag_from_runner": false,
+      "mechanical_repetition_not_adjudicated_by_parser": true
+    },
+    {
+      "seed": 44,
+      "tokens": 117,
+      "at_requested_token_cap": false,
+      "generated_has_tool_close_token": true,
+      "generated_last_id": 50,
+      "generated_head_ids": [
+        101,
+        236777,
+        795,
+        1502,
+        684,
+        119364,
+        506,
+        4186,
+        607,
+        496,
+        8948,
+        236761
+      ],
+      "generated_text_head": "<channel|>I will start by reproducing the issue with a script.\n\n<channel|><tool_call|>call:bash{comm",
+      "generated_text_tail": "ython3 reproduce_issue.py\n<|\"|>}<tool_call|><|tool_response>",
+      "conditioning_plus_generated": {
+        "structured_tool_count": 0,
+        "missing_tool": true,
+        "malformed_name": false,
+        "invalid_arguments": false,
+        "tools": [],
+        "visible_content_chars": 389,
+        "visible_content_head": "I will start by reproducing the issue with a script.\n\ncall:bash{command:<|\"|>cat <<'EOF' > reproduce_issue.py\nfrom sympy",
+        "reasoning_chars": 657,
+        "visible_GetAll_bash": false,
+        "visible_pseudo_call": true,
+        "reasoning_literal_thought_tail": false
+      },
+      "generated_only": {
+        "structured_tool_count": 0,
+        "missing_tool": true,
+        "malformed_name": false,
+        "invalid_arguments": false,
+        "tools": [],
+        "visible_content_chars": 389,
+        "visible_content_head": "I will start by reproducing the issue with a script.\n\ncall:bash{command:<|\"|>cat <<'EOF' > reproduce_issue.py\nfrom sympy",
+        "reasoning_chars": 0,
+        "visible_GetAll_bash": false,
+        "visible_pseudo_call": true,
+        "reasoning_literal_thought_tail": false
+      },
+      "mechanical_flag_from_runner": false,
+      "mechanical_repetition_not_adjudicated_by_parser": true
+    },
+    {
+      "seed": 42,
+      "tokens": 19,
+      "at_requested_token_cap": false,
+      "generated_has_tool_close_token": true,
+      "generated_last_id": 50,
+      "generated_head_ids": [
+        101,
+        48,
+        6639,
+        236787,
+        42422,
+        236782,
+        7674,
+        236787,
+        52,
+        5629,
+        753,
+        236794
+      ],
+      "generated_text_head": "<channel|><|tool_call>call:bash{command:<|\"|>ls -R sympy/stats<|\"|>}<tool_call|><|tool_response>",
+      "generated_text_tail": "and:<|\"|>ls -R sympy/stats<|\"|>}<tool_call|><|tool_response>",
+      "conditioning_plus_generated": {
+        "structured_tool_count": 1,
+        "missing_tool": false,
+        "malformed_name": false,
+        "invalid_arguments": false,
+        "tools": [
+          {
+            "name": "bash",
+            "expected_bash": true,
+            "valid_json": true,
+            "valid_command_schema": true,
+            "argument_keys": [
+              "command"
+            ]
+          }
+        ],
+        "visible_content_chars": 124,
+        "visible_content_head": "I will start by exploring the `sympy/stats` directory to locate the definitions of the distributions mentioned in the is",
+        "reasoning_chars": 684,
+        "visible_GetAll_bash": false,
+        "visible_pseudo_call": false,
+        "reasoning_literal_thought_tail": false
+      },
+      "generated_only": {
+        "structured_tool_count": 1,
+        "missing_tool": false,
+        "malformed_name": false,
+        "invalid_arguments": false,
+        "tools": [
+          {
+            "name": "bash",
+            "expected_bash": true,
+            "valid_json": true,
+            "valid_command_schema": true,
+            "argument_keys": [
+              "command"
+            ]
+          }
+        ],
+        "visible_content_chars": 0,
+        "visible_content_head": "",
+        "reasoning_chars": 0,
+        "visible_GetAll_bash": false,
+        "visible_pseudo_call": false,
+        "reasoning_literal_thought_tail": false
+      },
+      "mechanical_flag_from_runner": false,
+      "mechanical_repetition_not_adjudicated_by_parser": true
+    },
+    {
+      "seed": 43,
+      "tokens": 18,
+      "at_requested_token_cap": false,
+      "generated_has_tool_close_token": true,
+      "generated_last_id": 50,
+      "generated_head_ids": [
+        48,
+        6639,
+        236787,
+        42422,
+        236782,
+        7674,
+        236787,
+        52,
+        5629,
+        753,
+        236794,
+        228510
+      ],
+      "generated_text_head": "<|tool_call>call:bash{command:<|\"|>ls -R sympy/stats<|\"|>}<tool_call|><|tool_response>",
+      "generated_text_tail": "and:<|\"|>ls -R sympy/stats<|\"|>}<tool_call|><|tool_response>",
+      "conditioning_plus_generated": {
+        "structured_tool_count": 1,
+        "missing_tool": false,
+        "malformed_name": false,
+        "invalid_arguments": false,
+        "tools": [
+          {
+            "name": "bash",
+            "expected_bash": true,
+            "valid_json": true,
+            "valid_command_schema": true,
+            "argument_keys": [
+              "command"
+            ]
+          }
+        ],
+        "visible_content_chars": 124,
+        "visible_content_head": "I will start by exploring the `sympy/stats` directory to locate the definitions of the distributions mentioned in the is",
+        "reasoning_chars": 684,
+        "visible_GetAll_bash": false,
+        "visible_pseudo_call": false,
+        "reasoning_literal_thought_tail": false
+      },
+      "generated_only": {
+        "structured_tool_count": 1,
+        "missing_tool": false,
+        "malformed_name": false,
+        "invalid_arguments": false,
+        "tools": [
+          {
+            "name": "bash",
+            "expected_bash": true,
+            "valid_json": true,
+            "valid_command_schema": true,
+            "argument_keys": [
+              "command"
+            ]
+          }
+        ],
+        "visible_content_chars": 0,
+        "visible_content_head": "",
+        "reasoning_chars": 0,
+        "visible_GetAll_bash": false,
+        "visible_pseudo_call": false,
+        "reasoning_literal_thought_tail": false
+      },
+      "mechanical_flag_from_runner": false,
+      "mechanical_repetition_not_adjudicated_by_parser": true
+    },
+    {
+      "seed": 44,
+      "tokens": 22,
+      "at_requested_token_cap": false,
+      "generated_has_tool_close_token": true,
+      "generated_last_id": 50,
+      "generated_head_ids": [
+        101,
+        48,
+        6639,
+        236787,
+        42422,
+        236782,
+        7674,
+        236787,
+        52,
+        4114,
+        228510,
+        236786
+      ],
+      "generated_text_head": "<channel|><|tool_call>call:bash{command:<|\"|>find sympy/stats -name \"*.py\"<|\"|>}<tool_call|><|tool_r",
+      "generated_text_tail": "d sympy/stats -name \"*.py\"<|\"|>}<tool_call|><|tool_response>",
+      "conditioning_plus_generated": {
+        "structured_tool_count": 1,
+        "missing_tool": false,
+        "malformed_name": false,
+        "invalid_arguments": false,
+        "tools": [
+          {
+            "name": "bash",
+            "expected_bash": true,
+            "valid_json": true,
+            "valid_command_schema": true,
+            "argument_keys": [
+              "command"
+            ]
+          }
+        ],
+        "visible_content_chars": 124,
+        "visible_content_head": "I will start by exploring the `sympy/stats` directory to locate the definitions of the distributions mentioned in the is",
+        "reasoning_chars": 684,
+        "visible_GetAll_bash": false,
+        "visible_pseudo_call": false,
+        "reasoning_literal_thought_tail": false
+      },
+      "generated_only": {
+        "structured_tool_count": 1,
+        "missing_tool": false,
+        "malformed_name": false,
+        "invalid_arguments": false,
+        "tools": [
+          {
+            "name": "bash",
+            "expected_bash": true,
+            "valid_json": true,
+            "valid_command_schema": true,
+            "argument_keys": [
+              "command"
+            ]
+          }
+        ],
+        "visible_content_chars": 0,
+        "visible_content_head": "",
+        "reasoning_chars": 0,
+        "visible_GetAll_bash": false,
+        "visible_pseudo_call": false,
+        "reasoning_literal_thought_tail": false
+      },
+      "mechanical_flag_from_runner": false,
+      "mechanical_repetition_not_adjudicated_by_parser": true
+    }
+  ]
+}

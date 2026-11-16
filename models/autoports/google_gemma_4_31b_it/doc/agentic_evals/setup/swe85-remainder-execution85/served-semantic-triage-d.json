@@ -1,0 +1,135 @@
+{
+  "status": "host_only_diagnostic_triage_complete",
+  "scope": "Served completed trials excluded from served-semantic-coordinator-first24.json; text and saved parser observations only. No inference, device, container, or network actions.",
+  "source_index": "completed-anomaly-review-index.json",
+  "learned_source": "../../learned.json",
+  "coordinator_exclusion_source": "served-semantic-coordinator-first24.json",
+  "counts": {
+    "other_anomaly": 3,
+    "reproduced_native_motif": 3,
+    "inconclusive": 5,
+    "normal": 1
+  },
+  "trials": [
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset",
+      "seed": 42,
+      "verdict": "other_anomaly",
+      "quote": "\n# I will modify docutils/parsers/rst/directives/misc.py to implement the fix.\n# I'll use a python script",
+      "field": "conditioning_plus_generated parser: malformed tool name and invalid arguments",
+      "confidence": "high",
+      "cap": true,
+      "rationale": "The generated shell body is appended immediately after the already-conditioned bash name without the required argument delimiter. Full-prefix parser records malformed_name=true and invalid_arguments=true. This is a protocol/argument-boundary anomaly, distinct from the native repeated-token motif; the code itself is not the anomaly."
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset",
+      "seed": 43,
+      "verdict": "other_anomaly",
+      "quote": "\n# Modify docutils's Include.run to emit 'source-read' event.\n# We'll need to be careful about imports.\n\n",
+      "field": "conditioning_plus_generated parser: malformed tool name and invalid arguments",
+      "confidence": "high",
+      "cap": true,
+      "rationale": "The generated shell body is appended immediately after the already-conditioned bash name without the required argument delimiter. Full-prefix parser records malformed_name=true and invalid_arguments=true. This is a protocol/argument-boundary anomaly, distinct from the native repeated-token motif; the code itself is not the anomaly."
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset",
+      "seed": 44,
+      "verdict": "other_anomaly",
+      "quote": "\n# I will modify docutils's Include.run to emit the 'source-read' event if it's running within Sphinx.\n# ",
+      "field": "conditioning_plus_generated parser: malformed tool name and invalid arguments",
+      "confidence": "high",
+      "cap": true,
+      "rationale": "The generated shell body is appended immediately after the already-conditioned bash name without the required argument delimiter. Full-prefix parser records malformed_name=true and invalid_arguments=true. This is a protocol/argument-boundary anomaly, distinct from the native repeated-token motif; the code itself is not the anomaly."
+    },
+    {
+      "job": "anomaly.call91.canonicalprefix",
+      "seed": 42,
+      "verdict": "reproduced_native_motif",
+      "quote": "'ve’ve've’ve messed up the file, I'll just use a version of the file \n# and fix it. But I don't",
+      "field": "$.free_running[0].text",
+      "confidence": "high",
+      "cap": false,
+      "rationale": "Repeated contraction fragment at response start (for example ve/’ve repeated), matching the learned stray/repeated-token motif. This is visible generated content, not a raw tool marker."
+    },
+    {
+      "job": "anomaly.call91.canonicalprefix",
+      "seed": 43,
+      "verdict": "reproduced_native_motif",
+      "quote": "’ve’ve’ve’ve’ve messed up the file, I'll just use a a more robust approach.\n# I'll just use the",
+      "field": "$.free_running[1].text",
+      "confidence": "high",
+      "cap": false,
+      "rationale": "Repeated contraction fragment at response start (for example ve/’ve repeated), matching the learned stray/repeated-token motif. This is visible generated content, not a raw tool marker."
+    },
+    {
+      "job": "anomaly.call91.canonicalprefix",
+      "seed": 44,
+      "verdict": "reproduced_native_motif",
+      "quote": "'ve’ve’ve’ve messed up the file, I'll just try to be very careful.\n\n# I'll just use a simple re",
+      "field": "$.free_running[2].text",
+      "confidence": "high",
+      "cap": false,
+      "rationale": "Repeated contraction fragment at response start (for example ve/’ve repeated), matching the learned stray/repeated-token motif. This is visible generated content, not a raw tool marker."
+    },
+    {
+      "job": "anomaly.pytest-dev__pytest-5787.call65.onset",
+      "seed": 42,
+      "verdict": "inconclusive",
+      "quote": " find the start and end of _to_json and _from_json and replace them.\n\ndef replace_method(content, method_",
+      "field": "$.free_running[0].text",
+      "confidence": "high",
+      "cap": true,
+      "rationale": "At-cap output continues coherent code/action and does not exhibit the learned I will’ll repetition. Capped progressing output is inconclusive, not completed normal."
+    },
+    {
+      "job": "anomaly.pytest-dev__pytest-5787.call65.onset",
+      "seed": 43,
+      "verdict": "inconclusive",
+      "quote": " replace the _to_json method with a new one that handles the chain.\n# and _from_json method with a new on",
+      "field": "$.free_running[1].text",
+      "confidence": "high",
+      "cap": true,
+      "rationale": "At-cap output continues coherent code/action and does not exhibit the learned I will’ll repetition. Capped progressing output is inconclusive, not completed normal."
+    },
+    {
+      "job": "anomaly.pytest-dev__pytest-5787.call65.onset",
+      "seed": 44,
+      "verdict": "normal",
+      "quote": " find the start and end of _to_json and _from_json and replace them.\n# Since I cannot easily do that with regex, I'll just us",
+      "field": "$.free_running[2].text",
+      "confidence": "high",
+      "cap": false,
+      "rationale": "Completed uncapped response contains coherent code/commentary, including a repeated explanatory comment but no repeated-token fragment matching the native I will’ll motif and no evidence of an independent anomaly."
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset",
+      "seed": 42,
+      "verdict": "inconclusive",
+      "quote": "{command:<|\"|>cat <<'EOF' > replacement_include.py\n    def run(self) -> List[Node]:\n        if self.argum",
+      "field": "generated text; conditioning_plus_generated parser refresh pending",
+      "confidence": "medium",
+      "cap": true,
+      "rationale": "Capped response visibly begins with a command argument fragment while the conditioning supplies the tool opener; the index records parser output completed after its snapshot and requires refresh. Do not classify raw tool markers or an argument fragment alone as anomalous, and do not claim normal while parser state is pending."
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset",
+      "seed": 43,
+      "verdict": "inconclusive",
+      "quote": "{command:<|\"|>cat <<'EOF' > replacement_include.py\n    def run(self) -> List[Node]:\n        if self.argum",
+      "field": "generated text; conditioning_plus_generated parser refresh pending",
+      "confidence": "medium",
+      "cap": true,
+      "rationale": "Capped response visibly begins with a command argument fragment while the conditioning supplies the tool opener; the index records parser output completed after its snapshot and requires refresh. Do not classify raw tool markers or an argument fragment alone as anomalous, and do not claim normal while parser state is pending."
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset",
+      "seed": 44,
+      "verdict": "inconclusive",
+      "quote": "{command:<|\"|>cat <<'EOF' > replacement_include.py\n    def run(self) -> List[Node]:\n        if self.argum",
+      "field": "generated text; conditioning_plus_generated parser refresh pending",
+      "confidence": "medium",
+      "cap": true,
+      "rationale": "Capped response visibly begins with a command argument fragment while the conditioning supplies the tool opener; the index records parser output completed after its snapshot and requires refresh. Do not classify raw tool markers or an argument fragment alone as anomalous, and do not claim normal while parser state is pending."
+    }
+  ]
+}

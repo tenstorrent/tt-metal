@@ -1,0 +1,44 @@
+{
+  "status": "planning_proxy_clean_P1_only_not_measurement",
+  "baseline": {
+    "source": "P1 BFP8/HiFi2 fixed108 completion, clean serial evidence",
+    "completion_sha256": "fa70e146164d0b1b948f3bb969fff7e56b44b8d6cc85912f2dfb814c941675d9",
+    "completion_summary_sha256": "3e235673a01aa0a28ad88d49677ad8099b38dbe6e89d7ce65885365284a8d67f",
+    "forecast_miss_acceptance_sha256": "b33ebae3a3366738541d2983238c18f57cc3841bc539afcc021a85d86fd7c18b",
+    "manifest_sha256": "57193e4b91af3a31df00f0c92dbc0f2219fbce011e6533594e5244a93a3021ed",
+    "trials": 108,
+    "elapsed_seconds": 2018.038988828659,
+    "load_seconds": 138.38867970812134,
+    "case_seconds": 1874.3906799475662,
+    "decode_seconds": 911.1484370483086,
+    "decode_replays": 27884
+  },
+  "candidate_uncertainty": {
+    "low": "P1 wall as optimistic floor; assumes no net slowdown despite adding BFP8 down and retaining BF16 HiFi4 head",
+    "central": "1.7x P1 as planning allowance for changed precision, output-length variance, and host/prefill uncertainty",
+    "high": "3.2x P1 broad tail allowance; not a measured upper confidence bound",
+    "p2_use": "P2 wall is excluded from forecast calibration because an unintended HF CPU process overlapped it; P2 is predecessor/correctness evidence only, not speed ranking."
+  },
+  "scenarios": {
+    "low": {
+      "multiplier": 1.0,
+      "seconds": 2018.038988828659
+    },
+    "central": {
+      "multiplier": 1.7,
+      "seconds": 3430.6662810087205
+    },
+    "high": {
+      "multiplier": 3.2,
+      "seconds": 6457.7247642517095
+    }
+  },
+  "forecast_seconds": {
+    "low": 2018.038988828659,
+    "central": 3430.6662810087205,
+    "high": 6457.7247642517095
+  },
+  "timeout_seconds": 9000,
+  "timeout_margin_seconds_vs_high": 2542.2752357482905,
+  "method": "Scale the exact clean P1 fixed108 measured elapsed. Broad multipliers are planning judgments, not measured precision scaling. Include one model load and one serial fixed108 panel; no selected-policy/rate claim. Reforecast after P2 terminal and root reconciliation before any admission."
+}

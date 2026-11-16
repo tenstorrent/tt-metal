@@ -1,0 +1,11 @@
+# Pending common-cap-4096 HiFi2 panel
+
+Candidate only: pending V full cap4096 closure, not admitted and not run. This separate revision preserves all 108 original onset/seed trial identities and the exact 15 original served-anomalous/full-normal target pairs. The panel is 72×256, 7×512, 22×1024, 6×2048, and 1×4096. Only Pytest5787 call65 seed44 advances from cap2048 to cap4096, because the terminal T full seed44 cap2048 run was still constructing distinct serialization and method-boundary code. The matching served/full identities use one common cap. Prompt IDs, saved continuation IDs, sampling, seed, chosen precision policy, and branchless single-trial shape are preserved.
+
+The six other rows previously extended by T remain at cap2048 and use their actual terminal T measurements in the planning forecast. For the updated Pytest row, the forecast uses its actual T full cap2048 result and the separately reviewed long-context cap4096 proxy. Other rows retain the prior matched source projections. Fixed load and chosen64 first-preparation proxies are charged once. The resulting planning estimate is 3,524.69 s (0.979 h), with a 2,515.76–5,878.86 s range (0.699–1.633 h); this is not measured HiFi2 performance.
+
+Before admission, V must finish with `setup/swe85-adaptive-suffix4096-candidate/full-completion.json` reporting successful terminal completion and root raw review. Root must then explicitly review/admit this candidate.
+
+The panel must pass the root-defined gates: all 15 original precision-sensitive pairs complete without semantic anomaly (progressing caps remain inconclusive); all 108 outputs are reviewed for new anomalies on baseline-normal rows; the reverse baseline-normal/full-anomalous row remains in the panel; persistent full-TT anomalies require matched shortened TT/HF investigation or stack repair. Precision selection remains the fastest measured policy that passes all gates, followed by used-vLLM row remeasurement and the full85-list rerun. This candidate claims no passing policy.
+
+CPU-only `--validate-only` validated all 108 jobs without importing TTNN. No device work was used. See `proposal.json`, `candidate-input-provenance.json`, `runtime-estimate.json`, and `source-hashes.json`.

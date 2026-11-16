@@ -1,0 +1,105 @@
+{
+  "status": "candidate_only_unadmitted",
+  "purpose": "Test whether the late repeated loop history reinforces along decode rows 8,11,...,29 under HF and full-TT logits.",
+  "scope": {
+    "case_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-loop-branch-investigation/actual-branch-logits/later-loop-conditional-candidate/fixture/anomaly.psf__requests-5414.call11.onset.suffix2048.private.json",
+    "case_sha256": "fbe984e026dbe8ef2b9d8a4288056617cbfde5235d1efd4a3bd14038a2db5ad7",
+    "prompt_ids_sha256": "55fea04ac956c00e84884f04bf7e287a85e9d1a2b90794040070751161c968f0",
+    "prompt_tokens": 2048,
+    "modes": [
+      "hf",
+      "tt-full"
+    ],
+    "seed_source": 44,
+    "branch_name": "tt_seed44_loop_history",
+    "branch_ids": [
+      1390,
+      107,
+      147,
+      1390,
+      107,
+      147,
+      1390,
+      107,
+      147,
+      1390,
+      107,
+      147,
+      1390,
+      107,
+      147,
+      1390,
+      107,
+      147,
+      1390,
+      107,
+      147,
+      1390,
+      107,
+      147,
+      1390,
+      107,
+      147,
+      1390,
+      107,
+      147
+    ],
+    "branch_count": 1,
+    "captured_logits_rows_per_mode": 31,
+    "models_generated_tokens": 0
+  },
+  "conditioning": {
+    "history_is_forced": true,
+    "history_source_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/runs/full/anomaly.psf__requests-5414.call11.onset.json",
+    "history_source_sha256": "a967659d1f4edd7b726a36c976168ae767957b9821ffc4a2a31640d594e7a885",
+    "observed_exact_first30": true,
+    "sampling_reconstruction": {
+      "temperature": 1.0,
+      "top_k": 20,
+      "top_p": 0.95
+    },
+    "tt_capture_compatibility": {
+      "temperature": 0.0,
+      "top_k": 1,
+      "meaning": "greedy-only generator host_sampling compatibility plumbing; callback forces loop history; sampled choice is not evidence"
+    }
+  },
+  "policy": {
+    "hf_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+    "full_precision_config_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_config.json",
+    "full_precision_config_sha256": "63ce02f7fa0df993a27daca25eeeb3adca51e15c7c6956d1cef122534ebdc7a9",
+    "tt_build_kwargs_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_build_kwargs.json",
+    "tt_build_kwargs_sha256": "ff2b5ed24e0b6a1dee7eb5cd8bd437d17c3df5f8f25567927d239e666f0699f9"
+  },
+  "limits": [
+    "Branch-conditioned logits only; does not estimate probability of naturally entering or sustaining the loop.",
+    "No selected-precision mode; this probe isolates pinned HF versus full-TT.",
+    "Host reconstructed sampling supports remain strict-top-k20/nucleus proxies; full-vocabulary raw logits/ranks are primary.",
+    "Execution requires independent review of the later-loop input contract and separate root admission."
+  ],
+  "source": {
+    "prior_candidate_proposal_sha256": "0247e216bc3187e1375e2b1939937a4848b62e2a470cf37c2cf6aa22ef1d802b",
+    "prior_tool_sha256": "fa2eaf9f66a6a36c57385351a0b3e838edeabac4644c77c98aa81a817e3e3d5e",
+    "prior_command_sha256": "eaed7f8b7d20c6ea3720afac9dc8f14d6b0d4b9e5bf5461fae3bc49efec2693c",
+    "prior_branch_provenance_sha256": "fcd8f39e4e607655d404eb820800cfd4f83cb8f1c5be2e5f52cb6211e9703691",
+    "prior_hf_result_sha256": "697927aac05966b7360ef0db488c4264dfdc012d08db08c7e8a7be1b538ddd6b",
+    "prior_tt_full_result_sha256": "bd09e59dd1052f03d990d530475bbb68e1b1a6640f87d5747e618bcbebb4b519",
+    "tool_sha256": "3a9ad550813ee01d3a6fa701b2fe9b614bd7e2d694b7771bdd05a6636a8a6380",
+    "commands_sha256": "c41585b497c5b8af853b1b5c5b2c1b4fd71b69aac2b5440335ae93a39b1bd169"
+  },
+  "forecast_path": "forecast.json",
+  "commands_path": "commands.json",
+  "commands_sha256": "c41585b497c5b8af853b1b5c5b2c1b4fd71b69aac2b5440335ae93a39b1bd169",
+  "candidate_fixture_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-loop-branch-investigation/actual-branch-logits/later-loop-conditional-candidate/fixture/anomaly.psf__requests-5414.call11.onset.suffix2048.private.json",
+  "candidate_fixture_sha256": "fbe984e026dbe8ef2b9d8a4288056617cbfde5235d1efd4a3bd14038a2db5ad7",
+  "candidate_branches_sha256": "f19d1bea338fdcc0948ef044219e883efe404fda3e4cd7b8651d8210ab70ecbc",
+  "candidate_branch_provenance_sha256": "e90e5c0c06b36d43b8a733d4f6b2e3d1a731db27d39f26e281d6330beb52e37d",
+  "tool_contract": {
+    "flag": "--later-loop",
+    "tool_path": "models/autoports/google_gemma_4_31b_it/tools/actual_branch_logits.py",
+    "tool_sha256": "3a9ad550813ee01d3a6fa701b2fe9b614bd7e2d694b7771bdd05a6636a8a6380",
+    "original_tool_snapshot_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-loop-branch-investigation/actual-branch-logits/completed-original-tool.py",
+    "original_tool_snapshot_sha256": "fa2eaf9f66a6a36c57385351a0b3e838edeabac4644c77c98aa81a817e3e3d5e",
+    "state": "candidate input validation now has an explicit 30-token mode; model capture and sampler code are unchanged."
+  }
+}

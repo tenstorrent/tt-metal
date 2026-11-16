@@ -1,0 +1,51 @@
+{
+  "status": "planning_only_candidate_not_run",
+  "method": "Each source full suffix1024 run reached the 512-token cap for seed42. Preserve its exact suffix1024 fixture and measured per-trial prefill/host overhead; project decode at observed decode rate to 1023 replay calls. Add the same-mode observed model load once and one cold generator trace-preparation allowance because this branchless candidate skips chosen TF that warmed the source process. Apply 0.7x–1.7x to variable case work; keep load and first trace preparation fixed. Planning only.",
+  "mode": "full",
+  "rows": [
+    {
+      "job": "anomaly.psf__requests-5414.call11.onset.suffix1024.cap1024.seed42",
+      "source_fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/fixtures/anomaly.psf__requests-5414.call11.onset.suffix1024.private.json",
+      "source_fixture_sha256": "069a6794c0474028161f64153453577e07bc1cbde4690d0e77cef0286214ab65",
+      "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/full/anomaly.psf__requests-5414.call11.onset.json",
+      "source_result_sha256": "6a22257dbe5b30dec221560fc555e6331e83891872d9e274b89be6b293718b82",
+      "source_tokens": 512,
+      "source_decode_tokens": 511,
+      "source_prefill_host_overhead_s": 0.3269813056103885,
+      "source_decode_wall_s": 29.96614759019576,
+      "projected_decode_wall_s": 59.99093734788701,
+      "projected_case_wall_s": 60.3179186534974
+    },
+    {
+      "job": "anomaly.matplotlib__matplotlib-20488.call86.onset.suffix1024.cap1024.seed42",
+      "source_fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/fixtures/anomaly.matplotlib__matplotlib-20488.call86.onset.suffix1024.private.json",
+      "source_fixture_sha256": "56a0d881cd7c275743511dd2ac716c2755c913cbc014e7c9c1dd0713ce46a283",
+      "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/full/anomaly.matplotlib__matplotlib-20488.call86.onset.json",
+      "source_result_sha256": "a2dc3012fc83468f00dd3dfc66c82c940c093b5b2c6c72c4a7a1bfd09631e7a9",
+      "source_tokens": 512,
+      "source_decode_tokens": 511,
+      "source_prefill_host_overhead_s": 0.32585497479885817,
+      "source_decode_wall_s": 29.97089737607166,
+      "projected_decode_wall_s": 60.00044621471881,
+      "projected_case_wall_s": 60.326301189517665
+    }
+  ],
+  "load_source": {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/full/load.json",
+    "sha256": "ff0eaf01861f3664665eb2236dc13d8a0014e981597b0329453dca9ca22768df",
+    "wall_s": 77.84875810099766
+  },
+  "estimated_total_s": 210.65654086488857,
+  "range_s": [
+    174.46327491198406,
+    295.10749475499915
+  ],
+  "preparation_allowance": {
+    "seconds": 12.163562920875847,
+    "count": 1,
+    "basis": "One generator_trace_prepare event in the prior full suffix1024 log; event reports preparation_seconds=12.163562920875847. The new serial branchless run has no chosen TF warmup; both jobs share the same 1024 prompt/decode capture signature, so charge one preparation.",
+    "source_log": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/full.log",
+    "source_log_sha256": "401c3e9acd302ba8100d3eb8abb95d252af014f4ab48f563621171d6b5380036",
+    "range_treatment": "Fixed one-time allowance outside 0.7x–1.7x variable-work multiplier."
+  }
+}

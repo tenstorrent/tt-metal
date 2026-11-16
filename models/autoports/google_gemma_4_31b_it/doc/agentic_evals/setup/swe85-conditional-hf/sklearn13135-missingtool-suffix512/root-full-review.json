@@ -1,0 +1,57 @@
+{
+  "reviewed_unix": 1794727938.962629,
+  "reviewer": "root",
+  "rows": [
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/runs/full/anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix512.seed42.json",
+      "sha256": "81cf6fe18b20cfa30b0ddca5b839b9b8ebf57daf2a899708a84d91b3b1523d2b",
+      "seed": 42,
+      "tokens": 512,
+      "verdict": "other",
+      "reason": "Repeated unchanged Since Ive fixed the source code / check sentence to512; semantic token loop, not original missing-tool family.",
+      "trace_counters_delta": {
+        "model_replays": 511,
+        "sample_replays": 511,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 511,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/runs/full/anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix512.seed43.json",
+      "sha256": "548b687b902b17b31e874b20054976ea4ca45c0b3c8ecf2ca989885ff8f2f516",
+      "seed": 43,
+      "tokens": 512,
+      "verdict": "other",
+      "reason": "After short applied-fix phrase, cant plus repeated apostrophe-a to512. Degenerate token loop, not original missing-tool or exact contraction onset.",
+      "trace_counters_delta": {
+        "model_replays": 511,
+        "sample_replays": 511,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 511,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512/runs/full/anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix512.seed44.json",
+      "sha256": "bc216e065f572ac48d7dc800a72bb73cdcd037e73c7eb50ed88857d2fd4026d5",
+      "seed": 44,
+      "tokens": 85,
+      "verdict": "normal",
+      "reason": "Grammatical completed continuation and final-answer claim, naturally ends85; no degeneration. No task-success conclusion.",
+      "trace_counters_delta": {
+        "model_replays": 84,
+        "sample_replays": 84,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 84,
+        "captures": 0
+      }
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+[
+  {
+    "name": "sympy__sympy-13551.call1",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-update13/sympy__sympy-13551.call1.case.private.json",
+    "branches": [
+      "chosen"
+    ]
+  },
+  {
+    "name": "sympy__sympy-13551.call12",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-update13/sympy__sympy-13551.call12.case.private.json",
+    "branches": [
+      "chosen"
+    ]
+  }
+]

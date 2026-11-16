@@ -1,0 +1,66 @@
+{
+  "task": "139",
+  "artifact": "first-wave-served suffix-512 free-running semantic triage",
+  "source": "first-wave-served/task139.onset.suffix512.json",
+  "private_onset_context": "task139.onset.suffix512.private.json",
+  "original_triage": "current/gpqa-extended198-head-bfp8/digest/139.triage.json",
+  "per_seed": [
+    {
+      "seed": 42,
+      "mechanical_flag": true,
+      "semantic_anomaly": true,
+      "observed_malformed_text": true,
+      "evidence_spans": [
+        {
+          "char_start": 0,
+          "char_end": 2875,
+          "paraphrase": "The continuation repeatedly asks whether the close analog is one of two borohydrides, alternating the same candidates without adding a criterion or resolving the question. Later wording contains a doubled slash before “close analog”; the response ends mid-phrase."
+        }
+      ],
+      "assessment": "Clear no-new-information semantic loop. The alternating candidate question persists across the continuation and does not develop into a supported answer. The visible doubled slash and abrupt partial ending are reported separately as malformed text; they do not establish the semantic judgment."
+    },
+    {
+      "seed": 43,
+      "mechanical_flag": false,
+      "semantic_anomaly": true,
+      "observed_malformed_text": false,
+      "evidence_spans": [
+        {
+          "char_start": 0,
+          "char_end": 3040,
+          "paraphrase": "A three-step cycle repeats: assert the same close-analog relation, state the same reductive-amination use, and restate that NaBD4 has a heavier isotope. The cycle recurs at roughly 317-character intervals and ends in a partial sentence."
+        }
+      ],
+      "assessment": "Clear semantic cycling despite the saved mechanical flag being false. Repetition of chemically topical statements does not advance identification of the substance or address the prompt evidence; no materially new reasoning appears within the continuation."
+    },
+    {
+      "seed": 44,
+      "mechanical_flag": false,
+      "semantic_anomaly": true,
+      "observed_malformed_text": false,
+      "evidence_spans": [
+        {
+          "char_start": 0,
+          "char_end": 3339,
+          "paraphrase": "The text first states that NaBD4 is used for labeling and that deuterium replaces hydrogen, then repeatedly reopens the close-analog question and cycles among NaBH4, NaBH3CN, NaBD4, their uses, and whether a heavier isotope is present. A long multi-sentence cycle recurs with little change and the output ends mid-phrase."
+        }
+      ],
+      "assessment": "Clear semantic cycling even though the saved mechanical flag is false. The initial isotope explanation is locally coherent, but it does not resolve the underlying candidate/reaction identification; subsequent repeated reconsideration supplies no new constraint or conclusion."
+    }
+  ],
+  "original_pattern_comparison": {
+    "summary": "The original native-call triage describes repeated NaBH4/NaBD4 candidate reconsideration while acknowledging the gas and precipitate/decomposition mismatch, with partial late progress linking D2O to the 277 K clue followed by renewed cycling. It records normal stop, no mechanical repetition flag, and an incorrect final choice. The suffix-seeded outputs share the repeated reopening of the same candidate/analogy and isotope-use claims without resolving the chemistry; seeds 42 and 43 are especially narrow repetitive loops, while seed 44 has an initial isotope statement before returning to a broader cycle.",
+    "comparison_limit": "This is a semantic-pattern comparison only. The diagnostics use three different seeds and a suffix-truncated reconstructed prompt, so they are not continuations or reproductions of the original native trajectory and cannot establish the original onset cause."
+  },
+  "limits": [
+    "The saved input is the exact 512-token suffix of reconstructed IDs, with 4673 preceding tokens removed; the position origin therefore changes and this is not the original native prompt.",
+    "Native raw sampled token IDs were unavailable. Reconstructed completion token-count agreement does not prove native sampled-token identity.",
+    "The saved onset is a selected semantic point, not a uniquely established first error; the private metadata explicitly says it cannot rule out earlier precision effects.",
+    "These are semantic readings of the three saved ENTIRE3 free-running texts only. They do not assess the executed TFchosen continuation or make a score or population claim.",
+    "A mechanical flag is recorded verbatim from each saved continuation and is independent of this semantic judgment; an unflagged or normally stopping response can still show semantic cycling."
+  ],
+  "assessment_status": {
+    "TFchosen": "executed but not assessed in this artifact",
+    "scoring": "completed; no pending claim"
+  }
+}

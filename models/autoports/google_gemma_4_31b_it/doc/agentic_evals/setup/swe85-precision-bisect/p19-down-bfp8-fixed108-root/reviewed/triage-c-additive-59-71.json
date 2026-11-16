@@ -1,0 +1,1136 @@
+{
+  "status": "complete_additive_host_only_semantic_triage",
+  "created_utc": "2026-11-15",
+  "scope": "P19 fixed108 indices59-71 only; snapshot after mapped result files were found. No model/device/import/inference work. Outputs inspected are read-only.",
+  "panel": "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root",
+  "panel_manifest_sha256": "57193e4b91af3a31df00f0c92dbc0f2219fbce011e6533594e5244a93a3021ed",
+  "mapping_file": "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/triage-slice36-71-map.json",
+  "mapping_file_sha256": "d37b39dd43e12a1b395a00f0cbd4a8d59796059175d0afb3c204636d653e638c",
+  "precision_policy": "P19 runtime stage12_bf16_hifi4_kv_down_bfp8_p19; attention/mlp/lm_head BF16 HiFi4, down BFP8 LoFi, KV BFP8; sampling T1 top_p0.95 top_k20, per-case seeds as recorded.",
+  "full_control_policy": "Only all-weight-group BF16 + all-group HiFi4 full-mode outputs count as full precision controls. Each row exact prompt_token_ids and seed verified. P2 head-only is not used as full control. HF is left unclaimed unless matched exact source context/seed evidence is present.",
+  "summary": {
+    "rows": 13,
+    "normal": 12,
+    "reproduced_native_motif": 0,
+    "other_anomaly": 0,
+    "inconclusive": 1,
+    "progressing_p19_cap_rows": [
+      66
+    ],
+    "full_control_exact_prompt_seed_verified": true,
+    "hf_exact_reference_claimed": 0
+  },
+  "rows": [
+    {
+      "index": 59,
+      "job": "anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset",
+      "seed": 44,
+      "requested_cap": 1024,
+      "p19_fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.cap1024.seed44.private.json",
+      "fixture_sha256": "6be948416b6cefc2796d256824f3fd6f7c7e46ea001063de32ae75e63d343b09",
+      "prompt_tokens": 58982,
+      "prompt_ids_sha256_canonical_json": "a4c9e18717ee53ddbf5ced65964c1f28ac089b26e6b489bd9aa52b303e021a45",
+      "p19_result": "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.seed44.cap1024.json",
+      "p19_result_sha256": "256cc2157e9b590752bc0034b7054e1a46e3d767cc115eef7bdead0abd8f5686",
+      "p19_runtime_config_id": "stage12_bf16_hifi4_kv_down_bfp8_p19",
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 44
+      },
+      "generated_tokens": 388,
+      "p19_terminal_stop_id_50": true,
+      "verdict": "normal",
+      "confidence": "high",
+      "evidence": "Saved prompt ends `...see if it`; generated text begins `'s being loaded`, forming the grammatical continuation `it's being loaded`, then distinct loading/registration diagnosis and a completed canonical bash handoff. No doubled-contraction motif at this exact boundary.",
+      "cap_notes": "Natural stop at 388/1024. Full BF16/HiFi4 same-prompt seed44 reaches natural stop in the cap1024 extension; no additional P19 cap needed.",
+      "exact_full_precision_control": {
+        "result": "setup/swe85-second-cap-extensions/runs/full/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.cap1024.seed44.json",
+        "result_sha256": "7a40c0dec0926034b9143ad5ce8bba4bf0a5f8da48026a04dbf020dbf407dcab",
+        "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.cap1024.seed44.private.json",
+        "fixture_sha256": "6be948416b6cefc2796d256824f3fd6f7c7e46ea001063de32ae75e63d343b09",
+        "prompt_tokens": 58982,
+        "prompt_ids_sha256_canonical_json": "a4c9e18717ee53ddbf5ced65964c1f28ac089b26e6b489bd9aa52b303e021a45",
+        "mode": "full",
+        "seed": 44,
+        "requested_cap": 1024,
+        "generated_tokens": 762,
+        "terminal_stop_id_50": true,
+        "text_head": "'s being loaded.\nActually, let's just put a print at the top of `sphinx/directives/other.py`.\nI already did that with `HELLO FROM OTHER.PY`, and it WA",
+        "text_tail": "-r \"register_directive('include'\" /opt/miniconda3/lib/python3.11/site-packages/sphinx\n<|\"|>}<tool_call|><|tool_response>"
+      },
+      "same_prompt_seed_full_control_history": [
+        {
+          "result": "setup/swe85-pilot-split85/runs/rest/full/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.json",
+          "result_sha256": "56ca8669e2f71df9240ee9d5f1f70efede8407541dd67e236ea80a4e782862e0",
+          "seed": 44,
+          "requested_cap": 256,
+          "generated_tokens": 256,
+          "terminal_stop_id_50": false
+        },
+        {
+          "result": "setup/swe85-cap-extensions/runs/full/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.cap512.seed44.json",
+          "result_sha256": "2dd4aa97047bf51777098282da9982666c6917b92281015946334bdf9c56bf4f",
+          "seed": 44,
+          "requested_cap": 512,
+          "generated_tokens": 512,
+          "terminal_stop_id_50": false
+        },
+        {
+          "result": "setup/swe85-second-cap-extensions/runs/full/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.cap1024.seed44.json",
+          "result_sha256": "7a40c0dec0926034b9143ad5ce8bba4bf0a5f8da48026a04dbf020dbf407dcab",
+          "seed": 44,
+          "requested_cap": 1024,
+          "generated_tokens": 762,
+          "terminal_stop_id_50": true
+        }
+      ],
+      "other_precision_same_prompt_seed_comparators": [
+        {
+          "panel": "P3",
+          "result": "setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.seed44.cap1024.json",
+          "result_sha256": "01ec3d3a81a337191a2c3f4bcabd3cc6d403afd3971b6506b9591391cb6d4f74",
+          "runtime_config_id": "stage12_swe85_down_bfp8_lofi_isolated_served_head_bfp8_lofi",
+          "exact_prompt_ids_match": true,
+          "seed": 44,
+          "generated_tokens": 305,
+          "terminal_stop_id_50": true
+        },
+        {
+          "panel": "P6",
+          "result": "setup/swe85-precision-bisect/attention-down-bfp8-lofi-fixed108-candidate/runs/attention_down_bfp8_lofi_fixed108/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.seed44.cap1024.json",
+          "result_sha256": "757cfda00c80a4b63a7538b16fa2b8374231142ebaf086e1a28a7c9e6dcce016",
+          "runtime_config_id": "stage12_swe85_attention_down_bfp8_lofi_fixed108",
+          "exact_prompt_ids_match": true,
+          "seed": 44,
+          "generated_tokens": 352,
+          "terminal_stop_id_50": true
+        }
+      ],
+      "hf_reference": {
+        "matched_exact_full_prompt_seed_control": null,
+        "disposition": "No HF sample is asserted for this exact onset/seed. The current HF disposition/coverage audit does not provide a matching case+seed reference; do not infer HF behavior here."
+      }
+    },
+    {
+      "index": 60,
+      "job": "anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset",
+      "seed": 42,
+      "requested_cap": 256,
+      "p19_fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-sphinx11510-protocol-controls/sphinx-doc__sphinx-11510.call101.onset.private.json",
+      "fixture_sha256": "e940e736fad1b9ac133cd217d6163ea3ba1cdb01380471e0a9b77a35afb9f1c2",
+      "prompt_tokens": 59716,
+      "prompt_ids_sha256_canonical_json": "77ed0c1832712e30b11f78fd3e44e8b63720ff4002c62e91ba0f3efec205db29",
+      "p19_result": "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset.seed42.cap256.json",
+      "p19_result_sha256": "83631d60341fe9de0755089c3a06200d97f8149773d15b277320ade9fd5edbc7",
+      "p19_runtime_config_id": "stage12_bf16_hifi4_kv_down_bfp8_p19",
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 42
+      },
+      "generated_tokens": 115,
+      "p19_terminal_stop_id_50": true,
+      "verdict": "normal",
+      "confidence": "high",
+      "evidence": "The saved context ends at canonical `call:bash`; generation starts `{command:<|\"|>` and provides distinct Python/source-inspection commands, then closes with the normal tool handoff and stop ID50. This is valid command-argument continuation, not malformed-tool reproduction.",
+      "cap_notes": "Natural stop well below cap256; no extension needed.",
+      "exact_full_precision_control": {
+        "result": "setup/swe85-pilot-split85/runs/rest/full/anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset.json",
+        "result_sha256": "7659b62affcde464547dd94e576bc1a6df9657b51d2b8ac3026294bbdc103692",
+        "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-sphinx11510-protocol-controls/sphinx-doc__sphinx-11510.call101.onset.private.json",
+        "fixture_sha256": "e940e736fad1b9ac133cd217d6163ea3ba1cdb01380471e0a9b77a35afb9f1c2",
+        "prompt_tokens": 59716,
+        "prompt_ids_sha256_canonical_json": "77ed0c1832712e30b11f78fd3e44e8b63720ff4002c62e91ba0f3efec205db29",
+        "mode": "full",
+        "seed": 42,
+        "requested_cap": 256,
+        "generated_tokens": 115,
+        "terminal_stop_id_50": true,
+        "text_head": "{command:<|\"|># Let's check if sphinx.addnodes.document has a reference to the app.\npython3 -c \"\nfrom sphinx.addnodes import document\n# We can't easil",
+        "text_tail": "a3/lib/python3.11/site-packages/sphinx/addnodes.py', 'r') as f:\n    print(f.read())\n\"\n<|\"|>}<tool_call|><|tool_response>"
+      },
+      "same_prompt_seed_full_control_history": [
+        {
+          "result": "setup/swe85-pilot-split85/runs/rest/full/anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset.json",
+          "result_sha256": "7659b62affcde464547dd94e576bc1a6df9657b51d2b8ac3026294bbdc103692",
+          "seed": 42,
+          "requested_cap": 256,
+          "generated_tokens": 115,
+          "terminal_stop_id_50": true
+        }
+      ],
+      "other_precision_same_prompt_seed_comparators": [
+        {
+          "panel": "P3",
+          "result": "setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset.seed42.cap256.json",
+          "result_sha256": "2f2eaa3effd26e5def7ae926222d9ad09ea01b7aefc88926ffc530d8d7a8650e",
+          "runtime_config_id": "stage12_swe85_down_bfp8_lofi_isolated_served_head_bfp8_lofi",
+          "exact_prompt_ids_match": true,
+          "seed": 42,
+          "generated_tokens": 42,
+          "terminal_stop_id_50": true
+        },
+        {
+          "panel": "P6",
+          "result": "setup/swe85-precision-bisect/attention-down-bfp8-lofi-fixed108-candidate/runs/attention_down_bfp8_lofi_fixed108/anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset.seed42.cap256.json",
+          "result_sha256": "d2585485095e7021ab39b9c51430a90dad5f8ec35fb2d85ebef4827ce3bc994f",
+          "runtime_config_id": "stage12_swe85_attention_down_bfp8_lofi_fixed108",
+          "exact_prompt_ids_match": true,
+          "seed": 42,
+          "generated_tokens": 53,
+          "terminal_stop_id_50": true
+        }
+      ],
+      "hf_reference": {
+        "matched_exact_full_prompt_seed_control": null,
+        "disposition": "No HF sample is asserted for this exact onset/seed. The current HF disposition/coverage audit does not provide a matching case+seed reference; do not infer HF behavior here."
+      }
+    },
+    {
+      "index": 61,
+      "job": "anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset",
+      "seed": 43,
+      "requested_cap": 256,
+      "p19_fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset.seed43.private.json",
+      "fixture_sha256": "73525af6b566b8589b8960fc3c511484ec1e652068be470efbc9ac943c45fdab",
+      "prompt_tokens": 59716,
+      "prompt_ids_sha256_canonical_json": "77ed0c1832712e30b11f78fd3e44e8b63720ff4002c62e91ba0f3efec205db29",
+      "p19_result": "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset.seed43.cap256.json",
+      "p19_result_sha256": "5cc5331b7f2a1ca8b51c71ff2e7878edc374fe1916bfe7d9cf4fa1bc3939084c",
+      "p19_runtime_config_id": "stage12_bf16_hifi4_kv_down_bfp8_p19",
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 43
+      },
+      "generated_tokens": 122,
+      "p19_terminal_stop_id_50": true,
+      "verdict": "normal",
+      "confidence": "high",
+      "evidence": "The saved context ends at canonical `call:bash`; generation starts `{command:<|\"|>` and provides distinct Python/source-inspection commands, then closes with the normal tool handoff and stop ID50. This is valid command-argument continuation, not malformed-tool reproduction.",
+      "cap_notes": "Natural stop well below cap256; no extension needed.",
+      "exact_full_precision_control": {
+        "result": "setup/swe85-pilot-split85/runs/rest/full/anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset.json",
+        "result_sha256": "7659b62affcde464547dd94e576bc1a6df9657b51d2b8ac3026294bbdc103692",
+        "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-sphinx11510-protocol-controls/sphinx-doc__sphinx-11510.call101.onset.private.json",
+        "fixture_sha256": "e940e736fad1b9ac133cd217d6163ea3ba1cdb01380471e0a9b77a35afb9f1c2",
+        "prompt_tokens": 59716,
+        "prompt_ids_sha256_canonical_json": "77ed0c1832712e30b11f78fd3e44e8b63720ff4002c62e91ba0f3efec205db29",
+        "mode": "full",
+        "seed": 43,
+        "requested_cap": 256,
+        "generated_tokens": 64,
+        "terminal_stop_id_50": true,
+        "text_head": "{command:<|\"|>python3 -c \"\nfrom sphinx.application import Sphinx\nfrom sphinx.addnodes import document\nimport tempfile\nimport os\n\n# This is just to tes",
+        "text_tail": "t if we can get the app from the document\n# In reality we need a running Sphinx app\n\"\n<|\"|>}<tool_call|><|tool_response>"
+      },
+      "same_prompt_seed_full_control_history": [
+        {
+          "result": "setup/swe85-pilot-split85/runs/rest/full/anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset.json",
+          "result_sha256": "7659b62affcde464547dd94e576bc1a6df9657b51d2b8ac3026294bbdc103692",
+          "seed": 43,
+          "requested_cap": 256,
+          "generated_tokens": 64,
+          "terminal_stop_id_50": true
+        }
+      ],
+      "other_precision_same_prompt_seed_comparators": [
+        {
+          "panel": "P3",
+          "result": "setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset.seed43.cap256.json",
+          "result_sha256": "6838adf0be328f76cc0ff43a8ad858e2cf8438e0582cab1c5d76ab617b5248c7",
+          "runtime_config_id": "stage12_swe85_down_bfp8_lofi_isolated_served_head_bfp8_lofi",
+          "exact_prompt_ids_match": true,
+          "seed": 43,
+          "generated_tokens": 48,
+          "terminal_stop_id_50": true
+        },
+        {
+          "panel": "P6",
+          "result": "setup/swe85-precision-bisect/attention-down-bfp8-lofi-fixed108-candidate/runs/attention_down_bfp8_lofi_fixed108/anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset.seed43.cap256.json",
+          "result_sha256": "0c149af86d57d4285c7fcfaa6895369f4119791de5767a68d02531b6a3cdf948",
+          "runtime_config_id": "stage12_swe85_attention_down_bfp8_lofi_fixed108",
+          "exact_prompt_ids_match": true,
+          "seed": 43,
+          "generated_tokens": 102,
+          "terminal_stop_id_50": true
+        }
+      ],
+      "hf_reference": {
+        "matched_exact_full_prompt_seed_control": null,
+        "disposition": "No HF sample is asserted for this exact onset/seed. The current HF disposition/coverage audit does not provide a matching case+seed reference; do not infer HF behavior here."
+      }
+    },
+    {
+      "index": 62,
+      "job": "anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset",
+      "seed": 44,
+      "requested_cap": 256,
+      "p19_fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset.seed44.private.json",
+      "fixture_sha256": "11dc81f7659740d2f14dfefbdd68af8dd5b2ded451e79a07775cdc180674f269",
+      "prompt_tokens": 59716,
+      "prompt_ids_sha256_canonical_json": "77ed0c1832712e30b11f78fd3e44e8b63720ff4002c62e91ba0f3efec205db29",
+      "p19_result": "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset.seed44.cap256.json",
+      "p19_result_sha256": "4b9bcef243fe187f3b467df9b86c76e9a8d4137e386998b8a42a96916ce7fa8e",
+      "p19_runtime_config_id": "stage12_bf16_hifi4_kv_down_bfp8_p19",
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 44
+      },
+      "generated_tokens": 47,
+      "p19_terminal_stop_id_50": true,
+      "verdict": "normal",
+      "confidence": "high",
+      "evidence": "The saved context ends at canonical `call:bash`; generation starts `{command:<|\"|>` and provides distinct Python/source-inspection commands, then closes with the normal tool handoff and stop ID50. This is valid command-argument continuation, not malformed-tool reproduction.",
+      "cap_notes": "Natural stop well below cap256; no extension needed.",
+      "exact_full_precision_control": {
+        "result": "setup/swe85-pilot-split85/runs/rest/full/anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset.json",
+        "result_sha256": "7659b62affcde464547dd94e576bc1a6df9657b51d2b8ac3026294bbdc103692",
+        "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-sphinx11510-protocol-controls/sphinx-doc__sphinx-11510.call101.onset.private.json",
+        "fixture_sha256": "e940e736fad1b9ac133cd217d6163ea3ba1cdb01380471e0a9b77a35afb9f1c2",
+        "prompt_tokens": 59716,
+        "prompt_ids_sha256_canonical_json": "77ed0c1832712e30b11f78fd3e44e8b63720ff4002c62e91ba0f3efec205db29",
+        "mode": "full",
+        "seed": 44,
+        "requested_cap": 256,
+        "generated_tokens": 47,
+        "terminal_stop_id_50": true,
+        "text_head": "{command:<|\"|>python3 -c \"\nfrom sphinx.addnodes import document\ndoc = document()\nprint(f'Has app: {hasattr(doc, \\\"app\\\")}')\n\"\n<|\"|>}<tool_call|><|tool",
+        "text_tail": "ddnodes import document\ndoc = document()\nprint(f'Has app: {hasattr(doc, \\\"app\\\")}')\n\"\n<|\"|>}<tool_call|><|tool_response>"
+      },
+      "same_prompt_seed_full_control_history": [
+        {
+          "result": "setup/swe85-pilot-split85/runs/rest/full/anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset.json",
+          "result_sha256": "7659b62affcde464547dd94e576bc1a6df9657b51d2b8ac3026294bbdc103692",
+          "seed": 44,
+          "requested_cap": 256,
+          "generated_tokens": 47,
+          "terminal_stop_id_50": true
+        }
+      ],
+      "other_precision_same_prompt_seed_comparators": [
+        {
+          "panel": "P3",
+          "result": "setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset.seed44.cap256.json",
+          "result_sha256": "edaecba8bfa9db46f3b8f901a3cbf4e57ad1d54c05f8d34369d186bd3f159440",
+          "runtime_config_id": "stage12_swe85_down_bfp8_lofi_isolated_served_head_bfp8_lofi",
+          "exact_prompt_ids_match": true,
+          "seed": 44,
+          "generated_tokens": 256,
+          "terminal_stop_id_50": false
+        },
+        {
+          "panel": "P6",
+          "result": "setup/swe85-precision-bisect/attention-down-bfp8-lofi-fixed108-candidate/runs/attention_down_bfp8_lofi_fixed108/anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset.seed44.cap256.json",
+          "result_sha256": "8765dcf50b1a85df59c024994b5b375b35d86834b840c258d50de1f2fa2e904e",
+          "runtime_config_id": "stage12_swe85_attention_down_bfp8_lofi_fixed108",
+          "exact_prompt_ids_match": true,
+          "seed": 44,
+          "generated_tokens": 108,
+          "terminal_stop_id_50": true
+        }
+      ],
+      "hf_reference": {
+        "matched_exact_full_prompt_seed_control": null,
+        "disposition": "No HF sample is asserted for this exact onset/seed. The current HF disposition/coverage audit does not provide a matching case+seed reference; do not infer HF behavior here."
+      }
+    },
+    {
+      "index": 63,
+      "job": "anomaly.sphinx-doc__sphinx-11510.call108.onset",
+      "seed": 42,
+      "requested_cap": 256,
+      "p19_fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-sphinx11510-controls/sphinx-doc__sphinx-11510.call108.onset.private.json",
+      "fixture_sha256": "6efd3333b509e5dc6fe9c28b96829c345056cb2dc88538f0324b5fbce8ecb724",
+      "prompt_tokens": 62453,
+      "prompt_ids_sha256_canonical_json": "096357987ce47be0008a8297e3ea9150ca9210909e2f3e0e2708140c2925e2f2",
+      "p19_result": "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-11510.call108.onset.seed42.cap256.json",
+      "p19_result_sha256": "0f0ddabd04b0e9a21c55fed757018ca194b19a34a382fa0f9d5d9308408fe993",
+      "p19_runtime_config_id": "stage12_bf16_hifi4_kv_down_bfp8_p19",
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 42
+      },
+      "generated_tokens": 36,
+      "p19_terminal_stop_id_50": true,
+      "verdict": "normal",
+      "confidence": "high",
+      "evidence": "The saved prefix is inside a quoted source-edit command. Generation completes the existing path/string, emits the build commands, and closes the canonical tool handoff with stop ID50. No recurring malformed protocol or degeneration.",
+      "cap_notes": "Natural stop at36/256; no extension needed.",
+      "exact_full_precision_control": {
+        "result": "setup/swe85-pilot-split85/runs/rest/full/anomaly.sphinx-doc__sphinx-11510.call108.onset.json",
+        "result_sha256": "e90613cb3080d85ed7daf67359973e4aea63834afa3a856b4eff741210c5bece",
+        "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-sphinx11510-controls/sphinx-doc__sphinx-11510.call108.onset.private.json",
+        "fixture_sha256": "6efd3333b509e5dc6fe9c28b96829c345056cb2dc88538f0324b5fbce8ecb724",
+        "prompt_tokens": 62453,
+        "prompt_ids_sha256_canonical_json": "096357987ce47be0008a8297e3ea9150ca9210909e2f3e0e2708140c2925e2f2",
+        "mode": "full",
+        "seed": 42,
+        "requested_cap": 256,
+        "generated_tokens": 36,
+        "terminal_stop_id_50": true,
+        "text_head": ".11/site-packages/sphinx/directives/other.py\n\nrm -rf reproduction/build\ncd reproduction && sphinx-build . build\n<|\"|>}<tool_call|><|tool_response>",
+        "text_tail": "irectives/other.py\n\nrm -rf reproduction/build\ncd reproduction && sphinx-build . build\n<|\"|>}<tool_call|><|tool_response>"
+      },
+      "same_prompt_seed_full_control_history": [
+        {
+          "result": "setup/swe85-pilot-split85/runs/rest/full/anomaly.sphinx-doc__sphinx-11510.call108.onset.json",
+          "result_sha256": "e90613cb3080d85ed7daf67359973e4aea63834afa3a856b4eff741210c5bece",
+          "seed": 42,
+          "requested_cap": 256,
+          "generated_tokens": 36,
+          "terminal_stop_id_50": true
+        }
+      ],
+      "other_precision_same_prompt_seed_comparators": [
+        {
+          "panel": "P3",
+          "result": "setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sphinx-doc__sphinx-11510.call108.onset.seed42.cap256.json",
+          "result_sha256": "c0e4622323f1717630cf72e783af50442cbfbded44663117e65da0adb9e99588",
+          "runtime_config_id": "stage12_swe85_down_bfp8_lofi_isolated_served_head_bfp8_lofi",
+          "exact_prompt_ids_match": true,
+          "seed": 42,
+          "generated_tokens": 36,
+          "terminal_stop_id_50": true
+        },
+        {
+          "panel": "P6",
+          "result": "setup/swe85-precision-bisect/attention-down-bfp8-lofi-fixed108-candidate/runs/attention_down_bfp8_lofi_fixed108/anomaly.sphinx-doc__sphinx-11510.call108.onset.seed42.cap256.json",
+          "result_sha256": "687efe5eaf32cb93ee27d9a999dcae995cbf1794aa5a660dd061ffe045b50be4",
+          "runtime_config_id": "stage12_swe85_attention_down_bfp8_lofi_fixed108",
+          "exact_prompt_ids_match": true,
+          "seed": 42,
+          "generated_tokens": 36,
+          "terminal_stop_id_50": true
+        }
+      ],
+      "hf_reference": {
+        "matched_exact_full_prompt_seed_control": null,
+        "disposition": "No HF sample is asserted for this exact onset/seed. The current HF disposition/coverage audit does not provide a matching case+seed reference; do not infer HF behavior here."
+      }
+    },
+    {
+      "index": 64,
+      "job": "anomaly.sphinx-doc__sphinx-11510.call108.onset",
+      "seed": 43,
+      "requested_cap": 256,
+      "p19_fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.sphinx-doc__sphinx-11510.call108.onset.seed43.private.json",
+      "fixture_sha256": "b7bb67776073a6a6e7a14dc735af6f9398354e0d99bab7eb8c3d899a7c5da519",
+      "prompt_tokens": 62453,
+      "prompt_ids_sha256_canonical_json": "096357987ce47be0008a8297e3ea9150ca9210909e2f3e0e2708140c2925e2f2",
+      "p19_result": "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-11510.call108.onset.seed43.cap256.json",
+      "p19_result_sha256": "791aaae7f2d27788e86f8ce7dc8044fd63f65c7272c1e277f381eb5e365a4e74",
+      "p19_runtime_config_id": "stage12_bf16_hifi4_kv_down_bfp8_p19",
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 43
+      },
+      "generated_tokens": 36,
+      "p19_terminal_stop_id_50": true,
+      "verdict": "normal",
+      "confidence": "high",
+      "evidence": "The saved prefix is inside a quoted source-edit command. Generation completes the existing path/string, emits the build commands, and closes the canonical tool handoff with stop ID50. No recurring malformed protocol or degeneration.",
+      "cap_notes": "Natural stop at36/256; no extension needed.",
+      "exact_full_precision_control": {
+        "result": "setup/swe85-pilot-split85/runs/rest/full/anomaly.sphinx-doc__sphinx-11510.call108.onset.json",
+        "result_sha256": "e90613cb3080d85ed7daf67359973e4aea63834afa3a856b4eff741210c5bece",
+        "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-sphinx11510-controls/sphinx-doc__sphinx-11510.call108.onset.private.json",
+        "fixture_sha256": "6efd3333b509e5dc6fe9c28b96829c345056cb2dc88538f0324b5fbce8ecb724",
+        "prompt_tokens": 62453,
+        "prompt_ids_sha256_canonical_json": "096357987ce47be0008a8297e3ea9150ca9210909e2f3e0e2708140c2925e2f2",
+        "mode": "full",
+        "seed": 43,
+        "requested_cap": 256,
+        "generated_tokens": 36,
+        "terminal_stop_id_50": true,
+        "text_head": ".11/site-packages/sphinx/directives/other.py\n\nrm -rf reproduction/build\ncd reproduction && sphinx-build . build\n<|\"|>}<tool_call|><|tool_response>",
+        "text_tail": "irectives/other.py\n\nrm -rf reproduction/build\ncd reproduction && sphinx-build . build\n<|\"|>}<tool_call|><|tool_response>"
+      },
+      "same_prompt_seed_full_control_history": [
+        {
+          "result": "setup/swe85-pilot-split85/runs/rest/full/anomaly.sphinx-doc__sphinx-11510.call108.onset.json",
+          "result_sha256": "e90613cb3080d85ed7daf67359973e4aea63834afa3a856b4eff741210c5bece",
+          "seed": 43,
+          "requested_cap": 256,
+          "generated_tokens": 36,
+          "terminal_stop_id_50": true
+        }
+      ],
+      "other_precision_same_prompt_seed_comparators": [
+        {
+          "panel": "P3",
+          "result": "setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sphinx-doc__sphinx-11510.call108.onset.seed43.cap256.json",
+          "result_sha256": "aa44251f262da5e099c3d7129ff1b67f99c2fc9cddddb92b0f830046cb1467c3",
+          "runtime_config_id": "stage12_swe85_down_bfp8_lofi_isolated_served_head_bfp8_lofi",
+          "exact_prompt_ids_match": true,
+          "seed": 43,
+          "generated_tokens": 36,
+          "terminal_stop_id_50": true
+        },
+        {
+          "panel": "P6",
+          "result": "setup/swe85-precision-bisect/attention-down-bfp8-lofi-fixed108-candidate/runs/attention_down_bfp8_lofi_fixed108/anomaly.sphinx-doc__sphinx-11510.call108.onset.seed43.cap256.json",
+          "result_sha256": "6d624ea6a28fade5d86c988c94a12d509f1cc47d6087c79b5cd1be966080cc13",
+          "runtime_config_id": "stage12_swe85_attention_down_bfp8_lofi_fixed108",
+          "exact_prompt_ids_match": true,
+          "seed": 43,
+          "generated_tokens": 36,
+          "terminal_stop_id_50": true
+        }
+      ],
+      "hf_reference": {
+        "matched_exact_full_prompt_seed_control": null,
+        "disposition": "No HF sample is asserted for this exact onset/seed. The current HF disposition/coverage audit does not provide a matching case+seed reference; do not infer HF behavior here."
+      }
+    },
+    {
+      "index": 65,
+      "job": "anomaly.sphinx-doc__sphinx-11510.call108.onset",
+      "seed": 44,
+      "requested_cap": 256,
+      "p19_fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.sphinx-doc__sphinx-11510.call108.onset.seed44.private.json",
+      "fixture_sha256": "cab7d7acbcc4e910cbdef7993f8c39c0cfebfaa367030191b6c0b5e0519d8e24",
+      "prompt_tokens": 62453,
+      "prompt_ids_sha256_canonical_json": "096357987ce47be0008a8297e3ea9150ca9210909e2f3e0e2708140c2925e2f2",
+      "p19_result": "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-11510.call108.onset.seed44.cap256.json",
+      "p19_result_sha256": "fced4b09b150e42f6475d4f2afd267a3dd8df34de3fec3faf0b2011de360baca",
+      "p19_runtime_config_id": "stage12_bf16_hifi4_kv_down_bfp8_p19",
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 44
+      },
+      "generated_tokens": 36,
+      "p19_terminal_stop_id_50": true,
+      "verdict": "normal",
+      "confidence": "high",
+      "evidence": "The saved prefix is inside a quoted source-edit command. Generation completes the existing path/string, emits the build commands, and closes the canonical tool handoff with stop ID50. No recurring malformed protocol or degeneration.",
+      "cap_notes": "Natural stop at36/256; no extension needed.",
+      "exact_full_precision_control": {
+        "result": "setup/swe85-pilot-split85/runs/rest/full/anomaly.sphinx-doc__sphinx-11510.call108.onset.json",
+        "result_sha256": "e90613cb3080d85ed7daf67359973e4aea63834afa3a856b4eff741210c5bece",
+        "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-sphinx11510-controls/sphinx-doc__sphinx-11510.call108.onset.private.json",
+        "fixture_sha256": "6efd3333b509e5dc6fe9c28b96829c345056cb2dc88538f0324b5fbce8ecb724",
+        "prompt_tokens": 62453,
+        "prompt_ids_sha256_canonical_json": "096357987ce47be0008a8297e3ea9150ca9210909e2f3e0e2708140c2925e2f2",
+        "mode": "full",
+        "seed": 44,
+        "requested_cap": 256,
+        "generated_tokens": 36,
+        "terminal_stop_id_50": true,
+        "text_head": ".11/site-packages/sphinx/directives/other.py\n\nrm -rf reproduction/build\ncd reproduction && sphinx-build . build\n<|\"|>}<tool_call|><|tool_response>",
+        "text_tail": "irectives/other.py\n\nrm -rf reproduction/build\ncd reproduction && sphinx-build . build\n<|\"|>}<tool_call|><|tool_response>"
+      },
+      "same_prompt_seed_full_control_history": [
+        {
+          "result": "setup/swe85-pilot-split85/runs/rest/full/anomaly.sphinx-doc__sphinx-11510.call108.onset.json",
+          "result_sha256": "e90613cb3080d85ed7daf67359973e4aea63834afa3a856b4eff741210c5bece",
+          "seed": 44,
+          "requested_cap": 256,
+          "generated_tokens": 36,
+          "terminal_stop_id_50": true
+        }
+      ],
+      "other_precision_same_prompt_seed_comparators": [
+        {
+          "panel": "P3",
+          "result": "setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sphinx-doc__sphinx-11510.call108.onset.seed44.cap256.json",
+          "result_sha256": "bd68ca00752c6054bb8e20e41dcda05c4526052106aae58d1d560cf806ac7243",
+          "runtime_config_id": "stage12_swe85_down_bfp8_lofi_isolated_served_head_bfp8_lofi",
+          "exact_prompt_ids_match": true,
+          "seed": 44,
+          "generated_tokens": 36,
+          "terminal_stop_id_50": true
+        },
+        {
+          "panel": "P6",
+          "result": "setup/swe85-precision-bisect/attention-down-bfp8-lofi-fixed108-candidate/runs/attention_down_bfp8_lofi_fixed108/anomaly.sphinx-doc__sphinx-11510.call108.onset.seed44.cap256.json",
+          "result_sha256": "0c25fed6e1653e160bd465c1741148d2a0e9d263486e11d4268964e4c78198fa",
+          "runtime_config_id": "stage12_swe85_attention_down_bfp8_lofi_fixed108",
+          "exact_prompt_ids_match": true,
+          "seed": 44,
+          "generated_tokens": 36,
+          "terminal_stop_id_50": true
+        }
+      ],
+      "hf_reference": {
+        "matched_exact_full_prompt_seed_control": null,
+        "disposition": "No HF sample is asserted for this exact onset/seed. The current HF disposition/coverage audit does not provide a matching case+seed reference; do not infer HF behavior here."
+      }
+    },
+    {
+      "index": 66,
+      "job": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset",
+      "seed": 42,
+      "requested_cap": 1024,
+      "p19_fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap1024.seed42.private.json",
+      "fixture_sha256": "b4253957ad89651510a0e39ea3aa49373926c9ff2d963a4ee381047b400efac8",
+      "prompt_tokens": 76441,
+      "prompt_ids_sha256_canonical_json": "5e8c9025218ae22d2ae1491e4ff24e3aacdf82ad5d2985c6e2792168270c6808",
+      "p19_result": "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed42.cap1024.json",
+      "p19_result_sha256": "e4878adb1a16e1615880e90a21769012a4274e88436d859024fb7fec7d899d42",
+      "p19_runtime_config_id": "stage12_bf16_hifi4_kv_down_bfp8_p19",
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 42
+      },
+      "generated_tokens": 1024,
+      "p19_terminal_stop_id_50": false,
+      "verdict": "inconclusive",
+      "confidence": "high that status is cap-inconclusive",
+      "evidence": "Canonical `call:bash` prefix is continued with a coherent Python patch script (file reading, method boundary search, replacement and event-emission code). It is still constructing code at exactly1024 generated tokens; no repeated-token cycle or malformed tool argument established.",
+      "cap_notes": "Reached cap1024 without stop (last token is not ID50); classify as inconclusive, not failure. A fair P19 extension to2048 is needed to establish terminal behavior. Same-seed exact-full BF16/HiFi4 cap1024 control naturally closes at582 tokens, so this is P19-specific continuation evidence, not a native-motif match.",
+      "exact_full_precision_control": {
+        "result": "setup/swe85-second-cap-extensions/runs/full/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap1024.seed42.json",
+        "result_sha256": "327f227499cf9cc23e9c731f225617f65e042e68483b5ff7052c8f2aef9fb85f",
+        "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap1024.seed42.private.json",
+        "fixture_sha256": "b4253957ad89651510a0e39ea3aa49373926c9ff2d963a4ee381047b400efac8",
+        "prompt_tokens": 76441,
+        "prompt_ids_sha256_canonical_json": "5e8c9025218ae22d2ae1491e4ff24e3aacdf82ad5d2985c6e2792168270c6808",
+        "mode": "full",
+        "seed": 42,
+        "requested_cap": 1024,
+        "generated_tokens": 582,
+        "terminal_stop_id_50": true,
+        "text_head": "{command:<|\"|># I will modify docutils/parsers/rst/directives/misc.py to integrate with Sphinx's source-read event.\n\ncat <<'EOF' > patch_docutils.py\ni",
+        "text_tail": "cho \"BAD\"; else echo \"GOOD\"; fi\ngrep -Rq \"REPLACED\" build/*.html | sed 's/^/FOUND: /'\n<|\"|>}<tool_call|><|tool_response>"
+      },
+      "same_prompt_seed_full_control_history": [
+        {
+          "result": "setup/swe85-pilot-split85/runs/rest/full/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.json",
+          "result_sha256": "a37b39be0e17b017557ae8b583a2172f4b1ce0aa1cd5e292af02024d7f8053cc",
+          "seed": 42,
+          "requested_cap": 256,
+          "generated_tokens": 256,
+          "terminal_stop_id_50": false
+        },
+        {
+          "result": "setup/swe85-cap-extensions/runs/full/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap512.seed42.json",
+          "result_sha256": "e2b642959c7025ede1de4927863e40c349afe4672dcb98809e1f846f40da5dc2",
+          "seed": 42,
+          "requested_cap": 512,
+          "generated_tokens": 512,
+          "terminal_stop_id_50": false
+        },
+        {
+          "result": "setup/swe85-second-cap-extensions/runs/full/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap1024.seed42.json",
+          "result_sha256": "327f227499cf9cc23e9c731f225617f65e042e68483b5ff7052c8f2aef9fb85f",
+          "seed": 42,
+          "requested_cap": 1024,
+          "generated_tokens": 582,
+          "terminal_stop_id_50": true
+        }
+      ],
+      "other_precision_same_prompt_seed_comparators": [
+        {
+          "panel": "P3",
+          "result": "setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed42.cap1024.json",
+          "result_sha256": "cf64a6afad9c1e7bf59c07d2bf3c4bae92e6b19664470931de7b3cd43e3a13d9",
+          "runtime_config_id": "stage12_swe85_down_bfp8_lofi_isolated_served_head_bfp8_lofi",
+          "exact_prompt_ids_match": true,
+          "seed": 42,
+          "generated_tokens": 812,
+          "terminal_stop_id_50": true
+        },
+        {
+          "panel": "P6",
+          "result": "setup/swe85-precision-bisect/attention-down-bfp8-lofi-fixed108-candidate/runs/attention_down_bfp8_lofi_fixed108/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed42.cap1024.json",
+          "result_sha256": "1d11e70a68c28ea1ef593cca082e9cc5412cc6998234206a4ce1354b75ec1d98",
+          "runtime_config_id": "stage12_swe85_attention_down_bfp8_lofi_fixed108",
+          "exact_prompt_ids_match": true,
+          "seed": 42,
+          "generated_tokens": 771,
+          "terminal_stop_id_50": true
+        }
+      ],
+      "hf_reference": {
+        "matched_exact_full_prompt_seed_control": null,
+        "disposition": "No HF sample is asserted for this exact onset/seed. The current HF disposition/coverage audit does not provide a matching case+seed reference; do not infer HF behavior here."
+      }
+    },
+    {
+      "index": 67,
+      "job": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset",
+      "seed": 43,
+      "requested_cap": 2048,
+      "p19_fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap2048.seed43.private.json",
+      "fixture_sha256": "e4c5081386cd785ccc1216dda888b4c54cc165beb80b035e96daf69c2f119718",
+      "prompt_tokens": 76441,
+      "prompt_ids_sha256_canonical_json": "5e8c9025218ae22d2ae1491e4ff24e3aacdf82ad5d2985c6e2792168270c6808",
+      "p19_result": "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed43.cap2048.json",
+      "p19_result_sha256": "ca3cbf0de39bbedc4340737108381c1c6f97336cc26230bb7678ca3c9f3fa92e",
+      "p19_runtime_config_id": "stage12_bf16_hifi4_kv_down_bfp8_p19",
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 43
+      },
+      "generated_tokens": 522,
+      "p19_terminal_stop_id_50": true,
+      "verdict": "normal",
+      "confidence": "high",
+      "evidence": "Canonical `call:bash` prefix continues as a distinct patch_docutils.py script, followed by a reproduction build and checks, then a canonical tool handoff and stop ID50. No malformed name or sustained repeated-fragment loop.",
+      "cap_notes": "Requested cap2048 but naturally stopped at522; no further extension needed. Same exact full-context/prompt seed43 BF16/HiFi4 control also stops naturally at1884/2048.",
+      "exact_full_precision_control": {
+        "result": "setup/swe85-third-cap-extensions/runs/full/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap2048.seed43.json",
+        "result_sha256": "8a3b8c0bb10a1c8426f071f7ee19af6815fe976fafc4645b9126b319b61999e9",
+        "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap2048.seed43.private.json",
+        "fixture_sha256": "e4c5081386cd785ccc1216dda888b4c54cc165beb80b035e96daf69c2f119718",
+        "prompt_tokens": 76441,
+        "prompt_ids_sha256_canonical_json": "5e8c9025218ae22d2ae1491e4ff24e3aacdf82ad5d2985c6e2792168270c6808",
+        "mode": "full",
+        "seed": 43,
+        "requested_cap": 2048,
+        "generated_tokens": 1884,
+        "terminal_stop_id_50": true,
+        "text_head": "{command:<|\"|># We'll modify docutils/parsers/rst/directives/misc.py\n# We want to find the run method of Include and modify it.\n\ncat <<'EOF' > patch_d",
+        "text_tail": " the event emission at the start.\n# I'll just use sed to insert the event emission.\n\"\n<|\"|>}<tool_call|><|tool_response>"
+      },
+      "same_prompt_seed_full_control_history": [
+        {
+          "result": "setup/swe85-pilot-split85/runs/rest/full/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.json",
+          "result_sha256": "a37b39be0e17b017557ae8b583a2172f4b1ce0aa1cd5e292af02024d7f8053cc",
+          "seed": 43,
+          "requested_cap": 256,
+          "generated_tokens": 256,
+          "terminal_stop_id_50": false
+        },
+        {
+          "result": "setup/swe85-cap-extensions/runs/full/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap512.seed43.json",
+          "result_sha256": "fd94ec9981ba9a6d12cf0c1695a0cad0994a9eb3c0fcd87d8f602666d3a3f707",
+          "seed": 43,
+          "requested_cap": 512,
+          "generated_tokens": 512,
+          "terminal_stop_id_50": false
+        },
+        {
+          "result": "setup/swe85-second-cap-extensions/runs/full/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap1024.seed43.json",
+          "result_sha256": "211f4fe67a2826c3b934dba39139c70ef7d0ef8e57037493db713434ce9687c0",
+          "seed": 43,
+          "requested_cap": 1024,
+          "generated_tokens": 1024,
+          "terminal_stop_id_50": false
+        },
+        {
+          "result": "setup/swe85-third-cap-extensions/runs/full/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap2048.seed43.json",
+          "result_sha256": "8a3b8c0bb10a1c8426f071f7ee19af6815fe976fafc4645b9126b319b61999e9",
+          "seed": 43,
+          "requested_cap": 2048,
+          "generated_tokens": 1884,
+          "terminal_stop_id_50": true
+        }
+      ],
+      "other_precision_same_prompt_seed_comparators": [
+        {
+          "panel": "P3",
+          "result": "setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed43.cap2048.json",
+          "result_sha256": "aa575216e43dd4295eafdd70f56a0975a5c3aa39a8583be5a19c0ec8fb8dcf9a",
+          "runtime_config_id": "stage12_swe85_down_bfp8_lofi_isolated_served_head_bfp8_lofi",
+          "exact_prompt_ids_match": true,
+          "seed": 43,
+          "generated_tokens": 549,
+          "terminal_stop_id_50": true
+        },
+        {
+          "panel": "P6",
+          "result": "setup/swe85-precision-bisect/attention-down-bfp8-lofi-fixed108-candidate/runs/attention_down_bfp8_lofi_fixed108/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed43.cap2048.json",
+          "result_sha256": "b1b849397a6f723fe9c846cf387ed3466953994f61a27decdb742888765343a4",
+          "runtime_config_id": "stage12_swe85_attention_down_bfp8_lofi_fixed108",
+          "exact_prompt_ids_match": true,
+          "seed": 43,
+          "generated_tokens": 546,
+          "terminal_stop_id_50": true
+        }
+      ],
+      "hf_reference": {
+        "matched_exact_full_prompt_seed_control": null,
+        "disposition": "No HF sample is asserted for this exact onset/seed. The current HF disposition/coverage audit does not provide a matching case+seed reference; do not infer HF behavior here."
+      }
+    },
+    {
+      "index": 68,
+      "job": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset",
+      "seed": 44,
+      "requested_cap": 1024,
+      "p19_fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap1024.seed44.private.json",
+      "fixture_sha256": "7c5da63d138e6afa7b539dfed909ee1e8a937c2e168d587023c4421333688780",
+      "prompt_tokens": 76441,
+      "prompt_ids_sha256_canonical_json": "5e8c9025218ae22d2ae1491e4ff24e3aacdf82ad5d2985c6e2792168270c6808",
+      "p19_result": "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed44.cap1024.json",
+      "p19_result_sha256": "fc6f184c1ea1f8a2f6ceda48993ec01e30debbc634c8ce3f96274f94e352b5a6",
+      "p19_runtime_config_id": "stage12_bf16_hifi4_kv_down_bfp8_p19",
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 44
+      },
+      "generated_tokens": 577,
+      "p19_terminal_stop_id_50": true,
+      "verdict": "normal",
+      "confidence": "high",
+      "evidence": "Canonical `call:bash` prefix continues through a distinct debug cleanup, patch script and build/check commands, followed by normal tool handoff and stop ID50.",
+      "cap_notes": "Natural stop at577/1024; no extension needed.",
+      "exact_full_precision_control": {
+        "result": "setup/swe85-second-cap-extensions/runs/full/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap1024.seed44.json",
+        "result_sha256": "dba0f96230dde25ad66a1a3d10b4c8e3a1a77e52cea7e29000d8acedff758915",
+        "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap1024.seed44.private.json",
+        "fixture_sha256": "7c5da63d138e6afa7b539dfed909ee1e8a937c2e168d587023c4421333688780",
+        "prompt_tokens": 76441,
+        "prompt_ids_sha256_canonical_json": "5e8c9025218ae22d2ae1491e4ff24e3aacdf82ad5d2985c6e2792168270c6808",
+        "mode": "full",
+        "seed": 44,
+        "requested_cap": 1024,
+        "generated_tokens": 668,
+        "terminal_stop_id_50": true,
+        "text_head": "{command:<|\"|>cat <<'EOF' > patch_docutils_include.py\nimport os\n\nfile_path = '/opt/miniconda3/lib/python3.11/site-packages/docutils/parsers/rst/direct",
+        "text_tail": "cho \"BAD\"; else echo \"GOOD\"; fi\ngrep -Rq \"REPLACED\" build/*.html | sed 's/^/FOUND: /'\n<|\"|>}<tool_call|><|tool_response>"
+      },
+      "same_prompt_seed_full_control_history": [
+        {
+          "result": "setup/swe85-pilot-split85/runs/rest/full/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.json",
+          "result_sha256": "a37b39be0e17b017557ae8b583a2172f4b1ce0aa1cd5e292af02024d7f8053cc",
+          "seed": 44,
+          "requested_cap": 256,
+          "generated_tokens": 256,
+          "terminal_stop_id_50": false
+        },
+        {
+          "result": "setup/swe85-cap-extensions/runs/full/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap512.seed44.json",
+          "result_sha256": "b66d7be79d6633ab249243ef2f1cc62014662e820fa7e51515d6250804f93c95",
+          "seed": 44,
+          "requested_cap": 512,
+          "generated_tokens": 512,
+          "terminal_stop_id_50": false
+        },
+        {
+          "result": "setup/swe85-second-cap-extensions/runs/full/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap1024.seed44.json",
+          "result_sha256": "dba0f96230dde25ad66a1a3d10b4c8e3a1a77e52cea7e29000d8acedff758915",
+          "seed": 44,
+          "requested_cap": 1024,
+          "generated_tokens": 668,
+          "terminal_stop_id_50": true
+        }
+      ],
+      "other_precision_same_prompt_seed_comparators": [
+        {
+          "panel": "P3",
+          "result": "setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed44.cap1024.json",
+          "result_sha256": "1e544f50ef08db3968395a0eb93c1fd70e0db9cded4d68bc19170150cc4bb88f",
+          "runtime_config_id": "stage12_swe85_down_bfp8_lofi_isolated_served_head_bfp8_lofi",
+          "exact_prompt_ids_match": true,
+          "seed": 44,
+          "generated_tokens": 497,
+          "terminal_stop_id_50": true
+        },
+        {
+          "panel": "P6",
+          "result": "setup/swe85-precision-bisect/attention-down-bfp8-lofi-fixed108-candidate/runs/attention_down_bfp8_lofi_fixed108/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed44.cap1024.json",
+          "result_sha256": "0550c0237b02b8942dcb3532c15cc1336326e53dbf235e9faf62c2af99617e57",
+          "runtime_config_id": "stage12_swe85_attention_down_bfp8_lofi_fixed108",
+          "exact_prompt_ids_match": true,
+          "seed": 44,
+          "generated_tokens": 507,
+          "terminal_stop_id_50": true
+        }
+      ],
+      "hf_reference": {
+        "matched_exact_full_prompt_seed_control": null,
+        "disposition": "No HF sample is asserted for this exact onset/seed. The current HF disposition/coverage audit does not provide a matching case+seed reference; do not infer HF behavior here."
+      }
+    },
+    {
+      "index": 69,
+      "job": "anomaly.sphinx-doc__sphinx-11510.call28.onset",
+      "seed": 42,
+      "requested_cap": 1024,
+      "p19_fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call28.onset.cap1024.seed42.private.json",
+      "fixture_sha256": "2dfeb0e5b696b9997f100a3ef3eac57ab8db33df3cc0bae4369e292f34711cdb",
+      "prompt_tokens": 25118,
+      "prompt_ids_sha256_canonical_json": "412acd54240cc00f68b798921203e4af4314418b6c2d58c09b4e85064c4a73b5",
+      "p19_result": "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-11510.call28.onset.seed42.cap1024.json",
+      "p19_result_sha256": "db982ca64d8409e8e9aa7979efa60c2d1fd2e24231cbb6be59c6738cba8905e3",
+      "p19_runtime_config_id": "stage12_bf16_hifi4_kv_down_bfp8_p19",
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 42
+      },
+      "generated_tokens": 646,
+      "p19_terminal_stop_id_50": true,
+      "verdict": "normal",
+      "confidence": "high",
+      "evidence": "Saved command prefix ends `self.arguments[0].`; generation begins `endswith('>'):` which forms a valid continuation, then completes a distinct Include implementation and patch script and closes the tool handoff at stop ID50.",
+      "cap_notes": "Natural stop at646/1024; no extension needed.",
+      "exact_full_precision_control": {
+        "result": "setup/swe85-second-cap-extensions/runs/full/anomaly.sphinx-doc__sphinx-11510.call28.onset.cap1024.seed42.json",
+        "result_sha256": "214a8b6b96fefdebaf68521b154343541dd4a968826fb916cdc7f7d53b8ad108",
+        "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call28.onset.cap1024.seed42.private.json",
+        "fixture_sha256": "2dfeb0e5b696b9997f100a3ef3eac57ab8db33df3cc0bae4369e292f34711cdb",
+        "prompt_tokens": 25118,
+        "prompt_ids_sha256_canonical_json": "412acd54240cc00f68b798921203e4af4314418b6c2d58c09b4e85064c4a73b5",
+        "mode": "full",
+        "seed": 42,
+        "requested_cap": 1024,
+        "generated_tokens": 893,
+        "terminal_stop_id_50": true,
+        "text_head": "endswith('>'):\n            # docutils \"standard\" includes, do not do path processing\n            return super().run()\n        rel_filename, filename =",
+        "text_tail": "ced lines {start_line} to {end_line}')\nelse:\n    print('Could not find run method')\n\"\n<|\"|>}<tool_call|><|tool_response>"
+      },
+      "same_prompt_seed_full_control_history": [
+        {
+          "result": "setup/swe85-pilot-split85/runs/rest/full/anomaly.sphinx-doc__sphinx-11510.call28.onset.json",
+          "result_sha256": "c1fb8adc8ada9b5b12dbb083ca24fb318af2b99c445f9030170a78fbe717cf3d",
+          "seed": 42,
+          "requested_cap": 256,
+          "generated_tokens": 256,
+          "terminal_stop_id_50": false
+        },
+        {
+          "result": "setup/swe85-cap-extensions/runs/full/anomaly.sphinx-doc__sphinx-11510.call28.onset.cap512.seed42.json",
+          "result_sha256": "6f61026f09522249f075eff633a7bc9674fad3a9c1cf03c8e709d80b9a5966eb",
+          "seed": 42,
+          "requested_cap": 512,
+          "generated_tokens": 512,
+          "terminal_stop_id_50": false
+        },
+        {
+          "result": "setup/swe85-second-cap-extensions/runs/full/anomaly.sphinx-doc__sphinx-11510.call28.onset.cap1024.seed42.json",
+          "result_sha256": "214a8b6b96fefdebaf68521b154343541dd4a968826fb916cdc7f7d53b8ad108",
+          "seed": 42,
+          "requested_cap": 1024,
+          "generated_tokens": 893,
+          "terminal_stop_id_50": true
+        }
+      ],
+      "other_precision_same_prompt_seed_comparators": [
+        {
+          "panel": "P3",
+          "result": "setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sphinx-doc__sphinx-11510.call28.onset.seed42.cap1024.json",
+          "result_sha256": "4126feec4afec041335eb26dac2d7b61424ef58a32d00a18acce709e5303e47f",
+          "runtime_config_id": "stage12_swe85_down_bfp8_lofi_isolated_served_head_bfp8_lofi",
+          "exact_prompt_ids_match": true,
+          "seed": 42,
+          "generated_tokens": 320,
+          "terminal_stop_id_50": true
+        },
+        {
+          "panel": "P6",
+          "result": "setup/swe85-precision-bisect/attention-down-bfp8-lofi-fixed108-candidate/runs/attention_down_bfp8_lofi_fixed108/anomaly.sphinx-doc__sphinx-11510.call28.onset.seed42.cap1024.json",
+          "result_sha256": "f981a79aab9167401c834a96acecf80eeb09a3add7df741e47515e2e991d2752",
+          "runtime_config_id": "stage12_swe85_attention_down_bfp8_lofi_fixed108",
+          "exact_prompt_ids_match": true,
+          "seed": 42,
+          "generated_tokens": 572,
+          "terminal_stop_id_50": true
+        }
+      ],
+      "hf_reference": {
+        "matched_exact_full_prompt_seed_control": null,
+        "disposition": "No HF sample is asserted for this exact onset/seed. The current HF disposition/coverage audit does not provide a matching case+seed reference; do not infer HF behavior here."
+      }
+    },
+    {
+      "index": 70,
+      "job": "anomaly.sphinx-doc__sphinx-11510.call28.onset",
+      "seed": 43,
+      "requested_cap": 1024,
+      "p19_fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call28.onset.cap1024.seed43.private.json",
+      "fixture_sha256": "ea91bd0ca464c508824ec6106ab987d91d30452dfdbd86d56ea557fb91dd8455",
+      "prompt_tokens": 25118,
+      "prompt_ids_sha256_canonical_json": "412acd54240cc00f68b798921203e4af4314418b6c2d58c09b4e85064c4a73b5",
+      "p19_result": "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-11510.call28.onset.seed43.cap1024.json",
+      "p19_result_sha256": "55e455004d91f1cd6c1ffa66018d241ea9a9afd010e66c10ac207bb29719b946",
+      "p19_runtime_config_id": "stage12_bf16_hifi4_kv_down_bfp8_p19",
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 43
+      },
+      "generated_tokens": 511,
+      "p19_terminal_stop_id_50": true,
+      "verdict": "normal",
+      "confidence": "high",
+      "evidence": "The prefix ends inside the same Python condition; generation continues the method through a distinct replacement script and completes a canonical tool handoff at stop ID50. No sustained loop.",
+      "cap_notes": "Natural stop at511/1024; no extension needed.",
+      "exact_full_precision_control": {
+        "result": "setup/swe85-second-cap-extensions/runs/full/anomaly.sphinx-doc__sphinx-11510.call28.onset.cap1024.seed43.json",
+        "result_sha256": "6e8dd6db5b3882a91a4935d5c9dbc4df6432338b7849cbe69c9108865fb1b70a",
+        "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call28.onset.cap1024.seed43.private.json",
+        "fixture_sha256": "ea91bd0ca464c508824ec6106ab987d91d30452dfdbd86d56ea557fb91dd8455",
+        "prompt_tokens": 25118,
+        "prompt_ids_sha256_canonical_json": "412acd54240cc00f68b798921203e4af4314418b6c2d58c09b4e85064c4a73b5",
+        "mode": "full",
+        "seed": 43,
+        "requested_cap": 1024,
+        "generated_tokens": 547,
+        "terminal_stop_id_50": true,
+        "text_head": "endswith('>'):\n            # docutils \"standard\" includes, do not do path processing\n            return super().run()\n        rel_filename, filename =",
+        "text_tail": "te-packages/sphinx/directives/other.py', 'w') as f:\n        f.writelines(new_lines)\n\"\n<|\"|>}<tool_call|><|tool_response>"
+      },
+      "same_prompt_seed_full_control_history": [
+        {
+          "result": "setup/swe85-pilot-split85/runs/rest/full/anomaly.sphinx-doc__sphinx-11510.call28.onset.json",
+          "result_sha256": "c1fb8adc8ada9b5b12dbb083ca24fb318af2b99c445f9030170a78fbe717cf3d",
+          "seed": 43,
+          "requested_cap": 256,
+          "generated_tokens": 256,
+          "terminal_stop_id_50": false
+        },
+        {
+          "result": "setup/swe85-cap-extensions/runs/full/anomaly.sphinx-doc__sphinx-11510.call28.onset.cap512.seed43.json",
+          "result_sha256": "b272601f8a7de63b61df79ede4b26115df1bb4a19246bf2bbf3c4ef2a81a8960",
+          "seed": 43,
+          "requested_cap": 512,
+          "generated_tokens": 512,
+          "terminal_stop_id_50": false
+        },
+        {
+          "result": "setup/swe85-second-cap-extensions/runs/full/anomaly.sphinx-doc__sphinx-11510.call28.onset.cap1024.seed43.json",
+          "result_sha256": "6e8dd6db5b3882a91a4935d5c9dbc4df6432338b7849cbe69c9108865fb1b70a",
+          "seed": 43,
+          "requested_cap": 1024,
+          "generated_tokens": 547,
+          "terminal_stop_id_50": true
+        }
+      ],
+      "other_precision_same_prompt_seed_comparators": [
+        {
+          "panel": "P3",
+          "result": "setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sphinx-doc__sphinx-11510.call28.onset.seed43.cap1024.json",
+          "result_sha256": "777745fa595c1402eb8667e8aaea0985b2be1066ad57d2363c575233618c1baa",
+          "runtime_config_id": "stage12_swe85_down_bfp8_lofi_isolated_served_head_bfp8_lofi",
+          "exact_prompt_ids_match": true,
+          "seed": 43,
+          "generated_tokens": 575,
+          "terminal_stop_id_50": true
+        },
+        {
+          "panel": "P6",
+          "result": "setup/swe85-precision-bisect/attention-down-bfp8-lofi-fixed108-candidate/runs/attention_down_bfp8_lofi_fixed108/anomaly.sphinx-doc__sphinx-11510.call28.onset.seed43.cap1024.json",
+          "result_sha256": "342b2434cb2bec02c9e987b5ee483ca291d0cda96584b14fbfa548fb1b410a33",
+          "runtime_config_id": "stage12_swe85_attention_down_bfp8_lofi_fixed108",
+          "exact_prompt_ids_match": true,
+          "seed": 43,
+          "generated_tokens": 740,
+          "terminal_stop_id_50": true
+        }
+      ],
+      "hf_reference": {
+        "matched_exact_full_prompt_seed_control": null,
+        "disposition": "No HF sample is asserted for this exact onset/seed. The current HF disposition/coverage audit does not provide a matching case+seed reference; do not infer HF behavior here."
+      }
+    },
+    {
+      "index": 71,
+      "job": "anomaly.sphinx-doc__sphinx-11510.call28.onset",
+      "seed": 44,
+      "requested_cap": 1024,
+      "p19_fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/served/anomaly.sphinx-doc__sphinx-11510.call28.onset.cap1024.seed44.private.json",
+      "fixture_sha256": "d8f30f1f675502566ec61966931a4faac361a1441829d070c4e3a143de397809",
+      "prompt_tokens": 25118,
+      "prompt_ids_sha256_canonical_json": "412acd54240cc00f68b798921203e4af4314418b6c2d58c09b4e85064c4a73b5",
+      "p19_result": "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-11510.call28.onset.seed44.cap1024.json",
+      "p19_result_sha256": "e23018c5e703a2ba3fd78c41c437da807cfa30a469fc760c876e013937e5461d",
+      "p19_runtime_config_id": "stage12_bf16_hifi4_kv_down_bfp8_p19",
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 44
+      },
+      "generated_tokens": 537,
+      "p19_terminal_stop_id_50": true,
+      "verdict": "normal",
+      "confidence": "high",
+      "evidence": "Prefix ends `self.arguments[0].`; generation continues with `endswith('>'):` (grammatical code continuation), proceeds through distinct source-cache and method-replacement logic, and ends with a canonical tool handoff at stop ID50.",
+      "cap_notes": "Natural stop at537/1024; no extension needed. Exact full BF16/HiFi4 seed44 control naturally closes at cap512.",
+      "exact_full_precision_control": {
+        "result": "setup/swe85-cap-extensions/runs/full/anomaly.sphinx-doc__sphinx-11510.call28.onset.cap512.seed44.json",
+        "result_sha256": "56772e0c4533c8b21f64d9ff7f060d909227f4ec477d438cb381b68205864f8f",
+        "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call28.onset.cap512.seed44.private.json",
+        "fixture_sha256": "1a8a971385d274bea8e848da05a1d39307df81e720e7b3b4df5e3ea221e7c467",
+        "prompt_tokens": 25118,
+        "prompt_ids_sha256_canonical_json": "412acd54240cc00f68b798921203e4af4314418b6c2d58c09b4e85064c4a73b5",
+        "mode": "full",
+        "seed": 44,
+        "requested_cap": 512,
+        "generated_tokens": 436,
+        "terminal_stop_id_50": true,
+        "text_head": "endswith('>'):\n            # docutils \"standard\" includes, do not do path processing\n            return super().run()\n        rel_filename, filename =",
+        "text_tail": "t[Node]\n        pass\n\n# Let's just use a simpler approach: replace by line range.\nEOF\n<|\"|>}<tool_call|><|tool_response>"
+      },
+      "same_prompt_seed_full_control_history": [
+        {
+          "result": "setup/swe85-pilot-split85/runs/rest/full/anomaly.sphinx-doc__sphinx-11510.call28.onset.json",
+          "result_sha256": "c1fb8adc8ada9b5b12dbb083ca24fb318af2b99c445f9030170a78fbe717cf3d",
+          "seed": 44,
+          "requested_cap": 256,
+          "generated_tokens": 256,
+          "terminal_stop_id_50": false
+        },
+        {
+          "result": "setup/swe85-cap-extensions/runs/full/anomaly.sphinx-doc__sphinx-11510.call28.onset.cap512.seed44.json",
+          "result_sha256": "56772e0c4533c8b21f64d9ff7f060d909227f4ec477d438cb381b68205864f8f",
+          "seed": 44,
+          "requested_cap": 512,
+          "generated_tokens": 436,
+          "terminal_stop_id_50": true
+        }
+      ],
+      "other_precision_same_prompt_seed_comparators": [
+        {
+          "panel": "P3",
+          "result": "setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sphinx-doc__sphinx-11510.call28.onset.seed44.cap1024.json",
+          "result_sha256": "e2ad15221efddfe4443115b4bc844067e3fdbebfa3fa50777006d4150b5f688a",
+          "runtime_config_id": "stage12_swe85_down_bfp8_lofi_isolated_served_head_bfp8_lofi",
+          "exact_prompt_ids_match": true,
+          "seed": 44,
+          "generated_tokens": 433,
+          "terminal_stop_id_50": true
+        },
+        {
+          "panel": "P6",
+          "result": "setup/swe85-precision-bisect/attention-down-bfp8-lofi-fixed108-candidate/runs/attention_down_bfp8_lofi_fixed108/anomaly.sphinx-doc__sphinx-11510.call28.onset.seed44.cap1024.json",
+          "result_sha256": "e7cc64f4ef05b7247bafc918a85cbcffdd2f9b287f2b2e9a061494184b6c29cd",
+          "runtime_config_id": "stage12_swe85_attention_down_bfp8_lofi_fixed108",
+          "exact_prompt_ids_match": true,
+          "seed": 44,
+          "generated_tokens": 517,
+          "terminal_stop_id_50": true
+        }
+      ],
+      "hf_reference": {
+        "matched_exact_full_prompt_seed_control": null,
+        "disposition": "No HF sample is asserted for this exact onset/seed. The current HF disposition/coverage audit does not provide a matching case+seed reference; do not infer HF behavior here."
+      }
+    }
+  ],
+  "limits": [
+    "No task correctness or score inference.",
+    "Generation stops and command handoffs are judged at the saved boundary; anomaly/source metadata may describe corruption elsewhere in a complete native reply.",
+    "Same diagnostic seed does not establish native RNG replay; native seeds/token IDs are not available.",
+    "P19 row66 remains unresolved at cap1024; no normal/anomalous terminal verdict is assigned."
+  ],
+  "hf_coverage_basis": {
+    "audit": "setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/original-full-coverage-audit-b.json",
+    "audit_sha256": "50074a235ad71676c8824e6cc89cdff0aaa6d43b47a1723863909da7844cb356",
+    "finding": "For all five source onsets represented in indices59-71, audit rows have shortened_hf_control=null; no HF evidence is attached. Do not infer HF reference behavior from other Sphinx calls or seeds."
+  }
+}

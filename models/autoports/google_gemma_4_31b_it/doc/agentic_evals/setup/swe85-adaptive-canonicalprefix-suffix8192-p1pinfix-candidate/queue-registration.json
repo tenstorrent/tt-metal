@@ -1,0 +1,8 @@
+{
+  "session_id": null,
+  "admission_sha256": "7486a52dc08a9cd5d81917286eed508461f015d8599fae25a9e4090b6b23e66b",
+  "registered_unix": null,
+  "status": "candidate_only_not_admitted",
+  "candidate_dir": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-canonicalprefix-suffix8192-p1pinfix-candidate",
+  "note": "No active queue registration exists for this revised candidate; the prior session belongs to the archived original admission and never launched."
+}

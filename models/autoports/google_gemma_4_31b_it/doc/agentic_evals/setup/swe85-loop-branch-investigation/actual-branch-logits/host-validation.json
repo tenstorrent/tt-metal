@@ -1,0 +1,47 @@
+{
+  "checks": {
+    "callback_forced_history_and_capture_count": true,
+    "cleanup_failure_preserves_primary": true,
+    "compare_saved_host_mock": true,
+    "distinct_topk20_and_nominal_and_bf16_topp": true,
+    "exact_2048_prompt_and_two_branches": true,
+    "inference_or_device_or_network_used": false,
+    "invalid_branch_rejected": true,
+    "seed44_full_and_hf_branch_provenance_hash_checked_and_prefix_matched": true,
+    "source_hash_inventory": true,
+    "strict20_proxy_semantics_documented": true,
+    "top32_rank_and_target_summary": true,
+    "torch_transformers_ttnn_not_imported": true
+  },
+  "command": [
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tools/actual_branch_logits.py",
+    "--validate-only",
+    "--mock-tests"
+  ],
+  "exit_code": 0,
+  "mock_test_results": {
+    "cleanup_failure_preserves_primary": true,
+    "compare_saved_host_mock": true,
+    "distinct_topk_and_topp": true,
+    "fixture_and_branch_validation": true,
+    "host_distribution_summary": true,
+    "no_torch_transformers_or_ttnn_imported": true,
+    "tt_callback_history_and_capture_count": true
+  },
+  "sha256": {
+    "AUTOFIX.md": "e14637144475b7c4a01fa5c93ae8da72cd9ecb84e90961f7f27bdd87b3a01637",
+    "README.md": "8d026fcb54e786770424cff76d0814ed072d7f3b72fa62a7e0f9d76b7d3e95c2",
+    "branch-provenance.json": "fcd8f39e4e607655d404eb820800cfd4f83cb8f1c5be2e5f52cb6211e9703691",
+    "branches.json": "532e3f0ff8deec26cc89feb967d68fa18b6ec0221a2521de02c7dcc71c209ebc",
+    "command.json": "aa3f27765886f8963cb523bf05adaf3199dddefd4d3f23e0d1f07cbc9f44ae70",
+    "fixture/anomaly.psf__requests-5414.call11.onset.suffix2048.private.json": "fbe984e026dbe8ef2b9d8a4288056617cbfde5235d1efd4a3bd14038a2db5ad7",
+    "forecast.json": "584fd8a1c90e71cd30a858e07b1c3e9f106860c686ae7c8128591ebcd87b0ccf",
+    "proposal.json": "e71c9f3c4bf150b2989bf99480c1c84a8ca0bbc939e6953d05856ee64bc73ceb",
+    "source-pins.json": "f20f6a6b35647a018c5c326393e4cb67458322a16ffa129b6c67110d9cf7e847"
+  },
+  "status": "host_validation_passed_inert_no_model_or_device",
+  "stderr": "",
+  "stdout": "{\"facts\": {\"branch_count\": 2, \"branch_names\": [\"tt_seed44_loop_history\", \"hf_seed44_ellipsis_history\"], \"branch_provenance_sha256\": \"fcd8f39e4e607655d404eb820800cfd4f83cb8f1c5be2e5f52cb6211e9703691\", \"prompt_tokens\": 2048, \"rows_per_branch\": 7}, \"mock_tests\": {\"cleanup_failure_preserves_primary\": true, \"compare_saved_host_mock\": true, \"distinct_topk_and_topp\": true, \"fixture_and_branch_validation\": true, \"host_distribution_summary\": true, \"no_torch_transformers_or_ttnn_imported\": true, \"tt_callback_history_and_capture_count\": true}, \"source_pin_count\": 15, \"status\": \"validated_inert_no_model_or_device\"}",
+  "tool_sha256": "0106720fba10ffa1cef53476a309f0a6855dd636e8d056347849d7fcb3cf8a52"
+}

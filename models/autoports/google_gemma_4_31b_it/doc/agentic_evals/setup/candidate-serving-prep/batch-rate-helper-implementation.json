@@ -1,0 +1,17 @@
+{
+  "written_unix": 1794757760.4504583,
+  "change": "Use explicit validated batch 1/8/32 for existing measured rows, matching server identity, filenames and phase accounting; preserve original workload population. Default32 is backward compatible.",
+  "tests": {
+    "command": "python_env/bin/python -m pytest --noconftest -q models/autoports/google_gemma_4_31b_it/tests/test_remeasure_agentic_rates.py models/autoports/google_gemma_4_31b_it/tests/test_benchmark_work.py",
+    "passed": 21,
+    "subtests_passed": 11
+  },
+  "source_sha256": {
+    "models/autoports/google_gemma_4_31b_it/tools/remeasure_agentic_rates.py": "88a8231c07276198004bd297237c05841d75d501e46b7b9cc350c8356db091f3",
+    "models/autoports/google_gemma_4_31b_it/tests/test_remeasure_agentic_rates.py": "0d1802eb453d33af6cf889a9238f4c4af00585b0bb8121efcca9eebefa1f1585"
+  },
+  "original_rates": "models/autoports/google_gemma_4_31b_it/doc/benchmark/serving_rates-stage11-head_bfp4.json",
+  "original_rates_sha256": "d69d30aa6186e399e699f59b7300403d74d6f71dcddce54004d970cc9781af1e",
+  "device_work": false,
+  "status": "host-verified; candidate launch and precision acceptance pending"
+}

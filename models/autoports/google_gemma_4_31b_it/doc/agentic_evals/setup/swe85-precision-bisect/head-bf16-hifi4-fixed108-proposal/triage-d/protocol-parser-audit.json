@@ -1,0 +1,571 @@
+{
+  "status": "partial_completed_outputs_CPU_stock_nonstreaming_parser_only",
+  "created_utc": "2026-11-15T06:49:41.375937+00:00",
+  "manifest_sha256": "4a7a11e655a5a442a56648c40792fb791efe11c6dde626ee11e25ec537843d67",
+  "protocol_jobs_selected": 2,
+  "selected_jobs": [
+    "anomaly.psf__requests-1921.call1.onset",
+    "anomaly.pylint-dev__pylint-4551.call1.onset"
+  ],
+  "completed_case_modes": 2,
+  "completed_trials": 6,
+  "pending": [
+    {
+      "job": "anomaly.psf__requests-1921.call1.onset",
+      "mode": "full"
+    },
+    {
+      "job": "anomaly.pylint-dev__pylint-4551.call1.onset",
+      "mode": "full"
+    }
+  ],
+  "errors": [],
+  "sources_sha256": {
+    "python_env/lib/python3.10/site-packages/vllm/parser/gemma4.py": "c974f47dc39ab7276da1e4ae38c4010e3f5411481f75e3879e29f47b2fd08df7",
+    "python_env/lib/python3.10/site-packages/vllm/parser/engine/parser_engine.py": "d1075deeb25b4872e92752d7ef0598a07a747afaf2afc56058ec30c6dc1da89a",
+    "python_env/lib/python3.10/site-packages/vllm/parser/engine/adapters.py": "7a77bcb86e2129762f4199ee726398a4850b9e207893fc4295f2b759bcfeeb36",
+    "python_env/lib/python3.10/site-packages/vllm/tool_parsers/gemma4_engine_tool_parser.py": "02f31bdcc4d8527440daebb4f4e3e74c83a6010eb56cd33fe7522bea8f51bc65",
+    "python_env/lib/python3.10/site-packages/vllm/reasoning/gemma4_engine_reasoning_parser.py": "3e9adef8ae56ee993fbaee43e82aa36216fb71251ee2de14dc9f8b326220a594",
+    "/home/mvasiljevic/.cache/huggingface/hub/models--google--gemma-4-31B-it/snapshots/842da3794eaa0b77d5f08bae87a17459d91ff475/chat_template.jinja": "ae53464bf3be25802b3a5b37def7fd89667067d7577049b3b2d74c4d8de4c6d4",
+    "/home/mvasiljevic/.cache/huggingface/hub/models--google--gemma-4-31B-it/snapshots/842da3794eaa0b77d5f08bae87a17459d91ff475/tokenizer.json": "cc8d3a0ce36466ccc1278bf987df5f71db1719b9ca6b4118264f45cb627bfe0f",
+    "/home/mvasiljevic/.cache/huggingface/hub/models--google--gemma-4-31B-it/snapshots/842da3794eaa0b77d5f08bae87a17459d91ff475/tokenizer_config.json": "9f4fec4b1dc6ecddf8f4a92e9caea5971c0e67d81309f3f9066a2bee8c362633",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/audit_swe85_protocol_outputs.py": "c049003433ff2fa694206e7f5942a9551f8473763d4d3788c0aeeaa1e35417e9"
+  },
+  "rows": [
+    {
+      "job": "anomaly.psf__requests-1921.call1.onset",
+      "mode": "served",
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/triage-d/protocol-audit-input/runs/served/anomaly.psf__requests-1921.call1.onset.json",
+      "result_sha256": "e896972cd6e7f458546644c1d09de611dd884d4877de43c4ff82d93fec7c053e",
+      "fixture_sha256": "ba91bfa87c059b14b4385dcf00dd1e20390c87e320990104fd328ccb18f4d863",
+      "packet_sha256": "02d996cc78ccbf116e3b690cf68356824398a4c6c411330dd30aa831c49d8bd0",
+      "assistant_prefix_token_count": 203,
+      "assistant_prefix_tail_ids": [
+        119364,
+        506,
+        4186,
+        236761,
+        101,
+        236777,
+        795,
+        1502,
+        684,
+        22260,
+        506,
+        1873,
+        12229,
+        531,
+        3050,
+        506,
+        2203,
+        3904,
+        236761,
+        108
+      ],
+      "assistant_prefix_tail": "Let's start by exploring the codebase and reproducing the issue.<channel|>I will start by exploring the current directory to understand the project structure.\n\n",
+      "native": {
+        "response_id": "chatcmpl-b767061204ec5d62",
+        "structured_tool_names": [
+          "bash"
+        ],
+        "content_only_current_parser": {
+          "structured_tool_count": 0,
+          "missing_tool": true,
+          "malformed_name": false,
+          "invalid_arguments": false,
+          "tools": [],
+          "visible_content_chars": 97,
+          "visible_content_head": "I will start by exploring the current directory to understand the project structure.\n\nGetAll-bash",
+          "reasoning_chars": 0,
+          "visible_GetAll_bash": true,
+          "visible_pseudo_call": false,
+          "reasoning_literal_thought_tail": false
+        },
+        "canonical_full_reply_current_parser": {
+          "structured_tool_count": 1,
+          "missing_tool": false,
+          "malformed_name": false,
+          "invalid_arguments": false,
+          "tools": [
+            {
+              "name": "bash",
+              "expected_bash": true,
+              "valid_json": true,
+              "valid_command_schema": true,
+              "argument_keys": [
+                "command"
+              ]
+            }
+          ],
+          "visible_content_chars": 97,
+          "visible_content_head": "I will start by exploring the current directory to understand the project structure.\n\nGetAll-bash",
+          "reasoning_chars": 772,
+          "visible_GetAll_bash": true,
+          "visible_pseudo_call": false,
+          "reasoning_literal_thought_tail": false
+        }
+      },
+      "trials": [
+        {
+          "seed": 42,
+          "tokens": 16,
+          "at_requested_token_cap": false,
+          "generated_has_tool_close_token": true,
+          "generated_last_id": 50,
+          "generated_head_ids": [
+            101,
+            48,
+            6639,
+            236787,
+            42422,
+            236782,
+            7674,
+            236787,
+            52,
+            5629,
+            753,
+            236794
+          ],
+          "generated_text_head": "<channel|><|tool_call>call:bash{command:<|\"|>ls -R<|\"|>}<tool_call|><|tool_response>",
+          "generated_text_tail": "ll:bash{command:<|\"|>ls -R<|\"|>}<tool_call|><|tool_response>",
+          "conditioning_plus_generated": {
+            "structured_tool_count": 1,
+            "missing_tool": false,
+            "malformed_name": false,
+            "invalid_arguments": false,
+            "tools": [
+              {
+                "name": "bash",
+                "expected_bash": true,
+                "valid_json": true,
+                "valid_command_schema": true,
+                "argument_keys": [
+                  "command"
+                ]
+              }
+            ],
+            "visible_content_chars": 84,
+            "visible_content_head": "I will start by exploring the current directory to understand the project structure.",
+            "reasoning_chars": 772,
+            "visible_GetAll_bash": false,
+            "visible_pseudo_call": false,
+            "reasoning_literal_thought_tail": false
+          },
+          "generated_only": {
+            "structured_tool_count": 1,
+            "missing_tool": false,
+            "malformed_name": false,
+            "invalid_arguments": false,
+            "tools": [
+              {
+                "name": "bash",
+                "expected_bash": true,
+                "valid_json": true,
+                "valid_command_schema": true,
+                "argument_keys": [
+                  "command"
+                ]
+              }
+            ],
+            "visible_content_chars": 0,
+            "visible_content_head": "",
+            "reasoning_chars": 0,
+            "visible_GetAll_bash": false,
+            "visible_pseudo_call": false,
+            "reasoning_literal_thought_tail": false
+          },
+          "mechanical_flag_from_runner": false,
+          "mechanical_repetition_not_adjudicated_by_parser": true
+        },
+        {
+          "seed": 43,
+          "tokens": 18,
+          "at_requested_token_cap": false,
+          "generated_has_tool_close_token": true,
+          "generated_last_id": 50,
+          "generated_head_ids": [
+            101,
+            189436,
+            107,
+            48,
+            6639,
+            236787,
+            42422,
+            236782,
+            7674,
+            236787,
+            52,
+            5629
+          ],
+          "generated_text_head": "<channel|> ASN\n<|tool_call>call:bash{command:<|\"|>ls -R<|\"|>}<tool_call|><|tool_response>",
+          "generated_text_tail": "ll:bash{command:<|\"|>ls -R<|\"|>}<tool_call|><|tool_response>",
+          "conditioning_plus_generated": {
+            "structured_tool_count": 1,
+            "missing_tool": false,
+            "malformed_name": false,
+            "invalid_arguments": false,
+            "tools": [
+              {
+                "name": "bash",
+                "expected_bash": true,
+                "valid_json": true,
+                "valid_command_schema": true,
+                "argument_keys": [
+                  "command"
+                ]
+              }
+            ],
+            "visible_content_chars": 90,
+            "visible_content_head": "I will start by exploring the current directory to understand the project structure.\n\n ASN",
+            "reasoning_chars": 772,
+            "visible_GetAll_bash": false,
+            "visible_pseudo_call": false,
+            "reasoning_literal_thought_tail": false
+          },
+          "generated_only": {
+            "structured_tool_count": 1,
+            "missing_tool": false,
+            "malformed_name": false,
+            "invalid_arguments": false,
+            "tools": [
+              {
+                "name": "bash",
+                "expected_bash": true,
+                "valid_json": true,
+                "valid_command_schema": true,
+                "argument_keys": [
+                  "command"
+                ]
+              }
+            ],
+            "visible_content_chars": 3,
+            "visible_content_head": "ASN",
+            "reasoning_chars": 0,
+            "visible_GetAll_bash": false,
+            "visible_pseudo_call": false,
+            "reasoning_literal_thought_tail": false
+          },
+          "mechanical_flag_from_runner": false,
+          "mechanical_repetition_not_adjudicated_by_parser": true
+        },
+        {
+          "seed": 44,
+          "tokens": 3,
+          "at_requested_token_cap": false,
+          "generated_has_tool_close_token": true,
+          "generated_last_id": 50,
+          "generated_head_ids": [
+            101,
+            49,
+            50
+          ],
+          "generated_text_head": "<channel|><tool_call|><|tool_response>",
+          "generated_text_tail": "<channel|><tool_call|><|tool_response>",
+          "conditioning_plus_generated": {
+            "structured_tool_count": 0,
+            "missing_tool": true,
+            "malformed_name": false,
+            "invalid_arguments": false,
+            "tools": [],
+            "visible_content_chars": 86,
+            "visible_content_head": "I will start by exploring the current directory to understand the project structure.\n\n",
+            "reasoning_chars": 772,
+            "visible_GetAll_bash": false,
+            "visible_pseudo_call": false,
+            "reasoning_literal_thought_tail": false
+          },
+          "generated_only": {
+            "structured_tool_count": 0,
+            "missing_tool": true,
+            "malformed_name": false,
+            "invalid_arguments": false,
+            "tools": [],
+            "visible_content_chars": 0,
+            "visible_content_head": "",
+            "reasoning_chars": 0,
+            "visible_GetAll_bash": false,
+            "visible_pseudo_call": false,
+            "reasoning_literal_thought_tail": false
+          },
+          "mechanical_flag_from_runner": false,
+          "mechanical_repetition_not_adjudicated_by_parser": true
+        }
+      ]
+    },
+    {
+      "job": "anomaly.pylint-dev__pylint-4551.call1.onset",
+      "mode": "served",
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/triage-d/protocol-audit-input/runs/served/anomaly.pylint-dev__pylint-4551.call1.onset.json",
+      "result_sha256": "dbcd77267aea6f0c6cc588ff95e2f496c8435720bcece91bcafe06e03771fdc3",
+      "fixture_sha256": "34ad0af91e9d911cc9ac0e1bcb97d6adf7e3754df831a45af074c3bdba1fa369",
+      "packet_sha256": "49d388e3d01b85a0294434c79b850e9bdd6628e6fa0f651e3d4152f3475a48d4",
+      "assistant_prefix_token_count": 128,
+      "assistant_prefix_tail_ids": [
+        101,
+        236777,
+        1202,
+        531,
+        3050,
+        506,
+        3904,
+        529,
+        506,
+        20387,
+        532,
+        1298,
+        2165,
+        2551,
+        34220,
+        236929,
+        563,
+        5628,
+        236761,
+        108
+      ],
+      "assistant_prefix_tail": "ylint`.\n\nI'll start by exploring the current directory.thought<channel|>I need to understand the structure of the repository and where `pyreverse` is located.\n\n",
+      "native": {
+        "response_id": "chatcmpl-a6bb52ac80c04f20",
+        "structured_tool_names": [
+          "bash"
+        ],
+        "content_only_current_parser": {
+          "structured_tool_count": 0,
+          "missing_tool": true,
+          "malformed_name": false,
+          "invalid_arguments": false,
+          "tools": [],
+          "visible_content_chars": 99,
+          "visible_content_head": "I need to understand the structure of the repository and where `pyreverse` is located.\n\nGetAll-bash",
+          "reasoning_chars": 0,
+          "visible_GetAll_bash": true,
+          "visible_pseudo_call": false,
+          "reasoning_literal_thought_tail": false
+        },
+        "canonical_full_reply_current_parser": {
+          "structured_tool_count": 1,
+          "missing_tool": false,
+          "malformed_name": false,
+          "invalid_arguments": false,
+          "tools": [
+            {
+              "name": "bash",
+              "expected_bash": true,
+              "valid_json": true,
+              "valid_command_schema": true,
+              "argument_keys": [
+                "command"
+              ]
+            }
+          ],
+          "visible_content_chars": 99,
+          "visible_content_head": "I need to understand the structure of the repository and where `pyreverse` is located.\n\nGetAll-bash",
+          "reasoning_chars": 459,
+          "visible_GetAll_bash": true,
+          "visible_pseudo_call": false,
+          "reasoning_literal_thought_tail": true
+        }
+      },
+      "trials": [
+        {
+          "seed": 42,
+          "tokens": 20,
+          "at_requested_token_cap": false,
+          "generated_has_tool_close_token": true,
+          "generated_last_id": 50,
+          "generated_head_ids": [
+            101,
+            49,
+            6639,
+            236787,
+            42422,
+            236782,
+            7674,
+            236787,
+            52,
+            5629,
+            753,
+            236794
+          ],
+          "generated_text_head": "<channel|><tool_call|>call:bash{command:<|\"|>ls -R | grep pyreverse<|\"|>}<tool_call|><|tool_response",
+          "generated_text_tail": "|\"|>ls -R | grep pyreverse<|\"|>}<tool_call|><|tool_response>",
+          "conditioning_plus_generated": {
+            "structured_tool_count": 0,
+            "missing_tool": true,
+            "malformed_name": false,
+            "invalid_arguments": false,
+            "tools": [],
+            "visible_content_chars": 139,
+            "visible_content_head": "I need to understand the structure of the repository and where `pyreverse` is located.\n\ncall:bash{command:<|\"|>ls -R | g",
+            "reasoning_chars": 459,
+            "visible_GetAll_bash": false,
+            "visible_pseudo_call": true,
+            "reasoning_literal_thought_tail": true
+          },
+          "generated_only": {
+            "structured_tool_count": 0,
+            "missing_tool": true,
+            "malformed_name": false,
+            "invalid_arguments": false,
+            "tools": [],
+            "visible_content_chars": 51,
+            "visible_content_head": "call:bash{command:<|\"|>ls -R | grep pyreverse<|\"|>}",
+            "reasoning_chars": 0,
+            "visible_GetAll_bash": false,
+            "visible_pseudo_call": true,
+            "reasoning_literal_thought_tail": false
+          },
+          "mechanical_flag_from_runner": false,
+          "mechanical_repetition_not_adjudicated_by_parser": true
+        },
+        {
+          "seed": 43,
+          "tokens": 20,
+          "at_requested_token_cap": false,
+          "generated_has_tool_close_token": true,
+          "generated_last_id": 50,
+          "generated_head_ids": [
+            101,
+            48,
+            6639,
+            236787,
+            42422,
+            236782,
+            7674,
+            236787,
+            52,
+            5629,
+            753,
+            236794
+          ],
+          "generated_text_head": "<channel|><|tool_call>call:bash{command:<|\"|>ls -R | grep pyreverse<|\"|>}<tool_call|><|tool_response",
+          "generated_text_tail": "|\"|>ls -R | grep pyreverse<|\"|>}<tool_call|><|tool_response>",
+          "conditioning_plus_generated": {
+            "structured_tool_count": 1,
+            "missing_tool": false,
+            "malformed_name": false,
+            "invalid_arguments": false,
+            "tools": [
+              {
+                "name": "bash",
+                "expected_bash": true,
+                "valid_json": true,
+                "valid_command_schema": true,
+                "argument_keys": [
+                  "command"
+                ]
+              }
+            ],
+            "visible_content_chars": 86,
+            "visible_content_head": "I need to understand the structure of the repository and where `pyreverse` is located.",
+            "reasoning_chars": 459,
+            "visible_GetAll_bash": false,
+            "visible_pseudo_call": false,
+            "reasoning_literal_thought_tail": true
+          },
+          "generated_only": {
+            "structured_tool_count": 1,
+            "missing_tool": false,
+            "malformed_name": false,
+            "invalid_arguments": false,
+            "tools": [
+              {
+                "name": "bash",
+                "expected_bash": true,
+                "valid_json": true,
+                "valid_command_schema": true,
+                "argument_keys": [
+                  "command"
+                ]
+              }
+            ],
+            "visible_content_chars": 0,
+            "visible_content_head": "",
+            "reasoning_chars": 0,
+            "visible_GetAll_bash": false,
+            "visible_pseudo_call": false,
+            "reasoning_literal_thought_tail": false
+          },
+          "mechanical_flag_from_runner": false,
+          "mechanical_repetition_not_adjudicated_by_parser": true
+        },
+        {
+          "seed": 44,
+          "tokens": 20,
+          "at_requested_token_cap": false,
+          "generated_has_tool_close_token": true,
+          "generated_last_id": 50,
+          "generated_head_ids": [
+            101,
+            49,
+            6639,
+            236787,
+            42422,
+            236782,
+            7674,
+            236787,
+            52,
+            5629,
+            753,
+            236794
+          ],
+          "generated_text_head": "<channel|><tool_call|>call:bash{command:<|\"|>ls -R | grep pyreverse<|\"|>}<tool_call|><|tool_response",
+          "generated_text_tail": "|\"|>ls -R | grep pyreverse<|\"|>}<tool_call|><|tool_response>",
+          "conditioning_plus_generated": {
+            "structured_tool_count": 0,
+            "missing_tool": true,
+            "malformed_name": false,
+            "invalid_arguments": false,
+            "tools": [],
+            "visible_content_chars": 139,
+            "visible_content_head": "I need to understand the structure of the repository and where `pyreverse` is located.\n\ncall:bash{command:<|\"|>ls -R | g",
+            "reasoning_chars": 459,
+            "visible_GetAll_bash": false,
+            "visible_pseudo_call": true,
+            "reasoning_literal_thought_tail": true
+          },
+          "generated_only": {
+            "structured_tool_count": 0,
+            "missing_tool": true,
+            "malformed_name": false,
+            "invalid_arguments": false,
+            "tools": [],
+            "visible_content_chars": 51,
+            "visible_content_head": "call:bash{command:<|\"|>ls -R | grep pyreverse<|\"|>}",
+            "reasoning_chars": 0,
+            "visible_GetAll_bash": false,
+            "visible_pseudo_call": true,
+            "reasoning_literal_thought_tail": false
+          },
+          "mechanical_flag_from_runner": false,
+          "mechanical_repetition_not_adjudicated_by_parser": true
+        }
+      ]
+    }
+  ],
+  "rules": [
+    "Expected structured tool is bash with JSON mapping containing string command. Missing tool, malformed function name and invalid arguments are separate outcomes.",
+    "Missing tool at token cap may be incomplete; inspect completion/stop and channel context before declaring reproduction.",
+    "Valid structured call does not excuse visible GetAll-bash, stray thought, repetition, wrong actions or other semantic anomalies. Mechanical repetition is not assessed by this parser.",
+    "Raw special-marker display alone is not reproduction: runner decodes skip_special_tokens=False. Compare actual channel-aware structured results with native response body.",
+    "Native token IDs and exact historical stream absent. Canonical reconstruction/current nonstreaming parse is not proof of historical stream/parser equivalence or full-model correctness.",
+    "Full-prefix findings may include fixed inherited anomalous text. Compare generated-only findings and exact prefix before attributing anomaly to new sampling. A capped parser-extracted call is not necessarily complete/executable; tool-close-token presence is recorded separately."
+  ],
+  "partial_counts": {
+    "served": {
+      "case_modes": 2,
+      "trials": 6,
+      "missing_tool": 3,
+      "malformed_name": 0,
+      "invalid_arguments": 0,
+      "capped_trials": 0
+    },
+    "full": {
+      "case_modes": 0,
+      "trials": 0,
+      "missing_tool": 0,
+      "malformed_name": 0,
+      "invalid_arguments": 0,
+      "capped_trials": 0
+    }
+  }
+}

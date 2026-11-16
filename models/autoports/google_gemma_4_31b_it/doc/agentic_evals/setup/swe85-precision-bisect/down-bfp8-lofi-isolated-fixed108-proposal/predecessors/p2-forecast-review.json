@@ -1,0 +1,16 @@
+{
+  "status": "root_reviewed",
+  "reviewer": "root",
+  "accepted": true,
+  "completion_sha256": "47896893e57257757d1153dd3ae4df6b05985cd97b0fbb9993739e30145b2880",
+  "admission_sha256": "74bef162c97e23e882612eb85dae365f32c9da1f13ba4b9b8e1e1f8f582ad1be",
+  "forecast_status": "in_range",
+  "forecast_range_seconds": [
+    2018.038988828659,
+    5910.468657604884
+  ],
+  "reviewed_elapsed_seconds": 2469.2918775081635,
+  "contention_disclosed": true,
+  "speed_ranking_used": false,
+  "incident": "setup/swe85-conditional-hf/runner-validation-incident-c.json"
+}

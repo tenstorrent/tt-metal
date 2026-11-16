@@ -1,0 +1,28 @@
+{
+  "scope": "Supplemental semantic adjudication; original coordinator and frozen fixture hashes preserved",
+  "review": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/review/swe85-semantic-supplements-review.md",
+  "cases": [
+    {
+      "task": "matplotlib__matplotlib-20488",
+      "decisive_call": 29,
+      "native_message": 58,
+      "cause": "wrong",
+      "evidence": "Debug access before t_vmin/t_vmax assignment introduces two UnboundLocalError regressions; validated correct action fixes target with inherited failures retained."
+    },
+    {
+      "task": "psf__requests-2931",
+      "decisive_call": 29,
+      "native_message": 57,
+      "cause": "wrong",
+      "evidence": "Returning bytes unchanged fixes binary body but breaks byte URL parameters; validated correct action fixes both with external fixture failures retained."
+    },
+    {
+      "task": "pydata__xarray-3095",
+      "decisive_call": 48,
+      "native_message": 96,
+      "response_id": "chatcmpl-bbdcd73ab1428a8a",
+      "cause": "wrong",
+      "evidence": "PandasIndexAdapter guard leaves dtype target failing; same original test has 253pass1fail before/chosen and254pass correct. Call53 is separate protocol evidence, not first incorrect source edit."
+    }
+  ]
+}

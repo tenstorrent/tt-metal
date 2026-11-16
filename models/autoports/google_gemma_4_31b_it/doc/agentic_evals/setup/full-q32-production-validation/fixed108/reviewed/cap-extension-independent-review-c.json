@@ -1,0 +1,336 @@
+{
+  "status": "independent_host_only_review_complete_for_all_six",
+  "scope": "Exact fixture path, seed/sampling, runtime policy and generated-ID prefix checks against the original fixed108 row. No task correctness claim.",
+  "cases": [
+    {
+      "index": 37,
+      "name": "anomaly.pytest-dev__pytest-7432.call19.onset.seed43.cap256",
+      "seed": 43,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.pytest-dev__pytest-7432.call19.onset.seed43.private.json",
+      "case_sha256": "2eaad18936f926fc558cc1f2361399238e80897e4cf3b1b849fc28fa620edc2a",
+      "original_output": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full-q32-production-validation/fixed108/runs/anomaly.pytest-dev__pytest-7432.call19.onset.seed43.cap256.json",
+      "original_output_sha256": "7e5276c0992ed8d07b1914d7b6588cecfdd299f49492f53ad427f3c93c7589b7",
+      "extended_output": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full-q32-production-validation/fixed108/cap-extensions-root/runs/anomaly.pytest-dev__pytest-7432.call19.onset.seed43.cap256-extended-to512.json",
+      "extended_output_sha256": "306759d8478c13a0bba38a9045b3df07d47fae07c9e8e3e6e4350cf82603ed20",
+      "source_cap": 256,
+      "extended_cap": 512,
+      "generated_ids": 327,
+      "original_prefix_exact": true,
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 43
+      },
+      "runtime_precision": {
+        "config_id": "stage12_bf16_hifi4_diagnostic",
+        "weight_groups": {
+          "attention": "bf16",
+          "mlp": "bf16",
+          "down": "bf16",
+          "lm_head": "bf16"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "HiFi4",
+          "mlp": "HiFi4",
+          "down": "HiFi4",
+          "lm_head": "HiFi4"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat16",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144,
+        "sdpa_compute_fidelity": "HiFi4"
+      },
+      "natural_stop_before_cap": true,
+      "verdict": "normal",
+      "evidence": "327 generated IDs, natural stop before512. Starts with a caret marker line followed by coherent traceback reasoning and a closed bash tool call; no terminal sustained caret tail."
+    },
+    {
+      "index": 42,
+      "name": "anomaly.requests2931.call20.canonicalprefix.seed42.cap256",
+      "seed": 42,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-precision/requests2931-call20/canonicalprefix/case.private.json",
+      "case_sha256": "7f527603e08f61f5516745fc2fab496c6ae7020985372c8f71fd0459895c10f0",
+      "original_output": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full-q32-production-validation/fixed108/runs/anomaly.requests2931.call20.canonicalprefix.seed42.cap256.json",
+      "original_output_sha256": "ffbb921fa8743fd804ff55e8b6d4bbbf937bf878c139d324d5096a9bb52b2bbc",
+      "extended_output": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full-q32-production-validation/fixed108/cap-extensions-root/runs/anomaly.requests2931.call20.canonicalprefix.seed42.cap256-extended-to512.json",
+      "extended_output_sha256": "1e4bb0714f7fab91acf414b42548a98e8f5a80a4b78a315f60d9bbae39196949",
+      "source_cap": 256,
+      "extended_cap": 512,
+      "generated_ids": 512,
+      "original_prefix_exact": true,
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 42
+      },
+      "runtime_precision": {
+        "config_id": "stage12_bf16_hifi4_diagnostic",
+        "weight_groups": {
+          "attention": "bf16",
+          "mlp": "bf16",
+          "down": "bf16",
+          "lm_head": "bf16"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "HiFi4",
+          "mlp": "HiFi4",
+          "down": "HiFi4",
+          "lm_head": "HiFi4"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat16",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144,
+        "sdpa_compute_fidelity": "HiFi4"
+      },
+      "natural_stop_before_cap": false,
+      "verdict": "inconclusive",
+      "evidence": "512/512 IDs; coherent UnicodeDecodeError diagnosis but ends mid-inspection command at cap. Exact prefix preserved; extend to1024."
+    },
+    {
+      "index": 44,
+      "name": "anomaly.requests2931.call20.canonicalprefix.seed44.cap256",
+      "seed": 44,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.requests2931.call20.canonicalprefix.seed44.private.json",
+      "case_sha256": "971939b876f462ed4002ba8757826708e6e3d19a20d9496298f61c49af698d40",
+      "original_output": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full-q32-production-validation/fixed108/runs/anomaly.requests2931.call20.canonicalprefix.seed44.cap256.json",
+      "original_output_sha256": "2a9f6f733c86710fc56e3fe20c772497ca10e9fef91dd941e47bcddf266634f8",
+      "extended_output": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full-q32-production-validation/fixed108/cap-extensions-root/runs/anomaly.requests2931.call20.canonicalprefix.seed44.cap256-extended-to512.json",
+      "extended_output_sha256": "e229f0e76fe7b7cf8cd6505756ee657f7a0a3b92a4322210d8a90b656dd0ea74",
+      "source_cap": 256,
+      "extended_cap": 512,
+      "generated_ids": 512,
+      "original_prefix_exact": true,
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 44
+      },
+      "runtime_precision": {
+        "config_id": "stage12_bf16_hifi4_diagnostic",
+        "weight_groups": {
+          "attention": "bf16",
+          "mlp": "bf16",
+          "down": "bf16",
+          "lm_head": "bf16"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "HiFi4",
+          "mlp": "HiFi4",
+          "down": "HiFi4",
+          "lm_head": "HiFi4"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat16",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144,
+        "sdpa_compute_fidelity": "HiFi4"
+      },
+      "natural_stop_before_cap": false,
+      "verdict": "inconclusive",
+      "evidence": "512/512 IDs; coherent traceback explanation but ends mid-string literal at cap. Exact prefix preserved; extend to1024."
+    },
+    {
+      "index": 48,
+      "name": "anomaly.sphinx-doc__sphinx-10323.call57.onset.seed42.cap512",
+      "seed": 42,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-10323.call57.onset.cap512.seed42.private.json",
+      "case_sha256": "73900395540b408c3bdb3689ef5561eed2d4d9a1976a6a1b19ec1545e6d0eb2a",
+      "original_output": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full-q32-production-validation/fixed108/runs/anomaly.sphinx-doc__sphinx-10323.call57.onset.seed42.cap512.json",
+      "original_output_sha256": "7b5847261c4a4bd89069fc0f295525fed92a99716cf09b45385bca9ef4ba5345",
+      "extended_output": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full-q32-production-validation/fixed108/cap-extensions-root/runs/anomaly.sphinx-doc__sphinx-10323.call57.onset.seed42.cap512-extended-to1024.json",
+      "extended_output_sha256": "594e1d949575721a7b2f73157c32b4c0f0dbe9b447dde919eb43c346adfa38fc",
+      "source_cap": 512,
+      "extended_cap": 1024,
+      "generated_ids": 633,
+      "original_prefix_exact": true,
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 42
+      },
+      "runtime_precision": {
+        "config_id": "stage12_bf16_hifi4_diagnostic",
+        "weight_groups": {
+          "attention": "bf16",
+          "mlp": "bf16",
+          "down": "bf16",
+          "lm_head": "bf16"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "HiFi4",
+          "mlp": "HiFi4",
+          "down": "HiFi4",
+          "lm_head": "HiFi4"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat16",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144,
+        "sdpa_compute_fidelity": "HiFi4"
+      },
+      "natural_stop_before_cap": true,
+      "verdict": "normal",
+      "evidence": "633 generated IDs, natural stop before1024 after coherent Sphinx source inspection and closed bash tool call; no sustained motif."
+    },
+    {
+      "index": 68,
+      "name": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed44.cap1024",
+      "seed": 44,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap1024.seed44.private.json",
+      "case_sha256": "7c5da63d138e6afa7b539dfed909ee1e8a937c2e168d587023c4421333688780",
+      "original_output": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full-q32-production-validation/fixed108/runs/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed44.cap1024.json",
+      "original_output_sha256": "342461d65c726c5815f40e9f697f17c1cc928d5dad516fbcb74f2c9fff206919",
+      "extended_output": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full-q32-production-validation/fixed108/cap-extensions-root/runs/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed44.cap1024-extended-to2048.json",
+      "extended_output_sha256": "a7089b7efa2cf3fa2e2c231fd878a9e094a93bd9a4ced9a94d20ab387bb111b7",
+      "source_cap": 1024,
+      "extended_cap": 2048,
+      "generated_ids": 1834,
+      "original_prefix_exact": true,
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 44
+      },
+      "runtime_precision": {
+        "config_id": "stage12_bf16_hifi4_diagnostic",
+        "weight_groups": {
+          "attention": "bf16",
+          "mlp": "bf16",
+          "down": "bf16",
+          "lm_head": "bf16"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "HiFi4",
+          "mlp": "HiFi4",
+          "down": "HiFi4",
+          "lm_head": "HiFi4"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat16",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144,
+        "sdpa_compute_fidelity": "HiFi4"
+      },
+      "natural_stop_before_cap": true,
+      "verdict": "normal",
+      "evidence": "1834 generated IDs, natural stop before2048 after a coherent patch attempt closes heredoc and tool response; no sustained motif. This is not task correctness."
+    },
+    {
+      "index": 74,
+      "name": "anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.seed44.cap1024",
+      "seed": 44,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.cap1024.seed44.private.json",
+      "case_sha256": "14b67b9fcb8ad382713dff99ccb47922690bc5be90131e3adc25a195f3e712d3",
+      "original_output": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full-q32-production-validation/fixed108/runs/anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.seed44.cap1024.json",
+      "original_output_sha256": "6cc981aef16a2a048bd67882b473f403e39c1a7843e5e90ae8deb512d6546ec4",
+      "extended_output": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full-q32-production-validation/fixed108/cap-extensions-root/runs/anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.seed44.cap1024-extended-to2048.json",
+      "extended_output_sha256": "2b414038747edf84c7bfb4b2c4e155c21877bf3d1eb66aef2ecfe09c53646f48",
+      "source_cap": 1024,
+      "extended_cap": 2048,
+      "generated_ids": 1084,
+      "original_prefix_exact": true,
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 44
+      },
+      "runtime_precision": {
+        "config_id": "stage12_bf16_hifi4_diagnostic",
+        "weight_groups": {
+          "attention": "bf16",
+          "mlp": "bf16",
+          "down": "bf16",
+          "lm_head": "bf16"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "HiFi4",
+          "mlp": "HiFi4",
+          "down": "HiFi4",
+          "lm_head": "HiFi4"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat16",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144,
+        "sdpa_compute_fidelity": "HiFi4"
+      },
+      "natural_stop_before_cap": true,
+      "verdict": "normal",
+      "evidence": "1084 generated IDs, natural stop before2048 after coherent code/build inspection and completed tool response; no sustained motif. This is not task correctness."
+    }
+  ],
+  "aggregate": {
+    "initial_cap_inconclusive": 6,
+    "resolved_natural_stop": 4,
+    "still_progressing_at_cap": 2,
+    "classifications_after_extension": {
+      "normal": 4,
+      "reproduced_native_motif": 0,
+      "other_anomaly": 0,
+      "inconclusive": 2
+    },
+    "prefix_identity_all_six": true
+  }
+}

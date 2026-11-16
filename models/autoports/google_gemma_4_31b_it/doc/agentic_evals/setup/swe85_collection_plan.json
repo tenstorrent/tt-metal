@@ -1,0 +1,123 @@
+{
+  "status": "prepared_only_no_execution",
+  "run": "swe-extended85-head-bfp8",
+  "paths": {
+    "job": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe-jobs/swe-extended85-head-bfp8",
+    "task_list": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-candidate/combined85-tasks.json",
+    "task_dir": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-candidate/tasks85-offline-verifier",
+    "native_server_log": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/extended-head-bfp8-server/server/server-b32/server.log",
+    "trial_result": "<job>/<task>__<trial>/result.json",
+    "native_trajectory": "<trial>/agent/mini-swe-agent.trajectory.json",
+    "agent_text": "<trial>/agent/mini-swe-agent.txt",
+    "verifier": "<trial>/verifier/"
+  },
+  "per_completed_task": {
+    "argv_template": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-c",
+      "import sys,json,pathlib\nsys.path.insert(0,'/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tools')\nimport agentic_collect_swe as c\ntask=sys.argv[1];dest=pathlib.Path(sys.argv[2]);dest.mkdir(parents=True,exist_ok=False)\nids=[x['task'] for x in json.loads(pathlib.Path('/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-candidate/combined85-tasks.json').read_text())['tasks']];assert task in ids\nattempts=[a for a in c.load_attempts(pathlib.Path('/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe-jobs/swe-extended85-head-bfp8'),ids) if a['task']==task]\nassert attempts and all(a['start'] is not None and a['end'] is not None for a in attempts),'Wait for complete trial result'\nstatement=(pathlib.Path('/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-candidate/tasks85-offline-verifier')/task/'instruction.md').read_text().strip()\nraw=pathlib.Path('/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/extended-head-bfp8-server/server/server-b32/server.log').read_text();frames=list(c.digest.framed(raw.splitlines()));native_ids=set().union(*(a['response_ids'] for a in attempts));selected=[];selected_ids=set()\nfor frame in frames:\n if 'eval_call=' not in frame:continue\n r,_=json.JSONDecoder().raw_decode(frame.split('eval_call=',1)[1]);texts=list(c.strings(json.loads(r['request']).get('messages',[])))\n if r['id'] in native_ids or (any(statement in text for text in texts) and any(a['start']<=r['start']<=r['end']<=a['end'] for a in attempts)):\n  selected.append(frame);selected_ids.add(r['id'])\nbodies={b['id']:b for b in c.digest.responses(raw.splitlines()) if b['id'] in selected_ids}\nselected+=['response_body={'+json.dumps(b)+'}' for b in bodies.values()]\nresult,calls,mapping=c.collect(selected,attempts,{task:statement},12,32,min(a['start'] for a in attempts),max(a['end'] for a in attempts))\nresult['partial_task_only']=True;result['not_run_score_or_timing']=True\nfor name,data in [('collected.json',result),('calls.json',calls),('digest_accounting.json',mapping)]: (dest/name).write_text(json.dumps(data,indent=2)+'\\n')\nproof={'source_log':'/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/extended-head-bfp8-server/server/server-b32/server.log','source_sha256':c.sha(raw),'selected_ids':sorted(selected_ids),'body_ids':sorted(bodies),'mapping_issues':result['issues'],'selection':'native IDs or exact full instruction and complete trial lifecycle'}\n(dest/'selection-proof.json').write_text(json.dumps(proof,indent=2)+'\\n')\np=dest/'responses.private.log';p.write_text(''.join('response_body={'+json.dumps(b)+'}\\n' for b in bodies.values()));p.chmod(0o600)\nc.digest.digest_run([str(p)],[str(dest/'digest_accounting.json')],dest/'digest','swe-extended85-head-bfp8',[task],32768)\n",
+      "<EXACT_OFFICIAL_TASK_ID>",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-extended85-head-bfp8/live-tasks/<TASK>-<SNAPSHOT>"
+    ],
+    "notes": [
+      "Wait for complete result.json and synchronized native trajectory; reject ambiguous/missing identity.",
+      "Partial task digest is not overall score/timing. Snapshot output must be new; do not overwrite prior evidence.",
+      "Prompt root triage on wrong reward, capped/flagged replies, exceptions or missing rewards; retain coherent failures and all first-attempt costs."
+    ]
+  },
+  "final_collector_argv": [
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tools/agentic_collect_swe.py",
+    "--server-log",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/extended-head-bfp8-server/server/server-b32/server.log",
+    "--job-dir",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe-jobs/swe-extended85-head-bfp8",
+    "--task-list",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-candidate/combined85-tasks.json",
+    "--task-dir",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-candidate/tasks85-offline-verifier",
+    "--out",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-extended85-head-bfp8/collected-final",
+    "--agents",
+    "12",
+    "--server-batch",
+    "32",
+    "--run-start",
+    "<ACTUAL_EVAL_START_UNIX>",
+    "--run-end",
+    "<ACTUAL_PROCESS_EXIT_UNIX>",
+    "--rates",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/head-bfp8-rates/measurement/serving_rates-swe.json"
+  ],
+  "final_response_filter_argv": [
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+    "-c",
+    "import sys,json,pathlib,hashlib\nsys.path.insert(0,sys.argv[1]);import agentic_collect_swe as c\nlog=pathlib.Path(sys.argv[2]);account=pathlib.Path(sys.argv[3]);out=pathlib.Path(sys.argv[4]);ids={call['id'] for t in json.loads(account.read_text())['tasks'] for call in t['calls']};raw=log.read_text();bodies={b['id']:b for b in c.digest.responses(raw.splitlines()) if b['id'] in ids};assert set(bodies)==ids,'Missing mapped response bodies';out.parent.mkdir(parents=True,exist_ok=True);out.write_text(''.join('response_body={'+json.dumps(b)+'}\\n' for b in bodies.values()));out.chmod(0o600);out.with_name('response-selection-proof.json').write_text(json.dumps({'source':str(log),'source_sha256':hashlib.sha256(log.read_bytes()).hexdigest(),'accounting_sha256':hashlib.sha256(account.read_bytes()).hexdigest(),'ids':sorted(ids),'count':len(ids)},indent=2)+'\\n')",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tools",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/extended-head-bfp8-server/server/server-b32/server.log",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-extended85-head-bfp8/collected-final/digest_accounting.json",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-extended85-head-bfp8/collected-final/digest/responses.private.log"
+  ],
+  "final_digest_argv": [
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+    "/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/scripts/reply_digest.py",
+    "--log",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-extended85-head-bfp8/collected-final/digest/responses.private.log",
+    "--accounting",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-extended85-head-bfp8/collected-final/digest_accounting.json",
+    "--out",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-extended85-head-bfp8/collected-final/digest",
+    "--run",
+    "swe-extended85-head-bfp8",
+    "--output-cap",
+    "32768"
+  ],
+  "mapping_contract": [
+    "Native trajectory messages.extra.response.id preferred; exact full instruction substring plus unique complete trial interval recovers FormatError-discarded API replies.",
+    "No manual response mapping normally required. Missing/ambiguous mappings remain accounting issues; investigate original request history/IDs and never guess.",
+    "Native log includes earlier GPQA/probes; final collector filters eval_call by exact run interval, but digest MUST additionally filter bodies to attributed IDs to avoid false unmapped caps.",
+    "No calls/headers/runtime hooks need changing. Unfinished task trajectories may remain inside containers; current collector cannot guarantee live attribution before result lifecycle completes.",
+    "If an unscored logging probe lies inside run window, preserve raw log and exact probe request/response proof; exclude only its proven ID body/boundary in a distinct filtered file and point final collector there. Never bulk-drop unmapped replies."
+  ],
+  "verifier_recovery": {
+    "normal_path": "Cached generic-fixed parser should produce native reward; use raw native verifier result first.",
+    "known_script_limitation": "setup/recover_swe_verifier_offline.py is fixed10-specific and references retired v5-swe-prepared image plus /tmp install log; DO NOT execute unchanged for SWE85.",
+    "if_needed": "Inspect each actual verifier error first. Recover only proven parser infrastructure failure using e98973d parser, original config/output hashes and current offline-verifier image; no agent/test rerun. New run-specific driver must preserve raw output and exact log slicing evidence.",
+    "overlay_argv_template": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tools/agentic_overlay_swe_rewards.py",
+      "--collected",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-extended85-head-bfp8/collected-final/collected.json",
+      "--verifier-recovery",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-extended85-head-bfp8/verifier-recovery",
+      "--job-dir",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe-jobs/swe-extended85-head-bfp8",
+      "--task-dir",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-candidate/tasks85-offline-verifier",
+      "--out",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-extended85-head-bfp8/collected-final/collected-recovered.json"
+    ],
+    "missing_reward": "Never fabricate zero; preserve missing status. Model-failure adjudication is a separate signed coordinator record, not native reward."
+  },
+  "final_acceptance": [
+    "Exactly85 first attempts selected, preserve additional attempts if any without best-of selection.",
+    "accounting_complete=true, zero unexplained responseIDs, full native token/cache usage; all task lifecycle phases and global job overhead counted once.",
+    "Use actual exit timestamp, not delayed supervisor observation; preserve both timing sources.",
+    "Run explain replay only after complete mapping; record any context extrapolation and measured-vs-explained ratio.",
+    "Per-task task.triage.json for every wrong/capped/flagged reply; retain first bad action/call evidence.",
+    "Network/solution-fetch audit requires trajectory analysis, not assumption from no-network config."
+  ],
+  "host_functional_validation": {
+    "pass": true,
+    "method": "Executed both decoded argv recipes on synthetic two-response task, one trajectory ID plus one native-only ID; parsed all emitted JSON and decoded both response frames with official reply_digest.responses.",
+    "json_outputs_parseable": true,
+    "response_frames_each": 2,
+    "real_newlines_verified": true,
+    "native_only_reply_recovered": true,
+    "correction_needed": false,
+    "explanation": "JSON escaping displays backslash-n doubled, but decoded Python source contains one escape and emits real newline bytes.",
+    "partial_recipe_sha256": "8479ed084fdcce8bb39d32d53192739066095c9204a56040ac23af0e4e7f86fe",
+    "filter_recipe_sha256": "143eb677d242e2d6636973f76d0dfa5a41a7ebebc6ac4a6ab0b8182970816ebd",
+    "temporary_evidence": "/tmp/swe85-framing-cr1s8ipo"
+  }
+}

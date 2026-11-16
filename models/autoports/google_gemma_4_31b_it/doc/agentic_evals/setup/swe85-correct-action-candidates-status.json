@@ -1,0 +1,68 @@
+{
+  "status": "CPU application/syntax only; semantic validation pending; not completed attempt",
+  "private_manifest": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/candidate-actions-manifest.json",
+  "tasks": [
+    {
+      "task": "pytest-dev__pytest-6197",
+      "call": 35,
+      "patch_application": true,
+      "syntax_ok": true,
+      "semantic_validation": "pending"
+    },
+    {
+      "task": "pytest-dev__pytest-10356",
+      "call": 45,
+      "patch_application": true,
+      "syntax_ok": true,
+      "semantic_validation": "pending"
+    },
+    {
+      "task": "pytest-dev__pytest-5840",
+      "call": 15,
+      "patch_application": true,
+      "syntax_ok": true,
+      "semantic_validation": "pending"
+    },
+    {
+      "task": "pylint-dev__pylint-8898",
+      "call": 44,
+      "patch_application": true,
+      "syntax_ok": true,
+      "semantic_validation": "pending"
+    },
+    {
+      "task": "pylint-dev__pylint-4970",
+      "call": 51,
+      "patch_application": true,
+      "syntax_ok": true,
+      "semantic_validation": "pending"
+    },
+    {
+      "task": "pylint-dev__pylint-6386",
+      "call": 33,
+      "patch_application": true,
+      "syntax_ok": true,
+      "semantic_validation": "pending"
+    },
+    {
+      "task": "pylint-dev__pylint-4551",
+      "call": 35,
+      "patch_application": true,
+      "syntax_ok": true,
+      "semantic_validation": "pending"
+    }
+  ],
+  "cpu_schema_validation": {
+    "exit_code": 0,
+    "output": "Validated 7 jobs without importing TTNN",
+    "mode": "--validate-only"
+  },
+  "important_limits": [
+    "No container started or code tests executed. Every reference-informed correct branch is semantically unvalidated.",
+    "Only extracted candidate-touched production files and specified prior edits reconstructed; complete working tree, generated repro/config files, dependency state not reproduced.",
+    "Pylint4970 counterpart is at attempted first action51; actual insertion55 has separate whole chosen reply but no state-relative correct-action counterpart yet.",
+    "Original reasoning retained before tool action; reference-informed target may contradict it. No reference information added to scored model requests."
+  ],
+  "containers": "All extraction containers created stopped, never started, then removed. Image IDs and extracted HEAD/base differences recorded privately.",
+  "source_audit": "All available full or head/tail native source-read checks matched extracted files; truncated read matches do not prove full source equivalence."
+}

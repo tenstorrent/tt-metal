@@ -1,0 +1,277 @@
+{
+  "status": "complete",
+  "created_utc": "2026-11-14",
+  "scope": "Remaining 8 served jobs / 24 trials after coordinator first24 and next4 coverage. Host-only artifact/text/parser review; no native-token equivalence or precision conclusion.",
+  "rules_applied": [
+    "Judge isolated argument fragments with the conditioning; valid combined bash prefixes are normal.",
+    "Markers alone are not anomalies.",
+    "Capped progressing prefixes are inconclusive.",
+    "Separate reproduction of the recorded native motif from different stray words or malformed repetitions."
+  ],
+  "rows": [
+    {
+      "job": "anomaly.sphinx-doc__sphinx-10323.call57.onset",
+      "seed": 42,
+      "verdict": "inconclusive",
+      "quote": "messed up the order of filters and maybe something else.\nWait, if I move `dedent_filter` to the top, it's called first.\n`dedent_filter` is a method of `LiteralIncludeReader`.\n`filters` is a list of methods: `[self.dedent_filter, self.pyobject_filter, ...]`.\nT",
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/anomaly.sphinx-doc__sphinx-10323.call57.onset.json",
+      "text_field": "$.free_running[0].text",
+      "cap": true,
+      "confidence": "high",
+      "rationale": "Output reached its requested token cap while continuing a coherent code/action prefix; capped progress is inconclusive."
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-10323.call57.onset",
+      "seed": 43,
+      "verdict": "normal",
+      "quote": "moved `dedent_filter` to the top, but the filters are called in a loop:\n```python\n            for func in filters:\n                lines = func(lines, location=location)\n```\nAnd I've accidentally introduced something that is a list instead of a callable.\n\nWai",
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/anomaly.sphinx-doc__sphinx-10323.call57.onset.json",
+      "text_field": "$.free_running[1].text",
+      "cap": false,
+      "confidence": "high",
+      "rationale": "Completed generated text contains no instance of the recorded anomaly motif; no independent anomaly is evident."
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-10323.call57.onset",
+      "seed": 44,
+      "verdict": "other_anomaly",
+      "quote": "conditioned “I’ve” + generated “’s” → “I’ve’s”",
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/anomaly.sphinx-doc__sphinx-10323.call57.onset.json",
+      "text_field": "$.free_running[2].text",
+      "cap": false,
+      "confidence": "high",
+      "rationale": "Prompt ends with “I’ve”; generated “’s” forms malformed “I’ve’s”. This is a different duplicated contraction than the learned I’ve’ve motif."
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-10323.call68.onset",
+      "seed": 42,
+      "verdict": "normal",
+      "quote": "conditioned “I’ve” + generated “ analyzed…”: valid contraction boundary",
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/anomaly.sphinx-doc__sphinx-10323.call68.onset.json",
+      "text_field": "$.free_running[0].text",
+      "cap": false,
+      "confidence": "high",
+      "rationale": "The prefix-aware contraction check does not show a repeated suffix in this sample; isolated apostrophe fragments are judged with their conditioning and are normal."
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-10323.call68.onset",
+      "seed": 43,
+      "verdict": "reproduced_native_motif",
+      "quote": "conditioned “I’ve” + generated “’ve analyzed…” → “I’ve’ve”",
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/anomaly.sphinx-doc__sphinx-10323.call68.onset.json",
+      "text_field": "$.free_running[1].text",
+      "cap": false,
+      "confidence": "high",
+      "rationale": "Prompt ends with “I’ve”; generated “’ve” repeats the suffix, reproducing the learned I’ve’ve contraction motif."
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-10323.call68.onset",
+      "seed": 44,
+      "verdict": "normal",
+      "quote": "analyzed the issue and found it's a `docutils` limitation.\n<channel|><|tool_call>call:bash{command:<|\"|>sed -i '223,229c\\            filters = [self.pyobject_filter,\\n                       self.start_filter,\\n                       self.end_filter,\\n",
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/anomaly.sphinx-doc__sphinx-10323.call68.onset.json",
+      "text_field": "$.free_running[2].text",
+      "cap": false,
+      "confidence": "high",
+      "rationale": "The prefix-aware contraction check does not show a repeated suffix in this sample; isolated apostrophe fragments are judged with their conditioning and are normal."
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-10323.call70.onset",
+      "seed": 42,
+      "verdict": "normal",
+      "quote": "tried everything. I'll just finish.\n<channel|><|tool_call>call:bash{command:<|\"|>echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT<|\"|>}<tool_call|><|tool_response>",
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/anomaly.sphinx-doc__sphinx-10323.call70.onset.json",
+      "text_field": "$.free_running[0].text",
+      "cap": false,
+      "confidence": "high",
+      "rationale": "The prefix-aware contraction check does not show a repeated suffix in this sample; isolated apostrophe fragments are judged with their conditioning and are normal."
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-10323.call70.onset",
+      "seed": 43,
+      "verdict": "reproduced_native_motif",
+      "quote": "conditioned “I’ve” + generated “’ve’ve tried…”",
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/anomaly.sphinx-doc__sphinx-10323.call70.onset.json",
+      "text_field": "$.free_running[1].text",
+      "cap": false,
+      "confidence": "high",
+      "rationale": "The conditioned “I’ve” is followed by repeated ’ve fragments in generated text, reproducing the learned duplicated contraction motif."
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-10323.call70.onset",
+      "seed": 44,
+      "verdict": "normal",
+      "quote": "tried everything. I'll just submit.\n<channel|><|tool_call>call:bash{command:<|\"|>echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT<|\"|>}<tool_call|><|tool_response>",
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/anomaly.sphinx-doc__sphinx-10323.call70.onset.json",
+      "text_field": "$.free_running[2].text",
+      "cap": false,
+      "confidence": "high",
+      "rationale": "The prefix-aware contraction check does not show a repeated suffix in this sample; isolated apostrophe fragments are judged with their conditioning and are normal."
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset",
+      "seed": 42,
+      "verdict": "normal",
+      "quote": "'s called.\nActually, let's just put a print at the top of `sphinx/directives/other.py` and see if it's imported.\nI already did that: `HELLO FROM OTHER.PY` was printed.\n\nSo `sphinx/directives/other.py` is imported.\nIs `setup` called?\nI tried to add a print to `",
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.json",
+      "text_field": "$.free_running[0].text",
+      "cap": false,
+      "confidence": "high",
+      "rationale": "Prompt ends with “it”, so the generated opening “’s” forms ordinary “it’s” across the boundary; no duplicated contraction motif."
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset",
+      "seed": 43,
+      "verdict": "normal",
+      "quote": "'s loaded.\nActually, let's just put a print at the top of `sphinx/directives/other.py`.\nI already did that: `print(\"HELLO FROM OTHER.PY\")`.\nAnd it was printed!\n`HELLO FROM OTHER.PY`\n\nSo `sphinx/directives/other.py` IS loaded.\nAnd `setup` should be called.\nLet'",
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.json",
+      "text_field": "$.free_running[1].text",
+      "cap": false,
+      "confidence": "high",
+      "rationale": "Prompt ends with “it”, so the generated opening “’s” forms ordinary “it’s” across the boundary; no duplicated contraction motif."
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset",
+      "seed": 44,
+      "verdict": "inconclusive",
+      "quote": "'s called.\nNo, `sphinx/directives/other.py` is where `Include` is defined.\n\nWait, I'll try to put a print in `sphinx/directives/other.py`'s `setup` and see if it's printed.\nI already did that, and it was not printed! (I did `sed -i \"s/def setup(app: \\\"Sphinx\\\"",
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.json",
+      "text_field": "$.free_running[2].text",
+      "cap": true,
+      "confidence": "high",
+      "rationale": "Output reached its requested token cap while continuing a coherent code/action prefix; capped progress is inconclusive."
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset",
+      "seed": 42,
+      "verdict": "normal",
+      "quote": "{command:<|\"|>grep -r \"self.app =\" /opt/miniconda3/lib/python3.11/site-packages/sphinx/addnodes.py || echo \"Not found\"\n<|\"|>}<tool_call|><|tool_respon",
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset.json",
+      "text_field": "$.free_running[0].text",
+      "cap": false,
+      "confidence": "high",
+      "rationale": "Completed generated text contains no instance of the recorded anomaly motif; no independent anomaly is evident."
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset",
+      "seed": 43,
+      "verdict": "other_anomaly",
+      "quote": "generated “\\n<|\"|>}” closes without command; combined parser malformed_name=true, invalid_arguments=true",
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset.json",
+      "text_field": "$.free_running[1].text",
+      "cap": false,
+      "confidence": "high",
+      "rationale": "Generated suffix closes the conditioned tool call without a valid command body; the conditioning_plus_generated parser reports malformed_name and invalid_arguments. This is a protocol anomaly, distinct from stray-word/repetition motif."
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset",
+      "seed": 44,
+      "verdict": "normal",
+      "quote": "{command:<|\"|># Check if sphinx.addnodes.document has a reference to the app object.\npython3 -c \"\nfrom sphinx.addnodes import document\n# We can't easi",
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset.json",
+      "text_field": "$.free_running[2].text",
+      "cap": false,
+      "confidence": "high",
+      "rationale": "Completed generated text contains no instance of the recorded anomaly motif; no independent anomaly is evident."
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call108.onset",
+      "seed": 42,
+      "verdict": "normal",
+      "quote": ".11/site-packages/sphinx/directives/other.py\n\nrm -rf reproduction/build\ncd reproduction && sphinx-build . build\n<|\"|>}<tool_call|><|tool_response>",
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/anomaly.sphinx-doc__sphinx-11510.call108.onset.json",
+      "text_field": "$.free_running[0].text",
+      "cap": false,
+      "confidence": "high",
+      "rationale": "Completed generated text contains no instance of the recorded anomaly motif; no independent anomaly is evident."
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call108.onset",
+      "seed": 43,
+      "verdict": "normal",
+      "quote": ".11/site-packages/sphinx/directives/other.py\n\nrm -rf reproduction/build\ncd reproduction && sphinx-build . build\n<|\"|>}<tool_call|><|tool_response>",
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/anomaly.sphinx-doc__sphinx-11510.call108.onset.json",
+      "text_field": "$.free_running[1].text",
+      "cap": false,
+      "confidence": "high",
+      "rationale": "Completed generated text contains no instance of the recorded anomaly motif; no independent anomaly is evident."
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call108.onset",
+      "seed": 44,
+      "verdict": "normal",
+      "quote": ".11/site-packages/sphinx/directives/other.py\n\nrm -rf reproduction/build\ncd reproduction && sphinx-build . build\n<|\"|>}<tool_call|><|tool_response>",
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/anomaly.sphinx-doc__sphinx-11510.call108.onset.json",
+      "text_field": "$.free_running[2].text",
+      "cap": false,
+      "confidence": "high",
+      "rationale": "Completed generated text contains no instance of the recorded anomaly motif; no independent anomaly is evident."
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset",
+      "seed": 42,
+      "verdict": "inconclusive",
+      "quote": "{command:<|\"|>cat <<'EOF' > patch_docutils.py\nimport os\n\nfile_path = '/opt/miniconda3/lib/python3.11/site-packages/docutils/parsers/rst/directives/misc.py'\nwith open(file_path, 'r') as f:\n    lines = f.readlines()\n\nnew_lines = []\nfor line in lines:\n    new_lin",
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.json",
+      "text_field": "$.free_running[0].text",
+      "cap": true,
+      "confidence": "high",
+      "rationale": "Output reached its requested token cap while continuing a coherent code/action prefix; capped progress is inconclusive."
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset",
+      "seed": 43,
+      "verdict": "inconclusive",
+      "quote": "conditioned bash + generated prose/code before argument boundary; parser malformed_name=true, invalid_arguments=true",
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.json",
+      "text_field": "$.free_running[1].text",
+      "cap": true,
+      "confidence": "high",
+      "rationale": "Output reached its requested token cap while continuing a coherent code/action prefix; capped progress is inconclusive."
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset",
+      "seed": 44,
+      "verdict": "inconclusive",
+      "quote": "{command:<|\"|>cat <<'EOF' > patch_docutils_include.py\nimport os\n\nfile_path = '/opt/miniconda3/lib/python3.11/site-packages/docutils/parsers/rst/directives/misc.py'\nwith open(file_path, 'r') as f:\n    lines = f.readlines()\n\nnew_lines = []\nfor line in lines:",
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.json",
+      "text_field": "$.free_running[2].text",
+      "cap": true,
+      "confidence": "high",
+      "rationale": "Output reached its requested token cap while continuing a coherent code/action prefix; capped progress is inconclusive."
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-9461.call184.onset",
+      "seed": 42,
+      "verdict": "inconclusive",
+      "quote": "{command:<|\"|>cat <<'EOF' > fix_importer_final.py\nimport collections\n\ndef rewrite_get_object_members():\n    with open('sphinx/ext/autodoc/importer.py', 'r') as f:\n        lines = f.readlines()\n\n    new_lines = []\n    i = 0\n    while i < len(lines):\n        lin",
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/anomaly.sphinx-doc__sphinx-9461.call184.onset.json",
+      "text_field": "$.free_running[0].text",
+      "cap": true,
+      "confidence": "high",
+      "rationale": "Output reached its requested token cap while continuing a coherent code/action prefix; capped progress is inconclusive."
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-9461.call184.onset",
+      "seed": 43,
+      "verdict": "inconclusive",
+      "quote": "{command:<|\"|>cat <<'EOF' > fix_importer_final.py\nimport collections\n\ndef replace_get_object_members(content):\n    # Find the start of the 'for name in dir(subject):' loop in get_object_members\n    # and replace it with a version that checks the MRO.",
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/anomaly.sphinx-doc__sphinx-9461.call184.onset.json",
+      "text_field": "$.free_running[1].text",
+      "cap": true,
+      "confidence": "high",
+      "rationale": "Output reached its requested token cap while continuing a coherent code/action prefix; capped progress is inconclusive."
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-9461.call184.onset",
+      "seed": 44,
+      "verdict": "inconclusive",
+      "quote": "{command:<|\"|>cat <<'EOF' > fix_importer_final.py\nimport collections\n\nwith open('sphinx/ext/autodoc/importer.py', 'r') as f:\n    lines = f.readlines()\n\n# We want to rewrite the 'for name in dir(subject):' loop to avoid evaluating descriptors\n# by checking the",
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/anomaly.sphinx-doc__sphinx-9461.call184.onset.json",
+      "text_field": "$.free_running[2].text",
+      "cap": true,
+      "confidence": "high",
+      "rationale": "Output reached its requested token cap while continuing a coherent code/action prefix; capped progress is inconclusive."
+    }
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "status": "forecast_miss_explained_faster",
+  "measured_seconds": 720.7120478153229,
+  "forecast_seconds": 1008.9501237463417,
+  "range_seconds": [
+    803.5170095691419,
+    1351.3386473750081
+  ],
+  "generated_tokens": 10897,
+  "forecast_cap_tokens": 14336,
+  "completed_below_cap": 12,
+  "at_cap_progressing": 2,
+  "measured_load_seconds": 145.2108264057897,
+  "sum_sample_wall_seconds": 570.4006792260334,
+  "remaining_process_wall_seconds": 5.100542183499783,
+  "planning_preparation_allowance_seconds": 180,
+  "reason": "Forecast scaled every prior512-token continuation to full1024 and added180s planning preparation margin. Twelve stop early; fewer decode steps and smaller unallocated process overhead explain faster completion. Remaining process wall includes setup/teardown/overhead; not asserted to be measured warmup. Full arm was pre-admitted concurrently in the serialized chain; no precision change was selected from this miss."
+}

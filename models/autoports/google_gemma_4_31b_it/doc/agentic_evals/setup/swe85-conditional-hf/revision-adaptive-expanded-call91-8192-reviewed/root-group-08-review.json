@@ -1,0 +1,32 @@
+{
+  "status": "completed_root_and_corrected_independent_triage_reconciled",
+  "reviewer": "root",
+  "accepted": true,
+  "utc": "2026-11-15T10:33:35.023142+00:00",
+  "serial_order": 8,
+  "admission_sha256": "74640276fdf5e463fa968d5d188994622759df96f09d4f408e02712b7d09ae66",
+  "launch_sha256": "9ff71424e76c317cf17c67bc20fd6fc1b78bfd6dc2c4277402541435c910b6e1",
+  "completion_sha256": "54c14908183b4c1cee5f986e6321f277fc3b5358486e4d810513000d1643182b",
+  "result_sha256": "c42dc1b3206ca95431c91d0468bca2b71dc3386221bc28d12951a6b09cdf8fb9",
+  "independent_triage_sha256": "3cb2bd153415f03eca720bada36808a4ecc901135c9319a8f33a745b65cf5c31",
+  "verdict": "reproduced_native_motif",
+  "exact_fixture_sha256": "d70cf7ed6d97f32ae539b88484d73d4b9b166af69ce3b5f0defc2a7adc80211f",
+  "source_sha256": "3d32de201c14cf805635d3e38fafc2ff220202aded67b71861e16df4fbdf9180",
+  "source_slice": [
+    40219,
+    48411
+  ],
+  "seed": 43,
+  "generated_tokens": 55,
+  "natural_stop_id": 50,
+  "measured_seconds": 622.6370310783386,
+  "forecast_range_seconds": [
+    1485.7519224153596,
+    5742.646502322758
+  ],
+  "forecast_acceptance_sha256": "8aec32da9a2441c62763b90d5c51bdea93f5531b88b98e12f6bd0459048f5650",
+  "boundary": "Prompt ends ASCII Ive contraction IDs564,236789,560; generated236858,560 adds curly-apostrophe ve: Iveve with two apostrophes. Pinned tokenizer confirmed actual joined text Since I've\u2019ve. This is one extra suffix, already a localized native motif; no sustained loop follows.",
+  "review_correction": "Initial independent normal label ignored prompt boundary; root requested exact tokenizer boundary check, which confirms localized anomaly and supersedes initial label.",
+  "matched_tt": "Same8192prompt/seed43 selected68 and full53 natural tokens; both have more repeated suffixes before prose. At alignedpos2 allthreeTF rank236858first, HF free chooses1603. No equal-RNG or incidence claim.",
+  "interpretation": "Reference reproduces localized native contraction motif on shortened canonical input; native IDs/seed unavailable. No cap extension needed; no scored result or policy change."
+}

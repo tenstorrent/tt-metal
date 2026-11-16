@@ -1,0 +1,56 @@
+{
+  "status": "candidate_only_not_admitted_not_run",
+  "scope": "One serial served/full matched suffix1024 diagnostic for Sklearn13135 call29, seeds42/43/44. Each uses exact original final1024 prompt token IDs, chosen64 teacher-forced tokens, and free-run cap1024.",
+  "question": "Does the full-mode missing_tool protocol anomaly from original full prompt seed42 appear when matched shortened context and free generation reach its original onset around token665?",
+  "input": {
+    "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-extra-contraction-controls/scikit-learn__scikit-learn-13135.call29.onset.private.json",
+    "source_sha256": "1403d7a48b7ecca8ec2095479c77a871caa3add09bedd7f6830d36315a883bd2",
+    "full_prompt_tokens": 17395,
+    "suffix_tokens": 1024,
+    "suffix_start_index": 16371,
+    "suffix_end_index_exclusive": 17395,
+    "suffix_ids_sha256": "c8f91bde8c1ae6815872224613fb6e63b366f09ef4fde8ab1bc1c213267179fc",
+    "chosen_tokens": 64,
+    "chosen_ids_sha256": "8d4c97e7413b5ed9bf57c4a1f8ae56a386fb8c52b5588db4f765eb55f36a7e3e",
+    "seeds": [
+      42,
+      43,
+      44
+    ],
+    "free_run_cap_tokens": 1024
+  },
+  "candidate_files": {
+    "served_manifest_sha256": "c3c08106351241387b4c2a10a5bfedfb69b5bce340a36616929d863500ce5f13",
+    "full_manifest_sha256": "187c9ed825433ff71b4575c2a9b9917676bfd86763323606f30f204a5df8bd3a",
+    "commands_sha256": "b4dba8e21a801d468afb2c90ee0b55566eeee4dcfd4a5f081f659639f5081c50",
+    "forecast_sha256": "ef84397e6e61adbdad8f71eaf697001dd458069a466701aeec66a1f1df21f9ab",
+    "driver_sha256": "cb3dd0a84aa4261f196d262265985450c0ea9df5e4abe416d3ffe8cb5dd57ddd",
+    "source_inventory_sha256": "5bd9fa0fc893005a58c095f874f271b4f076fcf3175b0ef33b373f482d340276"
+  },
+  "mode_policies": {
+    "served": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/head_bfp8_build_kwargs.json (stage12_head_bfp8_lofi)",
+    "full": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_config.json",
+    "both": "Same saved prompt and chosen IDs per seed; one explicit mode at a time."
+  },
+  "predecessor_gates": {
+    "P2": "Require exact admitted P2 terminal success and accepted root forecast reconciliation; disclosed HF CPU contention means its wall cannot rank precision policy.",
+    "suffix512": "Require exact SK512 admission and all terminal outputs/root reviews/triage hashes; root must explicitly accept next step. SK512 full results did not reproduce original full-prompt missing_tool.",
+    "serialization": "Served first; root must review/accept served forecast before full. No active HF/model process and no device owners before each launch.",
+    "stop": "STOP_BEFORE_LAUNCH remains present for static validation and blocks execution until root creates exact admission and removes STOP.",
+    "mutable_evidence": "Do not pin learned.json or mutable canonical adjudication state; pin immutable fixture, raw outputs, reviews, code, config and candidate files."
+  },
+  "forecast_sha256": "ef84397e6e61adbdad8f71eaf697001dd458069a466701aeec66a1f1df21f9ab",
+  "no_claims": [
+    "The 1024-token suffix is not equivalent to the original17395-token context.",
+    "A missing_tool result here is a diagnostic behavior, not proof of task failure or model cause.",
+    "No HF comparison is scheduled unless root adjudicates that matched full mode reproduces the protocol anomaly.",
+    "This candidate does not test task success or blanket model behavior."
+  ],
+  "previous_suffix512_admission_sha256": "32fe5e6ccf38aff945424de6b7f3c8e24a7a375cf6a806424bd1097e99bb6194",
+  "served_precision_config": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/head_bfp8_precision_config.json",
+  "forecast_basis": "Selected served head-BFP8 LoFi load and original-prompt cap512 controls plus explicit chosen64 allowance; full precision exact suffix512 chosen64 controls. BFP4 suffix512 data is not the served policy timing basis.",
+  "predecessor_selected_served_correction_admission_sha256": "3135aac12cbe11d97803b166dc3173def8f9bc03a6e8bb786fe015ce3f24bf08",
+  "predecessor_selected_served_correction_completion_sha256": "1be9414e4447a6600ea163967ec4fc0601ae9ffbbd47e44ab5e407a1c3ee453e",
+  "predecessor_selected_served_root_review_sha256": "777d1a61090d8b827c76fc905b1a884b58270613d976c5eed73d8a41c2319151",
+  "served_policy": "stage12_head_bfp8_lofi"
+}

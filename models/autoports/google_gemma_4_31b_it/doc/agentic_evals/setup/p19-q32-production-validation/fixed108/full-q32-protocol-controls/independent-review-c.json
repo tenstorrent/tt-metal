@@ -1,0 +1,136 @@
+{
+  "status": "independent_review_two_matched_full_bf16_q32_protocol_controls_verified",
+  "reviewed_date_utc": "2026-11-15",
+  "records": {
+    "cases_sha256": "16042fa5fe4f10a4589e2eaffce787cfe86d44321cbf574378a30a68440a6e32",
+    "command_sha256": "7e220eabd6506f413b497f06bcd964108475561c03a092e1acadf77bae7f7ed6",
+    "admission_sha256": "a05859f1891e289f576803d149d8dcca3466132b0033974512e935b3f5bc200e",
+    "completion_sha256": "7ac541b54fd3da38ded5f68f078002fe11c7306787ed444db22b31e89132141f",
+    "root_review_sha256": "1d29a120f771a445816ba05780f3d9e3f140f01bc7d4afea3c290aa3729dff71",
+    "source_pin_count": 13,
+    "all_current_source_pins_match": true,
+    "source_mismatches": []
+  },
+  "completion": {
+    "start_unix": 1794778199.1387768,
+    "end_unix": 1794778350.4580486,
+    "exit_code": 0,
+    "wall_seconds": 151.31927180290222
+  },
+  "rows": [
+    {
+      "index": 54,
+      "case_name": "fullq32.anomaly.sphinx-doc__sphinx-10323.call70.onset.seed42.cap256",
+      "case_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-extra-contraction-controls/sphinx-doc__sphinx-10323.call70.onset.private.json",
+      "case_sha256": "7d39e2c87e91327f35317968bf2647887a402d0086085ec8f95db8ff5fc2ab64",
+      "prompt_token_count": 65779,
+      "prompt_ids_canonical_json_sha256": "fd24fbb8d469895d6b7bc344aa036fc844a4c80a754f06708be6ed35daa7d032",
+      "result_path": "setup/p19-q32-production-validation/fixed108/full-q32-protocol-controls/runs/fullq32.anomaly.sphinx-doc__sphinx-10323.call70.onset.seed42.cap256.json",
+      "result_sha256": "455d24443acd739c76d949c067d7309164d51ecfdd188b416c24d2cd31831d54",
+      "result_case_path_matches_manifest": true,
+      "runtime_precision": {
+        "config_id": "stage12_bf16_hifi4_diagnostic",
+        "weight_groups": {
+          "attention": "bf16",
+          "mlp": "bf16",
+          "down": "bf16",
+          "lm_head": "bf16"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "HiFi4",
+          "mlp": "HiFi4",
+          "down": "HiFi4",
+          "lm_head": "HiFi4"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat16",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144,
+        "sdpa_compute_fidelity": "HiFi4"
+      },
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 42
+      },
+      "configured_trial_count": 1,
+      "branches": [],
+      "generated_tokens": 64,
+      "terminal_id": 50,
+      "verdict": "protocol_restored",
+      "scope_limit": "Protocol shape on this exact fixture and seed only; not task correctness, score evidence, native seed replay, or full-policy panel acceptance.",
+      "generated_token_ids_sha256": "7fe6474c30b11b52b43550ecc633e0df2495f71131a8af7748fce785ba84a57a",
+      "protocol_observation": "Valid canonical bash tool-call opener, command field, and tool-response boundary are present."
+    },
+    {
+      "index": 89,
+      "case_name": "fullq32.anomaly.sympy__sympy-13878.call1.onset.seed44.cap256",
+      "case_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.sympy__sympy-13878.call1.onset.seed44.private.json",
+      "case_sha256": "884cc1eebec08f3511e27e1b989fa0a779bf750611494cbbdd7b33937ac54420",
+      "prompt_token_count": 1968,
+      "prompt_ids_canonical_json_sha256": "e6fc93a99df8548ad8aac06d66b7587d3d1e3e0bb43864a350baa447d72a8143",
+      "result_path": "setup/p19-q32-production-validation/fixed108/full-q32-protocol-controls/runs/fullq32.anomaly.sympy__sympy-13878.call1.onset.seed44.cap256.json",
+      "result_sha256": "119de5e58c4dcdabe39091f332fc9e4e468b452b30b72ae3573e41c5833009c9",
+      "result_case_path_matches_manifest": true,
+      "runtime_precision": {
+        "config_id": "stage12_bf16_hifi4_diagnostic",
+        "weight_groups": {
+          "attention": "bf16",
+          "mlp": "bf16",
+          "down": "bf16",
+          "lm_head": "bf16"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "HiFi4",
+          "mlp": "HiFi4",
+          "down": "HiFi4",
+          "lm_head": "HiFi4"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat16",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144,
+        "sdpa_compute_fidelity": "HiFi4"
+      },
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 44
+      },
+      "configured_trial_count": 1,
+      "branches": [],
+      "generated_tokens": 19,
+      "terminal_id": 50,
+      "verdict": "protocol_restored",
+      "scope_limit": "Protocol shape on this exact fixture and seed only; not task correctness, score evidence, native seed replay, or full-policy panel acceptance.",
+      "generated_token_ids_sha256": "c7b66b95207a3e3563c1aeb98585d2449f6350c2c58ff1168f6ff34885c470cc",
+      "protocol_observation": "Valid canonical bash tool-call opener, command field, and tool-response boundary are present."
+    }
+  ],
+  "conclusion": "Both free-running sampled outputs use their exact manifested fixture path, prompt-token identity bound by fixture SHA and canonical prompt-ID hash, manifested seed/sampling settings, and all-group BF16/HiFi4 plus BF16 KV runtime inventory. Each emits canonical bash tool protocol. Index54 ends at 64 tokens with a valid echo command; index89 stops after a 19-token valid ls command. These two outputs restore tool protocol on these exact cases under the tested current Q32 full-BF16 policy.",
+  "limitations": [
+    "Result records reference the exact fixture path rather than embedding prompt IDs; prompt identity was verified from the pinned fixture bytes.",
+    "Two targeted cases do not establish full108 behavior, broad acceptance, current serving behavior, evaluated-list results, or policy selection.",
+    "Native IDs/seeds and task correctness are not established by these diagnostic trials."
+  ]
+}

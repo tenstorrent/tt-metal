@@ -1,0 +1,100 @@
+{
+  "status": "prepared_not_admitted_not_run",
+  "created_unix": 1794758518.7283204,
+  "candidate": "stage12_bf16_hifi4_kv_down_bfp8_p19",
+  "original_rates": "models/autoports/google_gemma_4_31b_it/doc/benchmark/serving_rates-stage11-head_bfp4.json",
+  "original_plan": "models/autoports/google_gemma_4_31b_it/doc/benchmark/plan.json",
+  "rows": [
+    {
+      "id": "b8-c8-i4096-swe",
+      "batch": 8,
+      "concurrency": 8,
+      "input_tokens": 4096,
+      "output_tokens": 128,
+      "sampling": "swe",
+      "requests": 8,
+      "duration_s": 10.4449734732043
+    },
+    {
+      "id": "b8-c8-i22420-swe",
+      "batch": 8,
+      "concurrency": 8,
+      "input_tokens": 22420,
+      "output_tokens": 128,
+      "sampling": "swe",
+      "requests": 8,
+      "duration_s": 48.71746839606203
+    },
+    {
+      "id": "b8-c8-i28672-swe",
+      "batch": 8,
+      "concurrency": 8,
+      "input_tokens": 28672,
+      "output_tokens": 128,
+      "sampling": "swe",
+      "requests": 8,
+      "duration_s": 64.34986072592437
+    },
+    {
+      "id": "b8-c1-i4096-swe",
+      "batch": 8,
+      "concurrency": 1,
+      "input_tokens": 4096,
+      "output_tokens": 128,
+      "sampling": "swe",
+      "requests": 2,
+      "duration_s": 8.814215673832223
+    },
+    {
+      "id": "b8-c1-i22420-swe",
+      "batch": 8,
+      "concurrency": 1,
+      "input_tokens": 22420,
+      "output_tokens": 128,
+      "sampling": "swe",
+      "requests": 2,
+      "duration_s": 18.664398498134688
+    },
+    {
+      "id": "b8-c1-i28672-swe",
+      "batch": 8,
+      "concurrency": 1,
+      "input_tokens": 28672,
+      "output_tokens": 128,
+      "sampling": "swe",
+      "requests": 2,
+      "duration_s": 22.799233467085287
+    },
+    {
+      "id": "b8-c1-i131072-swe",
+      "batch": 8,
+      "concurrency": 1,
+      "input_tokens": 131072,
+      "output_tokens": 128,
+      "sampling": "swe",
+      "requests": 2,
+      "duration_s": 145.58968219393864
+    },
+    {
+      "id": "b1-c1-i4096-gpqa",
+      "batch": 1,
+      "concurrency": 1,
+      "input_tokens": 4096,
+      "output_tokens": 128,
+      "sampling": "gpqa",
+      "requests": 8,
+      "duration_s": 34.81445468403399
+    }
+  ],
+  "selection_reason": "Seven measured B8 SWE rows for a hypothetical8-agent precision-fix rerun, plus exactB1/C1 4096input128output headline. Batch8 remains conditional on measured launch memory; no row is relabeled fromanotherbatch. B1headline uses8 serialrequests likeoriginal.",
+  "requirements": [
+    "P19 anomaly panel with cap extensions and root/independent review",
+    "Full candidate acceptance and resumed-prefill gate",
+    "Actual runtime candidate policy registration",
+    "Fresh launch free/contiguous memory and pool sizing",
+    "Response body/token/finish log readback before eval",
+    "Prewritten matching forecast and precision/source identity",
+    "Measured rerun projection plus collection/analysis/review fit remaining deadline"
+  ],
+  "scope": "Prepare only. Remeasure only after a precision fix; no profiler. Candidate device-time fields remain unavailable. Old scores and rates retain their original policy labels."
+}

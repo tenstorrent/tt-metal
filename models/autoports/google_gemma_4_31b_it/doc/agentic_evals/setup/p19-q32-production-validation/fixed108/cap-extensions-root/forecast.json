@@ -1,0 +1,18 @@
+{
+  "created_unix": 1794777528.09318,
+  "status": "prepared_not_admitted",
+  "indices": [
+    4,
+    54,
+    68
+  ],
+  "forecast_seconds": {
+    "low": 340.341,
+    "point": 430.401,
+    "high": 640.642
+  },
+  "timeout_seconds": 1200,
+  "basis": "One measured Q32 load plus matched case prefill/decode elapsed plus added cap tokens at each observed traced diagnostic decode rate, plus30s overhead point. All cases projected to full doubled cap; early natural stops may be faster. No vLLM scaling.",
+  "model_loads": 1,
+  "no_score_change": true
+}

@@ -1,0 +1,1826 @@
+[
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/audit_swe85_protocol_outputs.py",
+    "removed": [],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/audit_swe85_reply_protocol.py",
+    "removed": [],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/collect_swe85_workload.py",
+    "removed": [],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/estimate_swe85_controls.py",
+    "removed": [],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/extract_swe85_correct_action_sources.py",
+    "removed": [
+      [
+        null,
+        null,
+        "os",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/finalize_swe85_xarray3095_supplement.py",
+    "removed": [],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/generate_gpqa_recipe.py",
+    "removed": [],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/generate_swe_recipe.py",
+    "removed": [],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/gpqa_host_preflight.py",
+    "removed": [],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/index_swe85_completed_anomalies.py",
+    "removed": [],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/inspect_swe85_sympy13480_protocol.py",
+    "removed": [],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/offline-verifier-build/parser.py",
+    "removed": [
+      [
+        null,
+        null,
+        "pathlib",
+        null
+      ],
+      [
+        "swebench.harness.grading",
+        0,
+        "MAP_REPO_TO_PARSER",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/prepare_fixed10_offline.py",
+    "removed": [],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/prepare_requests2931_control.py",
+    "removed": [],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/prepare_swe65_candidate.py",
+    "removed": [
+      [
+        null,
+        null,
+        "copy",
+        null
+      ],
+      [
+        null,
+        null,
+        "shutil",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/prepare_swe85_correct_action_candidates.py",
+    "removed": [
+      [
+        null,
+        null,
+        "os",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/prepare_swe85_fetch_controls.py",
+    "removed": [
+      [
+        null,
+        null,
+        "ast",
+        null
+      ],
+      [
+        null,
+        null,
+        "shutil",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/prepare_swe85_full_replies.py",
+    "removed": [
+      [
+        null,
+        null,
+        "os",
+        null
+      ],
+      [
+        null,
+        null,
+        "subprocess",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/prepare_swe85_gap_correct_candidates.py",
+    "removed": [
+      [
+        null,
+        null,
+        "os",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/prepare_swe85_getall_call1_onsets.py",
+    "removed": [
+      [
+        null,
+        null,
+        "os",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/prepare_swe85_optional_suffix512.py",
+    "removed": [],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/prepare_swe85_prior_repair_candidates.py",
+    "removed": [
+      [
+        null,
+        null,
+        "os",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/prepare_swe85_pylint4970_call55_candidate.py",
+    "removed": [
+      [
+        null,
+        null,
+        "os",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/prepare_swe85_pytest5787_onsets.py",
+    "removed": [
+      [
+        null,
+        null,
+        "os",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/prepare_swe85_remaining_correct_candidates.py",
+    "removed": [
+      [
+        null,
+        null,
+        "os",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/prepare_swe85_second_cap_extensions.py",
+    "removed": [
+      [
+        null,
+        null,
+        "sys",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/prepare_swe85_sklearn10908_correct_candidate.py",
+    "removed": [
+      [
+        null,
+        null,
+        "os",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/prepare_swe85_sklearn14983_correct_candidate.py",
+    "removed": [
+      [
+        null,
+        null,
+        "os",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/prepare_swe85_tt_execution_plan.py",
+    "removed": [],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/prepare_swe85_xarray3095_chosen_state.py",
+    "removed": [],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/prepare_swe85_xarray3095_correct_candidate.py",
+    "removed": [
+      [
+        null,
+        null,
+        "os",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/prepare_swe85_xarray3095_semantic_full.py",
+    "removed": [
+      [
+        null,
+        null,
+        "os",
+        null
+      ],
+      [
+        null,
+        null,
+        "subprocess",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/reconstruct_gap_states.py",
+    "removed": [
+      [
+        null,
+        null,
+        "re",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/recover_requests_verifier.py",
+    "removed": [],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/recover_swe_verifier_offline.py",
+    "removed": [],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/recover_swe_verifier_parser.py",
+    "removed": [],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/run_admitted_correct_action_validations.py",
+    "removed": [],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/run_admitted_fetch_validations.py",
+    "removed": [],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/run_pylint_recovery_when_slot_free.py",
+    "removed": [],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/run_swe85_adaptive1024_after_shortcap.py",
+    "removed": [],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/run_swe85_followups_after_short.py",
+    "removed": [],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/run_swe85_full_after_served.py",
+    "removed": [],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/run_swe85_secondcap_after_adaptive.py",
+    "removed": [],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/run_swe85_short2048_after_secondcap.py",
+    "removed": [],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/run_swe85_short_after_supplement.py",
+    "removed": [],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/run_swe85_short_cap1024_after_followups.py",
+    "removed": [],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/run_swe85_supplement_after_remainder.py",
+    "removed": [],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/summarize_swe85_action_comparisons.py",
+    "removed": [],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/summarize_swe85_action_sequences.py",
+    "removed": [],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/summarize_swe85_semantic_validations.py",
+    "removed": [],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/summarize_swe85_tt_controls.py",
+    "removed": [],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/pull_official_images.py",
+    "removed": [],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/pull_retry_20261114T0958Z.py",
+    "removed": [],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-followups-execution/run_swe85_adaptive_followups.py",
+    "removed": [],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-req5414-cap2048-after-v-candidate/run_after_v.py",
+    "removed": [],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-execution-candidate/run_cap1024_after_t.py",
+    "removed": [],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/run_suffix4096_after_u.py",
+    "removed": [],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-candidate/migrate_batch.py",
+    "removed": [
+      [
+        null,
+        null,
+        "datetime",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-candidate/migrate_final4.py",
+    "removed": [
+      [
+        null,
+        null,
+        "datetime",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-candidate/migrate_flask_pilot.py",
+    "removed": [
+      [
+        null,
+        null,
+        "datetime",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-candidate/migrate_sklearn13135.py",
+    "removed": [
+      [
+        null,
+        null,
+        "datetime",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-candidate/pilot_linked_mode_restored.py",
+    "removed": [
+      [
+        null,
+        null,
+        "datetime",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-candidate/prepare_linked_next20.py",
+    "removed": [],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-candidate/prepare_next20.py",
+    "removed": [
+      [
+        null,
+        null,
+        "copy",
+        null
+      ],
+      [
+        null,
+        null,
+        "shutil",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-candidate/prepare_remaining3.py",
+    "removed": [],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-candidate/prepare_remaining5.py",
+    "removed": [],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-candidate/prune_final4_cache.py",
+    "removed": [],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-candidate/prune_removed_image_cache.py",
+    "removed": [],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-candidate/prune_sklearn_cache.py",
+    "removed": [],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-candidate/reclaim_exact_cache.py",
+    "removed": [],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-candidate/reclaim_obsolete.py",
+    "removed": [
+      [
+        null,
+        null,
+        "os",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/pytest7432-first-caret-conditional/run_candidate.py",
+    "removed": [
+      [
+        null,
+        null,
+        "shutil",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/requests5414-call11-suffix2048-cap1024/run_candidate.py",
+    "removed": [],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-suffix512-head-bfp8-correction/run_root.py",
+    "removed": [],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-loop-branch-investigation/actual-branch-logits/completed-original-tool.py",
+    "removed": [],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-loop-branch-investigation/actual-branch-logits/run_serial_probe.py",
+    "removed": [],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-matplotlib86-full-suffix4096-cap1024-extension-candidate/run_cap1024.py",
+    "removed": [],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-matplotlib86-full-suffix4096-cap1024-extension-candidate/test_run_cap1024.py",
+    "removed": [],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bf16-hifi4-seven-case-candidate/audit_p5_gemma4_parser.py",
+    "removed": [],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/run_after_p1_x.py",
+    "removed": [],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/run_panel_after_w.py",
+    "removed": [],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-with-cap2048-pending-t-closure/prepare_candidate.py",
+    "removed": [],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/extract_10323_4661.py",
+    "removed": [
+      [
+        null,
+        null,
+        "os",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/extract_18763_7432.py",
+    "removed": [
+      [
+        null,
+        null,
+        "os",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/extract_gap_sources.py",
+    "removed": [],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/extract_new_fetch.py",
+    "removed": [],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/extract_remaining_swe.py",
+    "removed": [
+      [
+        null,
+        null,
+        "os",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/extract_requests5414.py",
+    "removed": [
+      [
+        null,
+        null,
+        "os",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/extract_sklearn14983.py",
+    "removed": [
+      [
+        null,
+        null,
+        "os",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/extract_sklearn25102.py",
+    "removed": [],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/extract_sklearn25747_pipeline.py",
+    "removed": [],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/extract_sphinx10614.py",
+    "removed": [],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/extract_sphinx11510.py",
+    "removed": [
+      [
+        null,
+        null,
+        "os",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/extract_sphinx7590.py",
+    "removed": [
+      [
+        null,
+        null,
+        "os",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/extract_sphinx9461.py",
+    "removed": [
+      [
+        null,
+        null,
+        "os",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/extract_swe_correct_sources.py",
+    "removed": [
+      [
+        null,
+        null,
+        "os",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/extract_sympy12489.py",
+    "removed": [
+      [
+        null,
+        null,
+        "os",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/extract_sympy13091.py",
+    "removed": [
+      [
+        null,
+        null,
+        "os",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/extract_sympy13480.py",
+    "removed": [],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/extract_sympy13551.py",
+    "removed": [],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/extract_sympy13878.py",
+    "removed": [],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/extract_sympy14248.py",
+    "removed": [
+      [
+        null,
+        null,
+        "hashlib",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/finalize_missing_semantic_actions.py",
+    "removed": [],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/finalize_requests5414.py",
+    "removed": [],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/finalize_sphinx11510.py",
+    "removed": [],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/finalize_swe_candidates.py",
+    "removed": [],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/finalize_sympy13878.py",
+    "removed": [],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/finalize_sympy14248.py",
+    "removed": [
+      [
+        null,
+        null,
+        "shutil",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_10323_4661_full.py",
+    "removed": [
+      [
+        null,
+        null,
+        "os",
+        null
+      ],
+      [
+        null,
+        null,
+        "subprocess",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_18763_7432_full.py",
+    "removed": [
+      [
+        null,
+        null,
+        "os",
+        null
+      ],
+      [
+        null,
+        null,
+        "subprocess",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_18763_7432_onsets.py",
+    "removed": [
+      [
+        null,
+        null,
+        "os",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_extra_contractions_full.py",
+    "removed": [
+      [
+        null,
+        null,
+        "os",
+        null
+      ],
+      [
+        null,
+        null,
+        "subprocess",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_extra_contractions_onsets.py",
+    "removed": [
+      [
+        null,
+        null,
+        "os",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_getall_onsets.py",
+    "removed": [
+      [
+        null,
+        null,
+        "os",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_missing_semantic_states.py",
+    "removed": [],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_more_full.py",
+    "removed": [
+      [
+        null,
+        null,
+        "os",
+        null
+      ],
+      [
+        null,
+        null,
+        "subprocess",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_new_fetch_full.py",
+    "removed": [
+      [
+        null,
+        null,
+        "os",
+        null
+      ],
+      [
+        null,
+        null,
+        "subprocess",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_protocol83_full.py",
+    "removed": [
+      [
+        null,
+        null,
+        "os",
+        null
+      ],
+      [
+        null,
+        null,
+        "subprocess",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_protocol83_onsets.py",
+    "removed": [
+      [
+        null,
+        null,
+        "os",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_protocol_call1.py",
+    "removed": [
+      [
+        null,
+        null,
+        "os",
+        null
+      ],
+      [
+        null,
+        null,
+        "subprocess",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_pytest5787_onsets.py",
+    "removed": [
+      [
+        null,
+        null,
+        "os",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_requests2931_semantic_full.py",
+    "removed": [
+      [
+        null,
+        null,
+        "os",
+        null
+      ],
+      [
+        null,
+        null,
+        "subprocess",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_requests5414_caps_full.py",
+    "removed": [
+      [
+        null,
+        null,
+        "os",
+        null
+      ],
+      [
+        null,
+        null,
+        "subprocess",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_requests5414_caret_onsets.py",
+    "removed": [
+      [
+        null,
+        null,
+        "os",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_requests5414_full.py",
+    "removed": [
+      [
+        null,
+        null,
+        "os",
+        null
+      ],
+      [
+        null,
+        null,
+        "subprocess",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_semantic_full.py",
+    "removed": [
+      [
+        null,
+        null,
+        "os",
+        null
+      ],
+      [
+        null,
+        null,
+        "subprocess",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_sklearn14983_full.py",
+    "removed": [
+      [
+        null,
+        null,
+        "os",
+        null
+      ],
+      [
+        null,
+        null,
+        "subprocess",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_sklearn25102_full.py",
+    "removed": [
+      [
+        null,
+        null,
+        "os",
+        null
+      ],
+      [
+        null,
+        null,
+        "subprocess",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_sklearn25747_full.py",
+    "removed": [
+      [
+        null,
+        null,
+        "os",
+        null
+      ],
+      [
+        null,
+        null,
+        "subprocess",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_sphinx10323_onset.py",
+    "removed": [
+      [
+        null,
+        null,
+        "os",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_sphinx10614_full.py",
+    "removed": [
+      [
+        null,
+        null,
+        "os",
+        null
+      ],
+      [
+        null,
+        null,
+        "subprocess",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_sphinx11510_contraction101_onset.py",
+    "removed": [
+      [
+        null,
+        null,
+        "os",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_sphinx11510_full.py",
+    "removed": [
+      [
+        null,
+        null,
+        "os",
+        null
+      ],
+      [
+        null,
+        null,
+        "subprocess",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_sphinx11510_onsets.py",
+    "removed": [
+      [
+        null,
+        null,
+        "os",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_sphinx11510_protocol_full.py",
+    "removed": [
+      [
+        null,
+        null,
+        "os",
+        null
+      ],
+      [
+        null,
+        null,
+        "subprocess",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_sphinx11510_protocol_onsets.py",
+    "removed": [
+      [
+        null,
+        null,
+        "os",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_sphinx7590_full.py",
+    "removed": [
+      [
+        null,
+        null,
+        "os",
+        null
+      ],
+      [
+        null,
+        null,
+        "subprocess",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_sphinx8638_full.py",
+    "removed": [
+      [
+        null,
+        null,
+        "os",
+        null
+      ],
+      [
+        null,
+        null,
+        "subprocess",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_sphinx9461_full.py",
+    "removed": [
+      [
+        null,
+        null,
+        "os",
+        null
+      ],
+      [
+        null,
+        null,
+        "subprocess",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_swe85_full_replies.py",
+    "removed": [
+      [
+        null,
+        null,
+        "os",
+        null
+      ],
+      [
+        null,
+        null,
+        "subprocess",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_sympy12489_full.py",
+    "removed": [
+      [
+        null,
+        null,
+        "os",
+        null
+      ],
+      [
+        null,
+        null,
+        "subprocess",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_sympy13091_full.py",
+    "removed": [
+      [
+        null,
+        null,
+        "os",
+        null
+      ],
+      [
+        null,
+        null,
+        "subprocess",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_sympy13480_full.py",
+    "removed": [
+      [
+        null,
+        null,
+        "os",
+        null
+      ],
+      [
+        null,
+        null,
+        "subprocess",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_sympy13480_onset.py",
+    "removed": [
+      [
+        null,
+        null,
+        "os",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_sympy13551_full.py",
+    "removed": [
+      [
+        null,
+        null,
+        "os",
+        null
+      ],
+      [
+        null,
+        null,
+        "subprocess",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_sympy13551_onset.py",
+    "removed": [
+      [
+        null,
+        null,
+        "os",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_sympy13878_full.py",
+    "removed": [
+      [
+        null,
+        null,
+        "os",
+        null
+      ],
+      [
+        null,
+        null,
+        "subprocess",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_sympy13878_onset.py",
+    "removed": [
+      [
+        null,
+        null,
+        "os",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_sympy14248_caps_full.py",
+    "removed": [
+      [
+        null,
+        null,
+        "os",
+        null
+      ],
+      [
+        null,
+        null,
+        "subprocess",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_sympy14248_caret_onsets.py",
+    "removed": [
+      [
+        null,
+        null,
+        "os",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_sympy14248_full.py",
+    "removed": [
+      [
+        null,
+        null,
+        "os",
+        null
+      ],
+      [
+        null,
+        null,
+        "subprocess",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/refresh_swe_full_roster.py",
+    "removed": [],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/validate_missing_semantic_states.py",
+    "removed": [],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/validate_requests5414_pure_urls.py",
+    "removed": [],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/validate_sympy14248_states.py",
+    "removed": [],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-execution/run_swe85_third_cap.py",
+    "removed": [],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85_build_10323_4661.py",
+    "removed": [
+      [
+        null,
+        null,
+        "os",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85_build_sklearn25102_fetch.py",
+    "removed": [
+      [
+        null,
+        null,
+        "ast",
+        null
+      ],
+      [
+        null,
+        null,
+        "shutil",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85_build_sympy12489.py",
+    "removed": [
+      [
+        null,
+        null,
+        "os",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85_build_sympy13091.py",
+    "removed": [
+      [
+        null,
+        null,
+        "os",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85_build_sympy13480_fetch.py",
+    "removed": [
+      [
+        null,
+        null,
+        "ast",
+        null
+      ],
+      [
+        null,
+        null,
+        "shutil",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85_prepare_10323_4661_full.py",
+    "removed": [
+      [
+        null,
+        null,
+        "os",
+        null
+      ],
+      [
+        null,
+        null,
+        "subprocess",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85_prepare_extra_contractions_full.py",
+    "removed": [
+      [
+        null,
+        null,
+        "os",
+        null
+      ],
+      [
+        null,
+        null,
+        "subprocess",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85_prepare_extra_contractions_onsets.py",
+    "removed": [
+      [
+        null,
+        null,
+        "os",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85_prepare_sklearn25102_full.py",
+    "removed": [
+      [
+        null,
+        null,
+        "os",
+        null
+      ],
+      [
+        null,
+        null,
+        "subprocess",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85_prepare_sphinx10323_onset.py",
+    "removed": [
+      [
+        null,
+        null,
+        "os",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85_prepare_sympy12489_full.py",
+    "removed": [
+      [
+        null,
+        null,
+        "os",
+        null
+      ],
+      [
+        null,
+        null,
+        "subprocess",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85_prepare_sympy13091_full.py",
+    "removed": [
+      [
+        null,
+        null,
+        "os",
+        null
+      ],
+      [
+        null,
+        null,
+        "subprocess",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85_prepare_sympy13480_full.py",
+    "removed": [
+      [
+        null,
+        null,
+        "os",
+        null
+      ],
+      [
+        null,
+        null,
+        "subprocess",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85_prepare_sympy13480_onset.py",
+    "removed": [
+      [
+        null,
+        null,
+        "os",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/sync_swe85_live.py",
+    "removed": [],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/validate_correct_action_semantics.py",
+    "removed": [],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/validate_requests1921_auth_regression.py",
+    "removed": [
+      [
+        null,
+        null,
+        "subprocess",
+        null
+      ]
+    ],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/verify_swe_image_provenance.py",
+    "removed": [],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/tests/run_datatype_candidate.py",
+    "removed": [],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/tests/test_benchmark_work.py",
+    "removed": [],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/tests/test_collect_candidate_sizing.py",
+    "removed": [],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/tests/test_precision_repro_hf.py",
+    "removed": [],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/tools/actual_branch_logits.py",
+    "removed": [],
+    "added": []
+  },
+  {
+    "path": "models/autoports/google_gemma_4_31b_it/tools/stage12_accuracy_references.py",
+    "removed": [],
+    "added": []
+  }
+]

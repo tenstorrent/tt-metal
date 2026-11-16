@@ -1,0 +1,28 @@
+{
+  "status": "teacher_forcing_comparison_complete_free_generation_pending",
+  "reviewed_unix": 1794762528.7603235,
+  "case": "anomaly.psf__requests-5414.call11.onset.seed42.cap256",
+  "positions": 64,
+  "identity": {
+    "hf_case_sha256": "50cbd0eb4e62c843a1ec8ac800a580135c3abc5dc2154d6be0a7e39d0c37ed6f",
+    "tt_case_sha256": null,
+    "tt_case_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-requests5414-caret-controls/psf__requests-5414.call11.onset.private.json",
+    "case_prompt_ids_verified": true,
+    "conditioning_token_ids_verified": true,
+    "position_window": [
+      0,
+      63
+    ],
+    "explicit_window_checked": false
+  },
+  "top1_agreement": 1.0,
+  "mean_chosen_logprob_delta_hf_minus_tt": 0.0019201232007617364,
+  "max_absolute_chosen_logprob_delta": 0.058528557419776917,
+  "first_caret_probability_hf": 0.9999998807907104,
+  "sources": {
+    "hf_partial": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/p19-native-onset-caret-controls/results/anomaly.psf__requests-5414.call11.onset.seed42.cap256.hf.private.json",
+    "full_tt": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/anomaly.psf__requests-5414.call11.onset.json",
+    "full_tt_sha256": "f02de92f04d37c6202ac72b60baebcc4b393610a63f13ad6425ba0d6fa109fd6"
+  },
+  "scope": "Full reconstructed7226-token input,64 native-chosen forced positions; notcompletedfree-run outcome."
+}

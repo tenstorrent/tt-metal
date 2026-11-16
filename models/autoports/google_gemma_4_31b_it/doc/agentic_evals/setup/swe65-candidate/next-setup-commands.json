@@ -1,0 +1,1273 @@
+{
+  "status": "not_executed_no_pulls_or_builds_during_HF",
+  "commands": [
+    {
+      "task": "pallets__flask-5014",
+      "pull_after_authorization_only": [
+        "docker",
+        "pull",
+        "swebench/sweb.eval.x86_64.pallets_1776_flask-5014:latest"
+      ],
+      "offline_build_after_pull": [
+        "docker",
+        "build",
+        "--network",
+        "none",
+        "--pull=false",
+        "--build-arg",
+        "OFFICIAL_IMAGE=swebench/sweb.eval.x86_64.pallets_1776_flask-5014:latest",
+        "-f",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/Dockerfile.offline",
+        "-t",
+        "v5-swe-offline-verifier:pallets__flask-5014",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts"
+      ],
+      "required_validation": "Record immutable official digest and derived SHA; base layers/HEAD must match; no /tests or /solution; uv0.7.13 mini2.2.8; run synthetic parser pass and fail network none; instructions/config/test-prefix+suffix remain frozen. First unseen base must pass before serializing remainder."
+    },
+    {
+      "task": "mwaskom__seaborn-3187",
+      "pull_after_authorization_only": [
+        "docker",
+        "pull",
+        "swebench/sweb.eval.x86_64.mwaskom_1776_seaborn-3187:latest"
+      ],
+      "offline_build_after_pull": [
+        "docker",
+        "build",
+        "--network",
+        "none",
+        "--pull=false",
+        "--build-arg",
+        "OFFICIAL_IMAGE=swebench/sweb.eval.x86_64.mwaskom_1776_seaborn-3187:latest",
+        "-f",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/Dockerfile.offline",
+        "-t",
+        "v5-swe-offline-verifier:mwaskom__seaborn-3187",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts"
+      ],
+      "required_validation": "Record immutable official digest and derived SHA; base layers/HEAD must match; no /tests or /solution; uv0.7.13 mini2.2.8; run synthetic parser pass and fail network none; instructions/config/test-prefix+suffix remain frozen. First unseen base must pass before serializing remainder."
+    },
+    {
+      "task": "pytest-dev__pytest-7982",
+      "pull_after_authorization_only": [
+        "docker",
+        "pull",
+        "swebench/sweb.eval.x86_64.pytest-dev_1776_pytest-7982:latest"
+      ],
+      "offline_build_after_pull": [
+        "docker",
+        "build",
+        "--network",
+        "none",
+        "--pull=false",
+        "--build-arg",
+        "OFFICIAL_IMAGE=swebench/sweb.eval.x86_64.pytest-dev_1776_pytest-7982:latest",
+        "-f",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/Dockerfile.offline",
+        "-t",
+        "v5-swe-offline-verifier:pytest-dev__pytest-7982",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts"
+      ],
+      "required_validation": "Record immutable official digest and derived SHA; base layers/HEAD must match; no /tests or /solution; uv0.7.13 mini2.2.8; run synthetic parser pass and fail network none; instructions/config/test-prefix+suffix remain frozen. First unseen base must pass before serializing remainder."
+    },
+    {
+      "task": "sympy__sympy-14711",
+      "pull_after_authorization_only": [
+        "docker",
+        "pull",
+        "swebench/sweb.eval.x86_64.sympy_1776_sympy-14711:latest"
+      ],
+      "offline_build_after_pull": [
+        "docker",
+        "build",
+        "--network",
+        "none",
+        "--pull=false",
+        "--build-arg",
+        "OFFICIAL_IMAGE=swebench/sweb.eval.x86_64.sympy_1776_sympy-14711:latest",
+        "-f",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/Dockerfile.offline",
+        "-t",
+        "v5-swe-offline-verifier:sympy__sympy-14711",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts"
+      ],
+      "required_validation": "Record immutable official digest and derived SHA; base layers/HEAD must match; no /tests or /solution; uv0.7.13 mini2.2.8; run synthetic parser pass and fail network none; instructions/config/test-prefix+suffix remain frozen. First unseen base must pass before serializing remainder."
+    },
+    {
+      "task": "pylint-dev__pylint-8898",
+      "pull_after_authorization_only": [
+        "docker",
+        "pull",
+        "swebench/sweb.eval.x86_64.pylint-dev_1776_pylint-8898:latest"
+      ],
+      "offline_build_after_pull": [
+        "docker",
+        "build",
+        "--network",
+        "none",
+        "--pull=false",
+        "--build-arg",
+        "OFFICIAL_IMAGE=swebench/sweb.eval.x86_64.pylint-dev_1776_pylint-8898:latest",
+        "-f",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/Dockerfile.offline",
+        "-t",
+        "v5-swe-offline-verifier:pylint-dev__pylint-8898",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts"
+      ],
+      "required_validation": "Record immutable official digest and derived SHA; base layers/HEAD must match; no /tests or /solution; uv0.7.13 mini2.2.8; run synthetic parser pass and fail network none; instructions/config/test-prefix+suffix remain frozen. First unseen base must pass before serializing remainder."
+    },
+    {
+      "task": "scikit-learn__scikit-learn-13135",
+      "pull_after_authorization_only": [
+        "docker",
+        "pull",
+        "swebench/sweb.eval.x86_64.scikit-learn_1776_scikit-learn-13135:latest"
+      ],
+      "offline_build_after_pull": [
+        "docker",
+        "build",
+        "--network",
+        "none",
+        "--pull=false",
+        "--build-arg",
+        "OFFICIAL_IMAGE=swebench/sweb.eval.x86_64.scikit-learn_1776_scikit-learn-13135:latest",
+        "-f",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/Dockerfile.offline",
+        "-t",
+        "v5-swe-offline-verifier:scikit-learn__scikit-learn-13135",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts"
+      ],
+      "required_validation": "Record immutable official digest and derived SHA; base layers/HEAD must match; no /tests or /solution; uv0.7.13 mini2.2.8; run synthetic parser pass and fail network none; instructions/config/test-prefix+suffix remain frozen. First unseen base must pass before serializing remainder."
+    },
+    {
+      "task": "psf__requests-2931",
+      "pull_after_authorization_only": [
+        "docker",
+        "pull",
+        "swebench/sweb.eval.x86_64.psf_1776_requests-2931:latest"
+      ],
+      "offline_build_after_pull": [
+        "docker",
+        "build",
+        "--network",
+        "none",
+        "--pull=false",
+        "--build-arg",
+        "OFFICIAL_IMAGE=swebench/sweb.eval.x86_64.psf_1776_requests-2931:latest",
+        "-f",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/Dockerfile.offline",
+        "-t",
+        "v5-swe-offline-verifier:psf__requests-2931",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts"
+      ],
+      "required_validation": "Record immutable official digest and derived SHA; base layers/HEAD must match; no /tests or /solution; uv0.7.13 mini2.2.8; run synthetic parser pass and fail network none; instructions/config/test-prefix+suffix remain frozen. First unseen base must pass before serializing remainder."
+    },
+    {
+      "task": "django__django-15037",
+      "pull_after_authorization_only": [
+        "docker",
+        "pull",
+        "swebench/sweb.eval.x86_64.django_1776_django-15037:latest"
+      ],
+      "offline_build_after_pull": [
+        "docker",
+        "build",
+        "--network",
+        "none",
+        "--pull=false",
+        "--build-arg",
+        "OFFICIAL_IMAGE=swebench/sweb.eval.x86_64.django_1776_django-15037:latest",
+        "-f",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/Dockerfile.offline",
+        "-t",
+        "v5-swe-offline-verifier:django__django-15037",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts"
+      ],
+      "required_validation": "Record immutable official digest and derived SHA; base layers/HEAD must match; no /tests or /solution; uv0.7.13 mini2.2.8; run synthetic parser pass and fail network none; instructions/config/test-prefix+suffix remain frozen. First unseen base must pass before serializing remainder."
+    },
+    {
+      "task": "matplotlib__matplotlib-20488",
+      "pull_after_authorization_only": [
+        "docker",
+        "pull",
+        "swebench/sweb.eval.x86_64.matplotlib_1776_matplotlib-20488:latest"
+      ],
+      "offline_build_after_pull": [
+        "docker",
+        "build",
+        "--network",
+        "none",
+        "--pull=false",
+        "--build-arg",
+        "OFFICIAL_IMAGE=swebench/sweb.eval.x86_64.matplotlib_1776_matplotlib-20488:latest",
+        "-f",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/Dockerfile.offline",
+        "-t",
+        "v5-swe-offline-verifier:matplotlib__matplotlib-20488",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts"
+      ],
+      "required_validation": "Record immutable official digest and derived SHA; base layers/HEAD must match; no /tests or /solution; uv0.7.13 mini2.2.8; run synthetic parser pass and fail network none; instructions/config/test-prefix+suffix remain frozen. First unseen base must pass before serializing remainder."
+    },
+    {
+      "task": "pydata__xarray-4629",
+      "pull_after_authorization_only": [
+        "docker",
+        "pull",
+        "swebench/sweb.eval.x86_64.pydata_1776_xarray-4629:latest"
+      ],
+      "offline_build_after_pull": [
+        "docker",
+        "build",
+        "--network",
+        "none",
+        "--pull=false",
+        "--build-arg",
+        "OFFICIAL_IMAGE=swebench/sweb.eval.x86_64.pydata_1776_xarray-4629:latest",
+        "-f",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/Dockerfile.offline",
+        "-t",
+        "v5-swe-offline-verifier:pydata__xarray-4629",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts"
+      ],
+      "required_validation": "Record immutable official digest and derived SHA; base layers/HEAD must match; no /tests or /solution; uv0.7.13 mini2.2.8; run synthetic parser pass and fail network none; instructions/config/test-prefix+suffix remain frozen. First unseen base must pass before serializing remainder."
+    },
+    {
+      "task": "astropy__astropy-14995",
+      "pull_after_authorization_only": [
+        "docker",
+        "pull",
+        "swebench/sweb.eval.x86_64.astropy_1776_astropy-14995:latest"
+      ],
+      "offline_build_after_pull": [
+        "docker",
+        "build",
+        "--network",
+        "none",
+        "--pull=false",
+        "--build-arg",
+        "OFFICIAL_IMAGE=swebench/sweb.eval.x86_64.astropy_1776_astropy-14995:latest",
+        "-f",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/Dockerfile.offline",
+        "-t",
+        "v5-swe-offline-verifier:astropy__astropy-14995",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts"
+      ],
+      "required_validation": "Record immutable official digest and derived SHA; base layers/HEAD must match; no /tests or /solution; uv0.7.13 mini2.2.8; run synthetic parser pass and fail network none; instructions/config/test-prefix+suffix remain frozen. First unseen base must pass before serializing remainder."
+    },
+    {
+      "task": "sphinx-doc__sphinx-9281",
+      "pull_after_authorization_only": [
+        "docker",
+        "pull",
+        "swebench/sweb.eval.x86_64.sphinx-doc_1776_sphinx-9281:latest"
+      ],
+      "offline_build_after_pull": [
+        "docker",
+        "build",
+        "--network",
+        "none",
+        "--pull=false",
+        "--build-arg",
+        "OFFICIAL_IMAGE=swebench/sweb.eval.x86_64.sphinx-doc_1776_sphinx-9281:latest",
+        "-f",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/Dockerfile.offline",
+        "-t",
+        "v5-swe-offline-verifier:sphinx-doc__sphinx-9281",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts"
+      ],
+      "required_validation": "Record immutable official digest and derived SHA; base layers/HEAD must match; no /tests or /solution; uv0.7.13 mini2.2.8; run synthetic parser pass and fail network none; instructions/config/test-prefix+suffix remain frozen. First unseen base must pass before serializing remainder."
+    },
+    {
+      "task": "mwaskom__seaborn-3069",
+      "pull_after_authorization_only": [
+        "docker",
+        "pull",
+        "swebench/sweb.eval.x86_64.mwaskom_1776_seaborn-3069:latest"
+      ],
+      "offline_build_after_pull": [
+        "docker",
+        "build",
+        "--network",
+        "none",
+        "--pull=false",
+        "--build-arg",
+        "OFFICIAL_IMAGE=swebench/sweb.eval.x86_64.mwaskom_1776_seaborn-3069:latest",
+        "-f",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/Dockerfile.offline",
+        "-t",
+        "v5-swe-offline-verifier:mwaskom__seaborn-3069",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts"
+      ],
+      "required_validation": "Record immutable official digest and derived SHA; base layers/HEAD must match; no /tests or /solution; uv0.7.13 mini2.2.8; run synthetic parser pass and fail network none; instructions/config/test-prefix+suffix remain frozen. First unseen base must pass before serializing remainder."
+    },
+    {
+      "task": "pytest-dev__pytest-6197",
+      "pull_after_authorization_only": [
+        "docker",
+        "pull",
+        "swebench/sweb.eval.x86_64.pytest-dev_1776_pytest-6197:latest"
+      ],
+      "offline_build_after_pull": [
+        "docker",
+        "build",
+        "--network",
+        "none",
+        "--pull=false",
+        "--build-arg",
+        "OFFICIAL_IMAGE=swebench/sweb.eval.x86_64.pytest-dev_1776_pytest-6197:latest",
+        "-f",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/Dockerfile.offline",
+        "-t",
+        "v5-swe-offline-verifier:pytest-dev__pytest-6197",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts"
+      ],
+      "required_validation": "Record immutable official digest and derived SHA; base layers/HEAD must match; no /tests or /solution; uv0.7.13 mini2.2.8; run synthetic parser pass and fail network none; instructions/config/test-prefix+suffix remain frozen. First unseen base must pass before serializing remainder."
+    },
+    {
+      "task": "sympy__sympy-14248",
+      "pull_after_authorization_only": [
+        "docker",
+        "pull",
+        "swebench/sweb.eval.x86_64.sympy_1776_sympy-14248:latest"
+      ],
+      "offline_build_after_pull": [
+        "docker",
+        "build",
+        "--network",
+        "none",
+        "--pull=false",
+        "--build-arg",
+        "OFFICIAL_IMAGE=swebench/sweb.eval.x86_64.sympy_1776_sympy-14248:latest",
+        "-f",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/Dockerfile.offline",
+        "-t",
+        "v5-swe-offline-verifier:sympy__sympy-14248",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts"
+      ],
+      "required_validation": "Record immutable official digest and derived SHA; base layers/HEAD must match; no /tests or /solution; uv0.7.13 mini2.2.8; run synthetic parser pass and fail network none; instructions/config/test-prefix+suffix remain frozen. First unseen base must pass before serializing remainder."
+    },
+    {
+      "task": "pylint-dev__pylint-4604",
+      "pull_after_authorization_only": [
+        "docker",
+        "pull",
+        "swebench/sweb.eval.x86_64.pylint-dev_1776_pylint-4604:latest"
+      ],
+      "offline_build_after_pull": [
+        "docker",
+        "build",
+        "--network",
+        "none",
+        "--pull=false",
+        "--build-arg",
+        "OFFICIAL_IMAGE=swebench/sweb.eval.x86_64.pylint-dev_1776_pylint-4604:latest",
+        "-f",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/Dockerfile.offline",
+        "-t",
+        "v5-swe-offline-verifier:pylint-dev__pylint-4604",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts"
+      ],
+      "required_validation": "Record immutable official digest and derived SHA; base layers/HEAD must match; no /tests or /solution; uv0.7.13 mini2.2.8; run synthetic parser pass and fail network none; instructions/config/test-prefix+suffix remain frozen. First unseen base must pass before serializing remainder."
+    },
+    {
+      "task": "scikit-learn__scikit-learn-25102",
+      "pull_after_authorization_only": [
+        "docker",
+        "pull",
+        "swebench/sweb.eval.x86_64.scikit-learn_1776_scikit-learn-25102:latest"
+      ],
+      "offline_build_after_pull": [
+        "docker",
+        "build",
+        "--network",
+        "none",
+        "--pull=false",
+        "--build-arg",
+        "OFFICIAL_IMAGE=swebench/sweb.eval.x86_64.scikit-learn_1776_scikit-learn-25102:latest",
+        "-f",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/Dockerfile.offline",
+        "-t",
+        "v5-swe-offline-verifier:scikit-learn__scikit-learn-25102",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts"
+      ],
+      "required_validation": "Record immutable official digest and derived SHA; base layers/HEAD must match; no /tests or /solution; uv0.7.13 mini2.2.8; run synthetic parser pass and fail network none; instructions/config/test-prefix+suffix remain frozen. First unseen base must pass before serializing remainder."
+    },
+    {
+      "task": "django__django-14011",
+      "pull_after_authorization_only": [
+        "docker",
+        "pull",
+        "swebench/sweb.eval.x86_64.django_1776_django-14011:latest"
+      ],
+      "offline_build_after_pull": [
+        "docker",
+        "build",
+        "--network",
+        "none",
+        "--pull=false",
+        "--build-arg",
+        "OFFICIAL_IMAGE=swebench/sweb.eval.x86_64.django_1776_django-14011:latest",
+        "-f",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/Dockerfile.offline",
+        "-t",
+        "v5-swe-offline-verifier:django__django-14011",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts"
+      ],
+      "required_validation": "Record immutable official digest and derived SHA; base layers/HEAD must match; no /tests or /solution; uv0.7.13 mini2.2.8; run synthetic parser pass and fail network none; instructions/config/test-prefix+suffix remain frozen. First unseen base must pass before serializing remainder."
+    },
+    {
+      "task": "pydata__xarray-3095",
+      "pull_after_authorization_only": [
+        "docker",
+        "pull",
+        "swebench/sweb.eval.x86_64.pydata_1776_xarray-3095:latest"
+      ],
+      "offline_build_after_pull": [
+        "docker",
+        "build",
+        "--network",
+        "none",
+        "--pull=false",
+        "--build-arg",
+        "OFFICIAL_IMAGE=swebench/sweb.eval.x86_64.pydata_1776_xarray-3095:latest",
+        "-f",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/Dockerfile.offline",
+        "-t",
+        "v5-swe-offline-verifier:pydata__xarray-3095",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts"
+      ],
+      "required_validation": "Record immutable official digest and derived SHA; base layers/HEAD must match; no /tests or /solution; uv0.7.13 mini2.2.8; run synthetic parser pass and fail network none; instructions/config/test-prefix+suffix remain frozen. First unseen base must pass before serializing remainder."
+    },
+    {
+      "task": "astropy__astropy-13579",
+      "pull_after_authorization_only": [
+        "docker",
+        "pull",
+        "swebench/sweb.eval.x86_64.astropy_1776_astropy-13579:latest"
+      ],
+      "offline_build_after_pull": [
+        "docker",
+        "build",
+        "--network",
+        "none",
+        "--pull=false",
+        "--build-arg",
+        "OFFICIAL_IMAGE=swebench/sweb.eval.x86_64.astropy_1776_astropy-13579:latest",
+        "-f",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/Dockerfile.offline",
+        "-t",
+        "v5-swe-offline-verifier:astropy__astropy-13579",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts"
+      ],
+      "required_validation": "Record immutable official digest and derived SHA; base layers/HEAD must match; no /tests or /solution; uv0.7.13 mini2.2.8; run synthetic parser pass and fail network none; instructions/config/test-prefix+suffix remain frozen. First unseen base must pass before serializing remainder."
+    },
+    {
+      "task": "sphinx-doc__sphinx-11510",
+      "pull_after_authorization_only": [
+        "docker",
+        "pull",
+        "swebench/sweb.eval.x86_64.sphinx-doc_1776_sphinx-11510:latest"
+      ],
+      "offline_build_after_pull": [
+        "docker",
+        "build",
+        "--network",
+        "none",
+        "--pull=false",
+        "--build-arg",
+        "OFFICIAL_IMAGE=swebench/sweb.eval.x86_64.sphinx-doc_1776_sphinx-11510:latest",
+        "-f",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/Dockerfile.offline",
+        "-t",
+        "v5-swe-offline-verifier:sphinx-doc__sphinx-11510",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts"
+      ],
+      "required_validation": "Record immutable official digest and derived SHA; base layers/HEAD must match; no /tests or /solution; uv0.7.13 mini2.2.8; run synthetic parser pass and fail network none; instructions/config/test-prefix+suffix remain frozen. First unseen base must pass before serializing remainder."
+    },
+    {
+      "task": "psf__requests-6028",
+      "pull_after_authorization_only": [
+        "docker",
+        "pull",
+        "swebench/sweb.eval.x86_64.psf_1776_requests-6028:latest"
+      ],
+      "offline_build_after_pull": [
+        "docker",
+        "build",
+        "--network",
+        "none",
+        "--pull=false",
+        "--build-arg",
+        "OFFICIAL_IMAGE=swebench/sweb.eval.x86_64.psf_1776_requests-6028:latest",
+        "-f",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/Dockerfile.offline",
+        "-t",
+        "v5-swe-offline-verifier:psf__requests-6028",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts"
+      ],
+      "required_validation": "Record immutable official digest and derived SHA; base layers/HEAD must match; no /tests or /solution; uv0.7.13 mini2.2.8; run synthetic parser pass and fail network none; instructions/config/test-prefix+suffix remain frozen. First unseen base must pass before serializing remainder."
+    },
+    {
+      "task": "matplotlib__matplotlib-25479",
+      "pull_after_authorization_only": [
+        "docker",
+        "pull",
+        "swebench/sweb.eval.x86_64.matplotlib_1776_matplotlib-25479:latest"
+      ],
+      "offline_build_after_pull": [
+        "docker",
+        "build",
+        "--network",
+        "none",
+        "--pull=false",
+        "--build-arg",
+        "OFFICIAL_IMAGE=swebench/sweb.eval.x86_64.matplotlib_1776_matplotlib-25479:latest",
+        "-f",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/Dockerfile.offline",
+        "-t",
+        "v5-swe-offline-verifier:matplotlib__matplotlib-25479",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts"
+      ],
+      "required_validation": "Record immutable official digest and derived SHA; base layers/HEAD must match; no /tests or /solution; uv0.7.13 mini2.2.8; run synthetic parser pass and fail network none; instructions/config/test-prefix+suffix remain frozen. First unseen base must pass before serializing remainder."
+    },
+    {
+      "task": "sympy__sympy-13878",
+      "pull_after_authorization_only": [
+        "docker",
+        "pull",
+        "swebench/sweb.eval.x86_64.sympy_1776_sympy-13878:latest"
+      ],
+      "offline_build_after_pull": [
+        "docker",
+        "build",
+        "--network",
+        "none",
+        "--pull=false",
+        "--build-arg",
+        "OFFICIAL_IMAGE=swebench/sweb.eval.x86_64.sympy_1776_sympy-13878:latest",
+        "-f",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/Dockerfile.offline",
+        "-t",
+        "v5-swe-offline-verifier:sympy__sympy-13878",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts"
+      ],
+      "required_validation": "Record immutable official digest and derived SHA; base layers/HEAD must match; no /tests or /solution; uv0.7.13 mini2.2.8; run synthetic parser pass and fail network none; instructions/config/test-prefix+suffix remain frozen. First unseen base must pass before serializing remainder."
+    },
+    {
+      "task": "pydata__xarray-6992",
+      "pull_after_authorization_only": [
+        "docker",
+        "pull",
+        "swebench/sweb.eval.x86_64.pydata_1776_xarray-6992:latest"
+      ],
+      "offline_build_after_pull": [
+        "docker",
+        "build",
+        "--network",
+        "none",
+        "--pull=false",
+        "--build-arg",
+        "OFFICIAL_IMAGE=swebench/sweb.eval.x86_64.pydata_1776_xarray-6992:latest",
+        "-f",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/Dockerfile.offline",
+        "-t",
+        "v5-swe-offline-verifier:pydata__xarray-6992",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts"
+      ],
+      "required_validation": "Record immutable official digest and derived SHA; base layers/HEAD must match; no /tests or /solution; uv0.7.13 mini2.2.8; run synthetic parser pass and fail network none; instructions/config/test-prefix+suffix remain frozen. First unseen base must pass before serializing remainder."
+    },
+    {
+      "task": "sphinx-doc__sphinx-7590",
+      "pull_after_authorization_only": [
+        "docker",
+        "pull",
+        "swebench/sweb.eval.x86_64.sphinx-doc_1776_sphinx-7590:latest"
+      ],
+      "offline_build_after_pull": [
+        "docker",
+        "build",
+        "--network",
+        "none",
+        "--pull=false",
+        "--build-arg",
+        "OFFICIAL_IMAGE=swebench/sweb.eval.x86_64.sphinx-doc_1776_sphinx-7590:latest",
+        "-f",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/Dockerfile.offline",
+        "-t",
+        "v5-swe-offline-verifier:sphinx-doc__sphinx-7590",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts"
+      ],
+      "required_validation": "Record immutable official digest and derived SHA; base layers/HEAD must match; no /tests or /solution; uv0.7.13 mini2.2.8; run synthetic parser pass and fail network none; instructions/config/test-prefix+suffix remain frozen. First unseen base must pass before serializing remainder."
+    },
+    {
+      "task": "pytest-dev__pytest-7521",
+      "pull_after_authorization_only": [
+        "docker",
+        "pull",
+        "swebench/sweb.eval.x86_64.pytest-dev_1776_pytest-7521:latest"
+      ],
+      "offline_build_after_pull": [
+        "docker",
+        "build",
+        "--network",
+        "none",
+        "--pull=false",
+        "--build-arg",
+        "OFFICIAL_IMAGE=swebench/sweb.eval.x86_64.pytest-dev_1776_pytest-7521:latest",
+        "-f",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/Dockerfile.offline",
+        "-t",
+        "v5-swe-offline-verifier:pytest-dev__pytest-7521",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts"
+      ],
+      "required_validation": "Record immutable official digest and derived SHA; base layers/HEAD must match; no /tests or /solution; uv0.7.13 mini2.2.8; run synthetic parser pass and fail network none; instructions/config/test-prefix+suffix remain frozen. First unseen base must pass before serializing remainder."
+    },
+    {
+      "task": "pylint-dev__pylint-4551",
+      "pull_after_authorization_only": [
+        "docker",
+        "pull",
+        "swebench/sweb.eval.x86_64.pylint-dev_1776_pylint-4551:latest"
+      ],
+      "offline_build_after_pull": [
+        "docker",
+        "build",
+        "--network",
+        "none",
+        "--pull=false",
+        "--build-arg",
+        "OFFICIAL_IMAGE=swebench/sweb.eval.x86_64.pylint-dev_1776_pylint-4551:latest",
+        "-f",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/Dockerfile.offline",
+        "-t",
+        "v5-swe-offline-verifier:pylint-dev__pylint-4551",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts"
+      ],
+      "required_validation": "Record immutable official digest and derived SHA; base layers/HEAD must match; no /tests or /solution; uv0.7.13 mini2.2.8; run synthetic parser pass and fail network none; instructions/config/test-prefix+suffix remain frozen. First unseen base must pass before serializing remainder."
+    },
+    {
+      "task": "scikit-learn__scikit-learn-10908",
+      "pull_after_authorization_only": [
+        "docker",
+        "pull",
+        "swebench/sweb.eval.x86_64.scikit-learn_1776_scikit-learn-10908:latest"
+      ],
+      "offline_build_after_pull": [
+        "docker",
+        "build",
+        "--network",
+        "none",
+        "--pull=false",
+        "--build-arg",
+        "OFFICIAL_IMAGE=swebench/sweb.eval.x86_64.scikit-learn_1776_scikit-learn-10908:latest",
+        "-f",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/Dockerfile.offline",
+        "-t",
+        "v5-swe-offline-verifier:scikit-learn__scikit-learn-10908",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts"
+      ],
+      "required_validation": "Record immutable official digest and derived SHA; base layers/HEAD must match; no /tests or /solution; uv0.7.13 mini2.2.8; run synthetic parser pass and fail network none; instructions/config/test-prefix+suffix remain frozen. First unseen base must pass before serializing remainder."
+    },
+    {
+      "task": "psf__requests-2317",
+      "pull_after_authorization_only": [
+        "docker",
+        "pull",
+        "swebench/sweb.eval.x86_64.psf_1776_requests-2317:latest"
+      ],
+      "offline_build_after_pull": [
+        "docker",
+        "build",
+        "--network",
+        "none",
+        "--pull=false",
+        "--build-arg",
+        "OFFICIAL_IMAGE=swebench/sweb.eval.x86_64.psf_1776_requests-2317:latest",
+        "-f",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/Dockerfile.offline",
+        "-t",
+        "v5-swe-offline-verifier:psf__requests-2317",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts"
+      ],
+      "required_validation": "Record immutable official digest and derived SHA; base layers/HEAD must match; no /tests or /solution; uv0.7.13 mini2.2.8; run synthetic parser pass and fail network none; instructions/config/test-prefix+suffix remain frozen. First unseen base must pass before serializing remainder."
+    },
+    {
+      "task": "django__django-16950",
+      "pull_after_authorization_only": [
+        "docker",
+        "pull",
+        "swebench/sweb.eval.x86_64.django_1776_django-16950:latest"
+      ],
+      "offline_build_after_pull": [
+        "docker",
+        "build",
+        "--network",
+        "none",
+        "--pull=false",
+        "--build-arg",
+        "OFFICIAL_IMAGE=swebench/sweb.eval.x86_64.django_1776_django-16950:latest",
+        "-f",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/Dockerfile.offline",
+        "-t",
+        "v5-swe-offline-verifier:django__django-16950",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts"
+      ],
+      "required_validation": "Record immutable official digest and derived SHA; base layers/HEAD must match; no /tests or /solution; uv0.7.13 mini2.2.8; run synthetic parser pass and fail network none; instructions/config/test-prefix+suffix remain frozen. First unseen base must pass before serializing remainder."
+    },
+    {
+      "task": "matplotlib__matplotlib-26291",
+      "pull_after_authorization_only": [
+        "docker",
+        "pull",
+        "swebench/sweb.eval.x86_64.matplotlib_1776_matplotlib-26291:latest"
+      ],
+      "offline_build_after_pull": [
+        "docker",
+        "build",
+        "--network",
+        "none",
+        "--pull=false",
+        "--build-arg",
+        "OFFICIAL_IMAGE=swebench/sweb.eval.x86_64.matplotlib_1776_matplotlib-26291:latest",
+        "-f",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/Dockerfile.offline",
+        "-t",
+        "v5-swe-offline-verifier:matplotlib__matplotlib-26291",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts"
+      ],
+      "required_validation": "Record immutable official digest and derived SHA; base layers/HEAD must match; no /tests or /solution; uv0.7.13 mini2.2.8; run synthetic parser pass and fail network none; instructions/config/test-prefix+suffix remain frozen. First unseen base must pass before serializing remainder."
+    },
+    {
+      "task": "astropy__astropy-14598",
+      "pull_after_authorization_only": [
+        "docker",
+        "pull",
+        "swebench/sweb.eval.x86_64.astropy_1776_astropy-14598:latest"
+      ],
+      "offline_build_after_pull": [
+        "docker",
+        "build",
+        "--network",
+        "none",
+        "--pull=false",
+        "--build-arg",
+        "OFFICIAL_IMAGE=swebench/sweb.eval.x86_64.astropy_1776_astropy-14598:latest",
+        "-f",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/Dockerfile.offline",
+        "-t",
+        "v5-swe-offline-verifier:astropy__astropy-14598",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts"
+      ],
+      "required_validation": "Record immutable official digest and derived SHA; base layers/HEAD must match; no /tests or /solution; uv0.7.13 mini2.2.8; run synthetic parser pass and fail network none; instructions/config/test-prefix+suffix remain frozen. First unseen base must pass before serializing remainder."
+    },
+    {
+      "task": "pytest-dev__pytest-7571",
+      "pull_after_authorization_only": [
+        "docker",
+        "pull",
+        "swebench/sweb.eval.x86_64.pytest-dev_1776_pytest-7571:latest"
+      ],
+      "offline_build_after_pull": [
+        "docker",
+        "build",
+        "--network",
+        "none",
+        "--pull=false",
+        "--build-arg",
+        "OFFICIAL_IMAGE=swebench/sweb.eval.x86_64.pytest-dev_1776_pytest-7571:latest",
+        "-f",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/Dockerfile.offline",
+        "-t",
+        "v5-swe-offline-verifier:pytest-dev__pytest-7571",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts"
+      ],
+      "required_validation": "Record immutable official digest and derived SHA; base layers/HEAD must match; no /tests or /solution; uv0.7.13 mini2.2.8; run synthetic parser pass and fail network none; instructions/config/test-prefix+suffix remain frozen. First unseen base must pass before serializing remainder."
+    },
+    {
+      "task": "sympy__sympy-18763",
+      "pull_after_authorization_only": [
+        "docker",
+        "pull",
+        "swebench/sweb.eval.x86_64.sympy_1776_sympy-18763:latest"
+      ],
+      "offline_build_after_pull": [
+        "docker",
+        "build",
+        "--network",
+        "none",
+        "--pull=false",
+        "--build-arg",
+        "OFFICIAL_IMAGE=swebench/sweb.eval.x86_64.sympy_1776_sympy-18763:latest",
+        "-f",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/Dockerfile.offline",
+        "-t",
+        "v5-swe-offline-verifier:sympy__sympy-18763",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts"
+      ],
+      "required_validation": "Record immutable official digest and derived SHA; base layers/HEAD must match; no /tests or /solution; uv0.7.13 mini2.2.8; run synthetic parser pass and fail network none; instructions/config/test-prefix+suffix remain frozen. First unseen base must pass before serializing remainder."
+    },
+    {
+      "task": "pylint-dev__pylint-4970",
+      "pull_after_authorization_only": [
+        "docker",
+        "pull",
+        "swebench/sweb.eval.x86_64.pylint-dev_1776_pylint-4970:latest"
+      ],
+      "offline_build_after_pull": [
+        "docker",
+        "build",
+        "--network",
+        "none",
+        "--pull=false",
+        "--build-arg",
+        "OFFICIAL_IMAGE=swebench/sweb.eval.x86_64.pylint-dev_1776_pylint-4970:latest",
+        "-f",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/Dockerfile.offline",
+        "-t",
+        "v5-swe-offline-verifier:pylint-dev__pylint-4970",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts"
+      ],
+      "required_validation": "Record immutable official digest and derived SHA; base layers/HEAD must match; no /tests or /solution; uv0.7.13 mini2.2.8; run synthetic parser pass and fail network none; instructions/config/test-prefix+suffix remain frozen. First unseen base must pass before serializing remainder."
+    },
+    {
+      "task": "scikit-learn__scikit-learn-13328",
+      "pull_after_authorization_only": [
+        "docker",
+        "pull",
+        "swebench/sweb.eval.x86_64.scikit-learn_1776_scikit-learn-13328:latest"
+      ],
+      "offline_build_after_pull": [
+        "docker",
+        "build",
+        "--network",
+        "none",
+        "--pull=false",
+        "--build-arg",
+        "OFFICIAL_IMAGE=swebench/sweb.eval.x86_64.scikit-learn_1776_scikit-learn-13328:latest",
+        "-f",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/Dockerfile.offline",
+        "-t",
+        "v5-swe-offline-verifier:scikit-learn__scikit-learn-13328",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts"
+      ],
+      "required_validation": "Record immutable official digest and derived SHA; base layers/HEAD must match; no /tests or /solution; uv0.7.13 mini2.2.8; run synthetic parser pass and fail network none; instructions/config/test-prefix+suffix remain frozen. First unseen base must pass before serializing remainder."
+    },
+    {
+      "task": "django__django-14999",
+      "pull_after_authorization_only": [
+        "docker",
+        "pull",
+        "swebench/sweb.eval.x86_64.django_1776_django-14999:latest"
+      ],
+      "offline_build_after_pull": [
+        "docker",
+        "build",
+        "--network",
+        "none",
+        "--pull=false",
+        "--build-arg",
+        "OFFICIAL_IMAGE=swebench/sweb.eval.x86_64.django_1776_django-14999:latest",
+        "-f",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/Dockerfile.offline",
+        "-t",
+        "v5-swe-offline-verifier:django__django-14999",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts"
+      ],
+      "required_validation": "Record immutable official digest and derived SHA; base layers/HEAD must match; no /tests or /solution; uv0.7.13 mini2.2.8; run synthetic parser pass and fail network none; instructions/config/test-prefix+suffix remain frozen. First unseen base must pass before serializing remainder."
+    },
+    {
+      "task": "pydata__xarray-6461",
+      "pull_after_authorization_only": [
+        "docker",
+        "pull",
+        "swebench/sweb.eval.x86_64.pydata_1776_xarray-6461:latest"
+      ],
+      "offline_build_after_pull": [
+        "docker",
+        "build",
+        "--network",
+        "none",
+        "--pull=false",
+        "--build-arg",
+        "OFFICIAL_IMAGE=swebench/sweb.eval.x86_64.pydata_1776_xarray-6461:latest",
+        "-f",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/Dockerfile.offline",
+        "-t",
+        "v5-swe-offline-verifier:pydata__xarray-6461",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts"
+      ],
+      "required_validation": "Record immutable official digest and derived SHA; base layers/HEAD must match; no /tests or /solution; uv0.7.13 mini2.2.8; run synthetic parser pass and fail network none; instructions/config/test-prefix+suffix remain frozen. First unseen base must pass before serializing remainder."
+    },
+    {
+      "task": "astropy__astropy-14309",
+      "pull_after_authorization_only": [
+        "docker",
+        "pull",
+        "swebench/sweb.eval.x86_64.astropy_1776_astropy-14309:latest"
+      ],
+      "offline_build_after_pull": [
+        "docker",
+        "build",
+        "--network",
+        "none",
+        "--pull=false",
+        "--build-arg",
+        "OFFICIAL_IMAGE=swebench/sweb.eval.x86_64.astropy_1776_astropy-14309:latest",
+        "-f",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/Dockerfile.offline",
+        "-t",
+        "v5-swe-offline-verifier:astropy__astropy-14309",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts"
+      ],
+      "required_validation": "Record immutable official digest and derived SHA; base layers/HEAD must match; no /tests or /solution; uv0.7.13 mini2.2.8; run synthetic parser pass and fail network none; instructions/config/test-prefix+suffix remain frozen. First unseen base must pass before serializing remainder."
+    },
+    {
+      "task": "sphinx-doc__sphinx-8638",
+      "pull_after_authorization_only": [
+        "docker",
+        "pull",
+        "swebench/sweb.eval.x86_64.sphinx-doc_1776_sphinx-8638:latest"
+      ],
+      "offline_build_after_pull": [
+        "docker",
+        "build",
+        "--network",
+        "none",
+        "--pull=false",
+        "--build-arg",
+        "OFFICIAL_IMAGE=swebench/sweb.eval.x86_64.sphinx-doc_1776_sphinx-8638:latest",
+        "-f",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/Dockerfile.offline",
+        "-t",
+        "v5-swe-offline-verifier:sphinx-doc__sphinx-8638",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts"
+      ],
+      "required_validation": "Record immutable official digest and derived SHA; base layers/HEAD must match; no /tests or /solution; uv0.7.13 mini2.2.8; run synthetic parser pass and fail network none; instructions/config/test-prefix+suffix remain frozen. First unseen base must pass before serializing remainder."
+    },
+    {
+      "task": "psf__requests-1921",
+      "pull_after_authorization_only": [
+        "docker",
+        "pull",
+        "swebench/sweb.eval.x86_64.psf_1776_requests-1921:latest"
+      ],
+      "offline_build_after_pull": [
+        "docker",
+        "build",
+        "--network",
+        "none",
+        "--pull=false",
+        "--build-arg",
+        "OFFICIAL_IMAGE=swebench/sweb.eval.x86_64.psf_1776_requests-1921:latest",
+        "-f",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/Dockerfile.offline",
+        "-t",
+        "v5-swe-offline-verifier:psf__requests-1921",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts"
+      ],
+      "required_validation": "Record immutable official digest and derived SHA; base layers/HEAD must match; no /tests or /solution; uv0.7.13 mini2.2.8; run synthetic parser pass and fail network none; instructions/config/test-prefix+suffix remain frozen. First unseen base must pass before serializing remainder."
+    },
+    {
+      "task": "matplotlib__matplotlib-26208",
+      "pull_after_authorization_only": [
+        "docker",
+        "pull",
+        "swebench/sweb.eval.x86_64.matplotlib_1776_matplotlib-26208:latest"
+      ],
+      "offline_build_after_pull": [
+        "docker",
+        "build",
+        "--network",
+        "none",
+        "--pull=false",
+        "--build-arg",
+        "OFFICIAL_IMAGE=swebench/sweb.eval.x86_64.matplotlib_1776_matplotlib-26208:latest",
+        "-f",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/Dockerfile.offline",
+        "-t",
+        "v5-swe-offline-verifier:matplotlib__matplotlib-26208",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts"
+      ],
+      "required_validation": "Record immutable official digest and derived SHA; base layers/HEAD must match; no /tests or /solution; uv0.7.13 mini2.2.8; run synthetic parser pass and fail network none; instructions/config/test-prefix+suffix remain frozen. First unseen base must pass before serializing remainder."
+    },
+    {
+      "task": "pytest-dev__pytest-10356",
+      "pull_after_authorization_only": [
+        "docker",
+        "pull",
+        "swebench/sweb.eval.x86_64.pytest-dev_1776_pytest-10356:latest"
+      ],
+      "offline_build_after_pull": [
+        "docker",
+        "build",
+        "--network",
+        "none",
+        "--pull=false",
+        "--build-arg",
+        "OFFICIAL_IMAGE=swebench/sweb.eval.x86_64.pytest-dev_1776_pytest-10356:latest",
+        "-f",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/Dockerfile.offline",
+        "-t",
+        "v5-swe-offline-verifier:pytest-dev__pytest-10356",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts"
+      ],
+      "required_validation": "Record immutable official digest and derived SHA; base layers/HEAD must match; no /tests or /solution; uv0.7.13 mini2.2.8; run synthetic parser pass and fail network none; instructions/config/test-prefix+suffix remain frozen. First unseen base must pass before serializing remainder."
+    },
+    {
+      "task": "sympy__sympy-13091",
+      "pull_after_authorization_only": [
+        "docker",
+        "pull",
+        "swebench/sweb.eval.x86_64.sympy_1776_sympy-13091:latest"
+      ],
+      "offline_build_after_pull": [
+        "docker",
+        "build",
+        "--network",
+        "none",
+        "--pull=false",
+        "--build-arg",
+        "OFFICIAL_IMAGE=swebench/sweb.eval.x86_64.sympy_1776_sympy-13091:latest",
+        "-f",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/Dockerfile.offline",
+        "-t",
+        "v5-swe-offline-verifier:sympy__sympy-13091",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts"
+      ],
+      "required_validation": "Record immutable official digest and derived SHA; base layers/HEAD must match; no /tests or /solution; uv0.7.13 mini2.2.8; run synthetic parser pass and fail network none; instructions/config/test-prefix+suffix remain frozen. First unseen base must pass before serializing remainder."
+    },
+    {
+      "task": "pylint-dev__pylint-4661",
+      "pull_after_authorization_only": [
+        "docker",
+        "pull",
+        "swebench/sweb.eval.x86_64.pylint-dev_1776_pylint-4661:latest"
+      ],
+      "offline_build_after_pull": [
+        "docker",
+        "build",
+        "--network",
+        "none",
+        "--pull=false",
+        "--build-arg",
+        "OFFICIAL_IMAGE=swebench/sweb.eval.x86_64.pylint-dev_1776_pylint-4661:latest",
+        "-f",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/Dockerfile.offline",
+        "-t",
+        "v5-swe-offline-verifier:pylint-dev__pylint-4661",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts"
+      ],
+      "required_validation": "Record immutable official digest and derived SHA; base layers/HEAD must match; no /tests or /solution; uv0.7.13 mini2.2.8; run synthetic parser pass and fail network none; instructions/config/test-prefix+suffix remain frozen. First unseen base must pass before serializing remainder."
+    },
+    {
+      "task": "django__django-14007",
+      "pull_after_authorization_only": [
+        "docker",
+        "pull",
+        "swebench/sweb.eval.x86_64.django_1776_django-14007:latest"
+      ],
+      "offline_build_after_pull": [
+        "docker",
+        "build",
+        "--network",
+        "none",
+        "--pull=false",
+        "--build-arg",
+        "OFFICIAL_IMAGE=swebench/sweb.eval.x86_64.django_1776_django-14007:latest",
+        "-f",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/Dockerfile.offline",
+        "-t",
+        "v5-swe-offline-verifier:django__django-14007",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts"
+      ],
+      "required_validation": "Record immutable official digest and derived SHA; base layers/HEAD must match; no /tests or /solution; uv0.7.13 mini2.2.8; run synthetic parser pass and fail network none; instructions/config/test-prefix+suffix remain frozen. First unseen base must pass before serializing remainder."
+    },
+    {
+      "task": "pydata__xarray-7233",
+      "pull_after_authorization_only": [
+        "docker",
+        "pull",
+        "swebench/sweb.eval.x86_64.pydata_1776_xarray-7233:latest"
+      ],
+      "offline_build_after_pull": [
+        "docker",
+        "build",
+        "--network",
+        "none",
+        "--pull=false",
+        "--build-arg",
+        "OFFICIAL_IMAGE=swebench/sweb.eval.x86_64.pydata_1776_xarray-7233:latest",
+        "-f",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/Dockerfile.offline",
+        "-t",
+        "v5-swe-offline-verifier:pydata__xarray-7233",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts"
+      ],
+      "required_validation": "Record immutable official digest and derived SHA; base layers/HEAD must match; no /tests or /solution; uv0.7.13 mini2.2.8; run synthetic parser pass and fail network none; instructions/config/test-prefix+suffix remain frozen. First unseen base must pass before serializing remainder."
+    },
+    {
+      "task": "astropy__astropy-13398",
+      "pull_after_authorization_only": [
+        "docker",
+        "pull",
+        "swebench/sweb.eval.x86_64.astropy_1776_astropy-13398:latest"
+      ],
+      "offline_build_after_pull": [
+        "docker",
+        "build",
+        "--network",
+        "none",
+        "--pull=false",
+        "--build-arg",
+        "OFFICIAL_IMAGE=swebench/sweb.eval.x86_64.astropy_1776_astropy-13398:latest",
+        "-f",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/Dockerfile.offline",
+        "-t",
+        "v5-swe-offline-verifier:astropy__astropy-13398",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts"
+      ],
+      "required_validation": "Record immutable official digest and derived SHA; base layers/HEAD must match; no /tests or /solution; uv0.7.13 mini2.2.8; run synthetic parser pass and fail network none; instructions/config/test-prefix+suffix remain frozen. First unseen base must pass before serializing remainder."
+    },
+    {
+      "task": "sphinx-doc__sphinx-10323",
+      "pull_after_authorization_only": [
+        "docker",
+        "pull",
+        "swebench/sweb.eval.x86_64.sphinx-doc_1776_sphinx-10323:latest"
+      ],
+      "offline_build_after_pull": [
+        "docker",
+        "build",
+        "--network",
+        "none",
+        "--pull=false",
+        "--build-arg",
+        "OFFICIAL_IMAGE=swebench/sweb.eval.x86_64.sphinx-doc_1776_sphinx-10323:latest",
+        "-f",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/Dockerfile.offline",
+        "-t",
+        "v5-swe-offline-verifier:sphinx-doc__sphinx-10323",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts"
+      ],
+      "required_validation": "Record immutable official digest and derived SHA; base layers/HEAD must match; no /tests or /solution; uv0.7.13 mini2.2.8; run synthetic parser pass and fail network none; instructions/config/test-prefix+suffix remain frozen. First unseen base must pass before serializing remainder."
+    },
+    {
+      "task": "scikit-learn__scikit-learn-25747",
+      "pull_after_authorization_only": [
+        "docker",
+        "pull",
+        "swebench/sweb.eval.x86_64.scikit-learn_1776_scikit-learn-25747:latest"
+      ],
+      "offline_build_after_pull": [
+        "docker",
+        "build",
+        "--network",
+        "none",
+        "--pull=false",
+        "--build-arg",
+        "OFFICIAL_IMAGE=swebench/sweb.eval.x86_64.scikit-learn_1776_scikit-learn-25747:latest",
+        "-f",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/Dockerfile.offline",
+        "-t",
+        "v5-swe-offline-verifier:scikit-learn__scikit-learn-25747",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts"
+      ],
+      "required_validation": "Record immutable official digest and derived SHA; base layers/HEAD must match; no /tests or /solution; uv0.7.13 mini2.2.8; run synthetic parser pass and fail network none; instructions/config/test-prefix+suffix remain frozen. First unseen base must pass before serializing remainder."
+    },
+    {
+      "task": "matplotlib__matplotlib-23412",
+      "pull_after_authorization_only": [
+        "docker",
+        "pull",
+        "swebench/sweb.eval.x86_64.matplotlib_1776_matplotlib-23412:latest"
+      ],
+      "offline_build_after_pull": [
+        "docker",
+        "build",
+        "--network",
+        "none",
+        "--pull=false",
+        "--build-arg",
+        "OFFICIAL_IMAGE=swebench/sweb.eval.x86_64.matplotlib_1776_matplotlib-23412:latest",
+        "-f",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/Dockerfile.offline",
+        "-t",
+        "v5-swe-offline-verifier:matplotlib__matplotlib-23412",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts"
+      ],
+      "required_validation": "Record immutable official digest and derived SHA; base layers/HEAD must match; no /tests or /solution; uv0.7.13 mini2.2.8; run synthetic parser pass and fail network none; instructions/config/test-prefix+suffix remain frozen. First unseen base must pass before serializing remainder."
+    },
+    {
+      "task": "psf__requests-1724",
+      "pull_after_authorization_only": [
+        "docker",
+        "pull",
+        "swebench/sweb.eval.x86_64.psf_1776_requests-1724:latest"
+      ],
+      "offline_build_after_pull": [
+        "docker",
+        "build",
+        "--network",
+        "none",
+        "--pull=false",
+        "--build-arg",
+        "OFFICIAL_IMAGE=swebench/sweb.eval.x86_64.psf_1776_requests-1724:latest",
+        "-f",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/Dockerfile.offline",
+        "-t",
+        "v5-swe-offline-verifier:psf__requests-1724",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts"
+      ],
+      "required_validation": "Record immutable official digest and derived SHA; base layers/HEAD must match; no /tests or /solution; uv0.7.13 mini2.2.8; run synthetic parser pass and fail network none; instructions/config/test-prefix+suffix remain frozen. First unseen base must pass before serializing remainder."
+    },
+    {
+      "task": "sympy__sympy-12489",
+      "pull_after_authorization_only": [
+        "docker",
+        "pull",
+        "swebench/sweb.eval.x86_64.sympy_1776_sympy-12489:latest"
+      ],
+      "offline_build_after_pull": [
+        "docker",
+        "build",
+        "--network",
+        "none",
+        "--pull=false",
+        "--build-arg",
+        "OFFICIAL_IMAGE=swebench/sweb.eval.x86_64.sympy_1776_sympy-12489:latest",
+        "-f",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/Dockerfile.offline",
+        "-t",
+        "v5-swe-offline-verifier:sympy__sympy-12489",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts"
+      ],
+      "required_validation": "Record immutable official digest and derived SHA; base layers/HEAD must match; no /tests or /solution; uv0.7.13 mini2.2.8; run synthetic parser pass and fail network none; instructions/config/test-prefix+suffix remain frozen. First unseen base must pass before serializing remainder."
+    },
+    {
+      "task": "sphinx-doc__sphinx-9461",
+      "pull_after_authorization_only": [
+        "docker",
+        "pull",
+        "swebench/sweb.eval.x86_64.sphinx-doc_1776_sphinx-9461:latest"
+      ],
+      "offline_build_after_pull": [
+        "docker",
+        "build",
+        "--network",
+        "none",
+        "--pull=false",
+        "--build-arg",
+        "OFFICIAL_IMAGE=swebench/sweb.eval.x86_64.sphinx-doc_1776_sphinx-9461:latest",
+        "-f",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe65-candidate/Dockerfile.offline",
+        "-t",
+        "v5-swe-offline-verifier:sphinx-doc__sphinx-9461",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts"
+      ],
+      "required_validation": "Record immutable official digest and derived SHA; base layers/HEAD must match; no /tests or /solution; uv0.7.13 mini2.2.8; run synthetic parser pass and fail network none; instructions/config/test-prefix+suffix remain frozen. First unseen base must pass before serializing remainder."
+    }
+  ],
+  "execution_policy": "Sequential, bounded240s build after complete local pull; do not start until parent authorizes after CPU HF controls. Do not run preserved original Dockerfile installer since it downloads from astral; use explicitly recorded local dependency image selection.",
+  "source_template_generic_fix": "e98973d132ec705baa4f59ca62680587ef5281a9",
+  "runtime_harbor_unchanged": "e76c762fca5267dfb36e1f900f0a7724ed72e735"
+}

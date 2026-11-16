@@ -1,0 +1,247 @@
+{
+  "rows": [
+    {
+      "job": "anomaly.sympy__sympy-14711.call1.onset",
+      "mode": "full",
+      "seed": 42,
+      "verdict": "normal",
+      "evidence": "Decoded fixture $.prompt_token_ids ends with “Let's reproduce this.”; native $.continuations.chosen begins with a normal reproduction-script plan and bash tool. Generated $.free_running[0].text begins with a reproduction script and valid structured bash command (e.g. '<channel|>I will start by creating a reproduction script to confirm the issue.\\n\\n<channel|><|tool_call>call:bash{command:<|\"|>cat <<\\'EOF\\' > reproduce_issue.py\\nfrom sympy.physics.vec'); no stray literal thought/GetAll motif after conditioning.",
+      "confidence": 0.92,
+      "cap_notes": "Below requested cap (139/256 or 135/256); tool response boundary closes the generated command."
+    },
+    {
+      "job": "anomaly.sympy__sympy-14711.call1.onset",
+      "mode": "full",
+      "seed": 43,
+      "verdict": "normal",
+      "evidence": "Decoded fixture $.prompt_token_ids ends with “Let's reproduce this.”; native $.continuations.chosen begins with a normal reproduction-script plan and bash tool. Generated $.free_running[1].text begins with a reproduction script and valid structured bash command (e.g. '<channel|>I will start by creating a reproduction script to confirm the issue.\\n\\n<channel|><|tool_call>call:bash{command:<|\"|>cat <<\\'EOF\\' > reproduce_issue.py\\nfrom sympy.physics.vec'); no stray literal thought/GetAll motif after conditioning.",
+      "confidence": 0.92,
+      "cap_notes": "Below requested cap (139/256 or 135/256); tool response boundary closes the generated command."
+    },
+    {
+      "job": "anomaly.sympy__sympy-14711.call1.onset",
+      "mode": "full",
+      "seed": 44,
+      "verdict": "normal",
+      "evidence": "Decoded fixture $.prompt_token_ids ends with “Let's reproduce this.”; native $.continuations.chosen begins with a normal reproduction-script plan and bash tool. Generated $.free_running[2].text begins with a reproduction script and valid structured bash command (e.g. '<channel|>I will start by creating a reproduction script to confirm the issue.\\n\\n<channel|><|tool_call>call:bash{command:<|\"|>cat <<\\'EOF\\' > reproduce_issue.py\\nfrom sympy.physics.vec'); no stray literal thought/GetAll motif after conditioning.",
+      "confidence": 0.92,
+      "cap_notes": "Below requested cap (139/256 or 135/256); tool response boundary closes the generated command."
+    },
+    {
+      "job": "anomaly.xarray7233-call1.canonicalprefix",
+      "mode": "full",
+      "seed": 42,
+      "verdict": "inconclusive",
+      "evidence": "Decoded fixture $.prompt_token_ids ends after the instruction to reproduce and a request to create a script; native $.continuations.chosen starts the expected reproduce_issue.py bash command. Generated $.free_running[0].text starts with that same script and a coarsen/construct check (e.g. '<|channel>thought\\n<channel|><|tool_call>call:bash{command:<|\"|>cat <<\\'EOF\\' > reproduce_issue.py\\nimport xarray as xr\\nimport numpy as np\\n\\nda = xr.DataArray(np.arange(24), dims=[\"time'), with no stray token pattern.",
+      "confidence": 0.72,
+      "cap_notes": "At requested cap 256 in the middle of the script/assertion; progressing, so cap is inconclusive."
+    },
+    {
+      "job": "anomaly.xarray7233-call1.canonicalprefix",
+      "mode": "full",
+      "seed": 43,
+      "verdict": "inconclusive",
+      "evidence": "Decoded fixture $.prompt_token_ids ends after the instruction to reproduce and a request to create a script; native $.continuations.chosen starts the expected reproduce_issue.py bash command. Generated $.free_running[1].text starts with that same script and a coarsen/construct check (e.g. '<channel|><|tool_call>call:bash{command:<|\"|>cat <<\\'EOF\\' > reproduce_issue.py\\nimport xarray as xr\\nimport numpy as np\\n\\nda = xr.DataArray(np.arange(24), dims=[\"time\"])\\nda = da.assign'), with no stray token pattern.",
+      "confidence": 0.72,
+      "cap_notes": "At requested cap 256 in the middle of the script/assertion; progressing, so cap is inconclusive."
+    },
+    {
+      "job": "anomaly.xarray7233-call1.canonicalprefix",
+      "mode": "full",
+      "seed": 44,
+      "verdict": "inconclusive",
+      "evidence": "Decoded fixture $.prompt_token_ids ends after the instruction to reproduce and a request to create a script; native $.continuations.chosen starts the expected reproduce_issue.py bash command. Generated $.free_running[2].text starts with that same script and a coarsen/construct check (e.g. '<|channel>thought\\n<channel|><|tool_call>call:bash{command:<|\"|>cat <<\\'EOF\\' > reproduce_issue.py\\nimport xarray as xr\\nimport numpy as np\\n\\nda = xr.DataArray(np.arange(24), dims=[\"time'), with no stray token pattern.",
+      "confidence": 0.72,
+      "cap_notes": "At requested cap 256 in the middle of the script/assertion; progressing, so cap is inconclusive."
+    },
+    {
+      "job": "anomaly.sympy__sympy-13878.call1.onset",
+      "mode": "full",
+      "seed": 42,
+      "verdict": "normal",
+      "evidence": "Decoded fixture $.prompt_token_ids ends after stating it will search sympy/stats. Native $.continuations.chosen is a bash ls command. Generated $.free_running[0].text is a valid bash discovery command (e.g. '<channel|><|tool_call>call:bash{command:<|\"|>find sympy/stats -name \"*.py\"<|\"|>}<tool_call|><|tool_response>'), a coherent next action; no anomalous repetition.",
+      "confidence": 0.92,
+      "cap_notes": "Below requested cap (19–22/256); tool-call boundary is present and the command is complete."
+    },
+    {
+      "job": "anomaly.sympy__sympy-13878.call1.onset",
+      "mode": "full",
+      "seed": 43,
+      "verdict": "normal",
+      "evidence": "Decoded fixture $.prompt_token_ids ends after stating it will search sympy/stats. Native $.continuations.chosen is a bash ls command. Generated $.free_running[1].text is a valid bash discovery command (e.g. '<|tool_call>call:bash{command:<|\"|>find sympy/stats -name \"*.py\"<|\"|>}<tool_call|><|tool_response>'), a coherent next action; no anomalous repetition.",
+      "confidence": 0.92,
+      "cap_notes": "Below requested cap (19–22/256); tool-call boundary is present and the command is complete."
+    },
+    {
+      "job": "anomaly.sympy__sympy-13878.call1.onset",
+      "mode": "full",
+      "seed": 44,
+      "verdict": "normal",
+      "evidence": "Decoded fixture $.prompt_token_ids ends after stating it will search sympy/stats. Native $.continuations.chosen is a bash ls command. Generated $.free_running[2].text is a valid bash discovery command (e.g. '<channel|><|tool_call>call:bash{command:<|\"|>ls -R sympy/stats<|\"|>}<tool_call|><|tool_response>'), a coherent next action; no anomalous repetition.",
+      "confidence": 0.92,
+      "cap_notes": "Below requested cap (19–22/256); tool-call boundary is present and the command is complete."
+    },
+    {
+      "job": "anomaly.sympy__sympy-18763.call10.onset",
+      "mode": "full",
+      "seed": 42,
+      "verdict": "normal",
+      "evidence": "Decoded fixture $.prompt_token_ids ends after proposing grep for PRECEDENCE and opens a bash call. Native $.continuations.chosen searches the file. Generated $.free_running[0].text contains a valid grep command targeting PRECEDENCE (e.g. '{command:<|\"|>grep \"PRECEDENCE =\" sympy/printing/latex.py\\n<|\"|>}<tool_call|><|tool_response>'), a coherent tool action; no stray token sequence.",
+      "confidence": 0.92,
+      "cap_notes": "Below requested cap (22–23/256); command closes at tool boundary."
+    },
+    {
+      "job": "anomaly.sympy__sympy-18763.call10.onset",
+      "mode": "full",
+      "seed": 43,
+      "verdict": "normal",
+      "evidence": "Decoded fixture $.prompt_token_ids ends after proposing grep for PRECEDENCE and opens a bash call. Native $.continuations.chosen searches the file. Generated $.free_running[1].text contains a valid grep command targeting PRECEDENCE (e.g. '{command:<|\"|>grep \"PRECEDENCE = {\" sympy/printing/latex.py\\n<|\"|>}<tool_call|><|tool_response>'), a coherent tool action; no stray token sequence.",
+      "confidence": 0.92,
+      "cap_notes": "Below requested cap (22–23/256); command closes at tool boundary."
+    },
+    {
+      "job": "anomaly.sympy__sympy-18763.call10.onset",
+      "mode": "full",
+      "seed": 44,
+      "verdict": "normal",
+      "evidence": "Decoded fixture $.prompt_token_ids ends after proposing grep for PRECEDENCE and opens a bash call. Native $.continuations.chosen searches the file. Generated $.free_running[2].text contains a valid grep command targeting PRECEDENCE (e.g. '{command:<|\"|>grep \"PRECEDENCE =\" sympy/printing/latex.py\\n<|\"|>}<tool_call|><|tool_response>'), a coherent tool action; no stray token sequence.",
+      "confidence": 0.92,
+      "cap_notes": "Below requested cap (22–23/256); command closes at tool boundary."
+    },
+    {
+      "job": "anomaly.psf__requests-5414.call10.onset",
+      "mode": "full",
+      "seed": 42,
+      "verdict": "reproduced_native_motif",
+      "evidence": "Index motif is literal repeated carets. Decoded fixture conditioning at $.prompt_token_ids ends before the traceback-tail caret run; native continuation $.continuations.chosen is the caret run. Generated suffix at $.free_running[0].text is a long uninterrupted literal ^ sequence.",
+      "confidence": 0.92,
+      "cap_notes": "At requested cap 256; caret repetition itself is sufficient anomaly evidence."
+    },
+    {
+      "job": "anomaly.psf__requests-5414.call10.onset",
+      "mode": "full",
+      "seed": 43,
+      "verdict": "reproduced_native_motif",
+      "evidence": "Index motif is literal repeated carets. Decoded fixture conditioning at $.prompt_token_ids ends before the traceback-tail caret run; native continuation $.continuations.chosen is the caret run. Generated suffix at $.free_running[1].text is a long uninterrupted literal ^ sequence.",
+      "confidence": 0.92,
+      "cap_notes": "At requested cap 256; caret repetition itself is sufficient anomaly evidence."
+    },
+    {
+      "job": "anomaly.psf__requests-5414.call10.onset",
+      "mode": "full",
+      "seed": 44,
+      "verdict": "reproduced_native_motif",
+      "evidence": "Index motif is literal repeated carets. Decoded fixture conditioning at $.prompt_token_ids ends before the traceback-tail caret run; native continuation $.continuations.chosen is the caret run. Generated suffix at $.free_running[2].text is a long uninterrupted literal ^ sequence.",
+      "confidence": 0.92,
+      "cap_notes": "At requested cap 256; caret repetition itself is sufficient anomaly evidence."
+    },
+    {
+      "job": "anomaly.psf__requests-5414.call11.onset",
+      "mode": "full",
+      "seed": 42,
+      "verdict": "reproduced_native_motif",
+      "evidence": "Index motif is literal repeated carets. Decoded fixture conditioning at $.prompt_token_ids ends before the traceback-tail caret run; native continuation $.continuations.chosen is the caret run. Generated suffix at $.free_running[0].text is a long uninterrupted literal ^ sequence.",
+      "confidence": 0.92,
+      "cap_notes": "At requested cap 256; caret repetition itself is sufficient anomaly evidence."
+    },
+    {
+      "job": "anomaly.psf__requests-5414.call11.onset",
+      "mode": "full",
+      "seed": 43,
+      "verdict": "reproduced_native_motif",
+      "evidence": "Index motif is literal repeated carets. Decoded fixture conditioning at $.prompt_token_ids ends before the traceback-tail caret run; native continuation $.continuations.chosen is the caret run. Generated suffix at $.free_running[1].text is a long uninterrupted literal ^ sequence.",
+      "confidence": 0.92,
+      "cap_notes": "At requested cap 256; caret repetition itself is sufficient anomaly evidence."
+    },
+    {
+      "job": "anomaly.psf__requests-5414.call11.onset",
+      "mode": "full",
+      "seed": 44,
+      "verdict": "reproduced_native_motif",
+      "evidence": "Index motif is literal repeated carets. Decoded fixture conditioning at $.prompt_token_ids ends before the traceback-tail caret run; native continuation $.continuations.chosen is the caret run. Generated suffix at $.free_running[2].text is a long uninterrupted literal ^ sequence.",
+      "confidence": 0.92,
+      "cap_notes": "At requested cap 256; caret repetition itself is sufficient anomaly evidence."
+    },
+    {
+      "job": "anomaly.psf__requests-5414.call9.onset",
+      "mode": "full",
+      "seed": 42,
+      "verdict": "reproduced_native_motif",
+      "evidence": "Index motif is literal repeated carets. Decoded fixture conditioning at $.prompt_token_ids ends before the traceback-tail caret run; native continuation $.continuations.chosen is the caret run. Generated suffix at $.free_running[0].text is a long uninterrupted literal ^ sequence.",
+      "confidence": 0.92,
+      "cap_notes": "At requested cap 256; caret repetition itself is sufficient anomaly evidence."
+    },
+    {
+      "job": "anomaly.psf__requests-5414.call9.onset",
+      "mode": "full",
+      "seed": 43,
+      "verdict": "reproduced_native_motif",
+      "evidence": "Index motif is literal repeated carets. Decoded fixture conditioning at $.prompt_token_ids ends before the traceback-tail caret run; native continuation $.continuations.chosen is the caret run. Generated suffix at $.free_running[1].text is a long uninterrupted literal ^ sequence.",
+      "confidence": 0.92,
+      "cap_notes": "At requested cap 256; caret repetition itself is sufficient anomaly evidence."
+    },
+    {
+      "job": "anomaly.psf__requests-5414.call9.onset",
+      "mode": "full",
+      "seed": 44,
+      "verdict": "reproduced_native_motif",
+      "evidence": "Index motif is literal repeated carets. Decoded fixture conditioning at $.prompt_token_ids ends before the traceback-tail caret run; native continuation $.continuations.chosen is the caret run. Generated suffix at $.free_running[2].text is a long uninterrupted literal ^ sequence.",
+      "confidence": 0.92,
+      "cap_notes": "At requested cap 256; caret repetition itself is sufficient anomaly evidence."
+    },
+    {
+      "job": "anomaly.requests2931.call20.canonicalprefix",
+      "mode": "full",
+      "seed": 42,
+      "verdict": "other_anomaly",
+      "evidence": "Decoded fixture $.prompt_token_ids ends inside traceback indentation; native $.continuations.chosen is capped caret repetition. Generated $.free_running[0].text begins with a caret burst (e.g. '^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^') but then advances coherently through traceback frames (requests/api.py:53, sessions.py:454, models.py:296), so it is anomalous stray repetition followed by progress, not a sustained native caret loop.",
+      "confidence": 0.92,
+      "cap_notes": "At requested cap 256 while traceback continues; cap_notes preserve that progress and avoid inferring a loop."
+    },
+    {
+      "job": "anomaly.requests2931.call20.canonicalprefix",
+      "mode": "full",
+      "seed": 43,
+      "verdict": "other_anomaly",
+      "evidence": "Decoded fixture $.prompt_token_ids ends inside traceback indentation; native $.continuations.chosen is capped caret repetition. Generated $.free_running[1].text begins with a caret burst (e.g. '^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^') but then advances coherently through traceback frames (requests/api.py:53, sessions.py:454, models.py:296), so it is anomalous stray repetition followed by progress, not a sustained native caret loop.",
+      "confidence": 0.92,
+      "cap_notes": "At requested cap 256 while traceback continues; cap_notes preserve that progress and avoid inferring a loop."
+    },
+    {
+      "job": "anomaly.requests2931.call20.canonicalprefix",
+      "mode": "full",
+      "seed": 44,
+      "verdict": "other_anomaly",
+      "evidence": "Decoded fixture $.prompt_token_ids ends inside traceback indentation; native $.continuations.chosen is capped caret repetition. Generated $.free_running[2].text begins with a caret burst (e.g. '^^^\\n  File \"/testbed/requests/') but then advances coherently through traceback frames (requests/api.py:53, sessions.py:454, models.py:296), so it is anomalous stray repetition followed by progress, not a sustained native caret loop.",
+      "confidence": 0.92,
+      "cap_notes": "At requested cap 256 while traceback continues; cap_notes preserve that progress and avoid inferring a loop."
+    },
+    {
+      "job": "anomaly.pytest-dev__pytest-5787.call1.onset",
+      "mode": "full",
+      "seed": 42,
+      "verdict": "normal",
+      "evidence": "Decoded fixture $.prompt_token_ids ends after asking to understand the project structure; native $.continuations.chosen starts with malformed GetAll-bash / markdown examples before a bash command. Generated $.free_running[0].text is a valid structured bash ls -R call (e.g. '<|tool_call>call:bash{command:<|\"|>ls -R<|\"|>}<tool_call|><|tool_response>'); no GetAll-bash or pseudo-call text in generated suffix.",
+      "confidence": 0.92,
+      "cap_notes": "Below requested cap (15/256); complete tool response boundary."
+    },
+    {
+      "job": "anomaly.pytest-dev__pytest-5787.call1.onset",
+      "mode": "full",
+      "seed": 43,
+      "verdict": "normal",
+      "evidence": "Decoded fixture $.prompt_token_ids ends after asking to understand the project structure; native $.continuations.chosen starts with malformed GetAll-bash / markdown examples before a bash command. Generated $.free_running[1].text is a valid structured bash ls -R call (e.g. '<|tool_call>call:bash{command:<|\"|>ls -R<|\"|>}<tool_call|><|tool_response>'); no GetAll-bash or pseudo-call text in generated suffix.",
+      "confidence": 0.92,
+      "cap_notes": "Below requested cap (15/256); complete tool response boundary."
+    },
+    {
+      "job": "anomaly.pytest-dev__pytest-5787.call1.onset",
+      "mode": "full",
+      "seed": 44,
+      "verdict": "normal",
+      "evidence": "Decoded fixture $.prompt_token_ids ends after asking to understand the project structure; native $.continuations.chosen starts with malformed GetAll-bash / markdown examples before a bash command. Generated $.free_running[2].text is a valid structured bash ls -R call (e.g. '<|tool_call>call:bash{command:<|\"|>ls -R<|\"|>}<tool_call|><|tool_response>'); no GetAll-bash or pseudo-call text in generated suffix.",
+      "confidence": 0.92,
+      "cap_notes": "Below requested cap (15/256); complete tool response boundary."
+    }
+  ]
+}

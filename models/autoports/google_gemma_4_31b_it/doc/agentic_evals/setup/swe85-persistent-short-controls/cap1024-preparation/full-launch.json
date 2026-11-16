@@ -1,0 +1,35 @@
+{
+  "name": "full",
+  "command": [
+    "timeout",
+    "3600",
+    "env",
+    "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+    "READINESS_TRACE_REGION_SIZE=134217728",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+    "-m",
+    "models.autoports.google_gemma_4_31b_it.tools.precision_repro_batch",
+    "--cases",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/cap1024-preparation/full-candidate-cases.json",
+    "--build-kwargs-file",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_build_kwargs.json",
+    "--output-dir",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/cap1024-preparation/runs/full"
+  ],
+  "start_unix": 1794713727.9547396,
+  "device_owner_preflight": [],
+  "prediction": {
+    "status": "prelaunch_forecast",
+    "cases": 2,
+    "predicted_hours": 0.05934949532112328,
+    "range_hours": [
+      0.04946160399729401,
+      0.07582931419417206
+    ],
+    "basis": "Sameprompt/seed,1023decode replays scaled from existing511 plus observedprefill; branchless noTFrepeat; same-mode observedload. Diagnostic only.",
+    "first_call_preparation_allowance_s": 16.380446143914014,
+    "allowance_basis": "Conservative entire first chosen64 TF branch of prior same-mode suffix512 batch; that branch prepared traces before the sampled continuations used by base forecast. NoTFbranch runs here."
+  },
+  "admission_sha256": "6c8ba98fabb89ae1f1be2b74756b8d37bade8a507893ad0c395cd74976dae699",
+  "scope": "Diagnostic host-wall, not serving performance."
+}

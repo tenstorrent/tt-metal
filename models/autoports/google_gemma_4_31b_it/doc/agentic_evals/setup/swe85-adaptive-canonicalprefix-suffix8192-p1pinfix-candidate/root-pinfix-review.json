@@ -1,0 +1,14 @@
+{
+  "status": "accepted_for_admission",
+  "reviewed_unix": 1794724411.6223528,
+  "checks": [
+    "exact P inventorySHA and finaladmissionSHA",
+    "one exact staleplaceholderrow exception only;allotherpinschecked",
+    "source suffix8192 IDs/chosen64 unchanged",
+    "six seededfixtures unchanged",
+    "owner/HF gates and bounded serial commands retained",
+    "forecast acceptance verified"
+  ],
+  "driver_sha256": "ccf6e0e36654b16603347450756f9748f2fd4c9f2dbf9bbd942adf787aecee2d",
+  "proposal_sha256": "e506154d52a4fb969d5f142cd9574cbb46db891c56d34d14f0387a28c493848a"
+}

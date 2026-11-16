@@ -1,0 +1,12 @@
+{
+  "status": "all_req5414_cap2048_extensions_completed",
+  "admission_sha256": "e9e997d686b1b85b53d414be8f84cf779b4d34917c25202727c4bcf21139446a",
+  "stop_file": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-req5414-cap2048-after-v-candidate/STOP_BEFORE_NEXT_JOB",
+  "queued_unix": 1794721335.7983334,
+  "predecessor_admission_sha256": "246dbd17606f3baaec25ddc490e35f0a4c394808d43479a3a4dd0b267550906a",
+  "predecessor_completion_sha256": "56ae2df18384155c16eb3a45416e46fda059ba8d334a6b7cc41362e5f04f245e",
+  "predecessor_queue_sha256": "d8bc2e70dd02fe44a474bf2144fe64d5b1e1258f2dd0eb20af2e9c334eb0bb36",
+  "start_unix": 1794721553.1874533,
+  "exit_code": 0,
+  "end_unix": 1794721745.0968316
+}

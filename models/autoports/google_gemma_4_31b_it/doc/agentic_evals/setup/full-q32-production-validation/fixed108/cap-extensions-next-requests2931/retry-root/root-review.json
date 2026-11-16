@@ -1,0 +1,31 @@
+{
+  "status": "root_reviewed_caps_completed",
+  "rows": [
+    {
+      "seed": 42,
+      "generated_tokens": 532,
+      "stop_id": 50,
+      "exact_prior_512_ids": true,
+      "verdict": "normal_finite_tool_handoff",
+      "output": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full-q32-production-validation/fixed108/cap-extensions-next-requests2931/retry-root/runs/anomaly.requests2931.call20.canonicalprefix.seed42.cap512-extended-to1024.json"
+    },
+    {
+      "seed": 44,
+      "generated_tokens": 773,
+      "stop_id": 50,
+      "exact_prior_512_ids": true,
+      "verdict": "normal_finite_tool_handoff",
+      "output": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full-q32-production-validation/fixed108/cap-extensions-next-requests2931/retry-root/runs/anomaly.requests2931.call20.canonicalprefix.seed44.cap512-extended-to1024.json"
+    }
+  ],
+  "pins_verified": 164,
+  "completion": {
+    "start_unix": 1794783912.2044315,
+    "end_unix": 1794784091.0436556,
+    "exit_code": 0,
+    "wall_seconds": 178.83922410011292
+  },
+  "forecast": "130/205/310seconds corrected root forecast; observed178.839s withinrange",
+  "previous_preimport_attempt": "Parent completion.json exit1 manifest wrapper error; no device opened; corrected list validated before retry.",
+  "decision": "No more cap extension needed; both coherent with natural tool yield. Not task success or eval score."
+}

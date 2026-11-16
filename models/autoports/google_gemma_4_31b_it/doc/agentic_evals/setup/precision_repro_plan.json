@@ -1,0 +1,64 @@
+{
+  "status": "host_only_prepared_not_executed",
+  "runtime_checkpoint": "680b4e9e",
+  "hf_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+  "cwd": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline",
+  "trigger": "Every degenerate reply and phase score below band, inside phase time; no prior-run results reused.",
+  "commands": {
+    "served": {
+      "probability_probe": "env PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime READINESS_TRACE_REGION_SIZE=134217728 /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python models/autoports/google_gemma_4_31b_it/tools/precision_repro_probe.py --case models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/CASE/case.json --build-kwargs-file models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/served_build_kwargs.json --output models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/CASE/served.probabilities.json",
+      "readiness_teacher_forcing": "env PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime READINESS_TRACE_REGION_SIZE=134217728 /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python -m readiness_check.run_teacher_forcing --model-dir models/autoports/google_gemma_4_31b_it --reference models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/CASE/reference.refpt --mesh-device P300x2 --fabric-config FABRIC_1D_RING --build-kwargs-file models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/served_build_kwargs.json > models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/CASE/served.tf.log 2>&1",
+      "readiness_autoregressive_greedy_control": "env PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime READINESS_TRACE_REGION_SIZE=134217728 /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python -m readiness_check.run_autoregressive --model-dir models/autoports/google_gemma_4_31b_it --hf-model /home/mvasiljevic/.cache/huggingface/hub/models--google--gemma-4-31B-it/snapshots/842da3794eaa0b77d5f08bae87a17459d91ff475 --prompt-file models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/CASE/prompt.txt --max-new-tokens 32 --mesh-device P300x2 --fabric-config FABRIC_1D_RING --build-kwargs-file models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/served_build_kwargs.json --output-dir models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/CASE/served.greedy",
+      "short_probability_probe": "env PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime READINESS_TRACE_REGION_SIZE=134217728 /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python models/autoports/google_gemma_4_31b_it/tools/precision_repro_probe.py --case models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/CASE/case.json --build-kwargs-file models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/served_build_kwargs.json --output models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/CASE/served.probabilities.json --start-token 0 --max-tokens 32"
+    },
+    "full_precision": {
+      "probability_probe": "env PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime READINESS_TRACE_REGION_SIZE=134217728 /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python models/autoports/google_gemma_4_31b_it/tools/precision_repro_probe.py --case models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/CASE/case.json --build-kwargs-file models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_build_kwargs.json --output models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/CASE/full_precision.probabilities.json",
+      "readiness_teacher_forcing": "env PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime READINESS_TRACE_REGION_SIZE=134217728 /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python -m readiness_check.run_teacher_forcing --model-dir models/autoports/google_gemma_4_31b_it --reference models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/CASE/reference.refpt --mesh-device P300x2 --fabric-config FABRIC_1D_RING --build-kwargs-file models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_build_kwargs.json > models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/CASE/full_precision.tf.log 2>&1",
+      "readiness_autoregressive_greedy_control": "env PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime READINESS_TRACE_REGION_SIZE=134217728 /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python -m readiness_check.run_autoregressive --model-dir models/autoports/google_gemma_4_31b_it --hf-model /home/mvasiljevic/.cache/huggingface/hub/models--google--gemma-4-31B-it/snapshots/842da3794eaa0b77d5f08bae87a17459d91ff475 --prompt-file models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/CASE/prompt.txt --max-new-tokens 32 --mesh-device P300x2 --fabric-config FABRIC_1D_RING --build-kwargs-file models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_build_kwargs.json --output-dir models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/CASE/full_precision.greedy",
+      "short_probability_probe": "env PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime READINESS_TRACE_REGION_SIZE=134217728 /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python models/autoports/google_gemma_4_31b_it/tools/precision_repro_probe.py --case models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/CASE/case.json --build-kwargs-file models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_build_kwargs.json --output models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/CASE/full_precision.probabilities.json --start-token 0 --max-tokens 32 --compare-report models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/CASE/served.probabilities.json"
+    }
+  },
+  "artifacts": {
+    "probe_input": {
+      "prompt_token_ids": "Exact rendered failed-call prefix IDs; preserve BOS/template/thinking markers",
+      "continuations": {
+        "chosen": "Actual failed reply token IDs",
+        "correct": "Correct answer continuation token IDs, same prefix; record source"
+      },
+      "metadata": "record request ID, task ID, seed, sampling recipe, full prompt artifact, prefix shortening rationale"
+    },
+    "probe_output": "Per-position top1 token, target probability/logprob, summed continuation logprob on both chosen/correct branches. Compare served/full top1 arrays over identical chosen branch for agreement over reply. Include every failed task; short first probe does not replace whole-reply comparison.",
+    "readiness_tf": "stdout per-entry/aggregate top1/top5/top100, TTFT and traced decode rate; no probabilities, no JSON output flag",
+    "readiness_ar": "hf_completion.txt, tt_completion.txt, autoregressive_meta.json with prompt/token IDs; greedy only and always loads HF",
+    "window": "--start-token N conditions each branch on its preceding tokens; --max-tokens32 gives short diagnostic. Complete reply comparison remains required for below-band failed tasks. Compare rejects different conditioning/token windows."
+  },
+  "consumption": {
+    "construction": "build_generator forwards kwargs -> Gemma4Generator precision_config -> Gemma4Model load_precision",
+    "decoder": "model.py passes group policies, KV/CCL/activation/residual/norm -> MultichipDecoder; group kernels derive fidelity from paired policy names; schema rejects mismatching fidelity",
+    "head": "model.py embedding.T dtype uses POLICIES[lm_head], kernel uses compute_fidelities[lm_head]",
+    "fixed": "Residual/norm/embedding/logits/sampler BF16 and max_seq_len262144 validated fixed by schema",
+    "full_precision_limit": "Optional sdpa_compute_fidelity=HiFi4 now reaches decode and prefill SDPA kernel constructors; prefill FP32 accumulation enabled only for HiFi4. Existing missing-field policies retain HiFi2 and prior accumulation defaults. All projection/head BF16+HiFi4; BF16 activations, KV and CCL. Host propagation verified, device legality/fit not tested."
+  },
+  "blockers": [
+    "Actual fresh failure call and correct continuation absent until phase runs; CASE is a required substitution, not fabricated input.",
+    "BF16 batch1 capacity and first-load/capture time unmeasured; no device run performed. Defaults retain262144 context/pool; physical failure must be captured, no silent reduction.",
+    "Stock AR runner lacks revision flag: use pinned local snapshot shown, not model ID; strips input and adds special tokens, so exact failed-call token fidelity must be checked in meta. It always loads full HF; not a cheap TT-only reproduction.",
+    "Stock readiness TF does not expose probabilities. Prepared model-owned probe uses callback plus full-logit readback; diagnostic timing is not a serving rate.",
+    "No fresh HF continuation/control has been generated. HF control is needed if TT full precision still fails; budget explicitly."
+  ],
+  "execution_gate": [
+    "Coordinator stops serving and verifies no owner; serialize local TT work. No reset is included.",
+    "Preserve raw call and sampling metadata before shortening; verify short reproduction still exhibits anomaly.",
+    "Run served then full serially, compare exact same continuation tokens; compute top1 agreement and chosen/correct logprob differences.",
+    "Disagreement -> datatype-sweep group/layer bisection and fastest passing config; remeasure used stage11 rows and rerun same list.",
+    "Record results.json anomalies phase/tasks/test/prompt/seed/served/full_precision/changed/hours; full precision agreeing can support a precision conclusion only on the tested reconstructed token stream; full-reply comparison still required."
+  ],
+  "host_validation": {
+    "schema": "served and full load_precision accepted",
+    "ast": "diagnostic script parses",
+    "runtime_executed": false,
+    "probe_unit_checks": "valid IDs accepted; malformed/empty/boolean IDs rejected; identical/disagreeing top1 comparison; conditioning mismatch rejected (7 checks passed)",
+    "sdpa_tests": "10 precision tests passed including optional policy rejection/default preservation and actual model forwarding + SDPA constructor expressions evaluated with host stubs."
+  },
+  "current_cases": "doc/agentic_evals/anomalies/gpqa-phase1-precision/case_manifest.json"
+}

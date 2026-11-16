@@ -1,0 +1,466 @@
+[
+  {
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/astropy__astropy-13398/action_counterfactual.candidate.private.json",
+    "task": "astropy__astropy-13398",
+    "name": "astropy__astropy-13398.call17",
+    "kind": "wrong",
+    "status": "deferred_requires_semantic_validation",
+    "metadata_status": "pending; candidate only"
+  },
+  {
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/astropy__astropy-14096/action_counterfactual.candidate.private.json",
+    "task": "astropy__astropy-14096",
+    "name": "astropy__astropy-14096.call23",
+    "kind": "wrong",
+    "status": "deferred_requires_semantic_validation",
+    "metadata_status": "pending; candidate only"
+  },
+  {
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/astropy__astropy-14598/action_counterfactual.candidate.private.json",
+    "task": "astropy__astropy-14598",
+    "name": "astropy__astropy-14598.call33",
+    "kind": "wrong",
+    "status": "deferred_requires_semantic_validation",
+    "metadata_status": "pending; candidate only"
+  },
+  {
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/django__django-14007/action_counterfactual.candidate.private.json",
+    "task": "django__django-14007",
+    "name": "django__django-14007.call31",
+    "kind": "wrong",
+    "status": "deferred_requires_semantic_validation",
+    "metadata_status": "pending; candidate only"
+  },
+  {
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/django__django-14011/action_counterfactual.candidate.private.json",
+    "task": "django__django-14011",
+    "name": "django__django-14011.call33",
+    "kind": "wrong",
+    "status": "deferred_requires_semantic_validation",
+    "metadata_status": "pending; candidate only"
+  },
+  {
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/django__django-15037/action_counterfactual.candidate.private.json",
+    "task": "django__django-15037",
+    "name": "django__django-15037.call19",
+    "kind": "wrong",
+    "status": "deferred_requires_semantic_validation",
+    "metadata_status": "pending; candidate only"
+  },
+  {
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/django__django-16950/action_counterfactual.candidate.private.json",
+    "task": "django__django-16950",
+    "name": "django__django-16950.call80",
+    "kind": "wrong",
+    "status": "deferred_requires_semantic_validation",
+    "metadata_status": "pending; candidate only"
+  },
+  {
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/matplotlib__matplotlib-25479/action_counterfactual.candidate.private.json",
+    "task": "matplotlib__matplotlib-25479",
+    "name": "matplotlib__matplotlib-25479.call34",
+    "kind": "wrong",
+    "status": "deferred_requires_semantic_validation",
+    "metadata_status": "pending; candidate only"
+  },
+  {
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/mwaskom__seaborn-3069/action_counterfactual.candidate.private.json",
+    "task": "mwaskom__seaborn-3069",
+    "name": "mwaskom__seaborn-3069.call50",
+    "kind": "wrong",
+    "status": "deferred_requires_semantic_validation",
+    "metadata_status": "pending; candidate only"
+  },
+  {
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/mwaskom__seaborn-3187/action_counterfactual.candidate.private.json",
+    "task": "mwaskom__seaborn-3187",
+    "name": "mwaskom__seaborn-3187.call64",
+    "kind": "wrong",
+    "status": "deferred_requires_semantic_validation",
+    "metadata_status": "pending; candidate only"
+  },
+  {
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/psf__requests-1142/action_counterfactual.candidate.private.json",
+    "task": "psf__requests-1142",
+    "name": "psf__requests-1142.call31",
+    "kind": "wrong",
+    "status": "deferred_requires_semantic_validation",
+    "metadata_status": "pending; candidate only"
+  },
+  {
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/psf__requests-1921/action_counterfactual.candidate.private.json",
+    "task": "psf__requests-1921",
+    "name": "psf__requests-1921.call34",
+    "kind": "wrong",
+    "status": "deferred_requires_semantic_validation",
+    "metadata_status": "pending; candidate only"
+  },
+  {
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/pydata__xarray-3993/action_counterfactual.candidate.private.json",
+    "task": "pydata__xarray-3993",
+    "name": "pydata__xarray-3993.call18",
+    "kind": "wrong",
+    "status": "deferred_requires_semantic_validation",
+    "metadata_status": "pending; candidate only"
+  },
+  {
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/pydata__xarray-6992/action_counterfactual.candidate.private.json",
+    "task": "pydata__xarray-6992",
+    "name": "pydata__xarray-6992.call16",
+    "kind": "wrong",
+    "status": "deferred_requires_semantic_validation",
+    "metadata_status": "pending; candidate only"
+  },
+  {
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/pylint-dev__pylint-4551/action_counterfactual.candidate.private.json",
+    "task": "pylint-dev__pylint-4551",
+    "name": "pylint-dev__pylint-4551.call35",
+    "kind": "wrong",
+    "status": "deferred_requires_semantic_validation",
+    "metadata_status": "pending; candidate only"
+  },
+  {
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/pylint-dev__pylint-4661/action_counterfactual.candidate.private.json",
+    "task": "pylint-dev__pylint-4661",
+    "name": "pylint-dev__pylint-4661.call19",
+    "kind": "wrong",
+    "status": "deferred_requires_semantic_validation",
+    "metadata_status": "pending; candidate only"
+  },
+  {
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/pylint-dev__pylint-4970/action_counterfactual.candidate.private.json",
+    "task": "pylint-dev__pylint-4970",
+    "name": "pylint-dev__pylint-4970.call51",
+    "kind": "wrong",
+    "status": "deferred_requires_semantic_validation",
+    "metadata_status": "pending; candidate only"
+  },
+  {
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/pylint-dev__pylint-4970-call55/action_counterfactual.candidate.private.json",
+    "task": "pylint-dev__pylint-4970",
+    "name": "pylint-dev__pylint-4970.call55",
+    "kind": "wrong",
+    "status": "deferred_requires_semantic_validation",
+    "metadata_status": "pending; candidate only"
+  },
+  {
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/pylint-dev__pylint-6386/action_counterfactual.candidate.private.json",
+    "task": "pylint-dev__pylint-6386",
+    "name": "pylint-dev__pylint-6386.call33",
+    "kind": "wrong",
+    "status": "deferred_requires_semantic_validation",
+    "metadata_status": "pending; candidate only"
+  },
+  {
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/pylint-dev__pylint-8898/action_counterfactual.candidate.private.json",
+    "task": "pylint-dev__pylint-8898",
+    "name": "pylint-dev__pylint-8898.call44",
+    "kind": "wrong",
+    "status": "deferred_requires_semantic_validation",
+    "metadata_status": "pending; candidate only"
+  },
+  {
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/pytest-dev__pytest-10356/action_counterfactual.candidate.private.json",
+    "task": "pytest-dev__pytest-10356",
+    "name": "pytest-dev__pytest-10356.call45",
+    "kind": "wrong",
+    "status": "deferred_requires_semantic_validation",
+    "metadata_status": "pending; candidate only"
+  },
+  {
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/pytest-dev__pytest-5840/action_counterfactual.candidate.private.json",
+    "task": "pytest-dev__pytest-5840",
+    "name": "pytest-dev__pytest-5840.call15",
+    "kind": "wrong",
+    "status": "deferred_requires_semantic_validation",
+    "metadata_status": "pending; candidate only"
+  },
+  {
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/pytest-dev__pytest-6197/action_counterfactual.candidate.private.json",
+    "task": "pytest-dev__pytest-6197",
+    "name": "pytest-dev__pytest-6197.call35",
+    "kind": "wrong",
+    "status": "deferred_requires_semantic_validation",
+    "metadata_status": "pending; candidate only"
+  },
+  {
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/pytest-dev__pytest-7432/action_counterfactual.candidate.private.json",
+    "task": "pytest-dev__pytest-7432",
+    "name": "pytest-dev__pytest-7432.call34",
+    "kind": "wrong",
+    "status": "deferred_requires_semantic_validation",
+    "metadata_status": "pending; candidate only"
+  },
+  {
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/scikit-learn__scikit-learn-10908/action_counterfactual.candidate.private.json",
+    "task": "scikit-learn__scikit-learn-10908",
+    "name": "scikit-learn__scikit-learn-10908.call34",
+    "kind": "wrong",
+    "status": "deferred_requires_semantic_validation",
+    "metadata_status": "pending; candidate only"
+  },
+  {
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/scikit-learn__scikit-learn-14983/action_counterfactual.candidate.private.json",
+    "task": "scikit-learn__scikit-learn-14983",
+    "name": "scikit-learn__scikit-learn-14983.call43",
+    "kind": "wrong",
+    "status": "deferred_requires_semantic_validation",
+    "metadata_status": "pending; candidate only"
+  },
+  {
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/sphinx-doc__sphinx-10323/action_counterfactual.candidate.private.json",
+    "task": "sphinx-doc__sphinx-10323",
+    "name": "sphinx-doc__sphinx-10323.call68",
+    "kind": "wrong",
+    "status": "deferred_requires_semantic_validation",
+    "metadata_status": "pending; candidate only"
+  },
+  {
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/sphinx-doc__sphinx-7590/action_counterfactual.candidate.private.json",
+    "task": "sphinx-doc__sphinx-7590",
+    "name": "sphinx-doc__sphinx-7590.call44",
+    "kind": "wrong",
+    "status": "deferred_requires_semantic_validation",
+    "metadata_status": "pending; candidate only"
+  },
+  {
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/sphinx-doc__sphinx-9461/action_counterfactual.candidate.private.json",
+    "task": "sphinx-doc__sphinx-9461",
+    "name": "sphinx-doc__sphinx-9461.call76",
+    "kind": "wrong",
+    "status": "deferred_requires_semantic_validation",
+    "metadata_status": "pending; candidate only"
+  },
+  {
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/sympy__sympy-12489/action_counterfactual.candidate.private.json",
+    "task": "sympy__sympy-12489",
+    "name": "sympy__sympy-12489.call34",
+    "kind": "wrong",
+    "status": "deferred_requires_semantic_validation",
+    "metadata_status": "pending; candidate only"
+  },
+  {
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/sympy__sympy-13091/action_counterfactual.candidate.private.json",
+    "task": "sympy__sympy-13091",
+    "name": "sympy__sympy-13091.call22",
+    "kind": "wrong",
+    "status": "deferred_requires_semantic_validation",
+    "metadata_status": "pending; candidate only"
+  },
+  {
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/sympy__sympy-18763/action_counterfactual.candidate.private.json",
+    "task": "sympy__sympy-18763",
+    "name": "sympy__sympy-18763.call20",
+    "kind": "wrong",
+    "status": "deferred_requires_semantic_validation",
+    "metadata_status": "pending; candidate only"
+  },
+  {
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/sphinx-doc__sphinx-11510/validated/action_counterfactual.validated.private.json",
+    "task": "sphinx-doc__sphinx-11510",
+    "name": "sphinx-doc__sphinx-11510.validated-action",
+    "kind": "wrong",
+    "status": "deferred_requires_semantic_validation",
+    "metadata_status": "Validated diagnostic source state: before fails2 source-read tests/passes7 regressions; after passes2+7, unchanged offline verifier, hash-verified build wheels, network none,1CPU4GiB. Shell action not executed by verifier; exact materialized patch after-state tested."
+  },
+  {
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/psf__requests-5414/validated-pure-urls/psf__requests-5414.call23.action.private.json",
+    "task": "psf__requests-5414",
+    "name": "psf__requests-5414.call23.validated-pure-url-action",
+    "kind": "wrong",
+    "status": "deferred_requires_semantic_validation",
+    "metadata_status": "Original pure URL test subset: before31pass1fail; chosen final source24pass8fail; correct32pass0fail. Full unchanged suite remains fixture/network limited, not full-suite validated."
+  },
+  {
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/psf__requests-5414/validated-pure-urls/psf__requests-5414.call30.action.private.json",
+    "task": "psf__requests-5414",
+    "name": "psf__requests-5414.call30.validated-pure-url-action",
+    "kind": "wrong",
+    "status": "deferred_requires_semantic_validation",
+    "metadata_status": "Original pure URL test subset: before31pass1fail; chosen final source24pass8fail; correct32pass0fail. Full unchanged suite remains fixture/network limited, not full-suite validated."
+  },
+  {
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/sympy__sympy-14248/validated/sympy__sympy-14248.call50.action.private.json",
+    "task": "sympy__sympy-14248",
+    "name": "sympy__sympy-14248.call50.validated-action",
+    "kind": "wrong",
+    "status": "deferred_requires_semantic_validation",
+    "metadata_status": "Official expected tests: before F2P0/2 P2P433/433; chosen50 F2P0/2 P2P431/433; correct F2P2/2 P2P433/433. Original official test script unchanged. Before/chosen/correct use same pinned image and native pre50 production changes. Four unchanged legacy parser AST exceptions and one XPASS remain in raw correct test log despite official report resolved=true; no full-clean-suite claim. Tests are original official files/test patch,11 unrelated native test-file mutations excluded and inventoried. No scored rerun."
+  },
+  {
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/astropy__astropy-13579/action_counterfactual.candidate.private.json",
+    "task": "astropy__astropy-13579",
+    "name": "astropy__astropy-13579.fetch-next-action",
+    "kind": "fetch",
+    "status": "deferred_requires_semantic_validation",
+    "metadata_status": "pending isolated command validation; candidate only"
+  },
+  {
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/astropy__astropy-7336/action_counterfactual.candidate.private.json",
+    "task": "astropy__astropy-7336",
+    "name": "astropy__astropy-7336.fetch-next-action",
+    "kind": "fetch",
+    "status": "deferred_requires_semantic_validation",
+    "metadata_status": "pending isolated command validation; candidate only"
+  },
+  {
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/astropy__astropy-8872/action_counterfactual.candidate.private.json",
+    "task": "astropy__astropy-8872",
+    "name": "astropy__astropy-8872.fetch-next-action",
+    "kind": "fetch",
+    "status": "deferred_requires_semantic_validation",
+    "metadata_status": "pending isolated command validation; candidate only"
+  },
+  {
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/matplotlib__matplotlib-25332/action_counterfactual.candidate.private.json",
+    "task": "matplotlib__matplotlib-25332",
+    "name": "matplotlib__matplotlib-25332.fetch-next-action",
+    "kind": "fetch",
+    "status": "deferred_requires_semantic_validation",
+    "metadata_status": "pending isolated command validation; candidate only"
+  },
+  {
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/matplotlib__matplotlib-25960/action_counterfactual.candidate.private.json",
+    "task": "matplotlib__matplotlib-25960",
+    "name": "matplotlib__matplotlib-25960.fetch-next-action",
+    "kind": "fetch",
+    "status": "deferred_requires_semantic_validation",
+    "metadata_status": "pending isolated command validation; candidate only"
+  },
+  {
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/matplotlib__matplotlib-26208/action_counterfactual.candidate.private.json",
+    "task": "matplotlib__matplotlib-26208",
+    "name": "matplotlib__matplotlib-26208.fetch-next-action",
+    "kind": "fetch",
+    "status": "deferred_requires_semantic_validation",
+    "metadata_status": "pending isolated command validation; candidate only"
+  },
+  {
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/matplotlib__matplotlib-26291/action_counterfactual.candidate.private.json",
+    "task": "matplotlib__matplotlib-26291",
+    "name": "matplotlib__matplotlib-26291.fetch-next-action",
+    "kind": "fetch",
+    "status": "deferred_requires_semantic_validation",
+    "metadata_status": "pending isolated command validation; candidate only"
+  },
+  {
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/pydata__xarray-4687/action_counterfactual.candidate.private.json",
+    "task": "pydata__xarray-4687",
+    "name": "pydata__xarray-4687.fetch-next-action",
+    "kind": "fetch",
+    "status": "deferred_requires_semantic_validation",
+    "metadata_status": "pending isolated command validation; candidate only"
+  },
+  {
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/pydata__xarray-7233/action_counterfactual.candidate.private.json",
+    "task": "pydata__xarray-7233",
+    "name": "pydata__xarray-7233.fetch-next-action",
+    "kind": "fetch",
+    "status": "deferred_requires_semantic_validation",
+    "metadata_status": "pending isolated command validation; candidate only"
+  },
+  {
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/pylint-dev__pylint-4604/action_counterfactual.candidate.private.json",
+    "task": "pylint-dev__pylint-4604",
+    "name": "pylint-dev__pylint-4604.fetch-next-action",
+    "kind": "fetch",
+    "status": "deferred_requires_semantic_validation",
+    "metadata_status": "pending isolated command validation; candidate only"
+  },
+  {
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/pytest-dev__pytest-5787/action_counterfactual.candidate.private.json",
+    "task": "pytest-dev__pytest-5787",
+    "name": "pytest-dev__pytest-5787.fetch-next-action",
+    "kind": "fetch",
+    "status": "deferred_requires_semantic_validation",
+    "metadata_status": "pending isolated command validation; candidate only"
+  },
+  {
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/scikit-learn__scikit-learn-13135/action_counterfactual.candidate.private.json",
+    "task": "scikit-learn__scikit-learn-13135",
+    "name": "scikit-learn__scikit-learn-13135.fetch-next-action",
+    "kind": "fetch",
+    "status": "deferred_requires_semantic_validation",
+    "metadata_status": "pending isolated command validation; candidate only"
+  },
+  {
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/scikit-learn__scikit-learn-13328/action_counterfactual.candidate.private.json",
+    "task": "scikit-learn__scikit-learn-13328",
+    "name": "scikit-learn__scikit-learn-13328.fetch-next-action",
+    "kind": "fetch",
+    "status": "deferred_requires_semantic_validation",
+    "metadata_status": "pending isolated command validation; candidate only"
+  },
+  {
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/scikit-learn__scikit-learn-14053/action_counterfactual.candidate.private.json",
+    "task": "scikit-learn__scikit-learn-14053",
+    "name": "scikit-learn__scikit-learn-14053.fetch-next-action",
+    "kind": "fetch",
+    "status": "deferred_requires_semantic_validation",
+    "metadata_status": "pending isolated command validation; candidate only"
+  },
+  {
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/scikit-learn__scikit-learn-14629/action_counterfactual.candidate.private.json",
+    "task": "scikit-learn__scikit-learn-14629",
+    "name": "scikit-learn__scikit-learn-14629.fetch-next-action",
+    "kind": "fetch",
+    "status": "deferred_requires_semantic_validation",
+    "metadata_status": "pending isolated command validation; candidate only"
+  },
+  {
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/scikit-learn__scikit-learn-25102/action_counterfactual.candidate.private.json",
+    "task": "scikit-learn__scikit-learn-25102",
+    "name": "scikit-learn__scikit-learn-25102.fetch-next-action",
+    "kind": "fetch",
+    "status": "deferred_requires_semantic_validation",
+    "metadata_status": "pending isolated command validation; candidate only"
+  },
+  {
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/scikit-learn__scikit-learn-25747/action_counterfactual.candidate.private.json",
+    "task": "scikit-learn__scikit-learn-25747",
+    "name": "scikit-learn__scikit-learn-25747.fetch-next-action",
+    "kind": "fetch",
+    "status": "deferred_requires_semantic_validation",
+    "metadata_status": "pending isolated command validation; candidate only"
+  },
+  {
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/sphinx-doc__sphinx-10614/action_counterfactual.candidate.private.json",
+    "task": "sphinx-doc__sphinx-10614",
+    "name": "sphinx-doc__sphinx-10614.fetch-next-action",
+    "kind": "fetch",
+    "status": "deferred_requires_semantic_validation",
+    "metadata_status": "pending isolated command validation; candidate only"
+  },
+  {
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/sphinx-doc__sphinx-8638/action_counterfactual.candidate.private.json",
+    "task": "sphinx-doc__sphinx-8638",
+    "name": "sphinx-doc__sphinx-8638.fetch-next-action",
+    "kind": "fetch",
+    "status": "deferred_requires_semantic_validation",
+    "metadata_status": "pending isolated command validation; candidate only"
+  },
+  {
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/sympy__sympy-13480/action_counterfactual.candidate.private.json",
+    "task": "sympy__sympy-13480",
+    "name": "sympy__sympy-13480.fetch-next-action",
+    "kind": "fetch",
+    "status": "deferred_requires_semantic_validation",
+    "metadata_status": "pending isolated command validation; candidate only"
+  },
+  {
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/sympy__sympy-13551/action_counterfactual.candidate.private.json",
+    "task": "sympy__sympy-13551",
+    "name": "sympy__sympy-13551.fetch-next-action",
+    "kind": "fetch",
+    "status": "deferred_requires_semantic_validation",
+    "metadata_status": "pending isolated command validation; candidate only"
+  },
+  {
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/sympy__sympy-13878/action_counterfactual.candidate.private.json",
+    "task": "sympy__sympy-13878",
+    "name": "sympy__sympy-13878.fetch-next-action",
+    "kind": "fetch",
+    "status": "deferred_requires_semantic_validation",
+    "metadata_status": "pending isolated command validation; candidate only"
+  }
+]

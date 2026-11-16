@@ -1,0 +1,54 @@
+{
+  "status": "root_admitted_not_launched",
+  "reviewer": "root",
+  "accepted": true,
+  "at_unix": 1794743984.3645096,
+  "stage_deadline_unix": 1794791725,
+  "modes": [
+    "hf",
+    "tt-full",
+    "compare"
+  ],
+  "required_rows_per_capture": 31,
+  "forecast": "forecast.json",
+  "pins": {
+    "commands.json": "c41585b497c5b8af853b1b5c5b2c1b4fd71b69aac2b5440335ae93a39b1bd169",
+    "source-pins.json": "436476495706280aa19a491a6e0a067a3d86150da2fd8b98217b8d075ed62b1b",
+    "forecast.json": "ea039d74aca72b99bed91c7cf110c5465998896379adedac6089898761b7648c",
+    "proposal.json": "c60ace8444c080c0e9b4f4850738e20fbd891e63a86a8c731b81f65df7f4f130",
+    "review-candidate.json": "6ed600cd22c3906123935f2a4446dc5010d4cd6b052622469cbe7690873ec4fa"
+  },
+  "tool_sha256": "3a9ad550813ee01d3a6fa701b2fe9b614bd7e2d694b7771bdd05a6636a8a6380",
+  "validation": {
+    "facts": {
+      "branch_count": 1,
+      "branch_names": [
+        "tt_seed44_loop_history"
+      ],
+      "branch_provenance_sha256": "e90e5c0c06b36d43b8a733d4f6b2e3d1a731db27d39f26e281d6330beb52e37d",
+      "prompt_tokens": 2048,
+      "rows_per_branch": 31
+    },
+    "mock_tests": {
+      "cleanup_failure_preserves_primary": true,
+      "compare_saved_host_mock": true,
+      "distinct_topk_and_topp": true,
+      "fixture_and_branch_validation": true,
+      "host_distribution_summary": true,
+      "later_loop_exact_30_token_branch": true,
+      "later_loop_rejects_altered_history_source_hash_and_seed": true,
+      "no_torch_transformers_or_ttnn_imported": true,
+      "original_six_token_branches_retained": true,
+      "tt_callback_history_and_capture_count": true
+    },
+    "source_pin_count": 11,
+    "status": "validated_inert_no_model_or_device"
+  },
+  "launch_conditions": [
+    "Root serial model/device ownership check; no overlap with current HF continuation or TT panel",
+    "Check deadline against full command timeout plus grace before each mode",
+    "Record per-mode wall and reconcile aggregate forecast before another precision change",
+    "Compare identical history rows and exact runtime precision; forced-history results are not unconditional reference incidence"
+  ],
+  "source_preservation": "Original completed six-token diagnostic source saved at ../completed-original-tool.py, matching old report hash; old pins are not rewritten."
+}

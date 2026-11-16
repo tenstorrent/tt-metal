@@ -1,0 +1,123 @@
+{
+  "status": "candidate planning estimate, not serving performance",
+  "formula": "For each explicit 512-token inconclusive source trial, preserve observed prefill/host overhead (diagnostic wall including prefill minus decode wall) and project decode as measured decode_wall_s * 1023/511. Add same-mode observed source-candidate model load once and one same-mode measured generator_trace_prepare event from the suffix1024 log. Range scales variable case work by 0.7x-1.7x, with load and preparation fixed.",
+  "source_cap": 512,
+  "candidate_cap": 1024,
+  "source_decode_tokens": 511,
+  "projected_decode_tokens": 1023,
+  "range_variable_component_multipliers": [
+    0.7,
+    1.7
+  ],
+  "modes": {
+    "served": {
+      "jobs": 1,
+      "load_sources": [
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/runs/served/load.json",
+          "wall_s": 143.9548370661214,
+          "sha256": "5bcd95673b1e8c6f8a56e72d3289ca67185276b7d27c59aadb0d779c84063f80"
+        }
+      ],
+      "load_seconds_used": 143.9548370661214,
+      "trace_preparation": {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/served.log",
+        "sha256": "f6877284c3e1e432cb4c8452b6d870d57f149e0913abe73f8be104ee562d5e04",
+        "event": {
+          "line": 119,
+          "seconds": 9.596254171105102
+        },
+        "proxy_note": "Measured same-mode first generator trace preparation from suffix1024 run; used once for this branchless cap1024 batch, not a measured suffix2048/cap1024 warmup."
+      },
+      "case_estimates": [
+        {
+          "job": "anomaly.psf__requests-5414.call10.onset.suffix2048.cap1024.seed42",
+          "seed": 42,
+          "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/runs/served/anomaly.psf__requests-5414.call10.onset.json",
+          "source_result_sha256": "db7de934dddf4587a779c855e99a37bebdf23e8d9a48806d6269217ea24a2b42",
+          "source_prefill_host_overhead_seconds": 0.34845097176730633,
+          "source_decode_tokens": 511,
+          "source_decode_seconds": 14.824789208127186,
+          "projected_1023_decode_seconds": 29.678589745428788,
+          "projected_case_seconds": 30.027040717196094
+        }
+      ],
+      "estimated_total_seconds": 183.5781319544226,
+      "estimated_range_seconds": [
+        174.57001973926376,
+        204.59706045645987
+      ]
+    },
+    "full": {
+      "jobs": 4,
+      "load_sources": [
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/runs/full/load.json",
+          "wall_s": 77.36976773384959,
+          "sha256": "74c4650613d1c674d3080c6af6a4b8d96bd7653a5e7b129e791968b1f28f4cf0"
+        }
+      ],
+      "load_seconds_used": 77.36976773384959,
+      "trace_preparation": {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/full.log",
+        "sha256": "401c3e9acd302ba8100d3eb8abb95d252af014f4ab48f563621171d6b5380036",
+        "event": {
+          "line": 119,
+          "seconds": 12.163562920875847
+        },
+        "proxy_note": "Measured same-mode first generator trace preparation from suffix1024 run; used once for this branchless cap1024 batch, not a measured suffix2048/cap1024 warmup."
+      },
+      "case_estimates": [
+        {
+          "job": "anomaly.psf__requests-5414.call10.onset.suffix2048.cap1024.seed43",
+          "seed": 43,
+          "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/runs/full/anomaly.psf__requests-5414.call10.onset.json",
+          "source_result_sha256": "1f34cd733be27e7e4c655da4dcf0fba30ac7c06fc83cca3753973dbae03263ff",
+          "source_prefill_host_overhead_seconds": 0.6631682578008622,
+          "source_decode_tokens": 511,
+          "source_decode_seconds": 30.00618965108879,
+          "projected_1023_decode_seconds": 60.07109982987051,
+          "projected_case_seconds": 60.734268087671374
+        },
+        {
+          "job": "anomaly.psf__requests-5414.call10.onset.suffix2048.cap1024.seed44",
+          "seed": 44,
+          "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/runs/full/anomaly.psf__requests-5414.call10.onset.json",
+          "source_result_sha256": "1f34cd733be27e7e4c655da4dcf0fba30ac7c06fc83cca3753973dbae03263ff",
+          "source_prefill_host_overhead_seconds": 0.6567965669091791,
+          "source_decode_tokens": 511,
+          "source_decode_seconds": 30.02353991800919,
+          "projected_1023_decode_seconds": 60.10583431726693,
+          "projected_case_seconds": 60.76263088417611
+        },
+        {
+          "job": "anomaly.psf__requests-5414.call11.onset.suffix2048.cap1024.seed42",
+          "seed": 42,
+          "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/runs/full/anomaly.psf__requests-5414.call11.onset.json",
+          "source_result_sha256": "a967659d1f4edd7b726a36c976168ae767957b9821ffc4a2a31640d594e7a885",
+          "source_prefill_host_overhead_seconds": 0.6552118617109954,
+          "source_decode_tokens": 511,
+          "source_decode_seconds": 30.01777199911885,
+          "projected_1023_decode_seconds": 60.09428719197374,
+          "projected_case_seconds": 60.74949905368474
+        },
+        {
+          "job": "anomaly.psf__requests-5414.call11.onset.suffix2048.cap1024.seed43",
+          "seed": 43,
+          "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/runs/full/anomaly.psf__requests-5414.call11.onset.json",
+          "source_result_sha256": "a967659d1f4edd7b726a36c976168ae767957b9821ffc4a2a31640d594e7a885",
+          "source_prefill_host_overhead_seconds": 0.6610126029700041,
+          "source_decode_tokens": 511,
+          "source_decode_seconds": 30.024189586983994,
+          "projected_1023_decode_seconds": 60.10713492658439,
+          "projected_case_seconds": 60.7681475295544
+        }
+      ],
+      "estimated_total_seconds": 332.54787620981205,
+      "estimated_range_seconds": [
+        259.6435125432861,
+        502.6580580983727
+      ]
+    }
+  }
+}

@@ -1,0 +1,43 @@
+{
+  "status": "immutable_predecessor_snapshot",
+  "directory": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512",
+  "admission_sha256": "32fe5e6ccf38aff945424de6b7f3c8e24a7a375cf6a806424bd1097e99bb6194",
+  "files": {
+    "proposal.json": "afae82ad53bb768661d781d4da108b527ee0b1cd2f4f55cc23563b51fbf654e0",
+    "run_serial_candidate.py": "e221a7fef9a593fc835413131b242561b799eca0d91748eaa7c36564d66ac332",
+    "source-hashes.json": "3fc390e6f34b8805f75628d841e5827a2a5401e91923a2cd7c77830001f22922",
+    "commands.json": "4fc7e9c6d905c721100011a7e6a78a6a481d7cb4c208ac2672f8a336e89fb845",
+    "forecast.json": "00c4488365bf25e4c744fe0dc85b957802e22392710b945caae98713a31546eb",
+    "served-cases.json": "a93796ce41a985492fc2e5075f4463186fa9fc258a2095f9728b5f9eff3b9bdf",
+    "full-cases.json": "10f582d0c77b4fa472bef0ab6c17535ddf2a5a288ffb6d3c2af34d89c3264e35",
+    "completion-served.json": "37340afd0077453ee24a913bc0ebe2ff8ddf6cd14c064a3231c3e213cd5dc7b3",
+    "completion-full.json": "927e9425adeb62200b42d38c6f7fc367358f8fd02ad1bcbabaf4010fc3f76dec",
+    "completion-summary.json": "9ff7139d71c3ee2163624f8f41324896bcc74a2127ee2d5c16774fab054bbb21",
+    "root-served-review.json": "4f9e333a9c4d6c94009c9718dfbf0c279d4185f8e2f151636274645ec154654d",
+    "root-full-review.json": "50073a981e1dcfb8446d10bc1c1c7e012cbfa53a8700cca79b952cb12f549fbd",
+    "triage-d.json": "ef7d0994f7067d540f7fbd986e8e9769d9440f470e00a8c57125a7458517f7a2",
+    "predecessors/sklearn-serial-review.json": "c015eb3bb495b92f047b6ae896e280c1fe3d64d8d2f89ea2437aa1a96f651748",
+    "predecessors/p2-forecast-review.json": "5d27739c8f376feba9ce6fd76e96b37029be4467d32ced410d4504c72d60ea0b"
+  },
+  "interpretation": "The original full-prompt missing_tool behavior did not reproduce in suffix512/cap512. This does not update the original adjudication; it motivates suffix1024/cap1024.",
+  "selected_served_policy": "stage12_head_bfp8_lofi",
+  "legacy_suffix512_served_policy": "head_bfp4; preserved as historical candidate evidence, not valid selected-served policy timing or semantic comparison",
+  "original_full_missing_tool_reproduced_at_suffix512": false,
+  "bfp8_served_correction": {
+    "directory": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-suffix512-head-bfp8-correction",
+    "admission_sha256": "3135aac12cbe11d97803b166dc3173def8f9bc03a6e8bb786fe015ce3f24bf08",
+    "completion_sha256": "1be9414e4447a6600ea163967ec4fc0601ae9ffbbd47e44ab5e407a1c3ee453e",
+    "root_review_sha256": "777d1a61090d8b827c76fc905b1a884b58270613d976c5eed73d8a41c2319151",
+    "runtime_policy": "stage12_head_bfp8_lofi",
+    "completion_elapsed_seconds": 201.28028845787048,
+    "root_review_counts": {
+      "native": 2,
+      "other": 1
+    },
+    "rows": {
+      "runs/anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix512.seed42.json": "cdba56f4ef6f96c94ca131c312f23ebcd615b72704f81353fbaee6ae93d48a49",
+      "runs/anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix512.seed43.json": "00cc018a2764f67350ba8503451209a16c4f42ad3010af0b4cb17bf392c93de4",
+      "runs/anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix512.seed44.json": "192beeb384d47ca8fad1dfd801ae8f6beb8884f70255d9dad7fa20b8d8c7a1c4"
+    }
+  }
+}

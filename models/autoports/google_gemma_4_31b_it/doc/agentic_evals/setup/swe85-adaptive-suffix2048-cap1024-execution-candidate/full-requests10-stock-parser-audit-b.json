@@ -1,0 +1,127 @@
+{
+  "status": "completed_cpu_only_stock_gemma4_nonstreaming_parser_audit_no_score_adjudication",
+  "scope": "Actual assistant-context prefix is the exact intersection: suffix2048 fixture covers onset source IDs [5009:7057]; source request ends at token6869; therefore parser input prefix is candidate IDs[1860:] (188 IDs) plus generated IDs. Original raw request and actual bash schema passed to installed stock non-streaming Gemma4Parser. TTNN and tt_lib import guard was installed before transformers/parser imports. Parser finding only.",
+  "tokenizer_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+  "tokenizer_snapshot": "/home/mvasiljevic/.cache/huggingface/hub/models--google--gemma-4-31B-it/snapshots/842da3794eaa0b77d5f08bae87a17459d91ff475",
+  "tokenizer_hashes": {
+    "/home/mvasiljevic/.cache/huggingface/hub/models--google--gemma-4-31B-it/snapshots/842da3794eaa0b77d5f08bae87a17459d91ff475/tokenizer.json": "cc8d3a0ce36466ccc1278bf987df5f71db1719b9ca6b4118264f45cb627bfe0f",
+    "/home/mvasiljevic/.cache/huggingface/hub/models--google--gemma-4-31B-it/snapshots/842da3794eaa0b77d5f08bae87a17459d91ff475/tokenizer_config.json": "9f4fec4b1dc6ecddf8f4a92e9caea5971c0e67d81309f3f9066a2bee8c362633",
+    "/home/mvasiljevic/.cache/huggingface/hub/models--google--gemma-4-31B-it/snapshots/842da3794eaa0b77d5f08bae87a17459d91ff475/chat_template.jinja": "ae53464bf3be25802b3a5b37def7fd89667067d7577049b3b2d74c4d8de4c6d4"
+  },
+  "parser_implementation_hashes": {
+    "python_env/lib/python3.10/site-packages/vllm/parser/gemma4.py": "c974f47dc39ab7276da1e4ae38c4010e3f5411481f75e3879e29f47b2fd08df7",
+    "python_env/lib/python3.10/site-packages/vllm/parser/engine/parser_engine.py": "d1075deeb25b4872e92752d7ef0598a07a747afaf2afc56058ec30c6dc1da89a",
+    "python_env/lib/python3.10/site-packages/vllm/parser/engine/adapters.py": "7a77bcb86e2129762f4199ee726398a4850b9e207893fc4295f2b759bcfeeb36",
+    "python_env/lib/python3.10/site-packages/vllm/tool_parsers/gemma4_engine_tool_parser.py": "02f31bdcc4d8527440daebb4f4e3e74c83a6010eb56cd33fe7522bea8f51bc65",
+    "python_env/lib/python3.10/site-packages/vllm/reasoning/gemma4_engine_reasoning_parser.py": "3e9adef8ae56ee993fbaee43e82aa36216fb71251ee2de14dc9f8b326220a594"
+  },
+  "rows": [
+    {
+      "job": "anomaly.psf__requests-5414.call10.onset.suffix2048.cap1024.seed43",
+      "mode": "full",
+      "seed": 43,
+      "result_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-execution-candidate/runs/full/anomaly.psf__requests-5414.call10.onset.suffix2048.cap1024.seed43.json",
+      "result_sha256": "5c4660236e54304af472b9ae8d1c572d663bfbf0ede40ac9a17cb9551a2f3a0e",
+      "fixture_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-candidate/fixtures/full/anomaly.psf__requests-5414.call10.onset.suffix2048.cap1024.seed43.private.json",
+      "fixture_sha256": "3c0862e806b31c9059065202c03fc559279a036957d53e853c4cf5460ba19dee",
+      "source_onset_fixture_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-requests5414-caret-controls/psf__requests-5414.call10.onset.private.json",
+      "source_onset_fixture_sha256": "38cba2429d022e64133da2c34388d9e88a9b26b82ec58594153692842dccb961",
+      "source_full_reply_case_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-requests5414-caps/psf__requests-5414.call10.case.private.json",
+      "source_full_reply_case_sha256": "3da38a4c4fcb3d3260267e62b1028e61acfd3f782f8f1b3396486170bd79af8a",
+      "raw_packet_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-requests5414-caps/psf__requests-5414.call10.packet.private.json",
+      "raw_packet_sha256": "79dcdd8f52f6cbd15265e96f11bb9b51ac682718ff927a8f28461404748e22c5",
+      "raw_request_body_sha256": "86beab76ef8607b073e13a9376e65d2b9e69b2937a168b78daff7eb9a7bba2c0",
+      "assistant_context": {
+        "original_request_prompt_tokens": 6869,
+        "suffix_start_in_onset_prompt": 5009,
+        "suffix_prompt_tokens": 2048,
+        "assistant_prefix_local_start": 1860,
+        "assistant_prefix_token_count": 188,
+        "assistant_prefix_ids_sha256": "f9f90e7273c96002d73a1b661eff983afc92209ffeeee833eb0f817e934d87f3",
+        "assistant_prefix_text": "<|channel>thought\nOkay, I've analyzed the issue. The user is reporting that `requests.get(\"http://.example.com\")` raises a `UnicodeError` (actually `urllib3.exceptions.LocationParseError` in the current environment, but the user's report mentioned `UnicodeError` and the goal is to raise `requests.exceptions.InvalidURL`).\n\nWait, looking at my reproduction:\n```\nTraceback (most recent call last):\n  File \"/testbed/reproduce_issue.py\", line 5, in <module>\n    requests.get(\"http://.example.com\")\n  ...\n  File \"/opt/miniconda3/lib/python3.11/site-packages/urllib3/util/connection.py\", line 68, in create_connection\n    return six.raise_from(\n           ",
+        "assistant_prefix_tail": "ction:\n```\nTraceback (most recent call last):\n  File \"/testbed/reproduce_issue.py\", line 5, in <module>\n    requests.get(\"http://.example.com\")\n  ...\n  File \"/opt/miniconda3/lib/python3.11/site-packages/urllib3/util/connection.py\", line 68, in create_connection\n    return six.raise_from(\n           "
+      },
+      "trial": {
+        "generated_tokens": 975,
+        "generated_ids_sha256": "a7d11d489507797902f63634953a5e3de9c2b5551ee36bd02c19f7bb87f21282",
+        "generated_text_sha256": "bb9a2f72831292dfd931d70462bc722bf5a227e5bcb3b7de16423bc2579eabcb",
+        "generated_text_head": "...\nurllib3.exceptions.LocationParseError: Failed to parse: '.example.com', label empty or too long\n```\n\nThe goal is to make this raise `requests.exceptions.InvalidURL`.\n\nLooking at the source code in `requests/models.py` ( lines 350-420):\nThe `prepare_url` method handles URL preparation. It calls `",
+        "generated_text_tail": "ait, I should first check if `.example.com` is caught by `_get_idna_encoded_host`.\n\n```python\nimport idna\ntry:\n    idna.encode(\".example.com\", uts46=True)\nexcept Exception as e:\n    print(e)\n```\n\nIf this raises an exception, then my plan is correct.\n\nI will now implement the fix.<channel|>```bash\ncat << 'EOF' > fix_issue.py\nimport idna\ntry:\n    idna.encode(\".example.com\", uts46=True)\n    print(\"Failed to catch\")\nexcept Exception as e:\n    print(f\"Caught: {e}\")\nEOF\npython3 fix_issue.py\n```<turn|>",
+        "generated_tool_call_opener_count": 0,
+        "tool_close_token_present": false
+      },
+      "request_tools": [
+        {
+          "name": "bash",
+          "parameters": "{'type': 'object', 'properties': {'command': {'type': 'string', 'description': 'The bash command to execute'}}, 'required': ['command']}"
+        }
+      ],
+      "stock_parser": {
+        "verdict": "missing_tool",
+        "enable_auto_tools": true,
+        "structured_tool_calls": [],
+        "reasoning_chars": 3681,
+        "reasoning_head": "Okay, I've analyzed the issue. The user is reporting that `requests.get(\"http://.example.com\")` raises a `UnicodeError` (actually `urllib3.exceptions.LocationParseError` in the current environment, but the user's report mentioned `UnicodeError` and the goal is to raise `requests.exceptions.InvalidUR",
+        "content_chars": 203,
+        "content_head": "```bash\ncat << 'EOF' > fix_issue.py\nimport idna\ntry:\n    idna.encode(\".example.com\", uts46=True)\n    print(\"Failed to catch\")\nexcept Exception as e:\n    print(f\"Caught: {e}\")\nEOF\npython3 fix_issue.py\n```"
+      },
+      "prefix_plus_generated_sha256": "ae96395346fc2f3fb17d90434857faf428a95b276fa01d2265041f477789f661"
+    },
+    {
+      "job": "anomaly.psf__requests-5414.call10.onset.suffix2048.cap1024.seed44",
+      "mode": "full",
+      "seed": 44,
+      "result_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-execution-candidate/runs/full/anomaly.psf__requests-5414.call10.onset.suffix2048.cap1024.seed44.json",
+      "result_sha256": "123f151deade6d8ceb86ef7103a1c32c4176606b84109368ca2ba80f869be8c6",
+      "fixture_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-candidate/fixtures/full/anomaly.psf__requests-5414.call10.onset.suffix2048.cap1024.seed44.private.json",
+      "fixture_sha256": "2115c3bdecbfc57e014b8c779edca64f4601a0470b0e68d8c516a5e9e28490cf",
+      "source_onset_fixture_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-requests5414-caret-controls/psf__requests-5414.call10.onset.private.json",
+      "source_onset_fixture_sha256": "38cba2429d022e64133da2c34388d9e88a9b26b82ec58594153692842dccb961",
+      "source_full_reply_case_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-requests5414-caps/psf__requests-5414.call10.case.private.json",
+      "source_full_reply_case_sha256": "3da38a4c4fcb3d3260267e62b1028e61acfd3f782f8f1b3396486170bd79af8a",
+      "raw_packet_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-requests5414-caps/psf__requests-5414.call10.packet.private.json",
+      "raw_packet_sha256": "79dcdd8f52f6cbd15265e96f11bb9b51ac682718ff927a8f28461404748e22c5",
+      "raw_request_body_sha256": "86beab76ef8607b073e13a9376e65d2b9e69b2937a168b78daff7eb9a7bba2c0",
+      "assistant_context": {
+        "original_request_prompt_tokens": 6869,
+        "suffix_start_in_onset_prompt": 5009,
+        "suffix_prompt_tokens": 2048,
+        "assistant_prefix_local_start": 1860,
+        "assistant_prefix_token_count": 188,
+        "assistant_prefix_ids_sha256": "f9f90e7273c96002d73a1b661eff983afc92209ffeeee833eb0f817e934d87f3",
+        "assistant_prefix_text": "<|channel>thought\nOkay, I've analyzed the issue. The user is reporting that `requests.get(\"http://.example.com\")` raises a `UnicodeError` (actually `urllib3.exceptions.LocationParseError` in the current environment, but the user's report mentioned `UnicodeError` and the goal is to raise `requests.exceptions.InvalidURL`).\n\nWait, looking at my reproduction:\n```\nTraceback (most recent call last):\n  File \"/testbed/reproduce_issue.py\", line 5, in <module>\n    requests.get(\"http://.example.com\")\n  ...\n  File \"/opt/miniconda3/lib/python3.11/site-packages/urllib3/util/connection.py\", line 68, in create_connection\n    return six.raise_from(\n           ",
+        "assistant_prefix_tail": "ction:\n```\nTraceback (most recent call last):\n  File \"/testbed/reproduce_issue.py\", line 5, in <module>\n    requests.get(\"http://.example.com\")\n  ...\n  File \"/opt/miniconda3/lib/python3.11/site-packages/urllib3/util/connection.py\", line 68, in create_connection\n    return six.raise_from(\n           "
+      },
+      "trial": {
+        "generated_tokens": 626,
+        "generated_ids_sha256": "d48a83dab4bf9e21be18ab36a7fa1879d4d0af4ac1581cab730dd5585a0b1f1f",
+        "generated_text_sha256": "7ce83f205f2cfa625ab4287156ca8992742011e66609b9fed6c3b1114f7f2fe3",
+        "generated_text_head": "...\n  File \"/opt/miniconda3/lib/python3.11/site-packages/urllib3/util/connection.py\", line 68, in create_connection\n    return six.raise_from(\n           ...\nurllib3.exceptions.LocationParseError: Failed to parse: '.example.com', label empty or too long\n```\n\nThe issue is that a hostname starting wit",
+        "generated_text_tail": "ts are always invalid.\nAccording to RFCs, a label cannot start or end with a dot.\n\nLet's test it with a script.<channel|>```bash\ncat << 'EOF' > test_dots.py\nimport requests\ntry:\n    requests.get(\"http://.example.com\")\n    print(\"Success\")\nexcept Exception as e:\n    print(f\"Caught: {type(e).__name__}: {e}\")\n\ntry:\n    requests.get(\"http://example.com.\")\n    print(\"Success\")\nexcept Exception as e:\n    print(f\"Caught: {type(e).__name__}: {e}\")\nEOF\npython3 test_dots.py\n```<tool_call|><|tool_response>",
+        "generated_tool_call_opener_count": 0,
+        "tool_close_token_present": true
+      },
+      "request_tools": [
+        {
+          "name": "bash",
+          "parameters": "{'type': 'object', 'properties': {'command': {'type': 'string', 'description': 'The bash command to execute'}}, 'required': ['command']}"
+        }
+      ],
+      "stock_parser": {
+        "verdict": "missing_tool",
+        "enable_auto_tools": true,
+        "structured_tool_calls": [],
+        "reasoning_chars": 2424,
+        "reasoning_head": "Okay, I've analyzed the issue. The user is reporting that `requests.get(\"http://.example.com\")` raises a `UnicodeError` (actually `urllib3.exceptions.LocationParseError` in the current environment, but the user's report mentioned `UnicodeError` and the goal is to raise `requests.exceptions.InvalidUR",
+        "content_chars": 351,
+        "content_head": "```bash\ncat << 'EOF' > test_dots.py\nimport requests\ntry:\n    requests.get(\"http://.example.com\")\n    print(\"Success\")\nexcept Exception as e:\n    print(f\"Caught: {type(e).__name__}: {e}\")\n\ntry:\n    requests.get(\"http://example.com.\")\n    print(\"Success\")\nexcept Exception as e:\n    print(f\"Caught: {ty"
+      },
+      "prefix_plus_generated_sha256": "b14c0a4c311fcc0457480df71f5998ce95a2341c28434eb3d6dd8c99888ba668"
+    }
+  ],
+  "limitations": [
+    "Current installed non-streaming Gemma4Parser interpretation only; historical server parser/stream behavior is not established.",
+    "Parser verdict is not semantic/task correctness or native anomaly adjudication.",
+    "No generated shell/code was executed."
+  ]
+}

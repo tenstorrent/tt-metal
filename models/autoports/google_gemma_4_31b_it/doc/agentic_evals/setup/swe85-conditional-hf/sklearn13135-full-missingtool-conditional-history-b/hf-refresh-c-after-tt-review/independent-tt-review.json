@@ -1,0 +1,58 @@
+{
+  "schema": "sklearn13135-tt-conditional-independent-review-v1",
+  "status": "reviewed_host_only_hf_pending",
+  "source_dir": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-full-missingtool-conditional-history-b",
+  "completion": {
+    "exit_code": 0,
+    "wall_seconds": 113.8532383441925,
+    "reported_forecast_seconds": [
+      130,
+      200,
+      300
+    ],
+    "interpretation": "Slight fast-side forecast miss; no quality inference from runtime."
+  },
+  "checks": [
+    {
+      "window": "protocol-switch",
+      "fixture_prompt_ids": 17585,
+      "conditioning_ids": 17585,
+      "conditioning_ids_equal_exact_fixture_prompt_ids": true,
+      "chosen_ids": 64,
+      "forced_ids": 64,
+      "forced_ids_equal_fixture_chosen": true,
+      "seed": 42,
+      "window_source_range": [
+        190,
+        254
+      ],
+      "source_generated_tokens": 665,
+      "policy_config_id": "stage12_bf16_hifi4_diagnostic",
+      "all_weight_groups_bf16": true,
+      "all_compute_groups_hifi4": true,
+      "kv_bf16": true,
+      "full_policy_exact": true
+    },
+    {
+      "window": "terminal-turn",
+      "fixture_prompt_ids": 17996,
+      "conditioning_ids": 17996,
+      "conditioning_ids_equal_exact_fixture_prompt_ids": true,
+      "chosen_ids": 64,
+      "forced_ids": 64,
+      "forced_ids_equal_fixture_chosen": true,
+      "seed": 42,
+      "window_source_range": [
+        601,
+        665
+      ],
+      "source_generated_tokens": 665,
+      "policy_config_id": "stage12_bf16_hifi4_diagnostic",
+      "all_weight_groups_bf16": true,
+      "all_compute_groups_hifi4": true,
+      "kv_bf16": true,
+      "full_policy_exact": true
+    }
+  ],
+  "conclusion": "Both TT conditional windows bind exactly to their per-window saved fixture prompt IDs, and all 64 forced IDs equal fixture chosen IDs. Both are seed42, full-BF16/HiFi4 runtime (attention/MLP/down/head BF16; BF16 KV; HiFi4 compute and SDPA; BF16 CCL). One window begins at the channel switch at generated token 190 and scores tokens190:254; terminal window scores601:665. Conditioning prefixes are 17,585 and 17,996 IDs. This is exact reconstructed history identity, not native prompt-ID identity; original fixture records native prompt IDs unavailable and discrepancy 17,395 reconstructed vs17,376 native prompt token count. Conditional scoring does not imply free-running incidence, sampler/RNG equivalence, or task correctness."
+}

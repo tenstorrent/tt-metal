@@ -2,18 +2,18 @@
  "pass": true,
  "problems": [],
  "logs": [
-  "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/benchmark/run/server-b1/server.log"
+  "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/server-phase1-counted/server-b32/server.log"
  ],
- "checked_at": "2026-11-13T22:01:48+0000",
+ "checked_at": "2026-11-13T23:31:55+0000",
  "thresholds": {
   "tail_chars": 4096,
   "flag_zlib_ratio_below": 0.05,
   "flag_distinct_chars_at_most": 10,
   "min_flag_chars": 1000
  },
- "id": "chatcmpl-8dd1f3983c02c2d7",
- "prompt_tokens": 21,
- "tokens": 19,
+ "id": "chatcmpl-bde3abfc527768bb",
+ "prompt_tokens": 19,
+ "tokens": 2,
  "finish": "stop",
- "chars": 76
+ "chars": 5
 }

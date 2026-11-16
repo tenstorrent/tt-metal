@@ -1,0 +1,175 @@
+{
+  "status": "launched",
+  "created_utc": "2026-11-14T13:11:50.917522+00:00",
+  "run_id": "swe-extended85-head-bfp8",
+  "eval_runs_start_argv": [
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+    "/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/scripts/eval_runs.py",
+    "start",
+    "--model-dir",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it",
+    "--id",
+    "swe-extended85-head-bfp8",
+    "--log",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-extended85-head-bfp8/run.log",
+    "--cwd",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline",
+    "--note",
+    "SWE85 admitted: fresh B32/12-agent memory, host resources and response logging verified; selected head_bfp8 unchanged; d1e4c8a5; projection 9.5901h plus25percent fits12h.",
+    "--",
+    "timeout",
+    "43200",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/agentic-v5-swe-env/bin/harbor",
+    "run",
+    "--config",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe-jobs/swe-extended85-head-bfp8_harbor_config.json"
+  ],
+  "shell_recipe": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python /home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/scripts/eval_runs.py start --model-dir /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it --id swe-extended85-head-bfp8 --log /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-extended85-head-bfp8/run.log --cwd /home/mvasiljevic/tt-metal-gemma4-31b-pipeline --note 'SWE85 conditional post-GPQA-controls head_bfp8; newPID/sourced1e4c8a5 B32/12agents; fresh allocator/resource/logging/admission required' -- timeout 43200 /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/agentic-v5-swe-env/bin/harbor run --config /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe-jobs/swe-extended85-head-bfp8_harbor_config.json",
+  "cwd": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline",
+  "config": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe-jobs/swe-extended85-head-bfp8_harbor_config.json",
+  "config_sha256": "da06dab8118aeaeaaed3a47737c4341f19f98a5820a53f29744a64653f1a41a8",
+  "candidate_preserved_sha256": "230e577c043484b01e0b855e728aab251c281cb4b6d711c3ec381ed183305902",
+  "combined85_manifest": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-candidate/combined85-tasks.json",
+  "combined85_sha256": "3cbce4e6ea2079b12441656a2bfb0ffbc9644881e2ea0fd50affdf76a445d326",
+  "image_provenance": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-candidate/all85-readiness.json",
+  "image_provenance_sha256": "cba8220e1db62de64c3031826420587c5a55597e89ffa4fc4eacc359fd897f37",
+  "definition_equivalence": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-candidate/combined85-definition-equivalence.json",
+  "server_identity": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/post-gpqa-controls-head-bfp8/server/perf-b32-server.json",
+  "server_identity_sha256": "06aadc102cc69d6d6a9c9794b78b51feb327fc48805e58c931571456d87ec516",
+  "source_commit": "d1e4c8a50935c0f084d7becfec656f3351fc0e3c",
+  "server_pid_at_preparation": null,
+  "precision": {
+    "config_id": "stage12_head_bfp8_lofi",
+    "weight_groups": {
+      "attention": "bfp4",
+      "mlp": "bfp4",
+      "down": "bfp4",
+      "lm_head": "bfp8_lofi"
+    },
+    "layer_exceptions": {},
+    "compute_fidelities": {
+      "attention": "LoFi",
+      "mlp": "LoFi",
+      "down": "LoFi",
+      "lm_head": "LoFi"
+    },
+    "activation_dtype": "bfloat8_b",
+    "residual_dtype": "bfloat16",
+    "ccl_dtype": {
+      "prefill": "bfloat8_b",
+      "decode": "bfloat16"
+    },
+    "kv_cache_dtype": "bfloat8_b",
+    "logits_dtype": "bfloat16",
+    "sampling_dtype": "bfloat16",
+    "embedding_dtype": "bfloat16",
+    "norm_dtype": "bfloat16",
+    "max_seq_len": 262144
+  },
+  "agents": 12,
+  "batch": 32,
+  "context": 262144,
+  "projection": {
+    "raw_hours": 9.590058417778545,
+    "margin_factor": 1.25,
+    "margin_hours": 11.98757302222318,
+    "outer_timeout_hours": 12,
+    "passes_time_arithmetic_only": true
+  },
+  "limits": {
+    "agent_timeout_seconds": 21600,
+    "llm_timeout_seconds": 3600,
+    "output_cap_tokens": 32768,
+    "outer_timeout_seconds": 43200
+  },
+  "environment_route": {
+    "host_cli": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/agentic-v5-swe-env/bin/harbor",
+    "agent_env": {
+      "OPENAI_BASE_URL": "http://172.17.0.1:8000/v1",
+      "OPENAI_API_BASE": "http://172.17.0.1:8000/v1",
+      "OPENAI_API_KEY": "local-no-auth-placeholder",
+      "LITELLM_LOCAL_MODEL_COST_MAP": "True"
+    },
+    "credential_policy": "Explicit non-secret local placeholder in agent config; no hosted credentials or substitution.",
+    "agent_network": "Official task definitions declare public agent and verifier network; Harbor warns endpoint allowlist is ignored for public policy. User explicitly allows declared network use. Every trajectory still requires fetched-solution audit.",
+    "verifier_network": "Official public verifier setting preserved; dependency parser environment already cached and UV_OFFLINE in images."
+  },
+  "harness": {
+    "main": "7a51c2f20f51e7508d8ea365d09092d00bbd5fcb",
+    "runtime_harbor": "e76c762fca5267dfb36e1f900f0a7724ed72e735",
+    "generic_verifier_template_fix": "e98973d132ec705baa4f59ca62680587ef5281a9",
+    "mini_swe_agent": "2.2.8"
+  },
+  "pending_launch_prerequisites": [
+    {
+      "check": "Fresh successful launch memory fit/identity collection; no reuse of prior launch as current measurement",
+      "status": "verified",
+      "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-admission.json"
+    },
+    {
+      "check": "Fresh response-body logging probe and digest, no profiler",
+      "status": "verified",
+      "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-admission.json"
+    },
+    {
+      "check": "Recheck host resource availability and task-specific sandbox requirements before admission",
+      "status": "verified",
+      "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-admission.json"
+    },
+    {
+      "check": "Controls/HF complete and policy unchanged; explicit new SWE85 admission audit",
+      "status": "verified",
+      "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-admission.json"
+    },
+    {
+      "check": "Current HEAD/runtime hash check, no other device owner before launch; old server is stopped",
+      "status": "verified",
+      "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-admission.json"
+    },
+    {
+      "check": "Fresh allocator/free pool measured on this new launch;12slots must be demonstrated at required context",
+      "status": "verified",
+      "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-admission.json"
+    },
+    {
+      "check": "Fresh actual Docker disk>=170GB plus RAM/CPU sandbox reserves;85 current image IDs/task hashes rechecked",
+      "status": "verified",
+      "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-admission.json"
+    },
+    {
+      "check": "Fresh probe on new PID and exactresponse logging pass; remaining lifetime covers43200s evaluation plus overhead",
+      "status": "verified",
+      "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-admission.json"
+    },
+    {
+      "check": "GPQA controls final review, corrected score accounting and coordinator SWE85 admission complete",
+      "status": "verified",
+      "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-admission.json"
+    }
+  ],
+  "fresh_logging_check_argv": [
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/check_swe85_post_gpqa_controls_response_logging.py"
+  ],
+  "fresh_logging_check_expected": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-extended85-head-bfp8/logging_check.json",
+  "no_score": true,
+  "conditional_on": "All nine shortened-input HF controls completed and coordinator-adjudicated; selected precision unchanged.",
+  "fresh_server_launch_recipe": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/post-gpqa-controls-server-launch.json",
+  "fresh_sizing_recipe": [
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tools/collect_candidate_sizing.py",
+    "--identity",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/post-gpqa-controls-head-bfp8/server/perf-b32-server.json",
+    "--output",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/post-gpqa-controls-swe85-sizing",
+    "--task-count",
+    "85",
+    "--host-slots",
+    "12"
+  ],
+  "historical_preparation": "Existing85 image and task cleanpass retained; fresh admission/resource checks required. Old stopped-server identity must not be reused.",
+  "source_scope_note": "Expected future launch HEAD d1e4c8a50935c0f084d7becfec656f3351fc0e3c includes only completed HF evidence since2e5ee43b; serving runtime unchanged. Verify actual runtime hashes/precision at launch; final stage review remains pending.",
+  "server_pid_at_admission": 246281,
+  "admission_evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-admission.json",
+  "launch_at_unix": 1794679363.3159566
+}

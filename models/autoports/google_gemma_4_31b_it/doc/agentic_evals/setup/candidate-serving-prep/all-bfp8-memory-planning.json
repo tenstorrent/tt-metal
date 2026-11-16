@@ -1,0 +1,450 @@
+{
+  "status": "host_only_planning_estimate_not_measurement_or_selection",
+  "prepared_utc": "2026-11-15",
+  "candidate_scope": {
+    "precision": "all weight groups BFP8-LoFi/LoFi based on the P8 accuracy policy",
+    "batch_assumption": 32,
+    "target_working_set_tokens": 131072,
+    "advertised_max_context_tokens": 262144,
+    "policy_assumption": "KV dtype, activation/layout, context and serving reserves unchanged from current selected head-BFP8 launch."
+  },
+  "memory_sources": {
+    "all_bfp8_b1_accuracy_memory": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/mlp-attention-down-accuracy/run/memory.json",
+      "sha256": "55f287cc2ccd47fb3712f623146e8cee0f17e400b9c9671e6b001b1233d9b31b",
+      "inventory": {
+        "decoder_weights": 8258273280,
+        "decoder_state": 299059200,
+        "embedding": 704643072,
+        "lm_head": 374341632,
+        "final_norm": 344064,
+        "rope": 805306368,
+        "kv_cache": 3074949120,
+        "page_tables": 15728640,
+        "sampler": 53248,
+        "prepared_prefill": 7409152,
+        "prepared_batched_prefill": 0,
+        "generator_state": 8521728,
+        "sum_owned_dram_bytes": 13548629504,
+        "allocator_bytes": 13549154304,
+        "unattributed_allocator_bytes": 524800
+      },
+      "prepared_free_bytes_per_bank": 2547894144,
+      "caveat": "B1 accuracy inventory includes a 3,074,949,120-byte KV allocation. It is removed before estimating the larger serving pool."
+    },
+    "current_selected_bfp4_b32_launch": {
+      "context_audit_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/head_bfp8_context_memory_audit.json",
+      "context_audit_sha256": "10b8a4bc6d1896b84ee2ae0e2ab7716f28402524a4be4fbaa22b2cebc400b3ee",
+      "measured_noncache_model_weights_rope_ccl_per_device": 6595987456,
+      "pool_source_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/gpqa_server_size_head_bfp8.json",
+      "pool_source_sha256": "968d2b1b8ab0c81728df9b8e745f041685d2baa3ab63082e8c3864095c57daf3",
+      "free_bytes_per_device": 27448525824,
+      "pool_bytes_per_device": 25691422720,
+      "pool_ids": 36896,
+      "reserve_bytes_per_device": 1015693824,
+      "ids_per_agent_131072": 2854,
+      "capacity_agents_131072": 12,
+      "full_context_capacity_agents_262144": 7,
+      "batch": 32,
+      "precision": {
+        "config_id": "stage12_head_bfp8_lofi",
+        "weight_groups": {
+          "attention": "bfp4",
+          "mlp": "bfp4",
+          "down": "bfp4",
+          "lm_head": "bfp8_lofi"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "LoFi",
+          "mlp": "LoFi",
+          "down": "LoFi",
+          "lm_head": "LoFi"
+        },
+        "activation_dtype": "bfloat8_b",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat8_b",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat8_b",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144
+      },
+      "measurement_scope": "One shared mesh allocator measurement applied uniformly to participating devices; these are not independent physical allocator samples. KV uses replicated ttnn.zeros on the mesh with equal shape/dtype on every device."
+    }
+  },
+  "calculation": {
+    "device_total_capacity_inferred_from_current_launch_bytes": 34044513280,
+    "p8_b1_non_kv_owned_bytes": 10473680384,
+    "p8_estimated_free_before_serving_pool_bytes": 23570832896,
+    "p8_estimated_free_before_pool_decimal_gb": 23.570832896,
+    "reduction_vs_current_bfp4_free_bytes": 3877692928,
+    "reserve_breakdown_bytes": {
+      "page_map": 62914560,
+      "prepared": 147472896,
+      "transient_analytical": 805306368,
+      "total": 1015693824
+    },
+    "candidate_kv_pool_budget_after_same_reserves_bytes": 22555139072,
+    "current_pool_bytes_per_pool_id": 696320.0,
+    "max_candidate_pool_ids_analytical": 32391,
+    "capacity_at_131072_analytical": 11,
+    "full_context_capacity_262144_analytical": 6,
+    "pool_ids_for_10_agents": 28540,
+    "pool_bytes_for_10_agents": 19872972800.0,
+    "remaining_candidate_kv_budget_after_10_agents_bytes": 2682166272.0,
+    "pool_ids_for_11_agents": 31394,
+    "pool_bytes_for_11_agents": 21860270080.0,
+    "remaining_candidate_kv_budget_after_11_agents_bytes": 694868992.0,
+    "pool_ids_for_12_agents": 34248,
+    "pool_bytes_for_12_agents": 23847567360.0,
+    "shortfall_for_12_agents_bytes": 1292428288.0
+  },
+  "interpretation": {
+    "planning_capacity": "Approximately11 agents at a 131072-token working set if pool IDs can be reduced. A 10-agent pool leaves about2.68GB additional KV budget; 11 leaves about0.695GB. Twelve would exceed this arithmetic pool budget by about1.29GB. Simple scaling of measured full-context capacity suggests roughly6 agents at262144 versus current7; context remains advertised, concurrency estimate only.",
+    "mandatory_validation": "These figures combine B1 owned-byte inventory with the current B32 launch total/free pool ledger. The stock plugin fixes pool sizing before model load. An all-BFP8 server must be launched with an explicit candidate pool, then actual allocator/free/contiguous/reserve values must be measured; this estimate cannot replace launch validation.",
+    "conservative_candidate": "10 agents at 131072 is the conservative planning point; no pool, batch, or agent count is selected here."
+  },
+  "swe85_wall_planning": {
+    "current_head_bfp8_full85_call_span": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-extended85-head-bfp8/collected-final/calls.json",
+      "sha256": "2d3016eb651e188bd88758782b5b3df6b4e16868e3039868717144a9fb956dda",
+      "tasks": 85,
+      "native_calls": 4427,
+      "start_epoch_min": 1794679365.538789,
+      "end_epoch_max": 1794692046.549794,
+      "span_seconds": 12681.011004924774,
+      "span_hours": 3.5225030569235485,
+      "caveat": "All85 final task records present. This is earliest-task-start to latest-task-end, not an independent process completion timestamp."
+    },
+    "prior_selected_launch_projection": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe_extended85_launch_metadata.json",
+      "sha256": "eb151244a0c05f5d1c2dd27e3dca391c02270770acec6bdb6b880bb28d5c5032",
+      "raw_hours": 9.590058417778545,
+      "25pct_margin_hours": 11.98757302222318,
+      "role": "Older conservative planning forecast; retained as a separate anchor, not mixed with measured task span."
+    },
+    "current_head_bfp8_b32_rate": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/head-bfp8-rates/measurement/serving_rates-swe.json",
+      "sha256": "c0d2ea027b4886f4a55e0590c72483c4c05f1402ee553431412699a307e57e03",
+      "row_id": "b32-c32-i4096-swe",
+      "concurrency": 32,
+      "input_tokens": 4096,
+      "decode_tps_per_user": 5.839150330150773,
+      "regime": "B32,32 concurrent requests"
+    },
+    "p8_accuracy_rate": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/mlp-attention-down-accuracy/run/readiness_accuracy.json",
+      "sha256": "ac9b331c0f92828534e2e029f951c8fa7b49de4602e56de3fac52d09692f7544",
+      "natural_decode_tps": 26.426570380862962,
+      "natural_e2e_tps": 26.289851373381442,
+      "regime": "B1 natural accuracy continuation, not B32 concurrent SWE traffic"
+    },
+    "rough_wall_scenarios": {
+      "observed_85_task_span_hours": 3.5225030569235485,
+      "11_agents_inverse_concurrency_sensitivity_hours": 3.8427306075529617,
+      "acceptance_range_hours": [
+        0.08333333333333333,
+        0.5
+      ],
+      "serving_rate_remeasurement_forecast_seconds": 5455.199,
+      "serving_rate_remeasurement_forecast_hours": 1.5153330555555555,
+      "combined_11_agent_repeat_plus_acceptance_plus_rates_hours": [
+        5.441396996441851,
+        5.858063663108518
+      ],
+      "rate_comparison": "26.43 t/s B1 diagnostic token rate is not directly comparable to 5.84 t/s/user at B32 and32 concurrent requests; no cross-regime speed adjustment applied. The 12-to-11 wall scaling is only a crude concurrency sensitivity."
+    },
+    "remaining_10h_assessment": "Using the observed 3.52h task span, a crude 12-to-11 concurrency scale, acceptance estimate (0.08\u20130.50h), and 1.52h serving-rate remeasurement gives about 5.44\u20135.86h before extra contingency, arithmetically within10h. The older 9.59h point plus acceptance and rate remeasurement exceeds10h. The P8 all-BFP8 natural score is currently rejected (447/512=87.30% below90%), so this does not authorize P8 acceptance or rate work; await a passing selected candidate."
+  },
+  "source_sha256": {
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/mlp-attention-down-accuracy/run/memory.json": "55f287cc2ccd47fb3712f623146e8cee0f17e400b9c9671e6b001b1233d9b31b",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/head_bfp8_context_memory_audit.json": "10b8a4bc6d1896b84ee2ae0e2ab7716f28402524a4be4fbaa22b2cebc400b3ee",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/gpqa_server_size_head_bfp8.json": "968d2b1b8ab0c81728df9b8e745f041685d2baa3ab63082e8c3864095c57daf3",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-extended85-head-bfp8/collected-final/calls.json": "2d3016eb651e188bd88758782b5b3df6b4e16868e3039868717144a9fb956dda",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe_extended85_launch_metadata.json": "eb151244a0c05f5d1c2dd27e3dca391c02270770acec6bdb6b880bb28d5c5032",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/attention-down-acceptance/commands.json": "d54e78957a79416bfa1cf212e88022b3dea6dc1108074dde03036e0787fd9b48",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/attention-down-policy-gates-c.json": "c78c3e10df8e669f47178ebcd25da75eb3517d83edf6fe2931b02c21f18d157b",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/head-bfp8-rates/measurement/serving_rates-swe.json": "c0d2ea027b4886f4a55e0590c72483c4c05f1402ee553431412699a307e57e03",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/mlp-attention-down-accuracy/run/readiness_accuracy.json": "ac9b331c0f92828534e2e029f951c8fa7b49de4602e56de3fac52d09692f7544",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full-bf16-natural-accuracy-control/run/memory.json": "f6d2d20048167bff33e6ea59ef03a5dd093b562b9445dce90ff571dfe2a37c42",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_config.json": "63ce02f7fa0df993a27daca25eeeb3adca51e15c7c6956d1cef122534ebdc7a9",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/head-bfp8-rates/measurement/serving_rates-by-config.json": "fe1e893ef0ce9c1d4819c082136749d38494feb3aca63cc4c1b45d1e4976347a",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe_server_size.json": "9143219361974fb09492f66219ef32cdf52b6701917797e851bd585275ca6666",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/extended_projection_trajectory_replay.json": "c89bedfbb0f39794311737ef696600dc1bcd7b335a79be3a0dd80c41aba1c6c7"
+  },
+  "additional_kv_scenarios": {
+    "method": "Use exact observed B1 KV allocations from all-BFP8/BFP8-KV memory and all-BF16/BF16-KV memory. Their measured ratio is the cache-byte multiplier, not an assumed exact 2x. Hold the current B32 total memory, current selected BFP4 launch reserve, 131072 ids-per-agent and shared-mesh model. Replace KV in each inventory before estimating pool capacity.",
+    "measured_kv_format_anchor": {
+      "all_bfp8_weights_bfp8_kv_bytes": 3074949120,
+      "all_bf16_weights_bf16_kv_bytes": 5788139520,
+      "bf16_to_bfp8_kv_byte_ratio": 1.8823529411764706,
+      "precision_source_bf16": {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_config.json",
+        "sha256": "63ce02f7fa0df993a27daca25eeeb3adca51e15c7c6956d1cef122534ebdc7a9",
+        "kv_cache_dtype": "bfloat16"
+      },
+      "note": "The two accuracy inventories use the model-owned exact cache layout; this empirical inventory ratio is about1.882, not2.0. Candidate B32 serving still requires actual allocation measurement."
+    },
+    "bfp8_weights_bf16_kv": {
+      "precision_concept": "All weight groups BFP8-LoFi, KV BF16; hypothetical memory-only mix, not an admitted/validated runtime policy.",
+      "non_kv_owned_bytes": 10473680384,
+      "free_before_pool_bytes_estimate": 23570832896,
+      "reserve_bytes": 1015693824,
+      "kv_pool_budget_bytes_estimate": 22555139072,
+      "pool_id_bytes_estimate": 1310720.0,
+      "max_pool_ids_estimate": 17208,
+      "capacity_at_131072_estimate": 6,
+      "full_context_capacity_262144_estimate": 3,
+      "ids_for_5_agents": 14270,
+      "pool_bytes_for_5_agents_estimate": 18703974400.0,
+      "remaining_budget_after_5_estimate": 3851164672.0,
+      "ids_for_6_agents": 17124,
+      "pool_bytes_for_6_agents_estimate": 22444769280.0,
+      "remaining_budget_after_6_estimate": 110369792.0,
+      "interpretation": "Arithmetic ceiling6 at131072, but six leaves only~110MB beyond pool after analytical reserves, so five is the safer planning envelope until allocator measurement; full-context concurrency estimate3."
+    },
+    "bf16_weights_bfp8_kv": {
+      "precision_concept": "All weight groups BF16, KV BFP8; hypothetical memory-only mix, not an admitted/validated runtime policy.",
+      "source_inventory_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full-bf16-natural-accuracy-control/run/memory.json",
+      "source_inventory_sha256": "f6d2d20048167bff33e6ea59ef03a5dd093b562b9445dce90ff571dfe2a37c42",
+      "bf16_non_kv_owned_bytes": 18015809024,
+      "free_before_pool_bytes_estimate": 16028704256,
+      "reserve_bytes": 1015693824,
+      "kv_pool_budget_bytes_estimate": 15013010432,
+      "pool_id_bytes_estimate": 696320.0,
+      "max_pool_ids_estimate": 21560,
+      "capacity_at_131072_estimate": 7,
+      "full_context_capacity_262144_estimate": 4,
+      "interpretation": "Arithmetic ceiling7 at131072 and4 at262144, assuming fixed other allocations/reserves transfer from current B32 selected BFP4 launch."
+    }
+  },
+  "stage11_batch_rate_and_replay_comparison": {
+    "rates_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/head-bfp8-rates/measurement/serving_rates-by-config.json",
+    "rates_sha256": "fe1e893ef0ce9c1d4819c082136749d38494feb3aca63cc4c1b45d1e4976347a",
+    "stage11_config": "head_bfp4 with BFP8 KV; policy differs from both hypothetical candidates.",
+    "measured_batch_comparisons": [
+      {
+        "input_tokens": 4096,
+        "b8_row": "b8-c8-i4096-swe",
+        "b8_concurrency": 8,
+        "b8_decode_tps_per_user": 19.03062627100608,
+        "b8_aggregate_decode_tps": 152.24501016804865,
+        "b32_row": "b32-c32-i4096-swe",
+        "b32_concurrency": 32,
+        "b32_decode_tps_per_user": 5.851680344991573,
+        "b32_aggregate_decode_tps": 187.25377103973034,
+        "aggregate_b8_over_b32": 0.813041090295299,
+        "policy_mismatch": "Stage11 head_bfp4 plus BFP8 KV, not all-BFP8 weights or BF16 KV."
+      },
+      {
+        "input_tokens": 22420,
+        "b8_row": "b8-c8-i22420-swe",
+        "b8_concurrency": 8,
+        "b8_decode_tps_per_user": 5.496555769380917,
+        "b8_aggregate_decode_tps": 43.972446155047336,
+        "b32_row": "b32-c32-i22420-swe",
+        "b32_concurrency": 32,
+        "b32_decode_tps_per_user": 1.3597005627358396,
+        "b32_aggregate_decode_tps": 43.51041800754687,
+        "aggregate_b8_over_b32": 1.010618793582271,
+        "policy_mismatch": "Stage11 head_bfp4 plus BFP8 KV, not all-BFP8 weights or BF16 KV."
+      },
+      {
+        "input_tokens": 28672,
+        "b8_row": "b8-c8-i28672-swe",
+        "b8_concurrency": 8,
+        "b8_decode_tps_per_user": 4.212130201662615,
+        "b8_aggregate_decode_tps": 33.69704161330092,
+        "b32_row": "b32-c32-i28672-swe",
+        "b32_concurrency": 32,
+        "b32_decode_tps_per_user": 1.1535137595864884,
+        "b32_aggregate_decode_tps": 36.91244030676763,
+        "aggregate_b8_over_b32": 0.9128911915130903,
+        "policy_mismatch": "Stage11 head_bfp4 plus BFP8 KV, not all-BFP8 weights or BF16 KV."
+      }
+    ],
+    "existing_call_replay_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe_server_size.json",
+    "existing_call_replay_sha256": "9143219361974fb09492f66219ef32cdf52b6701917797e851bd585275ca6666",
+    "existing_stage11_replay_proxies": [
+      {
+        "batch": 32,
+        "pool_ids": 36896,
+        "agents": 10,
+        "capacity": 12,
+        "waves": [
+          {
+            "agents": 10,
+            "seconds": 11802.333398810022,
+            "rate_reasons": [
+              "contexts above the longest measured row (28672 at batch 32) are extrapolated"
+            ]
+          }
+        ],
+        "conditional_single_call_task_hours": 3.278425944113895,
+        "current_launch_measured": true,
+        "policy_mismatch": "Existing sizing candidate, not BFP8-weights/BF16-KV. The B8 alternatives are not candidate runtime measurements."
+      },
+      {
+        "batch": 8,
+        "pool_ids": 20480,
+        "agents": 7,
+        "capacity": 7,
+        "waves": [
+          {
+            "agents": 7,
+            "seconds": 9378.850162815042,
+            "rate_reasons": [
+              "contexts above the longest measured row (28672 at batch 8) are extrapolated"
+            ]
+          },
+          {
+            "agents": 3,
+            "seconds": 3892.4954786638023,
+            "rate_reasons": [
+              "contexts above the longest measured row (28672 at batch 8) are extrapolated"
+            ]
+          }
+        ],
+        "conditional_single_call_task_hours": 3.6864849004107905,
+        "current_launch_measured": false,
+        "policy_mismatch": "Existing sizing candidate, not BFP8-weights/BF16-KV. The B8 alternatives are not candidate runtime measurements."
+      },
+      {
+        "batch": 8,
+        "pool_ids": 10248,
+        "agents": 3,
+        "capacity": 3,
+        "waves": [
+          {
+            "agents": 3,
+            "seconds": 3892.4954786638023,
+            "rate_reasons": [
+              "contexts above the longest measured row (28672 at batch 8) are extrapolated"
+            ]
+          },
+          {
+            "agents": 3,
+            "seconds": 3892.4954786638023,
+            "rate_reasons": [
+              "contexts above the longest measured row (28672 at batch 8) are extrapolated"
+            ]
+          },
+          {
+            "agents": 3,
+            "seconds": 3892.4954786638023,
+            "rate_reasons": [
+              "contexts above the longest measured row (28672 at batch 8) are extrapolated"
+            ]
+          },
+          {
+            "agents": 1,
+            "seconds": 1149.318136588183,
+            "rate_reasons": [
+              "contexts above the longest measured row (28672 at batch 8) are extrapolated"
+            ]
+          }
+        ],
+        "conditional_single_call_task_hours": 3.563001270160997,
+        "current_launch_measured": false,
+        "policy_mismatch": "Existing sizing candidate, not BFP8-weights/BF16-KV. The B8 alternatives are not candidate runtime measurements."
+      },
+      {
+        "batch": 1,
+        "pool_ids": 8449,
+        "agents": 1,
+        "capacity": 2,
+        "waves": [
+          {
+            "agents": 1,
+            "seconds": 1035.1240801517745,
+            "rate_reasons": [
+              "no rows below full concurrency at server batch 1; few requests in flight are priced as a full batch"
+            ]
+          },
+          {
+            "agents": 1,
+            "seconds": 1035.1240801517745,
+            "rate_reasons": [
+              "no rows below full concurrency at server batch 1; few requests in flight are priced as a full batch"
+            ]
+          },
+          {
+            "agents": 1,
+            "seconds": 1035.1240801517745,
+            "rate_reasons": [
+              "no rows below full concurrency at server batch 1; few requests in flight are priced as a full batch"
+            ]
+          },
+          {
+            "agents": 1,
+            "seconds": 1035.1240801517745,
+            "rate_reasons": [
+              "no rows below full concurrency at server batch 1; few requests in flight are priced as a full batch"
+            ]
+          },
+          {
+            "agents": 1,
+            "seconds": 1035.1240801517745,
+            "rate_reasons": [
+              "no rows below full concurrency at server batch 1; few requests in flight are priced as a full batch"
+            ]
+          },
+          {
+            "agents": 1,
+            "seconds": 1035.1240801517745,
+            "rate_reasons": [
+              "no rows below full concurrency at server batch 1; few requests in flight are priced as a full batch"
+            ]
+          },
+          {
+            "agents": 1,
+            "seconds": 1035.1240801517745,
+            "rate_reasons": [
+              "no rows below full concurrency at server batch 1; few requests in flight are priced as a full batch"
+            ]
+          },
+          {
+            "agents": 1,
+            "seconds": 1035.1240801517745,
+            "rate_reasons": [
+              "no rows below full concurrency at server batch 1; few requests in flight are priced as a full batch"
+            ]
+          },
+          {
+            "agents": 1,
+            "seconds": 1035.1240801517745,
+            "rate_reasons": [
+              "no rows below full concurrency at server batch 1; few requests in flight are priced as a full batch"
+            ]
+          },
+          {
+            "agents": 1,
+            "seconds": 1035.1240801517745,
+            "rate_reasons": [
+              "no rows below full concurrency at server batch 1; few requests in flight are priced as a full batch"
+            ]
+          }
+        ],
+        "conditional_single_call_task_hours": 2.8753446670882625,
+        "current_launch_measured": false,
+        "policy_mismatch": "Existing sizing candidate, not BFP8-weights/BF16-KV. The B8 alternatives are not candidate runtime measurements."
+      }
+    ],
+    "existing_full85_model_replay_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/extended_projection_trajectory_replay.json",
+    "existing_full85_model_replay_sha256": "c89bedfbb0f39794311737ef696600dc1bcd7b335a79be3a0dd80c41aba1c6c7",
+    "historical_full85_projection_at_12_agents_b32_hours": 9.590058417778545,
+    "historical_full85_projection_with_25pct_margin_hours": 11.98757302222318,
+    "replay_limitations": [
+      "The stage11 B8 rows are only at concurrency8 and input buckets4096/22420/28672; they do not directly measure the estimated five/six-agent operating points or longer contexts.",
+      "The stored current-run 85-task completion span is a measurement under B32/head-BFP8, not a rate replay for these altered weight/KV mixes.",
+      "Existing candidate call replays were for the BFP4-KV8 sizing study and small ten-task archetype set. Its predicted3.56\u20133.69h alternatives show batch/rates/waves can avoid inverse-concurrency scaling, but do not predict this candidate.",
+      "No policy-matched 85-task replay at five/six agents is supportable from existing rate rows. Fresh B8/B32 rates, exact pool launch, and workload replay are required after a candidate passes accuracy."
+    ],
+    "planning_takeaway": "Do not multiply BFP8-KV wall time by12/5 or12/6. Existing measured B8 per-user decode rates are much higher than B32 at high concurrency, while aggregate rates are similar at longer tested prompts; current candidate data lack the required policy/context coverage."
+  }
+}

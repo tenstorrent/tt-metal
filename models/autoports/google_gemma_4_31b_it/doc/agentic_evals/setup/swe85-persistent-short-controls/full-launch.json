@@ -1,0 +1,65 @@
+{
+  "mode": "full",
+  "command": [
+    "timeout",
+    "3600",
+    "env",
+    "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+    "READINESS_TRACE_REGION_SIZE=134217728",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+    "-m",
+    "models.autoports.google_gemma_4_31b_it.tools.precision_repro_batch",
+    "--cases",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/admitted-cases.json",
+    "--build-kwargs-file",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_build_kwargs.json",
+    "--output-dir",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/full",
+    "--compare-dir",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/served"
+  ],
+  "start_unix": 1794709664.5601785,
+  "manifest_sha256": "41b7db2aec3de94bee0a104994317227644b1f3801310cc02fd3c81ed72774bd",
+  "device_owner_preflight": [],
+  "prediction": {
+    "predicted_hours": 0.18977351677142082,
+    "range_hours": [
+      0.09488675838571041,
+      0.32261497851141535
+    ],
+    "load_seconds_basis": 75.54386684880592,
+    "rows": [
+      {
+        "job": "anomaly.psf__requests-5414.call10.onset.optional-suffix512",
+        "estimated_seconds": 97.89975867596709,
+        "source_TF_wall_seconds_unscaled_conservative": 6.532483668066561
+      },
+      {
+        "job": "anomaly.psf__requests-5414.call11.onset.optional-suffix512",
+        "estimated_seconds": 98.0800401013466,
+        "source_TF_wall_seconds_unscaled_conservative": 6.700830840971321
+      },
+      {
+        "job": "anomaly.psf__requests-5414.call9.onset.optional-suffix512",
+        "estimated_seconds": 98.65022657046978,
+        "source_TF_wall_seconds_unscaled_conservative": 7.117571000941098
+      },
+      {
+        "job": "anomaly.requests2931.call20.canonicalprefix.optional-suffix512",
+        "estimated_seconds": 98.86346338698363,
+        "source_TF_wall_seconds_unscaled_conservative": 7.256983602885157
+      },
+      {
+        "job": "anomaly.pytest-dev__pytest-7432.call19.onset.optional-suffix512",
+        "estimated_seconds": 100.1437275736926,
+        "source_TF_wall_seconds_unscaled_conservative": 8.087744676042348
+      },
+      {
+        "job": "anomaly.sympy__sympy-14248.call53.onset.optional-suffix512",
+        "estimated_seconds": 114.00357721984932,
+        "source_TF_wall_seconds_unscaled_conservative": 18.448180149076506
+      }
+    ]
+  },
+  "scope": "Six exact-suffix caret controls; diagnostic times are not serving performance."
+}

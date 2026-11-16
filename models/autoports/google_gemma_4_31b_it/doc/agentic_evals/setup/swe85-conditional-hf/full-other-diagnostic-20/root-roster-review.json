@@ -1,0 +1,131 @@
+{
+  "status": "root_roster_review_complete_no_execution_admission",
+  "utc": "2026-11-15T08:36:31.553215+00:00",
+  "reviewer": "root",
+  "observations": 20,
+  "checks": [
+    {
+      "name": "fullother-01-anomaly-psf-requests-5414-call11-s42-p2048-c2048",
+      "source_and_fixture_hashes_verified": true,
+      "seed": 42,
+      "source_tokens": 1632
+    },
+    {
+      "name": "fullother-02-anomaly-psf-requests-5414-call10-s42-p2048-c512",
+      "source_and_fixture_hashes_verified": true,
+      "seed": 42,
+      "source_tokens": 500
+    },
+    {
+      "name": "fullother-03-anomaly-psf-requests-5414-call11-s43-p2048-c1024",
+      "source_and_fixture_hashes_verified": true,
+      "seed": 43,
+      "source_tokens": 1024
+    },
+    {
+      "name": "fullother-04-anomaly-call91-canonicalprefix-s42-p4096-c512",
+      "source_and_fixture_hashes_verified": true,
+      "seed": 42,
+      "source_tokens": 39
+    },
+    {
+      "name": "fullother-05-anomaly-sphinx-doc-sphinx-10323--s44-p4096-c512",
+      "source_and_fixture_hashes_verified": true,
+      "seed": 44,
+      "source_tokens": 512
+    },
+    {
+      "name": "fullother-06-anomaly-psf-requests-5414-call10-s42-p1024-c512",
+      "source_and_fixture_hashes_verified": true,
+      "seed": 42,
+      "source_tokens": 512
+    },
+    {
+      "name": "fullother-07-anomaly-psf-requests-5414-call10-s43-p1024-c512",
+      "source_and_fixture_hashes_verified": true,
+      "seed": 43,
+      "source_tokens": 512
+    },
+    {
+      "name": "fullother-08-anomaly-psf-requests-5414-call10-s44-p1024-c512",
+      "source_and_fixture_hashes_verified": true,
+      "seed": 44,
+      "source_tokens": 328
+    },
+    {
+      "name": "fullother-09-anomaly-psf-requests-5414-call11-s44-p1024-c512",
+      "source_and_fixture_hashes_verified": true,
+      "seed": 44,
+      "source_tokens": 512
+    },
+    {
+      "name": "fullother-10-anomaly-psf-requests-5414-call11-s43-p1024-c512",
+      "source_and_fixture_hashes_verified": true,
+      "seed": 43,
+      "source_tokens": 124
+    },
+    {
+      "name": "fullother-11-anomaly-sphinx-doc-sphinx-10323--s42-p1024-c512",
+      "source_and_fixture_hashes_verified": true,
+      "seed": 42,
+      "source_tokens": 200
+    },
+    {
+      "name": "fullother-12-anomaly-sphinx-doc-sphinx-10323--s43-p1024-c512",
+      "source_and_fixture_hashes_verified": true,
+      "seed": 43,
+      "source_tokens": 207
+    },
+    {
+      "name": "fullother-13-anomaly-sphinx-doc-sphinx-10323--s44-p1024-c512",
+      "source_and_fixture_hashes_verified": true,
+      "seed": 44,
+      "source_tokens": 191
+    },
+    {
+      "name": "fullother-14-anomaly-matplotlib-matplotlib-20-s43-p1024-c512",
+      "source_and_fixture_hashes_verified": true,
+      "seed": 43,
+      "source_tokens": 512
+    },
+    {
+      "name": "fullother-15-anomaly-matplotlib-matplotlib-20-s44-p1024-c512",
+      "source_and_fixture_hashes_verified": true,
+      "seed": 44,
+      "source_tokens": 512
+    },
+    {
+      "name": "fullother-16-anomaly-psf-requests-5414-call11-s42-p1024-c1024",
+      "source_and_fixture_hashes_verified": true,
+      "seed": 42,
+      "source_tokens": 733
+    },
+    {
+      "name": "fullother-17-models-autoports-google-gemma-4--s43-p2048-c1024",
+      "source_and_fixture_hashes_verified": true,
+      "seed": 43,
+      "source_tokens": 975
+    },
+    {
+      "name": "fullother-18-models-autoports-google-gemma-4--s44-p2048-c1024",
+      "source_and_fixture_hashes_verified": true,
+      "seed": 44,
+      "source_tokens": 626
+    },
+    {
+      "name": "fullother-19-anomaly-psf-requests-5414-call11-s43-p512-c1024",
+      "source_and_fixture_hashes_verified": true,
+      "seed": 43,
+      "source_tokens": 1024
+    },
+    {
+      "name": "fullother-20-anomaly-psf-requests-5414-call11-s44-p512-c2048",
+      "source_and_fixture_hashes_verified": true,
+      "seed": 44,
+      "source_tokens": 2048
+    }
+  ],
+  "proposal_sha256": "e1f4c1470bd6ec1aaeb67177b1cebe57ab15b2421866c74966493d5ecb5775c7",
+  "forecast_sha256": "dd1965cefce35324a08a0c95aa6b98a6d750024b81cbccee5451b90a9e0f7750",
+  "cost_decision": "Total upper sensitivity exceeds remaining stage time; admit individual groups only after primary HF and precision-control work. All unrun observations remain explicitly uncovered."
+}

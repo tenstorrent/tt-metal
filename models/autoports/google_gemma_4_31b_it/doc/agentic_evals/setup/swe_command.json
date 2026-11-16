@@ -1,0 +1,23 @@
+{
+  "argv": [
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/agentic-v5-swe-env/bin/harbor",
+    "run",
+    "--config",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe-jobs/swe-phase2_harbor_config.json"
+  ],
+  "config": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe-jobs/swe-phase2_harbor_config.json",
+  "reference_model": "Qwen/Qwen3.8-27B",
+  "limits": {
+    "agent_timeout_sec": 21600,
+    "llm_timeout_sec": 3600,
+    "output_cap_tokens": 32768
+  },
+  "blockers": [],
+  "score_reference": 0.648,
+  "source": "Operator inputs, not Qwen provisional published score",
+  "no_network_sources_fetched": true,
+  "environment_ready": true,
+  "network_note": "Generated task agent network_mode=no-network, verifier retains public; main allow_agent_endpoint sets gateway exception. Resources remain official per-task definitions.",
+  "dependency_image_selection": "Each generated task environment.docker_image selects v5-swe-prepared:<task>. Original task configs preserved; resources, agent no-network and verifier unchanged. Details swe_runtime_preseed.json.",
+  "sandbox_install_ready": true
+}

@@ -1,0 +1,50 @@
+{
+  "status": "untested_short_prefix_candidates",
+  "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe-astropy-precision/second-call/astropy.onset.private.json",
+  "source_sha256": "1c97de4327f44ed6a0e9d6f48b50cdfbb854cf268e88504b8a01ac2597f35ffa",
+  "original_prefix_tokens": 17601,
+  "native_response_id": "chatcmpl-bdff2676d029ceb6",
+  "variants": [
+    {
+      "name": "astropy.second.suffix512",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe-astropy-precision/short-prefix-candidates/astropy.second.suffix512.private.json",
+      "prompt_tokens": 512,
+      "chosen_tokens": 64,
+      "case_sha256": "d2b890b2343fc4350cadfa9154ab65e0dc79bbf793cba83ab926570e6ade4321"
+    },
+    {
+      "name": "astropy.second.suffix2048",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe-astropy-precision/short-prefix-candidates/astropy.second.suffix2048.private.json",
+      "prompt_tokens": 2048,
+      "chosen_tokens": 64,
+      "case_sha256": "ab18973ec0f898a74ce68bc9290aa1666416f5aea92119f58567a748765a16f0"
+    }
+  ],
+  "sampling": {
+    "temperature": 1.0,
+    "top_p": 0.95,
+    "top_k": 20
+  },
+  "diagnostic_seeds": [
+    42,
+    43,
+    44
+  ],
+  "native_seed": null,
+  "exactness": "Each shortened prompt is byte-for-byte equivalent integer suffix of saved original diagnostic token IDs; chosen64 identical. Original reconstruction limitations remain; semantic context intentionally removed.",
+  "purpose": "Find a smaller prefix that still reproduces before spending CPUHF budget. No reproduction claim before execution.",
+  "projection": {
+    "per_config": "2short TFbranches total128positions and6x1024free token cap; one model load.",
+    "decode_lower_bound_minutes_from_prior_isolated_diagnostics": {
+      "served": 2.9902393797589406,
+      "full": 6.039744348946229
+    },
+    "budget_minutes_per_config": [
+      10,
+      25
+    ],
+    "limitations": "Budget includes estimatedload/warmup; shorterprefill benefit unmeasured. Prior diagnostic rates are planning only, not newperformance evidence; no concurrentCPU performanceclaims."
+  },
+  "learned_read": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/learned.json",
+  "original_case_unchanged": true
+}

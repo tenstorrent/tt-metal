@@ -1,0 +1,714 @@
+{
+  "status": "host_admitted_not_executed",
+  "jobs": 161,
+  "action_jobs": 58,
+  "pilot": "fullreply.sphinx-doc__sphinx-10323.call68",
+  "sources": {
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions-semantic/summary.json": "11f75c9eda4d3207d57fe919e407e00d60d4f3c3f578ca6f0dcafdda5782438b",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-semantic-validation/summary.json": "c868263c3777a1e52ce505cab91642ca7430f5f01995eb3c4b4044e072d2ecbb",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-tt-execution-plan/combined-cases.json": "8551ad904bfca135f18a59a0e68797dce604bb38fb2f1c7d19440cc03d0be0ca",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-tt-execution-plan/deferred-action-candidates.json": "15a891f65ba66410461b8bbde046cfe5a77606b332621f4988b7552b9e4770ac",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/review/swe85-fixtures-review.md": "d00329a7b7ddacaa47008730d5225ccb7ac9d7f4a914924103e45e01bbecdc6c",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions-semantic/psf__requests-1921-local-auth-attempt1/summary.json": "a2e5069842848c7f32a190733737638330137414af3357a3ceaa51e73c7794b7",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/psf__requests-5414/semantic-pure-urls/summary.json": "ed7a0f6df17c6a8788e78079768fdfbca245e7eb0d6e0f951c1d4fa51dd9952f"
+  },
+  "admitted": [
+    {
+      "name": "action.astropy__astropy-13398.call17",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/astropy__astropy-13398/action_counterfactual.candidate.private.json",
+      "branches": [
+        "chosen",
+        "correct"
+      ],
+      "sha256": "cf257559635633305e61cdd43ee580830d26040857d3a664e1e8291c8492d030",
+      "task": "astropy__astropy-13398",
+      "kind": "wrong",
+      "limitation": null
+    },
+    {
+      "name": "action.astropy__astropy-14096.call23",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/astropy__astropy-14096/action_counterfactual.candidate.private.json",
+      "branches": [
+        "chosen",
+        "correct"
+      ],
+      "sha256": "5feeb353e8d4dc4a956d0ff4fd4c9cb54ebaf173e8c8306bb4e8b242a3c970d9",
+      "task": "astropy__astropy-14096",
+      "kind": "wrong",
+      "limitation": null
+    },
+    {
+      "name": "action.astropy__astropy-14598.call33",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/astropy__astropy-14598/action_counterfactual.candidate.private.json",
+      "branches": [
+        "chosen",
+        "correct"
+      ],
+      "sha256": "ce76fb1ce580b1ddae47e94c6b2d78c92418e4da1be822ab2b7e505462ab9c3d",
+      "task": "astropy__astropy-14598",
+      "kind": "wrong",
+      "limitation": null
+    },
+    {
+      "name": "action.django__django-14007.call31",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/django__django-14007/action_counterfactual.candidate.private.json",
+      "branches": [
+        "chosen",
+        "correct"
+      ],
+      "sha256": "1afac21fa317e6099c8d74ffe523dbae743de534bb7b2fe2637cc92ad923000b",
+      "task": "django__django-14007",
+      "kind": "wrong",
+      "limitation": null
+    },
+    {
+      "name": "action.django__django-14011.call33",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/django__django-14011/action_counterfactual.candidate.private.json",
+      "branches": [
+        "chosen",
+        "correct"
+      ],
+      "sha256": "2656153fba29079165b1bcbb49ac7ddfd6bbf1dfe378285d680816f607639341",
+      "task": "django__django-14011",
+      "kind": "wrong",
+      "limitation": null
+    },
+    {
+      "name": "action.django__django-15037.call19",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/django__django-15037/action_counterfactual.candidate.private.json",
+      "branches": [
+        "chosen",
+        "correct"
+      ],
+      "sha256": "f40ae4b27d642a43e5a31e278d4f709afa52c973d5edf5acb57230b7b0a064d2",
+      "task": "django__django-15037",
+      "kind": "wrong",
+      "limitation": null
+    },
+    {
+      "name": "action.django__django-16950.call80",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/django__django-16950/action_counterfactual.candidate.private.json",
+      "branches": [
+        "chosen",
+        "correct"
+      ],
+      "sha256": "03cd0cc1a00bdfef7d263043f6e738d111760fd8d2481dcd450145deb30a6ebd",
+      "task": "django__django-16950",
+      "kind": "wrong",
+      "limitation": null
+    },
+    {
+      "name": "action.matplotlib__matplotlib-25479.call34",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/matplotlib__matplotlib-25479/action_counterfactual.candidate.private.json",
+      "branches": [
+        "chosen",
+        "correct"
+      ],
+      "sha256": "725d37edcc62b651707cc77079508353478c8a16fc09810fe13b17f005a44d8a",
+      "task": "matplotlib__matplotlib-25479",
+      "kind": "wrong",
+      "limitation": null
+    },
+    {
+      "name": "action.mwaskom__seaborn-3069.call50",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/mwaskom__seaborn-3069/action_counterfactual.candidate.private.json",
+      "branches": [
+        "chosen",
+        "correct"
+      ],
+      "sha256": "ee0491294d6b63d3641001708a0b4077d59f705590c1634a4abba00356f80d5f",
+      "task": "mwaskom__seaborn-3069",
+      "kind": "wrong",
+      "limitation": null
+    },
+    {
+      "name": "action.mwaskom__seaborn-3187.call64",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/mwaskom__seaborn-3187/action_counterfactual.candidate.private.json",
+      "branches": [
+        "chosen",
+        "correct"
+      ],
+      "sha256": "3393ba3aed8149c9f030418bc6ec79682d8da8009cfce2d44cf7367626383281",
+      "task": "mwaskom__seaborn-3187",
+      "kind": "wrong",
+      "limitation": null
+    },
+    {
+      "name": "action.psf__requests-1142.call31",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/psf__requests-1142/action_counterfactual.candidate.private.json",
+      "branches": [
+        "chosen",
+        "correct"
+      ],
+      "sha256": "d72283f1152735c027dfe9f7581115fcc9d769b295d3f28abd5e3775534191fe",
+      "task": "psf__requests-1142",
+      "kind": "wrong",
+      "limitation": null
+    },
+    {
+      "name": "action.psf__requests-1921.call34",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/psf__requests-1921/action_counterfactual.candidate.private.json",
+      "branches": [
+        "chosen",
+        "correct"
+      ],
+      "sha256": "2b44f72ac3567dfd855d23947762405695b9428e384d400fe84bdb350254e6a1",
+      "task": "psf__requests-1921",
+      "kind": "wrong",
+      "limitation": "Exact merge_setting auth path only; full suite remains externally limited."
+    },
+    {
+      "name": "action.pydata__xarray-3993.call18",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/pydata__xarray-3993/action_counterfactual.candidate.private.json",
+      "branches": [
+        "chosen",
+        "correct"
+      ],
+      "sha256": "fadf8f42ef467f8af698e8009afdeaa2541fdff1e38ed6e7c9b00900e31d8d0b",
+      "task": "pydata__xarray-3993",
+      "kind": "wrong",
+      "limitation": null
+    },
+    {
+      "name": "action.pydata__xarray-6992.call16",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/pydata__xarray-6992/action_counterfactual.candidate.private.json",
+      "branches": [
+        "chosen",
+        "correct"
+      ],
+      "sha256": "d3008b5e8c62baaa0dfd9fd1f747ba2bb0034518172a6e834dfb694e77b8b9d4",
+      "task": "pydata__xarray-6992",
+      "kind": "wrong",
+      "limitation": null
+    },
+    {
+      "name": "action.pylint-dev__pylint-4551.call35",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/pylint-dev__pylint-4551/action_counterfactual.candidate.private.json",
+      "branches": [
+        "chosen",
+        "correct"
+      ],
+      "sha256": "9ed48e522513c9cf83d72d72cbb74b1b88083f9562e56d8352af1570a6f48a22",
+      "task": "pylint-dev__pylint-4551",
+      "kind": "wrong",
+      "limitation": null
+    },
+    {
+      "name": "action.pylint-dev__pylint-4661.call19",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/pylint-dev__pylint-4661/action_counterfactual.candidate.private.json",
+      "branches": [
+        "chosen",
+        "correct"
+      ],
+      "sha256": "713e87789d9c8ed6cb7e77c4dfca39e69e706132ac5d48476e807d3cc569b206",
+      "task": "pylint-dev__pylint-4661",
+      "kind": "wrong",
+      "limitation": null
+    },
+    {
+      "name": "action.pylint-dev__pylint-4970.call51",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/pylint-dev__pylint-4970/action_counterfactual.candidate.private.json",
+      "branches": [
+        "chosen",
+        "correct"
+      ],
+      "sha256": "394177560f52396863ecde872372081b9c47e0f0467dce9e71a77e89dd950088",
+      "task": "pylint-dev__pylint-4970",
+      "kind": "wrong",
+      "limitation": null
+    },
+    {
+      "name": "action.pylint-dev__pylint-4970.call55",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/pylint-dev__pylint-4970-call55/action_counterfactual.candidate.private.json",
+      "branches": [
+        "chosen",
+        "correct"
+      ],
+      "sha256": "b000bd3e869079d4695a0249bafd5857091060e867d85824ee45a488bcce366d",
+      "task": "pylint-dev__pylint-4970",
+      "kind": "wrong",
+      "limitation": null
+    },
+    {
+      "name": "action.pylint-dev__pylint-6386.call33",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/pylint-dev__pylint-6386/action_counterfactual.candidate.private.json",
+      "branches": [
+        "chosen",
+        "correct"
+      ],
+      "sha256": "da24bf7996ba910e8e8b5261ca5b93c8a30e7078101d0afbc917dddb3b1827ac",
+      "task": "pylint-dev__pylint-6386",
+      "kind": "wrong",
+      "limitation": null
+    },
+    {
+      "name": "action.pylint-dev__pylint-8898.call44",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/pylint-dev__pylint-8898/action_counterfactual.candidate.private.json",
+      "branches": [
+        "chosen",
+        "correct"
+      ],
+      "sha256": "56c529515e4a2136eaa8c6463ae036c0f1d42af543f695a717e22de464fcd101",
+      "task": "pylint-dev__pylint-8898",
+      "kind": "wrong",
+      "limitation": null
+    },
+    {
+      "name": "action.pytest-dev__pytest-10356.call45",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/pytest-dev__pytest-10356/action_counterfactual.candidate.private.json",
+      "branches": [
+        "chosen",
+        "correct"
+      ],
+      "sha256": "2fc6ff38db5e9f9b6d230ca40de945ef031fdb175818ebb508ecb64eb69faa45",
+      "task": "pytest-dev__pytest-10356",
+      "kind": "wrong",
+      "limitation": null
+    },
+    {
+      "name": "action.pytest-dev__pytest-5840.call15",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/pytest-dev__pytest-5840/action_counterfactual.candidate.private.json",
+      "branches": [
+        "chosen",
+        "correct"
+      ],
+      "sha256": "b1c348c89abd193f05ed0e551322fcc3a3369df54a1465f1335ec52ca8659aa9",
+      "task": "pytest-dev__pytest-5840",
+      "kind": "wrong",
+      "limitation": null
+    },
+    {
+      "name": "action.pytest-dev__pytest-6197.call35",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/pytest-dev__pytest-6197/action_counterfactual.candidate.private.json",
+      "branches": [
+        "chosen",
+        "correct"
+      ],
+      "sha256": "3464ab28daeb2089a5ae07b152e6be192ee9c3479da14f6160d0960e49363c35",
+      "task": "pytest-dev__pytest-6197",
+      "kind": "wrong",
+      "limitation": null
+    },
+    {
+      "name": "action.pytest-dev__pytest-7432.call34",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/pytest-dev__pytest-7432/action_counterfactual.candidate.private.json",
+      "branches": [
+        "chosen",
+        "correct"
+      ],
+      "sha256": "5c8b6bc77b578ff2ff6d0641a0c35fcabdc41a6e204749ba9b18cbb763d95d8d",
+      "task": "pytest-dev__pytest-7432",
+      "kind": "wrong",
+      "limitation": null
+    },
+    {
+      "name": "action.scikit-learn__scikit-learn-10908.call34",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/scikit-learn__scikit-learn-10908/action_counterfactual.candidate.private.json",
+      "branches": [
+        "chosen",
+        "correct"
+      ],
+      "sha256": "433e48cae5b80c21f8250a46df39d3ef9536aee07de49b39ae1a6c8e42de05d7",
+      "task": "scikit-learn__scikit-learn-10908",
+      "kind": "wrong",
+      "limitation": null
+    },
+    {
+      "name": "action.scikit-learn__scikit-learn-14983.call43",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/scikit-learn__scikit-learn-14983/action_counterfactual.candidate.private.json",
+      "branches": [
+        "chosen",
+        "correct"
+      ],
+      "sha256": "e64458e623cab6438580416cc519688b08a4225ac7218213e0f49cb6839ab993",
+      "task": "scikit-learn__scikit-learn-14983",
+      "kind": "wrong",
+      "limitation": null
+    },
+    {
+      "name": "action.sphinx-doc__sphinx-10323.call68",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/sphinx-doc__sphinx-10323/action_counterfactual.candidate.private.json",
+      "branches": [
+        "chosen",
+        "correct"
+      ],
+      "sha256": "72789bdb0a798672e2011ee937ca9a10ea8bb6adaf7434ff436a9a4d8d73b385",
+      "task": "sphinx-doc__sphinx-10323",
+      "kind": "wrong",
+      "limitation": null
+    },
+    {
+      "name": "action.sphinx-doc__sphinx-7590.call44",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/sphinx-doc__sphinx-7590/action_counterfactual.candidate.private.json",
+      "branches": [
+        "chosen",
+        "correct"
+      ],
+      "sha256": "2c706fc31a48e359fb899074034916ff79531226a2d6684f964b814c74283002",
+      "task": "sphinx-doc__sphinx-7590",
+      "kind": "wrong",
+      "limitation": null
+    },
+    {
+      "name": "action.sphinx-doc__sphinx-9461.call76",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/sphinx-doc__sphinx-9461/action_counterfactual.candidate.private.json",
+      "branches": [
+        "chosen",
+        "correct"
+      ],
+      "sha256": "44eb979aed1c5f5691b5a51c4b7cded964764c7d975a631769abe3751a777c3a",
+      "task": "sphinx-doc__sphinx-9461",
+      "kind": "wrong",
+      "limitation": null
+    },
+    {
+      "name": "action.sympy__sympy-12489.call34",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/sympy__sympy-12489/action_counterfactual.candidate.private.json",
+      "branches": [
+        "chosen",
+        "correct"
+      ],
+      "sha256": "e7502eaa3dd07f487b64f62035abaa55bc806121b784ebf78d4c8b8530ba2910",
+      "task": "sympy__sympy-12489",
+      "kind": "wrong",
+      "limitation": "Paired diagnostic Callable compatibility binding; not unchanged reference environment."
+    },
+    {
+      "name": "action.sympy__sympy-13091.call22",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/sympy__sympy-13091/action_counterfactual.candidate.private.json",
+      "branches": [
+        "chosen",
+        "correct"
+      ],
+      "sha256": "e9de94d13411323de604aea2ce2664fc0cd3b343c66a5ee9a90f0752a2ba424f",
+      "task": "sympy__sympy-13091",
+      "kind": "wrong",
+      "limitation": null
+    },
+    {
+      "name": "action.sympy__sympy-18763.call20",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/sympy__sympy-18763/action_counterfactual.candidate.private.json",
+      "branches": [
+        "chosen",
+        "correct"
+      ],
+      "sha256": "8fa0ffe613458817c1bb838dcb1b241353d7f54f7da84911522e9852cac55a0f",
+      "task": "sympy__sympy-18763",
+      "kind": "wrong",
+      "limitation": null
+    },
+    {
+      "name": "action.sphinx-doc__sphinx-11510.validated-action",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/sphinx-doc__sphinx-11510/validated/action_counterfactual.validated.private.json",
+      "branches": [
+        "chosen",
+        "correct"
+      ],
+      "sha256": "bcb6d7ad7f7d309ba0a6dbdc749e3db3f0529f834df62f7419fcfc53c028260b",
+      "task": "sphinx-doc__sphinx-11510",
+      "kind": "wrong",
+      "limitation": null
+    },
+    {
+      "name": "action.psf__requests-5414.call23.validated-pure-url-action",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/psf__requests-5414/validated-pure-urls/psf__requests-5414.call23.action.private.json",
+      "branches": [
+        "chosen",
+        "correct"
+      ],
+      "sha256": "1845918122913a020700a8d935e2b1cf6c4481efccee2f4837036e67a2b18f54",
+      "task": "psf__requests-5414",
+      "kind": "wrong",
+      "limitation": "Original pure URL targets only: before31/32, chosen24/32, correct32/32. Full suite retains158 fixture errors and4 offline timeouts; no full-suite pass."
+    },
+    {
+      "name": "action.psf__requests-5414.call30.validated-pure-url-action",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/psf__requests-5414/validated-pure-urls/psf__requests-5414.call30.action.private.json",
+      "branches": [
+        "chosen",
+        "correct"
+      ],
+      "sha256": "c7e7d2302394f49db2043dd5cd688e833266af74be4298976edd15d99f11765d",
+      "task": "psf__requests-5414",
+      "kind": "wrong",
+      "limitation": "Original pure URL targets only: before31/32, chosen24/32, correct32/32. Full suite retains158 fixture errors and4 offline timeouts; no full-suite pass."
+    },
+    {
+      "name": "action.sympy__sympy-14248.call50.validated-action",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/sympy__sympy-14248/validated/sympy__sympy-14248.call50.action.private.json",
+      "branches": [
+        "chosen",
+        "correct"
+      ],
+      "sha256": "98bc61fb60e6e98da9fe69149e5d820c39abee89d22e05dd85543410f460aa08",
+      "task": "sympy__sympy-14248",
+      "kind": "wrong",
+      "limitation": "Official expected2+433 tests pass;4 unchanged baseline AST exceptions and1 XPASS retained. Eleven unrelated native test mutations excluded; production pre50 edits retained."
+    },
+    {
+      "name": "action.astropy__astropy-13579.fetch-next-action",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/astropy__astropy-13579/action_counterfactual.candidate.private.json",
+      "branches": [
+        "chosen",
+        "correct"
+      ],
+      "sha256": "818704ce976b75ba3f4fe0139bba86f45e6e51b24de46c979053b8e59b153f4d",
+      "task": "astropy__astropy-13579",
+      "kind": "fetch",
+      "limitation": "Valid local next action only; not a full task solution."
+    },
+    {
+      "name": "action.astropy__astropy-7336.fetch-next-action",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/astropy__astropy-7336/action_counterfactual.candidate.private.json",
+      "branches": [
+        "chosen",
+        "correct"
+      ],
+      "sha256": "419a06a00c05c49e4e6b51c9978a1c913ed7c59cf95414bea9d7bc624813aec6",
+      "task": "astropy__astropy-7336",
+      "kind": "fetch",
+      "limitation": "Valid local next action only; not a full task solution."
+    },
+    {
+      "name": "action.astropy__astropy-8872.fetch-next-action",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/astropy__astropy-8872/action_counterfactual.candidate.private.json",
+      "branches": [
+        "chosen",
+        "correct"
+      ],
+      "sha256": "c1dca0d99577b5bf1ae854f330af3954f7a84e89f41ea6811fc11b4979e8aba5",
+      "task": "astropy__astropy-8872",
+      "kind": "fetch",
+      "limitation": "Valid local next action only; not a full task solution."
+    },
+    {
+      "name": "action.matplotlib__matplotlib-25332.fetch-next-action",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/matplotlib__matplotlib-25332/action_counterfactual.candidate.private.json",
+      "branches": [
+        "chosen",
+        "correct"
+      ],
+      "sha256": "70957d53e94df9eacd837421afdf66bf7c7b46972a52e341f17c96fd8498a6ff",
+      "task": "matplotlib__matplotlib-25332",
+      "kind": "fetch",
+      "limitation": "Valid local next action only; not a full task solution."
+    },
+    {
+      "name": "action.matplotlib__matplotlib-25960.fetch-next-action",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/matplotlib__matplotlib-25960/action_counterfactual.candidate.private.json",
+      "branches": [
+        "chosen",
+        "correct"
+      ],
+      "sha256": "0ff0f74cf765bbba8acad052b164b1d070775ac8492cc4efcb2716cc87f01ad8",
+      "task": "matplotlib__matplotlib-25960",
+      "kind": "fetch",
+      "limitation": "Valid local next action only; not a full task solution."
+    },
+    {
+      "name": "action.matplotlib__matplotlib-26208.fetch-next-action",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/matplotlib__matplotlib-26208/action_counterfactual.candidate.private.json",
+      "branches": [
+        "chosen",
+        "correct"
+      ],
+      "sha256": "d60a3730d0c0792a5c836607969e0a89ec8040d7575a655add74fe904d4f19e9",
+      "task": "matplotlib__matplotlib-26208",
+      "kind": "fetch",
+      "limitation": "Valid local next action only; not a full task solution."
+    },
+    {
+      "name": "action.matplotlib__matplotlib-26291.fetch-next-action",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/matplotlib__matplotlib-26291/action_counterfactual.candidate.private.json",
+      "branches": [
+        "chosen",
+        "correct"
+      ],
+      "sha256": "6b3b98d4d9369490b1935d1a462105bb4ace2b1432a67c11ad2242329a4fdec7",
+      "task": "matplotlib__matplotlib-26291",
+      "kind": "fetch",
+      "limitation": "Valid local next action only; not a full task solution."
+    },
+    {
+      "name": "action.pydata__xarray-4687.fetch-next-action",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/pydata__xarray-4687/action_counterfactual.candidate.private.json",
+      "branches": [
+        "chosen",
+        "correct"
+      ],
+      "sha256": "7e0c07030b0bf623c339fe053d59edc4b48d861bbe09a17bfbab1358b3269294",
+      "task": "pydata__xarray-4687",
+      "kind": "fetch",
+      "limitation": "Valid local next action only; not a full task solution."
+    },
+    {
+      "name": "action.pydata__xarray-7233.fetch-next-action",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/pydata__xarray-7233/action_counterfactual.candidate.private.json",
+      "branches": [
+        "chosen",
+        "correct"
+      ],
+      "sha256": "30ae1e5e6a2ead902fe27b73cedc09c710f2eab176789d8fbcc3b65203bda684",
+      "task": "pydata__xarray-7233",
+      "kind": "fetch",
+      "limitation": "Valid local next action only; not a full task solution."
+    },
+    {
+      "name": "action.pylint-dev__pylint-4604.fetch-next-action",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/pylint-dev__pylint-4604/action_counterfactual.candidate.private.json",
+      "branches": [
+        "chosen",
+        "correct"
+      ],
+      "sha256": "0f01a95975a6c04e528a1d6b939806fc2c73cd50e45f4503051c0df58e5c4a12",
+      "task": "pylint-dev__pylint-4604",
+      "kind": "fetch",
+      "limitation": "Valid local next action only; not a full task solution."
+    },
+    {
+      "name": "action.pytest-dev__pytest-5787.fetch-next-action",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/pytest-dev__pytest-5787/action_counterfactual.candidate.private.json",
+      "branches": [
+        "chosen",
+        "correct"
+      ],
+      "sha256": "6bed68e36238b97ebb2fee8fb7db215d095bfc8ed60781e62a5d7adee6bb8586",
+      "task": "pytest-dev__pytest-5787",
+      "kind": "fetch",
+      "limitation": "Valid local next action only; not a full task solution."
+    },
+    {
+      "name": "action.scikit-learn__scikit-learn-13135.fetch-next-action",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/scikit-learn__scikit-learn-13135/action_counterfactual.candidate.private.json",
+      "branches": [
+        "chosen",
+        "correct"
+      ],
+      "sha256": "3690a5be8a7e9906ffcc7429684a6bf42523f0fc94b489ec2ba6c6b56da5d5a7",
+      "task": "scikit-learn__scikit-learn-13135",
+      "kind": "fetch",
+      "limitation": "Valid local next action only; not a full task solution."
+    },
+    {
+      "name": "action.scikit-learn__scikit-learn-13328.fetch-next-action",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/scikit-learn__scikit-learn-13328/action_counterfactual.candidate.private.json",
+      "branches": [
+        "chosen",
+        "correct"
+      ],
+      "sha256": "52f6614498c828972727e13a1086bb30323983eae756e9989ed4d4e44e6d4cf2",
+      "task": "scikit-learn__scikit-learn-13328",
+      "kind": "fetch",
+      "limitation": "Valid local next action only; not a full task solution."
+    },
+    {
+      "name": "action.scikit-learn__scikit-learn-14053.fetch-next-action",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/scikit-learn__scikit-learn-14053/action_counterfactual.candidate.private.json",
+      "branches": [
+        "chosen",
+        "correct"
+      ],
+      "sha256": "0a46e147aeeeecfd9af92f33074485993ede14d196a3d64f8664aca22fd1ce22",
+      "task": "scikit-learn__scikit-learn-14053",
+      "kind": "fetch",
+      "limitation": "Valid local next action only; not a full task solution."
+    },
+    {
+      "name": "action.scikit-learn__scikit-learn-14629.fetch-next-action",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/scikit-learn__scikit-learn-14629/action_counterfactual.candidate.private.json",
+      "branches": [
+        "chosen",
+        "correct"
+      ],
+      "sha256": "4f59833554b0af7b257288ee13cdba89b3c118e35383c9360d8b1935d08713b6",
+      "task": "scikit-learn__scikit-learn-14629",
+      "kind": "fetch",
+      "limitation": "Valid local next action only; not a full task solution."
+    },
+    {
+      "name": "action.scikit-learn__scikit-learn-25102.fetch-next-action",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/scikit-learn__scikit-learn-25102/action_counterfactual.candidate.private.json",
+      "branches": [
+        "chosen",
+        "correct"
+      ],
+      "sha256": "ac0efa0b76f90a6c5074b9211308237c66c9d2641c6ccf86c9c3948d5c0fb8dc",
+      "task": "scikit-learn__scikit-learn-25102",
+      "kind": "fetch",
+      "limitation": "Valid local next action only; not a full task solution."
+    },
+    {
+      "name": "action.scikit-learn__scikit-learn-25747.fetch-next-action",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/scikit-learn__scikit-learn-25747/action_counterfactual.candidate.private.json",
+      "branches": [
+        "chosen",
+        "correct"
+      ],
+      "sha256": "2bcb65ee9e9bee6d7f42f29234e469c8e9839d29fd7538ae46414f954baac48d",
+      "task": "scikit-learn__scikit-learn-25747",
+      "kind": "fetch",
+      "limitation": "Valid local next action only; not a full task solution."
+    },
+    {
+      "name": "action.sphinx-doc__sphinx-10614.fetch-next-action",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/sphinx-doc__sphinx-10614/action_counterfactual.candidate.private.json",
+      "branches": [
+        "chosen",
+        "correct"
+      ],
+      "sha256": "73308038ffb6e1153713aefd43055714957c7ff69ca2dfb84c42fa9e76df441f",
+      "task": "sphinx-doc__sphinx-10614",
+      "kind": "fetch",
+      "limitation": "Valid local next action only; not a full task solution."
+    },
+    {
+      "name": "action.sphinx-doc__sphinx-8638.fetch-next-action",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/sphinx-doc__sphinx-8638/action_counterfactual.candidate.private.json",
+      "branches": [
+        "chosen",
+        "correct"
+      ],
+      "sha256": "a98499f3f71718260984ae51b4bc3487946ebf030920dc7b6530a0480a2b78b2",
+      "task": "sphinx-doc__sphinx-8638",
+      "kind": "fetch",
+      "limitation": "Valid local next action only; not a full task solution."
+    },
+    {
+      "name": "action.sympy__sympy-13480.fetch-next-action",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/sympy__sympy-13480/action_counterfactual.candidate.private.json",
+      "branches": [
+        "chosen",
+        "correct"
+      ],
+      "sha256": "7958f1882b3dbbead9e0eb354aef9d1032ca9f93e6fef1cf30f492644aaa181d",
+      "task": "sympy__sympy-13480",
+      "kind": "fetch",
+      "limitation": "Valid local next action only; not a full task solution."
+    },
+    {
+      "name": "action.sympy__sympy-13551.fetch-next-action",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/sympy__sympy-13551/action_counterfactual.candidate.private.json",
+      "branches": [
+        "chosen",
+        "correct"
+      ],
+      "sha256": "e1f720371d9533b0cc4c14771e80b6e86af2ce47ec5b9791eeef9925fc96dc56",
+      "task": "sympy__sympy-13551",
+      "kind": "fetch",
+      "limitation": "Valid local next action only; not a full task solution."
+    },
+    {
+      "name": "action.sympy__sympy-13878.fetch-next-action",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/sympy__sympy-13878/action_counterfactual.candidate.private.json",
+      "branches": [
+        "chosen",
+        "correct"
+      ],
+      "sha256": "77c7ca4a7dbdde6ad96477e340b4314724668fcb90a8947dd561d0b0ba30f6c2",
+      "task": "sympy__sympy-13878",
+      "kind": "fetch",
+      "limitation": "Valid local next action only; not a full task solution."
+    }
+  ],
+  "limits": "Canonical reconstruction, conditional on original reasoning. No native token equivalence, task rescore or device-result claim. Require complete roster reconciliation and remaining-budget check before launch."
+}

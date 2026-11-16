@@ -1,0 +1,681 @@
+{
+  "status": "planning estimate only; corrected to literal documented prefill formula per review-d; not a performance claim",
+  "method": "Per case/mode/seed: suffix512 prefill proxy = suffix512 diagnostic_wall_s_including_prefill - suffix512 decode_wall_s; original long prefill proxy = matched-seed original long-prompt diagnostic_wall_s_including_prefill - decode_wall_s. Candidate suffix1024 prefill estimate = suffix512 prefill proxy + max(0, original long prefill proxy - suffix512 prefill proxy) * 1024/source_prompt_tokens. Candidate decode uses the existing suffix512 decode rate, projected to 511 replays and capped at each observed free-run length when shorter. Case work is the unchanged original-long chosen TF wall plus the three candidate free-run prefill/decode projections. Multiply each case by 0.7 and 1.7 for range endpoints; add maximum recorded same-mode model load once.",
+  "caveat": "Prefill work is not guaranteed linear in token count; attention/layout effects and generation behavior may differ at suffix1024. Forecast is diagnostic planning, not serving throughput.",
+  "modes": {
+    "served": {
+      "observed_load_wall_s": 145.3572200248018,
+      "load_sources": [
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/served/load.json",
+          "sha256": "54200eb563a980f67d2f49428ff98ccf2419effa0967045fd9425749b53d7402",
+          "wall_s": 145.3572200248018
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-contraction-short-controls/runs/served/load.json",
+          "sha256": "20ea301c18369a59f1ddb47ea38885356ad40b2f0bcd1c6483b5f5313565e213",
+          "wall_s": 144.3150853109546
+        }
+      ],
+      "cases": [
+        {
+          "name": "anomaly.psf__requests-5414.call9.onset",
+          "source_prompt_tokens": 8383,
+          "chosen_tokens": 64,
+          "chosen_wall_reference_s": 3.866806205827743,
+          "free_trials": [
+            {
+              "seed": 42,
+              "suffix512_decode_tokens": 511,
+              "suffix512_decode_wall_s": 14.366230416111648,
+              "suffix512_prefill_proxy_s": 0.1290517868474126,
+              "projected_decode_wall_s": 14.366230416111648,
+              "estimated_free_case_wall_s": 14.678826563709976,
+              "original_long_prefill_proxy_s": 1.6316419979557395,
+              "original_prefill_delta_s": 1.502590211108327,
+              "literal_candidate_suffix1024_prefill_s": 0.3125961475983283,
+              "historical_pre_review_candidate_suffix1024_prefill_s": 0.23332504899371304,
+              "candidate_suffix1024_prefill_s": 0.3125961475983283
+            },
+            {
+              "seed": 43,
+              "suffix512_decode_tokens": 511,
+              "suffix512_decode_wall_s": 14.361932636005804,
+              "suffix512_prefill_proxy_s": 0.12752244691364467,
+              "projected_decode_wall_s": 14.361932636005804,
+              "estimated_free_case_wall_s": 14.673080039075913,
+              "original_long_prefill_proxy_s": 1.6307724541984499,
+              "original_prefill_delta_s": 1.5032500072848052,
+              "literal_candidate_suffix1024_prefill_s": 0.311147403070109,
+              "historical_pre_review_candidate_suffix1024_prefill_s": 0.23179570905994512,
+              "candidate_suffix1024_prefill_s": 0.311147403070109
+            },
+            {
+              "seed": 44,
+              "suffix512_decode_tokens": 511,
+              "suffix512_decode_wall_s": 14.372462741099298,
+              "suffix512_prefill_proxy_s": 0.12767330487258732,
+              "projected_decode_wall_s": 14.372462741099298,
+              "estimated_free_case_wall_s": 14.684020954600708,
+              "original_long_prefill_proxy_s": 1.6330514191649854,
+              "original_prefill_delta_s": 1.505378114292398,
+              "literal_candidate_suffix1024_prefill_s": 0.31155821350140944,
+              "historical_pre_review_candidate_suffix1024_prefill_s": 0.23194656701888777,
+              "candidate_suffix1024_prefill_s": 0.31155821350140944
+            }
+          ],
+          "estimated_case_work_s": 47.90273376321434,
+          "range_s": [
+            33.53191363425004,
+            81.43464739746437
+          ]
+        },
+        {
+          "name": "anomaly.psf__requests-5414.call10.onset",
+          "source_prompt_tokens": 7057,
+          "chosen_tokens": 64,
+          "chosen_wall_reference_s": 3.5079115401022136,
+          "free_trials": [
+            {
+              "seed": 42,
+              "suffix512_decode_tokens": 189,
+              "suffix512_decode_wall_s": 5.252840486122295,
+              "suffix512_prefill_proxy_s": 0.12810041988268495,
+              "projected_decode_wall_s": 5.252840486122295,
+              "estimated_free_case_wall_s": 5.5486636068488835,
+              "original_long_prefill_proxy_s": 1.2839784470852464,
+              "original_prefill_delta_s": 1.1558780272025615,
+              "literal_candidate_suffix1024_prefill_s": 0.2958231207265879,
+              "historical_pre_review_candidate_suffix1024_prefill_s": 0.12810041988268495,
+              "candidate_suffix1024_prefill_s": 0.2958231207265879
+            },
+            {
+              "seed": 43,
+              "suffix512_decode_tokens": 511,
+              "suffix512_decode_wall_s": 14.370009989012033,
+              "suffix512_prefill_proxy_s": 0.12753837602213025,
+              "projected_decode_wall_s": 14.370009989012033,
+              "estimated_free_case_wall_s": 14.66562745894997,
+              "original_long_prefill_proxy_s": 1.2858725222758949,
+              "original_prefill_delta_s": 1.1583341462537646,
+              "literal_candidate_suffix1024_prefill_s": 0.2956174699379379,
+              "historical_pre_review_candidate_suffix1024_prefill_s": 0.12753837602213025,
+              "candidate_suffix1024_prefill_s": 0.2956174699379379
+            },
+            {
+              "seed": 44,
+              "suffix512_decode_tokens": 225,
+              "suffix512_decode_wall_s": 6.264638500055298,
+              "suffix512_prefill_proxy_s": 0.12775699398480356,
+              "projected_decode_wall_s": 6.264638500055298,
+              "estimated_free_case_wall_s": 6.5604830607177345,
+              "original_long_prefill_proxy_s": 1.2861495311371982,
+              "original_prefill_delta_s": 1.1583925371523947,
+              "literal_candidate_suffix1024_prefill_s": 0.29584456066243603,
+              "historical_pre_review_candidate_suffix1024_prefill_s": 0.12775699398480356,
+              "candidate_suffix1024_prefill_s": 0.29584456066243603
+            }
+          ],
+          "estimated_case_work_s": 30.282685666618804,
+          "range_s": [
+            21.19787996663316,
+            51.48056563325196
+          ]
+        },
+        {
+          "name": "anomaly.psf__requests-5414.call11.onset",
+          "source_prompt_tokens": 7226,
+          "chosen_tokens": 64,
+          "chosen_wall_reference_s": 3.624947164906189,
+          "free_trials": [
+            {
+              "seed": 42,
+              "suffix512_decode_tokens": 511,
+              "suffix512_decode_wall_s": 14.371339633129537,
+              "suffix512_prefill_proxy_s": 0.1287263948470354,
+              "projected_decode_wall_s": 14.371339633129537,
+              "estimated_free_case_wall_s": 14.6778219422442,
+              "original_long_prefill_proxy_s": 1.3830860008019954,
+              "original_prefill_delta_s": 1.25435960595496,
+              "literal_candidate_suffix1024_prefill_s": 0.3064823091146633,
+              "historical_pre_review_candidate_suffix1024_prefill_s": 0.22659437474954208,
+              "candidate_suffix1024_prefill_s": 0.3064823091146633
+            },
+            {
+              "seed": 43,
+              "suffix512_decode_tokens": 511,
+              "suffix512_decode_wall_s": 14.363899364834651,
+              "suffix512_prefill_proxy_s": 0.12931935815140605,
+              "projected_decode_wall_s": 14.363899364834651,
+              "estimated_free_case_wall_s": 14.682036329504736,
+              "original_long_prefill_proxy_s": 1.461737351026386,
+              "original_prefill_delta_s": 1.33241799287498,
+              "literal_candidate_suffix1024_prefill_s": 0.3181369646700858,
+              "historical_pre_review_candidate_suffix1024_prefill_s": 0.22718733805391272,
+              "candidate_suffix1024_prefill_s": 0.3181369646700858
+            },
+            {
+              "seed": 44,
+              "suffix512_decode_tokens": 511,
+              "suffix512_decode_wall_s": 14.361754264915362,
+              "suffix512_prefill_proxy_s": 0.1273858561180532,
+              "projected_decode_wall_s": 14.361754264915362,
+              "estimated_free_case_wall_s": 14.666701095250062,
+              "original_long_prefill_proxy_s": 1.3803698401898146,
+              "original_prefill_delta_s": 1.2529839840717614,
+              "literal_candidate_suffix1024_prefill_s": 0.30494683033469916,
+              "historical_pre_review_candidate_suffix1024_prefill_s": 0.22525383602055987,
+              "candidate_suffix1024_prefill_s": 0.30494683033469916
+            }
+          ],
+          "estimated_case_work_s": 47.651506531905184,
+          "range_s": [
+            33.356054572333626,
+            81.00756110423882
+          ]
+        },
+        {
+          "name": "anomaly.matplotlib__matplotlib-20488.call86.onset",
+          "source_prompt_tokens": 46118,
+          "chosen_tokens": 64,
+          "chosen_wall_reference_s": 15.370395907899365,
+          "free_trials": [
+            {
+              "seed": 42,
+              "suffix512_decode_tokens": 511,
+              "suffix512_decode_wall_s": 14.386621551122516,
+              "suffix512_prefill_proxy_s": 0.12769929692149162,
+              "projected_decode_wall_s": 14.386621551122516,
+              "estimated_free_case_wall_s": 14.797845582207609,
+              "original_long_prefill_proxy_s": 12.896833759965375,
+              "original_prefill_delta_s": 12.769134463043883,
+              "literal_candidate_suffix1024_prefill_s": 0.4112240310850923,
+              "historical_pre_review_candidate_suffix1024_prefill_s": 0.16847073320082598,
+              "candidate_suffix1024_prefill_s": 0.4112240310850923
+            },
+            {
+              "seed": 43,
+              "suffix512_decode_tokens": 511,
+              "suffix512_decode_wall_s": 14.375430617947131,
+              "suffix512_prefill_proxy_s": 0.12758829817175865,
+              "projected_decode_wall_s": 14.375430617947131,
+              "estimated_free_case_wall_s": 14.786460789011134,
+              "original_long_prefill_proxy_s": 12.892990929074585,
+              "original_prefill_delta_s": 12.765402630902827,
+              "literal_candidate_suffix1024_prefill_s": 0.41103017106400236,
+              "historical_pre_review_candidate_suffix1024_prefill_s": 0.168359734451093,
+              "candidate_suffix1024_prefill_s": 0.41103017106400236
+            },
+            {
+              "seed": 44,
+              "suffix512_decode_tokens": 511,
+              "suffix512_decode_wall_s": 14.362833052873611,
+              "suffix512_prefill_proxy_s": 0.12768325209617615,
+              "projected_decode_wall_s": 14.362833052873611,
+              "estimated_free_case_wall_s": 14.774116383793503,
+              "original_long_prefill_proxy_s": 12.90021102083847,
+              "original_prefill_delta_s": 12.772527768742293,
+              "literal_candidate_suffix1024_prefill_s": 0.41128333091989155,
+              "historical_pre_review_candidate_suffix1024_prefill_s": 0.1684546883755105,
+              "candidate_suffix1024_prefill_s": 0.41128333091989155
+            }
+          ],
+          "estimated_case_work_s": 59.728818662911614,
+          "range_s": [
+            41.810173064038125,
+            101.53899172694975
+          ]
+        },
+        {
+          "name": "anomaly.call91.canonicalprefix",
+          "source_prompt_tokens": 48411,
+          "chosen_tokens": 64,
+          "chosen_wall_reference_s": 16.209036132786423,
+          "free_trials": [
+            {
+              "seed": 42,
+              "suffix512_decode_tokens": 23,
+              "suffix512_decode_wall_s": 0.6365448329597712,
+              "suffix512_prefill_proxy_s": 0.1286580041050911,
+              "projected_decode_wall_s": 0.6365448329597712,
+              "estimated_free_case_wall_s": 1.0529466142461976,
+              "original_long_prefill_proxy_s": 13.732138470048085,
+              "original_prefill_delta_s": 13.603480465942994,
+              "literal_candidate_suffix1024_prefill_s": 0.41640178128642646,
+              "historical_pre_review_candidate_suffix1024_prefill_s": 0.2777306501893796,
+              "candidate_suffix1024_prefill_s": 0.41640178128642646
+            },
+            {
+              "seed": 43,
+              "suffix512_decode_tokens": 34,
+              "suffix512_decode_wall_s": 0.9414291081484407,
+              "suffix512_prefill_proxy_s": 0.12763868877664208,
+              "projected_decode_wall_s": 0.9414291081484407,
+              "estimated_free_case_wall_s": 1.3569585291605009,
+              "original_long_prefill_proxy_s": 13.73806665581651,
+              "original_prefill_delta_s": 13.610427967039868,
+              "literal_candidate_suffix1024_prefill_s": 0.4155294210120602,
+              "historical_pre_review_candidate_suffix1024_prefill_s": 0.2767113348609306,
+              "candidate_suffix1024_prefill_s": 0.4155294210120602
+            },
+            {
+              "seed": 44,
+              "suffix512_decode_tokens": 61,
+              "suffix512_decode_wall_s": 1.6885112540330738,
+              "suffix512_prefill_proxy_s": 0.12778995907865465,
+              "projected_decode_wall_s": 1.6885112540330738,
+              "estimated_free_case_wall_s": 2.104277137110669,
+              "original_long_prefill_proxy_s": 13.742245483212173,
+              "original_prefill_delta_s": 13.614455524133518,
+              "literal_candidate_suffix1024_prefill_s": 0.41576588307759543,
+              "historical_pre_review_candidate_suffix1024_prefill_s": 0.27686260516294314,
+              "candidate_suffix1024_prefill_s": 0.41576588307759543
+            }
+          ],
+          "estimated_case_work_s": 20.72321841330379,
+          "range_s": [
+            14.506252889312652,
+            35.229471302616446
+          ]
+        },
+        {
+          "name": "anomaly.sphinx-doc__sphinx-10323.call70.onset",
+          "source_prompt_tokens": 65779,
+          "chosen_tokens": 37,
+          "chosen_wall_reference_s": 23.15636695595458,
+          "free_trials": [
+            {
+              "seed": 42,
+              "suffix512_decode_tokens": 511,
+              "suffix512_decode_wall_s": 14.373696685070172,
+              "suffix512_prefill_proxy_s": 0.127473825821653,
+              "projected_decode_wall_s": 14.373696685070172,
+              "estimated_free_case_wall_s": 14.836473016187234,
+              "original_long_prefill_proxy_s": 21.666403020964935,
+              "original_prefill_delta_s": 21.538929195143282,
+              "literal_candidate_suffix1024_prefill_s": 0.4627763311170622,
+              "historical_pre_review_candidate_suffix1024_prefill_s": 0.2985385396650241,
+              "candidate_suffix1024_prefill_s": 0.4627763311170622
+            },
+            {
+              "seed": 43,
+              "suffix512_decode_tokens": 511,
+              "suffix512_decode_wall_s": 14.375811361009255,
+              "suffix512_prefill_proxy_s": 0.12803840497508645,
+              "projected_decode_wall_s": 14.375811361009255,
+              "estimated_free_case_wall_s": 14.839127154613331,
+              "original_long_prefill_proxy_s": 21.665354173164815,
+              "original_prefill_delta_s": 21.53731576818973,
+              "literal_candidate_suffix1024_prefill_s": 0.46331579360407565,
+              "historical_pre_review_candidate_suffix1024_prefill_s": 0.2991031188184575,
+              "candidate_suffix1024_prefill_s": 0.46331579360407565
+            },
+            {
+              "seed": 44,
+              "suffix512_decode_tokens": 511,
+              "suffix512_decode_wall_s": 14.375583245186135,
+              "suffix512_prefill_proxy_s": 0.12757393182255328,
+              "projected_decode_wall_s": 14.375583245186135,
+              "estimated_free_case_wall_s": 14.838507129029407,
+              "original_long_prefill_proxy_s": 21.669550976715982,
+              "original_prefill_delta_s": 21.54197704489343,
+              "literal_candidate_suffix1024_prefill_s": 0.4629238838432722,
+              "historical_pre_review_candidate_suffix1024_prefill_s": 0.29863864566592435,
+              "candidate_suffix1024_prefill_s": 0.4629238838432722
+            }
+          ],
+          "estimated_case_work_s": 67.67047425578455,
+          "range_s": [
+            47.369331979049186,
+            115.03980623483373
+          ]
+        }
+      ],
+      "estimated_total_wall_s_including_load": 419.3166573185401,
+      "estimated_total_range_wall_s": [
+        337.1288261304186,
+        611.0882634241568
+      ]
+    },
+    "full": {
+      "observed_load_wall_s": 78.91468639601953,
+      "load_sources": [
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/full/load.json",
+          "sha256": "7ccfc36c3db10085a06d789c1b6a0d29198c1a06ef2136031937a98b34ca3244",
+          "wall_s": 78.62304112617858
+        },
+        {
+          "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-contraction-short-controls/runs/full/load.json",
+          "sha256": "c8b312e60e0f7c490f2c91fddc450b1cfd36d5239f25d9b4c466dd052969f322",
+          "wall_s": 78.91468639601953
+        }
+      ],
+      "cases": [
+        {
+          "name": "anomaly.psf__requests-5414.call9.onset",
+          "source_prompt_tokens": 8383,
+          "chosen_tokens": 64,
+          "chosen_wall_reference_s": 7.117571000941098,
+          "free_trials": [
+            {
+              "seed": 42,
+              "suffix512_decode_tokens": 511,
+              "suffix512_decode_wall_s": 29.547484355047345,
+              "suffix512_prefill_proxy_s": 0.1985501181334257,
+              "projected_decode_wall_s": 29.547484355047345,
+              "estimated_free_case_wall_s": 30.086317853588174,
+              "original_long_prefill_proxy_s": 2.9842879872303456,
+              "original_prefill_delta_s": 2.78573786909692,
+              "literal_candidate_suffix1024_prefill_s": 0.5388334985408272,
+              "historical_pre_review_candidate_suffix1024_prefill_s": 0.38790674382692225,
+              "candidate_suffix1024_prefill_s": 0.5388334985408272
+            },
+            {
+              "seed": 43,
+              "suffix512_decode_tokens": 511,
+              "suffix512_decode_wall_s": 29.53099777805619,
+              "suffix512_prefill_proxy_s": 0.20159651804715395,
+              "projected_decode_wall_s": 29.53099777805619,
+              "estimated_free_case_wall_s": 30.072635454127173,
+              "original_long_prefill_proxy_s": 2.985351427923888,
+              "original_prefill_delta_s": 2.783754909876734,
+              "literal_candidate_suffix1024_prefill_s": 0.541637676070985,
+              "historical_pre_review_candidate_suffix1024_prefill_s": 0.3909531437406505,
+              "candidate_suffix1024_prefill_s": 0.541637676070985
+            },
+            {
+              "seed": 44,
+              "suffix512_decode_tokens": 511,
+              "suffix512_decode_wall_s": 29.54794740700163,
+              "suffix512_prefill_proxy_s": 0.20301183895207942,
+              "projected_decode_wall_s": 29.54794740700163,
+              "estimated_free_case_wall_s": 30.091542227675372,
+              "original_long_prefill_proxy_s": 2.9912024012301117,
+              "original_prefill_delta_s": 2.7881905622780323,
+              "literal_candidate_suffix1024_prefill_s": 0.5435948206737429,
+              "historical_pre_review_candidate_suffix1024_prefill_s": 0.39236846464557595,
+              "candidate_suffix1024_prefill_s": 0.5435948206737429
+            }
+          ],
+          "estimated_case_work_s": 97.36806653633182,
+          "range_s": [
+            68.15764657543227,
+            165.5257131117641
+          ]
+        },
+        {
+          "name": "anomaly.psf__requests-5414.call10.onset",
+          "source_prompt_tokens": 7057,
+          "chosen_tokens": 64,
+          "chosen_wall_reference_s": 6.532483668066561,
+          "free_trials": [
+            {
+              "seed": 42,
+              "suffix512_decode_tokens": 238,
+              "suffix512_decode_wall_s": 13.699127034982666,
+              "suffix512_prefill_proxy_s": 0.19934263196773827,
+              "projected_decode_wall_s": 13.699127034982666,
+              "estimated_free_case_wall_s": 14.218118265331762,
+              "original_long_prefill_proxy_s": 2.4022334120236337,
+              "original_prefill_delta_s": 2.2028907800558954,
+              "literal_candidate_suffix1024_prefill_s": 0.5189912303490953,
+              "historical_pre_review_candidate_suffix1024_prefill_s": 0.19934263196773827,
+              "candidate_suffix1024_prefill_s": 0.5189912303490953
+            },
+            {
+              "seed": 43,
+              "suffix512_decode_tokens": 511,
+              "suffix512_decode_wall_s": 29.552226403960958,
+              "suffix512_prefill_proxy_s": 0.30570429912768304,
+              "projected_decode_wall_s": 29.552226403960958,
+              "estimated_free_case_wall_s": 30.163599398618743,
+              "original_long_prefill_proxy_s": 2.4122511588502675,
+              "original_prefill_delta_s": 2.1065468597225845,
+              "literal_candidate_suffix1024_prefill_s": 0.6113729946577846,
+              "historical_pre_review_candidate_suffix1024_prefill_s": 0.30570429912768304,
+              "candidate_suffix1024_prefill_s": 0.6113729946577846
+            },
+            {
+              "seed": 44,
+              "suffix512_decode_tokens": 249,
+              "suffix512_decode_wall_s": 14.323811138048768,
+              "suffix512_prefill_proxy_s": 0.20123732974752784,
+              "projected_decode_wall_s": 14.323811138048768,
+              "estimated_free_case_wall_s": 14.844461904611888,
+              "original_long_prefill_proxy_s": 2.4025074699893594,
+              "original_prefill_delta_s": 2.2012701402418315,
+              "literal_candidate_suffix1024_prefill_s": 0.5206507665631201,
+              "historical_pre_review_candidate_suffix1024_prefill_s": 0.20123732974752784,
+              "candidate_suffix1024_prefill_s": 0.5206507665631201
+            }
+          ],
+          "estimated_case_work_s": 65.75866323662896,
+          "range_s": [
+            46.03106426564027,
+            111.78972750226923
+          ]
+        },
+        {
+          "name": "anomaly.psf__requests-5414.call11.onset",
+          "source_prompt_tokens": 7226,
+          "chosen_tokens": 64,
+          "chosen_wall_reference_s": 6.700830840971321,
+          "free_trials": [
+            {
+              "seed": 42,
+              "suffix512_decode_tokens": 511,
+              "suffix512_decode_wall_s": 29.52923491410911,
+              "suffix512_prefill_proxy_s": 0.2008836749009788,
+              "projected_decode_wall_s": 29.52923491410911,
+              "estimated_free_case_wall_s": 30.066825163633805,
+              "original_long_prefill_proxy_s": 2.5769009680952877,
+              "original_prefill_delta_s": 2.376017293194309,
+              "literal_candidate_suffix1024_prefill_s": 0.5375902495246949,
+              "historical_pre_review_candidate_suffix1024_prefill_s": 0.39211082705891653,
+              "candidate_suffix1024_prefill_s": 0.5375902495246949
+            },
+            {
+              "seed": 43,
+              "suffix512_decode_tokens": 511,
+              "suffix512_decode_wall_s": 29.529831159859896,
+              "suffix512_prefill_proxy_s": 0.20201914012432098,
+              "projected_decode_wall_s": 29.529831159859896,
+              "estimated_free_case_wall_s": 30.071336628991357,
+              "original_long_prefill_proxy_s": 2.597652161028236,
+              "original_prefill_delta_s": 2.395633020903915,
+              "literal_candidate_suffix1024_prefill_s": 0.5415054691314631,
+              "historical_pre_review_candidate_suffix1024_prefill_s": 0.3932462922822587,
+              "candidate_suffix1024_prefill_s": 0.5415054691314631
+            },
+            {
+              "seed": 44,
+              "suffix512_decode_tokens": 511,
+              "suffix512_decode_wall_s": 29.538524062838405,
+              "suffix512_prefill_proxy_s": 0.2003726502880454,
+              "projected_decode_wall_s": 29.538524062838405,
+              "estimated_free_case_wall_s": 30.076302142724227,
+              "original_long_prefill_proxy_s": 2.5813215118832886,
+              "original_prefill_delta_s": 2.380948861595243,
+              "literal_candidate_suffix1024_prefill_s": 0.5377780798858214,
+              "historical_pre_review_candidate_suffix1024_prefill_s": 0.39159980244598314,
+              "candidate_suffix1024_prefill_s": 0.5377780798858214
+            }
+          ],
+          "estimated_case_work_s": 96.9152947763207,
+          "range_s": [
+            67.84070634342449,
+            164.7560011197452
+          ]
+        },
+        {
+          "name": "anomaly.matplotlib__matplotlib-20488.call86.onset",
+          "source_prompt_tokens": 46118,
+          "chosen_tokens": 64,
+          "chosen_wall_reference_s": 26.772022722987458,
+          "free_trials": [
+            {
+              "seed": 42,
+              "suffix512_decode_tokens": 511,
+              "suffix512_decode_wall_s": 29.54124277899973,
+              "suffix512_prefill_proxy_s": 0.19953714101575315,
+              "projected_decode_wall_s": 29.54124277899973,
+              "estimated_free_case_wall_s": 30.23450041898722,
+              "original_long_prefill_proxy_s": 22.435281253885478,
+              "original_prefill_delta_s": 22.235744112869725,
+              "literal_candidate_suffix1024_prefill_s": 0.6932576399874908,
+              "historical_pre_review_candidate_suffix1024_prefill_s": 0.3160388604980318,
+              "candidate_suffix1024_prefill_s": 0.6932576399874908
+            },
+            {
+              "seed": 43,
+              "suffix512_decode_tokens": 35,
+              "suffix512_decode_wall_s": 2.0070911711081862,
+              "suffix512_prefill_proxy_s": 0.19704257673583925,
+              "projected_decode_wall_s": 2.0070911711081862,
+              "estimated_free_case_wall_s": 2.6996240711785715,
+              "original_long_prefill_proxy_s": 22.512494463007897,
+              "original_prefill_delta_s": 22.315451886272058,
+              "literal_candidate_suffix1024_prefill_s": 0.6925329000703851,
+              "historical_pre_review_candidate_suffix1024_prefill_s": 0.3135442962181179,
+              "candidate_suffix1024_prefill_s": 0.6925329000703851
+            },
+            {
+              "seed": 44,
+              "suffix512_decode_tokens": 40,
+              "suffix512_decode_wall_s": 2.2932130810804665,
+              "suffix512_prefill_proxy_s": 0.19561571604572237,
+              "projected_decode_wall_s": 2.2932130810804665,
+              "estimated_free_case_wall_s": 2.982407113706451,
+              "original_long_prefill_proxy_s": 22.424956344999373,
+              "original_prefill_delta_s": 22.22934062895365,
+              "literal_candidate_suffix1024_prefill_s": 0.6891940326259847,
+              "historical_pre_review_candidate_suffix1024_prefill_s": 0.31211743552800103,
+              "candidate_suffix1024_prefill_s": 0.6891940326259847
+            }
+          ],
+          "estimated_case_work_s": 62.6885543268597,
+          "range_s": [
+            43.881988028801786,
+            106.57054235566149
+          ]
+        },
+        {
+          "name": "anomaly.call91.canonicalprefix",
+          "source_prompt_tokens": 48411,
+          "chosen_tokens": 64,
+          "chosen_wall_reference_s": 28.213166807079688,
+          "free_trials": [
+            {
+              "seed": 42,
+              "suffix512_decode_tokens": 23,
+              "suffix512_decode_wall_s": 1.32055405783467,
+              "suffix512_prefill_proxy_s": 0.19556356710381806,
+              "projected_decode_wall_s": 1.32055405783467,
+              "estimated_free_case_wall_s": 2.0163781333429465,
+              "original_long_prefill_proxy_s": 23.846063051838428,
+              "original_prefill_delta_s": 23.65049948473461,
+              "literal_candidate_suffix1024_prefill_s": 0.6958240755082765,
+              "historical_pre_review_candidate_suffix1024_prefill_s": 0.4523914195291083,
+              "candidate_suffix1024_prefill_s": 0.6958240755082765
+            },
+            {
+              "seed": 43,
+              "suffix512_decode_tokens": 128,
+              "suffix512_decode_wall_s": 7.349748150911182,
+              "suffix512_prefill_proxy_s": 0.20120189408771694,
+              "projected_decode_wall_s": 7.349748150911182,
+              "estimated_free_case_wall_s": 8.049644511291548,
+              "original_long_prefill_proxy_s": 23.777664596913382,
+              "original_prefill_delta_s": 23.576462702825665,
+              "literal_candidate_suffix1024_prefill_s": 0.699896360380367,
+              "historical_pre_review_candidate_suffix1024_prefill_s": 0.45802974651300715,
+              "candidate_suffix1024_prefill_s": 0.699896360380367
+            },
+            {
+              "seed": 44,
+              "suffix512_decode_tokens": 45,
+              "suffix512_decode_wall_s": 2.581071806838736,
+              "suffix512_prefill_proxy_s": 0.1960651462431997,
+              "projected_decode_wall_s": 2.581071806838736,
+              "estimated_free_case_wall_s": 3.2769911526276037,
+              "original_long_prefill_proxy_s": 23.827355824178085,
+              "original_prefill_delta_s": 23.631290677934885,
+              "literal_candidate_suffix1024_prefill_s": 0.6959193457888675,
+              "historical_pre_review_candidate_suffix1024_prefill_s": 0.4528929986684899,
+              "candidate_suffix1024_prefill_s": 0.6959193457888675
+            }
+          ],
+          "estimated_case_work_s": 41.55618060434179,
+          "range_s": [
+            29.08932642303925,
+            70.64550702738104
+          ]
+        },
+        {
+          "name": "anomaly.sphinx-doc__sphinx-10323.call70.onset",
+          "source_prompt_tokens": 65779,
+          "chosen_tokens": 37,
+          "chosen_wall_reference_s": 42.78625736106187,
+          "free_trials": [
+            {
+              "seed": 42,
+              "suffix512_decode_tokens": 511,
+              "suffix512_decode_wall_s": 29.561283440096304,
+              "suffix512_prefill_proxy_s": 0.19725359487347305,
+              "projected_decode_wall_s": 29.561283440096304,
+              "estimated_free_case_wall_s": 30.38728181789268,
+              "original_long_prefill_proxy_s": 40.58612378616817,
+              "original_prefill_delta_s": 40.3888701912947,
+              "literal_candidate_suffix1024_prefill_s": 0.8259983777963781,
+              "historical_pre_review_candidate_suffix1024_prefill_s": 0.5134872226185411,
+              "candidate_suffix1024_prefill_s": 0.8259983777963781
+            },
+            {
+              "seed": 43,
+              "suffix512_decode_tokens": 511,
+              "suffix512_decode_wall_s": 29.54920821986161,
+              "suffix512_prefill_proxy_s": 0.20061869826167822,
+              "projected_decode_wall_s": 29.54920821986161,
+              "estimated_free_case_wall_s": 30.3722069341502,
+              "original_long_prefill_proxy_s": 40.18063341919333,
+              "original_prefill_delta_s": 39.98001472093165,
+              "literal_candidate_suffix1024_prefill_s": 0.8229987142885866,
+              "historical_pre_review_candidate_suffix1024_prefill_s": 0.5168523260067462,
+              "candidate_suffix1024_prefill_s": 0.8229987142885866
+            },
+            {
+              "seed": 44,
+              "suffix512_decode_tokens": 511,
+              "suffix512_decode_wall_s": 29.537926020100713,
+              "suffix512_prefill_proxy_s": 0.19912034482695162,
+              "projected_decode_wall_s": 29.537926020100713,
+              "estimated_free_case_wall_s": 30.37536205613714,
+              "original_long_prefill_proxy_s": 41.20279988786206,
+              "original_prefill_delta_s": 41.003679543035105,
+              "literal_candidate_suffix1024_prefill_s": 0.837436036036425,
+              "historical_pre_review_candidate_suffix1024_prefill_s": 0.5153539725720196,
+              "candidate_suffix1024_prefill_s": 0.837436036036425
+            }
+          ],
+          "estimated_case_work_s": 133.9211081692419,
+          "range_s": [
+            93.74477571846933,
+            227.66588388771123
+          ]
+        }
+      ],
+      "estimated_total_wall_s_including_load": 577.1225540457444,
+      "estimated_total_range_wall_s": [
+        427.6601937508269,
+        925.8680614005517
+      ]
+    }
+  },
+  "historical_prior_forecast": {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/forecast-historical-pre-review-d.json",
+    "sha256": "6920a7df50a074776eafa6c2f30bb95c53f5b7dd397fd2cd35bfcc2d54b40290",
+    "status": "preserved original pre-review forecast without modification"
+  },
+  "limitations": "Planning only: extrapolates prompt prefill linearly by source prompt length and decode at suffix512 rate. Shape-dependent prefill, warmup, and generated continuation lengths may differ at suffix1024; values are not serving performance."
+}

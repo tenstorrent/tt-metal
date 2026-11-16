@@ -1,0 +1,11 @@
+{
+  "status": "pending_root_review",
+  "reviewer": "root",
+  "accepted": false,
+  "matched_tt_status": "pending",
+  "hf_followup": "deferred_until_matched_TT",
+  "sklearn_candidate_admission_sha256": "fill after fresh root admission",
+  "served_completion_sha256": "fill after served",
+  "full_completion_sha256": "fill after full",
+  "decision": "This down panel remains blocked until matched suffix TT outcome and conditional HF decision are terminal."
+}

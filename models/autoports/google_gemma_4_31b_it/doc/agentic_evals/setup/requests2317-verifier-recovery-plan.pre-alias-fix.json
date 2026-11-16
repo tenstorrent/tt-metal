@@ -1,0 +1,88 @@
+{
+  "status": "read_only_recovery_plan_corrected_full_patch_and_original_verifier_required",
+  "scope": {
+    "task": "psf__requests-2317",
+    "changed_files": [
+      "setup/requests2317-verifier-recovery-plan.json"
+    ],
+    "no_docker_device_or_network_commands_run": true,
+    "no_reference_or_oracle_patch_applied": true,
+    "shared_results_untouched": true
+  },
+  "task_identity": {
+    "trial": "psf__requests-2317__FwcKtRY",
+    "base_commit": "091991be0da19de9108dbe5e3752917fea3d7fdc",
+    "test_image_base": "swebench/sweb.eval.x86_64.psf_1776_requests-2317:latest",
+    "configured_image": "v5-swe-offline-verifier:psf__requests-2317",
+    "testbed_python": "3.9.20",
+    "testbed_pytest": "7.4.4",
+    "testbed_pluggy": "1.0.0",
+    "test_target": "test_requests.py::TestTimeout::test_encoded_methods",
+    "source": "setup/swe85-candidate/tasks85-offline-verifier/psf__requests-2317/tests/config.json",
+    "source_sha256": "a6739bd30dcf261f9482aea872efb871e239956c94e7591c0ed02179b488d9b2"
+  },
+  "agent_patch": {
+    "standalone_patch_file": null,
+    "saved_location": "setup/swe-jobs/swe-extended85-head-bfp8/psf__requests-2317__FwcKtRY/agent/trajectory.json and agent/mini-swe-agent.txt; reconstruct final state from every successful source edit and subsequent reversal in the transcript.",
+    "reconstruction_rule": "Faithfully reconstruct every final tracked source modification made by the agent, including all retained collections.abc compatibility edits; reproduce the original final tree as saved by the trajectory. Do not make a minimal-fix judgment or omit a modification because it arose during debugging. Intermediate edits later reverted are not part of the final tree. Untracked helper scripts created during the run are not source patches; determine inclusion by the task runner\u2019s captured submitted diff if available, and never infer tracked source changes from the test patch.",
+    "files_and_edit_evidence": {
+      "requests/sessions.py": "Trajectory step 17 (lines 590-637) inserts bytes decode before builtin_str; step 24 issues a successful edit changing `from collections import Mapping` to `from collections.abc import Mapping`. Both are final source changes.",
+      "requests/packages/urllib3/_collections.py": "Trajectory step 12 changes `from collections import Mapping, MutableMapping` to `from collections.abc import Mapping, MutableMapping`.",
+      "requests/cookies.py": "Trajectory step 19 changes the RequestsCookieJar base from collections.MutableMapping to collections.abc.MutableMapping.",
+      "requests/structures.py": "Trajectory step 21 changes the CaseInsensitiveDict base from collections.MutableMapping to collections.abc.MutableMapping.",
+      "requests/utils.py": "Trajectory steps 29, 34, 36: final source state retains the original `import collections` and `collections.Mapping` use; intermediate collections.abc edits are reverted and must not be represented in the final patch.",
+      "requests/models.py": "Trajectory steps 39, 41, 43: final source state retains the original `import collections` and `collections.Callable` use; intermediate collections.abc edits are reverted and must not be represented in the final patch."
+    },
+    "final_state_caveat": "The trial has no standalone agent patch file. The lock/config patch field is the SWE-bench oracle solution using to_native_string and must not be used. Reconstruct the agent patch from the complete successful source edit history and final reversions, then inspect the disposable checkout diff against base before replay. If any final tracked state cannot be established, report the unresolved file rather than inventing it.",
+    "oracle_patch_exclusion": "Never apply lock.json patch: it is the SWE-bench oracle/reference solution using to_native_string, not the agent submission.",
+    "targeted_test_evidence": "The verifier-injected test test_encoded_methods passes (test-stdout.txt line 2282), but this alone does not certify the full submitted patch or authorize patch minimization."
+  },
+  "verifier_provenance": {
+    "task_test_script": "setup/swe85-candidate/tasks85-offline-verifier/psf__requests-2317/tests/test.sh",
+    "task_test_script_sha256": "af1e4169b579d0ec1291ce611fa5c8cb37daeaf4afb570f8decfb5d2e5568259",
+    "official_test_patch": "Embedded in that test.sh: adds test_encoded_methods only. It is distinct from the source patch.",
+    "parser_source": "The same test.sh embeds parser.py in its heredoc at lines 73 onward; this is the exact task evaluator/parser provenance.",
+    "parser_behavior": "Reads /tests/config.json, wraps LOG_FILE in SWEbench START_TEST_OUTPUT/END_TEST_OUTPUT markers, calls swebench.harness.grading get_logs_eval, get_eval_tests_report, and get_resolution_status, and writes /logs/verifier/report.json and reward.txt.",
+    "parser_dependency_environment": "setup/offline-verifier-build/evidence.json establishes an offline Python 3.12.12 / uv 0.7.13 parser image and the recovery env bringup/artifacts/swe-verifier-recovery-env. Its pins in setup/extended_offline_verifier_preparation.json are swebench==4.0.3, datasets==2.16.1, fastcore==1.10.5. The cache contains swebench 4.0.3; no parser was run as part of this read-only plan.",
+    "generic_helper_reuse": "setup/recover_swe_verifier_offline.py demonstrates reconstructing parser source from an original test.sh, isolating a bounded test-output slice, running parser against a copied log with task config mounted read-only, and recording provenance separately. Do not execute or mutate that generic helper; adapt its method to a new task-specific diagnostic runner after worker capacity is available.",
+    "submitted_source_evidence": "The verifier log shows python -m pip install . and injected test patch application, then test output; the printed diff is only the test patch. The agent source patch is recoverable from the trajectory, not a standalone artifact. The test install is the local target project build/install, not a fetched Requests release."
+  },
+  "safe_recovery_plan_when_slot_free": {
+    "preflight": [
+      "Wait until the 12-worker run is finished and Docker capacity is free; check for current owners before starting local work.",
+      "Use the configured cached task image v5-swe-offline-verifier:psf__requests-2317 only; record its image ID. Do not pull or build an image.",
+      "Use the existing task checkout at base commit 091991be0da19de9108dbe5e3752917fea3d7fdc and the complete transcript-reconstructed final agent source patch. Verify each file against the trajectory before executing.",
+      "Keep the task source tree, official test patch, original task test.sh, and parser exactly as provisioned. Do not edit tests/config.json, tests/test.sh, injected test, pytest behavior, or parser."
+    ],
+    "authoritative_recovery": [
+      "Wait for all 12 workers to finish and confirm Docker/device ownership and capacity before any local execution.",
+      "Reconstruct the complete transcript-authored final source patch across sessions.py, packages/urllib3/_collections.py, cookies.py, and structures.py; retain original final states for utils.py and models.py after their transcript reverts. Compare the complete diff against the base commit and evidence before use.",
+      "Seed that full patch into a fresh disposable checkout/container using the configured cached task image v5-swe-offline-verifier:psf__requests-2317 based on swebench/sweb.eval.x86_64.psf_1776_requests-2317:latest. Record image ID and checkout/base SHA.",
+      "Launch the original task verifier through the normal Harbor/worker path with its original public-network verifier configuration, original tests/test.sh unchanged, original tests/config.json unchanged, and injected official regression test unchanged. Do not run just the targeted test or a modified test script as a score recovery.",
+      "Preserve TLS verification and retain all external HTTP/TLS failures. Save the rerun trial, logs, report, and reward in a distinct diagnostic/recovery directory. Never overwrite original trial artifacts or shared/coordinator results; parent decides whether evidence qualifies for score reconciliation."
+    ],
+    "optional_offline_diagnostic": [
+      "A copied-log parser run with network none may confirm the parser reproduces the score from the saved verifier output; it cannot validate the source patch or replace the original full verifier.",
+      "A mocked-send bytes conversion check may supplement the full run but cannot substitute for the original test.sh or count as score recovery.",
+      "If performing parser-only validation, extract the exact parser heredoc and config from the immutable task artifacts and use only a copied log and separate output directory. Keep source artifacts read-only."
+    ],
+    "no_go": [
+      "Do not use lock.json patch, any SWE-bench oracle solution, later Requests release, fetched target project source, or reference implementation.",
+      "Do not replay the agent trajectory or any of its remote/network commands.",
+      "Do not use a minimal patch in place of the full transcript-reconstructed final source patch.",
+      "Do not disable, bypass, replace, or partially run the original test.sh when claiming a verifier recovery.",
+      "Do not mutate original logs, reports, rewards, collection artifacts, or shared coordinator results."
+    ],
+    "previous_offline_parser_invocation": "The initial draft\u2019s parser-only docker command is diagnostic-only, is not the recovery command, and does not test replayed source changes. Score recovery requires the normal task verifier rerun."
+  },
+  "evidence_files": {
+    "task_trial": "setup/swe-jobs/swe-extended85-head-bfp8/psf__requests-2317__FwcKtRY",
+    "trajectory_sha256": "17ccfa484604919de2d38b5bd025d2693348b02ecac498779da1b6d7f044b57c",
+    "verifier_log_sha256": "07205ee19cd53cf71446eea41a6382f7d5c80f0542fc6ae74d5ce1daf7dc3681",
+    "lock_sha256": "35245d7ff4aca4eb8b9b0299804a3a73c50399eb40fd859522d4ffc969a23e9c",
+    "reference_patch_warning": "lock.json patch field is oracle/reference patch and must not be replayed",
+    "recovery_helper": "setup/recover_swe_verifier_offline.py",
+    "task_parser": "setup/swe85-candidate/tasks85-offline-verifier/psf__requests-2317/tests/test.sh",
+    "initial_plan": "setup/requests2317-verifier-recovery-plan.initial.json"
+  }
+}

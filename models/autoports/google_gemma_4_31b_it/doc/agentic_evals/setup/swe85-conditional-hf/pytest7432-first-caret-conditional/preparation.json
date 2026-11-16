@@ -1,0 +1,50 @@
+{
+  "status": "candidate_only_not_admitted_not_run",
+  "purpose": "Test the HF continuation after conditioning on the first full-TT token that initiated the same-seed full-TT caret loop.",
+  "hypothesis": "The existing suffix512 HF sample took a different first-token branch (236884) despite the full-TT caret token being plausible under HF. Conditioning on the observed TT first token distinguishes RNG branch divergence from post-branch continuation behavior.",
+  "transformation": {
+    "original_prompt_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-85/anomaly.pytest-dev__pytest-7432.call19.onset.suffix512.private.json",
+    "original_prompt_source_sha256": "7ca8039708a12c24acd3c2cfb1c2c51b8946e99df118576545605efad6225bf4",
+    "full_original_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-18763-7432-controls/pytest-dev__pytest-7432.call19.onset.private.json",
+    "full_original_case_sha256": "436bf8f06cebc27f9ac206ab4c85c655b2c707145be67b8341f14288370807f5",
+    "original_prompt_tokens": 512,
+    "suffix_matches_original_last512": true,
+    "candidate_prompt_tokens": 513,
+    "appended_token_id": 172109,
+    "appended_token_is_same_seed_full_tt_first_generated_id": true,
+    "candidate_chosen_tokens": 63,
+    "candidate_chosen_ids_equal_source_chosen_ids_1_through_63": true,
+    "full_tt_seed": 44,
+    "hf_seed": 44,
+    "free_cap": 512
+  },
+  "observed_branch_evidence": {
+    "full_tt_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/full/anomaly.pytest-dev__pytest-7432.call19.onset.optional-suffix512.json",
+    "full_tt_sha256": "ec50a12e48db7b2446435f2e3f64d5fd158f0dc58988d7788a620815b5abcca4",
+    "full_tt_seed44_generated_tokens": 512,
+    "full_tt_seed44_first_token": 172109,
+    "full_tt_seed44_unique_generated_ids": 1,
+    "prior_hf_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/results/seed44-suffix512/anomaly.pytest-dev__pytest-7432.call19.onset.optional-suffix512.hf.private.json",
+    "prior_hf_sha256": "389d4c9c55f00e544dcacb209814a289e7c61af4dec2ec55ebfc265cd872cb63",
+    "prior_hf_first_token": 236884,
+    "prior_hf_generated_tokens": 307,
+    "hf_probability_of_full_tt_first_token": 0.10442692041397095,
+    "hf_chosen_top1_agreement_with_full_tt_positions": 64,
+    "hf_minus_tt_first_chosen_logprob_delta": 0.07065606117248535,
+    "later_forced_hf_top1_probability_range": [
+      0.9920097589492798,
+      0.9999771118164062
+    ]
+  },
+  "interpretation_guard": "Do not claim the stack bug is confirmed by the earlier branch-divergent HF sample. This candidate conditions on one full-TT token, so it is causal continuation evidence only; it does not estimate equal-input incidence or replace prior results. No score or policy implication.",
+  "files": {
+    "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/pytest7432-first-caret-conditional/pytest7432-post-first-fulltt-token.private.json",
+    "fixture_sha256": "acfe5c87d2b16de1f566b55b295f632beac9db6269121545a105882a9b67f24e",
+    "manifest": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/pytest7432-first-caret-conditional/candidate-cases.json",
+    "manifest_sha256": "2a6435b88ab24f780db9a26207989e0a511ad54dca5ddb35e26384aa914c6f32",
+    "command": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/pytest7432-first-caret-conditional/command.json",
+    "forecast": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/pytest7432-first-caret-conditional/forecast.json",
+    "source_hashes": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/pytest7432-first-caret-conditional/source-hashes.json"
+  },
+  "host_validation_sha256": "ec8d8922ba0c633cc888a9879d12a27e0f14c7bd46d71ae5e6b05d8f4991f0c6"
+}

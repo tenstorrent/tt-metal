@@ -1,0 +1,42 @@
+{
+  "status": "host_recipe_audit_pass_launch_checks_pending",
+  "source_head": "2e5ee43b29898b4f09ab1a01d2cb6d295705daf4",
+  "config_task_count": 85,
+  "matches_frozen85": true,
+  "agents": 12,
+  "server_batch": 32,
+  "lifetime_seconds": 90000,
+  "new_identity": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/post-gpqa-controls-head-bfp8/server/perf-b32-server.json",
+  "collector_native_log": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/post-gpqa-controls-head-bfp8/server/server-b32/server.log",
+  "allocator_identity_reused": false,
+  "gaps": [
+    "TT nine controls reviewed at2e5ee43b; serial HF controls/final policy adjudication pending.",
+    "New server has not launched; real allocator12slot capacity, startup memory,PID/runtime provenance and lifetime must be measured.",
+    "Fresh Dockerhost>=170GB plus sandbox RAM/CPU reserve and all85 tag/hash checks needed at admission.",
+    "Fresh response logging probe required on newPID; preserve unscored probe boundary.",
+    "Detailed corrected12 triage files retain provisional flags; final-reconciliation supplies final status, do not silently rewrite evidence."
+  ],
+  "evidence_proposal": {
+    "public_paths": 57,
+    "review_paths": 76,
+    "minimal_existing_paths": 36
+  },
+  "staged_unchanged_observed": [
+    "models/autoports/google_gemma_4_31b_it/doc/benchmark/run/REPORT.md",
+    "models/autoports/google_gemma_4_31b_it/doc/benchmark/stage_usage.json"
+  ],
+  "refreshed_utc": "2026-11-14T14:16:20.959783+00:00",
+  "recipe_hashes": {
+    "post-gpqa-controls-server-launch.json": "82cc344893fb5db0d4d309c053e2a6cf30a7695110f0d107e78e37d13c4bec65",
+    "swe85_post_gpqa_controls_launch_metadata.json": "d62693e82846dbe9c77c8f0e81aa6d2a3d7e1d6a68515a76fbacced6cd3d971a",
+    "swe85_post_gpqa_controls_collection_plan.json": "12ef0c5cf9d49ab96cd545e4a8cef80d06d8493731ebaa062424c4a62e9cc9df"
+  },
+  "expected_pending": [
+    "Serial CPU HF controls/final adjudication; no HF pass inferred from TT controls review.",
+    "SWE85 not launched/admitted; actual fresh allocator12slots, host disk/RAM, image mappings, PID/lifetime and logging proof pending."
+  ],
+  "actual_defects_found": [],
+  "nonblocking_stale_wording": [
+    "Conditional metadata still says nine controls pending; TT nine controls reviewed now, HF remains pending. Condition remains conservative; coordinator can clarify on admission."
+  ]
+}

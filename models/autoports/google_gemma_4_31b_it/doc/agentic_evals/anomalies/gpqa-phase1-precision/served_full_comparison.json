@@ -1,0 +1,152 @@
+{
+  "served_collapsed_trials": 1,
+  "full_collapsed_trials": 0,
+  "trials_per_config": 3,
+  "trial_output_cap": 1024,
+  "served_exit_code": 0,
+  "full_exit_code": 0,
+  "full_success_attempt": 4,
+  "implementation": "ef25803b",
+  "results": {
+    "task195.onset": {
+      "comparison": {
+        "chosen": {
+          "tokens": 32,
+          "top1_agreement": 0.84375,
+          "served_sequence_log_probability": -15.48701651027659,
+          "full_sequence_log_probability": -22.78963837819174
+        },
+        "correct": {
+          "tokens": 11,
+          "top1_agreement": 0.9090909090909091,
+          "served_sequence_log_probability": -34.35174473296513,
+          "full_sequence_log_probability": -33.371474655738155
+        }
+      },
+      "wall_s": 192.19065584801137,
+      "free_running": [
+        {
+          "sampling": {
+            "temperature": 1.0,
+            "top_k": 20,
+            "top_p": 0.95,
+            "seed": 42
+          },
+          "flag": false,
+          "tail_zlib_ratio": 0.36027070063694266,
+          "tail_distinct_chars": 65,
+          "diagnostic_wall_s_including_prefill": 61.56421460094862
+        },
+        {
+          "sampling": {
+            "temperature": 1.0,
+            "top_k": 20,
+            "top_p": 0.95,
+            "seed": 43
+          },
+          "flag": false,
+          "tail_zlib_ratio": 0.38485947416137806,
+          "tail_distinct_chars": 68,
+          "diagnostic_wall_s_including_prefill": 50.04489093297161
+        },
+        {
+          "sampling": {
+            "temperature": 1.0,
+            "top_k": 20,
+            "top_p": 0.95,
+            "seed": 44
+          },
+          "flag": false,
+          "tail_zlib_ratio": 0.40073162620552044,
+          "tail_distinct_chars": 74,
+          "diagnostic_wall_s_including_prefill": 61.59290962200612
+        }
+      ]
+    },
+    "task7.decisive": {
+      "comparison": {
+        "chosen": {
+          "tokens": 3,
+          "top1_agreement": 1.0,
+          "served_sequence_log_probability": -9.631682723920676e-05,
+          "full_sequence_log_probability": -5.876846623209531e-05
+        },
+        "correct": {
+          "tokens": 3,
+          "top1_agreement": 1.0,
+          "served_sequence_log_probability": -28.86377727975014,
+          "full_sequence_log_probability": -26.1947445869082
+        }
+      },
+      "wall_s": 8.108951036818326
+    },
+    "task93.decisive": {
+      "comparison": {
+        "chosen": {
+          "tokens": 3,
+          "top1_agreement": 1.0,
+          "served_sequence_log_probability": -1.931178530867328e-05,
+          "full_sequence_log_probability": -2.145765790828591e-06
+        },
+        "correct": {
+          "tokens": 3,
+          "top1_agreement": 1.0,
+          "served_sequence_log_probability": -26.285076138738077,
+          "full_sequence_log_probability": -28.302497129916446
+        }
+      },
+      "wall_s": 5.63823903305456
+    },
+    "task167.decisive": {
+      "comparison": {
+        "chosen": {
+          "tokens": 3,
+          "top1_agreement": 1.0,
+          "served_sequence_log_probability": -0.00019882209699062514,
+          "full_sequence_log_probability": -4.613295448052668e-05
+        },
+        "correct": {
+          "tokens": 3,
+          "top1_agreement": 1.0,
+          "served_sequence_log_probability": -33.84966133911803,
+          "full_sequence_log_probability": -34.267301651780144
+        }
+      },
+      "wall_s": 2.8411764740012586
+    },
+    "task7.full_reply": {
+      "comparison": {
+        "chosen": {
+          "tokens": 10564,
+          "top1_agreement": 0.9477470655054904,
+          "served_sequence_log_probability": -3260.7490329467637,
+          "full_sequence_log_probability": -3786.0611546033606
+        }
+      },
+      "wall_s": 689.1911652670242
+    },
+    "task93.full_reply": {
+      "comparison": {
+        "chosen": {
+          "tokens": 7428,
+          "top1_agreement": 0.9485729671513193,
+          "served_sequence_log_probability": -1765.449612196144,
+          "full_sequence_log_probability": -2223.413555378871
+        }
+      },
+      "wall_s": 483.38288383488543
+    },
+    "task167.full_reply": {
+      "comparison": {
+        "chosen": {
+          "tokens": 3803,
+          "top1_agreement": 0.9295293189587168,
+          "served_sequence_log_probability": -1461.8497628434643,
+          "full_sequence_log_probability": -1753.269603181628
+        }
+      },
+      "wall_s": 246.33861317601986
+    }
+  },
+  "interpretation": "Full precision removes observed collapse in this small seeded panel; proceed with group precision bisection. Failed coherent tasks retain identical decisive top1 choices; whole-reply agreement0.930-0.949 does not rule out earlier reasoning sensitivity. Conditional correct alternatives are not independently generated correct reasoning."
+}

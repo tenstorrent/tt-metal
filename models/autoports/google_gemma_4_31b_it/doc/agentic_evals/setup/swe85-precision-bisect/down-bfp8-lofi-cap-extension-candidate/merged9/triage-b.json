@@ -1,0 +1,158 @@
+{
+  "status": "independent_triage_complete",
+  "scope": "Merged9 P3 cap extensions for original P3 indices 15,18,34. Exact saved fixtures, seeds, sampling, and complete down-BFP8-LoFi P3 runtime policy verified. This is diagnostic-only; no task correctness or score claim.",
+  "tokenizer": {
+    "repo_id": "google/gemma-4-31B-it",
+    "revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+    "local_files_only": true
+  },
+  "rows": [
+    {
+      "manifest_index": 15,
+      "job": "anomaly.psf__requests-5414.call10.onset",
+      "mode": "full",
+      "seed": 42,
+      "requested_cap_tokens": 512,
+      "generated_tokens": 512,
+      "natural_stop": false,
+      "last_token_id": 6163,
+      "verdict": "inconclusive",
+      "confidence": "high",
+      "evidence": "The continuation begins with a brief caret run, then extends the conditioned traceback into distinct URL/IDNA validation reasoning. It is cut off mid-explanation at 512/512 tokens. No sustained caret-only loop is established, and no normal completion can be claimed.",
+      "cap_notes": "Progressing at cap. Root decides whether further extension is useful; this finding alone does not require an automatic extension.",
+      "fixture": {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-requests5414-caret-controls/psf__requests-5414.call10.onset.private.json",
+        "sha256": "38cba2429d022e64133da2c34388d9e88a9b26b82ec58594153692842dccb961",
+        "sha256_matches_pinned_fixture": true
+      },
+      "result": {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-cap-extension-candidate/merged9/results/p3capext.anomaly.psf__requests-5414.call10.onset.seed42.cap512.json",
+        "sha256": "dd7ff410f4989cfd8c5fe0336e9fdebd2418e21914f93e9ca619eccfc2a1e5d9",
+        "diagnostic_total_wall_s": 27.118886924814433
+      },
+      "prefix_identity": {
+        "prior_result_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.psf__requests-5414.call10.onset.seed42.cap256.json",
+        "prior_result_sha256": "51b40437942121d43d32b1f4b7280027f6da1e86bcd572eff4c360146dfddf83",
+        "prior_generated_token_count": 256,
+        "prior_generated_token_ids_sha256_compact_expected": "7f7b741575d0c4306ab179cb9c7b973cd48abf838d64eb204b0dc5ef6b7a3086",
+        "extended_prefix_token_ids_sha256_compact": "7f7b741575d0c4306ab179cb9c7b973cd48abf838d64eb204b0dc5ef6b7a3086",
+        "exact_prefix_equal": true
+      },
+      "sampling_and_runtime": {
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 42
+        },
+        "sampling_seed_matches_case": true,
+        "case_path_matches_case": true,
+        "runtime_policy_sha256": "45beca08f516c6d09091d459ca53f130d8833b1ff970d74dc76b3aa1a38701e7",
+        "runtime_policy_equals_p3_policy": true,
+        "policy_config_id": "stage12_swe85_down_bfp8_lofi_isolated_served_head_bfp8_lofi"
+      },
+      "text_evidence": {
+        "decoded_head": "^^^^^^^^^^^^^^^^^\n  File \"<string>\", line 3, in raise_from\nurllib3.exceptions.LocationParseError: Failed to parse: '.example.com', label empty or too long\n```\nThe error is happening inside `urllib3`, not in `requests/models.py`'s `prepare_url`.\n\n`requests/models.py` does have som",
+        "decoded_tail": " non-ASCII hosts. For ASCII hosts that are invalid (like starting with a dot, which `idna` might complain about if it was called), it doesn't catch it here.\n\nActually, `idna.encode` is what raises the error. If the host is ASCII, `requests` doesn't call `_get_idna_encoded_host`.\n\nIf I want to fix this, I should probably call `_get_idna_encoded_host"
+      }
+    },
+    {
+      "manifest_index": 18,
+      "job": "anomaly.psf__requests-5414.call11.onset",
+      "mode": "full",
+      "seed": 42,
+      "requested_cap_tokens": 512,
+      "generated_tokens": 512,
+      "natural_stop": false,
+      "last_token_id": 6738,
+      "verdict": "inconclusive",
+      "confidence": "high",
+      "evidence": "The continuation begins with a brief caret run, then extends the conditioned traceback into distinct URL/IDNA validation reasoning. It is cut off mid-explanation at 512/512 tokens. No sustained caret-only loop is established, and no normal completion can be claimed.",
+      "cap_notes": "Progressing at cap. Root decides whether further extension is useful; this finding alone does not require an automatic extension.",
+      "fixture": {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-requests5414-caret-controls/psf__requests-5414.call11.onset.private.json",
+        "sha256": "50cbd0eb4e62c843a1ec8ac800a580135c3abc5dc2154d6be0a7e39d0c37ed6f",
+        "sha256_matches_pinned_fixture": true
+      },
+      "result": {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-cap-extension-candidate/merged9/results/p3capext.anomaly.psf__requests-5414.call11.onset.seed42.cap512.json",
+        "sha256": "e9102d4c0f208857957c7591884f5b772199b5ccb8d98eaf2903d037ca8ffeea",
+        "diagnostic_total_wall_s": 17.726193534908816
+      },
+      "prefix_identity": {
+        "prior_result_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.psf__requests-5414.call11.onset.seed42.cap256.json",
+        "prior_result_sha256": "178c2bbbf77dec7b779c2633efe6f22f7c0bd8909c73415b767ec263dda73e63",
+        "prior_generated_token_count": 256,
+        "prior_generated_token_ids_sha256_compact_expected": "b0d0fca0e4ffa2b3a7b21c397925ff36506a3618fe40e15749f8bc240e902bbd",
+        "extended_prefix_token_ids_sha256_compact": "b0d0fca0e4ffa2b3a7b21c397925ff36506a3618fe40e15749f8bc240e902bbd",
+        "exact_prefix_equal": true
+      },
+      "sampling_and_runtime": {
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 42
+        },
+        "sampling_seed_matches_case": true,
+        "case_path_matches_case": true,
+        "runtime_policy_sha256": "45beca08f516c6d09091d459ca53f130d8833b1ff970d74dc76b3aa1a38701e7",
+        "runtime_policy_equals_p3_policy": true,
+        "policy_config_id": "stage12_swe85_down_bfp8_lofi_isolated_served_head_bfp8_lofi"
+      },
+      "text_evidence": {
+        "decoded_head": "^^^^^^^^^^^^^^^^^\n  File \"<string>\", line 3, in raise_from\nurllib3.exceptions.LocationParseError: Failed to parse: '.example.com', label empty or too long\n```\n\nInterestingly, `requests/models.py` has some code to catch `UnicodeError` and raise `InvalidURL` in `prepare_url`:\n\n```p",
+        "decoded_tail": "ifferent versions of `requests` and `urllib3`.\n\nLooking at the provided system information in the issue:\n- requests: 2.23.0\n- idna: 2.8\n- urllib3: 1.25.8\n- python: 3.8.0\n\nIn my environment:\n- requests: 2.26.0\n- idna: 3.4\n- urllib3: 1.26.18\n- python: 3.11.5\n\nRegardless of the exact exception type, the goal is to raise `requests.exceptions.InvalidURL"
+      }
+    },
+    {
+      "manifest_index": 34,
+      "job": "anomaly.pytest-dev__pytest-5787.call65.onset",
+      "mode": "full",
+      "seed": 43,
+      "requested_cap_tokens": 4096,
+      "generated_tokens": 2489,
+      "natural_stop": true,
+      "last_token_id": 50,
+      "verdict": "normal",
+      "confidence": "medium",
+      "evidence": "The continuation completes a long, line-distinct serializer/deserializer editing script and emits the tool handoff, then naturally stops at token ID 50 after 2489 tokens (below the 4096 cap). No sustained loop or native localized contraction is evident. This only classifies the finite continuation; script correctness/task success were not checked and no generated command was executed.",
+      "cap_notes": "Natural stop at 2489/4096 tokens; no extension required for cap closure.",
+      "fixture": {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/fixtures/full/anomaly.pytest-dev__pytest-5787.call65.onset.cap2048.seed43.private.json",
+        "sha256": "2f36db800a3807dd533cbbbc1071b060fa91cd099371c96894f1cf60123368e7",
+        "sha256_matches_pinned_fixture": true
+      },
+      "result": {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-cap-extension-candidate/merged9/results/p3capext.anomaly.pytest-dev__pytest-5787.call65.onset.seed43.cap4096.json",
+        "sha256": "d60229c3096612fd42b1737e0af93f90ee5fe4b7d64f0dbb0bdd598656e5e7e7",
+        "diagnostic_total_wall_s": 106.71842325897887
+      },
+      "prefix_identity": {
+        "prior_result_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.pytest-dev__pytest-5787.call65.onset.seed43.cap2048.json",
+        "prior_result_sha256": "3228a96bc18c8640bc6a6fb08158c19c6f31f695991fd4d2c5ae3783891112d9",
+        "prior_generated_token_count": 2048,
+        "prior_generated_token_ids_sha256_compact_expected": "26b7a017f377217427befdcd12fd58d18d8d585af47bd380f35702e6036c11e2",
+        "extended_prefix_token_ids_sha256_compact": "26b7a017f377217427befdcd12fd58d18d8d585af47bd380f35702e6036c11e2",
+        "exact_prefix_equal": true
+      },
+      "sampling_and_runtime": {
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 43
+        },
+        "sampling_seed_matches_case": true,
+        "case_path_matches_case": true,
+        "runtime_policy_sha256": "45beca08f516c6d09091d459ca53f130d8833b1ff970d74dc76b3aa1a38701e7",
+        "runtime_policy_equals_p3_policy": true,
+        "policy_config_id": "stage12_swe85_down_bfp8_lofi_isolated_served_head_bfp8_lofi"
+      },
+      "text_evidence": {
+        "decoded_head": " replace the _to_json method and _from_json method.\n# I'll use the content of the original file and replace the methods.\n\n# Since I cannot easily identify the exact lines, I'll just search for the method definitions.\n\n# Actually, I can just read the file and replace the methods u",
+        "decoded_tail": "     exception_info.addsection(*section)')\n            new_content.append('                reportdict[\"longrepr\"] = exception_info')\n        i += 1\n    else:\n        new_content.append(line)\n    i += 1\n\nwith open('src/_pytest/reports.py', 'w') as f:\n    f.write('\\n'.join(new_content))\nEOF\npython3 modify_reports.py\n<|\"|>}<tool_call|><|tool_response>"
+      }
+    }
+  ]
+}

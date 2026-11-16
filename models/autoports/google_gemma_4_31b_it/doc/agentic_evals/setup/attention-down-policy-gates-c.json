@@ -1,0 +1,74 @@
+{
+  "status": "host_only_checklist_candidate_panel_not_yet_accepted",
+  "scope": "Conditional checklist for a stage12 precision-fix candidate changing attention and/or down policy after the fixed108 panel is terminal and independently reviewed. This does not reopen or rerun the complete stage08 datatype sweep and does not select a policy.",
+  "read_first": [
+    "bringup/run_contract.json",
+    "bringup/agentic_evals/inputs.json",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/learned.json"
+  ],
+  "current_comparison_baseline": {
+    "stage08_selected_policy": "doc/datatype_sweep/selected_precision_config.json (head_bfp4; its prior scores are comparison history only)",
+    "stage12_served_policy": "tt/selected_precision_config.json and doc/agentic_evals/setup/head_bfp8_precision_config.json (stage12_head_bfp8_lofi: attention/mlp/down BFP4 LoFi, head BFP8 LoFi)",
+    "candidate_policy": "must be an immutable candidate JSON/build-kwargs file, separately pinned; current default files are not to be edited until accepted.",
+    "existing_mechanical_validation": "doc/agentic_evals/setup/swe85-remainder-execution85/precision-policy-validation.json passes only its served and full policies. Existing head-BFP8 remeasurement host checks do not mechanically validate a new attention/down policy. Candidate run must produce and inspect runtime_policy.json with actual group weight dtypes and fidelities."
+  },
+  "acceptance_checks": [
+    {
+      "id": "full_model_top1_top5_readiness",
+      "command": "TT_METAL_TRACE_ALLOC_TRACKING=0 TT_METAL_DEVICE_PROFILER=0 python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tests.run_datatype_candidate --config <candidate-precision.json> --id <fresh-candidate-id> --acceptance",
+      "reference": "HF AIME24 100-token reference recorded by doc/optimized_full_model/reference_metadata.json (pinned revision 842da3794eaa0b77d5f08bae87a17459d91ff475) and prompt doc/optimized_full_model/aime24_prompt.json; candidate result goes in a new doc/datatype_sweep/<id>/readiness_accuracy.json.",
+      "gate": "Per reference: top1 >= 0.90, top5 >= 0.98; retain existing top100 readiness expectation 1.0. This runner also emits full-model runtime policy, memory, token-out performance, long-prefix, six-prompt qualitative, and full-context checks.",
+      "provenance_gap": "The expected bringup/references/google_gemma_4_31b_it_aime24_chat.refpt is absent in this checkout, although reference_metadata records its path. If absent at launch, recreate only the pinned HF reference with python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tests.generate_full_reference (previous reference generation recorded 287.324 s); do not substitute old TT scores."
+    },
+    {
+      "id": "natural_text_accuracy",
+      "reference_source": "models/tt_transformers/tests/tale-of-two-cities.txt.bz2, pinned HF snapshot /home/mvasiljevic/.cache/huggingface/hub/models--google--gemma-4-31B-it/snapshots/842da3794eaa0b77d5f08bae87a17459d91ff475; use the same deterministic contiguous real-text target positions for all configs and score full-model top1/top5 against pinned HF top-k logits.",
+      "candidate_command": "env PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime READINESS_TRACE_REGION_SIZE=134217728 python_env/bin/python -m readiness_check.run_teacher_forcing --model-dir models/autoports/google_gemma_4_31b_it --reference <fresh-pinned-natural-text-reference.refpt> --mesh-device P300x2 --fabric-config FABRIC_1D_RING --build-kwargs-file <candidate-build-kwargs.json>",
+      "availability": "The Tale source is present and the existing head-BFP8 prefill-resume artifact uses it, but no full-model natural-text top1/top5 reference/results file is present. prefill_resume.json is not an accuracy substitute. Build/locate a compatible pinned HF reference from actual natural text before comparison; do not reuse prior policy scores as candidate evidence.",
+      "gate": "Use the same per-reference top1/top5 bars as readiness, report position count and sample uncertainty; do not rank policies from the 100-token readiness sample alone."
+    },
+    {
+      "id": "resumed_prefill",
+      "command": "env PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime READINESS_TRACE_REGION_SIZE=134217728 python_env/bin/python -m readiness_check.run_prefill_resume_check --model-dir models/autoports/google_gemma_4_31b_it --mesh-device P300x2 --fabric-config FABRIC_1D_RING --lengths 2560,16384 --block-sizes 32,64 --sliding-window 1024 --build-kwargs-file <candidate-build-kwargs.json> --output <fresh-candidate-output>/prefill_resume.json",
+      "reference": "Reuse deterministic Tale text corpus models/tt_transformers/tests/tale-of-two-cities.txt.bz2; compare resumed and fresh paths to each other and pinned HF per position.",
+      "gate": "Retain all default thresholds and all14 cases, including tile/window aligned and unaligned starts 132/1029 and expected-failing no-history/fresh-suffix controls. Do not replace with reduced probe_resume_stages.",
+      "runtime": "Historical full60 run spanned 794.726 s (~13.25 min); planning note budgets 15-25 min including model load/capture. This is a scheduling estimate, not candidate performance."
+    },
+    {
+      "id": "prompt_correct_qualitative",
+      "command": "python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tests.generate_qualitative_tt_control --output-dir <fresh-candidate-output>/qualitative-tt --max-new-tokens 256 --context 4096 --build-kwargs-file <candidate-build-kwargs.json>",
+      "reference": "Reuse doc/datatype_sweep/selected_default/qualitative_hf.json and qualitative_prompt_format.json only as pinned HF reference controls; validate exact prompt messages and token IDs against the candidate run. Existing run metadata fixes pinned tokenizer/template and six prompts. Candidate TT outputs and judgments must be fresh.",
+      "gate": "Inspect all six prompt-correct outputs against matched HF controls; preserve EOS/normalization details. If including sampling, use matched HF sampled controls (head-BFP8 plan uses greedy and T0.7/top_k32/top_p0.9 seed42); do not treat an unmatched sampled output as a comparison.",
+      "runtime": "Existing head-BFP8 plan estimates 10-20 min for the qualitative block; no candidate-specific measured duration was found."
+    },
+    {
+      "id": "default_and_vllm_policy_propagation",
+      "checks": [
+        "Candidate full-model run must report every selected weight group and kernel fidelity in runtime_policy.json, and the runtime output must match candidate config exactly.",
+        "After acceptance only, install that exact full policy into tt/selected_precision_config.json and validate load_precision(None) through build_generator; keep a clearly documented safe rollback config.",
+        "Validate vLLM adapter uses the same no-override model default: tt/generator_vllm.py initialize path calls load_precision(None); launch server with --expected-precision <candidate-config> and archive actual server identity/runtime policy. Run models/autoports/google_gemma_4_31b_it/tests/check_vllm_adapter.py only if required to validate adapter mechanics; it is a real device test and must be serialized."
+      ],
+      "existing_evidence": "doc/datatype_sweep/propagation_check.json proves the earlier stage08 model/generator default only and explicitly leaves vllm_adapter null; it is not proof for a new candidate. doc/agentic_evals/setup/head_bfp8_remeasurement_commands.json pins stage12 server expected-precision checks and a 15-row B32 serving-rate remeasurement plan.",
+      "post_selection_cost": "If this policy becomes the stage12 served default, the existing 15-row B32 remeasurement forecast is 5455.199 s (~91 min) plus closure reserve; it is post-selection, not part of the fixed108 decision itself."
+    },
+    {
+      "id": "context_and_allocator_ledger",
+      "checks": [
+        "Keep advertised context 262144 unless a measured hard physical limit proves the maximum feasible value; candidate acceptance runner covers exact262144 and nonaligned262143 full-stack prefill/decode boundaries.",
+        "Refresh candidate allocator/pool ledger for changed attention/down weights and record all persistent/transient allocations; do not copy the existing head-BFP8 ledger as if it measured this policy.",
+        "If KV dtype/layout/chunking is unchanged, preserve KV/context arithmetic, but confirm candidate allocator fit and boundary gates. Update doc/context_contract.json only from candidate evidence; no capability reduction by convenience."
+      ],
+      "existing_references": [
+        "doc/context_contract.json (262144 contract and historical layer tests)",
+        "doc/optimized_full_model/full_context_post_barrier.json (prior selected-default full-stack boundary reference)",
+        "doc/agentic_evals/setup/head_bfp8_context_memory_audit.json and doc/agentic_serving.json (stage12_head_bfp8 allocator baseline; not a measurement for altered weight policy)"
+      ]
+    }
+  ],
+  "stage_boundary": "This is a targeted stage12 precision-fix acceptance path after the fixed108 panel, not a request to repeat all stage08 candidates, the entire datatype sweep, or stage10. The earlier stage08 results are historical comparisons for head_bfp4, not scores for the new stage12 candidate.",
+  "remaining_unknowns": [
+    "A natural-text full-model top1/top5 HF reference aligned to actual Tale text is not currently persisted; locate or prepare it before choosing.",
+    "AIME24 .refpt path recorded by reference_metadata is currently absent; verify/recreate pinned HF reference before calling the standard candidate runner.",
+    "No runtime forecast was found for the full candidate load+acceptance command; only its per-request readiness scoring is around 2.7 seconds after construction, which is not wall time."
+  ]
+}

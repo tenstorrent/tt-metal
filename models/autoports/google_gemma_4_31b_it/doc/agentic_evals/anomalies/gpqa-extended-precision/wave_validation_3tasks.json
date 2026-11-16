@@ -1,0 +1,9 @@
+{
+  "status": "host_only",
+  "batch_exit": 0,
+  "batch_stdout": "Validated 6 jobs without importing TTNN\n",
+  "new_task": "127",
+  "prompt_count_matches": true,
+  "reply_count_matches": true,
+  "hf_not_rerun": "Unchanged validated schema; new cases token IDs validated, no HF/model import."
+}

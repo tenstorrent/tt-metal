@@ -1,0 +1,70 @@
+{
+  "status": "review_preparation_only_waiting_for_terminal_fixed108_outputs",
+  "scope": "Host-only review plan for admitted production-Q32 P19 fixed108; no output conclusions until completion.json.",
+  "new_output_directory": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/p19-q32-production-validation/fixed108/runs/p19_q32",
+  "new_outputs_present_initial_scan": 1,
+  "comparators": {
+    "old_p19_q128": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19",
+      "json_files_initial_scan": 109,
+      "expected_rows": 108,
+      "source_manifest": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/candidate-cases.json",
+      "manifest_sha256": "57193e4b91af3a31df00f0c92dbc0f2219fbce011e6533594e5244a93a3021ed",
+      "use": "Same original P19 fixture/cap/seed rows. Historical Q128 only; never reuse verdict for changed Q32 outputs."
+    },
+    "p6_attention_down_bfp8_lofi": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/attention-down-bfp8-lofi-fixed108-candidate/runs/attention_down_bfp8_lofi_fixed108",
+      "json_files_initial_scan": 109,
+      "expected_rows": 108,
+      "observed_runtime_policy": {
+        "config_id": "stage12_swe85_attention_down_bfp8_lofi_fixed108",
+        "weight_groups": {
+          "attention": "bfp8_lofi",
+          "mlp": "bfp4",
+          "down": "bfp8_lofi",
+          "lm_head": "bfp8_lofi"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "LoFi",
+          "mlp": "LoFi",
+          "down": "LoFi",
+          "lm_head": "LoFi"
+        },
+        "activation_dtype": "bfloat8_b",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat8_b",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat8_b",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144
+      },
+      "use": "Matched secondary precision comparator; distinct policy, not all-group full BF16."
+    },
+    "all_group_full_bf16_controls": {
+      "survey": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/full-bf16-hifi4-control-survey-b.json",
+      "survey_sha256": "353db0c89f44251825534c1e498c88fe4eab5a38f9808b7738896e8027b01419",
+      "verified_rows": 7,
+      "scope_note": "Use only rows with exact full prompt ID matches and runtime policy stating all-group BF16/HiFi4. Do not mislabel the prior head-only BF16/HiFi4 panel as full BF16."
+    }
+  },
+  "row_review_method": [
+    "Wait for terminal completion.json and confirm exit 0, all108 expected result files, no validation errors, and the run manifest identity before producing final triage.",
+    "Join by exact fixture/job identity plus seed, not substring call matching; check generated output file hash, fixture path, prompt-token IDs, chosen continuation IDs, sampling settings, cap, and runtime_precision against the admitted candidate and production Q32 policy.",
+    "Read each complete free_running token sequence/text with its exact conditioned prefix. Treat native motif/protocol breakage as affirmative even if it occurs early; only mark cap inconclusive when the output actually hits requested cap and text is still progressing.",
+    "Compare new row to exact old P19 Q128 and P6 same-identity rows. Consult full-BF16 only where a surveyed full-policy row has the same seed and exact prompt IDs. Keep policy attribution qualified because Q32 changes geometry and outputs are conditional samples.",
+    "For each unresolved row reaching its cap while progressing, note the exact original fixture, seed, current cap, last token IDs/text, output SHA and candidate extended cap. Construct any extension subset solely from these new Q32 findings; retain the extension fixture\u2019s exact original prefix/continuation/sampling/seed and generate fresh provenance and hashes. Exclude natural stops, and do not extend affirmative malformed/native anomalies merely because they hit cap."
+  ],
+  "conditional_extension_rule": {
+    "prepared_old_list_count": 5,
+    "reuse_old_list_as_is": false,
+    "decision_basis": "Only new Q32 rows with genuine progressing-cap inconclusive outputs. A candidate from old five-case roster is not automatically included; a newly progressing Q32 row may be added. Extension admission requires a separate reviewed manifest."
+  },
+  "trace_tracking_caveat": "New fixed108 command records TT_METAL_TRACE_ALLOC_TRACKING=1; historical P19/P6 panels used tracking=0/unset, so compare outcome phenotype and identity, not wall speed.",
+  "remaining_scope": "No score changes, precision selection, or serving claim; fixed108 is a semantic regression panel only."
+}

@@ -1,0 +1,456 @@
+{
+  "status": "additive_native_contraction_family_adjudication",
+  "scope": "Clarifies repeated-contraction morphology and shortest full-precision positive by complete input prompt-token count; no task correctness or score claim. Keeps prior snapshots immutable.",
+  "rule": "A native-family positive is an immediate repeated apostrophe-plus-ve suffix: either an extra apostrophe-ve unit attached directly to a completed contraction ending in ve (e.g. the saved assistant prefix I’ve followed immediately by generated ’ve), or a contiguous chain of at least two apostrophe-ve units (e.g. and’ve’ve). Apostrophe glyph may be ASCII or curly. One duplicate unit is enough because native Sphinx call70 has exactly I’ve've. Intervening lexical material such as “I’ve already’ve” breaks the boundary match; classify separately as localized other anomaly unless another adjacent chain occurs.",
+  "native_source_refs": [
+    {
+      "path": "anomalies/swe85-protocol-scan83-controls/matplotlib__matplotlib-20488.call86.onset.private.json",
+      "sha256": "c11bb5890af7b0166bbbb61c44a3200e58aa3eb4b509403759fbb162ae58d179",
+      "needle": "I've’ve’ve’ve’ve",
+      "context": null
+    },
+    {
+      "path": "anomalies/swe85-below-band/full-replies/matplotlib__matplotlib-20488.call91.packet.private.json",
+      "sha256": "66a2b677e34ef4a62ca2ae02ea5a9e06a0f8bfa91c68aac34842e29e883884f7",
+      "needle": "Since I've’ve’ve’ve’ve",
+      "context": "Error at 1218-1220\\n# and the __call__ method.\\n# Since I've’ve’ve’ve’ve made a mess, I'll just use a known good version o"
+    },
+    {
+      "path": "anomalies/swe85-below-band/double-contraction-archive/sphinx-doc__sphinx-10323.call70.packet.private.json",
+      "sha256": "68db34d2fbd2afa478014fb2a2da1d07d87d58d86ebcc4d5bc49cb9aff54676d",
+      "needle": "I've've tried everything",
+      "context": "nd:     <plugin>` and we'd need to not strip it.\n\nI've've tried everything. I'll just submit."
+    }
+  ],
+  "served_reclassifications": [
+    {
+      "mode": "served",
+      "seed": 43,
+      "case_file": "setup/swe85-adaptive-suffix4096-candidate/runs/served/anomaly.matplotlib__matplotlib-20488.call86.onset.suffix4096.seed43.json",
+      "source_sha256": "0473b2a180e527d9a609a1f28d65cb7770bb3421012c0affa534ac5fa3ef6d56",
+      "generated_tokens": 238,
+      "generated_text_head": "’ve’ve made a total mess of the files. I'll just restore the original files and start over.\nBut I can't restore the orig",
+      "prefix_tail": "I’ve",
+      "previous_verdict": "other_anomaly",
+      "adjudicated_verdict": "reproduced_native_motif",
+      "evidence": "Pinned prefix ends “I’ve”; continuation begins “’ve’ve made…”, forming I’ve’ve’ve at the assistant boundary. This is the same adjacent repeated-contraction family as native Mpl86; glyph style does not change it."
+    },
+    {
+      "mode": "served",
+      "seed": 44,
+      "case_file": "setup/swe85-adaptive-suffix4096-candidate/runs/served/anomaly.matplotlib__matplotlib-20488.call86.onset.suffix4096.seed44.json",
+      "source_sha256": "3eedba823b3b3f55be41012a0a7f87ef45ca6e748a876c8842020f903e2d7edd",
+      "generated_tokens": 138,
+      "generated_text_head": "'ve’ve’ve made a total mess of the `lib/matplotlib/colors.py` file.\nI'll just restore the file from the most reliable ve",
+      "prefix_tail": "I’ve",
+      "previous_verdict": "other_anomaly",
+      "adjudicated_verdict": "reproduced_native_motif",
+      "evidence": "Pinned prefix ends “I’ve”; continuation begins “'ve’ve’ve made…”, forming I’ve've’ve’ve. The immediate repeated suffix matches the native Mpl86 family."
+    },
+    {
+      "mode": "served",
+      "seed": 43,
+      "case_file": "setup/swe85-adaptive-suffix4096-candidate/runs/served/anomaly.sphinx-doc__sphinx-10323.call70.onset.suffix4096.seed43.json",
+      "source_sha256": "bfbd718661ba70c712a02aebea1f93378570721cf44cec131b8fed91c40b833c",
+      "generated_tokens": 116,
+      "generated_text_head": "’ve explored everything. I'll just submit the original code.\n<channel|><|tool_call>call:bash{command:<|\"|>sed -i '223,22",
+      "prefix_tail": "I’ve",
+      "previous_verdict": "other_anomaly",
+      "adjudicated_verdict": "reproduced_native_motif",
+      "evidence": "Pinned prefix ends “I’ve”; continuation begins “’ve explored…”, yielding I’ve’ve at the boundary. One extra suffix is sufficient: native Sphinx call70 has localized “I’ve've tried…”."
+    }
+  ],
+  "shortest_full_precision_positive_by_case": [
+    {
+      "case": "matplotlib__matplotlib-20488 call86",
+      "shortest_positive_full_prompt_tokens": 4096,
+      "seed": 43,
+      "evidence_source": "setup/swe85-adaptive-suffix4096-candidate/runs/full/anomaly.matplotlib__matplotlib-20488.call86.onset.suffix4096.seed43.json",
+      "source_sha256": "2fc88476353a38633134bcb85d1fbf8624f99d8e55bb8273e42fca2898bc594d",
+      "generated_tokens": 512,
+      "comparison": "Shorter than the original pilot full positive (46118 input tokens, seed43, 112 generated tokens). No positive in shortened full prompts512/1024/2048."
+    },
+    {
+      "case": "matplotlib__matplotlib-20488 call91",
+      "shortest_positive_full_prompt_tokens": 48411,
+      "shortest_shortened_prompt_positive_full_prompt_tokens": null,
+      "seed": 43,
+      "evidence_source": "setup/swe85-pilot-split85/runs/rest/full/anomaly.call91.canonicalprefix.json",
+      "source_sha256": "f02685d64d3567dd6f357c5ac5a0e40cb44e4db2cb60eeaa77c7889904cc876e",
+      "generated_tokens": 67,
+      "comparison": "Pilot full sample uses a 48411-token input prompt. No native-family positive in shortened full prompts512/1024/2048/4096; root is preparing an 8192-token full/served probe."
+    },
+    {
+      "case": "sphinx-doc__sphinx-10323 call70",
+      "shortest_positive_full_prompt_tokens": 2048,
+      "seed": 43,
+      "evidence_source": "setup/swe85-adaptive-suffix2048-candidate/runs/full/anomaly.sphinx-doc__sphinx-10323.call70.onset.json",
+      "source_sha256": "079baccb97ee11584b68c0e69353c172f1dd976fcbfdf65df71d53d421fd3182",
+      "generated_tokens": 52,
+      "comparison": "No family positive in full prompt lengths512/1024; seed43 at2048 continues exact saved prefix I’ve with generated ’ve."
+    }
+  ],
+  "full_positive_examples": [
+    {
+      "case_file": "setup/swe85-pilot-split85/runs/rest/full/anomaly.matplotlib__matplotlib-20488.call86.onset.json",
+      "source_sha256": "c2361a7834aba8825214064e048ad8a859b01b72300d6a143be31cba754ee9dc",
+      "case": "matplotlib__matplotlib-20488 call86",
+      "seed": 43,
+      "generated_tokens": 112,
+      "generated_text_excerpt": "’ve’ve made a total mess of the `lib/matplotlib/colors.py` file. I should just try to restore it to a clean state and apply only the necessary change.\nSince I don't have git, I'll ",
+      "assistant_prefix_tail": "I’ve",
+      "rationale": "The continuation opens ’ve’ve; with the exact saved prefix I’ve, that is immediately I’ve’ve’ve and matches native repeated-contraction family. This is the earliest full-precision positive in the inspected runs (original prompt context, no added suffix).",
+      "full_prompt_tokens": 46118
+    },
+    {
+      "case_file": "setup/swe85-pilot-split85/runs/rest/full/anomaly.call91.canonicalprefix.json",
+      "source_sha256": "f02685d64d3567dd6f357c5ac5a0e40cb44e4db2cb60eeaa77c7889904cc876e",
+      "case": "matplotlib__matplotlib-20488 call91",
+      "seed": 43,
+      "generated_tokens": 67,
+      "generated_text_excerpt": "’ve’ve messed up the file, I'll just try to make it syntactically correct.\n\n# Let's just use a very simple approach: remove all my added DEBUG prints and\n# try to restore the origi",
+      "assistant_prefix_tail": "I’ve",
+      "rationale": "The continuation opens ’ve’ve; attached to the exact canonical assistant prefix ending I’ve, this gives I’ve’ve’ve, matching native call91’s adjacent repeated suffix in a tool argument. Earliest full-precision positive found (original prompt context, no added suffix).",
+      "full_prompt_tokens": 48411
+    },
+    {
+      "case_file": "setup/swe85-adaptive-suffix4096-candidate/runs/full/anomaly.matplotlib__matplotlib-20488.call86.onset.suffix4096.seed43.json",
+      "source_sha256": "2fc88476353a38633134bcb85d1fbf8624f99d8e55bb8273e42fca2898bc594d",
+      "seed": 43,
+      "generated_tokens": 512,
+      "generated_text_excerpt": "’ve’ve made a complete mess of `lib/matplotlib/colors.py`.\nI'll just use a version of the file and fix it.\nI'll start over with `lib/matplotlib/colors.py`.\nSince I don't have the o",
+      "rationale": "Prefix ending I’ve plus two generated repeated suffix units; exact-family positive.",
+      "full_prompt_tokens": 4096
+    },
+    {
+      "case_file": "setup/swe85-adaptive-suffix2048-candidate/runs/full/anomaly.sphinx-doc__sphinx-10323.call70.onset.json",
+      "source_sha256": "079baccb97ee11584b68c0e69353c172f1dd976fcbfdf65df71d53d421fd3182",
+      "seed": 43,
+      "generated_tokens": 52,
+      "generated_text_excerpt": "’ve explored all possibilities and found it to be a `docutils` limitation.\n<channel|><|tool_call>call:bash{command:<|\"|># Final check of the code\ngrep -n \"filters =\" sphinx/directi",
+      "rationale": "Prefix ending I’ve plus one generated repeated suffix; shortest full-precision positive found for Sphinx call70.",
+      "full_prompt_tokens": 2048
+    },
+    {
+      "case_file": "setup/swe85-adaptive-suffix4096-candidate/runs/full/anomaly.sphinx-doc__sphinx-10323.call70.onset.suffix4096.seed42.json",
+      "source_sha256": "c697bf38a482271dcb854202205ffa7f638da022d5d8eac243c0298b87070f1f",
+      "seed": 42,
+      "generated_tokens": 73,
+      "generated_text_excerpt": "'ve've exhausted all options. I'll finish the task.\n<channel|><|tool_call>call:bash{command:<|\"|>sed -i '223,229c\\            filters = [self.pyobject_filter,\\n                    ",
+      "rationale": "Prefix ending I’ve; generated continuation also includes an adjacent duplicated ve suffix chain later in its text.",
+      "full_prompt_tokens": 4096
+    }
+  ],
+  "scanned_full_samples": [
+    {
+      "case_file": "setup/swe85-contraction-short-controls/runs/full/anomaly.matplotlib__matplotlib-20488.call86.onset.optional-suffix512.json",
+      "source_sha256": "b024eb7dec3058fd8494d5ed200c9d7547c1708bd54e0f96d0fe983738ca3391",
+      "seed": 42,
+      "generated_tokens": 512,
+      "suffix_length": 512,
+      "full_prompt_tokens": 512
+    },
+    {
+      "case_file": "setup/swe85-contraction-short-controls/runs/full/anomaly.matplotlib__matplotlib-20488.call86.onset.optional-suffix512.json",
+      "source_sha256": "b024eb7dec3058fd8494d5ed200c9d7547c1708bd54e0f96d0fe983738ca3391",
+      "seed": 43,
+      "generated_tokens": 36,
+      "suffix_length": 512,
+      "full_prompt_tokens": 512
+    },
+    {
+      "case_file": "setup/swe85-contraction-short-controls/runs/full/anomaly.matplotlib__matplotlib-20488.call86.onset.optional-suffix512.json",
+      "source_sha256": "b024eb7dec3058fd8494d5ed200c9d7547c1708bd54e0f96d0fe983738ca3391",
+      "seed": 44,
+      "generated_tokens": 41,
+      "suffix_length": 512,
+      "full_prompt_tokens": 512
+    },
+    {
+      "case_file": "setup/swe85-contraction-short-controls/runs/full/anomaly.call91.canonicalprefix.optional-suffix512.json",
+      "source_sha256": "160854af31e14c008e4332084d0dadf97e5743fe433f4e27a3128c924a715cfd",
+      "seed": 42,
+      "generated_tokens": 24,
+      "suffix_length": 512,
+      "full_prompt_tokens": 512
+    },
+    {
+      "case_file": "setup/swe85-contraction-short-controls/runs/full/anomaly.call91.canonicalprefix.optional-suffix512.json",
+      "source_sha256": "160854af31e14c008e4332084d0dadf97e5743fe433f4e27a3128c924a715cfd",
+      "seed": 43,
+      "generated_tokens": 129,
+      "suffix_length": 512,
+      "full_prompt_tokens": 512
+    },
+    {
+      "case_file": "setup/swe85-contraction-short-controls/runs/full/anomaly.call91.canonicalprefix.optional-suffix512.json",
+      "source_sha256": "160854af31e14c008e4332084d0dadf97e5743fe433f4e27a3128c924a715cfd",
+      "seed": 44,
+      "generated_tokens": 46,
+      "suffix_length": 512,
+      "full_prompt_tokens": 512
+    },
+    {
+      "case_file": "setup/swe85-contraction-short-controls/runs/full/anomaly.sphinx-doc__sphinx-10323.call70.onset.optional-suffix512.json",
+      "source_sha256": "2ce3cdc547d055d4bd2663e1c3c383109b7bad006ad71c0adeff4758f99264a5",
+      "seed": 42,
+      "generated_tokens": 512,
+      "suffix_length": 512,
+      "full_prompt_tokens": 512
+    },
+    {
+      "case_file": "setup/swe85-contraction-short-controls/runs/full/anomaly.sphinx-doc__sphinx-10323.call70.onset.optional-suffix512.json",
+      "source_sha256": "2ce3cdc547d055d4bd2663e1c3c383109b7bad006ad71c0adeff4758f99264a5",
+      "seed": 43,
+      "generated_tokens": 512,
+      "suffix_length": 512,
+      "full_prompt_tokens": 512
+    },
+    {
+      "case_file": "setup/swe85-contraction-short-controls/runs/full/anomaly.sphinx-doc__sphinx-10323.call70.onset.optional-suffix512.json",
+      "source_sha256": "2ce3cdc547d055d4bd2663e1c3c383109b7bad006ad71c0adeff4758f99264a5",
+      "seed": 44,
+      "generated_tokens": 512,
+      "suffix_length": 512,
+      "full_prompt_tokens": 512
+    },
+    {
+      "case_file": "setup/swe85-adaptive-suffix1024/runs/full/anomaly.matplotlib__matplotlib-20488.call86.onset.json",
+      "source_sha256": "a2dc3012fc83468f00dd3dfc66c82c940c093b5b2c6c72c4a7a1bfd09631e7a9",
+      "seed": 42,
+      "generated_tokens": 512,
+      "suffix_length": 1024,
+      "full_prompt_tokens": 1024
+    },
+    {
+      "case_file": "setup/swe85-adaptive-suffix1024/runs/full/anomaly.matplotlib__matplotlib-20488.call86.onset.json",
+      "source_sha256": "a2dc3012fc83468f00dd3dfc66c82c940c093b5b2c6c72c4a7a1bfd09631e7a9",
+      "seed": 43,
+      "generated_tokens": 512,
+      "suffix_length": 1024,
+      "full_prompt_tokens": 1024
+    },
+    {
+      "case_file": "setup/swe85-adaptive-suffix1024/runs/full/anomaly.matplotlib__matplotlib-20488.call86.onset.json",
+      "source_sha256": "a2dc3012fc83468f00dd3dfc66c82c940c093b5b2c6c72c4a7a1bfd09631e7a9",
+      "seed": 44,
+      "generated_tokens": 512,
+      "suffix_length": 1024,
+      "full_prompt_tokens": 1024
+    },
+    {
+      "case_file": "setup/swe85-adaptive-suffix1024/runs/full/anomaly.call91.canonicalprefix.json",
+      "source_sha256": "9ca5ad50c2d6a88f9d777afd8c2e0f9e01b5ab9b6e66f021dc0fe60871e60cc8",
+      "seed": 42,
+      "generated_tokens": 27,
+      "suffix_length": 1024,
+      "full_prompt_tokens": 1024
+    },
+    {
+      "case_file": "setup/swe85-adaptive-suffix1024/runs/full/anomaly.call91.canonicalprefix.json",
+      "source_sha256": "9ca5ad50c2d6a88f9d777afd8c2e0f9e01b5ab9b6e66f021dc0fe60871e60cc8",
+      "seed": 43,
+      "generated_tokens": 38,
+      "suffix_length": 1024,
+      "full_prompt_tokens": 1024
+    },
+    {
+      "case_file": "setup/swe85-adaptive-suffix1024/runs/full/anomaly.call91.canonicalprefix.json",
+      "source_sha256": "9ca5ad50c2d6a88f9d777afd8c2e0f9e01b5ab9b6e66f021dc0fe60871e60cc8",
+      "seed": 44,
+      "generated_tokens": 72,
+      "suffix_length": 1024,
+      "full_prompt_tokens": 1024
+    },
+    {
+      "case_file": "setup/swe85-adaptive-suffix1024/runs/full/anomaly.sphinx-doc__sphinx-10323.call70.onset.json",
+      "source_sha256": "a441ba44ab8294f359c1ea864d045cc4e6fb5d123930684db4b02ee3c1749f77",
+      "seed": 42,
+      "generated_tokens": 200,
+      "suffix_length": 1024,
+      "full_prompt_tokens": 1024
+    },
+    {
+      "case_file": "setup/swe85-adaptive-suffix1024/runs/full/anomaly.sphinx-doc__sphinx-10323.call70.onset.json",
+      "source_sha256": "a441ba44ab8294f359c1ea864d045cc4e6fb5d123930684db4b02ee3c1749f77",
+      "seed": 43,
+      "generated_tokens": 207,
+      "suffix_length": 1024,
+      "full_prompt_tokens": 1024
+    },
+    {
+      "case_file": "setup/swe85-adaptive-suffix1024/runs/full/anomaly.sphinx-doc__sphinx-10323.call70.onset.json",
+      "source_sha256": "a441ba44ab8294f359c1ea864d045cc4e6fb5d123930684db4b02ee3c1749f77",
+      "seed": 44,
+      "generated_tokens": 191,
+      "suffix_length": 1024,
+      "full_prompt_tokens": 1024
+    },
+    {
+      "case_file": "setup/swe85-adaptive-suffix2048-candidate/runs/full/anomaly.matplotlib__matplotlib-20488.call86.onset.json",
+      "source_sha256": "a556f1d00926a250659c8b0120a8ffdface28209ef3246febf96c5db772fe6b3",
+      "seed": 42,
+      "generated_tokens": 65,
+      "suffix_length": 2048,
+      "full_prompt_tokens": 2048
+    },
+    {
+      "case_file": "setup/swe85-adaptive-suffix2048-candidate/runs/full/anomaly.matplotlib__matplotlib-20488.call86.onset.json",
+      "source_sha256": "a556f1d00926a250659c8b0120a8ffdface28209ef3246febf96c5db772fe6b3",
+      "seed": 43,
+      "generated_tokens": 102,
+      "suffix_length": 2048,
+      "full_prompt_tokens": 2048
+    },
+    {
+      "case_file": "setup/swe85-adaptive-suffix2048-candidate/runs/full/anomaly.matplotlib__matplotlib-20488.call86.onset.json",
+      "source_sha256": "a556f1d00926a250659c8b0120a8ffdface28209ef3246febf96c5db772fe6b3",
+      "seed": 44,
+      "generated_tokens": 67,
+      "suffix_length": 2048,
+      "full_prompt_tokens": 2048
+    },
+    {
+      "case_file": "setup/swe85-adaptive-suffix2048-candidate/runs/full/anomaly.call91.canonicalprefix.json",
+      "source_sha256": "5fa7cf2a7817014afd07c2db91bb142ec1bfd2fefa3b94ab33ffe68d748cc67b",
+      "seed": 42,
+      "generated_tokens": 208,
+      "suffix_length": 2048,
+      "full_prompt_tokens": 2048
+    },
+    {
+      "case_file": "setup/swe85-adaptive-suffix2048-candidate/runs/full/anomaly.call91.canonicalprefix.json",
+      "source_sha256": "5fa7cf2a7817014afd07c2db91bb142ec1bfd2fefa3b94ab33ffe68d748cc67b",
+      "seed": 43,
+      "generated_tokens": 200,
+      "suffix_length": 2048,
+      "full_prompt_tokens": 2048
+    },
+    {
+      "case_file": "setup/swe85-adaptive-suffix2048-candidate/runs/full/anomaly.call91.canonicalprefix.json",
+      "source_sha256": "5fa7cf2a7817014afd07c2db91bb142ec1bfd2fefa3b94ab33ffe68d748cc67b",
+      "seed": 44,
+      "generated_tokens": 37,
+      "suffix_length": 2048,
+      "full_prompt_tokens": 2048
+    },
+    {
+      "case_file": "setup/swe85-adaptive-suffix2048-candidate/runs/full/anomaly.sphinx-doc__sphinx-10323.call70.onset.json",
+      "source_sha256": "079baccb97ee11584b68c0e69353c172f1dd976fcbfdf65df71d53d421fd3182",
+      "seed": 42,
+      "generated_tokens": 89,
+      "suffix_length": 2048,
+      "full_prompt_tokens": 2048
+    },
+    {
+      "case_file": "setup/swe85-adaptive-suffix2048-candidate/runs/full/anomaly.sphinx-doc__sphinx-10323.call70.onset.json",
+      "source_sha256": "079baccb97ee11584b68c0e69353c172f1dd976fcbfdf65df71d53d421fd3182",
+      "seed": 43,
+      "generated_tokens": 52,
+      "suffix_length": 2048,
+      "full_prompt_tokens": 2048
+    },
+    {
+      "case_file": "setup/swe85-adaptive-suffix2048-candidate/runs/full/anomaly.sphinx-doc__sphinx-10323.call70.onset.json",
+      "source_sha256": "079baccb97ee11584b68c0e69353c172f1dd976fcbfdf65df71d53d421fd3182",
+      "seed": 44,
+      "generated_tokens": 50,
+      "suffix_length": 2048,
+      "full_prompt_tokens": 2048
+    },
+    {
+      "case_file": "setup/swe85-adaptive-suffix4096-candidate/runs/full/anomaly.matplotlib__matplotlib-20488.call86.onset.suffix4096.seed42.json",
+      "source_sha256": "bf72f9a8e59294f769dce975da2d917e69fd62a1572d778310ce773b74792595",
+      "seed": 42,
+      "generated_tokens": 137,
+      "suffix_length": 4096,
+      "full_prompt_tokens": 4096
+    },
+    {
+      "case_file": "setup/swe85-adaptive-suffix4096-candidate/runs/full/anomaly.matplotlib__matplotlib-20488.call86.onset.suffix4096.seed43.json",
+      "source_sha256": "2fc88476353a38633134bcb85d1fbf8624f99d8e55bb8273e42fca2898bc594d",
+      "seed": 43,
+      "generated_tokens": 512,
+      "suffix_length": 4096,
+      "full_prompt_tokens": 4096
+    },
+    {
+      "case_file": "setup/swe85-adaptive-suffix4096-candidate/runs/full/anomaly.matplotlib__matplotlib-20488.call86.onset.suffix4096.seed44.json",
+      "source_sha256": "0cc72d580c11939d9ca44a66580d36ec9aec81d578f59e13c26a17ec480bbe1e",
+      "seed": 44,
+      "generated_tokens": 69,
+      "suffix_length": 4096,
+      "full_prompt_tokens": 4096
+    },
+    {
+      "case_file": "setup/swe85-adaptive-suffix4096-candidate/runs/full/anomaly.call91.canonicalprefix.suffix4096.seed42.json",
+      "source_sha256": "395c749ff59a128749ec3606ada859cca84798e9be3cc73a67bbeac539eee3b4",
+      "seed": 42,
+      "generated_tokens": 39,
+      "suffix_length": 4096,
+      "full_prompt_tokens": 4096
+    },
+    {
+      "case_file": "setup/swe85-adaptive-suffix4096-candidate/runs/full/anomaly.call91.canonicalprefix.suffix4096.seed43.json",
+      "source_sha256": "0e7ea7bee6d85b8e910228abcb95c665ba62b7c50c09ec0ed21be04fa582373d",
+      "seed": 43,
+      "generated_tokens": 148,
+      "suffix_length": 4096,
+      "full_prompt_tokens": 4096
+    },
+    {
+      "case_file": "setup/swe85-adaptive-suffix4096-candidate/runs/full/anomaly.call91.canonicalprefix.suffix4096.seed44.json",
+      "source_sha256": "aea5b2d0e873e71c856b0e3c22802b30dd468b94d2b9bf8290b7dbd71253a183",
+      "seed": 44,
+      "generated_tokens": 264,
+      "suffix_length": 4096,
+      "full_prompt_tokens": 4096
+    },
+    {
+      "case_file": "setup/swe85-adaptive-suffix4096-candidate/runs/full/anomaly.sphinx-doc__sphinx-10323.call70.onset.suffix4096.seed42.json",
+      "source_sha256": "c697bf38a482271dcb854202205ffa7f638da022d5d8eac243c0298b87070f1f",
+      "seed": 42,
+      "generated_tokens": 73,
+      "suffix_length": 4096,
+      "full_prompt_tokens": 4096
+    },
+    {
+      "case_file": "setup/swe85-adaptive-suffix4096-candidate/runs/full/anomaly.sphinx-doc__sphinx-10323.call70.onset.suffix4096.seed43.json",
+      "source_sha256": "feebcee326bad1b086bf1ce757049ebe245dbe7adc24e3bc63ed36a517d215eb",
+      "seed": 43,
+      "generated_tokens": 102,
+      "suffix_length": 4096,
+      "full_prompt_tokens": 4096
+    },
+    {
+      "case_file": "setup/swe85-adaptive-suffix4096-candidate/runs/full/anomaly.sphinx-doc__sphinx-10323.call70.onset.suffix4096.seed44.json",
+      "source_sha256": "c193e6752a5481dd12dfc3e5942b8d687e15bd58f4660dddc252ec6dd49aead0",
+      "seed": 44,
+      "generated_tokens": 512,
+      "suffix_length": 4096,
+      "full_prompt_tokens": 4096
+    },
+    {
+      "case_file": "setup/swe85-pilot-split85/runs/rest/full/anomaly.matplotlib__matplotlib-20488.call86.onset.json",
+      "source_sha256": "c2361a7834aba8825214064e048ad8a859b01b72300d6a143be31cba754ee9dc",
+      "seed": 43,
+      "generated_tokens": 112,
+      "full_prompt_tokens": 46118
+    },
+    {
+      "case_file": "setup/swe85-pilot-split85/runs/rest/full/anomaly.call91.canonicalprefix.json",
+      "source_sha256": "f02685d64d3567dd6f357c5ac5a0e40cb44e4db2cb60eeaa77c7889904cc876e",
+      "seed": 43,
+      "generated_tokens": 67,
+      "full_prompt_tokens": 48411
+    }
+  ],
+  "notes": [
+    "The exact pinned prefix is part of evidence: boundary concatenation is evaluated across prompt/generated-text boundary.",
+    "ASCII versus curly apostrophe is not semantically meaningful for this morphology.",
+    "The 512/1024/2048/4096 label refers to suffix prompt context length, not generation cap.",
+    "Full Mpl86 positive at 4096 is itself capped at 512 generated tokens; motif appears at the start, so cap truncation does not weaken the morphology judgment.",
+    "Suffix length 0 identifies the original pilot-split full-prompt condition, before added suffix contexts; it is distinct from the later 512/1024/2048/4096 suffix-extension ladder.",
+    "Shortest comparisons use actual complete input prompt token counts, not the shortened suffix increment. The pilot full positives use large inputs (Mpl86 46118 tokens; call91 48411 tokens), so they do not establish short-prefix positives. Sphinx pilot context has no full sample matching this motif in the inspected set."
+  ]
+}

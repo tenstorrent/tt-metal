@@ -1,0 +1,45 @@
+{
+  "status": "candidate_only_not_admitted_not_run",
+  "scope": "One P2-serial matched served/full suffix512 diagnostic for Sklearn13135 call29, seeds42/43/44. Each mode uses the exact original final512 prompt IDs, chosen64 teacher-forced tokens, and free-run cap512.",
+  "question": "Does missing_tool persist in full mode at exact input suffix512? Only if yes may root plan a matched HF comparison at this exact suffix; otherwise adapt prefix based on full-mode evidence.",
+  "input": {
+    "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-extra-contraction-controls/scikit-learn__scikit-learn-13135.call29.onset.private.json",
+    "source_sha256": "1403d7a48b7ecca8ec2095479c77a871caa3add09bedd7f6830d36315a883bd2",
+    "full_prompt_tokens": 17395,
+    "suffix_tokens": 512,
+    "suffix_ids_sha256": "6cb6161236c625fd131a51c46c0c180f8225366631be9579fb22d1d470a1ab74",
+    "chosen_tokens": 64
+  },
+  "candidate_files": {
+    "served_manifest_sha256": "a93796ce41a985492fc2e5075f4463186fa9fc258a2095f9728b5f9eff3b9bdf",
+    "full_manifest_sha256": "10f582d0c77b4fa472bef0ab6c17535ddf2a5a288ffb6d3c2af34d89c3264e35",
+    "commands_sha256": "4fc7e9c6d905c721100011a7e6a78a6a481d7cb4c208ac2672f8a336e89fb845",
+    "forecast_sha256": "00c4488365bf25e4c744fe0dc85b957802e22392710b945caae98713a31546eb",
+    "driver_sha256": "e221a7fef9a593fc835413131b242561b799eca0d91748eaa7c36564d66ac332",
+    "source_inventory_sha256": "3fc390e6f34b8805f75628d841e5827a2a5401e91923a2cd7c77830001f22922"
+  },
+  "mode_policies": {
+    "served": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/served_precision_config.json",
+    "full": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_config.json",
+    "both": "Same saved token fixture IDs and chosen IDs per seed; one explicit mode launch at a time."
+  },
+  "predecessor_gates": {
+    "P2_directory": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal",
+    "P2_admission_sha256": "74bef162c97e23e882612eb85dae365f32c9da1f13ba4b9b8e1e1f8f582ad1be",
+    "P2_terminal": "Verify actual admission pins proposal/driver/source inventory; verify inventory files, frozen command, queue, launch and completion bind the same admission and exact command. Require terminal success and root forecast reconciliation bound to completion/admission, actual forecast range and measured elapsed. Because P2 overlapped an unintended HF CPU process, root must disclose contention and exclude P2 wall time from policy speed ranking.",
+    "Sklearn/HF": "Root serial-review record may explicitly defer HF follow-up until the matched TT evidence. No active HF model process is allowed at either TT launch; any later HF follow-up is conditional on the full suffix512 result.",
+    "serialization": "No active HF/model process and no device owners before each mode. Served must complete and root review its forecast before full can launch.",
+    "stop": "STOP_BEFORE_LAUNCH file is not required to be absent for host-only validation; it blocks execution until removed after explicit root admission.",
+    "mutable_evidence_policy": "learned.json is mutable canonical adjudication state and is intentionally not a source pin; immutable source fixtures, raw outputs, and code remain pinned."
+  },
+  "no_claims": [
+    "This suffix512 input is a shortened context; it cannot establish behavior at original17395 tokens.",
+    "The source I\u2019ve\u2019ve doubled-contraction native motif and later missing_tool protocol output are separate anomaly families.",
+    "No task success, model cause, or blanket waiver follows from these diagnostics."
+  ],
+  "previous_admission_record": {
+    "path": "admission-before-mutable-pin-fix.json",
+    "sha256": "b63fe0f052d998212cb7de138bac823ae3ffc82125ce41ec84b7b74cee7fcf44",
+    "status": "obsolete; its source inventory included mutable learned.json and is not a live admission"
+  }
+}

@@ -1,0 +1,70 @@
+{
+  "created_utc": "2026-11-14T23:36:52.394011+00:00",
+  "status": "conditional_candidates_only",
+  "question": "Which smallest precision restoration clears the served anomalies that disappear in matched full TT?",
+  "basis": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/onset-paired-transitions.json",
+  "candidate_arms": [
+    {
+      "id": "stage12_swe85_head_bfp8_hifi2",
+      "changes_only": "lm_head",
+      "precision": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head_bfp8_hifi2_precision.json",
+      "build_kwargs": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head_bfp8_hifi2_build_kwargs.json",
+      "status": "candidate_not_admitted_not_run"
+    },
+    {
+      "id": "stage12_swe85_head_bf16_hifi4",
+      "changes_only": "lm_head",
+      "precision": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head_bf16_hifi4_precision.json",
+      "build_kwargs": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head_bf16_hifi4_build_kwargs.json",
+      "status": "candidate_not_admitted_not_run"
+    },
+    {
+      "id": "stage12_swe85_down_bfp8_lofi",
+      "changes_only": "down",
+      "precision": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down_bfp8_lofi_precision.json",
+      "build_kwargs": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down_bfp8_lofi_build_kwargs.json",
+      "status": "candidate_not_admitted_not_run"
+    },
+    {
+      "id": "stage12_swe85_down_bfp8_hifi2",
+      "changes_only": "down",
+      "precision": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down_bfp8_hifi2_precision.json",
+      "build_kwargs": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down_bfp8_hifi2_build_kwargs.json",
+      "status": "candidate_not_admitted_not_run"
+    },
+    {
+      "id": "stage12_swe85_attention_bfp8_lofi",
+      "changes_only": "attention",
+      "precision": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/attention_bfp8_lofi_precision.json",
+      "build_kwargs": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/attention_bfp8_lofi_build_kwargs.json",
+      "status": "candidate_not_admitted_not_run"
+    },
+    {
+      "id": "stage12_swe85_mlp_bfp8_lofi",
+      "changes_only": "mlp",
+      "precision": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/mlp_bfp8_lofi_precision.json",
+      "build_kwargs": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/mlp_bfp8_lofi_build_kwargs.json",
+      "status": "candidate_not_admitted_not_run"
+    }
+  ],
+  "sequence": "Use head fidelity, then head dtype as cheap first hypotheses. If neither clears the fixed panel, isolate down, attention and MLP groups; test cumulative retained repairs and layer ranges as indicated by results. Standalone candidates do not imply final order or acceptance.",
+  "gates": [
+    "Finish required full controls and semantic supplement queue before new device work.",
+    "Freeze test panel from all36 initial onset cases, retain served-positive/full-normal examples, served-normal/full-anomalous regression, and all progressing-cap extensions; passing a favorable subset is insufficient.",
+    "Compare identical inputs/seeds; retain capped progress as inconclusive until extended >=2x.",
+    "Validate loaded runtime config; record prelaunch time range and measured serial traced diagnostic decode rate for each candidate.",
+    "Precision-sensitive panel pass alone does not explain persistent caret loops or contractions; matched short TT then conditional HF is required for persistent symptoms.",
+    "No config selected until fastest passing measured candidate established; no rate or score mixing.",
+    "Any chosen config must preserve context262144, measure launch memory, remeasure used vLLM rate rows and rerun whole85 list."
+  ],
+  "missing_measurements": "No candidates run; all candidate speed and pass outcomes unknown.",
+  "context_contract": 262144,
+  "baseline_sha256": "aa0e651fb3fdd7afc285293645c5ca309b2da246619e6e7fb6da86c5d2f28853",
+  "updated_utc": "2026-11-15T00:33:21.729215+00:00",
+  "paired_initial_findings": {
+    "served_anomalous_full_completed_normal_trials": 15,
+    "served_normal_full_anomalous_trials": 1,
+    "full_precision_globally_passing": false,
+    "initial_full_cap_inconclusive_trials": 33
+  }
+}

@@ -1,0 +1,56 @@
+[
+  {
+    "name": "anomaly.psf__requests-5414.call10.onset.optional-suffix512",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-85/anomaly.psf__requests-5414.call10.onset.suffix512.private.json",
+    "branches": [
+      "chosen"
+    ],
+    "free_run_tokens": 512,
+    "free_run_trials": 3
+  },
+  {
+    "name": "anomaly.psf__requests-5414.call11.onset.optional-suffix512",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-85/anomaly.psf__requests-5414.call11.onset.suffix512.private.json",
+    "branches": [
+      "chosen"
+    ],
+    "free_run_tokens": 512,
+    "free_run_trials": 3
+  },
+  {
+    "name": "anomaly.psf__requests-5414.call9.onset.optional-suffix512",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-85/anomaly.psf__requests-5414.call9.onset.suffix512.private.json",
+    "branches": [
+      "chosen"
+    ],
+    "free_run_tokens": 512,
+    "free_run_trials": 3
+  },
+  {
+    "name": "anomaly.requests2931.call20.canonicalprefix.optional-suffix512",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-85/anomaly.requests2931.call20.canonicalprefix.suffix512.private.json",
+    "branches": [
+      "chosen"
+    ],
+    "free_run_tokens": 512,
+    "free_run_trials": 3
+  },
+  {
+    "name": "anomaly.pytest-dev__pytest-7432.call19.onset.optional-suffix512",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-85/anomaly.pytest-dev__pytest-7432.call19.onset.suffix512.private.json",
+    "branches": [
+      "chosen"
+    ],
+    "free_run_tokens": 512,
+    "free_run_trials": 3
+  },
+  {
+    "name": "anomaly.sympy__sympy-14248.call53.onset.optional-suffix512",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-85/anomaly.sympy__sympy-14248.call53.onset.suffix512.private.json",
+    "branches": [
+      "chosen"
+    ],
+    "free_run_tokens": 512,
+    "free_run_trials": 3
+  }
+]

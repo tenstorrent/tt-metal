@@ -1,0 +1,95 @@
+{
+  "status": "two_protocol_controls_pass_not_policy_selection",
+  "single_delta": "KV BF16 to BFP8; othergroupsfull BF16 HiFi4",
+  "rows": [
+    {
+      "output": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full-q32-production-validation/protocol-group-bisect/arm-a-kv-bfp8-only/runs/fullq32.anomaly.sympy__sympy-13878.call1.onset.seed44.cap256.json",
+      "sha256": "036d7cc6ba7fb37d0d50fb4e70a824a9915041ebaf0c5b4f1ed5dd3416a3ac49",
+      "generated_tokens": 19,
+      "stop_id": 50,
+      "verdict": "correct_tool_boundary_natural_stop",
+      "decode_timing": {
+        "decode_tokens": 18,
+        "decode_wall_s": 1.0542335389181972,
+        "decode_tok_s_user": 17.074015704784653,
+        "trace_counters_before_decode": {
+          "model_replays": 47,
+          "sample_replays": 49,
+          "token_refreshes": 0,
+          "position_refreshes": 2,
+          "page_refreshes": 120,
+          "readbacks": 49,
+          "captures": 3
+        },
+        "trace_counters_after_decode": {
+          "model_replays": 65,
+          "sample_replays": 67,
+          "token_refreshes": 0,
+          "position_refreshes": 2,
+          "page_refreshes": 120,
+          "readbacks": 67,
+          "captures": 3
+        },
+        "trace_counters_delta": {
+          "model_replays": 18,
+          "sample_replays": 18,
+          "token_refreshes": 0,
+          "position_refreshes": 0,
+          "page_refreshes": 0,
+          "readbacks": 18,
+          "captures": 0
+        },
+        "basis": "Batch1 wall from immediately before first _replay to return after last existing synchronous token-out readback; counts completed replay calls, includes host loop gaps, excludes prefill/first token and text decoding. No added device sync or profiler. Traced diagnostic rate, not serving benchmark."
+      }
+    },
+    {
+      "output": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full-q32-production-validation/protocol-group-bisect/arm-a-kv-bfp8-only/runs/fullq32.anomaly.sphinx-doc__sphinx-10323.call70.onset.seed42.cap256.json",
+      "sha256": "80fe8b090b0fd5957c4ef8137ec9b031a706b5289df0d1b8adb2e049b9fdcddc",
+      "generated_tokens": 48,
+      "stop_id": 50,
+      "verdict": "correct_tool_boundary_natural_stop",
+      "decode_timing": {
+        "decode_tokens": 47,
+        "decode_wall_s": 3.0609206720255315,
+        "decode_tok_s_user": 15.354857258975697,
+        "trace_counters_before_decode": {
+          "model_replays": 0,
+          "sample_replays": 1,
+          "token_refreshes": 0,
+          "position_refreshes": 1,
+          "page_refreshes": 60,
+          "readbacks": 1,
+          "captures": 3
+        },
+        "trace_counters_after_decode": {
+          "model_replays": 47,
+          "sample_replays": 48,
+          "token_refreshes": 0,
+          "position_refreshes": 1,
+          "page_refreshes": 60,
+          "readbacks": 48,
+          "captures": 3
+        },
+        "trace_counters_delta": {
+          "model_replays": 47,
+          "sample_replays": 47,
+          "token_refreshes": 0,
+          "position_refreshes": 0,
+          "page_refreshes": 0,
+          "readbacks": 47,
+          "captures": 0
+        },
+        "basis": "Batch1 wall from immediately before first _replay to return after last existing synchronous token-out readback; counts completed replay calls, includes host loop gaps, excludes prefill/first token and text decoding. No added device sync or profiler. Traced diagnostic rate, not serving benchmark."
+      }
+    }
+  ],
+  "pins_verified": 160,
+  "completion": {
+    "start_unix": 1794784130.5166345,
+    "end_unix": 1794784270.8664348,
+    "exit_code": 0,
+    "wall_seconds": 140.34980034828186
+  },
+  "forecast_result": "140.3498seconds within120-450 range; early natural stops",
+  "next": "Run down-only arm; no fastestpassing configuration established by two cases."
+}

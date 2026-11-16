@@ -1,0 +1,209 @@
+{
+  "reviewed_unix": 1794722473.012152,
+  "rows": [
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.matplotlib__matplotlib-20488.call82.onset.seed43.cap256.json",
+      "sha256": "6fc172aceef71d88138eb26d1d65fe837a05e50e7c0e0fd357e0c2b8f5baff37",
+      "seed": 43,
+      "tokens": 87,
+      "verdict": "normal",
+      "reason": "Full raw text and pinned prefix read: grammatical continuation, distinct coherent action and canonical tool boundary; no anomaly, not patch correctness.",
+      "trace_counters_delta": {
+        "model_replays": 86,
+        "sample_replays": 86,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 86,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.matplotlib__matplotlib-20488.call82.onset.seed44.cap256.json",
+      "sha256": "f18e5e49fc7efd1792eae9d6b7f4e9f86ea4f78cfbf63ffaccbadd3b3c6987c4",
+      "seed": 44,
+      "tokens": 116,
+      "verdict": "native",
+      "reason": "Extra adjacent curly apostrophe-ve directly following pinned Ive contraction; localized native duplicated contraction.",
+      "trace_counters_delta": {
+        "model_replays": 115,
+        "sample_replays": 115,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 115,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.matplotlib__matplotlib-20488.call86.onset.seed42.cap256.json",
+      "sha256": "dca635b32c1c16183b8d5e4f4066cb2cf88f9da78b04dceb203512585533bc8a",
+      "seed": 42,
+      "tokens": 86,
+      "verdict": "normal",
+      "reason": "Full raw text and pinned prefix read: grammatical continuation, distinct coherent action and canonical tool boundary; no anomaly, not patch correctness.",
+      "trace_counters_delta": {
+        "model_replays": 85,
+        "sample_replays": 85,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 85,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.matplotlib__matplotlib-20488.call86.onset.seed43.cap256.json",
+      "sha256": "e1bcf40c1b191975c35607a3f11fbad04e7f2dc8f86dd8e7a2285d6ab394855d",
+      "seed": 43,
+      "tokens": 138,
+      "verdict": "native",
+      "reason": "Extra adjacent curly apostrophe-ve directly following pinned Ive contraction; localized native duplicated contraction.",
+      "trace_counters_delta": {
+        "model_replays": 137,
+        "sample_replays": 137,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 137,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.matplotlib__matplotlib-20488.call86.onset.seed44.cap1024.json",
+      "sha256": "0f80b288ff335845437e69cdbe8cc10965cf75312f12a6257644b87ce81910c0",
+      "seed": 44,
+      "tokens": 127,
+      "verdict": "normal",
+      "reason": "Full raw text and pinned prefix read: grammatical continuation, distinct coherent action and canonical tool boundary; no anomaly, not patch correctness.",
+      "trace_counters_delta": {
+        "model_replays": 126,
+        "sample_replays": 126,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 126,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.psf__requests-1921.call1.onset.seed42.cap256.json",
+      "sha256": "f0111687004bc00443e930c57fd574e8ec6bd94cf9db3e7521584bf8770086b8",
+      "seed": 42,
+      "tokens": 16,
+      "verdict": "normal",
+      "reason": "Full raw text and pinned prefix read: grammatical continuation, distinct coherent action and canonical tool boundary; no anomaly, not patch correctness.",
+      "trace_counters_delta": {
+        "model_replays": 15,
+        "sample_replays": 15,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 15,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.psf__requests-1921.call1.onset.seed43.cap256.json",
+      "sha256": "fa0adc50f7f61caf1fe98e424609ca2eb249bf46e8f8bab1fcdd3ead474387e9",
+      "seed": 43,
+      "tokens": 22,
+      "verdict": "other",
+      "reason": "Unrelated stray paparazzi between channel boundaries before ls command.",
+      "trace_counters_delta": {
+        "model_replays": 21,
+        "sample_replays": 21,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 21,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.psf__requests-1921.call1.onset.seed44.cap256.json",
+      "sha256": "1b67c852af9ce1f13515b3df1be6e59994266c427d194c20633e6d26e9c5f9e0",
+      "seed": 44,
+      "tokens": 3,
+      "verdict": "other",
+      "reason": "Only channel/closingtool/toolresponse markers, no tool name or arguments; empty malformed tool protocol.",
+      "trace_counters_delta": {
+        "model_replays": 2,
+        "sample_replays": 2,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 2,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.psf__requests-5414.call10.onset.seed42.cap256.json",
+      "sha256": "70ab0f17b0f02fa0acb01ffb85f881543d5741b1c1cbfac18edf05e88ae4e8c1",
+      "seed": 42,
+      "tokens": 256,
+      "verdict": "native",
+      "reason": "All generated characters are1024 carets across256tokens; affirmative native collapse, not capbased failure.",
+      "trace_counters_delta": {
+        "model_replays": 255,
+        "sample_replays": 255,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 255,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.psf__requests-5414.call10.onset.seed43.cap256.json",
+      "sha256": "c6b4e1ca297b2d7fe8163c5307ec7005a2255c9b74f4a10238ee706c255f7bb1",
+      "seed": 43,
+      "tokens": 256,
+      "verdict": "native",
+      "reason": "All generated characters are1024 carets across256tokens; affirmative native collapse, not capbased failure.",
+      "trace_counters_delta": {
+        "model_replays": 255,
+        "sample_replays": 255,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 255,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.psf__requests-5414.call10.onset.seed44.cap256.json",
+      "sha256": "944a50b5cf2b5eb9f7486de3c48a8c380ed3f7668285688058823b67c4af0d91",
+      "seed": 44,
+      "tokens": 256,
+      "verdict": "native",
+      "reason": "All generated characters are1024 carets across256tokens; affirmative native collapse, not capbased failure.",
+      "trace_counters_delta": {
+        "model_replays": 255,
+        "sample_replays": 255,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 255,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.psf__requests-5414.call11.onset.seed42.cap256.json",
+      "sha256": "95a0a66c736aae9a9c02918fa04b15b492f23446f53d81722a380c92d26aaef0",
+      "seed": 42,
+      "tokens": 256,
+      "verdict": "native",
+      "reason": "All generated characters are1024 carets across256tokens; affirmative native collapse, not capbased failure.",
+      "trace_counters_delta": {
+        "model_replays": 255,
+        "sample_replays": 255,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 255,
+        "captures": 0
+      }
+    }
+  ]
+}

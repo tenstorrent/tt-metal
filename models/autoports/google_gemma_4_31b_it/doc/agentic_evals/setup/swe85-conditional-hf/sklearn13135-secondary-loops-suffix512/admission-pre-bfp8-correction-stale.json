@@ -1,0 +1,14 @@
+{
+  "status": "candidate_only_not_admitted",
+  "execution_authority": "root_owned_no_execute_until_root_explicitly_admits_this_exact_candidate",
+  "proposal_sha256": "8c8c59e34a96f16e295d196b861158aaeaf3129a31f9e3f636a3e6747888b96f",
+  "commands_sha256": "b746e7675363e774d8b8c4c33f85d268799952a3a372a826106533506a16e68b",
+  "source_integrity_sha256": "42703da032dc23dd3a9b110ce372d7dfe2a79fd7f05a8c8772cb3a97d7e9ae78",
+  "forecast_sha256": "e5962ee880ae51627e85dda1610342bef8155556850211846424ee473054504b",
+  "runner_sha256": "aafe67c88bb5a1eb38b8718570bbddd5749e2a9ecbb9dd19cdb100a49572c03e",
+  "manifest_sha256s": {
+    "secondary-loop-seed42.json": "e9ef583e1c26d77bd0366884bea508151df2f13498e9bc7e41fd378a571f8621",
+    "secondary-loop-seed43.json": "aa1e3a75676a80f0754db46a90e3e4d8f05c8589f156496108ff9551b742e85b"
+  },
+  "note": "Unadmitted host-only preparation. No validation command or HF generation command was executed."
+}

@@ -1,0 +1,12 @@
+[
+  {
+    "config": "head_bfp8_build_kwargs.json",
+    "returncode": 0,
+    "stdout": "Validated 2 jobs without importing TTNN"
+  },
+  {
+    "config": "full_precision_build_kwargs.json",
+    "returncode": 0,
+    "stdout": "Validated 2 jobs without importing TTNN"
+  }
+]

@@ -1,0 +1,130 @@
+{
+  "status": "independent_host_only_review_pass_candidate_only_V_root_semantic_closure_confirmed_pending_root_admission",
+  "scope": "Independent candidate panel integrity, fixture exactness, source hashes, cost arithmetic, CPU validate-only, and gate review. No TTNN import, device work, model load, launch, admission, score decision, or semantic re-adjudication.",
+  "disposition": "P common-cap4096 candidate is internally consistent and preserves the fixed108 panel. V root semantic closure is now evidenced for all 12 matched served/full rows plus the full-only cap4096 row; P remains unadmitted pending root decision.",
+  "panel": {
+    "expected_fixed_trials": 108,
+    "actual_trials": 108,
+    "unique_onset_seed_keys": 108,
+    "same_identities_as_cap2048_panel": true,
+    "cap_counts": {
+      "1024": 22,
+      "256": 72,
+      "512": 7,
+      "2048": 6,
+      "4096": 1
+    },
+    "only_trial_change": [
+      {
+        "source_onset": "anomaly.pytest-dev__pytest-5787.call65.onset",
+        "seed": 44,
+        "from_cap": 2048,
+        "to_cap": 4096
+      }
+    ],
+    "all_branchless_single_trial": true,
+    "all_fixture_seed_matches_job": true,
+    "target_pair_count": 15,
+    "target_pairs_unique": 15,
+    "root_acceptance_requires_all_15": "All15 original served-anomalous/full-normal rows must complete without semantic anomaly, not only the4 native-motif rows. A progressing cap is inconclusive, never a pass.",
+    "all108_retained_including_reverse_direction_row": true,
+    "candidate_policy": "head BFP8 HiFi2 build kwargs; all108 remain in the proposed candidate manifest"
+  },
+  "changed_fixture": {
+    "candidate_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-with-cap4096-pending-v-closure/fixtures/pytest5787.call65.seed44.cap4096.private.json",
+    "candidate_sha256": "eb66af59398c5cbf2e73697e177ec70330060512e774e76f041839d957b9e77c",
+    "source_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/fixtures/full/anomaly.pytest-dev__pytest-5787.call65.onset.cap2048.seed44.private.json",
+    "source_sha256": "e1d35e0a08dca171114e3856df379fe7070264bce3410b7b4e6097a1a6562085",
+    "prompt_ids_equal": true,
+    "prompt_token_count": 53684,
+    "chosen_continuation_equal": true,
+    "chosen_tokens": 64,
+    "sampling_equal": true,
+    "seed_equal": true
+  },
+  "hashes": {
+    "candidate_manifest_sha256": "57193e4b91af3a31df00f0c92dbc0f2219fbce011e6533594e5244a93a3021ed",
+    "matches_proposal_candidate_sha": true,
+    "source_hash_inventory_entries": 21,
+    "source_hash_inventory_mismatches": [],
+    "runtime_source_hash_entries": 187,
+    "runtime_source_hash_mismatches": [],
+    "provenance_sha_matches_proposal": true
+  },
+  "validation": {
+    "independent_cpu_validate_only": "Validated 108 jobs without importing TTNN",
+    "ttnn_imported": false,
+    "device_work": false
+  },
+  "forecast": {
+    "reported_case_generation_s": 3363.101834885062,
+    "recomputed_case_generation_s": 3363.101834885062,
+    "fixed_load_plus_prep_s": 161.59127254970372,
+    "reported_point_s": 3524.693107434766,
+    "recomputed_point_s": 3524.693107434766,
+    "reported_range_s": [
+      2515.762556969247,
+      5878.864391854309
+    ],
+    "recomputed_range_s": [
+      2515.762556969247,
+      5878.864391854309
+    ],
+    "load_basis": "Observed served BFP8 load; closest measured served load proxy for the proposed head-BFP8 HiFi2 build.",
+    "preparation_basis": "Measured chosen64 branch wall as first-preparation proxy, not direct HiFi2 cap2048 warmup measurement.",
+    "long_cap_row": {
+      "source_onset": "anomaly.pytest-dev__pytest-5787.call65.onset",
+      "seed": 44,
+      "cap": 4096,
+      "source_mode": "full",
+      "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/runs/full/anomaly.pytest-dev__pytest-5787.call65.onset.cap2048.seed44.json",
+      "source_result_sha256": "8d87356ff1f0e6cb835889f799cd9bb4340db6f72b250a8a31e3423c7e497c55",
+      "source_fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/fixtures/full/anomaly.pytest-dev__pytest-5787.call65.onset.cap2048.seed44.private.json",
+      "source_fixture_sha256": "e1d35e0a08dca171114e3856df379fe7070264bce3410b7b4e6097a1a6562085",
+      "candidate_fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-with-cap4096-pending-v-closure/fixtures/pytest5787.call65.seed44.cap4096.private.json",
+      "candidate_fixture_sha256": "eb66af59398c5cbf2e73697e177ec70330060512e774e76f041839d957b9e77c",
+      "source_generated_tokens": 2048,
+      "source_decode_tokens": 2047,
+      "source_diagnostic_wall_s": 158.33591718506068,
+      "prefill_host_overhead_s": 27.04696852923371,
+      "source_decode_wall_s": 131.28894865582697,
+      "decode_scale": 2.0379334581706305,
+      "projected_decode_wall_s": 267.55814115375586,
+      "projected_case_seconds": 294.60510968298956,
+      "projected_decode_tokens": 4095,
+      "forecast_proxy": "matched long-context cap4096 forecast.json; fixed prompt prefill overhead, context-scaled decode to all4095 steps"
+    },
+    "assessment": "Arithmetic agrees. The cap4096 row projects 2047 source decode replays to 4095 by context ratio and preserves prompt overhead. The aggregate uses one measured BFP8 load proxy plus a disclosed chosen64 diagnostic preparation proxy; context scaling/ranges remain planning estimates, not measured HiFi2 panel runtime."
+  },
+  "gates": {
+    "V_admitted_package_sha256": "246dbd17606f3baaec25ddc490e35f0a4c394808d43479a3a4dd0b267550906a",
+    "expected_V_admission_sha256": "246dbd17606f3baaec25ddc490e35f0a4c394808d43479a3a4dd0b267550906a",
+    "V_queue_status": "all_suffix4096_jobs_completed",
+    "V_queue_exit_code": 0,
+    "V_full_completion_exists": true,
+    "V_full_root_review_rows_seen": 13,
+    "V_full_expected_rows": 13,
+    "V_root_semantic_closure_complete": true,
+    "admission_status": "proposal_only_V_root_semantic_closure_confirmed_not_admitted_not_run",
+    "requires_root_review_admission": true,
+    "V_served_root_review_rows_seen": 12,
+    "V_served_expected_rows": 12,
+    "V_full_matched_root_review_rows_seen": 12,
+    "V_full_matched_expected_rows": 12,
+    "V_full_only_cap4096_root_review": {
+      "verdict": "normal",
+      "generated_tokens": 2380,
+      "cap": 4096,
+      "result_sha256": "d4f7c3efe8df8d4a5c10cc1d74bd7f6aa88b042b438af94af81dc3f1412035b3"
+    },
+    "V_root_review_source_hashes_verified": true,
+    "V_served_review_sha256": "57bbf5305a4fd0b6eeb6a105fc5a5afdf29ab42381b78fb99e74020f0e7594d0",
+    "V_full_requests10_coordinator_sha256": "7c65b43e8bfd090a6d447e55c2e6ebb569d17f73db7654cfc8cf82e4f839a8fe",
+    "V_full_other9_coordinator_sha256": "3043aa466609199a90ed635a84a2607404e4f07b434268f23d34af383781aeea",
+    "V_full_cap4096_coordinator_sha256": "d6511e92c8c7ca51771794210c4ec5fd87d9af27b5857427df753b605607c8a2",
+    "V_full_completion_sha256": "56ae2df18384155c16eb3a45416e46fda059ba8d334a6b7cc41362e5f04f245e",
+    "V_queue_sha256": "d8bc2e70dd02fe44a474bf2144fe64d5b1e1258f2dd0eb20af2e9c334eb0bb36"
+  },
+  "review_note": "V terminal success is not by itself treated as semantic closure. Closure was independently checked from the pinned root artifacts: 12/12 served result hashes reviewed in triage-b, 12/12 matched full result hashes reviewed in the two full coordinators, and the full-only cap4096 result hash reviewed separately as normal. Candidate P remains unadmitted and unrun pending root decision.",
+  "wording_note": "The proposal/provenance mentions a common cap on a matching served/full row, while this fixed candidate is one job per onset+seed (108 total), not 216 duplicated arm jobs. No panel row is missing; consider clarifying that \u201ccommon cap\u201d means maximum required cap across source arms for the single candidate trial."
+}

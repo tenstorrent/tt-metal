@@ -1,0 +1,140 @@
+{
+  "job_name": "swe-extended85-CANDIDATE-NOT-ADMITTED",
+  "jobs_dir": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe-jobs",
+  "n_attempts": 1,
+  "n_concurrent_trials": 12,
+  "quiet": false,
+  "environment": {
+    "type": "docker"
+  },
+  "agents": [
+    {
+      "model_name": "openai/google/gemma-4-31B-it",
+      "override_timeout_sec": 21600,
+      "kwargs": {
+        "version": "2.2.8",
+        "max_tokens": 32768,
+        "config": {
+          "model": {
+            "model_kwargs": {
+              "temperature": 1.0,
+              "top_p": 0.95,
+              "extra_body": {
+                "top_k": 20,
+                "chat_template_kwargs": {
+                  "enable_thinking": true
+                }
+              },
+              "drop_params": true,
+              "timeout": 3600
+            },
+            "cost_tracking": "ignore_errors"
+          }
+        }
+      },
+      "name": "mini-swe-agent",
+      "env": {
+        "OPENAI_BASE_URL": "http://172.17.0.1:8000/v1",
+        "OPENAI_API_BASE": "http://172.17.0.1:8000/v1",
+        "OPENAI_API_KEY": "local-no-auth-placeholder",
+        "LITELLM_LOCAL_MODEL_COST_MAP": "True"
+      },
+      "extra_allowed_hosts": [
+        "172.17.0.1"
+      ]
+    }
+  ],
+  "datasets": [
+    {
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-candidate/tasks85-offline-verifier",
+      "task_names": [
+        "django__django-11299",
+        "astropy__astropy-14096",
+        "matplotlib__matplotlib-25332",
+        "sympy__sympy-13551",
+        "scikit-learn__scikit-learn-14629",
+        "pydata__xarray-3993",
+        "sphinx-doc__sphinx-9673",
+        "pytest-dev__pytest-5840",
+        "pylint-dev__pylint-6903",
+        "psf__requests-1142",
+        "pallets__flask-5014",
+        "mwaskom__seaborn-3187",
+        "pytest-dev__pytest-7982",
+        "sympy__sympy-14711",
+        "pylint-dev__pylint-8898",
+        "scikit-learn__scikit-learn-13135",
+        "psf__requests-2931",
+        "django__django-15037",
+        "matplotlib__matplotlib-20488",
+        "pydata__xarray-4629",
+        "astropy__astropy-14995",
+        "sphinx-doc__sphinx-9281",
+        "mwaskom__seaborn-3069",
+        "pytest-dev__pytest-6197",
+        "sympy__sympy-14248",
+        "pylint-dev__pylint-4604",
+        "scikit-learn__scikit-learn-25102",
+        "django__django-14011",
+        "pydata__xarray-3095",
+        "astropy__astropy-13579",
+        "sphinx-doc__sphinx-11510",
+        "psf__requests-6028",
+        "matplotlib__matplotlib-25479",
+        "sympy__sympy-13878",
+        "pydata__xarray-6992",
+        "sphinx-doc__sphinx-7590",
+        "pytest-dev__pytest-7521",
+        "pylint-dev__pylint-4551",
+        "scikit-learn__scikit-learn-10908",
+        "psf__requests-2317",
+        "django__django-16950",
+        "matplotlib__matplotlib-26291",
+        "astropy__astropy-14598",
+        "pytest-dev__pytest-7571",
+        "sympy__sympy-18763",
+        "pylint-dev__pylint-4970",
+        "scikit-learn__scikit-learn-13328",
+        "django__django-14999",
+        "pydata__xarray-6461",
+        "astropy__astropy-14309",
+        "sphinx-doc__sphinx-8638",
+        "psf__requests-1921",
+        "matplotlib__matplotlib-26208",
+        "pytest-dev__pytest-10356",
+        "sympy__sympy-13091",
+        "pylint-dev__pylint-4661",
+        "django__django-14007",
+        "pydata__xarray-7233",
+        "astropy__astropy-13398",
+        "sphinx-doc__sphinx-10323",
+        "scikit-learn__scikit-learn-25747",
+        "matplotlib__matplotlib-23412",
+        "psf__requests-1724",
+        "sympy__sympy-12489",
+        "sphinx-doc__sphinx-9461",
+        "pytest-dev__pytest-7432",
+        "pylint-dev__pylint-7277",
+        "scikit-learn__scikit-learn-14983",
+        "django__django-11790",
+        "pydata__xarray-4094",
+        "astropy__astropy-8872",
+        "matplotlib__matplotlib-25960",
+        "psf__requests-1766",
+        "pytest-dev__pytest-10051",
+        "sympy__sympy-13480",
+        "pylint-dev__pylint-6386",
+        "django__django-13363",
+        "pydata__xarray-4687",
+        "astropy__astropy-7336",
+        "sphinx-doc__sphinx-10614",
+        "scikit-learn__scikit-learn-14053",
+        "matplotlib__matplotlib-24149",
+        "psf__requests-5414",
+        "pytest-dev__pytest-5787",
+        "sympy__sympy-23262"
+      ]
+    }
+  ],
+  "agent_timeout_multiplier": 1.0
+}

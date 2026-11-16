@@ -1,0 +1,15 @@
+{
+  "status": "planning_only_not_admitted",
+  "range_seconds": [
+    180,
+    700
+  ],
+  "hard_timeout_seconds": 1200,
+  "basis": "Measured P8 accuracy-only execution: 187.6457178592682 seconds for the same references/workload. Planning range intentionally retains the P8 180\u2013700 second bound; P9 HiFi2 may be slower.",
+  "workload": {
+    "aime_prefill_positions": 100,
+    "aime_teacher_forcing_repeats": 3,
+    "natural_teacher_forcing_positions": 512
+  },
+  "not_a_performance_result": true
+}

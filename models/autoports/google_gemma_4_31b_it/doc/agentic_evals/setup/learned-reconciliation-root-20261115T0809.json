@@ -1,0 +1,9 @@
+{
+  "status": "root_reviewed_applied",
+  "reviewer": "root",
+  "at_utc": "2026-11-15T08:08:42.817383+00:00",
+  "audit_sha256": "cd229ed1944fd552e5d08180c7ccf6338fb9aaabd3f71ed283b22f75920aa41c",
+  "fields": 18,
+  "root_addendum": "Retained GPQA pass and SWE85 below-band/unknown status in extended phase note.",
+  "learned_sha256": "88090bce44b53d3343d921efee71d62df7279958a2dc830ad4d0ad64e428fb04"
+}

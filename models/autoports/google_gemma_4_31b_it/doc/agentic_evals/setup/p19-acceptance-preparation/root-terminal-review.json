@@ -1,0 +1,131 @@
+{
+  "status": "broad_acceptance_pass_pending_resume_and_serving",
+  "reviewed_unix": 1794766615.150265,
+  "completion": {
+    "status": "completed",
+    "start_unix": 1794765524.7361696,
+    "end_unix": 1794766580.7715566,
+    "elapsed_seconds": 1056.0353870391846,
+    "process_exit_code": 0
+  },
+  "forecast_seconds": {
+    "low": 600,
+    "point": 1500,
+    "high": 3000
+  },
+  "forecast_result": "within_range",
+  "accuracy_rows": [
+    {
+      "top1": 0.99,
+      "top5": 1.0,
+      "top100": 1.0,
+      "total": 100
+    },
+    {
+      "top1": 0.98,
+      "top5": 1.0,
+      "top100": 1.0,
+      "total": 100
+    },
+    {
+      "top1": 0.98,
+      "top5": 1.0,
+      "top100": 1.0,
+      "total": 100
+    },
+    {
+      "top1": 0.98,
+      "top5": 1.0,
+      "top100": 1.0,
+      "total": 100
+    },
+    {
+      "top1": 0.908203125,
+      "top5": 0.990234375,
+      "top100": 1.0,
+      "total": 512
+    }
+  ],
+  "all_three_teacher_forcing_repeats_checked": true,
+  "runtime_all60layers_verified": true,
+  "performance": {
+    "source": "autoregressive",
+    "input_tokens": 4096,
+    "generated_tokens": 128,
+    "batch_size": 1,
+    "concurrent_requests": 1,
+    "ttft_ms": 1229.6536539215595,
+    "decode_tps": 18.505836278014602,
+    "streaming_exact": true
+  },
+  "context": {
+    "scope": "full60layers",
+    "context": 262144,
+    "boundaries": [
+      {
+        "prompt_tokens": 262143,
+        "output": [
+          236795
+        ]
+      },
+      {
+        "prompt_tokens": 262144,
+        "output": [
+          35769
+        ]
+      }
+    ],
+    "last_decode_input_position": 262143,
+    "last_decode_output": [
+      35769
+    ],
+    "positions_after": [
+      262144
+    ],
+    "host_sampling_compatibility_equal": true,
+    "host_sampling_logit_reads": 8
+  },
+  "qualitative": {
+    "inspected_raw_completions": true,
+    "same_pinned_HF_controls": true,
+    "natural_stops": [
+      "shared_0",
+      "shared_4"
+    ],
+    "coherent_bounded128_prefixes": [
+      "shared_1",
+      "shared_2",
+      "shared_3",
+      "shared_5"
+    ],
+    "divergences": {
+      "shared_0": null,
+      "shared_1": 21,
+      "shared_2": null,
+      "shared_3": 83,
+      "shared_4": null,
+      "shared_5": 65
+    },
+    "scope": "Greedy128-token shared-suite prefix comparison, not completed answers for capped prompts. No mechanical repetition or degraded coherence observed."
+  },
+  "long_prefix": {
+    "prompt_tokens": 32083,
+    "label_retrieved": true,
+    "natural_stop": true,
+    "format_caveat": "Fenced JSON rather than strict JSON-only response."
+  },
+  "selection": "P19 still unselected; resume and fresh serving/memory/rates needed. No evalscorechange.",
+  "source_sha256": {
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/p19-acceptance-preparation/run/aime24_prompt.json": "578790e2d9e5d7fad6d187bc6d733699c3514218ea5a42ca2bf9d25d7afdd4dd",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/p19-acceptance-preparation/run/full_context_post_barrier.json": "7cef036492930fa5857a0c42a99af57ee56fd4e3d442b03f0dac6d9715aa1610",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/p19-acceptance-preparation/run/long_prefix.json": "c2b410c7c772d9c30027f3f9cbe5faf59b5cc51696d9a233364bb3a6893a719c",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/p19-acceptance-preparation/run/memory.json": "ab34f913c3766d5c469f9e89fbdb821848c6e97cf5185e26d174e93122648e1b",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/p19-acceptance-preparation/run/performance_b1.json": "5d46877af53b03399b39c829c75220e212d5973d52b55bbb4b7a080ea6cc7ed8",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/p19-acceptance-preparation/run/qualitative_hf.json": "05c2ac233052909c2e785b9d36f819c52e95cecfcfd299eff81a6b1de3a174d6",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/p19-acceptance-preparation/run/qualitative_prompt_format.json": "16e4bfd8857e67ee9ca39297c8521b30e8ceacf0c848783e83b1192ef331cb9c",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/p19-acceptance-preparation/run/qualitative_tt.json": "9bdb443b02571f78c62df59c8fc06a56e635c7e41b7245d4e05a358b9f8cbcc2",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/p19-acceptance-preparation/run/readiness_accuracy.json": "f1e304ba411f3ae9bb5a25fab87c40e2444a3ca795ae166d3568c4fab627c1d6",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/p19-acceptance-preparation/run/runtime_policy.json": "db381061657ecdbecaab977c428f47e9b12ab55ec73b8d4afb633db744050b76",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/p19-acceptance-preparation/run/source_manifest.json": "ca05d794510008fe62b5144e607996c3c2b993b49222775f99c334b9b4644dfd"
+  }
+}

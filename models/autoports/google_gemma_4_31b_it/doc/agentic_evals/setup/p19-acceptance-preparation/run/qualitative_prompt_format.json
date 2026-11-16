@@ -1,0 +1,21 @@
+{
+  "hf_model": "google/gemma-4-31B-it",
+  "hf_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+  "tokenizer": "GemmaTokenizer",
+  "tokenizer_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+  "chat_template_present": true,
+  "prompt_mode": "chat",
+  "rendering": "apply_chat_template(add_generation_prompt=True,return_dict=False)",
+  "source": "/home/mvasiljevic/.codex-personal-gemma4/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.22/runtime/readiness_check/vllm_prompts.txt",
+  "generation": {
+    "do_sample": false,
+    "max_new_tokens": 128,
+    "eos_token_id": [
+      1,
+      50,
+      106
+    ]
+  },
+  "generation_config_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+  "stop_correction": "Initial text-only constructor inherited eos1; retained exact greedy prefixes end at first pinned generation_config stop ID. Original outputs preserved in qualitative_hf_unstopped.json. Future loader loads pinned GenerationConfig."
+}

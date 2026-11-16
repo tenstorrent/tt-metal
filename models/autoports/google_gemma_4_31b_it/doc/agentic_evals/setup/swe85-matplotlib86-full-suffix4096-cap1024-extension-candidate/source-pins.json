@@ -1,0 +1,28 @@
+{
+  "files": {
+    "fixture": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/fixtures/anomaly.matplotlib__matplotlib-20488.call86.onset.suffix4096.seed43.full.private.json",
+      "sha256": "7e8ee5bb1a24cca6e4e58651929198f7a4c4de279ca54495cedae74f3678193d"
+    },
+    "prior_full_512": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/runs/full/anomaly.matplotlib__matplotlib-20488.call86.onset.suffix4096.seed43.json",
+      "sha256": "2fc88476353a38633134bcb85d1fbf8624f99d8e55bb8273e42fca2898bc594d"
+    },
+    "prior_full_load": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/runs/full/load.json",
+      "sha256": "344ce5eba8fdafebade63d23e140c3634e163d3c090222b9f794936fdbbad899"
+    },
+    "trace_prep_proxy_log": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-followups-execution/suffix2048-full.log",
+      "sha256": "67a5ddc5db1e423bdda2787214180a2b29b96b6881e7a7148888ca2e501cb62d"
+    },
+    "batch_runner": {
+      "path": "models/autoports/google_gemma_4_31b_it/tools/precision_repro_batch.py",
+      "sha256": "172f5a1dd7a7403847e47b966ae79c306163650a60211418c7c195794ec5c125"
+    },
+    "probe_runner": {
+      "path": "models/autoports/google_gemma_4_31b_it/tools/precision_repro_probe.py",
+      "sha256": "2ffc23b9081d7be78f3a0e911da7c50dd51dbf80de07a8716d600579dad1c25f"
+    }
+  }
+}

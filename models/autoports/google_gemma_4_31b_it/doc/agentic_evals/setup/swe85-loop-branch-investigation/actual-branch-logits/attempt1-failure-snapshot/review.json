@@ -1,0 +1,76 @@
+{
+  "status": "independent_static_review_findings",
+  "review_scope": "Host-only inspection of frozen standalone probe, proposal, fixture, branch histories, source pins and recorded outputs. Ran only --validate-only --mock-tests; no HF/TT inference, model imports, or device access.",
+  "checked_utc": "2026-11-15T09:54:00Z",
+  "frozen_tool_sha256": "6240cfc9efa4755c2defceefaa8d60f75c26f8727598f97e2b98bd59abdddc9f",
+  "proposal_tool_sha256": "6240cfc9efa4755c2defceefaa8d60f75c26f8727598f97e2b98bd59abdddc9f",
+  "source_pins_status": "source_pins_prepared_candidate_only",
+  "host_validation_command": [
+    "python_env/bin/python",
+    "models/autoports/google_gemma_4_31b_it/tools/actual_branch_logits.py",
+    "--validate-only",
+    "--mock-tests"
+  ],
+  "host_validation_exit_code": 0,
+  "host_validation_summary": "Passed case/branch validation, pure host summary tests, forced-history callback mock, cleanup-error preservation and saved-logit comparison mock; output confirms torch, Transformers and TTNN not imported.",
+  "findings": [
+    {
+      "id": "branch_history_not_exact_full_observation",
+      "severity": "candidate_correction_required_before_execution",
+      "evidence": {
+        "branch_name": "full_escape_contrast",
+        "proposed_ids": [
+          1390,
+          107,
+          147,
+          1390,
+          107,
+          147
+        ],
+        "actual_full_seed42_ids_first6": [
+          1390,
+          107,
+          147,
+          1390,
+          107,
+          556
+        ],
+        "actual_full_result_sha256": "a967659d1f4edd7b726a36c976168ae767957b9821ffc4a2a31640d594e7a885",
+        "first_mismatch_generated_index": 5,
+        "proposed_index5": 147,
+        "observed_index5": 556
+      },
+      "impact": "The proposal describes this as a full escape contrast / one of two observed continuations, but it forces a synthetic 147 at index 5 where the matched full seed42 output emitted 556. Rows through index5 still score the same prefix, but row6 is conditioned on the wrong token and its expected-token annotation is not the recorded full continuation.",
+      "proposed_correction": "If the intent is to capture the observed full seed42 continuation, use [1390,107,147,1390,107,556] and update the exact branch validator and branch/source pins. If the repeated-147 counterfactual is desired as a separate hypothesis, keep it under a clearly counterfactual name and include the exact full seed42 branch separately."
+    },
+    {
+      "id": "topk_nucleus_are_host_estimates_not_canonical_support",
+      "severity": "interpretation_limit_material_if_used_for_sampler_support_claims",
+      "evidence": {
+        "probe_summary_behavior": "analyze_logits selects exactly20 candidates with score-descending/global-ID-ascending tie break, normalizes their host FP32 logits, then reconstructs nominal .95 or BF16 .94921875 nucleus distributions over that set.",
+        "pinned_hf_warper_behavior": "Installed pinned Transformers TopKLogitsWarper masks scores strictly below the kth score, so all kth-score ties survive and support can exceed20; TopPLogitsWarper then applies its own sorted-logit mask.",
+        "device_behavior_limit": "The probe reads TT full-vocabulary logits but does not record TT top32 candidate indices, device k/p filtered support, probability quantization or sampled draw."
+      },
+      "impact": "The fields `top_k20_distribution` and `top_p095_*_distribution` can look like engine distributions although they are deterministic host reconstructions. The report does label them estimates and says it does not model device probability quantization; nevertheless HF tie-expanded support is not reproduced, and none of the TT sampler support is observed.",
+      "proposed_correction": "Retain raw logits/ranks as primary evidence. Label the outputs explicitly as host strict-20 tie-break proxies and state that neither HF processor support nor TT device support is exact. If a support/probability claim is needed, pass captured logits through the pinned HF Temperature/TopK/TopP processor stack, and separately capture the device candidate IDs and post-k/p probabilities or validate against the actual device sampler implementation. Do not infer canonical support from these reconstructed fields."
+    }
+  ],
+  "reviewed_and_no_concrete_issue_found": [
+    "HF teacher-forced alignment is P[:-1] chunked at512 followed by input P[-1] and the six forced branch tokens; captured row0 predicts continuation index0.",
+    "TT callback executes after prefill and before forcing branch token0, then after each replay before forcing the next branch token; seven captured rows represent the seven expected next-token distributions for six-token histories.",
+    "Both mode implementations reset/rebuild the same exact fixture prefix for each branch; source pins cover fixture, HF result, served/full TT results, build kwargs/configs, runner, generator, sampling code, reference loader and probe.",
+    "TT runtime configuration is checked against the selected/full expected config IDs before building; generator teardown and mesh close are in finally with primary-exception preservation.",
+    "The forecast is explicitly candidate/planning-only and serial; total point/range and timeout-budget arithmetic recompute (670s point, 490–1150s forecast range, 6270s summed command timeout). The HF estimate remains broad and is not an inference measurement."
+  ],
+  "source_hashes": {
+    "tool": "6240cfc9efa4755c2defceefaa8d60f75c26f8727598f97e2b98bd59abdddc9f",
+    "proposal": "4819701b816bc3e086b5ef1298b919407e9ea32a26d7706b02508776a5ce7cea",
+    "branches": "35ec5de0272c5fd02c71b7ba665d7e3452014dd8fca6ff642b3455a5d796e552",
+    "source_pins": "2a21ef7a862629a1d49741355d9c33afb941635e70ed7ea52414b1e14c79968d",
+    "command": "7be876b0baed6d4ab5cd1d1eceff7e73f869f7bd182c686e43fd530df2f3673c",
+    "forecast": "584fd8a1c90e71cd30a858e07b1c3e9f106860c686ae7c8128591ebcd87b0ccf",
+    "full_result": "a967659d1f4edd7b726a36c976168ae767957b9821ffc4a2a31640d594e7a885",
+    "hf_result": "ea3eb180de1ef8898c2565dcb5ffd7700f3e792ccfce8bc279efef80c6dfe9a4"
+  },
+  "admission_or_launch": "none; candidate remains unadmitted and unlaunched"
+}

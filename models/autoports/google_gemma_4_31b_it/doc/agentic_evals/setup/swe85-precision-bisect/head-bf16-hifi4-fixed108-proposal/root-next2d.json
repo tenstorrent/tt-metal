@@ -1,0 +1,39 @@
+{
+  "reviewed_unix": 1794726657.3185847,
+  "rows": [
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/runs/head_bf16_hifi4/anomaly.sphinx-doc__sphinx-11510.call28.onset.seed44.cap1024.json",
+      "sha256": "c8d6b5ab117f92ca85f911b3d21666eaf5022d8800903a89fd91a0ecf7706dba",
+      "seed": 44,
+      "tokens": 690,
+      "verdict": "normal",
+      "reason": "Full raw/pinned-prefix review: distinct implementation and apply script continue saved expression and close canonical tool call. No degeneration; patch correctness not evaluated.",
+      "trace_counters_delta": {
+        "model_replays": 689,
+        "sample_replays": 689,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 689,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/runs/head_bf16_hifi4/anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.seed42.cap1024.json",
+      "sha256": "1aa98bfb1bd7d67e78fe7879bc5e0e6de558426946f4e424620c54471f2d82c8",
+      "seed": 42,
+      "tokens": 1024,
+      "verdict": "native",
+      "reason": "Pinned prefix ends call:bash; generated newline then shell script without required argument opener. Native malformed tool protocol begins immediately; at cap1024 script also remains unfinished, but anomaly verdict is independent of cap.",
+      "trace_counters_delta": {
+        "model_replays": 1023,
+        "sample_replays": 1023,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 1023,
+        "captures": 0
+      }
+    }
+  ]
+}

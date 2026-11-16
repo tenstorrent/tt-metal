@@ -1,0 +1,47 @@
+{
+  "status": "host_only_collector_generalized_and_tests_passed",
+  "scope": "Candidate sizing report construction only. No model/device commands, serving-rate edits, candidate selection or score changes.",
+  "implementation": [
+    "Accepts exact four-group runtime policies including BF16 lm_head, if the full policy matches observed autoport registration and has no layer exceptions.",
+    "Supports actual server batches 1/8/32 while preserving the advertised 262144-token context and 131072-token working-set planning basis.",
+    "Parses actual pre-cache allocator num_banks, launch validation, and cache-allocation events. Derives pool IDs and exact per-ID bytes using the cache dtype, unique tensor_idx groups, K/V pairs, scheduler/physical tile geometry, and the same ceil(tiles/banks)*banks formula as serving_memory.validate_pool_memory.",
+    "Checks measured per-device pool bytes equal the geometry-derived total, and rejects non-fitting launches, policy mismatch, unsupported precision, wrong devices, bad shapes, and duplicate/missing evidence events.",
+    "Preserves 2854 pool IDs per 131072 working-set agent and 4902 per 262144 full-context agent. Selected agents cannot exceed measured capacity or actual max_num_seqs.",
+    "Reports the smallest configured batch for the selected agent count. If a smaller batch could work, it marks that an independent launch is required before selecting it.",
+    "New policy outputs use stable gpqa_server_size.json / swe_server_size.json names. Exact legacy stage12_head_bfp8_lofi preserves old *_server_size_head_bfp8.json names; --output-prefix allows explicit policy suffixes."
+  ],
+  "geometry": {
+    "kv_tile_bytes_from_runtime_adapter": {
+      "bfloat8_b": 1088,
+      "bfloat16": 2048
+    },
+    "actual_captured_allocator_num_banks": 8,
+    "actual_captured_bfp8_pool_bytes_per_id": 696320,
+    "host_derived_bf16_pool_bytes_per_id": 1310720,
+    "bf16_to_bfp8_pool_byte_ratio": 1.8823529411764706,
+    "basis": "Captured identity and pre-cache allocator event plus 60 per-layer cache shapes; BF16 value is a deterministic host-only dtype variant, not a launch measurement."
+  },
+  "tests": {
+    "command": "python_env/bin/python -m unittest models.autoports.google_gemma_4_31b_it.tests.test_collect_candidate_sizing models.autoports.google_gemma_4_31b_it.tests.test_kv_pool_budget models.autoports.google_gemma_4_31b_it.tests.test_benchmark_work -v",
+    "result": "26 tests passed, including AST verification that the collector tile-byte constants match generator_vllm.py; py_compile passed for collector, tests, pool-budget module, serving adapter and benchmark work estimator.",
+    "fixture": "Trimmed captured completed B32 head-BFP8/BFP8-KV identity, pre-cache allocator event, launch validation and cache-allocation events. BF16-head/B8 and BF16-KV variants are deterministic host-only transformations, not hardware evidence.",
+    "cli_smoke": "Ran the collector against the captured completed B32 server identity and log with GPQA10/SWE85 counts; it reconstructed36896 pool IDs at696320 bytes/ID and wrote temporary outputs. GPQA selected10 agents; SWE selected12, both at measured B32.",
+    "imports": "Collector and tests use standard library only; no TTNN or model imports."
+  },
+  "consumer_compatibility": {
+    "historical_names": "Historical head-BFP8 callers retain *_server_size_head_bfp8.json names under the exact legacy precision signature.",
+    "new_policy_names": "Changed precision policies avoid a false head_bfp8 label by using stable suite_server_size.json names unless an explicit output prefix is supplied.",
+    "task_counts": "Defaults GPQA10/SWE85; `--task-count` remains a compatibility shorthand for both; new callers can set per-suite counts."
+  },
+  "source_sha256": {
+    "collector": "220f89b5d21ef9115763fbda0224082fe31ff679f0ef6584136975284f011c7d",
+    "collector_tests": "b4540448228f58567ea45add9d93e19f9a6463217cec4cc687f6e8e7a91b5c56",
+    "captured_fixture": "6d74b6b0ed5b497f6dcefc38e3b8a69cf5090574d5fd1b2c00eddef8c1e86cec",
+    "pool_budget": "67739175d88efe9e02cdbd5b5b559b4bac047ab7e57d7dc24ac47cff888ba081",
+    "serving_adapter": "5a19558b9b28b6a5586cc985bedebdd88671ba07b453ced2890935552937b734",
+    "serving_memory_geometry": "cfe9191dbb8f57fa8390388576bb1a6d4163bf0e319dc287dd4ddde0af81171d",
+    "server_identity_producer": "edf1461896dca830bf850a50deca6440850505332ee6945708e0b0790039e172",
+    "pool_budget_tests": "f8d3225d54007035b9436e0297ae8500af758d1af39a06ebe5c964e2b85df2fe",
+    "benchmark_work_accounting": "0fd668dcba7e9b7bc036f2cfa89186f2032d683e414059a5028a6b3ab9a92650"
+  }
+}

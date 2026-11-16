@@ -1,0 +1,18 @@
+{
+  "status": "root_static_review_accepted_candidate_only",
+  "reviewer": "root",
+  "accepted": true,
+  "utc": "2026-11-15T10:18:03.911356+00:00",
+  "proposal_sha256": "e71c9f3c4bf150b2989bf99480c1c84a8ca0bbc939e6953d05856ee64bc73ceb",
+  "tool_sha256": "0106720fba10ffa1cef53476a309f0a6855dd636e8d056347849d7fcb3cf8a52",
+  "independent_rereview_sha256": "24c587b8b0daddbd875e4be61378773545dd0886eb2ec07a8d8057de3ef70085",
+  "validation": "Root ran --validate-only --mock-tests exit0;15 source pins, no model/device imports. Read capture callback/HF chunking/cleanup/report/compare code; exact branches provenance bound.",
+  "limitations": [
+    "Forced-history logits do not establish native branch incidence or equal random streams.",
+    "The TT path uses generator.generate(next_input=..., host_sampling=True, buffered=False). It does not reveal the device sampler draw or full internal candidate mapping; it is not a sampler trace.",
+    "The existing prefill function still executes its ordinary device-sampler operation; its sampled token is discarded. Subsequent model replay logits are forced through the callback.",
+    "No implementation defect, causal bug, answer quality, or performance conclusion is claimed.",
+    "Strict top-k20/nucleus supports and probabilities are deterministic host proxies; HF may keep every tie at the kth logit and device support is not exposed. Raw logits and ranks are primary evidence."
+  ],
+  "execution": "Not admitted or run; serialized executor preparation pending."
+}

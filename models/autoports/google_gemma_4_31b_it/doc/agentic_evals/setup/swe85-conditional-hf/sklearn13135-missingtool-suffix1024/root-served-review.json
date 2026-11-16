@@ -1,0 +1,54 @@
+{
+  "status": "completed_root_reviewed",
+  "counts": {
+    "normal": 2,
+    "native": 1
+  },
+  "rows": [
+    {
+      "seed": 42,
+      "verdict": "normal",
+      "reason": "Coherent continuation to valid bash tool call, no loop or stray token",
+      "generated_tokens": 49,
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix1024/runs/served/anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix1024.seed42.json",
+      "source_sha256": "f76236278e2369a2c946556de8495e2621e3fa188604cf6812fe39bd54698080"
+    },
+    {
+      "seed": 43,
+      "verdict": "normal",
+      "reason": "Coherent continuation to valid bash tool call, no loop or stray token",
+      "generated_tokens": 54,
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix1024/runs/served/anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix1024.seed43.json",
+      "source_sha256": "d4395ad90aaa77f8b5a95dba24b205231bb188d468e090d45b152e2b8ff66330"
+    },
+    {
+      "seed": 44,
+      "verdict": "native",
+      "reason": "Extra apostrophe-ve after completed Ive, then valid tool call",
+      "generated_tokens": 58,
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-missingtool-suffix1024/runs/served/anomaly.scikit-learn__scikit-learn-13135.call29.onset.suffix1024.seed44.json",
+      "source_sha256": "c2c9da7b1edf8fe99f957de26a2942a04c29e03fb2000dcf50a56aaec545c47a"
+    }
+  ],
+  "forecast": {
+    "reviewer": "root",
+    "accepted": true,
+    "forecast_status": "accepted_miss",
+    "completion_sha256": "b0485e6d7f64bfe2e2905c98f8bc493fd5a2db92e59522f58ac2dd972c32cf26",
+    "admission_sha256": "2e635a1169648396cf6abd95a6a3f3918808a45f0918431702fae2f5ff3ba308",
+    "forecast_range_seconds": [
+      220.0,
+      400.0
+    ],
+    "reviewed_elapsed_seconds": 166.36522507667542,
+    "explanation": "Low miss: all three terminate at49/54/58, versus forecast extended1024 cap. Load139.063s close to136.801s prior; only5.097s free work. Broad generation/context allowance unused. No speed ranking claim.",
+    "accounting": {
+      "load_seconds": 139.06262786802836,
+      "case_seconds": 22.278884618077427,
+      "free_seconds": 5.096605851082131,
+      "chosen_and_case_setup_seconds": 17.182278766995296,
+      "outside_load_and_cases_seconds": 5.02371259056963
+    },
+    "reviewed_unix": 1794729025.2638354
+  }
+}

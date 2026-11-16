@@ -1,0 +1,22 @@
+{
+  "status": "root_and_independent_review_correction",
+  "historical_summary": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/completion-summary.json",
+  "historical_summary_sha256": "cb3caa7e237fa6d83ad281a259669490d79a773513e02d315e2e6ce3bf28566c",
+  "case": "anomaly.psf__requests-5414.call11.onset",
+  "mode": "full",
+  "seed": 43,
+  "previous_verdict": "inconclusive",
+  "corrected_verdict": "other",
+  "reason": "Localized stray own in malformed traceback is already present in original512; later exact512-prefix cap1024 extension exposed the oversight. Original admitted records and their source hashes remain immutable. This is not a score change.",
+  "evidence": [
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-execution-candidate/full-coordinator-requests11-seed43.json",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-cap1024-execution-candidate/full-requests11-seed43-independent-addendum-b.json"
+  ],
+  "corrected_full_counts": {
+    "normal": 8,
+    "native": 1,
+    "other": 3,
+    "inconclusive": 3
+  },
+  "served_counts_unchanged": true
+}

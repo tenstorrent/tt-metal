@@ -1,0 +1,188 @@
+{
+  "status": "candidate_only_not_admitted_not_run",
+  "created_utc": "2026-11-15T17:15:00Z",
+  "source_status": "P19 fixed108 panel outputs are still being triaged; this candidate is not eligible for execution until root terminalizes/reviews the entire panel and merges required rows.",
+  "source_fixed_manifest": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/candidate-cases.json",
+  "source_fixed_manifest_sha256": "57193e4b91af3a31df00f0c92dbc0f2219fbce011e6533594e5244a93a3021ed",
+  "source_triage": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/p19-q32-production-validation/fixed108/triage-c-slice36-71.json",
+  "source_triage_sha256": "c34878054097390eba6614bb8b86519612c665d43c392bb08d2bea2c1936f823",
+  "source_precision": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/precision.json",
+  "source_precision_sha256": "540760ea34cea22459c9248b4ce8c90ad1b34e000b18e82b70552e45fd766fad",
+  "source_build_kwargs_sha256": "b4ae49bdd44f605435f46482d0bc7e2ad1c4c2749f2acd4b1a64a7b89ef0ee6a",
+  "runner": "models/autoports/google_gemma_4_31b_it/tools/precision_repro_batch.py",
+  "runner_sha256": "172f5a1dd7a7403847e47b966ae79c306163650a60211418c7c195794ec5c125",
+  "source_rows": [
+    {
+      "manifest_index": 54,
+      "manifest_row": {
+        "name": "anomaly.sphinx-doc__sphinx-10323.call70.onset.seed42.cap256",
+        "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-extra-contraction-controls/sphinx-doc__sphinx-10323.call70.onset.private.json",
+        "branches": [],
+        "free_run_tokens": 256,
+        "free_run_trials": 1,
+        "source_onset": "anomaly.sphinx-doc__sphinx-10323.call70.onset",
+        "seed": 42,
+        "cap_source": "initial_onset"
+      },
+      "fixture_sha256": "7d39e2c87e91327f35317968bf2647887a402d0086085ec8f95db8ff5fc2ab64",
+      "fixture_prompt_token_ids": 65779,
+      "fixture_prompt_token_ids_sha256": "fd24fbb8d469895d6b7bc344aa036fc844a4c80a754f06708be6ed35daa7d032",
+      "prior_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/p19-q32-production-validation/fixed108/runs/p19_q32/anomaly.sphinx-doc__sphinx-10323.call70.onset.seed42.cap256.json",
+      "prior_result_sha256": "8dfb04e0d290f13dee822128b41d12de1944fc7834ea601f840c61fbd0c3d529",
+      "prior_generated_token_count": 256,
+      "prior_generated_token_ids_sha256": "cb997473c906fb0c641fb30369429d80a8ddd79e724b6e36e4eaf51caa9d6933",
+      "diagnostic_wall_s_including_prefill": 55.093617673031986,
+      "decode": {
+        "decode_tokens": 255,
+        "decode_wall_s": 15.422120749019086,
+        "decode_tok_s_user": 16.534690925449997,
+        "trace_counters_before_decode": {
+          "model_replays": 11217,
+          "sample_replays": 11272,
+          "token_refreshes": 0,
+          "position_refreshes": 55,
+          "page_refreshes": 1560,
+          "readbacks": 11272,
+          "captures": 3
+        },
+        "trace_counters_after_decode": {
+          "model_replays": 11472,
+          "sample_replays": 11527,
+          "token_refreshes": 0,
+          "position_refreshes": 55,
+          "page_refreshes": 1560,
+          "readbacks": 11527,
+          "captures": 3
+        },
+        "trace_counters_delta": {
+          "model_replays": 255,
+          "sample_replays": 255,
+          "token_refreshes": 0,
+          "position_refreshes": 0,
+          "page_refreshes": 0,
+          "readbacks": 255,
+          "captures": 0
+        },
+        "basis": "Batch1 wall from immediately before first _replay to return after last existing synchronous token-out readback; counts completed replay calls, includes host loop gaps, excludes prefill/first token and text decoding. No added device sync or profiler. Traced diagnostic rate, not serving benchmark."
+      },
+      "runtime_precision": {
+        "config_id": "stage12_bf16_hifi4_kv_down_bfp8_p19",
+        "weight_groups": {
+          "attention": "bf16",
+          "mlp": "bf16",
+          "down": "bfp8_lofi",
+          "lm_head": "bf16"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "HiFi4",
+          "mlp": "HiFi4",
+          "down": "LoFi",
+          "lm_head": "HiFi4"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat8_b",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144,
+        "sdpa_compute_fidelity": "HiFi4"
+      }
+    },
+    {
+      "manifest_index": 68,
+      "manifest_row": {
+        "name": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed44.cap1024",
+        "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap1024.seed44.private.json",
+        "branches": [],
+        "free_run_tokens": 1024,
+        "free_run_trials": 1,
+        "source_onset": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset",
+        "seed": 44,
+        "cap_source": "second_cap_full"
+      },
+      "fixture_sha256": "7c5da63d138e6afa7b539dfed909ee1e8a937c2e168d587023c4421333688780",
+      "fixture_prompt_token_ids": 76441,
+      "fixture_prompt_token_ids_sha256": "5e8c9025218ae22d2ae1491e4ff24e3aacdf82ad5d2985c6e2792168270c6808",
+      "prior_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/p19-q32-production-validation/fixed108/runs/p19_q32/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed44.cap1024.json",
+      "prior_result_sha256": "9ddbe31160890bbea94ccb463d6c97e035933cb7c40d8d66ac4b34d29c79587b",
+      "prior_generated_token_count": 1024,
+      "prior_generated_token_ids_sha256": "c48612b867327bcf9828b5aed0c62fb85b9de1a25352e82fc7c3c2caf0423e62",
+      "diagnostic_wall_s_including_prefill": 107.17813577014022,
+      "decode": {
+        "decode_tokens": 1023,
+        "decode_wall_s": 63.046971084782854,
+        "decode_tok_s_user": 16.225997576066163,
+        "trace_counters_before_decode": {
+          "model_replays": 15555,
+          "sample_replays": 15624,
+          "token_refreshes": 0,
+          "position_refreshes": 69,
+          "page_refreshes": 1920,
+          "readbacks": 15624,
+          "captures": 3
+        },
+        "trace_counters_after_decode": {
+          "model_replays": 16578,
+          "sample_replays": 16647,
+          "token_refreshes": 0,
+          "position_refreshes": 69,
+          "page_refreshes": 1920,
+          "readbacks": 16647,
+          "captures": 3
+        },
+        "trace_counters_delta": {
+          "model_replays": 1023,
+          "sample_replays": 1023,
+          "token_refreshes": 0,
+          "position_refreshes": 0,
+          "page_refreshes": 0,
+          "readbacks": 1023,
+          "captures": 0
+        },
+        "basis": "Batch1 wall from immediately before first _replay to return after last existing synchronous token-out readback; counts completed replay calls, includes host loop gaps, excludes prefill/first token and text decoding. No added device sync or profiler. Traced diagnostic rate, not serving benchmark."
+      },
+      "runtime_precision": {
+        "config_id": "stage12_bf16_hifi4_kv_down_bfp8_p19",
+        "weight_groups": {
+          "attention": "bf16",
+          "mlp": "bf16",
+          "down": "bfp8_lofi",
+          "lm_head": "bf16"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "HiFi4",
+          "mlp": "HiFi4",
+          "down": "LoFi",
+          "lm_head": "HiFi4"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat8_b",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144,
+        "sdpa_compute_fidelity": "HiFi4"
+      }
+    }
+  ],
+  "candidate_cases_sha256": "ef9a7800fa0425781ad3d2c39ea3e9233dc65cb2445d2f736888d61548fd5b2a",
+  "command_sha256": "8ea273689a9f48b69c3592df23623e8c9b2f43fb96660eb931717d4debd758da",
+  "expected_prefixes_sha256": "ed3e35efe187c81b54b7641dc83a55c3acb645593943d04ac7c8af45ccd3fdc3",
+  "forecast_sha256": "da80b36f4a893c48ade1a99bf734dc7fd242148030e31d77f2b5820e316fbd57",
+  "candidate_fixture_count": 2,
+  "note": "Source candidate fixtures are referenced read-only, not copied or modified. No command was run."
+}

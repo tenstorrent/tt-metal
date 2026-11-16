@@ -1,0 +1,87 @@
+{
+  "status": "independent_host_only_review_candidate_not_admitted",
+  "scope": "Static provenance, fixture semantics, manifest/hash integration, CPU validate-only result, driver/comparator, and forecast arithmetic. No TTNN import, device work, model load, launch, or admission.",
+  "disposition": "Fourth cap4096 delta is internally consistent after merge refresh; ready for root review/admission decision, remains candidate-only.",
+  "integration": {
+    "full_manifest_case_count": 13,
+    "served_manifest_case_count": 12,
+    "full_manifest_sha256": "b734dfb2e5e822b1eff8f01b82d2ead1a785b37cc30db5ce76811341bbb0eca5",
+    "proposal_hash_matches_admission": true,
+    "driver_hash_matches_admission": true,
+    "proposal_and_command_manifest_hashes_match": true,
+    "admission_status": "candidate_only_not_admitted",
+    "all_source_hashes_current": true,
+    "all_proposal_source_hashes_current": true,
+    "merged_case_name": "anomaly.pytest-dev__pytest-5787.call65.onset.cap4096.seed44",
+    "unique_full_case_names": true,
+    "standalone_manifest_has_distinct_output_dir": true,
+    "stale_12_case_validation_corrected": [
+      [
+        "served",
+        12,
+        "Validated 12 jobs without importing TTNN"
+      ],
+      [
+        "full",
+        13,
+        "Validated 13 jobs without importing TTNN"
+      ]
+    ]
+  },
+  "fixture": {
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/pytest-call65-cap4096/pytest-call65.cap4096.seed44.private.json",
+    "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/fixtures/full/anomaly.pytest-dev__pytest-5787.call65.onset.cap2048.seed44.private.json",
+    "source_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/runs/full/anomaly.pytest-dev__pytest-5787.call65.onset.cap2048.seed44.json",
+    "candidate_fixture_sha256": "a383f6456c2dc6a0e08eeb4d17aad8561a2ad783ef92d8642e74218b1963447c",
+    "source_fixture_sha256": "e1d35e0a08dca171114e3856df379fe7070264bce3410b7b4e6097a1a6562085",
+    "source_result_sha256": "8d87356ff1f0e6cb835889f799cd9bb4340db6f72b250a8a31e3423c7e497c55",
+    "prompt_token_ids_equal": true,
+    "prompt_length": 53684,
+    "chosen_continuation_equal": true,
+    "chosen_positions": 64,
+    "sampling_equal": true,
+    "seed_equal": true,
+    "seed": 44,
+    "previous_cap_verdict": "inconclusive/progressing: at 2047 decode replays and still constructing distinct serialization/code",
+    "new_free_run_tokens": 4096,
+    "branches": []
+  },
+  "forecast": {
+    "source_cap": 2048,
+    "source_decode_replays": 2047,
+    "candidate_cap": 4096,
+    "cap_safe_replays": 4095,
+    "context_ratio": 2.0379334581706305,
+    "projected_decode_wall_s": 267.55814115375586,
+    "projected_prefill_overhead_s": 27.04696852923371,
+    "incremental_variable_case_s": 294.60510968298956,
+    "standalone_full_load_and_prep_s": 87.6422862240579,
+    "standalone_point_s": 382.24739590704746,
+    "standalone_range_s": [
+      293.8658630021506,
+      588.4709726851402
+    ],
+    "shared_full_batch_incremental_s": 294.60510968298956,
+    "full_mode_aggregate_jobs": 13,
+    "full_mode_point_s": 845.0943469400173,
+    "full_mode_range_s": [
+      618.4852846243643,
+      2160.9194427483762
+    ],
+    "assessment": "Independent context-sum ratio recomputes to 2.03793345817; decode scaling 131.288949s \u00d7 ratio gives 267.558141s; plus 27.046969s source overhead = 294.605110s variable. Standalone adds 87.642286s measured load/prep, point 382.247396s; bounds fixed + 0.7x/1.7x variable. Merged full batch counts this variable once and one batch load/prep."
+  },
+  "validation": {
+    "served_jobs": 12,
+    "full_jobs": 13,
+    "recorded_validate_only_pass": true,
+    "ttnn_imported": false,
+    "driver_candidate_only_hash_gates": true,
+    "host_only_compare_pairs": 12,
+    "compare_excludes_full_only_new_case": true,
+    "merged_fourth_case_changes_scores_or_adjudication": false
+  },
+  "caveats": [
+    "Keep admission gated on U completion/terminal queue and root single-queue/device-owner preflight as driver specifies.",
+    "Prior source stop-count correction remains: 8/24 matched suffix2048 trials reached 512 (served 6/full 2); 16 stopped earlier (served 6/full 10). The added fourth-cap case is a single full-mode progressing extension."
+  ]
+}

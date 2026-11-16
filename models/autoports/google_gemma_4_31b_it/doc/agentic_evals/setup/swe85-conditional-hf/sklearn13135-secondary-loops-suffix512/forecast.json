@@ -1,0 +1,52 @@
+{
+  "status": "host_wall_planning_estimate_only",
+  "basis_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/cost-basis.json",
+  "basis_sha256": "dc16b01ffe4dc12f0148cad0cb6b7fade4f1fce2a00688f964413f4ab3e685c5",
+  "formula": "per_group_point=median_incremental_s*1+180s; per_group_range=[800*1+180,1600*1+180]. Two serial process launches; no compute from TT wall.",
+  "median_incremental_case_s": 1040.1832335699582,
+  "range_per_case_s": [
+    800,
+    1600
+  ],
+  "model_load_margin_per_group_s": 180,
+  "groups": [
+    {
+      "serial_order": 1,
+      "seed": 42,
+      "case_count": 1,
+      "model_load_margin_s": 180,
+      "point_seconds": 1220.183,
+      "range_seconds": [
+        980,
+        1780
+      ],
+      "timeout_seconds": 3600,
+      "basis": "eight prior HF 512-prompt/512-generation incremental cases; one fresh process per group"
+    },
+    {
+      "serial_order": 2,
+      "seed": 43,
+      "case_count": 1,
+      "model_load_margin_s": 180,
+      "point_seconds": 1220.183,
+      "range_seconds": [
+        980,
+        1780
+      ],
+      "timeout_seconds": 3600,
+      "basis": "eight prior HF 512-prompt/512-generation incremental cases; one fresh process per group"
+    }
+  ],
+  "total_point_seconds": 2440.366,
+  "total_range_seconds": [
+    1960,
+    3560
+  ],
+  "serial": true,
+  "timeouts_are_hard_stops_not_forecast_bounds": true,
+  "uncertainty": [
+    "The timing basis is eight prior pinned-HF 512-prompt controls, not a matched sklearn-loop sample.",
+    "These exact full-mode seed42/43 inputs are 512 tokens and use chosen64/free512; prompt family differs from calibration.",
+    "Estimate is host wall only, not a model-serving performance result."
+  ]
+}

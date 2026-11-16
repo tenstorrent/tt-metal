@@ -1,0 +1,39 @@
+{
+  "exit_code": 0,
+  "files": 1721,
+  "wall_seconds": 0.887444257736206,
+  "format_only_checks": [
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/gpqa_provisional_reverse_validation.json",
+      "only_terminal_whitespace": true,
+      "json_equal": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/offline-verifier-build/config.json",
+      "only_terminal_whitespace": true,
+      "json_equal": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-loop-branch-investigation/precision-repro-hf-identity-guard-proposal.md",
+      "only_terminal_whitespace": true,
+      "json_equal": null
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/attention-hifi2-down-lofi-ten-case-candidate/triage-c.json",
+      "only_terminal_whitespace": true,
+      "json_equal": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/attention-hifi2-down-lofi-ten-case-candidate/triage-c.json.pre-correction-20261115.json",
+      "only_terminal_whitespace": true,
+      "json_equal": true
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-cap-extension-candidate/merged9/launch.json",
+      "only_terminal_whitespace": true,
+      "json_equal": true
+    }
+  ],
+  "historical_bytes_preserved_in": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/stage12-artifact-hook-current-snapshot",
+  "log": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/review/pre-commit-artifacts-final.log"
+}

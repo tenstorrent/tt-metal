@@ -1,0 +1,41 @@
+{
+  "status": "partial_completed_outputs_CPU_stock_nonstreaming_parser_only",
+  "created_utc": "2026-11-15T06:15:29.628557+00:00",
+  "protocol_jobs_selected": 1,
+  "completed_case_modes": 1,
+  "completed_trials": 1,
+  "partial_counts": {
+    "served": {
+      "case_modes": 1,
+      "trials": 1,
+      "missing_tool": 0,
+      "malformed_name": 1,
+      "invalid_arguments": 1,
+      "capped_trials": 0
+    },
+    "full": {
+      "case_modes": 0,
+      "trials": 0,
+      "missing_tool": 0,
+      "malformed_name": 0,
+      "invalid_arguments": 0,
+      "capped_trials": 0
+    }
+  },
+  "pending": [
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed42.cap1024",
+      "mode": "full"
+    }
+  ],
+  "errors": [],
+  "rules": [
+    "Expected structured tool is bash with JSON mapping containing string command. Missing tool, malformed function name and invalid arguments are separate outcomes.",
+    "Missing tool at token cap may be incomplete; inspect completion/stop and channel context before declaring reproduction.",
+    "Valid structured call does not excuse visible GetAll-bash, stray thought, repetition, wrong actions or other semantic anomalies. Mechanical repetition is not assessed by this parser.",
+    "Raw special-marker display alone is not reproduction: runner decodes skip_special_tokens=False. Compare actual channel-aware structured results with native response body.",
+    "Native token IDs and exact historical stream absent. Canonical reconstruction/current nonstreaming parse is not proof of historical stream/parser equivalence or full-model correctness.",
+    "Full-prefix findings may include fixed inherited anomalous text. Compare generated-only findings and exact prefix before attributing anomaly to new sampling. A capped parser-extracted call is not necessarily complete/executable; tool-close-token presence is recorded separately."
+  ],
+  "detailed_audit_sha256": "df50d2faa04174be151e49624ba22b1c9ab4153248d4a05ccfe1f8572b930b31"
+}

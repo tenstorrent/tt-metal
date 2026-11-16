@@ -1,0 +1,243 @@
+{
+  "reviewed_unix": 1794722644.350375,
+  "rows": [
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.psf__requests-5414.call11.onset.seed43.cap256.json",
+      "sha256": "c3a58585ae4aa439943b8bd9271b6e406920bcb7cb13636f267c120b9e583289",
+      "seed": 43,
+      "tokens": 256,
+      "verdict": "native",
+      "reason": "Character census confirms1024carets across256generatedtokens: nativecollapse, notcapfailure.",
+      "trace_counters_delta": {
+        "model_replays": 255,
+        "sample_replays": 255,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 255,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.psf__requests-5414.call11.onset.seed44.cap256.json",
+      "sha256": "afa05543a7e2c56401bf5549fb814700cd5b648e8a400f8e12030c205479fae3",
+      "seed": 44,
+      "tokens": 256,
+      "verdict": "native",
+      "reason": "Character census confirms1024carets across256generatedtokens: nativecollapse, notcapfailure.",
+      "trace_counters_delta": {
+        "model_replays": 255,
+        "sample_replays": 255,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 255,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.psf__requests-5414.call9.onset.seed42.cap256.json",
+      "sha256": "b618bb956106fc884104717d2f97ede060453cd085b3d536c9f8cbf3edf2bc2d",
+      "seed": 42,
+      "tokens": 256,
+      "verdict": "native",
+      "reason": "Character census confirms1024carets across256generatedtokens: nativecollapse, notcapfailure.",
+      "trace_counters_delta": {
+        "model_replays": 255,
+        "sample_replays": 255,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 255,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.psf__requests-5414.call9.onset.seed43.cap256.json",
+      "sha256": "cb74baafad457e8af264f38e9de23267d45ff7bc236f1d54d82fedb693a3be76",
+      "seed": 43,
+      "tokens": 256,
+      "verdict": "native",
+      "reason": "Character census confirms1024carets across256generatedtokens: nativecollapse, notcapfailure.",
+      "trace_counters_delta": {
+        "model_replays": 255,
+        "sample_replays": 255,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 255,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.psf__requests-5414.call9.onset.seed44.cap256.json",
+      "sha256": "a973a75420f0631e39fb374671ec269efbb8d98179607cef4db8759e439a2e56",
+      "seed": 44,
+      "tokens": 256,
+      "verdict": "native",
+      "reason": "Character census confirms1024carets across256generatedtokens: nativecollapse, notcapfailure.",
+      "trace_counters_delta": {
+        "model_replays": 255,
+        "sample_replays": 255,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 255,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.pylint-dev__pylint-4551.call1.onset.seed42.cap256.json",
+      "sha256": "d6751fb75938d98df1b790bc362554d8d03992241905265b5870eec993d51655",
+      "seed": 42,
+      "tokens": 20,
+      "verdict": "other",
+      "reason": "Generated closing tool_call marker before call:bash, instead of opening marker; malformed protocol provisional pending stock parser audit.",
+      "trace_counters_delta": {
+        "model_replays": 19,
+        "sample_replays": 19,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 19,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.pylint-dev__pylint-4551.call1.onset.seed43.cap256.json",
+      "sha256": "723c55d57801df33fe4723104d7e576e32e2c02e01bad4bc05ec28e2179d0be0",
+      "seed": 43,
+      "tokens": 20,
+      "verdict": "normal",
+      "reason": "Full raw text and pinned boundary reviewed: grammatical nondegenerate continuation and canonical bash call. No patch correctness or generated execution claim.",
+      "trace_counters_delta": {
+        "model_replays": 19,
+        "sample_replays": 19,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 19,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.pylint-dev__pylint-4551.call1.onset.seed44.cap256.json",
+      "sha256": "7c6bb94084be19364b905a2269f3b09cdcb58528e7fee113eab147cde571c805",
+      "seed": 44,
+      "tokens": 20,
+      "verdict": "other",
+      "reason": "Generated closing tool_call marker before call:bash, instead of opening marker; malformed protocol provisional pending stock parser audit.",
+      "trace_counters_delta": {
+        "model_replays": 19,
+        "sample_replays": 19,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 19,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.pylint-dev__pylint-4604.call45.onset.seed42.cap256.json",
+      "sha256": "26eb19313ab3089f106792becc190f8652e2db427bb04c74ae718a968764c4da",
+      "seed": 42,
+      "tokens": 65,
+      "verdict": "normal",
+      "reason": "Full raw text and pinned boundary reviewed: grammatical nondegenerate continuation and canonical bash call. No patch correctness or generated execution claim.",
+      "trace_counters_delta": {
+        "model_replays": 64,
+        "sample_replays": 64,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 64,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.pylint-dev__pylint-4604.call45.onset.seed43.cap256.json",
+      "sha256": "f85ab73e85fbbf1d15892ce5ff2f3bdb321fccdddb88701e8607ea89e16c2481",
+      "seed": 43,
+      "tokens": 50,
+      "verdict": "normal",
+      "reason": "Full raw text and pinned boundary reviewed: grammatical nondegenerate continuation and canonical bash call. No patch correctness or generated execution claim.",
+      "trace_counters_delta": {
+        "model_replays": 49,
+        "sample_replays": 49,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 49,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.pylint-dev__pylint-4604.call45.onset.seed44.cap256.json",
+      "sha256": "1711a76a000c8cd02e25d769505ad5bf8e179450a6644edc20cb7dc39bfef31c",
+      "seed": 44,
+      "tokens": 51,
+      "verdict": "normal",
+      "reason": "Full raw text and pinned boundary reviewed: grammatical nondegenerate continuation and canonical bash call. No patch correctness or generated execution claim.",
+      "trace_counters_delta": {
+        "model_replays": 50,
+        "sample_replays": 50,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 50,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.pytest-dev__pytest-5787.call1.onset.seed42.cap256.json",
+      "sha256": "94a5badd066e534d6eb82cc77bc40f7f3a8722e3379bfc2e0ad1d640338f3b8d",
+      "seed": 42,
+      "tokens": 16,
+      "verdict": "normal",
+      "reason": "Full raw text and pinned boundary reviewed: grammatical nondegenerate continuation and canonical bash call. No patch correctness or generated execution claim.",
+      "trace_counters_delta": {
+        "model_replays": 15,
+        "sample_replays": 15,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 15,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.pytest-dev__pytest-5787.call1.onset.seed43.cap256.json",
+      "sha256": "14b07db9b134b62ec366765e5bf1c209123f6782faed02a766aa1561d55f3255",
+      "seed": 43,
+      "tokens": 15,
+      "verdict": "normal",
+      "reason": "Full raw text and pinned boundary reviewed: grammatical nondegenerate continuation and canonical bash call. No patch correctness or generated execution claim.",
+      "trace_counters_delta": {
+        "model_replays": 14,
+        "sample_replays": 14,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 14,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.pytest-dev__pytest-5787.call1.onset.seed44.cap256.json",
+      "sha256": "697cc8fd18c1022d5e0d48fe149403180075565b2469b1441698bfae43a5eaec",
+      "seed": 44,
+      "tokens": 16,
+      "verdict": "normal",
+      "reason": "Full raw text and pinned boundary reviewed: grammatical nondegenerate continuation and canonical bash call. No patch correctness or generated execution claim.",
+      "trace_counters_delta": {
+        "model_replays": 15,
+        "sample_replays": 15,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 15,
+        "captures": 0
+      }
+    }
+  ]
+}

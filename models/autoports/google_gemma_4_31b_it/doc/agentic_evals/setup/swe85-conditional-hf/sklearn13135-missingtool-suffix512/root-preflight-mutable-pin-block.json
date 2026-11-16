@@ -1,0 +1,6 @@
+{
+  "status": "preflight_blocked_no_device_launch",
+  "time_unix": 1794727277.3402283,
+  "reason": "source-hashes pinned live learned.json; root canonical status maintenance changed this mutable record. Freeze evidence snapshot or exclude from runtime source pins, preserving all actual model/code/config/fixture pins.",
+  "stop_retained": true
+}

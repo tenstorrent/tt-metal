@@ -1,0 +1,70 @@
+{
+  "status": "candidate_only_not_admitted_not_run",
+  "objective": "Test whether P19 HiFi4 SDPA Q partition choice changes attention outputs on identical real Q and K/V cache, and whether offset32 Q32/K32 replay matches its full-query counterpart through absolute rows32\u2013287.",
+  "scope": "Correctness-only reduced real layer0, using the first1024 natural-book token IDs, exact P19 precision config and model revision. Attention output only; no output projection/CCL/MLP or serving metric.",
+  "hypothesis": "For P19 BF16 activations, BFP8 KV and HiFi4 SDPA, the fresh-path Q128/K32 attention and Q32/K32 attention could differ numerically on identical rotated Q and cached K/V. Existing resumed-prefill stage capture reports Q/K/V exact and the first non-exact stage at attention input for starts32/64; the full-resume position summary shows deterioration within the first256 rows. Neither proves Q partition caused it.",
+  "design": {
+    "model_layers": [
+      0
+    ],
+    "source_prefill_tokens": 1024,
+    "prompt_file": "models/tt_transformers/tests/tale-of-two-cities.txt.bz2",
+    "prompt_file_sha256": "25d33cc39a17a4a576712e29056053cd8f818f1288e7b2a8abd668225e630e1e",
+    "tokenizer_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+    "precision_config": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/bf16-hifi4-kv-down-bfp8-accuracy-p19/precision.json",
+    "precision_config_sha256": "540760ea34cea22459c9248b4ce8c90ad1b34e000b18e82b70552e45fd766fad",
+    "strict_policy_guard": true,
+    "query_capture": "Capture actual rotated layer0 Q from _qkv during a single P19 1024-token prefill; K/V are written into the real BFP8 paged cache. All arms reuse the captured Q/cache/page table.",
+    "absolute_query_range": [
+      32,
+      288
+    ],
+    "band_size": 32,
+    "same_query_assertion": "Exact equality between Q[32:288] and the extracted query slice; Q and cache digests recorded; K/V cache and page table digests checked unchanged across arms.",
+    "arms": [
+      {
+        "name": "full_q128_k32",
+        "q_chunk_size": 128,
+        "k_chunk_size": 32,
+        "offset": 0
+      },
+      {
+        "name": "full_q32_k32",
+        "q_chunk_size": 32,
+        "k_chunk_size": 32,
+        "offset": 0
+      },
+      {
+        "name": "offset_slice_q32_k32",
+        "q_chunk_size": 32,
+        "k_chunk_size": 32,
+        "offset": 32,
+        "query": "same captured Q rows32:288"
+      },
+      {
+        "name": "full_q128_k128",
+        "q_chunk_size": 128,
+        "k_chunk_size": 128,
+        "offset": 0,
+        "role": "secondary reference only; differs in K partition too"
+      }
+    ],
+    "primary_isolated_comparison": "full_q128_k32 vs full_q32_k32; same whole Q, absolute origin0, K32 and cache.",
+    "secondary_offset_comparison": "full_q32_k32 vs offset_slice_q32_k32; same Q values for positions32:288 and same K32/cache/table, with the latter using absolute chunk offset32."
+  },
+  "prior_evidence": {
+    "full_resume_after_ccl_fix": "9/14 cases remain failing; no policy selection or gate relaxation.",
+    "position_evidence": "P19 resume-after-position-summary shows high divergence in the absolute64:96 band for start64 in both lengths; layer-0 stage capture reports Q/K/V exact and attention input first non-exact for starts32/64; starts256 remain exact through captured stages.",
+    "scope": "This probe examines attention arithmetic at one layer/input only; it cannot establish full-model continuation sufficiency."
+  },
+  "source_artifacts": {
+    "autodebug": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/p19-resume-investigation/AUTODEBUG.md",
+    "stage_capture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/p19-resume-investigation/p19-resume-stages.json",
+    "stage_capture_sha256": "20b023c203cfa4a35bf0223a63eb60f929a25132c28d3286683e3161e200b439",
+    "resume_position_summary": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/p19-resume-investigation/resume-after-position-summary.json",
+    "resume_completion": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/p19-resume-investigation/resume-after-completion.json",
+    "ccl_probe_completion": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/p19-resume-investigation/ccl-probe-completion.json"
+  },
+  "no_production_edits": true,
+  "no_launch_or_admission": true
+}

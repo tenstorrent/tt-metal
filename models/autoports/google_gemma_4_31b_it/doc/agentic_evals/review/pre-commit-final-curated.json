@@ -1,0 +1,17 @@
+{
+  "exit_code": 0,
+  "files": 2188,
+  "wall_seconds": 1.9394216537475586,
+  "archive": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/bringup/artifacts/stage12-final-hook-snapshot",
+  "log": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/review/pre-commit-final-curated.log",
+  "network": "GIT_ALLOW_PROTOCOL=file; PIP_NO_INDEX=1; existing cached hook environments",
+  "changes_during_hooks": [
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/precision-pareto/q32-production/generate.py",
+      "before_sha256": "ce78303fcf089547137037226e998cbb4484dabeead820ceca54401dcd71dfa7",
+      "after_sha256": "81a1df115463c51739a298a2b5adb78083223be9cabd9860e4953ee0753fb21e",
+      "change": "Split/reordered imports; same imported names and aliases; non-import AST identical."
+    }
+  ],
+  "historical_pins": "One chart generator import-format change archived; no model source or evidence artifacts changed. Earlier source/artifact snapshot provenance remains applicable."
+}

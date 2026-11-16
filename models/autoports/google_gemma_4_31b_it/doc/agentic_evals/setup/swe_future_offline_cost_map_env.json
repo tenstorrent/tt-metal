@@ -1,0 +1,16 @@
+{
+  "status": "prepared_only_not_applied",
+  "agent_env_additions": {
+    "LITELLM_LOCAL_MODEL_COST_MAP": "True"
+  },
+  "reason": "Use bundled price map and suppress automatic external metadata fetch; cost_tracking ignore_errors unchanged.",
+  "source_evidence": {
+    "agent_env": {
+      "LITELLM_LOCAL_MODEL_COST_MAP": "True"
+    },
+    "source": "bringup/artifacts/v5-swe-runtime/root-local/share/uv/tools/mini-swe-agent/lib/python3.12/site-packages/litellm/litellm_core_utils/get_model_cost_map.py",
+    "sha256": "414dd7d7f0b24dff238316eec07aeb647c6e6fc9682d4110d6c3e14c2dd7be9e",
+    "guards": "lines462 and746 return bundled local map when env.lower()==true; source header documents env.",
+    "applied_to_running_job": false
+  }
+}

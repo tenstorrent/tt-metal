@@ -1,0 +1,15 @@
+{
+  "schema": "swe85-fetch-next-action-v1",
+  "status": "CPU prepared only; no correct branch passed",
+  "tasks": [
+    {
+      "task": "scikit-learn__scikit-learn-25102",
+      "call": 5,
+      "manifest": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/scikit-learn__scikit-learn-25102/manifest.json",
+      "status": "semantic execution pending",
+      "scope": "Inspect local target source in existing testbed environment without upgrading target. Next investigation action only; not completed fix. Preserves exact reproduction helper but does not execute its invalid np.dtype(category) statement. Inspects local selector transformation; no prior tracked source edits."
+    }
+  ],
+  "n": 1,
+  "revision": "842da3794eaa0b77d5f08bae87a17459d91ff475"
+}

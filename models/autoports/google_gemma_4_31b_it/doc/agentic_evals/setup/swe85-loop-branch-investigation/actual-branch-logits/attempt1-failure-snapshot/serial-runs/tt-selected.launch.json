@@ -1,0 +1,64 @@
+{
+  "candidate_admission_sha256": "3733589f29cafa52d03f8f457ea1900448050c1353c9dfb66af7da0d66e870bd",
+  "commands": [
+    {
+      "argv": [
+        "timeout",
+        "1800",
+        "env",
+        "HF_HUB_OFFLINE=1",
+        "HF_DATASETS_OFFLINE=1",
+        "HF_HUB_DISABLE_TELEMETRY=1",
+        "READINESS_TRACE_REGION_SIZE=134217728",
+        "OMP_NUM_THREADS=16",
+        "MKL_NUM_THREADS=16",
+        "OPENBLAS_NUM_THREADS=16",
+        "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tools/actual_branch_logits.py",
+        "--execute",
+        "--mode",
+        "tt-selected",
+        "--case",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-loop-branch-investigation/actual-branch-logits/fixture/anomaly.psf__requests-5414.call11.onset.suffix2048.private.json",
+        "--branches",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-loop-branch-investigation/actual-branch-logits/branches.json",
+        "--build-kwargs-file",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/head_bfp8_build_kwargs.json",
+        "--output-prefix",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-loop-branch-investigation/actual-branch-logits/outputs/tt-selected"
+      ],
+      "name": "tt-selected",
+      "timeout_seconds": 1800
+    }
+  ],
+  "h9_terminal_evidence": {
+    "admission_sha256": "74640276fdf5e463fa968d5d188994622759df96f09d4f408e02712b7d09ae66",
+    "group_count": 8,
+    "progress_sha256": "4a9363429f50949031da53c13f3156c2bd399f756d227f353babaafd065ec773",
+    "root_reviews": {
+      "01": "0c6e547db4f93a2c7bfb8e0278deba56ac643a79c633ade638db045bdc436803",
+      "02": "27fb72254a1ee6149b04d013174a471bcaeab60e69bf982e4fe357c901a0d85a",
+      "03": "7f119e66e90420977079dec6a9d65c09b00b851ba8c7e9ae786ee6188635e071",
+      "04": "c88541915f789412656370cd353ba50dfa62e68e5624c33d4b348901d9227503",
+      "05": "244884fec49742320618150b86258143478976547e05c2196b6a368f9146a3c5",
+      "06": "4f2f0dd6941f59a507139aee30b6013f789bca0a9769d15ba65f696fd8de5a5c",
+      "07": "44e493ccda9f00b75e8ae562c79880fd7da2d5d7beb3262a135a4d56bcae8127",
+      "08": "3261fbdcd51ce4584887196549fb347419bc705d19cee2b2af075f5494b91ffd"
+    },
+    "root_terminal_review_sha256": "e7109b54dafdd7f8507703b7f0c31795ee2678b56f9a543a1ef2d0b4f6f36cd5"
+  },
+  "mode": "tt-selected",
+  "resource_preflight": {
+    "active_hf_or_probe_processes": [],
+    "fuser": {
+      "active": false,
+      "output": ""
+    },
+    "mem_available_bytes": null,
+    "proc_device_owners": [],
+    "required_mem_available_bytes_for_hf": null
+  },
+  "started_unix": 1794739535.6066864,
+  "status": "launched"
+}

@@ -1,0 +1,38 @@
+{
+  "status": "root_text_and_pinned_prefix_reviewed",
+  "rows": [
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap512.seed42",
+      "seed": 42,
+      "mode": "full",
+      "verdict": "inconclusive",
+      "reason": "After canonical call:bash, varying patch script continues into implementation or cleanup/testing at512. No malformed tool-name or repetitive collapse; extend1024.",
+      "tokens": 512,
+      "original256_prefix_identical": true,
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/full/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap512.seed42.json",
+      "source_sha256": "e2b642959c7025ede1de4927863e40c349afe4672dcb98809e1f846f40da5dc2"
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap512.seed43",
+      "seed": 43,
+      "mode": "full",
+      "verdict": "inconclusive",
+      "reason": "After canonical call:bash, varying patch script continues into implementation or cleanup/testing at512. No malformed tool-name or repetitive collapse; extend1024.",
+      "tokens": 512,
+      "original256_prefix_identical": true,
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/full/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap512.seed43.json",
+      "source_sha256": "fd94ec9981ba9a6d12cf0c1695a0cad0994a9eb3c0fcd87d8f602666d3a3f707"
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap512.seed44",
+      "seed": 44,
+      "mode": "full",
+      "verdict": "inconclusive",
+      "reason": "After canonical call:bash, varying patch script continues into implementation or cleanup/testing at512. No malformed tool-name or repetitive collapse; extend1024.",
+      "tokens": 512,
+      "original256_prefix_identical": true,
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/runs/full/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap512.seed44.json",
+      "source_sha256": "b66d7be79d6633ab249243ef2f1cc62014662e820fa7e51515d6250804f93c95"
+    }
+  ]
+}

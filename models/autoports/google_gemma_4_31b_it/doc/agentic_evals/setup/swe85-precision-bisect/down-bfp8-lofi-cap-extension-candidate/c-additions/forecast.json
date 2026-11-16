@@ -1,0 +1,63 @@
+{
+  "status": "host_planning_proxy_not_measurement",
+  "basis": "Same-policy P3 down-bfp8-lofi completed trials, with one measured P3 model-load cost; each row is a fresh full capped run from its exact original case fixture, not in-place continuation.",
+  "load_source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/load.json",
+  "load_sha256": "3c1370e1c8d7a25128ac7e35548f1b77198f3ed0d0c4a1c039687b9c8da3a086",
+  "load_wall_s": 137.96008633519523,
+  "per_case": [
+    {
+      "candidate_job_name": "p3capext.anomaly.requests2931.call20.canonicalprefix.seed43.cap512",
+      "source_result_sha256": "431c7e7b659f01cf7b5c1f7d42d1cd91ae5b5855f5728ff3a49805b682cad08b",
+      "source_manifest_index": 43,
+      "old_tokens": 256,
+      "new_cap": 512,
+      "measured_decode_tokens": 255,
+      "measured_decode_wall_s": 8.175462888088077,
+      "measured_decode_tokens_per_s": 31.19089444727876,
+      "measured_free_wall_s_including_prefill": 9.843154591042548,
+      "estimated_prefill_first_token_and_other_overhead_s": 1.6676917029544711,
+      "estimated_new_decode_tokens": 511,
+      "estimated_full_rerun_free_wall_s": 18.05067811790744,
+      "method": "reuse matched P3 measured non-decode overhead and same-trial user decode rate; forecast fresh full rerun, not an incremental suffix-only cost"
+    },
+    {
+      "candidate_job_name": "p3capext.anomaly.sphinx-doc__sphinx-10323.call57.onset.seed42.cap1024",
+      "source_result_sha256": "08cf0a251b59d9661bd8516a9887849347afd25fa136def0f8316869606f5b35",
+      "source_manifest_index": 48,
+      "old_tokens": 512,
+      "new_cap": 1024,
+      "measured_decode_tokens": 511,
+      "measured_decode_wall_s": 18.81726303207688,
+      "measured_decode_tokens_per_s": 27.155915242770586,
+      "measured_free_wall_s_including_prefill": 37.030685090925545,
+      "estimated_prefill_first_token_and_other_overhead_s": 18.213422058848664,
+      "estimated_new_decode_tokens": 1023,
+      "estimated_full_rerun_free_wall_s": 55.88477251249768,
+      "method": "reuse matched P3 measured non-decode overhead and same-trial user decode rate; forecast fresh full rerun, not an incremental suffix-only cost"
+    },
+    {
+      "candidate_job_name": "p3capext.anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset.seed44.cap512",
+      "source_result_sha256": "edaecba8bfa9db46f3b8f901a3cbf4e57ad1d54c05f8d34369d186bd3f159440",
+      "source_manifest_index": 62,
+      "old_tokens": 256,
+      "new_cap": 512,
+      "measured_decode_tokens": 255,
+      "measured_decode_wall_s": 9.411357336910442,
+      "measured_decode_tokens_per_s": 27.09492274827505,
+      "measured_free_wall_s_including_prefill": 28.10398912616074,
+      "estimated_prefill_first_token_and_other_overhead_s": 18.6926317892503,
+      "estimated_new_decode_tokens": 511,
+      "estimated_full_rerun_free_wall_s": 37.552253746745336,
+      "method": "reuse matched P3 measured non-decode overhead and same-trial user decode rate; forecast fresh full rerun, not an incremental suffix-only cost"
+    }
+  ],
+  "estimated_case_wall_s": 111.48770437715046,
+  "point_total_wall_s": 249.4477907123457,
+  "range_seconds": [
+    174.61345349864197,
+    324.2821279260494
+  ],
+  "range_note": "\u00b130% planning envelope around measured-rate projection, not a confidence interval or guarantee. No allowance for queue contention beyond envelope.",
+  "timeout_seconds": 1800,
+  "candidate_not_admitted_or_launched": true
+}

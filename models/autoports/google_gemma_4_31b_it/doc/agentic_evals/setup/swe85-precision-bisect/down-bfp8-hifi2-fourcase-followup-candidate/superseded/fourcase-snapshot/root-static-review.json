@@ -1,0 +1,19 @@
+{
+  "status": "root_static_review_candidate_not_launched",
+  "at_unix": 1794742432.067537,
+  "reviewer": "root",
+  "accepted": true,
+  "checks": [
+    "Only down weight recipe and fidelity differ: BFP8 LoFi to BFP8 HiFi2; config ID renamed",
+    "Exact P3 case content except output names; same fixture, seed, cap, branches and trials",
+    "Existing runner, timeout1200, batch1; no source/default changes"
+  ],
+  "pins": {
+    "command.json": "0cc785c2ddf68df4b5c9a010cc2913024a2547194287b790b793bbed196a077e",
+    "forecast.json": "c35007206f40f3fe8d780e27ee4ccd310fc5178f44416597282dcfcf8bbd9ab4",
+    "down_bfp8_hifi2_build_kwargs.json": "7ed91a1ca7a1765cbc14b1e6e9de9184b4dc7e12a9eabf5c36173672a0b00fbc",
+    "candidate-cases.json": "0b5a6330ed64ed4f4d3b686876fa7852c55d1fddc17907b349b52133d7df78c4",
+    "down_bfp8_hifi2_precision.json": "118dceaf55f938ac3521684d77953390e1ee5ba0c4cf893c3195b403910b93b8"
+  },
+  "next": "After AB selected/full/compare terminal and forecast reconciliation; serialized hardware preflight required."
+}

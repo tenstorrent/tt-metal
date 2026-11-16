@@ -1,0 +1,18 @@
+{
+  "status": "driver_integrity_frozen_candidate_only",
+  "candidate_pins": {
+    "proposal_sha256": "e1f4c1470bd6ec1aaeb67177b1cebe57ab15b2421866c74966493d5ecb5775c7",
+    "commands_sha256": "9e3acdf87bba6741df8696348ff911755748e0222849ad59ca65f3c8ad908fb6",
+    "forecast_sha256": "dd1965cefce35324a08a0c95aa6b98a6d750024b81cbccee5451b90a9e0f7750",
+    "source_integrity_sha256": "4a2ec157bc834c0c9fc9a2f2900ccc82339e5e058e7ec927efec45e017f0aa31"
+  },
+  "driver_sha256": "7ac8788a510d75ab459a2e481b9b3f887a967aaec458f30df5e6c6385efc3601",
+  "tests_sha256": "dedde3ba279b3754b638a460daaf8dcbcef50e4e99631f7a2ee169a9621db095",
+  "contract_sha256": "3154a43ebaca1a1e2b35348a536bddd8f69599038e1f22a0b50213783bbefbdb",
+  "runner_sha256": "aafe67c88bb5a1eb38b8718570bbddd5749e2a9ecbb9dd19cdb100a49572c03e",
+  "roster_review_sha256": "1c40faf03d90a278aa971bdb24530ac0c8873eb8d18be0bb68f4d6c402ab4d32",
+  "groups": 8,
+  "observations": 20,
+  "admission_status": "none_admitted",
+  "execution_status": "no_inference"
+}

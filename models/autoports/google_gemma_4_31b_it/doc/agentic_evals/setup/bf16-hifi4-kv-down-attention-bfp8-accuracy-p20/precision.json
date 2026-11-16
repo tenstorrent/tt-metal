@@ -1,0 +1,29 @@
+{
+  "config_id": "stage12_bf16_hifi4_kv_down_attention_bfp8_p20",
+  "weight_groups": {
+    "attention": "bfp8_lofi",
+    "mlp": "bf16",
+    "down": "bfp8_lofi",
+    "lm_head": "bf16"
+  },
+  "layer_exceptions": {},
+  "compute_fidelities": {
+    "attention": "LoFi",
+    "mlp": "HiFi4",
+    "down": "LoFi",
+    "lm_head": "HiFi4"
+  },
+  "activation_dtype": "bfloat16",
+  "residual_dtype": "bfloat16",
+  "ccl_dtype": {
+    "prefill": "bfloat16",
+    "decode": "bfloat16"
+  },
+  "kv_cache_dtype": "bfloat8_b",
+  "logits_dtype": "bfloat16",
+  "sampling_dtype": "bfloat16",
+  "embedding_dtype": "bfloat16",
+  "norm_dtype": "bfloat16",
+  "max_seq_len": 262144,
+  "sdpa_compute_fidelity": "HiFi4"
+}

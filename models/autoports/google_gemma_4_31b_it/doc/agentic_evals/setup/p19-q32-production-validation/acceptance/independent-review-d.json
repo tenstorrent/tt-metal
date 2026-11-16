@@ -1,0 +1,235 @@
+{
+  "review_scope": "Independent read-only review of completed production Q32 broad acceptance; does not decide/select serving precision.",
+  "reviewed_unix": 1794774049.16321,
+  "disposition": "pass_for_fixed108_admission_not_policy_selection",
+  "completion": {
+    "start_unix": 1794772980.4598236,
+    "end_unix": 1794773945.7663949,
+    "exit_code": 0,
+    "wall_seconds": 965.3065712451935
+  },
+  "forecast_seconds": {
+    "low": 800,
+    "point": 1500,
+    "high": 3000
+  },
+  "forecast_hit": true,
+  "admission_checks": {
+    "status": "admitted",
+    "trace_alloc_tracking": "1",
+    "command_has_allocation_tracking": true,
+    "deadline_unix": 1794791725,
+    "owner_preflight_returncode": 1
+  },
+  "source_integrity": {
+    "manifest_head": "8a68d14dbf6788609fe0356d2a8c67e2b37b08d1",
+    "manifest_source_count": 17,
+    "manifest_mismatches": [],
+    "production_q32_source_sha256": "878c61052aee1ddd6f4afc78c4e4bbcda2c894a5a5878d01531f860e97006d99"
+  },
+  "accuracy": {
+    "reference_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+    "scope": "full60layers",
+    "prefill_top1": 1.0,
+    "decode_top1_repeats": [
+      0.98,
+      0.98,
+      0.98
+    ],
+    "decode_top5_repeats": [
+      1.0,
+      1.0,
+      1.0
+    ],
+    "natural_top1": 0.91015625,
+    "natural_matches_top1": 466,
+    "natural_total": 512,
+    "natural_top5": 1.0,
+    "counters": {
+      "prefill": {
+        "model_replays": 0,
+        "sample_replays": 0,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 60,
+        "readbacks": 1,
+        "captures": 0
+      },
+      "decode": {
+        "model_replays": 297,
+        "sample_replays": 300,
+        "token_refreshes": 300,
+        "position_refreshes": 3,
+        "page_refreshes": 0,
+        "readbacks": 300,
+        "captures": 0
+      },
+      "natural": {
+        "model_replays": 511,
+        "sample_replays": 512,
+        "token_refreshes": 512,
+        "position_refreshes": 1,
+        "page_refreshes": 60,
+        "readbacks": 512,
+        "captures": 0
+      }
+    },
+    "assessment": "Meets configured broad acceptance bars: prefill 100/100, each decode repeat 98/100, natural 466/512 (91.0156%) with 512/512 top5 and top100."
+  },
+  "runtime_policy": {
+    "config_id": "stage12_bf16_hifi4_kv_down_bfp8_p19",
+    "weight_groups": {
+      "attention": "bf16",
+      "mlp": "bf16",
+      "down": "bfp8_lofi",
+      "lm_head": "bf16"
+    },
+    "compute_fidelities": {
+      "attention": "HiFi4",
+      "mlp": "HiFi4",
+      "down": "LoFi",
+      "lm_head": "HiFi4"
+    },
+    "kv_cache_dtype": "bfloat8_b",
+    "activation_dtype": "bfloat16",
+    "sdpa_compute_fidelity": "HiFi4",
+    "max_seq_len": 262144,
+    "layer_count": 60,
+    "layer_exception_count": 0,
+    "layer_policies_consistent": true
+  },
+  "qualitative": {
+    "prompt_format_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+    "tokenizer_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+    "all_six_ids_match": true,
+    "raw_text_inspected": true,
+    "cases": [
+      {
+        "id": "shared_0",
+        "prompt_tokens": 21,
+        "hf_generated_tokens": 19,
+        "tt_generated_tokens": 19,
+        "first_divergence": null,
+        "exact_token_match": true,
+        "tt_natural_stop": true
+      },
+      {
+        "id": "shared_1",
+        "prompt_tokens": 25,
+        "hf_generated_tokens": 128,
+        "tt_generated_tokens": 128,
+        "first_divergence": 21,
+        "exact_token_match": false,
+        "tt_natural_stop": false
+      },
+      {
+        "id": "shared_2",
+        "prompt_tokens": 35,
+        "hf_generated_tokens": 128,
+        "tt_generated_tokens": 128,
+        "first_divergence": 28,
+        "exact_token_match": false,
+        "tt_natural_stop": false
+      },
+      {
+        "id": "shared_3",
+        "prompt_tokens": 21,
+        "hf_generated_tokens": 128,
+        "tt_generated_tokens": 128,
+        "first_divergence": 83,
+        "exact_token_match": false,
+        "tt_natural_stop": false
+      },
+      {
+        "id": "shared_4",
+        "prompt_tokens": 27,
+        "hf_generated_tokens": 104,
+        "tt_generated_tokens": 104,
+        "first_divergence": null,
+        "exact_token_match": true,
+        "tt_natural_stop": true
+      },
+      {
+        "id": "shared_5",
+        "prompt_tokens": 23,
+        "hf_generated_tokens": 128,
+        "tt_generated_tokens": 128,
+        "first_divergence": 65,
+        "exact_token_match": false,
+        "tt_natural_stop": false
+      }
+    ],
+    "assessment": "All six bounded replies are coherent and on-prompt. Two are exact HF token matches and naturally stopped; four reach the 128-token cap with token divergence. These are bounded-prefix comparisons, not complete-answer correctness judgments."
+  },
+  "full_context": {
+    "scope": "full60layers",
+    "context_tokens": 262144,
+    "boundary_cases": [
+      {
+        "prompt_tokens": 262143,
+        "output": [
+          236795
+        ]
+      },
+      {
+        "prompt_tokens": 262144,
+        "output": [
+          35769
+        ]
+      }
+    ],
+    "last_decode_input_position": 262143,
+    "positions_after": [
+      262144
+    ],
+    "assessment": "Execution exercised both 262143- and 262144-token prompt boundaries and decoded at final legal input position 262143; this checks boundary execution, not semantic long-context quality."
+  },
+  "performance_diagnostic": {
+    "scope": "full60layers",
+    "input_tokens": 4096,
+    "generated_tokens": 128,
+    "batch_size": 1,
+    "concurrent_requests": 1,
+    "ttft_ms": 1167.1495148912072,
+    "decode_tps": 18.5037961501331,
+    "tracking": "1",
+    "assessment": "AR diagnostic only, not a vLLM serving-rate result; tracking=1 differs from historical tracking=0, so no speed comparison is inferred."
+  },
+  "other_checks": {
+    "long_prefix_tokens": 32083,
+    "long_prefix_contains_expected_label": true,
+    "long_prefix_expected_label": "ORCHID-742",
+    "long_prefix_generation_cap": 128,
+    "memory_inventory_owned_bytes": 19306540544,
+    "memory_inventory_allocator_bytes": 19307376640,
+    "run_log_failure_signature_counts": {
+      "Traceback": 0,
+      "AssertionError": 0,
+      "OutOfMemory": 0,
+      "allocation failed": 0
+    }
+  },
+  "limitations": [
+    "This review supports fixed108 follow-up admission only; it does not select the serving precision.",
+    "The 128-token qualitative comparisons are bounded prefixes.",
+    "Full-context results are boundary execution only.",
+    "The autoregressive timing is not vLLM performance.",
+    "Fixed108 post-Q32 anomaly comparison and serving validation remain pending."
+  ],
+  "artifact_sha256": {
+    "completion.json": "8b1543c595584a9f38c7579d96e39ae9ec8a440cb95e5ce1b4c29c4e314286bd",
+    "admission.json": "6ad420f0971305b9464d7abc15a3153f9f17d9632296e73316e1b7031f04bdf2",
+    "root-review.json": "6156597cae6f590d89b3b24382961aa197a178fea795ddfbf35b911601a063a5",
+    "run/source_manifest.json": "08eb7fe3de3051ab32b4d76fa2df2bc1a09dda977533c85c3345ed4e1ad31b0d",
+    "run/qualitative_prompt_format.json": "16e4bfd8857e67ee9ca39297c8521b30e8ceacf0c848783e83b1192ef331cb9c",
+    "run/qualitative_tt.json": "21efd97b319f6c554803dd68ed98604019ccb47ca1bacde84fdf1a2a37123837",
+    "run/qualitative_hf.json": "05c2ac233052909c2e785b9d36f819c52e95cecfcfd299eff81a6b1de3a174d6",
+    "run/readiness_accuracy.json": "3c14699f1a59053e40c07a3939a567af705579d35fb43419b34d6d626e8554ef",
+    "run/runtime_policy.json": "db381061657ecdbecaab977c428f47e9b12ab55ec73b8d4afb633db744050b76",
+    "run/aime24_prompt.json": "578790e2d9e5d7fad6d187bc6d733699c3514218ea5a42ca2bf9d25d7afdd4dd",
+    "run/full_context_post_barrier.json": "7cef036492930fa5857a0c42a99af57ee56fd4e3d442b03f0dac6d9715aa1610",
+    "run/performance_b1.json": "94e60675a2bbb621b0854ad239f2b79068b1f7867c0e0121bf46674a3ad5dabc",
+    "run/long_prefix.json": "c2b410c7c772d9c30027f3f9cbe5faf59b5cc51696d9a233364bb3a6893a719c",
+    "run/memory.json": "9053b70c348654139dc83502604c869711bab23667d86d0e1b50d6dc64e82ee1"
+  }
+}

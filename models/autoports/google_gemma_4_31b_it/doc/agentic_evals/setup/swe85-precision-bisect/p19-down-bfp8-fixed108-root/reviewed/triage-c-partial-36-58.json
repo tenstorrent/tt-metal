@@ -1,0 +1,1559 @@
+{
+  "status": "partial_independent_triage_rows_36_58_only",
+  "slice": [
+    36,
+    58
+  ],
+  "availability_basis": "Root notified that P19 rows36–58 were available; no later P19 rows inspected for this artifact.",
+  "panel": "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root",
+  "panel_manifest_sha256": "57193e4b91af3a31df00f0c92dbc0f2219fbce011e6533594e5244a93a3021ed",
+  "mapping_path": "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/triage-slice36-71-map.json",
+  "mapping_sha256": "d37b39dd43e12a1b395a00f0cbd4a8d59796059175d0afb3c204636d653e638c",
+  "full_precision_control_source": "setup/swe85-pilot-split85/runs/rest/full",
+  "full_precision_policy": "stage12_bf16_hifi4_diagnostic (all weight groups BF16, all HiFi4, activations/cache BF16)",
+  "counts": {
+    "normal": 15,
+    "reproduced_native_motif": 7,
+    "other_anomaly": 0,
+    "inconclusive": 1
+  },
+  "rows": [
+    {
+      "index": 36,
+      "case": "anomaly.pytest-dev__pytest-7432.call19.onset",
+      "seed": 42,
+      "free_token_cap": 256,
+      "verdict": "reproduced_native_motif",
+      "confidence": "high",
+      "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-18763-7432-controls/pytest-dev__pytest-7432.call19.onset.private.json",
+      "fixture_sha256": "436bf8f06cebc27f9ac206ab4c85c655b2c707145be67b8341f14288370807f5",
+      "prompt_tokens": 11095,
+      "prompt_token_ids_sha256": "d736c0dcaf372d481d9b7b7fc80e458e49ab4167af9c9e98f6b6148577c29f28",
+      "p19": {
+        "path": "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.pytest-dev__pytest-7432.call19.onset.seed42.cap256.json",
+        "sha256": "ec7088f6b0b9405fdeb20193f0247390757b18c620261ff5bf8a0fce70a4b706",
+        "runtime_config_id": "stage12_bf16_hifi4_kv_down_bfp8_p19",
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 42
+        },
+        "generated_tokens": 256,
+        "last_token_id": 172109,
+        "text_prefix": "^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/testbed/src/_pytest/assertion/rewrite.py\", line 360, in _rewrite_test\n    co = compile(tree, fn_, \"exec\", dont_inherit=True)\n",
+        "text_tail": "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^"
+      },
+      "exact_full_bf16_hifi4_control": {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/anomaly.pytest-dev__pytest-7432.call19.onset.json",
+        "sha256": "62dc8a7a0d36eaadf188803d4e1d08372a099dccb41aaa09ca7119710dfe2f07",
+        "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+        "same_prompt_token_ids": true,
+        "seed": 42,
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 42
+        },
+        "generated_tokens": 256,
+        "last_token_id": 172109,
+        "same_generated_token_sequence_as_p19": true
+      },
+      "same_fixture_reduced_precision_controls": {
+        "P3_down_BFP8_LoFi": {
+          "path": "setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.pytest-dev__pytest-7432.call19.onset.seed42.cap256.json",
+          "sha256": "31a546e7d507b42116d2a4c8f67ccb3211bf0a9bb4e91776105117eae62e7961",
+          "runtime_config_id": "stage12_swe85_down_bfp8_lofi_isolated_served_head_bfp8_lofi",
+          "seed": 42,
+          "generated_tokens": 256,
+          "last_token_id": 172109
+        },
+        "P6_attention_down_BFP8_LoFi": {
+          "path": "setup/swe85-precision-bisect/attention-down-bfp8-lofi-fixed108-candidate/runs/attention_down_bfp8_lofi_fixed108/anomaly.pytest-dev__pytest-7432.call19.onset.seed42.cap256.json",
+          "sha256": "c4ad01d795594e34f5ddf9ac841985168fc75abc436e590c05bac9360dcff95d",
+          "runtime_config_id": "stage12_swe85_attention_down_bfp8_lofi_fixed108",
+          "seed": 42,
+          "generated_tokens": 256,
+          "last_token_id": 172109
+        }
+      },
+      "scoped_hf_reference": {
+        "path": "setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/results/seed44-suffix512/anomaly.pytest-dev__pytest-7432.call19.onset.optional-suffix512.hf.private.json",
+        "result_sha256": "389d4c9c55f00e544dcacb209814a289e7c61af4dec2ec55ebfc265cd872cb63",
+        "seed_available": [
+          44
+        ],
+        "prompt_tokens": 512,
+        "suffix_ids_match": true,
+        "scope": "last512 prompt IDs only; short-context comparison; same seed only for P19 row38 seed44"
+      },
+      "evidence": "Exact same-seed full-BF16/HiFi4 output; begins with a traceback underline then repeats caret token through cap. P19 output is 256 tokens, still caret-dominated. No score/task-correctness claim.",
+      "limitation": "No task-score/correctness inference; full control is exact prompt+seed, while HF evidence is only the narrower scope recorded."
+    },
+    {
+      "index": 37,
+      "case": "anomaly.pytest-dev__pytest-7432.call19.onset",
+      "seed": 43,
+      "free_token_cap": 256,
+      "verdict": "reproduced_native_motif",
+      "confidence": "high",
+      "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.pytest-dev__pytest-7432.call19.onset.seed43.private.json",
+      "fixture_sha256": "2eaad18936f926fc558cc1f2361399238e80897e4cf3b1b849fc28fa620edc2a",
+      "prompt_tokens": 11095,
+      "prompt_token_ids_sha256": "d736c0dcaf372d481d9b7b7fc80e458e49ab4167af9c9e98f6b6148577c29f28",
+      "p19": {
+        "path": "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.pytest-dev__pytest-7432.call19.onset.seed43.cap256.json",
+        "sha256": "a367898432d1c5cc0c13ec6eeaea4e80b10e392df21b085556abc9872698d7bb",
+        "runtime_config_id": "stage12_bf16_hifi4_kv_down_bfp8_p19",
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 43
+        },
+        "generated_tokens": 256,
+        "last_token_id": 172109,
+        "text_prefix": "^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/testbed/src/_pytest/assertion/rewrite.py\", line 360, in _rewrite_test\n    co = compile(tree, fn_, \"exec\", dont_inherit=True)\n",
+        "text_tail": "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^"
+      },
+      "exact_full_bf16_hifi4_control": {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/anomaly.pytest-dev__pytest-7432.call19.onset.json",
+        "sha256": "62dc8a7a0d36eaadf188803d4e1d08372a099dccb41aaa09ca7119710dfe2f07",
+        "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+        "same_prompt_token_ids": true,
+        "seed": 43,
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 43
+        },
+        "generated_tokens": 256,
+        "last_token_id": 172109,
+        "same_generated_token_sequence_as_p19": true
+      },
+      "same_fixture_reduced_precision_controls": {
+        "P3_down_BFP8_LoFi": {
+          "path": "setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.pytest-dev__pytest-7432.call19.onset.seed43.cap256.json",
+          "sha256": "2a30e0170c8c4f1e0158736264f93db0c37bf315b7fa087e0761f3133996bc23",
+          "runtime_config_id": "stage12_swe85_down_bfp8_lofi_isolated_served_head_bfp8_lofi",
+          "seed": 43,
+          "generated_tokens": 256,
+          "last_token_id": 172109
+        },
+        "P6_attention_down_BFP8_LoFi": {
+          "path": "setup/swe85-precision-bisect/attention-down-bfp8-lofi-fixed108-candidate/runs/attention_down_bfp8_lofi_fixed108/anomaly.pytest-dev__pytest-7432.call19.onset.seed43.cap256.json",
+          "sha256": "557cc620e5b6ef449eefb5b230f15ade89dd90b3a439459ca7748e04ba631104",
+          "runtime_config_id": "stage12_swe85_attention_down_bfp8_lofi_fixed108",
+          "seed": 43,
+          "generated_tokens": 256,
+          "last_token_id": 172109
+        }
+      },
+      "scoped_hf_reference": {
+        "path": "setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/results/seed44-suffix512/anomaly.pytest-dev__pytest-7432.call19.onset.optional-suffix512.hf.private.json",
+        "result_sha256": "389d4c9c55f00e544dcacb209814a289e7c61af4dec2ec55ebfc265cd872cb63",
+        "seed_available": [
+          44
+        ],
+        "prompt_tokens": 512,
+        "suffix_ids_match": true,
+        "scope": "last512 prompt IDs only; short-context comparison; same seed only for P19 row38 seed44"
+      },
+      "evidence": "Exact same-seed full-BF16/HiFi4 output; traceback context followed by caret repetition through cap. P19 output reaches 256-token cap. No score/task-correctness claim.",
+      "limitation": "No task-score/correctness inference; full control is exact prompt+seed, while HF evidence is only the narrower scope recorded."
+    },
+    {
+      "index": 38,
+      "case": "anomaly.pytest-dev__pytest-7432.call19.onset",
+      "seed": 44,
+      "free_token_cap": 256,
+      "verdict": "reproduced_native_motif",
+      "confidence": "high",
+      "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.pytest-dev__pytest-7432.call19.onset.seed44.private.json",
+      "fixture_sha256": "5dbb2f59dbc730651a720f58734568c2dc6a5839aef74be2be5d66b99c6f8eb5",
+      "prompt_tokens": 11095,
+      "prompt_token_ids_sha256": "d736c0dcaf372d481d9b7b7fc80e458e49ab4167af9c9e98f6b6148577c29f28",
+      "p19": {
+        "path": "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.pytest-dev__pytest-7432.call19.onset.seed44.cap256.json",
+        "sha256": "82c3e07f27b68ef21efb13143fdabf09c7d9709a343dec885a236c20eaf33e0e",
+        "runtime_config_id": "stage12_bf16_hifi4_kv_down_bfp8_p19",
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 44
+        },
+        "generated_tokens": 256,
+        "last_token_id": 172109,
+        "text_prefix": "^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/testbed/src/_pytest/assertion/rewrite.py\", line 360, in _rewrite_test\n    co = compile(tree, fn_, \"exec\", dont_inherit=True)\n",
+        "text_tail": "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^"
+      },
+      "exact_full_bf16_hifi4_control": {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/anomaly.pytest-dev__pytest-7432.call19.onset.json",
+        "sha256": "62dc8a7a0d36eaadf188803d4e1d08372a099dccb41aaa09ca7119710dfe2f07",
+        "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+        "same_prompt_token_ids": true,
+        "seed": 44,
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 44
+        },
+        "generated_tokens": 256,
+        "last_token_id": 172109,
+        "same_generated_token_sequence_as_p19": true
+      },
+      "same_fixture_reduced_precision_controls": {
+        "P3_down_BFP8_LoFi": {
+          "path": "setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.pytest-dev__pytest-7432.call19.onset.seed44.cap256.json",
+          "sha256": "e5bf9e1881ab9558d1b08f4dad677cad4cf6574bc78d64ef748e082545d99a7f",
+          "runtime_config_id": "stage12_swe85_down_bfp8_lofi_isolated_served_head_bfp8_lofi",
+          "seed": 44,
+          "generated_tokens": 256,
+          "last_token_id": 172109
+        },
+        "P6_attention_down_BFP8_LoFi": {
+          "path": "setup/swe85-precision-bisect/attention-down-bfp8-lofi-fixed108-candidate/runs/attention_down_bfp8_lofi_fixed108/anomaly.pytest-dev__pytest-7432.call19.onset.seed44.cap256.json",
+          "sha256": "b105eb9f02d5e2ec49240a6080156a4ace05909852f3d27dee29d95ae94c6f70",
+          "runtime_config_id": "stage12_swe85_attention_down_bfp8_lofi_fixed108",
+          "seed": 44,
+          "generated_tokens": 256,
+          "last_token_id": 172109
+        }
+      },
+      "scoped_hf_reference": {
+        "path": "setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/results/seed44-suffix512/anomaly.pytest-dev__pytest-7432.call19.onset.optional-suffix512.hf.private.json",
+        "result_sha256": "389d4c9c55f00e544dcacb209814a289e7c61af4dec2ec55ebfc265cd872cb63",
+        "seed_available": [
+          44
+        ],
+        "prompt_tokens": 512,
+        "suffix_ids_match": true,
+        "scope": "last512 prompt IDs only; short-context comparison; same seed only for P19 row38 seed44"
+      },
+      "evidence": "Exact same-seed full-BF16/HiFi4 output; traceback context followed by caret repetition through cap. P19 output reaches 256-token cap. Same-seed HF suffix512 result is scoped shorter-context evidence only.",
+      "limitation": "No task-score/correctness inference; full control is exact prompt+seed, while HF evidence is only the narrower scope recorded."
+    },
+    {
+      "index": 39,
+      "case": "anomaly.pytest10356-call14.canonicalprefix",
+      "seed": 42,
+      "free_token_cap": 256,
+      "verdict": "normal",
+      "confidence": "high",
+      "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-precision/pytest10356-call14/canonicalprefix/case.private.json",
+      "fixture_sha256": "07b45f8cd1bf0b42a6b7114dbf180eb5a1b0e4a31a80c1d3817660b24d50f71e",
+      "prompt_tokens": 11309,
+      "prompt_token_ids_sha256": "d8aa6f71f66f8504032ff30c08eb19b34f1419719df8de946b36123b626a1d92",
+      "p19": {
+        "path": "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.pytest10356-call14.canonicalprefix.seed42.cap256.json",
+        "sha256": "823fcb13fe7f8b4cdff909481590f86f12e034293f8fd2502123cf4639e8723c",
+        "runtime_config_id": "stage12_bf16_hifi4_kv_down_bfp8_p19",
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 42
+        },
+        "generated_tokens": 35,
+        "last_token_id": 50,
+        "text_prefix": "bash{command:<|\"|>grep -r \"pytestmark\" src/_pytest | grep -v \"__pycache__\" | head -n 50<|\"|>}<tool_call|><|tool_response>",
+        "text_tail": "ash{command:<|\"|>grep -r \"pytestmark\" src/_pytest | grep -v \"__pycache__\" | head -n 50<|\"|>}<tool_call|><|tool_response>"
+      },
+      "exact_full_bf16_hifi4_control": {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/anomaly.pytest10356-call14.canonicalprefix.json",
+        "sha256": "82ea62cfd69a48647332bf72ef380d6a9b53655459c1e80d9f15d281a146433f",
+        "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+        "same_prompt_token_ids": true,
+        "seed": 42,
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 42
+        },
+        "generated_tokens": 35,
+        "last_token_id": 50,
+        "same_generated_token_sequence_as_p19": true
+      },
+      "same_fixture_reduced_precision_controls": {
+        "P3_down_BFP8_LoFi": {
+          "path": "setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.pytest10356-call14.canonicalprefix.seed42.cap256.json",
+          "sha256": "21bed595ac96856a23b6c64e925d0e7c496dee4bcdf39d19a1bb1a7afa571758",
+          "runtime_config_id": "stage12_swe85_down_bfp8_lofi_isolated_served_head_bfp8_lofi",
+          "seed": 42,
+          "generated_tokens": 33,
+          "last_token_id": 50
+        },
+        "P6_attention_down_BFP8_LoFi": {
+          "path": "setup/swe85-precision-bisect/attention-down-bfp8-lofi-fixed108-candidate/runs/attention_down_bfp8_lofi_fixed108/anomaly.pytest10356-call14.canonicalprefix.seed42.cap256.json",
+          "sha256": "79512228dfc5cec854b42c551f7c016b5d6c882519df9f5897266523e7911cf5",
+          "runtime_config_id": "stage12_swe85_attention_down_bfp8_lofi_fixed108",
+          "seed": 42,
+          "generated_tokens": 33,
+          "last_token_id": 50
+        }
+      },
+      "scoped_hf_reference": null,
+      "evidence": "Finite canonical bash tool call searches pytestmark and ends in tool response at 35 generated tokens; exact same-seed full-BF16/HiFi4 control is a valid tool handoff. No task correctness assessment.",
+      "limitation": "No task-score/correctness inference; full control is exact prompt+seed, while HF evidence is only the narrower scope recorded."
+    },
+    {
+      "index": 40,
+      "case": "anomaly.pytest10356-call14.canonicalprefix",
+      "seed": 43,
+      "free_token_cap": 256,
+      "verdict": "normal",
+      "confidence": "high",
+      "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.pytest10356-call14.canonicalprefix.seed43.private.json",
+      "fixture_sha256": "7016a37129adb51c3d72523a404fa16afa1df64ccda3d55409db8c9d2cf13572",
+      "prompt_tokens": 11309,
+      "prompt_token_ids_sha256": "d8aa6f71f66f8504032ff30c08eb19b34f1419719df8de946b36123b626a1d92",
+      "p19": {
+        "path": "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.pytest10356-call14.canonicalprefix.seed43.cap256.json",
+        "sha256": "9ec762e65884b49bc3137de75901361d77e538e12b217235e4ab407dfbfce8fc",
+        "runtime_config_id": "stage12_bf16_hifi4_kv_down_bfp8_p19",
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 43
+        },
+        "generated_tokens": 33,
+        "last_token_id": 50,
+        "text_prefix": "bash{command:<|\"|>grep -r \"pytestmark\" src/ | grep -v \".pyc\" | head -n 50<|\"|>}<tool_call|><|tool_response>",
+        "text_tail": "bash{command:<|\"|>grep -r \"pytestmark\" src/ | grep -v \".pyc\" | head -n 50<|\"|>}<tool_call|><|tool_response>"
+      },
+      "exact_full_bf16_hifi4_control": {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/anomaly.pytest10356-call14.canonicalprefix.json",
+        "sha256": "82ea62cfd69a48647332bf72ef380d6a9b53655459c1e80d9f15d281a146433f",
+        "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+        "same_prompt_token_ids": true,
+        "seed": 43,
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 43
+        },
+        "generated_tokens": 33,
+        "last_token_id": 50,
+        "same_generated_token_sequence_as_p19": true
+      },
+      "same_fixture_reduced_precision_controls": {
+        "P3_down_BFP8_LoFi": {
+          "path": "setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.pytest10356-call14.canonicalprefix.seed43.cap256.json",
+          "sha256": "bb4a72f326857d232ff4f5e561a1742e9bebafb1150e8b1c9d87caf78a5650de",
+          "runtime_config_id": "stage12_swe85_down_bfp8_lofi_isolated_served_head_bfp8_lofi",
+          "seed": 43,
+          "generated_tokens": 34,
+          "last_token_id": 50
+        },
+        "P6_attention_down_BFP8_LoFi": {
+          "path": "setup/swe85-precision-bisect/attention-down-bfp8-lofi-fixed108-candidate/runs/attention_down_bfp8_lofi_fixed108/anomaly.pytest10356-call14.canonicalprefix.seed43.cap256.json",
+          "sha256": "aa33ec8ad6b7a4b30b1de5cbe5ca1fbdcc3efae3fd195ca19d437a3f77f0b685",
+          "runtime_config_id": "stage12_swe85_attention_down_bfp8_lofi_fixed108",
+          "seed": 43,
+          "generated_tokens": 34,
+          "last_token_id": 50
+        }
+      },
+      "scoped_hf_reference": null,
+      "evidence": "Finite canonical bash grep tool call and tool response at 33 tokens; exact same-seed full-BF16/HiFi4 control also completes a valid tool handoff.",
+      "limitation": "No task-score/correctness inference; full control is exact prompt+seed, while HF evidence is only the narrower scope recorded."
+    },
+    {
+      "index": 41,
+      "case": "anomaly.pytest10356-call14.canonicalprefix",
+      "seed": 44,
+      "free_token_cap": 256,
+      "verdict": "normal",
+      "confidence": "high",
+      "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.pytest10356-call14.canonicalprefix.seed44.private.json",
+      "fixture_sha256": "c987819b73937b9fedd8c6198958b49b41f87c9c3720881bf1cf5f14d46dc50c",
+      "prompt_tokens": 11309,
+      "prompt_token_ids_sha256": "d8aa6f71f66f8504032ff30c08eb19b34f1419719df8de946b36123b626a1d92",
+      "p19": {
+        "path": "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.pytest10356-call14.canonicalprefix.seed44.cap256.json",
+        "sha256": "ffc87c65ba7be33fef5e6ea0e1d05ec3e057e331e64f9fcd650a2f6a9d01a349",
+        "runtime_config_id": "stage12_bf16_hifi4_kv_down_bfp8_p19",
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 44
+        },
+        "generated_tokens": 34,
+        "last_token_id": 50,
+        "text_prefix": "bash{command:<|\"|>grep -r \"pytestmark\" src/ | grep -v \"__pycache__\" | head -n 50<|\"|>}<tool_call|><|tool_response>",
+        "text_tail": "bash{command:<|\"|>grep -r \"pytestmark\" src/ | grep -v \"__pycache__\" | head -n 50<|\"|>}<tool_call|><|tool_response>"
+      },
+      "exact_full_bf16_hifi4_control": {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/anomaly.pytest10356-call14.canonicalprefix.json",
+        "sha256": "82ea62cfd69a48647332bf72ef380d6a9b53655459c1e80d9f15d281a146433f",
+        "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+        "same_prompt_token_ids": true,
+        "seed": 44,
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 44
+        },
+        "generated_tokens": 34,
+        "last_token_id": 50,
+        "same_generated_token_sequence_as_p19": true
+      },
+      "same_fixture_reduced_precision_controls": {
+        "P3_down_BFP8_LoFi": {
+          "path": "setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.pytest10356-call14.canonicalprefix.seed44.cap256.json",
+          "sha256": "ca3be283457ed1b1e6c874bc45541783dbf88b262f602b4efbefcd5179ac5afe",
+          "runtime_config_id": "stage12_swe85_down_bfp8_lofi_isolated_served_head_bfp8_lofi",
+          "seed": 44,
+          "generated_tokens": 33,
+          "last_token_id": 50
+        },
+        "P6_attention_down_BFP8_LoFi": {
+          "path": "setup/swe85-precision-bisect/attention-down-bfp8-lofi-fixed108-candidate/runs/attention_down_bfp8_lofi_fixed108/anomaly.pytest10356-call14.canonicalprefix.seed44.cap256.json",
+          "sha256": "729ea91ad5fd8b23d47daf915362c4f0f06d9f26fe57eefc344d46a8f17badca",
+          "runtime_config_id": "stage12_swe85_attention_down_bfp8_lofi_fixed108",
+          "seed": 44,
+          "generated_tokens": 34,
+          "last_token_id": 50
+        }
+      },
+      "scoped_hf_reference": null,
+      "evidence": "Finite canonical bash grep tool call and tool response at 34 tokens; exact same-seed full-BF16/HiFi4 control completes a valid tool handoff.",
+      "limitation": "No task-score/correctness inference; full control is exact prompt+seed, while HF evidence is only the narrower scope recorded."
+    },
+    {
+      "index": 42,
+      "case": "anomaly.requests2931.call20.canonicalprefix",
+      "seed": 42,
+      "free_token_cap": 256,
+      "verdict": "reproduced_native_motif",
+      "confidence": "high",
+      "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-precision/requests2931-call20/canonicalprefix/case.private.json",
+      "fixture_sha256": "7f527603e08f61f5516745fc2fab496c6ae7020985372c8f71fd0459895c10f0",
+      "prompt_tokens": 8580,
+      "prompt_token_ids_sha256": "6b3e77fefce6aad9e93dbe6ec7cad68337025a9a70a4479c0c353b2f95260771",
+      "p19": {
+        "path": "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.requests2931.call20.canonicalprefix.seed42.cap256.json",
+        "sha256": "85b67f6a97dc0eddbf6a05f57dc23df96832f778b118136f040413e1575d7840",
+        "runtime_config_id": "stage12_bf16_hifi4_kv_down_bfp8_p19",
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 42
+        },
+        "generated_tokens": 256,
+        "last_token_id": 172109,
+        "text_prefix": "^^^\n  File \"/testbed/requests/api.py\", line 53, in request\n    return session.request(method=method, url=url, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^",
+        "text_tail": "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^"
+      },
+      "exact_full_bf16_hifi4_control": {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/anomaly.requests2931.call20.canonicalprefix.json",
+        "sha256": "b01fc94e30e4257457c3123c6cb843b5dca13adbd5cecede30b6e11c076ca67d",
+        "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+        "same_prompt_token_ids": true,
+        "seed": 42,
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 42
+        },
+        "generated_tokens": 256,
+        "last_token_id": 172109,
+        "same_generated_token_sequence_as_p19": false
+      },
+      "same_fixture_reduced_precision_controls": {
+        "P3_down_BFP8_LoFi": {
+          "path": "setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.requests2931.call20.canonicalprefix.seed42.cap256.json",
+          "sha256": "053e005cc03266adcb5f6ab6a6ae45dfbbae7be685a7c75ec1cfca13f8e90c38",
+          "runtime_config_id": "stage12_swe85_down_bfp8_lofi_isolated_served_head_bfp8_lofi",
+          "seed": 42,
+          "generated_tokens": 256,
+          "last_token_id": 172109
+        },
+        "P6_attention_down_BFP8_LoFi": {
+          "path": "setup/swe85-precision-bisect/attention-down-bfp8-lofi-fixed108-candidate/runs/attention_down_bfp8_lofi_fixed108/anomaly.requests2931.call20.canonicalprefix.seed42.cap256.json",
+          "sha256": "e852f6bf789d2bdd727a3bf306dc0a49004aecb05fa375be59fa93f7442c7bd3",
+          "runtime_config_id": "stage12_swe85_attention_down_bfp8_lofi_fixed108",
+          "seed": 42,
+          "generated_tokens": 256,
+          "last_token_id": 172109
+        }
+      },
+      "scoped_hf_reference": {
+        "path": "setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/results/seed42-suffix512/anomaly.requests2931.call20.canonicalprefix.optional-suffix512.hf.private.json",
+        "result_sha256": "a91e0aff64f340594679d595122c256f280e66e650a512ce34a85d52ed432156",
+        "seed_available": [
+          42
+        ],
+        "prompt_tokens": 512,
+        "suffix_ids_match": true,
+        "scope": "last512 prompt IDs only; short-context comparison; same seed only for P19 row42 seed42"
+      },
+      "evidence": "Traceback underline followed by long caret repetition through the 256-token cap. Exact same-seed full-BF16/HiFi4 control has the same caret-run motif; initial caret count differs. HF seed42 suffix512 has same final 512 prompt IDs, but not the full 8,580-token context.",
+      "limitation": "No task-score/correctness inference; full control is exact prompt+seed, while HF evidence is only the narrower scope recorded."
+    },
+    {
+      "index": 43,
+      "case": "anomaly.requests2931.call20.canonicalprefix",
+      "seed": 43,
+      "free_token_cap": 256,
+      "verdict": "reproduced_native_motif",
+      "confidence": "high",
+      "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.requests2931.call20.canonicalprefix.seed43.private.json",
+      "fixture_sha256": "46c8f0e924d5231eb779bab85611942cdc2aa1add396842d50c7559f64ddd359",
+      "prompt_tokens": 8580,
+      "prompt_token_ids_sha256": "6b3e77fefce6aad9e93dbe6ec7cad68337025a9a70a4479c0c353b2f95260771",
+      "p19": {
+        "path": "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.requests2931.call20.canonicalprefix.seed43.cap256.json",
+        "sha256": "c6cfc81950b93a9b3d9f38411c0c1509379339d23fa48aac9502126ff8ee6985",
+        "runtime_config_id": "stage12_bf16_hifi4_kv_down_bfp8_p19",
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 43
+        },
+        "generated_tokens": 256,
+        "last_token_id": 172109,
+        "text_prefix": "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/testbed/requests/api.py\", line 53, in request\n    return session.request(method=method, url=url, **kwargs)\n      ",
+        "text_tail": "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^"
+      },
+      "exact_full_bf16_hifi4_control": {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/anomaly.requests2931.call20.canonicalprefix.json",
+        "sha256": "b01fc94e30e4257457c3123c6cb843b5dca13adbd5cecede30b6e11c076ca67d",
+        "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+        "same_prompt_token_ids": true,
+        "seed": 43,
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 43
+        },
+        "generated_tokens": 256,
+        "last_token_id": 172109,
+        "same_generated_token_sequence_as_p19": true
+      },
+      "same_fixture_reduced_precision_controls": {
+        "P3_down_BFP8_LoFi": {
+          "path": "setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.requests2931.call20.canonicalprefix.seed43.cap256.json",
+          "sha256": "431c7e7b659f01cf7b5c1f7d42d1cd91ae5b5855f5728ff3a49805b682cad08b",
+          "runtime_config_id": "stage12_swe85_down_bfp8_lofi_isolated_served_head_bfp8_lofi",
+          "seed": 43,
+          "generated_tokens": 256,
+          "last_token_id": 172109
+        },
+        "P6_attention_down_BFP8_LoFi": {
+          "path": "setup/swe85-precision-bisect/attention-down-bfp8-lofi-fixed108-candidate/runs/attention_down_bfp8_lofi_fixed108/anomaly.requests2931.call20.canonicalprefix.seed43.cap256.json",
+          "sha256": "40ad84c4592740a0d0572c0b94100df0a6132616f38bc243d11987090a2505f2",
+          "runtime_config_id": "stage12_swe85_attention_down_bfp8_lofi_fixed108",
+          "seed": 43,
+          "generated_tokens": 256,
+          "last_token_id": 172109
+        }
+      },
+      "scoped_hf_reference": {
+        "path": "setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/results/seed42-suffix512/anomaly.requests2931.call20.canonicalprefix.optional-suffix512.hf.private.json",
+        "result_sha256": "a91e0aff64f340594679d595122c256f280e66e650a512ce34a85d52ed432156",
+        "seed_available": [
+          42
+        ],
+        "prompt_tokens": 512,
+        "suffix_ids_match": true,
+        "scope": "last512 prompt IDs only; short-context comparison; same seed only for P19 row42 seed42"
+      },
+      "evidence": "Traceback then caret repetition to the 256-token cap; exact same-seed full-BF16/HiFi4 control repeats the same motif. HF comparator is seed42 suffix512, so does not match this seed.",
+      "limitation": "No task-score/correctness inference; full control is exact prompt+seed, while HF evidence is only the narrower scope recorded."
+    },
+    {
+      "index": 44,
+      "case": "anomaly.requests2931.call20.canonicalprefix",
+      "seed": 44,
+      "free_token_cap": 256,
+      "verdict": "reproduced_native_motif",
+      "confidence": "high",
+      "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.requests2931.call20.canonicalprefix.seed44.private.json",
+      "fixture_sha256": "971939b876f462ed4002ba8757826708e6e3d19a20d9496298f61c49af698d40",
+      "prompt_tokens": 8580,
+      "prompt_token_ids_sha256": "6b3e77fefce6aad9e93dbe6ec7cad68337025a9a70a4479c0c353b2f95260771",
+      "p19": {
+        "path": "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.requests2931.call20.canonicalprefix.seed44.cap256.json",
+        "sha256": "8e7e612a50d96da98c0db8701d5d8d84081232e5ff69a00025aae066a4720a53",
+        "runtime_config_id": "stage12_bf16_hifi4_kv_down_bfp8_p19",
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 44
+        },
+        "generated_tokens": 256,
+        "last_token_id": 172109,
+        "text_prefix": "^^^\n  File \"/testbed/requests/api.py\", line 53, in request\n    return session.request(method=method, url=url, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^",
+        "text_tail": "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^"
+      },
+      "exact_full_bf16_hifi4_control": {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/anomaly.requests2931.call20.canonicalprefix.json",
+        "sha256": "b01fc94e30e4257457c3123c6cb843b5dca13adbd5cecede30b6e11c076ca67d",
+        "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+        "same_prompt_token_ids": true,
+        "seed": 44,
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 44
+        },
+        "generated_tokens": 256,
+        "last_token_id": 172109,
+        "same_generated_token_sequence_as_p19": true
+      },
+      "same_fixture_reduced_precision_controls": {
+        "P3_down_BFP8_LoFi": {
+          "path": "setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.requests2931.call20.canonicalprefix.seed44.cap256.json",
+          "sha256": "d29279c03319d653e89438f4e550c1520dc6245f1b87cdf7ca3a73ee71e8b63c",
+          "runtime_config_id": "stage12_swe85_down_bfp8_lofi_isolated_served_head_bfp8_lofi",
+          "seed": 44,
+          "generated_tokens": 256,
+          "last_token_id": 172109
+        },
+        "P6_attention_down_BFP8_LoFi": {
+          "path": "setup/swe85-precision-bisect/attention-down-bfp8-lofi-fixed108-candidate/runs/attention_down_bfp8_lofi_fixed108/anomaly.requests2931.call20.canonicalprefix.seed44.cap256.json",
+          "sha256": "71968f3b1a434b2a7a4f27a6428e0bddec12829fda192e2ca1594c243bb8580a",
+          "runtime_config_id": "stage12_swe85_attention_down_bfp8_lofi_fixed108",
+          "seed": 44,
+          "generated_tokens": 256,
+          "last_token_id": 172109
+        }
+      },
+      "scoped_hf_reference": {
+        "path": "setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/results/seed42-suffix512/anomaly.requests2931.call20.canonicalprefix.optional-suffix512.hf.private.json",
+        "result_sha256": "a91e0aff64f340594679d595122c256f280e66e650a512ce34a85d52ed432156",
+        "seed_available": [
+          42
+        ],
+        "prompt_tokens": 512,
+        "suffix_ids_match": true,
+        "scope": "last512 prompt IDs only; short-context comparison; same seed only for P19 row42 seed42"
+      },
+      "evidence": "Traceback underline/caret repetition through the 256-token cap; exact same-seed full-BF16/HiFi4 control repeats the same motif. HF comparator is seed42 suffix512, so does not match this seed.",
+      "limitation": "No task-score/correctness inference; full control is exact prompt+seed, while HF evidence is only the narrower scope recorded."
+    },
+    {
+      "index": 45,
+      "case": "anomaly.scikit-learn__scikit-learn-13135.call29.onset",
+      "seed": 42,
+      "free_token_cap": 1024,
+      "verdict": "normal",
+      "confidence": "high",
+      "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.scikit-learn__scikit-learn-13135.call29.onset.cap1024.seed42.private.json",
+      "fixture_sha256": "310716fee5157983973aa6183e55fb529fd26179d182398b847ecb142b644b79",
+      "prompt_tokens": 17395,
+      "prompt_token_ids_sha256": "433e40a88bd54227618ffb028a3d4322df14ebee37ff03a52c0986d5154df69a",
+      "p19": {
+        "path": "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.scikit-learn__scikit-learn-13135.call29.onset.seed42.cap1024.json",
+        "sha256": "54930cedf54c2a329a59b4f5a340ebc708fcd5559b20808cad5d1afc22b79eff",
+        "runtime_config_id": "stage12_bf16_hifi4_kv_down_bfp8_p19",
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 42
+        },
+        "generated_tokens": 190,
+        "last_token_id": 50,
+        "text_prefix": " already reproduced the issue using the logic from the source code and verified that sorting the centers fixes it, and I've also seen that the current version o",
+        "text_tail": "{command:<|\"|># No further changes needed.\necho COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT\n<|\"|>}<tool_call|><|tool_response>"
+      },
+      "exact_full_bf16_hifi4_control": {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/anomaly.scikit-learn__scikit-learn-13135.call29.onset.json",
+        "sha256": "4a8b768621690557bd8c07c6568923b2c2c0265a18153d82490b1ea9328c1275",
+        "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+        "same_prompt_token_ids": true,
+        "seed": 42,
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 42
+        },
+        "generated_tokens": 256,
+        "last_token_id": 659,
+        "same_generated_token_sequence_as_p19": false
+      },
+      "same_fixture_reduced_precision_controls": {
+        "P3_down_BFP8_LoFi": {
+          "path": "setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.scikit-learn__scikit-learn-13135.call29.onset.seed42.cap1024.json",
+          "sha256": "7c00e94c6d76ffc47384eb7bfe7b955f373ac5781f299a6807d12466b481951d",
+          "runtime_config_id": "stage12_swe85_down_bfp8_lofi_isolated_served_head_bfp8_lofi",
+          "seed": 42,
+          "generated_tokens": 156,
+          "last_token_id": 50
+        },
+        "P6_attention_down_BFP8_LoFi": {
+          "path": "setup/swe85-precision-bisect/attention-down-bfp8-lofi-fixed108-candidate/runs/attention_down_bfp8_lofi_fixed108/anomaly.scikit-learn__scikit-learn-13135.call29.onset.seed42.cap1024.json",
+          "sha256": "9283e81b27947ab1373c760a9eafb577e9f9e1beb407fd4a0f6a8d4091987ed5",
+          "runtime_config_id": "stage12_swe85_attention_down_bfp8_lofi_fixed108",
+          "seed": 42,
+          "generated_tokens": 188,
+          "last_token_id": 50
+        }
+      },
+      "scoped_hf_reference": null,
+      "evidence": "Coherent analysis and finite canonical bash submission call; P19 ends with a tool response after190 tokens. The exact full-BF16/HiFi4 same-seed output is still mid-response at its 256-token cap; this is not a correctness comparison.",
+      "limitation": "No task-score/correctness inference; full control is exact prompt+seed, while HF evidence is only the narrower scope recorded."
+    },
+    {
+      "index": 46,
+      "case": "anomaly.scikit-learn__scikit-learn-13135.call29.onset",
+      "seed": 43,
+      "free_token_cap": 512,
+      "verdict": "normal",
+      "confidence": "high",
+      "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/fixtures/full/anomaly.scikit-learn__scikit-learn-13135.call29.onset.cap512.seed43.private.json",
+      "fixture_sha256": "68419746ea6b9dbfcf4a871f7caa486dcfff6991cec45c0d511aab69876adeb2",
+      "prompt_tokens": 17395,
+      "prompt_token_ids_sha256": "433e40a88bd54227618ffb028a3d4322df14ebee37ff03a52c0986d5154df69a",
+      "p19": {
+        "path": "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.scikit-learn__scikit-learn-13135.call29.onset.seed43.cap512.json",
+        "sha256": "c4ea21291317f89f422a1f3164e8dbbc927c8759c4d7d913700f7b23db0e6012",
+        "runtime_config_id": "stage12_bf16_hifi4_kv_down_bfp8_p19",
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 43
+        },
+        "generated_tokens": 247,
+        "last_token_id": 50,
+        "text_prefix": " already verified that this logic (sorting the centers) is what the current scikit-learn uses to fix the issue, and I've reproduced the issue with the old logic",
+        "text_tail": "hannel|><|tool_call>call:bash{command:<|\"|>echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT\n<|\"|>}<tool_call|><|tool_response>"
+      },
+      "exact_full_bf16_hifi4_control": {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/anomaly.scikit-learn__scikit-learn-13135.call29.onset.json",
+        "sha256": "4a8b768621690557bd8c07c6568923b2c2c0265a18153d82490b1ea9328c1275",
+        "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+        "same_prompt_token_ids": true,
+        "seed": 43,
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 43
+        },
+        "generated_tokens": 256,
+        "last_token_id": 236764,
+        "same_generated_token_sequence_as_p19": false
+      },
+      "same_fixture_reduced_precision_controls": {
+        "P3_down_BFP8_LoFi": {
+          "path": "setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.scikit-learn__scikit-learn-13135.call29.onset.seed43.cap512.json",
+          "sha256": "89472b741bfe36da625673ff93b580fec839ee5fedb258cb06e9f61ce854c507",
+          "runtime_config_id": "stage12_swe85_down_bfp8_lofi_isolated_served_head_bfp8_lofi",
+          "seed": 43,
+          "generated_tokens": 394,
+          "last_token_id": 50
+        },
+        "P6_attention_down_BFP8_LoFi": {
+          "path": "setup/swe85-precision-bisect/attention-down-bfp8-lofi-fixed108-candidate/runs/attention_down_bfp8_lofi_fixed108/anomaly.scikit-learn__scikit-learn-13135.call29.onset.seed43.cap512.json",
+          "sha256": "52f3f2199f1a71d54d8ead0612336ac0ced75944678337c39997e2ec046e56b4",
+          "runtime_config_id": "stage12_swe85_attention_down_bfp8_lofi_fixed108",
+          "seed": 43,
+          "generated_tokens": 404,
+          "last_token_id": 50
+        }
+      },
+      "scoped_hf_reference": null,
+      "evidence": "Coherent explanation of sorted centers and finite canonical bash submission call; ends in tool response after247 tokens. Exact full-BF16/HiFi4 same-seed sample remains mid-response at256 tokens.",
+      "limitation": "No task-score/correctness inference; full control is exact prompt+seed, while HF evidence is only the narrower scope recorded."
+    },
+    {
+      "index": 47,
+      "case": "anomaly.scikit-learn__scikit-learn-13135.call29.onset",
+      "seed": 44,
+      "free_token_cap": 512,
+      "verdict": "normal",
+      "confidence": "high",
+      "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/fixtures/served/anomaly.scikit-learn__scikit-learn-13135.call29.onset.cap512.seed44.private.json",
+      "fixture_sha256": "dc59c14755d834d03e13b1b9d60981c10a93e68d68375db6198fdea1df67bc78",
+      "prompt_tokens": 17395,
+      "prompt_token_ids_sha256": "433e40a88bd54227618ffb028a3d4322df14ebee37ff03a52c0986d5154df69a",
+      "p19": {
+        "path": "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.scikit-learn__scikit-learn-13135.call29.onset.seed44.cap512.json",
+        "sha256": "72f3c48bfdd852473242d0fd01ec62cad7205572263f0abfbf0c831eba2755bc",
+        "runtime_config_id": "stage12_bf16_hifi4_kv_down_bfp8_p19",
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 44
+        },
+        "generated_tokens": 405,
+        "last_token_id": 50,
+        "text_prefix": " reproduced the bug and verified that sorting the centers is the fix (and it's how it's fixed in the official scikit-learn 1.9.1 version), I'm confident in this",
+        "text_tail": "\n    print(\"np.digitize failed:\", e)\nEOF\n\ncd /tmp/repro && python test_logic_fixed.py\n<|\"|>}<tool_call|><|tool_response>"
+      },
+      "exact_full_bf16_hifi4_control": {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/anomaly.scikit-learn__scikit-learn-13135.call29.onset.json",
+        "sha256": "4a8b768621690557bd8c07c6568923b2c2c0265a18153d82490b1ea9328c1275",
+        "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+        "same_prompt_token_ids": true,
+        "seed": 44,
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 44
+        },
+        "generated_tokens": 88,
+        "last_token_id": 50,
+        "same_generated_token_sequence_as_p19": false
+      },
+      "same_fixture_reduced_precision_controls": {
+        "P3_down_BFP8_LoFi": {
+          "path": "setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.scikit-learn__scikit-learn-13135.call29.onset.seed44.cap512.json",
+          "sha256": "a3ebc7e7161163805ea36cd1219315568aaa7d2cd4fa57d267d82d8afec2371c",
+          "runtime_config_id": "stage12_swe85_down_bfp8_lofi_isolated_served_head_bfp8_lofi",
+          "seed": 44,
+          "generated_tokens": 93,
+          "last_token_id": 50
+        },
+        "P6_attention_down_BFP8_LoFi": {
+          "path": "setup/swe85-precision-bisect/attention-down-bfp8-lofi-fixed108-candidate/runs/attention_down_bfp8_lofi_fixed108/anomaly.scikit-learn__scikit-learn-13135.call29.onset.seed44.cap512.json",
+          "sha256": "84d9890af95c3288afb177ff5d6c17d6508bbcc1cd7410ee2fe43b732e29af28",
+          "runtime_config_id": "stage12_swe85_attention_down_bfp8_lofi_fixed108",
+          "seed": 44,
+          "generated_tokens": 177,
+          "last_token_id": 50
+        }
+      },
+      "scoped_hf_reference": null,
+      "evidence": "Coherent solution summary and canonical bash submission call; ends in tool response after405 tokens. Exact full-BF16/HiFi4 same-seed control ends naturally at88 tokens with a tool handoff.",
+      "limitation": "No task-score/correctness inference; full control is exact prompt+seed, while HF evidence is only the narrower scope recorded."
+    },
+    {
+      "index": 48,
+      "case": "anomaly.sphinx-doc__sphinx-10323.call57.onset",
+      "seed": 42,
+      "free_token_cap": 512,
+      "verdict": "normal",
+      "confidence": "high",
+      "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-10323.call57.onset.cap512.seed42.private.json",
+      "fixture_sha256": "73900395540b408c3bdb3689ef5561eed2d4d9a1976a6a1b19ec1545e6d0eb2a",
+      "prompt_tokens": 58695,
+      "prompt_token_ids_sha256": "b717f8d15d30f0bd3b445deef9213defb8a6c36f4bc1bc86a7f889289270c2fb",
+      "p19": {
+        "path": "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-10323.call57.onset.seed42.cap512.json",
+        "sha256": "f0c4ae83cf08a2bcdc8adc062f00e437c4aaf516f02896fc67959b08134f1da1",
+        "runtime_config_id": "stage12_bf16_hifi4_kv_down_bfp8_p19",
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 42
+        },
+        "generated_tokens": 485,
+        "last_token_id": 50,
+        "text_prefix": " moved `dedent_filter` to the beginning, and maybe some other filter is now behaving differently?\n\nWait, I just realized something. `dedent_filter` is a method ",
+        "text_tail": "|tool_call>call:bash{command:<|\"|>nl -ba sphinx/directives/code.py | sed -n '220,230p'<|\"|>}<tool_call|><|tool_response>"
+      },
+      "exact_full_bf16_hifi4_control": {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/anomaly.sphinx-doc__sphinx-10323.call57.onset.json",
+        "sha256": "1063260ce5a9bb63b7209fc68fa8677bfa2383e5eb8d2898b05b1e2ee1db962c",
+        "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+        "same_prompt_token_ids": true,
+        "seed": 42,
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 42
+        },
+        "generated_tokens": 256,
+        "last_token_id": 7212,
+        "same_generated_token_sequence_as_p19": false
+      },
+      "same_fixture_reduced_precision_controls": {
+        "P3_down_BFP8_LoFi": {
+          "path": "setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sphinx-doc__sphinx-10323.call57.onset.seed42.cap512.json",
+          "sha256": "08cf0a251b59d9661bd8516a9887849347afd25fa136def0f8316869606f5b35",
+          "runtime_config_id": "stage12_swe85_down_bfp8_lofi_isolated_served_head_bfp8_lofi",
+          "seed": 42,
+          "generated_tokens": 512,
+          "last_token_id": 50
+        },
+        "P6_attention_down_BFP8_LoFi": {
+          "path": "setup/swe85-precision-bisect/attention-down-bfp8-lofi-fixed108-candidate/runs/attention_down_bfp8_lofi_fixed108/anomaly.sphinx-doc__sphinx-10323.call57.onset.seed42.cap512.json",
+          "sha256": "58a57539e18748692028acbbcaab219c7e28cc11febea2c4eed406b7910bd00e",
+          "runtime_config_id": "stage12_swe85_attention_down_bfp8_lofi_fixed108",
+          "seed": 42,
+          "generated_tokens": 203,
+          "last_token_id": 50
+        }
+      },
+      "scoped_hf_reference": null,
+      "evidence": "Coherent debugging narrative and valid bash tool handoff at485 tokens; terminal token is tool-yield EOS. Full same-seed control is still progressing at256 tokens, so this verdict concerns the P19 output only.",
+      "limitation": "No task-score/correctness inference; full control is exact prompt+seed, while HF evidence is only the narrower scope recorded."
+    },
+    {
+      "index": 49,
+      "case": "anomaly.sphinx-doc__sphinx-10323.call57.onset",
+      "seed": 43,
+      "free_token_cap": 256,
+      "verdict": "inconclusive",
+      "confidence": "high_for_inconclusive_progress",
+      "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.sphinx-doc__sphinx-10323.call57.onset.seed43.private.json",
+      "fixture_sha256": "f92ea14c2024b7c89722784a2f1d8e8551e470f4cd281f974e3b9e691f6a8523",
+      "prompt_tokens": 58695,
+      "prompt_token_ids_sha256": "b717f8d15d30f0bd3b445deef9213defb8a6c36f4bc1bc86a7f889289270c2fb",
+      "p19": {
+        "path": "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-10323.call57.onset.seed43.cap256.json",
+        "sha256": "8563ed7f5806f8d002b291d1a4f88858c44ea2f22b98561b2444ce1f34ff57e6",
+        "runtime_config_id": "stage12_bf16_hifi4_kv_down_bfp8_p19",
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 43
+        },
+        "generated_tokens": 256,
+        "last_token_id": 236778,
+        "text_prefix": " probably introduced a bug in the filters loop.\n\nWait, the `filters` list is defined as:\n```python\n            filters = [self.pyobject_filter,\n                ",
+        "text_tail": "phinx/directives/code.py`\nThis added a line *after* line 223.\nLine 223 was `filters = [self.pyobject_filter,`.\nSo line 2"
+      },
+      "exact_full_bf16_hifi4_control": {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/anomaly.sphinx-doc__sphinx-10323.call57.onset.json",
+        "sha256": "1063260ce5a9bb63b7209fc68fa8677bfa2383e5eb8d2898b05b1e2ee1db962c",
+        "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+        "same_prompt_token_ids": true,
+        "seed": 43,
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 43
+        },
+        "generated_tokens": 54,
+        "last_token_id": 50,
+        "same_generated_token_sequence_as_p19": false
+      },
+      "same_fixture_reduced_precision_controls": {
+        "P3_down_BFP8_LoFi": {
+          "path": "setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sphinx-doc__sphinx-10323.call57.onset.seed43.cap256.json",
+          "sha256": "1faf633e2acc8b91982c830dc8564243b5598eb86244743222dc13916561987e",
+          "runtime_config_id": "stage12_swe85_down_bfp8_lofi_isolated_served_head_bfp8_lofi",
+          "seed": 43,
+          "generated_tokens": 145,
+          "last_token_id": 50
+        },
+        "P6_attention_down_BFP8_LoFi": {
+          "path": "setup/swe85-precision-bisect/attention-down-bfp8-lofi-fixed108-candidate/runs/attention_down_bfp8_lofi_fixed108/anomaly.sphinx-doc__sphinx-10323.call57.onset.seed43.cap256.json",
+          "sha256": "3f23af6014db27e5e8354334c06aa304f96be507e163f41614cdf291d90aa4c2",
+          "runtime_config_id": "stage12_swe85_attention_down_bfp8_lofi_fixed108",
+          "seed": 43,
+          "generated_tokens": 55,
+          "last_token_id": 50
+        }
+      },
+      "scoped_hf_reference": null,
+      "evidence": "Coherent Sphinx filter diagnosis is cut off mid-line at the 256-token cap with no natural stop. Root has a cap512 extension prepared. This is progressing, not normal completion or a failure.",
+      "limitation": "Full BF16/HiFi4 confirms exact prompt+seed control; it does not prove task correctness. HF controls, where present, use only the recorded shortened suffix. Cap-reaching output is inconclusive."
+    },
+    {
+      "index": 50,
+      "case": "anomaly.sphinx-doc__sphinx-10323.call57.onset",
+      "seed": 44,
+      "free_token_cap": 512,
+      "verdict": "normal",
+      "confidence": "high",
+      "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-10323.call57.onset.cap512.seed44.private.json",
+      "fixture_sha256": "09926a71feec07d7cde94dd30e60a80e65d0b7a14a973fdf18f8fbcefb20c357",
+      "prompt_tokens": 58695,
+      "prompt_token_ids_sha256": "b717f8d15d30f0bd3b445deef9213defb8a6c36f4bc1bc86a7f889289270c2fb",
+      "p19": {
+        "path": "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-10323.call57.onset.seed44.cap512.json",
+        "sha256": "f44e6fd2f8861f90bd1af32ae35c13b963076952ed4397e79008d222345d01a1",
+        "runtime_config_id": "stage12_bf16_hifi4_kv_down_bfp8_p19",
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 44
+        },
+        "generated_tokens": 193,
+        "last_token_id": 50,
+        "text_prefix": " moved `dedent_filter` to the front, and `dedent_filter` is a method of `LiteralIncludeReader`.\n\nWait, `filters` is a list of methods.\n```python\n            fil",
+        "text_tail": "|tool_call>call:bash{command:<|\"|>nl -ba sphinx/directives/code.py | sed -n '220,235p'<|\"|>}<tool_call|><|tool_response>"
+      },
+      "exact_full_bf16_hifi4_control": {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/anomaly.sphinx-doc__sphinx-10323.call57.onset.json",
+        "sha256": "1063260ce5a9bb63b7209fc68fa8677bfa2383e5eb8d2898b05b1e2ee1db962c",
+        "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+        "same_prompt_token_ids": true,
+        "seed": 44,
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 44
+        },
+        "generated_tokens": 256,
+        "last_token_id": 236764,
+        "same_generated_token_sequence_as_p19": false
+      },
+      "same_fixture_reduced_precision_controls": {
+        "P3_down_BFP8_LoFi": {
+          "path": "setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sphinx-doc__sphinx-10323.call57.onset.seed44.cap512.json",
+          "sha256": "cdf589ed5c9defedd45085e9d647d16964648c44e0e26e9b3a8bd9470252ae5e",
+          "runtime_config_id": "stage12_swe85_down_bfp8_lofi_isolated_served_head_bfp8_lofi",
+          "seed": 44,
+          "generated_tokens": 71,
+          "last_token_id": 50
+        },
+        "P6_attention_down_BFP8_LoFi": {
+          "path": "setup/swe85-precision-bisect/attention-down-bfp8-lofi-fixed108-candidate/runs/attention_down_bfp8_lofi_fixed108/anomaly.sphinx-doc__sphinx-10323.call57.onset.seed44.cap512.json",
+          "sha256": "85d8cc61532f4690cfb62506ff4367dd0315d798eb8833109eb235938f1fb7a7",
+          "runtime_config_id": "stage12_swe85_attention_down_bfp8_lofi_fixed108",
+          "seed": 44,
+          "generated_tokens": 331,
+          "last_token_id": 50
+        }
+      },
+      "scoped_hf_reference": null,
+      "evidence": "Coherent debugging narrative ends in a finite bash tool handoff at193 tokens. The exact full-BF16/HiFi4 control is still progressing at its256-token cap.",
+      "limitation": "No task-score/correctness inference; full control is exact prompt+seed, while HF evidence is only the narrower scope recorded."
+    },
+    {
+      "index": 51,
+      "case": "anomaly.sphinx-doc__sphinx-10323.call68.onset",
+      "seed": 42,
+      "free_token_cap": 256,
+      "verdict": "normal",
+      "confidence": "high",
+      "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-sphinx10323-controls/sphinx-doc__sphinx-10323.call68.onset.private.json",
+      "fixture_sha256": "2d726d2a43b0678df8fb3d931ffda87277954bf9599424c4140394c669cfa103",
+      "prompt_tokens": 64509,
+      "prompt_token_ids_sha256": "eb1a464aa0e934d3eb4dc3ea1908c4046b04fb3c9fbb076354d87bf2a8ba0468",
+      "p19": {
+        "path": "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-10323.call68.onset.seed42.cap256.json",
+        "sha256": "ea08e66380cd47ab5d216d9367f7a42d40c07ed4560924703a2dba0d8d3e5bc9",
+        "runtime_config_id": "stage12_bf16_hifi4_kv_down_bfp8_p19",
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 42
+        },
+        "generated_tokens": 38,
+        "last_token_id": 50,
+        "text_prefix": " analyzed the problem and found it's a `docutils` issue.\n<channel|><|tool_call>call:bash{command:<|\"|>git checkout sphinx/directives/code.py<|\"|>}<tool_call|><|",
+        "text_tail": "e.\n<channel|><|tool_call>call:bash{command:<|\"|>git checkout sphinx/directives/code.py<|\"|>}<tool_call|><|tool_response>"
+      },
+      "exact_full_bf16_hifi4_control": {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/anomaly.sphinx-doc__sphinx-10323.call68.onset.json",
+        "sha256": "dfc0c88d0e622243ecf215c5c25e330b29d9a15723f505f1ccf9fabc61cfb040",
+        "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+        "same_prompt_token_ids": true,
+        "seed": 42,
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 42
+        },
+        "generated_tokens": 38,
+        "last_token_id": 50,
+        "same_generated_token_sequence_as_p19": true
+      },
+      "same_fixture_reduced_precision_controls": {
+        "P3_down_BFP8_LoFi": {
+          "path": "setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sphinx-doc__sphinx-10323.call68.onset.seed42.cap256.json",
+          "sha256": "981c0ce51f8ed8ac8549f0a36ac6c18bb30b65ff757369470b4afe6b87b37a5e",
+          "runtime_config_id": "stage12_swe85_down_bfp8_lofi_isolated_served_head_bfp8_lofi",
+          "seed": 42,
+          "generated_tokens": 105,
+          "last_token_id": 50
+        },
+        "P6_attention_down_BFP8_LoFi": {
+          "path": "setup/swe85-precision-bisect/attention-down-bfp8-lofi-fixed108-candidate/runs/attention_down_bfp8_lofi_fixed108/anomaly.sphinx-doc__sphinx-10323.call68.onset.seed42.cap256.json",
+          "sha256": "30bdae1270393c6cc8692ae748fc2024ddccbeb937f430985eb0819a695e735e",
+          "runtime_config_id": "stage12_swe85_attention_down_bfp8_lofi_fixed108",
+          "seed": 42,
+          "generated_tokens": 113,
+          "last_token_id": 50
+        }
+      },
+      "scoped_hf_reference": null,
+      "evidence": "Concise diagnosis followed by canonical bash git-checkout tool call and tool response at38 tokens; exact full-BF16/HiFi4 same-seed control is the same finite handoff.",
+      "limitation": "No task-score/correctness inference; full control is exact prompt+seed, while HF evidence is only the narrower scope recorded."
+    },
+    {
+      "index": 52,
+      "case": "anomaly.sphinx-doc__sphinx-10323.call68.onset",
+      "seed": 43,
+      "free_token_cap": 256,
+      "verdict": "normal",
+      "confidence": "high",
+      "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.sphinx-doc__sphinx-10323.call68.onset.seed43.private.json",
+      "fixture_sha256": "268ebac1198fcc7951fda3d5c9760ced4b941c45b4fde336cafea68ca187eb51",
+      "prompt_tokens": 64509,
+      "prompt_token_ids_sha256": "eb1a464aa0e934d3eb4dc3ea1908c4046b04fb3c9fbb076354d87bf2a8ba0468",
+      "p19": {
+        "path": "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-10323.call68.onset.seed43.cap256.json",
+        "sha256": "4c6422a609064ffbef0e763cd46a2801391b0c4607b7f7bbf0f3ee4f6a9d368a",
+        "runtime_config_id": "stage12_bf16_hifi4_kv_down_bfp8_p19",
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 43
+        },
+        "generated_tokens": 87,
+        "last_token_id": 50,
+        "text_prefix": " determined it's a `docutils` issue.\nWait, I should probably check if there's any other way to fix it.\n\nActually, I'll just submit the fix of moving the `dedent",
+        "text_tail": "`.\n<channel|><|tool_call>call:bash{command:<|\"|>git checkout sphinx/directives/code.py<|\"|>}<tool_call|><|tool_response>"
+      },
+      "exact_full_bf16_hifi4_control": {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/anomaly.sphinx-doc__sphinx-10323.call68.onset.json",
+        "sha256": "dfc0c88d0e622243ecf215c5c25e330b29d9a15723f505f1ccf9fabc61cfb040",
+        "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+        "same_prompt_token_ids": true,
+        "seed": 43,
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 43
+        },
+        "generated_tokens": 77,
+        "last_token_id": 50,
+        "same_generated_token_sequence_as_p19": false
+      },
+      "same_fixture_reduced_precision_controls": {
+        "P3_down_BFP8_LoFi": {
+          "path": "setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sphinx-doc__sphinx-10323.call68.onset.seed43.cap256.json",
+          "sha256": "9de01cc34e86e7f72e16827eb3f9c0ecb9ed1cefaad93678b4845ac0f1f484cf",
+          "runtime_config_id": "stage12_swe85_down_bfp8_lofi_isolated_served_head_bfp8_lofi",
+          "seed": 43,
+          "generated_tokens": 38,
+          "last_token_id": 50
+        },
+        "P6_attention_down_BFP8_LoFi": {
+          "path": "setup/swe85-precision-bisect/attention-down-bfp8-lofi-fixed108-candidate/runs/attention_down_bfp8_lofi_fixed108/anomaly.sphinx-doc__sphinx-10323.call68.onset.seed43.cap256.json",
+          "sha256": "9c0c89e866bbef0181a1e6a1d5ccbb2513979ff45ed8012e8477b9a00d47c8f3",
+          "runtime_config_id": "stage12_swe85_attention_down_bfp8_lofi_fixed108",
+          "seed": 43,
+          "generated_tokens": 131,
+          "last_token_id": 50
+        }
+      },
+      "scoped_hf_reference": null,
+      "evidence": "Diagnosis ends with a canonical bash git-checkout tool handoff at87 tokens. Full-BF16/HiFi4 same-seed control also ends naturally with a tool handoff.",
+      "limitation": "No task-score/correctness inference; full control is exact prompt+seed, while HF evidence is only the narrower scope recorded."
+    },
+    {
+      "index": 53,
+      "case": "anomaly.sphinx-doc__sphinx-10323.call68.onset",
+      "seed": 44,
+      "free_token_cap": 256,
+      "verdict": "normal",
+      "confidence": "high",
+      "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.sphinx-doc__sphinx-10323.call68.onset.seed44.private.json",
+      "fixture_sha256": "a4cbaf72f69ca7e7b5fc0a5d3150a75e6211fc46992d8bc044ff89db3bb60251",
+      "prompt_tokens": 64509,
+      "prompt_token_ids_sha256": "eb1a464aa0e934d3eb4dc3ea1908c4046b04fb3c9fbb076354d87bf2a8ba0468",
+      "p19": {
+        "path": "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-10323.call68.onset.seed44.cap256.json",
+        "sha256": "64f1f6c912966a4feaaf5c24bd748df8b2737e3fa34d723e647991c2a02ff413",
+        "runtime_config_id": "stage12_bf16_hifi4_kv_down_bfp8_p19",
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 44
+        },
+        "generated_tokens": 38,
+        "last_token_id": 50,
+        "text_prefix": " analyzed the problem and found it's a `docutils` limitation.\n<channel|><|tool_call>call:bash{command:<|\"|>git checkout sphinx/directives/code.py<|\"|>}<tool_cal",
+        "text_tail": "n.\n<channel|><|tool_call>call:bash{command:<|\"|>git checkout sphinx/directives/code.py<|\"|>}<tool_call|><|tool_response>"
+      },
+      "exact_full_bf16_hifi4_control": {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/anomaly.sphinx-doc__sphinx-10323.call68.onset.json",
+        "sha256": "dfc0c88d0e622243ecf215c5c25e330b29d9a15723f505f1ccf9fabc61cfb040",
+        "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+        "same_prompt_token_ids": true,
+        "seed": 44,
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 44
+        },
+        "generated_tokens": 38,
+        "last_token_id": 50,
+        "same_generated_token_sequence_as_p19": true
+      },
+      "same_fixture_reduced_precision_controls": {
+        "P3_down_BFP8_LoFi": {
+          "path": "setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sphinx-doc__sphinx-10323.call68.onset.seed44.cap256.json",
+          "sha256": "7bd74074a053a80bf4f2c8eac538c8a399bf1137ad18244163d9f1d9c8395251",
+          "runtime_config_id": "stage12_swe85_down_bfp8_lofi_isolated_served_head_bfp8_lofi",
+          "seed": 44,
+          "generated_tokens": 104,
+          "last_token_id": 50
+        },
+        "P6_attention_down_BFP8_LoFi": {
+          "path": "setup/swe85-precision-bisect/attention-down-bfp8-lofi-fixed108-candidate/runs/attention_down_bfp8_lofi_fixed108/anomaly.sphinx-doc__sphinx-10323.call68.onset.seed44.cap256.json",
+          "sha256": "5d3371620e565ccd12d8ac59a13f7d93c16ca6c0856886526c6e122705a98e1a",
+          "runtime_config_id": "stage12_swe85_attention_down_bfp8_lofi_fixed108",
+          "seed": 44,
+          "generated_tokens": 174,
+          "last_token_id": 50
+        }
+      },
+      "scoped_hf_reference": null,
+      "evidence": "Diagnosis and canonical bash git-checkout handoff at38 tokens; exact full-BF16/HiFi4 same-seed control is a finite tool handoff.",
+      "limitation": "No task-score/correctness inference; full control is exact prompt+seed, while HF evidence is only the narrower scope recorded."
+    },
+    {
+      "index": 54,
+      "case": "anomaly.sphinx-doc__sphinx-10323.call70.onset",
+      "seed": 42,
+      "free_token_cap": 256,
+      "verdict": "normal",
+      "confidence": "high",
+      "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-extra-contraction-controls/sphinx-doc__sphinx-10323.call70.onset.private.json",
+      "fixture_sha256": "7d39e2c87e91327f35317968bf2647887a402d0086085ec8f95db8ff5fc2ab64",
+      "prompt_tokens": 65779,
+      "prompt_token_ids_sha256": "fd24fbb8d469895d6b7bc344aa036fc844a4c80a754f06708be6ed35daa7d032",
+      "p19": {
+        "path": "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-10323.call70.onset.seed42.cap256.json",
+        "sha256": "5675101bf0ae32fb7de58cc05c94ed042a51735e12e3a57a6a14275487841993",
+        "runtime_config_id": "stage12_bf16_hifi4_kv_down_bfp8_p19",
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 42
+        },
+        "generated_tokens": 40,
+        "last_token_id": 50,
+        "text_prefix": " already tried and failed to find a way to not strip it.\n<channel|><|tool_call>call:bash{command:<|\"|>echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT<|\"|>}<tool_call",
+        "text_tail": "channel|><|tool_call>call:bash{command:<|\"|>echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT<|\"|>}<tool_call|><|tool_response>"
+      },
+      "exact_full_bf16_hifi4_control": {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/anomaly.sphinx-doc__sphinx-10323.call70.onset.json",
+        "sha256": "581abc9eafc039e5507b874dabba86b859204f29b1a9a14e45a28dd8d7efa995",
+        "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+        "same_prompt_token_ids": true,
+        "seed": 42,
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 42
+        },
+        "generated_tokens": 64,
+        "last_token_id": 50,
+        "same_generated_token_sequence_as_p19": false
+      },
+      "same_fixture_reduced_precision_controls": {
+        "P3_down_BFP8_LoFi": {
+          "path": "setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sphinx-doc__sphinx-10323.call70.onset.seed42.cap256.json",
+          "sha256": "cb63761c04c61541cc188cbe0ff52a187646b570bc8a1e60df326afc5183c567",
+          "runtime_config_id": "stage12_swe85_down_bfp8_lofi_isolated_served_head_bfp8_lofi",
+          "seed": 42,
+          "generated_tokens": 47,
+          "last_token_id": 50
+        },
+        "P6_attention_down_BFP8_LoFi": {
+          "path": "setup/swe85-precision-bisect/attention-down-bfp8-lofi-fixed108-candidate/runs/attention_down_bfp8_lofi_fixed108/anomaly.sphinx-doc__sphinx-10323.call70.onset.seed42.cap256.json",
+          "sha256": "1f0a6e820197dca9b80bc680cd7bf6d9349081980f2694624a8661a80ee5a8e0",
+          "runtime_config_id": "stage12_swe85_attention_down_bfp8_lofi_fixed108",
+          "seed": 42,
+          "generated_tokens": 40,
+          "last_token_id": 50
+        }
+      },
+      "scoped_hf_reference": null,
+      "evidence": "Finite Sphinx diagnosis and canonical echo submission tool call, natural tool-yield EOS at40 tokens. Exact full-BF16/HiFi4 same-seed control also completes.",
+      "limitation": "No task-score/correctness inference; full control is exact prompt+seed, while HF evidence is only the narrower scope recorded."
+    },
+    {
+      "index": 55,
+      "case": "anomaly.sphinx-doc__sphinx-10323.call70.onset",
+      "seed": 43,
+      "free_token_cap": 256,
+      "verdict": "reproduced_native_motif",
+      "confidence": "high",
+      "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.sphinx-doc__sphinx-10323.call70.onset.seed43.private.json",
+      "fixture_sha256": "52f78b1aa3daba1691172b565090fd48487e2a5a9290b2811c3d4e16cd4a0526",
+      "prompt_tokens": 65779,
+      "prompt_token_ids_sha256": "fd24fbb8d469895d6b7bc344aa036fc844a4c80a754f06708be6ed35daa7d032",
+      "p19": {
+        "path": "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-10323.call70.onset.seed43.cap256.json",
+        "sha256": "5d27e822041fdeaeb8970d4796744efba66f293f4b7dc639a3337b2bb9bd2dc6",
+        "runtime_config_id": "stage12_bf16_hifi4_kv_down_bfp8_p19",
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 43
+        },
+        "generated_tokens": 39,
+        "last_token_id": 50,
+        "text_prefix": "’ve tried everything I can. I'll submit.\n<channel|><|tool_call>call:bash{command:<|\"|>echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT<|\"|>}<tool_call|><|tool_respons",
+        "text_tail": "channel|><|tool_call>call:bash{command:<|\"|>echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT<|\"|>}<tool_call|><|tool_response>"
+      },
+      "exact_full_bf16_hifi4_control": {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/anomaly.sphinx-doc__sphinx-10323.call70.onset.json",
+        "sha256": "581abc9eafc039e5507b874dabba86b859204f29b1a9a14e45a28dd8d7efa995",
+        "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+        "same_prompt_token_ids": true,
+        "seed": 43,
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 43
+        },
+        "generated_tokens": 39,
+        "last_token_id": 50,
+        "same_generated_token_sequence_as_p19": true
+      },
+      "same_fixture_reduced_precision_controls": {
+        "P3_down_BFP8_LoFi": {
+          "path": "setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sphinx-doc__sphinx-10323.call70.onset.seed43.cap256.json",
+          "sha256": "4c35f3146e391b35948da75553676476606351d640cfd2bbd39eba6aa65d25a7",
+          "runtime_config_id": "stage12_swe85_down_bfp8_lofi_isolated_served_head_bfp8_lofi",
+          "seed": 43,
+          "generated_tokens": 38,
+          "last_token_id": 50
+        },
+        "P6_attention_down_BFP8_LoFi": {
+          "path": "setup/swe85-precision-bisect/attention-down-bfp8-lofi-fixed108-candidate/runs/attention_down_bfp8_lofi_fixed108/anomaly.sphinx-doc__sphinx-10323.call70.onset.seed43.cap256.json",
+          "sha256": "e23f5b37e4850325af0a7b024061838508d5b559dc8253b96b010377723ac223",
+          "runtime_config_id": "stage12_swe85_attention_down_bfp8_lofi_fixed108",
+          "seed": 43,
+          "generated_tokens": 38,
+          "last_token_id": 50
+        }
+      },
+      "scoped_hf_reference": {
+        "path": "setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/results/sphinx70-cap2048-seed43/anomaly.sphinx-doc__sphinx-10323.call70.onset.hf.private.json",
+        "result_sha256": "2472008d4ab3ca68d5803944ccf3410c53e603940e62529f062df2e8fdf199a2",
+        "seed_available": [
+          43
+        ],
+        "prompt_tokens": 2048,
+        "suffix_ids_match": true,
+        "scope": "last2048 prompt IDs only, seed43; HF natural stop is not native-prompt evidence"
+      },
+      "evidence": "Conditioning prompt ends with “I've”; P19 starts with “’ve tried”, creating the extra boundary suffix “I've’ve”. Exact same-seed full-BF16/HiFi4 control has the same first39-token sequence. The HF seed43 suffix2048 output is a scoped comparison: same last2048 prompt IDs but only that shortened context.",
+      "limitation": "No task-score/correctness inference; full control is exact prompt+seed, while HF evidence is only the narrower scope recorded."
+    },
+    {
+      "index": 56,
+      "case": "anomaly.sphinx-doc__sphinx-10323.call70.onset",
+      "seed": 44,
+      "free_token_cap": 256,
+      "verdict": "normal",
+      "confidence": "high",
+      "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/proposal-c/fixtures/seed-adjusted/anomaly.sphinx-doc__sphinx-10323.call70.onset.seed44.private.json",
+      "fixture_sha256": "e6905c26f7b592712e8e7c536babe496e7410b2bd5914677ad89e2c3ff699763",
+      "prompt_tokens": 65779,
+      "prompt_token_ids_sha256": "fd24fbb8d469895d6b7bc344aa036fc844a4c80a754f06708be6ed35daa7d032",
+      "p19": {
+        "path": "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-10323.call70.onset.seed44.cap256.json",
+        "sha256": "d0c4bf78f914d8533d0a8fbe9238f9cc95fa5d83df819ebd02baa83b496510fa",
+        "runtime_config_id": "stage12_bf16_hifi4_kv_down_bfp8_p19",
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 44
+        },
+        "generated_tokens": 54,
+        "last_token_id": 50,
+        "text_prefix": " already tried and failed to find a way to stop the stripping.\n\nI'll just submit the original code and state the findings.\n<channel|><|tool_call>call:bash{comma",
+        "text_tail": "channel|><|tool_call>call:bash{command:<|\"|>echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT<|\"|>}<tool_call|><|tool_response>"
+      },
+      "exact_full_bf16_hifi4_control": {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/anomaly.sphinx-doc__sphinx-10323.call70.onset.json",
+        "sha256": "581abc9eafc039e5507b874dabba86b859204f29b1a9a14e45a28dd8d7efa995",
+        "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+        "same_prompt_token_ids": true,
+        "seed": 44,
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 44
+        },
+        "generated_tokens": 56,
+        "last_token_id": 50,
+        "same_generated_token_sequence_as_p19": false
+      },
+      "same_fixture_reduced_precision_controls": {
+        "P3_down_BFP8_LoFi": {
+          "path": "setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sphinx-doc__sphinx-10323.call70.onset.seed44.cap256.json",
+          "sha256": "f97cadf56d2e48dcaa6d33b980bdd3f5c26c38cdafbd9cac33955fecdceee051",
+          "runtime_config_id": "stage12_swe85_down_bfp8_lofi_isolated_served_head_bfp8_lofi",
+          "seed": 44,
+          "generated_tokens": 45,
+          "last_token_id": 50
+        },
+        "P6_attention_down_BFP8_LoFi": {
+          "path": "setup/swe85-precision-bisect/attention-down-bfp8-lofi-fixed108-candidate/runs/attention_down_bfp8_lofi_fixed108/anomaly.sphinx-doc__sphinx-10323.call70.onset.seed44.cap256.json",
+          "sha256": "e69a4b8515d4cf4e441f03f6ee2e83b1959ce261ad5f3d7e70f31f008638e77a",
+          "runtime_config_id": "stage12_swe85_attention_down_bfp8_lofi_fixed108",
+          "seed": 44,
+          "generated_tokens": 53,
+          "last_token_id": 50
+        }
+      },
+      "scoped_hf_reference": null,
+      "evidence": "Finite diagnosis and canonical bash echo handoff at54 tokens; exact full-BF16/HiFi4 same-seed control also completes.",
+      "limitation": "No task-score/correctness inference; full control is exact prompt+seed, while HF evidence is only the narrower scope recorded."
+    },
+    {
+      "index": 57,
+      "case": "anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset",
+      "seed": 42,
+      "free_token_cap": 2048,
+      "verdict": "normal",
+      "confidence": "high",
+      "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.cap2048.seed42.private.json",
+      "fixture_sha256": "020694b001269c7998c8e36753d830f23a5d6700a1842526dc098bd459c3ca64",
+      "prompt_tokens": 58982,
+      "prompt_token_ids_sha256": "a4c9e18717ee53ddbf5ced65964c1f28ac089b26e6b489bd9aa52b303e021a45",
+      "p19": {
+        "path": "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.seed42.cap2048.json",
+        "sha256": "da909d81a3111621cba2a904448363e49961a150d090c0ee60bfdcef4ffd099b",
+        "runtime_config_id": "stage12_bf16_hifi4_kv_down_bfp8_p19",
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 42
+        },
+        "generated_tokens": 290,
+        "last_token_id": 50,
+        "text_prefix": "'s being loaded.\nActually, let's just put a print at the top of `sphinx/directives/other.py`.\nI already did that: `sed -i '1i print(\"HELLO FROM OTHER.PY\")' /opt",
+        "text_tail": "|>python3 -c \"from docutils.parsers.rst import directives; print(directives.include)\"\n<|\"|>}<tool_call|><|tool_response>"
+      },
+      "exact_full_bf16_hifi4_control": {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.json",
+        "sha256": "56ca8669e2f71df9240ee9d5f1f70efede8407541dd67e236ea80a4e782862e0",
+        "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+        "same_prompt_token_ids": true,
+        "seed": 42,
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 42
+        },
+        "generated_tokens": 256,
+        "last_token_id": 11355,
+        "same_generated_token_sequence_as_p19": false
+      },
+      "same_fixture_reduced_precision_controls": {
+        "P3_down_BFP8_LoFi": {
+          "path": "setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.seed42.cap2048.json",
+          "sha256": "ca6dd5cf36df6bcbf8401ce5a2f68ef29368706a191cd231f30fe3e53fe8e279",
+          "runtime_config_id": "stage12_swe85_down_bfp8_lofi_isolated_served_head_bfp8_lofi",
+          "seed": 42,
+          "generated_tokens": 482,
+          "last_token_id": 50
+        },
+        "P6_attention_down_BFP8_LoFi": {
+          "path": "setup/swe85-precision-bisect/attention-down-bfp8-lofi-fixed108-candidate/runs/attention_down_bfp8_lofi_fixed108/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.seed42.cap2048.json",
+          "sha256": "2f89d649bf687026246d9f1bbfc162302dcb5b994e826f2f5b2f6454a6f65563",
+          "runtime_config_id": "stage12_swe85_attention_down_bfp8_lofi_fixed108",
+          "seed": 42,
+          "generated_tokens": 1146,
+          "last_token_id": 50
+        }
+      },
+      "scoped_hf_reference": null,
+      "evidence": "Prompt ends in “it”; generated “'s being loaded” forms grammatical “it’s being loaded.” Coherent investigation then a finite tool handoff at290 tokens. Exact full-BF16/HiFi4 same-seed prefix begins identically.",
+      "limitation": "No task-score/correctness inference; full control is exact prompt+seed, while HF evidence is only the narrower scope recorded."
+    },
+    {
+      "index": 58,
+      "case": "anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset",
+      "seed": 43,
+      "free_token_cap": 2048,
+      "verdict": "normal",
+      "confidence": "high",
+      "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.cap2048.seed43.private.json",
+      "fixture_sha256": "f09f5493bf5e6d1f1bec5f5ce7e4273d0ec9352de1f85ffe780ef897063dec98",
+      "prompt_tokens": 58982,
+      "prompt_token_ids_sha256": "a4c9e18717ee53ddbf5ced65964c1f28ac089b26e6b489bd9aa52b303e021a45",
+      "p19": {
+        "path": "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/runs/p19/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.seed43.cap2048.json",
+        "sha256": "7f3ba7d5c4c1af658a622f51773512a9b06ecac0160dfcbf4d70bf3f1c08c99a",
+        "runtime_config_id": "stage12_bf16_hifi4_kv_down_bfp8_p19",
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 43
+        },
+        "generated_tokens": 1382,
+        "last_token_id": 50,
+        "text_prefix": "'s loaded.\nActually, let's just put a print at the top of `sphinx/directives/other.py`.\nI already did that: `sed -i '1i print(\"HELLO FROM OTHER.PY\")' /opt/minic",
+        "text_tail": "e.\n\n# Let's try to find the exact line.\nEOF\n# I will just use sed to insert the code.\n<|\"|>}<tool_call|><|tool_response>"
+      },
+      "exact_full_bf16_hifi4_control": {
+        "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.json",
+        "sha256": "56ca8669e2f71df9240ee9d5f1f70efede8407541dd67e236ea80a4e782862e0",
+        "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+        "same_prompt_token_ids": true,
+        "seed": 43,
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 43
+        },
+        "generated_tokens": 256,
+        "last_token_id": 33588,
+        "same_generated_token_sequence_as_p19": false
+      },
+      "same_fixture_reduced_precision_controls": {
+        "P3_down_BFP8_LoFi": {
+          "path": "setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.seed43.cap2048.json",
+          "sha256": "9998f0613978430ddb7b6428a0c38efffd3b00e482763afef0ef79efc46478e7",
+          "runtime_config_id": "stage12_swe85_down_bfp8_lofi_isolated_served_head_bfp8_lofi",
+          "seed": 43,
+          "generated_tokens": 329,
+          "last_token_id": 50
+        },
+        "P6_attention_down_BFP8_LoFi": {
+          "path": "setup/swe85-precision-bisect/attention-down-bfp8-lofi-fixed108-candidate/runs/attention_down_bfp8_lofi_fixed108/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.seed43.cap2048.json",
+          "sha256": "f5effcb7f2009f106913a70a4ce50c89ebb7826af5660afa9a0dc4c30b5bd109",
+          "runtime_config_id": "stage12_swe85_attention_down_bfp8_lofi_fixed108",
+          "seed": 43,
+          "generated_tokens": 1574,
+          "last_token_id": 50
+        }
+      },
+      "scoped_hf_reference": null,
+      "evidence": "Prompt ends in “it”; generated “'s loaded” forms grammatical “it’s loaded.” Coherent investigation and finite tool handoff at1,382 tokens (below 2,048 cap). Exact full-BF16/HiFi4 same-seed prefix begins identically; no repeated-token motif.",
+      "limitation": "No task-score/correctness inference; full control is exact prompt+seed, while HF evidence is only the narrower scope recorded."
+    }
+  ],
+  "summary": "Six rows reproduce the exact caret degeneration (Pytest7432 three seeds; Requests2931 call20 three seeds), and row55 reproduces a localized Ive+’ve boundary duplication. P19 matched the exact full-BF16 prompt IDs and seed for each. Rows39–41 (Pytest10356),45–48 (Sklearn/Sphinx call57 except row49),50–54 and56–58 complete bounded tool handoffs; these are diagnostic normal-protocol observations, not task-quality findings. Row49 Sphinx call57 seed43 remains progressing midline at256/256 and needs the prepared cap512 extension. P2 head-only results were not used as full precision controls. The few HF comparisons are suffix-scoped, with exact suffix identity and limitations recorded per row.",
+  "no_policy_or_score_change": true
+}

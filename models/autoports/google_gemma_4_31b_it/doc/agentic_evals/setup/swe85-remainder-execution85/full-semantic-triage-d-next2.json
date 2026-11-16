@@ -1,0 +1,58 @@
+{
+  "rows": [
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset",
+      "mode": "full",
+      "seed": 42,
+      "verdict": "inconclusive",
+      "evidence": "Continues the conditioned proposal to replace Docutils Include.run and emit source-read; all visible continuations are progressing code/prose with no repeated-token loop or malformed-name repetition observed. Native malformed call:bash-with-newline/prose motif is not reproduced in these generated continuations.",
+      "confidence": "high",
+      "cap_notes": "All 3 runs reach the 256-token cap mid-replacement script; progressing cap remains inconclusive."
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset",
+      "mode": "full",
+      "seed": 43,
+      "verdict": "inconclusive",
+      "evidence": "Continues the conditioned proposal to replace Docutils Include.run and emit source-read; all visible continuations are progressing code/prose with no repeated-token loop or malformed-name repetition observed. Native malformed call:bash-with-newline/prose motif is not reproduced in these generated continuations.",
+      "confidence": "high",
+      "cap_notes": "All 3 runs reach the 256-token cap mid-replacement script; progressing cap remains inconclusive."
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset",
+      "mode": "full",
+      "seed": 44,
+      "verdict": "inconclusive",
+      "evidence": "Continues the conditioned proposal to replace Docutils Include.run and emit source-read; all visible continuations are progressing code/prose with no repeated-token loop or malformed-name repetition observed. Native malformed call:bash-with-newline/prose motif is not reproduced in these generated continuations.",
+      "confidence": "high",
+      "cap_notes": "All 3 runs reach the 256-token cap mid-replacement script; progressing cap remains inconclusive."
+    },
+    {
+      "job": "anomaly.call91.canonicalprefix",
+      "mode": "full",
+      "seed": 42,
+      "verdict": "normal",
+      "evidence": "Continues from the conditioned malformed-file repair into a Python script that fixes indentation and writes the file; no native duplicated-contraction motif appears in full conditioned text.",
+      "confidence": "high",
+      "cap_notes": "Ends at a valid tool-response boundary before requested cap."
+    },
+    {
+      "job": "anomaly.call91.canonicalprefix",
+      "mode": "full",
+      "seed": 43,
+      "verdict": "reproduced_native_motif",
+      "evidence": "Generated continuation starts with `\u2019ve\u2019ve messed up the file`, reproducing the fixture native duplicated-contraction motif (fixture: `I\u2019ve\u2019ve\u2019ve\u2019ve\u2019ve made a mess`), then proceeds into a valid script and tool boundary.",
+      "confidence": "high",
+      "cap_notes": "Short completed continuation ending at tool-response boundary."
+    },
+    {
+      "job": "anomaly.call91.canonicalprefix",
+      "mode": "full",
+      "seed": 44,
+      "verdict": "inconclusive",
+      "evidence": "Continues coherently into a new Python script to repair indentation; generated text does not repeat the native contraction motif.",
+      "confidence": "high",
+      "cap_notes": "Reaches 256-token cap mid-script while progressing; cap cannot establish normal completion."
+    }
+  ]
+}

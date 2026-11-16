@@ -1,0 +1,163 @@
+{
+  "status": "seed42_complete_task147_complete_extension_controls_pending",
+  "prepared_utc": "2026-11-14T13:38:09.809164+00:00",
+  "commands": {
+    "seed42": {
+      "bounded_argv": [
+        "timeout",
+        "18000",
+        "env",
+        "HF_HUB_OFFLINE=1",
+        "HF_DATASETS_OFFLINE=1",
+        "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+        "models/autoports/google_gemma_4_31b_it/tools/precision_repro_hf.py",
+        "--cases",
+        "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/admitted-seed42.json",
+        "--output",
+        "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/results-seed42",
+        "--tokens",
+        "512",
+        "--seeds",
+        "42",
+        "--prefill-chunk",
+        "512",
+        "--compare-dir",
+        "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first-wave-served",
+        "--compare-dir",
+        "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first-wave-full"
+      ],
+      "bounded_command": "timeout 18000 env HF_HUB_OFFLINE=1 HF_DATASETS_OFFLINE=1 PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python models/autoports/google_gemma_4_31b_it/tools/precision_repro_hf.py --cases models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/admitted-seed42.json --output models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/results-seed42 --tokens 512 --seeds 42 --prefill-chunk 512 --compare-dir models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first-wave-served --compare-dir models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first-wave-full",
+      "status": "completed_exit0",
+      "admission": "admission-seed42.json",
+      "launch": "results-seed42/launch.json"
+    },
+    "task147-seed43": {
+      "bounded_argv": [
+        "timeout",
+        "3600",
+        "env",
+        "HF_HUB_OFFLINE=1",
+        "HF_DATASETS_OFFLINE=1",
+        "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+        "models/autoports/google_gemma_4_31b_it/tools/precision_repro_hf.py",
+        "--cases",
+        "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/admitted-task147-seed43.json",
+        "--output",
+        "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/results-task147-seed43",
+        "--tokens",
+        "512",
+        "--seeds",
+        "43",
+        "--prefill-chunk",
+        "512",
+        "--compare-dir",
+        "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first-wave-served",
+        "--compare-dir",
+        "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first-wave-full"
+      ],
+      "bounded_command": "timeout 3600 env HF_HUB_OFFLINE=1 HF_DATASETS_OFFLINE=1 PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python models/autoports/google_gemma_4_31b_it/tools/precision_repro_hf.py --cases models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/admitted-task147-seed43.json --output models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/results-task147-seed43 --tokens 512 --seeds 43 --prefill-chunk 512 --compare-dir models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first-wave-served --compare-dir models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first-wave-full",
+      "status": "completed_exit0_inconclusive",
+      "admission": "admission-task147-seed43.json",
+      "launch": "results-task147-seed43/launch.json"
+    }
+  },
+  "admission": "Eight seed42 cases and separate147seed43 completed exit0. Task129 seed42/1024 extension is running;147seed43/1024 extension is being prepared after inconclusive512 review. Original manifests/admissions remain preserved.",
+  "task147_predeclared_rationale": "Servedseed42 progressing/inconclusive;43 hasclear repetitiveanomaly,44straylanguage percoordinator. If full43also positive, use explicit diagnosticseed43 forHF147 ratherthan assumeseed42reproduces. HFandTT RNGdiffer, so seeddoesnotguaranteematchingpath. Separatehelperinvocation/modelreload required byglobal--seeds; nohelperedit.",
+  "sampling": {
+    "temperature": 1.0,
+    "top_p": 0.95,
+    "top_k": 20,
+    "generated_tokens": 512,
+    "prompt_tokens": 512,
+    "main_seed": 42,
+    "conditional147_seed": 43
+  },
+  "revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+  "source_sha256": {
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task110.onset.suffix512.private.json": "9e59564d4fdf7b80a2c22d990b68ba581c9a5903cacd12aad265665f018b8115",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task129.onset.suffix512.private.json": "ed546140385f31914b69d2e1b437166e439181164db29ae9c6cf40c77c18a49f",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task127.onset.suffix512.private.json": "9358f7b4cd8f88b6be716f05b439bab7f6ff97ccc6cfcaf7bf9e4558caaea5e7",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task130.onset.suffix512.private.json": "e5392ef8dacd423969e18ddee5c47fc98a3f57babd47f39873b91cc448f227f1",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task145.onset.suffix512.private.json": "49509cb3060d9c35706ca2dac139af8efab8de2cb64428ee39206fd6fbdb91c3",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task30.onset.suffix512.private.json": "40d866e08ba26e30392a32009afd746123317aa3a372f2c4ec125b3ad6736ac8",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task48.onset.suffix512.private.json": "b692aa5767347bfd84812ee16046fc94d639af4aa2abda4d0002ef35107e69f5",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task139.onset.suffix512.private.json": "1d32b1a1562236692f7ab7a5a0b51b6622acf4a29fde529e1ba501e4fa0afcf3",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task147.onset.suffix512.private.json": "1da2fb6f7c5c59a1ad448044b4bac32b13122d919ea209d5e4753a4d5f7d4635",
+    "models/autoports/google_gemma_4_31b_it/tools/precision_repro_hf.py": "aafe67c88bb5a1eb38b8718570bbddd5749e2a9ecbb9dd19cdb100a49572c03e",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/head_bfp8_build_kwargs.json": "2e583fa8bd7aff7c5f8be110835df751924d167243c5a44a68aa5b3d70c6845f",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_build_kwargs.json": "ff2b5ed24e0b6a1dee7eb5cd8bd437d17c3df5f8f25567927d239e666f0699f9",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/candidates-seed42.json": "7d58722301fd2e4cc8c07386fb186cc933f31de07329e487dfef7c2fcd0b2b91",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/candidate147-seed43.json": "682e7ebe2fed606a6a8261093934784c0bfba064c40d8d32d9ab84a92eff41a6"
+  },
+  "cases": [
+    {
+      "name": "task110.onset.suffix512",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task110.onset.suffix512.private.json",
+      "prompt_ids_sha256": "84110119dd905f7f3b29060a2bd7afcd87e900cbdf2aa6a06051c4a971ebe296",
+      "prompt_tokens": 512
+    },
+    {
+      "name": "task129.onset.suffix512",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task129.onset.suffix512.private.json",
+      "prompt_ids_sha256": "00aafcf420c286bb4afd485a925f53d9fc5c717299e6368956c0a5fe57cecab6",
+      "prompt_tokens": 512
+    },
+    {
+      "name": "task127.onset.suffix512",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task127.onset.suffix512.private.json",
+      "prompt_ids_sha256": "37eb9d8efe41d5cc914a71b58a736dcb52f8774d0cbfed3eec28c27ec5e2edc3",
+      "prompt_tokens": 512
+    },
+    {
+      "name": "task130.onset.suffix512",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task130.onset.suffix512.private.json",
+      "prompt_ids_sha256": "fb3c50b2073eab93882c9f7b67575e8b0a3de586eb84762a0ba89dbecd836ca7",
+      "prompt_tokens": 512
+    },
+    {
+      "name": "task145.onset.suffix512",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task145.onset.suffix512.private.json",
+      "prompt_ids_sha256": "dac30532dbe3110bddfbc4d2fe99adc362b9782e5877504b9570212b5fdde98f",
+      "prompt_tokens": 512
+    },
+    {
+      "name": "task30.onset.suffix512",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task30.onset.suffix512.private.json",
+      "prompt_ids_sha256": "5aa418fa3b0c5625f07fb8eb28f42dbdc016dfc0bd16a52c8fa04e6f3812a88e",
+      "prompt_tokens": 512
+    },
+    {
+      "name": "task48.onset.suffix512",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task48.onset.suffix512.private.json",
+      "prompt_ids_sha256": "a469ead2d59221883638748385890316a26dc8d741b4ee408476c0f113e0e1f0",
+      "prompt_tokens": 512
+    },
+    {
+      "name": "task139.onset.suffix512",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task139.onset.suffix512.private.json",
+      "prompt_ids_sha256": "169ac77e22462ce87075ef24c115884c9ff7a05a2013d6addbc44d0371bed24a",
+      "prompt_tokens": 512
+    },
+    {
+      "name": "task147.onset.suffix512",
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task147.onset.suffix512.private.json",
+      "prompt_ids_sha256": "ef9553018b7ae304f1a7ac04cb321ac387d71e168078c0ca5e10f36567c4a3b0",
+      "prompt_tokens": 512
+    }
+  ],
+  "memory_gate": "No concurrentHFcheckpointprocess. MemAvailable>=100GB beforeeachCPUload; weights~62.55GB andshortcache/workspace fit withheadroom. Recheckhostpressure; do notlaunch ifbelowgate. NoTT/server use authorizedhere. RecordactualDocker/TT contention ifcoordinator permits; accuracy-only, neverperformanceranking.",
+  "cost": {
+    "measured_prior_two_case_wall_s": 2438.390525341034,
+    "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe-astropy-precision/short-hf-batch/launch.json",
+    "prior_regime": "Dockerpreparations overlappedCPUHF; noTT/serving. Planningcostonly.",
+    "linear_nine_case_hours": 3.0479881566762925,
+    "eight_seed42_hours": 2.709322805934482,
+    "extra_reload_note": "147separateinvocationaddsmodelload; linearprojection embedspriorone-load/2cases andisnot exact. Provision~3\u20134h for9, boundedseed42batch18000s plus1473600s. Ifall9seed42insteadselectedbycoordinator,18000stotal stillreasonable butrequiresnewexplicitmanifest/rationale.",
+    "timeout_policy": "Keep partialTF/sampleartifacts; timeoutisnotnegativeHFcontrol anddoesnotsettleanomaly."
+  },
+  "decision": "Semanticpositive establishesHFreference reproduction forthat savedtruncatedinput only, not equalincidence/nativeprompt. Noautomaticflagcannotpass. Coherent/inconclusive512output requires1024/additionalseeds orfurtherinvestigation beforeclosure. ShortTFnotwhole-replyaccuracy.",
+  "tf_comparison": "Existinghelper comparesfirst64chosenTF rows againstsamejobname inserved/full dirs andassertsexactforced-tokenIDs. No posthocdifferentprompt substitution.",
+  "status_reconciled_unix": 1794671309.514642
+}

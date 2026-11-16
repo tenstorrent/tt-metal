@@ -1,0 +1,253 @@
+{
+  "status": "complete_host_only_diagnostic",
+  "source_index": "completed-anomaly-review-index.json",
+  "trial_positions_zero_based_inclusive": [24, 47],
+  "distinct_jobs": 8,
+  "trials": [
+    {
+      "job": "anomaly.sympy__sympy-18763.call10.onset",
+      "seed": 42,
+      "field": "$.free_running[0].text",
+      "verdict": "other_anomaly",
+      "quote": "{command:<|\"|>grep \"PRECEDENCE =\" sympy/printing/latex.py",
+      "cap": {"generated_tokens": 22, "requested_cap": 256, "at_cap": false},
+      "parser": "Generated-only parser sees no structured tool; conditioning-plus-generated parser sees a valid bash call. The generated text begins inside the command argument, consistent with continuation of an already-open call, so this is not the native missing-call motif.",
+      "confidence": "high"
+    },
+    {
+      "job": "anomaly.sympy__sympy-18763.call10.onset",
+      "seed": 43,
+      "field": "$.free_running[1].text",
+      "verdict": "other_anomaly",
+      "quote": "{command:<|\"|>grep \"PRECEDENCE =\" sympy/printing/latex.py",
+      "cap": {"generated_tokens": 22, "requested_cap": 256, "at_cap": false},
+      "parser": "Generated-only parser sees no structured tool; conditioning-plus-generated parser sees a valid bash call. The generated text begins inside the command argument, consistent with continuation of an already-open call, so this is not the native missing-call motif.",
+      "confidence": "high"
+    },
+    {
+      "job": "anomaly.sympy__sympy-18763.call10.onset",
+      "seed": 44,
+      "field": "$.free_running[2].text",
+      "verdict": "other_anomaly",
+      "quote": "{command:<|\"|>grep \"PRECEDENCE =\" sympy/printing/latex.py",
+      "cap": {"generated_tokens": 22, "requested_cap": 256, "at_cap": false},
+      "parser": "Generated-only parser sees no structured tool; conditioning-plus-generated parser sees a valid bash call. The generated text begins inside the command argument, consistent with continuation of an already-open call, so this is not the native missing-call motif.",
+      "confidence": "high"
+    },
+    {
+      "job": "anomaly.psf__requests-5414.call10.onset",
+      "seed": 42,
+      "field": "$.free_running[0].text",
+      "verdict": "reproduced_native_motif",
+      "quote": "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^…",
+      "cap": {"generated_tokens": 256, "requested_cap": 256, "at_cap": true},
+      "parser": "Caret loop matches the indexed native caret motif; response is capped.",
+      "confidence": "high"
+    },
+    {
+      "job": "anomaly.psf__requests-5414.call10.onset",
+      "seed": 43,
+      "field": "$.free_running[1].text",
+      "verdict": "reproduced_native_motif",
+      "quote": "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^…",
+      "cap": {"generated_tokens": 256, "requested_cap": 256, "at_cap": true},
+      "parser": "Caret loop matches the indexed native caret motif; response is capped.",
+      "confidence": "high"
+    },
+    {
+      "job": "anomaly.psf__requests-5414.call10.onset",
+      "seed": 44,
+      "field": "$.free_running[2].text",
+      "verdict": "reproduced_native_motif",
+      "quote": "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^…",
+      "cap": {"generated_tokens": 256, "requested_cap": 256, "at_cap": true},
+      "parser": "Caret loop matches the indexed native caret motif; response is capped.",
+      "confidence": "high"
+    },
+    {
+      "job": "anomaly.psf__requests-5414.call11.onset",
+      "seed": 42,
+      "field": "$.free_running[0].text",
+      "verdict": "reproduced_native_motif",
+      "quote": "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^…",
+      "cap": {"generated_tokens": 256, "requested_cap": 256, "at_cap": true},
+      "parser": "Caret loop matches the indexed native caret motif; response is capped.",
+      "confidence": "high"
+    },
+    {
+      "job": "anomaly.psf__requests-5414.call11.onset",
+      "seed": 43,
+      "field": "$.free_running[1].text",
+      "verdict": "reproduced_native_motif",
+      "quote": "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^…",
+      "cap": {"generated_tokens": 256, "requested_cap": 256, "at_cap": true},
+      "parser": "Caret loop matches the indexed native caret motif; response is capped.",
+      "confidence": "high"
+    },
+    {
+      "job": "anomaly.psf__requests-5414.call11.onset",
+      "seed": 44,
+      "field": "$.free_running[2].text",
+      "verdict": "reproduced_native_motif",
+      "quote": "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^…",
+      "cap": {"generated_tokens": 256, "requested_cap": 256, "at_cap": true},
+      "parser": "Caret loop matches the indexed native caret motif; response is capped.",
+      "confidence": "high"
+    },
+    {
+      "job": "anomaly.psf__requests-5414.call9.onset",
+      "seed": 42,
+      "field": "$.free_running[0].text",
+      "verdict": "reproduced_native_motif",
+      "quote": "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^…",
+      "cap": {"generated_tokens": 256, "requested_cap": 256, "at_cap": true},
+      "parser": "Caret loop matches the indexed native caret motif; response is capped.",
+      "confidence": "high"
+    },
+    {
+      "job": "anomaly.psf__requests-5414.call9.onset",
+      "seed": 43,
+      "field": "$.free_running[1].text",
+      "verdict": "reproduced_native_motif",
+      "quote": "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^…",
+      "cap": {"generated_tokens": 256, "requested_cap": 256, "at_cap": true},
+      "parser": "Caret loop matches the indexed native caret motif; response is capped.",
+      "confidence": "high"
+    },
+    {
+      "job": "anomaly.psf__requests-5414.call9.onset",
+      "seed": 44,
+      "field": "$.free_running[2].text",
+      "verdict": "reproduced_native_motif",
+      "quote": "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^…",
+      "cap": {"generated_tokens": 256, "requested_cap": 256, "at_cap": true},
+      "parser": "Caret loop matches the indexed native caret motif; response is capped.",
+      "confidence": "high"
+    },
+    {
+      "job": "anomaly.requests2931.call20.canonicalprefix",
+      "seed": 42,
+      "field": "$.free_running[0].text",
+      "verdict": "reproduced_native_motif",
+      "quote": "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^…",
+      "cap": {"generated_tokens": 256, "requested_cap": 256, "at_cap": true},
+      "parser": "Capped caret loop matches the indexed native repeated-caret motif.",
+      "confidence": "high"
+    },
+    {
+      "job": "anomaly.requests2931.call20.canonicalprefix",
+      "seed": 43,
+      "field": "$.free_running[1].text",
+      "verdict": "reproduced_native_motif",
+      "quote": "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^…",
+      "cap": {"generated_tokens": 256, "requested_cap": 256, "at_cap": true},
+      "parser": "Capped caret loop matches the indexed native repeated-caret motif.",
+      "confidence": "high"
+    },
+    {
+      "job": "anomaly.requests2931.call20.canonicalprefix",
+      "seed": 44,
+      "field": "$.free_running[2].text",
+      "verdict": "reproduced_native_motif",
+      "quote": "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^…",
+      "cap": {"generated_tokens": 256, "requested_cap": 256, "at_cap": true},
+      "parser": "Capped caret loop matches the indexed native repeated-caret motif.",
+      "confidence": "high"
+    },
+    {
+      "job": "anomaly.pytest-dev__pytest-5787.call1.onset",
+      "seed": 42,
+      "field": "$.free_running[0].text",
+      "verdict": "normal",
+      "quote": "<channel|><|tool_call>call:bash{command:<|\"|>ls -R<|\"|>}<tool_call|><|tool_response>",
+      "cap": {"generated_tokens": 16, "requested_cap": 256, "at_cap": false},
+      "parser": "Audited generated-only and conditioning-plus-generated forms are one valid structured bash call with valid command schema. Raw tool markers here are expected serialized structure, not anomaly.",
+      "confidence": "high"
+    },
+    {
+      "job": "anomaly.pytest-dev__pytest-5787.call1.onset",
+      "seed": 43,
+      "field": "$.free_running[1].text",
+      "verdict": "normal",
+      "quote": "<|tool_call>call:bash{command:<|\"|>ls -R<|\"|>}<tool_call|><|tool_response>",
+      "cap": {"generated_tokens": 15, "requested_cap": 256, "at_cap": false},
+      "parser": "Audited generated-only and conditioning-plus-generated forms are one valid structured bash call with valid command schema. Raw tool markers here are expected serialized structure, not anomaly.",
+      "confidence": "high"
+    },
+    {
+      "job": "anomaly.pytest-dev__pytest-5787.call1.onset",
+      "seed": 44,
+      "field": "$.free_running[2].text",
+      "verdict": "normal",
+      "quote": "<channel|><|tool_call>call:bash{command:<|\"|>ls -R<|\"|>}<tool_call|><|tool_response>",
+      "cap": {"generated_tokens": 16, "requested_cap": 256, "at_cap": false},
+      "parser": "Audited generated-only and conditioning-plus-generated forms are one valid structured bash call with valid command schema. Raw tool markers here are expected serialized structure, not anomaly.",
+      "confidence": "high"
+    },
+    {
+      "job": "anomaly.pytest-dev__pytest-7432.call19.onset",
+      "seed": 42,
+      "field": "$.free_running[0].text",
+      "verdict": "reproduced_native_motif",
+      "quote": "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\n  File \"/testbed/src/_pytest/assertion/rewrite.py\", line 360",
+      "cap": {"generated_tokens": 256, "requested_cap": 256, "at_cap": true},
+      "parser": "Begins with the native caret motif and then a traceback fragment; capped at the requested limit.",
+      "confidence": "high"
+    },
+    {
+      "job": "anomaly.pytest-dev__pytest-7432.call19.onset",
+      "seed": 43,
+      "field": "$.free_running[1].text",
+      "verdict": "reproduced_native_motif",
+      "quote": "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^…",
+      "cap": {"generated_tokens": 256, "requested_cap": 256, "at_cap": true},
+      "parser": "Capped caret loop matches native caret motif.",
+      "confidence": "high"
+    },
+    {
+      "job": "anomaly.pytest-dev__pytest-7432.call19.onset",
+      "seed": 44,
+      "field": "$.free_running[2].text",
+      "verdict": "reproduced_native_motif",
+      "quote": "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^…",
+      "cap": {"generated_tokens": 256, "requested_cap": 256, "at_cap": true},
+      "parser": "Capped caret loop matches native caret motif.",
+      "confidence": "high"
+    },
+    {
+      "job": "anomaly.pytest10356-call14.canonicalprefix",
+      "seed": 42,
+      "field": "$.free_running[0].text",
+      "verdict": "other_anomaly",
+      "quote": "<|\"|>grep -r \"pytestmark\" src/ | grep -v \"__pycache__\" | head -n 20",
+      "cap": {"generated_tokens": 30, "requested_cap": 256, "at_cap": false},
+      "parser": "Generated-only parse is missing a structured tool; conditioning-plus-generated parse produces a malformed function name and invalid command schema. This matches a protocol parsing anomaly, but does not reproduce the indexed malformed-name motif because generated text itself is only a command fragment.",
+      "confidence": "high"
+    },
+    {
+      "job": "anomaly.pytest10356-call14.canonicalprefix",
+      "seed": 43,
+      "field": "$.free_running[1].text",
+      "verdict": "other_anomaly",
+      "quote": "<|\"|>grep -r \"pytestmark\" src/ | grep \".pytestmark\" | head -n 20",
+      "cap": {"generated_tokens": 27, "requested_cap": 256, "at_cap": false},
+      "parser": "Generated-only parse is missing a structured tool; conditioning-plus-generated parse produces a malformed function name and invalid command schema. This matches a protocol parsing anomaly, but does not reproduce the indexed malformed-name motif because generated text itself is only a command fragment.",
+      "confidence": "high"
+    },
+    {
+      "job": "anomaly.pytest10356-call14.canonicalprefix",
+      "seed": 44,
+      "field": "$.free_running[2].text",
+      "verdict": "other_anomaly",
+      "quote": "<|\"|>grep -r \"pytestmark\" src/ | grep -v \"__pycache__\" | head -n 50",
+      "cap": {"generated_tokens": 30, "requested_cap": 256, "at_cap": false},
+      "parser": "Generated-only parse is missing a structured tool; conditioning-plus-generated parse produces a malformed function name and invalid command schema. This matches a protocol parsing anomaly, but does not reproduce the indexed malformed-name motif because generated text itself is only a command fragment.",
+      "confidence": "high"
+    }
+  ],
+  "limitations": [
+    "Verdicts compare saved generated text with the indexed native motif and audited stock parser findings only.",
+    "They do not establish full precision or native token-stream equivalence.",
+    "Repeated coherent steps in separate tool calls were not treated as within-response repetition."
+  ]
+}

@@ -1,0 +1,26 @@
+{
+  "status": "served_and_full_complete",
+  "jobs_each": 4,
+  "runs": {
+    "served": {
+      "exit_code": 0,
+      "wall_seconds": 266.0450382232666,
+      "predicted_seconds": 303.83722533296043,
+      "measured_over_prediction": 0.8756169950265995,
+      "prediction_range": null,
+      "missing_reason": "Prelaunch point estimate and timeout recorded, but no prediction interval; no retrospective interval invented.",
+      "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-semantic-supplement/served-completion.json"
+    },
+    "full": {
+      "exit_code": 0,
+      "wall_seconds": 290.7323741912842,
+      "predicted_seconds": 335.3443120149566,
+      "measured_over_prediction": 0.8669667675124226,
+      "prediction_range": null,
+      "missing_reason": "Prelaunch point estimate and timeout recorded, but no prediction interval; no retrospective interval invented.",
+      "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-semantic-supplement/full-completion.json"
+    }
+  },
+  "scope": "Diagnostic host wall, not serving performance or device time. Both batches completed before the queued caret short controls.",
+  "historical_admission_note": "Admission status admitted_not_executed is an immutable prelaunch snapshot; completion records supersede it."
+}

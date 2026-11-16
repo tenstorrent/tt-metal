@@ -1,0 +1,90 @@
+{
+  "reviewed_unix": 1794723395.4117496,
+  "rows": [
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.sphinx-doc__sphinx-11510.call108.onset.seed42.cap256.json",
+      "sha256": "56d6dddba040a925cc69916a929e4e9a61ab4b2e4eed5983ca466df60d637240",
+      "seed": 42,
+      "tokens": 36,
+      "verdict": "normal",
+      "reason": "Pinned prefix and full raw continuation read: coherent split Python path and canonical tool close.",
+      "trace_counters_delta": {
+        "model_replays": 35,
+        "sample_replays": 35,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 35,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.sphinx-doc__sphinx-11510.call108.onset.seed43.cap256.json",
+      "sha256": "1311c8a93de177d12d063a3bd5ee7894b0ae387b5e0743b14039b75adf83272c",
+      "seed": 43,
+      "tokens": 36,
+      "verdict": "normal",
+      "reason": "Pinned prefix and full raw continuation read: coherent split Python path and canonical tool close.",
+      "trace_counters_delta": {
+        "model_replays": 35,
+        "sample_replays": 35,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 35,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.sphinx-doc__sphinx-11510.call108.onset.seed44.cap256.json",
+      "sha256": "c87cc48f1c59c07fc940d2643cfcb91c6f22adbf29605e5ab161e2cf4f0e8804",
+      "seed": 44,
+      "tokens": 36,
+      "verdict": "normal",
+      "reason": "Pinned prefix and full raw continuation read: coherent split Python path and canonical tool close.",
+      "trace_counters_delta": {
+        "model_replays": 35,
+        "sample_replays": 35,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 35,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed42.cap1024.json",
+      "sha256": "789444322120fb23dc7a087300e574a6107a3d3f2a5300f4525e119ebbd2351b",
+      "seed": 42,
+      "tokens": 609,
+      "verdict": "native",
+      "reason": "Inherited call:bash followed by script without argument object opener; malformed protocol native family. Parser audit requested. Code correctness not asserted.",
+      "trace_counters_delta": {
+        "model_replays": 608,
+        "sample_replays": 608,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 608,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bfp8-hifi2-first-panel-after-w/runs/head_bfp8_hifi2/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed43.cap2048.json",
+      "sha256": "3784cae570393305075972406f2e0946194f4a24973cf3876e0b83388d05d27f",
+      "seed": 43,
+      "tokens": 1108,
+      "verdict": "native",
+      "reason": "Inherited call:bash followed by script without argument object opener; malformed protocol native family. Parser audit requested. Code correctness not asserted.",
+      "trace_counters_delta": {
+        "model_replays": 1107,
+        "sample_replays": 1107,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 1107,
+        "captures": 0
+      }
+    }
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "status": "completed_root_and_independent_triage_reconciled",
+  "served": {
+    "counts": {
+      "normal": 2,
+      "native": 1
+    },
+    "wall_seconds": 166.36522507667542
+  },
+  "full": {
+    "counts": {
+      "normal": 3
+    },
+    "wall_seconds": 117.3222713470459
+  },
+  "forecast": "both low misses accounted for early natural stops",
+  "original_full_missing_tool_reproduced": false,
+  "next": "HF9 queued now; prepare longer2048prefix test for original missingtool after HF serial block. Separate HF512secondary2 pending.",
+  "score_or_policy_change": false,
+  "triage_hashes": {
+    "served": "5f48a80b44ce6086390e541eade5c4d9f878e00ef8c6e829d7a1b18d29b04b7b",
+    "full": "7c5d1a20673ca8036f94fe8f30b5b6ae145a3038fa4f0ccae904030f2ec48791"
+  }
+}

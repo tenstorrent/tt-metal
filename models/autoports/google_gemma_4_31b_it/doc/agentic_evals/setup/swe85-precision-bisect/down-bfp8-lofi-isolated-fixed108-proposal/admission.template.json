@@ -1,0 +1,12 @@
+{
+  "status": "pending_root_admission",
+  "proposal_sha256": "dbaa7eb5bdb789586794b5061dd0eda81aea5b2562a77a901d80e2735e63c632",
+  "driver_sha256": "b813686bfbb4a5c18326d404999f1ff71c33ce560d9a07011e992b26c27c85b2",
+  "source_inventory_sha256": "2c6199d5f2f501f13b9b4f8f419e95df6b62a278a77a46a2fb2f452d0d5c2ecf",
+  "command_sha256": "e6248d54563b2f3349e576f49971df44f91c9306d1752d6e9e3d531b9f74867f",
+  "forecast_sha256": "516a0676a9535ddc9a1954740a4588c95a4e07630b47343920c8e68c1eb01cfa",
+  "precision_sha256": "769f6b5d975c3a4b252c01668ded02f32c61c43819117a95868249b4b1fd7350",
+  "build_kwargs_sha256": "0dbc1dfb7d72a9211662d1c40d9bf295fffd83f2bf080fa6932d11adff50e828",
+  "manifest_sha256": "57193e4b91af3a31df00f0c92dbc0f2219fbce011e6533594e5244a93a3021ed",
+  "note": "Template only. Candidate is not admitted or launched; root owns admission.json."
+}

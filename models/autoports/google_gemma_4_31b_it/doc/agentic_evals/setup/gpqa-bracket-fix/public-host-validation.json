@@ -1,0 +1,17 @@
+{
+  "status": "host_checks_pass",
+  "fixed_commit": "6290a8f7e24a7fa8b5e2cfe50e16e2b9b1f49335",
+  "base_commit": "af401ef3dd3d2d90e55680990ed1f0c9f7892448",
+  "patch_sha256": "2a70a78ec56498f8bad49c21f13b71cc5612f6830a6caca72ff8f3126ec43def",
+  "regression_test_cases": 4,
+  "fixed_result": "OK",
+  "original_result": "FAILED (failures=6)",
+  "all198_choice_gold_validation": "host-validation.json",
+  "affected12_no_fixed10_overlap": true,
+  "pinned_local_chat_model_construction": "model-construction.json",
+  "model_requests": 0,
+  "raw_test_logs_retained_locally_not_proposed": [
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/gpqa-bracket-fix/host-tests.log",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/gpqa-bracket-fix/original-regression-failure.log"
+  ]
+}

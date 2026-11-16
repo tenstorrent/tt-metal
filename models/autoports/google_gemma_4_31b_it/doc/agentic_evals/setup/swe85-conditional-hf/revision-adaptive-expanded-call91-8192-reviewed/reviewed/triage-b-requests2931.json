@@ -1,0 +1,57 @@
+{
+  "job": "anomaly.requests2931.call20.canonicalprefix",
+  "mode": "conditional_hf_cpu_short_suffix512",
+  "seed": 42,
+  "verdict": "reproduced_native_motif",
+  "evidence": {
+    "result_file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/results/seed42-suffix512/anomaly.requests2931.call20.canonicalprefix.optional-suffix512.hf.private.json",
+    "result_sha256": "a91e0aff64f340594679d595122c256f280e66e650a512ce34a85d52ed432156",
+    "result_fields": {
+      "status": "complete",
+      "case_sha256": "5017461630f07f8232f054ddf6c2b979c4e3bb14370431de6799ca8c4d1d7804",
+      "revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+      "prompt_tokens": 512,
+      "prompt_source": "Saved prompt_token_ids, no chat rerender",
+      "device": "cpu",
+      "results[0].seed": 42,
+      "results[0].generated_tokens": 512,
+      "results[0].streamed_generated_tokens": 512,
+      "results[0].generated_token_ids_unique_count": 1,
+      "results[0].generated_token_ids_only_value": 172109,
+      "results[0].text_chars": 2048,
+      "results[0].text_all_carets": true,
+      "results[0].tail_ratio": 0.01123046875,
+      "results[0].tail_distinct": 1,
+      "results[0].flag": true,
+      "case_metadata.call_number": 20,
+      "case_metadata.chosen_teacher_forcing_positions": 64,
+      "case_metadata.sampling": {"temperature": 1.0, "top_p": 0.95, "top_k": 20}
+    },
+    "fixture": {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-85/anomaly.requests2931.call20.canonicalprefix.suffix512.private.json",
+      "sha256": "5017461630f07f8232f054ddf6c2b979c4e3bb14370431de6799ca8c4d1d7804",
+      "prompt_token_ids_length": 512,
+      "same_ids_as_original_case_suffix": true,
+      "original_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-precision/requests2931-call20/canonicalprefix/case.private.json",
+      "original_case_sha256": "7f527603e08f61f5516745fc2fab496c6ae7020985372c8f71fd0459895c10f0",
+      "original_prompt_token_ids_length": 8580,
+      "suffix_range": "original prompt_token_ids[8068:8580]",
+      "source_caveat": "This removes 8068 prompt tokens and may begin inside turn/protocol context. Fixture metadata says no new BOS/template text was inserted and native serialization equivalence is not claimed; the original request itself uses reconstructed pinned-tokenizer rendering, with an inferred empty thought-channel closure."
+    },
+    "matched_tt": {
+      "served_file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/served/anomaly.requests2931.call20.canonicalprefix.optional-suffix512.json",
+      "served_sha256": "1150c42e334a9fd9da59a8f6214713eeaa6f1283bb9e17c83c284f83cc5252c8",
+      "served_seed": 42,
+      "served_free_running_tokens": 512,
+      "served_text_all_carets": true,
+      "full_file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/full/anomaly.requests2931.call20.canonicalprefix.optional-suffix512.json",
+      "full_sha256": "14ec7feaac78ac5659f21df7926336c2521648b4c9fb33966d0687610e9dfe98",
+      "full_seed": 42,
+      "full_free_running_tokens": 512,
+      "full_text_all_carets": true
+    },
+    "native_motif": "The saved source case's chosen continuation is 64 copies of token 172109 (caret); reconstruction notes state this starts with the first excess caret after 40 matching traceback underline characters. The HF continuation is exactly 512 caret tokens, so the same source-specific repeated-caret motif is present, beyond the short matching boundary. Both matched TT suffix controls at seed 42 also emit 512 caret tokens."
+  },
+  "confidence": "high for same-motif degeneration on this shortened suffix; not evidence of native full-context equivalence or HF explaining the original full-prefix anomaly",
+  "cap_notes": "The HF run reached its requested 512-token cap with no stop and remains degenerate through the last token; this is not merely an unfinished coherent answer. The matched TT runs likewise reach 512. The result is CPU diagnostic HF at seed 42; its sampling RNG differs from TT, and the fixture is the last 512 IDs of the reconstructed 8580-token prompt, not the original 8454-token native prompt. No task-solution inference is warranted."
+}

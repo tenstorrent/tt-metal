@@ -1,0 +1,63 @@
+{
+  "epoch": 1794756093.9987962,
+  "status": "rejected_natural_accuracy",
+  "elapsed_seconds": 278.9212110042572,
+  "forecast_seconds": [
+    130,
+    550
+  ],
+  "forecast_hit": true,
+  "scores": {
+    "prefill": [
+      {
+        "top1": 0.97,
+        "top5": 1.0,
+        "top100": 1.0,
+        "matches_top1": 97,
+        "matches_top5": 100,
+        "matches_top100": 100,
+        "total": 100,
+        "k": 100
+      }
+    ],
+    "decode": [
+      {
+        "top1": 0.98,
+        "top5": 1.0,
+        "top100": 1.0,
+        "matches_top1": 98,
+        "matches_top5": 100,
+        "matches_top100": 100,
+        "total": 100,
+        "k": 100,
+        "elapsed_s": 3.714445199817419,
+        "e2e_t/s/u": 26.921920938533546,
+        "ttft_ms": 121.10434984788299,
+        "decode_tokens": 99.0,
+        "decode_elapsed_s": 3.593034658115357,
+        "decode_t/s/u": 27.56038952194527
+      }
+    ],
+    "natural": [
+      {
+        "top1": 0.857421875,
+        "top5": 0.9921875,
+        "top100": 1.0,
+        "matches_top1": 439,
+        "matches_top5": 508,
+        "matches_top100": 512,
+        "total": 512,
+        "k": 100,
+        "elapsed_s": 19.531409157905728,
+        "e2e_t/s/u": 26.214186383615736,
+        "ttft_ms": 158.61854399554431,
+        "decode_tokens": 511.0,
+        "decode_elapsed_s": 19.372715710895136,
+        "decode_t/s/u": 26.377303400607676
+      }
+    ]
+  },
+  "runtime_policy_verified": true,
+  "trace_verified": true,
+  "selected": false
+}

@@ -1,0 +1,20 @@
+[
+  {
+    "mode": "served",
+    "exit": 0,
+    "stdout": "Validated 2 jobs without importing TTNN\n",
+    "stderr": ""
+  },
+  {
+    "mode": "full",
+    "exit": 0,
+    "stdout": "Validated 2 jobs without importing TTNN\n",
+    "stderr": ""
+  },
+  {
+    "mode": "hf",
+    "exit": 0,
+    "stdout": "Validated 1 saved-token cases; no model loaded\n",
+    "stderr": ""
+  }
+]

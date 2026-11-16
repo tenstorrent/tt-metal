@@ -1,0 +1,21 @@
+{
+  "status": "admitted",
+  "start_unix": 1794766632.0719624,
+  "command_sha256": "3828149f51286d114ae17e4bae96de8522363dd085f2d9dba34471c46e87a832",
+  "source_checks": 33,
+  "source_mismatches": [],
+  "owner_check": {
+    "returncode": 1,
+    "stdout": "",
+    "stderr": ""
+  },
+  "acceptance_review_sha256": "f91e3e9a05e8e8b5c989cfdb0fc609a8b138f6a9539218db899eb6fdd56074d4",
+  "forecast_seconds": {
+    "low": 750,
+    "point": 1200,
+    "high": 2100
+  },
+  "deadline_unix": 1794791725,
+  "closure_reserve_seconds": 1800,
+  "scope": "B1 diagnostic cache-resume allocation16384 only; advertisedcontext262144 separatelypassed. No default change."
+}

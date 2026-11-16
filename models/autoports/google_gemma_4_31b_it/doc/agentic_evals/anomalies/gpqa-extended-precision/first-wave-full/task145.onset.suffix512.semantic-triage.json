@@ -1,0 +1,101 @@
+{
+  "task": "145",
+  "diagnostic": "Full-precision suffix512 first-wave free-running semantic review",
+  "source": "anomalies/gpqa-extended-precision/first-wave-full/task145.onset.suffix512.json",
+  "comparison_context": {
+    "suffix_packet": "anomalies/gpqa-extended-precision/task145.onset.suffix512.private.json",
+    "original_triage": "current/gpqa-extended198-head-bfp8/digest/145.triage.json",
+    "coordinator_context": "current/gpqa-extended198-head-bfp8/digest/coordinator.json",
+    "learned_context": "learned.json",
+    "original_finding": "The original full response was judged anomalous for sustained latter-half semantic cycling: it repeatedly reopened the same syn/anti and stereochemical orientation checks, restated the same priorities, and returned to the same assignment without resolving the checks. It eventually selected C and stopped normally; its digest was uncapped and unflagged. The onset packet marks a concrete malformed-fragment boundary but says it is not unique first-error attribution.",
+    "selected_onset": "The diagnostic prompt is the exact retained suffix of 512 reconstructed IDs, with 5,352 earlier IDs removed and the position origin changed. It is not the original native prompt.",
+    "reconstruction_limit": "Raw native sampled token IDs are unavailable; matching completion counts do not prove sampled-token identity.",
+    "review_scope": "All three saved free_running texts only. TFchosen was executed and is not assessed here; official scoring is complete."
+  },
+  "pattern_comparison": {
+    "shared_pattern": "All three continuations become dominated by repetition without new evidence or resolution. Seeds 42 and 43 collapse into malformed repeated text; seed 44 sustains the original syn/anti and orientation-check cycle in coherent prose.",
+    "between_seeds": "Seed 42 repeats a single letter throughout. Seed 43 begins with the same F/C7/C4 orientation claim, then repeats a malformed self-correction around clockwise rotation and H(up). Seed 44 gives a syn-product conclusion and then repeats the same C8 priority/spatial assignment and syn-preference conclusion several times.",
+    "relation_to_original": "Seed 44 strongly matches the original semantic-cycle pattern. Seeds 42 and 43 are anomalous repetitions but differ in surface form from the original substantive cycle. The continuations do not establish the original onset or native prompt path.",
+    "progress_and_cutoff": "Seed 44's opening statement and first syn-product conclusion are coherent content; the subsequent unchanged re-verification cycle persists across multiple repetitions without a new check. Its last sentence ends mid-phrase at the saved output boundary, which is not counted as malformed text."
+  },
+  "seeds": [
+    {
+      "seed": 42,
+      "text_chars": 2048,
+      "semantic_anomaly": true,
+      "mechanical_flag": true,
+      "observed_malformed_text": {
+        "observed": true,
+        "stray_language": false,
+        "actual_bad_fragments": true,
+        "description": "The entire visible continuation, chars 0-2048, is a stream of isolated repeated 'a' characters separated by spaces, with no coherent proposition or task-relevant reasoning. This is actual malformed repetitive output, not stray-language text."
+      },
+      "evidence": [
+        {
+          "char_range": [0, 2048],
+          "paraphrase": "The continuation repeats the same isolated letter and adds no semantic content or task-relevant reasoning."
+        }
+      ],
+      "relation_to_original": "Anomalous malformed repetition, but not a recurrence of the original substantive syn/anti reasoning cycle.",
+      "basis": "The text is wholly degenerate across the saved span; the judgment does not rely on its mechanical flag or infer why the text occurred."
+    },
+    {
+      "seed": 43,
+      "text_chars": 3227,
+      "semantic_anomaly": true,
+      "mechanical_flag": true,
+      "observed_malformed_text": {
+        "observed": true,
+        "stray_language": false,
+        "actual_bad_fragments": true,
+        "description": "At about char 110 the text contains the malformed fragment '//*', followed by a long nested repetition of the same clockwise-rotation/H(up) correction and '*R*' assertion. This is malformed text; no stray-language passage is visible. The final mid-phrase cutoff is not independently treated as malformed."
+      },
+      "evidence": [
+        {
+          "char_range": [0, 110],
+          "paraphrase": "The opening states that F(down) to C7(right) to C4(left) gives a clockwise rotation, then asks whether clockwise rotation with H(up) is R."
+        },
+        {
+          "char_range": [110, 3227],
+          "paraphrase": "The same correction is nested and repeated: an initial malformed slash fragment gives way to many copies of the H(up) question and the same R assertion, without a new orientation check or resolution."
+        }
+      ],
+      "relation_to_original": "The initial orientation claim and repeated syn/anti check resemble the original concern, but this continuation becomes malformed self-repetition rather than a full reproduction of the original reasoning path.",
+      "basis": "The unchanged self-correction occupies nearly the full continuation and does not progress. This remains anomalous independently of the mechanical flag."
+    },
+    {
+      "seed": 44,
+      "text_chars": 3216,
+      "semantic_anomaly": true,
+      "mechanical_flag": false,
+      "observed_malformed_text": {
+        "observed": false,
+        "stray_language": false,
+        "actual_bad_fragments": false,
+        "description": "The text remains readable and task-related. Its ending at char 3216 cuts off mid-phrase at the saved output boundary; that terminal cutoff is not malformed-text evidence."
+      },
+      "evidence": [
+        {
+          "char_range": [0, 253],
+          "paraphrase": "The text states that the syn product is favored and identifies it as C. This is coherent initial content."
+        },
+        {
+          "char_range": [253, 3216],
+          "paraphrase": "The response repeats the same C8 priority order (F, C7, C4, H), the same F-down/C7-right/C4-left orientation, the same syn-to-the-ring statement, the same preference rationale, and the same C conclusion. The re-verification block begins at chars 253, 749, 1245, 1741, 2237, and 2733; the repeated blocks add no new check or evidence. The last copy stops mid-phrase at the saved boundary."
+        }
+      ],
+      "relation_to_original": "Strong semantic match to the original triage's sustained syn/anti and stereochemical orientation cycling, even though this saved text is coherent and mechanically unflagged. The suffix-conditioned text does not show where the original full response began to cycle.",
+      "basis": "Several consecutive unchanged re-verification cycles persist after the initial conclusion. The semantic anomaly is supported by sustained repetition, not by the terminal cutoff or an assumed answer judgment."
+    }
+  ],
+  "limits": [
+    "Mechanical flags are copied exactly from the three saved free_running records and are separate from semantic judgments.",
+    "These are three suffix-truncated diagnostic continuations, not native-path reproductions or population evidence.",
+    "No answer correctness or score claim is made, and the completed official scoring is not reassessed.",
+    "The executed TFchosen continuation is outside this review; no precision-causality conclusion is drawn."
+  ],
+  "assessment_status": {
+    "TFchosen": "executed but not assessed in this artifact",
+    "scoring": "completed; no score claim"
+  }
+}

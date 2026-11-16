@@ -1,0 +1,439 @@
+{
+  "status": "independent_host_only_review_candidate_not_admitted",
+  "scope": "Static provenance/forecast/driver inspection and validate-only checks. No device, model, or TTNN import; no launch.",
+  "disposition": "24-fixture suffix4096 candidate and inert serial driver are internally consistent and hash-frozen; admission remains inappropriate while predecessor and global queue/state gates are incomplete.",
+  "candidate": {
+    "motif_families": [
+      "anomaly.call91.canonicalprefix",
+      "anomaly.matplotlib__matplotlib-20488.call86.onset",
+      "anomaly.psf__requests-5414.call10.onset",
+      "anomaly.sphinx-doc__sphinx-10323.call70.onset"
+    ],
+    "fixtures": 24,
+    "served_cases": 12,
+    "full_cases": 12,
+    "per_case": {
+      "prompt_ids": "exact last4096 original source IDs",
+      "chosen_continuation": "exact preservation (64 positions, except Sphinx10323 call70 at37)",
+      "sampling": "preserved exactly",
+      "seed": "matched per fixture",
+      "free_tokens": 512,
+      "trials": 1
+    },
+    "matched_suffix2048_stop_lengths_by_mode_and_length": {
+      "full/37": 1,
+      "full/50": 1,
+      "full/52": 1,
+      "full/65": 1,
+      "full/67": 1,
+      "full/89": 1,
+      "full/102": 1,
+      "full/200": 1,
+      "full/208": 1,
+      "full/500": 1,
+      "full/512": 2,
+      "served/59": 1,
+      "served/75": 1,
+      "served/82": 1,
+      "served/122": 1,
+      "served/245": 1,
+      "served/368": 1,
+      "served/512": 6
+    },
+    "note": "Corrected independent count: 8/24 matched suffix2048 source trials reached their 512-token cap (served 6, full 2); 16/24 stopped earlier (served 6, full 10). Source trials are recorded by actual stopping length; the 4096 jobs remain new-prefix probes and do not claim every seed was a 512-token source positive.",
+    "matched_suffix2048_source_trial_caps": {
+      "reached_512_cap": 8,
+      "stopped_below_512": 16,
+      "total": 24,
+      "mode_breakdown": {
+        "served": {
+          "reached_512_cap": 6,
+          "stopped_below_512": 6
+        },
+        "full": {
+          "reached_512_cap": 2,
+          "stopped_below_512": 10
+        }
+      }
+    }
+  },
+  "manifest_validation": {
+    "independent_validate_only_passed": true,
+    "served_jobs": 12,
+    "full_jobs": 12,
+    "TTNN_imported": false,
+    "device_work": false
+  },
+  "forecast": {
+    "served": {
+      "jobs": 12,
+      "point_total_s": 501.6386460935118,
+      "range_s": [
+        397.4177344002635,
+        963.8267827456933
+      ],
+      "recomputed": true
+    },
+    "full": {
+      "jobs": 12,
+      "point_total_s": 550.4892372570278,
+      "range_s": [
+        412.26170784627163,
+        1660.0907562872937
+      ],
+      "recomputed": true
+    },
+    "total_point_s": 1052.1278833505396,
+    "total_range_s": [
+      809.6794422465351,
+      2623.917539032987
+    ],
+    "method": "Measured suffix2048 chosen/free-run traces with context-length ratios, measured mode-specific load and generator trace prep, observed stop point and cap-safe 511-replay upper; arithmetic independently reproduced. Context scaling remains an unbenchmarked planning proxy."
+  },
+  "driver": {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/run_suffix4096_after_u.py",
+    "admission_status": "candidate_only_not_admitted",
+    "driver_hash_matches": true,
+    "proposal_hash_matches": true,
+    "waits_for_named_U_completion_and_queue_terminal_success": true,
+    "served_then_full_serial": true,
+    "owner_zero_check_before_each_batch": true,
+    "full_waits_for_all_served_outputs": true,
+    "source_and_manifest_hash_checks": true,
+    "timeouts_seconds": [
+      3600,
+      3600
+    ],
+    "stop_file_supported": true
+  },
+  "gating": {
+    "named_predecessor_completion_exists": false,
+    "named_predecessor_queue_exists": true,
+    "current_T_full_pending_rows_per_root": true,
+    "must_not_assume_T_closed": true,
+    "global_serialization_note": "Driver checks owners immediately before each batch, but cannot by itself guarantee no unrelated coordinator starts after the check. Root should ensure a single serialized queue/admission window.",
+    "fourth_cap_package_present": false
+  },
+  "source_hash_count_verified": 50,
+  "fixture_checks": [
+    {
+      "onset": "anomaly.psf__requests-5414.call10.onset",
+      "mode": "served",
+      "seed": 42,
+      "candidate_fixture_sha256": "4ee5d2a78289bfda82ac535f009035eb0f669082dc4b37b474b11ba6095bdccc",
+      "source_result_sha256": "db7de934dddf4587a779c855e99a37bebdf23e8d9a48806d6269217ea24a2b42",
+      "exact_suffix4096": true,
+      "chosen_exact": true,
+      "sampling_exact": true,
+      "seed_exact": true,
+      "matched_2048_source_tokens": 512
+    },
+    {
+      "onset": "anomaly.psf__requests-5414.call10.onset",
+      "mode": "served",
+      "seed": 43,
+      "candidate_fixture_sha256": "8ceac6889a1d6e10992f68b52596ce262f4031608317b5a40a32906fc3eb7ca7",
+      "source_result_sha256": "db7de934dddf4587a779c855e99a37bebdf23e8d9a48806d6269217ea24a2b42",
+      "exact_suffix4096": true,
+      "chosen_exact": true,
+      "sampling_exact": true,
+      "seed_exact": true,
+      "matched_2048_source_tokens": 512
+    },
+    {
+      "onset": "anomaly.psf__requests-5414.call10.onset",
+      "mode": "served",
+      "seed": 44,
+      "candidate_fixture_sha256": "40173399c4c62f8ccb70d4ac349200924e81e89c7453962c13ff4c312ef780e5",
+      "source_result_sha256": "db7de934dddf4587a779c855e99a37bebdf23e8d9a48806d6269217ea24a2b42",
+      "exact_suffix4096": true,
+      "chosen_exact": true,
+      "sampling_exact": true,
+      "seed_exact": true,
+      "matched_2048_source_tokens": 512
+    },
+    {
+      "onset": "anomaly.psf__requests-5414.call10.onset",
+      "mode": "full",
+      "seed": 42,
+      "candidate_fixture_sha256": "3d9d27b333ad2e1c1db496e1f2e2d27e7aa721a6b8b5425bd15a3374339f2986",
+      "source_result_sha256": "1f34cd733be27e7e4c655da4dcf0fba30ac7c06fc83cca3753973dbae03263ff",
+      "exact_suffix4096": true,
+      "chosen_exact": true,
+      "sampling_exact": true,
+      "seed_exact": true,
+      "matched_2048_source_tokens": 500
+    },
+    {
+      "onset": "anomaly.psf__requests-5414.call10.onset",
+      "mode": "full",
+      "seed": 43,
+      "candidate_fixture_sha256": "fa8f63b6a5a8b443bc4c7f8c321d064ac0a38bf2287597f2fdf27478438510f6",
+      "source_result_sha256": "1f34cd733be27e7e4c655da4dcf0fba30ac7c06fc83cca3753973dbae03263ff",
+      "exact_suffix4096": true,
+      "chosen_exact": true,
+      "sampling_exact": true,
+      "seed_exact": true,
+      "matched_2048_source_tokens": 512
+    },
+    {
+      "onset": "anomaly.psf__requests-5414.call10.onset",
+      "mode": "full",
+      "seed": 44,
+      "candidate_fixture_sha256": "a95c26a2fe0a8649880e6c33663e382f2cedfc8d7707519258f2dba851c25ee4",
+      "source_result_sha256": "1f34cd733be27e7e4c655da4dcf0fba30ac7c06fc83cca3753973dbae03263ff",
+      "exact_suffix4096": true,
+      "chosen_exact": true,
+      "sampling_exact": true,
+      "seed_exact": true,
+      "matched_2048_source_tokens": 512
+    },
+    {
+      "onset": "anomaly.matplotlib__matplotlib-20488.call86.onset",
+      "mode": "served",
+      "seed": 42,
+      "candidate_fixture_sha256": "513f9f1e29de8eaa956d70b10cfb15d84fd8fcc7ec114e26966db94d150ea641",
+      "source_result_sha256": "ac7d49f941553dce1eb827c6a9dda5aee221bb31a972f76800518590478f579d",
+      "exact_suffix4096": true,
+      "chosen_exact": true,
+      "sampling_exact": true,
+      "seed_exact": true,
+      "matched_2048_source_tokens": 512
+    },
+    {
+      "onset": "anomaly.matplotlib__matplotlib-20488.call86.onset",
+      "mode": "served",
+      "seed": 43,
+      "candidate_fixture_sha256": "a5d83f9ee832bb85a537f6b02f93d5552283b752c77a9cd418a211f97d52b4fd",
+      "source_result_sha256": "ac7d49f941553dce1eb827c6a9dda5aee221bb31a972f76800518590478f579d",
+      "exact_suffix4096": true,
+      "chosen_exact": true,
+      "sampling_exact": true,
+      "seed_exact": true,
+      "matched_2048_source_tokens": 245
+    },
+    {
+      "onset": "anomaly.matplotlib__matplotlib-20488.call86.onset",
+      "mode": "served",
+      "seed": 44,
+      "candidate_fixture_sha256": "c5d804e5405e9e6fa0a57c1986030ff017b1f06af282067d920df7c0424d4266",
+      "source_result_sha256": "ac7d49f941553dce1eb827c6a9dda5aee221bb31a972f76800518590478f579d",
+      "exact_suffix4096": true,
+      "chosen_exact": true,
+      "sampling_exact": true,
+      "seed_exact": true,
+      "matched_2048_source_tokens": 75
+    },
+    {
+      "onset": "anomaly.matplotlib__matplotlib-20488.call86.onset",
+      "mode": "full",
+      "seed": 42,
+      "candidate_fixture_sha256": "dd17353fffc032eb5bb82ee8025870eab4841d414e2f01f1e87d976bd812e62d",
+      "source_result_sha256": "a556f1d00926a250659c8b0120a8ffdface28209ef3246febf96c5db772fe6b3",
+      "exact_suffix4096": true,
+      "chosen_exact": true,
+      "sampling_exact": true,
+      "seed_exact": true,
+      "matched_2048_source_tokens": 65
+    },
+    {
+      "onset": "anomaly.matplotlib__matplotlib-20488.call86.onset",
+      "mode": "full",
+      "seed": 43,
+      "candidate_fixture_sha256": "7e8ee5bb1a24cca6e4e58651929198f7a4c4de279ca54495cedae74f3678193d",
+      "source_result_sha256": "a556f1d00926a250659c8b0120a8ffdface28209ef3246febf96c5db772fe6b3",
+      "exact_suffix4096": true,
+      "chosen_exact": true,
+      "sampling_exact": true,
+      "seed_exact": true,
+      "matched_2048_source_tokens": 102
+    },
+    {
+      "onset": "anomaly.matplotlib__matplotlib-20488.call86.onset",
+      "mode": "full",
+      "seed": 44,
+      "candidate_fixture_sha256": "b1813964f7d3bae886d4aabaf794affb4a26217b708ec322f485c79d8c5f300a",
+      "source_result_sha256": "a556f1d00926a250659c8b0120a8ffdface28209ef3246febf96c5db772fe6b3",
+      "exact_suffix4096": true,
+      "chosen_exact": true,
+      "sampling_exact": true,
+      "seed_exact": true,
+      "matched_2048_source_tokens": 67
+    },
+    {
+      "onset": "anomaly.call91.canonicalprefix",
+      "mode": "served",
+      "seed": 42,
+      "candidate_fixture_sha256": "ae41ea6882901a66170d4eb1da286bc864004d02a375ca634d2e5ccc62366d25",
+      "source_result_sha256": "2c660fd154ca3b4b7ae2e032e14f004d5a9b0afd3db025620b19b08e00b73537",
+      "exact_suffix4096": true,
+      "chosen_exact": true,
+      "sampling_exact": true,
+      "seed_exact": true,
+      "matched_2048_source_tokens": 59
+    },
+    {
+      "onset": "anomaly.call91.canonicalprefix",
+      "mode": "served",
+      "seed": 43,
+      "candidate_fixture_sha256": "6caec5b093009522b2380b19a8bd6e62d34490b9ddcaf37d7d19422392bd541f",
+      "source_result_sha256": "2c660fd154ca3b4b7ae2e032e14f004d5a9b0afd3db025620b19b08e00b73537",
+      "exact_suffix4096": true,
+      "chosen_exact": true,
+      "sampling_exact": true,
+      "seed_exact": true,
+      "matched_2048_source_tokens": 512
+    },
+    {
+      "onset": "anomaly.call91.canonicalprefix",
+      "mode": "served",
+      "seed": 44,
+      "candidate_fixture_sha256": "796f3e9245800c84311dd3ad7f5ae699d2c76f506b3556a9d0b4c643f5cb662c",
+      "source_result_sha256": "2c660fd154ca3b4b7ae2e032e14f004d5a9b0afd3db025620b19b08e00b73537",
+      "exact_suffix4096": true,
+      "chosen_exact": true,
+      "sampling_exact": true,
+      "seed_exact": true,
+      "matched_2048_source_tokens": 82
+    },
+    {
+      "onset": "anomaly.call91.canonicalprefix",
+      "mode": "full",
+      "seed": 42,
+      "candidate_fixture_sha256": "3c0b7d82cc4f4e627cc65415002c9e5113237c3e83c66fbaaa4813a2f48726e4",
+      "source_result_sha256": "5fa7cf2a7817014afd07c2db91bb142ec1bfd2fefa3b94ab33ffe68d748cc67b",
+      "exact_suffix4096": true,
+      "chosen_exact": true,
+      "sampling_exact": true,
+      "seed_exact": true,
+      "matched_2048_source_tokens": 208
+    },
+    {
+      "onset": "anomaly.call91.canonicalprefix",
+      "mode": "full",
+      "seed": 43,
+      "candidate_fixture_sha256": "e952644afadb00abed9fac52db02976bf0f03f4ccdca9f3039866d53bd512a6b",
+      "source_result_sha256": "5fa7cf2a7817014afd07c2db91bb142ec1bfd2fefa3b94ab33ffe68d748cc67b",
+      "exact_suffix4096": true,
+      "chosen_exact": true,
+      "sampling_exact": true,
+      "seed_exact": true,
+      "matched_2048_source_tokens": 200
+    },
+    {
+      "onset": "anomaly.call91.canonicalprefix",
+      "mode": "full",
+      "seed": 44,
+      "candidate_fixture_sha256": "38be301909c01754a52d0f28c704aca1826f4c86b2018ca8510c31b78e047a37",
+      "source_result_sha256": "5fa7cf2a7817014afd07c2db91bb142ec1bfd2fefa3b94ab33ffe68d748cc67b",
+      "exact_suffix4096": true,
+      "chosen_exact": true,
+      "sampling_exact": true,
+      "seed_exact": true,
+      "matched_2048_source_tokens": 37
+    },
+    {
+      "onset": "anomaly.sphinx-doc__sphinx-10323.call70.onset",
+      "mode": "served",
+      "seed": 42,
+      "candidate_fixture_sha256": "62397a3ddac9e4edd1cfda3c86c390de768d28395ccf3c8edf73a830f3a79be4",
+      "source_result_sha256": "1fa9f54e8a4aace416fa70fed3ea9daa36f074e6c5f8ebe00c6550d3aee01f30",
+      "exact_suffix4096": true,
+      "chosen_exact": true,
+      "sampling_exact": true,
+      "seed_exact": true,
+      "matched_2048_source_tokens": 512
+    },
+    {
+      "onset": "anomaly.sphinx-doc__sphinx-10323.call70.onset",
+      "mode": "served",
+      "seed": 43,
+      "candidate_fixture_sha256": "31791e688141f85e6a7f9f660f81a2ff2ecf69e79f3c621f2af05855e303e315",
+      "source_result_sha256": "1fa9f54e8a4aace416fa70fed3ea9daa36f074e6c5f8ebe00c6550d3aee01f30",
+      "exact_suffix4096": true,
+      "chosen_exact": true,
+      "sampling_exact": true,
+      "seed_exact": true,
+      "matched_2048_source_tokens": 368
+    },
+    {
+      "onset": "anomaly.sphinx-doc__sphinx-10323.call70.onset",
+      "mode": "served",
+      "seed": 44,
+      "candidate_fixture_sha256": "6effd6b8eda2e38af845844022c4c02cb7f7638e30851abaf64cacc2dece4263",
+      "source_result_sha256": "1fa9f54e8a4aace416fa70fed3ea9daa36f074e6c5f8ebe00c6550d3aee01f30",
+      "exact_suffix4096": true,
+      "chosen_exact": true,
+      "sampling_exact": true,
+      "seed_exact": true,
+      "matched_2048_source_tokens": 122
+    },
+    {
+      "onset": "anomaly.sphinx-doc__sphinx-10323.call70.onset",
+      "mode": "full",
+      "seed": 42,
+      "candidate_fixture_sha256": "b3ce39612e93df0a5ca3adb9df9e040308fc7fb84ee091c1d6f3a2f88bfde89a",
+      "source_result_sha256": "079baccb97ee11584b68c0e69353c172f1dd976fcbfdf65df71d53d421fd3182",
+      "exact_suffix4096": true,
+      "chosen_exact": true,
+      "sampling_exact": true,
+      "seed_exact": true,
+      "matched_2048_source_tokens": 89
+    },
+    {
+      "onset": "anomaly.sphinx-doc__sphinx-10323.call70.onset",
+      "mode": "full",
+      "seed": 43,
+      "candidate_fixture_sha256": "a3e871e689bd1ea9ca7e9e6b18fb21f64c32286dec94bec5e3840c1a547698ba",
+      "source_result_sha256": "079baccb97ee11584b68c0e69353c172f1dd976fcbfdf65df71d53d421fd3182",
+      "exact_suffix4096": true,
+      "chosen_exact": true,
+      "sampling_exact": true,
+      "seed_exact": true,
+      "matched_2048_source_tokens": 52
+    },
+    {
+      "onset": "anomaly.sphinx-doc__sphinx-10323.call70.onset",
+      "mode": "full",
+      "seed": 44,
+      "candidate_fixture_sha256": "05f781687dd299562714596868b1744ebca8300330e730a23db118e841d27f40",
+      "source_result_sha256": "079baccb97ee11584b68c0e69353c172f1dd976fcbfdf65df71d53d421fd3182",
+      "exact_suffix4096": true,
+      "chosen_exact": true,
+      "sampling_exact": true,
+      "seed_exact": true,
+      "matched_2048_source_tokens": 50
+    }
+  ],
+  "findings": [
+    {
+      "severity": "limitation",
+      "finding": "Forecast applies linear context-length scaling to chosen and free-run costs. It is transparent and recomputed, but still a planning proxy for longer-context kernels/TTNN traces."
+    },
+    {
+      "severity": "gate",
+      "finding": "The driver is inert until explicit admission and waits for U completion/queue success. That predecessor is not evidence that every unrelated TT queue has closed; retain root\u2019s global serialization and HF-inactive gates."
+    },
+    {
+      "severity": "scope",
+      "finding": "The N suffix2048 source outputs include both 512-token caps and natural earlier stops: 8/24 reached512, 16/24 stopped earlier. The independent count matches each recorded seed trial; do not characterize every seed as a 512-token positive."
+    }
+  ],
+  "not_findings": [
+    "The 2048\u21924096 suffix extension is exact and does not re-render or re-encode prompts.",
+    "Separate served/full manifests preserve the same 12 onset/seed identities and exact case names.",
+    "No admission or launch took place."
+  ],
+  "reviewed_hashes": {
+    "provenance.json": "84a2cce62555364e966d6bf0ed01125d289666d453f488db61ca00c0e5d94539",
+    "served-cases.json": "af4b101a47cd6cbd2f52e48a9b2c50d1ba35afe9c3fc2df4fd1584db5c21e4d5",
+    "full-cases.json": "9bbc8c1d5b6053aba0a1f1bc25c942b73b81cc1e087fa005fe9ee2b50894992a",
+    "forecast.json": "16399e2fe43738baa99813e50ef0a22d26d353e18818ed453cf12041f436989c",
+    "command.json": "b653039bff1808543f0e05bdec8ab0a994d5d64b9e4a0f0e49bbd37372c8987e",
+    "proposal.json": "dfb508bd927f0daec894b93d5e40c928da949283088f4e08e6667d2109872021",
+    "admission.json": "ba643f4d309c7324e12475047b6d861437c43e57098950a7e64db211fe59e949",
+    "run_suffix4096_after_u.py": "ad073cdce3e382b3781b0161a2cef665358ecd2154118a96a22e2c6ba35c6417",
+    "cpu-validation.json": "b09ed22ea339b52976297f0cb2b5e45552c11ac3ba30206a72aba1dbf1b827d5",
+    "source-hashes.json": "db655083820e1c5922a729ece7b51d3792ba254ad9d10855cbb10ff55b7b7873"
+  }
+}

@@ -1,0 +1,150 @@
+{
+  "reviewer": "root",
+  "status": "completed_root_and_independent_triage_reconciled",
+  "trials": 108,
+  "counts": {
+    "normal": 58,
+    "other": 13,
+    "native": 37
+  },
+  "target_pairs": [
+    {
+      "job": "anomaly.call91.canonicalprefix",
+      "seed": 42,
+      "candidate_verdict": "native",
+      "result_sha256": "18b7c39682925541ed823ac2c5293a7d3959a0aee204906b60ca2ddab2ef1e6b",
+      "prior_served_verdict": "reproduced_native_motif",
+      "prior_full_verdict": "normal"
+    },
+    {
+      "job": "anomaly.psf__requests-1921.call1.onset",
+      "seed": 43,
+      "candidate_verdict": "other",
+      "result_sha256": "fa0adc50f7f61caf1fe98e424609ca2eb249bf46e8f8bab1fcdd3ead474387e9",
+      "prior_served_verdict": "other_anomaly",
+      "prior_full_verdict": "normal"
+    },
+    {
+      "job": "anomaly.psf__requests-1921.call1.onset",
+      "seed": 44,
+      "candidate_verdict": "other",
+      "result_sha256": "1b67c852af9ce1f13515b3df1be6e59994266c427d194c20633e6d26e9c5f9e0",
+      "prior_served_verdict": "other_anomaly",
+      "prior_full_verdict": "normal"
+    },
+    {
+      "job": "anomaly.pylint-dev__pylint-4551.call1.onset",
+      "seed": 42,
+      "candidate_verdict": "other",
+      "result_sha256": "d6751fb75938d98df1b790bc362554d8d03992241905265b5870eec993d51655",
+      "prior_served_verdict": "other_anomaly",
+      "prior_full_verdict": "normal"
+    },
+    {
+      "job": "anomaly.pylint-dev__pylint-4551.call1.onset",
+      "seed": 43,
+      "candidate_verdict": "normal",
+      "result_sha256": "723c55d57801df33fe4723104d7e576e32e2c02e01bad4bc05ec28e2179d0be0",
+      "prior_served_verdict": "other_anomaly",
+      "prior_full_verdict": "normal"
+    },
+    {
+      "job": "anomaly.pylint-dev__pylint-4551.call1.onset",
+      "seed": 44,
+      "candidate_verdict": "other",
+      "result_sha256": "7c6bb94084be19364b905a2269f3b09cdcb58528e7fee113eab147cde571c805",
+      "prior_served_verdict": "other_anomaly",
+      "prior_full_verdict": "normal"
+    },
+    {
+      "job": "anomaly.pytest10356-call14.canonicalprefix",
+      "seed": 42,
+      "candidate_verdict": "native",
+      "result_sha256": "e2bd9cbff5011cfad96609a6c4554a59c3ea06a328808a7e6999b921864c90f3",
+      "prior_served_verdict": "other_anomaly",
+      "prior_full_verdict": "normal"
+    },
+    {
+      "job": "anomaly.pytest10356-call14.canonicalprefix",
+      "seed": 43,
+      "candidate_verdict": "native",
+      "result_sha256": "2d1e0f928244a37ebe87a419548ebced485a7ff890e2805574373ceeb924e0d9",
+      "prior_served_verdict": "other_anomaly",
+      "prior_full_verdict": "normal"
+    },
+    {
+      "job": "anomaly.pytest10356-call14.canonicalprefix",
+      "seed": 44,
+      "candidate_verdict": "native",
+      "result_sha256": "58d52fae8a2fdc2fd1d4dcb76d7db13fc970cf74278aa23dfb8e8376b02088b4",
+      "prior_served_verdict": "other_anomaly",
+      "prior_full_verdict": "normal"
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-10323.call68.onset",
+      "seed": 43,
+      "candidate_verdict": "native",
+      "result_sha256": "97275e67bc6aff93c99ba855f3bda9e72f11b1e287077557bd8ce7cc561df3c4",
+      "prior_served_verdict": "reproduced_native_motif",
+      "prior_full_verdict": "normal"
+    },
+    {
+      "job": "anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset",
+      "seed": 43,
+      "candidate_verdict": "native",
+      "result_sha256": "72ba95abd92abf19ee4a48e6c131e908658fa0d4490b5a3284c028c1afe3ada5",
+      "prior_served_verdict": "other_anomaly",
+      "prior_full_verdict": "normal"
+    },
+    {
+      "job": "anomaly.sympy__sympy-13551.call1.onset",
+      "seed": 42,
+      "candidate_verdict": "native",
+      "result_sha256": "47840f1b97ae55ec4b46ee90895b0fc1ef203b83780d1cf861ea1383fc3e2bf2",
+      "prior_served_verdict": "reproduced_native_motif",
+      "prior_full_verdict": "normal"
+    },
+    {
+      "job": "anomaly.sympy__sympy-14711.call1.onset",
+      "seed": 43,
+      "candidate_verdict": "other",
+      "result_sha256": "201388167a517607c7ce73425ade3ff9da0d64cb5e4534ed1ce1b91560896c75",
+      "prior_served_verdict": "other_anomaly",
+      "prior_full_verdict": "normal"
+    },
+    {
+      "job": "anomaly.sympy__sympy-14711.call1.onset",
+      "seed": 44,
+      "candidate_verdict": "other",
+      "result_sha256": "0877c53199e1457052f92408598e19e3a02ab67825f07ef8b75df420b99fe1cd",
+      "prior_served_verdict": "other_anomaly",
+      "prior_full_verdict": "normal"
+    },
+    {
+      "job": "anomaly.sympy__sympy-18763.call1.onset",
+      "seed": 43,
+      "candidate_verdict": "native",
+      "result_sha256": "c9c784516fa1056e773264d86496017b9f63bff8daf3ae329b59ffc1ece40bd2",
+      "prior_served_verdict": "reproduced_native_motif",
+      "prior_full_verdict": "normal"
+    }
+  ],
+  "target_counts": {
+    "native": 8,
+    "other": 6,
+    "normal": 1
+  },
+  "candidate_accepted": false,
+  "reason": "14 of15 served-anomalous/full-normal target pairs remain anomalous; no selected policy or evaluation score change.",
+  "trace_counters_all_valid": true,
+  "completion_sha256": "fa70e146164d0b1b948f3bb969fff7e56b44b8d6cc85912f2dfb814c941675d9",
+  "forecast_evidence": "forecast-miss-accepted.json",
+  "reviewed_unix": 1794724271.3557322,
+  "triage_reconciliation": {
+    "rows": 108,
+    "verdict_mismatches": 0,
+    "evidence": "triage-d/chunk-*.json",
+    "checked_unix": 1794724464.4079382
+  },
+  "runtime_integrity_evidence": "runtime-integrity-audit.json"
+}

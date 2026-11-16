@@ -1,0 +1,9 @@
+[
+  {
+    "name": "sphinx-doc__sphinx-11510.call24",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-sphinx11510/sphinx-doc__sphinx-11510.call24.case.private.json",
+    "branches": [
+      "chosen"
+    ]
+  }
+]

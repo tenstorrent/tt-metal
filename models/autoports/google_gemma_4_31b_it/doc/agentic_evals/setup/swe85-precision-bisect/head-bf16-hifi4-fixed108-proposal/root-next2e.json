@@ -1,0 +1,39 @@
+{
+  "reviewed_unix": 1794726940.9514902,
+  "rows": [
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/runs/head_bf16_hifi4/anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.seed44.cap1024.json",
+      "sha256": "1745666034271aa35aa713cae3b0f2c1a26fcafdcbb68d91429b994ff4a31c37",
+      "seed": 44,
+      "tokens": 827,
+      "verdict": "normal",
+      "reason": "Entire raw text and pinned prefix reviewed. Correct argument opener, varying script/instrumentation or MRO patch attempt, canonical closure. Weak/incomplete patch logic is not degenerate syntax or token loop; no task success claim.",
+      "trace_counters_delta": {
+        "model_replays": 826,
+        "sample_replays": 826,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 826,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/runs/head_bf16_hifi4/anomaly.sphinx-doc__sphinx-9461.call184.onset.seed42.cap1024.json",
+      "sha256": "7e67f4e8becf7481ea213339f144782e28c3f2878ce6fc82bf9cff8940d55a8a",
+      "seed": 42,
+      "tokens": 728,
+      "verdict": "normal",
+      "reason": "Entire raw text and pinned prefix reviewed. Correct argument opener, varying script/instrumentation or MRO patch attempt, canonical closure. Weak/incomplete patch logic is not degenerate syntax or token loop; no task success claim.",
+      "trace_counters_delta": {
+        "model_replays": 727,
+        "sample_replays": 727,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 727,
+        "captures": 0
+      }
+    }
+  ]
+}

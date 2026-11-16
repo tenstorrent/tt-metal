@@ -1,0 +1,3122 @@
+{
+  "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-remainder-execution85/completed-summary165.json",
+  "source_sha256": "392e5a4934accb1c19022df1387fbf5e6c823398ed583e7f7466a1b7be4759c3",
+  "scope": "Descriptive local token evidence only. First token divergence may be formatting rather than the semantic error. It does not establish sequence preference, task correctness, native prompt equivalence, or a passing precision policy. Whole-reply agreement and semantic controls must be reviewed alongside it.",
+  "counts": {
+    "paired": 61
+  },
+  "unique_tasks": 59,
+  "actions": [
+    {
+      "name": "action.astropy__astropy-13398.call17",
+      "task": "astropy__astropy-13398",
+      "call": 17,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/astropy__astropy-13398/action_counterfactual.candidate.private.json",
+      "case_sha256": "cf257559635633305e61cdd43ee580830d26040857d3a664e1e8291c8492d030",
+      "status": "paired",
+      "modes": {
+        "served": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/action.astropy__astropy-13398.call17.json",
+          "runtime_config_id": "stage12_head_bfp8_lofi",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 11841,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -1.1920928244535389e-07,
+            "target_probability": 0.9999998807907104,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -32.5,
+            "target_probability": 7.68120477976069e-15,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -32.49999988079072
+        },
+        "full": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/action.astropy__astropy-13398.call17.json",
+          "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 11841,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": 0.0,
+            "target_probability": 1.0,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -32.75,
+            "target_probability": 5.982128261852607e-15,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -32.75
+        }
+      },
+      "top1_agreement_by_branch": {
+        "chosen": true,
+        "correct": true
+      },
+      "full_minus_served_local_log_odds": -0.25000011920928245
+    },
+    {
+      "name": "action.astropy__astropy-14096.call23",
+      "task": "astropy__astropy-14096",
+      "call": 23,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/astropy__astropy-14096/action_counterfactual.candidate.private.json",
+      "case_sha256": "5feeb353e8d4dc4a956d0ff4fd4c9cb54ebaf173e8c8306bb4e8b242a3c970d9",
+      "status": "paired",
+      "modes": {
+        "served": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/action.astropy__astropy-14096.call23.json",
+          "runtime_config_id": "stage12_head_bfp8_lofi",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 10611,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -0.031208518892526627,
+            "target_probability": 0.9692734479904175,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -20.499958038330078,
+            "target_probability": 1.2502052726404145e-09,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -20.46874951943755
+        },
+        "full": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/action.astropy__astropy-14096.call23.json",
+          "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 10611,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -0.057267218828201294,
+            "target_probability": 0.9443416595458984,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -22.776018142700195,
+            "target_probability": 1.2838106966395202e-10,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -22.718750923871994
+        }
+      },
+      "top1_agreement_by_branch": {
+        "chosen": true,
+        "correct": true
+      },
+      "full_minus_served_local_log_odds": -2.2500014044344425
+    },
+    {
+      "name": "action.astropy__astropy-14598.call33",
+      "task": "astropy__astropy-14598",
+      "call": 33,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/astropy__astropy-14598/action_counterfactual.candidate.private.json",
+      "case_sha256": "ce76fb1ce580b1ddae47e94c6b2d78c92418e4da1be822ab2b7e505462ab9c3d",
+      "status": "paired",
+      "modes": {
+        "served": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/action.astropy__astropy-14598.call33.json",
+          "runtime_config_id": "stage12_head_bfp8_lofi",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 18586,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -0.0005158047424629331,
+            "target_probability": 0.9994843006134033,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -18.03176498413086,
+            "target_probability": 1.4753802624056789e-08,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -18.031249179388396
+        },
+        "full": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/action.astropy__astropy-14598.call33.json",
+          "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 18586,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -0.0006349454633891582,
+            "target_probability": 0.9993652701377869,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -16.625635147094727,
+            "target_probability": 6.019749321239942e-08,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -16.625000201631337
+        }
+      },
+      "top1_agreement_by_branch": {
+        "chosen": true,
+        "correct": true
+      },
+      "full_minus_served_local_log_odds": 1.406248977757059
+    },
+    {
+      "name": "action.django__django-14007.call31",
+      "task": "django__django-14007",
+      "call": 31,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/django__django-14007/action_counterfactual.candidate.private.json",
+      "case_sha256": "1afac21fa317e6099c8d74ffe523dbae743de534bb7b2fe2637cc92ad923000b",
+      "status": "paired",
+      "modes": {
+        "served": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/action.django__django-14007.call31.json",
+          "runtime_config_id": "stage12_head_bfp8_lofi",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 19591,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -0.16041532158851624,
+            "target_probability": 0.8517899513244629,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -20.597915649414062,
+            "target_probability": 1.1335453686811547e-09,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -20.437500327825546
+        },
+        "full": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/action.django__django-14007.call31.json",
+          "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 19591,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -0.011086059734225273,
+            "target_probability": 0.9889751672744751,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -22.636085510253906,
+            "target_probability": 1.4766343703342955e-10,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -22.62499945051968
+        }
+      },
+      "top1_agreement_by_branch": {
+        "chosen": true,
+        "correct": true
+      },
+      "full_minus_served_local_log_odds": -2.1874991226941347
+    },
+    {
+      "name": "action.django__django-14011.call33",
+      "task": "django__django-14011",
+      "call": 33,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/django__django-14011/action_counterfactual.candidate.private.json",
+      "case_sha256": "2656153fba29079165b1bcbb49ac7ddfd6bbf1dfe378285d680816f607639341",
+      "status": "paired",
+      "modes": {
+        "served": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/action.django__django-14011.call33.json",
+          "runtime_config_id": "stage12_head_bfp8_lofi",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 25213,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -0.0005983707960695028,
+            "target_probability": 0.9994018077850342,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -24.516223907470703,
+            "target_probability": 2.2528860721404698e-11,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -24.515625536674634
+        },
+        "full": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/action.django__django-14011.call33.json",
+          "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 25213,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -0.0002456601650919765,
+            "target_probability": 0.9997543692588806,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -25.781496047973633,
+            "target_probability": 6.356799635287569e-12,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -25.78125038780854
+        }
+      },
+      "top1_agreement_by_branch": {
+        "chosen": true,
+        "correct": true
+      },
+      "full_minus_served_local_log_odds": -1.2656248511339072
+    },
+    {
+      "name": "action.django__django-15037.call19",
+      "task": "django__django-15037",
+      "call": 19,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/django__django-15037/action_counterfactual.candidate.private.json",
+      "case_sha256": "f40ae4b27d642a43e5a31e278d4f709afa52c973d5edf5acb57230b7b0a064d2",
+      "status": "paired",
+      "modes": {
+        "served": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/action.django__django-15037.call19.json",
+          "runtime_config_id": "stage12_head_bfp8_lofi",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 16369,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -0.007615344598889351,
+            "target_probability": 0.9924135804176331,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -23.21074104309082,
+            "target_probability": 8.311955984607877e-11,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -23.20312569849193
+        },
+        "full": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/action.django__django-15037.call19.json",
+          "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 16369,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -0.0031873397529125214,
+            "target_probability": 0.9968177080154419,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -23.69068717956543,
+            "target_probability": 5.143577577748637e-11,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -23.687499839812517
+        }
+      },
+      "top1_agreement_by_branch": {
+        "chosen": true,
+        "correct": true
+      },
+      "full_minus_served_local_log_odds": -0.4843741413205862
+    },
+    {
+      "name": "action.django__django-16950.call80",
+      "task": "django__django-16950",
+      "call": 80,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/django__django-16950/action_counterfactual.candidate.private.json",
+      "case_sha256": "03cd0cc1a00bdfef7d263043f6e738d111760fd8d2481dcd450145deb30a6ebd",
+      "status": "paired",
+      "modes": {
+        "served": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/action.django__django-16950.call80.json",
+          "runtime_config_id": "stage12_head_bfp8_lofi",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 60969,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -0.21355342864990234,
+            "target_probability": 0.8077089786529541,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -21.43230438232422,
+            "target_probability": 4.921171248284395e-10,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -21.218750953674316
+        },
+        "full": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/action.django__django-16950.call80.json",
+          "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 60969,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -0.5500393509864807,
+            "target_probability": 0.576927125453949,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -20.518789291381836,
+            "target_probability": 1.2268827065398114e-09,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -19.968749940395355
+        }
+      },
+      "top1_agreement_by_branch": {
+        "chosen": true,
+        "correct": true
+      },
+      "full_minus_served_local_log_odds": 1.2500010132789612
+    },
+    {
+      "name": "action.matplotlib__matplotlib-25479.call34",
+      "task": "matplotlib__matplotlib-25479",
+      "call": 34,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/matplotlib__matplotlib-25479/action_counterfactual.candidate.private.json",
+      "case_sha256": "725d37edcc62b651707cc77079508353478c8a16fc09810fe13b17f005a44d8a",
+      "status": "paired",
+      "modes": {
+        "served": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/action.matplotlib__matplotlib-25479.call34.json",
+          "runtime_config_id": "stage12_head_bfp8_lofi",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 23937,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -0.004401875659823418,
+            "target_probability": 0.9956077933311462,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -19.53565216064453,
+            "target_probability": 3.2792464299546964e-09,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -19.531250284984708
+        },
+        "full": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/action.matplotlib__matplotlib-25479.call34.json",
+          "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 23937,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -0.027313267812132835,
+            "target_probability": 0.9730563759803772,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -19.496063232421875,
+            "target_probability": 3.4116722780197506e-09,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -19.468749964609742
+        }
+      },
+      "top1_agreement_by_branch": {
+        "chosen": true,
+        "correct": true
+      },
+      "full_minus_served_local_log_odds": 0.06250032037496567
+    },
+    {
+      "name": "action.mwaskom__seaborn-3069.call50",
+      "task": "mwaskom__seaborn-3069",
+      "call": 50,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/mwaskom__seaborn-3069/action_counterfactual.candidate.private.json",
+      "case_sha256": "ee0491294d6b63d3641001708a0b4077d59f705590c1634a4abba00356f80d5f",
+      "status": "paired",
+      "modes": {
+        "served": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/action.mwaskom__seaborn-3069.call50.json",
+          "runtime_config_id": "stage12_head_bfp8_lofi",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 25380,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -0.00496274558827281,
+            "target_probability": 0.9950495362281799,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -21.692462921142578,
+            "target_probability": 3.793875213986553e-10,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -21.687500175554305
+        },
+        "full": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/action.mwaskom__seaborn-3069.call50.json",
+          "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 25380,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -0.00024041623692028224,
+            "target_probability": 0.9997596144676208,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -23.031490325927734,
+            "target_probability": 9.943764561759494e-11,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -23.031249909690814
+        }
+      },
+      "top1_agreement_by_branch": {
+        "chosen": true,
+        "correct": true
+      },
+      "full_minus_served_local_log_odds": -1.3437497341365088
+    },
+    {
+      "name": "action.mwaskom__seaborn-3187.call64",
+      "task": "mwaskom__seaborn-3187",
+      "call": 64,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/mwaskom__seaborn-3187/action_counterfactual.candidate.private.json",
+      "case_sha256": "3393ba3aed8149c9f030418bc6ec79682d8da8009cfce2d44cf7367626383281",
+      "status": "paired",
+      "modes": {
+        "served": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/action.mwaskom__seaborn-3187.call64.json",
+          "runtime_config_id": "stage12_head_bfp8_lofi",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 29842,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -8.344646857949556e-07,
+            "target_probability": 0.9999991655349731,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -29.65625,
+            "target_probability": 1.3196364031901886e-13,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -29.656249165535314
+        },
+        "full": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/action.mwaskom__seaborn-3187.call64.json",
+          "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 29842,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -1.1920928244535389e-07,
+            "target_probability": 0.9999998807907104,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -29.375,
+            "target_probability": 1.7482341258239636e-13,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -29.374999880790718
+        }
+      },
+      "top1_agreement_by_branch": {
+        "chosen": true,
+        "correct": true
+      },
+      "full_minus_served_local_log_odds": 0.28124928474459665
+    },
+    {
+      "name": "action.psf__requests-1142.call31",
+      "task": "psf__requests-1142",
+      "call": 31,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/psf__requests-1142/action_counterfactual.candidate.private.json",
+      "case_sha256": "d72283f1152735c027dfe9f7581115fcc9d769b295d3f28abd5e3775534191fe",
+      "status": "paired",
+      "modes": {
+        "served": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/action.psf__requests-1142.call31.json",
+          "runtime_config_id": "stage12_head_bfp8_lofi",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 17583,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -8.606540359323844e-05,
+            "target_probability": 0.9999139308929443,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -25.730554580688477,
+            "target_probability": 6.689014359767542e-12,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -25.730468515284883
+        },
+        "full": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/action.psf__requests-1142.call31.json",
+          "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 17583,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -1.6331539882230572e-05,
+            "target_probability": 0.9999836683273315,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -27.500017166137695,
+            "target_probability": 1.1399722311955518e-12,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -27.500000834597813
+        }
+      },
+      "top1_agreement_by_branch": {
+        "chosen": true,
+        "correct": true
+      },
+      "full_minus_served_local_log_odds": -1.7695323193129298
+    },
+    {
+      "name": "action.psf__requests-1921.call34",
+      "task": "psf__requests-1921",
+      "call": 34,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/psf__requests-1921/action_counterfactual.candidate.private.json",
+      "case_sha256": "2b44f72ac3567dfd855d23947762405695b9428e384d400fe84bdb350254e6a1",
+      "status": "paired",
+      "modes": {
+        "served": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/action.psf__requests-1921.call34.json",
+          "runtime_config_id": "stage12_head_bfp8_lofi",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 15716,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -4.386805812828243e-05,
+            "target_probability": 0.9999561309814453,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -26.656293869018555,
+            "target_probability": 2.650444100305016e-12,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -26.656250000960426
+        },
+        "full": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/action.psf__requests-1921.call34.json",
+          "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 15716,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -3.802703940891661e-05,
+            "target_probability": 0.9999619722366333,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -29.093788146972656,
+            "target_probability": 2.3159455581588106e-13,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -29.093750119933247
+        }
+      },
+      "top1_agreement_by_branch": {
+        "chosen": true,
+        "correct": true
+      },
+      "full_minus_served_local_log_odds": -2.437500118972821
+    },
+    {
+      "name": "action.pydata__xarray-3993.call18",
+      "task": "pydata__xarray-3993",
+      "call": 18,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/pydata__xarray-3993/action_counterfactual.candidate.private.json",
+      "case_sha256": "fadf8f42ef467f8af698e8009afdeaa2541fdff1e38ed6e7c9b00900e31d8d0b",
+      "status": "paired",
+      "modes": {
+        "served": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/action.pydata__xarray-3993.call18.json",
+          "runtime_config_id": "stage12_head_bfp8_lofi",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 8747,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -0.0013300867285579443,
+            "target_probability": 0.9986708164215088,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -24.20445442199707,
+            "target_probability": 3.077081645042057e-11,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -24.203124335268512
+        },
+        "full": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/action.pydata__xarray-3993.call18.json",
+          "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 8747,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -0.00014065706636756659,
+            "target_probability": 0.9998593330383301,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -26.132953643798828,
+            "target_probability": 4.473036524510476e-12,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -26.13281298673246
+        }
+      },
+      "top1_agreement_by_branch": {
+        "chosen": true,
+        "correct": true
+      },
+      "full_minus_served_local_log_odds": -1.9296886514639482
+    },
+    {
+      "name": "action.pydata__xarray-6992.call16",
+      "task": "pydata__xarray-6992",
+      "call": 16,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/pydata__xarray-6992/action_counterfactual.candidate.private.json",
+      "case_sha256": "d3008b5e8c62baaa0dfd9fd1f747ba2bb0034518172a6e834dfb694e77b8b9d4",
+      "status": "paired",
+      "modes": {
+        "served": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/action.pydata__xarray-6992.call16.json",
+          "runtime_config_id": "stage12_head_bfp8_lofi",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 10842,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -0.0004318020073696971,
+            "target_probability": 0.9995682835578918,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -24.842227935791016,
+            "target_probability": 1.6261382865256913e-11,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -24.841796133783646
+        },
+        "full": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/action.pydata__xarray-6992.call16.json",
+          "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 10842,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -0.00010132275929208845,
+            "target_probability": 0.9998986721038818,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -24.80478858947754,
+            "target_probability": 1.6881739062224455e-11,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -24.804687266718247
+        }
+      },
+      "top1_agreement_by_branch": {
+        "chosen": true,
+        "correct": true
+      },
+      "full_minus_served_local_log_odds": 0.037108867065398954
+    },
+    {
+      "name": "action.pylint-dev__pylint-4551.call35",
+      "task": "pylint-dev__pylint-4551",
+      "call": 35,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/pylint-dev__pylint-4551/action_counterfactual.candidate.private.json",
+      "case_sha256": "9ed48e522513c9cf83d72d72cbb74b1b88083f9562e56d8352af1570a6f48a22",
+      "status": "paired",
+      "modes": {
+        "served": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/action.pylint-dev__pylint-4551.call35.json",
+          "runtime_config_id": "stage12_head_bfp8_lofi",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 36991,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -0.2700955271720886,
+            "target_probability": 0.7633065581321716,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -19.020095825195312,
+            "target_probability": 5.491327392803669e-09,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -18.750000298023224
+        },
+        "full": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/action.pylint-dev__pylint-4551.call35.json",
+          "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 36991,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -0.016462096944451332,
+            "target_probability": 0.9836726784706116,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -21.641462326049805,
+            "target_probability": 3.9923842010125554e-10,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -21.625000229105353
+        }
+      },
+      "top1_agreement_by_branch": {
+        "chosen": true,
+        "correct": true
+      },
+      "full_minus_served_local_log_odds": -2.8749999310821295
+    },
+    {
+      "name": "action.pylint-dev__pylint-4661.call19",
+      "task": "pylint-dev__pylint-4661",
+      "call": 19,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/pylint-dev__pylint-4661/action_counterfactual.candidate.private.json",
+      "case_sha256": "713e87789d9c8ed6cb7e77c4dfca39e69e706132ac5d48476e807d3cc569b206",
+      "status": "paired",
+      "modes": {
+        "served": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/action.pylint-dev__pylint-4661.call19.json",
+          "runtime_config_id": "stage12_head_bfp8_lofi",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 22271,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -1.5497195136049413e-06,
+            "target_probability": 0.9999984502792358,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -27.703126907348633,
+            "target_probability": 9.304324888673166e-13,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -27.70312535762912
+        },
+        "full": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/action.pylint-dev__pylint-4661.call19.json",
+          "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 22271,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -7.152555099310121e-07,
+            "target_probability": 0.9999992847442627,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -27.453125,
+            "target_probability": 1.1947012389795786e-12,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -27.45312428474449
+        }
+      },
+      "top1_agreement_by_branch": {
+        "chosen": true,
+        "correct": true
+      },
+      "full_minus_served_local_log_odds": 0.25000107288462914
+    },
+    {
+      "name": "action.pylint-dev__pylint-4970.call51",
+      "task": "pylint-dev__pylint-4970",
+      "call": 51,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/pylint-dev__pylint-4970/action_counterfactual.candidate.private.json",
+      "case_sha256": "394177560f52396863ecde872372081b9c47e0f0467dce9e71a77e89dd950088",
+      "status": "paired",
+      "modes": {
+        "served": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/action.pylint-dev__pylint-4970.call51.json",
+          "runtime_config_id": "stage12_head_bfp8_lofi",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 34846,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -0.0015411416534334421,
+            "target_probability": 0.998460054397583,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -19.376541137695312,
+            "target_probability": 3.84481202431175e-09,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -19.37499999604188
+        },
+        "full": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/action.pylint-dev__pylint-4970.call51.json",
+          "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 34846,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -0.006092429161071777,
+            "target_probability": 0.9939261078834534,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -17.131092071533203,
+            "target_probability": 3.6312925999482104e-08,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -17.12499964237213
+        }
+      },
+      "top1_agreement_by_branch": {
+        "chosen": true,
+        "correct": true
+      },
+      "full_minus_served_local_log_odds": 2.2500003536697477
+    },
+    {
+      "name": "action.pylint-dev__pylint-4970.call55",
+      "task": "pylint-dev__pylint-4970",
+      "call": 55,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/pylint-dev__pylint-4970-call55/action_counterfactual.candidate.private.json",
+      "case_sha256": "b000bd3e869079d4695a0249bafd5857091060e867d85824ee45a488bcce366d",
+      "status": "paired",
+      "modes": {
+        "served": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/action.pylint-dev__pylint-4970.call55.json",
+          "runtime_config_id": "stage12_head_bfp8_lofi",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 35856,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -0.0019311128417029977,
+            "target_probability": 0.9980707764625549,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -27.548805236816406,
+            "target_probability": 1.0856901315470235e-12,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -27.546874123974703
+        },
+        "full": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/action.pylint-dev__pylint-4970.call55.json",
+          "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 35856,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -3.1470757676288486e-05,
+            "target_probability": 0.9999685287475586,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -31.062530517578125,
+            "target_probability": 3.233809162291046e-14,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -31.06249904682045
+        }
+      },
+      "top1_agreement_by_branch": {
+        "chosen": true,
+        "correct": true
+      },
+      "full_minus_served_local_log_odds": -3.5156249228457455
+    },
+    {
+      "name": "action.pylint-dev__pylint-6386.call33",
+      "task": "pylint-dev__pylint-6386",
+      "call": 33,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/pylint-dev__pylint-6386/action_counterfactual.candidate.private.json",
+      "case_sha256": "da24bf7996ba910e8e8b5261ca5b93c8a30e7078101d0afbc917dddb3b1827ac",
+      "status": "paired",
+      "modes": {
+        "served": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/action.pylint-dev__pylint-6386.call33.json",
+          "runtime_config_id": "stage12_head_bfp8_lofi",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 51591,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -0.07890131324529648,
+            "target_probability": 0.9241310954093933,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -23.344526290893555,
+            "target_probability": 7.27111565401728e-11,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -23.265624977648258
+        },
+        "full": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/action.pylint-dev__pylint-6386.call33.json",
+          "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 51591,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -0.006721742916852236,
+            "target_probability": 0.9933007955551147,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -25.63953399658203,
+            "target_probability": 7.326420720099591e-12,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -25.63281225366518
+        }
+      },
+      "top1_agreement_by_branch": {
+        "chosen": true,
+        "correct": true
+      },
+      "full_minus_served_local_log_odds": -2.367187276016921
+    },
+    {
+      "name": "action.pylint-dev__pylint-8898.call44",
+      "task": "pylint-dev__pylint-8898",
+      "call": 44,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/pylint-dev__pylint-8898/action_counterfactual.candidate.private.json",
+      "case_sha256": "56c529515e4a2136eaa8c6463ae036c0f1d42af543f695a717e22de464fcd101",
+      "status": "paired",
+      "modes": {
+        "served": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/action.pylint-dev__pylint-8898.call44.json",
+          "runtime_config_id": "stage12_head_bfp8_lofi",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 19467,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -0.0001419681793777272,
+            "target_probability": 0.999858021736145,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -29.781391143798828,
+            "target_probability": 1.1644106360543527e-13,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -29.78124917561945
+        },
+        "full": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/action.pylint-dev__pylint-8898.call44.json",
+          "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 19467,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -1.1920928244535389e-07,
+            "target_probability": 0.9999998807907104,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -32.75,
+            "target_probability": 5.982128261852607e-15,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -32.74999988079072
+        }
+      },
+      "top1_agreement_by_branch": {
+        "chosen": true,
+        "correct": true
+      },
+      "full_minus_served_local_log_odds": -2.968750705171267
+    },
+    {
+      "name": "action.pytest-dev__pytest-10356.call45",
+      "task": "pytest-dev__pytest-10356",
+      "call": 45,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/pytest-dev__pytest-10356/action_counterfactual.candidate.private.json",
+      "case_sha256": "2fc6ff38db5e9f9b6d230ca40de945ef031fdb175818ebb508ecb64eb69faa45",
+      "status": "paired",
+      "modes": {
+        "served": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/action.pytest-dev__pytest-10356.call45.json",
+          "runtime_config_id": "stage12_head_bfp8_lofi",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 22995,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -0.3645693063735962,
+            "target_probability": 0.694495677947998,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -18.27081871032715,
+            "target_probability": 1.1616739570285972e-08,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -17.906249403953552
+        },
+        "full": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/action.pytest-dev__pytest-10356.call45.json",
+          "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 22995,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -0.2751553952693939,
+            "target_probability": 0.759454071521759,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -20.681406021118164,
+            "target_probability": 1.042748332125143e-09,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -20.40625062584877
+        }
+      },
+      "top1_agreement_by_branch": {
+        "chosen": true,
+        "correct": true
+      },
+      "full_minus_served_local_log_odds": -2.500001221895218
+    },
+    {
+      "name": "action.pytest-dev__pytest-5840.call15",
+      "task": "pytest-dev__pytest-5840",
+      "call": 15,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/pytest-dev__pytest-5840/action_counterfactual.candidate.private.json",
+      "case_sha256": "b1c348c89abd193f05ed0e551322fcc3a3369df54a1465f1335ec52ca8659aa9",
+      "status": "paired",
+      "modes": {
+        "served": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/action.pytest-dev__pytest-5840.call15.json",
+          "runtime_config_id": "stage12_head_bfp8_lofi",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 24540,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -2.992108420585282e-05,
+            "target_probability": 0.9999700784683228,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -28.656280517578125,
+            "target_probability": 3.5870340985705296e-13,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -28.65625059649392
+        },
+        "full": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/action.pytest-dev__pytest-5840.call15.json",
+          "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 24540,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -2.3841855067985307e-07,
+            "target_probability": 0.9999997615814209,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -32.625,
+            "target_probability": 6.778639505451451e-15,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -32.62499976158145
+        }
+      },
+      "top1_agreement_by_branch": {
+        "chosen": true,
+        "correct": true
+      },
+      "full_minus_served_local_log_odds": -3.96874916508753
+    },
+    {
+      "name": "action.pytest-dev__pytest-6197.call35",
+      "task": "pytest-dev__pytest-6197",
+      "call": 35,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/pytest-dev__pytest-6197/action_counterfactual.candidate.private.json",
+      "case_sha256": "3464ab28daeb2089a5ae07b152e6be192ee9c3479da14f6160d0960e49363c35",
+      "status": "paired",
+      "modes": {
+        "served": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/action.pytest-dev__pytest-6197.call35.json",
+          "runtime_config_id": "stage12_head_bfp8_lofi",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 30081,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -8.702239938429557e-06,
+            "target_probability": 0.9999912977218628,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -25.400400161743164,
+            "target_probability": 9.305643061674473e-12,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -25.400391459503226
+        },
+        "full": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/action.pytest-dev__pytest-6197.call35.json",
+          "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 30081,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -4.0531076592742465e-06,
+            "target_probability": 0.9999959468841553,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -26.519535064697266,
+            "target_probability": 3.0388710211409764e-12,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -26.519531011589606
+        }
+      },
+      "top1_agreement_by_branch": {
+        "chosen": true,
+        "correct": true
+      },
+      "full_minus_served_local_log_odds": -1.1191395520863807
+    },
+    {
+      "name": "action.pytest-dev__pytest-7432.call34",
+      "task": "pytest-dev__pytest-7432",
+      "call": 34,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/pytest-dev__pytest-7432/action_counterfactual.candidate.private.json",
+      "case_sha256": "5c8b6bc77b578ff2ff6d0641a0c35fcabdc41a6e204749ba9b18cbb763d95d8d",
+      "status": "paired",
+      "modes": {
+        "served": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/action.pytest-dev__pytest-7432.call34.json",
+          "runtime_config_id": "stage12_head_bfp8_lofi",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 25200,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -3.671578815556131e-05,
+            "target_probability": 0.9999632835388184,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -25.261754989624023,
+            "target_probability": 1.0689544735487111e-11,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -25.261718273835868
+        },
+        "full": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/action.pytest-dev__pytest-7432.call34.json",
+          "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 25200,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -1.5497195136049413e-06,
+            "target_probability": 0.9999984502792358,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -27.250001907348633,
+            "target_probability": 1.4637757152213826e-12,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -27.25000035762912
+        }
+      },
+      "top1_agreement_by_branch": {
+        "chosen": true,
+        "correct": true
+      },
+      "full_minus_served_local_log_odds": -1.9882820837932513
+    },
+    {
+      "name": "action.scikit-learn__scikit-learn-10908.call34",
+      "task": "scikit-learn__scikit-learn-10908",
+      "call": 34,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/scikit-learn__scikit-learn-10908/action_counterfactual.candidate.private.json",
+      "case_sha256": "433e48cae5b80c21f8250a46df39d3ef9536aee07de49b39ae1a6c8e42de05d7",
+      "status": "paired",
+      "modes": {
+        "served": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/action.scikit-learn__scikit-learn-10908.call34.json",
+          "runtime_config_id": "stage12_head_bfp8_lofi",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 16928,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -0.020566541701555252,
+            "target_probability": 0.9796435236930847,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -23.614316940307617,
+            "target_probability": 5.5517826447193386e-11,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -23.593750398606062
+        },
+        "full": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/action.scikit-learn__scikit-learn-10908.call34.json",
+          "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 16928,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -0.048637859523296356,
+            "target_probability": 0.9525260329246521,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -24.95488739013672,
+            "target_probability": 1.4528812181113793e-11,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -24.906249530613422
+        }
+      },
+      "top1_agreement_by_branch": {
+        "chosen": true,
+        "correct": true
+      },
+      "full_minus_served_local_log_odds": -1.3124991320073605
+    },
+    {
+      "name": "action.scikit-learn__scikit-learn-14983.call43",
+      "task": "scikit-learn__scikit-learn-14983",
+      "call": 43,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/scikit-learn__scikit-learn-14983/action_counterfactual.candidate.private.json",
+      "case_sha256": "e64458e623cab6438580416cc519688b08a4225ac7218213e0f49cb6839ab993",
+      "status": "paired",
+      "modes": {
+        "served": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/action.scikit-learn__scikit-learn-14983.call43.json",
+          "runtime_config_id": "stage12_head_bfp8_lofi",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 26168,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -0.9012855291366577,
+            "target_probability": 0.40604734420776367,
+            "target_is_top1": false
+          },
+          "correct": {
+            "target_log_probability": -21.04191017150879,
+            "target_probability": 7.271341306847035e-10,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -20.14062464237213
+        },
+        "full": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/action.scikit-learn__scikit-learn-14983.call43.json",
+          "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 26168,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -1.1370381116867065,
+            "target_probability": 0.32076770067214966,
+            "target_is_top1": false
+          },
+          "correct": {
+            "target_log_probability": -22.77766227722168,
+            "target_probability": 1.2817016892263666e-10,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -21.640624165534973
+        }
+      },
+      "top1_agreement_by_branch": {
+        "chosen": true,
+        "correct": true
+      },
+      "full_minus_served_local_log_odds": -1.4999995231628418
+    },
+    {
+      "name": "action.sphinx-doc__sphinx-10323.call68",
+      "task": "sphinx-doc__sphinx-10323",
+      "call": 68,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/sphinx-doc__sphinx-10323/action_counterfactual.candidate.private.json",
+      "case_sha256": "72789bdb0a798672e2011ee937ca9a10ea8bb6adaf7434ff436a9a4d8d73b385",
+      "status": "paired",
+      "modes": {
+        "served": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/action.sphinx-doc__sphinx-10323.call68.json",
+          "runtime_config_id": "stage12_head_bfp8_lofi",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 64535,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -0.3100106716156006,
+            "target_probability": 0.7334391474723816,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -25.17329216003418,
+            "target_probability": 1.167825992159921e-11,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -24.86328148841858
+        },
+        "full": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/action.sphinx-doc__sphinx-10323.call68.json",
+          "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 64535,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -5.628759860992432,
+            "target_probability": 0.003593028523027897,
+            "target_is_top1": false
+          },
+          "correct": {
+            "target_log_probability": -28.574071884155273,
+            "target_probability": 3.8943793936180304e-13,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -22.945312023162842
+        }
+      },
+      "top1_agreement_by_branch": {
+        "chosen": false,
+        "correct": false
+      },
+      "full_minus_served_local_log_odds": 1.9179694652557373
+    },
+    {
+      "name": "action.sphinx-doc__sphinx-7590.call44",
+      "task": "sphinx-doc__sphinx-7590",
+      "call": 44,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/sphinx-doc__sphinx-7590/action_counterfactual.candidate.private.json",
+      "case_sha256": "2c706fc31a48e359fb899074034916ff79531226a2d6684f964b814c74283002",
+      "status": "paired",
+      "modes": {
+        "served": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/action.sphinx-doc__sphinx-7590.call44.json",
+          "runtime_config_id": "stage12_head_bfp8_lofi",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 22193,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -0.0007384672062471509,
+            "target_probability": 0.9992617964744568,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -22.9382381439209,
+            "target_probability": 1.0915653797516356e-10,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -22.93749967671465
+        },
+        "full": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/action.sphinx-doc__sphinx-7590.call44.json",
+          "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 22193,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -0.0014132998185232282,
+            "target_probability": 0.9985877275466919,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -24.751413345336914,
+            "target_probability": 1.7807286895044072e-11,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -24.75000004551839
+        }
+      },
+      "top1_agreement_by_branch": {
+        "chosen": true,
+        "correct": true
+      },
+      "full_minus_served_local_log_odds": -1.8125003688037395
+    },
+    {
+      "name": "action.sphinx-doc__sphinx-9461.call76",
+      "task": "sphinx-doc__sphinx-9461",
+      "call": 76,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/sphinx-doc__sphinx-9461/action_counterfactual.candidate.private.json",
+      "case_sha256": "44eb979aed1c5f5691b5a51c4b7cded964764c7d975a631769abe3751a777c3a",
+      "status": "paired",
+      "modes": {
+        "served": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/action.sphinx-doc__sphinx-9461.call76.json",
+          "runtime_config_id": "stage12_head_bfp8_lofi",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 27873,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -4.60137271147687e-05,
+            "target_probability": 0.9999539852142334,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -25.531295776367188,
+            "target_probability": 8.163926999704696e-12,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -25.531249762640073
+        },
+        "full": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/action.sphinx-doc__sphinx-9461.call76.json",
+          "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 27873,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -4.660974445869215e-05,
+            "target_probability": 0.9999533891677856,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -26.160202026367188,
+            "target_probability": 4.352798937262703e-12,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -26.16015541662273
+        }
+      },
+      "top1_agreement_by_branch": {
+        "chosen": true,
+        "correct": true
+      },
+      "full_minus_served_local_log_odds": -0.6289056539826561
+    },
+    {
+      "name": "action.sympy__sympy-12489.call34",
+      "task": "sympy__sympy-12489",
+      "call": 34,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/sympy__sympy-12489/action_counterfactual.candidate.private.json",
+      "case_sha256": "e7502eaa3dd07f487b64f62035abaa55bc806121b784ebf78d4c8b8530ba2910",
+      "status": "paired",
+      "modes": {
+        "served": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/action.sympy__sympy-12489.call34.json",
+          "runtime_config_id": "stage12_head_bfp8_lofi",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 16006,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -0.9777855277061462,
+            "target_probability": 0.37614312767982483,
+            "target_is_top1": false
+          },
+          "correct": {
+            "target_log_probability": -22.446535110473633,
+            "target_probability": 1.7848168776257722e-10,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -21.468749582767487
+        },
+        "full": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/action.sympy__sympy-12489.call34.json",
+          "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 16006,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -0.8263394236564636,
+            "target_probability": 0.4376484155654907,
+            "target_is_top1": false
+          },
+          "correct": {
+            "target_log_probability": -22.763839721679688,
+            "target_probability": 1.299541169119678e-10,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -21.937500298023224
+        }
+      },
+      "top1_agreement_by_branch": {
+        "chosen": true,
+        "correct": true
+      },
+      "full_minus_served_local_log_odds": -0.4687507152557373
+    },
+    {
+      "name": "action.sympy__sympy-13091.call22",
+      "task": "sympy__sympy-13091",
+      "call": 22,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/sympy__sympy-13091/action_counterfactual.candidate.private.json",
+      "case_sha256": "e9de94d13411323de604aea2ce2664fc0cd3b343c66a5ee9a90f0752a2ba424f",
+      "status": "paired",
+      "modes": {
+        "served": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/action.sympy__sympy-13091.call22.json",
+          "runtime_config_id": "stage12_head_bfp8_lofi",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 7610,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -0.0031905481591820717,
+            "target_probability": 0.9968145489692688,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -21.721940994262695,
+            "target_probability": 3.683671423448942e-10,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -21.718750446103513
+        },
+        "full": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/action.sympy__sympy-13091.call22.json",
+          "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 7610,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -0.004635659046471119,
+            "target_probability": 0.9953750967979431,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -22.410884857177734,
+            "target_probability": 1.8495938114426735e-10,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -22.406249198131263
+        }
+      },
+      "top1_agreement_by_branch": {
+        "chosen": true,
+        "correct": true
+      },
+      "full_minus_served_local_log_odds": -0.68749875202775
+    },
+    {
+      "name": "action.sympy__sympy-18763.call20",
+      "task": "sympy__sympy-18763",
+      "call": 20,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/sympy__sympy-18763/action_counterfactual.candidate.private.json",
+      "case_sha256": "8fa0ffe613458817c1bb838dcb1b241353d7f54f7da84911522e9852cac55a0f",
+      "status": "paired",
+      "modes": {
+        "served": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/action.sympy__sympy-18763.call20.json",
+          "runtime_config_id": "stage12_head_bfp8_lofi",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 12919,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -0.00035494225448928773,
+            "target_probability": 0.9996451139450073,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -23.937854766845703,
+            "target_probability": 4.01718450171451e-11,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -23.937499824591214
+        },
+        "full": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/action.sympy__sympy-18763.call20.json",
+          "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 12919,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -0.000161038784426637,
+            "target_probability": 0.9998389482498169,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -21.875160217285156,
+            "target_probability": 3.1603750172415346e-10,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -21.87499917850073
+        }
+      },
+      "top1_agreement_by_branch": {
+        "chosen": true,
+        "correct": true
+      },
+      "full_minus_served_local_log_odds": 2.0625006460904842
+    },
+    {
+      "name": "action.sphinx-doc__sphinx-11510.validated-action",
+      "task": "sphinx-doc__sphinx-11510",
+      "call": 24,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/sphinx-doc__sphinx-11510/validated/action_counterfactual.validated.private.json",
+      "case_sha256": "bcb6d7ad7f7d309ba0a6dbdc749e3db3f0529f834df62f7419fcfc53c028260b",
+      "status": "paired",
+      "modes": {
+        "served": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/action.sphinx-doc__sphinx-11510.validated-action.json",
+          "runtime_config_id": "stage12_head_bfp8_lofi",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 23290,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -0.0067732506431639194,
+            "target_probability": 0.9932496547698975,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -21.288022994995117,
+            "target_probability": 5.684981929654498e-10,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -21.281249744351953
+        },
+        "full": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/action.sphinx-doc__sphinx-11510.validated-action.json",
+          "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 23290,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -0.007639833260327578,
+            "target_probability": 0.9923892617225647,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -22.038888931274414,
+            "target_probability": 2.683070987608005e-10,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -22.031249098014086
+        }
+      },
+      "top1_agreement_by_branch": {
+        "chosen": true,
+        "correct": true
+      },
+      "full_minus_served_local_log_odds": -0.7499993536621332
+    },
+    {
+      "name": "action.psf__requests-5414.call23.validated-pure-url-action",
+      "task": "psf__requests-5414",
+      "call": 23,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/psf__requests-5414/validated-pure-urls/psf__requests-5414.call23.action.private.json",
+      "case_sha256": "1845918122913a020700a8d935e2b1cf6c4481efccee2f4837036e67a2b18f54",
+      "status": "paired",
+      "modes": {
+        "served": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/action.psf__requests-5414.call23.validated-pure-url-action.json",
+          "runtime_config_id": "stage12_head_bfp8_lofi",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 13122,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -1.0132738680113107e-05,
+            "target_probability": 0.9999898672103882,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -28.781259536743164,
+            "target_probability": 3.1656128456417076e-13,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -28.781249404004484
+        },
+        "full": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/action.psf__requests-5414.call23.validated-pure-url-action.json",
+          "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 13122,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -2.622600959512056e-06,
+            "target_probability": 0.9999973773956299,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -29.687501907348633,
+            "target_probability": 1.2790330318306065e-13,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -29.687499284747673
+        }
+      },
+      "top1_agreement_by_branch": {
+        "chosen": true,
+        "correct": true
+      },
+      "full_minus_served_local_log_odds": -0.9062498807431894
+    },
+    {
+      "name": "action.psf__requests-5414.call30.validated-pure-url-action",
+      "task": "psf__requests-5414",
+      "call": 30,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/psf__requests-5414/validated-pure-urls/psf__requests-5414.call30.action.private.json",
+      "case_sha256": "c7e7d2302394f49db2043dd5cd688e833266af74be4298976edd15d99f11765d",
+      "status": "paired",
+      "modes": {
+        "served": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/action.psf__requests-5414.call30.validated-pure-url-action.json",
+          "runtime_config_id": "stage12_head_bfp8_lofi",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 16058,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": 0.0,
+            "target_probability": 1.0,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -32.59375,
+            "target_probability": 6.9938163672401445e-15,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -32.59375
+        },
+        "full": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/action.psf__requests-5414.call30.validated-pure-url-action.json",
+          "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 16058,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": 0.0,
+            "target_probability": 1.0,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -32.875,
+            "target_probability": 5.279209500244153e-15,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -32.875
+        }
+      },
+      "top1_agreement_by_branch": {
+        "chosen": true,
+        "correct": true
+      },
+      "full_minus_served_local_log_odds": -0.28125
+    },
+    {
+      "name": "action.sympy__sympy-14248.call50.validated-action",
+      "task": "sympy__sympy-14248",
+      "call": 50,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/sympy__sympy-14248/validated/sympy__sympy-14248.call50.action.private.json",
+      "case_sha256": "98bc61fb60e6e98da9fe69149e5d820c39abee89d22e05dd85543410f460aa08",
+      "status": "paired",
+      "modes": {
+        "served": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/action.sympy__sympy-14248.call50.validated-action.json",
+          "runtime_config_id": "stage12_head_bfp8_lofi",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 28697,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -3.933898824470816e-06,
+            "target_probability": 0.9999960660934448,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -29.828128814697266,
+            "target_probability": 1.1112409549398489e-13,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -29.82812488079844
+        },
+        "full": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/action.sympy__sympy-14248.call50.validated-action.json",
+          "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 28697,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -1.1920928244535389e-07,
+            "target_probability": 0.9999998807907104,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -32.5625,
+            "target_probability": 7.215823702715497e-15,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -32.56249988079072
+        }
+      },
+      "top1_agreement_by_branch": {
+        "chosen": true,
+        "correct": true
+      },
+      "full_minus_served_local_log_odds": -2.7343749999922764
+    },
+    {
+      "name": "action.astropy__astropy-13579.fetch-next-action",
+      "task": "astropy__astropy-13579",
+      "call": 3,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/astropy__astropy-13579/action_counterfactual.candidate.private.json",
+      "case_sha256": "818704ce976b75ba3f4fe0139bba86f45e6e51b24de46c979053b8e59b153f4d",
+      "status": "paired",
+      "modes": {
+        "served": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/action.astropy__astropy-13579.fetch-next-action.json",
+          "runtime_config_id": "stage12_head_bfp8_lofi",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 4003,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -1.1920928244535389e-07,
+            "target_probability": 0.9999998807907104,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -29.84375,
+            "target_probability": 1.0940169804145652e-13,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -29.843749880790718
+        },
+        "full": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/action.astropy__astropy-13579.fetch-next-action.json",
+          "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 4003,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": 0.0,
+            "target_probability": 1.0,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -26.8671875,
+            "target_probability": 2.1464893664585594e-12,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -26.8671875
+        }
+      },
+      "top1_agreement_by_branch": {
+        "chosen": true,
+        "correct": true
+      },
+      "full_minus_served_local_log_odds": 2.9765623807907176
+    },
+    {
+      "name": "action.astropy__astropy-7336.fetch-next-action",
+      "task": "astropy__astropy-7336",
+      "call": 18,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/astropy__astropy-7336/action_counterfactual.candidate.private.json",
+      "case_sha256": "419a06a00c05c49e4e6b51c9978a1c913ed7c59cf95414bea9d7bc624813aec6",
+      "status": "paired",
+      "modes": {
+        "served": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/action.astropy__astropy-7336.fetch-next-action.json",
+          "runtime_config_id": "stage12_head_bfp8_lofi",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 9084,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -0.0005128260818310082,
+            "target_probability": 0.9994872808456421,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -23.313013076782227,
+            "target_probability": 7.503900278926778e-11,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -23.312500250700396
+        },
+        "full": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/action.astropy__astropy-7336.fetch-next-action.json",
+          "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 9084,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -0.0001691436773398891,
+            "target_probability": 0.9998308420181274,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -19.53141975402832,
+            "target_probability": 3.2931550819625954e-09,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -19.53125061035098
+        }
+      },
+      "top1_agreement_by_branch": {
+        "chosen": true,
+        "correct": true
+      },
+      "full_minus_served_local_log_odds": 3.781249640349415
+    },
+    {
+      "name": "action.astropy__astropy-8872.fetch-next-action",
+      "task": "astropy__astropy-8872",
+      "call": 8,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/astropy__astropy-8872/action_counterfactual.candidate.private.json",
+      "case_sha256": "c1dca0d99577b5bf1ae854f330af3954f7a84e89f41ea6811fc11b4979e8aba5",
+      "status": "paired",
+      "modes": {
+        "served": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/action.astropy__astropy-8872.fetch-next-action.json",
+          "runtime_config_id": "stage12_head_bfp8_lofi",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 7567,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -1.1920922133867862e-06,
+            "target_probability": 0.9999988079071045,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -30.312501907348633,
+            "target_probability": 6.846170223610837e-14,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -30.31250071525642
+        },
+        "full": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/action.astropy__astropy-8872.fetch-next-action.json",
+          "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 7567,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -2.3841855067985307e-07,
+            "target_probability": 0.9999997615814209,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -26.61328125,
+            "target_probability": 2.766934034323376e-12,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -26.61328101158145
+        }
+      },
+      "top1_agreement_by_branch": {
+        "chosen": true,
+        "correct": true
+      },
+      "full_minus_served_local_log_odds": 3.69921970367497
+    },
+    {
+      "name": "action.matplotlib__matplotlib-25332.fetch-next-action",
+      "task": "matplotlib__matplotlib-25332",
+      "call": 2,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/matplotlib__matplotlib-25332/action_counterfactual.candidate.private.json",
+      "case_sha256": "70957d53e94df9eacd837421afdf66bf7c7b46972a52e341f17c96fd8498a6ff",
+      "status": "paired",
+      "modes": {
+        "served": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/action.matplotlib__matplotlib-25332.fetch-next-action.json",
+          "runtime_config_id": "stage12_head_bfp8_lofi",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 1655,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": 0.0,
+            "target_probability": 1.0,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -30.03125,
+            "target_probability": 9.069719123953532e-14,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -30.03125
+        },
+        "full": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/action.matplotlib__matplotlib-25332.fetch-next-action.json",
+          "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 1655,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": 0.0,
+            "target_probability": 1.0,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -27.046875,
+            "target_probability": 1.7934589360488196e-12,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -27.046875
+        }
+      },
+      "top1_agreement_by_branch": {
+        "chosen": true,
+        "correct": true
+      },
+      "full_minus_served_local_log_odds": 2.984375
+    },
+    {
+      "name": "action.matplotlib__matplotlib-25960.fetch-next-action",
+      "task": "matplotlib__matplotlib-25960",
+      "call": 3,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/matplotlib__matplotlib-25960/action_counterfactual.candidate.private.json",
+      "case_sha256": "0ff0f74cf765bbba8acad052b164b1d070775ac8492cc4efcb2716cc87f01ad8",
+      "status": "paired",
+      "modes": {
+        "served": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/action.matplotlib__matplotlib-25960.fetch-next-action.json",
+          "runtime_config_id": "stage12_head_bfp8_lofi",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 1809,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": 0.0,
+            "target_probability": 1.0,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -28.5,
+            "target_probability": 4.1937956471276017e-13,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -28.5
+        },
+        "full": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/action.matplotlib__matplotlib-25960.fetch-next-action.json",
+          "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 1809,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": 0.0,
+            "target_probability": 1.0,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -26.2265625,
+            "target_probability": 4.0733211074950315e-12,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -26.2265625
+        }
+      },
+      "top1_agreement_by_branch": {
+        "chosen": true,
+        "correct": true
+      },
+      "full_minus_served_local_log_odds": 2.2734375
+    },
+    {
+      "name": "action.matplotlib__matplotlib-26208.fetch-next-action",
+      "task": "matplotlib__matplotlib-26208",
+      "call": 3,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/matplotlib__matplotlib-26208/action_counterfactual.candidate.private.json",
+      "case_sha256": "d60a3730d0c0792a5c836607969e0a89ec8040d7575a655add74fe904d4f19e9",
+      "status": "paired",
+      "modes": {
+        "served": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/action.matplotlib__matplotlib-26208.fetch-next-action.json",
+          "runtime_config_id": "stage12_head_bfp8_lofi",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 3029,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": 0.0,
+            "target_probability": 1.0,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -27.765625,
+            "target_probability": 8.740620532042553e-13,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -27.765625
+        },
+        "full": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/action.matplotlib__matplotlib-26208.fetch-next-action.json",
+          "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 3029,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": 0.0,
+            "target_probability": 1.0,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -25.7109375,
+            "target_probability": 6.8215290187356725e-12,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -25.7109375
+        }
+      },
+      "top1_agreement_by_branch": {
+        "chosen": true,
+        "correct": true
+      },
+      "full_minus_served_local_log_odds": 2.0546875
+    },
+    {
+      "name": "action.matplotlib__matplotlib-26291.fetch-next-action",
+      "task": "matplotlib__matplotlib-26291",
+      "call": 3,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/matplotlib__matplotlib-26291/action_counterfactual.candidate.private.json",
+      "case_sha256": "6b3b98d4d9369490b1935d1a462105bb4ace2b1432a67c11ad2242329a4fdec7",
+      "status": "paired",
+      "modes": {
+        "served": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/action.matplotlib__matplotlib-26291.fetch-next-action.json",
+          "runtime_config_id": "stage12_head_bfp8_lofi",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 2632,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -1.1920928244535389e-07,
+            "target_probability": 0.9999998807907104,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -28.59375,
+            "target_probability": 3.818494457262511e-13,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -28.593749880790718
+        },
+        "full": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/action.matplotlib__matplotlib-26291.fetch-next-action.json",
+          "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 2632,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": 0.0,
+            "target_probability": 1.0,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -26.212890625,
+            "target_probability": 4.129393441770768e-12,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -26.212890625
+        }
+      },
+      "top1_agreement_by_branch": {
+        "chosen": true,
+        "correct": true
+      },
+      "full_minus_served_local_log_odds": 2.3808592557907176
+    },
+    {
+      "name": "action.pydata__xarray-4687.fetch-next-action",
+      "task": "pydata__xarray-4687",
+      "call": 39,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/pydata__xarray-4687/action_counterfactual.candidate.private.json",
+      "case_sha256": "7e0c07030b0bf623c339fe053d59edc4b48d861bbe09a17bfbab1358b3269294",
+      "status": "paired",
+      "modes": {
+        "served": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/action.pydata__xarray-4687.fetch-next-action.json",
+          "runtime_config_id": "stage12_head_bfp8_lofi",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 28893,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -0.00015877417172305286,
+            "target_probability": 0.9998412132263184,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -26.896642684936523,
+            "target_probability": 2.084186122297549e-12,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -26.8964839107648
+        },
+        "full": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/action.pydata__xarray-4687.fetch-next-action.json",
+          "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 28893,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -1.0847986231965479e-05,
+            "target_probability": 0.9999891519546509,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -22.531261444091797,
+            "target_probability": 1.6398249425009226e-10,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -22.531250596105565
+        }
+      },
+      "top1_agreement_by_branch": {
+        "chosen": true,
+        "correct": true
+      },
+      "full_minus_served_local_log_odds": 4.3652333146592355
+    },
+    {
+      "name": "action.pydata__xarray-7233.fetch-next-action",
+      "task": "pydata__xarray-7233",
+      "call": 4,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/pydata__xarray-7233/action_counterfactual.candidate.private.json",
+      "case_sha256": "30ae1e5e6a2ead902fe27b73cedc09c710f2eab176789d8fbcc3b65203bda684",
+      "status": "paired",
+      "modes": {
+        "served": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/action.pydata__xarray-7233.fetch-next-action.json",
+          "runtime_config_id": "stage12_head_bfp8_lofi",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 2936,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": 0.0,
+            "target_probability": 1.0,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -29.21875,
+            "target_probability": 2.0438928056542432e-13,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -29.21875
+        },
+        "full": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/action.pydata__xarray-7233.fetch-next-action.json",
+          "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 2936,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": 0.0,
+            "target_probability": 1.0,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -26.9375,
+            "target_probability": 2.0007480915074094e-12,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -26.9375
+        }
+      },
+      "top1_agreement_by_branch": {
+        "chosen": true,
+        "correct": true
+      },
+      "full_minus_served_local_log_odds": 2.28125
+    },
+    {
+      "name": "action.pylint-dev__pylint-4604.fetch-next-action",
+      "task": "pylint-dev__pylint-4604",
+      "call": 8,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/pylint-dev__pylint-4604/action_counterfactual.candidate.private.json",
+      "case_sha256": "0f01a95975a6c04e528a1d6b939806fc2c73cd50e45f4503051c0df58e5c4a12",
+      "status": "paired",
+      "modes": {
+        "served": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/action.pylint-dev__pylint-4604.fetch-next-action.json",
+          "runtime_config_id": "stage12_head_bfp8_lofi",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 7482,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": 0.0,
+            "target_probability": 1.0,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -29.875,
+            "target_probability": 1.0603575851565739e-13,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -29.875
+        },
+        "full": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/action.pylint-dev__pylint-4604.fetch-next-action.json",
+          "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 7482,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": 0.0,
+            "target_probability": 1.0,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -25.9375,
+            "target_probability": 5.438597055346106e-12,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -25.9375
+        }
+      },
+      "top1_agreement_by_branch": {
+        "chosen": true,
+        "correct": true
+      },
+      "full_minus_served_local_log_odds": 3.9375
+    },
+    {
+      "name": "action.pytest-dev__pytest-5787.fetch-next-action",
+      "task": "pytest-dev__pytest-5787",
+      "call": 12,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/pytest-dev__pytest-5787/action_counterfactual.candidate.private.json",
+      "case_sha256": "6bed68e36238b97ebb2fee8fb7db215d095bfc8ed60781e62a5d7adee6bb8586",
+      "status": "paired",
+      "modes": {
+        "served": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/action.pytest-dev__pytest-5787.fetch-next-action.json",
+          "runtime_config_id": "stage12_head_bfp8_lofi",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 11260,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": 0.0,
+            "target_probability": 1.0,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -27.3515625,
+            "target_probability": 1.3224136412651188e-12,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -27.3515625
+        },
+        "full": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/action.pytest-dev__pytest-5787.fetch-next-action.json",
+          "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 11260,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": 0.0,
+            "target_probability": 1.0,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -25.84765625,
+            "target_probability": 5.949843048802528e-12,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -25.84765625
+        }
+      },
+      "top1_agreement_by_branch": {
+        "chosen": true,
+        "correct": true
+      },
+      "full_minus_served_local_log_odds": 1.50390625
+    },
+    {
+      "name": "action.scikit-learn__scikit-learn-13135.fetch-next-action",
+      "task": "scikit-learn__scikit-learn-13135",
+      "call": 9,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/scikit-learn__scikit-learn-13135/action_counterfactual.candidate.private.json",
+      "case_sha256": "3690a5be8a7e9906ffcc7429684a6bf42523f0fc94b489ec2ba6c6b56da5d5a7",
+      "status": "paired",
+      "modes": {
+        "served": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/action.scikit-learn__scikit-learn-13135.fetch-next-action.json",
+          "runtime_config_id": "stage12_head_bfp8_lofi",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 6947,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": 0.0,
+            "target_probability": 1.0,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -30.375,
+            "target_probability": 6.431393774746635e-14,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -30.375
+        },
+        "full": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/action.scikit-learn__scikit-learn-13135.fetch-next-action.json",
+          "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 6947,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": 0.0,
+            "target_probability": 1.0,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -28.5,
+            "target_probability": 4.1937956471276017e-13,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -28.5
+        }
+      },
+      "top1_agreement_by_branch": {
+        "chosen": true,
+        "correct": true
+      },
+      "full_minus_served_local_log_odds": 1.875
+    },
+    {
+      "name": "action.scikit-learn__scikit-learn-13328.fetch-next-action",
+      "task": "scikit-learn__scikit-learn-13328",
+      "call": 3,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/scikit-learn__scikit-learn-13328/action_counterfactual.candidate.private.json",
+      "case_sha256": "52f6614498c828972727e13a1086bb30323983eae756e9989ed4d4e44e6d4cf2",
+      "status": "paired",
+      "modes": {
+        "served": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/action.scikit-learn__scikit-learn-13328.fetch-next-action.json",
+          "runtime_config_id": "stage12_head_bfp8_lofi",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 3785,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -1.1920928244535389e-07,
+            "target_probability": 0.9999998807907104,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -28.3125,
+            "target_probability": 5.05868296470785e-13,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -28.312499880790718
+        },
+        "full": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/action.scikit-learn__scikit-learn-13328.fetch-next-action.json",
+          "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 3785,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": 0.0,
+            "target_probability": 1.0,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -26.4765625,
+            "target_probability": 3.1723055172322434e-12,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -26.4765625
+        }
+      },
+      "top1_agreement_by_branch": {
+        "chosen": true,
+        "correct": true
+      },
+      "full_minus_served_local_log_odds": 1.8359373807907176
+    },
+    {
+      "name": "action.scikit-learn__scikit-learn-14053.fetch-next-action",
+      "task": "scikit-learn__scikit-learn-14053",
+      "call": 13,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/scikit-learn__scikit-learn-14053/action_counterfactual.candidate.private.json",
+      "case_sha256": "0a46e147aeeeecfd9af92f33074485993ede14d196a3d64f8664aca22fd1ce22",
+      "status": "paired",
+      "modes": {
+        "served": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/action.scikit-learn__scikit-learn-14053.fetch-next-action.json",
+          "runtime_config_id": "stage12_head_bfp8_lofi",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 13237,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -2.3841855067985307e-07,
+            "target_probability": 0.9999997615814209,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -29.53125,
+            "target_probability": 1.4953438335664482e-13,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -29.53124976158145
+        },
+        "full": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/action.scikit-learn__scikit-learn-14053.fetch-next-action.json",
+          "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 13237,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": 0.0,
+            "target_probability": 1.0,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -27.25,
+            "target_probability": 1.463778534147031e-12,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -27.25
+        }
+      },
+      "top1_agreement_by_branch": {
+        "chosen": true,
+        "correct": true
+      },
+      "full_minus_served_local_log_odds": 2.2812497615814493
+    },
+    {
+      "name": "action.scikit-learn__scikit-learn-14629.fetch-next-action",
+      "task": "scikit-learn__scikit-learn-14629",
+      "call": 8,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/scikit-learn__scikit-learn-14629/action_counterfactual.candidate.private.json",
+      "case_sha256": "4f59833554b0af7b257288ee13cdba89b3c118e35383c9360d8b1935d08713b6",
+      "status": "paired",
+      "modes": {
+        "served": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/action.scikit-learn__scikit-learn-14629.fetch-next-action.json",
+          "runtime_config_id": "stage12_head_bfp8_lofi",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 5931,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -1.1920928244535389e-07,
+            "target_probability": 0.9999998807907104,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -29.40625,
+            "target_probability": 1.6944465849964147e-13,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -29.406249880790718
+        },
+        "full": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/action.scikit-learn__scikit-learn-14629.fetch-next-action.json",
+          "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 5931,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": 0.0,
+            "target_probability": 1.0,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -27.46875,
+            "target_probability": 1.176179054325488e-12,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -27.46875
+        }
+      },
+      "top1_agreement_by_branch": {
+        "chosen": true,
+        "correct": true
+      },
+      "full_minus_served_local_log_odds": 1.9374998807907176
+    },
+    {
+      "name": "action.scikit-learn__scikit-learn-25102.fetch-next-action",
+      "task": "scikit-learn__scikit-learn-25102",
+      "call": 5,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/scikit-learn__scikit-learn-25102/action_counterfactual.candidate.private.json",
+      "case_sha256": "ac0efa0b76f90a6c5074b9211308237c66c9d2641c6ccf86c9c3948d5c0fb8dc",
+      "status": "paired",
+      "modes": {
+        "served": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/action.scikit-learn__scikit-learn-25102.fetch-next-action.json",
+          "runtime_config_id": "stage12_head_bfp8_lofi",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 6229,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -2.7418097943154862e-06,
+            "target_probability": 0.9999972581863403,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -26.492189407348633,
+            "target_probability": 3.123117433070921e-12,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -26.49218666553884
+        },
+        "full": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/action.scikit-learn__scikit-learn-25102.fetch-next-action.json",
+          "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 6229,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -1.1920928244535389e-07,
+            "target_probability": 0.9999998807907104,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -22.84375,
+            "target_probability": 1.199735311097072e-10,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -22.843749880790718
+        }
+      },
+      "top1_agreement_by_branch": {
+        "chosen": true,
+        "correct": true
+      },
+      "full_minus_served_local_log_odds": 3.648436784748121
+    },
+    {
+      "name": "action.scikit-learn__scikit-learn-25747.fetch-next-action",
+      "task": "scikit-learn__scikit-learn-25747",
+      "call": 3,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/scikit-learn__scikit-learn-25747/action_counterfactual.candidate.private.json",
+      "case_sha256": "2bcb65ee9e9bee6d7f42f29234e469c8e9839d29fd7538ae46414f954baac48d",
+      "status": "paired",
+      "modes": {
+        "served": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/action.scikit-learn__scikit-learn-25747.fetch-next-action.json",
+          "runtime_config_id": "stage12_head_bfp8_lofi",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 4003,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -2.3841855067985307e-07,
+            "target_probability": 0.9999997615814209,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -28.125,
+            "target_probability": 6.101936447441836e-13,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -28.12499976158145
+        },
+        "full": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/action.scikit-learn__scikit-learn-25747.fetch-next-action.json",
+          "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 4003,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": 0.0,
+            "target_probability": 1.0,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -26.09375,
+            "target_probability": 4.651878274947174e-12,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -26.09375
+        }
+      },
+      "top1_agreement_by_branch": {
+        "chosen": true,
+        "correct": true
+      },
+      "full_minus_served_local_log_odds": 2.0312497615814493
+    },
+    {
+      "name": "action.sphinx-doc__sphinx-10614.fetch-next-action",
+      "task": "sphinx-doc__sphinx-10614",
+      "call": 12,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/sphinx-doc__sphinx-10614/action_counterfactual.candidate.private.json",
+      "case_sha256": "73308038ffb6e1153713aefd43055714957c7ff69ca2dfb84c42fa9e76df441f",
+      "status": "paired",
+      "modes": {
+        "served": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/action.sphinx-doc__sphinx-10614.fetch-next-action.json",
+          "runtime_config_id": "stage12_head_bfp8_lofi",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 21048,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": 0.0,
+            "target_probability": 1.0,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -28.734375,
+            "target_probability": 3.31756540641881e-13,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -28.734375
+        },
+        "full": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/action.sphinx-doc__sphinx-10614.fetch-next-action.json",
+          "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 21048,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": 0.0,
+            "target_probability": 1.0,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -26.4453125,
+            "target_probability": 3.273005347650959e-12,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -26.4453125
+        }
+      },
+      "top1_agreement_by_branch": {
+        "chosen": true,
+        "correct": true
+      },
+      "full_minus_served_local_log_odds": 2.2890625
+    },
+    {
+      "name": "action.sphinx-doc__sphinx-8638.fetch-next-action",
+      "task": "sphinx-doc__sphinx-8638",
+      "call": 3,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/sphinx-doc__sphinx-8638/action_counterfactual.candidate.private.json",
+      "case_sha256": "a98499f3f71718260984ae51b4bc3487946ebf030920dc7b6530a0480a2b78b2",
+      "status": "paired",
+      "modes": {
+        "served": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/action.sphinx-doc__sphinx-8638.fetch-next-action.json",
+          "runtime_config_id": "stage12_head_bfp8_lofi",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 2188,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -0.0001867835089797154,
+            "target_probability": 0.9998132586479187,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -29.109561920166016,
+            "target_probability": 2.2797009505831634e-13,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -29.109375136657036
+        },
+        "full": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/action.sphinx-doc__sphinx-8638.fetch-next-action.json",
+          "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 2188,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": 0.0,
+            "target_probability": 1.0,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -26.64453125,
+            "target_probability": 2.681804431303725e-12,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -26.64453125
+        }
+      },
+      "top1_agreement_by_branch": {
+        "chosen": true,
+        "correct": true
+      },
+      "full_minus_served_local_log_odds": 2.464843886657036
+    },
+    {
+      "name": "action.sympy__sympy-13480.fetch-next-action",
+      "task": "sympy__sympy-13480",
+      "call": 9,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/sympy__sympy-13480/action_counterfactual.candidate.private.json",
+      "case_sha256": "7958f1882b3dbbead9e0eb354aef9d1032ca9f93e6fef1cf30f492644aaa181d",
+      "status": "paired",
+      "modes": {
+        "served": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/action.sympy__sympy-13480.fetch-next-action.json",
+          "runtime_config_id": "stage12_head_bfp8_lofi",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 4189,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -7.152555099310121e-07,
+            "target_probability": 0.9999992847442627,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -26.1708984375,
+            "target_probability": 4.306487891986288e-12,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -26.17089772224449
+        },
+        "full": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/action.sympy__sympy-13480.fetch-next-action.json",
+          "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 4189,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -2.3841855067985307e-07,
+            "target_probability": 0.9999997615814209,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -24.03125,
+            "target_probability": 3.658985961441097e-11,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -24.03124976158145
+        }
+      },
+      "top1_agreement_by_branch": {
+        "chosen": true,
+        "correct": true
+      },
+      "full_minus_served_local_log_odds": 2.1396479606630407
+    },
+    {
+      "name": "action.sympy__sympy-13551.fetch-next-action",
+      "task": "sympy__sympy-13551",
+      "call": 12,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/sympy__sympy-13551/action_counterfactual.candidate.private.json",
+      "case_sha256": "e1f720371d9533b0cc4c14771e80b6e86af2ce47ec5b9791eeef9925fc96dc56",
+      "status": "paired",
+      "modes": {
+        "served": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/action.sympy__sympy-13551.fetch-next-action.json",
+          "runtime_config_id": "stage12_head_bfp8_lofi",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 4493,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": 0.0,
+            "target_probability": 1.0,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -29.53125,
+            "target_probability": 1.4953438335664482e-13,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -29.53125
+        },
+        "full": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/action.sympy__sympy-13551.fetch-next-action.json",
+          "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 4493,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": 0.0,
+            "target_probability": 1.0,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -26.36328125,
+            "target_probability": 3.552813642240804e-12,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -26.36328125
+        }
+      },
+      "top1_agreement_by_branch": {
+        "chosen": true,
+        "correct": true
+      },
+      "full_minus_served_local_log_odds": 3.16796875
+    },
+    {
+      "name": "action.sympy__sympy-13878.fetch-next-action",
+      "task": "sympy__sympy-13878",
+      "call": 29,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/sympy__sympy-13878/action_counterfactual.candidate.private.json",
+      "case_sha256": "77c7ca4a7dbdde6ad96477e340b4314724668fcb90a8947dd561d0b0ba30f6c2",
+      "status": "paired",
+      "modes": {
+        "served": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/served/action.sympy__sympy-13878.fetch-next-action.json",
+          "runtime_config_id": "stage12_head_bfp8_lofi",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 9559,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -4.768370445162873e-07,
+            "target_probability": 0.9999995231628418,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -27.0078125,
+            "target_probability": 1.8649021129441e-12,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -27.007812023162955
+        },
+        "full": {
+          "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/action.sympy__sympy-13878.fetch-next-action.json",
+          "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 9559,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -1.1920928244535389e-07,
+            "target_probability": 0.9999998807907104,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -23.5625,
+            "target_probability": 5.847042988671447e-11,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -23.562499880790718
+        }
+      },
+      "top1_agreement_by_branch": {
+        "chosen": true,
+        "correct": true
+      },
+      "full_minus_served_local_log_odds": 3.445312142372238
+    },
+    {
+      "name": "action.matplotlib__matplotlib-20488.call29.validated-action",
+      "task": "matplotlib__matplotlib-20488",
+      "call": 29,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/matplotlib__matplotlib-20488/validated/matplotlib__matplotlib-20488.call29.action.private.json",
+      "case_sha256": "a14c188ceaf5174e740f7ed696253efeb07f5270353086ffa5aaa84cf2ad5dd3",
+      "status": "paired",
+      "modes": {
+        "served": {
+          "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-semantic-supplement/runs/served/action.matplotlib__matplotlib-20488.call29.validated-action.json",
+          "runtime_config_id": "stage12_head_bfp8_lofi",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 17237,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -0.0025133469607681036,
+            "target_probability": 0.9974898099899292,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -19.721263885498047,
+            "target_probability": 2.72372924214892e-09,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -19.71875053853728
+        },
+        "full": {
+          "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-semantic-supplement/runs/full/action.matplotlib__matplotlib-20488.call29.validated-action.json",
+          "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 17237,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -0.31340405344963074,
+            "target_probability": 0.7309545278549194,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -19.719654083251953,
+            "target_probability": 2.7281172876314486e-09,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -19.406250029802322
+        }
+      },
+      "top1_agreement_by_branch": {
+        "chosen": true,
+        "correct": true
+      },
+      "full_minus_served_local_log_odds": 0.3125005087349564
+    },
+    {
+      "name": "action.psf__requests-2931.call29.validated-action",
+      "task": "psf__requests-2931",
+      "call": 29,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/psf__requests-2931/validated/psf__requests-2931.call29.action.private.json",
+      "case_sha256": "2e9adb5e6ebc4f10a8fe3f113b00a93b6ef0c07d8a6e853dbb4f32d26cdbee09",
+      "status": "paired",
+      "modes": {
+        "served": {
+          "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-semantic-supplement/runs/served/action.psf__requests-2931.call29.validated-action.json",
+          "runtime_config_id": "stage12_head_bfp8_lofi",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 14468,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -0.002827339107170701,
+            "target_probability": 0.9971766471862793,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -22.159076690673828,
+            "target_probability": 2.3792237624498114e-10,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -22.156249351566657
+        },
+        "full": {
+          "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-semantic-supplement/runs/full/action.psf__requests-2931.call29.validated-action.json",
+          "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 14468,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -0.0011759040644392371,
+            "target_probability": 0.9988247752189636,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -25.219926834106445,
+            "target_probability": 1.1146151709939822e-11,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -25.218750930042006
+        }
+      },
+      "top1_agreement_by_branch": {
+        "chosen": true,
+        "correct": true
+      },
+      "full_minus_served_local_log_odds": -3.0625015784753487
+    },
+    {
+      "name": "action.pydata__xarray-3095.call48.validated-action",
+      "task": "pydata__xarray-3095",
+      "call": 48,
+      "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/pydata__xarray-3095/validated/pydata__xarray-3095.call48.action.private.json",
+      "case_sha256": "7be9b7d14358dae44241c10b6a481b773f0714b7128e3e7ff9f510d2e209f5af",
+      "status": "paired",
+      "modes": {
+        "served": {
+          "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-semantic-supplement/runs/served/action.pydata__xarray-3095.call48.validated-action.json",
+          "runtime_config_id": "stage12_head_bfp8_lofi",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 30144,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -0.01613922044634819,
+            "target_probability": 0.9839903116226196,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -23.46926498413086,
+            "target_probability": 6.418413717179661e-11,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -23.45312576368451
+        },
+        "full": {
+          "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-semantic-supplement/runs/full/action.pydata__xarray-3095.call48.validated-action.json",
+          "runtime_config_id": "stage12_bf16_hifi4_diagnostic",
+          "branch_position_zero_based": 8,
+          "absolute_next_token_index_zero_based": 30144,
+          "same_top1_across_branch_replays": true,
+          "chosen": {
+            "target_log_probability": -0.0018146253423765302,
+            "target_probability": 0.9981870055198669,
+            "target_is_top1": true
+          },
+          "correct": {
+            "target_log_probability": -25.193220138549805,
+            "target_probability": 1.1447839204370425e-11,
+            "target_is_top1": false
+          },
+          "correct_minus_chosen_log_probability": -25.191405513207428
+        }
+      },
+      "top1_agreement_by_branch": {
+        "chosen": true,
+        "correct": true
+      },
+      "full_minus_served_local_log_odds": -1.738279749522917
+    }
+  ]
+}

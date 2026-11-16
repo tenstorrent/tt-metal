@@ -1,0 +1,56 @@
+{
+  "reviewed_unix": 1794726147.841504,
+  "rows": [
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/runs/head_bf16_hifi4/anomaly.sphinx-doc__sphinx-10323.call68.onset.seed43.cap256.json",
+      "sha256": "698f5cc3f065d09404f2d6ccc8cdd1a1ac8438ab3eb583339d8844e84601171f",
+      "seed": 43,
+      "tokens": 113,
+      "verdict": "native",
+      "reason": "Root entire raw and pinned-prefix review: Immediate two extra apostrophe-ve after completed Ive.",
+      "trace_counters_delta": {
+        "model_replays": 112,
+        "sample_replays": 112,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 112,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/runs/head_bf16_hifi4/anomaly.sphinx-doc__sphinx-10323.call68.onset.seed44.cap256.json",
+      "sha256": "c1fc4ea0d02e878d9f47cac151b167247e1c381295a495031e7792df28dcb7e1",
+      "seed": 44,
+      "tokens": 103,
+      "verdict": "normal",
+      "reason": "Root entire raw and pinned-prefix review: Grammatical identified continuation and canonical restoring sed command; no patch correctness claim.",
+      "trace_counters_delta": {
+        "model_replays": 102,
+        "sample_replays": 102,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 102,
+        "captures": 0
+      }
+    },
+    {
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal/runs/head_bf16_hifi4/anomaly.sphinx-doc__sphinx-10323.call70.onset.seed42.cap256.json",
+      "sha256": "dc72e7d00ce9a81b9af9064df90e48a3c17b1b787dae999fca9d5e3037fec886",
+      "seed": 42,
+      "tokens": 36,
+      "verdict": "normal",
+      "reason": "Root entire raw and pinned-prefix review: Grammatical tried-everything continuation and canonical submission; no correctness claim.",
+      "trace_counters_delta": {
+        "model_replays": 35,
+        "sample_replays": 35,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 35,
+        "captures": 0
+      }
+    }
+  ]
+}

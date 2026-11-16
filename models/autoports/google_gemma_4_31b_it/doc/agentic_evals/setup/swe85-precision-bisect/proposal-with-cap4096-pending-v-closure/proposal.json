@@ -1,0 +1,40 @@
+{
+  "status": "proposal_only_pending_V_full_cap4096_closure_not_admitted_not_run",
+  "candidate": "candidate-cases.json",
+  "candidate_sha256": "57193e4b91af3a31df00f0c92dbc0f2219fbce011e6533594e5244a93a3021ed",
+  "source_panel": "setup/swe85-precision-bisect/proposal-with-cap2048-pending-t-closure/candidate-cases.json",
+  "source_panel_sha256": "99ce7c952732e52bcf75eea901c93fe88983c781cf7fba147412f86940af3faa",
+  "selection": "Preserve all108 original onset/seed trial identities and the exact15 original served-anomalous/full-normal target pairs. Extend only Pytest5787 call65 seed44 cap2048\u21924096 after terminal T full seed44 remained progressing. Common cap4096 is applied to the matching served/full row; all other trial caps are unchanged.",
+  "panel_counts": {
+    "trials": 108,
+    "target_pairs": 15,
+    "cap256": 72,
+    "cap512": 7,
+    "cap1024": 22,
+    "cap2048": 6,
+    "cap4096": 1
+  },
+  "trial_config": "For all108 trials, preserve source prompt IDs, saved continuation IDs, sampling settings, seed, selected precision policy, chosen-token count, and branchless one-free-running-trial shape; only the named free-run cap changes.",
+  "acceptance_gates": [
+    "All15 original precision-sensitive served-anomalous/full-normal pairs complete without semantic anomaly; any progressing-cap result is inconclusive, not a pass.",
+    "Review all108 candidate outputs for new anomalies on baseline-normal rows; investigate any regression. Retain the reverse baseline-normal/full-anomalous row.",
+    "Persistent full-TT anomalies require matched shortened TT/HF investigation or stack repair; no blanket waiver.",
+    "Select the fastest measured policy only after the full fixed panel and persistent-symptom evidence pass; then remeasure the used vLLM row and rerun the full85-list."
+  ],
+  "pre_admission_gate": {
+    "required_predecessor": "setup/swe85-adaptive-suffix4096-candidate/full-completion.json",
+    "required_status": "completed_root_raw_review_exit0",
+    "required_run": "V admitted suffix4096 plus full Pytest5787 call65 seed44 cap4096 closure",
+    "currently_present": false,
+    "admission": "Root review and admission required after predecessor completion; this artifact itself grants no admission."
+  },
+  "execution_command": "command.json",
+  "execution_timeout_seconds": 21600,
+  "cpu_validation": "cpu-validation.json",
+  "forecast": "runtime-estimate.json",
+  "provenance": "candidate-input-provenance.json",
+  "no_TTNN_or_device_work": true,
+  "provenance_sha256": "d3ee3a39a83ce19247cc8ed85fdcb82edc1c7b11125756c619935dd570385f19",
+  "source_hashes": "source-hashes.json",
+  "source_hash_inventory": "source-hashes.json"
+}

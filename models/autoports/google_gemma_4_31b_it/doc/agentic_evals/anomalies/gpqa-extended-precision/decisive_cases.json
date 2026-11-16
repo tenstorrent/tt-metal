@@ -1,0 +1,10 @@
+[
+  {
+    "name": "task110.decisive",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task110.decisive.private.json",
+    "branches": [
+      "chosen",
+      "correct"
+    ]
+  }
+]

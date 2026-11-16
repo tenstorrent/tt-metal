@@ -1,0 +1,33 @@
+[
+  {
+    "name": "action.matplotlib__matplotlib-20488.call29.validated-action",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/matplotlib__matplotlib-20488/validated/matplotlib__matplotlib-20488.call29.action.private.json",
+    "branches": [
+      "chosen",
+      "correct"
+    ]
+  },
+  {
+    "name": "action.psf__requests-2931.call29.validated-action",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/psf__requests-2931/validated/psf__requests-2931.call29.action.private.json",
+    "branches": [
+      "chosen",
+      "correct"
+    ]
+  },
+  {
+    "name": "fullreply.pydata__xarray-3095.call48",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/full-replies-xarray3095-semantic/pydata__xarray-3095.call48.case.private.json",
+    "branches": [
+      "chosen"
+    ]
+  },
+  {
+    "name": "action.pydata__xarray-3095.call48.validated-action",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/correct-actions/pydata__xarray-3095/validated/pydata__xarray-3095.call48.action.private.json",
+    "branches": [
+      "chosen",
+      "correct"
+    ]
+  }
+]

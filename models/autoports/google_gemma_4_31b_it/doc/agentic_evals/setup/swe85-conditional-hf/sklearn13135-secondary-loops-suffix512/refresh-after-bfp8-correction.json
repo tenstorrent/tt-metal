@@ -1,0 +1,108 @@
+{
+  "status": "host_only_candidate_refresh_no_hf_execution",
+  "previous_proposal_snapshot": {
+    "path": "proposal-pre-bfp8-correction-stale.json",
+    "sha256": "8c8c59e34a96f16e295d196b861158aaeaf3129a31f9e3f636a3e6747888b96f"
+  },
+  "previous_commands_snapshot": {
+    "path": "commands-pre-bfp8-correction-stale.json",
+    "sha256": "b746e7675363e774d8b8c4c33f85d268799952a3a372a826106533506a16e68b"
+  },
+  "previous_admission_snapshot": {
+    "path": "admission-pre-bfp8-correction-stale.json",
+    "sha256": "d0fb8b3bfd2f46d3ed0d48ac6dd6e9cfd846facd3f028a15d770ccf3b93517bd"
+  },
+  "corrected_served_arm": {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-suffix512-head-bfp8-correction",
+    "admission_sha256": "3135aac12cbe11d97803b166dc3173def8f9bc03a6e8bb786fe015ce3f24bf08",
+    "root_review_sha256": "777d1a61090d8b827c76fc905b1a884b58270613d976c5eed73d8a41c2319151",
+    "served_results_sha256": {
+      "seed42": "cdba56f4ef6f96c94ca131c312f23ebcd615b72704f81353fbaee6ae93d48a49",
+      "seed43": "00cc018a2764f67350ba8503451209a16c4f42ad3010af0b4cb17bf392c93de4",
+      "seed44": "192beeb384d47ca8fad1dfd801ae8f6beb8884f70255d9dad7fa20b8d8c7a1c4"
+    },
+    "config_id": "stage12_head_bfp8_lofi"
+  },
+  "updated_candidate_hashes": {
+    "driver_sha256": "6ece35a9c230f266896cb8e12477f5402083d5b2047746b5a630ff28bc23a0fb",
+    "source_integrity_sha256": "408d1614186a70cf599295c05e03744fd54a786b8a6be3cec2bbd8ea46a399af",
+    "proposal_sha256": "3a9a2ad692bf837d61aa22aeb9512b7c4bab1df668657f457c83bebbf86d1991",
+    "commands_sha256": "5f688c86c517970145f0f28a5320413ccb8f96c86b692b033161aedeb2854179",
+    "forecast_sha256": "e5962ee880ae51627e85dda1610342bef8155556850211846424ee473054504b",
+    "admission_placeholder_sha256": "e707f8e96d866b616d99fb16a29034d9a9e2330d2bc1956192e6c77f4bcc0c45"
+  },
+  "driver_policy": "Root admission required; zero device owners/no precision_repro_hf.py process/MemAvailable >=100GiB; one --group N per invocation; group2 pauses for root raw-output and forecast review; launch/completion records exclusive-create.",
+  "validation_policy": "Only explicit driver --validate-only was run; no execution command, HF runner, model or TTNN imports, or device access.",
+  "static_validation": {
+    "status": "passed_candidate_static_validation_unadmitted",
+    "method": "run_secondary_hf.py --validate-only",
+    "checked": [
+      "pinned source inventory and corrected BFP8 served arm",
+      "served result runtime_precision config_id for seeds42/43/44",
+      "same exact prompt/chosen IDs in served/full fixtures",
+      "saved two-group commands, compare files, forecast, admission placeholder pins"
+    ],
+    "corrected_served_arm": {
+      "directory": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-suffix512-head-bfp8-correction",
+      "admission_sha256": "3135aac12cbe11d97803b166dc3173def8f9bc03a6e8bb786fe015ce3f24bf08",
+      "root_review_sha256": "777d1a61090d8b827c76fc905b1a884b58270613d976c5eed73d8a41c2319151",
+      "completion_sha256": "1be9414e4447a6600ea163967ec4fc0601ae9ffbbd47e44ab5e407a1c3ee453e",
+      "config_id": "stage12_head_bfp8_lofi",
+      "results_dir": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-suffix512-head-bfp8-correction/runs"
+    },
+    "candidate_pins": {
+      "driver_sha256": "6ece35a9c230f266896cb8e12477f5402083d5b2047746b5a630ff28bc23a0fb",
+      "source_integrity_sha256": "408d1614186a70cf599295c05e03744fd54a786b8a6be3cec2bbd8ea46a399af",
+      "proposal_sha256": "3a9a2ad692bf837d61aa22aeb9512b7c4bab1df668657f457c83bebbf86d1991",
+      "commands_sha256": "5f688c86c517970145f0f28a5320413ccb8f96c86b692b033161aedeb2854179",
+      "forecast_sha256": "e5962ee880ae51627e85dda1610342bef8155556850211846424ee473054504b",
+      "admission_placeholder_sha256": "e707f8e96d866b616d99fb16a29034d9a9e2330d2bc1956192e6c77f4bcc0c45"
+    },
+    "execution_scope": "Static checks only. No owner/HF-process/MemAvailable preflight was queried; no saved generation command, HF runner, model import/load/inference, TTNN import, or device access."
+  },
+  "driver_validation_correction": {
+    "status": "host_mocked_validation_status_and_cli_exit_fix",
+    "prior_driver_sha256": "6ece35a9c230f266896cb8e12477f5402083d5b2047746b5a630ff28bc23a0fb",
+    "driver_sha256": "ae085eb32cb96a9e5b6f96ea4f41c284968a6999a7f59af46e97208e00d706d9",
+    "source_integrity_sha256": "cf5efba0647800b7b401e2d3f1be87e352b7b479b06e96ccac38bcd3eec6f789",
+    "commands_sha256": "c265bee496925a1897c98cfb25ca8cf93135df2d583493a8cfd0a4bcff1b2383",
+    "proposal_sha256": "ca8549349562de66a14b187b647b374d32554f45da44733e4a1f2bb6d8b96414",
+    "admission_placeholder_sha256": "90388c18405720b1f3898f08831b881332587e638f58d44d526622bbe4435d25",
+    "tests": [
+      {
+        "case": "valid result file",
+        "status": "completed",
+        "child_exit_code": 0,
+        "driver_exit_code": 0
+      },
+      {
+        "case": "invalid/missing result file",
+        "status": "output_validation_failed",
+        "output_validation_status": "failed",
+        "child_exit_code": 0,
+        "driver_exit_code": 2,
+        "preserved_child_exit_code": true
+      },
+      {
+        "case": "nonzero child",
+        "status": "failed",
+        "output_validation_status": "not_run_child_failed",
+        "child_exit_code": 7,
+        "driver_exit_code": 7
+      }
+    ],
+    "static_validation": "passed via explicit run_secondary_hf.py --validate-only after pin refresh",
+    "cli_exit_mock_tests": {
+      "success": 0,
+      "output_validation_failed": 2,
+      "child_failed": 7
+    },
+    "refreshed_candidate_hashes": {
+      "driver_sha256": "ae085eb32cb96a9e5b6f96ea4f41c284968a6999a7f59af46e97208e00d706d9",
+      "source_integrity_sha256": "cf5efba0647800b7b401e2d3f1be87e352b7b479b06e96ccac38bcd3eec6f789",
+      "commands_sha256": "c265bee496925a1897c98cfb25ca8cf93135df2d583493a8cfd0a4bcff1b2383",
+      "proposal_sha256": "ca8549349562de66a14b187b647b374d32554f45da44733e4a1f2bb6d8b96414",
+      "admission_placeholder_sha256": "90388c18405720b1f3898f08831b881332587e638f58d44d526622bbe4435d25"
+    }
+  }
+}

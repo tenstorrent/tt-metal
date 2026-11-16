@@ -1,0 +1,34 @@
+{
+  "start_unix": 1794742808.9714959,
+  "command": [
+    "timeout",
+    "1800",
+    "env",
+    "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+    "READINESS_TRACE_REGION_SIZE=134217728",
+    "OMP_NUM_THREADS=16",
+    "MKL_NUM_THREADS=16",
+    "OPENBLAS_NUM_THREADS=16",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+    "-m",
+    "models.autoports.google_gemma_4_31b_it.tools.precision_repro_batch",
+    "--cases",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-cap-extension-candidate/merged9/cases.json",
+    "--build-kwargs-file",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/down_bfp8_lofi_isolated_build_kwargs.json",
+    "--output-dir",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-cap-extension-candidate/merged9/results"
+  ],
+  "forecast": {
+    "point_seconds": 640.0003207179305,
+    "range_seconds": [
+      480.0002405384479,
+      896.0004490051027
+    ],
+    "basis": "One measured P3 load plus exact prior nine case diagnostic_total_wall_s and extra cap tokens divided by each measured traced decode rate. Fresh full reruns, not in-place continuation. Bounds planning allowances, outputs may terminate early.",
+    "timeout_seconds": 1800
+  },
+  "device_owner_preflight": [],
+  "cpu_model_preflight": [],
+  "root_review_sha256": "811570f10fc12b3fb09f93683d4f844eb868ad4bf33edfdcd3f8d7d9bfc5c311"
+}

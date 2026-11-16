@@ -1,0 +1,26 @@
+{
+  "status": "candidate_only_pin_repair_no_admission_no_launch",
+  "p_actual_admission_sha256": "91dc764e6a3a6b1e8a1be51e6eee5fc958c19d1dfcfa3d057b989aa325618cdd",
+  "p_source_inventory_sha256": "e1254ae95f87360bc214b01757062a8910b5fed95f6e6cfd13244b024cce01ad",
+  "p_frozen_placeholder_sha256": "428bea328fae8fa6e4f6fe21802f3763985d6b5ee819f5beac6c6df3ff1f2b97",
+  "suffix8192_revision": {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-canonicalprefix-suffix8192-p1pinfix-candidate",
+    "admission_sha256": "658c26ba85e5646c9c1280158ed31c2344c87fdbef7e079fb423145a8ba74dcf",
+    "proposal_sha256": "d7089f9058957f881c2c3fb53dabe6208ba6028624121b891465a9f946105910",
+    "driver_sha256": "a79de95caeaf2d04d8751ec9a3543568d17305075c12bf852ba4edfd1da082e5",
+    "old_admission_archive_sha256": "f71ac674ff37bedd8304b92762cf98528f70d687afe14ebbf7416fe5860a06ec"
+  },
+  "hf_expanded_revision": {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded",
+    "admission_sha256": "8cdf8309d10fdea0a384d411980b5da7ee8fc0e9259e5943323c5eb946b57e2e",
+    "proposal_sha256": "e9f608f56a882cae6bd356a8dc13d2c35f6900d827fcf637c5eee02510f5bd3c",
+    "driver_sha256": "d3f0ea6d9c8d5b61c8c3610281fd15dba05e65d4519521e35a4f326b5f30ef16",
+    "source_integrity_sha256": "f6f4e9ee947e2af8c069bf1009d8e288340df6286857b24d7117a9d27790e7bf"
+  },
+  "validation": {
+    "no_device_or_model_imports": true,
+    "no_launch_or_results_written": true,
+    "source_inventory_mutated": false
+  },
+  "limitation": "Original pre-admission P admission bytes are not available in this workspace; lineage preserves the P source inventory row containing its exact stale digest and the unchanged final admitted bytes. The original X admitted admission bytes are archived verbatim."
+}

@@ -1,0 +1,106 @@
+{
+  "cases": [
+    {
+      "task": "167",
+      "native_response_id": "chatcmpl-b4bf0c0b05e5cd31",
+      "source_packet": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/gpqa-phase1-ready/digest/analysis.private/167-c20efe40442258b3.json",
+      "hf_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+      "seed": 42,
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "prompt_token_count_matches_native": true,
+      "native_completion_tokens": 3804,
+      "reconstructed_completion_tokens": 3803,
+      "decisive_reply_token_index": 3800,
+      "chosen_letter": "A",
+      "correct_letter": "D",
+      "reconstruction": "Pinned chat template and native reasoning/content re-tokenized with canonical <|channel>thought newline / <channel|> markers and native stop ID. Original prompt/output token IDs were null. Count match is not proof of sampled-token identity.",
+      "correct_continuation_scope": "Counterfactual replacement of final boxed answer letter only, conditional on original reasoning; not a corrected reasoning derivation.",
+      "executed": false,
+      "provisional_failure": true,
+      "full_reply_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-phase1-precision/task167.full_reply.private.json",
+      "decisive_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-phase1-precision/task167.decisive.private.json",
+      "decisive_tokens": 3
+    },
+    {
+      "task": "7",
+      "native_response_id": "chatcmpl-9ad6d40ef1aae359",
+      "source_packet": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/gpqa-phase1-ready/digest/analysis.private/7-ffad683f8eb73379.json",
+      "hf_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+      "seed": 42,
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "prompt_token_count_matches_native": true,
+      "native_completion_tokens": 10575,
+      "reconstructed_completion_tokens": 10564,
+      "decisive_reply_token_index": 10561,
+      "chosen_letter": "A",
+      "correct_letter": "B",
+      "reconstruction": "Pinned chat template and native reasoning/content re-tokenized with canonical <|channel>thought newline / <channel|> markers and native stop ID. Original prompt/output token IDs were null. Count match is not proof of sampled-token identity.",
+      "correct_continuation_scope": "Counterfactual replacement of final boxed answer letter only, conditional on original reasoning; not a corrected reasoning derivation.",
+      "executed": false,
+      "provisional_failure": true,
+      "full_reply_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-phase1-precision/task7.full_reply.private.json",
+      "decisive_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-phase1-precision/task7.decisive.private.json",
+      "decisive_tokens": 3
+    },
+    {
+      "task": "93",
+      "native_response_id": "chatcmpl-abf408c968f652d6",
+      "source_packet": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/gpqa-phase1-ready/digest/analysis.private/93-5415052461def3b3.json",
+      "hf_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+      "seed": 42,
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20
+      },
+      "prompt_token_count_matches_native": true,
+      "native_completion_tokens": 7431,
+      "reconstructed_completion_tokens": 7428,
+      "decisive_reply_token_index": 7425,
+      "chosen_letter": "D",
+      "correct_letter": "C",
+      "reconstruction": "Pinned chat template and native reasoning/content re-tokenized with canonical <|channel>thought newline / <channel|> markers and native stop ID. Original prompt/output token IDs were null. Count match is not proof of sampled-token identity.",
+      "correct_continuation_scope": "Counterfactual replacement of final boxed answer letter only, conditional on original reasoning; not a corrected reasoning derivation.",
+      "executed": false,
+      "provisional_failure": true,
+      "full_reply_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-phase1-precision/task93.full_reply.private.json",
+      "decisive_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-phase1-precision/task93.decisive.private.json",
+      "decisive_tokens": 3
+    },
+    {
+      "task": "195",
+      "native_response_id": "chatcmpl-89ac2901351d686e",
+      "seed": 42,
+      "sampling": {
+        "temperature": 1.0,
+        "top_k": 20,
+        "top_p": 0.95
+      },
+      "source_statement": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/gpqa-phase1-ready/digest/statements.private/195-8c17b64910dfa654.json",
+      "source_response": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/gpqa-phase1-ready/digest/responses.private.log",
+      "first_stray_reasoning_char": 8692,
+      "first_stray_reconstructed_token": 3713,
+      "prompt_token_count_matches_native": true,
+      "native_completion_tokens": 126976,
+      "reconstruction": "Original native prompt/output token IDs null. Pinned chat-template prompt count228 matches native; canonical reasoning header plus native text retokenized. Sampled token identity not proven.",
+      "correct_continuation_scope": "Coherent completion of broken dimensional-analysis sentence followed by answerB; official current sample target/doc.answer(B) and exact native B choice text match official Correct Answer. Sentence continuation is an intervention, not unique next-token ground truth.",
+      "executed": false,
+      "scope": "32-token onset TF window; does not replace full reply agreement. Prefix retained to first stray; no additional shortening has yet reproduced anomaly.",
+      "onset_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-phase1-precision/task195.onset.private.json",
+      "prefix_tokens": 3941,
+      "chosen_tokens": 32,
+      "alternative_tokens": 11,
+      "official_correct_letter": "B",
+      "official_mapping_evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/gpqa-phase1-ready/eval_gemma4-v5/google__gemma-4-31B-it/samples_r1_gpqa_diamond_2026-11-14T02-32-20.450607.jsonl"
+    }
+  ],
+  "status": "prepared_not_executed"
+}

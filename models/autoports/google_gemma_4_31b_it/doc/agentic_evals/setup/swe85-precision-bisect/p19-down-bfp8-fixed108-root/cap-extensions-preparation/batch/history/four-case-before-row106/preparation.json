@@ -1,0 +1,200 @@
+{
+  "status": "prepared_not_admitted_not_run",
+  "created_utc": "2026-11-15T16:34:06+00:00",
+  "batch_dir": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/cap-extensions-preparation/batch",
+  "cases_sha256": "c532692990e141977a6272db8454b491ae5bb6200a3766f355d448abf8f50882",
+  "build_kwargs_sha256": "6bb591a2e1cdb4a1837129f1d2eccf130974fdfef1d0cf7b342aaf9153a6a3ef",
+  "command_sha256": "f62e5d40de6d44274abb096126f8f131f231dfd075ee725f017671ab731d6352",
+  "forecast_sha256": "4e8e872e534128c8376368e07379599967871d834bdf5ee3a1659dfde188956d",
+  "source_hashes_sha256": "e4c0cc41de2c7e873749aa3cf4cd593eb6d11707509cd368d0edfd7b61047202",
+  "host_validation": {
+    "exit_code": 0,
+    "stdout": "Validated 4 jobs without importing TTNN",
+    "no_model_or_TTNN_import": true,
+    "output_directory_absent_after_validation": true
+  },
+  "identity_checks": [
+    {
+      "name": "anomaly.matplotlib__matplotlib-20488.call86.onset.seed43.cap512",
+      "fixture_prompt_tokens": 46118,
+      "p19_case_path_match": true,
+      "seed_matches": true,
+      "original_generated_count": 256,
+      "expected_prefix_ids_sha256": "db60bcae3f813fe0935e97f553f4d4a47e337235588681ed6c674c5c3915bc19",
+      "extension_cap": 512,
+      "fixture_sha256": "a427e543e23d8291eed5bac6535acc3965401ab0ccf18535cbc4c4d6caf97da3",
+      "p19_output_sha256": "84b2492b334ddfffe11df139d707e35fbb06dcabd6048ed6fe8c5ab5238e9dd4"
+    },
+    {
+      "name": "anomaly.sphinx-doc__sphinx-10323.call57.onset.seed43.cap512",
+      "fixture_prompt_tokens": 58695,
+      "p19_case_path_match": true,
+      "seed_matches": true,
+      "original_generated_count": 256,
+      "expected_prefix_ids_sha256": "b1ccdee92148e3ec363378860b5e8d57f7fc5db546cb88bbbe507e43ccf5fa7d",
+      "extension_cap": 512,
+      "fixture_sha256": "f92ea14c2024b7c89722784a2f1d8e8551e470f4cd281f974e3b9e691f6a8523",
+      "p19_output_sha256": "8563ed7f5806f8d002b291d1a4f88858c44ea2f22b98561b2444ce1f34ff57e6"
+    },
+    {
+      "name": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed42.cap2048",
+      "fixture_prompt_tokens": 76441,
+      "p19_case_path_match": true,
+      "seed_matches": true,
+      "original_generated_count": 1024,
+      "expected_prefix_ids_sha256": "de238d541c0cc7b010d415d242ec954290fd54fefc701ebb1ade85cdfcea5bfa",
+      "extension_cap": 2048,
+      "fixture_sha256": "b4253957ad89651510a0e39ea3aa49373926c9ff2d963a4ee381047b400efac8",
+      "p19_output_sha256": "e4878adb1a16e1615880e90a21769012a4274e88436d859024fb7fec7d899d42"
+    },
+    {
+      "name": "anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.seed44.cap2048",
+      "fixture_prompt_tokens": 47548,
+      "p19_case_path_match": true,
+      "seed_matches": true,
+      "original_generated_count": 1024,
+      "expected_prefix_ids_sha256": "70dcb8a48bf508ef622aec8d3b67943ce6b19bd51196f7da3d028a4b99fb4fea",
+      "extension_cap": 2048,
+      "fixture_sha256": "14b67b9fcb8ad382713dff99ccb47922690bc5be90131e3adc25a195f3e712d3",
+      "p19_output_sha256": "a79a20bd828f19237d4fd30477eca3b19e21761ccbedf2ac4dc075a6edbad117"
+    }
+  ],
+  "prefix_comparison_plan": {
+    "check_each_new_seed_matched_row": "new token_ids[:original_generated_count] == exact same-seed P19 token_ids",
+    "source_hashes": "source-hashes.json extension_prefix_comparisons rows pin canonical JSON SHA256 of each full original generated ID list",
+    "must_report": "exact prefix equality, or first mismatch position plus old/new token and both hashes; no inferred pass"
+  },
+  "forecast": {
+    "status": "host_forecast_only_not_admitted",
+    "anchors": [
+      {
+        "source_index": 10,
+        "name": "anomaly.matplotlib__matplotlib-20488.call86.onset.seed43.cap512",
+        "prompt_tokens": 46118,
+        "prior_generated_tokens": 256,
+        "new_cap": 512,
+        "seed": 43,
+        "prior_total_free_trial_wall_including_prefill_s": 38.54,
+        "prior_decode_tokens": 255,
+        "prior_decode_wall_s": 14.89,
+        "prior_decode_tokens_per_s": 17.12,
+        "inferred_prefill_plus_first_token_s": 23.65,
+        "extension_prefill_plus_first_token_estimate_s": {
+          "low": 20.1,
+          "point": 23.65,
+          "high": 31.92
+        },
+        "extension_decode_estimate_s": {
+          "low": 30.8,
+          "point": 33.49,
+          "high": 40.37
+        }
+      },
+      {
+        "source_index": 49,
+        "name": "anomaly.sphinx-doc__sphinx-10323.call57.onset.seed43.cap512",
+        "prompt_tokens": 58695,
+        "prior_generated_tokens": 256,
+        "new_cap": 512,
+        "seed": 43,
+        "prior_total_free_trial_wall_including_prefill_s": 48.65,
+        "prior_decode_tokens": 255,
+        "prior_decode_wall_s": 15.22,
+        "prior_decode_tokens_per_s": 16.75,
+        "inferred_prefill_plus_first_token_s": 33.42,
+        "extension_prefill_plus_first_token_estimate_s": {
+          "low": 28.41,
+          "point": 33.42,
+          "high": 45.12
+        },
+        "extension_decode_estimate_s": {
+          "low": 31.48,
+          "point": 34.23,
+          "high": 41.26
+        }
+      },
+      {
+        "source_index": 66,
+        "name": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed42.cap2048",
+        "prompt_tokens": 76441,
+        "prior_generated_tokens": 1024,
+        "new_cap": 2048,
+        "seed": 42,
+        "prior_total_free_trial_wall_including_prefill_s": 113.09,
+        "prior_decode_tokens": 1023,
+        "prior_decode_wall_s": 63.01,
+        "prior_decode_tokens_per_s": 16.24,
+        "inferred_prefill_plus_first_token_s": 50.08,
+        "extension_prefill_plus_first_token_estimate_s": {
+          "low": 42.57,
+          "point": 50.08,
+          "high": 67.61
+        },
+        "extension_decode_estimate_s": {
+          "low": 136.23,
+          "point": 161.46,
+          "high": 208.13
+        }
+      },
+      {
+        "source_index": 74,
+        "name": "anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.seed44.cap2048",
+        "prompt_tokens": 47548,
+        "prior_generated_tokens": 1024,
+        "new_cap": 2048,
+        "seed": 44,
+        "prior_total_free_trial_wall_including_prefill_s": 84.65,
+        "prior_decode_tokens": 1023,
+        "prior_decode_wall_s": 59.93,
+        "prior_decode_tokens_per_s": 17.07,
+        "inferred_prefill_plus_first_token_s": 24.72,
+        "extension_prefill_plus_first_token_estimate_s": {
+          "low": 21.02,
+          "point": 24.72,
+          "high": 33.38
+        },
+        "extension_decode_estimate_s": {
+          "low": 129.57,
+          "point": 153.57,
+          "high": 197.96
+        }
+      }
+    ],
+    "model_setup_load_s": {
+      "measured_p19": 101.04163398081437,
+      "low": 101.04163398081437,
+      "point": 101.04163398081437,
+      "high": 125.0
+    },
+    "aggregate_s": {
+      "low": 561,
+      "point": 646,
+      "high": 836
+    },
+    "timeout_seconds": 1500,
+    "timeout_margin_over_high_seconds": 664,
+    "basis": "Per row, residual = observed original P19 free trial wall minus measured decode_wall (prompt prefill + first-token and small host work); fixture, prompt, seed and policy stay the same. Project decode for the doubled output cap using measured row rate, with allowances of +3/12/35% for512-token outputs and +8/28/65% for2048-token outputs to cover longer context; P19 one-model load was measured101.04s, high allowance125s. Add small serialization overhead. Planning estimate only, no claim about serving throughput."
+  },
+  "p19_gate": {
+    "observed_launch_status": "running",
+    "observed_p19_json_count": 80,
+    "required_before_launch": "P19 must be terminal and root-reviewed; this candidate does not infer live owner state"
+  },
+  "prospective_deadline": {
+    "deadline_epoch": 1794791725,
+    "checked_epoch": 1794760446,
+    "remaining_seconds": 31279,
+    "timeout_seconds": 1500,
+    "closure_reserve_seconds": 900,
+    "latest_start_epoch": 1794789325,
+    "latest_start_utc": "2026-11-16T00:35:25+00:00",
+    "recompute_at_admission": true
+  },
+  "additional_prelaunch_gates": [
+    "root may append or remove rows before admission; refresh manifest, forecast, and pins, then validate-only again",
+    "fresh memory and owner-zero admission",
+    "no overlapping TT/HF model process",
+    "new unique output directory absent and output paths do not overwrite P19 evidence",
+    "latest-start still has timeout plus 900s closure reserve before stage deadline"
+  ]
+}

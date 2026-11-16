@@ -1,0 +1,172 @@
+{
+  "review": "Independent read-only review of the P19 BF16 ring-phase correction and probe evidence",
+  "date": "2026-11-15",
+  "scope": "Host source/artifact review only; no production edits, TTNN imports, device commands, or inference. Resume rerun is still active; its results are intentionally pending.",
+  "patch_review": {
+    "production_change": "In MultichipDecoder._reduce_output, prefill ring phase padding is now selected for all prefill dtypes rather than only BFP8; decode and non-Ring paths still select phase zero. In prepare_prefill_ccl, ring warmup is now allowed for BF16, and dummy input dtype is bfloat8_b for BFP8 policy or residual_dtype for the BF16 policy.",
+    "dtype_correctness": "P19 runtime policy has ccl_dtype.prefill=bfloat16 and residual_dtype=bfloat16; existing BFP8 policies have prefill_ccl_bfp8=true. The warmup dummy therefore matches both supported prefill CCL dtypes. _prefill_ccl_zero_rows cache key includes dtype, preventing BF16/BFP8 buffer aliasing.",
+    "trace_allocation": "Generator.prepare_decode calls each layer.prepare_prefill_ccl before beginning model/sample trace captures. It shares padding dictionaries by (hidden, prefill_ccl_bfp8, topology), which separates BF16 from BFP8 and reuses same-policy zero buffers. The new BF16 warmup allocations occur before trace capture. Prefill itself is eager, not replayed as a trace; decode has phase zero. The active resume command enables TT_METAL_TRACE_ALLOC_TRACKING=1 to check runtime trace-allocation behavior.",
+    "host_tests": {
+      "command": "python models/autoports/google_gemma_4_31b_it/tests/test_prefill_ccl_phase_policy.py",
+      "result": "5 tests passed, 0.015s. Tests AST-execute production methods with doubles and cover BF16/BFP8 padding, unchanged decode/non-Ring paths, phase trim shape, warmup dtype, phase restoration, and dtype-keyed zero-row reuse."
+    },
+    "probe_evidence": {
+      "artifact": "root-ccl-probe-review.json",
+      "result": "40 comparisons across captured layer-0 BF16 self_attn.o_proj and mlp.down_proj inputs. Exact source slice identity and leading-phase padding parity held for all comparisons; nonzero-phase direct reduction mismatched in 6 comparisons, while phase-256 controls were exact. This supports the local BF16 ring phase mechanism; it does not establish full-model sufficiency.",
+      "limitations": "The diagnostic allocated temporary reductions after prepare_decode had captured decode traces but did not replay those traces afterward. It released traces at teardown. This does not prove trace allocation safety; the active full resume rerun with allocation tracking is the relevant check."
+    },
+    "review_conclusion": "The patch is narrowly scoped and consistent with the isolated mechanism. BFP8 behavior is preserved and decode/non-Ring behavior remains unchanged by the new guard. BF16 warmup uses the policy-compatible dtype and is ordered before trace capture. The full-model rerun with tracking completed but still fails the unchanged resume gate at 9/14 cases; phase alignment improves the earliest rows but does not prove sufficiency. Preserve P19 as unselected pending further diagnosis and a passing gate."
+  },
+  "resume_rerun": {
+    "status": "completed_failure",
+    "completion_path": "resume-after-completion.json",
+    "completion_sha256": "b3803a7d2a0b44811694060c742f6e115f7efb03df2619d8a71e390ac76e2560",
+    "output_path": "prefill_resume_after_bf16_ccl.json",
+    "output_sha256": "d43678813b235acfddf113790f38f70c254679b7583f15fe6d838d7968bb4724",
+    "position_summary_path": "resume-after-position-summary.json",
+    "position_summary_sha256": "d3ed985334cea681e34510135d79308048f44983a3be5552060e7b4f46e1f671",
+    "process_exit_code": 1,
+    "elapsed_seconds": 289.6828188896179,
+    "passed_cases": 5,
+    "total_cases": 14,
+    "case_summary": [
+      {
+        "length": 2560,
+        "start": 32,
+        "pass": false,
+        "pcc_mean": 0.9666147054779937,
+        "pcc_min": 0.4310350637237468,
+        "top1": 0.8638132214546204,
+        "first_top1_mismatch": 41
+      },
+      {
+        "length": 2560,
+        "start": 64,
+        "pass": false,
+        "pcc_mean": 0.9650930793002429,
+        "pcc_min": 0.4268211541658301,
+        "top1": 0.8793774247169495,
+        "first_top1_mismatch": 77
+      },
+      {
+        "length": 2560,
+        "start": 132,
+        "pass": false,
+        "pcc_mean": 0.9934730748186139,
+        "pcc_min": 0.7795140343442557,
+        "top1": 0.9688715934753418,
+        "first_top1_mismatch": 170
+      },
+      {
+        "length": 2560,
+        "start": 1024,
+        "pass": true,
+        "pcc_mean": 1.000002403800841,
+        "pcc_min": 0.9999654200027003,
+        "top1": 1.0
+      },
+      {
+        "length": 2560,
+        "start": 1029,
+        "pass": false,
+        "pcc_mean": 0.9878467615088492,
+        "pcc_min": 0.5714877858766119,
+        "top1": 0.9260700345039368,
+        "first_top1_mismatch": 1079
+      },
+      {
+        "length": 2560,
+        "start": 2496,
+        "pass": true,
+        "pcc_mean": 0.9990895224337584,
+        "pcc_min": 0.9889236934714273,
+        "top1": 0.984375
+      },
+      {
+        "length": 2560,
+        "start": 2559,
+        "pass": true,
+        "pcc_mean": 0.9996593770856574,
+        "pcc_min": 0.9996593770856574,
+        "top1": 1.0
+      },
+      {
+        "length": 16384,
+        "start": 32,
+        "pass": false,
+        "pcc_mean": 0.9666259138230203,
+        "pcc_min": 0.4310350637237468,
+        "top1": 0.8638132214546204,
+        "first_top1_mismatch": 41
+      },
+      {
+        "length": 16384,
+        "start": 64,
+        "pass": false,
+        "pcc_mean": 0.9651028287322672,
+        "pcc_min": 0.4268211541658301,
+        "top1": 0.8793774247169495,
+        "first_top1_mismatch": 77
+      },
+      {
+        "length": 16384,
+        "start": 132,
+        "pass": false,
+        "pcc_mean": 0.9934755517952437,
+        "pcc_min": 0.7795140343442557,
+        "top1": 0.9688715934753418,
+        "first_top1_mismatch": 170
+      },
+      {
+        "length": 16384,
+        "start": 1024,
+        "pass": true,
+        "pcc_mean": 1.0000024325752543,
+        "pcc_min": 0.9999654200027003,
+        "top1": 1.0
+      },
+      {
+        "length": 16384,
+        "start": 1029,
+        "pass": false,
+        "pcc_mean": 0.987859900816437,
+        "pcc_min": 0.5714877858766119,
+        "top1": 0.9260700345039368,
+        "first_top1_mismatch": 1079
+      },
+      {
+        "length": 16384,
+        "start": 16320,
+        "pass": false,
+        "pcc_mean": 0.9918308172347041,
+        "pcc_min": 0.8889451314830337,
+        "top1": 0.90625,
+        "first_top1_mismatch": 16325
+      },
+      {
+        "length": 16384,
+        "start": 16383,
+        "pass": true,
+        "pcc_mean": 0.9996473412094095,
+        "pcc_min": 0.9996473412094095,
+        "top1": 1.0
+      }
+    ],
+    "position_observation": "At start32, positions32-63 have segment PCC mean .999193, PCC min .997802, top1 31/32; first top1 mismatch is absolute position41. The 64-95 band drops to mean PCC .949524 and top1 26/32; 96-127 drops further to .865404 and 22/32. At start64, the first 64-95 band is .950571/27 of32 and 96-127 is .862533/24 of32. Thus phase correction improves the earliest prefix-aligned rows but later chunk rows still diverge.",
+    "trace_tracking": "The run was admitted with TT_METAL_TRACE_ALLOC_TRACKING=1. It reached the normal statistical-gate failure and exited after closing devices; the captured log contains no trace-allocation exception or process/runtime error. This is evidence that this execution completed under tracking, not a general proof that all trace paths are allocation-safe.",
+    "interpretation": "The BF16 ring phase probe supports the local mechanism, and the full-model rerun shows improved early rows, but the unchanged resume acceptance remains failed (9/14 failures). This patch is insufficient to establish resumed-prefill equivalence. Continue stage capture; do not select P19 or relax thresholds."
+  },
+  "sha256": {
+    "tt/multichip_decoder.py": "8b5577586ae1c8d3f323e3ddff08bee1bf0537c8ed643b01585049aa6b090972",
+    "tests/test_prefill_ccl_phase_policy.py": "51acda7c984f44232823511dda35e1b20880b6fc2d38812adab7abf00acddf7e",
+    "tests/probe_resume_ccl_p19_bf16.py": "45fa791ca0c31727ae48770cfacd313b06181c67f406efe3b0d0a46a2ae45c64",
+    "root-ccl-probe-review.json": "e2ddf9c756490452401475043fcf7d6567af47466e6838d049bbef94ff7cdc24",
+    "run_resume_with_positions.py": "449f2e5f754569a875a4bd8ddce7fcf3dfa10f408ec2ae498e5c1b111d46b763",
+    "resume-after-admission.json": "d1923435f647a6b8a7bcd579bd72b2c4ac94b180b369b9d7ab2bb6d20a362eb3",
+    "resume-after-launch.json": "01c6fc2dcb157072cc378d6c8a6cbbb65ddefab5e4f9766f4e3e12a473923a7a",
+    "ccl-probe-completion.json": "76d800f39586a0a6a90e25a0acf96baded60277972cf3eb3cc664bc5694fc8eb",
+    "prefill_resume_after_bf16_ccl.json": "d43678813b235acfddf113790f38f70c254679b7583f15fe6d838d7968bb4724",
+    "resume-after-completion.json": "b3803a7d2a0b44811694060c742f6e115f7efb03df2619d8a71e390ac76e2560",
+    "resume-after-position-summary.json": "d3ed985334cea681e34510135d79308048f44983a3be5552060e7b4f46e1f671"
+  }
+}

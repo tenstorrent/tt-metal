@@ -1,0 +1,14 @@
+{
+  "status": "root_accepted_forecast_miss",
+  "reviewer": "root",
+  "accepted": true,
+  "completion_sha256": "048166b9584f831631c37dfde278b7085680daebf0169ba727bf8f4a299505af",
+  "at_unix": 1794742518.0090945,
+  "elapsed_seconds": 159.04888367652893,
+  "forecast_range_seconds": [
+    190,
+    360
+  ],
+  "reason": "Low-side planning miss: all14 requested logit rows captured with identity/runtime validation and clean shutdown. Fixed short forced-history capture completed faster than the conservative proxy range; no skipped rows or shorter generation criterion. No measured component timing exists to attribute this to cache or another mechanism; no speed-gain claim.",
+  "next": "Permit already admitted full-precision arm; its original forecast remains recorded."
+}

@@ -1,0 +1,90 @@
+{
+  "status": "planning_proxy_from_same_case_P3_timings_not_measurement",
+  "purpose": "Isolate down projection compute fidelity after P3; identical P3 fixture/prompt IDs, seeds, sampling and caps; only down weight/fidelity changes from bfp8_lofi/LoFi to bfp8/HiFi2.",
+  "policy_delta": {
+    "baseline_precision_file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/down_bfp8_lofi_isolated_precision.json",
+    "baseline_sha256": "769f6b5d975c3a4b252c01668ded02f32c61c43819117a95868249b4b1fd7350",
+    "candidate_precision_file": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-hifi2-fourcase-followup-candidate/down_bfp8_hifi2_precision.json",
+    "candidate_sha256": "118dceaf55f938ac3521684d77953390e1ee5ba0c4cf893c3195b403910b93b8",
+    "changed_only": {
+      "down": {
+        "from": [
+          "bfp8_lofi",
+          "LoFi"
+        ],
+        "to": [
+          "bfp8",
+          "HiFi2"
+        ]
+      }
+    }
+  },
+  "timing_basis": {
+    "p3_result_rows": [
+      {
+        "manifest_index": 58,
+        "row_name": "anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.seed43.cap2048",
+        "result_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.seed43.cap2048.json",
+        "result_sha256": "9998f0613978430ddb7b6428a0c38efffd3b00e482763afef0ef79efc46478e7",
+        "fixture_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.cap2048.seed43.private.json",
+        "fixture_sha256": "f09f5493bf5e6d1f1bec5f5ce7e4273d0ec9352de1f85ffe780ef897063dec98",
+        "p3_runtime_precision_config_id": "stage12_swe85_down_bfp8_lofi_isolated_served_head_bfp8_lofi",
+        "p3_diagnostic_total_wall_s": 30.322419377975166,
+        "p3_generated_tokens": 329,
+        "p3_verdict": "other_anomaly"
+      },
+      {
+        "manifest_index": 66,
+        "row_name": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed42.cap1024",
+        "result_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed42.cap1024.json",
+        "result_sha256": "cf64a6afad9c1e7bf59c07d2bf3c4bae92e6b19664470931de7b3cd43e3a13d9",
+        "fixture_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap1024.seed42.private.json",
+        "fixture_sha256": "b4253957ad89651510a0e39ea3aa49373926c9ff2d963a4ee381047b400efac8",
+        "p3_runtime_precision_config_id": "stage12_swe85_down_bfp8_lofi_isolated_served_head_bfp8_lofi",
+        "p3_diagnostic_total_wall_s": 58.36516250902787,
+        "p3_generated_tokens": 812,
+        "p3_verdict": "other_anomaly"
+      },
+      {
+        "manifest_index": 67,
+        "row_name": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed43.cap2048",
+        "result_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed43.cap2048.json",
+        "result_sha256": "aa575216e43dd4295eafdd70f56a0975a5c3aa39a8583be5a19c0ec8fb8dcf9a",
+        "fixture_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-third-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap2048.seed43.private.json",
+        "fixture_sha256": "e4c5081386cd785ccc1216dda888b4c54cc165beb80b035e96daf69c2f119718",
+        "p3_runtime_precision_config_id": "stage12_swe85_down_bfp8_lofi_isolated_served_head_bfp8_lofi",
+        "p3_diagnostic_total_wall_s": 48.239312693011016,
+        "p3_generated_tokens": 549,
+        "p3_verdict": "other_anomaly"
+      },
+      {
+        "manifest_index": 68,
+        "row_name": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed44.cap1024",
+        "result_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/down-bfp8-lofi-isolated-fixed108-proposal/runs/down_bfp8_lofi_isolated/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed44.cap1024.json",
+        "result_sha256": "1e544f50ef08db3968395a0eb93c1fd70e0db9cded4d68bc19170150cc4bb88f",
+        "fixture_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.cap1024.seed44.private.json",
+        "fixture_sha256": "7c5da63d138e6afa7b539dfed909ee1e8a937c2e168d587023c4421333688780",
+        "p3_runtime_precision_config_id": "stage12_swe85_down_bfp8_lofi_isolated_served_head_bfp8_lofi",
+        "p3_diagnostic_total_wall_s": 46.20707752602175,
+        "p3_generated_tokens": 497,
+        "p3_verdict": "other_anomaly"
+      }
+    ],
+    "observed_four_trial_sum_seconds": 183.1339721060358,
+    "one_model_load_proxy_seconds": 138.38867970812134,
+    "load_proxy_source": "P1 fixed108 measured model load; P3 full panel load duration not yet separately finalized",
+    "sum_plus_load_seconds": 321.52265181415714
+  },
+  "scenarios_seconds": {
+    "low": 321.52265181415714,
+    "central": 434.0555799491122,
+    "high": 578.7407732654829
+  },
+  "timeout_seconds": 1200,
+  "caveats": [
+    "Four P3 outputs are observed under down BFP8 LoFi; changed HiFi2 may change decode cost and generated trajectories.",
+    "Output-dependent duration can change because sampling branches may differ; cap ceiling is unchanged per case.",
+    "The P3 full108 completion/root reconciliation remains pending; this candidate is only a proposed follow-up and should not launch until P3 terminal review.",
+    "P3 already used one model load; the small candidate includes a fresh load. Forecast multipliers are planning allowances, not confidence intervals or measured speed claims."
+  ]
+}

@@ -1,0 +1,54 @@
+{
+  "status": "completed_root_and_independent_triage_reconciled",
+  "reviewer": "root",
+  "accepted": true,
+  "at_utc": "2026-11-15T08:31:10.483552+00:00",
+  "serial_order": 1,
+  "admission_sha256": "74640276fdf5e463fa968d5d188994622759df96f09d4f408e02712b7d09ae66",
+  "launch_sha256": "72d715ddf08a150cbfda72949bc8e0713e5037ff245ee97d4cdcb7c0ed35276f",
+  "completion_sha256": "fc52a3d203e4cc299ce8037dde0bf7c25fdcf36c62e767ef98183c46fcb203fe",
+  "forecast_status": "in_range",
+  "forecast_range_seconds": [
+    1780,
+    3380
+  ],
+  "measured_seconds": 2106.1512775421143,
+  "rows": [
+    {
+      "case": "anomaly.requests2931.call20.canonicalprefix.optional-suffix512",
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/results/seed42-suffix512/anomaly.requests2931.call20.canonicalprefix.optional-suffix512.hf.private.json",
+      "result_sha256": "a91e0aff64f340594679d595122c256f280e66e650a512ce34a85d52ed432156",
+      "fixture_sha256": "5017461630f07f8232f054ddf6c2b979c4e3bb14370431de6799ca8c4d1d7804",
+      "prompt_tokens": 512,
+      "seed": 42,
+      "generated_tokens": 512,
+      "verdict": "native",
+      "evidence": "512 identical caret token IDs; 2048 decoded carets. Demonstrated loop at cap, not progressing.",
+      "trial_wall_seconds": 1032.3833539891057,
+      "runner_cumulative_wall_seconds": 1051.8399178220425,
+      "independent_triage": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/reviewed/triage-b-requests2931.json",
+      "independent_triage_sha256": "d9159f7af30adab648c7d9197dff4bc7f232d562aee50ab4171aedc3a843b4fa"
+    },
+    {
+      "case": "anomaly.sympy__sympy-14248.call53.onset.optional-suffix512",
+      "result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/results/seed42-suffix512/anomaly.sympy__sympy-14248.call53.onset.optional-suffix512.hf.private.json",
+      "result_sha256": "33d3407480d344a1537e40965d584ef95ecae49c5bea9609eacb83cac4783cf3",
+      "fixture_sha256": "91359efd10ca926d39011351f97d53948db58fc4fedd961705ad4c0a462dbad1",
+      "prompt_tokens": 512,
+      "seed": 42,
+      "generated_tokens": 512,
+      "verdict": "native",
+      "evidence": "512 identical caret token IDs; 2048 decoded carets. Demonstrated loop at cap, not progressing.",
+      "trial_wall_seconds": 1034.075209268136,
+      "runner_cumulative_wall_seconds": 2102.1063768039457,
+      "independent_triage": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/reviewed/triage-b-sympy14248.json",
+      "independent_triage_sha256": "821b1d137a65dde5a04c99d689f1c1fd4eb9a2998fe7c705ac5ae6e6a711e83f"
+    }
+  ],
+  "accounting": {
+    "free_generation_sum_seconds": 2066.4585632572416,
+    "other_group_wall_seconds": 39.692714284872636,
+    "basis": "Group host wall minus per-trial free generation; residual includes load, prefill, forced comparison, report/teardown. Per-case total_wall_s is cumulative since runner start and is not summed."
+  },
+  "interpretation": "Both shortened diagnostic contexts reproduce their caret motif in pinned HF and matched served/full TT. No native full-prompt equivalence or incidence claim; no score or policy change."
+}

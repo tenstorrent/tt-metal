@@ -1,0 +1,77 @@
+{
+  "status": "candidate_only_not_admitted_not_run",
+  "objective": "Extend only the existing full-mode Matplotlib call86 suffix4096 seed43 free run from cap512 to cap1024 while preserving exact original conditioning and chosen-64 branch.",
+  "scope": {
+    "task": "matplotlib__matplotlib-20488",
+    "call": 86,
+    "mode": "full BF16/HiFi4",
+    "seed": 43,
+    "prompt_tokens": 4096,
+    "chosen_tokens": 64,
+    "free_run_cap": 1024,
+    "free_run_trials": 1
+  },
+  "input_fixture": {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/fixtures/anomaly.matplotlib__matplotlib-20488.call86.onset.suffix4096.seed43.full.private.json",
+    "sha256": "7e8ee5bb1a24cca6e4e58651929198f7a4c4de279ca54495cedae74f3678193d",
+    "exact_conditioning": "fixture prompt IDs are the original request final4096 IDs, no re-rendering; source prompt slice [42022,46118]"
+  },
+  "runtime_policy": {
+    "build_kwargs_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_build_kwargs.json",
+    "build_kwargs_sha256": "ff2b5ed24e0b6a1dee7eb5cd8bd437d17c3df5f8f25567927d239e666f0699f9",
+    "precision_config_path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_config.json",
+    "precision_config_sha256": "63ce02f7fa0df993a27daca25eeeb3adca51e15c7c6956d1cef122534ebdc7a9",
+    "expected_config_id": "stage12_bf16_hifi4_diagnostic",
+    "runner_path": "models/autoports/google_gemma_4_31b_it/tools/precision_repro_batch.py",
+    "runner_sha256": "172f5a1dd7a7403847e47b966ae79c306163650a60211418c7c195794ec5c125"
+  },
+  "source_run": {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix4096-candidate/runs/full/anomaly.matplotlib__matplotlib-20488.call86.onset.suffix4096.seed43.json",
+    "sha256": "2fc88476353a38633134bcb85d1fbf8624f99d8e55bb8273e42fca2898bc594d",
+    "existing_seed": 43,
+    "existing_free_tokens": 512,
+    "existing_end": "mid Python script; truncated at cap512"
+  },
+  "artifacts": {
+    "cases": "cases.json",
+    "command": "command.json",
+    "forecast": "forecast.json",
+    "new_output_dir": "runs/full"
+  },
+  "review_gates": [
+    "Root reviews proposal and forecast before any admission.",
+    "Do not launch while another TT or HF run owns the device.",
+    "After output, compare generated token IDs to existing first512 and explicitly report whether prefix identity holds; do not call a changed branch an extension."
+  ],
+  "non_claims": [
+    "No source/model policy change.",
+    "No task correctness or score claim.",
+    "No claim that this caused or fixes native anomaly."
+  ],
+  "driver_contract": {
+    "driver": "run_cap1024.py",
+    "host_tests": "test_run_cap1024.py",
+    "run_requires": "explicit --execute and root-created admission.json; default invocation never launches",
+    "admission_pins": [
+      "proposal.json",
+      "command.json",
+      "cases.json",
+      "forecast.json",
+      "source-pins.json",
+      "runtime-pins.json",
+      "run_cap1024.py",
+      "test_run_cap1024.py",
+      "admission-template.json"
+    ],
+    "predecessor_gate": "H9 progress must be all_groups_completed with all eight groups completed; every completion exit_code 0 and every root group review accepted; every forecast miss has a hash-pinned root acceptance. The root admission must hash-bind the final progress, all eight completion/review records, and candidate forecast review.",
+    "output_prefix_gate": "require generated token count >=512 AND generated_ids[:512] exactly equal all 512 prior full seed43 token IDs; shorter output is invalid for extension identity.",
+    "offline": "set HF_HUB_OFFLINE=1 and HF_DATASETS_OFFLINE=1 in the exact child command.",
+    "deadline": "2026-11-16T01:15:25Z; preflight requires at least timeout_seconds+60 seconds remaining.",
+    "output_safety": "reject existing launch, completion, log or output directory before child launch; always write terminal completion after any started child including timeout/invalid output.",
+    "extension_identity": "Require len(generated_token_ids) >= 512 AND generated_token_ids[:512] == prior_seed43_token_ids (exactly all first512); never compare only min(512, generated length).",
+    "default_behavior": "Without --execute, print inert status and never inspect/import TT/device helpers or run the child.",
+    "terminal_record": "Once child spawn is attempted, always write completion.json with process_exit_code, child_error, output_validation_error, output/load hashes, runtime policy, elapsed time, and forecast gate, including timeout/spawn/invalid-output cases.",
+    "stop_guard": "Honor STOP_BEFORE_LAUNCH; candidate will retain this sentinel until root admits and explicitly clears it.",
+    "bounded_execution": "The driver invokes the child with subprocess timeout_seconds=1200 (no outer timeout wrapper that could kill the completion writer); preflight requires timeout+60 seconds remaining."
+  }
+}

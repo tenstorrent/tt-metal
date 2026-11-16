@@ -1,0 +1,132 @@
+{
+  "status": "attribution_correction_addendum",
+  "original_triage_sha256": "363c650d5928b8547da5207686bd605e9a854b87961938c4a000cdabe19d6cfe",
+  "corrected_copy": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/attention-down-bfp8-lofi-fixed108-candidate/triage-b-attribution-corrected.json",
+  "corrected_copy_sha256": "152afd34a8e3838e0cae1463d4a05438103c9f8b3cbc372e58ff32eaed882bf3",
+  "strict_policy_definition": "All four runtime_precision.weight_groups equal bf16 and all four runtime_precision.compute_fidelities equal HiFi4.",
+  "misattribution": "The previous all_group_head_bf16_hifi4_control entries referenced config stage12_swe85_head_bf16_hifi4: attention/MLP/down BFP4 LoFi, lm_head BF16 HiFi4. Not an all-group control.",
+  "true_controls": [
+    {
+      "case": "call88 canonicalprefix seed42",
+      "fixed108_manifest_index": 0,
+      "mode": "full",
+      "seed": 42,
+      "requested_cap": 1024,
+      "generated_tokens": 605,
+      "terminal_token_id": 50,
+      "natural_stop_token_id_50": true,
+      "exact_prompt_token_ids_match_p6": true,
+      "prompt_token_count": 47038,
+      "prompt_ids_sha256_canonical_json": "f80a379999b13c063360ac90b2fc5ae1689b8abe823b8392d49bbfbc1a836866",
+      "p6_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/attention-down-bfp8-lofi-fixed108-candidate/runs/attention_down_bfp8_lofi_fixed108/anomaly.call88.canonicalprefix.seed42.cap1024.json",
+      "p6_result_sha256": "c837befa7470197d993695868fbd52d713e984584b13ff965ab2f72e96a5d531",
+      "control_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/runs/full/anomaly.call88.canonicalprefix.cap1024.seed42.json",
+      "control_result_sha256": "759c59189f1b94f73f13f12882e10bc647414537336971ec9eb8085f6531a8d5",
+      "control_fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/fixtures/full/anomaly.call88.canonicalprefix.cap1024.seed42.private.json",
+      "control_fixture_sha256": "72d00a7035ece99112f136dc0bac71e03deead3d78421b037a696f1518b6a8d0",
+      "control_fixture_prompt_ids_sha256_canonical_json": "f80a379999b13c063360ac90b2fc5ae1689b8abe823b8392d49bbfbc1a836866",
+      "control_policy_config_id": "stage12_bf16_hifi4_diagnostic",
+      "control_policy": {
+        "config_id": "stage12_bf16_hifi4_diagnostic",
+        "weight_groups": {
+          "attention": "bf16",
+          "mlp": "bf16",
+          "down": "bf16",
+          "lm_head": "bf16"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "HiFi4",
+          "mlp": "HiFi4",
+          "down": "HiFi4",
+          "lm_head": "HiFi4"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat16",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144,
+        "sdpa_compute_fidelity": "HiFi4"
+      },
+      "control_sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 42
+      },
+      "scope": "Same prompt IDs and seed, separate free-running trial; no exact stochastic-trajectory equivalence or task correctness claim."
+    },
+    {
+      "case": "pytest5787 call1 seed44",
+      "fixed108_manifest_index": 32,
+      "mode": "full",
+      "seed": 44,
+      "requested_cap": 256,
+      "generated_tokens": 15,
+      "terminal_token_id": 50,
+      "natural_stop_token_id_50": true,
+      "exact_prompt_token_ids_match_p6": true,
+      "prompt_token_count": 9606,
+      "prompt_ids_sha256_canonical_json": "37f60a65b87072893df2669bd8aa339515ccb75579a86650806ec588c28e248f",
+      "p6_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/attention-down-bfp8-lofi-fixed108-candidate/runs/attention_down_bfp8_lofi_fixed108/anomaly.pytest-dev__pytest-5787.call1.onset.seed44.cap256.json",
+      "p6_result_sha256": "b4df5ea53ff31e9dd55f97b1da8adb9130a0857af0fa62779d63397b28a31395",
+      "control_result": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-pilot-split85/runs/rest/full/anomaly.pytest-dev__pytest-5787.call1.onset.json",
+      "control_result_sha256": "b7a6c040c4d659b8d59c5236993559f7e0cfe2252d28ef766dec69267483c879",
+      "control_fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-pytest5787-controls/pytest-dev__pytest-5787.call1.onset.private.json",
+      "control_fixture_sha256": "198ec73ad83296c21c93e0484d12b52717c6803b9ae7ea0131dcfac76f6ae3af",
+      "control_fixture_prompt_ids_sha256_canonical_json": "37f60a65b87072893df2669bd8aa339515ccb75579a86650806ec588c28e248f",
+      "control_policy_config_id": "stage12_bf16_hifi4_diagnostic",
+      "control_policy": {
+        "config_id": "stage12_bf16_hifi4_diagnostic",
+        "weight_groups": {
+          "attention": "bf16",
+          "mlp": "bf16",
+          "down": "bf16",
+          "lm_head": "bf16"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "HiFi4",
+          "mlp": "HiFi4",
+          "down": "HiFi4",
+          "lm_head": "HiFi4"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat16",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144,
+        "sdpa_compute_fidelity": "HiFi4"
+      },
+      "control_sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "seed": 44
+      },
+      "scope": "Same prompt IDs and seed, separate free-running trial; no exact stochastic-trajectory equivalence or task correctness claim."
+    }
+  ],
+  "survey_audit": {
+    "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/full-bf16-hifi4-control-survey-b.json",
+    "sha256": "353db0c89f44251825534c1e498c88fe4eab5a38f9808b7738896e8027b01419",
+    "strict_policy_rows_checked": 7,
+    "valid": 7,
+    "invalid": 0,
+    "note": "Every referenced result showed all-group BF16 and all-group HiFi4; survey attribution is correct."
+  }
+}

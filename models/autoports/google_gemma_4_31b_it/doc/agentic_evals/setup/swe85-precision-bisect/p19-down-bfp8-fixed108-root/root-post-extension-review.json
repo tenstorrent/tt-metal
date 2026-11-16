@@ -1,0 +1,38 @@
+{
+  "status": "panel_and_cap_continuations_collected_reference_disposition_pending",
+  "reviewed_unix": 1794761941.4431868,
+  "original_panel_counts": {
+    "normal": 83,
+    "reproduced_native_motif": 21,
+    "other_anomaly": 0,
+    "inconclusive": 4
+  },
+  "after_higher_cap_counts": {
+    "normal": 87,
+    "reproduced_native_motif": 21,
+    "other_anomaly": 0,
+    "inconclusive": 0
+  },
+  "originals_preserved": true,
+  "extension_indices": [
+    10,
+    49,
+    66,
+    74,
+    106
+  ],
+  "extension_lengths": [
+    258,
+    326,
+    1632,
+    1191,
+    1003
+  ],
+  "all_prefixes_equal": true,
+  "all_natural_stop": true,
+  "extension_review": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/cap-extensions-preparation/batch/triage-d.json",
+  "extension_review_sha256": "2c79a11c3fd7ca27f9baf07deed670a11d7ef8b53e99370b4f6893ce321ac79c",
+  "scope": "108 fixed diagnostic seeds across36onsets. Localized/repeated motifs require reference disposition; normal means no tested mechanical phenotype, not task success. No scored eval rerun has occurred.",
+  "candidate_selected": false,
+  "scores_changed": false
+}

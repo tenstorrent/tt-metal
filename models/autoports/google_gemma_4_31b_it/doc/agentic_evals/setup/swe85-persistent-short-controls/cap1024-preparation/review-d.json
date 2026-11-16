@@ -1,0 +1,129 @@
+{
+  "status": "independent_review_candidate_only_not_admitted",
+  "scope": "Host-only validation of the three prepared 512-to-1024 diagnostic fixtures; no admission, launch, TT import, device work, or stage signoff.",
+  "disposition": "fixtures_and_forecasts_validated_no_concrete_error_found",
+  "findings": [
+    "Each candidate preserves the source prompt IDs, continuations/chosen TF, sampling settings, and exact selected seed.",
+    "Each source trial generated512 IDs under a512 cap; candidate raises only the free-run cap to1024, has branches[] and one trial, so it does not schedule TF branches.",
+    "Source fixture/result hashes in each candidate metadata are correct.",
+    "Forecast totals and intervals recompute from observed prompt-prefill time, 1023-decode replay scaled from 511 measured decode steps, and one mode-specific measured load."
+  ],
+  "mode_reviews": [
+    {
+      "mode": "served",
+      "candidate_manifest": "served-candidate-cases.json",
+      "candidate_manifest_sha256": "33d93f355ff768860f4136e6adbd66749b594ba8793ccd7ced1c76c7422dd2e1",
+      "prediction_file": "served-prediction.json",
+      "prediction_sha256": "af3059c7bf098181469d641082fb1c140aa101244c46982e4c63563d08ee6542",
+      "load_file": "setup/swe85-persistent-short-controls/runs/served/load.json",
+      "load_file_sha256": "54200eb563a980f67d2f49428ff98ccf2419effa0967045fd9425749b53d7402",
+      "load_wall_s": 145.3572200248018,
+      "case_rows": [
+        {
+          "job": "anomaly.pytest-dev__pytest-7432.call19.onset.optional-suffix512.cap1024.seed42",
+          "seed": 42,
+          "candidate_fixture_sha256": "feebd5a9da150a6cf6ec67de02822a2a11338e84b8ab77a171e593d30a5adf4f",
+          "source_case_sha256": "7ca8039708a12c24acd3c2cfb1c2c51b8946e99df118576545605efad6225bf4",
+          "source_result_sha256": "21b2fb860e3dba265f76605c5807f7b89c32d6c76d2428444e42e95047c97639",
+          "prompt_ids_equal": true,
+          "continuations_equal": true,
+          "sampling_equal": true,
+          "seed_matches_source_trial": true,
+          "previous_cap": 512,
+          "new_cap": 1024,
+          "source_generated_ids": 512,
+          "source_decode_tokens": 511,
+          "branches": [],
+          "free_run_trials": 1,
+          "estimated_prefill_s": 0.12854828219860792,
+          "scaled_1023_decode_replay_s": 28.762380396718992,
+          "estimated_case_s": 28.8909286789176
+        }
+      ],
+      "recomputed_total_s": 174.24814870371938,
+      "recomputed_hours": 0.04840226352881094,
+      "stored_hours": 0.04840226352881094,
+      "stored_range_hours": [
+        0.04599468613890114,
+        0.05241489251199394
+      ],
+      "range_variable_component_multipliers": [
+        0.7,
+        1.5
+      ],
+      "formula": "one same-mode measured load + sum((sample diagnostic wall including prefill - decode wall) + decode wall * 1023 / 511)"
+    },
+    {
+      "mode": "full",
+      "candidate_manifest": "full-candidate-cases.json",
+      "candidate_manifest_sha256": "a2099458e1dfe4e50597cadc1c5a7664916af48280f5421654452966dc614b34",
+      "prediction_file": "full-prediction.json",
+      "prediction_sha256": "75c3b558f7684eb044cd4f4886a9ba6c74cbe7cc9ea14e4069d4eb59cadd89fc",
+      "load_file": "setup/swe85-persistent-short-controls/runs/full/load.json",
+      "load_file_sha256": "7ccfc36c3db10085a06d789c1b6a0d29198c1a06ef2136031937a98b34ca3244",
+      "load_wall_s": 78.62304112617858,
+      "case_rows": [
+        {
+          "job": "anomaly.psf__requests-5414.call11.onset.optional-suffix512.cap1024.seed43",
+          "seed": 43,
+          "candidate_fixture_sha256": "1850ce0f5b3b322ac4b147aacefc1c1a6fe342a9d7440354dda7c659a96c07c2",
+          "source_case_sha256": "705c84003084ef0866174aa7d7840b54ca8287a4daa5f3a0b98c5a7dbc88aa74",
+          "source_result_sha256": "ef5a245dd5579605de4ff1ece121865078b20c869e9608149ce49742f0512ac3",
+          "prompt_ids_equal": true,
+          "continuations_equal": true,
+          "sampling_equal": true,
+          "seed_matches_source_trial": true,
+          "previous_cap": 512,
+          "new_cap": 1024,
+          "source_generated_ids": 512,
+          "source_decode_tokens": 511,
+          "branches": [],
+          "free_run_trials": 1,
+          "estimated_prefill_s": 0.20201914012432098,
+          "scaled_1023_decode_replay_s": 59.11745063901502,
+          "estimated_case_s": 59.31946977913934
+        },
+        {
+          "job": "anomaly.psf__requests-5414.call11.onset.optional-suffix512.cap1024.seed44",
+          "seed": 44,
+          "candidate_fixture_sha256": "2327d31bd7c4aef5ff2156ddbafc71dbaa39b4dcd9e74c1705e4937eb154b929",
+          "source_case_sha256": "705c84003084ef0866174aa7d7840b54ca8287a4daa5f3a0b98c5a7dbc88aa74",
+          "source_result_sha256": "ef5a245dd5579605de4ff1ece121865078b20c869e9608149ce49742f0512ac3",
+          "prompt_ids_equal": true,
+          "continuations_equal": true,
+          "sampling_equal": true,
+          "seed_matches_source_trial": true,
+          "previous_cap": 512,
+          "new_cap": 1024,
+          "source_generated_ids": 512,
+          "source_decode_tokens": 511,
+          "branches": [],
+          "free_run_trials": 1,
+          "estimated_prefill_s": 0.2003726502880454,
+          "scaled_1023_decode_replay_s": 59.13485345652385,
+          "estimated_case_s": 59.335226106811895
+        }
+      ],
+      "recomputed_total_s": 197.27773701212982,
+      "recomputed_hours": 0.05479937139225828,
+      "stored_hours": 0.05479937139225828,
+      "stored_range_hours": [
+        0.04491148006842901,
+        0.07127919026530706
+      ],
+      "range_variable_component_multipliers": [
+        0.7,
+        1.5
+      ],
+      "formula": "one same-mode measured load + sum((sample diagnostic wall including prefill - decode wall) + decode wall * 1023 / 511)"
+    }
+  ],
+  "sha256": {
+    "source_six_caret_manifest": "41b7db2aec3de94bee0a104994317227644b1f3801310cc02fd3c81ed72774bd",
+    "pinned_tristage_triage": "afca6672f81b58344251c44e2ff06a132bcc66ba6d6fc672de812ff26f6872fe",
+    "served_cap_manifest": "33d93f355ff768860f4136e6adbd66749b594ba8793ccd7ced1c76c7422dd2e1",
+    "full_cap_manifest": "a2099458e1dfe4e50597cadc1c5a7664916af48280f5421654452966dc614b34",
+    "served_prediction": "af3059c7bf098181469d641082fb1c140aa101244c46982e4c63563d08ee6542",
+    "full_prediction": "75c3b558f7684eb044cd4f4886a9ba6c74cbe7cc9ea14e4069d4eb59cadd89fc"
+  }
+}

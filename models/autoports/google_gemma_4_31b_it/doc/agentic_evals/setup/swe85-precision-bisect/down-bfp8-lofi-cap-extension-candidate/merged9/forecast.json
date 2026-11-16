@@ -1,0 +1,9 @@
+{
+  "point_seconds": 640.0003207179305,
+  "range_seconds": [
+    480.0002405384479,
+    896.0004490051027
+  ],
+  "basis": "One measured P3 load plus exact prior nine case diagnostic_total_wall_s and extra cap tokens divided by each measured traced decode rate. Fresh full reruns, not in-place continuation. Bounds planning allowances, outputs may terminate early.",
+  "timeout_seconds": 1800
+}

@@ -1,0 +1,170 @@
+{
+  "instrumentation_requirements_verified": {
+    "TT_METAL_DEVICE_PROFILER": "0",
+    "TT_METAL_TRACE_ALLOC_TRACKING": "1"
+  },
+  "limitations": [
+    "This compares diagnostic configurations and does not select a serving policy.",
+    "Natural top-1/top-5 are agreement with the saved natural-token reference, not task correctness.",
+    "Autoregressive single-request timing is not vLLM serving throughput.",
+    "The full-BF16 broad row has all expected outputs and context-boundary checks, but child process exit status is unknown; do not claim a clean process exit.",
+    "P19 was rejected for protocol behavior; charting it does not imply acceptance."
+  ],
+  "reference_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+  "rows": [
+    {
+      "autoregressive_b1c1_4096_128": {
+        "batch_size": 1,
+        "concurrent_requests": 1,
+        "decode_tps": 18.5037961501331,
+        "generated_tokens": 128,
+        "input_tokens": 4096,
+        "profiler": "0",
+        "sample_decode_tps": [
+          18.50297969292487,
+          18.5037961501331,
+          18.505359702275634
+        ],
+        "tracking": "1",
+        "ttft_ms": 1167.1495148912072
+      },
+      "label": "P19 Q32 down-BFP8",
+      "natural512": {
+        "top1": 0.91015625,
+        "top1_matches": 466,
+        "top5": 1.0,
+        "top5_matches": 512,
+        "total": 512
+      },
+      "runtime_policy": {
+        "activation_dtype": "bfloat16",
+        "ccl_dtype": {
+          "decode": "bfloat16",
+          "prefill": "bfloat16"
+        },
+        "compute_fidelities": {
+          "attention": "HiFi4",
+          "down": "LoFi",
+          "lm_head": "HiFi4",
+          "mlp": "HiFi4"
+        },
+        "config_id": "stage12_bf16_hifi4_kv_down_bfp8_p19",
+        "kv_cache_dtype": "bfloat8_b",
+        "max_seq_len": 262144,
+        "weight_groups": {
+          "attention": "bf16",
+          "down": "bfp8_lofi",
+          "lm_head": "bf16",
+          "mlp": "bf16"
+        }
+      },
+      "sources": {
+        "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/p19-q32-production-validation/acceptance/run/performance_b1.json": {
+          "bytes": 1667,
+          "sha256": "94e60675a2bbb621b0854ad239f2b79068b1f7867c0e0121bf46674a3ad5dabc"
+        },
+        "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/p19-q32-production-validation/acceptance/run/readiness_accuracy.json": {
+          "bytes": 3659,
+          "sha256": "3c14699f1a59053e40c07a3939a567af705579d35fb43419b34d6d626e8554ef"
+        },
+        "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/p19-q32-production-validation/acceptance/run/runtime_policy.json": {
+          "bytes": 91615,
+          "sha256": "db381061657ecdbecaab977c428f47e9b12ab55ec73b8d4afb633db744050b76"
+        }
+      },
+      "status": "protocol-rejected; diagnostic only",
+      "status_note": "P19 failed protocol controls; not selected. Acceptance run independently root-reviewed.",
+      "terminal_evidence": {
+        "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/p19-q32-production-validation/acceptance/root-review.json": {
+          "bytes": 4561,
+          "sha256": "6156597cae6f590d89b3b24382961aa197a178fea795ddfbf35b911601a063a5"
+        }
+      }
+    },
+    {
+      "autoregressive_b1c1_4096_128": {
+        "batch_size": 1,
+        "concurrent_requests": 1,
+        "decode_tps": 16.982449546294834,
+        "generated_tokens": 128,
+        "input_tokens": 4096,
+        "profiler": "0",
+        "sample_decode_tps": [
+          16.982410248245213,
+          16.982597800320008,
+          16.982449546294834
+        ],
+        "tracking": "1",
+        "ttft_ms": 1407.5714061036706
+      },
+      "label": "Full BF16/HiFi4 under Q32",
+      "natural512": {
+        "top1": 0.9375,
+        "top1_matches": 480,
+        "top5": 1.0,
+        "top5_matches": 512,
+        "total": 512
+      },
+      "runtime_policy": {
+        "activation_dtype": "bfloat16",
+        "ccl_dtype": {
+          "decode": "bfloat16",
+          "prefill": "bfloat16"
+        },
+        "compute_fidelities": {
+          "attention": "HiFi4",
+          "down": "HiFi4",
+          "lm_head": "HiFi4",
+          "mlp": "HiFi4"
+        },
+        "config_id": "stage12_bf16_hifi4_diagnostic",
+        "kv_cache_dtype": "bfloat16",
+        "max_seq_len": 262144,
+        "weight_groups": {
+          "attention": "bf16",
+          "down": "bf16",
+          "lm_head": "bf16",
+          "mlp": "bf16"
+        }
+      },
+      "sources": {
+        "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full-q32-production-validation/full-bf16-broad-acceptance-candidate/run/performance_b1.json": {
+          "bytes": 1674,
+          "sha256": "f094f940fbea4ee184b53f12925e2c640282b0923339453d8ec8c0e29f040892"
+        },
+        "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full-q32-production-validation/full-bf16-broad-acceptance-candidate/run/readiness_accuracy.json": {
+          "bytes": 3651,
+          "sha256": "9e5b1cc8dc75452a88f365867000db37f29034c6b9955f202fd02c090791333e"
+        },
+        "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full-q32-production-validation/full-bf16-broad-acceptance-candidate/run/runtime_policy.json": {
+          "bytes": 91484,
+          "sha256": "5a3e5294314c738f54deffa346303953481e802561660692b4b3c58c8d8ed7a8"
+        }
+      },
+      "status": "unselected diagnostic baseline; process exit status unknown",
+      "status_note": "Broad artifacts and context-boundary checks are present and root-reviewed; wrapper exited 143, actual child exit status is unrecoverable and remains null.",
+      "terminal_evidence": {
+        "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full-q32-production-validation/full-bf16-broad-acceptance-candidate/completion.json": {
+          "bytes": 510,
+          "sha256": "003712fba9c192cc6c82861b9059b5ed1ebaa863b50d09c2637bcfc5f77657ed"
+        },
+        "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full-q32-production-validation/full-bf16-broad-acceptance-candidate/process-exit-observer.json": {
+          "bytes": 633,
+          "sha256": "6003522475fb13ff73574cf180c8f4029b92040409294d4c52781664ee564311"
+        },
+        "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full-q32-production-validation/full-bf16-broad-acceptance-candidate/root-review.json": {
+          "bytes": 3029,
+          "sha256": "282231259df438812a9601d964bc672a4f6b0c0d0f2f01d8fa33540940cd9a9a"
+        },
+        "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full-q32-production-validation/full-bf16-broad-acceptance-candidate/wrapper-interruption.json": {
+          "bytes": 519,
+          "sha256": "822aff3be99d488ae0718e1ffd49dc7637513daf0c0a79309a4f4f3fc02326e9"
+        }
+      }
+    }
+  ],
+  "schema_version": 1,
+  "scope": "Two matched current-Q32 production-generation configurations only; natural 512-token accuracy vs actual autoregressive B1/C1 4096-input, 128-output decode rate. No vLLM rates or historical pre-Q32 datapoints.",
+  "status": "Terminal broad artifacts and checks are root-reviewed, but the broad child process exit status is unknown (outer wrapper exit 143; no exit-zero inference). P19 is protocol-rejected; both points are unselected diagnostics.",
+  "title": "Stage 12 Q32-production diagnostic comparison"
+}

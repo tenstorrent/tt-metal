@@ -1,0 +1,105 @@
+{
+  "status": "proposal_only_not_admitted_no_hf_process_started",
+  "hf_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+  "runner": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tools/precision_repro_hf.py",
+  "runner_sha256": "aafe67c88bb5a1eb38b8718570bbddd5749e2a9ecbb9dd19cdb100a49572c03e",
+  "cases": [
+    {
+      "name": "anomaly.requests2931.call20.canonicalprefix.optional-suffix512",
+      "seed_group": 42,
+      "prompt_tokens": 512,
+      "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-85/anomaly.requests2931.call20.canonicalprefix.suffix512.private.json",
+      "fixture_sha256": "5017461630f07f8232f054ddf6c2b979c4e3bb14370431de6799ca8c4d1d7804",
+      "full_output": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/full/anomaly.requests2931.call20.canonicalprefix.optional-suffix512.json",
+      "full_output_sha256": "14ec7feaac78ac5659f21df7926336c2521648b4c9fb33966d0687610e9dfe98",
+      "evidence": "Existing proposal exact suffix512 caret-only full-TT positive; root and independent short-control triage already cited in original preparation.",
+      "source_revision": "retained original candidate"
+    },
+    {
+      "name": "anomaly.sympy__sympy-14248.call53.onset.optional-suffix512",
+      "seed_group": 42,
+      "prompt_tokens": 512,
+      "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-85/anomaly.sympy__sympy-14248.call53.onset.suffix512.private.json",
+      "fixture_sha256": "91359efd10ca926d39011351f97d53948db58fc4fedd961705ad4c0a462dbad1",
+      "full_output": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/full/anomaly.sympy__sympy-14248.call53.onset.optional-suffix512.json",
+      "full_output_sha256": "c2f99685050adea2459487a86fffcf009129abb1698ca848ef402a1514d219d7",
+      "evidence": "Existing proposal exact suffix512 caret-only full-TT positive; root and independent short-control triage already cited in original preparation.",
+      "source_revision": "retained original candidate"
+    },
+    {
+      "name": "anomaly.pytest-dev__pytest-7432.call19.onset.optional-suffix512",
+      "seed_group": 44,
+      "prompt_tokens": 512,
+      "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-optional-suffix512-85/anomaly.pytest-dev__pytest-7432.call19.onset.suffix512.private.json",
+      "fixture_sha256": "7ca8039708a12c24acd3c2cfb1c2c51b8946e99df118576545605efad6225bf4",
+      "full_output": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-persistent-short-controls/runs/full/anomaly.pytest-dev__pytest-7432.call19.onset.optional-suffix512.json",
+      "full_output_sha256": "ec50a12e48db7b2446435f2e3f64d5fd158f0dc58988d7788a620815b5abcca4",
+      "evidence": "Existing proposal exact suffix512 caret-only full-TT positive; root and independent short-control triage already cited in original preparation.",
+      "source_revision": "retained original candidate"
+    },
+    {
+      "name": "anomaly.psf__requests-5414.call9.onset",
+      "seed_group": 44,
+      "prompt_tokens": 1024,
+      "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/fixtures/anomaly.psf__requests-5414.call9.onset.suffix1024.private.json",
+      "fixture_sha256": "9e19aaa5b7f11f026931ef8a8ca1e49bb070a338805b3568cc89dd5065e41e7c",
+      "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-requests5414-caret-controls/psf__requests-5414.call9.onset.private.json",
+      "source_case_sha256": "5024622915942584d71a4eebe667180b660a2f3c45955bddb72de8e019ad7181",
+      "served_output": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/served/anomaly.psf__requests-5414.call9.onset.json",
+      "served_output_sha256": "ab28180a1cce9bb9eec291201f38527c99ec0fac41b22ae84abca5774091d969",
+      "full_output": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix1024/runs/full/anomaly.psf__requests-5414.call9.onset.json",
+      "full_output_sha256": "dec3d27c4021946b317f76a9bac5049e6ecadbd2f5dcc60fd9d67fd95951be71",
+      "positive_seed": 44,
+      "served_seed_evidence": {
+        "tokens": 512,
+        "unique_ids": [
+          172109
+        ],
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 44
+        },
+        "review": "setup/swe85-adaptive-suffix1024/served-coordinator-first7.json"
+      },
+      "full_seed_evidence": {
+        "tokens": 512,
+        "unique_ids": [
+          172109
+        ],
+        "sampling": {
+          "temperature": 1.0,
+          "top_p": 0.95,
+          "top_k": 20,
+          "seed": 44
+        },
+        "review": "setup/swe85-adaptive-suffix1024/full-coordinator-first3.json"
+      },
+      "source_revision": "adaptive suffix1024; run directory used as comparison source"
+    },
+    {
+      "name": "anomaly.psf__requests-5414.call11.onset",
+      "seed_group": 44,
+      "prompt_tokens": 2048,
+      "fixture": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/fixtures/anomaly.psf__requests-5414.call11.onset.suffix2048.private.json",
+      "fixture_sha256": "fbe984e026dbe8ef2b9d8a4288056617cbfde5235d1efd4a3bd14038a2db5ad7",
+      "source_case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-requests5414-caret-controls/psf__requests-5414.call11.onset.private.json",
+      "source_case_sha256": "50cbd0eb4e62c843a1ec8ac800a580135c3abc5dc2154d6be0a7e39d0c37ed6f",
+      "source_manifest": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-admitted-controls85/combined-cases.json",
+      "source_manifest_sha256": "f2aeb0bfe40bce8c102ceba564c41ca164a138d90d9fd25adc5993b6c3d8eb81",
+      "full_output": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/runs/full/anomaly.psf__requests-5414.call11.onset.json",
+      "full_output_sha256": "a967659d1f4edd7b726a36c976168ae767957b9821ffc4a2a31640d594e7a885",
+      "served_output": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/runs/served/anomaly.psf__requests-5414.call11.onset.json",
+      "served_output_sha256": "fe2ed3734685fbc806bc3ce821a77e21f9b390cb838fc223daf8d6090cc8d039",
+      "coordinator": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-adaptive-suffix2048-candidate/full-coordinator-last12.json",
+      "coordinator_sha256": "b8c68301fbc84a35d66c8cd8bdbe3415ef46577c10ba4848ce66914d74620e17",
+      "evidence": "Root full-mode review marks seed44 native: all512 continuation tokens are the ellipsis/indent/newline cycle IDs1390/107/147. Served seed44 independently has the same 512-token native cycle on the same exact saved suffix2048 prompt. Original chosen64 and sampling preserved exactly.",
+      "source_revision": "N suffix2048 exact saved fixture"
+    }
+  ],
+  "selection_method": "Original three exact suffix512 short-control positives retained unchanged; one additional exact suffix1024 Requests5414 call9 case selected from root-adjudicated seed44 full/served short outputs. Positive is diagnostic caret motif on the same saved prompt fixture and seed, not native token identity or incidence.",
+  "comparison_partitioning": "Comparison directories are grouped by exact source suffix/fixture family. suffix512 controls compare only with swe85-persistent-short-controls served/full; Requests5414 call9 suffix1024 compares only with swe85-adaptive-suffix1024 served/full. Do not put both source families in one command because runner opens every job filename in every compare directory and asserts forced-token equality.",
+  "admission_gate": "Await pending cap2048 probe and root-frozen native-positive set. This artifact is not admitted; no HF process is launched.",
+  "revision_of": "revision-adaptive1024"
+}

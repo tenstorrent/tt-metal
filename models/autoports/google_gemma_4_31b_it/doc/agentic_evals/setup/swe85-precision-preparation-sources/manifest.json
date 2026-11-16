@@ -1,0 +1,502 @@
+{
+  "scope": "Selected task-owned CPU diagnostic preparation scripts only; no logs, credentials or model source copied. Historical generators retained for resumption/audit, not a batch executable pipeline.",
+  "resume_notes": [
+    "Run from repository root with pinned offline tokenizer. No inference authorized by these scripts.",
+    "Review output targets before rerun: historical subset builders can replace subset rosters; refresh combined manifests after preparation.",
+    "Some generators reference historical /tmp script names; use same-named persisted files as source or adjust paths explicitly.",
+    "Stopped extraction scripts require continuing authorization and serialization; never start/exec/run containers.",
+    "Rebuilding candidate manifests can reset semantic-status metadata; preserve validation attempt provenance and do not overwrite results."
+  ],
+  "scripts": [
+    {
+      "name": "build_10323_4661",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/build_10323_4661.py",
+      "sha256": "36474895b112042c938ac31597f2a0ad260389d8a59a751334308b688846198a",
+      "historical_source": "/tmp/build_10323_4661.py",
+      "contains_stopped_extraction": false
+    },
+    {
+      "name": "build_call55",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/build_call55.py",
+      "sha256": "82ebbf0a58bed85a4d3a781fb8c6ce5eb0edb5081c18f23cb8f76ed8bb73d3a5",
+      "historical_source": "/tmp/build_call55.py",
+      "contains_stopped_extraction": false
+    },
+    {
+      "name": "build_correct_swe_actions",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/build_correct_swe_actions.py",
+      "sha256": "81a39828e6d49c4d3d9c7f5358d87ebd949c6a75e1103675e910239420bd9264",
+      "historical_source": "/tmp/build_correct_swe_actions.py",
+      "contains_stopped_extraction": false
+    },
+    {
+      "name": "build_gap_correct",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/build_gap_correct.py",
+      "sha256": "0e705096def3a77b66e2556ce15c7ad3f37531d4a23badef02dcd455269d1386",
+      "historical_source": "/tmp/build_gap_correct.py",
+      "contains_stopped_extraction": false
+    },
+    {
+      "name": "build_new_fetch",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/build_new_fetch.py",
+      "sha256": "4ecc25d7eb78d84ae5fb8a6fffb7b57019532027e229591fcfe5768a387daca8",
+      "historical_source": "/tmp/build_new_fetch.py",
+      "contains_stopped_extraction": false
+    },
+    {
+      "name": "build_prior_repair",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/build_prior_repair.py",
+      "sha256": "39ac2c37da8e32a7c961fe618e06d1a2cd229f1968b014259e97135bfecfc4aa",
+      "historical_source": "/tmp/build_prior_repair.py",
+      "contains_stopped_extraction": false
+    },
+    {
+      "name": "build_remaining_correct",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/build_remaining_correct.py",
+      "sha256": "d22ff43dfc3a49d8552ea052417b2318be136fd9e82dffeef6983d80f7ddd868",
+      "historical_source": "/tmp/build_remaining_correct.py",
+      "contains_stopped_extraction": false
+    },
+    {
+      "name": "build_sklearn10908_correct",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/build_sklearn10908_correct.py",
+      "sha256": "5eef5fd65f345dd3ce959139d499f13b055f613edf734ef56476b62e6a191a97",
+      "historical_source": "/tmp/build_sklearn10908_correct.py",
+      "contains_stopped_extraction": false
+    },
+    {
+      "name": "build_sklearn14983_correct",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/build_sklearn14983_correct.py",
+      "sha256": "29bb3d74a1f5aa6884c6ab4d33491fcd520773f4a94dbb00fcbaf94cb2eaa900",
+      "historical_source": "/tmp/build_sklearn14983_correct.py",
+      "contains_stopped_extraction": false
+    },
+    {
+      "name": "build_sklearn25102_fetch",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/build_sklearn25102_fetch.py",
+      "sha256": "cf112180d67797f6383d74ad57cdab0c366603fe1ff7d6f1e3ff9f3401cb580e",
+      "historical_source": "/tmp/build_sklearn25102_fetch.py",
+      "contains_stopped_extraction": false
+    },
+    {
+      "name": "build_sphinx10614_fetch",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/build_sphinx10614_fetch.py",
+      "sha256": "9e717aadc8ec472b2308f0da32c9162d0358c2d4b456834e2ee8c2835f92334f",
+      "historical_source": "/tmp/build_sphinx10614_fetch.py",
+      "contains_stopped_extraction": false
+    },
+    {
+      "name": "build_sphinx7590",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/build_sphinx7590.py",
+      "sha256": "ac6caed8d8dfc2d3582e6da64b328899c71d850e4ca1945226bf2ef5db6b461c",
+      "historical_source": "/tmp/build_sphinx7590.py",
+      "contains_stopped_extraction": false
+    },
+    {
+      "name": "build_swe85_plan",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/build_swe85_plan.py",
+      "sha256": "101df39ff45b9712ea66d70c4d4e7397b484b973bb33a5726a3eff753cfe8774",
+      "historical_source": "/tmp/build_swe85_plan.py",
+      "contains_stopped_extraction": false
+    },
+    {
+      "name": "build_sympy12489",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/build_sympy12489.py",
+      "sha256": "5526bb34b71185755d5b9b05815c4312d41a476000801db294c833197ee03458",
+      "historical_source": "/tmp/build_sympy12489.py",
+      "contains_stopped_extraction": false
+    },
+    {
+      "name": "build_sympy13091",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/build_sympy13091.py",
+      "sha256": "bc4d99ca3a71c6d837755321f2b220264b8154d725d5b2032f8ade60c5b32782",
+      "historical_source": "/tmp/build_sympy13091.py",
+      "contains_stopped_extraction": false
+    },
+    {
+      "name": "build_sympy13480_fetch",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/build_sympy13480_fetch.py",
+      "sha256": "fb23672244e70503169d7c0449d21c2bb21d77abf008c1df69b2452eab45338f",
+      "historical_source": "/tmp/build_sympy13480_fetch.py",
+      "contains_stopped_extraction": false
+    },
+    {
+      "name": "build_sympy13551_fetch",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/build_sympy13551_fetch.py",
+      "sha256": "8f10438f9abbab426e9ec01cce231e41a0597cc54780c8a309f24cf431945e43",
+      "historical_source": "/tmp/build_sympy13551_fetch.py",
+      "contains_stopped_extraction": false
+    },
+    {
+      "name": "extract_10323_4661",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/extract_10323_4661.py",
+      "sha256": "35a40297d32aa59eadad53bd5f808929dbc9bd1f90db03be9fb874e74f42cc54",
+      "historical_source": "/tmp/extract_10323_4661.py",
+      "contains_stopped_extraction": true
+    },
+    {
+      "name": "extract_gap_sources",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/extract_gap_sources.py",
+      "sha256": "0c37d9d6e2057d5852ce843b4d0bc8cc71b6cd54034bdebbdacafa781fa0dc87",
+      "historical_source": "/tmp/extract_gap_sources.py",
+      "contains_stopped_extraction": true
+    },
+    {
+      "name": "extract_new_fetch",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/extract_new_fetch.py",
+      "sha256": "81d2d71b82f1f82e13b433857a45c5a1c7299ec8576b44f1f539b31cab0f04f8",
+      "historical_source": "/tmp/extract_new_fetch.py",
+      "contains_stopped_extraction": true
+    },
+    {
+      "name": "extract_remaining_swe",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/extract_remaining_swe.py",
+      "sha256": "d0843a9a8cf71601e2aad35b2b40abb7d0cd1cd9b1cc43334275b38083f472bc",
+      "historical_source": "/tmp/extract_remaining_swe.py",
+      "contains_stopped_extraction": true
+    },
+    {
+      "name": "extract_sklearn14983",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/extract_sklearn14983.py",
+      "sha256": "77ba18568e53bf534475738610e65c0e1555a75b5affd704fe9ff84d9c76e619",
+      "historical_source": "/tmp/extract_sklearn14983.py",
+      "contains_stopped_extraction": true
+    },
+    {
+      "name": "extract_sklearn25102",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/extract_sklearn25102.py",
+      "sha256": "4c5e87f6088511cd44dfdd298928876c87da689a79705e8fca0bbd11b9170233",
+      "historical_source": "/tmp/extract_sklearn25102.py",
+      "contains_stopped_extraction": true
+    },
+    {
+      "name": "extract_sklearn25747_pipeline",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/extract_sklearn25747_pipeline.py",
+      "sha256": "a76604624ba82d61a4b016d450e326979a960d1c66a8fc6e2bbb9f00504cf054",
+      "historical_source": "/tmp/extract_sklearn25747_pipeline.py",
+      "contains_stopped_extraction": true
+    },
+    {
+      "name": "extract_sphinx10614",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/extract_sphinx10614.py",
+      "sha256": "35802465430fd7880ded178899f17e017b51b3f80bdee55826056bd94a3bbad0",
+      "historical_source": "/tmp/extract_sphinx10614.py",
+      "contains_stopped_extraction": true
+    },
+    {
+      "name": "extract_sphinx7590",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/extract_sphinx7590.py",
+      "sha256": "6fdb92737c913618229b03e865670ca53123168027f8effd3ece520669deff5f",
+      "historical_source": "/tmp/extract_sphinx7590.py",
+      "contains_stopped_extraction": true
+    },
+    {
+      "name": "extract_swe_correct_sources",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/extract_swe_correct_sources.py",
+      "sha256": "39f9f91c7b4dc2da76285c35ef69c4d840364eb5159a526ca81eb7647b4be97b",
+      "historical_source": "/tmp/extract_swe_correct_sources.py",
+      "contains_stopped_extraction": true
+    },
+    {
+      "name": "extract_sympy12489",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/extract_sympy12489.py",
+      "sha256": "2107155e5882b1f7d82b35ebc55c8930df48d478e3a1fd35daa4f479e6c05a1b",
+      "historical_source": "/tmp/extract_sympy12489.py",
+      "contains_stopped_extraction": true
+    },
+    {
+      "name": "extract_sympy13091",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/extract_sympy13091.py",
+      "sha256": "bafecbe3bcc9412fcd42de46f277157b2feadb27d98047c68d9d1d6479955a73",
+      "historical_source": "/tmp/extract_sympy13091.py",
+      "contains_stopped_extraction": true
+    },
+    {
+      "name": "extract_sympy13480",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/extract_sympy13480.py",
+      "sha256": "efade27274d51825d9e0b163b39a840170f26d2ab75afe47a1d37963915483dd",
+      "historical_source": "/tmp/extract_sympy13480.py",
+      "contains_stopped_extraction": true
+    },
+    {
+      "name": "extract_sympy13551",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/extract_sympy13551.py",
+      "sha256": "ee40db860a2bf86f97f338ee6fa12b8935be76ce43fcfd7e1cf31a06235b3d24",
+      "historical_source": "/tmp/extract_sympy13551.py",
+      "contains_stopped_extraction": true
+    },
+    {
+      "name": "finalize_swe_candidates",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/finalize_swe_candidates.py",
+      "sha256": "8c730c828236bd0b707fca4c5188873b2af28c200108856f816a98f98f3038dc",
+      "historical_source": "/tmp/finalize_swe_candidates.py",
+      "contains_stopped_extraction": false
+    },
+    {
+      "name": "make_10323_4661_builder",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/make_10323_4661_builder.py",
+      "sha256": "9fb6d9b23a349d53ccdec0a966cbca0b63f4fcf902e32aa21678657cd28f1952",
+      "historical_source": "/tmp/make_10323_4661_builder.py",
+      "contains_stopped_extraction": false
+    },
+    {
+      "name": "prepare_10323_4661_full",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_10323_4661_full.py",
+      "sha256": "7734595dab821553f6def2d972c5b3e0e9dc9422828bcc6160b4c620c1320dcf",
+      "historical_source": "/tmp/prepare_10323_4661_full.py",
+      "contains_stopped_extraction": false
+    },
+    {
+      "name": "prepare_extra_contractions_full",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_extra_contractions_full.py",
+      "sha256": "73bb2c45b04b08e58895f59f3e6dd3e1e1f9d2353e5e072afbbc030a2f0262f2",
+      "historical_source": "/tmp/prepare_extra_contractions_full.py",
+      "contains_stopped_extraction": false
+    },
+    {
+      "name": "prepare_extra_contractions_onsets",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_extra_contractions_onsets.py",
+      "sha256": "9f80fde420226a8c588459b5534bda8374a3756323f6273631b567ef0da09a07",
+      "historical_source": "/tmp/prepare_extra_contractions_onsets.py",
+      "contains_stopped_extraction": false
+    },
+    {
+      "name": "prepare_getall_onsets",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_getall_onsets.py",
+      "sha256": "802affcd5046f41222454af21656dcb4becd3b478f2fd664b13e195c80540928",
+      "historical_source": "/tmp/prepare_getall_onsets.py",
+      "contains_stopped_extraction": false
+    },
+    {
+      "name": "prepare_more_full",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_more_full.py",
+      "sha256": "f37e87cdeadec0aa8ed5cc5b68677545a0a4f4f688e456857c23114f888108e4",
+      "historical_source": "/tmp/prepare_more_full.py",
+      "contains_stopped_extraction": false
+    },
+    {
+      "name": "prepare_new_fetch_full",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_new_fetch_full.py",
+      "sha256": "4b1840db4b25090961a618656254617da79b6fd7362b085a2c20c786aa0d442a",
+      "historical_source": "/tmp/prepare_new_fetch_full.py",
+      "contains_stopped_extraction": false
+    },
+    {
+      "name": "prepare_protocol_call1",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_protocol_call1.py",
+      "sha256": "e5caa30c723ef2169eaeb6a920c677a4e9a2a190a75d94b73d4614cabf11575a",
+      "historical_source": "/tmp/prepare_protocol_call1.py",
+      "contains_stopped_extraction": false
+    },
+    {
+      "name": "prepare_pytest5787_onsets",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_pytest5787_onsets.py",
+      "sha256": "de4bc6d47085b202131b8dc42bf242d46dcf695557d1226d2a7279562d0c0bb1",
+      "historical_source": "/tmp/prepare_pytest5787_onsets.py",
+      "contains_stopped_extraction": false
+    },
+    {
+      "name": "prepare_requests2931_semantic_full",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_requests2931_semantic_full.py",
+      "sha256": "d67e74e948a90ca91f86f628e3fff3d3107cca109b606843ae0aead37cf2bf7b",
+      "historical_source": "/tmp/prepare_requests2931_semantic_full.py",
+      "contains_stopped_extraction": false
+    },
+    {
+      "name": "prepare_semantic_full",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_semantic_full.py",
+      "sha256": "51b79bd76de3cebfbe489e72afbb03da4c321ed8f9014c968a2d33623f21ca74",
+      "historical_source": "/tmp/prepare_semantic_full.py",
+      "contains_stopped_extraction": false
+    },
+    {
+      "name": "prepare_sklearn14983_full",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_sklearn14983_full.py",
+      "sha256": "15286d4b37e44041b32259bb0b6787305bfb0a388039cc2885d1d0a8af06913a",
+      "historical_source": "/tmp/prepare_sklearn14983_full.py",
+      "contains_stopped_extraction": false
+    },
+    {
+      "name": "prepare_sklearn25102_full",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_sklearn25102_full.py",
+      "sha256": "c244eb69639010f044b597560a058bb2949e2cb9090e6180aa455c160ee7a749",
+      "historical_source": "/tmp/prepare_sklearn25102_full.py",
+      "contains_stopped_extraction": false
+    },
+    {
+      "name": "prepare_sklearn25747_full",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_sklearn25747_full.py",
+      "sha256": "fa546cca627909c330b1b9604550d4558262da62bd2973fb6c48c80fb131822f",
+      "historical_source": "/tmp/prepare_sklearn25747_full.py",
+      "contains_stopped_extraction": false
+    },
+    {
+      "name": "prepare_sphinx10323_onset",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_sphinx10323_onset.py",
+      "sha256": "91f72b07108d56c619420963575d07892dfbe6402c49b9db66e3ed9f8c1ede7f",
+      "historical_source": "/tmp/prepare_sphinx10323_onset.py",
+      "contains_stopped_extraction": false
+    },
+    {
+      "name": "prepare_sphinx10614_full",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_sphinx10614_full.py",
+      "sha256": "6618960c02fbb23a6ee7f977b4138bc74776d686c27ab90e3d6070d5689fd09b",
+      "historical_source": "/tmp/prepare_sphinx10614_full.py",
+      "contains_stopped_extraction": false
+    },
+    {
+      "name": "prepare_sphinx7590_full",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_sphinx7590_full.py",
+      "sha256": "515d09510013b9db16c4c608748f88920fd6e1685dc1d746705c5b4f2ccbcb02",
+      "historical_source": "/tmp/prepare_sphinx7590_full.py",
+      "contains_stopped_extraction": false
+    },
+    {
+      "name": "prepare_sphinx8638_full",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_sphinx8638_full.py",
+      "sha256": "9242d5885c9cccb9f1c83d9c207149b667613d423c702ac0266df11866b83a11",
+      "historical_source": "/tmp/prepare_sphinx8638_full.py",
+      "contains_stopped_extraction": false
+    },
+    {
+      "name": "prepare_swe85_full_replies",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_swe85_full_replies.py",
+      "sha256": "abd6a148be173d9af9b81b7fbb8140c8a220e44074b1e96df6c1a631d26eed5e",
+      "historical_source": "/tmp/prepare_swe85_full_replies.py",
+      "contains_stopped_extraction": false
+    },
+    {
+      "name": "prepare_sympy12489_full",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_sympy12489_full.py",
+      "sha256": "b9dc5e5059f6bb5a214d83613a2bbe2220a2fb4f4040cee2fc4c9f5d2d276181",
+      "historical_source": "/tmp/prepare_sympy12489_full.py",
+      "contains_stopped_extraction": false
+    },
+    {
+      "name": "prepare_sympy13091_full",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_sympy13091_full.py",
+      "sha256": "6f3116864db75f4b117b72c74e257167bd6f2430719008ce3221ee4784ecb052",
+      "historical_source": "/tmp/prepare_sympy13091_full.py",
+      "contains_stopped_extraction": false
+    },
+    {
+      "name": "prepare_sympy13480_full",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_sympy13480_full.py",
+      "sha256": "5a67f00e228b1337f94bfc742bca9d91610516d9ea73a2e2cd79d71cb5af658b",
+      "historical_source": "/tmp/prepare_sympy13480_full.py",
+      "contains_stopped_extraction": false
+    },
+    {
+      "name": "prepare_sympy13480_onset",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_sympy13480_onset.py",
+      "sha256": "89c9807e62824e8f6923469acce558731fd57da6a667faa40662b0181a77526f",
+      "historical_source": "/tmp/prepare_sympy13480_onset.py",
+      "contains_stopped_extraction": false
+    },
+    {
+      "name": "prepare_sympy13551_full",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_sympy13551_full.py",
+      "sha256": "7d1c7cddf56d1575a40314bbc85552098098c64e7627edf5734f8f4aba40e33a",
+      "historical_source": "/tmp/prepare_sympy13551_full.py",
+      "contains_stopped_extraction": false
+    },
+    {
+      "name": "prepare_sympy13551_onset",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_sympy13551_onset.py",
+      "sha256": "b7e5e07be9c20dd8a106eedf27ad8afbe4dc3b693f2de355222a8d529b4fbd82",
+      "historical_source": "/tmp/prepare_sympy13551_onset.py",
+      "contains_stopped_extraction": false
+    },
+    {
+      "name": "refresh_swe_full_roster",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/refresh_swe_full_roster.py",
+      "sha256": "06fffc401f5355292833c327f21768dd6169b9ce06b0cd99d7da2cacf23aa636",
+      "historical_source": "/tmp/refresh_swe_full_roster.py",
+      "contains_stopped_extraction": false
+    },
+    {
+      "name": "extract_18763_7432",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/extract_18763_7432.py",
+      "sha256": "2046187181f6f92c3284eca7adf5e1cb4cb8f917f35217be225d1f6102c0d595",
+      "historical_source": "/tmp/extract_18763_7432.py",
+      "contains_stopped_extraction": true
+    },
+    {
+      "name": "prepare_18763_7432_full",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_18763_7432_full.py",
+      "sha256": "9dd2d2aaa91d5500a673cfb1f445547aecf7a169b7b27431db39c995c87f5679",
+      "historical_source": "/tmp/prepare_18763_7432_full.py",
+      "contains_stopped_extraction": false
+    },
+    {
+      "name": "build_18763_7432",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/build_18763_7432.py",
+      "sha256": "01a2b10be422e30a1e581232917c3c58c7e41ecc2bd98339f77987d6b80de726",
+      "historical_source": "/tmp/build_18763_7432.py",
+      "contains_stopped_extraction": false
+    },
+    {
+      "name": "prepare_18763_7432_onsets",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_18763_7432_onsets.py",
+      "sha256": "4b5875c99f57478efc85bd9e6363eee8ddd5a2e2c4220f768bc82646b2fe6b20",
+      "historical_source": "/tmp/prepare_18763_7432_onsets.py",
+      "contains_stopped_extraction": false
+    },
+    {
+      "name": "extract_sphinx9461",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/extract_sphinx9461.py",
+      "sha256": "c58aaedfc4f5b16e47a73d2d85658168df87d455ee72330d4a5eb1535ce09339",
+      "historical_source": "/tmp/extract_sphinx9461.py",
+      "contains_stopped_extraction": true
+    },
+    {
+      "name": "prepare_sphinx9461_full",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_sphinx9461_full.py",
+      "sha256": "3137e027cbbe9994f353785d63a53e6e42c20ad43743210ac20c7fa3134d2383",
+      "historical_source": "/tmp/prepare_sphinx9461_full.py",
+      "contains_stopped_extraction": false
+    },
+    {
+      "name": "build_sphinx9461",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/build_sphinx9461.py",
+      "sha256": "4a2c72bdad19705756d5e983a6e25179e66971433917b5684daaaa8337da61c9",
+      "historical_source": "/tmp/build_sphinx9461.py",
+      "contains_stopped_extraction": false
+    },
+    {
+      "name": "extract_sympy13878",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/extract_sympy13878.py",
+      "sha256": "e3bebef9d771987b02f76d4fa75e97be8cb02081293bd85836aa81e2543f379c",
+      "historical_source": "/tmp/extract_sympy13878.py",
+      "contains_stopped_extraction": true
+    },
+    {
+      "name": "prepare_sympy13878_full",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_sympy13878_full.py",
+      "sha256": "d51fe74dfe9aefd2b06d3772789d6c841da7b0dec7a81c09f602b9b66c1e77d1",
+      "historical_source": "/tmp/prepare_sympy13878_full.py",
+      "contains_stopped_extraction": false
+    },
+    {
+      "name": "build_sympy13878_fetch",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/build_sympy13878_fetch.py",
+      "sha256": "d6544ed06703eb6b1d0f15337ad2c931fe3ba3af55286ed4a6093dc104b8e15e",
+      "historical_source": "/tmp/build_sympy13878_fetch.py",
+      "contains_stopped_extraction": false
+    },
+    {
+      "name": "prepare_sympy13878_onset",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/prepare_sympy13878_onset.py",
+      "sha256": "0208ae9cc9c250ee40238c939b4d0cd7bc189ec89846e2a13a2c1e8de582b4f1",
+      "historical_source": "/tmp/prepare_sympy13878_onset.py",
+      "contains_stopped_extraction": false
+    },
+    {
+      "name": "finalize_sympy13878",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-preparation-sources/finalize_sympy13878.py",
+      "sha256": "496487296dfa68efe0392bc6d2f9eeb4173a5133f684d7b019ff0f7bdc673444",
+      "historical_source": "/tmp/finalize_sympy13878.py",
+      "contains_stopped_extraction": false
+    }
+  ]
+}

@@ -1,0 +1,27 @@
+{
+  "status": "passed_candidate_static_validation_unadmitted",
+  "method": "run_secondary_hf.py --validate-only",
+  "checked": [
+    "pinned source inventory and corrected BFP8 served arm",
+    "served result runtime_precision config_id for seeds42/43/44",
+    "same exact prompt/chosen IDs in served/full fixtures",
+    "saved two-group commands, compare files, forecast, admission placeholder pins"
+  ],
+  "corrected_served_arm": {
+    "directory": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-suffix512-head-bfp8-correction",
+    "admission_sha256": "3135aac12cbe11d97803b166dc3173def8f9bc03a6e8bb786fe015ce3f24bf08",
+    "root_review_sha256": "777d1a61090d8b827c76fc905b1a884b58270613d976c5eed73d8a41c2319151",
+    "completion_sha256": "1be9414e4447a6600ea163967ec4fc0601ae9ffbbd47e44ab5e407a1c3ee453e",
+    "config_id": "stage12_head_bfp8_lofi",
+    "results_dir": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-conditional-hf/sklearn13135-suffix512-head-bfp8-correction/runs"
+  },
+  "candidate_pins": {
+    "driver_sha256": "6ece35a9c230f266896cb8e12477f5402083d5b2047746b5a630ff28bc23a0fb",
+    "source_integrity_sha256": "408d1614186a70cf599295c05e03744fd54a786b8a6be3cec2bbd8ea46a399af",
+    "proposal_sha256": "3a9a2ad692bf837d61aa22aeb9512b7c4bab1df668657f457c83bebbf86d1991",
+    "commands_sha256": "5f688c86c517970145f0f28a5320413ccb8f96c86b692b033161aedeb2854179",
+    "forecast_sha256": "e5962ee880ae51627e85dda1610342bef8155556850211846424ee473054504b",
+    "admission_placeholder_sha256": "e707f8e96d866b616d99fb16a29034d9a9e2330d2bc1956192e6c77f4bcc0c45"
+  },
+  "execution_scope": "Static checks only. No owner/HF-process/MemAvailable preflight was queried; no saved generation command, HF runner, model import/load/inference, TTNN import, or device access."
+}

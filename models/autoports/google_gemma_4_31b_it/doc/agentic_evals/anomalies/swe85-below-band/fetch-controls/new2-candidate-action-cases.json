@@ -1,0 +1,18 @@
+[
+  {
+    "name": "scikit-learn__scikit-learn-25747.fetch-next-action",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/scikit-learn__scikit-learn-25747/action_counterfactual.candidate.private.json",
+    "branches": [
+      "chosen",
+      "correct"
+    ]
+  },
+  {
+    "name": "sphinx-doc__sphinx-8638.fetch-next-action",
+    "case": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/swe85-below-band/fetch-controls/sphinx-doc__sphinx-8638/action_counterfactual.candidate.private.json",
+    "branches": [
+      "chosen",
+      "correct"
+    ]
+  }
+]

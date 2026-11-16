@@ -1,0 +1,92 @@
+{
+  "status": "candidate_only_not_admitted_not_run",
+  "scope": "One full-mode fixed108 precision diagnostic panel: 36 source targets x seeds 42/43/44, one free run per case, preserving the per-case caps in the frozen manifest, batch size 1.",
+  "question": "Does changing only the down projection to BFP8 LoFi alter target behavior relative to the served-head BFP8 LoFi baseline?",
+  "coverage": {
+    "rows": 108,
+    "unique_cases": 36,
+    "seeds": [
+      42,
+      43,
+      44
+    ],
+    "free_run_caps": [
+      256,
+      512,
+      1024,
+      2048,
+      4096
+    ],
+    "chosen_branches": 0,
+    "manifest_sha256": "57193e4b91af3a31df00f0c92dbc0f2219fbce011e6533594e5244a93a3021ed",
+    "free_run_cap_counts": {
+      "256": 72,
+      "512": 7,
+      "1024": 22,
+      "2048": 6,
+      "4096": 1
+    }
+  },
+  "candidate_files": {
+    "precision_sha256": "769f6b5d975c3a4b252c01668ded02f32c61c43819117a95868249b4b1fd7350",
+    "build_kwargs_sha256": "0dbc1dfb7d72a9211662d1c40d9bf295fffd83f2bf080fa6932d11adff50e828",
+    "manifest_sha256": "57193e4b91af3a31df00f0c92dbc0f2219fbce011e6533594e5244a93a3021ed",
+    "command_sha256": "e6248d54563b2f3349e576f49971df44f91c9306d1752d6e9e3d531b9f74867f",
+    "forecast_sha256": "516a0676a9535ddc9a1954740a4588c95a4e07630b47343920c8e68c1eb01cfa",
+    "source_inventory_sha256": "2c6199d5f2f501f13b9b4f8f419e95df6b62a278a77a46a2fb2f452d0d5c2ecf",
+    "driver_sha256": "b813686bfbb4a5c18326d404999f1ff71c33ce560d9a07011e992b26c27c85b2"
+  },
+  "predecessors": {
+    "P2_directory": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-precision-bisect/head-bf16-hifi4-fixed108-proposal",
+    "P2_admission_sha256": "74bef162c97e23e882612eb85dae365f32c9da1f13ba4b9b8e1e1f8f582ad1be",
+    "P2_terminal": "Require successful terminal queue/completion, matching admission and exact frozen command, plus root forecast reconciliation matching exact completion/admission/range/elapsed, explicit HF contention disclosure, and no policy speed ranking. P2 is a serialization/correctness prerequisite only; its policy is not carried into this isolated comparison.",
+    "sklearn_candidate": "Matched three-arm evidence: corrected selected-BFP8 served suffix512, original full BF16 suffix512, and matched selected-BFP8 served/full suffix1024.",
+    "sklearn_required": "Launch-time gate verifies every admission/launch/completion/manifest/result/root-review/independent-triage hash and exact runtime_precision for all three arms; root supplies a SHA-bound SK reconciliation record, a separate SHA-bound HF completed/not_required decision, and a SHA-bound terminal root review for the H9 serialized HF batch. The HF decision is not inferred from an enum. No active HF process is allowed.",
+    "sklearn_candidate_admission_sha256": {
+      "corrected_selected_bfp8_served_suffix512": "3135aac12cbe11d97803b166dc3173def8f9bc03a6e8bb786fe015ce3f24bf08",
+      "original_full_bf16_suffix512": "32fe5e6ccf38aff945424de6b7f3c8e24a7a375cf6a806424bd1097e99bb6194",
+      "matched_selected_bfp8_suffix1024": "2e635a1169648396cf6abd95a6a3f3918808a45f0918431702fae2f5ff3ba308"
+    },
+    "sklearn_evidence": {
+      "corrected_bfp8_served": "setup/swe85-conditional-hf/sklearn13135-suffix512-head-bfp8-correction",
+      "original_full_bf16": "setup/swe85-conditional-hf/sklearn13135-missingtool-suffix512 (full arm only)",
+      "matched_suffix1024": "setup/swe85-conditional-hf/sklearn13135-missingtool-suffix1024 (served and full)"
+    },
+    "root_records": {
+      "sk_review": "predecessors/sklearn-serial-review.json binds exact SK evidence map and HF decision/H9 review paths+hashes",
+      "hf_decision": "predecessors/hf-followup-decision.json; decision is completed with a complete hash-verified root-reviewed HF package, or not_required with reason and exact SK evidence-map basis",
+      "h9_terminal_review": "predecessors/h9-terminal-review.json; must bind actual H9 admission, all eight successful serial groups, live progress, every launch/completion/output hash, and the current SK evidence map"
+    }
+  },
+  "forecast_basis": "Clean P1 fixed108 completion only. P2 timing is excluded from speed forecast because an unintended HF CPU process overlapped it. This forecast is a broad planning proxy for the isolated served-head baseline and not a measured precision scaling.",
+  "execution_gates": [
+    "STOP_BEFORE_LAUNCH removed only after explicit root admission",
+    "P2 terminal success and root forecast/contention reconciliation accepted",
+    "corrected selected-BFP8 SK512 served, original full-BF16 SK512 full, and matched SK1024 served/full all pass exact admission/command/manifest/result hashes, root output reviews, independent triage, and complete runtime precision policy checks",
+    "root SK reconciliation record pins those exact three-arm outputs; separate SHA-bound root HF decision is completed with verified admission/completion/output/root-review package or not_required with an evidence-bound reason",
+    "all eight H9 HF groups have successful completion and root terminal review binding every output, with exact current progress hash; no active HF process, no device owners, fresh memory/readiness preflight",
+    "one serial full-mode fixed108 run, timeout9000, nonempty outputs, no retry"
+  ],
+  "no_claims": [
+    "No candidate precision is selected or accepted.",
+    "No task score, accuracy, vLLM rate, or serving-policy implication follows.",
+    "The planning forecast is not a measured BFP8 LoFi speed prediction."
+  ],
+  "precision_delta_vs_baseline": {
+    "baseline": "setup/head_bfp8_precision_config.json: attention/MLP/down BFP4 LoFi; lm_head BFP8 LoFi",
+    "changed_only": {
+      "group": "down",
+      "from": {
+        "weight": "bfp4",
+        "fidelity": "LoFi"
+      },
+      "to": {
+        "weight": "bfp8_lofi",
+        "fidelity": "LoFi"
+      }
+    },
+    "retained": "attention, MLP, served lm_head BFP8 LoFi, activations, collectives, cache, outputs, and max_seq_len 262144",
+    "baseline_sha256": "aa0e651fb3fdd7afc285293645c5ca309b2da246619e6e7fb6da86c5d2f28853"
+  },
+  "source_inventory_policy": "Mutable canonical learned.json is excluded; immutable fixtures, model/runtime configuration, runner, and terminal predecessor evidence remain pinned."
+}

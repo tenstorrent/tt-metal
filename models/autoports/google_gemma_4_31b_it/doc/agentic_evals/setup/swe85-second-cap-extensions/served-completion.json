@@ -1,0 +1,37 @@
+{
+  "name": "served",
+  "command": [
+    "timeout",
+    "3600",
+    "env",
+    "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+    "READINESS_TRACE_REGION_SIZE=134217728",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+    "-m",
+    "models.autoports.google_gemma_4_31b_it.tools.precision_repro_batch",
+    "--cases",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/served-candidate-cases.json",
+    "--build-kwargs-file",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/head_bfp8_build_kwargs.json",
+    "--output-dir",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/swe85-second-cap-extensions/runs/served"
+  ],
+  "start_unix": 1794714804.1477757,
+  "device_owner_preflight": [],
+  "prediction": {
+    "predicted_hours": 0.2802639232628727,
+    "range_hours": [
+      0.22319916932476164,
+      0.3753718464930578
+    ],
+    "basis": "Per selected matched 512-token run, preserve measured prefill/host overhead (diagnostic wall minus decode wall) and scale decode by 1023/511, then add same-mode observed model-load time and a first-preparation allowance. Range is 0.7x\u20131.5x case work plus fixed load/preparation.",
+    "first_preparation_allowance_seconds": 180,
+    "allowance_status": "planning margin, not measured second-cap warmup"
+  },
+  "admission_sha256": "2b69cc4b881361734ab2a8d097e34d89a129a3b788010451f46f54fe83a0d359",
+  "scope": "Diagnostic host-wall, not serving performance.",
+  "end_unix": 1794715524.8598235,
+  "exit_code": 0,
+  "measured_hours": 0.20019779105981192,
+  "prediction_range_hit": false
+}

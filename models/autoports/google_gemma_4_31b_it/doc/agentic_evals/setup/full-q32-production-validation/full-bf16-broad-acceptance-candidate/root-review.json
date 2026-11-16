@@ -1,0 +1,73 @@
+{
+  "status": "recorded_broad_checks_pass_process_exit_status_unknown",
+  "pins_verified": 172,
+  "completion": {
+    "status": "process_exit_observed_all_results_collected_exit_status_unknown",
+    "start_unix": 1794784925.965542,
+    "end_unix": 1794786272.6901937,
+    "wall_seconds": 1346.7246515750885,
+    "exit_code": null,
+    "wrapper_exit_code": 143,
+    "missing_reasons": {
+      "exit_code": "Outer wrapper terminated unexpectedly; actual child completed later, but was reaped before /proc exit status could be read. No exit0 is inferred."
+    },
+    "observer": "process-exit-observer.json",
+    "device_release_observed": true
+  },
+  "output_sha256": {
+    "source_manifest.json": "e1f6d17953919bb87ac82dc52b0a40f343ff1ee1c30a76849f069cabe7ac8fc4",
+    "qualitative_prompt_format.json": "16e4bfd8857e67ee9ca39297c8521b30e8ceacf0c848783e83b1192ef331cb9c",
+    "qualitative_tt.json": "da645d9c8e56e9cac05a2cf8da575b0773880edf7b7dfc67c1c51f5b50ef0cfb",
+    "qualitative_hf.json": "05c2ac233052909c2e785b9d36f819c52e95cecfcfd299eff81a6b1de3a174d6",
+    "readiness_accuracy.json": "9e5b1cc8dc75452a88f365867000db37f29034c6b9955f202fd02c090791333e",
+    "runtime_policy.json": "5a3e5294314c738f54deffa346303953481e802561660692b4b3c58c8d8ed7a8",
+    "aime24_prompt.json": "578790e2d9e5d7fad6d187bc6d733699c3514218ea5a42ca2bf9d25d7afdd4dd",
+    "full_context_post_barrier.json": "7cef036492930fa5857a0c42a99af57ee56fd4e3d442b03f0dac6d9715aa1610",
+    "performance_b1.json": "f094f940fbea4ee184b53f12925e2c640282b0923339453d8ec8c0e29f040892",
+    "long_prefix.json": "c2b410c7c772d9c30027f3f9cbe5faf59b5cc51696d9a233364bb3a6893a719c",
+    "memory.json": "a69f5cdb8f79ebbcd7521fb035a1677a904c71486d81b87096723d99e34133e6"
+  },
+  "accuracy": {
+    "aime_prefill_top1": [
+      98,
+      100
+    ],
+    "aime_decode_top1_each_of_three_repeats": [
+      98,
+      100
+    ],
+    "natural_top1": [
+      480,
+      512
+    ],
+    "natural_top5": [
+      512,
+      512
+    ]
+  },
+  "autoregressive_diagnostic": {
+    "input_tokens": 4096,
+    "output_tokens": 128,
+    "batch": 1,
+    "concurrency": 1,
+    "ttft_ms": 1407.5714061036706,
+    "decode_tps": 16.982449546294834,
+    "source": "autoregressive",
+    "not_vllm": true
+  },
+  "qualitative": {
+    "complete_natural_stops": 2,
+    "coherent_bounded_128_token_prefixes": 4,
+    "not_six_completed_answers": true
+  },
+  "context": {
+    "boundary_tokens": [
+      262143,
+      262144
+    ],
+    "host_sampling_compatibility_equal": true,
+    "semantic_scope": "Repeated-prompt execution boundary, not semantic accuracy across262144tokens. Separate32083token retrieval returns expected label in fencedJSON."
+  },
+  "forecast_result": "Observed1346.7246527s inside800-3000s range; no profiler; wrapper interruption separately preserved.",
+  "decision": "No further model/device experiments in current window. FullBF16 remains an unselected diagnostic baseline. Candidate serving sizing, matching vLLM rates and retained85-task rerun require an authorized continuation."
+}

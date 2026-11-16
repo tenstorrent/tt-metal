@@ -1,0 +1,92 @@
+[
+  {
+    "task": "django__django-11299",
+    "tag": "v5-swe-preflight:django__django-11299",
+    "exit": 0,
+    "cached_uv_step": false,
+    "installer_download_reported": true,
+    "log": "build-django__django-11299.log",
+    "log_file_mtime_unix": 1794613669.3560278
+  },
+  {
+    "task": "astropy__astropy-14096",
+    "tag": "v5-swe-preflight:astropy__astropy-14096",
+    "exit": 0,
+    "cached_uv_step": false,
+    "installer_download_reported": true,
+    "log": "build-astropy__astropy-14096.log",
+    "log_file_mtime_unix": 1794613671.6608412
+  },
+  {
+    "task": "matplotlib__matplotlib-25332",
+    "tag": "v5-swe-preflight:matplotlib__matplotlib-25332",
+    "exit": 0,
+    "cached_uv_step": false,
+    "installer_download_reported": true,
+    "log": "build-matplotlib__matplotlib-25332.log",
+    "log_file_mtime_unix": 1794613674.034592
+  },
+  {
+    "task": "sympy__sympy-13551",
+    "tag": "v5-swe-preflight:sympy__sympy-13551",
+    "exit": 0,
+    "cached_uv_step": false,
+    "installer_download_reported": true,
+    "log": "build-sympy__sympy-13551.log",
+    "log_file_mtime_unix": 1794613676.4283783
+  },
+  {
+    "task": "scikit-learn__scikit-learn-14629",
+    "tag": "v5-swe-preflight:scikit-learn__scikit-learn-14629",
+    "exit": 0,
+    "cached_uv_step": false,
+    "installer_download_reported": true,
+    "log": "build-scikit-learn__scikit-learn-14629.log",
+    "log_file_mtime_unix": 1794613678.8481944
+  },
+  {
+    "task": "pydata__xarray-3993",
+    "tag": "v5-swe-preflight:pydata__xarray-3993",
+    "exit": 0,
+    "cached_uv_step": false,
+    "installer_download_reported": true,
+    "log": "build-pydata__xarray-3993.log",
+    "log_file_mtime_unix": 1794613681.1867588
+  },
+  {
+    "task": "sphinx-doc__sphinx-9673",
+    "tag": "v5-swe-preflight:sphinx-doc__sphinx-9673",
+    "exit": 0,
+    "cached_uv_step": false,
+    "installer_download_reported": true,
+    "log": "build-sphinx-doc__sphinx-9673.log",
+    "log_file_mtime_unix": 1794613683.5977874
+  },
+  {
+    "task": "pytest-dev__pytest-5840",
+    "tag": "v5-swe-preflight:pytest-dev__pytest-5840",
+    "exit": 0,
+    "cached_uv_step": false,
+    "installer_download_reported": true,
+    "log": "build-pytest-dev__pytest-5840.log",
+    "log_file_mtime_unix": 1794613686.0370774
+  },
+  {
+    "task": "pylint-dev__pylint-6903",
+    "tag": "v5-swe-preflight:pylint-dev__pylint-6903",
+    "exit": 0,
+    "cached_uv_step": false,
+    "installer_download_reported": true,
+    "log": "build-pylint-dev__pylint-6903.log",
+    "log_file_mtime_unix": 1794613688.4477766
+  },
+  {
+    "task": "psf__requests-1142",
+    "tag": "v5-swe-preflight:psf__requests-1142",
+    "exit": 0,
+    "cached_uv_step": false,
+    "installer_download_reported": true,
+    "log": "build-psf__requests-1142.log",
+    "log_file_mtime_unix": 1794613690.8728383
+  }
+]

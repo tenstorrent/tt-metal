@@ -1,0 +1,42 @@
+{
+  "task": "145",
+  "source": "anomalies/gpqa-extended-precision/first-wave-served/task145.onset.suffix512.json",
+  "reference_context": {
+    "original_triage": "current/gpqa-extended198-head-bfp8/digest/145.triage.json",
+    "onset_packet": "anomalies/gpqa-extended-precision/task145.onset.suffix512.private.json",
+    "learned": "learned.json",
+    "original_pattern": "The original full response was judged anomalous for sustained latter-half semantic cycling: repeatedly reopening the same syn/anti and stereochemical orientation checks, restating the same priorities and returning to the same assignment without resolving the checks. That original response eventually selected C and stopped normally. Its digest was uncapped and mechanically unflagged. The saved onset packet selects a concrete malformed-fragment boundary, but explicitly says it is not unique first-error attribution.",
+    "comparison_limits": "These are free-running diagnostic TF continuations from an exact retained 512-token suffix of reconstructed IDs, not full-context reproductions; position origin changed. The packet says raw native sampled IDs are unavailable and count agreement does not establish sampled-token identity. This small set supports only per-seed observations, not population or causality claims."
+  },
+  "assessment_scope": "Semantic review of all three saved free_running texts only. TFchosen was executed but is not assessed here. No scoring is pending or claimed.",
+  "seeds": [
+    {
+      "seed": 42,
+      "mechanical_flag": true,
+      "semantic_anomaly": true,
+      "observed_malformed_text": false,
+      "span_and_paraphrase": "Across nearly the entire retained continuation, the text repeatedly asserts the same spatial assignment (F down, C7 right, C4 left, clockwise/R) and inserts a short reconsideration prompt, then repeats the same assignment. The subsequent repetitions add no new check or evidence that changes the conclusion.",
+      "original_pattern_comparison": "Semantically consistent with the original task-145 pattern of repeatedly reopening and restating the same orientation check without progress. This continuation is more locally repetitive and begins directly in the repeated assignment; it does not establish where degeneration began in the original full reply.",
+      "limits": "The mechanical flag agrees with the evident repetitive tail, but is not the basis for the semantic judgment. This is a truncated free-running continuation, not evidence of whole-response answer quality or cause."
+    },
+    {
+      "seed": 43,
+      "mechanical_flag": false,
+      "semantic_anomaly": true,
+      "observed_malformed_text": false,
+      "span_and_paraphrase": "After a brief initial statement mapping the sequence to clockwise and assigning syn/anti, the rest repeatedly cycles among asserting that assignment, saying it was just stated, and announcing it again. The cycle occupies almost all of the saved text and introduces no additional reasoning or resolution.",
+      "original_pattern_comparison": "Strong semantic match to the original triage's repeated syn/anti and orientation reconsideration, despite the saved mechanical flag being false. As in the original, repeated semantic cycling is the evidence; mechanical detection is not required. The served continuation does not reproduce the original full prompt or its eventual answer.",
+      "limits": "The unflagged status does not negate the visible semantic cycle. Because only a 512-token suffix was used and the token reconstruction is not native-ID identity, this is not an exact reproduction claim."
+    },
+    {
+      "seed": 44,
+      "mechanical_flag": true,
+      "semantic_anomaly": true,
+      "observed_malformed_text": true,
+      "span_and_paraphrase": "The continuation starts with a repeated self-referential phrase, then devolves into a long run of isolated repeated letters. The latter portion has no coherent proposition or task-relevant reasoning; it is malformed output rather than a substantive continuation of the stereochemical analysis.",
+      "original_pattern_comparison": "This is compatible with a broad degeneration outcome but differs from the original task-145 semantic-cycle pattern: the retained text is primarily malformed/repetitive character output, rather than repeated substantive syn/anti and orientation checks. It should not be treated as evidence that the original's specific semantic cycle recurred.",
+      "limits": "Mechanical flag and malformed-text observation are reported separately from the semantic judgment. Malformation is directly visible in this saved text; no inference is made about its source or onset outside this suffix."
+    }
+  ],
+  "overall": "Per-seed semantic anomalies are present in all three saved continuations: two show semantic repetition/cycling and one shows severe malformed degeneration. The original-pattern comparison is strongest for seeds 42 and 43; seed 44 is a distinct malformed-text form. The seed-43 cycle remains anomalous despite its false mechanical flag."
+}

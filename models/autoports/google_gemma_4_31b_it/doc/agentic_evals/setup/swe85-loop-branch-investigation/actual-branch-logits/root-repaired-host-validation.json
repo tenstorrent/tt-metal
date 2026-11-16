@@ -1,0 +1,14 @@
+{
+  "status": "root_repeated_repaired_host_validation_passed",
+  "reviewer": "root",
+  "tool_sha256": "fa2eaf9f66a6a36c57385351a0b3e838edeabac4644c77c98aa81a817e3e3d5e",
+  "standalone_command": "python_env/bin/python models/autoports/google_gemma_4_31b_it/tools/actual_branch_logits.py --validate-only --mock-tests",
+  "standalone_exit_code": 0,
+  "wrapper_command": "python run_serial_probe.py --validate-only --mock-tests",
+  "wrapper_exit_code": 0,
+  "wrapper_checks_passed": 13,
+  "inference": false,
+  "device_access": false,
+  "retry_admission_sha256": "1e7d2c4f6c6879ad8c63d4e2fdb1092546633a7c0e566581b083309a747044d4",
+  "old_host_validation": "historical original version only; retained"
+}

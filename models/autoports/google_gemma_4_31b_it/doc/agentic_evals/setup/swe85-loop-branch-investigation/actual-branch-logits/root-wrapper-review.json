@@ -1,0 +1,7 @@
+{
+  "accepted": true,
+  "reviewer": "root",
+  "utc": "2026-11-15T10:41:19.541912+00:00",
+  "validation": "Root inspected capture identity, runtime precision, compare freshness, tensor paths, serial ownership and timeout completion; repeated CLI validate-only and all 13 host mocks passed. No model imports in inert validation.",
+  "wrapper_sha256": "1066e245c478a21f0d8f1749ddd1ba6eae2a62be27f3d2e29ec59b952e316789"
+}

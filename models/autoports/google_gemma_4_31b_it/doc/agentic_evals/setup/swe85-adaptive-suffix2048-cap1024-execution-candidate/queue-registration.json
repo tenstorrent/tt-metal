@@ -1,0 +1,6 @@
+{
+  "session_id": 15931,
+  "registered_unix": 1794719396.62649,
+  "predecessor": "swe85-third-cap-execution/full-completion.json",
+  "device_work": "waits for prior successful full batch then owner-zero check"
+}
