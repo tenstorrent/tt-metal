@@ -914,9 +914,11 @@ static tt::tt_metal::ProgramDescriptor pool2d_multi_core_sharded_with_halo_v2_im
     const bool default_fp32_acc = (params.is_avg_pool && params.is_large_kernel) || indexes_32_bit;
     // Due to hardware bug (#38306), HiFi4 + fp32_dest_acc_en can sometime produce incorrect results on Wormhole.
     // Use HiFi3 when fp32_dest_acc_en is True on Wormhole (less likely to give bad results).
-    const auto default_math_fidelity = (default_fp32_acc && device_arch == tt::ARCH::WORMHOLE_B0)
-                                           ? tt::tt_metal::MathFidelity::HiFi3
-                                           : tt::tt_metal::MathFidelity::HiFi4;
+    // Only avg pool multiplies (by the scalar); max pool ignores fidelity, so its default is left unchanged.
+    const auto default_math_fidelity =
+        (params.is_avg_pool && params.is_large_kernel && device_arch == tt::ARCH::WORMHOLE_B0)
+            ? tt::tt_metal::MathFidelity::HiFi3
+            : tt::tt_metal::MathFidelity::HiFi4;
     ttnn::verify_numerical_configuration(device_arch, compute_kernel_config);
 
     // Initialize device compute kernel config with user-provided config or defaults

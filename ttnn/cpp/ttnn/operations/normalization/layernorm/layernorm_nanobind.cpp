@@ -125,7 +125,7 @@ void bind_normalization_layernorm_operation(nb::module_& mod) {
             arch (tt.ARCH): The device architecture.
 
         Returns:
-            ttnn.DeviceComputeKernelConfig: The default compute config for layer norm (HiFi4, approx_mode=False, fp32_dest_acc_en=True).
+            ttnn.DeviceComputeKernelConfig: The default compute config for layer norm (HiFi4, or HiFi3 on Wormhole, approx_mode=False, fp32_dest_acc_en=True).
         )doc");
 
     // Bind create_layernorm_program_config function
