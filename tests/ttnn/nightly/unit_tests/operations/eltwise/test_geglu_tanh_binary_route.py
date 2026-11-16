@@ -2,8 +2,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""ttnn.geglu_tanh as one binary_ng program whose only arithmetic is geglu_tanh_tile, scored in pure ULP against the
-exact product; special-value classes follow torch where the BF16 pipeline can store torch's result."""
+"""ttnn.multiply with the gate's GELU_TANH as one binary_ng program whose only arithmetic is geglu_tanh_tile, scored in pure ULP against
+the exact product; special-value classes follow torch where the BF16 pipeline can store torch's result."""
 
 import pytest
 import torch
@@ -13,6 +13,13 @@ from loguru import logger
 # The boards the route runs geglu_tanh_tile on; Wormhole keeps the composite.
 ROUTE_BOARDS = ("blackhole",)
 OP_TYPE = "GEGLU_TANH"
+
+
+def _routed(gate, up, **kwargs):
+    """ttnn.multiply with the gate's GELU_TANH: the call that runs the GEGLU_TANH program."""
+    return ttnn.multiply(
+        gate, up, input_tensor_a_activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU_TANH)], **kwargs
+    )
 
 
 def _board(device=None):
@@ -176,15 +183,13 @@ def _on_device(t, device, **kwargs):
 
 
 def _run(device, first, second):
-    """ttnn.geglu_tanh over flat BF16 operands, padded to whole tiles; the output, the device operations and their arguments."""
+    """_routed over flat BF16 operands, padded to whole tiles; the output, the device operations and their arguments."""
     n = first.numel()
     pad = (-n) % TILE
     shape = [1, (n + pad) // TILE, 32, 32]
     a = torch.cat([first, torch.ones(pad, dtype=first.dtype)]).reshape(shape)
     b = torch.cat([second, torch.ones(pad, dtype=second.dtype)]).reshape(shape)
-    out, operations, arguments = _device_operations(
-        lambda: ttnn.geglu_tanh(_on_device(a, device), _on_device(b, device))
-    )
+    out, operations, arguments = _device_operations(lambda: _routed(_on_device(a, device), _on_device(b, device)))
     return ttnn.to_torch(out).flatten()[:n], operations, arguments
 
 
@@ -265,26 +270,24 @@ def _operands(shape):
 def test_geglu_tanh_every_placement_matches_interleaved_tiles(device, placement):
     _skip_unless_routed(device)
     a, b = _operands((1, 1, 64, 128))
-    expected = ttnn.to_torch(ttnn.geglu_tanh(_on_device(a, device), _on_device(b, device)))
+    expected = ttnn.to_torch(_routed(_on_device(a, device), _on_device(b, device)))
     if placement == "l1":
-        call = lambda: ttnn.geglu_tanh(
+        call = lambda: _routed(
             _on_device(a, device, memory_config=ttnn.L1_MEMORY_CONFIG),
             _on_device(b, device, memory_config=ttnn.L1_MEMORY_CONFIG),
         )
     elif placement == "row_major":
-        call = lambda: ttnn.geglu_tanh(
+        call = lambda: _routed(
             ttnn.from_torch(a, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device),
             ttnn.from_torch(b, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device),
         )
     elif placement.startswith("broadcast"):
         b = b[..., :1, :]
-        expected = ttnn.to_torch(
-            ttnn.geglu_tanh(_on_device(a, device), _on_device(b.expand(a.shape).contiguous(), device))
-        )
-        call = lambda: ttnn.geglu_tanh(_on_device(a, device), _on_device(b, device))
+        expected = ttnn.to_torch(_routed(_on_device(a, device), _on_device(b.expand(a.shape).contiguous(), device)))
+        call = lambda: _routed(_on_device(a, device), _on_device(b, device))
     else:
         grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))])
-        call = lambda: ttnn.geglu_tanh(_on_device(a, device), _on_device(b, device), sub_core_grids=grid)
+        call = lambda: _routed(_on_device(a, device), _on_device(b, device), sub_core_grids=grid)
     # A row-major operand adds its layout conversions around the program.
     out, _, arguments = _device_operations(call)
     assert OP_TYPE in arguments, f"the {placement} call does not run the {OP_TYPE} program"
@@ -303,5 +306,5 @@ def test_geglu_tanh_keeps_the_composite_elsewhere(device, dtype):
         a, b = as_float32(a), as_float32(b)
     else:
         a, b = _on_device(a, device), _on_device(b, device)
-    _, _, arguments = _device_operations(lambda: ttnn.geglu_tanh(a, b))
+    _, _, arguments = _device_operations(lambda: _routed(a, b))
     assert OP_TYPE not in arguments
