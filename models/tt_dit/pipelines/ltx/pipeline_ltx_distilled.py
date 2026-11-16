@@ -675,6 +675,14 @@ class LTXDistilledPipeline(LTXPipeline):
         if self._warmup_t2v_only:
             logger.info("  LTX_WARMUP_T2V_ONLY=1: skipping the s1_i2v/s2_i2v trace families")
             i2v_families = False
+        # LTX_T2V_PER_TOKEN=1: a base worker that can pin serves plain t2v gens on the per-token family
+        # too (timestep pair (sigma, sigma) and an empty pin mask give every token the scalar gen's
+        # modulation), so warmup warms and captures that one family and skips the scalar s1/s2: two
+        # fewer DiT traces and eager passes (~30 s of a 4x8 i2v warmup or keyframe -> i2v switch).
+        self._t2v_per_token = i2v_families and _env_on("LTX_T2V_PER_TOKEN")
+        skip_scalar = self._t2v_per_token
+        if skip_scalar:
+            logger.info("  LTX_T2V_PER_TOKEN=1: plain t2v rides the s1_i2v/s2_i2v family; skipping the scalar s1/s2")
 
         if self._traced:
 
@@ -682,11 +690,13 @@ class LTXDistilledPipeline(LTXPipeline):
                 self._prealloc_trace_io(self._trace_variant_key(base, per_token), num_frames=num_frames, **kw)
 
             if "s1" in stages:
-                _alloc("s1", kf_per_token, height=height // 2, width=width // 2)
+                if not skip_scalar:
+                    _alloc("s1", kf_per_token, height=height // 2, width=width // 2)
                 if i2v_families:
                     _alloc("s1", True, height=height // 2, width=width // 2)
             if "s2" in stages:
-                _alloc("s2", kf_per_token, height=height, width=width)
+                if not skip_scalar:
+                    _alloc("s2", kf_per_token, height=height, width=width)
                 if i2v_families:
                     _alloc("s2", True, height=height, width=width)
             if "s1" in stages and "s2" in stages and self._device_resident(None):
@@ -779,19 +789,20 @@ class LTXDistilledPipeline(LTXPipeline):
             logger.info(f"warmup stage 1: {s1_h}x{s1_w}, σ={s1_sigmas}")
             # Cold kernel compile for the stage-1 denoise — a dominant, otherwise-untracked
             # slice of warmup wall time.
-            with walltime.timed("warmup", "stage1 build"):
-                self._denoise_no_guidance(
-                    v_p,
-                    a_p,
-                    num_frames=num_frames,
-                    height=s1_h,
-                    width=s1_w,
-                    sigma_values=s1_sigmas,
-                    seed=0,
-                    image_conds=_kf_conds(s1_h, s1_w),
-                    traced=capture_traced,
-                    trace_key="s1",
-                )
+            if not skip_scalar:
+                with walltime.timed("warmup", "stage1 build"):
+                    self._denoise_no_guidance(
+                        v_p,
+                        a_p,
+                        num_frames=num_frames,
+                        height=s1_h,
+                        width=s1_w,
+                        sigma_values=s1_sigmas,
+                        seed=0,
+                        image_conds=_kf_conds(s1_h, s1_w),
+                        traced=capture_traced,
+                        trace_key="s1",
+                    )
             if i2v_families:
                 logger.info(f"warmup stage 1 (per-token family): {s1_h}x{s1_w}, frame-0 pin")
                 with walltime.timed("warmup", "stage1_i2v build"):
@@ -858,21 +869,22 @@ class LTXDistilledPipeline(LTXPipeline):
                 logger.info(f"warmup stage 2: {height}x{width}, σ={s2_sigmas}")
                 # Cold kernel compile for the stage-2 denoise (full-res) — the other dominant
                 # warmup slice.
-                with walltime.timed("warmup", "stage2 build"):
-                    self._denoise_no_guidance(
-                        v_p,
-                        a_p,
-                        num_frames=num_frames,
-                        height=height,
-                        width=width,
-                        sigma_values=s2_sigmas,
-                        seed=0,
-                        initial_video_latent=dummy_v_init,
-                        initial_audio_latent=dummy_a_init,
-                        image_conds=_kf_conds(height, width),
-                        traced=capture_traced,
-                        trace_key="s2",
-                    )
+                if not skip_scalar:
+                    with walltime.timed("warmup", "stage2 build"):
+                        self._denoise_no_guidance(
+                            v_p,
+                            a_p,
+                            num_frames=num_frames,
+                            height=height,
+                            width=width,
+                            sigma_values=s2_sigmas,
+                            seed=0,
+                            initial_video_latent=dummy_v_init,
+                            initial_audio_latent=dummy_a_init,
+                            image_conds=_kf_conds(height, width),
+                            traced=capture_traced,
+                            trace_key="s2",
+                        )
                 if i2v_families:
                     logger.info(f"warmup stage 2 (per-token family): {height}x{width}, frame-0 pin")
                     with walltime.timed("warmup", "stage2_i2v build"):
@@ -1034,6 +1046,7 @@ class LTXDistilledPipeline(LTXPipeline):
                     ref_num_frames=ref_num_frames,
                     kf_anchors=kf_anchors,
                     i2v_families=i2v_families,
+                    skip_scalar=skip_scalar,
                 )
             ]
             if _env_on("LTX_WARMUP_CAPTURE", "1") if warmup_capture is None else warmup_capture:
@@ -1054,7 +1067,9 @@ class LTXDistilledPipeline(LTXPipeline):
         t0 = time.time()
         for w in pending:
             stages = w["stages"]
-            families = [("s1", "s2", w["kf_anchors"], self._device_resident(None) and not w["kf_anchors"], False)]
+            families = []
+            if not w.get("skip_scalar"):
+                families.append(("s1", "s2", w["kf_anchors"], self._device_resident(None) and not w["kf_anchors"], False))
             if w["i2v_families"]:
                 families.append(("s1", "s2", [0], False, False))
             if "s1_ref" in stages or "s2_ref" in stages:
@@ -1585,7 +1600,11 @@ class LTXDistilledPipeline(LTXPipeline):
         image_cond = bool(image_conds) or has_ref
         # Per-token modulation only when this gen pins something. A plain t2v gen on an image-capable
         # worker takes the scalar-AdaLN path, which is a different graph, so it owns its own trace family.
-        needs_video_ts = getattr(self.transformer, "image_conditioning", False) and image_cond
+        # LTX_T2V_PER_TOKEN=1 sends plain t2v down the per-token family as well (pair (sigma, sigma), zero
+        # pin mask: the scalar modulation, token for token), so that worker never captures the scalar one.
+        needs_video_ts = getattr(self.transformer, "image_conditioning", False) and (
+            image_cond or getattr(self, "_t2v_per_token", False)
+        )
         trace_key = self._trace_variant_key(trace_key, needs_video_ts)
         self._assert_trace_family_warmed(trace_key, traced)
         logger.info(f"  conditioning path: {'per-token' if needs_video_ts else 'scalar'} (trace family {trace_key})")
@@ -1889,6 +1908,7 @@ class LTXDistilledPipeline(LTXPipeline):
                 and self._trace_euler_tail
                 and traced
                 and not image_cond
+                and not needs_video_ts
                 and os.environ.get("LTX_DEBUG_STATS", "0") != "1"
             )
             if trace_euler:
@@ -2020,6 +2040,9 @@ class LTXDistilledPipeline(LTXPipeline):
         mesh keeps the host round-trip unless ``LTX_DEVICE_RESIDENT=1`` forces the device path, and
         ``LTX_DEVICE_RESIDENT=0`` restores the host round-trip everywhere."""
         if images:
+            return False
+        # The traced transition reads the scalar s1 family, which LTX_T2V_PER_TOKEN=1 never builds.
+        if getattr(self, "_t2v_per_token", False):
             return False
         flag = os.environ.get("LTX_DEVICE_RESIDENT")
         if flag is not None:
