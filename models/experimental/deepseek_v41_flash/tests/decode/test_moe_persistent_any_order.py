@@ -21,10 +21,16 @@ requesters above it. ``ROWS`` 1 is the one-row request, 4 the DSpark verify bloc
 
 ``MOE_ANY_ORDER_ROWS`` (comma-separated mesh rows, default ``2,3,4``) picks the requesters' rows, e.g. ``0,1,2,3,4``
 for five, the five-instance layout.
+
+The mixed-rows tests (one launch for 4-row blocks serving one-row requests too) run one-row requests natively by
+default -- the plain row on the wire, 1x32 tiles through the op -- and padded into a block's row 0 with
+``DEEPSEEK_V41_MOE_NATIVE_ONE_ROW=0`` (read once per process; the A/B of ``test_moe_persistent_mixed_rows_perf``).
 """
 
+import gc
 import os
 import random
+import time
 
 import pytest
 import torch
@@ -37,6 +43,7 @@ from models.experimental.deepseek_v41_flash.tests.decode.test_moe_persistent imp
     PARENT_MESH,
     PCC,
     REQUEST_SUBMESH,
+    STEPS,
     _load_layers,
     _pcc,
     _reference,
@@ -44,6 +51,7 @@ from models.experimental.deepseek_v41_flash.tests.decode.test_moe_persistent imp
 )
 from models.experimental.deepseek_v41_flash.tt.config import DEFAULT_MODEL_DIR, load_config
 from models.experimental.deepseek_v41_flash.tt.decode.persistent_moe import (
+    NATIVE_ONE_ROW,
     PersistentMoE,
     default_socket_core,
     untile_rows,
@@ -175,8 +183,10 @@ def test_moe_persistent_any_order(mesh_device, rows):
 def test_moe_persistent_mixed_rows(mesh_device):
     """One launch serving one-row and 4-row requests together (``PersistentMoE(rows=1, block_rows=4)``, mixed): every
     requester sends an uneven, shuffled run of requests, each one row or a 4-row block at random. Each output must
-    match the same request run alone bit for bit, and torch. A one-row request rides the block's row 0 (its other rows
-    unused), so it also checks that no other row leaks into it."""
+    match the same request run alone bit for bit, and torch. A one-row request runs natively (1x32 tiles through the
+    op, switching tile shapes with the 4-row ones around it; ``DEEPSEEK_V41_MOE_NATIVE_ONE_ROW=0``: it rides the
+    block's row 0, its other rows unused), so it also checks that neither the shape switches nor another row leak
+    into it."""
     if os.environ.get("TT_FE_FIXED_ORDER") == "1":
         pytest.skip("TT_FE_FIXED_ORDER=1 takes the requesters in strict turn, which this test's uneven counts hang")
     moe_mesh, request_meshes, config, socket_core, single_senders = _setup(mesh_device)
@@ -187,7 +197,10 @@ def test_moe_persistent_mixed_rows(mesh_device):
     rng = random.Random(1)
     # Each request one row (its block's row 0) or the whole block.
     rows_of = {(j, i): rng.choice((1, block)) for j, mine in enumerate(requests) for i in range(len(mine))}
-    logger.info(f"{num_requesters} requesters, rows per request {rows_of}")
+    logger.info(
+        f"{num_requesters} requesters, one-row requests {'native' if NATIVE_ONE_ROW else 'padded'}, rows per request "
+        f"{rows_of}"
+    )
 
     moe_op = PersistentMoE(
         moe_mesh, request_meshes, moes, socket_core, socket_core, single_senders, rows=1, block_rows=block
@@ -235,3 +248,111 @@ def test_moe_persistent_mixed_rows(mesh_device):
             )
     logger.info("\n" + "\n".join(report))
     assert not failed, "a mixed-rows request differs alone vs together, or is below PCC:\n" + "\n".join(report)
+
+
+@pytest.mark.skipif(_snapshot() is None, reason=f"V4.1-Flash config not found under {DEFAULT_MODEL_DIR}")
+@pytest.mark.timeout(7200)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY, "trace_region_size": 32 << 20}],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_device", [PARENT_MESH], indirect=True, ids=["8x4"])
+@torch.no_grad()
+def test_moe_persistent_mixed_rows_perf(mesh_device):
+    """Per-request latency on the mixed server (one launch for 4-row blocks, ``PersistentMoE(rows=1,
+    block_rows=4)``): one-row requests, 4-row requests, and the two alternating, with 1 requester and then all of
+    them, each (requester, layer, rows) request traced once and replayed back to back with no host I/O (device only).
+    The one-row figure is the native mode's by default; run again with ``DEEPSEEK_V41_MOE_NATIVE_ONE_ROW=0`` for the
+    padded mode's (the A/B).
+
+    ``MOE_PERF_WARMUP`` / ``MOE_PERF_STEPS`` override the step counts, ``MOE_MIXED_REQUESTERS`` (e.g. ``1``) the
+    requester counts. Each traced request's output must match its eager run's bit for bit."""
+    moe_mesh, request_meshes, config, socket_core, single_senders = _setup(mesh_device)
+    layers, moes = _load_layers(moe_mesh, config)
+    hidden = config.hidden_size
+    block = 4
+    warmup = int(os.environ.get("MOE_PERF_WARMUP", 20))
+    steps = int(os.environ.get("MOE_PERF_STEPS", 200))
+    requester_counts = [int(n) for n in os.environ.get("MOE_MIXED_REQUESTERS", f"1,{len(request_meshes)}").split(",")]
+    order = [STEPS[i % len(STEPS)] for i in range(warmup + steps)]
+    g = torch.Generator().manual_seed(2)
+    data = {}
+    for layer in sorted(set(STEPS)):
+        rows = torch.randn(block, hidden, generator=g)
+        data[layer] = (rows / rows.norm(dim=-1, keepdim=True) * hidden**0.5).to(torch.bfloat16).float()
+    mode = "native" if NATIVE_ONE_ROW else "padded"
+    # Per phase, the rows of request i.
+    phases = {
+        "1-row": lambda i: 1,
+        f"{block}-row": lambda i: block,
+        "alternating": lambda i: 1 if i % 2 == 0 else block,
+    }
+    results = []
+    for num_requesters in requester_counts:
+        meshes = request_meshes[-num_requesters:]
+        moe_op = PersistentMoE(
+            moe_mesh,
+            meshes,
+            moes,
+            socket_core,
+            socket_core,
+            single_senders[-num_requesters:],
+            rows=1,
+            block_rows=block,
+        )
+        assert moe_op.mixed, "the mixed-rows server is off (DEEPSEEK_V41_MOE_MIXED_ROWS=0?)"
+        mismatched = []
+        inputs, tids, trace_outs, eager = {}, {}, {}, {}
+        try:
+            keys = {(i % num_requesters, layer, rows) for i, layer in enumerate(order) for rows in (1, block)}
+            # The eager reference of every (requester, layer, rows) request, then its trace.
+            for j, layer, rows in sorted(keys):
+                moe_op.use_rows(rows)
+                tensor = moe_op.request_input(j)
+                moe_op.upload(j, data[layer][:rows], tensor)
+                out = moe_op.request(j, layer, tensor)
+                eager[j, layer, rows] = ttnn.to_torch(ttnn.get_device_tensors(out)[0]).reshape(-1)
+                ttnn.deallocate(out)
+                inputs[j, layer, rows] = tensor
+            for j, layer, rows in sorted(keys):
+                moe_op.use_rows(rows)
+                tids[j, layer, rows] = ttnn.begin_trace_capture(meshes[j], cq_id=0)
+                trace_outs[j, layer, rows] = moe_op.request(j, layer, inputs[j, layer, rows])
+                ttnn.end_trace_capture(meshes[j], tids[j, layer, rows], cq_id=0)
+            for mesh in meshes:
+                ttnn.synchronize_device(mesh)
+
+            def replay(indices, rows_of):
+                for i in indices:
+                    j = i % num_requesters
+                    ttnn.execute_trace(meshes[j], tids[j, order[i], rows_of(i)], cq_id=0, blocking=False)
+                for mesh in meshes:
+                    ttnn.synchronize_device(mesh)
+
+            for phase, rows_of in phases.items():
+                replay(range(warmup), rows_of)
+                start = time.perf_counter()
+                replay(range(warmup, len(order)), rows_of)
+                per_request = (time.perf_counter() - start) / steps
+                results.append(
+                    f"{phase:<12} requests, one-row {mode}, {num_requesters} req: traced, device only "
+                    f"{per_request * 1e6:8.1f} us/request"
+                )
+            for key, out in trace_outs.items():
+                copies = PersistentMoE.rows_of(out)
+                mismatched += [(*key, c) for c, copy in enumerate(copies) if not torch.equal(copy, eager[key])]
+            for key, tid in tids.items():
+                ttnn.release_trace(meshes[key[0]], tid)
+            for t in list(trace_outs.values()) + list(inputs.values()):
+                ttnn.deallocate(t)
+        finally:
+            moe_op.stop()
+        assert (
+            not mismatched
+        ), f"{num_requesters} req: traced (requester, layer, rows, chip) {mismatched} differ from eager"
+        # PersistentMoE's relaunch closure holds a reference cycle: collect it so its L1 is free for the next one.
+        del moe_op
+        gc.collect()
+        ttnn.synchronize_device(moe_mesh)
+    logger.info(f"MoE TP12 mixed server ({block}-row launch), layers interleaved {STEPS}:\n" + "\n".join(results))

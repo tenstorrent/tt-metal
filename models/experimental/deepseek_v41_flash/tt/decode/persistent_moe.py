@@ -62,6 +62,10 @@ ROUTER_L1_WITH_BLOCKS = False
 FUSE_HC = os.environ.get("DEEPSEEK_V41_MOE_FUSE_HC", "1") not in ("0", "", "false", "False")
 # A server with a block mode launched once for blocks, serving one-row requests too (see PersistentMoE).
 MIXED_ROWS = os.environ.get("DEEPSEEK_V41_MOE_MIXED_ROWS", "1") not in ("0", "", "false", "False")
+# On such a server a one-row request runs natively -- its plain row on the wire, 1x32 tiles through every kernel of the
+# op -- rather than padded into a block's row 0 (DEEPSEEK_V41_MOE_NATIVE_ONE_ROW=0). Read by the ops in C++, once per
+# process; mirrored here for logging.
+NATIVE_ONE_ROW = os.environ.get("DEEPSEEK_V41_MOE_NATIVE_ONE_ROW", "1") != "0"
 ROUTER_PART_CORES = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 8), ttnn.CoreCoord(ROUTER_PARTS - 1, 8))])
 
 
@@ -497,9 +501,11 @@ class PersistentMoE:
     carry a tile per row, ``[1, rows, hc, 1]`` and ``[1, rows, hc, hc]``.
 
     With ``block_rows`` too, the server is launched once for blocks and takes either kind of request
-    (:data:`MIXED_ROWS`, on by default): a one-row request goes on the requester's block socket, its row in row 0 of
-    the block's tiles and the page's header saying it is one row (``persistent_moe_request``), and its partial comes
-    back as one row into the front of the requester's block partials buffer. :meth:`use_rows` then only picks the
+    (:data:`MIXED_ROWS`, on by default): a one-row request goes on the requester's block socket, the page's header
+    saying it is one row (``persistent_moe_request``), and its partial comes back as one row into the front of the
+    requester's block partials buffer. The op runs it natively (:data:`NATIVE_ONE_ROW`): the page carries the plain
+    row and every kernel takes 1x32 tiles for that request; with ``DEEPSEEK_V41_MOE_NATIVE_ONE_ROW=0`` the row rides
+    row 0 of a block's tiles instead (the other rows computed and dropped). :meth:`use_rows` then only picks the
     requester-side request rows -- no relaunch -- so requesters may mix one-row and block requests freely, and no
     one-row sockets or partials are built. ``DEEPSEEK_V41_MOE_MIXED_ROWS=0`` keeps one launch per mode instead (a
     switch stops and relaunches the kernels).
