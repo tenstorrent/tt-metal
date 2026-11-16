@@ -234,7 +234,7 @@ inline std::uint32_t _get_dest_buffer_base_()
     return dest_register_offset;
 }
 
-inline constexpr static std::uint32_t masked_data_format(std::uint32_t data_format)
+inline constexpr std::uint32_t masked_data_format(std::uint32_t data_format)
 {
     return data_format & DATA_FORMAT_CONFIG_MASK;
 }
