@@ -13,7 +13,10 @@
 //   cb_g:   (q / k) the packed gamma and the packed, rotated, sign-folded gamma (host-built, one DRAM page each);
 //   cb_scaler: the reduce scaler (1.0 in row 0 of every face).
 //
-// runtime args: [x_addr, first_tile, cos_addr, sin_addr, g_addr, g_page]
+// from_table: cos / sin come straight from the row-major [context, D] RoPE tables: the decode position (element 0 of
+// the [1, 32] UINT32 position tensor) selects one row (page) of each; packed row r = bytes [64 r, 64 r + 64).
+//
+// runtime args: [x_addr, first_tile, cos_addr, sin_addr, g_addr, g_page, pos_addr]
 
 #include <stdint.h>
 
@@ -38,6 +41,8 @@ void kernel_main() {
     constexpr auto c_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
     constexpr auto s_args = TensorAccessorArgs<c_args.next_compile_time_args_offset()>();
     constexpr auto g_args = TensorAccessorArgs<s_args.next_compile_time_args_offset()>();
+    constexpr uint32_t from_table = get_compile_time_arg_val(g_args.next_compile_time_args_offset());
+    constexpr auto p_args = TensorAccessorArgs<g_args.next_compile_time_args_offset() + 1>();
     constexpr uint32_t page = 2048, face = 512;
     static_assert(R <= 16 && R % 2 == 0, "head_dim <= 512, a multiple of 64");
 
@@ -75,20 +80,47 @@ void kernel_main() {
         const auto s_g = TensorAccessor(g_args, g_addr, page);
         noc_async_read(s_g.get_noc_addr(2 * g_page), get_write_ptr(cb_g), page);
         noc_async_read(s_g.get_noc_addr(2 * g_page + 1), get_write_ptr(cb_g) + page, page);
-        // cos / sin rows: rows 0-1 of faces 0 / 1 (64 B, aligned) of each of the R source tiles into the stage
         const uint32_t stage = get_write_ptr(cb_stage);
-        const auto s_c = TensorAccessor(c_args, cos_addr, page);
-        const auto s_s = TensorAccessor(s_args, sin_addr, page);
-        for (uint32_t r = 0; r < R; ++r) {
-            noc_async_read(s_c.get_noc_addr(r, 0), stage + 256 * r, 64);
-            noc_async_read(s_c.get_noc_addr(r, face), stage + 256 * r + 64, 64);
-            noc_async_read(s_s.get_noc_addr(r, 0), stage + 256 * r + 128, 64);
-            noc_async_read(s_s.get_noc_addr(r, face), stage + 256 * r + 192, 64);
+        if constexpr (from_table) {
+            // position, then one row of each table (64 B aligned stage offsets)
+            noc_async_read(TensorAccessor(p_args, get_arg_val<uint32_t>(6), 128).get_noc_addr(0), stage, 64);
+            noc_async_read_barrier();
+            const uint32_t pos = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stage)[0];
+            noc_async_read(TensorAccessor(c_args, cos_addr, 64 * R).get_noc_addr(pos), stage + 64, 64 * R);
+            noc_async_read(TensorAccessor(s_args, sin_addr, 64 * R).get_noc_addr(pos), stage + 64 + 64 * R, 64 * R);
+        } else {
+            // cos / sin rows: rows 0-1 of faces 0 / 1 (64 B, aligned) of each of the R source tiles into the stage
+            const auto s_c = TensorAccessor(c_args, cos_addr, page);
+            const auto s_s = TensorAccessor(s_args, sin_addr, page);
+            for (uint32_t r = 0; r < R; ++r) {
+                noc_async_read(s_c.get_noc_addr(r, 0), stage + 256 * r, 64);
+                noc_async_read(s_c.get_noc_addr(r, face), stage + 256 * r + 64, 64);
+                noc_async_read(s_s.get_noc_addr(r, 0), stage + 256 * r + 128, 64);
+                noc_async_read(s_s.get_noc_addr(r, face), stage + 256 * r + 192, 64);
+            }
         }
         gather(get_write_ptr(cb_xr), true);
         noc_async_read_barrier();
         const uint32_t cs = get_write_ptr(cb_cs);
-        for (uint32_t r = 0; r < R; ++r) {
+        if constexpr (from_table) {
+            for (uint32_t r = 0; r < R; ++r) {
+                volatile tt_l1_ptr uint32_t* c = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stage + 64 + 64 * r);
+                volatile tt_l1_ptr uint32_t* sn =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stage + 64 + 64 * R + 64 * r);
+                volatile tt_l1_ptr uint32_t* c0 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cs + 32 * r);
+                volatile tt_l1_ptr uint32_t* c1 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cs + face + 32 * r);
+                volatile tt_l1_ptr uint32_t* s0 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cs + page + 32 * r);
+                volatile tt_l1_ptr uint32_t* s1 =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cs + page + face + 32 * r);
+                for (uint32_t w = 0; w < 8; ++w) {
+                    c0[w] = c[w];
+                    c1[w] = c[8 + w];
+                    s0[w] = sn[w];
+                    s1[w] = sn[8 + w];
+                }
+            }
+        }
+        for (uint32_t r = 0; r < (from_table ? 0 : R); ++r) {
             volatile tt_l1_ptr uint32_t* src = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stage + 256 * r);
             volatile tt_l1_ptr uint32_t* c0 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cs + 32 * r);
             volatile tt_l1_ptr uint32_t* c1 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cs + face + 32 * r);

@@ -67,9 +67,11 @@ class HeadsB1:
         # unit u: tensor (0 q, 1 k, 2 v), head
         self.units = [(0, h) for h in range(hq)] + [(1, h) for h in range(hkv)] + [(2, h) for h in range(hkv)]
 
-    def __call__(self, x, cos, sin):
+    def __call__(self, x, cos, sin, position=None):
         """x: the QKV projection output [1, 1, 1, (hq + 2 hkv) D] BF16 TILE, L1; cos / sin: the position-gathered
-        [1, 1, 32, D] rows (row 0). Returns (q, k, v)."""
+        [1, 1, 32, D] rows (row 0), or (position given: the [1, 32] UINT32 decode positions) the row-major
+        [context, D] RoPE tables, read at the position. Returns (q, k, v)."""
+        from_table = position is not None
         D, R, mesh = self.D, self.R, self.mesh
         assert x.memory_config().buffer_type == ttnn.BufferType.L1 and x.dtype == ttnn.bfloat16
         outs = [
@@ -95,7 +97,7 @@ class HeadsB1:
             cb(cb_cs, 2),
             cb(cb_g, 2),
             cb(cb_scaler, 1),
-            cb(cb_stage, 1, page=256 * R),
+            cb(cb_stage, 1, page=max(256 * R, 64 + 128 * R)),
             cb(cb_sq, 1, ttnn.float32, 4096),
             cb(cb_rs, 1, ttnn.float32, 4096),
             cb(cb_t, 2, ttnn.float32, 4096),
@@ -104,6 +106,7 @@ class HeadsB1:
         acc = []
         for tsr in (x, cos, sin, self.gammas):
             acc += ttnn.TensorAccessorArgs(tsr).get_compile_time_args()
+        acc += [int(from_table)] + ttnn.TensorAccessorArgs(position if from_table else x).get_compile_time_args()
         reader_rts = {True: ttnn.RuntimeArgs(), False: ttnn.RuntimeArgs()}
         writer_rts = {True: ttnn.RuntimeArgs(), False: ttnn.RuntimeArgs()}
         heads_before = (0, self.hq, self.hq + self.hkv)
@@ -117,6 +120,7 @@ class HeadsB1:
                 sin.buffer_address(),
                 self.gammas.buffer_address(),
                 t if t < 2 else 0,
+                position.buffer_address() if from_table else 0,
             ]
             writer_rt[core.x][core.y] = [targets[t].x, targets[t].y, outs[t].buffer_address(), h]
         kernels = []
@@ -155,6 +159,7 @@ class HeadsB1:
                 ),
             ]
         ttnn.generic_op(
-            [x, cos, sin, self.gammas] + outs, ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs)
+            [x, cos, sin, self.gammas] + ([position] if from_table else []) + outs,
+            ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs),
         )
         return tuple(outs)
