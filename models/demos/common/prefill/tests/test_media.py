@@ -22,6 +22,14 @@ def u16(t):
     return t.view(torch.int16).numpy().view("uint16")
 
 
+def table_of(height, runs):
+    """The [SP, height, HIDDEN] table MediaPartials writes the runs into, row 0 zeros."""
+    table = torch.zeros(SP, height, HIDDEN, dtype=torch.bfloat16)
+    for sp_row, slot, rows in runs:
+        table[sp_row, slot : slot + len(rows)] = torch.from_numpy(rows.view("int16")).view(torch.bfloat16)
+    return table
+
+
 def expected(chunks, refs, embs):
     """Rows and mask from the token layout: the cell holding (chunk k, position p) gets p's media row."""
     cells = pack_forward_tokens(
@@ -91,7 +99,8 @@ def test_partials_sum_to_the_image_rows(chunks, refs):
     """D: summing every SP row's partial reproduces build_injection's rows at the image positions."""
     embs = {r.media_key: torch.randn(r.num_tokens, HIDDEN).to(torch.bfloat16) for r in refs}
     rows_of = lambda r: u16(embs[r.media_key])
-    table, lookup, is_img = build_media_partials(refs, chunks, rows_of, SP, LOCAL)
+    height, lookup, is_img, runs = build_media_partials(refs, chunks, rows_of, SP, LOCAL)
+    table = table_of(height, runs)
     want_rows, want_mask = build_injection(refs, chunks, rows_of, SP, LOCAL)
 
     summed = torch.zeros(lookup.shape[1], HIDDEN, dtype=torch.bfloat16)  # s_total, not one chunk
@@ -109,27 +118,29 @@ def test_partials_are_contiguous_blocks_per_sp_row():
     bounds the table height; rows past the last block take none."""
     chunks, refs = [PrefillChunk(0, 0, C)], [ref(0, 0, SP * 4, 1)]
     embs = {refs[0].media_key: torch.randn(refs[0].num_tokens, HIDDEN).to(torch.bfloat16)}
-    table, lookup, _ = build_media_partials(refs, chunks, lambda r: u16(embs[r.media_key]), SP, LOCAL)
+    height, lookup, _, _ = build_media_partials(refs, chunks, lambda r: u16(embs[r.media_key]), SP, LOCAL)
     for r in range(SP):
         slots = sorted(lookup[r][lookup[r] > 0].tolist())
         assert slots == list(range(1, len(slots) + 1)), (r, slots)
-    assert max((lookup[r] > 0).sum().item() for r in range(SP)) + 1 <= table.shape[1]
+    assert max((lookup[r] > 0).sum().item() for r in range(SP)) + 1 <= height
 
 
 def test_partials_text_only():
     assert build_media_partials([], [PrefillChunk(0, 0, C)], None, SP, LOCAL) is None
 
 
-@pytest.mark.parametrize("rows,want", [(1, 32), (32, 32), (33, 64), (73, 128), (288, 512), (1281, 2048)])
-def test_table_height_snaps_to_powers_of_two(rows, want):
+@pytest.mark.parametrize(
+    "rows,want", [(1, 32), (32, 32), (33, 64), (73, 96), (289, 384), (577, 608), (1153, 1216), (2561, 3008)]
+)
+def test_table_height_snaps_to_the_ladder(rows, want):
     assert table_height(rows) == want
 
 
-def test_table_is_bucketed_and_row_zero_stays_zero():
-    """Row 0 is the "not this row's" sentinel and is read, so it must stay zero. Rows above the slots in
-    use are not read — lookup never points at them — so the staging buffer may leave them stale."""
+def test_table_is_bucketed_and_row_zero_is_never_written():
+    """Row 0 is the "not this row's" sentinel and is read, so no run may write it. Rows above the slots in
+    use are not read — lookup never points at them — so the persistent host table may leave them stale."""
     chunks, refs = [PrefillChunk(0, 0, C)], [ref(0, 10, 40, 1)]
     embs = {refs[0].media_key: torch.randn(refs[0].num_tokens, HIDDEN).to(torch.bfloat16)}
-    table, lookup, _ = build_media_partials(refs, chunks, lambda r: u16(embs[r.media_key]), SP, LOCAL)
-    assert table.shape[1] == table_height(int(lookup.max()) + 1)
-    assert not table[:, 0].any(), "the sentinel row must stay zero"
+    height, lookup, _, runs = build_media_partials(refs, chunks, lambda r: u16(embs[r.media_key]), SP, LOCAL)
+    assert height == table_height(int(lookup.max()) + 1)
+    assert min(slot for _, slot, _ in runs) == 1, "the sentinel row must not be written"

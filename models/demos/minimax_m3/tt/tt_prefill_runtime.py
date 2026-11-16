@@ -41,7 +41,7 @@ import ttnn
 from models.common.multimedia_store.reader import FetchRequest
 from models.common.utils import block_cyclic_reorder
 from models.demos.common.prefill.chunk_layout import pack_forward_tokens
-from models.demos.common.prefill.media import TILE_HEIGHT, build_injection, build_media_partials
+from models.demos.common.prefill.media import TILE_HEIGHT, build_injection, build_media_partials, next_table_height
 from models.demos.common.prefill.prefill_chunk import MediaRef, PrefillChunk, validate_chunks
 from models.demos.minimax_m3.tt.media_injection import MediaPartials, inject_media_embeddings
 from models.demos.minimax_m3.tt.residual import activation_mapper
@@ -370,9 +370,9 @@ class TtPrefillRuntime:
         """Compile the splice for every table height a forward can reach.
 
         The media hook is a lookup into the table and a where, so a height needs one embedding call
-        rather than a prefill forward. Heights double from one tile up to the largest an image fitting
-        the chunk can name, so nothing compiles while serving whatever the image count. The warming
-        image for a height is the smallest that lands in it. StubEmbeddingReader stands in for the
+        rather than a prefill forward. Heights climb table_height's ladder from one tile up to the largest
+        an image fitting the chunk can name, so nothing compiles while serving whatever the image count. The
+        warming image for a height is the smallest that lands in it. StubEmbeddingReader stands in for the
         store, which need not be reachable at compile time."""
         from models.demos.common.prefill.media_stub import stub_media_key
         from models.demos.minimax_m3.vision.stub_reader import StubEmbeddingReader
@@ -383,9 +383,9 @@ class TtPrefillRuntime:
         real_reader = self.media_embedding_reader
         self.media_embedding_reader = StubEmbeddingReader(self.hf_config.hidden_size)
         try:
-            height, warmed = TILE_HEIGHT, []
+            height, below, warmed = TILE_HEIGHT, 0, []
             while True:
-                n = 1 if height == TILE_HEIGHT else sp * (height // 2)
+                n = max(1, sp * below)
                 if n > chunk:
                     break
                 refs = [MediaRef(0, 0, n, stub_media_key(n, 0))]
@@ -394,7 +394,7 @@ class TtPrefillRuntime:
                 ttnn.deallocate(x)
                 ttnn.deallocate(inp)
                 warmed.append(height)
-                height *= 2
+                height, below = next_table_height(height), height
             logger.info(f"TtPrefillRuntime.compile() — media table heights warmed: {warmed}")
         finally:
             self.media_embedding_reader = real_reader
@@ -411,20 +411,19 @@ class TtPrefillRuntime:
         )
         if packed is None:
             return None
-        table, lookup, is_img = packed
-        sp, height, hidden = table.shape
+        height, lookup, is_img, runs = packed
         buffers = self._media_partials_cache
         if buffers is None:
             buffers = self._media_partials_cache = MediaPartials(
                 self.mesh_device,
-                sp=sp,
-                hidden=hidden,
+                sp=cfg.sp_factor,
+                hidden=self.hf_config.hidden_size,
                 s_total=lookup.shape[1],
                 mesh_shape=cfg.mesh_shape,
                 sp_axis=cfg.sp_axis,
                 tp_axis=cfg.tp_axis,
             )
-        buffers.refill(table, lookup, is_img)
+        buffers.refill(height, runs, lookup, is_img)
         return buffers
 
     def _splice_media(self, x_embd: ttnn.Tensor, chunks: list, media_refs: list) -> ttnn.Tensor:

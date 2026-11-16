@@ -3,6 +3,9 @@
 
 """Stage-0 image-embedding injection: overwrite the token embeddings at a chunk's image positions."""
 
+import itertools
+
+import numpy as np
 import torch
 
 import ttnn
@@ -70,9 +73,14 @@ class MediaPartials:
 
     table [h, hidden/tp] per chip (row 0 zeros), lookup [1,1,s_total] per chip (0 = not this SP row's),
     is_img [1,1,s_total,1] replicated. lookup and is_img are chunk-shaped and allocated once; only the
-    table tracks the image count, and build_media_partials snaps its height to a power of two, so a
+    table tracks the image count, and build_media_partials snaps its height to a few buckets, so a
     deployment keeps a handful. All are refilled with copy_host_to_device_tensor, so a forward pays no
     host tilize.
+
+    Each table height also keeps its host tensor, laid out [sp, tp*h, hidden/tp] so every chip's shard is
+    one contiguous host buffer. refill copies the media rows straight into those buffers, so a forward
+    builds no host tensor. Reusing them is safe: copy_host_to_device_tensor either copies the shards into
+    the command queue before it returns or, on its pinned path, blocks until the transfer is done.
 
     The table goes up row-major because ttnn.embedding requires a ROW_MAJOR weight and converts a tiled
     one back on every call (ttnn/cpp/ttnn/operations/embedding/embedding.cpp). is_img goes up row-major
@@ -87,10 +95,11 @@ class MediaPartials:
         self.sp, self.hidden, self.s_total = sp, hidden, s_total
         self._mesh_device = mesh_device
         sp_tp, sp_only = [None, None], [None, None]
-        sp_tp[sp_axis], sp_tp[tp_axis] = 0, 2
+        sp_tp[sp_axis], sp_tp[tp_axis] = 0, 1
         sp_only[sp_axis] = 0
         self._sp_tp, self._sp_only, self._replicated = tuple(sp_tp), tuple(sp_only), (None, None)
         self._mapper = lambda dims: ttnn.ShardTensor2dMesh(mesh_device, dims=dims, mesh_shape=mesh_shape)
+        self._mesh_shape, self._axes, self.tp = tuple(mesh_shape), (sp_axis, tp_axis), mesh_shape[tp_axis]
 
         self._tables = {}
         self.table = None
@@ -115,28 +124,32 @@ class MediaPartials:
     def _host(self, t, dtype, layout, dims):
         return ttnn.from_torch(t, dtype=dtype, layout=layout, mesh_mapper=self._mapper(dims))
 
-    def table_for(self, height: int) -> ttnn.Tensor:
-        """The table of this height, allocated on first use. compile() warms every height a deployment
-        can reach, so serving finds them already here."""
-        table = self._tables.get(height)
-        if table is None:
-            table = self._tables[height] = self._to_device(
-                torch.zeros(self.sp, height, self.hidden, dtype=torch.bfloat16),
-                ttnn.bfloat16,
-                ttnn.ROW_MAJOR_LAYOUT,
-                self._sp_tp,
-            )
-        return table
+    def table_for(self, height: int) -> tuple:
+        """(device table, host table, {(sp_row, tp_col): [h, hidden/tp] view of that chip's host shard}) of
+        this height, allocated on first use. compile() warms every height a deployment can reach, so
+        serving finds them already here. Row 0 of each shard stays zero: runs start at slot 1."""
+        entry = self._tables.get(height)
+        if entry is None:
+            zeros = torch.zeros(self.sp, self.tp * height, self.hidden // self.tp, dtype=torch.bfloat16)
+            host = self._host(zeros, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, self._sp_tp)
+            shards = host.host_buffer()
+            views = {}
+            for coord in itertools.product(*map(range, self._mesh_shape)):
+                shard = torch.from_dlpack(shards.get_shard(ttnn.MeshCoordinate(*coord)))
+                views[coord[self._axes[0]], coord[self._axes[1]]] = shard.view(torch.int16).view(height, -1).numpy()
+            device = self._to_device(zeros, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, self._sp_tp)
+            entry = self._tables[height] = (device, host, views)
+        return entry
 
-    def refill(self, table: torch.Tensor, lookup: torch.Tensor, is_img: torch.Tensor) -> None:
-        sp, height, hidden = table.shape
-        assert (sp, hidden) == (self.sp, self.hidden), f"{tuple(table.shape)} against sp={self.sp} hidden={self.hidden}"
-        self.table = self.table_for(height)
+    def refill(self, height: int, runs: list, lookup: torch.Tensor, is_img: torch.Tensor) -> None:
+        self.table, host, views = self.table_for(height)
+        cols = self.hidden // self.tp
+        for sp_row, slot, rows in runs:
+            for t in range(self.tp):
+                views[sp_row, t][slot : slot + len(rows)] = rows[:, t * cols : (t + 1) * cols].view(np.int16)
+        ttnn.copy_host_to_device_tensor(host, self.table)
         ttnn.copy_host_to_device_tensor(
-            self._host(table, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, self._sp_tp), self.table
-        )
-        ttnn.copy_host_to_device_tensor(
-            self._host(lookup.reshape(sp, 1, -1), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, self._sp_only), self.lookup
+            self._host(lookup.reshape(self.sp, 1, -1), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, self._sp_only), self.lookup
         )
         ttnn.copy_host_to_device_tensor(
             self._host(

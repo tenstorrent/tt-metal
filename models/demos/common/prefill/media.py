@@ -55,8 +55,7 @@ def build_injection(
 
 TILE_HEIGHT = 32
 
-# Host staging, reused across forwards. s_total is fixed for a deployment and table_height snaps to a
-# power of two, so these shapes repeat and a forward allocates none of them.
+# Host staging for lookup and is_img, reused across forwards: s_total is fixed for a deployment.
 _STAGING: dict = {}
 
 
@@ -67,15 +66,19 @@ def _staged(shape: tuple, dtype) -> torch.Tensor:
     return buf
 
 
+def next_table_height(height: int) -> int:
+    return -(-int(height * 1.25) // TILE_HEIGHT) * TILE_HEIGHT
+
+
 def table_height(rows: int) -> int:
-    """Snap a partial table's height to a power of two, at least one tile.
+    """Snap a partial table's height up a ~1.25x ladder of whole tiles: 32, 64, 96, 128, 160, 224, ...
 
     k moves with how many images a forward names, so an exact height would compile a new program for
-    every image count and could never be preallocated. Snapping leaves a handful of shapes: the program
-    cache hits, and compile() can warm each one so trace capture has somewhere to put them."""
+    every image count and could never be preallocated. Snapping leaves a few shapes the program cache hits
+    and compile() can warm, while padding stays under ~25% of the bytes uploaded each forward."""
     height = TILE_HEIGHT
     while height < rows:
-        height *= 2
+        height = next_table_height(height)
     return height
 
 
@@ -85,9 +88,11 @@ def build_media_partials(
     rows_of: Callable[[MediaRef], np.ndarray],
     sp: int,
     chunk_local: int,
-) -> Optional[tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
-    """(table [sp, h, hidden] bf16, lookup [sp, s_total] uint32, is_img [s_total] bool), or None
-    without refs. h is table_height(k + 1): a power of two, so a forward reuses one of a few shapes.
+) -> Optional[tuple[int, torch.Tensor, torch.Tensor, list]]:
+    """(h, lookup [sp, s_total] uint32, is_img [s_total] bool, runs), or None without refs. h is
+    table_height(k + 1), so a forward reuses one of a few table shapes. Each run (sp_row, slot, rows) puts
+    rows, consecutive media rows viewed from rows_of, at table slots slot.. of that SP row; the caller
+    copies them straight into the table, so the media rows are copied once.
 
     For the 2D embedding's pre-reduce-scatter partials. Each image row is assigned to exactly one SP
     row, in contiguous blocks, so the reduce-scatter that already runs sums it into place: adding zeros
@@ -97,7 +102,7 @@ def build_media_partials(
     ``lookup`` and ``is_img`` are indexed by the all-gathered token order (chip-major, _positions), not
     by natural position: that is the order the lookup sees inside _forward_2d.
 
-    The three tensors are staging buffers kept per shape, so a caller must consume them before the next
+    lookup and is_img are staging buffers kept per shape, so a caller must consume them before the next
     call rather than hold them.
     """
     if not refs:
@@ -125,20 +130,20 @@ def build_media_partials(
     sp_row, slot = order // per_row, order % per_row + 1
 
     s_total = positions.numel()
-    hidden = rows_of(refs[0]).shape[1]
     height = table_height(int(slot.max()) + 1 if slot.numel() else 1)
-    table = _staged((sp, height, hidden), torch.bfloat16)
     lookup = _staged((sp, s_total), torch.int32)
     is_img = _staged((s_total,), torch.bool)
-    # lookup and is_img are read in full, so they are cleared; the table is not. Slots are 1 and up, so
-    # row 0 keeps the zeros it was allocated with, and the rows above this forward's slots hold the
-    # last forward's bytes — lookup never points at them, so they are never read.
     lookup.zero_()
     is_img.zero_()
     lookup[sp_row, flats] = slot.to(torch.int32)
     is_img[flats] = True
-    for j, ref in enumerate(refs):  # one gather per ref, not one per image row
-        m = ref_id == j
-        picked = np.ascontiguousarray(rows_of(ref)[row_in_ref[m].numpy()])
-        table[sp_row[m], slot[m]] = torch.from_numpy(picked).view(torch.bfloat16)
-    return table, lookup, is_img
+
+    # A run breaks where the SP row or the ref changes, or the media rows stop being consecutive.
+    brk = torch.ones(flats.numel(), dtype=torch.bool)
+    brk[1:] = (ref_id[1:] != ref_id[:-1]) | (sp_row[1:] != sp_row[:-1]) | (row_in_ref[1:] != row_in_ref[:-1] + 1)
+    starts = brk.nonzero().flatten().tolist()
+    runs = []
+    for a, b in zip(starts, starts[1:] + [flats.numel()]):
+        first = int(row_in_ref[a])
+        runs.append((int(sp_row[a]), int(slot[a]), rows_of(refs[int(ref_id[a])])[first : first + b - a]))
+    return height, lookup, is_img, runs
