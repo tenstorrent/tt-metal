@@ -130,6 +130,14 @@ PLACEMENTS = [
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
         id="4x4-sp1",
     ),
+    pytest.param(
+        (4, 4),
+        torus_xy_device_params(l1_small_size=KimiK3Config.L1_SMALL_SIZE),
+        1,
+        0,
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+        id="xy4-sp1",
+    ),
 ]
 # The full-Galaxy row alone, for the tests that reuse this file's helpers on 8x4 only.
 PLACEMENTS_8X4 = [p for p in PLACEMENTS if p.values[0] == (8, 4)]
