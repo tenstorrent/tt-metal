@@ -25,9 +25,10 @@ enum class QuantVariant : std::uint8_t { Quant, Requant, Dequant };
 // for |v| < 2^22:
 //     m = RNE(RNE_MAGIC + zp_hi + v) ,  t = RNE_MAGIC - zp_lo ,  bits(m) - bits(t) = RNE(v) + zp
 // zp_hi is a multiple of 4 near zp, so zp_lo = zp - zp_hi stays in [-2, 2] and adding zp_hi before
-// the rounding add does not change how a tie rounds. Exact for |zp| <= 2^24. Quant adds its zero
-// point before that round. Requant does the same with its input zero point, then adds the output
-// zero point afterwards, through this split.
+// the rounding add does not change how a tie rounds. Exact for |zp| <= 2^24. Quant puts its zero
+// point through this split, so it lands after the round: q = RNE(A * scale) + zp. Requant adds its
+// input zero point before the round and puts its output zero point through the split. Both match
+// the Blackhole contract, which the shared WH/BH golden pins at exact halves.
 //
 // The biased m is then clamped to [t - 128, t + 127] before the subtract, which is the full int8
 // range. Quasar's SFPSWAP writes both operands and mode 9 (VEC_MAX_MIN) is reserved, so both clamps
@@ -57,11 +58,12 @@ inline constexpr bool quant_unhandled_variant = false;
 // constants below are shared, so mixing ops means re-running the matching init.
 //   LREG0 = operand A / running value / result
 //   LREG1 = operand B (fp32 scale). Also scratch while an init builds the RNE constants.
-//   LREG2 = the fp32 zero point (quant / requant input zp, or dequant's negated zp)
+//   LREG2 = the fp32 zero point added before the round (requant's input zp, or dequant's
+//           negated zp). Quant's zero point rides the bias instead, so quant leaves this free.
 //   LREG3 = per-iteration scratch for the lower clamp (holds the min after SFPSWAP)
 //   LREG4 = lower clamp bound, copied into LREG3 every iteration
-//   LREG5 = RNE_MAGIC + out_zp_hi (0 for quant and for requant with no output zero point)
-//   LREG6 = -bits(t), built from quant's 0 or requant's output zero point
+//   LREG5 = RNE_MAGIC + zp_hi of whichever zero point the bias carries
+//   LREG6 = -bits(t), built from quant's zero point or requant's output zero point
 //   RG13  = upper clamp bound (programmable constant; SFPSWAP write-back is dropped)
 //
 // SIGN_MAGNITUDE_FORMAT selects the int32 representation in Dest. The default (false)
@@ -73,19 +75,19 @@ inline constexpr bool quant_unhandled_variant = false;
 // runtime-address loads and the store. Slots are non-overlapping and sized to the
 // longer of the two formats. Replay-bank 0's switch slot is 31, and these three
 // bodies stay below it. Counts, in emission order:
-//   QUANT   (2s-comp, 6) : SFPMAD(A*B+zp), SFPADD, <clamp>
-//   QUANT   (sign-m, 7) : SFPMAD(A*B+zp), SFPADD, <clamp>, SFPCAST(out)
+//   QUANT   (2s-comp, 5) : SFPMAD(A*B + bias), <clamp>
+//   QUANT   (sign-m, 6) : SFPMAD(A*B + bias), <clamp>, SFPCAST(out)
 //   REQUANT (2s-comp, 8): SFPCAST(in), SFPCAST(int->fp32), SFPMAD, SFPADD, <clamp>
 //   REQUANT (sign-m, 8): SFPCAST(int->fp32), SFPMAD, SFPADD, <clamp>, SFPCAST(out)
 //   DEQUANT (2s-comp, 4) : SFPCAST(in), SFPCAST(int->fp32), SFPMAD, SFPMUL
 //   DEQUANT (sign-m, 3)  : SFPCAST(int->fp32), SFPMAD, SFPMUL
 // <clamp> is 4 instructions: SFPMOV, SFPSWAP(hi), SFPSWAP(lo), SFPIADD.
-// The SFPMOV is independent of the preceding add, so it fills the TEN-4581 shadow a
+// The SFPMOV is independent of the arithmetic before it, so it fills the TEN-4581 shadow a
 // 2-cycle op would otherwise need before SFPSWAP. No NOP follows either swap:
 // SFPSWAP stalls the next SFPU op itself, same as gcd and max_pool_indices.
 constexpr std::uint32_t QUANT_REPLAY_SLOT = 0;
-constexpr std::uint32_t QUANT_REPLAY_LEN_2S_COMP = 6;
-constexpr std::uint32_t QUANT_REPLAY_LEN_SIGN_MAGN = 7;
+constexpr std::uint32_t QUANT_REPLAY_LEN_2S_COMP = 5;
+constexpr std::uint32_t QUANT_REPLAY_LEN_SIGN_MAGN = 6;
 constexpr std::uint32_t QUANT_REPLAY_LEN_MAX = QUANT_REPLAY_LEN_SIGN_MAGN;
 
 constexpr std::uint32_t REQUANT_REPLAY_SLOT = QUANT_REPLAY_SLOT + QUANT_REPLAY_LEN_MAX;
@@ -187,7 +189,7 @@ __attribute__((always_inline)) inline void _quant_clamp_body_() {
  * Streams the op's compute body into a replay buffer (NoExec: LREG0/LREG1 are undefined at init
  * time). The body is replayed per loop iteration by @ref quant_family. Op math (A = operand,
  * B = fp32 scale, zp = zero-point), with the integer result saturated to [-128, 127]:
- *   Quant   : out = round_to_nearest_even(A_fp32 * B + zp)
+ *   Quant   : out = round_to_nearest_even(A_fp32 * B) + zp
  *   Requant : out = round_to_nearest_even(int32_to_fp32(A) * B + zp) + out_zp
  *   Dequant : out = (int32_to_fp32(A) + zp) * B   -- caller passes bits of -zero_point
  *
@@ -201,17 +203,19 @@ __attribute__((always_inline)) inline void _quant_clamp_body_() {
  */
 template <QuantVariant OP, bool SIGN_MAGNITUDE_FORMAT = false>
 inline void quant_family_init(const std::uint32_t zero_point, const std::uint32_t out_zero_point = 0) {
-    _quant_load_imm32_(p_sfpu::LREG2, zero_point);
-
     if constexpr (OP == QuantVariant::Quant) {
-        // The zero point stays in LREG2 and is added before the round, so q = RNE(A*B + zp).
-        // The bias itself is built from 0 and ends up in LREG6.
-        _quant_load_imm32_(p_sfpu::LREG6, 0);
+        // The zero point is split into the bias, which puts it after the round: q = RNE(A*B) + zp.
+        // Nothing adds it before the round, so LREG2 goes unused.
+        _quant_load_imm32_(p_sfpu::LREG6, zero_point);
         _rne_clamp_init_<p_sfpu::LREG6>();
     } else if constexpr (OP == QuantVariant::Requant) {
-        // LREG2 stays the input zero point. The output zero point is what gets split into the bias.
+        // LREG2 is the input zero point, added before the round. The output zero point is what
+        // gets split into the bias.
+        _quant_load_imm32_(p_sfpu::LREG2, zero_point);
         _quant_load_imm32_(p_sfpu::LREG6, out_zero_point);
         _rne_clamp_init_<p_sfpu::LREG6>();
+    } else {
+        _quant_load_imm32_(p_sfpu::LREG2, zero_point);
     }
 
     constexpr std::uint32_t slot = quant_replay_slot<OP>();
@@ -227,10 +231,9 @@ inline void quant_family_init(const std::uint32_t zero_point, const std::uint32_
             TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG2, p_sfpu::LREG0, 0 /* mod1 */);
             TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG0, 0 /* mod1 */);
         } else if constexpr (OP == QuantVariant::Quant) {
-            // A*B + zp first, so the magic-constant add rounds the whole sum. Quasar's MAD is not a
-            // fused multiply-add, and folding the bias into it would round the unrounded product.
-            TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG2, p_sfpu::LREG0, 0 /* mod1 */);
-            TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG5, p_sfpu::LREG0, 0 /* mod1 */);
+            // One MAD, as on Blackhole: the product is added to the bias unrounded, so the single
+            // rounding the result sees is the magic-constant one. q = RNE(A*B) + zp.
+            TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG5, p_sfpu::LREG0, 0 /* mod1 */);
             _quant_clamp_body_<p_sfpu::LREG6>();
             if constexpr (SIGN_MAGNITUDE_FORMAT) {
                 TTI_SFPCAST(

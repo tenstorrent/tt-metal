@@ -884,10 +884,12 @@ float quant_out_zero_point(const std::string& op_name) { return op_name == "requ
 constexpr int32_t quant_out_min = -128;
 constexpr int32_t quant_out_max = 127;
 
-// Pre-rounding values for quant / requant worth pinning down: both ends of the clamp with the ties
+// Values fed to the rounder that are worth pinning down: both ends of the clamp with the ties
 // either side of them, the ties around zero, and the small negatives whose magnitude rounds to
 // zero. Uniform sampling essentially never lands on an exact .5, so without these a kernel that
-// rounded ties away from zero instead of to even would pass.
+// rounded ties away from zero instead of to even would pass. The zero point shifts the final
+// result off these bounds, so saturation itself is covered by the random bulk, whose products
+// reach several hundred either way.
 constexpr float quant_edge_case_values[] = {
     -129.0f, -128.5f, -128.25f, -128.0f, -127.75f, -127.5f, -127.25f, -127.0f, -126.5f, -1.5f,
     -1.0f,   -0.75f,  -0.5f,    -0.25f,  0.0f,     0.25f,   0.5f,     0.75f,   1.0f,    1.5f,
@@ -1439,9 +1441,19 @@ std::vector<uint32_t> compute_packed_quant_binary_golden(
             packed_golden[i] = std::bit_cast<uint32_t>((lhs - zero_point) * scale);
             continue;
         }
-        // Requant adds its output zero point after the round, then the result is saturated.
-        const float scaled = lhs * scale + zero_point;
-        const int32_t rounded = static_cast<int32_t>(std::nearbyint(scaled)) + static_cast<int32_t>(out_zero_point);
+        // The product is exact here so each expression rounds exactly once, matching the kernel.
+        const double exact = static_cast<double>(lhs) * static_cast<double>(scale);
+        int32_t rounded;
+        if (op_name == "quant") {
+            // One MAD adds the product to the bias unrounded, so the round sees the exact product
+            // and the zero point lands after it.
+            rounded = static_cast<int32_t>(std::nearbyint(exact)) + static_cast<int32_t>(zero_point);
+        } else {
+            // Requant's MAD leaves A * scale + zp in an fp32 register, and the magic-constant add
+            // rounds that. The output zero point is added after the round.
+            const auto biased = static_cast<double>(static_cast<float>(exact + zero_point));
+            rounded = static_cast<int32_t>(std::nearbyint(biased)) + static_cast<int32_t>(out_zero_point);
+        }
         const int32_t result = std::clamp(rounded, quant_out_min, quant_out_max);  // round half to even
         packed_golden[i] = std::bit_cast<uint32_t>(result);
     }
@@ -1618,13 +1630,15 @@ std::pair<vector<uint32_t>, vector<uint32_t>> generate_packed_sfpu_binary_inputs
                 lhs_is_int ? std::bit_cast<uint32_t>(int_lhs_dist(rng)) : std::bit_cast<uint32_t>(float_lhs_dist(rng));
             rhs[i] = std::bit_cast<uint32_t>(scale_dist(rng));
         }
-        // Overwrite the front of the buffer with the quant / requant edge cases. A scale of 0.25
-        // steps the pre-rounding value in quarters while keeping operand A an exact integer, which
+        // Overwrite the front of the buffer with the quant / requant edge cases, chosen so the
+        // value reaching the rounder is the table entry. Quant rounds the bare product and adds
+        // its zero point afterwards; requant rounds the product plus the zero point. A scale of
+        // 0.25 steps that value in quarters while keeping operand A an exact integer, which
         // requant and dequant need. Dequant computes a different expression and just sees these as
         // more input values.
         constexpr float edge_scale = 0.25f;
         constexpr size_t num_edge_cases = sizeof(quant_edge_case_values) / sizeof(quant_edge_case_values[0]);
-        const float zero_point = quant_zero_point(op_name);
+        const float zero_point = op_name == "quant" ? 0.0f : quant_zero_point(op_name);
         for (size_t i = 0; i < num_edge_cases && i < numel; ++i) {
             const float operand_a = (quant_edge_case_values[i] - zero_point) / edge_scale;
             lhs[i] = lhs_is_int ? std::bit_cast<uint32_t>(static_cast<int32_t>(operand_a))

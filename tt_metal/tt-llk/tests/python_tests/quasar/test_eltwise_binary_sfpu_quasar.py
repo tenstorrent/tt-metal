@@ -1063,7 +1063,7 @@ def test_eltwise_binary_sfpu_max_min_int32_quasar(
 # Family 4 — quant / requant / dequant. Mixed int/float operands with a runtime
 # fp32 zero-point. Ported from Blackhole ckernel_sfpu_quant.h.
 #
-#   quant:   out_int32 = clamp(round(A_fp32 * scale_fp32 + zp), -128, 127)
+#   quant:   out_int32 = clamp(round(A_fp32 * scale_fp32) + zp, -128, 127)
 #   requant: out_int32 = clamp(round(int32_to_fp32(A) * scale_fp32 + zp), -128, 127)
 #   dequant: out_fp32  = (int32_to_fp32(A) - zp) * scale_fp32
 #
@@ -1142,10 +1142,13 @@ def _run_quant(
         golden_active = golden_active.to(torch.float32)
         out_dtype = torch.float32
     else:
-        prod = a_float * scale + zero_point
-        rounded = torch.round(
-            prod
-        )  # round-half-to-even, same as the magic-constant add
+        # Matching Blackhole: quant rounds the bare product and adds the zero point afterwards,
+        # requant rounds the product plus the zero point. The two differ at exact halves.
+        exact = a_float.double() * scale.double()
+        if binary_op == "QUANT":
+            rounded = torch.round(exact) + zero_point
+        else:
+            rounded = torch.round((exact + zero_point).float().double())
         clamped = torch.clamp(rounded, _QUANT_INT8_MIN, _QUANT_INT8_MAX).to(torch.int32)
         if sign_magnitude:
             # The kernel rounds in two's complement, then casts back to sign-magnitude.
