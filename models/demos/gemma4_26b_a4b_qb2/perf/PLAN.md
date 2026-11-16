@@ -18,7 +18,7 @@ batch 1 **53.8 tok/s/user** (18.6 ms); batches 8 / 16 / 32 step 129 / 255 / 501 
 | WS6 | A | MTP speculative decoding (port from `models/demos/gemma4`, #62806) | B1 ×1.5-2 effective |
 
 Machines: **A** = qb2-120-p01t07 (lead Claude, terminal `qb2-120-p01t07/t21`),
-**B** = qb2-49-14 / qb2-120-p04t04 (stage agent). Each agent uses **only its own QB2's chips**.
+**B** = qb2-120-p04t04 (ssh nickname qb2-120-p04t04; Herdr address qb2-120-p04t04/gemma26-b) (stage agent). Each agent uses **only its own QB2's chips**.
 
 ## Code ownership (to keep stages from colliding)
 
