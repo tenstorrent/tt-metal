@@ -713,9 +713,7 @@ class MiniMaxH3Attention(Module):
         long sequence lengths."""
         if not self.use_fused_agmm:
             return {"compute_kernel_config": self.mm_compute_kernel_config}
-        return agmm_kwargs(
-            pins, k, n, x.padded_shape[-2], self.mm_compute_kernel_config, rules_fallback=is_blackhole()
-        )
+        return agmm_kwargs(pins, k, n, x.padded_shape[-2], self.mm_compute_kernel_config, rules_fallback=is_blackhole())
 
     def _ring_sdpa_program_config(self, seq_local: int) -> ttnn.SDPAProgramConfig:
         """The per-device length's class pin on the dynamic-length path, else the length-keyed table."""
