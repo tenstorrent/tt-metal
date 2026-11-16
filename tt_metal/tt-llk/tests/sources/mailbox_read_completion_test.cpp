@@ -75,8 +75,8 @@ void run_kernel(RUNTIME_PARAMETERS)
     {
         // Wait for both released threads with blocking loads, so this side's ordering does not
         // depend on the function under test.
-        load_blocking(&mailbox_base[ThreadId::UnpackThreadId][0]);
-        load_blocking(&mailbox_base[ThreadId::PackThreadId][0]);
+        load_blocking(&mailbox_base[to_underlying(ThreadId::UnpackThreadId)][0]);
+        load_blocking(&mailbox_base[to_underlying(ThreadId::PackThreadId)][0]);
 
         cfg_reg_rmw_tensix<PCK_DEST_RD_CTRL_Read_32b_data_RMW>(expected_field(i));
         tensix_sync();

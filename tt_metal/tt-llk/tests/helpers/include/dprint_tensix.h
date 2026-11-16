@@ -54,7 +54,7 @@ inline void dprint_tensix_dest_reg(int tile_id = 0)
 #ifdef ARCH_BLACKHOLE
     // Program Math's SEC1 for MMIO DEST reads. No restore: this register only
     // affects the RISC MMIO window, and every MMIO consumer reprograms it.
-    ckernel::configure_dest_access<ckernel::MathThreadId>(data_format, /*enable_swizzle=*/true);
+    ckernel::configure_dest_access<ckernel::ThreadId::MathThreadId>(data_format, /*enable_swizzle=*/true);
     ckernel::tensix_sync();
 
     // Wait before reading through the memory-mapped region for the write to be committed.

@@ -75,10 +75,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t block = 0; block < num_blocks; ++block)
                 {
-                    _perf_unpack_set_valid(ckernel::SrcB);
+                    _perf_unpack_set_valid(ckernel::p_srcs::SrcB);
                     for (std::uint32_t tile = 0; tile < num_tiles_in_block; ++tile)
                     {
-                        _perf_unpack_set_valid(ckernel::SrcA);
+                        _perf_unpack_set_valid(ckernel::p_srcs::SrcA);
                     }
                 }
             }
@@ -166,10 +166,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t block = 0; block < num_blocks; ++block)
                 {
-                    _perf_math_clear_valid(ckernel::SrcB);
+                    _perf_math_clear_valid(ckernel::p_srcs::SrcB);
                     for (std::uint32_t tile = 0; tile < num_tiles_in_block; ++tile)
                     {
-                        _perf_math_clear_valid(ckernel::SrcA);
+                        _perf_math_clear_valid(ckernel::p_srcs::SrcA);
                     }
                 }
             }

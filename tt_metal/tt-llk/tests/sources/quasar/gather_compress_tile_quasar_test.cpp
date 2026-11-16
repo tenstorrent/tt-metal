@@ -55,15 +55,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     // One ARG FIFO entry's worth of index/mask bytes, in as few registers as hold it.
     constexpr std::uint32_t VREG_BYTES = 16; // one RVV vector register at VLEN=128
-    constexpr vregmult LMUL            = (ARG_PUSH_BYTES == 4 * VREG_BYTES) ? M4 : (ARG_PUSH_BYTES == 2 * VREG_BYTES) ? M2 : M1;
-    (void)vsetvl<E8, LMUL, ARG_PUSH_BYTES>();
+    constexpr vregmult LMUL            = (ARG_PUSH_BYTES == 4 * VREG_BYTES) ? vregmult::M4 : (ARG_PUSH_BYTES == 2 * VREG_BYTES) ? vregmult::M2 : vregmult::M1;
+    (void)vsetvl<vdatasz::E8, LMUL, ARG_PUSH_BYTES>();
 
     // Per vector, queue the MOP first, then feed its ARG FIFO entry: the queued UNPACR1_STRIDE stalls until the entry arrives.
     for (std::uint32_t vector = 0; vector < TILE_VECTORS; vector++)
     {
-        vector_load<V0>(reinterpret_cast<const std::uint8_t*>(buffer_B[0] + vector * ARG_PUSH_BYTES));
+        vector_load<vreg::V0>(reinterpret_cast<const std::uint8_t*>(buffer_B[0] + vector * ARG_PUSH_BYTES));
         _llk_unpack_gather_compress_(vector * VECTOR_ROWS /*l1_row_16_idx*/);
-        vector_store<V0>(unpack_arg_mbox);
+        vector_store<vreg::V0>(unpack_arg_mbox);
     }
 
     _llk_unpack_gather_compress_uninit_();

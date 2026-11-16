@@ -25,14 +25,16 @@ constexpr auto to_underlying(T t) noexcept
     return static_cast<std::underlying_type_t<T>>(t);
 }
 
-enum Srcs
+// Source register selector, written into instruction fields (e.g. UNPACR Unpack_block_selection).
+// Plain integer constants rather than an enum class so they can be used directly as encoding values.
+struct p_srcs
 {
-    SrcA = 0,
-    SrcB = 1,
-    SrcC = 2
+    constexpr static std::uint32_t SrcA = 0;
+    constexpr static std::uint32_t SrcB = 1;
+    constexpr static std::uint32_t SrcC = 2;
 };
 
-enum register_space_e
+enum class register_space_e
 {
     TDMA_REGS     = 0x0,
     LOCAL_REGS    = 0x1,
@@ -44,7 +46,7 @@ enum register_space_e
 // quasar/tt_t6_trisc_map.h, which backs mailbox_base[4] in ckernel.h. Note hal_2xx_common.cpp's
 // COMPILE_FOR_TRISC=<processor_id> is the cluster-GLOBAL id (NEO_n_COMPUTE_m = n*4 + m, see
 // QuasarComputeProcessor in impl/kernels/kernel.hpp); it only agrees with this enum modulo 4.
-enum ThreadId
+enum class ThreadId
 {
     UnpackThreadId      = 0,
     MathThreadId        = 1,

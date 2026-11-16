@@ -32,7 +32,7 @@ inline void _llk_unpack_A_sdpa_mop_config_(
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
 
     static constexpr std::uint32_t unpack_srca =
-        TT_OP_UNPACR(SrcA, 0b1 /*Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+        TT_OP_UNPACR(p_srcs::SrcA, 0b1 /*Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
     if (num_faces == 1)
     {
         constexpr std::uint32_t outerloop = 1;
@@ -84,7 +84,7 @@ inline void _llk_unpack_A_sdpa_set_srcb_dummy_valid_()
 {
     TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::UNPACK);
     // Stall_Clr_Cntrl=1 so the publication waits on the bank it clears.
-    TTI_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, 1, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
+    TTI_UNPACR_NOP(p_srcs::SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, 1, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
 }
 
 inline void _llk_unpack_A_sdpa_set_srca_srcb_dummy_valid_()
@@ -92,6 +92,6 @@ inline void _llk_unpack_A_sdpa_set_srca_srcb_dummy_valid_()
     TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::UNPACK);
     // Stall_Clr_Cntrl=1 on each: per-instruction, so the SrcB publication flipping the
     // unpacker's bank pointer cannot leave the SrcA publication relying on a stale gate.
-    TTI_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, 1, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
-    TTI_UNPACR_NOP(SrcA, 0, 0, p_unpacr_nop::SET_DVALID, 0, 1, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
+    TTI_UNPACR_NOP(p_srcs::SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, 1, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
+    TTI_UNPACR_NOP(p_srcs::SrcA, 0, 0, p_unpacr_nop::SET_DVALID, 0, 1, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
 }

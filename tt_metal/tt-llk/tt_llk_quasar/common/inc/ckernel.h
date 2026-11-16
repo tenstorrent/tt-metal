@@ -56,7 +56,7 @@ volatile std::uint32_t *const replay_mmap = (std::uint32_t volatile *)(INSTRN_BU
 
 inline void mmio_register_write(register_space_e space, std::uint32_t addr, std::uint32_t data)
 {
-    const std::uint32_t regaddr = (space << 6) | (addr & 0x3F);
+    const std::uint32_t regaddr = (to_underlying(space) << 6) | (addr & 0x3F);
     // FWLOG2("Regaddr: 0x%x, data: 0x%x", regaddr, data);
     reg_base[regaddr] = data;
 }
@@ -474,29 +474,29 @@ namespace ckernel
 // COMPILE_FOR_TRISC is the cluster-global processor id (NEO_n_COMPUTE_m = n*4 + m, see
 // QuasarComputeProcessor), while mailbox slots are indexed by NEO-cluster-local role (0..3), so the
 // self-check compares against the local id, COMPILE_FOR_TRISC % 4.
-inline void mailbox_write(const std::uint8_t thread, const std::uint32_t data)
+inline void mailbox_write(const ThreadId thread, const std::uint32_t data)
 {
 #ifdef COMPILE_FOR_TRISC
-    LLK_ASSERT(thread != COMPILE_FOR_TRISC % 4, "mailbox_write: self-loopback not valid for inter-thread sync");
+    LLK_ASSERT(to_underlying(thread) != COMPILE_FOR_TRISC % 4, "mailbox_write: self-loopback not valid for inter-thread sync");
 #endif
-    mailbox_base[thread][0] = data;
+    mailbox_base[to_underlying(thread)][0] = data;
 }
 
 // Blocking read
-inline std::uint32_t mailbox_read(const std::uint8_t thread)
+inline std::uint32_t mailbox_read(const ThreadId thread)
 {
 #ifdef COMPILE_FOR_TRISC
-    LLK_ASSERT(thread != COMPILE_FOR_TRISC % 4, "mailbox_read: self-loopback not valid for inter-thread sync");
+    LLK_ASSERT(to_underlying(thread) != COMPILE_FOR_TRISC % 4, "mailbox_read: self-loopback not valid for inter-thread sync");
 #endif
-    return mailbox_base[thread][0];
+    return mailbox_base[to_underlying(thread)][0];
 }
 
-inline bool mailbox_not_empty(const std::uint8_t thread)
+inline bool mailbox_not_empty(const ThreadId thread)
 {
 #ifdef COMPILE_FOR_TRISC
-    LLK_ASSERT(thread != COMPILE_FOR_TRISC % 4, "mailbox_not_empty: self-loopback not valid for inter-thread sync");
+    LLK_ASSERT(to_underlying(thread) != COMPILE_FOR_TRISC % 4, "mailbox_not_empty: self-loopback not valid for inter-thread sync");
 #endif
-    return mailbox_base[thread][1] > 0;
+    return mailbox_base[to_underlying(thread)][1] > 0;
 }
 
 union qstatus_u

@@ -11,7 +11,7 @@
 
 // First-class enum types to get smarter template type deduction
 
-enum vreg
+enum class vreg
 {
     V0 = 0,
     V1,
@@ -47,7 +47,7 @@ enum vreg
     V31
 };
 
-enum vdatasz
+enum class vdatasz
 {
     E8 = 0,
     E16,
@@ -56,8 +56,8 @@ enum vdatasz
     NUM_VDATA_SIZES
 };
 
-std::uint32_t constexpr vdatasz_encodings[NUM_VDATA_SIZES] = {0, 1, 2, 3};
-std::uint32_t constexpr vdatasz_asm_nums[NUM_VDATA_SIZES]  = {8, 16, 32, 64};
+std::uint32_t constexpr vdatasz_encodings[static_cast<std::uint32_t>(vdatasz::NUM_VDATA_SIZES)] = {0, 1, 2, 3};
+std::uint32_t constexpr vdatasz_asm_nums[static_cast<std::uint32_t>(vdatasz::NUM_VDATA_SIZES)]  = {8, 16, 32, 64};
 
 template <typename T>
 struct _type_to_datasz
@@ -67,49 +67,49 @@ struct _type_to_datasz
 template <>
 struct _type_to_datasz<float>
 {
-    static vdatasz const sz = E32;
+    static vdatasz const sz = vdatasz::E32;
 };
 
 template <>
 struct _type_to_datasz<std::uint32_t>
 {
-    static vdatasz const sz = E32;
+    static vdatasz const sz = vdatasz::E32;
 };
 
 template <>
 struct _type_to_datasz<std::int32_t>
 {
-    static vdatasz const sz = E32;
+    static vdatasz const sz = vdatasz::E32;
 };
 
 template <>
 struct _type_to_datasz<std::uint16_t>
 {
-    static vdatasz const sz = E16;
+    static vdatasz const sz = vdatasz::E16;
 };
 
 template <>
 struct _type_to_datasz<std::int16_t>
 {
-    static vdatasz const sz = E16;
+    static vdatasz const sz = vdatasz::E16;
 };
 
 template <>
 struct _type_to_datasz<std::uint8_t>
 {
-    static vdatasz const sz = E8;
+    static vdatasz const sz = vdatasz::E8;
 };
 
 template <>
 struct _type_to_datasz<std::int8_t>
 {
-    static vdatasz const sz = E8;
+    static vdatasz const sz = vdatasz::E8;
 };
 
 #define type_to_datasz(T) (_type_to_datasz<T>::sz)
 
 // MF = multiplier (fractional). For example, MF4 represents 1/4
-enum vregmult
+enum class vregmult
 {
     MF8 = 0,
     MF4,
@@ -121,17 +121,17 @@ enum vregmult
     NUM_VREGMULTS
 };
 
-std::uint32_t constexpr vregmult_encodings[NUM_VREGMULTS] = {5, 6, 7, 0, 1, 2, 3};
-std::uint32_t constexpr vregmult_asm_nums[NUM_VREGMULTS]  = {8, 4, 2, 1, 2, 4, 8};
+std::uint32_t constexpr vregmult_encodings[static_cast<std::uint32_t>(vregmult::NUM_VREGMULTS)] = {5, 6, 7, 0, 1, 2, 3};
+std::uint32_t constexpr vregmult_asm_nums[static_cast<std::uint32_t>(vregmult::NUM_VREGMULTS)]  = {8, 4, 2, 1, 2, 4, 8};
 
-template <vdatasz SEW, vregmult LMUL = M1>
+template <vdatasz SEW, vregmult LMUL = vregmult::M1>
 inline std::uint32_t vsetvl(std::uint32_t appn_vec_len)
 {
     std::uint32_t chunk_sz;
-    if (LMUL < M1)
+    if (LMUL < vregmult::M1)
     {
-        std::uint32_t constexpr e_val = vdatasz_asm_nums[SEW];
-        std::uint32_t constexpr m_val = vregmult_asm_nums[LMUL];
+        std::uint32_t constexpr e_val = vdatasz_asm_nums[static_cast<std::uint32_t>(SEW)];
+        std::uint32_t constexpr m_val = vregmult_asm_nums[static_cast<std::uint32_t>(LMUL)];
         (void)e_val; // Prevent unused variable error
         (void)m_val; // Prevent unused variable error
         asm volatile("vsetvli %[chunk_sz], %[avl], e%c[e_val], mf%c[m_val] \n"
@@ -140,8 +140,8 @@ inline std::uint32_t vsetvl(std::uint32_t appn_vec_len)
     }
     else
     {
-        std::uint32_t constexpr e_val = vdatasz_asm_nums[SEW];
-        std::uint32_t constexpr m_val = vregmult_asm_nums[LMUL];
+        std::uint32_t constexpr e_val = vdatasz_asm_nums[static_cast<std::uint32_t>(SEW)];
+        std::uint32_t constexpr m_val = vregmult_asm_nums[static_cast<std::uint32_t>(LMUL)];
         (void)e_val; // Prevent unused variable error
         (void)m_val; // Prevent unused variable error
         asm volatile("vsetvli %[chunk_sz], %[avl], e%c[e_val], m%c[m_val] \n"
@@ -162,10 +162,10 @@ inline std::uint32_t vsetvl()
     }
 
     std::uint32_t chunk_sz;
-    if (LMUL < M1)
+    if (LMUL < vregmult::M1)
     {
-        std::uint32_t constexpr e_val = vdatasz_asm_nums[SEW];
-        std::uint32_t constexpr m_val = vregmult_asm_nums[LMUL];
+        std::uint32_t constexpr e_val = vdatasz_asm_nums[static_cast<std::uint32_t>(SEW)];
+        std::uint32_t constexpr m_val = vregmult_asm_nums[static_cast<std::uint32_t>(LMUL)];
         (void)e_val; // Prevent unused variable error
         (void)m_val; // Prevent unused variable error
         asm volatile("vsetivli %[chunk_sz], %[avl], e%c[e_val], mf%c[m_val] \n"
@@ -174,8 +174,8 @@ inline std::uint32_t vsetvl()
     }
     else
     {
-        std::uint32_t constexpr e_val = vdatasz_asm_nums[SEW];
-        std::uint32_t constexpr m_val = vregmult_asm_nums[LMUL];
+        std::uint32_t constexpr e_val = vdatasz_asm_nums[static_cast<std::uint32_t>(SEW)];
+        std::uint32_t constexpr m_val = vregmult_asm_nums[static_cast<std::uint32_t>(LMUL)];
         (void)e_val; // Prevent unused variable error
         (void)m_val; // Prevent unused variable error
         asm volatile("vsetivli %[chunk_sz], %[avl], e%c[e_val], m%c[m_val] \n"
@@ -189,50 +189,66 @@ inline std::uint32_t vsetvl()
 template <vreg vec_reg_no, typename T, vdatasz data_size = type_to_datasz(T)>
 inline void vector_load(T const *addr)
 {
-    std::uint32_t constexpr e_val = vdatasz_asm_nums[data_size];
-    asm volatile("vle%c[e_val].v v%c[vec_reg_no], (%[addr]) \n" : : [e_val] "i"(e_val), [vec_reg_no] "i"(vec_reg_no), [addr] "r"(addr) : "memory");
+    std::uint32_t constexpr e_val = vdatasz_asm_nums[static_cast<std::uint32_t>(data_size)];
+    asm volatile("vle%c[e_val].v v%c[vec_reg_no], (%[addr]) \n"
+                 :
+                 : [e_val] "i"(e_val), [vec_reg_no] "i"(static_cast<int>(vec_reg_no)), [addr] "r"(addr)
+                 : "memory");
 }
 
 // For backwards compatibility
 template <vdatasz data_size, vreg vec_reg_no, typename T>
 inline void vector_load(T const *addr)
 {
-    std::uint32_t constexpr e_val = vdatasz_asm_nums[data_size];
-    asm volatile("vle%c[e_val].v v%c[vec_reg_no], (%[addr]) \n" : : [e_val] "i"(e_val), [vec_reg_no] "i"(vec_reg_no), [addr] "r"(addr) : "memory");
+    std::uint32_t constexpr e_val = vdatasz_asm_nums[static_cast<std::uint32_t>(data_size)];
+    asm volatile("vle%c[e_val].v v%c[vec_reg_no], (%[addr]) \n"
+                 :
+                 : [e_val] "i"(e_val), [vec_reg_no] "i"(static_cast<int>(vec_reg_no)), [addr] "r"(addr)
+                 : "memory");
 }
 
 template <vreg vec_reg_no, typename T, vdatasz data_size = type_to_datasz(T)>
 inline void vector_store(T *addr)
 {
-    std::uint32_t constexpr e_val = vdatasz_asm_nums[data_size];
-    asm volatile("vse%c[e_val].v v%c[vec_reg_no], (%[addr]) \n" : : [e_val] "i"(e_val), [vec_reg_no] "i"(vec_reg_no), [addr] "r"(addr) : "memory");
+    std::uint32_t constexpr e_val = vdatasz_asm_nums[static_cast<std::uint32_t>(data_size)];
+    asm volatile("vse%c[e_val].v v%c[vec_reg_no], (%[addr]) \n"
+                 :
+                 : [e_val] "i"(e_val), [vec_reg_no] "i"(static_cast<int>(vec_reg_no)), [addr] "r"(addr)
+                 : "memory");
 }
 
 // For backwards compatibility
 template <vdatasz data_size, vreg vec_reg_no, typename T>
 inline void vector_store(T *addr)
 {
-    std::uint32_t constexpr e_val = vdatasz_asm_nums[data_size];
-    asm volatile("vse%c[e_val].v v%c[vec_reg_no], (%[addr]) \n" : : [e_val] "i"(e_val), [vec_reg_no] "i"(vec_reg_no), [addr] "r"(addr) : "memory");
+    std::uint32_t constexpr e_val = vdatasz_asm_nums[static_cast<std::uint32_t>(data_size)];
+    asm volatile("vse%c[e_val].v v%c[vec_reg_no], (%[addr]) \n"
+                 :
+                 : [e_val] "i"(e_val), [vec_reg_no] "i"(static_cast<int>(vec_reg_no)), [addr] "r"(addr)
+                 : "memory");
 }
 
 template <vreg dest_vec_reg_no, vreg src_vec_reg_no, int shift_amt>
 inline void vector_slide_down()
 {
-    asm volatile("vslidedown.vi v%c[dst], v%c[src], %[amt] \n" : : [dst] "i"(dest_vec_reg_no), [src] "i"(src_vec_reg_no), [amt] "i"(shift_amt));
+    asm volatile("vslidedown.vi v%c[dst], v%c[src], %[amt] \n"
+                 :
+                 : [dst] "i"(static_cast<int>(dest_vec_reg_no)), [src] "i"(static_cast<int>(src_vec_reg_no)), [amt] "i"(shift_amt));
 }
 
 template <vreg dest_vec_reg_no, vreg src_vec_reg_no>
 inline void vector_slide_down(int shift_amt)
 {
-    asm volatile("vslidedown.vx v%c[dst], v%c[src], %[amt] \n" : : [dst] "i"(dest_vec_reg_no), [src] "i"(src_vec_reg_no), [amt] "r"(shift_amt));
+    asm volatile("vslidedown.vx v%c[dst], v%c[src], %[amt] \n"
+                 :
+                 : [dst] "i"(static_cast<int>(dest_vec_reg_no)), [src] "i"(static_cast<int>(src_vec_reg_no)), [amt] "r"(shift_amt));
 }
 
 template <vreg vec_reg_no>
 inline std::uint32_t vector_pop_front()
 {
     std::uint32_t val;
-    asm volatile("vmv.x.s %[val], v%c[src]\n" : [val] "=r"(val) : [src] "i"(vec_reg_no));
+    asm volatile("vmv.x.s %[val], v%c[src]\n" : [val] "=r"(val) : [src] "i"(static_cast<int>(vec_reg_no)));
 
     return val;
 }
@@ -241,37 +257,42 @@ inline std::uint32_t vector_pop_front()
 template <vreg vec_reg_no>
 inline void vector_iota()
 {
-    asm volatile("vid.v v%c[dst]\n" : : [dst] "i"(vec_reg_no));
+    asm volatile("vid.v v%c[dst]\n" : : [dst] "i"(static_cast<int>(vec_reg_no)));
 }
 
-#define mk_vector_binary_op(op)                                                                                                                     \
-    template <vreg dest_vec_reg_no, vreg src1_vec_reg_no, vreg src2_vec_reg_no>                                                                     \
-    inline void vector_##op()                                                                                                                       \
-    {                                                                                                                                               \
-        asm volatile("v" #op ".vv v%c[dst], v%c[src1], v%c[src2] \n"                                                                                \
-                     :                                                                                                                              \
-                     : [dst] "i"(dest_vec_reg_no), [src1] "i"(src1_vec_reg_no), [src2] "i"(src2_vec_reg_no));                                       \
-    }                                                                                                                                               \
-    template <vreg dest_vec_reg_no, vreg src1_vec_reg_no>                                                                                           \
-    inline void vector_##op(std::int32_t val)                                                                                                       \
-    {                                                                                                                                               \
-        asm volatile("v" #op ".vx v%c[dst], v%c[src1], %[val] \n" : : [dst] "i"(dest_vec_reg_no), [src1] "i"(src1_vec_reg_no), [val] "r"(val));     \
-    }                                                                                                                                               \
-    template <vreg dest_vec_reg_no, vreg src1_vec_reg_no, std::int32_t imm>                                                                         \
-    inline void vector_##op##_imm()                                                                                                                 \
-    {                                                                                                                                               \
-        if (imm < -16 || imm > 15)                                                                                                                  \
-        {                                                                                                                                           \
-            /*Immediate too big; just use the register version*/                                                                                    \
-            vector_##op<dest_vec_reg_no, src1_vec_reg_no>(static_cast<std::int32_t>(imm));                                                          \
-        }                                                                                                                                           \
-        else                                                                                                                                        \
-        {                                                                                                                                           \
-            asm volatile("v" #op ".vi v%c[dst], v%c[src1], %[imm] \n" : : [dst] "i"(dest_vec_reg_no), [src1] "i"(src1_vec_reg_no), [imm] "i"(imm)); \
-        }                                                                                                                                           \
-    }                                                                                                                                               \
-    struct swallow_semicolon_##op                                                                                                                   \
-    {                                                                                                                                               \
+#define mk_vector_binary_op(op)                                                                                                                            \
+    template <vreg dest_vec_reg_no, vreg src1_vec_reg_no, vreg src2_vec_reg_no>                                                                            \
+    inline void vector_##op()                                                                                                                              \
+    {                                                                                                                                                      \
+        asm volatile(                                                                                                                                      \
+            "v" #op ".vv v%c[dst], v%c[src1], v%c[src2] \n"                                                                                                \
+            :                                                                                                                                              \
+            : [dst] "i"(static_cast<int>(dest_vec_reg_no)), [src1] "i"(static_cast<int>(src1_vec_reg_no)), [src2] "i"(static_cast<int>(src2_vec_reg_no))); \
+    }                                                                                                                                                      \
+    template <vreg dest_vec_reg_no, vreg src1_vec_reg_no>                                                                                                  \
+    inline void vector_##op(std::int32_t val)                                                                                                              \
+    {                                                                                                                                                      \
+        asm volatile("v" #op ".vx v%c[dst], v%c[src1], %[val] \n"                                                                                          \
+                     :                                                                                                                                     \
+                     : [dst] "i"(static_cast<int>(dest_vec_reg_no)), [src1] "i"(static_cast<int>(src1_vec_reg_no)), [val] "r"(val));                       \
+    }                                                                                                                                                      \
+    template <vreg dest_vec_reg_no, vreg src1_vec_reg_no, std::int32_t imm>                                                                                \
+    inline void vector_##op##_imm()                                                                                                                        \
+    {                                                                                                                                                      \
+        if (imm < -16 || imm > 15)                                                                                                                         \
+        {                                                                                                                                                  \
+            /*Immediate too big; just use the register version*/                                                                                           \
+            vector_##op<dest_vec_reg_no, src1_vec_reg_no>(static_cast<std::int32_t>(imm));                                                                 \
+        }                                                                                                                                                  \
+        else                                                                                                                                               \
+        {                                                                                                                                                  \
+            asm volatile("v" #op ".vi v%c[dst], v%c[src1], %[imm] \n"                                                                                      \
+                         :                                                                                                                                 \
+                         : [dst] "i"(static_cast<int>(dest_vec_reg_no)), [src1] "i"(static_cast<int>(src1_vec_reg_no)), [imm] "i"(imm));                   \
+        }                                                                                                                                                  \
+    }                                                                                                                                                      \
+    struct swallow_semicolon_##op                                                                                                                          \
+    {                                                                                                                                                      \
     }
 
 mk_vector_binary_op(add);

@@ -30,11 +30,11 @@ using namespace ckernel::unpacker;
 inline void _llk_unpack_tilize_mop_config_(const bool narrow_tile = false, const bool unpack_to_dest = false)
 {
     static constexpr std::uint32_t unpack_srca =
-        TT_OP_UNPACR(SrcA, 0b1 /*Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+        TT_OP_UNPACR(p_srcs::SrcA, 0b1 /*Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
     static constexpr std::uint32_t unpack_srca_to_dest =
-        TT_OP_UNPACR(SrcA, 0b00010001 /*CH0/CH1 Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 0, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
-    static constexpr std::uint32_t unpack_srcb_zerosrc    = TT_OP_UNPACR_NOP(SrcB, p_unpacr_nop::UNP_ZEROSRC);
-    static constexpr std::uint32_t unpack_srcb_set_dvalid = TT_OP_UNPACR_NOP(SrcB, p_unpacr_nop::UNP_SET_DVALID); // WA for tenstorrent/budabackend#1230
+        TT_OP_UNPACR(p_srcs::SrcA, 0b00010001 /*CH0/CH1 Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 0, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+    static constexpr std::uint32_t unpack_srcb_zerosrc    = TT_OP_UNPACR_NOP(p_srcs::SrcB, p_unpacr_nop::UNP_ZEROSRC);
+    static constexpr std::uint32_t unpack_srcb_set_dvalid = TT_OP_UNPACR_NOP(p_srcs::SrcB, p_unpacr_nop::UNP_SET_DVALID); // WA for tenstorrent/budabackend#1230
 
     const std::uint32_t outerloop     = narrow_tile ? 1 : 2;
     constexpr std::uint32_t innerloop = 1;
@@ -317,9 +317,9 @@ inline void _llk_unpack_tilizeA_B_mop_config_(const std::uint32_t num_faces = 4,
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     LLK_ASSERT(!(zero_srcA && narrow_tile && num_faces > 1), "tilizeA_B with zero_srcA supports a narrow tile only when it has a single face");
     static constexpr std::uint32_t unpack_srca =
-        TT_OP_UNPACR(SrcA, (zero_srcA ? 0b010001 : 0b1), 0, 0, 0, 1, (zero_srcA ? 0 : 1), p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+        TT_OP_UNPACR(p_srcs::SrcA, (zero_srcA ? 0b010001 : 0b1), 0, 0, 0, 1, (zero_srcA ? 0 : 1), p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
     static constexpr std::uint32_t unpack_srcb = TT_OP_UNPACR(
-        SrcB,
+        p_srcs::SrcB,
         (zero_srcA ? 0b010001 : (reload_srcB ? 0b0 : 0b1)),
         0,
         0,
@@ -332,15 +332,15 @@ inline void _llk_unpack_tilizeA_B_mop_config_(const std::uint32_t num_faces = 4,
         0,
         0,
         1); // Skip face ptr inc if same face is reloaded into srcB
-    static constexpr std::uint32_t unpack_neginf_srca = TT_OP_UNPACR_NOP(SrcA, p_unpacr_nop::UNP_NEGINFSRC); // Needed for max pool
-    static constexpr std::uint32_t unpack_zero_srca   = TT_OP_UNPACR_NOP(SrcA, p_unpacr_nop::UNP_ZEROSRC);   // Needed for dot product
+    static constexpr std::uint32_t unpack_neginf_srca = TT_OP_UNPACR_NOP(p_srcs::SrcA, p_unpacr_nop::UNP_NEGINFSRC); // Needed for max pool
+    static constexpr std::uint32_t unpack_zero_srca   = TT_OP_UNPACR_NOP(p_srcs::SrcA, p_unpacr_nop::UNP_ZEROSRC);   // Needed for dot product
     static constexpr std::uint32_t unpack_srcb_2_face =
-        TT_OP_UNPACR(SrcB, 0b100010, 0, 0, 0, 1, 0, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1); // Needed for dot product
+        TT_OP_UNPACR(p_srcs::SrcB, 0b100010, 0, 0, 0, 1, 0, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1); // Needed for dot product
     static constexpr std::uint32_t unpack_srca_dat_valid =
-        TT_OP_UNPACR(SrcA, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1); // Needed for dot product
+        TT_OP_UNPACR(p_srcs::SrcA, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1); // Needed for dot product
     static constexpr std::uint32_t unpack_srcb_dat_valid =
-        TT_OP_UNPACR(SrcB, (reload_srcB ? 0b0 : 0b1), 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1); // Needed for dot
-                                                                                                                // product
+        TT_OP_UNPACR(p_srcs::SrcB, (reload_srcB ? 0b0 : 0b1), 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1); // Needed for dot
+                                                                                                                        // product
 
     const std::uint32_t innerloop = zero_srcA ? (num_faces > 2 ? 2 : (num_faces - 1)) : 1;
     // The execute runs the MOP once per face-row for full-width tiles and once per face for narrow ones.
@@ -519,15 +519,15 @@ inline void _llk_unpack_tilizeA_B_(
         {
             if (num_faces == 4 && n == 0)
             {
-                TTI_UNPACR_NOP(SrcA, p_unpacr_nop::UNP_ZEROSRC);
+                TTI_UNPACR_NOP(p_srcs::SrcA, p_unpacr_nop::UNP_ZEROSRC);
             }
 
             ckernel::ckernel_template::run();
 
             if (num_faces == 4 && n != 0)
             {
-                TTI_UNPACR_NOP(SrcA, p_unpacr_nop::UNP_SET_DVALID);
-                TTI_UNPACR_NOP(SrcB, p_unpacr_nop::UNP_SET_DVALID);
+                TTI_UNPACR_NOP(p_srcs::SrcA, p_unpacr_nop::UNP_SET_DVALID);
+                TTI_UNPACR_NOP(p_srcs::SrcB, p_unpacr_nop::UNP_SET_DVALID);
             }
         }
         else
@@ -641,13 +641,13 @@ inline void _llk_unpack_fast_tilize_mop_config_()
     ckernel_unpack_template tmp = ckernel_unpack_template(
         true,
         false,
-        TT_OP_UNPACR_COMMON(SrcA, ADDRMOD_CH1Y_0_CH1Z_2_CH0Y_0_CH0Z_1, 0),
+        TT_OP_UNPACR_COMMON(p_srcs::SrcA, ADDRMOD_CH1Y_0_CH1Z_2_CH0Y_0_CH0Z_1, 0),
         TT_OP_NOP,
         TT_OP_NOP,
         TT_OP_NOP,
-        TT_OP_UNPACR_COMMON(SrcA, ADDRMOD_CH1Y_0_CH1Z_3_CH0Y_0_CH0Z_1, 0),
-        TT_OP_UNPACR_COMMON(SrcB, ADDRMOD_CH1Y_0_CH1Z_2_CH0Y_0_CH0Z_1, 0),
-        TT_OP_UNPACR_COMMON(SrcB, ADDRMOD_CH1Y_0_CH1Z_3_CH0Y_0_CH0Z_1, 0));
+        TT_OP_UNPACR_COMMON(p_srcs::SrcA, ADDRMOD_CH1Y_0_CH1Z_3_CH0Y_0_CH0Z_1, 0),
+        TT_OP_UNPACR_COMMON(p_srcs::SrcB, ADDRMOD_CH1Y_0_CH1Z_2_CH0Y_0_CH0Z_1, 0),
+        TT_OP_UNPACR_COMMON(p_srcs::SrcB, ADDRMOD_CH1Y_0_CH1Z_3_CH0Y_0_CH0Z_1, 0));
 
     tmp.program();
 }
@@ -817,7 +817,7 @@ inline void _llk_unpack_fast_tilize_block_(
         if (unit_dim == 1)
         {
             // read whole tile contiguously then move two face rows down to the next tile
-            TTI_UNPACR_COMMON(SrcA, ADDRMOD_CH1Y_0_CH1Z_0_CH0Y_0_CH0Z_0, 1);
+            TTI_UNPACR_COMMON(p_srcs::SrcA, ADDRMOD_CH1Y_0_CH1Z_0_CH0Y_0_CH0Z_0, 1);
             TTI_INCADCZW(p_setadc::UNP_A, 0, 0, 2, 0);
         }
         else if (unit_dim == 2 && num_faces == 4)
@@ -831,8 +831,8 @@ inline void _llk_unpack_fast_tilize_block_(
             //     TTI_UNPACR_COMMON(SrcB, ADDRMOD_CH1Y_0_CH1Z_2_CH0Y_0_CH0Z_1, 0);
             // }
             TTI_MOP(p_mop::MASK_LOOP, (FACE_R_DIM - 1) - 1, 0x0);
-            TTI_UNPACR_COMMON(SrcA, ADDRMOD_CH1Y_0_CH1Z_0_CH0Y_2_CH0Z_0, 1);
-            TTI_UNPACR_COMMON(SrcB, ADDRMOD_CH1Y_0_CH1Z_0_CH0Y_2_CH0Z_0, 1);
+            TTI_UNPACR_COMMON(p_srcs::SrcA, ADDRMOD_CH1Y_0_CH1Z_0_CH0Y_2_CH0Z_0, 1);
+            TTI_UNPACR_COMMON(p_srcs::SrcB, ADDRMOD_CH1Y_0_CH1Z_0_CH0Y_2_CH0Z_0, 1);
             TTI_SETADCZW(p_setadc::UNP_AB, 0, 0, 0, 0, SETADC_CH01(p_setadc::ZW));
         }
         else if (unit_dim == 2 && num_faces == 2)
@@ -846,8 +846,8 @@ inline void _llk_unpack_fast_tilize_block_(
             //     TTI_UNPACR_COMMON(SrcB, ADDRMOD_CH1Y_0_CH1Z_2_CH0Y_0_CH0Z_1, 0);
             // }
             TTI_MOP(p_mop::MASK_LOOP, (FACE_R_DIM / 2 - 1) - 1, 0x0);
-            TTI_UNPACR_COMMON(SrcA, ADDRMOD_CH1Y_0_CH1Z_0_CH0Y_2_CH0Z_0, 1);
-            TTI_UNPACR_COMMON(SrcB, ADDRMOD_CH1Y_0_CH1Z_0_CH0Y_2_CH0Z_0, 1);
+            TTI_UNPACR_COMMON(p_srcs::SrcA, ADDRMOD_CH1Y_0_CH1Z_0_CH0Y_2_CH0Z_0, 1);
+            TTI_UNPACR_COMMON(p_srcs::SrcB, ADDRMOD_CH1Y_0_CH1Z_0_CH0Y_2_CH0Z_0, 1);
             TTI_SETADCZW(p_setadc::UNP_AB, 0, 0, 0, 0, SETADC_CH01(p_setadc::ZW));
         }
         else if (unit_dim == 3)
@@ -861,8 +861,8 @@ inline void _llk_unpack_fast_tilize_block_(
             //     TTI_UNPACR_COMMON(SrcB, ADDRMOD_CH1Y_0_CH1Z_3_CH0Y_0_CH0Z_1, 0);
             // }
             TTI_MOP(p_mop::MASK_LOOP, ((FACE_R_DIM / 2) - 1) - 1, 0xFFFF);
-            TTI_UNPACR_COMMON(SrcA, ADDRMOD_CH1Y_0_CH1Z_3_CH0Y_0_CH0Z_1, 1);
-            TTI_UNPACR_COMMON(SrcB, ADDRMOD_CH1Y_0_CH1Z_3_CH0Y_0_CH0Z_1, 1);
+            TTI_UNPACR_COMMON(p_srcs::SrcA, ADDRMOD_CH1Y_0_CH1Z_3_CH0Y_0_CH0Z_1, 1);
+            TTI_UNPACR_COMMON(p_srcs::SrcB, ADDRMOD_CH1Y_0_CH1Z_3_CH0Y_0_CH0Z_1, 1);
             TTI_SETADCZW(p_setadc::UNP_AB, 0, 0, 1, 0, SETADC_CH01(p_setadc::ZW));
 
             // read top 8(A)/bottom 8(B) rows of bottom faces of three tiles in a row (6 halves of a face each), switch bank,
@@ -874,8 +874,8 @@ inline void _llk_unpack_fast_tilize_block_(
             //     TTI_UNPACR_COMMON(SrcB, ADDRMOD_CH1Y_0_CH1Z_3_CH0Y_0_CH0Z_1, 0);
             // }
             TTI_MOP(p_mop::MASK_LOOP, ((FACE_R_DIM / 2) - 1) - 1, 0xFFFF);
-            TTI_UNPACR_COMMON(SrcA, ADDRMOD_CH1Y_0_CH1Z_0_CH0Y_3_CH0Z_0, 1);
-            TTI_UNPACR_COMMON(SrcB, ADDRMOD_CH1Y_0_CH1Z_0_CH0Y_3_CH0Z_0, 1);
+            TTI_UNPACR_COMMON(p_srcs::SrcA, ADDRMOD_CH1Y_0_CH1Z_0_CH0Y_3_CH0Z_0, 1);
+            TTI_UNPACR_COMMON(p_srcs::SrcB, ADDRMOD_CH1Y_0_CH1Z_0_CH0Y_3_CH0Z_0, 1);
             TTI_SETADCZW(p_setadc::UNP_AB, 0, 0, 0, 0, SETADC_CH01(p_setadc::ZW));
         }
     }

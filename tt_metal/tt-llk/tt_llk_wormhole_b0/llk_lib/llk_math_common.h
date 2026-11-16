@@ -112,14 +112,14 @@ inline void _llk_math_pack_sync_init_()
     {
         TTI_SEMINIT(1, 0, p_stall::SEMAPHORE_1);
         reset_dest_offset_id();
-        set_dest_section_base<StartZero>();
+        set_dest_section_base<DstStart::StartZero>();
     }
     else
     {
         static_assert(Dst == DstSync::SyncHalf);
         TTI_SEMINIT(2, 0, p_stall::SEMAPHORE_1);
         reset_dest_offset_id();
-        set_dest_section_base<StartZero>();
+        set_dest_section_base<DstStart::StartZero>();
     }
 }
 

@@ -27,10 +27,10 @@ void kernel_main() {
     const int32_t* b = a + num_elements;
     int32_t* c = reinterpret_cast<int32_t*>(l1_address) + 2 * num_elements;
 
-    (void)vsetvl<E32, M8, num_elements>();
-    vector_load<V0>(a);
-    vector_load<V8>(b);
-    vector_add<V16, V0, V8>();
-    vector_store<V16>(c);
+    (void)vsetvl<vdatasz::E32, vregmult::M8, num_elements>();
+    vector_load<vreg::V0>(a);
+    vector_load<vreg::V8>(b);
+    vector_add<vreg::V16, vreg::V0, vreg::V8>();
+    vector_store<vreg::V16>(c);
 #endif
 }

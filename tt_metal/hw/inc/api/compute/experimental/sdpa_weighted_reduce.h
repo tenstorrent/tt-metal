@@ -129,11 +129,11 @@ inline void weighted_reduce_unpack_impl(
 
     // qk face0 -> SrcA rows 0..15; AddrMode advances the L1 read + SrcA write to
     // face1, no dvalid yet.
-    TTI_UNPACR(SrcA, 0b00010001, 0, 0, 0, 1, 0, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+    TTI_UNPACR(p_srcs::SrcA, 0b00010001, 0, 0, 0, 1, 0, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
     // weights -> SrcB row 0; sets SrcB dvalid.
-    TTI_UNPACR(SrcB, 0b00000000, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+    TTI_UNPACR(p_srcs::SrcB, 0b00000000, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
     // qk face1 -> SrcA rows 16..31; sets SrcA dvalid.
-    TTI_UNPACR(SrcA, 0b00000000, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+    TTI_UNPACR(p_srcs::SrcA, 0b00000000, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
 
     t6_semaphore_get(semaphore::UNPACK_SYNC);
     switch_config_context(unp_cfg_context);

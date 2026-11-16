@@ -52,7 +52,7 @@ constexpr std::uint32_t TRIANGLE_SOLVE_ODD_COLUMNS     = 2; // SFPLOAD address s
 constexpr std::uint32_t TRIANGLE_SOLVE_BLOCK_OFF[TRIANGLE_SOLVE_ROWS_PER_GROUP] = {
     0, TRIANGLE_SOLVE_ODD_COLUMNS, TRIANGLE_SOLVE_FACE_ROWS, TRIANGLE_SOLVE_FACE_ROWS + TRIANGLE_SOLVE_ODD_COLUMNS};
 // DEST rows one 32x32 tile occupies, from the same shift set_dst_write_addr uses.
-constexpr std::uint32_t TRIANGLE_SOLVE_DEST_TILE_ROWS = 1u << DstTileSizeLog2[DstTileShape::Tile32x32];
+constexpr std::uint32_t TRIANGLE_SOLVE_DEST_TILE_ROWS = 1u << DstTileSizeLog2[to_underlying(DstTileShape::Tile32x32)];
 static_assert(TRIANGLE_SOLVE_DEST_TILE_ROWS == 2 * TRIANGLE_SOLVE_FACE_PAIR_ROWS, "the solve's DEST layout assumes four 16-row faces per 32x32 tile");
 
 static_assert(TRIANGLE_SOLVE_FACE_DIM % TRIANGLE_SOLVE_ROWS_PER_GROUP == 0, "a row group's columns must not straddle a face boundary");

@@ -133,18 +133,18 @@ inline void _llk_unpack_hadamard_h128_(
     TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
 
     // h16 -> srcB (full face, Set Dvalid).
-    TTI_UNPACR(SrcB, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /*Set ContextIdInc*/, 0, 0, 1);
+    TTI_UNPACR(p_srcs::SrcB, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /*Set ContextIdInc*/, 0, 0, 1);
 
     // Zero srcA bank 0 at the FULL span (ZEROSRC honors the X span, so this
     // must precede the narrow) -> rows 8..15 zero for MM1's 16-row reduction.
     // No Set Dvalid: the input UNPACR below sets it and hands the bank to FPU.
-    TTI_UNPACR_NOP(SrcA, 0, 0, 0 /*no Set Dvalid*/, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
+    TTI_UNPACR_NOP(p_srcs::SrcA, 0, 0, 0 /*no Set Dvalid*/, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
 
     // Narrow srcA to the top 8 rows (128 datums) for the input read.
     TTI_SETADCXX(p_setadc::UNP_A, kInputXEnd, 0x0);
 
     // input -> srcA bank 0 (top 8 rows, Set Dvalid).
-    TTI_UNPACR(SrcA, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /*Set ContextIdInc*/, 0, 0, 1);
+    TTI_UNPACR(p_srcs::SrcA, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /*Set ContextIdInc*/, 0, 0, 1);
 
     // Restore full face span: phase 2 streams the entire 16x16 H_16 into
     // srcA bank 1, and the next tile's zero-src needs the full span.
@@ -157,7 +157,7 @@ inline void _llk_unpack_hadamard_h128_(
     // SEC0 context-1 srcA base was preprogrammed to H_16 by _init_, so no
     // per-tile CFG write is needed. Set Dvalid hands srcA bank 1 to the FPU
     // for MM2.
-    TTI_UNPACR(SrcA, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /*Set ContextIdInc*/, 0, 0, 1);
+    TTI_UNPACR(p_srcs::SrcA, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /*Set ContextIdInc*/, 0, 0, 1);
     TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::UNPACK);
 
     // Re-pin phase 1 to context 0 for the next tile (one SETC16, no stall).

@@ -31,9 +31,9 @@ inline void _llk_unpack_mul_reduce_scalar_switch_to_reduce_()
     // inherits the ZEROSRC's wait by sequencing. ZEROSRC keeps the default Matrix-Unit-bank wait:
     // on Wormhole an own-bank-wait clear can run while math holds a bank, and one that coincides
     // with a math ZEROSRC(write_mode=1) clears the bank math is reading instead of its own.
-    TTI_UNPACR_NOP(SrcA, p_unpacr_nop::UNP_ZEROSRC);
-    TTI_UNPACR_NOP(SrcA, p_unpacr_nop::UNP_SET_DVALID);
-    TTI_UNPACR_NOP(SrcB, p_unpacr_nop::UNP_ZEROSRC);
-    TTI_UNPACR_NOP(SrcB, p_unpacr_nop::UNP_SET_DVALID);
+    TTI_UNPACR_NOP(p_srcs::SrcA, p_unpacr_nop::UNP_ZEROSRC);
+    TTI_UNPACR_NOP(p_srcs::SrcA, p_unpacr_nop::UNP_SET_DVALID);
+    TTI_UNPACR_NOP(p_srcs::SrcB, p_unpacr_nop::UNP_ZEROSRC);
+    TTI_UNPACR_NOP(p_srcs::SrcB, p_unpacr_nop::UNP_SET_DVALID);
     t6_semaphore_get(semaphore::UNPACK_SYNC);
 }

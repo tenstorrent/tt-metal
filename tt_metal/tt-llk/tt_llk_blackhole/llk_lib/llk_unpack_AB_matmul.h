@@ -69,16 +69,41 @@ inline void _llk_unpack_AB_matmul_mop_config_(
             {
                 if (unpA_partial_face)
                 {
-                    TTI_UNPACR_NOP(SrcA, 0, 0, 0 /*Set Dvalid*/, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
+                    TTI_UNPACR_NOP(p_srcs::SrcA, 0, 0, 0 /*Set Dvalid*/, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
                     TTI_UNPACR(
-                        SrcA, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
+                        p_srcs::SrcA,
+                        0b00010001,
+                        0,
+                        0,
+                        0,
+                        1 /*Set OvrdThreadId*/,
+                        0 /*Set Dvalid*/,
+                        p_unpacr::RAREFYB_DISABLE,
+                        0,
+                        0 /* Set ContextIdInc */,
+                        0,
+                        0,
+                        1);
                     TTI_UNPACR(
-                        SrcA, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
+                        p_srcs::SrcA,
+                        0b00010001,
+                        0,
+                        0,
+                        0,
+                        1 /*Set OvrdThreadId*/,
+                        1 /*Set Dvalid*/,
+                        p_unpacr::RAREFYB_DISABLE,
+                        0,
+                        0 /* Set ContextIdInc */,
+                        0,
+                        0,
+                        1);
                     TTI_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 0, 0b0101); // Set ch0_z=0, ch1_z=0
                 }
                 else
                 {
-                    TTI_UNPACR(SrcA, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
+                    TTI_UNPACR(
+                        p_srcs::SrcA, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
                 }
                 if constexpr (kernel_broadcast_b == 1)
                 {
@@ -99,16 +124,41 @@ inline void _llk_unpack_AB_matmul_mop_config_(
 
                 if (unpA_partial_face)
                 {
-                    TTI_UNPACR_NOP(SrcA, 0, 0, 0 /*Set Dvalid*/, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
+                    TTI_UNPACR_NOP(p_srcs::SrcA, 0, 0, 0 /*Set Dvalid*/, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
                     TTI_UNPACR(
-                        SrcA, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
+                        p_srcs::SrcA,
+                        0b00010001,
+                        0,
+                        0,
+                        0,
+                        1 /*Set OvrdThreadId*/,
+                        0 /*Set Dvalid*/,
+                        p_unpacr::RAREFYB_DISABLE,
+                        0,
+                        0 /* Set ContextIdInc */,
+                        0,
+                        0,
+                        1);
                     TTI_UNPACR(
-                        SrcA, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
+                        p_srcs::SrcA,
+                        0b00010001,
+                        0,
+                        0,
+                        0,
+                        1 /*Set OvrdThreadId*/,
+                        1 /*Set Dvalid*/,
+                        p_unpacr::RAREFYB_DISABLE,
+                        0,
+                        0 /* Set ContextIdInc */,
+                        0,
+                        0,
+                        1);
                     TTI_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 0, 0b0101); // Set ch0_z=0, ch1_z=0
                 }
                 else
                 {
-                    TTI_UNPACR(SrcA, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
+                    TTI_UNPACR(
+                        p_srcs::SrcA, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
                 }
                 if constexpr (kernel_broadcast_b == 1)
                 {
@@ -139,16 +189,41 @@ inline void _llk_unpack_AB_matmul_mop_config_(
             {
                 if (unpB_partial_face)
                 {
-                    TTI_UNPACR_NOP(SrcB, 0, 0, 0 /*Set Dvalid*/, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
+                    TTI_UNPACR_NOP(p_srcs::SrcB, 0, 0, 0 /*Set Dvalid*/, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
                     TTI_UNPACR(
-                        SrcB, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
+                        p_srcs::SrcB,
+                        0b00010001,
+                        0,
+                        0,
+                        0,
+                        1 /*Set OvrdThreadId*/,
+                        0 /*Set Dvalid*/,
+                        p_unpacr::RAREFYB_DISABLE,
+                        0,
+                        0 /* Set ContextIdInc */,
+                        0,
+                        0,
+                        1);
                     TTI_UNPACR(
-                        SrcB, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
+                        p_srcs::SrcB,
+                        0b00010001,
+                        0,
+                        0,
+                        0,
+                        1 /*Set OvrdThreadId*/,
+                        1 /*Set Dvalid*/,
+                        p_unpacr::RAREFYB_DISABLE,
+                        0,
+                        0 /* Set ContextIdInc */,
+                        0,
+                        0,
+                        1);
                     TTI_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 0, 0b0101); // Set ch0_z=0, ch1_z=0
                 }
                 else
                 {
-                    TTI_UNPACR(SrcB, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
+                    TTI_UNPACR(
+                        p_srcs::SrcB, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
                 }
                 if constexpr (kernel_broadcast_a == 1)
                 {
@@ -169,16 +244,41 @@ inline void _llk_unpack_AB_matmul_mop_config_(
 
                 if (unpB_partial_face)
                 {
-                    TTI_UNPACR_NOP(SrcB, 0, 0, 0 /*Set Dvalid*/, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
+                    TTI_UNPACR_NOP(p_srcs::SrcB, 0, 0, 0 /*Set Dvalid*/, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
                     TTI_UNPACR(
-                        SrcB, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
+                        p_srcs::SrcB,
+                        0b00010001,
+                        0,
+                        0,
+                        0,
+                        1 /*Set OvrdThreadId*/,
+                        0 /*Set Dvalid*/,
+                        p_unpacr::RAREFYB_DISABLE,
+                        0,
+                        0 /* Set ContextIdInc */,
+                        0,
+                        0,
+                        1);
                     TTI_UNPACR(
-                        SrcB, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
+                        p_srcs::SrcB,
+                        0b00010001,
+                        0,
+                        0,
+                        0,
+                        1 /*Set OvrdThreadId*/,
+                        1 /*Set Dvalid*/,
+                        p_unpacr::RAREFYB_DISABLE,
+                        0,
+                        0 /* Set ContextIdInc */,
+                        0,
+                        0,
+                        1);
                     TTI_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 0, 0b0101); // Set ch0_z=0, ch1_z=0
                 }
                 else
                 {
-                    TTI_UNPACR(SrcB, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
+                    TTI_UNPACR(
+                        p_srcs::SrcB, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
                 }
                 if constexpr (kernel_broadcast_a == 1)
                 {
@@ -387,17 +487,41 @@ inline void _llk_unpack_AB_matmul_(
         {
             if (unpB_partial_face)
             {
-                TTI_UNPACR_NOP(SrcB, 0, 0, 0 /*Set Dvalid*/, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
+                TTI_UNPACR_NOP(p_srcs::SrcB, 0, 0, 0 /*Set Dvalid*/, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
                 // Do face by face unpacking
                 TTI_UNPACR(
-                    SrcB, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
+                    p_srcs::SrcB,
+                    0b00010001,
+                    0,
+                    0,
+                    0,
+                    1 /*Set OvrdThreadId*/,
+                    0 /*Set Dvalid*/,
+                    p_unpacr::RAREFYB_DISABLE,
+                    0,
+                    0 /* Set ContextIdInc */,
+                    0,
+                    0,
+                    1);
                 TTI_UNPACR(
-                    SrcB, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
+                    p_srcs::SrcB,
+                    0b00010001,
+                    0,
+                    0,
+                    0,
+                    1 /*Set OvrdThreadId*/,
+                    1 /*Set Dvalid*/,
+                    p_unpacr::RAREFYB_DISABLE,
+                    0,
+                    0 /* Set ContextIdInc */,
+                    0,
+                    0,
+                    1);
                 TTI_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 0, 0b0101); // Set ch0_z=0, ch1_z=0
             }
             else
             {
-                TTI_UNPACR(SrcB, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
+                TTI_UNPACR(p_srcs::SrcB, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
             }
         }
         else
@@ -405,16 +529,40 @@ inline void _llk_unpack_AB_matmul_(
             if (unpA_partial_face)
             {
                 // Do face by face unpacking
-                TTI_UNPACR_NOP(SrcA, 0, 0, 0 /*Set Dvalid*/, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
+                TTI_UNPACR_NOP(p_srcs::SrcA, 0, 0, 0 /*Set Dvalid*/, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
                 TTI_UNPACR(
-                    SrcA, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
+                    p_srcs::SrcA,
+                    0b00010001,
+                    0,
+                    0,
+                    0,
+                    1 /*Set OvrdThreadId*/,
+                    0 /*Set Dvalid*/,
+                    p_unpacr::RAREFYB_DISABLE,
+                    0,
+                    0 /* Set ContextIdInc */,
+                    0,
+                    0,
+                    1);
                 TTI_UNPACR(
-                    SrcA, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
+                    p_srcs::SrcA,
+                    0b00010001,
+                    0,
+                    0,
+                    0,
+                    1 /*Set OvrdThreadId*/,
+                    1 /*Set Dvalid*/,
+                    p_unpacr::RAREFYB_DISABLE,
+                    0,
+                    0 /* Set ContextIdInc */,
+                    0,
+                    0,
+                    1);
                 TTI_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 0, 0b0101); // Set ch0_z=0, ch1_z=0
             }
             else
             {
-                TTI_UNPACR(SrcA, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
+                TTI_UNPACR(p_srcs::SrcA, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
             }
         }
 

@@ -2260,7 +2260,7 @@ inline void _topk_xl_local_sort_(const std::uint32_t dst_index, const bool ascen
 
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
     bool dir                            = ascending;
-    const std::uint32_t tile_offset     = dst_index << DstTileSizeLog2[DstTileShape::Tile32x32];
+    const std::uint32_t tile_offset     = dst_index << DstTileSizeLog2[to_underlying(DstTileShape::Tile32x32)];
     constexpr int consecutive_32_offset = 16;
     // Kept as a local so the inner `if constexpr (row_scale_factor > 1)`
     // checks below match the historical K=2048 codegen byte-for-byte.
@@ -2547,7 +2547,7 @@ inline void _topk_xl_local_sort_generic_(const std::uint32_t dst_index, const bo
 #endif
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
     bool dir                            = ascending;
-    const std::uint32_t tile_offset     = dst_index << DstTileSizeLog2[DstTileShape::Tile32x32];
+    const std::uint32_t tile_offset     = dst_index << DstTileSizeLog2[to_underlying(DstTileShape::Tile32x32)];
     constexpr int consecutive_32_offset = 16;
     constexpr int row_scale_factor      = K == 512 ? 1 : K == 1024 ? 2 : 4;
     constexpr int n_iters_stride2       = row_scale_factor * 2;
@@ -2848,7 +2848,7 @@ inline void _topk_xl_merge_(const std::uint32_t dst_index)
     constexpr int row_scale_factor                = (K == 512) ? 1 : (K == 1024) ? 2 : 4;
     constexpr int distance                        = fused ? (64 * num_tiles_per_sequence) : (128 * num_tiles_per_sequence);
     [[maybe_unused]] constexpr int indices_offset = 64 * num_tiles_per_sequence;
-    const std::uint32_t tile_offset               = dst_index << DstTileSizeLog2[DstTileShape::Tile32x32];
+    const std::uint32_t tile_offset               = dst_index << DstTileSizeLog2[to_underlying(DstTileShape::Tile32x32)];
 
 #if TOPK_XL_UNFUSED_MACRO
     constexpr int body_len = 16; // must match topk_mop_config's REPLAY length
@@ -2964,7 +2964,7 @@ inline void _topk_xl_rebuild_(const std::uint32_t dst_index, const bool ascendin
 
     bool dir                                             = ascending;
     [[maybe_unused]] constexpr int consecutive_32_offset = 16;
-    const std::uint32_t tile_offset                      = dst_index << DstTileSizeLog2[DstTileShape::Tile32x32];
+    const std::uint32_t tile_offset                      = dst_index << DstTileSizeLog2[to_underlying(DstTileShape::Tile32x32)];
 
     if constexpr (fused)
     {
@@ -3268,7 +3268,7 @@ inline void _topk_xl_rebuild_generic_(const std::uint32_t dst_index, const bool 
     bool dir                                             = ascending;
     constexpr int num_tiles_per_sequence                 = K == 512 ? 1 : K == 1024 ? 1 : 2;
     [[maybe_unused]] constexpr int consecutive_32_offset = 16;
-    const std::uint32_t tile_offset                      = dst_index << DstTileSizeLog2[DstTileShape::Tile32x32];
+    const std::uint32_t tile_offset                      = dst_index << DstTileSizeLog2[to_underlying(DstTileShape::Tile32x32)];
     constexpr int row_scale_factor                       = K == 512 ? 1 : K == 1024 ? 2 : 4;
     constexpr int n_iters_stride2                        = row_scale_factor * 2;
 #if TOPK_XL_FUSED_MACRO
@@ -3535,7 +3535,7 @@ inline void _topk_xl_rebuild_columns_(const std::uint32_t dst_index, const bool 
 {
     static_assert(K == 1024, "K must be 1024: the column rebuild sorts the 64 row columns of one tile");
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-    const std::uint32_t tile_offset = dst_index << DstTileSizeLog2[DstTileShape::Tile32x32];
+    const std::uint32_t tile_offset = dst_index << DstTileSizeLog2[to_underlying(DstTileShape::Tile32x32)];
     for (int col = 0; col < 2; col++)
     {
         canonical_big_block_with_replay<2>(ascending);

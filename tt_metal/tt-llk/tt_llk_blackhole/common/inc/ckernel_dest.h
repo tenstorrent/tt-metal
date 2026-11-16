@@ -51,15 +51,15 @@ inline void set_dest_fmt(std::uint32_t fmt)
 {
     static_assert(IS_TRISC_THREAD<thread_id>, "Thread must be UnpackThreadId or MathThreadId or PackThreadId");
 
-    if constexpr (thread_id == UnpackThreadId)
+    if constexpr (thread_id == ThreadId::UnpackThreadId)
     {
         cfg_reg_rmw_tensix<RISC_DEST_ACCESS_CTRL_SEC0_fmt_RMW>(fmt);
     }
-    else if constexpr (thread_id == MathThreadId)
+    else if constexpr (thread_id == ThreadId::MathThreadId)
     {
         cfg_reg_rmw_tensix<RISC_DEST_ACCESS_CTRL_SEC1_fmt_RMW>(fmt);
     }
-    else if constexpr (thread_id == PackThreadId)
+    else if constexpr (thread_id == ThreadId::PackThreadId)
     {
         cfg_reg_rmw_tensix<RISC_DEST_ACCESS_CTRL_SEC2_fmt_RMW>(fmt);
     }
@@ -76,15 +76,15 @@ inline void set_dest_unsigned_int_rmw(const int val)
 {
     static_assert(IS_TRISC_THREAD<thread_id>, "Thread must be UnpackThreadId or MathThreadId or PackThreadId");
 
-    if constexpr (thread_id == UnpackThreadId)
+    if constexpr (thread_id == ThreadId::UnpackThreadId)
     {
         cfg_reg_rmw_tensix<RISC_DEST_ACCESS_CTRL_SEC0_unsigned_int_RMW>(val);
     }
-    else if constexpr (thread_id == MathThreadId)
+    else if constexpr (thread_id == ThreadId::MathThreadId)
     {
         cfg_reg_rmw_tensix<RISC_DEST_ACCESS_CTRL_SEC1_unsigned_int_RMW>(val);
     }
-    else if constexpr (thread_id == PackThreadId)
+    else if constexpr (thread_id == ThreadId::PackThreadId)
     {
         cfg_reg_rmw_tensix<RISC_DEST_ACCESS_CTRL_SEC2_unsigned_int_RMW>(val);
     }
@@ -105,15 +105,15 @@ inline void set_dest_no_swizzle_rmw(const int val)
     // no saturation checks and no bit shuffling. This means they
     // are incompatible with the FPU, but it could be useful for
     // debugging
-    if constexpr (thread_id == UnpackThreadId)
+    if constexpr (thread_id == ThreadId::UnpackThreadId)
     {
         cfg_reg_rmw_tensix<RISC_DEST_ACCESS_CTRL_SEC0_no_swizzle_RMW>(val);
     }
-    else if constexpr (thread_id == MathThreadId)
+    else if constexpr (thread_id == ThreadId::MathThreadId)
     {
         cfg_reg_rmw_tensix<RISC_DEST_ACCESS_CTRL_SEC1_no_swizzle_RMW>(val);
     }
-    else if constexpr (thread_id == PackThreadId)
+    else if constexpr (thread_id == ThreadId::PackThreadId)
     {
         cfg_reg_rmw_tensix<RISC_DEST_ACCESS_CTRL_SEC2_no_swizzle_RMW>(val);
     }

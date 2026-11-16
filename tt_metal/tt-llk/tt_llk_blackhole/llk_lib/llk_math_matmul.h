@@ -99,7 +99,7 @@ inline void matmul_configure_addrmod(
         // reset src and fidelity, step dest cr (and the counter with it) to the base row of the next tile of the
         // reuse row: the next column when SrcB is reused along a row, the next row when SrcA is reused down a column
         const bool reuse_a                   = ct_dim >= rt_dim;
-        const std::uint32_t dest_tile_stride = (reuse_a ? 1 : ct_dim) << DstTileSizeLog2[DstTileShape::Tile32x32];
+        const std::uint32_t dest_tile_stride = (reuse_a ? 1 : ct_dim) << DstTileSizeLog2[to_underlying(DstTileShape::Tile32x32)];
         LLK_ASSERT(dest_tile_stride <= DEST_INCR_MASK, "matmul row MOP: the DEST step to the next tile does not fit the dest increment");
         const addr_mod_t next_tile {
             .srca     = {.incr = 0, .clr = 1, .cr = 1},

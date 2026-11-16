@@ -36,33 +36,33 @@ inline void _llk_unpack_AB_compressed_custom_mm_mop_config_()
         []
         {
             // Bfp8
-            TTI_UNPACR_NOP(SrcA, 0, 0, 0, 0, 1, 0, 0, p_unpacr_nop::CLR_SRC);
+            TTI_UNPACR_NOP(p_srcs::SrcA, 0, 0, 0, 0, 1, 0, 0, p_unpacr_nop::CLR_SRC);
             TTI_WRCFG(p_gpr_unpack::PERF_UNPACK_NUM_TILES_3, p_cfg::WRCFG_32b, THCON_SEC0_REG0_TileDescriptor_ADDR32);
             TTI_NOP;
-            TTI_UNPACR_COMMON(SrcA, 0b00000000, set_dvalid);
+            TTI_UNPACR_COMMON(p_srcs::SrcA, 0b00000000, set_dvalid);
             TTI_CFGSHIFTMASK(1, 3, 32 - 1, 0, 0, THCON_SEC0_REG3_Base_address_ADDR32);
             TTI_NOP;
-            TTI_UNPACR_COMMON(SrcB, 0b00010001, 0);
-            TTI_UNPACR_COMMON(SrcB, 0b00110100, set_dvalid);
+            TTI_UNPACR_COMMON(p_srcs::SrcB, 0b00010001, 0);
+            TTI_UNPACR_COMMON(p_srcs::SrcB, 0b00110100, set_dvalid);
             // Bfp4
-            TTI_UNPACR_NOP(SrcA, 0, 0, 0, 0, 1, 0, 0, p_unpacr_nop::CLR_SRC);
+            TTI_UNPACR_NOP(p_srcs::SrcA, 0, 0, 0, 0, 1, 0, 0, p_unpacr_nop::CLR_SRC);
             TTI_WRCFG(p_gpr_unpack::PERF_UNPACK_NUM_TILES_2, p_cfg::WRCFG_32b, THCON_SEC0_REG0_TileDescriptor_ADDR32);
             TTI_NOP;
-            TTI_UNPACR_COMMON(SrcA, 0b00000000, set_dvalid);
+            TTI_UNPACR_COMMON(p_srcs::SrcA, 0b00000000, set_dvalid);
             TTI_CFGSHIFTMASK(1, 3, 32 - 1, 0, 1, THCON_SEC0_REG3_Base_address_ADDR32);
             TTI_NOP;
-            TTI_UNPACR_COMMON(SrcB, 0b00010001, 0);
-            TTI_UNPACR_COMMON(SrcB, 0b00110100, set_dvalid);
+            TTI_UNPACR_COMMON(p_srcs::SrcB, 0b00010001, 0);
+            TTI_UNPACR_COMMON(p_srcs::SrcB, 0b00110100, set_dvalid);
             // Bfp2
-            TTI_UNPACR_NOP(SrcA, 0, 0, 0, 0, 1, 0, 0, p_unpacr_nop::CLR_SRC);
+            TTI_UNPACR_NOP(p_srcs::SrcA, 0, 0, 0, 0, 1, 0, 0, p_unpacr_nop::CLR_SRC);
             TTI_WRCFG(p_gpr_unpack::PERF_UNPACK_NUM_TILES_1, p_cfg::WRCFG_32b, THCON_SEC0_REG0_TileDescriptor_ADDR32);
             TTI_NOP;
-            TTI_UNPACR_COMMON(SrcA, 0b00000000, set_dvalid);
+            TTI_UNPACR_COMMON(p_srcs::SrcA, 0b00000000, set_dvalid);
             TTI_CFGSHIFTMASK(1, 3, 32 - 1, 0, 2, THCON_SEC0_REG3_Base_address_ADDR32);
             TTI_NOP;
-            TTI_UNPACR_COMMON(SrcB, 0b00010001, 0);
-            TTI_UNPACR_COMMON(SrcB, 0b00110100, set_dvalid);
-            TTI_UNPACR_NOP(SrcA, 0, 0, 0, 0, 1, 0, 0, p_unpacr_nop::CLR_SRC);
+            TTI_UNPACR_COMMON(p_srcs::SrcB, 0b00010001, 0);
+            TTI_UNPACR_COMMON(p_srcs::SrcB, 0b00110100, set_dvalid);
+            TTI_UNPACR_NOP(p_srcs::SrcA, 0, 0, 0, 0, 1, 0, 0, p_unpacr_nop::CLR_SRC);
         });
 }
 
@@ -102,7 +102,7 @@ inline void _llk_unpack_AB_compressed_custom_mm_init_(const std::uint32_t unpB_f
         // This particular instruction clears both banks after waiting for both of them to be free
         // It must run alone: a both-bank SrcB clear drops SrcA writes that unpacker 0 makes while it runs
         TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::UNPACK);
-        TTI_UNPACR_NOP(SrcB, 0, 0, 0, 0, 0, 1, 0, p_unpacr_nop::CLR_SRC);
+        TTI_UNPACR_NOP(p_srcs::SrcB, 0, 0, 0, 0, 0, 1, 0, p_unpacr_nop::CLR_SRC);
         TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::UNPACK1);
     }
 
@@ -288,7 +288,7 @@ inline void _llk_unpack_AB_compressed_custom_mm_(
     // The to/from bfp2 stall is encoded per tile only within a call; the first tile's prev format is a
     // metadata sentinel, not the last format of the previous call, so always end on the stall. It only has
     // to precede the next call's unpacks, so it goes after the SEMGET to keep it out of the context handshake.
-    TTI_UNPACR_NOP(SrcA, 0, 0, 0, 0, 1 /* Stall_Clr_Cntrl */, 0, 0, p_unpacr_nop::CLR_SRC);
+    TTI_UNPACR_NOP(p_srcs::SrcA, 0, 0, 0, 0, 1 /* Stall_Clr_Cntrl */, 0, 0, p_unpacr_nop::CLR_SRC);
 
     wait_for_next_context(1);
     reset_config_context();

@@ -37,7 +37,7 @@ using namespace ckernel::unpacker;
 inline void _llk_unpack_AB_reduce_block_max_row_mop_config_runtime_(std::uint32_t block_ct_dim, bool respect_trigger = false)
 {
     static constexpr std::uint32_t unpack_srca_op =
-        TT_OP_UNPACR(SrcA, 0b00000001 /* Z_ch0_inc and Z_ch1_inc */, 0, 0, 0, 1, 1 /* Set Dvalid */, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+        TT_OP_UNPACR(p_srcs::SrcA, 0b00000001 /* Z_ch0_inc and Z_ch1_inc */, 0, 0, 0, 1, 1 /* Set Dvalid */, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
 
     const std::uint32_t outerloop = respect_trigger ? (block_ct_dim / 2) : block_ct_dim;
     const std::uint32_t innerloop = 1;
@@ -126,7 +126,7 @@ inline void _llk_unpack_AB_reduce_block_max_row_runtime_(
     // Stall unpacker until pending CFG writes from Trisc have completed
     TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
 
-    TTI_UNPACR(SrcB, 0b00000000 /* Z_ch0_inc and Z_ch1_inc */, 0, 0, 0, 1, 1 /* Set Dvalid */, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+    TTI_UNPACR(p_srcs::SrcB, 0b00000000 /* Z_ch0_inc and Z_ch1_inc */, 0, 0, 0, 1, 1 /* Set Dvalid */, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
 
     if (respect_trigger)
     {

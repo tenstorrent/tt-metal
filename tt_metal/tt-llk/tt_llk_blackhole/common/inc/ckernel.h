@@ -243,7 +243,7 @@ static constexpr bool is_valid(const T val, const std::uint8_t wid)
 
 inline void mmio_register_write(register_space_e space, std::uint32_t addr, std::uint32_t data)
 {
-    const std::uint32_t regaddr = (space << 6) | (addr & 0x3F);
+    const std::uint32_t regaddr = (to_underlying(space) << 6) | (addr & 0x3F);
     reg_base[regaddr]           = data;
 }
 
@@ -544,20 +544,20 @@ inline void cfg_reg_rmw_tensix(std::uint32_t val)
     }
 }
 
-inline void mailbox_write(const std::uint8_t thread, const std::uint32_t data)
+inline void mailbox_write(const ThreadId thread, const std::uint32_t data)
 {
-    mailbox_base[thread][0] = data;
+    mailbox_base[to_underlying(thread)][0] = data;
 }
 
 // Blocking read: returns only once the message has arrived, even when the caller never uses the value.
-[[nodiscard]] inline std::uint32_t mailbox_read(const std::uint8_t thread)
+[[nodiscard]] inline std::uint32_t mailbox_read(const ThreadId thread)
 {
-    return load_blocking(&mailbox_base[thread][0]);
+    return load_blocking(&mailbox_base[to_underlying(thread)][0]);
 }
 
-inline bool mailbox_not_empty(const std::uint8_t thread)
+inline bool mailbox_not_empty(const ThreadId thread)
 {
-    return mailbox_base[thread][1] > 0;
+    return mailbox_base[to_underlying(thread)][1] > 0;
 }
 
 template <class T>

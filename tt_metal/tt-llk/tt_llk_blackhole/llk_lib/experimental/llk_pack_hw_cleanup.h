@@ -67,7 +67,7 @@ inline void _llk_pack_hw_cleanup_poison_pack_ambient_()
 template <DstSync Dst, bool is_fp32_dest_acc_en>
 inline void _llk_pack_hw_cleanup_canonical_()
 {
-    hw_cleanup::start<PackThreadId>();
+    hw_cleanup::start<ThreadId::PackThreadId>();
 
     hw_cleanup::select_cfg_state(0);
     _llk_pack_hw_cleanup_configure_current_bank_<is_fp32_dest_acc_en>();
@@ -81,5 +81,5 @@ inline void _llk_pack_hw_cleanup_canonical_()
 
     _llk_pack_hw_cleanup_poison_pack_ambient_();
 
-    hw_cleanup::finish<PackThreadId>();
+    hw_cleanup::finish<ThreadId::PackThreadId>();
 }

@@ -42,27 +42,29 @@ inline bool requires_disabled_src_zero_flag(const std::uint32_t srca_dst_format,
     return (srca_dst_format == static_cast<std::uint32_t>(DataFormat::UInt16)) || (srcb_dst_format == static_cast<std::uint32_t>(DataFormat::UInt16));
 }
 
-enum Srcs
+// Source register selector, written into instruction fields (e.g. UNPACR Unpack_block_selection).
+// Plain integer constants rather than an enum class so they can be used directly as encoding values.
+struct p_srcs
 {
-    SrcA = 0,
-    SrcB = 1,
-    SrcC = 2
+    constexpr static std::uint32_t SrcA = 0;
+    constexpr static std::uint32_t SrcB = 1;
+    constexpr static std::uint32_t SrcC = 2;
 };
 
-enum Unpackers
+enum class Unpackers
 {
     Unp0   = 0,
     Unp1   = 1,
     UnpAll = 2
 };
 
-enum DstStart
+enum class DstStart
 {
     StartZero = 0,
     StartHalf = 1
 };
 
-enum DstClear
+enum class DstClear
 {
     ClearRow    = 0,
     Clear16Rows = 1,
@@ -70,7 +72,7 @@ enum DstClear
     ClearFull   = 3
 };
 
-enum ThreadId
+enum class ThreadId
 {
     BriscThreadId  = 0,
     UnpackThreadId = 1,
@@ -84,27 +86,27 @@ enum class DataLayout
     ROW_MAJOR = 1
 };
 
-enum DstTileShape
+enum class DstTileShape
 {
     Tile32x32 = 0,
     Tile32x16 = 1,
     Tile16x16 = 2
 };
 
-enum UnpackDestination
+enum class UnpackDestination
 {
     SrcRegs = 0,
     DestReg = 1
 };
 
-enum register_space_e
+enum class register_space_e
 {
     TDMA_REGS     = 0x0,
     LOCAL_REGS    = 0x1,
     ADDR_COUNTERS = 0x2
 };
 
-enum SortDir : bool
+enum class SortDir : bool
 {
     ArgMax = false,
     ArgMin = true,
@@ -154,7 +156,7 @@ constexpr auto to_underlying(T t) noexcept
 }
 
 template <ThreadId thread_id>
-constexpr bool IS_TRISC_THREAD = thread_id == MathThreadId || thread_id == PackThreadId || thread_id == UnpackThreadId;
+constexpr bool IS_TRISC_THREAD = thread_id == ThreadId::MathThreadId || thread_id == ThreadId::PackThreadId || thread_id == ThreadId::UnpackThreadId;
 
 inline constexpr static std::uint32_t masked_data_format(std::uint32_t data_format)
 {

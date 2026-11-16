@@ -376,8 +376,8 @@ inline void _perf_mock_srcb_reuse_(const std::uint32_t a_count, const std::uint3
 
 inline void _perf_unpack_set_valid(std::uint32_t source)
 {
-    std::uint32_t set_a = source == ckernel::SrcA ? 1 : 0;
-    std::uint32_t set_b = source == ckernel::SrcB ? 1 : 0;
+    std::uint32_t set_a = source == ckernel::p_srcs::SrcA ? 1 : 0;
+    std::uint32_t set_b = source == ckernel::p_srcs::SrcB ? 1 : 0;
 
     std::uint32_t wait_clear_a = set_a ? ckernel::p_stall::SRCA_CLR : 0;
     std::uint32_t wait_clear_b = set_b ? ckernel::p_stall::SRCB_CLR : 0;
@@ -406,8 +406,8 @@ inline void _perf_unpack_set_valid(std::uint32_t source)
 
 inline void _perf_math_clear_valid(std::uint32_t source)
 {
-    std::uint32_t clear_a = source == ckernel::SrcA ? 1 : 0;
-    std::uint32_t clear_b = source == ckernel::SrcB ? 1 : 0;
+    std::uint32_t clear_a = source == ckernel::p_srcs::SrcA ? 1 : 0;
+    std::uint32_t clear_b = source == ckernel::p_srcs::SrcB ? 1 : 0;
 
     std::uint32_t wait_valid_a = clear_a ? ckernel::p_stall::SRCA_VLD : 0;
     std::uint32_t wait_valid_b = clear_b ? ckernel::p_stall::SRCB_VLD : 0;
@@ -509,10 +509,10 @@ inline void _perf_unpack_matmul_mock(std::uint32_t loop_factor, std::uint32_t rt
         {
             for (std::uint32_t j = 0; j < kt_dim; j++)
             {
-                const std::uint32_t reuse_reg  = ct_dim >= rt_dim ? ckernel::SrcB : ckernel::SrcA;
+                const std::uint32_t reuse_reg  = ct_dim >= rt_dim ? ckernel::p_srcs::SrcB : ckernel::p_srcs::SrcA;
                 const std::uint32_t reuse_loop = std::min(ct_dim, rt_dim);
 
-                const std::uint32_t reload_reg  = ct_dim >= rt_dim ? ckernel::SrcA : ckernel::SrcB;
+                const std::uint32_t reload_reg  = ct_dim >= rt_dim ? ckernel::p_srcs::SrcA : ckernel::p_srcs::SrcB;
                 const std::uint32_t reload_loop = std::max(ct_dim, rt_dim);
 
 #ifdef ARCH_WORMHOLE
@@ -586,10 +586,10 @@ inline void _perf_math_matmul_mock(std::uint32_t loop_factor, std::uint32_t rt_d
         {
             for (std::uint32_t j = 0; j < kt_dim; j++)
             {
-                const std::uint32_t reuse_reg  = ct_dim >= rt_dim ? ckernel::SrcB : ckernel::SrcA;
+                const std::uint32_t reuse_reg  = ct_dim >= rt_dim ? ckernel::p_srcs::SrcB : ckernel::p_srcs::SrcA;
                 const std::uint32_t reuse_loop = std::min(ct_dim, rt_dim);
 
-                const std::uint32_t reload_reg  = ct_dim >= rt_dim ? ckernel::SrcA : ckernel::SrcB;
+                const std::uint32_t reload_reg  = ct_dim >= rt_dim ? ckernel::p_srcs::SrcA : ckernel::p_srcs::SrcB;
                 const std::uint32_t reload_loop = std::max(ct_dim, rt_dim);
 
 #ifdef ARCH_WORMHOLE

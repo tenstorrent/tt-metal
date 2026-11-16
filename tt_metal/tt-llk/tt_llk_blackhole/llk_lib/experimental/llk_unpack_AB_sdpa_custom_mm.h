@@ -58,7 +58,7 @@ inline void _llk_unpack_AB_sdpa_custom_mm_(
             TT_SETADCXX(p_setadc::UNP_B, ct_dim * 2 * FACE_C_DIM - 1, 0x0);
         }
         TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
-        TTI_UNPACR_COMMON_EXPLICIT_CONTEXT(SrcB, 0b00000000, 1, 1);
+        TTI_UNPACR_COMMON_EXPLICIT_CONTEXT(p_srcs::SrcB, 0b00000000, 1, 1);
         if constexpr (configure_mask_extent)
         {
             TT_SETADCXX(p_setadc::UNP_B, operandB_face_r_dim * FACE_C_DIM - 1, 0x0);

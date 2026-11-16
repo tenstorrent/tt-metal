@@ -37,7 +37,7 @@ inline void _llk_unpack_AB_custom_mm_iter_insns(const bool post1)
     }
 
     // Unpack SrcA (in1, full tile, uses CFGSHIFTMASK to manipulate L1 addr and keeps SrcA addr fixed at 0)
-    TTI_UNPACR_COMMON(SrcA, 0b00000000, 1); // Also set dvalid
+    TTI_UNPACR_COMMON(p_srcs::SrcA, 0b00000000, 1); // Also set dvalid
 
     // Unpack SrcB (in0, one instruction per face, uses counters to manipulate addresses for both L1 and SrcB)
     // Counters of interest are CH0 Y and Z (both with a stride of a single face in L1
@@ -52,11 +52,11 @@ inline void _llk_unpack_AB_custom_mm_iter_insns(const bool post1)
     // thus an increment of 48 rows or 3 CH1 Y increments wraps us back to 0
     // (which is conveniently the max we can increment in a single instruction)
 
-    TTI_UNPACR_COMMON(SrcB, 0b00010001, 0);
+    TTI_UNPACR_COMMON(p_srcs::SrcB, 0b00010001, 0);
     if (!post1)
     {
         // Unpack second face of SrcB before CFGSHIFTMASK in post0 tuning
-        TTI_UNPACR_COMMON(SrcB, 0b00110100, 1); // Also set dvalid
+        TTI_UNPACR_COMMON(p_srcs::SrcB, 0b00110100, 1); // Also set dvalid
     }
 
     // Increment UnpA L1 address
@@ -64,7 +64,7 @@ inline void _llk_unpack_AB_custom_mm_iter_insns(const bool post1)
     if (post1)
     {
         // Unpack second face of SrcB after CFGSHIFTMASK in post1 tuning
-        TTI_UNPACR_COMMON(SrcB, 0b00110100, 1); // Also set dvalid;
+        TTI_UNPACR_COMMON(p_srcs::SrcB, 0b00110100, 1); // Also set dvalid;
     }
     else
     {
@@ -93,13 +93,13 @@ inline void _llk_unpack_AB_custom_mm_mop_config_(const std::uint32_t ct_dim, con
             for (std::uint32_t i = 0; i < 8; i++)
             {
                 // Reuse unpack (unpacks only SrcA, SrcB is reused across width dim)
-                TTI_UNPACR_COMMON(SrcA, 0b00000000, 1); // Also set dvalid
+                TTI_UNPACR_COMMON(p_srcs::SrcA, 0b00000000, 1); // Also set dvalid
                 TTI_CFGSHIFTMASK(1, 3, 32 - 1, 0, 0, THCON_SEC0_REG3_Base_address_ADDR32);
                 TTI_NOP;
             }
 
             // Reuse unpack (unpacks only SrcA, SrcB is reused across width dim)
-            TTI_UNPACR_COMMON(SrcA, 0b00000000, 1); // Also set dvalid
+            TTI_UNPACR_COMMON(p_srcs::SrcA, 0b00000000, 1); // Also set dvalid
             // This last iteration uses inner_increment instead of block_increment
             TTI_CFGSHIFTMASK(1, 3, 32 - 1, 0, 1, THCON_SEC0_REG3_Base_address_ADDR32);
             TTI_NOP;
@@ -222,7 +222,7 @@ inline void _llk_unpack_AB_custom_mm_init_(
         // This particular instruction clears both banks after waiting for both of them to be free
         // It must run alone: a both-bank SrcB clear drops SrcA writes that unpacker 0 makes while it runs
         TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::UNPACK);
-        TTI_UNPACR_NOP(SrcB, 0, 0, 0, 0, 0, 1, 0, p_unpacr_nop::CLR_SRC);
+        TTI_UNPACR_NOP(p_srcs::SrcB, 0, 0, 0, 0, 0, 1, 0, p_unpacr_nop::CLR_SRC);
         TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::UNPACK1);
     }
 
