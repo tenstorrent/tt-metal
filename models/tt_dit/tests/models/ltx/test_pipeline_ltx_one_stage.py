@@ -109,6 +109,7 @@ def test_pipeline_one_stage(
         tp_axis=tp_axis,
         num_links=num_links,
         offload_weights=offload_weights,
+        trace=False,
         topology=topology,
         is_fsdp=is_fsdp,
         run_warmup=run_warmup,

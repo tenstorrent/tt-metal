@@ -87,18 +87,28 @@ def test_encoder_pair_traces_only_with_a_traced_resident_pipeline(
     assert pair._encoder_trace is encoder_trace
 
 
-def _create(monkeypatch: pytest.MonkeyPatch, **kwargs: object) -> tuple[dict, list[str]]:
-    monkeypatch.setattr(ttnn.device, "is_blackhole", lambda: True)
+def _create(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    mesh_shape: tuple[int, int] = (4, 8),
+    blackhole: bool = True,
+    level: str = "WARNING",
+    **kwargs: object,
+) -> tuple[dict, list[str]]:
+    monkeypatch.setattr(ttnn.device, "is_blackhole", lambda: blackhole)
     monkeypatch.setattr(pipeline_ltx, "CCLManager", lambda *args, **kwargs: None)
     messages: list[str] = []
-    sink = logger.add(lambda m: messages.append(m.record["message"]), level="WARNING")
+    sink = logger.add(lambda m: messages.append(m.record["message"]), level=level)
     try:
         built = LTXPipeline.create_pipeline(
-            SimpleNamespace(shape=(4, 8)), pipeline_class=lambda **constructor_kwargs: constructor_kwargs, **kwargs
+            SimpleNamespace(shape=mesh_shape), pipeline_class=lambda **constructor_kwargs: constructor_kwargs, **kwargs
         )
     finally:
         logger.remove(sink)
     return built, messages
+
+
+_SIZE = {"num_frames": 121, "height": 512, "width": 768}
 
 
 def test_create_pipeline_takes_the_deprecated_keyword_names(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -139,3 +149,74 @@ def test_deprecated_names_still_meet_the_trace_rule(expect_error: Callable) -> N
     trace = pipeline_ltx._renamed_keyword(kwargs, "traced", "trace", None)  # noqa: SLF001
     with expect_error(ValueError, _RULE):
         LTXPipeline(None, None, None, offload_weights=offload_weights, trace=trace)
+
+
+@pytest.mark.parametrize(
+    ("blackhole", "mesh_shape", "offload_weights"),
+    [
+        (True, (4, 8), False),
+        (True, (2, 4), True),
+        (False, (1, 8), False),
+        (False, (2, 4), False),
+        (False, (4, 8), False),
+    ],
+)
+def test_trace_defaults_to_the_meshes_that_keep_weights_resident(
+    monkeypatch: pytest.MonkeyPatch, blackhole: bool, mesh_shape: tuple[int, int], offload_weights: bool
+) -> None:
+    built, messages = _create(monkeypatch, mesh_shape=mesh_shape, blackhole=blackhole, **_SIZE)
+    assert built["offload_weights"] is offload_weights
+    assert built["trace"] is (not offload_weights)
+    assert built["trace_by_default"] is True
+    assert messages == []
+
+
+def test_without_a_size_to_warm_up_at_the_default_is_eager(monkeypatch: pytest.MonkeyPatch) -> None:
+    for size in ({}, {**_SIZE, "num_frames": 0}, {**_SIZE, "height": 0}, {**_SIZE, "width": 0}):
+        built, messages = _create(monkeypatch, level="INFO", **size)
+        assert (built["offload_weights"], built["trace"], built["trace_by_default"]) == (False, False, True)
+        assert ["running untraced by default" in m for m in messages] == [True]
+
+
+def test_an_offloading_default_is_eager_without_a_message(monkeypatch: pytest.MonkeyPatch) -> None:
+    built, messages = _create(monkeypatch, mesh_shape=(2, 4), level="INFO")
+    assert (built["offload_weights"], built["trace"]) == (True, False)
+    assert messages == []
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "trace"),
+    [
+        ({"trace": False, **_SIZE}, False),
+        ({"traced": False, **_SIZE}, False),
+        ({"trace": True}, True),
+        ({"traced": True}, True),
+    ],
+)
+def test_an_explicit_trace_is_kept(monkeypatch: pytest.MonkeyPatch, kwargs: dict, trace: bool) -> None:
+    built, _ = _create(monkeypatch, **kwargs)
+    assert (built["trace"], built["trace_by_default"]) == (trace, False)
+
+
+@pytest.mark.parametrize("name", ["offload_weights", "dynamic_load"])
+def test_an_offload_override_moves_the_default(monkeypatch: pytest.MonkeyPatch, name: str) -> None:
+    built, _ = _create(monkeypatch, **{name: True}, **_SIZE)
+    assert (built["offload_weights"], built["trace"], built["trace_by_default"]) == (True, False, True)
+
+
+@pytest.mark.parametrize("by_default", [True, False])
+def test_construction_checks_the_trace_region(monkeypatch: pytest.MonkeyPatch, by_default: bool) -> None:
+    class _Checked(Exception):
+        pass
+
+    def check(self: Pipeline, mesh_device: object, *, by_default: bool) -> None:
+        raise _Checked(self.trace, mesh_device, by_default)
+
+    monkeypatch.setattr(Pipeline, "warn_if_no_trace_region", check)
+    mesh_device = object()
+    try:
+        LTXPipeline(mesh_device, None, None, trace=True, trace_by_default=by_default)
+    except _Checked as checked:
+        assert checked.args == (True, mesh_device, by_default)
+    else:
+        pytest.fail("the trace region was not checked")

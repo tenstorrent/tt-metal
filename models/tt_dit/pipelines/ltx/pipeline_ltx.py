@@ -252,12 +252,14 @@ class LTXPipeline(Pipeline):
         fps: float = 24.0,
         run_warmup: bool = False,
         trace: bool = False,
+        trace_by_default: bool = False,
         extra_transformer_variants: list[tuple[str, list[LoraSpec]]] | None = None,
         lora_enabled: bool = False,
         lora_cache_capacity: int = 2,
         image_conditioning: bool | None = None,
     ):
         super().__init__(offload_weights=offload_weights, trace=trace)
+        self.warn_if_no_trace_region(mesh_device, by_default=trace_by_default)
         self.mesh_device = mesh_device
         self.parallel_config = parallel_config
         self.ccl_manager = ccl_manager
@@ -454,10 +456,13 @@ class LTXPipeline(Pipeline):
         repo strings (auto-downloaded on first use). Subclass-specific kwargs
         (e.g. ``distilled_lora_path``) flow through ``extra_pipeline_kwargs``.
 
+        ``trace`` left unset traces where the mesh keeps the weights resident and a size is given
+        to warm up at; otherwise the pipeline runs eager.
+
         ``dynamic_load`` and ``traced`` are the deprecated names of ``offload_weights`` and ``trace``.
         """
         offload_weights = _renamed_keyword(extra_pipeline_kwargs, "dynamic_load", "offload_weights", offload_weights)
-        trace = bool(_renamed_keyword(extra_pipeline_kwargs, "traced", "trace", trace))
+        trace = _renamed_keyword(extra_pipeline_kwargs, "traced", "trace", trace)
         mesh_shape = tuple(mesh_device.shape)
         device_configs: dict[tuple[int, int], dict] = {}
         if ttnn.device.is_blackhole():
@@ -510,6 +515,13 @@ class LTXPipeline(Pipeline):
         offload_weights = offload_weights if offload_weights is not None else defaults["offload_weights"]
         topology = topology if topology is not None else defaults["topology"]
         is_fsdp = is_fsdp if is_fsdp is not None else defaults["is_fsdp"]
+        trace_by_default = trace is None
+        if trace_by_default:
+            # A trace is captured over kernels compiled by the warm-up, which needs the size.
+            sized = num_frames > 0 and height > 0 and width > 0
+            trace = sized and not offload_weights
+            if not sized and not offload_weights:
+                logger.info("LTX create_pipeline: no size given to warm up at, running untraced by default")
 
         parallel_config = DiTParallelConfig(
             cfg_parallel=ParallelFactor(factor=1, mesh_axis=0),
@@ -542,7 +554,8 @@ class LTXPipeline(Pipeline):
             width=width,
             fps=fps,
             run_warmup=run_warmup,
-            trace=trace,
+            trace=bool(trace),
+            trace_by_default=trace_by_default,
             **extra_pipeline_kwargs,
         )
 

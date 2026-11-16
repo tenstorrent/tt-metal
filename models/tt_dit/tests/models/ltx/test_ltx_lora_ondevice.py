@@ -97,6 +97,7 @@ def test_ondevice_lora_bind_matches_host_delta(
         tp_axis=tp_axis,
         num_links=num_links,
         offload_weights=offload_weights,
+        trace=False,
         topology=topology,
         is_fsdp=is_fsdp,
         mode="av",
