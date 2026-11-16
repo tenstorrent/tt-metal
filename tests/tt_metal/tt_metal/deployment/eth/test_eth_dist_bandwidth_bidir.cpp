@@ -107,8 +107,9 @@ TEST_F(MeshDispatchFixture, TensixDeploymentEthernet02BandwidthBidirDist) {
     delay_until_env();
 
     for (auto& core : get_dist_cores_to_test(devices_)) {
-        log_info(tt::LogTest, "running {}", core);
         const auto processor = static_cast<DataMovementProcessor>(0);
+
+        log_info(tt::LogTest, "    testing dist {} {}", get_eth_unique_id(core.chip, core.core), processor);
 
         bool passed = run_test_bandwidth_bidir(this, core.mesh_device, core.core, processor, inputs, core.direction);
 
@@ -116,7 +117,7 @@ TEST_F(MeshDispatchFixture, TensixDeploymentEthernet02BandwidthBidirDist) {
             errors.emplace_back(core.chip->id(), core.chip->id(), core.core, core.core, processor);
         }
 
-        log_info(tt::LogTest, "passed: {}", passed);
+        log_info(tt::LogTest, "    done");
     }
 
     print_summary(errors);
