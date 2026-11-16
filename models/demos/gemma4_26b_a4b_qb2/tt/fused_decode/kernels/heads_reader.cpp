@@ -43,9 +43,9 @@ void kernel_main() {
 
     const auto s_x = TensorAccessor(x_args, x_addr, page);
     const uint64_t zeros = get_noc_addr(MEM_ZEROS_BASE);
-    auto zero_tile = [&](uint32_t dst) {
-        for (uint32_t z = 0; z < page; z += MEM_ZEROS_SIZE) {
-            noc_async_read(zeros, dst + z, MEM_ZEROS_SIZE < page - z ? MEM_ZEROS_SIZE : page - z);
+    auto zero = [&](uint32_t dst, uint32_t bytes) {
+        for (uint32_t z = 0; z < bytes; z += MEM_ZEROS_SIZE) {
+            noc_async_read(zeros, dst + z, MEM_ZEROS_SIZE < bytes - z ? MEM_ZEROS_SIZE : bytes - z);
         }
     };
     // packed row r <- row 0 of QKV tile first + src_r
@@ -57,16 +57,20 @@ void kernel_main() {
         }
     };
 
+    // All reads in flight at once, one barrier. Only x needs zeros past its R rows (the norm sums the whole tile),
+    // and those rows are disjoint from the gathered ones; every other operand's rows >= R only reach output rows the
+    // writer never sends.
     cb_reserve_back(cb_x, 1);
-    zero_tile(get_write_ptr(cb_x));
-    noc_async_read_barrier();
-    gather(get_write_ptr(cb_x), false);
+    cb_reserve_back(cb_scaler, 1);
+    const uint32_t xt = get_write_ptr(cb_x);
+    zero(xt + 32 * R, face - 32 * R);
+    zero(xt + face + 32 * R, face - 32 * R);
+    zero(xt + 2 * face, 2 * face);
+    zero(get_write_ptr(cb_scaler), page);
+    gather(xt, false);
     if constexpr (rope) {
         cb_reserve_back(cb_xr, 1);
-        zero_tile(get_write_ptr(cb_xr));
         cb_reserve_back(cb_cs, 2);
-        zero_tile(get_write_ptr(cb_cs));
-        zero_tile(get_write_ptr(cb_cs) + page);
         cb_reserve_back(cb_g, 2);
         const auto s_g = TensorAccessor(g_args, g_addr, page);
         noc_async_read(s_g.get_noc_addr(2 * g_page), get_write_ptr(cb_g), page);
@@ -81,8 +85,8 @@ void kernel_main() {
             noc_async_read(s_s.get_noc_addr(r, 0), stage + 256 * r + 128, 64);
             noc_async_read(s_s.get_noc_addr(r, face), stage + 256 * r + 192, 64);
         }
-        noc_async_read_barrier();
         gather(get_write_ptr(cb_xr), true);
+        noc_async_read_barrier();
         const uint32_t cs = get_write_ptr(cb_cs);
         for (uint32_t r = 0; r < R; ++r) {
             volatile tt_l1_ptr uint32_t* src = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stage + 256 * r);
@@ -97,22 +101,19 @@ void kernel_main() {
                 s1[w] = src[48 + w];
             }
         }
+    } else {
+        noc_async_read_barrier();
     }
     {
-        // reduce scaler: 1.0 in row 0 of every face
-        cb_reserve_back(cb_scaler, 1);
-        volatile tt_l1_ptr uint32_t* s = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_scaler));
-        for (uint32_t i = 0; i < page / 4; ++i) {
-            s[i] = 0;
-        }
+        // reduce scaler (zeroed above): 1.0 in row 0 of every face
+        volatile tt_l1_ptr uint32_t* sc = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_scaler));
         for (uint32_t f = 0; f < 4; ++f) {
             for (uint32_t i = 0; i < 8; ++i) {
-                s[f * 128 + i] = 0x3F803F80;
+                sc[f * 128 + i] = 0x3F803F80;
             }
         }
-        cb_push_back(cb_scaler, 1);
     }
-    noc_async_read_barrier();
+    cb_push_back(cb_scaler, 1);
     cb_push_back(cb_x, 1);
     if constexpr (rope) {
         cb_push_back(cb_xr, 1);

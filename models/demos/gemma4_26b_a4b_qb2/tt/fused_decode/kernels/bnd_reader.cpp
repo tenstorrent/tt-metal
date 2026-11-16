@@ -112,13 +112,15 @@ void kernel_main() {
         cb_reserve_back(cb_vf, tiles);
         noc_async_read(s_vf.get_noc_addr(0), get_write_ptr(cb_vf), tiles * 2 * page);
     }
+    // Reduce scaler: 1.0 in the first row of each face of a BF16 tile (scalar sum of all 1024 values); zeroed by DMA
+    // with the reads above, the ones written after the barrier.
+    cb_reserve_back(cb_scaler, 1);
+    for (uint32_t z = 0; z < page; z += MEM_ZEROS_SIZE) {
+        noc_async_read(get_noc_addr(MEM_ZEROS_BASE), get_write_ptr(cb_scaler) + z, MEM_ZEROS_SIZE);
+    }
+    noc_async_read_barrier();
     {
-        // Reduce scaler: 1.0 in the first row of each face of a BF16 tile (scalar sum of all 1024 values).
-        cb_reserve_back(cb_scaler, 1);
         volatile tt_l1_ptr uint32_t* s = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_scaler));
-        for (uint32_t i = 0; i < page / 4; ++i) {
-            s[i] = 0;
-        }
         for (uint32_t f = 0; f < 4; ++f) {
             for (uint32_t i = 0; i < 8; ++i) {
                 s[f * 128 + i] = 0x3F803F80;
@@ -126,7 +128,6 @@ void kernel_main() {
         }
         cb_push_back(cb_scaler, 1);
     }
-    noc_async_read_barrier();
     cb_push_back(cb_g, gammas * tiles);
     if constexpr (has_vf) {
         cb_push_back(cb_vf, tiles);
