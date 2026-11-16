@@ -228,6 +228,11 @@ STATE_SPLIT = 0
 # R-QKCORE pair cores running several units: the reader writes the final states of all but the last unit, as compute
 # packs them (the writer would issue them only at the next unit's store point), the writer the last unit's.
 STATE_READER_EARLY_UNITS = False
+# R-QKCORE pair cores running several units (UNIT_LAG): after unit 0 the writer polls instead of blocking, so a unit's
+# coefficients never wait for an earlier state's write-back (decode B=32: the write-starved cores' compute idled 20 to
+# 77 us per unit behind state k - 1's barrier). Up to two final states in flight, each freed on its own transaction id.
+# 2: a state is also issued as soon as it is packed instead of after the next unit's coefficients.
+WRITER_ASYNC = 1
 # Decode token step (shared q / k builds): the token vector of a column tile in one SFPU pass over the token's band
 # instead of ~14 scalar / binary / broadcast SFPU calls with their inits (2.0 -> 0.6 us per unit at Vb = 4). "auto":
 # on for R-VSPLIT pieces (decode B=1: 12.5 -> 12.0 us), off for whole-V units (B=8 / B=16 are DRAM-bound there:
@@ -244,7 +249,7 @@ SPLIT_BCAST_GROUPS = False
 # Level 2 also compiles the point marks (GDN_MARK) of each block's end, for chain timelines (zone_timeline.py).
 PROFILE_ZONES = int(os.environ.get("GDN_PROFILE_ZONES", "0") or 0)
 # Knob overrides for before / after runs in one build: GDN_KNOBS="NAME=literal,NAME=literal".
-for _item in filter(None, os.environ.get("GDN_KNOBS", "").split(",")):
+for _item in filter(None, os.environ.get("GDN_KNOBS", "").replace(";", ",").split(",")):
     _name, _literal = _item.split("=", 1)
     assert _name.isupper() and _name in globals(), f"GDN_KNOBS: unknown knob {_name}"
     globals()[_name] = ast.literal_eval(_literal)
@@ -1666,6 +1671,7 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
             ("GDN_HOLD_QK", str(int(bool(qk_cores) and SHARE_QK_FINISH))),
             ("GDN_QK_RAW", str(int(qk_raw))),
             ("GDN_UNIT_LAG", str(int(prep is None and unit_lag(unit_depth)))),
+            ("GDN_WRITER_ASYNC", str(int(WRITER_ASYNC) * int(prep is None and unit_lag(unit_depth)))),
             ("GDN_STATE_STAGGER", str(STATE_STAGGER if qk_cores else 0)),
             ("GDN_STATE_SPLIT", str(int(state_split))),
             ("GDN_S0_WRITER", str(int(s0_writer_any))),

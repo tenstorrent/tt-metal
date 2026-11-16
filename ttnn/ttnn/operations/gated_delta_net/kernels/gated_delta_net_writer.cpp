@@ -76,6 +76,8 @@ constexpr bool UNIT_LAG = GDN_UNIT_LAG != 0;   // compute normalizes unit u afte
 constexpr uint32_t STATE_STAGGER = GDN_STATE_STAGGER;  // compute's rotation of the final-state tiles (see compute)
 constexpr bool STATE_SPLIT = GDN_STATE_SPLIT != 0;     // the reader writes this core's reader_share of the state tiles
 constexpr uint32_t cb_state_done = GDN_CB_STATE_DONE;  // STATE_SPLIT: the reader's tiles of a state have left
+constexpr bool WRITER_ASYNC = GDN_WRITER_ASYNC != 0;   // UNIT_LAG cores: no unit's coefficients wait for a write
+constexpr bool ASYNC_STATE_HOLD = GDN_WRITER_ASYNC != 2;
 constexpr uint32_t TILE_WORDS = 1024;  // cb_gates / cb_tok_coef are Float32 compute buffers
 constexpr uint32_t ONE_BITS = 0x3f800000u;  // 1.0f
 
@@ -138,6 +140,30 @@ FORCE_INLINE void mcast_rects(uint32_t arg, uint32_t src, uint32_t dst, uint32_t
                                                 : get_noc_multicast_addr(x_hi, y_hi, x_lo, y_lo, dst);
         noc_async_write_multicast(src, dst_noc, bytes, cores);
     }
+}
+
+// The three coefficient pages of the token at row p of a tile row: alpha, beta and 1 of gate column gate_col at
+// (p, 0), 0 elsewhere.
+void push_token_coefs(volatile tt_l1_ptr uint32_t* gates, uint32_t p, uint32_t gate_col) {
+    const uint32_t alpha = gates[elem_index(p, gate_col)];
+    const uint32_t beta = gates[TILE_WORDS + elem_index(p, gate_col)];
+    cb_reserve_back(cb_tok_coef, GDN_TOK_COEF_PAGES);
+    volatile tt_l1_ptr uint32_t* coef = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_tok_coef));
+    for (uint32_t r = 0; r < TILE_ROWS; ++r) {
+        const uint32_t e = elem_index(r, 0);
+        const bool at_p = (r == p);
+        coef[e] = at_p ? alpha : 0u;
+        coef[TILE_WORDS + e] = at_p ? beta : 0u;
+        coef[2 * TILE_WORDS + e] = at_p ? ONE_BITS : 0u;  // row-p selector
+    }
+    // TOKEN_VECTOR_FUSED reads the selector elementwise on p's 4-row band: every column there (~1.5 us
+    // of this RISC at decode B=1, off its critical path there).
+    for (uint32_t r = p & ~3u; r < (p & ~3u) + 4 && GDN_TOKEN_VECTOR_FUSED; ++r) {
+        for (uint32_t c = 1; c < TILE_ROWS; ++c) {
+            coef[2 * TILE_WORDS + elem_index(r, c)] = r == p ? ONE_BITS : 0u;
+        }
+    }
+    cb_push_back(cb_tok_coef, GDN_TOK_COEF_PAGES);
 }
 
 // Column-0 chunk coefficient pages of one pair for tile row [base_row, +32): g (page 0) and beta (page 1) of gate
@@ -734,7 +760,9 @@ void kernel_main() {
     const bool lag = UNIT_LAG && hold_qk && num_units > 1;
     // UNIT_LAG: the output rows of the previous unit, stored once compute has normalized them (after this unit's step).
     uint32_t lag_page = 0, lag_base = 0, lag_lo = 0, lag_hi = 0;
-    for (uint32_t unit_idx = 0; unit_idx < num_units; ++unit_idx) {
+    // WRITER_ASYNC: the loop runs unit 0 only; async_units serves the rest.
+    const bool async = WRITER_ASYNC && lag && !reader_writes && !s0_by_writer && PIECES == 1;
+    for (uint32_t unit_idx = 0; unit_idx < (async ? 1 : num_units); ++unit_idx) {
         const uint32_t unit = first_unit + unit_idx * unit_stride;
         GDN_ZONE("gdn_wr_unit");
         const uint32_t pair = unit / PIECES;
@@ -772,27 +800,7 @@ void kernel_main() {
                     push_chunk_coefs(gates, gate_col, base_row, lo, hi);
                 }
                 for (uint32_t row = lo; row < hi && !CHUNKED; ++row) {
-                    const uint32_t p = row - base_row;
-                    const uint32_t alpha = gates[elem_index(p, gate_col)];
-                    const uint32_t beta = gates[TILE_WORDS + elem_index(p, gate_col)];
-                    cb_reserve_back(cb_tok_coef, GDN_TOK_COEF_PAGES);
-                    volatile tt_l1_ptr uint32_t* coef =
-                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_tok_coef));
-                    for (uint32_t r = 0; r < TILE_ROWS; ++r) {
-                        const uint32_t e = elem_index(r, 0);
-                        const bool at_p = (r == p);
-                        coef[e] = at_p ? alpha : 0u;
-                        coef[TILE_WORDS + e] = at_p ? beta : 0u;
-                        coef[2 * TILE_WORDS + e] = at_p ? ONE_BITS : 0u;  // row-p selector
-                    }
-                    // TOKEN_VECTOR_FUSED reads the selector elementwise on p's 4-row band: every column there (~1.5 us
-                    // of this RISC at decode B=1, off its critical path there).
-                    for (uint32_t r = p & ~3u; r < (p & ~3u) + 4 && GDN_TOKEN_VECTOR_FUSED; ++r) {
-                        for (uint32_t c = 1; c < TILE_ROWS; ++c) {
-                            coef[2 * TILE_WORDS + elem_index(r, c)] = r == p ? ONE_BITS : 0u;
-                        }
-                    }
-                    cb_push_back(cb_tok_coef, GDN_TOK_COEF_PAGES);
+                    push_token_coefs(gates, row - base_row, gate_col);
                 }
                 cb_pop_front(cb_gates, 2);
                 GDN_MARK("m_wr_coef");
@@ -912,7 +920,77 @@ void kernel_main() {
             pop_state(n_state, reader_writes);
         }
     }
-    if (lag) {
+    if (async) {
+        // Units 1 on, T = 1: three jobs polled in turn, none of which waits. (1) The next unit's coefficients as soon
+        // as compute has its gates. (2) Final states tile by tile as compute packs them and the write command buffer
+        // is free; up to two states in flight (transaction id = state parity), each freed when its own writes have
+        // completed. (3) A unit's output rows once normalized, one unit in flight. A write-starved core thus keeps
+        // computing until cb_state_out is full.
+        constexpr uint32_t STATE_TRID = 12, ROWS_TRID = 14;
+        const auto& state_cb = get_local_cb_interface(cb_state_out);
+        const uint32_t state_slots = state_cb.fifo_size / (n_state * STATE_TILE_BYTES) < 2 ? 1 : 2;
+        uint32_t coef_unit = 1;
+        uint32_t state_unit = 0, state_tile = 0, states_freed = 0;
+        uint32_t rows_unit = 0, rows_freed = 0;
+        auto pair_of = [&](uint32_t unit_idx) { return (first_unit + unit_idx * unit_stride) / PIECES; };
+        while (states_freed < num_units || rows_freed < num_units) {
+            if (coef_unit < num_units && cb_pages_available_at_front(cb_gates, 2) &&
+                cb_pages_reservable_at_back(cb_tok_coef, GDN_TOK_COEF_PAGES)) {
+                const uint32_t pair = pair_of(coef_unit);
+                push_token_coefs(
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_gates)),
+                    (pair / Hv) % TILE_ROWS,
+                    (pair % Hv) % TILE_ROWS);
+                cb_pop_front(cb_gates, 2);
+                ++coef_unit;
+                GDN_MARK("m_wr_coef");
+            }
+            const bool cmd_free = noc_cmd_buf_ready(noc_index, write_cmd_buf);
+            const uint32_t ahead = (state_unit - states_freed) * n_state + state_tile;  // tiles before the next one
+            // A non-last state starts after the next unit's coefficients, as in the blocking order (earlier
+            // write-backs delay the other cores' S0 reads: decode B=16 +4.4 us).
+            const bool state_due = state_unit + 1 == num_units || coef_unit > state_unit + 1 || !ASYNC_STATE_HOLD;
+            if (cmd_free && state_unit < num_units && state_due && state_unit - states_freed < state_slots &&
+                cb_pages_available_at_front(cb_state_out, ahead + 1)) {
+                uint32_t src = get_read_ptr(cb_state_out) + ahead * STATE_TILE_BYTES;
+                src -= src >= state_cb.fifo_limit ? state_cb.fifo_size : 0;
+                const uint32_t page =
+                    gdn::state_out_page<Kt, Vt, Vb>(pair_of(state_unit) * Kt * Vt, state_tile, STATE_STAGGER);
+                noc_async_write_set_trid(STATE_TRID + (state_unit & 1));
+                noc_async_write(src, state_out.get_noc_addr(page), STATE_TILE_BYTES);
+                if (++state_tile == n_state) {
+                    state_tile = 0;
+                    ++state_unit;
+                    GDN_MARK("m_wr_state_issued");
+                }
+            } else if (cmd_free && rows_unit < num_units && rows_unit == rows_freed &&
+                       cb_pages_available_at_front(cb_out_rows, Vb)) {
+                const uint32_t pair = pair_of(rows_unit);
+                const uint32_t seq = pair / Hv;
+                const uint32_t base_row = seq / TILE_ROWS * TILE_ROWS;
+                noc_async_write_set_trid(ROWS_TRID);
+                store_rows<false>(
+                    out_acc, Vb, seq / TILE_ROWS * out_width_tiles + (pair % Hv) * Vt, base_row, seq, seq + 1);
+                ++rows_unit;
+            } else if (cmd_free) {
+                // The id counters are current only once the last command has left its buffer.
+                if (states_freed < state_unit &&
+                    ncrisc_noc_nonposted_write_with_transaction_id_flushed(noc_index, STATE_TRID + (states_freed & 1))) {
+                    cb_pop_front(cb_state_out, n_state);
+                    ++states_freed;
+                    GDN_MARK("m_wr_state_done");
+                }
+                if (rows_freed < rows_unit &&
+                    ncrisc_noc_nonposted_write_with_transaction_id_flushed(noc_index, ROWS_TRID)) {
+                    cb_pop_front(cb_out_rows, Vb);
+                    ++rows_freed;
+                }
+            }
+        }
+        noc_async_write_set_trid(0);
+        noc_async_write_barrier();
+        pending_state = 0xffffffffu;
+    } else if (lag) {
         // The previous rows' writes must have left cb_out_rows before the last unit's rows are read from its front.
         noc_async_writes_flushed();
         cb_pop_front(cb_out_rows, Vb);
