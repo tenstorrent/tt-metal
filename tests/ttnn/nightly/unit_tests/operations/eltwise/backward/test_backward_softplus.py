@@ -143,7 +143,7 @@ def _softplus_bw_torch_reference(grad, x, flush):
 
 
 def _softplus_bw_reference(grad, x, flush):
-    """Torch, except on the declared lanes."""
+    """Torch, except: 0 for any grad where x < -131.7, where even exp(x) * 2^64 is below the smallest normal."""
     result = _softplus_bw_torch_reference(grad, x, flush)
     x32 = x.to(torch.float32)
     result = torch.where(x32 < -131.75, torch.zeros_like(result), result)
@@ -331,6 +331,8 @@ def _softplus_bw_placements(shape):
         "sharded_output_without_spec",
         "float32",
         "other_scalars",
+        "other_beta",
+        "other_threshold",
     ],
 )
 def test_softplus_bw_runs_the_fused_program_only_where_it_applies(call, device):
@@ -349,11 +351,16 @@ def test_softplus_bw_runs_the_fused_program_only_where_it_applies(call, device):
     )
     tt_g = ttnn.from_torch(g, dtype=dtype, layout=grad_layout, device=device, memory_config=grad_memory)
     tt_x = ttnn.from_torch(x, dtype=dtype, layout=input_layout, device=device, memory_config=input_memory)
-    scalars = (
-        SOFTPLUS_BW_OTHER_SCALARS
-        if call == "other_scalars"
-        else {"beta": SOFTPLUS_BW_BETA, "threshold": SOFTPLUS_BW_THRESHOLD}
-    )
+    scalars = {"beta": SOFTPLUS_BW_BETA, "threshold": SOFTPLUS_BW_THRESHOLD}
+    if call.startswith("other_"):
+        # Every scalar, or the one the call names, off its fitted value.
+        scalars.update(
+            {
+                name: value
+                for name, value in SOFTPLUS_BW_OTHER_SCALARS.items()
+                if call in ("other_scalars", f"other_{name}")
+            }
+        )
     memory = {} if output_memory is None else {"memory_config": output_memory}
 
     result, error, trace = _softplus_bw_device_operations(lambda: ttnn.softplus_bw(tt_g, tt_x, **scalars, **memory)[0])

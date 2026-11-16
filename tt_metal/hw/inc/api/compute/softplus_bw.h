@@ -39,7 +39,8 @@ ALWI void softplus_bw_tile([[maybe_unused]] uint32_t idst) {
     MATH(LLK_ASSERT(
         (idst + 2 <= get_dest_max_tiles_rt<DST_SYNC_MODE, DstTileShape::Tile32x32>()),
         "softplus_bw_tile needs DEST tiles idst to idst + 1"));
-    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_softplus_bw_bf16, (32), idst, VectorMode::None));
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_softplus_bw_bf16, (32 /*ITERATIONS*/), idst, VectorMode::None));
 #else
     static_assert(on_board, "softplus_bw_tile: Blackhole and Wormhole only");
 #endif
