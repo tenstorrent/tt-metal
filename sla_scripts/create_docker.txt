@@ -1,0 +1,134 @@
+HOW TO BUILD AND TEST THE LLAMA-3.3-70B GALAXY SERVER IMAGE
+(tt-inference-server + tt-metal + vllm-tt-plugin, WH Galaxy, TP32)
+
+
+WHAT GOES IN THE IMAGE
+
+  tt-inference-server   main, commit 0ad0f4be9 (version 0.26.1)
+  tt-metal              f0a85c864bf744b85008be365e37de3ba187c949
+  vllm-tt-plugin        042a948
+  Ubuntu                22.04
+
+
+BEFORE YOU START
+
+  1. Docker installed, user can run docker.
+  2. About 60 GB free disk for the build. The image is about 22 GB.
+  3. HF token saved in ~/.cache/huggingface/token (access to meta-llama/Llama-3.3-70B-Instruct).
+  4. Llama-3.3-70B-Instruct weights downloaded on the host (about 132 GB).
+  5. Galaxy free: no other server running, then reset it:
+       tt-smi -glx_reset_auto
+  6. Hugepages folder exists:
+       sudo mkdir -p /dev/hugepages-1G
+
+
+STEP 1 - GET TT-INFERENCE-SERVER
+
+  The folder name must be tt-inference-server.
+
+  git clone https://github.com/tenstorrent/tt-inference-server.git
+  cd tt-inference-server
+  git checkout 0ad0f4be9
+
+
+STEP 2 - BUILD THE IMAGE
+
+  Use the FULL tt-metal commit. The short one fails in the vLLM stage.
+  Use --ubuntu-version 22.04. The default is 20.04 and does not work.
+  If a folder named temp_docker_build_dir_<commit> is left from an old build, delete it first.
+
+  scripts/build_single_docker.sh --build --release --ubuntu-version 22.04 \
+    --tt-metal-commit f0a85c864bf744b85008be365e37de3ba187c949 \
+    --vllm-commit 042a948 \
+    --tag-suffix llama70b
+
+  Takes a few hours. When done, check:
+
+  docker images | grep llama70b
+
+  Image name:
+  ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-release-ubuntu-22.04-amd64:0.26.1-f0a85c864bf744b85008be365e37de3ba187c949-042a948-llama70b
+
+  The image stays on your machine. Do not push it.
+
+
+STEP 3 - START THE SERVER
+
+  Run from the tt-inference-server folder.
+  Change --host-weights-dir to your weights folder.
+
+  export HF_TOKEN=$(cat ~/.cache/huggingface/token)
+  python3 run.py --model meta-llama/Llama-3.3-70B-Instruct --tt-device galaxy \
+    --workflow server --docker-server --dev-mode \
+    --override-docker-image ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-release-ubuntu-22.04-amd64:0.26.1-f0a85c864bf744b85008be365e37de3ba187c949-042a948-llama70b \
+    --host-weights-dir /path/to/Llama-3.3-70B-Instruct --no-auth \
+    --vllm-override-args '{"no-async-scheduling": true, "enable_prompt_tokens_details": true}'
+
+  Why these flags:
+    --dev-mode                 dev spec sets top_k 32, so sampling runs on the chip (19x faster decode)
+    no-async-scheduling        REQUIRED. With async on, TP32 gives garbage answers on long prompts
+    enable_prompt_tokens_details   shows cached tokens, so you can measure prefix cache hits
+
+  First start builds the weight cache: about 35 minutes. Later starts are faster.
+
+
+STEP 4 - CHECK IT WORKS
+
+  Wait until this returns 200:
+
+  curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8000/v1/models
+
+  Get the model name:
+
+  curl -s http://localhost:8000/v1/models
+
+  Send one request (put the model name from above):
+
+  curl -s http://localhost:8000/v1/completions -H "Content-Type: application/json" \
+    -d '{"model": "<model name>", "prompt": "The capital of France is", "max_tokens": 20, "top_k": 32}'
+
+  The answer must be normal text, not "\\\\\\" or random symbols.
+
+
+STEP 5 - RUN THE SLA TESTS
+
+  Scripts are in tt-metal branch teja/tp32-chunked-prefill, folder sla_scripts/.
+  Some paths are fixed to /home/ubuntu, so run them as user ubuntu.
+  They expect this layout on the host:
+    ~/teja/tt-metal                         tt-metal checkout with python_env, vLLM installed in it
+    ~/teja/weights/Llama-3.3-70B-Instruct   weights (also used as the tokenizer)
+    ~/teja/lmeval_venv                      lm-eval 0.4.9, only for MMLU
+    ~/teja/<script>                         scripts copied flat, see below
+
+  Copy the scripts:
+    cp ~/teja/tt-metal/sla_scripts/vllm/* ~/teja/tt-metal/sla_scripts/tis/* ~/teja/tt-metal/sla_scripts/eval/* ~/teja/
+
+  SLA load test (server must be up):
+    OUT=~/teja/runs/bench_image ~/teja/bench_tis.sh
+
+  MMLU accuracy (server must be up):
+    MODEL=<model name> NC=8 TMO=600 ~/teja/run_mmlu.sh <tag>
+
+  Expected on one WH Galaxy:
+    single 4K request     TTFT 0.69 s, 49.7 tok/s/user
+    cold 16K / 32K        TTFT 2.14 s / 4.20 s
+    60 RPM                TTFT mean 1.69 s, P99 7.02 s; 13.5 tok/s/user mean
+    60 RPM + 40% prefix   prefix hit about 38.7%
+    MMLU                  about 82%, zero garbage answers
+
+
+STEP 6 - STOP AND CLEAN UP
+
+  docker ps
+  docker stop <container id>
+  tt-smi -glx_reset_auto
+
+
+IF SOMETHING FAILS
+
+  Build fails at git fetch          use the full tt-metal commit, not the short one
+  Build fails at clone              delete temp_docker_build_dir_<commit> and rerun
+  Server fails on hugepages         sudo mkdir -p /dev/hugepages-1G
+  Server cannot open the device     tt-smi -glx_reset_auto, then start again
+  Garbage answers                   check no-async-scheduling is in the vllm args
+  Requests time out at 32 clients   known stall bug; test with 8 clients

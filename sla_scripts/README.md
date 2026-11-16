@@ -13,6 +13,7 @@ HF token is read from `~/.cache/huggingface/token`.
 | `eval/` | MMLU (lm-eval) and agentx runs |
 | `bh_vllm/` | TP8/DP4 vLLM server + bench, used on BH and WH |
 | `patches/` | vllm-tt-plugin DP discovery timeout (TP8/DP4 vLLM server only) |
+| `create_docker.txt` | Build, run and test the server image |
 
 TP8/DP4 tuning knobs (`ttt_compat`, all off unless set):
 
