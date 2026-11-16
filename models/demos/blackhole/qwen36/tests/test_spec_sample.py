@@ -44,7 +44,9 @@ FLOOR = -60.0  # every other token: no mass at any temperature used here
 
 
 def _parametrize(fn):
-    fn = pytest.mark.parametrize("device_params", [{"trace_region_size": 64 << 20}], indirect=True)(fn)
+    # The sampler all-gathers the shards' candidates.
+    params = {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 64 << 20}
+    fn = pytest.mark.parametrize("device_params", [params], indirect=True)(fn)
     return pytest.mark.parametrize("mesh_device", [pytest.param(MESH, id=f"{MESH[0]}x{MESH[1]}")], indirect=True)(fn)
 
 
