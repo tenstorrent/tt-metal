@@ -4,8 +4,8 @@
 
 #pragma once
 namespace ckernel::sfpu::ttpoly::logsigmoid {
-using namespace ::sfpi;
 using ::sfpi::DataLayout;
+using ::sfpi::vFloat;
 template <typename Reciprocal, bool Held = false>
 __attribute__((always_inline)) inline vFloat correction_finite_reciprocal(
     vFloat x, [[maybe_unused]] Reciprocal reciprocal) {

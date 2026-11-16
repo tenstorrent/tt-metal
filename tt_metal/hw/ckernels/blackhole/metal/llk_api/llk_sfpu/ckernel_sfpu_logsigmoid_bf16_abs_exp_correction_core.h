@@ -7,8 +7,25 @@
 // Single-row residual replay. Callers own numerical init, replay recording,
 // row count, address modes and counter restoration.
 namespace ckernel::sfpu::ttpoly::logsigmoid {
-using namespace ::sfpi;
+using ::sfpi::as;
+using ::sfpi::convert;
 using ::sfpi::DataLayout;
+using ::sfpi::dst_reg;
+using ::sfpi::exexp;
+using ::sfpi::exman;
+using ::sfpi::ExponentMode;
+using ::sfpi::MantissaMode;
+using ::sfpi::RoundMode;
+using ::sfpi::setexp;
+using ::sfpi::setsgn;
+using ::sfpi::SFPMAD_MOD1_OFFSET_NONE;
+using ::sfpi::shft;
+using ::sfpi::ShiftMode;
+using ::sfpi::vConstFloatPrgm1;
+using ::sfpi::vConstFloatPrgm2;
+using ::sfpi::vFloat;
+using ::sfpi::vInt;
+using ::sfpi::vMag;
 constexpr float correction_exp_scale(int degree) {
     float scale = 1.0f;
     for (int i = 0; i < degree; i++) {
