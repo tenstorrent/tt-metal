@@ -128,6 +128,7 @@ def _model(monkeypatch, calls, block_size=1024, buf_blocks=32):
     m._masked_traces_recorded = False
     m._masked_trace_gdn = None
     m._masked_trace_refs = []
+    m._masked_trace_hold = False
 
     def rope(start, length):
         pos = torch.arange(start, start + length, dtype=torch.float32).reshape(1, 1, length, 1)
@@ -600,6 +601,32 @@ def test_a_replay_waits_for_the_previous_replays_input_copies(monkeypatch, devic
     _replay(m, 300)
     first_stage = next(i for i, c in enumerate(device_calls) if c[0] == "stage")
     assert ("sync",) in device_calls[:first_stage]
+
+
+def test_a_held_replay_restages_without_waiting_and_keeps_every_replays_inputs(monkeypatch, device_calls):
+    """While hold_masked_trace_inputs holds (the rows of a prefill step enqueued back to back), a replay restages its
+    trace's inputs without waiting for the device, and the host tensors of every replay's copies stay kept until
+    release_masked_trace_inputs, which does not wait either. After the hold ends, a replay that finds kept tensors
+    waits before it restages, as before; after a release it finds none."""
+    m, _ = _captured(monkeypatch, device_calls)
+    m.hold_masked_trace_inputs(True)
+    _replay(m, 300)
+    _replay(m, 2000, checkpoint_len=1024)
+    hosts = [c[2] for c in device_calls if c[0] == "stage"]
+    assert not any(c[0] == "sync" for c in device_calls)
+    assert len(m._masked_trace_refs) == len(hosts) and all(a is b for a, b in zip(m._masked_trace_refs, hosts))
+    m.hold_masked_trace_inputs(False)
+    device_calls.clear()
+    _replay(m, 300)
+    first_stage = next(i for i, c in enumerate(device_calls) if c[0] == "stage")
+    assert ("sync",) in device_calls[:first_stage]
+    m.hold_masked_trace_inputs(True)
+    _replay(m, 300)
+    device_calls.clear()
+    m.release_masked_trace_inputs()
+    m.hold_masked_trace_inputs(False)
+    _replay(m, 300)
+    assert m._masked_trace_refs and not any(c[0] == "sync" for c in device_calls)
 
 
 def test_replay_refusals(monkeypatch, device_calls, expect_error):

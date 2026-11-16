@@ -304,6 +304,8 @@ class GdnBlockState:
             for variant in (False, True)
         }
         self._trace_staged = {}  # (variant, table group, part) -> (host page ids its device table holds, host tensor)
+        self._hold_tables = False  # hold_replaced_tables
+        self._held_tables = []  # host tables that _replay_write replaced while holding
         self._write_traces = {}  # variant -> trace id
         self._trace_sources = {}  # variant -> the tensors its trace reads
         self._warmed_variants = ()
@@ -627,13 +629,28 @@ class GdnBlockState:
                     mesh_mapper=rep,
                 )
                 ttnn.copy_host_to_device_tensor(host, dev)
-                # The copy may read the host tensor after it returns; it is held until this table is staged again.
+                # The copy may read the host tensor after it returns; it is held until this table is staged again, and
+                # while hold_replaced_tables holds, until release_held_tables.
+                if self._hold_tables and key in self._trace_staged:
+                    self._held_tables.append(self._trace_staged[key][1])
                 self._trace_staged[key] = (ids, host)
         ttnn.execute_trace(self.mesh, tid, cq_id=0, blocking=False)
         if checkpoint:
             for dn in self.layers.values():
                 dn.release_prefill_checkpoint(*dn.take_prefill_checkpoint())
         return True
+
+    def hold_replaced_tables(self, hold):
+        """``hold`` True: keep every host page table that a captured write replaces when it restages a table, until
+        release_held_tables. A caller that does not wait for the device between block writes (the rows of a prefill
+        step enqueued back to back) may replace a table whose copy has not run yet. False: stop keeping new ones (kept
+        tables stay kept)."""
+        self._hold_tables = bool(hold)
+
+    def release_held_tables(self):
+        """Free the tables that hold_replaced_tables kept. Only after a wait for the device past the copies that
+        staged them."""
+        self._held_tables = []
 
     def record_traces(self):
         """Capture the block writes and the block zeroing (_record_write_traces, _record_zero_trace). After warmup, in
@@ -671,6 +688,7 @@ class GdnBlockState:
         self._write_traces = {}
         self._trace_sources = {}
         self._trace_staged = {}
+        self._held_tables = []
 
     def restore(self, mamba_state, blocks):
         """Load the full state that block ``blocks[g]`` holds into the batch-1 workspace of every GDN layer of

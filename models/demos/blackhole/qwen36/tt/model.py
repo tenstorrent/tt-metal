@@ -286,11 +286,13 @@ class Qwen36Model:
         self._bucket_sin_buf = None
         self._gdn_batched_prev = None  # batched GDN bindings saved during bucket-trace capture
         # Captured masked-bucket prefill (prepare_prefill_traces_masked): bucket -> _MaskedPrefillTrace, the GDN
-        # workspace the traces read, and the host tensors of the last replay's inputs (held until the device is idle).
+        # workspace the traces read, and the host tensors of the last replay's inputs (held until the device is idle;
+        # of every replay while hold_masked_trace_inputs holds them).
         self._masked_traces = {}
         self._masked_traces_recorded = False
         self._masked_trace_gdn = None
         self._masked_trace_refs = []
+        self._masked_trace_hold = False
         # Persistent B=1 GDN prefill scratch (batched serving): allocated once at warmup, its buffer
         # addresses are baked into the chunk-prefill trace and reused by every prefill_paged_slots
         # replay, so it is never freed/reallocated (only zeroed in place). See _bind_gdn_prefill_scratch.
@@ -4049,7 +4051,7 @@ class Qwen36Model:
         chunk_row = row[:, blk0 : blk0 + tr.blocks].clone()
         chunk_row[:, blkN - blk0 :] = 0
 
-        if self._masked_trace_refs:
+        if self._masked_trace_refs and not getattr(self, "_masked_trace_hold", False):
             # The previous replay's input copies may still read their host tensors.
             ttnn.synchronize_device(self.device)
             self._masked_trace_refs = []
@@ -4094,6 +4096,18 @@ class Qwen36Model:
             dn.note_traced_prefill(variant)
         hidden, logits = tr.outputs[variant]
         return hidden, ttnn.clone(logits)
+
+    def hold_masked_trace_inputs(self, hold):
+        """``hold`` True: a masked-bucket trace replay restages its trace's inputs without first waiting for the
+        device, so that the rows of a prefill step enqueue back to back; the device still runs every copy after the
+        replays before it (one command queue). The host tensors of every replay's input copies are kept until
+        release_masked_trace_inputs. False: a replay waits again before it restages (kept tensors stay kept)."""
+        self._masked_trace_hold = bool(hold)
+
+    def release_masked_trace_inputs(self):
+        """Free the host tensors of the replays' input copies. Only after a wait for the device past the last
+        masked-bucket replay enqueued before this call."""
+        self._masked_trace_refs = []
 
     def _release_prefill_hidden(self, hidden):
         """Free a hidden from prefill_masked_bucket(return_hidden=True), unless it is a captured trace's output."""

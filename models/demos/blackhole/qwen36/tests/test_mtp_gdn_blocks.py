@@ -32,6 +32,7 @@ import pytest
 import torch
 from loguru import logger
 
+import ttnn
 from models.common.tests.vllm_stubs import stub_vllm_if_missing
 from models.demos.blackhole.qwen36.tests.gdn_block_helpers import PluginLayout
 from models.demos.blackhole.qwen36.tests.spec_block_helpers import SpecBlocks
@@ -563,6 +564,16 @@ def _replica_rows(t, rows):
     return [ttnn.to_torch(d).reshape(-1, int(t.shape[-1]))[:rows].clone() for d in ttnn.get_device_tensors(t)]
 
 
+def _bytes(t):
+    return t.contiguous().view(torch.uint8)
+
+
+def _same_bits(got, want, label):
+    for d, (g, w) in enumerate(zip(got, want, strict=True)):
+        assert g.shape == w.shape and g.dtype == w.dtype, f"{label}: device {d} {g.shape} {g.dtype} vs {w.shape}"
+        assert torch.equal(_bytes(g), _bytes(w)), f"{label}: bytes differ on device {d}"
+
+
 @torch.no_grad()
 @pytest.mark.timeout(3600)
 @_parametrize
@@ -660,3 +671,112 @@ def test_a_sampled_bucket_verify_draws_what_the_full_width_verify_draws(
                 pair.rows[r]["n"] += 1
             logger.info(f"{where}: bucket {bucket} equals the full-width verify (column-0 ids {got['ids'][::T]})")
     assert compared == 4 * T * (1 + 2 + 2)
+
+
+@torch.no_grad()
+@pytest.mark.timeout(3600)
+@_parametrize
+def test_a_prefill_step_of_several_rows_matches_one_row_steps(mesh_device, monkeypatch, reset_seeds, ensure_gc):
+    """Qwen36ForCausalLM.prefill_forward (the MTP class runs it, plus the drafter's prompt KV per row) enqueues the
+    rows of a prefill step back to back and reads their logits after the last row; the device runs the same commands
+    in the same order as when the host waits per row. After the plugin's two-phase warmup (masked-bucket prefill
+    traces, block write traces), four rows prefilled in one step must leave, byte for byte, what the same rows leave
+    when each runs in a prefill step of its own: the logits, the attention K / V of each row's pages, the GDN state in
+    its destination and checkpoint blocks, the drafter's K / V of its pages and the feed row each slot keeps for its
+    first verify. Rows: 2000 tokens (checkpoint after 1024 in the forward), 700 (none), 1500 (checkpoint after 1024)
+    and 2348 (the chunk trace, then a two-part plan around the checkpoint after 2048). Logs the wall time of the one
+    step and of the four one-row steps (PREFILL STEP line); not a pass / fail gate."""
+    stub_vllm_if_missing(monkeypatch)
+    from models.demos.blackhole.qwen36.tt.qwen36_vllm import Qwen36MTPContractForCausalLM
+
+    K, n = 3, 4
+    monkeypatch.setattr(Qwen36MTPContractForCausalLM, "_SPEC_K", K)
+    monkeypatch.setattr(Qwen36MTPContractForCausalLM, "_SUPPORTED_K", (K,))
+    model = Qwen36Model.from_pretrained(
+        mesh_device, max_batch_size=BMAX, max_seq_len=CTX, n_layers=N_LAYERS, hf_model=model_path(), enable_mtp=True
+    )
+    spec = Qwen36MTPContractForCausalLM([model], [model.args], mesh_device)
+    probe = PluginLayout.for_model(model, num_blocks=1)
+    bs, groups = probe.block_size, probe.num_groups
+    bpu = -(-(CTX + 2 * (K + 1)) // bs)
+    # Each row: bpu attention pages, then a destination and a checkpoint block per GDN group.
+    layout = PluginLayout.for_model(model, num_blocks=1 + BMAX * bpu + 2 * BMAX * groups)
+    kv = spec.allocate_kv_cache_per_layer(layout.per_layer_specs)
+    for enable_trace in (False, True):
+        spec.warmup_model_prefill(enable_trace=enable_trace, kv_cache=kv, can_sample_on_device=False)
+        spec.warmup_model_decode(
+            enable_trace=enable_trace, kv_cache=kv, max_batch_size=BMAX, num_blocks=bpu, can_sample_on_device=False
+        )
+    vocab = model.args.vocab_size
+    lens = [2000, 700, 1500, 2048 + 300]
+    prompts = _prompts(n, max(lens), seed=31)
+    pages = torch.stack([torch.arange(1 + r * bpu, 1 + (r + 1) * bpu, dtype=torch.int32) for r in range(n)])
+    first_state = 1 + BMAX * bpu
+    dest = [tuple(first_state + 2 * r * groups + g for g in range(groups)) for r in range(n)]
+    ck_blocks = [tuple(first_state + (2 * r + 1) * groups + g for g in range(groups)) for r in range(n)]
+
+    def checkpoint(r):
+        pos = (lens[r] - 1) // bs * bs  # vLLM's align-mode checkpoint: the last block boundary before the end
+        return (pos, ck_blocks[r]) if pos else None
+
+    def step(rows):
+        ttnn.synchronize_device(mesh_device)
+        t0 = time.perf_counter()
+        logits, _ = spec.prefill_forward(
+            prompts[rows],
+            pages[rows],
+            kv,
+            [lens[r] for r in rows],
+            start_pos=[0] * len(rows),
+            empty_slots=list(rows),
+            mamba_state=layout.step_state([dest[r] for r in rows], BMAX, checkpoints=[checkpoint(r) for r in rows]),
+        )
+        ttnn.synchronize_device(mesh_device)
+        return logits[:, 0, :vocab], time.perf_counter() - t0
+
+    def snapshot():
+        """Per row: [(label, per-device host tensors)] of everything the row's prefill wrote."""
+        rows = [[] for _ in range(n)]
+        caches = [("attention", k, v) for k, v in kv]
+        caches.append(("drafter", model.mtp.attention.paged_k, model.mtp.attention.paged_v))
+        for c, (name, k, v) in enumerate(caches):
+            for kind, t in (("K", k), ("V", v)):
+                per_dev = _device_tensors(t)
+                for r in range(n):
+                    idx = pages[r].long()
+                    rows[r].append((f"{name} {c} {kind} pages", [x[idx].clone() for x in per_dev]))
+                del per_dev
+        for i in _gdn_layers(model):
+            g = next(g for g, layers in enumerate(layout.gdn_groups) if i in layers)
+            for r in range(n):
+                blocks = [("destination", dest[r][g])]
+                if checkpoint(r):
+                    blocks.append(("checkpoint", ck_blocks[r][g]))
+                for label, block in blocks:
+                    st = block_state(model, i, block)
+                    rows[r].append((f"layer {i} {label} recurrent", [a for a, _ in st]))
+                    rows[r].append((f"layer {i} {label} history", [b for _, b in st]))
+        eng = spec._engine()
+        for r in range(n):
+            rows[r].append(("drafter feed row", _device_tensors(eng._last_hidden[r])))
+        return rows
+
+    together, t_one = step(list(range(n)))
+    want = snapshot()
+    for r in range(n):
+        spec.release_request(r)
+    apart, t_rows = [], 0.0
+    for r in range(n):
+        lg, t = step([r])
+        apart.append(lg[0])
+        t_rows += t
+    got = snapshot()
+    for r in range(n):
+        assert torch.equal(_bytes(together[r]), _bytes(apart[r])), f"row {r}: logits differ"
+        for (label, w), (label2, g) in zip(want[r], got[r], strict=True):
+            assert label == label2
+            _same_bits(g, w, f"row {r}: {label}")
+    logger.info(
+        f"PREFILL STEP ({N_LAYERS} layers, rows {lens}): one step {t_one * 1e3:.1f} ms, one step per row "
+        f"{t_rows * 1e3:.1f} ms in all ({(t_rows - t_one) * 1e3 / n:.2f} ms per row saved)"
+    )

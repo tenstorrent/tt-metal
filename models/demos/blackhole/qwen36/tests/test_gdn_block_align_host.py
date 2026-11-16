@@ -411,6 +411,8 @@ def adapter(monkeypatch):
         restore=lambda state, b: events.append(("restore", tuple(b))),
         write_state=lambda state, b: events.append(("write", tuple(b))),
         write_checkpoint=lambda state, b: events.append(("checkpoint", tuple(b))),
+        hold_replaced_tables=lambda hold: None,
+        release_held_tables=lambda: None,
     )
     model = SimpleNamespace(
         args=SimpleNamespace(max_batch_size=4, vocab_size=vocab),
@@ -420,7 +422,17 @@ def adapter(monkeypatch):
         vision_rows=lambda tokens, image=None, video=None: events.append(("vision rows", int(tokens.shape[-1])))
         or "host vision",
         prefill_chunk_size=CHUNK,
+        hold_masked_trace_inputs=lambda hold: None,
+        release_masked_trace_inputs=lambda: None,
     )
+
+    def from_device(t, blocking=True):
+        assert not blocking, "a row enqueues its logits read without waiting"
+        return t
+
+    monkeypatch.setattr(ttnn, "from_device", from_device)
+    monkeypatch.setattr(ttnn, "record_event", lambda mesh, cq_id: "event")
+    monkeypatch.setattr(ttnn, "event_synchronize", lambda event: None)
     monkeypatch.setattr(ttnn, "to_torch", to_torch)
     monkeypatch.setattr(ttnn, "ConcatMeshToTensor", lambda mesh, dim: ("concat", dim))
     monkeypatch.setattr(ttnn, "get_device_tensors", lambda t: list(t.copies))
