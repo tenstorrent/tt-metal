@@ -215,6 +215,13 @@ case "${MODEL}" in
     ;;
 esac
 
+# PREFILL_K31_PD is read only inside the kimi_k3_1 sc4 smoke above. Anywhere else it would be dropped and the
+# normal PCC leg would run, looking like a P->D run that passed.
+if [ "${PREFILL_K31_PD:-0}" = 1 ] && [ "${PRODUCER_MODULE:-}" != migration_driver ]; then
+  echo "PREFILL_K31_PD=1 needs model kimi_k3_1, config sc4 and PREFILL_K31_SC4_SMOKE=1 (got ${MODEL}/${CONFIG})" >&2
+  exit 2
+fi
+
 if [ -n "${VARIANT}" ]; then
   [ "${MANIFEST##*/}" = "${RUN_NAME}.json" ] || { echo "${MODEL} has no ${VARIANT#_} variant" >&2; exit 2; }
   [ -f "${MANIFEST}" ] || { echo "no manifest for ${RUN_NAME} at ${MANIFEST}" >&2; exit 2; }
@@ -286,6 +293,9 @@ mkdir -p "${TTRUN_CWD}"
 MR_DIR=$(mktemp -d "${PIPELINE_DIR}/${RUN_NAME}_prefill_ci_mr.XXXXXX")
 GATE_LOG="${MR_DIR}/gates.log"
 export TABLE_PATH="${PREFILL_PD_TABLE_PATH:-${MR_DIR}/kv_chunk_table.pb}"
+# A caller-chosen path outlives the run, unlike the fresh MR_DIR one. Rank 0 removes a table left there only at
+# table setup, after weight load, so until then the wait below would take the last run's table for this run's.
+[ -z "${PREFILL_PD_TABLE_PATH:-}" ] || rm -f -- "${TABLE_PATH}"
 PCC_DIR="${MR_DIR}/pcc_verdict"
 RANKLOGS="${MR_DIR}/ranklogs"
 PRODUCER_LOG="${MR_DIR}/producer.log"

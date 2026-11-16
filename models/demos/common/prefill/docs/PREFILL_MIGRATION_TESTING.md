@@ -566,8 +566,8 @@ consecutive layers that share a position range (`layer_position_range`).
 
 Any other reply that is not `status: SUCCESSFUL` raises. After the last layer the driver writes the handoff
 JSON (`PREFILL_MIGRATION_HANDOFF_PATH`) and the DONE sentinel (`MIGRATION_DONE_FILE`) that decode waits on.
-With `PREFILL_MIGRATION_HANDOFF_TAIL=1` the prefill stops one token short and the handoff carries the next
-prompt token for decode to apply. When that token lies past the prompt pool, the driver reads it from the
+With `PREFILL_MIGRATION_HANDOFF_TAIL=1` the handoff carries the prompt token after the last one prefill ran,
+for decode to apply; the prefill length itself is unchanged. When that token lies past the prompt pool, the driver reads it from the
 trace (`_trace_continuation`), after checking that the trace starts with the pool.
 
 **Kimi-K3.1 on four galaxies.** `ci/run_multirank_pcc.sh` drives the prefill side:
@@ -603,9 +603,11 @@ python -m models.demos.common.prefill.runners.migration_chunk_digest compare \
     --src '<shared dir>/prefill_*.json' --dst '<shared dir>/decode_*.json'
 ```
 
-It prints `identical/compared` per config and exits non-zero on any byte difference or on a chunk only one
-side hashed (a host left out). Decode writes the migrated slot only at positions `>= P`, so `[0, P)` still
-holds the migrated bytes after decode has run. Leave the KDA configs out: decode advances that state after
+It prints `identical/compared` per config and exits non-zero on any byte difference, on a chunk only one
+side hashed, and on a side whose digests hold fewer chunks than its table names. Each digest file records that
+count, so a host left out of both sides is caught too. Decode writes the migrated slot only at positions `>= P`, so `[0, P)` still
+holds the migrated bytes after decode has run. A chunk that `P` ends inside is skipped, since it also holds
+positions decode has written; `digest` prints how many positions that leaves unchecked. Leave the KDA configs out: decode advances that state after
 the handoff, so compare it by PCC on the decode side instead.
 
 ---
