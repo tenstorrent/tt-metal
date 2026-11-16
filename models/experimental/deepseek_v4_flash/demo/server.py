@@ -3885,6 +3885,9 @@ def serve(
             logger.info(
                 f"decode on: {args.num_stages} x TP{_TP_SIZE} stages ({args.num_stages * _TP_SIZE} of {chips} chips)"
             )
+    if l1_small_size is None and getattr(args, "persistent_moe", False):
+        # The V4.1 persistent-MoE stage's CCLs need L1_SMALL without a prefill model too.
+        l1_small_size = args.l1_small_size
     with open_mesh_device(
         args.trace_region_size, system_config=args.system_config, mesh_shape=mesh_shape, l1_small_size=l1_small_size
     ) as mesh_device:

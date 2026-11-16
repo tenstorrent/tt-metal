@@ -49,6 +49,19 @@ What V4.1 imposes on the serving side:
   trace dispatch, the H2D packet writes and the D2H reads each run on their own thread (see :class:`V41ChatEngine`).
   A user decoding alone keeps ``--decode-ahead`` (32) steps posted, as the decode demo does; a reply that stops
   early feeds the steps still posted a rerun of its last one (:meth:`V41ChatEngine.repeat_traced`).
+* Persistent MoE (``--persistent-moe``, on by default; ``--no-persistent-moe`` or ``DEEPSEEK_V41_PERSISTENT_MOE=0``
+  serves the stage pipeline described below instead). Decode runs on one ``1 x 4`` stage (mesh row 4) holding every
+  layer's attention, Engram, hyper-connections and norms; every layer's MoE runs on the persistent TP12
+  ``fused_experts`` server on rows 5-7 (``tt/decode/persistent_moe.py``), and the DSpark drafter on row 3, its MoE
+  served by the same server. With ``--dspark`` a reply decodes in verify rounds of 3 drafts + 1 checked in ONE traced
+  4-row step (``DeepSeekV41Model.decode_verify_block``; ~216 tok/s/user on GSM8K, ~145 on chat text against ~149 a
+  step at a time, ``tests/decode/test_dspark_spec.py``). What that path takes: one session (``--num-users 1``, one
+  running turn), greedy decoding with the sampler on device (``--temperature 0``; a request's ``temperature`` and
+  ``top_p`` are ignored), no traced prefill model (prompts are replayed through decode, ``--no-prefill``), no
+  ``--vision`` and no Rust host runtime. The 4-row verify attends the compressed groups densely, so it covers
+  positions below ~508; past them the reply decodes a step at a time. ``--max-context`` defaults to
+  :data:`_PERSISTENT_MAX_CONTEXT` here (one-level select; longer contexts are untested on this layout). The rest
+  of this docstring describes the stage pipeline.
 * Speculative decode (``--dspark``, on by default; ``--no-dspark`` or ``DEEPSEEK_V41_DSPARK=0`` turns it off). The DSpark drafter takes the
   mesh's last row, so decode runs on the first seven, and a reply decodes in verify rounds
   (:class:`_SpecScheduler`, :class:`~..tt.spec.DSparkSpeculator`): ~81 tok/s at three drafts against ~56 a step at a
@@ -255,6 +268,14 @@ _DSPARK_STAGES = 7
 # The most --dspark-drafts takes: one user's rounds take ~1 ms more per draft up to 3, then stall to twice the round
 # (test_dspark_spec.py's draft-count sweep: 81 tok/s at 3 drafts, 43 at 4, against 56 greedy).
 _DSPARK_MAX_DRAFTS = 3
+# --persistent-moe: the rows of a DSpark verify step (3 drafts + 1), the L1_SMALL its CCLs need (as
+# tests/decode/test_dspark_spec.py opens the mesh), and the default --max-context (below the two-level select's
+# 16384 compressed entries; the persistent layout has not run longer contexts).
+_PERSISTENT_VERIFY_ROWS = 4
+_PERSISTENT_L1_SMALL_SIZE = 16384
+_PERSISTENT_MAX_CONTEXT = 16384
+# Default --num-users with --persistent-moe and no --dspark (one stage holds every user's pools).
+_NUM_USERS_PERSISTENT = 8
 # Fewer seated users raise the drafts only once they have stayed fewer this long, so a reply ending just before the
 # next one is seated does not switch speculation on and off.
 _DSPARK_RAISE_SECONDS = 2.0
@@ -1720,7 +1741,12 @@ class _SpecScheduler(_SlotReuse, _PrefillFirst):
             return 0
         if turn.next_id == engine.eos_id and not turn.ignore_eos:
             return 0
-        room = engine.max_seq - engine.users[turn.slot].pos - 2 * (self._drafts + 1)
+        pos = engine.users[turn.slot].pos
+        room = engine.max_seq - pos - 2 * (self._drafts + 1)
+        if engine.block_verify:
+            # A 4-row verify block selects densely only below engine.block_end: this round's rows and the next
+            # one's, dispatched ahead, stay below it, and past it the reply decodes a step at a time.
+            room = min(room, engine.block_end - pos - 2 * (self._drafts + 1))
         return max(0, min(turn.max_tokens - len(turn.generated), room))
 
     def _speculator(self, turn: _Turn):
@@ -1737,16 +1763,20 @@ class _SpecScheduler(_SlotReuse, _PrefillFirst):
                 self._spec_live = None
             spec.finish()
             logger.debug(f"user {turn.user_key!r}: DSpark {spec.stats.summary(spec.drafts)}")
-        temperature = turn.body.get("temperature")
-        if temperature is None:
-            temperature = self.server.temperature
-        spec = DSparkSpeculator(
-            self.engine.model,
-            self._drafts,
-            temperature=float(temperature or 0.0),
-            top_p=float(turn.body.get("top_p") or 1.0),
-            seed=int(torch.randint(1, 2**31 - 1, ())),
-        )
+        if self.engine.block_verify:
+            # The persistent stage verifies a round in one 4-row step and samples it greedily on device.
+            spec = DSparkSpeculator(self.engine.model, self._drafts, parallel_verify=True, temperature=0.0)
+        else:
+            temperature = turn.body.get("temperature")
+            if temperature is None:
+                temperature = self.server.temperature
+            spec = DSparkSpeculator(
+                self.engine.model,
+                self._drafts,
+                temperature=float(temperature or 0.0),
+                top_p=float(turn.body.get("top_p") or 1.0),
+                seed=int(torch.randint(1, 2**31 - 1, ())),
+            )
         spec.start(turn.next_id, self.engine.users[turn.slot].pos)
         self._specs[turn] = spec
         return spec
@@ -2164,6 +2194,17 @@ class V41ChatEngine(ChatEngine):
         self.vision = self.images = self.row_writer = None
         self.image_token_id = load_vision_config(loader.snapshot_dir).image_token_id
         prefill_placement = None
+        # --persistent-moe: one stage, every MoE on the persistent server; with DSpark, 4-row verify steps.
+        self.persistent_moe = bool(getattr(args, "persistent_moe", False))
+        self.dspark = bool(getattr(args, "dspark", False))
+        persistent = {}
+        if self.persistent_moe:
+            persistent = dict(
+                persistent_moe=True,
+                verify_rows=_PERSISTENT_VERIFY_ROWS if self.dspark else 1,
+                balance_dram_banks=os.environ.get("DEEPSEEK_V4_BALANCE_DRAM_BANKS", "1")
+                not in ("0", "", "false", "False"),
+            )
         if getattr(args, "prefill_all_stages", False):
             kv_layers = max(i for i in config.kv_source_layer_ids if i < num_layers) + 1
             prefill_placement = plan_layer_placement(kv_layers, num_stages, 1)
@@ -2180,10 +2221,11 @@ class V41ChatEngine(ChatEngine):
             num_stages=num_stages,
             submeshes=getattr(args, "submeshes", None),
             use_prefetcher=getattr(args, "use_prefetcher", None),
-            layer_submesh_ids=plan_layer_placement(num_layers, num_stages, 1),
+            layer_submesh_ids=None if self.persistent_moe else plan_layer_placement(num_layers, num_stages, 1),
             image_rows=args.image_rows if vision else 0,
             vision_stage=VISION_STAGE if vision else None,
             prefill_layer_submesh_ids=prefill_placement,
+            **persistent,
         )
         self.lm_head = DeepSeekV41LMHead(
             dequantized(loader, "lm_head.weight", translate=True),
@@ -2218,11 +2260,18 @@ class V41ChatEngine(ChatEngine):
                 f"vision tower on stage {VISION_STAGE}, built and compiled in {time.perf_counter() - t0:.1f}s; "
                 f"{len(self.images.free)} image rows on stage 0"
             )
-        logger.info(
-            f"built DeepSeekV41Model with {self.model.num_layers}/{config.num_hidden_layers} layers, "
-            f"TP{self.model.tp_size} over {self.model.pipeline_stages} pipeline stages, "
-            f"context {self.max_seq} tokens"
-        )
+        if self.persistent_moe:
+            logger.info(
+                f"built DeepSeekV41Model with {self.model.num_layers}/{config.num_hidden_layers} layers: attention "
+                f"on one TP{self.model.tp_size} stage (mesh row 4), every MoE on the persistent TP12 server (rows "
+                f"5-7), verify rows {self.model.verify_rows}, context {self.max_seq} tokens"
+            )
+        else:
+            logger.info(
+                f"built DeepSeekV41Model with {self.model.num_layers}/{config.num_hidden_layers} layers, "
+                f"TP{self.model.tp_size} over {self.model.pipeline_stages} pipeline stages, "
+                f"context {self.max_seq} tokens"
+            )
         # The prefetcher session spans the whole process, and the replay thread stops before it (LIFO); see
         # ChatEngine.__init__.
         prefetcher.enter_context(self.model.prefetcher_session())
@@ -2254,18 +2303,33 @@ class V41ChatEngine(ChatEngine):
                 f"(temperature {self.temperature}, seed {self.seed}); requests cannot set their own"
             )
 
-        self.dspark = bool(getattr(args, "dspark", False))
         # Drafts per verify round with 1, 2, ... seated decoding users, the last entry for more (--dspark-drafts).
         self.dspark_drafts = tuple(getattr(args, "dspark_drafts", _DSPARK_DRAFTS))
+        # The persistent stage's 4-row verify rounds (DSpark on --persistent-moe), and the first position whose
+        # verify block no longer selects densely: rounds stop short of it and the reply goes on a step at a time.
+        self.block_verify = self.dspark and self.persistent_moe
+        self.block_end = None
+        if self.block_verify:
+            self.block_end = next(
+                (p for p in range(self.max_seq) if not self.model._block_dense(p)),
+                self.max_seq,
+            )
         if self.dspark:
             # Before anything is compiled; the drafter's prefetcher rings are on its own row.
             self.model.prepare_spec_decode(self.rope["main"])
             if self.model.use_prefetcher:
                 prefetcher.enter_context(tensor_prefetcher_session(self.model.dspark.device))
-            logger.info(
-                f"DSpark speculative decode: {', '.join(map(str, self.dspark_drafts))} drafts a round with "
-                f"1, 2, ... seated users, the drafter on mesh row {self.model.num_submeshes}"
-            )
+            if self.block_verify:
+                logger.info(
+                    f"DSpark speculative decode: {self.model.verify_rows - 1} drafts + 1 verified in one "
+                    f"{self.model.verify_rows}-row step, greedy, the drafter on mesh row 3 (its MoE on the "
+                    f"persistent server); 4-row verify rounds below position {self.block_end}, then plain decode"
+                )
+            else:
+                logger.info(
+                    f"DSpark speculative decode: {', '.join(map(str, self.dspark_drafts))} drafts a round with "
+                    f"1, 2, ... seated users, the drafter on mesh row {self.model.num_submeshes}"
+                )
         if self.model._eager_decode:
             # An eager step runs as its packet is written, at the position it was posted for.
             self.max_decode_ahead = 1
@@ -2609,6 +2673,16 @@ def parse_args(argv: list[str] | None = None):
         f"{','.join(map(str, _DSPARK_DRAFTS))})",
     )
     p.add_argument(
+        "--persistent-moe",
+        action=argparse.BooleanOptionalAction,
+        default=os.environ.get("DEEPSEEK_V41_PERSISTENT_MOE", "1") not in ("0", "", "false", "False"),
+        help="decode on one TP4 stage (mesh row 4) with every MoE on the persistent TP12 server (rows 5-7) and, with "
+        "--dspark, verify rounds of 3 drafts + 1 in one 4-row step (drafter on row 3); then one session, greedy "
+        "on-device sampling, prompts replayed through decode, no --vision and no Rust host runtime "
+        f"(default: on, --max-context {_PERSISTENT_MAX_CONTEXT}; --no-persistent-moe or "
+        "DEEPSEEK_V41_PERSISTENT_MOE=0 serves the stage pipeline)",
+    )
+    p.add_argument(
         "--rust-host",
         action=argparse.BooleanOptionalAction,
         default=os.environ.get("DEEPSEEK_V41_RUST_HOST", "1") not in ("0", "", "false", "False"),
@@ -2668,6 +2742,27 @@ def parse_args(argv: list[str] | None = None):
         args.device_sampling = False
         # Each verify round's log line, read when tt/spec.py is imported; DEEPSEEK_V4_SPEC_VERBOSE=1 brings them back.
         os.environ.setdefault("DEEPSEEK_V4_SPEC_VERBOSE", "0")
+    if args.persistent_moe:
+        # No prefill model (build_prefill has none for this layout) and no image rows; the output stage samples.
+        args.prefill = False
+        args.prefill_all_stages = False
+        args.vision = False
+        args.device_sampling = True
+        if args.max_context == p.get_default("max_context"):
+            args.max_context = _PERSISTENT_MAX_CONTEXT
+        if args.dspark:
+            # The 4-row verify: one session, greedy, a fixed 3 drafts, and the Python host path.
+            if args.num_users not in (None, 1):
+                logger.warning(f"--persistent-moe --dspark serves one session: --num-users 1, not {args.num_users}")
+            if args.temperature and args.temperature != p.get_default("temperature"):
+                logger.warning(f"--persistent-moe --dspark decodes greedily: --temperature 0, not {args.temperature}")
+            args.num_users = 1
+            args.max_running = 1
+            args.temperature = 0.0
+            args.rust_host = False
+            args.dspark_drafts = (_PERSISTENT_VERIFY_ROWS - 1,)
+        elif args.num_users is None:
+            args.num_users = _NUM_USERS_PERSISTENT
     # host_rs.enabled(), which the model reads too, follows the flag.
     os.environ["DEEPSEEK_V41_RUST_HOST"] = "1" if args.rust_host else "0"
     if args.rust_host:
@@ -2676,6 +2771,8 @@ def parse_args(argv: list[str] | None = None):
         p.error(f"--image-rows must be a positive multiple of 32, got {args.image_rows}")
     if args.l1_small_size is None:
         args.l1_small_size = int(os.environ.get("DEEPSEEK_V4_L1_SMALL_SIZE", _L1_SMALL_SIZE))
+    if args.persistent_moe:
+        args.l1_small_size = max(args.l1_small_size, _PERSISTENT_L1_SMALL_SIZE)
     if args.max_new_tokens is None:
         args.max_new_tokens = args.max_context
     if args.prefill_all_stages is None:
@@ -2688,6 +2785,9 @@ def parse_args(argv: list[str] | None = None):
         p.error("--prefill-all-stages places the KV-only prefill: it needs --prefill and --prefill-kv-only")
     if args.num_users is None:
         args.num_users = _NUM_USERS
+    if args.total_context is None and args.persistent_moe:
+        # One stage holds every layer's pools: each user's context, no more.
+        args.total_context = args.num_users * args.max_context
     if args.total_context is None:
         kv_users = _NUM_USERS_ALL_STAGES if args.prefill_all_stages else (_NUM_USERS_DSPARK if args.dspark else 64)
         args.total_context = max(kv_users * _KV_TOKENS_PER_USER, args.max_context)
@@ -2709,7 +2809,13 @@ def main(argv: list[str] | None = None) -> int:
         args,
         engine_cls=V41ChatEngine,
         prefiller_cls=_V41Prefiller,
-        num_stages=min(pipeline_stage_count(), _DSPARK_STAGES) if args.dspark else pipeline_stage_count(),
+        num_stages=(
+            1
+            if args.persistent_moe
+            else min(pipeline_stage_count(), _DSPARK_STAGES)
+            if args.dspark
+            else pipeline_stage_count()
+        ),
         handler_cls=_V41Handler,
         server_cls=V41GenerationServer,
     )
