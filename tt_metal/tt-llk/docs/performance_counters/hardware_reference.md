@@ -20,6 +20,8 @@ The counter inventory is defined once, in tt-llk, and metal consumes it too. The
 | `registers.h` | `BankRegs` and `bank_regs(bank)` (the three control and two readout registers of each bank), `PERF_CNT_ALL`, `PERF_CNT_MUX_CTRL`, `DBG_FEATURE_DISABLE`, the `START` / `STOP` / `SELECT_SHIFT` / `L1_MUX_SHIFT` constants. On Quasar the registers are per-window offsets: `bank_regs(bank, window)`, `perf_cnt_all(window)`, `LOCAL_REGS_WINDOW` (0x00800000, the default, a TRISC's own NEO), `neo_window(n)` (0x01800000 + n x 0x10000, the NoC view DM0 uses), `NUM_NEOS`, and the l1_client CSR pair `l1_client_regs(window)` (`ctrl` 0xA0AC, `cnt` 0xA0B0) |
 | `hw.h` | Register primitives: `configure`, `start`, `stop`, `start_all`, `stop_all`, `select` (readback poll, bounded unless the caller asks for no limit), `read_ref`, `read_count`, `read_table` (unbounded poll), `set_l1_mux`, `clear_debug_feature_disable`; the window-taking ones default to the arch window. Quasar adds `l1_client_ctrl_word`, `l1_client_start` (route and clear), `l1_client_stop`, `l1_client_read` |
 
+The RISC-V core performance monitor has its own headers (`riscv_pmc_*.h`) and reference: [riscv_pmc.md](riscv_pmc.md).
+
 The host side is the stdlib-only package `tools/python/tt_llk_perf/`: `headers.py` parses `types.h` (`counter_type_names()`, ordinal to name) and the arch tables (`bank_tables(arch)`, bank to `[CounterEntry(name, select, l1_mux)]`); `metrics.py` is the derived-metric engine (`compute_metrics(view)`, `METRIC_LABELS`).
 
 Consumers:

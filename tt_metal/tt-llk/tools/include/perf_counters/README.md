@@ -8,6 +8,19 @@ Header-only description of the hardware performance counters, namespace `llk::pe
 - `registers.h`: `BankRegs`, `bank_regs(bank)`, shared register addresses and bit constants.
 - `hw.h`: register primitives (`configure`, `start`, `stop`, `select`, `read_table`, `set_l1_mux`).
 
+RISC-V performance monitor (the counters inside the cores, not the Tensix banks above), namespace
+`llk::perf::riscv`:
+
+- `riscv_pmc_types.h`: `CoreKind` (select encoding of a core family), `PmcEvent` (event names), `Entry`.
+- `riscv_pmc_blackhole.h`, `riscv_pmc_wormhole.h`, `riscv_pmc_quasar.h`: per-core-kind `{event, select}` tables
+  (`baby_events`, `trisc_events`, `dm_events`); Wormhole's is empty because those cores have no counters.
+- `riscv_pmc_inventory.h`: picks the arch table from `ARCH_*` and exposes `events_for(CoreKind)`.
+- `riscv_pmc_hw.h`: the CSR addresses and `select`, `zero_counters`, `read_mcycle`, `read_minstret`,
+  `read_counter3`, `read_counter4`.
+
+A profiler record carries the raw mhpmevent select, not an ordinal, so `PmcEvent` is only for names: append new
+names, the host decodes a select by looking it up in the arch table. Reference: `docs/performance_counters/riscv_pmc.md`.
+
 Two consumers use these headers and nothing else describes the counters:
 
 - the metal profiler (`tt_metal/hw/inc/internal/profiler/perf_counters.hpp`), which adds its record format,
@@ -17,7 +30,8 @@ Two consumers use these headers and nothing else describes the counters:
 
 Adding a counter: append the name to the end of `PerfCounterType` (never reorder or remove, the
 ordinals are decoded by position on the host), add one `{PerfCounterType::NAME, select}` entry to the
-right bank table in the arch header, and bump the size in that table declaration. The Python side
+right bank table in the arch header, and bump the size in that table declaration. Adding a RISC-V event: append the name to `PmcEvent`, add `{PmcEvent::NAME, select}` to the right table and
+bump its size. The Python side
 (`tt_metal/tt-llk/tools/python/tt_llk_perf`) parses names and tables from these headers, so nothing
 else has to change.
 

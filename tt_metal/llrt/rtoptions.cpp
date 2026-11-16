@@ -1244,7 +1244,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // RISC-V performance monitor of the Tensix baby cores: BRISC, NCRISC and TRISC0/1/2 on Blackhole,
         // the TRISCs and data-movement cores on Quasar. Value is the mhpmevent3 and optional mhpmevent4 select, comma
         // separated, hex or decimal (eight 4-bit pipeline-domain nibbles each). See
-        // tech_reports/PerfCounters/riscv-pmc.md. Default: disabled Usage: export
+        // tt_metal/tt-llk/docs/performance_counters/riscv_pmc.md. Default: disabled Usage: export
         // TT_METAL_PROFILE_RISCV_PMC=0x10110111,0xA0000000
         case EnvVarID::TT_METAL_PROFILE_RISCV_PMC: {
             // strtoul with base 0 rather than sscanf: the selects routinely have bit 31 set (the MEM

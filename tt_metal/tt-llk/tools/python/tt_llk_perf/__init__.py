@@ -5,13 +5,17 @@
 Stdlib only, so tools/tracy can import it without the LLK harness.
 """
 
-from . import headers, metrics
+from . import headers, metrics, riscv_metrics, riscv_pmc
 from .headers import (
     BANK_KEYS,
     CounterEntry,
     bank_tables,
     counter_type_names,
     find_include_dir,
+    riscv_event_names,
+    riscv_event_select,
+    riscv_event_tables,
+    riscv_select_events,
 )
 from .metrics import (
     METRIC_LABELS,
@@ -42,6 +46,12 @@ __all__ = [
     "is_ratio_label",
     "metric_label",
     "metrics",
+    "riscv_metrics",
+    "riscv_pmc",
+    "riscv_event_names",
+    "riscv_event_select",
+    "riscv_event_tables",
+    "riscv_select_events",
     "quasar_l1_client_label",
     "quasar_l1_client_selection_is_valid",
 ]
