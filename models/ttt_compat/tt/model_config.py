@@ -879,7 +879,7 @@ class ModelArgs:
             # use the same fused AGMM path as T3K on Galaxy-class systems.
             use_galaxy_dp4_8b_submesh_agmm = (
                 self.is_galaxy_cluster
-                and self.base_model_name == "Llama-3.1-8B"
+                and (self.base_model_name == "Llama-3.1-8B" or os.environ.get("AGMM", "0") == "1")
                 and self.num_devices == 8
                 and tuple(self.cluster_shape) == (1, 8)
             )
@@ -1258,14 +1258,18 @@ class ModelArgs:
             # Model-specific CCL configs are tuned for Galaxy (TG) with 4 links
             # Only apply them on Galaxy, otherwise use defaults
             executed_on_galaxy = self.is_galaxy_cluster
-            if executed_on_galaxy and self.base_model_name in model_specific_ccl_configs:
-                self.model_config["ATTN_LN_AG_CONFIG"] = model_specific_ccl_configs[self.base_model_name]["attn_ln_ag"]
-                self.model_config["FFN_LN_AG_CONFIG"] = model_specific_ccl_configs[self.base_model_name]["ffn_ln_ag"]
-                self.model_config["ATTN_AGMM_CONFIG"] = model_specific_ccl_configs[self.base_model_name]["attn_agmm"]
-                self.model_config["MLP_RS_CONFIG"] = model_specific_ccl_configs[self.base_model_name]["mlp_rs"]
-                self.model_config["SAMPLING_AG_CONFIG"] = model_specific_ccl_configs[self.base_model_name][
-                    "sampling_force_argmax"
-                ]
+            ccl_model = os.environ.get("CCL_CFG_FROM", self.base_model_name)
+            if executed_on_galaxy and ccl_model in model_specific_ccl_configs:
+                self.model_config["ATTN_LN_AG_CONFIG"] = model_specific_ccl_configs[ccl_model]["attn_ln_ag"]
+                self.model_config["FFN_LN_AG_CONFIG"] = model_specific_ccl_configs[ccl_model]["ffn_ln_ag"]
+                self.model_config["ATTN_AGMM_CONFIG"] = model_specific_ccl_configs[ccl_model]["attn_agmm"]
+                self.model_config["MLP_RS_CONFIG"] = model_specific_ccl_configs[ccl_model]["mlp_rs"]
+                if os.environ.get("SAMPLING_FROM_CCL_MODEL", "0") == "1" or ccl_model == self.base_model_name:
+                    self.model_config["SAMPLING_AG_CONFIG"] = model_specific_ccl_configs[ccl_model][
+                        "sampling_force_argmax"
+                    ]
+                else:
+                    self.model_config["SAMPLING_AG_CONFIG"] = default_sampling_force_argmax
             else:
                 self.model_config["ATTN_LN_AG_CONFIG"] = default_ln_ag
                 self.model_config["FFN_LN_AG_CONFIG"] = default_ln_ag
@@ -4036,6 +4040,13 @@ class ModelArgs:
             fused_activation=fused_activation,
             num_workers_per_dram_bank=num_workers_per_dram_bank,
         )
+        override = json.loads(os.environ.get("MM_CFG", "{}")).get(f"{k}x{n}")
+        if override is not None:
+            program_config.in0_block_w, cores_per_bank = override
+            program_config.num_workers_per_dram_bank = max(cores_per_bank, 1)
+            program_config.use_multicore_pipeline = cores_per_bank >= 2
+            logger.info(f"MM_CFG {k}x{n}: {program_config}")
+            return program_config
         if self.is_galaxy or self.prefetcher is not None:
             return program_config
         return with_dram_sharded_cores_per_bank(program_config, m, k, n, num_cores)

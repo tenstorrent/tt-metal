@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import ttnn
 from models.common.tt_ccl import get_num_links as get_common_num_links
 
@@ -190,13 +192,13 @@ def tt_all_reduce(
             dim=dim,
             multi_device_global_semaphore=tt_ccl.get_and_cycle_rs_semaphore_handles(),
             barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(),
-            num_links=num_reduce_scatter_links,
+            num_links=int(os.environ.get("RS_LINKS", num_reduce_scatter_links)),
             memory_config=memory_config,
             intermediate_memory_config=rs_memory_config,
             topology=topology,
-            chunks_per_sync=chunks_per_sync,
-            num_workers_per_link=num_workers_per_link,
-            num_buffers_per_channel=num_buffers_per_channel,
+            chunks_per_sync=int(os.environ.get("RS_CHUNKS", chunks_per_sync)),
+            num_workers_per_link=int(os.environ.get("RS_WORKERS", num_workers_per_link)),
+            num_buffers_per_channel=int(os.environ.get("RS_BUFFERS", num_buffers_per_channel)),
             subdevice_id=subdevice_id,
         )
         input_tensor.deallocate(True)

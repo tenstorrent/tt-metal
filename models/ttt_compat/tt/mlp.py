@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import torch
 
 import ttnn
@@ -199,6 +201,21 @@ class MLP(LightweightModule):
         pc_1 = self.args.get_mlp_ff1_3_prg_config(mode, seq_len, self.prefetcher)
         pc_2 = self.args.get_mlp_ff2_prg_config(mode, seq_len, self.prefetcher)
         pc_3 = self.args.get_mlp_ff1_3_prg_config(mode, seq_len, self.prefetcher)
+        fuse_silu = (
+            os.environ.get("SILU_FUSE", "0") == "1"
+            and mode == Mode.DECODE
+            and isinstance(pc_1, ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig)
+            and self.activation_type == ttnn.UnaryOpType.SILU
+        )
+        if fuse_silu:
+            pc_1 = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+                in0_block_w=pc_1.in0_block_w,
+                per_core_M=pc_1.per_core_M,
+                per_core_N=pc_1.per_core_N,
+                fused_activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
+                num_workers_per_dram_bank=pc_1.num_workers_per_dram_bank,
+                use_multicore_pipeline=pc_1.use_multicore_pipeline,
+            )
 
         use_tg_decode_no_prefetch = TG and mode == Mode.DECODE and self.prefetcher is None
         if use_tg_decode_no_prefetch:
@@ -318,7 +335,7 @@ class MLP(LightweightModule):
         w2_in = ttnn.mul(
             w1_out,
             w3_out,
-            input_tensor_a_activations=[self.activation_type],
+            input_tensor_a_activations=[] if fuse_silu else [self.activation_type],
             dtype=activation_dtype or ttnn.bfloat8_b,
             memory_config=w1_out.memory_config(),
         )
