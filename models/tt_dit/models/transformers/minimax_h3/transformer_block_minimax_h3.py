@@ -201,8 +201,8 @@ class MiniMaxH3TransformerBlock(Module):
         )
         self._fold_norm_weight = os.environ.get("MINIMAX_H3_FOLD_NORM_WEIGHT", "1") == "1"
         self._eye_tables: dict[int, ttnn.Tensor] = {}
-        # `prepare_modulation`'s projection of every step's temb, row-major [1, 1, steps * slots, adaLN width].
-        self._projected_steps: list[ttnn.Tensor] = []
+        # `prepare_modulation`'s projection of every step's temb, row-major [steps * slots, adaLN width].
+        self._projected_steps: ttnn.Tensor | None = None
         # The dynamic-length modulation gathers: one-hot [rows, 32] @ table [32, hidden_local] through
         # minimal_matmul, whose program keeps only the M > N bit of the row count (fixed per selector kind).
         self._gather_config = None
@@ -262,12 +262,12 @@ class MiniMaxH3TransformerBlock(Module):
         """
         self.release_modulation()
         projected = self._project(temb_steps)
-        self._projected_steps.append(ttnn.reshape(projected, (projected.shape[2], projected.shape[3])))
+        self._projected_steps = ttnn.reshape(projected, (projected.shape[2], projected.shape[3]))
 
     def release_modulation(self) -> None:
-        for t in self._projected_steps:
-            ttnn.deallocate(t)
-        self._projected_steps.clear()
+        if self._projected_steps is not None:
+            ttnn.deallocate(self._projected_steps)
+            self._projected_steps = None
 
     def _modulation_tables(self, temb: ttnn.Tensor, rows_index: ttnn.Tensor | None = None) -> list[ttnn.Tensor]:
         """Project `temb` into the six per-(timestep, modality) modulation tables.
@@ -287,9 +287,9 @@ class MiniMaxH3TransformerBlock(Module):
         if rows_index is None:
             projected = self._project(temb)
         else:
-            if not self._projected_steps:
+            if self._projected_steps is None:
                 raise RuntimeError("modulation_rows needs prepare_modulation first")
-            projected = ttnn.embedding(rows_index, self._projected_steps[0], layout=ttnn.ROW_MAJOR_LAYOUT)
+            projected = ttnn.embedding(rows_index, self._projected_steps, layout=ttnn.ROW_MAJOR_LAYOUT)
 
         # Fold the modality axis into rows: [num_timesteps, mod, param, h] -> [t * mod, param * h].
         # Done in row-major because the row count changes and num_timesteps is tiny (a handful of
