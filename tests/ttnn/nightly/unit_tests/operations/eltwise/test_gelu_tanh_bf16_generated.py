@@ -39,20 +39,6 @@ _GENERATED_GELU_TANH_SPECIAL_RESULTS = {
 }
 
 
-_GENERATED_GELU_TANH_TINY = torch.finfo(torch.float32).tiny  # 2^-126, the smallest normal
-
-
-_GENERATED_GELU_TANH_BF16_MAX = torch.finfo(torch.bfloat16).max
-
-
-# Results the kernel may store as 0: within this relative distance above the smallest normal, and at every input at or
-# below the next, where the exp leaf's e^-|z| is 0.
-_GENERATED_GELU_TANH_BOUNDARY_BAND = 2.0**-12
-
-
-_GENERATED_GELU_TANH_LOGISTIC_FLUSH_INPUT = -10.0625
-
-
 def _generated_gelu_tanh_run(device, values):
     """ttnn.gelu(x, variant=ttnn.GeluVariant.Tanh) of a 1-D BF16 tensor x, padded with ones to whole 32x32 tiles."""
     n = values.numel()
