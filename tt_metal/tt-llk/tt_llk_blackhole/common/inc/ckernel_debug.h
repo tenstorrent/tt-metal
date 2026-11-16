@@ -207,7 +207,7 @@ inline void dbg_copy_dest_tile(
         volatile elem_t *dest_array = reinterpret_cast<volatile elem_t *>(RISCV_DEST_START_ADDR);
         if constexpr (op == DbgDestTileOp::Write)
         {
-            const volatile elem_t *src = reinterpret_cast<const volatile elem_t *>(buffer);
+            const volatile elem_t *src = static_cast<const volatile elem_t *>(buffer);
             for (std::uint32_t i = 0; i < TILE_ELEMENTS; ++i)
             {
                 dest_array[offset + i] = src[i];
@@ -215,7 +215,7 @@ inline void dbg_copy_dest_tile(
         }
         else
         {
-            volatile elem_t *dst = reinterpret_cast<volatile elem_t *>(buffer);
+            volatile elem_t *dst = static_cast<volatile elem_t *>(buffer);
             for (std::uint32_t i = 0; i < TILE_ELEMENTS; ++i)
             {
                 dst[i] = dest_array[offset + i];
