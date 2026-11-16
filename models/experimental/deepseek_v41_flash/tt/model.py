@@ -85,7 +85,12 @@ from models.experimental.deepseek_v41_flash.tt.decode.decoder_layer import (
     DeepSeekV41PersistentMoeDecoderLayer,
 )
 from models.experimental.deepseek_v41_flash.tt.decode.engram import open_rows_sockets, rows_page_bytes
-from models.experimental.deepseek_v41_flash.tt.decode.dspark import DSPARK_BLOCK, DeepSeekV41DSpark, host_to_device
+from models.experimental.deepseek_v41_flash.tt.decode.dspark import (
+    DSPARK_BLOCK,
+    DSPARK_SERVER_MOE,
+    DeepSeekV41DSpark,
+    host_to_device,
+)
 from models.experimental.deepseek_v41_flash.tt.decode.moe import DeepSeekV41PreloadedExperts
 from models.experimental.deepseek_v41_flash.tt.decode.step_context import StepContextBuilder, rope_table, term
 from models.experimental.deepseek_v41_flash.tt.decode import persistent_moe as pmoe
@@ -3234,7 +3239,12 @@ class DeepSeekV41Model(DeepSeekV4Model):
                 f"{self.mesh_devices // self.tp_size}: build with fewer num_stages"
             )
         out_sm = self.submeshes_io[self._output_sm_index]
-        device = self.device.create_submesh(ttnn.MeshShape(1, self.tp_size), ttnn.MeshCoordinate(drafter_row, 0))
+        server_mesh = getattr(self, "_drafter_mesh", None)
+        device = (
+            server_mesh
+            if server_mesh is not None
+            else self.device.create_submesh(ttnn.MeshShape(1, self.tp_size), ttnn.MeshCoordinate(drafter_row, 0))
+        )
         link = self._create_socket_pair(out_sm["device"], device)
         logger.info(f"DSpark drafter on idle row {drafter_row}, its stash on output stage {out_sm['index']}")
         lm_head = DeepSeekV41LMHead(
@@ -3246,6 +3256,9 @@ class DeepSeekV41Model(DeepSeekV4Model):
         # The block verify reads verify_rows - 1 proposals: the greedy draft computes only those.
         greedy_drafts = self.verify_rows - 1 if self._block_verify and DSPARK_BLOCK else None
         drafter_kwargs = {"use_prefetcher": self.use_prefetcher, "greedy_drafts": greedy_drafts, **drafter_kwargs}
+        if server_mesh is not None:
+            # The greedy block draft's FFNs go to the persistent server as its on-demand requester 1.
+            drafter_kwargs.update(moe_server=self.moe_server, moe_requester=1)
         self.dspark = DeepSeekV41DSpark(
             cfg,
             self.loader,
@@ -3345,6 +3358,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
             self.dspark.write_main()
             self.dspark.refresh_uniforms(1, accept=self.spec_device_accept)
             self.dspark.draft()
+            self._use_server_rows_for_draft(quiesce=True)
             self.dspark.draft(greedy=True)
             if self.spec_device_accept:
                 for sampled in (False, True):
@@ -3387,6 +3401,8 @@ class DeepSeekV41Model(DeepSeekV4Model):
             ttnn.end_trace_capture(device, tid, cq_id=0)
             self._spec_tids["draft"] = tid
             if self.dspark.block_mode:
+                # Its requests to the persistent server are 4-row ones (the server's sockets differ per mode).
+                self._use_server_rows_for_draft(quiesce=True)
                 # The block draft's programs key on their L1 inputs' placement, which the captures above moved: warm
                 # them up again on the allocator state the capture sees.
                 entries = device.num_program_cache_entries()
@@ -3660,13 +3676,26 @@ class DeepSeekV41Model(DeepSeekV4Model):
                 )
 
         moes = pmoe.build_moe_layers(self.config, self.loader, self.moe_mesh, self.cache, range(num_layers), log=log)
+        meshes, rows = [self.submeshes[0]], [pmoe.REQUESTER_ROW]
+        # The DSpark drafter's MoE on this server (DSPARK_SERVER_MOE): its row-3 mesh is the server's on-demand
+        # requester 1 and its stages are layers DSPARK_LAYER_BASE + s. The sockets take L1 on row 3 before the drafter
+        # (prepare_spec_decode) builds there.
+        self._drafter_mesh = None
+        if DSPARK_SERVER_MOE and self.verify_rows == 4 and DSPARK_BLOCK:
+            self._drafter_mesh = self.device.create_submesh(
+                ttnn.MeshShape(1, self.tp_size), ttnn.MeshCoordinate(pmoe.REQUESTER_ROW - 1, 0)
+            )
+            moes.update(pmoe.build_dspark_server_layers(self.config, self.loader, self.moe_mesh, self.cache))
+            meshes.append(self._drafter_mesh)
+            rows.append(pmoe.REQUESTER_ROW - 1)
         self.moe_server = pmoe.PersistentMoE(
             self.moe_mesh,
-            [self.submeshes[0]],
+            meshes,
             moes,
-            single_senders=pmoe.single_senders([pmoe.REQUESTER_ROW]),
+            single_senders=pmoe.single_senders(rows),
             # A verify block's requests: the server switches between the two (_use_server_rows).
             block_rows=self.verify_rows if self.verify_rows > 1 else 0,
+            **({"on_demand": [1]} if self._drafter_mesh is not None else {}),
         )
         logger.info(f"persistent MoE launched over layers 0..{num_layers - 1} ({time.perf_counter() - start:.0f}s)")
         logger.debug(f"stage before its layers: {_l1_report(self.submeshes[0])}")
@@ -3734,6 +3763,17 @@ class DeepSeekV41Model(DeepSeekV4Model):
         self.dspark.write_rows(rows, positions, slots)
 
     # -- DSpark verify on the persistent stage: every layer as (T, 32)-tiled block ops, one traced step -- #
+    def _use_server_rows_for_draft(self, quiesce: bool = False) -> None:
+        """The greedy block draft sends its FFNs to the persistent server as 4-row requests (DSPARK_SERVER_MOE): put
+        the server in that mode first. The drafter is the server's on-demand requester, so it may send only while no
+        stage request is outstanding: every draft comes after a step whose output the host has read (or, at compile
+        time, after a synchronize: ``quiesce``)."""
+        if self.dspark is not None and self.dspark.moe_server is not None:
+            if quiesce:
+                for sm in self.submeshes_io:
+                    ttnn.synchronize_device(sm["device"])
+            self._use_server_rows(self.verify_rows)
+
     def _use_server_rows(self, rows: int) -> None:
         """Have the persistent MoE serve ``rows``-row requests (one row for plain decode, ``verify_rows`` for a verify
         block), switching once every step already dispatched is in the stage's queue."""
@@ -4176,6 +4216,8 @@ class DeepSeekV41Model(DeepSeekV4Model):
         device with ``seed`` first (``None`` keeps the last draw, which a greedy draft ignores)."""
         self._wait_replays_dispatched()
         d = self.dspark
+        if d.temperature == 0:
+            self._use_server_rows_for_draft()
         d.set_block(token, frontier, self._resident_slot())
         if seed is not None:
             d.refresh_uniforms(seed, accept=False)
