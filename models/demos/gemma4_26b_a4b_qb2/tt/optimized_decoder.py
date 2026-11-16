@@ -1005,7 +1005,7 @@ class GeneralizedRouter:
         )
         return RouterTopk.op(logits, self._topk_scale, base, local_experts, 8)
 
-    def decode_packed(self, normalized):
+    def decode_packed(self, normalized, prescaled=False):
         """Batch-1 decode for the moe_decode experts (WS4): the scaled projection in FP32 (L1), then the batch-1
         router tail on one core (``moe_decode.router_topk_b1``: top-8 of the FP32 logits, softmax over the picks,
         times per_expert_scale) into one ``[1, 1, 32, 16]`` bf16 row-major tensor, row 0 = the 8 routing weights then
@@ -1022,10 +1022,15 @@ class GeneralizedRouter:
                 ),
                 ttnn.L1_MEMORY_CONFIG,
             )
-        scaled = ttnn.mul(
-            normalized,
-            source.scale,
-            activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.MUL_UNARY_SFPU, router.scalar_root_size)],
+        # prescaled (WS5 fused boundary): the input already is normalized * scale * scalar_root_size, FP32.
+        scaled = (
+            normalized
+            if prescaled
+            else ttnn.mul(
+                normalized,
+                source.scale,
+                activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.MUL_UNARY_SFPU, router.scalar_root_size)],
+            )
         )
         logits = ttnn.linear(
             scaled,
