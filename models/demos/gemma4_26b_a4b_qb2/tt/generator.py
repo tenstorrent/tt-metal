@@ -47,6 +47,11 @@ class _Gemma4SamplingGenerator(SamplingGenerator):
         return output
 
 
+# WS5: greedy batch-1 decode picks its token inside the model trace (fused_decode/greedy.py) instead of the common
+# sampler's top-k trace, when the model decodes batch 1 through the fused boundaries.
+WS5_GREEDY = os.environ.get("GEMMA4_26B_WS5_GREEDY", "1") != "0"
+
+
 class Gemma4Generator:
     def __init__(
         self,
@@ -520,6 +525,7 @@ class Gemma4Generator:
         if self.trace_debug:
             self.consumed_tokens = ttnn.clone(self.tokens)
             self.consumed_positions = ttnn.clone(self.cache_positions)
+        fused_greedy = getattr(self, "_fused_greedy", False)
         logits = self.model.decode_forward(
             self.tokens,
             current_pos=self.positions,
@@ -528,7 +534,10 @@ class Gemma4Generator:
             kv_cache=self.cache,
             batch=self.batch,
             active_slots=self.active_slots,
+            **({"greedy_tokens": self.tokens} if fused_greedy else {}),
         )
+        if fused_greedy:
+            self.sampler.format_public_tokens()
         ttnn.plus_one(self.positions, skip_negative_entries=True)
         ttnn.plus_one(self.cache_positions, skip_negative_entries=True)
         if self.sampled_mode and not self._trace_returns_logits:
@@ -587,8 +596,21 @@ class Gemma4Generator:
     def _format_tokens(self):
         self.sampler.format_public_tokens()
 
+    def _fused_greedy_ok(self):
+        sampler = self.sampler
+        return (
+            WS5_GREEDY
+            and self.batch == 1
+            and getattr(self.model, "fused_b1", None) is not None
+            and not self.host_sampling
+            and not self.sampled_mode
+            and not getattr(sampler, "_penalties_active", False)
+            and not getattr(sampler, "_log_probs_active", False)
+        )
+
     def _capture(self, *, return_logits=False):
         self._trace_returns_logits = return_logits
+        self._fused_greedy = not return_logits and self._fused_greedy_ok()
         self._trace_sampled_mode = self.sampled_mode
         if not return_logits:
             self._format_tokens()
@@ -597,7 +619,7 @@ class Gemma4Generator:
         initial_cache_positions = ttnn.clone(self.cache_positions)
         initial_seeds = None if return_logits else ttnn.clone(self.sampler.tt_sampling.seeds_tt_tensor)
         warmed = self._forward()
-        if not return_logits:
+        if not return_logits and not self._fused_greedy:
             self.sampler.precompile(warmed, tt_out_tok=self.tokens)
         ttnn.copy(initial_tokens, self.tokens)
         ttnn.copy(initial_positions, self.positions)
@@ -609,7 +631,8 @@ class Gemma4Generator:
         self.trace_logits = self._forward()
         ttnn.end_trace_capture(self.mesh, self.trace_id, cq_id=0)
         if not return_logits:
-            self.sampler.capture_trace(self.trace_logits, tt_out_tok=self.tokens, skip_precompile=True)
+            if not self._fused_greedy:
+                self.sampler.capture_trace(self.trace_logits, tt_out_tok=self.tokens, skip_precompile=True)
             self._capture_prefill()
         ttnn.copy(initial_tokens, self.tokens)
         ttnn.copy(initial_positions, self.positions)
@@ -693,6 +716,8 @@ class Gemma4Generator:
             ids = torch.zeros(1, 1, 1, 32, dtype=torch.int32)
             ids.flatten()[: self.batch] = predicted
             self._copy(ids, self.tokens, "token_refreshes")
+        elif getattr(self, "_fused_greedy", False):
+            self.last_log_probs = None  # the model trace wrote the greedy token (and the public copy)
         else:
             sampled = self.sampler.sample(self.trace_logits, tt_out_tok=self.tokens, enable_trace=True)
             self.last_log_probs = sampled[1] if isinstance(sampled, tuple) else None

@@ -2165,7 +2165,22 @@ class MultichipDecoder(OptimizedDecoder):
                 ]
             ),
             layer_scalar=float(layer.layer_scalar),
+            router=None,
         )
+        if boundary.flat_router:
+            # WS5: router projection split over K + the top-k tail in one program (fused_decode/router.py)
+            from models.demos.gemma4_26b_a4b_qb2.tt.fused_decode.router import RouterB1
+
+            projection = layer.moe.router.projection_weight
+            weight = ttnn.to_torch(ttnn.get_device_tensors(projection)[0]).float().reshape(hidden, -1)
+            scale = ttnn.typecast(source.source.per_expert_scale, ttnn.bfloat16)
+            pes = ttnn.to_memory_config(
+                ttnn.to_layout(ttnn.reshape(scale, (1, 1, 1, weight.shape[-1])), ttnn.ROW_MAJOR_LAYOUT),
+                ttnn.L1_MEMORY_CONFIG,
+            )
+            self.fused.router = RouterB1(
+                boundary.mesh, weight, pes, self.config.top_k_experts, skip=[(boundary.core.x, boundary.core.y)]
+            )
 
     def fused_decode(self, x, *, rope_mats, current_pos, cache_pos, page_table, kv_cache):
         """WS5 batch-1 decode layer between two fused boundaries: x is this layer's normed input (the previous
@@ -2188,7 +2203,11 @@ class MultichipDecoder(OptimizedDecoder):
         finally:
             attention.fused_partial = False
         router_in, expert_in, shared_in = f.boundary.attn(partial, f.g_attn, f.router_scale)
-        packed = self.layer.moe.router.decode_packed(router_in, prescaled=True)
+        packed = (
+            f.router(router_in)
+            if f.router is not None
+            else self.layer.moe.router.decode_packed(router_in, prescaled=True)
+        )
         moe = self.moe_b1
         boundary = f.boundary
         flat = boundary.flat_moe

@@ -149,12 +149,14 @@ class Gemma4Model:
 
         # The moe_decode shared MLP takes a BF16 input; the ttnn shared MLP the FP32 normed vector.
         shared_bf16 = all(getattr(layer, "shared_b1", None) is not None for layer in layers)
+        flat_moe = shared_bf16 and os.environ.get("GEMMA4_26B_WS5_FLAT_MOE", "1") != "0"
         boundary = GemmaBoundary(
             self.mesh,
             self.config.hidden_size,
             self.config.rms_norm_eps,
             shared_dtype=ttnn.bfloat16 if shared_bf16 else ttnn.float32,
-            flat_moe=shared_bf16 and os.environ.get("GEMMA4_26B_WS5_FLAT_MOE", "1") != "0",
+            flat_moe=flat_moe,
+            flat_router=flat_moe and os.environ.get("GEMMA4_26B_WS5_ROUTER", "1") != "0",
             round_n=os.environ.get("GEMMA4_26B_WS5_ROUND_N", "1") != "0",
         )
         hidden = self.config.hidden_size
@@ -166,7 +168,13 @@ class Gemma4Model:
         for n, layer in enumerate(layers):
             nxt = input_gamma(layers[n + 1]) if n + 1 < len(layers) else final_norm.float()
             layer.fused_setup(boundary, nxt)
-        return SimpleNamespace(boundary=boundary, g_entry=boundary.gammas([input_gamma(layers[0])]))
+        from models.demos.gemma4_26b_a4b_qb2.tt.fused_decode.greedy import GreedyB1
+
+        return SimpleNamespace(
+            boundary=boundary,
+            g_entry=boundary.gammas([input_gamma(layers[0])]),
+            greedy=GreedyB1(self.mesh, self.config.vocab_size // 4, softcap=self.softcap),
+        )
 
     def precision_summary(self):
         """Validate requested precision against allocated weights and bound kernels."""
@@ -240,7 +248,9 @@ class Gemma4Model:
         self.precision_observations["embedding_output"] = dtype_name(value.dtype)
         return value
 
-    def _fused_decode(self, hidden, current_pos, cache_pos, page_table, kv_cache, return_hidden=False):
+    def _fused_decode(
+        self, hidden, current_pos, cache_pos, page_table, kv_cache, return_hidden=False, greedy_tokens=None
+    ):
         """WS5 batch-1 decode: entry boundary (residual = the embedded token, first input norm), the layers between
         fused boundaries, the LM head on the last boundary's output (the final norm already applied)."""
         x = self.fused_b1.boundary.entry(hidden, self.fused_b1.g_entry)
@@ -258,6 +268,11 @@ class Gemma4Model:
                 page_table=layer_table,
                 kv_cache=cache,
             )
+        if greedy_tokens is not None:
+            # greedy: the argmax of the raw LM-head output (the softcap is monotonic) straight into the token input
+            logits = self.head_logits(x, softcap=False)
+            self.fused_b1.greedy(logits, greedy_tokens)
+            return logits
         if return_hidden:
             # x is the boundary's persistent buffer: hand out a DRAM copy (the final_norm contract).
             normed = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
@@ -290,7 +305,22 @@ class Gemma4Model:
             hidden = ttnn.typecast(rms_norm(hidden, self.config.rms_norm_eps, self.norm), ttnn.bfloat16)
         return hidden
 
-    def head_logits(self, hidden):
+    def softcap(self, logits):
+        """Final-logit softcap: tanh(logits / cap) * cap as one program over the vocab shard (was three)."""
+        cap = self.config.final_logit_softcapping
+        if not cap:
+            return logits
+        return ttnn.unary_chain(
+            logits,
+            [
+                ttnn.UnaryWithParam(ttnn.UnaryOpType.MUL_UNARY_SFPU, 1.0 / cap),
+                ttnn.UnaryWithParam(ttnn.UnaryOpType.TANH, 0.0),
+                ttnn.UnaryWithParam(ttnn.UnaryOpType.MUL_UNARY_SFPU, float(cap)),
+            ],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    def head_logits(self, hidden, softcap=True):
         logits = ttnn.linear(
             hidden,
             self.head,
@@ -299,18 +329,8 @@ class Gemma4Model:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             program_config=self.head_program if hidden.shape[-2] <= 32 else None,
         )
-        cap = self.config.final_logit_softcapping
-        if cap:
-            # tanh(logits / cap) * cap as one program over the vocab shard (was three).
-            logits = ttnn.unary_chain(
-                logits,
-                [
-                    ttnn.UnaryWithParam(ttnn.UnaryOpType.MUL_UNARY_SFPU, 1.0 / cap),
-                    ttnn.UnaryWithParam(ttnn.UnaryOpType.TANH, 0.0),
-                    ttnn.UnaryWithParam(ttnn.UnaryOpType.MUL_UNARY_SFPU, float(cap)),
-                ],
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
+        if softcap:
+            logits = self.softcap(logits)
         if logits.dtype != ttnn.bfloat16:
             raise ValueError("Logits and sampler input must be BF16")
         self.precision_observations["logits_output"] = dtype_name(logits.dtype)
@@ -352,6 +372,7 @@ class Gemma4Model:
         active_slots=None,
         return_hidden=False,
         kv_write_rows=None,
+        greedy_tokens=None,
     ):
         """``return_hidden`` (WS6): return ``(logits, post-final-norm hidden)``. ``kv_write_rows`` (WS6 verify):
         one int32 cache-position tensor per row, each with only that row's position set (-1 elsewhere); the
@@ -387,7 +408,11 @@ class Gemma4Model:
         if batch == 1 and len(active) == 1 and self.fused_b1 is not None and not per_row_writes:
             # The entry boundary gathers row 0 with 32 B reads: its source must be in L1.
             hidden = self.embed(tokens[..., :1], memory_config=ttnn.L1_MEMORY_CONFIG)
-            return self._fused_decode(hidden, current_pos, cache_pos, page_table, kv_cache, return_hidden)
+            return self._fused_decode(
+                hidden, current_pos, cache_pos, page_table, kv_cache, return_hidden, greedy_tokens
+            )
+        if greedy_tokens is not None:
+            raise ValueError("greedy_tokens (WS5 greedy terminal) needs the fused batch-1 decode path")
         hidden = self.embed(tokens[..., :batch])
         # Batch 1: gather the RoPE rows once per step and layer type, not once per layer.
         rope_rows = {}
