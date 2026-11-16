@@ -32,8 +32,8 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
 from models.demos.deepseek_v3_d_p.tests.sparse_mla.sparse_mla_mesh import detect_num_devices
 from models.demos.deepseek_v3_d_p.tests.sparse_mla.test_sparse_mla_perf import CHUNK_TOKENS, GALAXY_SP, SCENARIOS
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal
-from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
+from tt_py_test_utils_common.comparison_funcs import comp_equal
+from tt_py_test_utils_common.realtime_profiler_utils import profile_realtime_program
 
 # Mesh axes. In production the layout is SP (sequence) on axis 0, TP (tensor) on axis 1.
 SP_AXIS = 0
