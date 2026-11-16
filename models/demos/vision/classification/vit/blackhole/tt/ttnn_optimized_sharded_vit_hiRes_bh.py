@@ -67,6 +67,10 @@ def update_model_config(config, batch_size, sequence_size, device):
     # to the block-sharded grid, and the rest of the layer stays in L1. Blocks wider than eight tiles go there
     # too: their matmuls' buffers do not fit L1 beside the activations.
     projections_in_dram = ff1_exceeds_l1_budget(device, seqL_t__y, dim_t__x) or dim_t__x > 8
+    # The head split reads the fused qkv from L1 when a quarter of the grid's L1 holds it, from DRAM otherwise.
+    l1 = ttnn.get_memory_view(device, ttnn.BufferType.L1)
+    qkv_bytes = batch_size * seqL_t * 3 * dim_t * ttnn.tile_size(ttnn.bfloat8_b)
+    qkv_in_l1 = qkv_bytes <= l1.num_banks * l1.total_bytes_per_bank // 4
 
     # 1000 classes padded to 1152
     class__x = class_t // core_grid.x
@@ -174,6 +178,7 @@ def update_model_config(config, batch_size, sequence_size, device):
             core_grid_BLOCK_SHARDED=core_grid_BLOCK_SHARDED,
             should_reallocate_in_attention=should_reallocate_in_attention,
             projections_in_dram=projections_in_dram,
+            qkv_in_l1=qkv_in_l1,
             program_configs=program_configs,
         )
     )
@@ -271,7 +276,9 @@ def vit_attention(
             dtype=ttnn.bfloat8_b,
             program_config=config.program_configs["query_key_value_matmul_program_config"],
         )
-    query_key_value = ttnn.to_memory_config(query_key_value, ttnn.L1_MEMORY_CONFIG)
+    query_key_value = ttnn.to_memory_config(
+        query_key_value, ttnn.L1_MEMORY_CONFIG if config.qkv_in_l1 else ttnn.DRAM_MEMORY_CONFIG
+    )
 
     query, key, value = ttnn.experimental.nlp_create_qkv_heads(
         query_key_value,
