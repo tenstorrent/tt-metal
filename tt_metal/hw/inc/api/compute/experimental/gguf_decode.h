@@ -7,6 +7,9 @@
 #include <cstdint>
 
 #include "api/compute/common.h"
+#if defined(ARCH_BLACKHOLE)
+#include "experimental/ckernel_gguf_page.h"
+#endif
 // Blackhole-only: the GGUF decoders live only in the Blackhole LLK tree. The pack thread can run them too.
 #if (defined(TRISC_MATH) || defined(TRISC_PACK)) && defined(ARCH_BLACKHOLE)
 #include "experimental/llk_sfpu/llk_math_gguf_decode.h"
@@ -56,6 +59,11 @@ ALWI void gguf_decode_group_copy(const std::uint32_t idst, const std::uint32_t r
     GGUF_DECODE_ON(thr, llk_math_gguf_decode_group_copy<fmt, delta>(idst, rows));
 }
 
+// Formats whose phase 1 reads only the group's scale fields, the same for every tile of the group (not the tile index
+// or its codes): a tile may keep the params another tile of its group left at the same DEST tiles.
+template <std::uint32_t fmt>
+constexpr bool gguf_decode_params_per_group = fmt == gguf::Q1_0 || fmt == gguf::TQ1_0;
+
 // clang-format off
 /**
  * Decodes one GGUF weight tile into a Float32 [K][N] tile in DEST, scales applied (ggml's dequantization). Q4_K,
@@ -67,13 +75,21 @@ ALWI void gguf_decode_group_copy(const std::uint32_t idst, const std::uint32_t r
  * | idst     | DEST tile of the output; its page must be in tile idst + 1 (UInt32), tile idst + 2 is scratch | uint32_t | DEST tiles               | True     |
  * | ti       | The tile's index in its group of K tiles (page_layout<fmt>().group_tiles)                    | uint32_t | 0 to group_tiles - 1     | True     |
  * | rows     | DEST row offset of the page inside tile idst + 1 (several pages copied as one tile)          | uint32_t | 0, 2 * 16 * j            | False    |
+ *
+ * params = false skips phase 1 (the per-lane scales and offsets in tile idst + 2), for a format with
+ * gguf_decode_params_per_group: a tile whose tile idst + 2 still holds them from another tile of its group.
  */
 // clang-format on
-template <std::uint32_t fmt, GgufDecodeThread thr = GgufDecodeThread::Math, bool beside_unpack = true>
+template <
+    std::uint32_t fmt,
+    GgufDecodeThread thr = GgufDecodeThread::Math,
+    bool beside_unpack = true,
+    bool params = true>
 ALWI void gguf_decode_tile(const std::uint32_t idst, const std::uint32_t ti, const std::uint32_t rows = 0) {
     static_assert(thr == GgufDecodeThread::Math || beside_unpack, "the overlap protocol copies pages beside decodes");
+    static_assert(params || gguf_decode_params_per_group<fmt>, "phase 1 differs between the tiles of a group");
     if constexpr (thr == GgufDecodeThread::Math) {
-        MATH((llk_math_gguf_decode_tile<fmt, true, true, beside_unpack>(idst, ti, rows)));
+        MATH((llk_math_gguf_decode_tile<fmt, params, true, beside_unpack>(idst, ti, rows)));
     } else {
         // A phase 2 that stores through SFPLOADMACRO waits for the matmul of the tile before (such stores beside the
         // FPU's DEST writes are lost) and, where they are not arbitrated against the unpacker either, for the copy of
@@ -81,7 +97,9 @@ ALWI void gguf_decode_tile(const std::uint32_t idst, const std::uint32_t ti, con
         // which waits too (measured faster).
         PACK(({
             if constexpr (llk_math_gguf_decode_body_macro_stores<fmt>() || fmt == gguf::Q8_0) {
-                llk_math_gguf_decode_tile<fmt, true, false>(idst, ti, rows);
+                if constexpr (params) {
+                    llk_math_gguf_decode_tile<fmt, true, false>(idst, ti, rows);
+                }
                 TTI_SEMWAIT(
                     p_stall::STALL_SFPU | p_stall::STALL_SYNC,
                     semaphore::t6_sem(semaphore::PACK_DONE),
@@ -89,7 +107,7 @@ ALWI void gguf_decode_tile(const std::uint32_t idst, const std::uint32_t ti, con
                 t6_semaphore_get<p_stall::NONE>(semaphore::PACK_DONE);
                 llk_math_gguf_decode_tile<fmt, false, true>(idst, ti, rows);
             } else {
-                llk_math_gguf_decode_tile<fmt>(idst, ti, rows);
+                llk_math_gguf_decode_tile<fmt, params, true>(idst, ti, rows);
             }
         }));
     }
