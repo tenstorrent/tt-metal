@@ -27,7 +27,6 @@ OTHER_NIGHTLIES = (
     ("bit-exact", "llk-bit-exact.yaml"),
     ("e2e", "llk-e2e.yaml"),
 )
-HEALTH = "llk-perf-nightly-health.yaml"
 WORKFLOWS = ".github/workflows"
 VERDICT = re.compile(r"verdict=(\w+) regressions=(\d+)")
 BASELINE = re.compile(r"(?:^|Z )baseline \S+ \(([0-9a-f]+), (\d{4}-\d{2}-\d{2})", re.M)
@@ -322,34 +321,6 @@ def build_details(reports, extras=()):
     return "\n".join(lines)
 
 
-def watchdog(repo, day, workflows_dir, dm, out):
-    problems = [
-        f"{w} is disabled"
-        for w in disabled_workflows(repo, workflows_dir)
-        if w == HEALTH
-    ]
-    run = scheduled_run(repo, HEALTH, day)
-    if run is None:
-        problems.append("no health check ran today")
-    elif run["conclusion"] != "success":
-        problems.append(
-            f"the health check ended {run['conclusion'] or run['status']}: {run['html_url']}"
-        )
-    if problems:
-        with open(out, "w") as fh:
-            json.dump(
-                [
-                    {
-                        "channel": dm,
-                        "text": f":rotating_light: *LLK nightly watchdog, {day}*\n"
-                        + "\n".join(f"• {p}" for p in problems),
-                    }
-                ],
-                fh,
-            )
-    return problems
-
-
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--repo", required=True)
@@ -363,15 +334,8 @@ def main(argv=None):
     ap.add_argument("--details", default="health_details.md")
     ap.add_argument("--workflows", default=WORKFLOWS)
     ap.add_argument("--extra", nargs="*", default=[], help="reports of other checks")
-    ap.add_argument(
-        "--watchdog", action="store_true", help="check only the health check"
-    )
     a = ap.parse_args(argv)
     day = dt.date.fromisoformat(a.date)
-    if a.watchdog:
-        for p in watchdog(a.repo, a.date, a.workflows, a.dm, a.out):
-            print(p)
-        return 0
     limits = leg_limits(a.tests_yaml)
     reports = []
     for name, workflow in NIGHTLIES:
