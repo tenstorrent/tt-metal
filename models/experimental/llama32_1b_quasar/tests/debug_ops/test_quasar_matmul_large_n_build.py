@@ -34,7 +34,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_allclose
+from tt_py_test_utils_common.utils_for_testing import assert_allclose
 
 # Exact compile-time args of the failing e2e matmul.
 GRID = (2, 1)  # compute_with_storage_grid_size = 2x1 (the 2-node emulator)

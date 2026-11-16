@@ -229,5 +229,12 @@ inline void _calculate_comp_unary_int_([[maybe_unused]] int scalar) {
     LLK_ASSERT(false, "Int32 unary comparisons (unary_*_tile_int32) are not supported on Quasar");
 }
 
+// Quasar has no UInt32 data format, so the UInt32 unary comparisons (unary_*_tile_uint32) reject the call here
+// for the same reason as the Int32 ones above.
+template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
+inline void calculate_comp_unary_uint32([[maybe_unused]] const std::uint32_t scalar) {
+    LLK_ASSERT(false, "UInt32 unary comparisons (unary_*_tile_uint32) are not supported on Quasar");
+}
+
 }  // namespace sfpu
 }  // namespace ckernel

@@ -25,7 +25,7 @@
 #include "impl/metal2_host_api/llk_metadata.hpp"
 #include <tt-metalium/math.hpp>
 
-namespace tt::tt_metal::experimental {
+namespace tt::tt_metal {
 
 namespace {
 
@@ -90,7 +90,7 @@ ResolvedTensorParameter ResolveTensorParameterStaticCTAs(
                           spec.layout() == Layout::ROW_MAJOR;
     // dynamic_tensor_shape's runtime accessor fields would have no reader: a per-node binding builds only a
     // LocalTensorAccessor, which reads just its base address.
-    const bool is_per_node = per_core_allocation::is_per_core_allocation(memory_config);
+    const bool is_per_node = experimental::per_core_allocation::is_per_core_allocation(memory_config);
     TT_FATAL(
         !is_per_node || !tensor_parameter.relaxations.dynamic_tensor_shape,
         "TensorParameter '{}' is per-node allocated, which does not support dynamic_tensor_shape",
@@ -306,4 +306,4 @@ std::unordered_map<TensorParamName, ResolvedTensorParameter> RegisterTensorParam
     return resolved_tensor_parameters;
 }
 
-}  // namespace tt::tt_metal::experimental
+}  // namespace tt::tt_metal

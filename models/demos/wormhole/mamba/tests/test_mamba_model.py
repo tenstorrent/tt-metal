@@ -16,7 +16,7 @@ from models.demos.wormhole.mamba.reference.decode_model import MambaPretrainedMo
 from models.demos.wormhole.mamba.reference.prefill_decode_model import Mamba
 from models.demos.wormhole.mamba.tt import model_config
 from models.demos.wormhole.mamba.tt.mamba_model import MambaTT
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
+from tt_py_test_utils_common.comparison_funcs import comp_allclose, comp_pcc
 
 
 class MambaPytorch(torch.nn.Module):
