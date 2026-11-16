@@ -99,6 +99,12 @@ class Gemma4Model:
             print(f"LAYER_READY {index}", flush=True)
         embedding = checkpoint.load("model.language_model.embed_tokens.")["weight"]
         self.embedding = self.upload(embedding[None, None], layout=ttnn.ROW_MAJOR_LAYOUT, shard=-1)
+        # WS5: a replicated row-major copy for the batch-1 token entry boundary (one row per page)
+        self.embedding_rows = (
+            self.upload(embedding[None, None], layout=ttnn.ROW_MAJOR_LAYOUT)
+            if WS5_FUSED and os.environ.get("GEMMA4_26B_WS5_TOKEN_ENTRY", "1") != "0"
+            else None
+        )
         self.head = self.upload(
             embedding.T.contiguous()[None, None],
             dtype=policy_dtype(self.precision_config["model"]["head_weight_dtype"]),
@@ -256,7 +262,11 @@ class Gemma4Model:
     ):
         """WS5 batch-1 decode: entry boundary (residual = the embedded token, first input norm), the layers between
         fused boundaries, the LM head on the last boundary's output (the final norm already applied)."""
-        x = self.fused_b1.boundary.entry(hidden, self.fused_b1.g_entry)
+        boundary = self.fused_b1.boundary
+        if self.embedding_rows is not None:
+            x = boundary.entry_token(hidden, self.embedding_rows, self.fused_b1.g_entry, self.embed_scale)
+        else:
+            x = boundary.entry(hidden, self.fused_b1.g_entry)
         rope_rows = {}
         for layer_number, (layer, cache, index) in enumerate(zip(self.layers, kv_cache, self.layer_indices)):
             layer_table = page_table[layer_number] if isinstance(page_table, (tuple, list)) else page_table
@@ -409,8 +419,11 @@ class Gemma4Model:
         active = tuple(range(batch)) if active_slots is None else tuple(active_slots)
         per_row_writes = getattr(self.layers[0].layer.self_attn, "kv_write_rows", None) is not None
         if batch == 1 and len(active) == 1 and self.fused_b1 is not None and not per_row_writes:
-            # The entry boundary gathers row 0 with 32 B reads: its source must be in L1.
-            hidden = self.embed(tokens[..., :1], memory_config=ttnn.L1_MEMORY_CONFIG)
+            if self.embedding_rows is not None:
+                hidden = tokens  # the token entry boundary reads the embedding row itself
+            else:
+                # The entry boundary gathers row 0 with 32 B reads: its source must be in L1.
+                hidden = self.embed(tokens[..., :1], memory_config=ttnn.L1_MEMORY_CONFIG)
             return self._fused_decode(
                 hidden, current_pos, cache_pos, page_table, kv_cache, return_hidden, greedy_tokens
             )
