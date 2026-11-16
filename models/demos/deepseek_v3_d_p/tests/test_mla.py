@@ -27,6 +27,16 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     torus_xy_device_params,
     torus_y_device_params,
 )
+from models.demos.deepseek_v3_d_p.tests.measure.determinism import RUNS, check_determinism
+from models.demos.deepseek_v3_d_p.tests.measure.gate import (
+    TRACED_MARGIN,
+    UNTRACED_MARGIN,
+    PerfReport,
+    PerfTarget,
+    band_failure,
+)
+from models.demos.deepseek_v3_d_p.tests.measure.timing import time_untraced
+from models.demos.deepseek_v3_d_p.tests.measure.trace import TracedStep, time_traced
 from models.demos.deepseek_v3_d_p.tests.reference_runners import run_reference_mla
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import num_full_indexer_layers, resolve_has_indexer
@@ -56,6 +66,7 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, 
 from models.demos.deepseek_v3_d_p.utils.prefill_summary_utils import emit_perf_metrics
 from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import require_high_power
 from models.demos.deepseek_v3_d_p.utils.test_utils import gather_cache_natural, preload_cache, tp_stripe_major_cache
+from tt_py_test_utils_common.perf.cpu_clock import hold_full_cpu_clock
 from tt_py_test_utils_common.realtime_profiler_utils import profile_realtime_program
 from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
@@ -521,16 +532,17 @@ ROTATED_VALID_LISTS = [
 ]
 ROTATED_VALID_IDS = ["aligned_min", "midchip_straddle", "lastchip", "rot_partial", "multislab", "allfull"]
 
-# Determinism gate, same contract as test_prefill_block / test_prefill_transformer: repeats must be
-# bit-identical, so the threshold is exactly 1.0. Rep 0 is the baseline, hence >= 2.
-DETERMINISM_PCC_THRESHOLD = 1.0
-DETERMINISM_REPS = 3
-
 # Realtime ("lightweight") profiler perf gate: in-process device program records, so no Tracy
 # subprocess, no signposts and no ops-CSV re-parse -- it runs on the plain build. Not comparable to
 # the Tracy path's number -- Tracy averages collectives across chips, this takes the max.
 K3_CHUNKED_RT_PERF_NS = 9_996_000
 K3_CHUNKED_RT_PERF_MARGIN = 0.03
+# Host-time targets (ms) for the same forward, untraced and traced. Report-only until calibrated from CI; the
+# realtime-profiler gate above cannot see sub-device overlap and goes once these exist.
+K3_CHUNKED_HOST_TARGETS_MS = {"untraced": None, "traced": None}
+K3_TRACE_PCC = 0.9999
+# The determinism check and the host-time gate replay a captured forward, so these meshes reserve a trace region.
+_CHUNKED_DEVICE_PARAMS = {"l1_small_size": 1152, "trace_region_size": 16 * 1024 * 1024}
 
 
 def _rt_profile_forward_ns(mesh_device, run_fn):
@@ -547,6 +559,24 @@ def _rt_profile_forward_ns(mesh_device, run_fn):
     return result, sum(per_program.values())
 
 
+def _host_times(mesh_device, mla_tt, forward):
+    """Host ms of `forward`, untraced and traced (tests/measure defaults), and the minimum per-device PCC of the traced
+    output against the last timed eager output."""
+    untraced, eager_out = time_untraced(forward, lambda: ttnn.synchronize_device(mesh_device), keep_last=True)
+    try:
+        eager = [ttnn.to_torch(t) for t in ttnn.get_device_tensors(ttnn.from_device(eager_out))]
+    finally:
+        ttnn.deallocate(eager_out)
+    with TracedStep(
+        mesh_device, forward, attach=mla_tt.set_trace_controller, detach=lambda: mla_tt.set_trace_controller(None)
+    ) as traced:
+        traced.capture()
+        traced_samples = time_traced(traced)
+        replayed = [ttnn.to_torch(t) for t in ttnn.get_device_tensors(ttnn.from_device(traced.output))]
+    trace_pcc = min(comp_pcc(a, b, K3_TRACE_PCC)[1] for a, b in zip(eager, replayed))
+    return {"untraced": untraced, "traced": traced_samples, "trace_pcc": trace_pcc}
+
+
 def _run_chunked_prefill(
     request,
     mesh_device,
@@ -560,6 +590,7 @@ def _run_chunked_prefill(
     topology=None,
     use_metadata_tensor=False,
     determinism_check=False,
+    host_times=None,
     profile=False,
     tight_cache=False,
     tp_shard_kv=False,
@@ -853,53 +884,58 @@ def _run_chunked_prefill(
                     chunk_size_global=chunk_size_global,
                     sp_axis=sp_axis,
                 )
+
             # Metadata path: pass ONLY the per-element metadata operands (the runtime's _trace_metadata
             # equivalent) -- actual_start/actual_end are read on-device, so leave them None to prove
             # forward needs no host per-chunk scalars. cache_user_id is unused on this path (slot comes
             # from metadata[0]).
-            # Determinism re-issues the SAME forward on the same device inputs. forward takes
+            # Determinism and the host-time gate re-issue the SAME forward on the same device inputs. forward takes
             # actual_start/cache_user_id from the caller, so a repeat rewrites the same cache slots
             # with the same data -- idempotent, like the repeated block() in test_prefill_block.
-            det_baseline = None
-            for rep in range(DETERMINISM_REPS if determinism_check else 1):
+            def _forward():
+                return mla_tt.forward(
+                    hidden_states=tt_h,
+                    rope_tensors=indexed_rope,
+                    kvpe_cache=tt_kvpe_cache,
+                    actual_start=None if use_metadata_tensor else kv_actual,
+                    # Scalar path needs actual_end only when the window overruns; None otherwise keeps
+                    # the existing scenarios writing the whole padded slab. (Metadata always carries it.)
+                    actual_end=valid_end if (tight_cache and not use_metadata_tensor) else None,
+                    cache_user_id=u,
+                    metadata=kv_pad_metadata,
+                )
 
-                def _forward():
-                    return mla_tt.forward(
-                        hidden_states=tt_h,
-                        rope_tensors=indexed_rope,
-                        kvpe_cache=tt_kvpe_cache,
-                        actual_start=None if use_metadata_tensor else kv_actual,
-                        # Scalar path needs actual_end only when the window overruns; None otherwise keeps
-                        # the existing scenarios writing the whole padded slab. (Metadata always carries it.)
-                        actual_end=valid_end if (tight_cache and not use_metadata_tensor) else None,
-                        cache_user_id=u,
-                        metadata=kv_pad_metadata,
-                    )
-
-                if profile:
-                    tt_out, fwd_ns = _rt_profile_forward_ns(mesh_device, _forward)
-                    profiled_ns += fwd_ns
-                    logger.info(f"  user {u} iter {i}: forward {fwd_ns / 1e6:.3f} ms (realtime profiler)")
-                else:
-                    tt_out = _forward()
-                out_flat = ttnn.to_torch(
-                    tt_out,
-                    mesh_composer=ttnn.ConcatMesh2dToTensor(
-                        mesh_device, dims=out_concat_dims, mesh_shape=mesh_device.shape
+            if determinism_check:
+                # On device (tests/measure/determinism.py): RUNS eager forwards and RUNS replays of a captured one,
+                # each against the first, and the first replay against the first eager run. Collect rather than
+                # assert: one report listing every non-deterministic (user, iter).
+                failure = check_determinism(
+                    mesh_device,
+                    _forward,
+                    lambda: TracedStep(
+                        mesh_device,
+                        _forward,
+                        attach=mla_tt.set_trace_controller,
+                        detach=lambda: mla_tt.set_trace_controller(None),
                     ),
-                ).to(torch.bfloat16)[0, 0]
-                if not determinism_check:
-                    continue
-                if rep == 0:
-                    det_baseline = out_flat.clone()
-                    continue
-                # Collect rather than assert: one report listing every non-deterministic (user, iter,
-                # rep) beats aborting on the first, same as the prefill-block/transformer checks.
-                _, pcc = comp_pcc(det_baseline.float(), out_flat.float())
-                status = "PASS" if pcc >= DETERMINISM_PCC_THRESHOLD else "FAIL"
-                logger.info(f"  user {u} iter {i} rep {rep} vs rep0: PCC = {pcc:.6f}  {status}")
-                if pcc < DETERMINISM_PCC_THRESHOLD:
-                    det_failures.append((u, i, rep, pcc))
+                )
+                logger.info(f"  user {u} iter {i}: determinism {'FAIL' if failure else 'PASS'}")
+                if failure:
+                    det_failures.append((u, i, failure))
+            if profile:
+                tt_out, fwd_ns = _rt_profile_forward_ns(mesh_device, _forward)
+                profiled_ns += fwd_ns
+                logger.info(f"  user {u} iter {i}: forward {fwd_ns / 1e6:.3f} ms (realtime profiler)")
+                if host_times is not None:
+                    host_times.update(_host_times(mesh_device, mla_tt, _forward))
+            else:
+                tt_out = _forward()
+            out_flat = ttnn.to_torch(
+                tt_out,
+                mesh_composer=ttnn.ConcatMesh2dToTensor(
+                    mesh_device, dims=out_concat_dims, mesh_shape=mesh_device.shape
+                ),
+            ).to(torch.bfloat16)[0, 0]
             if kv_pad_metadata is not None:
                 # .scalars: field 3 is a persistent buffer allocated outside this loop, so a
                 # blanket deallocate would free it before the next chunk reads it.
@@ -928,11 +964,11 @@ def _run_chunked_prefill(
 
     if determinism_check:
         if det_failures:
-            msg = "; ".join(f"user {u} iter {i} rep {rep}: {pcc:.6f}" for u, i, rep, pcc in det_failures)
-            pytest.fail(f"Determinism PCC below {DETERMINISM_PCC_THRESHOLD}: {msg}")
+            msg = "\n".join(f"user {u} iter {i}: {failure}" for u, i, failure in det_failures)
+            pytest.fail(f"Chunked prefill is not deterministic:\n{msg}")
         logger.success(
-            f"✓ Chunked prefill determinism: {DETERMINISM_REPS} reps of every forward bit-identical "
-            f"({n_iters} iter(s) x {num_users} user(s))"
+            f"✓ Chunked prefill determinism: {RUNS} eager runs, {RUNS} replays and traced vs eager identical "
+            f"for every forward ({n_iters} iter(s) x {num_users} user(s))"
         )
         return
 
@@ -1343,16 +1379,16 @@ _CHUNKED_SCENARIOS = (
 @pytest.mark.parametrize(
     "mesh_device,device_params,sp_axis",
     [
-        pytest.param((2, 2), fabric2d_device_params(l1_small_size=1152), 0, id="fabric2d-2x2"),
-        pytest.param((2, 4), fabric2d_device_params(l1_small_size=1152), 0, id="fabric2d-2x4"),
+        pytest.param((2, 2), fabric2d_device_params(**_CHUNKED_DEVICE_PARAMS), 0, id="fabric2d-2x2"),
+        pytest.param((2, 4), fabric2d_device_params(**_CHUNKED_DEVICE_PARAMS), 0, id="fabric2d-2x4"),
         # high_bw_all_gather parks readiness/completion semaphores in L1_SMALL. On 8x4 the
         # fallback fragments general L1 enough that a later op's static circular buffers collide.
         #
-        pytest.param((8, 4), torus_xy_device_params(l1_small_size=1152), 0, id="torus-xy-8x4"),
+        pytest.param((8, 4), torus_xy_device_params(**_CHUNKED_DEVICE_PARAMS), 0, id="torus-xy-8x4"),
         # One 4x4 prefill stage (a Galaxy tray half): SP=4 on the axis-1 ring, TP=4 on the axis-0 line.
         pytest.param(
             (4, 4),
-            torus_x_device_params(l1_small_size=1152),
+            torus_x_device_params(**_CHUNKED_DEVICE_PARAMS),
             1,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
             id="torus-x-4x4-sp1",
@@ -1479,7 +1515,7 @@ def test_mistral4_mla_chunked_prefill_loudbox(request, mesh_device, device_param
     [
         pytest.param(
             (8, 4),
-            torus_xy_device_params(l1_small_size=1152),
+            torus_xy_device_params(**_CHUNKED_DEVICE_PARAMS),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4",
         )
@@ -1498,6 +1534,10 @@ def test_mla_chunked_perf_check(request, mesh_device, device_params, variant):
     program. K3's forward is ~7% CCL, so the two disagree by construction."""
     require_high_power("kimi_k3 MLA chunked perf")
     topology = per_axis_topology(device_params["fabric_config"])
+    clock = hold_full_cpu_clock()
+    request.addfinalizer(clock.restore)
+    print(f"kimi_k3 MLA chunked 50k+5k host: {clock.status}")
+    host = {}
     total_ns = _run_chunked_prefill(
         request,
         mesh_device,
@@ -1506,12 +1546,14 @@ def test_mla_chunked_perf_check(request, mesh_device, device_params, variant):
         profile=True,
         iters_isl=[5120],
         prefill_len=50 * 1024,
+        host_times=host,
     )
-    lower = K3_CHUNKED_RT_PERF_NS * (1 - K3_CHUNKED_RT_PERF_MARGIN)
-    upper = K3_CHUNKED_RT_PERF_NS * (1 + K3_CHUNKED_RT_PERF_MARGIN)
+    device_failure = band_failure(
+        "device time", total_ns / 1e6, PerfTarget(K3_CHUNKED_RT_PERF_NS / 1e6, K3_CHUNKED_RT_PERF_MARGIN)
+    )
     logger.info(
         f"kimi_k3 chunked 50k+5k realtime perf: {total_ns:,.0f} ns ({total_ns / 1e6:.3f} ms), "
-        f"expected {K3_CHUNKED_RT_PERF_NS:,} ns, band [{lower:,.0f}, {upper:,.0f}]"
+        f"expected {K3_CHUNKED_RT_PERF_NS:,} ns ±{K3_CHUNKED_RT_PERF_MARGIN:.0%}"
     )
     emit_perf_metrics(
         "kimi_k3_mla_chunked_50k_5k_torus-xy-8x4",
@@ -1523,13 +1565,16 @@ def test_mla_chunked_perf_check(request, mesh_device, device_params, variant):
             "measured_ms": total_ns / 1e6,
             "expected_ns": K3_CHUNKED_RT_PERF_NS,
             "perf_margin_pct": K3_CHUNKED_RT_PERF_MARGIN * 100.0,
-            "within_band": lower <= total_ns <= upper,
+            "within_band": device_failure is None,
+            "host_untraced_ms": host["untraced"].estimate,
+            "host_traced_ms": host["traced"].estimate,
         },
     )
-    assert_perf_gate(
-        lower <= total_ns <= upper,
-        (
-            f"device time {total_ns:,.0f} ns outside band [{lower:,.0f}, {upper:,.0f}] "
-            f"(expected {K3_CHUNKED_RT_PERF_NS:,} ns, margin +/- {K3_CHUNKED_RT_PERF_MARGIN * 100:.1f}%)"
-        ),
-    )
+    report = PerfReport("kimi_k3 MLA chunked 50k+5k host")
+    for mode, margin in (("untraced", UNTRACED_MARGIN), ("traced", TRACED_MARGIN)):
+        report.add(mode, host[mode], PerfTarget(K3_CHUNKED_HOST_TARGETS_MS[mode], margin))
+    assert (
+        host["trace_pcc"] >= K3_TRACE_PCC
+    ), f"traced output differs from untraced: min per-device PCC {host['trace_pcc']:.6f}"
+    assert_perf_gate(device_failure is None, device_failure or "")
+    report.finish(skip_unmeasured=False)  # the device gate above decides until host targets exist
