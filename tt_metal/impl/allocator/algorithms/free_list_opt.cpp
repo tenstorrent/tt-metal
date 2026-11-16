@@ -15,25 +15,6 @@
 
 #include "allocator_algorithm.hpp"
 
-inline size_t intlg2(size_t n) {
-    // std::log2() is slow
-    size_t count = 0;
-    while (n > 0) {
-        count++;
-        n >>= 1;
-    }
-    return count;
-}
-
-inline size_t num_segerated_classes(size_t max_size_bytes, size_t size_segregated_base) {
-    size_t n = max_size_bytes / size_segregated_base;
-    size_t count = intlg2(n);
-    // 128MB as the last seggregated class size should be enough
-    // avoid having too many classes as iterating them is not free
-    size_t max_count = intlg2(128 * 1024 * 1024 / size_segregated_base);
-    return std::clamp(count, size_t{2}, max_count);
-}
-
 namespace tt::tt_metal::allocator {
 
 FreeListOpt::FreeListOpt(
@@ -43,7 +24,7 @@ FreeListOpt::FreeListOpt(
     DeviceAddr alignment,
     SearchPolicy policy) :
     Algorithm(max_size_bytes, offset_bytes, min_allocation_size, alignment),
-    size_segregated_count((num_segerated_classes(max_size_bytes, size_segregated_base))),
+    size_classes_(max_size_bytes),
     policy_(policy) {
     // Reduce reallocations by reserving memory for free list components
     constexpr size_t initial_block_count = 64;
@@ -54,10 +35,7 @@ FreeListOpt::FreeListOpt(
     block_is_allocated_.reserve(initial_block_count);
     free_meta_block_indices_.reserve(initial_block_count);
     meta_block_is_allocated_.reserve(initial_block_count);
-    free_blocks_segregated_by_size_.resize(size_segregated_count);
-    for (auto& free_blocks : free_blocks_segregated_by_size_) {
-        free_blocks.reserve(initial_block_count);
-    }
+    size_classes_.reserve(initial_block_count);
     allocated_block_table_.resize(n_alloc_table_buckets);
     for (auto& bucket : allocated_block_table_) {
         bucket.reserve(n_alloc_table_init_bucket_size);
@@ -80,9 +58,7 @@ void FreeListOpt::init() {
     for (auto& bucket : allocated_block_table_) {
         bucket.clear();
     }
-    for (auto& free_blocks : free_blocks_segregated_by_size_) {
-        free_blocks.clear();
-    }
+    size_classes_.clear();
 
     // Create a single block that spans the entire memory
     block_address_.push_back(0);
@@ -91,7 +67,7 @@ void FreeListOpt::init() {
     block_next_block_.push_back(no_block);
     block_is_allocated_.push_back(false);
     meta_block_is_allocated_.push_back(true);
-    free_blocks_segregated_by_size_[get_size_segregated_index(max_size_bytes_)].push_back(0);
+    insert_block_to_segregated_list(0);
 }
 
 std::optional<DeviceAddr> FreeListOpt::allocate(DeviceAddr size_bytes, bool bottom_up, DeviceAddr address_limit) {
@@ -101,62 +77,13 @@ std::optional<DeviceAddr> FreeListOpt::allocate(DeviceAddr size_bytes, bool bott
     // we can be confident that it's the best block to allocate from. Else, look at the next size class. However the
     // blocks within a size class are not sorted by size, so we may not always find the best block.
 
-    std::optional<size_t> target_block_index;
-    size_t size_segregated_index = get_size_segregated_index(alloc_size);
-    TT_ASSERT(size_segregated_index < size_segregated_count, "Size segregated index out of bounds");
-    std::vector<size_t>* segregated_list = nullptr;
-    size_t segregated_item_index = 0;
-    DeviceAddr best_address = bottom_up ? ~(DeviceAddr)0 : 0;
-
-    for (size_t i = size_segregated_index; i < free_blocks_segregated_by_size_.size(); i++) {
-        auto& free_blocks = free_blocks_segregated_by_size_[i];
-        for (size_t n = 0; n < free_blocks.size(); n++) {
-            // Bottom-up walks front to back, top-down back to front. Deriving j from an unsigned
-            // counter avoids an empty list underflowing the start index.
-            const size_t j = bottom_up ? n : free_blocks.size() - 1 - n;
-            const size_t block_index = free_blocks[j];
-            if (policy_ == SearchPolicy::BEST) {
-                if (block_size_[block_index] == alloc_size) {
-                    target_block_index = block_index;
-                    segregated_list = &free_blocks;
-                    segregated_item_index = j;
-                    break;
-                }
-                if (block_size_[block_index] >= alloc_size &&
-                    (!target_block_index.has_value() || block_size_[block_index] < block_size_[*target_block_index])) {
-                    target_block_index = block_index;
-                    segregated_list = &free_blocks;
-                    segregated_item_index = j;
-                }
-                if (target_block_index.has_value()) {
-                    break;
-                }
-            } else {
-                if (block_size_[block_index] < alloc_size) {
-                    continue;
-                }
-
-                bool address_better =
-                    bottom_up ? block_address_[block_index] < best_address : block_address_[block_index] > best_address;
-                if (!target_block_index.has_value() || address_better) {
-                    target_block_index = block_index;
-                    segregated_list = &free_blocks;
-                    segregated_item_index = j;
-                    best_address = block_address_[block_index];
-                    break;
-                }
-            }
-        }
-    }
-
+    std::optional<size_t> target_block_index =
+        size_classes_.take_fit(alloc_size, bottom_up, policy_, block_address_accessor(), block_size_accessor());
     if (!target_block_index.has_value()) {
         return std::nullopt;
     }
-    TT_ASSERT(segregated_list != nullptr, "Segregated list is null");
-    TT_ASSERT(segregated_item_index < segregated_list->size(), "Segregated item index out of bounds");
     TT_ASSERT(
         block_is_allocated_[*target_block_index] == false, "Block we are trying allocate from is already allocated");
-    segregated_list->erase(segregated_list->begin() + static_cast<std::ptrdiff_t>(segregated_item_index));
 
     // Allocate the block
     size_t offset = 0;
@@ -195,21 +122,9 @@ std::optional<DeviceAddr> FreeListOpt::allocate_at_address(DeviceAddr absolute_s
         return std::nullopt;
     }
 
-    // Find the relevant size segregated list
-    size_t size_segregated_index = get_size_segregated_index(block_size_[*target_block_index]);
-    std::vector<size_t>& segregated_list = free_blocks_segregated_by_size_[size_segregated_index];
-    // Precondition: insert_block_to_segregated_list() keeps each list sorted ascending by block
-    // address, which the lower_bound below relies on. Assert it (debug-only) instead of silently
-    // assuming it.
-    const auto by_address = [this](size_t a, size_t b) { return block_address_[a] < block_address_[b]; };
-    TT_ASSERT(
-        std::is_sorted(segregated_list.begin(), segregated_list.end(), by_address),
-        "Size segregated list must be sorted by block address");
-    auto it = std::lower_bound(segregated_list.begin(), segregated_list.end(), *target_block_index, by_address);
-    TT_ASSERT(it != segregated_list.end() && *it == *target_block_index, "Block not found in size segregated list");
-    if (it != segregated_list.end() && *it == *target_block_index) {
-        segregated_list.erase(it);
-    }
+    [[maybe_unused]] const bool erased =
+        size_classes_.erase(*target_block_index, block_size_[*target_block_index], block_address_accessor());
+    TT_ASSERT(erased, "Block not found in size segregated list");
 
     size_t offset = start_address - block_address_[*target_block_index];
     // Allocated addresses cache is invalidated by allocate_in_block
@@ -278,18 +193,19 @@ void FreeListOpt::deallocate(DeviceAddr absolute_address) {
     size_t prev_block = block_prev_block_[block_index];
     size_t next_block = block_next_block_[block_index];
 
+    // Both merges find the neighbour in its class by a linear scan, as they have since they were
+    // written, with no recorded reason. Its address and size are unchanged at that point, so erase()
+    // would also work.
+
     // Merge with previous block if it's free
     if (prev_block != no_block && !block_is_allocated_[prev_block]) {
         // Look into the size segregated list to remove the block
-        size_t size_segregated_index = get_size_segregated_index(block_size_[prev_block]);
-        std::vector<size_t>& segregated_list = free_blocks_segregated_by_size_[size_segregated_index];
-        auto it = std::find(segregated_list.begin(), segregated_list.end(), prev_block);
+        [[maybe_unused]] const bool erased = size_classes_.erase_by_scan(prev_block, block_size_[prev_block]);
         TT_ASSERT(
-            it != segregated_list.end(),
+            erased,
             "Prev block {} not found in size segregated list during deallocation of block {}",
             prev_block,
             block_index);
-        segregated_list.erase(it);
 
         block_size_[prev_block] += block_size_[block_index];
         unlink_block(block_index);
@@ -300,15 +216,12 @@ void FreeListOpt::deallocate(DeviceAddr absolute_address) {
     // Merge with next block if it's free
     if (next_block != no_block && !block_is_allocated_[next_block]) {
         // Look into the size segregated list to remove the block
-        size_t size_segregated_index = get_size_segregated_index(block_size_[next_block]);
-        std::vector<size_t>& segregated_list = free_blocks_segregated_by_size_[size_segregated_index];
-        auto it = std::find(segregated_list.begin(), segregated_list.end(), next_block);
+        [[maybe_unused]] const bool erased = size_classes_.erase_by_scan(next_block, block_size_[next_block]);
         TT_ASSERT(
-            it != segregated_list.end(),
+            erased,
             "Next block {} not found in size segregated list during deallocation of block {}",
             next_block,
             block_index);
-        segregated_list.erase(it);
 
         block_size_[block_index] += block_size_[next_block];
         // block_prev_block_[next_block] == block_index here, so unlinking next_block is what rewires
@@ -335,17 +248,17 @@ void FreeListOpt::deallocate(DeviceAddr absolute_address) {
 
 std::vector<std::pair<DeviceAddr, DeviceAddr>> FreeListOpt::available_addresses(DeviceAddr size_bytes) const {
     size_t alloc_size = align(std::max(size_bytes, min_allocation_size_));
-    size_t size_segregated_index = get_size_segregated_index(alloc_size);
+    size_t size_segregated_index = size_classes_.class_of(alloc_size);
     std::vector<std::pair<DeviceAddr, DeviceAddr>> addresses;
 
     size_t max_candidate_blocks = 0;
-    for (size_t i = size_segregated_index; i < size_segregated_count; i++) {
-        max_candidate_blocks += free_blocks_segregated_by_size_[i].size();
+    for (size_t i = size_segregated_index; i < size_classes_.num_classes(); ++i) {
+        max_candidate_blocks += size_classes_.blocks(i).size();
     }
     addresses.reserve(max_candidate_blocks);
 
-    for (size_t i = size_segregated_index; i < size_segregated_count; i++) {
-        for (size_t block_index : free_blocks_segregated_by_size_[i]) {
+    for (size_t i = size_segregated_index; i < size_classes_.num_classes(); ++i) {
+        for (size_t block_index : size_classes_.blocks(i)) {
             if (block_size_[block_index] >= alloc_size) {
                 addresses.push_back(
                     {block_address_[block_index] + offset_bytes_,
@@ -455,15 +368,15 @@ Statistics FreeListOpt::get_statistics() const {
 void FreeListOpt::dump_blocks(std::ostream& out) const {
     out << "FreeListOpt allocator info:" << std::endl;
     out << "segregated free blocks by size:" << std::endl;
-    for (size_t i = 0; i < free_blocks_segregated_by_size_.size(); i++) {
-        if (i != free_blocks_segregated_by_size_.size() - 1) {
-            out << "  Size class " << i << ": (" << size_t(size_segregated_base * (size_t{1} << i)) << " - "
-                << size_t(size_segregated_base * (size_t{1} << (i + 1))) << ") blocks: ";
+    for (size_t i = 0; i < size_classes_.num_classes(); ++i) {
+        if (i != size_classes_.num_classes() - 1) {
+            out << "  Size class " << i << ": (" << size_t(SizeClassIndex::base_size * (size_t{1} << i)) << " - "
+                << size_t(SizeClassIndex::base_size * (size_t{1} << (i + 1))) << ") blocks: ";
         } else {
-            out << "  Size class " << i << ": (" << size_t(size_segregated_base * (size_t{1} << i))
+            out << "  Size class " << i << ": (" << size_t(SizeClassIndex::base_size * (size_t{1} << i))
                 << " - inf) blocks: ";
         }
-        for (size_t block_id : free_blocks_segregated_by_size_[i]) {
+        for (size_t block_id : size_classes_.blocks(i)) {
             out << block_id << " ";
         }
 
@@ -571,20 +484,9 @@ void FreeListOpt::shrink_size(DeviceAddr shrink_size, bool bottom_up) {
     }
     const size_t block_to_shrink = this->find_block_to_shrink(shrink_size, bottom_up);
 
-    // Find the relevant size segregated list
-    size_t size_segregated_index = get_size_segregated_index(block_size_[block_to_shrink]);
-    std::vector<size_t>& segregated_list = free_blocks_segregated_by_size_[size_segregated_index];
-    // Precondition: insert_block_to_segregated_list() keeps each list sorted ascending by block
-    // address, which the lower_bound below relies on. Assert it (debug-only) instead of silently
-    // assuming it.
-    const auto by_address = [this](size_t a, size_t b) { return block_address_[a] < block_address_[b]; };
-    TT_ASSERT(
-        std::is_sorted(segregated_list.begin(), segregated_list.end(), by_address),
-        "Size segregated list must be sorted by block address");
-    auto it = std::lower_bound(segregated_list.begin(), segregated_list.end(), block_to_shrink, by_address);
-    if (it != segregated_list.end() && *it == block_to_shrink) {
-        segregated_list.erase(it);
-    }
+    [[maybe_unused]] const bool erased =
+        size_classes_.erase(block_to_shrink, block_size_[block_to_shrink], block_address_accessor());
+    TT_ASSERT(erased, "Block to shrink not found in size segregated list");
 
     // Shrink the block
     block_size_[block_to_shrink] -= shrink_size;
@@ -629,14 +531,9 @@ void FreeListOpt::reset_size() {
         size_t new_block_index = alloc_meta_block(0, shrink_size_, no_block, no_block, false);
         insert_block_to_segregated_list(new_block_index);
     } else if (!block_is_allocated_[*lowest_block_index]) {
-        auto* segregated_list =
-            &free_blocks_segregated_by_size_[get_size_segregated_index(block_size_[*lowest_block_index])];
-        for (size_t i = 0; i < segregated_list->size(); i++) {
-            if ((*segregated_list)[i] == *lowest_block_index) {
-                segregated_list->erase(segregated_list->begin() + static_cast<std::ptrdiff_t>(i));
-                break;
-            }
-        }
+        [[maybe_unused]] const bool erased =
+            size_classes_.erase_by_scan(*lowest_block_index, block_size_[*lowest_block_index]);
+        TT_ASSERT(erased, "Lowest block not found in size segregated list during reset size");
         block_size_[*lowest_block_index] += shrink_size_;
         block_address_[*lowest_block_index] = 0;
         insert_block_to_segregated_list(*lowest_block_index);
@@ -649,29 +546,6 @@ void FreeListOpt::reset_size() {
 
     max_size_bytes_ += shrink_size_;
     shrink_size_ = 0;
-}
-
-void FreeListOpt::insert_block_to_segregated_list(size_t block_index) {
-    const size_t size_segregated_index = get_size_segregated_index(block_size_[block_index]);
-    auto& free_blocks = free_blocks_segregated_by_size_[size_segregated_index];
-    // Pushing to the back is faster than sorted insertion. But it increases fragmentation
-    // free_blocks.push_back(block_index);
-    // The overhead is not worth it in benchmarks. Need real world data to confirm. But certainly it'll help with
-    // fragmentation
-    std::vector<size_t>::iterator it;
-    // from experience, the lower bound is only faster after a certain number of elements
-    if (free_blocks.size() < 30) {
-        for (it = free_blocks.begin(); it != free_blocks.end(); it++) {
-            if (block_address_[*it] > block_address_[block_index]) {
-                break;
-            }
-        }
-    } else {
-        it = std::lower_bound(free_blocks.begin(), free_blocks.end(), block_index, [this](size_t a, size_t b) {
-            return block_address_[a] < block_address_[b];
-        });
-    }
-    free_blocks.insert(it, block_index);
 }
 
 inline size_t FreeListOpt::hash_device_address(DeviceAddr address) {

@@ -375,8 +375,9 @@ alignment (256 rows), and the DiT ops that used to key a program on the padded l
 `all_gather_async`, `embedding` and its `untilize`) take the per-device row count as a runtime word
 instead; the norms' worker split (`row_capacity`) is sized once at `max_sequence_length / 8` rows per device
 and the ring attention's K/V gather pair, which holds the whole gathered sequence on every device, at
-`max_sequence_length` rows. Eager only: a trace freezes the length, so the quad preset
-stays bucketed and traced, and the Wormhole 4x8 preset stays bucketed (dynamic length is unmeasured there).
+`max_sequence_length` rows. Eager only: a trace freezes the length, so a dynamic request takes the quad preset
+off its trace (see *On the quad* below), and the Wormhole 4x8 preset stays bucketed (dynamic length is unmeasured
+there).
 A line topology (a `FABRIC_1D` fabric or `MINIMAX_H3_TOPOLOGY=linear`) takes the dynamic path too: there the
 projections run unfused (all-gather + matmul, matmul + reduce-scatter). The reduce-scatter keys its program
 without the row count when its worker and chunk counts are pinned (`CCLManager` pins both), the all-gathers key
@@ -391,14 +392,18 @@ resident weights it does not fit at construction, while bucketed ref2va and dyna
 numbers were taken with FSDP on (`test_performance_minimax_h3.py` passes `dit_fsdp=True`), and the construction
 log records the choice (`dit_fsdp: on (dynamic ref2va)`).
 
+**On the quad.** The 4x32 preset stays bucketed and traced by default; dynamic length is opt-in there, with
+`MINIMAX_H3_DYNAMIC_LENGTH=1` or `create_pipeline(..., dynamic_length=True)`. The opt-in runs the denoise eagerly
+(an explicit `trace_denoise=True` beside it raises).
+
 **Backup.** The 4x8 ladder path is kept behind a flag for a few weeks and then removed. It is selected by
 `create_pipeline(..., dynamic_length=False)`, by `MINIMAX_H3_DYNAMIC_LENGTH=0` in the environment, or by
 pinning any of its own kwargs (`trace_denoise=True`, `bucket_denoise=True`, `bucket_ladder=`), which the
 preset's dynamic default yields to. Precedence for `dynamic_length` is kwarg > env > preset: an explicit
 kwarg cannot be flipped by the shell, so a test that pins a path stays pinned (the audio T-shard factor
 follows the same order; `MINIMAX_H3_DIT_FSDP` is the odd one out). The env takes `0` or `1` and nothing
-else; `=1` on the quad raises, since its trace cannot take a dynamic length, as does `dynamic_length=True`
-beside `trace_denoise=True` or `bucket_denoise=True`. A `bucket_ladder=` beside a dynamic request is
+else; on the quad `=1` takes the preset off its trace (see *On the quad*), and `dynamic_length=True` beside an
+explicit `trace_denoise=True` or `bucket_denoise=True` raises. A `bucket_ladder=` beside a dynamic request is
 allowed: it only supplies the default `max_sequence_length` and the ref2va warm-up's full-duration point.
 The construction log says which path was taken (`denoise path: dynamic length` / `bucketed`).
 
@@ -407,8 +412,8 @@ ladders (`MINIMAX_H3_*_BUCKET_LADDER_4X8`), the `bucket_denoise` and `bucket_lad
 presets (which then carry `max_sequence_length`, 120320 t2va / 326656 ref2va, instead), the env switch and
 the yielding rule in `_resolve_denoise_path`, so that `bucket_denoise` collapses to `trace_denoise`.
 `_select_bucket`, `_warm_denoise_buckets`, `_capture_denoise`, `validate_bucket_ladder` and the quad
-ladders stay: the quad's traced path uses them until an eager quad step is cheap enough on the host to drop
-the trace (the agreed route; a device-scalar length is not planned). The encoder-side
+ladders stay: the quad's default path is still bucketed and traced (*On the quad*) until its dynamic path is the
+faster one. The encoder-side
 presentation and vision-patch ladders are unrelated to denoise bucketing and stay regardless.
 
 Every program choice is frozen at construction into **length classes** keyed on rows per device

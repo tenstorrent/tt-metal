@@ -2338,6 +2338,9 @@
   # The fabric suite runs a smoke subset (32-rank snake ring: bf16 gathers, slot select, multi-packet
   # pages; traced metadata and the GLM sub-device path) to stay inside this bucket's 20 min budget.
   # The full matrix (~100 cases on this torus, 4+ min) is not run here.
+  #
+  # The 4x4 cylinder (a 4x4 submesh: axis 1 keeps its wrap, axis 0 is a line) runs the 16-rank gather over three
+  # Hamiltonian cycles: time and bandwidth, plus a bf16 accuracy smoke.
   fabric_profile: torus_xy
   cmd: |
     export MESH_DEVICE=TG
@@ -2353,6 +2356,8 @@
       python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py::test_high_bw_all_gather_galaxy_ci_perf_traced -q || rc=1
       python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather_fabric.py -q -s -k "torus_xy_6k and full_mesh and ((test_gather and bf16) or test_slot_select_partial_extent or test_pages_larger_than_payload)" || rc=1
       python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather_fabric.py -q -s -k "torus_xy_6k and (test_metadata_traced or test_subdevice_external_semaphores)" || rc=1
+      python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py::test_high_bw_all_gather_galaxy_cylinder_4x4_perf -q || rc=1
+      python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather_fabric.py -q -s -k "test_cylinder_4x4 and interleaved and tile" || rc=1
       python3 -m pytest tests/nightly/blackhole/sdpa/test_sparse_sdpa_kv_push.py::test_sparse_kv_push_glm_perf -q -s || rc=1
       exit $rc
     '

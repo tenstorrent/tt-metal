@@ -8,8 +8,8 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/math.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/tensor/tensor_apis.hpp>
 
 #include <algorithm>
@@ -21,7 +21,6 @@
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 namespace ttnn::prim::qsr {
 using ttnn::operations::data_movement::float_to_uint16;
