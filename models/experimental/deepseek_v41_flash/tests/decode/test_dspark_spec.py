@@ -118,6 +118,9 @@ TOP_P = float(os.environ.get("DEEPSEEK_V4_SPEC_TOP_P", "1"))
 # eager verify blocks and save, per position, the tap rows the drafter receives, the target-layer stream means, the
 # block path's argmax, and the device drafter's greedy proposals at every frontier (see _dump_drafter_inputs).
 DUMP_PATH = os.environ.get("DEEPSEEK_V4_SPEC_DUMP", "")
+# DEEPSEEK_V4_SPEC_REPLAY=1 (block verify): replay the DSpark run's rounds eagerly, as run and with the rejected rows
+# replaced by noise, and against the teacher-forced blocks; log where the kept rows' streams part (_replay_rounds).
+REPLAY = os.environ.get("DEEPSEEK_V4_SPEC_REPLAY", "0") == "1"
 # DEEPSEEK_V4_SPEC_PROMPT (block verify): the user turn, a name in _PROMPTS or the text itself (default the demo's).
 PROMPT = os.environ.get("DEEPSEEK_V4_SPEC_PROMPT", "demo")
 _PROMPTS = {
@@ -683,11 +686,27 @@ def _block_spec_decode(mesh_device) -> None:
 
         # 4. The DSpark drafter, greedy.
         spec = DSparkSpeculator(model, drafts, parallel_verify=True, temperature=0.0)
-        got = converse(spec)
+        history = []
+        if REPLAY:
+            verify_block = model.decode_verify_block
+
+            def recorded(token_ids, pos):
+                tokens = verify_block(token_ids, pos)
+                history.append((list(token_ids), pos, list(tokens)))
+                return tokens
+
+            model.decode_verify_block = recorded
+        try:
+            got = converse(spec)
+        finally:
+            if REPLAY:
+                del model.decode_verify_block
         logger.info(f"DSpark, block verify, {drafts} drafts, greedy: {spec.stats.summary(drafts)}")
         if _VERBOSE:
             logger.info(f"DSpark output: {tokenizer.decode(got)!r}")
         results["dspark"] = (spec.stats, got)
+        if REPLAY:
+            _replay_rounds(model, prompt, got, history, rows, noise)
 
         lines = [
             f"DSpark block verify T={rows} vs plain greedy decode on the same model:",
@@ -764,6 +783,104 @@ def _dump_drafter_inputs(model, prompt: list[int], baseline: list[int], rows: in
         f"dump: {len(stream)} positions, {len(drafts)} drafts in {time.perf_counter() - t0:.0f}s to {path}; "
         f"teacher-forced P(first j drafts right) {[round(h / max(len(drafts), 1), 3) for h in hits]}"
     )
+
+
+def _replay_rounds(model, prompt, got, history, rows, noise) -> None:
+    """Replay a block-verify spec run's rounds (``history``: (inputs, p, tokens) per verify) eagerly from a fresh
+    prefill, capturing every layer's output streams, in two variants: A as run, B with every rejected row's token
+    replaced by ``noise``. With causal rows and an exact rollback, every kept row is bit-identical in A and B: the first
+    round / layer where they differ locates a row coupling or a rollback hole. Then the kept rows of A against the same
+    positions teacher-forced in prompt-aligned blocks (C, no rejections): per layer, the max diff at the positions
+    whose C argmax is not the run's token (the NEAR_TIE deficits), i.e. how block-alignment noise grows."""
+    n = len(prompt)
+    history = [h for h in history if h[1] >= n]  # not the prompt's prefill blocks
+    rounds = []
+    for i, (ids, p, tokens) in enumerate(history):
+        m = (
+            history[i + 1][1] - p - 1
+            if i + 1 < len(history)
+            else next((j for j in range(rows - 1) if ids[j + 1] != tokens[j]), rows - 1)
+        )
+        rounds.append((ids, p, tokens, m))
+
+    def replay(variant: str) -> tuple[dict, dict]:
+        """Kept rows' per-layer streams [layers, hc, D] and logits [V], by input position."""
+        streams, logits = {}, {}
+        _, rejected = model.prefill_blocks(prompt, 0)
+        for ids, p, tokens, m in rounds:
+            model.spec_fixup(rejected)
+            if variant == "B":
+                ids = ids[: m + 1] + [noise] * (rows - m - 1)
+            model._block_debug_streams = []
+            lg = model.debug_block_logits(ids, p)
+            st = model.block_debug_taps  # [layers, hc * T, D]
+            st = st.reshape(st.shape[0], -1, rows, st.shape[-1])
+            for j in range(m + 1):
+                streams[p + j] = st[:, :, j].to(torch.bfloat16)
+                logits[p + j] = lg[j]
+            if variant == "A":
+                picks = [int(x) for x in lg.argmax(dim=-1)]
+                if picks[: m + 1] != tokens[: m + 1]:
+                    logger.warning(f"replay A at p={p}: eager picks {picks} vs the run's {tokens} (m={m})")
+            rejected = list(range(p + m + 1, p + rows))
+        model._block_debug_streams = None
+        return streams, logits
+
+    sa, la = replay("A")
+    sb, lb = replay("B")
+    first = None
+    for q in sorted(sa):
+        if not torch.equal(sa[q], sb[q]) or not torch.equal(la[q], lb[q]):
+            d = (sa[q].float() - sb[q].float()).abs().amax(dim=(1, 2))
+            bad = (d > 0).nonzero()
+            first = (q, int(bad[0]) if len(bad) else None, [round(float(x), 4) for x in d[:40:4]])
+            break
+    logger.info(
+        f"replay: {len(rounds)} rounds; kept rows as run (A) vs rejected rows as noise (B): "
+        + (
+            "bit-identical"
+            if first is None
+            else f"first differ at position {first[0]}, layer {first[1]}, per-layer max diff (every 4th) {first[2]}"
+        )
+    )
+    # C: the same stream teacher-forced in prompt-aligned blocks, every row accepted.
+    sc, lc = {}, {}
+    _, padded = model.prefill_blocks(prompt, 0)
+    model.spec_fixup(padded)
+    seq = prompt + got
+    for p in range(n, len(seq), rows):
+        block = seq[p : p + rows]
+        k = len(block)
+        model._block_debug_streams = []
+        lg = model.debug_block_logits(block + [block[-1]] * (rows - k), p)
+        st = model.block_debug_taps
+        st = st.reshape(st.shape[0], -1, rows, st.shape[-1])
+        for j in range(k):
+            sc[p + j] = st[:, :, j].to(torch.bfloat16)
+            lc[p + j] = lg[j]
+    model._block_debug_streams = None
+    common = [q for q in sorted(sa) if q in sc and q + 1 - n < len(got)]
+    deficits = []
+    for q in common:
+        want = seq[q + 1]
+        top = float(lc[q].max())
+        if int(lc[q].argmax()) != want:
+            deficits.append((q, top - float(lc[q][want])))
+    layer_diff = torch.stack([(sa[q].float() - sc[q].float()).abs().amax(dim=(1, 2)) for q in common])  # [Q, L]
+    logit_diff = torch.tensor([float((la[q] - lc[q]).abs().max()) for q in common])
+    logger.info(
+        f"replay A vs teacher-forced C over {len(common)} positions: per-layer max stream diff, median over positions "
+        f"(every 4th layer) {[round(float(x), 4) for x in layer_diff.median(dim=0).values[::4]]}, max "
+        f"{[round(float(x), 4) for x in layer_diff.amax(dim=0)[::4]]}; logits max diff median "
+        f"{float(logit_diff.median()):.3f} max {float(logit_diff.max()):.3f}"
+    )
+    for q, deficit in deficits:
+        i = common.index(q)
+        logger.info(
+            f"  deficit at position {q} (token {q + 1 - n}): {deficit:.3f} logits; A's logits for the run's token vs "
+            f"C's: {float(la[q][seq[q + 1]]):.3f} / {float(lc[q][seq[q + 1]]):.3f}, top {float(la[q].max()):.3f} / "
+            f"{float(lc[q].max()):.3f}; per-layer stream diff (every 4th) {[round(float(x), 4) for x in layer_diff[i, ::4]]}"
+        )
 
 
 # Both parities below the sliding window (masked), across the causal switch, and past the ring's wrap.
