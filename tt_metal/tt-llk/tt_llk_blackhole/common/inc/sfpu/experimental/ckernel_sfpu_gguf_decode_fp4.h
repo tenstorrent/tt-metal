@@ -29,18 +29,12 @@ sfpi_inline vFloat e8m0_half(const vUInt e)
     return sfpi::as<vFloat>(v);
 }
 
-// Unsigned E4M3 (low 7 bits of x) times 0.5 (ggml's ue4m3 conversion); 0 and 0x7F decode to 0.
+// Unsigned E4M3 (low 7 bits of x) times 0.5 (ggml's ue4m3 conversion) for x other than 0x7F, which decodes to 0.
 sfpi_inline vFloat ue4m3_half(const vUInt x7)
 {
     const vFloat b = sfpi::as<vFloat>((x7 << 20u) + sfpi::as<vUInt>(sfpi::vConstIntPrgm1));
     const vFloat a = sfpi::addexp(b, 1) + -0.0078125f;
-    vFloat v       = sfpi::min_max(a, b).first;
-    v_if (sfpi::as<vInt>(x7) == 0x7F)
-    {
-        v = 0.0f;
-    }
-    v_endif;
-    return v;
+    return sfpi::min_max(a, b).first;
 }
 
 // The page's codes are BFP4 datums (sign in bit 3, magnitude code c in bits 0..2) in the [K][N] tile's face order,
@@ -72,7 +66,7 @@ sfpi_inline void bfp_scale(const vUInt x7)
     const vFloat s = ue4m3_half(x7);
     vUInt b        = (sfpi::as<vUInt>(s) >> 13u) - vUInt(112u << 10);
     vUInt z        = 0u;
-    v_if (s == 0.0f)
+    v_if (((x7 + 1u) & 0x7Eu) == 0u) // x7 = 0 or 0x7F: S = 0
     {
         z = vUInt(0x7C007C00u);
     }

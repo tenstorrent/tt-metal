@@ -29,17 +29,6 @@ constexpr bool q40_params = FMT == Q8_0 || FMT == Q4_0 || FMT == Q5_0 || FMT == 
 // where pf32 reads them, past the page.
 constexpr int K4 = 2 * TILE;
 
-// f16_at with the fp16 rebias as an immediate (the body owns the programmable constants).
-template <int HALF>
-sfpi_inline vFloat k4_f16(const vUInt w)
-{
-    const vUInt m13 = HALF == 0 ? (w << 17u) >> 4u : ((w >> 16u) << 17u) >> 4u;
-    const vFloat b  = sfpi::as<vFloat>(m13 + vUInt(0x38000000u));
-    const vFloat a  = sfpi::addexp(b, 1) + -6.103515625e-05f;
-    const vInt sgn  = sfpi::as<vInt>(HALF == 0 ? w << 16u : w);
-    return sfpi::copysgn(sfpi::min_max(a, b).first, sgn);
-}
-
 template <int FMT>
 sfpi_inline void k4_group()
 {
@@ -76,9 +65,10 @@ sfpi_inline void k4_group()
 #pragma GCC unroll 2
         for (int F = 0; F < 2; F++)
         {
-            const vUInt w                         = ldu(pf32_idx<FMT>(F, 1, a));
-            sfpi::dst_reg[pf32_idx<FMT>(F, 0, a)] = k4_f16<0>(w);
-            sfpi::dst_reg[pf32_idx<FMT>(F, 1, a)] = k4_f16<1>(w);
+            vFloat lo, hi;
+            f16_both(ldu(pf32_idx<FMT>(F, 1, a)), lo, hi, vUInt(0x38000000u));
+            sfpi::dst_reg[pf32_idx<FMT>(F, 0, a)] = lo;
+            sfpi::dst_reg[pf32_idx<FMT>(F, 1, a)] = hi;
         }
     }
 }
@@ -92,10 +82,13 @@ sfpi_inline void q2_group()
     {
         vUInt r0, r1, r2, r3;
         rep4<FMT>(2, a, r0, r1, r2, r3);
-        sfpi::dst_reg[pf32_idx<FMT>(0, 0, a)] = k4_f16<0>(r0);
-        sfpi::dst_reg[pf32_idx<FMT>(0, 1, a)] = k4_f16<1>(r0);
-        sfpi::dst_reg[pf32_idx<FMT>(1, 0, a)] = k4_f16<0>(r1);
-        sfpi::dst_reg[pf32_idx<FMT>(1, 1, a)] = k4_f16<1>(r1);
+        vFloat d0, d1, m0, m1;
+        f16_both(r0, d0, d1, vUInt(0x38000000u));
+        f16_both(r1, m0, m1, vUInt(0x38000000u));
+        sfpi::dst_reg[pf32_idx<FMT>(0, 0, a)] = d0;
+        sfpi::dst_reg[pf32_idx<FMT>(0, 1, a)] = d1;
+        sfpi::dst_reg[pf32_idx<FMT>(1, 0, a)] = m0;
+        sfpi::dst_reg[pf32_idx<FMT>(1, 1, a)] = m1;
     }
 }
 
@@ -136,8 +129,10 @@ sfpi_inline void q3_group()
         sfpi::dst_reg[w1 + 1].mode<sfpi::DataLayout::U32>() = q3_word<0, 2>(q0, q1);
         sfpi::dst_reg[w1 + 2].mode<sfpi::DataLayout::U32>() = q3_word<4, 4>(l0, q1);
         sfpi::dst_reg[w1 + 3].mode<sfpi::DataLayout::U32>() = q3_word<4, 6>(q0, q1);
-        sfpi::dst_reg[pf32_idx<FMT>(0, 0, a)] = k4_f16<0>(q2);
-        sfpi::dst_reg[pf32_idx<FMT>(0, 1, a)] = k4_f16<1>(q2);
+        vFloat d0, d1;
+        f16_both(q2, d0, d1, vUInt(0x38000000u));
+        sfpi::dst_reg[pf32_idx<FMT>(0, 0, a)] = d0;
+        sfpi::dst_reg[pf32_idx<FMT>(0, 1, a)] = d1;
     }
 }
 
@@ -973,13 +968,34 @@ template <int FMT, int CP, bool CYC>
 sfpi_inline void body_macro()
 {
     using M = mfield<FMT>;
-#pragma GCC unroll 2
-    for (int k = M::clean; k < 32; k++)
+    if constexpr (M::B == 5)
     {
-        const int o      = mrow(k);
-        const int pi     = pidx(o / 8 % 2, o % 2, traits<FMT>::has_h ? o / 16 : 0);
-        const vFloat x   = ufloat(code_of<FMT, CP>(o));
-        sfpi::dst_reg[o] = x * sfpi::dst_reg[PS + pi] + sfpi::dst_reg[PM + pi];
+        // Rows 30, 31: bits 0..4 of each from the top two bits of words 0..2 and 2..4, both chains interleaved.
+        static_assert(M::clean == 30 && mrow(30) == 30 && mrow(31) == 31 && !traits<FMT>::has_h);
+        constexpr int w   = CO + mbase<FMT, CP>();
+        vUInt qa          = ldu(w) >> 30u;
+        vUInt qb          = ldu(w + 2) >> 31u;
+        qa                = qa | ((ldu(w + 1) >> 30u) << 2u);
+        qb                = qb | ((ldu(w + 3) >> 30u) << 1u);
+        qa                = qa | (((ldu(w + 2) << 1u) >> 31u) << 4u);
+        qb                = qb | ((ldu(w + 4) >> 30u) << 3u);
+        const vFloat xa   = ufloat(qa);
+        const vFloat xb   = ufloat(qb);
+        const vFloat va   = xa * sfpi::dst_reg[PS + pidx(1, 0, 0)] + sfpi::dst_reg[PM + pidx(1, 0, 0)];
+        const vFloat vb   = xb * sfpi::dst_reg[PS + pidx(1, 1, 0)] + sfpi::dst_reg[PM + pidx(1, 1, 0)];
+        sfpi::dst_reg[30] = va;
+        sfpi::dst_reg[31] = vb;
+    }
+    else
+    {
+#pragma GCC unroll 2
+        for (int k = M::clean; k < 32; k++)
+        {
+            const int o      = mrow(k);
+            const int pi     = pidx(o / 8 % 2, o % 2, traits<FMT>::has_h ? o / 16 : 0);
+            const vFloat x   = ufloat(code_of<FMT, CP>(o));
+            sfpi::dst_reg[o] = x * sfpi::dst_reg[PS + pi] + sfpi::dst_reg[PM + pi];
+        }
     }
     mslots_issue<FMT, CP, false, CYC>(std::make_integer_sequence<int, mplan_v<FMT, CP, false, CYC>.n> {});
 }

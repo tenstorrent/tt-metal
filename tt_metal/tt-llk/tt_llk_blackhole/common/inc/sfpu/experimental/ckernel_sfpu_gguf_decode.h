@@ -8,6 +8,7 @@
 #pragma once
 
 #include <cstdint>
+#include <utility>
 
 #include "ckernel.h"
 #include "experimental/ckernel_gguf_page.h"
@@ -346,6 +347,105 @@ inline void sfpu_gguf_decode_group(const std::uint32_t dst_index, const std::uin
     {
         sfpu_gguf_decode_start(dst_index, rows);
         gguf::q3_group<FMT>();
+        sfpu_gguf_decode_done();
+    }
+}
+
+namespace gguf
+{
+
+// What the group step writes for phase 1: scratch entries K4 / Q3 .. + 15 (Q4_K, Q5_K, Q3_K) and the fp32 copies of
+// group_fields fp16 fields (pf32_idx).
+template <int FMT>
+constexpr int group_words = FMT == Q4_K || FMT == Q5_K || FMT == Q3_K ? 16 : 0;
+
+template <int FMT>
+constexpr int group_fields = FMT == Q3_K ? 1 : 2;
+
+// Entries E of the source tiles to the same entries DELTA tiles further, through LRegs J.
+template <int REG, int ENTRY>
+sfpi_inline void group_copy_load()
+{
+    TTI_SFPLOAD(REG, InstrModLoadStore::INT32, ADDR_MOD_7, 2 * ENTRY);
+}
+
+template <int REG, int ENTRY>
+sfpi_inline void group_copy_store()
+{
+    TTI_SFPSTORE(REG, InstrModLoadStore::INT32, ADDR_MOD_7, 2 * ENTRY);
+}
+
+template <int DELTA, int... E, int... J>
+sfpi_inline void group_copy_regs(std::integer_sequence<int, J...>)
+{
+    static_assert(sizeof...(E) == sizeof...(J) && sizeof...(J) <= 8);
+    (group_copy_load<J, E>(), ...);
+    (group_copy_store<J, E + TILE * DELTA>(), ...);
+}
+
+template <int DELTA, int... E>
+sfpi_inline void group_copy_entries(std::integer_sequence<int, E...>)
+{
+    group_copy_regs<DELTA, E...>(std::make_integer_sequence<int, sizeof...(E)> {});
+}
+
+template <int FMT, int F>
+constexpr int group_pf32(const int i)
+{
+    return pf32_idx<FMT>(F, i / 2, i % 2);
+}
+
+} // namespace gguf
+
+/**
+ * @brief Copy of the group step's results in the tiles of dst_index (@ref sfpu_gguf_decode_group there) to the tiles of
+ *        dst_index + DELTA, in place of a group step there for the same group. Nothing for the other formats.
+ *
+ * @tparam FMT: ckernel::gguf::Format of the pages.
+ * @tparam DELTA: DEST tiles from the source to the destination tiles.
+ * @param dst_index, rows: As the source's @ref sfpu_gguf_decode_group.
+ */
+template <int FMT, int DELTA>
+inline void sfpu_gguf_decode_group_copy(const std::uint32_t dst_index, const std::uint32_t rows = 0)
+{
+    using namespace gguf;
+    if constexpr (group_scales<FMT>)
+    {
+        sfpu_gguf_decode_start(dst_index, rows);
+        if constexpr (group_words<FMT> > 0)
+        {
+            group_copy_entries<DELTA>(
+                std::integer_sequence<int, 2 * TILE + 0, 2 * TILE + 1, 2 * TILE + 2, 2 * TILE + 3, 2 * TILE + 4, 2 * TILE + 5, 2 * TILE + 6, 2 * TILE + 7> {});
+            group_copy_entries<DELTA>(std::integer_sequence<
+                                      int,
+                                      2 * TILE + 8,
+                                      2 * TILE + 9,
+                                      2 * TILE + 10,
+                                      2 * TILE + 11,
+                                      2 * TILE + 12,
+                                      2 * TILE + 13,
+                                      2 * TILE + 14,
+                                      2 * TILE + 15> {});
+        }
+        if constexpr (group_fields<FMT> == 2)
+        {
+            group_copy_entries<DELTA>(std::integer_sequence<
+                                      int,
+                                      group_pf32<FMT, 0>(0),
+                                      group_pf32<FMT, 0>(1),
+                                      group_pf32<FMT, 0>(2),
+                                      group_pf32<FMT, 0>(3),
+                                      group_pf32<FMT, 1>(0),
+                                      group_pf32<FMT, 1>(1),
+                                      group_pf32<FMT, 1>(2),
+                                      group_pf32<FMT, 1>(3)> {});
+        }
+        else
+        {
+            group_copy_entries<DELTA>(
+                std::integer_sequence<int, group_pf32<FMT, 0>(0), group_pf32<FMT, 0>(1), group_pf32<FMT, 0>(2), group_pf32<FMT, 0>(3)> {});
+        }
+        TTI_SFPNOP;
         sfpu_gguf_decode_done();
     }
 }
