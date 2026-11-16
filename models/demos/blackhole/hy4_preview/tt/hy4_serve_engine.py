@@ -375,6 +375,14 @@ class Hy4Engine:
         if self.spec:
             # D75-1: EVERY lazily created persistent tensor of EVERY variant must exist before the FIRST capture (one allocated between two captures can sit in the first trace's scratch and is clobbered by its
             # replays): run both round bodies eagerly first, then capture. (p4 / p5: the first sampled round hung at 78 layers after greedy rounds had replayed.)
+            cp = os.environ.get("HY4_WARM_CAPPOS", "")
+            if (
+                cp
+            ):  # old serve-long path captured its trace at the LAST pool position (a trace captured at a short position produced garbage above it, serve-long RESULT.md)
+                cpos = self.pages * PAGE - self.K - 4 if cp == "last" else int(cp)
+                self.runner.load([PAD] * ROWS, [cpos] * ROWS, [[-1] * self.K for _ in range(ROWS)], cap=[0] * ROWS)
+                self.runner.set_park([0] * ROWS)
+                logger.info(f"HY4 warm-up: capture position {cpos}")
             self.runner.body("G")
             ttnn.synchronize_device(self.md)
             if self.sampled:

@@ -18,6 +18,9 @@ HID = 6144
 TOPK = 8
 
 
+TAP = None  # product-race debugging: a list -> forward appends host copies (chip (0,0)) of the gathered tokens, routes and the pre-reduce partial `out`
+
+
 class Hy4MoeTp32PrefillBlock:
     def __init__(self, md, ccl, gate, tpe, n, nc=110):
         self.md, self.ccl, self.gate, self.n = md, ccl, gate, n
@@ -33,6 +36,18 @@ class Hy4MoeTp32PrefillBlock:
         self.last_route = None
         self.keep_route = False
         self.dram_log = None  # tests: list -> (stage, allocated bytes per bank) samples
+        self.rs_fp32 = os.environ.get("HY4_TP32PF_RS_FP32", "0") == "1"
+        # EXACT row-independent reduction (product-race): gather the 4 row partials, add them in the FIXED order 0..3 on every chip (same bits whatever the destination row), take the own n tokens with an embedding row-select.
+        self.rs_exact = os.environ.get("HY4_TP32PF_RS_EXACT", "0") == "1"
+        self.sel_idx = None
+        if self.rs_exact:
+            from models.demos.blackhole.hy4_preview.tt.hy4_common import upload
+
+            ids = (
+                torch.arange(self.rows, dtype=torch.int32).reshape(self.rows, 1) * n
+                + torch.arange(n, dtype=torch.int32).reshape(1, n)
+            ).reshape(self.rows, 1, n)
+            self.sel_idx = ttnn.reshape(upload(md, ids, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, row_dim=0), [1, n])
         self.plan_mode = os.environ.get("HY4_TP32PF_PLAN", "dev")
         self.pb = Tp32PlanBuilder(md, nc=nc)
 
@@ -130,12 +145,62 @@ class Hy4MoeTp32PrefillBlock:
             self.last = (ids, sc)
         self._probe("plan tensors")
         self.ex(x_all, pt, act, out, tt)
+        if TAP is not None:
+            d0 = lambda t: ttnn.to_torch(ttnn.get_device_tensors(t)[0]).float()
+            TAP.append(
+                dict(
+                    x_all=d0(x_all),
+                    pk_all=ttnn.to_torch(ttnn.get_device_tensors(pk_all)[0]).to(torch.int64),
+                    out=d0(out),
+                )
+            )
         ttnn.deallocate(x_all)
         ttnn.deallocate(act)
         if not (self.plan_mode == "dev" and self.keep_route):
             ttnn.deallocate(pk_all)
         ttnn.deallocate(pk)
         pt.free()
+        if self.rs_exact:
+            Dc = int(out.shape[3]) // self.cols
+            o32 = ttnn.typecast(out, ttnn.float32)
+            ttnn.deallocate(out)
+            y = self._rs(
+                o32, 3, 1, ttnn.Topology.Ring
+            )  # [1,1,Tt,D/8] fp32: the sum over the 8 columns (order depends on the destination COLUMN only: identical for every row)
+            ttnn.deallocate(o32)
+            yg = self._ag_rows(y, 2)  # [1,1,4 Tt,D/8]: block r' = the partial of mesh row r'
+            ttnn.deallocate(y)
+            acc = ttnn.slice(yg, [0, 0, 0, 0], [1, 1, tt, Dc])
+            for k in range(1, self.rows):
+                blk = ttnn.slice(yg, [0, 0, k * tt, 0], [1, 1, (k + 1) * tt, Dc])
+                nxt = ttnn.add(acc, blk)
+                ttnn.deallocate(acc)
+                ttnn.deallocate(blk)
+                acc = nxt
+            ttnn.deallocate(yg)
+            sb = ttnn.typecast(acc, ttnn.bfloat16)
+            ttnn.deallocate(acc)
+            sb = ttnn.to_layout(sb, ttnn.ROW_MAJOR_LAYOUT)
+            sb = ttnn.reshape(sb, [1, 1, tt, Dc])
+            y3 = ttnn.embedding(self.sel_idx, sb, layout=ttnn.TILE_LAYOUT)  # [1,n,D/8]: this row's own tokens
+            ttnn.deallocate(sb)
+            y3 = ttnn.reshape(y3, [1, 1, n, Dc])
+            self._probe("end")
+            return y3
+        if self.rs_fp32:
+            # product-race: the bf16 reduce_scatter over the 4 mesh rows (Linear) rounds the sum of the 4 partials in an order that depends on the DESTINATION ROW: the same token gets different bf16 bits on
+            # different rows (layer-1 `y` differs in ~20-28% of elements by 1 ulp, then grows to a stray-token trigger). Reducing in fp32 and rounding once makes the result row-independent (to fp32 association noise).
+            o32 = ttnn.typecast(out, ttnn.float32)
+            ttnn.deallocate(out)
+            y = self._rs(o32, 3, 1, ttnn.Topology.Ring)
+            ttnn.deallocate(o32)
+            self._probe("rs cols (out + y)")
+            y2 = self._rs(y, 2, 0, ttnn.Topology.Linear)
+            ttnn.deallocate(y)
+            y3 = ttnn.typecast(y2, ttnn.bfloat16)
+            ttnn.deallocate(y2)
+            self._probe("end")
+            return y3
         y = self._rs(out, 3, 1, ttnn.Topology.Ring)  # [1,1,Tt,D/8]
         self._probe("rs cols (out + y)")
         ttnn.deallocate(out)
