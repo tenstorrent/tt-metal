@@ -801,8 +801,8 @@ def test_distributed_group_norm_program_cache_hit(
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
 @pytest.mark.parametrize(
     ("leading", "embedding_dim"),
-    [((1,), 5120), ((1, 16), 128), ((1, 2), 128)],
-    ids=["hidden", "q_heads", "k_heads"],
+    [((1,), 5120), ((1, 16), 128), ((1, 2), 128), ((2, 16), 128)],
+    ids=["hidden", "q_heads", "k_heads", "batched"],
 )
 def test_rmsnorm_row_capacity(
     mesh_device: ttnn.MeshDevice, leading: tuple[int, ...], embedding_dim: int, expect_error

@@ -81,7 +81,7 @@ class RMSNorm(Module):
         shape = list(x.shape)
         # The fused distributed RMSNorm without a cluster axis normalizes each [1, batch, N, C] row locally.
         x = ttnn.experimental.dit_fused_distributed_rmsnorm(
-            ttnn.unsqueeze_to_4D(x),
+            ttnn.reshape(x, [1, math.prod(shape[:-2]), *shape[-2:]]),
             None,
             self.mesh_device,
             [],

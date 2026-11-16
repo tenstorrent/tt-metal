@@ -410,6 +410,15 @@ void validate_dynamic_local_n(const RingJointSDPAParams& args, const RingJointSD
         "dynamic_local_n requires logical_n as a device tensor (the kernels derive the masks from it)");
     // Balanced causal compiles the zigzag parity and the straddle chunk per length.
     TT_FATAL(!args.is_balanced && !args.is_cross, "dynamic_local_n does not support balanced or cross attention");
+    // Causal with bf16 accumulation (the streaming compute path) and a K chunk wider than the Q chunk returns
+    // wrong live rows when logical_n is below the padded total.
+    TT_FATAL(
+        !args.is_causal || get_fp32_dest_acc_en(args.compute_kernel_config) ||
+            args.get_k_chunk_size() <= args.get_q_chunk_size(),
+        "dynamic_local_n causal attention with bf16 accumulation requires k_chunk_size <= q_chunk_size. Got "
+        "q_chunk_size: {}, k_chunk_size: {}",
+        args.get_q_chunk_size(),
+        args.get_k_chunk_size());
     TT_FATAL(!has_joint_tensors, "dynamic_local_n does not support joint tensors");
     TT_FATAL(
         tensor_args.input_v.has_value() && !tensor_args.has_latent_v() && !tensor_args.attention_sink.has_value(),
