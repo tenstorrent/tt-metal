@@ -76,8 +76,22 @@ def upload_per_chip(mesh, per_chip, dtype):
     )
 
 
+def tp_expert_layouts(state, *, tp, banks, inter_pad):
+    """Checkpoint experts (``experts.gate_up_proj [E, 2I, H]``, ``experts.down_proj [E, H, I]``) -> per chip, the
+    tensor-parallel slice of the intermediate dimension (I padded to ``inter_pad``, split ``tp`` ways) in the
+    bank-sharded gate|up and down layouts."""
+    gate, up = state["experts.gate_up_proj"].chunk(2, dim=-2)
+    pad = inter_pad - gate.shape[-2]
+    gate, up = (torch.nn.functional.pad(t.transpose(-2, -1), (0, pad)) for t in (gate, up))  # [E, H, Ip]
+    down = torch.nn.functional.pad(state["experts.down_proj"].transpose(-2, -1), (0, 0, 0, pad))  # [E, Ip, H]
+    gates, ups, downs = gate.chunk(tp, dim=-1), up.chunk(tp, dim=-1), down.chunk(tp, dim=-2)
+    gu = [gate_up_layout(g.contiguous(), u.contiguous(), banks) for g, u in zip(gates, ups)]
+    dn = [down_layout(d.contiguous(), banks) for d in downs]
+    return gu, dn
+
+
 class MoeDecodeB1:
-    def __init__(self, mesh, *, hidden, inter_chip, k, weight_dtype=ttnn.bfloat8_b, grid=None):
+    def __init__(self, mesh, *, hidden, inter_chip, k, weight_dtype=ttnn.bfloat8_b, down_dtype=None, grid=None):
         assert hidden % TILE == 0 and inter_chip % TILE == 0 and (4 * k) % 32 == 0
         self.mesh, self.hidden, self.inter = mesh, hidden, inter_chip
         self.kt, self.pairs, self.kts, self.cols, self.k = (
@@ -88,6 +102,8 @@ class MoeDecodeB1:
             k,
         )
         self.dtype, self.tile_bytes = weight_dtype, TILE_BYTES[weight_dtype]
+        self.down_dtype = down_dtype or weight_dtype
+        self.down_tile_bytes = TILE_BYTES[self.down_dtype]
         g = mesh.compute_with_storage_grid_size()
         self.gx, self.gy = grid or (int(g.x), int(g.y))
         assert self.k * self.pairs <= self.gx * self.gy and self.cols <= self.gx * self.gy
@@ -218,17 +234,27 @@ class MoeDecodeB1:
         cb_in0, cb_w, cb_route, cb_scr, cb_sync, cb_out = 0, 1, 2, 3, 4, 16
         cbs = [
             self._cb(cb_in0, ttnn.bfloat16, TINY_BYTES, kt, core_set, tiny=True),
-            self._cb(cb_w, self.dtype, self.tile_bytes, kt, core_set),
+            self._cb(cb_w, self.down_dtype, self.down_tile_bytes, kt, core_set),
             self._cb(cb_route, ttnn.bfloat16, self.route_page, 1, core_set),
             self._cb(cb_scr, ttnn.bfloat16, self.route_page, 1, core_set),
             self._cb(cb_sync, ttnn.bfloat16, 32, 1, core_set),
             self._cb(cb_out, ttnn.bfloat16, TINY_BYTES, 1, core_set, tiny=True),
         ]
-        reader_ct = [cb_in0, cb_w, cb_route, self.kts, self.k, self.cols, self.tile_bytes, self.route_page, self.banks]
+        reader_ct = [
+            cb_in0,
+            cb_w,
+            cb_route,
+            self.kts,
+            self.k,
+            self.cols,
+            self.down_tile_bytes,
+            self.route_page,
+            self.banks,
+        ]
         reader_ct += [cb_sync]
         for t in (route, h):
             reader_ct += ttnn.TensorAccessorArgs(t).get_compile_time_args()
-        writer_ct = [cb_out, cb_w, cb_sync, cb_scr, self.kts, self.k, self.cols, self.tile_bytes, self.route_page]
+        writer_ct = [cb_out, cb_w, cb_sync, cb_scr, self.kts, self.k, self.cols, self.down_tile_bytes, self.route_page]
         writer_ct += [self.banks]
         for t in (out, route):
             writer_ct += ttnn.TensorAccessorArgs(t).get_compile_time_args()
@@ -279,7 +305,7 @@ class MoeDecodeB1Fused(MoeDecodeB1):
             self._cb(cb_w, self.dtype, self.tile_bytes, 2 * self.kt, grid),
             self._cb(cb_hout, ttnn.bfloat16, TINY_BYTES, 1, grid, tiny=True),
             self._cb(cb_h, ttnn.bfloat16, TINY_BYTES, kdown, grid, tiny=True),
-            self._cb(cb_dw, self.dtype, self.tile_bytes, kdown, grid),
+            self._cb(cb_dw, self.down_dtype, self.down_tile_bytes, kdown, grid),
             self._cb(cb_out, ttnn.bfloat16, TINY_BYTES, 1, grid, tiny=True),
             self._cb(cb_route, ttnn.bfloat16, self.route_page, 1, grid),
             self._cb(cb_scr, ttnn.bfloat16, self.route_page, 1, grid),

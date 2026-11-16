@@ -44,6 +44,8 @@ WS2_FOLD_SHARED = os.environ.get("GEMMA4_26B_WS2_FOLD_SHARED", "1") != "0"
 WS2_GATHER_SHARDED = os.environ.get("GEMMA4_26B_WS2_GATHER_SHARDED", "1") != "0"
 WS2_PACK_MOE = os.environ.get("GEMMA4_26B_WS2_PACK_MOE", "1") != "0"
 WS2_PACK_ATTN = os.environ.get("GEMMA4_26B_WS2_PACK_ATTN", "1") != "0"
+# WS4: batch-1 routed experts through the moe_decode programs (tt/moe_decode.py); "0" keeps the indexed sparse_matmul.
+WS4_MOE_DECODE = os.environ.get("GEMMA4_26B_WS4_MOE_DECODE", "1") != "0"
 # Fabric links per decode all-reduce (QB2 Linear 1x4). 2 measured ~35% faster than 1 at decode-row sizes.
 WS2_CCL_LINKS = int(os.environ.get("GEMMA4_26B_WS2_CCL_LINKS", "2"))
 # WS1: decode 2-32 users in one pass per layer (attention, router and experts batched; perf/WS1.md).
@@ -1390,6 +1392,33 @@ class MultichipDecoder(OptimizedDecoder):
                 experts,
             )
         self.hybrid_experts = hybrid_experts
+        self.moe_b1 = None
+        if WS4_MOE_DECODE and self.ws2_norm is not None and hybrid_experts and not expert_parallel:
+            # WS4: batch-1 routed experts through the moe_decode programs. Their bank-sharded weights replace the
+            # tensor-parallel decode copies, which only batch-1 decode read (prefill and the batched path use EP).
+            from models.demos.gemma4_26b_a4b_qb2.tt.moe_decode import MoeDecodeB1, tp_expert_layouts, upload_per_chip
+
+            banks = mesh_device.dram_grid_size().x
+            inter_pad = -(-config.moe_intermediate_size // (4 * 32)) * 4 * 32
+            gu, dn = tp_expert_layouts(state_dict, tp=4, banks=banks, inter_pad=inter_pad)
+            gate_dtype, down_dtype = experts.gate_up.dtype, experts.down.dtype
+            self.moe_b1 = SimpleNamespace(
+                op=MoeDecodeB1(
+                    mesh_device,
+                    hidden=config.hidden_size,
+                    inter_chip=inter_pad // 4,
+                    k=config.top_k_experts,
+                    weight_dtype=gate_dtype,
+                    down_dtype=down_dtype,
+                ),
+                w_gu=upload_per_chip(mesh_device, gu, gate_dtype),
+                w_down=upload_per_chip(mesh_device, dn, down_dtype),
+                gate_dtype=gate_dtype,
+                down_dtype=down_dtype,
+            )
+            del gu, dn
+            for name in ("gate_up", "down"):
+                ttnn.deallocate(getattr(experts, name))
         self.expert_parallel = expert_parallel
         shared_class = _DramSharedMLP if shared_dram else _SharedMLP
         self.layer.shared_mlp = shared_class(self.layer.shared_mlp, compute, self.allreduce)
@@ -1470,8 +1499,8 @@ class MultichipDecoder(OptimizedDecoder):
             "qkv_fidelity": fidelity_name(qkv.decode_compute.math_fidelity),
             "output_weight_dtype": dtype_name(attention.source.weights.o_proj.dtype),
             "output_fidelity": fidelity_name(attention.output_compute.math_fidelity),
-            "expert_gate_dtype": dtype_name(decode.gate_up.dtype),
-            "expert_down_dtype": dtype_name(decode.down.dtype),
+            "expert_gate_dtype": dtype_name(self.moe_b1.gate_dtype if self.moe_b1 else decode.gate_up.dtype),
+            "expert_down_dtype": dtype_name(self.moe_b1.down_dtype if self.moe_b1 else decode.down.dtype),
             "expert_fidelity": fidelity_name(decode.decode_compute.math_fidelity),
             "shared_gate_dtype": dtype_name(shared.decode_weights[0].dtype),
             "shared_down_dtype": dtype_name(shared.decode_weights[1].dtype),
@@ -2059,11 +2088,18 @@ class MultichipDecoder(OptimizedDecoder):
         attention = attention if attention.is_sharded() else shard(attention)
         residual = ttnn.add(x, norm(attention, "post_attention"), memory_config=cfg.memory)
         normalized = ttnn.sharded_to_interleaved(norm(residual, None), ttnn.L1_MEMORY_CONFIG, output_dtype=ttnn.float32)
-        routes = self.layer.moe.router(residual, normalized=normalized)
-        experts = self.layer.moe.experts
-        expert_dtype = getattr(getattr(experts, "decode", experts), "decode_activation_dtype", None)
-        expert_input = ttnn.mul(normalized, self.expert_norm_weight, dtype=expert_dtype or ttnn.bfloat16)
-        routed = experts(expert_input, routes)
+        if self.moe_b1 is not None:
+            # WS4: RouterTopk.op_packed row + the batch-1 moe_decode programs (routed experts only, every bank busy)
+            packed = self.layer.moe.router.decode_packed(normalized)
+            expert_input = ttnn.mul(normalized, self.expert_norm_weight, dtype=ttnn.bfloat16)
+            moe = self.moe_b1
+            routed = moe.op(expert_input, packed, moe.w_gu, moe.w_down)
+        else:
+            routes = self.layer.moe.router(residual, normalized=normalized)
+            experts = self.layer.moe.experts
+            expert_dtype = getattr(getattr(experts, "decode", experts), "decode_activation_dtype", None)
+            expert_input = ttnn.mul(normalized, self.expert_norm_weight, dtype=expert_dtype or ttnn.bfloat16)
+            routed = experts(expert_input, routes)
         shared_mlp = self.layer.shared_mlp
         if getattr(shared_mlp, "input_gamma_folded", False):
             shared_input = normalized
