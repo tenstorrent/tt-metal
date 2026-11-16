@@ -38,8 +38,8 @@ void initialize_weights_tensor_parallel(PipelineParallelLlama& model) {
             auto value = ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(
                 weight_xtensor, device, ttnn::Layout::TILE, mapper.get());
             // The dim-0 mapper labels every weight Shard(0). A tensor-parallel weight gets back the label its module
-            // gave it, which names the dim it is sharded along: a linear labels its output from it, and dropout seeds
-            // from that label. Each device's shape is unchanged.
+            // gave it, which names the dim it is sharded along: ops read it, and the LM head's logits must read as
+            // sharded along the vocab for vocab_parallel_cross_entropy_loss. Each device's shape is unchanged.
             if (core::distributed::has_shard(topology)) {
                 value.update_tensor_topology(topology);
             }
