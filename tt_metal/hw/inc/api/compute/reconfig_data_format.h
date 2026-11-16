@@ -541,7 +541,7 @@ constexpr std::uint32_t pack_reconfig_cb_id(const T& cb) {
 
 // pack_reconfig_data_format(cb) with the output's id taken by the front end: a constant output reconfigures with
 // immediates (llk_pack_reconfig_data_format_ct), any other keeps today's call.
-template <std::uint32_t cb_id, typename T>
+template <std::uint32_t cb_id, std::size_t mark = 0, typename T>
 ALWI void pack_reconfig_data_format_cb(const T& new_cb) {
     if constexpr (cb_id != PACK_RECONFIG_CB_NONE) {
         LLK_SAN_FUNCTION();
@@ -553,7 +553,7 @@ ALWI void pack_reconfig_data_format_cb(const T& new_cb) {
 
 // pack_reconfig_data_format(old_cb, new_cb) with both ids taken by the front end: a constant new output checks the
 // output formats and reconfigures with immediates (llk_pack_reconfig_data_format_ct2), any other keeps today's call.
-template <std::uint32_t old_id, std::uint32_t new_id, typename A, typename B>
+template <std::uint32_t old_id, std::uint32_t new_id, std::size_t mark = 0, typename A, typename B>
 ALWI void pack_reconfig_data_format_cb2(const A& old_cb, const B& new_cb) {
     if constexpr (new_id != PACK_RECONFIG_CB_NONE && old_id != PACK_RECONFIG_CB_NONE) {
         LLK_SAN_FUNCTION();
@@ -579,9 +579,17 @@ ALWI void pack_reconfig_data_format_cb2(const A& old_cb, const B& new_cb) {
 #define PACK_RECONFIG_ID(cb)                                                                                      \
     (__builtin_constant_p(::ckernel::pack_reconfig_cb_id(cb)) ? ::ckernel::pack_reconfig_cb_id(cb)               \
                                                                : ::ckernel::PACK_RECONFIG_CB_NONE)
-#define PACK_RECONFIG_CALL_1(cb) pack_reconfig_data_format_cb<PACK_RECONFIG_ID(cb)>(cb)
-#define PACK_RECONFIG_CALL_2(old_cb, new_cb) \
-    pack_reconfig_data_format_cb2<PACK_RECONFIG_ID(old_cb), PACK_RECONFIG_ID(new_cb)>(old_cb, new_cb)
+// The second template argument marks the output of each reconfigure for the pack (llk_pack_live_one_format): 256 + its
+// id, 256 + 0xFF for a run-time one. A qualified call still expands to a name.
+#define PACK_RECONFIG_MARK(cb)                                                  \
+    (0 * sizeof(::ckernel::packer::llk_pack_out_set<                            \
+                256 + (PACK_RECONFIG_ID(cb) == ::ckernel::PACK_RECONFIG_CB_NONE \
+                           ? 0xFF                                               \
+                           : static_cast<int>(PACK_RECONFIG_ID(cb)))>))
+#define PACK_RECONFIG_CALL_1(cb) pack_reconfig_data_format_cb<PACK_RECONFIG_ID(cb), PACK_RECONFIG_MARK(cb)>(cb)
+#define PACK_RECONFIG_CALL_2(old_cb, new_cb)                                                                       \
+    pack_reconfig_data_format_cb2<PACK_RECONFIG_ID(old_cb), PACK_RECONFIG_ID(new_cb), PACK_RECONFIG_MARK(new_cb)>( \
+        old_cb, new_cb)
 #define PACK_RECONFIG_CALL_3(...) pack_reconfig_data_format(__VA_ARGS__)
 #define PACK_RECONFIG_CALL_4(...) pack_reconfig_data_format(__VA_ARGS__)
 #define pack_reconfig_data_format(...) PACK_RECONFIG_CAT(PACK_RECONFIG_CALL_, PACK_RECONFIG_NARGS(__VA_ARGS__))(__VA_ARGS__)
