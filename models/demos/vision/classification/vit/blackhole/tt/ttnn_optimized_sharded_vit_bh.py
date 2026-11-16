@@ -65,7 +65,8 @@ def update_model_config(config, batch_size, device):
 
     # Placement by role: embeddings interleaved, encoder activations block-sharded over core_grid, attention
     # heads height-sharded. On a grid whose L1 cannot hold ff1, every role goes to DRAM.
-    in_dram = ff1_exceeds_l1_budget(device, seqL_t__y, dim_t__x)
+    # The sharded head split takes one image per core row, so a row holding more runs from DRAM too.
+    in_dram = ff1_exceeds_l1_budget(device, seqL_t__y, dim_t__x) or batch_per_y > 1
     if in_dram:
         memory_configs = {
             "embeddings": ttnn.DRAM_MEMORY_CONFIG,
