@@ -16,6 +16,7 @@ from nightly_health import (
     OTHER_NIGHTLIES,
     assess,
     assess_plain,
+    build_details,
     build_text,
     gate_result,
     leg_limits,
@@ -77,8 +78,10 @@ def _jobs(wh_conclusion="success", upload="success"):
 def test_a_clean_night_has_no_problem_and_reports_leg_use_and_baseline_age():
     report = assess("SoL", RUN, _jobs(), {4: LOG, 5: LOG}, LIMITS, DAY)
     assert report["problems"] == []
-    text = build_text(DAY.isoformat(), [report])
-    assert ":white_check_mark:" in text
+    assert build_text(DAY.isoformat(), [report]) == (
+        ":white_check_mark: *LLK nightly health, 2026-10-13*: 0 problems"
+    )
+    text = build_details([report])
     assert "BH: 1/5 50%" in text and "WH: 1/5 100%" in text
     assert "baseline `6d88aa4fe5b`, 14 days old" in text
 
@@ -95,7 +98,10 @@ def test_a_timeout_a_failed_upload_and_a_regression_are_problems():
         "SoL: upload failure",
         "SoL blackhole: gate regressed, 110,671 points",
     ]
-    assert ":red_circle:" in build_text(DAY.isoformat(), [report])
+    text = build_text(DAY.isoformat(), [report])
+    assert text.startswith(":red_circle: *LLK nightly health, 2026-10-13*: 3 problems")
+    assert "• SoL: upload failure <https://x/1|run>" in text
+    assert "legs" not in text
 
 
 def test_a_missing_run_and_a_missing_verdict_are_problems():
@@ -132,13 +138,13 @@ def test_a_run_in_progress_shows_unfinished_legs():
         "SoL: llk_perf_wormhole group 1/5 not finished",
         "SoL: run still in_progress",
     ]
-    assert "WH: 1/5 ?% ✗" in build_text(DAY.isoformat(), [report])
+    assert "WH: 1/5 ?% ✗" in build_details([report])
 
 
 def test_a_verdict_without_a_baseline_line_has_unknown_age():
     report = assess("SoL", RUN, _jobs(), {4: LOG.splitlines()[1], 5: LOG}, LIMITS, DAY)
-    assert "gate blackhole: clean · baseline `?`, age unknown" in build_text(
-        DAY.isoformat(), [report]
+    assert "gate blackhole: clean · baseline `?`, age unknown" in build_details(
+        [report]
     )
 
 
@@ -210,7 +216,7 @@ def test_a_plain_nightly_reports_failed_jobs_and_a_missing_run():
     ]
     report = assess_plain("e2e", {**RUN, "conclusion": "cancelled"}, [])
     assert report["problems"] == ["e2e: run cancelled"]
-    assert "legs" not in build_text(DAY.isoformat(), [report]).split("*e2e*")[1]
+    assert "legs" not in build_details([report]).split("**e2e**")[1]
 
 
 def test_reports_of_other_checks_join_the_message(tmp_path):
@@ -221,8 +227,8 @@ def test_reports_of_other_checks_join_the_message(tmp_path):
     extras = read_extras([str(good), str(tmp_path / "missing.json")])
     assert extras[0]["problems"] == ["WH matmul +4 %"]
     assert "no report" in extras[1]["problems"][0]
-    text = build_text(DAY.isoformat(), [], extras)
-    assert ": 2 problem(s)" in text and "*Drift*\n7 modules" in text
+    assert ": 2 problems" in build_text(DAY.isoformat(), [], extras)
+    assert "**Drift**\n7 modules" in build_details([], extras)
 
 
 def test_gate_result_reads_the_lines_the_gate_really_prints(
