@@ -140,10 +140,11 @@ Tensor combine_device_tensors(const std::vector<Tensor>& tensor_shards, int shar
 
 Tensor from_local_host_shards(
     const std::map<MeshCoordinate, Tensor>& shards,
-    const tt::tt_metal::distributed::MeshDeviceView& mesh_device_view,
+    const MeshDevice& mesh_device,
     const tt::tt_metal::TensorTopology& topology) {
     TT_FATAL(!shards.empty(), "from_local_host_shards needs at least one shard");
     const auto& [reference_coord, reference_shard] = *shards.begin();
+    const auto& mesh_device_view = mesh_device.get_view();
     const auto& mesh_shape = mesh_device_view.shape();
     const distributed::MeshCoordinateRange mesh_range(mesh_shape);
     for (const auto& [coord, shard] : shards) {
