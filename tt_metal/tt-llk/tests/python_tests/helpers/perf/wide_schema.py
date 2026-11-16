@@ -139,6 +139,7 @@ DB_SCHEMA = [
     Column("num_faces_r_dim_A", "int64", True, "configuration"),
     Column("num_faces_r_dim_B", "int64", True, "configuration"),
     Column("num_guard_tiles", "int64", True, "configuration"),
+    Column("num_rows_to_pack", "int64", True, "configuration"),
     Column("num_tiles_in_block", "int64", True, "configuration"),
     Column("tile_dst_ct_offset", "int64", True, "configuration"),
     Column("out_zero_point_bits", "int64", True, "configuration"),
