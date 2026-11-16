@@ -63,10 +63,6 @@ def leg_limits(tests_yaml):
     }
 
 
-def owners(tests_yaml):
-    return sorted({e["owner_id"] for e in _entries(tests_yaml) if e.get("owner_id")})
-
-
 def payloads(text, problems, dm, channel, owner_ids):
     out = [{"channel": dm, "text": text}]
     if channel:
@@ -362,7 +358,7 @@ def main(argv=None):
         fh.write(build_details(reports, extras))
     problems = any(r["problems"] for r in [*reports, *extras])
     with open(a.out, "w") as fh:
-        json.dump(payloads(text, problems, a.dm, a.channel, owners(a.tests_yaml)), fh)
+        json.dump(payloads(text, problems, a.dm, a.channel, [a.dm]), fh)
     print(text)
     return 0
 
