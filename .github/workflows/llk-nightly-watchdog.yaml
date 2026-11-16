@@ -1,10 +1,6 @@
 name: "LLK nightly watchdog"
 
-# The health check reports on the nightlies, and nothing reports on the health
-# check. This runs two hours after it and messages the owner only when the
-# health check is disabled, did not run today, or failed. The health check in
-# turn lists this workflow when it is disabled, so one of the two still speaks
-# when the other is turned off.
+# Messages the owner when the health check is disabled, did not run, or failed.
 on:
   schedule:
     - cron: '0 10 * * *'

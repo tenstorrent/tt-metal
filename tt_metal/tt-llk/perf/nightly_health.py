@@ -26,7 +26,6 @@ NIGHTLIES = (
 OTHER_NIGHTLIES = (
     ("bit-exact", "llk-bit-exact.yaml"),
     ("e2e", "llk-e2e.yaml"),
-    ("ttsim weekly", "llk-ttsim-weekly.yaml"),
 )
 HEALTH = "llk-perf-nightly-health.yaml"
 WORKFLOWS = ".github/workflows"
@@ -94,26 +93,7 @@ def scheduled_run(repo, workflow, day):
     return runs[0] if runs else None
 
 
-def crons(path):
-    with open(path) as fh:
-        doc = yaml.safe_load(fh) or {}
-    # A bare ``on:`` key parses as the boolean True, not as the string.
-    triggers = doc.get("on", doc.get(True)) or {}
-    return [str(c["cron"]) for c in triggers.get("schedule") or []]
-
-
-def due(cron_lines, day):
-    """True when one of the crons fires on ``day`` (only the weekday field is read)."""
-    weekday = str(day.isoweekday() % 7)
-    for line in cron_lines:
-        dow = line.split()[4]
-        if dow == "*" or weekday in re.split(r"[,-]", dow):
-            return True
-    return False
-
-
 def disabled_workflows(repo, workflows_dir):
-    """LLK workflows on this branch that GitHub will not run."""
     ours = {
         f"{WORKFLOWS}/{p.name}"
         for p in pathlib.Path(workflows_dir).iterdir()
@@ -272,7 +252,7 @@ def assess_plain(name, run, jobs):
 
 
 def read_extras(paths):
-    """Reports of the other nightly checks: ``{"name", "problems", "lines"}`` each."""
+    """Each report is {"name", "problems", "lines"}."""
     out = []
     for path in paths:
         try:
@@ -337,7 +317,6 @@ def build_text(day, reports, extras=()):
 
 
 def watchdog(repo, day, workflows_dir, dm, out):
-    """Tell the owner when the health check itself did not report today."""
     problems = [
         f"{w} is disabled"
         for w in disabled_workflows(repo, workflows_dir)
@@ -394,8 +373,6 @@ def main(argv=None):
         logs = {j["id"]: job_log(a.repo, j["id"]) for j in jobs if _is_gate(j)}
         reports.append(assess(name, run, jobs, logs, limits, day))
     for name, workflow in OTHER_NIGHTLIES:
-        if not due(crons(f"{a.workflows}/{workflow}"), day):
-            continue
         run = scheduled_run(a.repo, workflow, a.date)
         reports.append(
             assess_plain(name, run, run_jobs(a.repo, run["id"]) if run else [])
