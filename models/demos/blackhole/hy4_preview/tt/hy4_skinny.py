@@ -753,6 +753,16 @@ class SkinnyLinear:
         )
 
     def __call__(self, x, T, out=None):
+        kernels, sems, cbs, out, key = self._parts(x, T, out)
+        prog = ttnn.ProgramDescriptor(kernels=kernels, semaphores=sems, cbs=cbs)
+        prog.custom_program_hash = _hash(0x7B4, *key)
+        ttnn.generic_op([x, self.w, out], prog)
+        return out
+
+    def _parts(self, x, T, out=None, ready=None):
+        """kernel / semaphore / CB descriptors of the o-proj program. ready = (sem id, count) (B22 fused back + o-proj): the writer waits for ``count`` increments of that
+        semaphore (sent by the producers of x, which write x to DRAM first) before it loads x; the weight stream of the readers starts at program start.
+        """
         assert T <= 16
         MT = 1 if T <= 8 else 2
         R = 8 if (MT == 2 or not self.tiny) else (2 if T <= 2 else 4 if T <= 4 else 8)
@@ -800,10 +810,13 @@ class SkinnyLinear:
         for q in self.phys:
             common_w += [q.x, q.y]
         writer = ttnn.KernelDescriptor(
-            kernel_source=f"{KDIR}/hsk_ln_writer.cpp",
+            kernel_source=f"{KDIR}/hsk_ln_writer.cpp" if ready is None else f"{KDIR}/hsk_ln_writer_fb.cpp",
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
             core_ranges=core_set,
-            compile_time_args=[CB_X, CB_O, NB, KT, PNC, SBW, self.xsplit, MT, R] + _acc(x) + _acc(out),
+            compile_time_args=[CB_X, CB_O, NB, KT, PNC, SBW, self.xsplit, MT, R]
+            + _acc(x)
+            + _acc(out)
+            + ([ready[0], ready[1]] if ready is not None else []),
             runtime_args=rt_w,
             common_runtime_args=common_w,
             config=ttnn.WriterConfigDescriptor(),
@@ -819,13 +832,11 @@ class SkinnyLinear:
                 math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=bool(self.fp32), math_approx_mode=True
             ),
         )
-        prog = ttnn.ProgramDescriptor(
-            kernels=readers + [writer, compute],
-            semaphores=[ttnn.SemaphoreDescriptor(id=i, core_ranges=core_set, initial_value=0) for i in range(3)],
-            cbs=cbs,
-        )
-        prog.custom_program_hash = _hash(
-            0x7B4,
+        sems = [
+            ttnn.SemaphoreDescriptor(id=i, core_ranges=core_set, initial_value=0)
+            for i in range(3 if ready is None else 4)
+        ]
+        key = (
             MT,
             R,
             self.xsplit,
@@ -837,9 +848,8 @@ class SkinnyLinear:
             self.w.buffer_address(),
             tuple(_acc(x)),
             tuple(_acc(out)),
-        )
-        ttnn.generic_op([x, self.w, out], prog)
-        return out
+        ) + ((("fb",) + tuple(ready)) if ready is not None else ())
+        return readers + [writer, compute], sems, cbs, out, key
 
 
 # --------------------------------------------------------------------------------------------------------------------------------------------------

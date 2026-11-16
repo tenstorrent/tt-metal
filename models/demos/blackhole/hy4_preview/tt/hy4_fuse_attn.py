@@ -322,3 +322,233 @@ def _rt_all(cores, args):
     for x, y in cores:
         rt[x][y] = list(args)
     return rt
+
+
+# ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# B22 (HY4_NORM_FUSE=1, default OFF): the six small front-norm programs of a decode layer (q_a to_memory_config -> rms_norm -> to_memory_config, kv slice -> rms_norm, k_pe slice)
+# as ONE program: q_a rms on 16 cores (4 tiles each), kv latent rms on 4 cores (4 tiles each), k_pe tiles copied by 2 of the kv cores; the per-row sum of squares is exchanged between the
+# cores of a group through flag-word slots (iHC fused-pre exchange pattern).
+def norm_enabled():
+    return os.environ.get("HY4_NORM_FUSE", "0") == "1"
+
+
+def _bits(v):
+    import struct
+
+    return struct.unpack("<I", struct.pack("<f", v))[0]
+
+
+NF_Q_ORIGIN = (
+    0,
+    int(os.environ.get("HY4_NORM_Y0", "0")),
+)  # logical (x, y) of core 0 of the q group; q: 4 x 4 cores, kv group: the 4 cores of the row below
+
+
+def fused_norms(qa_g, kv, qw, kvw, eps, mc_q=None):
+    """qa_g [1,1,S,2048] bf16 TILE, kv [1,1,S,576] bf16 TILE, qw [1,1,64,32] / kvw [1,1,16,32] bf16 ROW_MAJOR (the rms weights, one 64 B page per 32 values), S <= 8
+    -> (qa [1,1,S,2048], lat [1,1,S,512], k_pe [1,1,S,64]) bf16 TILE: qa = rms(qa_g) * qw, lat = rms(kv[..., :512]) * kvw, k_pe = kv[..., 512:] (replaces 6 ops).
+    """
+    md = qa_g.device()
+    S = int(qa_g.shape[2])
+    assert 1 <= S <= 8 and int(qa_g.shape[3]) == 2048 and int(kv.shape[3]) == 576 and int(kv.shape[2]) == S
+    bf, f32 = ttnn.bfloat16, ttnn.float32
+    mq = mc_q or ttnn.DRAM_MEMORY_CONFIG
+    qa = ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, S, 2048]), bf, ttnn.TILE_LAYOUT, md, mq)
+    lat = ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, S, 512]), bf, ttnn.TILE_LAYOUT, md, mq)
+    kpe = ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, S, 64]), bf, ttnn.TILE_LAYOUT, md, mq)
+    x0, y0 = NF_Q_ORIGIN
+    NW = 4
+    q_set = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(x0, y0), ttnn.CoreCoord(x0 + NW - 1, y0 + 3))])
+    k_set = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(x0, y0 + 4), ttnn.CoreCoord(x0 + NW - 1, y0 + 4))])
+
+    def phys(x, y):
+        return md.worker_core_from_logical_core(ttnn.CoreCoord(x, y))
+
+    p0 = phys(x0, y0)
+    assert phys(x0 + NW - 1, y0 + 3).x - p0.x == NW - 1 and phys(x0 + NW - 1, y0 + 3).y - p0.y == 3
+    pk = phys(x0, y0 + 4)
+    assert phys(x0 + NW - 1, y0 + 4).x - pk.x == NW - 1
+    cc = ttnn.ComputeConfigDescriptor(
+        math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True
+    )
+    kernels, cbs = [], []
+    for gi, (cset, n_g, xin, wgt, outt, w_el, kpe_on, (px, py), ncy) in enumerate(
+        [
+            (q_set, 16, qa_g, qw, qa, 2048, 0, (p0.x, p0.y), 4),
+            (k_set, 4, kv, kvw, lat, 512, 1, (pk.x, pk.y), 1),
+        ]
+    ):
+        TPC = w_el // 32 // n_g
+        cb0 = 10 * gi
+
+        def cb(i, dt, page, n, cset=cset, cb0=cb0):
+            return ttnn.CBDescriptor(
+                total_size=page * n,
+                core_ranges=cset,
+                format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=cb0 + i, data_format=dt, page_size=page)],
+            )
+
+        CX, CG, CONES, CP2, CSLOT, CTOT, CKPE, CRS, CTMP, COUT = [cb0 + i for i in range(10)]
+        cbs += [
+            cb(0, bf, 2048, TPC),
+            cb(1, bf, 2048, TPC),
+            cb(2, f32, 4096, 1),
+            cb(3, f32, 4096, 1),
+            cb(4, f32, 4096, 1),
+            cb(5, f32, 4096, 1),
+            cb(6, bf, 2048, 1),
+            cb(7, f32, 4096, 1),
+            cb(8, f32, 4096, TPC),
+            cb(9, bf, 2048, TPC),
+        ]
+        rt = ttnn.RuntimeArgs()
+        for k in range(n_g):
+            rt[x0 + (k % NW)][(y0 if gi == 0 else y0 + 4) + k // NW] = [k]
+        rd = ttnn.KernelDescriptor(
+            kernel_source=f"{KDIR}/nf_reader.cpp",
+            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+            core_ranges=cset,
+            compile_time_args=[
+                CX,
+                CG,
+                CONES,
+                CP2,
+                CSLOT,
+                CTOT,
+                CKPE,
+                S,
+                TPC,
+                n_g,
+                px,
+                py,
+                NW,
+                _bits(1.0 / w_el),
+                kpe_on,
+            ]
+            + _acc(xin)
+            + _acc(wgt)
+            + _acc(kpe),
+            runtime_args=rt,
+            common_runtime_args=[xin.buffer_address(), wgt.buffer_address(), kpe.buffer_address()],
+            config=ttnn.ReaderConfigDescriptor(),
+        )
+        wr = ttnn.KernelDescriptor(
+            kernel_source=f"{KDIR}/nf_writer.cpp",
+            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+            core_ranges=cset,
+            compile_time_args=[COUT, TPC] + _acc(outt),
+            runtime_args=rt,
+            common_runtime_args=[outt.buffer_address()],
+            config=ttnn.WriterConfigDescriptor(),
+        )
+        cp = ttnn.KernelDescriptor(
+            kernel_source=f"{KDIR}/nf_compute.cpp",
+            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+            core_ranges=cset,
+            compile_time_args=[CX, CG, CONES, CP2, CTOT, CRS, CTMP, COUT, TPC, _bits(eps)],
+            runtime_args=ttnn.RuntimeArgs(),
+            common_runtime_args=[],
+            config=cc,
+        )
+        kernels += [rd, wr, cp]
+    prog = ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs)
+    prog.custom_program_hash = (0x3B4 << 40) | (
+        hash((S, x0, y0, tuple(tuple(_acc(t)) for t in (qa_g, kv, qw, kvw, qa, lat, kpe)))) & ((1 << 40) - 1)
+    )
+    ttnn.generic_op([qa_g, kv, qw, kvw, qa, lat, kpe], prog)
+    return qa, lat, kpe
+
+
+# ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# B22 step 4 (HY4_BACK_FUSE=1, needs HY4_ATTN_FUSE back + HY4_SKINNY=oproj; default OFF): fused_back (64 cores) and the skinny o-proj (8 DRAM-bank cores) in ONE program. The o-proj readers start
+# streaming their weight shard at program start (hidden behind the back phase); the back cores write og to DRAM and increment the ready semaphore of the bank core of their head; the o-proj
+# writer waits for the 8 increments of its head, then runs the unchanged x exchange + matmul.
+def back_fuse_enabled():
+    return os.environ.get("HY4_BACK_FUSE", "0") == "1"
+
+
+def fused_back_oproj(o_lat, w_uv_t, g, gfold, sk):
+    md = o_lat.device()
+    H, KT, NT = int(w_uv_t.shape[1]), int(w_uv_t.shape[2]) // 32, int(w_uv_t.shape[3]) // 32
+    assert int(o_lat.shape[1]) == H and int(o_lat.shape[3]) == KT * 32 and o_lat.layout == ttnn.TILE_LAYOUT
+    assert w_uv_t.layout == ttnn.TILE_LAYOUT and w_uv_t.dtype == ttnn.bfloat16 and g.layout == ttnn.TILE_LAYOUT
+    S = int(o_lat.shape[2])
+    assert 1 <= S <= 8 and H == 8 and sk.xsplit and sk.KT == H * NT  # skinny core b loads the x pages of head b
+    n_cores = H * NT
+    grid = md.compute_with_storage_grid_size()
+    og = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([1, 1, S, H * NT * 32]), ttnn.bfloat16, ttnn.TILE_LAYOUT, md, ttnn.DRAM_MEMORY_CONFIG
+    )
+    SEM = 3
+    kernels, sems, cbs_sk, out, key = sk._parts(og, S, None, ready=(SEM, 0 if os.environ.get("HY4_B22_NOWAIT") else NT))
+    bank = {(c.x, c.y) for c in sk.cores}
+    cl = [(x, y) for y in range(grid.y) for x in range(grid.x) if (x, y) not in bank][:n_cores]
+    assert len(cl) == n_cores
+    core_set = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for x, y in cl])
+    CX, CW, CG, CO = 16, 17, 18, 19  # CB ids disjoint from the o-proj's 0..2
+    bf = ttnn.bfloat16
+
+    def cb(i, n):
+        return ttnn.CBDescriptor(
+            total_size=2048 * n,
+            core_ranges=core_set,
+            format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=i, data_format=bf, page_size=2048)],
+        )
+
+    cbs = cbs_sk + [cb(CX, KT), cb(CW, KT), cb(CG, 1), cb(CO, 1)]
+    rt = ttnn.RuntimeArgs()
+    for i, (x, y) in enumerate(cl):
+        rt[x][y] = [i]
+    reader = ttnn.KernelDescriptor(
+        kernel_source=f"{KDIR}/hb_reader.cpp",
+        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+        core_ranges=core_set,
+        compile_time_args=[CX, CW, CG, KT, NT, S] + _acc(o_lat) + _acc(w_uv_t) + _acc(g),
+        runtime_args=rt,
+        common_runtime_args=[o_lat.buffer_address(), w_uv_t.buffer_address(), g.buffer_address()],
+        config=ttnn.ReaderConfigDescriptor(),
+    )
+    writer = ttnn.KernelDescriptor(
+        kernel_source=f"{KDIR}/hb_writer_sk.cpp",
+        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+        core_ranges=core_set,
+        compile_time_args=[CO, NT, SEM] + _acc(og),
+        runtime_args=rt,
+        common_runtime_args=[og.buffer_address()] + [v for q in sk.phys for v in (q.x, q.y)],
+        config=ttnn.WriterConfigDescriptor(),
+    )
+    compute = ttnn.KernelDescriptor(
+        kernel_source=f"{KDIR}/hb_compute.cpp",
+        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+        core_ranges=core_set,
+        compile_time_args=[
+            CX,
+            CW,
+            CG,
+            CO,
+            KT,
+            int(bool(gfold)),
+            int(os.environ.get("HY4_FA_ROUND", "1")),
+            int(os.environ.get("HY4_FA_SIGFAST", "0")),
+        ],
+        runtime_args=ttnn.RuntimeArgs(),
+        common_runtime_args=[],
+        config=ttnn.ComputeConfigDescriptor(
+            math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True
+        ),
+    )
+    # the ready semaphore exists on the back cores too (the same L1 address on every core of the program)
+    all_rngs = [ttnn.CoreRange(ttnn.CoreCoord(c.x, c.y), ttnn.CoreCoord(c.x, c.y)) for c in sk.cores] + [
+        ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for x, y in cl
+    ]
+    sems = [sm for sm in sems if sm.id != SEM] + [
+        ttnn.SemaphoreDescriptor(id=SEM, core_ranges=ttnn.CoreRangeSet(all_rngs), initial_value=0)
+    ]
+    prog = ttnn.ProgramDescriptor(kernels=kernels + [reader, writer, compute], semaphores=sems, cbs=cbs)
+    prog.custom_program_hash = (0x3B5 << 40) | (
+        hash((H, KT, NT, S, int(bool(gfold)), key, tuple(_acc(o_lat)), tuple(_acc(w_uv_t)), tuple(_acc(g))))
+        & ((1 << 40) - 1)
+    )
+    ttnn.generic_op([o_lat, w_uv_t, g, og, sk.w, out], prog)
+    ttnn.deallocate(og)
+    return out
