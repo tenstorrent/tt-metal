@@ -38,20 +38,17 @@ def history(tmp_path):
 
 
 @pytest.mark.parametrize(
-    "strategy, step, epoch, expected",
+    "strategy, current_count, expected",
     [
-        ({"type": "step", "frequency": 2}, 4, None, True),
-        ({"type": "step", "frequency": 2}, 3, None, False),
-        ({"type": "step", "frequency": 2}, 4, 0, False),
-        ({"type": "epoch", "frequency": 2}, 4, None, False),
-        ({"type": "epoch", "frequency": 2}, 4, 1, True),
-        ({"type": "epoch", "frequency": 2}, 4, 0, False),
-        ({"type": "none"}, 4, None, False),
-        ({"type": "none"}, 4, 1, False),
+        ({"type": "step", "frequency": 2}, 4, True),
+        ({"type": "step", "frequency": 2}, 3, False),
+        ({"type": "epoch", "frequency": 2}, 2, True),
+        ({"type": "epoch", "frequency": 2}, 1, False),
+        ({"type": "none"}, 4, False),
     ],
 )
-def test_should_save_checkpoint(tmp_path, strategy, step, epoch, expected):
-    assert manager(tmp_path, save_strategy=strategy).should_save_checkpoint(step, epoch) is expected
+def test_should_save_checkpoint(tmp_path, strategy, current_count, expected):
+    assert manager(tmp_path, save_strategy=strategy).should_save_checkpoint(current_count) is expected
 
 
 @pytest.mark.parametrize("save_optim", [False, True])

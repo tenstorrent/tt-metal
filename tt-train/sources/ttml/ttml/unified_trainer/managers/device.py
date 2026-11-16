@@ -19,7 +19,7 @@ class DeviceManager:
     def __init__(self, config: DeviceConfig) -> None:
         self.config = config
         self._closed = False
-        ttml.open_device_mesh(config.mesh)
+        ttml.open_device_mesh(tuple(config.mesh))
         try:
             self.device = ttml.autograd.AutoContext.get_instance().get_device()
             # How a host array is placed on the mesh, and a tensor read back from it. No mapper: the mesh is a

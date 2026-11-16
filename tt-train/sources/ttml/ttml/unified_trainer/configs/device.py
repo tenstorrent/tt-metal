@@ -2,10 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from pydantic import BaseModel, ConfigDict, PositiveInt
-
-# A single chip.
-SINGLE_CHIP_MESH = (1, 1)
+from pydantic import BaseModel, ConfigDict, Field, PositiveInt
 
 
 class DeviceConfig(BaseModel):
@@ -13,5 +10,6 @@ class DeviceConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    # Rows and columns of the device mesh. A single chip, [1, 1], is the only mesh a run trains on so far.
-    mesh: tuple[PositiveInt, PositiveInt] = SINGLE_CHIP_MESH
+    # The size of each dimension of the device mesh, such as [rows, columns]. A single chip, [1, 1], is the only
+    # mesh a run trains on so far.
+    mesh: list[PositiveInt] = Field(default_factory=lambda: [1, 1], min_length=1)

@@ -124,6 +124,17 @@ def test_epoch_checkpoints(tmp_path):
     assert [(m["step"], m["epoch"]) for m in trainer.saved.values()] == [(4, 0), (8, 1), (8, 1)]
 
 
+def test_step_checkpoints_are_not_saved_at_the_end_of_an_epoch(tmp_path):
+    trainer = FakeTrainer([CheckpointCallback()])
+    # Ends 1 step into the second epoch, whose end must not save although 2 epochs are a multiple of the frequency.
+    run(
+        trainer,
+        stopping_criteria=after_steps(5),
+        checkpoint=checkpoint_config(tmp_path, save_strategy=EVERY_2_STEPS, rotation_strategy=KEEP_ALL),
+    )
+    assert [metadata["step"] for metadata in trainer.saved.values()] == [2, 4, 5]
+
+
 def test_init_loads_the_weights_and_trains_from_step_0(tmp_path):
     first = FakeTrainer([CheckpointCallback()])
     run(first, checkpoint=checkpoint_config(tmp_path, save_strategy=EVERY_2_STEPS, save_optim=True))

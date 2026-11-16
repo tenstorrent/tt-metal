@@ -39,12 +39,12 @@ class CheckpointManager:
         # The checkpoints of this run that rotation kept, oldest first.
         self.history: list[dict] = []
 
-    def should_save_checkpoint(self, step: int, epoch: Optional[int] = None) -> bool:
-        """At the end of an epoch with ``epoch`` set, else after optimizer step ``step``."""
+    def should_save_checkpoint(self, current_count: int) -> bool:
+        """Whether to save once ``current_count`` steps or epochs are done, whichever ``save_strategy`` counts."""
         strategy = self.config.save_strategy
-        if epoch is not None:
-            return strategy.type == "epoch" and (epoch + 1) % strategy.frequency == 0
-        return strategy.type == "step" and step % strategy.frequency == 0
+        if strategy.type == "none":
+            return False
+        return current_count % strategy.frequency == 0
 
     def save_checkpoint(
         self,

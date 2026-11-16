@@ -108,6 +108,8 @@ def test_gradient_checkpointing_picks_the_runner_the_model_is_built_with(gradien
             r"device.mesh: Llama trains on a single chip so far, \[1, 1\]; got \[1, 2\]",
         ),
         ({"device": {"mesh": [2, 1]}}, {}, r"device.mesh: .* got \[2, 1\]"),
+        ({"device": {"mesh": [1]}}, {}, r"device.mesh: .* got \[1\]"),
+        ({"device": {"mesh": [1, 1, 1]}}, {}, r"device.mesh: .* got \[1, 1, 1\]"),
         ({"dtype": "float32"}, {}, "dtype: ttml Llama weights"),
         ({"dtype": "torch.bfloat16"}, {}, "dtype: ttml Llama weights"),
         ({"max_length": 48}, {}, "max_length: must be a multiple of 32"),

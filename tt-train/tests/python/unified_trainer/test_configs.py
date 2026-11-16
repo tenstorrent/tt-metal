@@ -165,8 +165,7 @@ def test_unknown_fields_are_rejected(overrides, expect_error):
         ({"checkpoint": {"init_strategy": {"type": "resume"}}}, "checkpoint.init_strategy.path"),
         ({"device": [1, 1]}, "device"),
         ({"device": {"mesh": "1x1"}}, "device.mesh"),
-        ({"device": {"mesh": [1]}}, "device.mesh.1"),
-        ({"device": {"mesh": [1, 1, 1]}}, "device.mesh"),
+        ({"device": {"mesh": []}}, "device.mesh"),
         ({"device": {"mesh": [0, 1]}}, "device.mesh.0"),
         ({"optimizer": {"lr": -1.0}}, "optimizer.0.lr"),
         ({"optimizer": {"lr": 1e-4, "weight_decay": -1.0}}, "optimizer.0.weight_decay"),
@@ -344,10 +343,11 @@ def test_the_metrics_section_has_the_same_fields_for_training_and_validation():
 
 
 def test_the_device_section_names_the_mesh_a_single_chip_unless_set():
-    assert sft().device.mesh == (1, 1)
+    assert sft().device.mesh == [1, 1]
     assert sft().model_dump(mode="json")["device"] == {"mesh": [1, 1]}
-    # Any mesh is a valid config; the model provider decides which ones it trains on.
-    assert sft(device={"mesh": [1, 2]}).device.mesh == (1, 2)
+    # Any mesh is a valid config, of any number of dimensions; the model provider decides which ones it trains on.
+    assert sft(device={"mesh": [1, 2]}).device.mesh == [1, 2]
+    assert sft(device={"mesh": [8]}).device.mesh == [8]
 
 
 @pytest.mark.parametrize("section", ["dataset", "model"])

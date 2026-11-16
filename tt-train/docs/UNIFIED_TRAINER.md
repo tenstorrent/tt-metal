@@ -93,7 +93,7 @@ Unknown fields are errors, so a typo fails instead of being ignored. Required fi
 | `model` | | `name`, an HF hub id or a local HF model directory, is required. `lora` is the LoRA adapters to train, and a run needs it, as only LoRA training is supported so far: `r`, `alpha` (the scaling is `alpha / r`), `target_modules`, `dropout` (0.0), `task_type` (`CAUSAL_LM`). `gradient_checkpointing` (`false`) builds the model to recompute activations in the backward pass, which saves memory. |
 | `dataset` | | `id`, one of `sst2`, `alpaca` or `custom`, is required. `custom_options` is required when `id` is `custom`: `train_dataset_path`, `val_dataset_path` (no validation if unset), `file_type` (`json`; `jsonl` works too), `template` (`alpaca`), `column_mapping`. |
 | `optimizer` | | One optimizer, or a list (see [Several optimizers](#several-optimizers)). Each takes `lr` (constant), `modules`, and `type`, which picks the optimizer and the other fields it takes. `adamw` (the default, and the only one supported so far) takes `weight_decay` (0.0, decoupled), `beta1`, `beta2`, `epsilon`, `amsgrad` and `stochastic_rounding`; unset, those keep ttml's defaults. |
-| `device` | | `mesh` (`[1, 1]`), the rows and columns of the device mesh the run opens. A single chip, `[1, 1]`, is the only mesh supported so far. |
+| `device` | | `mesh` (`[1, 1]`), the size of each dimension of the device mesh the run opens, such as `[rows, columns]`. A single chip, `[1, 1]`, is the only mesh supported so far. |
 | `dtype` | `bfloat16` | Must be `bfloat16`. |
 | `max_length` | | Tokens per example: a multiple of 32, at most the model's `max_position_embeddings`. |
 | `batch_size` | | Examples per micro-batch. |

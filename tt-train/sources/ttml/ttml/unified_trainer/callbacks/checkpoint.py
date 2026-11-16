@@ -40,11 +40,13 @@ class CheckpointCallback(Callback):
         self._last_metrics["val/loss"] = trainer.loss_to_float(val_loss)
 
     def on_step_end(self, trainer: Any, global_step: int) -> None:
-        if self.manager.should_save_checkpoint(global_step):
+        strategy = trainer.config.checkpoint.save_strategy
+        if strategy.type == "step" and self.manager.should_save_checkpoint(global_step):
             self._save(trainer)
 
     def on_train_epoch_end(self, trainer: Any) -> None:
-        if self.manager.should_save_checkpoint(trainer.global_step, epoch=trainer.epoch):
+        strategy = trainer.config.checkpoint.save_strategy
+        if strategy.type == "epoch" and self.manager.should_save_checkpoint(trainer.epoch + 1):
             self._save(trainer)
 
     def on_train_end(self, trainer: Any) -> None:
