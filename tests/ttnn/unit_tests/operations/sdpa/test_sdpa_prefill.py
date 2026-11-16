@@ -917,3 +917,57 @@ def test_sdpa_block_map_rejects_windowed_and_sliding(device, mode, expect_error)
         ttnn.transformer.scaled_dot_product_attention(
             q, k, v, is_causal=False, program_config=program_config, attn_mask_block_map=block_map, **kwargs
         )
+
+
+@pytest.mark.parametrize(
+    "s, d, is_causal, chunk_size, math_fidelity, math_approx_mode, exp_approx_mode",
+    [
+        (32, 32, False, 32, ttnn.MathFidelity.HiFi4, False, False),
+        (64, 64, True, None, ttnn.MathFidelity.HiFi2, True, None),
+        (128, 64, True, 32, ttnn.MathFidelity.HiFi4, False, False),
+    ],
+    ids=["accurate_exp", "fp32_dest_default_config", "accurate_exp_k_chunks"],
+)
+def test_sdpa_fp32_dest_wide_score_rows(
+    device, s, d, is_causal, chunk_size, math_fidelity, math_approx_mode, exp_approx_mode
+):
+    """With fp32 scores, the row max must equal each row's peak exactly: scores spanning 2^±12 scales
+    put a bf16-rounded max hundreds of units from the peak once scaled, which zeroed whole rows."""
+    torch.manual_seed(20261110)
+    q, k, v = (
+        (torch.randn(1, 1, s, d) * torch.exp2(torch.randint(-12, 13, (1, 1, s, d)).float())).bfloat16()
+        for _ in range(3)
+    )
+    expected = torch.nn.functional.scaled_dot_product_attention(q.double(), k.double(), v.double(), is_causal=is_causal)
+
+    program_config = None
+    if chunk_size is not None:
+        program_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+            q_chunk_size=chunk_size,
+            k_chunk_size=chunk_size,
+            exp_approx_mode=exp_approx_mode,
+        )
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=math_fidelity,
+        math_approx_mode=math_approx_mode,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+    tt_q, tt_k, tt_v = (ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device) for t in (q, k, v))
+    actual = ttnn.to_torch(
+        ttnn.transformer.scaled_dot_product_attention(
+            tt_q,
+            tt_k,
+            tt_v,
+            is_causal=is_causal,
+            program_config=program_config,
+            compute_kernel_config=compute_kernel_config,
+        )
+    ).double()
+
+    zero_rows = (actual == 0).all(-1).reshape(-1).nonzero().reshape(-1).tolist()
+    assert not zero_rows, f"rows {zero_rows} are all zero"
+    relative_rms = ((actual - expected).square().sum() / expected.square().sum()).sqrt().item()
+    assert relative_rms < 0.02, f"relative RMS error {relative_rms:.4f} against a float64 reference"
