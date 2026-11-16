@@ -135,10 +135,6 @@ public:
 
     void initialize_parallelism_context(const DistributedConfig& config);
 
-    // Drops the parallelism context so a later initialize_parallelism_context can set up a different one, e.g. a
-    // test suite that opens another mesh. close_device does not do this.
-    void reset_parallelism_context();
-
 private:
     AutoContext();
     uint32_t m_seed = 5489U;
