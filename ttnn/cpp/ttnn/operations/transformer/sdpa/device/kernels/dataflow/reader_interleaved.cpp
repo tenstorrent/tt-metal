@@ -12,6 +12,7 @@
 #include "api/tensor/noc_traits.h"
 #include "dataflow_common.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/windowed_loop_geometry.hpp"
+#include "cpp/ttnn/operations/transformer/sdpa/device/kernels/sdpa_runtime_seq_len_args.hpp"
 
 // Fetch a KV chunk into L1 for forwarding. No CB lifecycle — caller manages
 // cb_reserve_back / cb_push_back. Single read barrier at end for lower latency.
@@ -73,15 +74,25 @@ void kernel_main() {
     constexpr uint32_t NQH = get_compile_time_arg_val(1);
     constexpr uint32_t NKH = get_compile_time_arg_val(2);
     constexpr uint32_t NVH = get_compile_time_arg_val(3);
+#ifdef SDPA_RUNTIME_SEQ_LEN
+    // The sequence lengths come at run time (compile-time slots 4, 5, 6, 10 and 12 are 0), so one
+    // binary serves every length.
+    const uint32_t Skt = get_common_arg_val<uint32_t>(sdpa_seq_len_args::SKT);
+    const uint32_t valid_Sqt = get_common_arg_val<uint32_t>(sdpa_seq_len_args::VALID_SQT);
+    const uint32_t valid_Skt = get_common_arg_val<uint32_t>(sdpa_seq_len_args::VALID_SKT);
+    const uint32_t q_num_chunks = get_common_arg_val<uint32_t>(sdpa_seq_len_args::Q_NUM_CHUNKS);
+    const uint32_t k_num_chunks = get_common_arg_val<uint32_t>(sdpa_seq_len_args::K_NUM_CHUNKS);
+#else
     constexpr uint32_t Skt = get_compile_time_arg_val(4);
     constexpr uint32_t valid_Sqt = get_compile_time_arg_val(5);
     constexpr uint32_t valid_Skt = get_compile_time_arg_val(6);
+    constexpr uint32_t q_num_chunks = get_compile_time_arg_val(10);
+    constexpr uint32_t k_num_chunks = get_compile_time_arg_val(12);
+#endif
     constexpr uint32_t DHt = get_compile_time_arg_val(7);
     constexpr uint32_t vDHt = get_compile_time_arg_val(8);
     constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(9);
-    constexpr uint32_t q_num_chunks = get_compile_time_arg_val(10);
     constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(11);
-    constexpr uint32_t k_num_chunks = get_compile_time_arg_val(12);
     constexpr uint32_t num_cores = get_compile_time_arg_val(13);
     constexpr uint32_t is_causal = get_compile_time_arg_val(14) == 1;
     constexpr uint32_t use_provided_mask = get_compile_time_arg_val(15) == 1;
