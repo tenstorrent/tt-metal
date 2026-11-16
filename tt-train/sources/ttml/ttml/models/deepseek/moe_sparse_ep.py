@@ -35,7 +35,7 @@ import ttnn
 import ttml
 
 from .moe import MoE
-from .autograd_ops import to_layout
+from .autograd_ops import ScaleGrad, to_layout
 
 
 class SparseMoEEP(MoE):
@@ -91,6 +91,11 @@ class SparseMoEEP(MoE):
         )
         if dp_gather:
             x = ttml.ops.distributed.all_gather(x, 0, self.cluster_axis, ttml.ops.distributed.GradOutputType.REPLICATED)
+            # The experts, the shared experts and the gate then see every dp rank's tokens, so the gradient the closing
+            # scatter hands them is that of the sum of the ranks' losses. Every other parameter gets its own rank's,
+            # which sync_gradients averages over dp. The gradient is divided by dp on its way into this region (at the
+            # scatter) and multiplied back here, so these parameters get the dp mean too and x its own rank's gradient.
+            x = ScaleGrad.apply(x, float(self.ep_size))
 
         B, _, S, _dim = list(x.get_value().shape)
         x = self._memory_snapshot(x, "START")
@@ -188,6 +193,7 @@ class SparseMoEEP(MoE):
         # Re-shard the (replicated, full-batch) output back onto the DP axis so
         # downstream layers stay data-parallel. Mirror of the entry all_gather.
         if dp_gather:
+            output = ScaleGrad.apply(output, 1.0 / self.ep_size)
             output = ttml.ops.distributed.scatter(output, 0, self.cluster_axis)
 
         output = self._memory_snapshot(output, "END")

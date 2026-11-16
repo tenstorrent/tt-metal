@@ -305,6 +305,19 @@ class ToLayout(ttml.autograd.Function):
         return ttnn.to_layout(grad_output, ctx.source_layout)
 
 
+class ScaleGrad(ttml.autograd.Function):
+    """Identity in forward; multiplies the gradient by ``scale`` in backward."""
+
+    @staticmethod
+    def forward(ctx, input, scale):
+        ctx.scale = scale
+        return input.get_value()
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        return ttnn.multiply(grad_output, ctx.scale)
+
+
 def autograd_slice(tensor, start, end):
     """Slice with autograd backward."""
     return Slice.apply(tensor, start, end)

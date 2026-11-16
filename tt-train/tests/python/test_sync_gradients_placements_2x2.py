@@ -9,6 +9,8 @@ four chips."""
 
 from __future__ import annotations
 
+import re
+
 import numpy as np
 import pytest
 
@@ -30,6 +32,8 @@ from sync_gradients_placements_common import (
     is_sharded_on_axis,
 )
 from tp_block import TPBlock, gather_like
+from ttml.models import RunnerType
+from ttml.models.deepseek import DeepSeek, DeepSeekConfig
 from ttml.models.deepseek.transformer import DeepSeekMLP
 from ttml.modules import LoraConfig, LoraModel
 
@@ -81,6 +85,100 @@ class TestDPxTP:
             if name.endswith(TP_SHARDED_SUFFIXES):
                 assert is_sharded_on_axis(grad, tp), f"{name}: the TP shard did not survive the dp all_reduce"
             _assert_mean_over_axis(before[name], _shards(grad), dp_tp_mesh.shape, dp, name)
+
+
+# --- MoE experts split across an axis of [2, 2] ("dp", "tp") -------------------------------------------------------
+# Kept next to TestDPxTP: dp_tp_mesh is module-scoped, and a later [2, 2] fixture replaces the mesh it opened.
+
+MOE_EXPERTS, MOE_SEQ_LEN, MOE_VOCAB = 4, 64, 128
+# Relative Frobenius error. bf16 rounding measured at most 0.012; MoE gradients a factor dp off score about 1.
+MOE_MAX_REL_ERROR = 0.04
+_EP_EXPERT = re.compile(r"(?P<ffn>.*/ffn)/w_(?P<kind>gate|up|down)_(?P<local>\d+)$")
+_DENSE_LINEAR = {"gate": "w1", "up": "w3", "down": "w2"}
+
+
+def _deepseek(moe_type: str, moe_axis_name: str | None) -> DeepSeek:
+    return DeepSeek(
+        DeepSeekConfig(
+            vocab_size=MOE_VOCAB,
+            dim=128,
+            inter_dim=256,
+            moe_inter_dim=64,
+            n_layers=2,
+            n_dense_layers=1,
+            n_heads=4,
+            n_routed_experts=MOE_EXPERTS,
+            n_shared_experts=1,
+            n_activated_experts=MOE_EXPERTS,
+            n_expert_groups=1,
+            n_limited_groups=1,
+            score_func="softmax",
+            route_scale=1.0,
+            moe_type=moe_type,
+            q_lora_rank=0,
+            kv_lora_rank=64,
+            qk_nope_head_dim=32,
+            qk_rope_head_dim=32,
+            v_head_dim=32,
+            max_seq_len=MOE_SEQ_LEN,
+            runner_type=RunnerType.Default,
+            moe_axis_name=moe_axis_name,
+        )
+    )
+
+
+def _from_dense(dense: DeepSeek, name: str, read, ep_size: int) -> np.ndarray:
+    """``read`` of the dense parameters that expert-parallel parameter ``name`` is made of, in rank order."""
+    sources = dense.parameters()
+    match = _EP_EXPERT.match(name)
+    if match is None:
+        return read(sources[name])
+    linear, local = _DENSE_LINEAR[match["kind"]], int(match["local"])
+    experts = range(local, MOE_EXPERTS, MOE_EXPERTS // ep_size)
+    return np.concatenate([read(sources[f"{match['ffn']}/experts/{e}/{linear}/weight"]) for e in experts])
+
+
+def _synced_step(model: DeepSeek, ids: np.ndarray, targets: np.ndarray, mapper) -> None:
+    model.train()
+    ids = ttml.autograd.Tensor.from_numpy(ids, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32, mapper)
+    targets = ttml.autograd.Tensor.from_numpy(targets, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32, mapper)
+    ttml.ops.loss.cross_entropy_loss(model(ids, None), targets).backward(False)
+    ttml.autograd.AutoContext.get_instance().reset_graph()
+    ttml.sync_gradients(model.parameters())
+
+
+class TestExpertParallelMoE:
+    @pytest.mark.parametrize("moe_axis", ["dp", "tp"])
+    def test_gradients_match_the_dense_moe(self, dp_tp_mesh, moe_axis):
+        """sparse_ep with its experts and shared experts split across ``moe_axis``, the batch split across "dp", against
+        the dense MoE on the whole batch: after sync_gradients every gradient is the dense model's. With the experts on
+        "dp" the MoE runs on every dp rank's tokens, so its parameters must come out the dp mean every other parameter
+        gets, and the gradient it hands back must be each rank's own."""
+        dp, ep = dp_tp_mesh.axis_size("dp"), dp_tp_mesh.axis_size(moe_axis)
+        dense = _deepseek("dense", None)
+        model = _deepseek("sparse_ep", moe_axis)
+        params = model.parameters()
+        for name, param in params.items():
+            mapper = ttml.Sharding.from_tensor(param).derive_mapper()
+            ttml.autograd.assign_numpy(
+                param, _from_dense(dense, name, lambda t: gather_like(t.get_value(NATIVE), t), ep), mapper=mapper
+            )
+        rng = np.random.default_rng(7)
+        ids = rng.integers(0, MOE_VOCAB, (dp, 1, 1, MOE_SEQ_LEN)).astype(np.uint32)
+        targets = rng.integers(0, MOE_VOCAB, (dp, MOE_SEQ_LEN)).astype(np.uint32)
+        _synced_step(dense, ids, targets, None)
+        _synced_step(model, ids, targets, dp_tp_mesh.axis_mapper("dp", tdim=0))
+
+        moe = [name for name in params if "/ffn/" in name and "/blocks/1/" in name]
+        assert any(_EP_EXPERT.match(name) for name in moe) and any("shared_experts" in name for name in moe), moe
+        errors = {}
+        for name, param in params.items():
+            expected = _from_dense(dense, name, lambda t: gather_like(t.get_grad(), t), ep)
+            scale = np.linalg.norm(expected)
+            assert scale > 0, f"{name}: zero gradient, agreement would prove nothing"
+            errors[name] = np.linalg.norm(gather_like(param.get_grad(), param) - expected) / scale
+        worst = sorted(errors.items(), key=lambda item: -item[1])[:5]
+        assert worst[0][1] <= MOE_MAX_REL_ERROR, f"relative errors, worst first: {worst}"
 
 
 # --- FSDP x TP on [2, 2] ("fsdp", "tp") --------------------------------------------------------------------------
