@@ -876,6 +876,21 @@ class Gemma4Generator:
         }
         return result
 
+    def generate_speculative(self, prompt_token_ids, max_new_tokens, *, draft_len=5, stop_on_eos=True):
+        """Greedy MTP speculative decode, batch 1 (perf/WS6.md): the it-assistant drafter proposes ``draft_len``
+        tokens per round and one traced batched decode verifies them. Metrics land in ``self.metrics``."""
+        from models.demos.gemma4_26b_a4b_qb2.tt.mtp.speculative import SpeculativeDecoder
+
+        spec = getattr(self, "_speculative", None)
+        if spec is None or spec.K != draft_len:
+            if spec is not None:
+                spec.release()
+            spec = SpeculativeDecoder(self, draft_len=draft_len, drafter=None if spec is None else spec.drafter)
+            self._speculative = spec
+        tokens = spec.generate_traced(list(prompt_token_ids), max_new_tokens, stop_on_eos=stop_on_eos)
+        self.metrics = {"decode_tps": spec.stats.get("tps"), "batch": 1, "source": "mtp", **spec.stats}
+        return tokens
+
 
 def build_generator(model_dir, mesh_device, **kwargs):
     return Gemma4Generator(mesh_device, **kwargs)

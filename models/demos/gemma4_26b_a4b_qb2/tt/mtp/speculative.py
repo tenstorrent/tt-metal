@@ -328,7 +328,7 @@ class SpeculativeDecoder:
         first_token_s = time.perf_counter() - started
         accepted = []
         decode_started = time.perf_counter()
-        while len(out) < max_new_tokens and not (stop_on_eos and out[-1] in EOS):
+        while len(out) < max_new_tokens and not (stop_on_eos and any(t in EOS for t in out)):
             ttnn.execute_trace(self.mesh, s["trace"], cq_id=0, blocking=False)
             row = ttnn.to_torch(ttnn.get_device_tensors(s["ids"])[0]).flatten().tolist()
             drafts, top = row[1 : K + 1], row[K + 1 : 2 * K + 2]
@@ -341,6 +341,8 @@ class SpeculativeDecoder:
             self._load_inputs(s, self._round_inputs(position, written))
         ttnn.synchronize_device(self.mesh)
         seconds = time.perf_counter() - decode_started
+        if stop_on_eos:
+            out = next((out[: i + 1] for i, t in enumerate(out) if t in EOS), out)
         produced = min(len(out), max_new_tokens) - 1
         self.stats = {
             "rounds": len(accepted),
