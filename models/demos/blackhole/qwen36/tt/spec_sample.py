@@ -22,23 +22,25 @@ untouched. A chained verify (spec_chain) knows its positions only on the device:
 (``chained_sampling_plan``), and the chain program writes each drawing row's seed, picked by the predecessor's
 accepted count from candidates the host hashes for every position the column can take.
 
-Device graph (``VerifySampler.body``, a trace of its own after the verify trace): the verify's gathered logits
-[1, 1, B*T, V] (at most 32 rows, one core each) are cut into equal vocabulary chunks of at most 64K columns, each chunk gives its
-top-32 (``ttnn.topk``), the candidates' global ids are the local ids plus the chunk offset, then ``ttnn.manual_seed``
-and one ``ttnn.sampling`` with the per-row parameters write one draw per row. Top-k above 32 never reaches it: the
-plugin samples such a row on the host (``max_device_top_k``).
+Device graph (``VerifySampler.body``, a trace of its own after the verify trace): each device's vocabulary shard of
+the verify's logits [1, 1, rows, V / shards] (at most 32 rows, one core each) is padded to a power-of-two width (32768
+at V / shards = 31040) and gives its top-32 in one stable ``ttnn.topk`` call, lowest local id first among equal
+values. The candidates' global ids are the local ids plus the shard's first vocabulary id; ``ttnn.all_gather`` along
+the vocabulary puts the shards' candidates side by side in shard order (8 x 32 = 256 at TP = 8). Then
+``ttnn.manual_seed`` and one ``ttnn.sampling`` with the per-row parameters write one draw per row. Top-k above 32 never
+reaches it: the plugin samples such a row on the host (``max_device_top_k``).
 
-The chunks are stacked as rows of one [1, chunks, B*T, V / chunks] tensor and take their top-32 in one ``ttnn.topk``
-call: the routed top-k reduces every row on its own core in one sequential pass over the row, so one call over
-chunks x B*T rows takes about one chunk's time (two when the rows outnumber the worker cores) instead of one per chunk,
-and each row gets the values and ids, in the same order, that a call over that chunk alone gives it. The candidates'
-order is part of the draw: ``ttnn.sampling`` ranks equal values by their position among the candidates, and the routed
-top-k orders equal values by its merge sequence, which depends on the row's width. So the chunk width and the chunk
-order stay fixed.
+Tie order: among equal logits the lowest token id comes first, as ``ttnn.argmax`` takes it for a greedy row.
+``ttnn.sampling`` ranks equal values by their position among the candidates, and the candidates of equal value sit in
+ascending id order (within a shard by the stable top-k, across shards by the shard order). So the sampler draws from
+the vocabulary's top-k under the order (value descending, id ascending), the order of a stable torch sort of the whole
+row: any token of that top-32 has fewer than 32 tokens before it in its own shard, so it is among its shard's
+candidates. The stable top-k needs the power-of-two width for its multi-core path; at 31040 columns it runs on one
+core.
 
 A verify row bucket of b users (Qwen36Model._verify_bucket_body) has its own sampler trace: the same graph over the
-bucket's b*T rows of logits, whose candidates are padded with zero rows to B*T before ``ttnn.manual_seed`` and
-``ttnn.sampling``, so the seeds, the per-row parameters and the draws buffer are the full-width ones.
+bucket's b*T rows of the shard, whose pad fills the rows up to B*T, so the seeds, the per-row parameters and the
+draws buffer are the full-width ones.
 """
 
 import secrets
@@ -55,10 +57,17 @@ from models.common.sampling.generator import (
     format_sampling_params,
 )
 from models.common.sampling.sampling_params import SamplingParams
+from models.demos.blackhole.qwen36.tt.spec_argmax_fused import all_gather_dim3
 
 SAMPLER_ROWS = 32  # one ttnn.sampling call: a row per core, B * T <= 32 verify rows
 SAMPLER_TOP_K = 32  # candidates per vocabulary chunk; the plugin keeps a row with top-k above it on the host
-TOPK_MAX_WIDTH = 64 * 1024  # widest input one ttnn.topk call takes
+# Widths of the stable ttnn.topk's multi-core path: a power of two, at least 8192 and below 65535. Its single-core
+# path, which any other width takes, needs milliseconds for a 31040-column shard.
+TOPK_MIN_WIDTH = 8 * 1024
+TOPK_MAX_WIDTH = 32 * 1024
+# Pad columns and rows of the top-k input: below any logit, so a real column always outranks a pad column. Finite:
+# the stable top-k sorts bfloat16 values packed with their 16-bit index.
+PAD_LOGIT = -1e30
 SKIP_SEED = MAX_UINT32  # manual_seed leaves the core's random state untouched
 NO_CORE = MAX_UINT32  # a manual_seed user id no core matches: the entry seeds nothing
 
@@ -198,24 +207,44 @@ def with_draws(ids, draws, plan):
     return flat.reshape(B, T)
 
 
-def vocab_chunks(vocab):
-    """Fewest equal vocabulary chunks, a power of two, of at most TOPK_MAX_WIDTH tile-aligned columns each."""
-    chunks = 1
-    while vocab // chunks > TOPK_MAX_WIDTH:
-        chunks *= 2
-    if vocab % chunks or (vocab // chunks) % ttnn.TILE_SIZE:
-        raise ValueError(f"a vocabulary of {vocab} does not split into {chunks} tile-aligned top-k chunks")
+def _pow2_at_least(n):
+    p = 1
+    while p < n:
+        p *= 2
+    return p
+
+
+def shard_chunks(width):
+    """Fewest equal tile-aligned chunks, of at most TOPK_MAX_WIDTH columns each, of one device's vocabulary shard of
+    ``width`` columns: each chunk is one row of the sampler's stable top-k."""
+    chunks = -(-int(width) // TOPK_MAX_WIDTH)
+    while width % chunks or (width // chunks) % ttnn.TILE_SIZE:
+        chunks += 1
+        if width // chunks < SAMPLER_TOP_K:
+            raise ValueError(f"a vocabulary shard of {width} does not split into tile-aligned top-k chunks")
     return chunks
 
 
 class VerifySampler:
-    """The device half: persistent per-row inputs, the draw output, and the trace-capturable ``body``."""
+    """The device half: persistent per-row inputs, the draw output, and the trace-capturable ``body``. ``shards``: the
+    number of vocabulary shards of the logits over a 1 x shards mesh (the vocab-sharded LM head's), 1 when every device
+    holds the whole vocabulary. ``gather`` all-gathers a [1, 1, rows, n] TILE tensor along dim 3 in mesh order, the
+    order of the vocabulary shards."""
 
-    def __init__(self, mesh, B, T, vocab):
+    def __init__(self, mesh, B, T, vocab, shards=1, gather=all_gather_dim3):
         if B * T > SAMPLER_ROWS:
             raise ValueError(f"{B} users x {T} columns exceed the sampler's {SAMPLER_ROWS} rows")
-        self.mesh, self.rows, self.vocab = mesh, B * T, int(vocab)
-        self.chunks = vocab_chunks(self.vocab)
+        self.mesh, self.rows, self.vocab, self.shards, self.gather = mesh, B * T, int(vocab), int(shards), gather
+        if self.vocab % self.shards:
+            raise ValueError(f"a vocabulary of {self.vocab} does not split into {self.shards} shards")
+        self.width = self.vocab // self.shards
+        self.chunks = shard_chunks(self.width)
+        self.chunk_width = self.width // self.chunks
+        self.topk_width = _pow2_at_least(max(self.chunk_width, TOPK_MIN_WIDTH))
+        self.candidates_per_row = self.shards * self.chunks * SAMPLER_TOP_K
+        tiles = self.candidates_per_row // ttnn.TILE_SIZE
+        if tiles & (tiles - 1):
+            raise ValueError(f"{self.candidates_per_row} candidates per row are not a power-of-two count of tiles")
         idle = sampling_plan(None, [-1] * B, T)
         self.k = self._device(torch.tensor(idle.k, dtype=torch.int32), ttnn.uint32)
         self.p = self._device(torch.tensor(idle.p), ttnn.bfloat16)
@@ -225,33 +254,17 @@ class VerifySampler:
         self._staged = {}  # name -> host tensor its device buffer holds (stage)
         self.user_ids = self._device(torch.tensor(idle.user_ids, dtype=torch.int64), ttnn.uint32)
         self.draws = self._device(torch.zeros(1, 1, 1, self.rows, dtype=torch.int32), ttnn.uint32)
-        self.offsets = self._offsets(self.rows)
-        # logits rows -> (their chunk offsets, the zero candidates of the rows past them up to B*T, or None)
-        self._row_inputs = {self.rows: (self.offsets, None)}
+        self.offsets = self._offsets()
 
-    def _offsets(self, rows):
-        """int32 TILE [1, 1, rows, chunks * 32]: chunk c's first vocabulary id in its 32 candidate columns."""
-        width = self.vocab // self.chunks
-        offsets = torch.arange(self.chunks, dtype=torch.int32).repeat_interleave(SAMPLER_TOP_K) * width
-        return self._device(
-            offsets.reshape(1, 1, 1, -1).expand(1, 1, rows, -1).contiguous(), ttnn.int32, ttnn.TILE_LAYOUT
-        )
-
-    def prepare_rows(self, rows):
-        """Allocate what ``body`` needs for logits of ``rows`` < B*T rows (a verify row bucket's): their chunk offsets
-        and zero candidates for the rows past them. Call it before any trace capture, as ``body`` allocates nothing
-        that outlives it."""
-        rows = int(rows)
-        if rows in self._row_inputs:
-            return
-        if not 1 <= rows < self.rows:
-            raise ValueError(f"the sampler draws {self.rows} rows; logits of {rows} rows are not a prefix of them")
-        shape = (1, 1, self.rows - rows, self.chunks * SAMPLER_TOP_K)
-        zeros = (
-            self._device(torch.zeros(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT),
-            self._device(torch.zeros(shape, dtype=torch.int32), ttnn.uint32),
-        )
-        self._row_inputs[rows] = (self._offsets(rows), zeros)
+    def _offsets(self):
+        """int32 TILE [1, 1, B*T, chunks * 32] per device: in chunk c's 32 candidate columns, the first vocabulary id of
+        chunk c of the device's shard."""
+        first = torch.arange(self.shards * self.chunks, dtype=torch.int32) * self.chunk_width
+        cols = first.reshape(self.shards, self.chunks).repeat_interleave(SAMPLER_TOP_K, dim=1)
+        offsets = cols.reshape(1, self.shards, 1, -1).expand(1, self.shards, self.rows, -1).contiguous()
+        mapper = ttnn.ShardTensorToMesh(self.mesh, dim=1) if self.shards > 1 else ttnn.ReplicateTensorToMesh(self.mesh)
+        host = ttnn.from_torch(offsets, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, mesh_mapper=mapper)
+        return ttnn.to_device(host, self.mesh, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     def _host(self, t, dtype, layout=ttnn.ROW_MAJOR_LAYOUT):
         return ttnn.from_torch(t, dtype=dtype, layout=layout, mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh))
@@ -283,35 +296,54 @@ class VerifySampler:
         self._staged.pop("seeds", None)
 
     def candidates(self, logits):
-        """The sampler's candidates of ``logits`` [1, 1, rows, vocab] bfloat16 TILE: (values [1, 1, rows, chunks * 32]
-        bfloat16 TILE, global ids [1, 1, rows, chunks * 32] uint32 ROW_MAJOR), chunk c's top-32 at columns 32c ..
-        32c + 31 in the order ``ttnn.topk`` returns them."""
-        rows = int(logits.shape[2])
-        if rows not in self._row_inputs:
-            raise ValueError(f"logits of {rows} rows need prepare_rows({rows}) before the sampler runs over them")
-        if self.chunks == 1:
-            vals, i = ttnn.topk(logits, k=SAMPLER_TOP_K, dim=-1)
-            idx = ttnn.typecast(i, ttnn.int32)
-            ttnn.deallocate(i)
-        else:
-            parts = ttnn.split(logits, self.vocab // self.chunks, dim=3)
+        """The sampler's candidates of ``logits`` bfloat16 TILE, each device's vocabulary shard [1, 1, rows, vocab /
+        shards] of the first ``rows`` <= B*T rows, or the whole vocabulary [1, 1, rows, vocab] on every device:
+        (values [1, 1, B*T, shards * chunks * 32] bfloat16 TILE, global ids, the same shape, uint32 ROW_MAJOR). Shard d's
+        chunk c holds its top-32 at columns 32 (d * chunks + c) .. + 31, in value order, equal values lowest id first.
+        The rows past ``rows`` are the pad's: every candidate PAD_LOGIT."""
+        rows, width = int(logits.shape[2]), int(logits.shape[3])
+        if not 1 <= rows <= self.rows:
+            raise ValueError(f"the sampler draws {self.rows} rows; logits of {rows} rows are not a prefix of them")
+        x, owned = logits, None
+        if width == self.vocab and self.shards > 1:
+            x = owned = ttnn.mesh_partition(logits, dim=3, cluster_axis=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        elif width != self.width:
+            raise ValueError(f"logits of width {width}: the sampler takes {self.width} (one of {self.shards} shards)")
+        if self.chunks > 1:
+            parts = ttnn.split(x, self.chunk_width, dim=3)
             stacked = ttnn.concat(parts, dim=1)
             for part in parts:
                 ttnn.deallocate(part)
-            v, i = ttnn.topk(stacked, k=SAMPLER_TOP_K, dim=-1)
-            ttnn.deallocate(stacked)
-            i32 = ttnn.typecast(i, ttnn.int32)
-            ttnn.deallocate(i)
-            vals, idx = (self._unstack(t, rows) for t in (v, i32))
-        gidx = ttnn.add(self._row_inputs[rows][0], idx, dtype=ttnn.uint32)
+            if owned is not None:
+                ttnn.deallocate(owned)
+            x = owned = stacked
+        padded = x
+        if rows < self.rows or self.chunk_width < self.topk_width:
+            pad = [(0, 0), (0, 0), (0, self.rows - rows), (0, self.topk_width - self.chunk_width)]
+            padded = ttnn.pad(x, pad, value=PAD_LOGIT)
+            if owned is not None:
+                ttnn.deallocate(owned)
+        v, i = ttnn.topk(padded, k=SAMPLER_TOP_K, dim=-1, largest=True, sorted=True, stable=True)
+        if padded is not logits:
+            ttnn.deallocate(padded)
+        idx = ttnn.typecast(i, ttnn.int32)
+        ttnn.deallocate(i)
+        if self.chunks > 1:
+            v, idx = (self._unstack(t) for t in (v, idx))
+        gidx = ttnn.add(self.offsets, idx, dtype=ttnn.uint32)
         ttnn.deallocate(idx)
+        if self.shards > 1:
+            local = (v, gidx)
+            v, gidx = (self.gather(t) for t in local)
+            for t in local:
+                ttnn.deallocate(t)
         gidx_rm = ttnn.untilize(gidx, use_multicore=True)
         ttnn.deallocate(gidx)
-        return vals, gidx_rm
+        return v, gidx_rm
 
-    def _unstack(self, t, rows):
-        """[1, chunks, rows, 32] -> [1, 1, rows, chunks * 32], chunk c at columns 32c .. 32c + 31; frees ``t``."""
-        parts = [ttnn.slice(t, (0, c, 0, 0), (1, c + 1, rows, SAMPLER_TOP_K)) for c in range(self.chunks)]
+    def _unstack(self, t):
+        """[1, chunks, B*T, 32] -> [1, 1, B*T, chunks * 32], chunk c at columns 32c .. 32c + 31; frees ``t``."""
+        parts = [ttnn.slice(t, (0, c, 0, 0), (1, c + 1, self.rows, SAMPLER_TOP_K)) for c in range(self.chunks)]
         ttnn.deallocate(t)
         out = ttnn.concat(parts, dim=3)
         for part in parts:
@@ -327,19 +359,11 @@ class VerifySampler:
         return self.draws
 
     def body(self, logits):
-        """``logits`` [1, 1, rows, vocab] bfloat16 TILE, replicated, of all B*T rows or of the first ``rows`` (a verify
-        row bucket's, prepare_rows). Writes one draw per row of B*T into ``draws``. The rows past the logits draw from
-        zero candidates; ttnn.sampling draws each row from its own candidates and its core's seed alone, so the first
-        rows draw what they draw beside the full-width logits."""
-        rows = int(logits.shape[2])
-        vals, gidx_rm = self.candidates(logits)
-        zeros = self._row_inputs[rows][1]
-        if zeros is not None:
-            full = [ttnn.concat([t, z], dim=2) for t, z in zip((vals, gidx_rm), zeros)]
-            ttnn.deallocate(vals)
-            ttnn.deallocate(gidx_rm)
-            vals, gidx_rm = full
-        return self.draw(vals, gidx_rm)
+        """``logits`` as ``candidates`` takes them, of all B*T rows or of the first ``rows`` (a verify row bucket's).
+        Writes one draw per row of B*T into ``draws``. ttnn.sampling draws each row from its own candidates and its
+        core's seed alone, and the top-k ranks each row on its own, so the first rows draw what they draw beside the
+        full-width logits."""
+        return self.draw(*self.candidates(logits))
 
     def read(self):
         """The draws of the last replay, one per row, from the device-0 replica."""

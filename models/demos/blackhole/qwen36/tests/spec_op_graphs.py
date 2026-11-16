@@ -10,9 +10,6 @@ inputs and compare every output word. Not used by the model.
 
 Both take the same input and output tensors as spec_accept.StepAccept and spec_chain.ChainInputs, plus their own
 float32 TILE constants and candidates, and compute in float32 tiles.
-
-  * ChunkedVerifySampler: spec_sample.VerifySampler with one ``ttnn.topk`` call per vocabulary chunk, the sampler
-    before the chunks were stacked into one call; the reference of the stacked sampler in test_spec_sample.py.
 """
 
 import torch
@@ -20,7 +17,6 @@ import torch
 import ttnn
 from models.demos.blackhole.qwen36.tt.spec_accept import graph
 from models.demos.blackhole.qwen36.tt.spec_chain import chain_graph
-from models.demos.blackhole.qwen36.tt.spec_sample import SAMPLER_TOP_K, VerifySampler
 from models.demos.blackhole.qwen36.tt.tp_common import aliases
 
 
@@ -242,29 +238,3 @@ class OpGraphChain:
         for t in self.buffers:
             ttnn.deallocate(t)
         self.buffers = []
-
-
-class ChunkedVerifySampler(VerifySampler):
-    """VerifySampler whose candidates take one ttnn.topk call per vocabulary chunk, each over [1, 1, rows, vocab /
-    chunks]; the draw is VerifySampler's."""
-
-    def candidates(self, logits):
-        parts = ttnn.split(logits, self.vocab // self.chunks, dim=3) if self.chunks > 1 else [logits]
-        values, indices = [], []
-        for part in parts:
-            v, i = ttnn.topk(part, k=SAMPLER_TOP_K, dim=-1)
-            values.append(v)
-            indices.append(ttnn.typecast(i, ttnn.int32))
-            ttnn.deallocate(i)
-            if part is not logits:
-                ttnn.deallocate(part)
-        vals = ttnn.concat(values, dim=3) if self.chunks > 1 else values[0]
-        idx = ttnn.concat(indices, dim=3) if self.chunks > 1 else indices[0]
-        if self.chunks > 1:
-            for t in values + indices:
-                ttnn.deallocate(t)
-        gidx = ttnn.add(self.offsets, idx, dtype=ttnn.uint32)
-        ttnn.deallocate(idx)
-        gidx_rm = ttnn.untilize(gidx, use_multicore=True)
-        ttnn.deallocate(gidx)
-        return vals, gidx_rm

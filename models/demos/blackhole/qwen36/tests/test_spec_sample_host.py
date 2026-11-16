@@ -27,7 +27,7 @@ from models.demos.blackhole.qwen36.tt.spec_sample import (
     enables_logprobs,
     sampled_token_logprobs,
     sampling_plan,
-    vocab_chunks,
+    shard_chunks,
     with_draws,
 )
 
@@ -123,9 +123,9 @@ def test_the_plan_refuses_what_the_sampler_cannot_draw(expect_error):
         sampling_plan(_params(temperature=[1.0], top_k=[64]), [5], 4)
     with expect_error(ValueError, "exceed the sampler"):
         sampling_plan(_params(temperature=[1.0] * 9, top_k=[5] * 9), [5] * 9, 4)
-    assert SAMPLER_TOP_K == 32 and vocab_chunks(248320) == 4
+    assert SAMPLER_TOP_K == 32 and shard_chunks(248320 // 8) == 1
     with expect_error(ValueError, "tile-aligned"):
-        vocab_chunks(248321)
+        shard_chunks(248321)
 
 
 def test_draws_replace_the_sampled_rows_ids_only():
@@ -249,9 +249,9 @@ def test_a_moved_row_keeps_its_requests_delta_and_sampling(engine):
 
 def test_a_mixed_verify_reads_shard_argmax_ids_and_device_draws(monkeypatch):
     """The verify trace's ids are the fused per-shard argmax lanes ([1,1,1,32] uint32, lane r = row r, zeros past the
-    B * T rows), and the sampler trace draws from the logits the gather trace all-gathers. In a step with a greedy and
-    a sampled row, the greedy row keeps its argmax ids and the sampled row gets its draws; the verify, gather and
-    sampler traces replay, and a greedy step replays the verify trace only."""
+    B * T rows), and the sampler trace draws from the verify's vocab shard. In a step with a greedy and a sampled row,
+    the greedy row keeps its argmax ids and the sampled row gets its draws; the verify and sampler traces replay (no
+    logits gather), and a greedy step replays the verify trace only."""
     B, T = 2, 4
     m = Qwen36Model.__new__(Qwen36Model)
     m._vfy_trace_id, m._vfy_sample_trace_id, m._vfy_T, m._vfy_B, m._vfy_kv_grouped = "verify", "sample", T, B, False
@@ -272,7 +272,7 @@ def test_a_mixed_verify_reads_shard_argmax_ids_and_device_draws(monkeypatch):
     plan = sampling_plan(_params(temperature=[0.0, 1.0], top_k=[1, 20]), [10, 20], T, fresh_seed=lambda: 7)
     ids, _, _ = m.verify_traced([[1] * T] * B, [10, 20], [0] * B, sample_plan=plan)
     assert ids == [100, 101, 102, 103, 504, 505, 506, 507]
-    assert replays == ["verify", "gather", "sample"] and staged == [plan]
+    assert replays == ["verify", "sample"] and staged == [plan]
     replays.clear()
     ids, _, _ = m.verify_traced([[1] * T] * B, [10, 20], [0] * B)
     assert ids == list(range(100, 108)) and replays == ["verify"]
