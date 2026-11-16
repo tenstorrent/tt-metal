@@ -1,8 +1,30 @@
 # WS6 · MTP speculative decoding, batch 1 (A, 16 Nov 2026)
 
-Branch `ws6-mtp` (base `integration` b1d5cbf206a + the RouterTopk speedup + the quick_check change). Greedy, batch 1,
-drafter `google/gemma-4-26B-A4B-it-assistant` (revision 6e5aaaf4c4). Not landed: the stage gate (numerics, decode
-timing, agreement, serving, GPQA) has not been run, and the token-identity proof needs a decision (see below).
+Branch `ws6-mtp`, gate commit `59ed96f2ab2` (= `integration` 1844cb151a with WS4 + WS6). Greedy, batch 1, drafter
+`google/gemma-4-26B-A4B-it-assistant` (revision 6e5aaaf4c4). Status: **landed partial**. Every proof line passes except
+speed: speculative decoding is **1.33×** plain batch 1 after WS4 (157.4 vs 118.2 tok/s/user, K=5), short of the 1.5×
+target. It was 1.86× against the pre-WS4 plain 86.4 tok/s. WS4 sped up the batch-1 path, but the verify runs on the
+batched path, which WS4 did not change. Speculation is opt-in (`Gemma4Generator.generate_speculative`); plain decode is unchanged.
+
+## Gate (on the merged commit, after WS4)
+
+| Line | Result | Proof |
+|---|---|---|
+| Effective batch-1 tok/s/user, 10 prompts × 192 tokens, K=5 (`results/WS6/mtp_k5_gate.json`) | **157.4** vs plain 118.2 = **1.33×** (2.80 accepted drafts/round, 23.9 ms/round; per prompt 104.9-211.2) | ≥ 1.5× ✗ (partial: +33 %) |
+| Token identity vs plain greedy through the verify's batched path (`results/WS6/mtp_identity_gate.json`, `--ref-rows`) | **10/10** identical | ✓ |
+| Teacher-forced agreement vs `integration` 1844cb151a (`results/WS6/agreement.json`) | batch 1 100 % / 100 %; batched b8 99.2 % (worst slot 98.4 %) | ≥ 99 % ✓ |
+| `test_device_numerics` (`results/WS6/numerics.txt`) | 4 passed; decode PCC 0.99985 / 0.99991 | ✓ |
+| `quick_check` (`results/WS6/quick_check.json`) | PASS; B1_layers_ms 8.87, B32 26.41; batched = serial 0.99982, KV equal, inactive untouched | ✓ |
+| Plain decode no regression (`results/WS6/decode_timing.json`) | B1 117.1 tok/s (4K 110.8), B8/16/32 17.6 / 20.2 / 22.6 ms | ≤ 3 % ✓ |
+| Serving (`serve_perf_c1/c16.json`) and GPQA-10 (`gpqa/summary.json`) | 1 user 116.2 tok/s; 16 users 62.7 tok/s/user, 32/32; GPQA **8/10** | ✓ |
+
+Batch-1 vs batched decode now part earlier than before WS4 (first difference at tokens 3-136, top-1/top-2 margin
+≤ 0.875). That is why identity is proven against the verify's own numerics (PLAN.md WS6 line, decided 16 Nov).
+
+Ways to reach 1.5×: a faster batched verify (15 ms for 6 rows vs 8.4 ms batch 1), and an adaptive fallback to plain
+decode when acceptance is low (the short story, 1.58 accepted/round, is 11 % slower than plain).
+
+Below: the worker's measurements before WS4 (plain 86.4 tok/s).
 
 ## Result
 
