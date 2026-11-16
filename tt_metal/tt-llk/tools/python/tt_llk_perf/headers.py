@@ -213,3 +213,87 @@ def bank_tables(arch, include_dir=None) -> Dict[str, List[CounterEntry]]:
             "the parser expects {PerfCounterType::NAME, <select>} entries in *_counters arrays."
         )
     return banks
+
+
+# RISC-V performance monitor: riscv_pmc_types.h has the PmcEvent names, riscv_pmc_<arch>.h the {name, select} tables
+# of each core kind. A profiler record carries the raw mhpmevent select, so decoding goes select -> names.
+RISCV_CORE_KINDS = ("baby", "trisc", "dm")
+_RISCV_ARCH_HEADER = {
+    "blackhole": "riscv_pmc_blackhole.h",
+    "wormhole": "riscv_pmc_wormhole.h",
+    "wormhole_b0": "riscv_pmc_wormhole.h",
+    "quasar": "riscv_pmc_quasar.h",
+}
+_RISCV_TABLE_DECL = re.compile(
+    r"std::array<\s*Entry\s*,\s*(\d+)\s*>\s+(baby|trisc|dm)_events\b[^=;]*="
+)
+_RISCV_ENTRY = re.compile(r"\{\s*PmcEvent::(\w+)\s*,\s*(0[xX][0-9a-fA-F]+|\d+)\s*\}")
+
+
+def riscv_event_names(include_dir=None) -> List[str]:
+    """PmcEvent enumerator names in declaration order (UNDEF first), parsed from riscv_pmc_types.h."""
+    header = find_include_dir(include_dir) / "riscv_pmc_types.h"
+    names = parse_enum(header.read_text(), "PmcEvent")
+    if not names:
+        raise ValueError(f"enum PmcEvent in {header} parsed empty")
+    return [names[i] for i in sorted(names)]
+
+
+def parse_riscv_tables(text: str) -> Dict[str, List[tuple]]:
+    """Core kind -> [(event name, select)] for one riscv_pmc_<arch>.h; raises on a count other than the array size."""
+    text = _strip_comments(text)
+    decls = list(_RISCV_TABLE_DECL.finditer(text))
+    tables: Dict[str, List[tuple]] = {}
+    for i, decl in enumerate(decls):
+        size, kind = int(decl.group(1)), decl.group(2)
+        chunk = text[decl.end() : decls[i + 1].start() if i + 1 < len(decls) else None]
+        chunk = chunk.split("}};", 1)[0] if size else ""
+        pairs = [(n, int(s, 0)) for n, s in _RISCV_ENTRY.findall(chunk)]
+        if len(pairs) != size:
+            raise ValueError(
+                f"{kind}_events: parsed {len(pairs)} entries but the array declares {size}"
+            )
+        tables[kind] = pairs
+    return tables
+
+
+def riscv_event_tables(arch, include_dir=None) -> Dict[str, List[tuple]]:
+    """Core kind -> [(event name, select)] for one arch. Wormhole returns {'baby': []}: it has no counters."""
+    arch = normalize_arch(arch)
+    if arch not in _RISCV_ARCH_HEADER:
+        raise ValueError(
+            f"unknown arch {arch!r}; expected one of {sorted(_RISCV_ARCH_HEADER)}"
+        )
+    header = find_include_dir(include_dir) / _RISCV_ARCH_HEADER[arch]
+    tables = parse_riscv_tables(header.read_text())
+    if not tables:
+        raise ValueError(f"{header}: no *_events tables parsed")
+    return tables
+
+
+def riscv_select_events(arch, kind, select, include_dir=None) -> List[str]:
+    """Names of the events an mhpmevent select arms; the counter counts their OR. [] when the select is 0."""
+    entries = riscv_event_tables(arch, include_dir).get(kind)
+    if entries is None:
+        raise ValueError(f"arch {arch!r} has no {kind!r} cores")
+    select = int(select)
+    if kind == "dm":
+        event_set, mask = select & 0xFF, select >> 8
+        return [n for n, s in entries if (s & 0xFF) == event_set and (s >> 8) & mask]
+    names = []
+    for n, s in entries:
+        position = (s.bit_length() - 1) // 4 * 4
+        if (select >> position) & 0xF == s >> position:
+            names.append(n)
+    return names
+
+
+def riscv_event_select(arch, kind, names, include_dir=None) -> int:
+    """The mhpmevent select that arms every named event of one core kind (inverse of riscv_select_events)."""
+    by_name = dict(riscv_event_tables(arch, include_dir).get(kind, []))
+    select = 0
+    for name in names:
+        if name not in by_name:
+            raise ValueError(f"{name} is not an event of {kind} cores on {arch}")
+        select |= by_name[name]
+    return select

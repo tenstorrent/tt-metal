@@ -24,3 +24,8 @@ Consumers: `tools/tracy/perf_counter_analysis.py` (metal profiler) and
 `setup.py` installs the package; the LLK pytest plugin puts `tools/python` on
 `sys.path`. Adding a counter needs no Python change: the names are parsed from
 the headers. Adding a metric means one formula plus one `METRIC_LABELS` entry.
+
+RISC-V performance monitor: `headers.riscv_event_tables(arch)` and `riscv_select_events(arch, kind, select)` parse
+the `riscv_pmc_*.h` tables (core kinds `baby`, `trisc`, `dm`); `riscv_pmc.py` decodes the profiler markers
+9092 to 9094 into event names; `riscv_metrics.py` derives IPC, stall and per-instruction metrics (kept out of
+`metrics.py`, whose keys are the warehouse metric catalog). Adding an event needs no Python change.
