@@ -60,9 +60,11 @@ FusedLightningSelectKvDeviceOperation::ProgramFactory::create_program_artifacts(
     const CoreRangeSet& all_cores = query_shard.grid;
     // B == 1: each core holds all Sq query rows (Hi heads each, row-major [Sq * Hi, D]) and their
     // [Sq, Hi] weights.
-    const uint32_t num_queries = tensor_args.head_weights.memory_config().shard_spec()->shape[0];
-    const uint32_t num_heads = query_shard.shape[0] / num_queries;
-    const uint32_t d_tiles = query_shard.shape[1] / tt::constants::TILE_WIDTH;
+    // The shards hold those values row-major in whatever shard shape, so take the counts from the logical shapes:
+    // head_weights [num_cores, 1, Sq, Hi], query [num_cores, Sq * Hi, 1, D].
+    const uint32_t num_queries = tensor_args.head_weights.logical_shape()[-2];
+    const uint32_t num_heads = tensor_args.query.logical_shape()[1] / num_queries;
+    const uint32_t d_tiles = tensor_args.query.logical_shape()[-1] / tt::constants::TILE_WIDTH;
     const uint32_t num_query_tiles = num_queries * num_heads * d_tiles;
     const uint32_t num_weight_tiles = num_queries * num_heads / tt::constants::TILE_WIDTH;
     const bool has_valid_length = tensor_args.valid_length_tensor.has_value();

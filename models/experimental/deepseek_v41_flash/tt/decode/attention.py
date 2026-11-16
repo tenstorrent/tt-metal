@@ -106,6 +106,25 @@ _SELECT_DRAM_STREAM_BYTES = int(os.environ.get("DEEPSEEK_V41_SELECT_DRAM_STREAM_
 # A one-row step without a scoring select runs q, kv and ring write as one ``attention_qkv_decode``
 # (``DEEPSEEK_V41_FUSED_QKV=0``: q_a, q_b, kv, their RoPE and the ring write as separate ops).
 _FUSED_QKV = os.environ.get("DEEPSEEK_V41_FUSED_QKV", "1") not in ("0", "", "false", "False")
+# A scoring select's one-row step runs attention_qkv_decode too, which also hands the indexer the gathered q_a * gamma
+# replica (``q_a_output``) its wq_b reads. That row lacks q_a's RMSNorm 1 / rms scale, a positive per-token scalar the
+# indexer's top-k is invariant to (score = sum_h w_h relu(q_h . k), positively homogeneous in q). The selection can
+# still differ from the scaled query's at bfloat16 near-ties. ``DEEPSEEK_V41_FUSED_SELECT_QKV=0``: such a step runs
+# q_a, q_b, kv, their RoPE and the ring write as separate ops.
+FUSED_SELECT_QKV = os.environ.get("DEEPSEEK_V41_FUSED_SELECT_QKV", "1") not in ("0", "", "false", "False")
+
+
+# A one-row select hands fused_lightning_select_kv its query and head-weight replicas as one all_gather_for_matmul
+# each (a [1, Hi * D] row is the [Hi, D] replica's bytes), not reshape / repeat / reshard (``_replicate_heads``).
+# ``DEEPSEEK_V41_GATHER_SELECT_HEADS=0``: always ``_replicate_heads``.
+GATHER_SELECT_HEADS = os.environ.get("DEEPSEEK_V41_GATHER_SELECT_HEADS", "1") not in ("0", "", "false", "False")
+
+
+def fused_qkv_step(select: bool, dense: bool) -> bool:
+    """Whether a one-row step with this ``select`` / ``dense`` runs attention_qkv_decode (where the layer can)."""
+    return not select or dense or FUSED_SELECT_QKV
+
+
 # Up to ``index_topk`` entries the select keeps every entry, so a one-row step attends the session's entries
 # in ``dense_kv`` instead of scoring them (``DEEPSEEK_V41_DENSE_SELECT=0``: always score).
 DENSE_SELECT = os.environ.get("DEEPSEEK_V41_DENSE_SELECT", "1") not in ("0", "", "false", "False")
@@ -131,6 +150,7 @@ COMP_INTERLEAVED_POOL = os.environ.get("DEEPSEEK_V41_COMP_INTERLEAVED_POOL", "1"
 _FUSED_QKV_GRID = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 9))})
 _FUSED_Q_A_CORES = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(8, 0), ttnn.CoreCoord(11, 9))})
 _FUSED_KV_CORES = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 8), ttnn.CoreCoord(7, 9))})
+_FUSED_Q_B_CORES = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))})
 # ``fused_lightning_select_kv`` scores ``(cur_pos + 1) // 4`` keys whatever the ratio.
 _SELECT_KV_RATE = 4
 # ``flash_mqa_decode``: more S-blocks or 128-row chunks measured no faster; HiFi2 matches HiFi4's PCC.
@@ -281,6 +301,21 @@ class DeepSeekV41Indexer(DeepSeekV4Indexer):
         self.q_b_proj.set_dram_stream(_SELECT_DRAM_STREAM_BYTES)
         self.weights_proj.set_dram_stream(_SELECT_DRAM_STREAM_BYTES)
 
+    def _gather_heads(self, q: ttnn.Tensor, w: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """One row's query ``[1, 1, 1, Hi * D]`` and head weights ``[1, 1, 1, Hi]`` as the select's replicas on
+        :meth:`_select_grid`: ``[num_cores, Hi, 1, D]`` and ``[num_cores, 1, 1, Hi]``, one all_gather_for_matmul each.
+        Each core's shard is the row itself, the replica's values row-major."""
+        grid = self._select_grid()
+        n = grid.num_cores()
+        query = ttnn.experimental.deepseek.all_gather_for_matmul(q, grid)
+        weights = ttnn.experimental.deepseek.all_gather_for_matmul(w, grid)
+        ttnn.deallocate(q)
+        ttnn.deallocate(w)
+        return (
+            ttnn.experimental.view(query, [n, self.num_heads, 1, self.head_dim]),
+            ttnn.experimental.view(weights, [n, 1, 1, self.num_heads]),
+        )
+
     def select_kv(
         self,
         tokens: ttnn.Tensor,
@@ -325,8 +360,11 @@ class DeepSeekV41Indexer(DeepSeekV4Indexer):
         q = _apply_rope(q, cos_row, sin_row, self.rot, self.rope_dim, head_dim=self.head_dim)
         w = self.weights_proj(_decode_activation(self.weights_proj, tokens))
         # Row j's heads are rows [j * Hi, (j + 1) * Hi) of the query replica.
-        query = self._replicate_heads(q, rows * self.num_heads, self.head_dim)
-        weights = self._replicate_heads(w, rows, self.num_heads)
+        if rows == 1 and GATHER_SELECT_HEADS:
+            query, weights = self._gather_heads(q, w)
+        else:
+            query = self._replicate_heads(q, rows * self.num_heads, self.head_dim)
+            weights = self._replicate_heads(w, rows, self.num_heads)
         weights = ttnn.experimental.view(weights, [weights.shape[0], 1, rows, self.num_heads])
         cur_pos = ttnn.reshape(compress_pos, [rows])
 
@@ -917,9 +955,9 @@ class DeepSeekV41Attention(DeepSeekV4Module):
 
     def prefetch_weights(self, *, one_row: bool = True, fused_qkv: bool | None = None):
         """Queue the prefetched projections in the order :meth:`decode` pops them. ``one_row``: the step this is for
-        decodes one row; ``fused_qkv`` (default ``not self.is_index_source``) queues attention_qkv_decode's slabs
+        decodes one row; ``fused_qkv`` (default :func:`fused_qkv_step` of a scoring step for an index source) queues attention_qkv_decode's slabs
         when ``self.fused_pipes`` is built instead of running q_a, kv and q_b from DRAM."""
-        use_fused = not self.is_index_source if fused_qkv is None else fused_qkv
+        use_fused = (not self.is_index_source or FUSED_SELECT_QKV) if fused_qkv is None else fused_qkv
         if one_row and use_fused and self.fused_pipes is not None:
             self._queue_fused_prefetch()
         for proj in (self.q_a_proj, self.q_b_proj, self.kv_proj, self.o_a_proj, self.o_b_proj):
@@ -938,7 +976,7 @@ class DeepSeekV41Attention(DeepSeekV4Module):
     def token_replica_grid(self, select: bool = False, dense: bool = False) -> ttnn.CoreRangeSet | None:
         """The rectangle a one-row :meth:`decode` (with these ``select`` / ``dense``) replicates its input row onto
         (``all_gather_for_matmul``), for its caller to build the replica itself; ``None`` if not one rectangle."""
-        grid = _FUSED_QKV_GRID if self.fused_qkv and (not select or dense) else self._decode_activation_grid()
+        grid = _FUSED_QKV_GRID if self.fused_qkv and fused_qkv_step(select, dense) else self._decode_activation_grid()
         box = grid.bounding_box()
         if box.grid_size().x * box.grid_size().y != grid.num_cores():
             return None
@@ -974,10 +1012,27 @@ class DeepSeekV41Attention(DeepSeekV4Module):
         kv = _apply_rope(kv, cos, sin, self.rot, self.rope_dim)
         return q, kv, q_a
 
-    def _fused_qkv_into_ring(self, tokens, cos, sin, ring, sliding_pos, comp: bool = False):
+    def _q_a_output(self) -> ttnn.Tensor:
+        """An empty ``q_a_output`` for attention_qkv_decode: one ``[1, q_lora]`` ROW_MAJOR row per core of the indexer
+        wq_b's B grid when the op's q_b cores contain it (wq_b then reads it in place), else of those q_b cores."""
+        grid = self.indexer.q_b_proj.b_core_grid()
+        if not _core_grid_contains(_FUSED_Q_B_CORES, grid):
+            grid = _FUSED_Q_B_CORES
+        q_lora = self.q_a_proj.N
+        mem = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(grid, [1, q_lora], ttnn.ShardOrientation.ROW_MAJOR),
+        )
+        return ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, 1, grid.num_cores(), q_lora]), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, self.device, mem
+        )
+
+    def _fused_qkv_into_ring(self, tokens, cos, sin, ring, sliding_pos, comp: bool = False, q_a_out=None):
         """:meth:`_qkv` of one row as attention_qkv_decode, writing its kv into ``ring`` at ``sliding_pos``.
         ``tokens`` is the replica on ``_FUSED_QKV_GRID``; returns q ``[1, 1, H_local, Dh]`` as SDPA reads it.
-        ``comp`` also writes this rank's compressor columns of the row into ``fused_comp_row``."""
+        ``comp`` also writes this rank's compressor columns of the row into ``fused_comp_row``; ``q_a_out``
+        (:meth:`_q_a_output`) receives the row's q_a * gamma for the indexer."""
         _profile(self.device)
         pipes = []
         if self.fused_pipes is not None:
@@ -1000,6 +1055,7 @@ class DeepSeekV41Attention(DeepSeekV4Module):
             prefetcher_pipes=pipes,
             w_comp=self.comp_proj.weight if comp else None,
             comp_output=self.fused_comp_row if comp else None,
+            q_a_output=q_a_out,
         )
 
     def _sdpa(
@@ -1586,7 +1642,7 @@ class DeepSeekV41Attention(DeepSeekV4Module):
             assert s <= self.window, f"{s} rows would overwrite each other's ring slots"
             assert ring_offset is None and win_offset is None, "several sessions' rings decode one row at a time"
             assert ring_rows is not None, "decode_inputs(..., rows=S) builds the rows' ring copies"
-        fused = self.fused_qkv and b == 1 and s == 1 and (not select or dense)
+        fused = self.fused_qkv and b == 1 and s == 1 and fused_qkv_step(select, dense)
         assert fused or not self.fused_prefetch_queued, "attention_qkv_decode's slabs were queued for a one-row step"
         token_grid = _FUSED_QKV_GRID if fused else self._decode_activation_grid()
         if tokens is None:
@@ -1668,8 +1724,9 @@ class DeepSeekV41Attention(DeepSeekV4Module):
                     latent = self._latent_rows(kv, gate, scache, win_slot, pool_rows, win_prev)
         assert select or not candidates, "candidates are a select mode"
         if fused:
-            q = self._fused_qkv_into_ring(tokens, cos, sin, scache.kv, sliding_pos, comp=comp_in_qkv)
-            q_a = None
+            # A scoring select's indexer reads q_a; the op hands it over as q_a * gamma (see FUSED_SELECT_QKV).
+            q_a = self._q_a_output() if select and not dense else None
+            q = self._fused_qkv_into_ring(tokens, cos, sin, scache.kv, sliding_pos, comp=comp_in_qkv, q_a_out=q_a)
             if comp_in_qkv:
                 with _region("COMPRESSOR"):
                     interleave = self._comp_interleave()

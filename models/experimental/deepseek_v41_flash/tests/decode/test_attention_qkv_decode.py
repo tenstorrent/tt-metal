@@ -361,6 +361,46 @@ def test_attention_qkv_decode_compressor_columns(device, n_comp):
         ttnn.deallocate(q)
 
 
+@pytest.mark.parametrize("grid", ("q_b", "corner"))
+@torch.no_grad()
+def test_attention_qkv_decode_q_a_output(device, grid):
+    """``q_a_output``: every core of its grid (all 64 q_b cores, or a 4x2 corner of them) receives q_a * gamma, the
+    gathered row before q_a's RMSNorm scale, beside an unchanged q and kv."""
+    heads, pos = 16, 77
+    host, tt = _setup(device, heads, 128)
+    cores = (
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))})
+        if grid == "q_b"
+        else ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(2, 3), ttnn.CoreCoord(5, 4))})
+    )
+    n = cores.num_cores()
+    q_a_output = ttnn.from_torch(
+        torch.zeros(1, 1, n, Q_LORA),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(cores, [1, Q_LORA], ttnn.ShardOrientation.ROW_MAJOR),
+        ),
+    )
+    expected_q, expected_kv = _reference(host, heads)
+    expected_qa = (host["x"] @ host["w_q_a"]).reshape(-1) * host["q_a_gamma"]
+    for step in range(2):
+        q = _run(tt, _cache_pos(pos + step, device), q_a_output=q_a_output)
+        got_q = ttnn.to_torch(q).float().reshape(heads, HEAD_DIM)
+        got_kv = ttnn.to_torch(tt["kv_cache"]).float()[0, 0, pos + step]
+        got_qa = ttnn.to_torch(q_a_output).float().reshape(n, Q_LORA)
+        q_pcc, kv_pcc = comp_pcc(expected_q, got_q, Q_PCC), comp_pcc(expected_kv, got_kv, KV_PCC)
+        assert q_pcc[0] and kv_pcc[0], f"q PCC {q_pcc[1]}, kv PCC {kv_pcc[1]}"
+        assert torch.equal(got_qa, got_qa[:1].expand(n, Q_LORA)), "q_a_output's replicas differ"
+        qa_pcc = comp_pcc(expected_qa, got_qa[0], KV_PCC)
+        logger.info(f"{grid} step {step}: q PCC {q_pcc[1]}, kv PCC {kv_pcc[1]}, q_a_output PCC {qa_pcc[1]}")
+        assert qa_pcc[0], f"q_a_output PCC {qa_pcc[1]} < {KV_PCC}"
+        ttnn.deallocate(q)
+
+
 def _text_config():
     """The checkpoint's ``text_config`` as :func:`load_config` gives it, from ``config.json`` alone."""
     configs = sorted(DEFAULT_MODEL_DIR.glob("snapshots/*/config.json"))
@@ -428,7 +468,7 @@ def _decode_both(
             for fused in attns:
                 attn = attns[fused][i]
                 inputs = attn.decode_inputs(pos, angles.cos(), angles.sin())
-                use_fused = not attn.is_index_source or not inputs.get("select") or bool(inputs.get("dense"))
+                use_fused = attention_module.fused_qkv_step(bool(inputs.get("select")), bool(inputs.get("dense")))
                 if fused and attn.is_index_source:
                     if pos == 0 and attn.compress_ratio > 1:
                         assert not inputs.get("select")
@@ -436,7 +476,7 @@ def _decode_both(
                     elif (pos + 1) // attn.compress_ratio <= attn.index_topk:
                         assert inputs.get("select")
                         assert bool(inputs.get("dense")) == attention_module.DENSE_SELECT
-                        assert use_fused == attention_module.DENSE_SELECT
+                        assert use_fused == (attention_module.DENSE_SELECT or attention_module.FUSED_SELECT_QKV)
                 if use_prefetcher:
                     attn.prefetch_weights(fused_qkv=use_fused)
                 out = attn.decode(x, scache=caches[fused][i], **inputs)
@@ -454,13 +494,14 @@ def _check_layer_fused_qkv(
     use_prefetcher: bool = False,
     dense_select: bool = True,
     separate_column_compressor: bool = True,
+    seq_len: int | None = None,
 ):
     """``layers`` on random weights, in order from position 0 past the ring wrap, with and without
     attention_qkv_decode: every layer's block output and ring must agree. ``use_prefetcher`` streams both
     builds' ring weights through one set of rings, as a stage device does. ``separate_column_compressor=False``
     gives the separate build the bfloat16 row-parallel compressor instead of the bfloat8_b column split."""
     config = _text_config()
-    seq_len = config.sliding_window + 4
+    seq_len = seq_len or config.sliding_window + 4
     torch.manual_seed(0)
     weights = {i: _random_attention_weights(config, i) for i in layers}
     prefetch_buffers = make_prefetch_buffers(device, ttnn.bfloat4_b, tp_size=tp_size) if use_prefetcher else None
@@ -505,9 +546,38 @@ def _check_layer_fused_qkv(
                 fused: ttnn.to_torch(ttnn.get_device_tensors(getattr(caches[fused][i], attr))[0]).float()
                 for fused in caches
             }
+            if attr == "sel_tile" and seq_len // config.compress_ratios[i] > config.index_topk:
+                # Past index_topk the builds' bfloat16 queries differ in rounding (the fused one also by q_a's RMSNorm
+                # scale), which can swap a near-tie at the top-k boundary and shift every later row of sel_tile.
+                # Compare the selected comp_kv rows as sets instead.
+                comp_kv = _cache_buffers(caches, i, "comp_kv")[True].reshape(-1, config.head_dim)
+                picked = {fused: _selected_rows(bufs[fused], comp_kv, config) for fused in bufs}
+                swapped = len(picked[False] - picked[True])
+                logger.info(f"layer {i}: {swapped} of {config.index_topk} selected rows differ")
+                assert swapped <= _MAX_TOPK_SWAPS, f"layer {i}: {swapped} selected rows differ"
+                continue
             passing, pcc = comp_pcc(bufs[False], bufs[True], 0.999)
             logger.info(f"layer {i}: {attr} PCC {pcc}")
             assert passing, f"layer {i}: {attr} PCC {pcc}"
+
+
+# Near-tie swaps at the top-k boundary allowed between two builds' selections of one step.
+_MAX_TOPK_SWAPS = 2
+
+
+def _cache_buffers(caches: dict, layer: int, attr: str) -> dict:
+    """``attr`` of ``layer``'s cache on each build, from the first device."""
+    return {
+        fused: ttnn.to_torch(ttnn.get_device_tensors(getattr(caches[fused][layer], attr))[0]).float()
+        for fused in caches
+    }
+
+
+def _selected_rows(sel_tile: torch.Tensor, comp_kv: torch.Tensor, config) -> set:
+    """The ``comp_kv`` row each of ``sel_tile``'s selected rows (after the ring) copies."""
+    window, topk = config.sliding_window, config.index_topk
+    rows = sel_tile.reshape(-1, config.head_dim)[window : window + topk]
+    return set(torch.cdist(rows, comp_kv).argmin(dim=1).tolist())
 
 
 # Window only (0); ratio 2, its kv + index source (2, fused when not select or dense) and a consumer (3).
@@ -555,9 +625,11 @@ def test_attention_layer_fused_qkv_tp4_prefetcher(mesh_device, layers, monkeypat
 @INDEX_SOURCE_FUSED_LAYERS
 @pytest.mark.parametrize("dense_select", (True, False), ids=("dense", "sparse"))
 @torch.no_grad()
-def test_attention_layer_fused_qkv_index_source(device, layers, dense_select, monkeypatch):
-    """Index source layer 2 (and consumer 3) under dense (fused for pos >= 0) vs sparse select (fused at pos=0,
-    separate _qkv + select_kv for pos >= 1)."""
+@pytest.mark.parametrize("fused_select", (True, False), ids=("fused_select", "separate_select"))
+def test_attention_layer_fused_qkv_index_source(device, layers, dense_select, fused_select, monkeypatch):
+    """Index source layer 2 (and consumer 3) under dense vs sparse select. A sparse (scoring) step runs
+    attention_qkv_decode with its q_a_output for the indexer (``fused_select``), else separate _qkv + select_kv."""
+    monkeypatch.setattr(attention_module, "FUSED_SELECT_QKV", fused_select)
     _check_layer_fused_qkv(device, 1, layers, monkeypatch, dense_select=dense_select)
 
 
@@ -589,6 +661,23 @@ def test_attention_layer_fused_qkv_index_source_tp4_prefetcher(mesh_device, laye
     if not ttnn.experimental.is_tensor_prefetcher_supported(submesh):
         pytest.skip("needs the tensor prefetcher (programmable DRAM cores)")
     _check_layer_fused_qkv(submesh, 4, layers, monkeypatch, use_prefetcher=True, dense_select=dense_select)
+
+
+@pytest.mark.skipif(_text_config() is None, reason=f"no V4.1-Flash config.json under {DEFAULT_MODEL_DIR}")
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True, ids=["8x4"])
+@torch.no_grad()
+def test_attention_layer_fused_select_topk_tp4_prefetcher(mesh_device, monkeypatch):
+    """Ratio-1 index source 20 and consumer 21 on a 1x4 stage with the prefetcher, past index_topk (600 entries, the
+    select drops 88): attention_qkv_decode's q_a_output (q_a * gamma, without the 1 / rms) must select the rows the
+    separate build's normalized q_a does."""
+    if tuple(mesh_device.shape) != (8, 4):
+        pytest.skip(f"needs an 8x4 mesh, got {tuple(mesh_device.shape)}")
+    submesh = mesh_device.create_submesh(ttnn.MeshShape(1, 4), ttnn.MeshCoordinate(0, 0))
+    if not ttnn.experimental.is_tensor_prefetcher_supported(submesh):
+        pytest.skip("needs the tensor prefetcher (programmable DRAM cores)")
+    monkeypatch.setattr(attention_module, "FUSED_SELECT_QKV", True)
+    _check_layer_fused_qkv(submesh, 4, (20, 21), monkeypatch, use_prefetcher=True, dense_select=True, seq_len=600)
 
 
 @pytest.mark.parametrize("path", ("fused", "today"))
