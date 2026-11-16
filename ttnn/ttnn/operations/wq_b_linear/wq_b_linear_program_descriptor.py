@@ -81,8 +81,6 @@ def create_program_descriptor(x_tensor, w_tensor, y_tensor, compute_cfg):
     block_m_tiles = tensor_m_tiles
     k_block_tiles = _largest_divisor_at_most(tensor_k_tiles, K_BLOCK_TILES)
     num_k_blocks = tensor_k_tiles // k_block_tiles
-    x_cb_k_blocks = num_k_blocks
-    w_cb_k_blocks = num_k_blocks
     w_reads_in_flight = min(num_k_blocks, W_READS_IN_FLIGHT, MAX_READ_TRIDS)
 
     grid = device.compute_with_storage_grid_size()
@@ -109,9 +107,9 @@ def create_program_descriptor(x_tensor, w_tensor, y_tensor, compute_cfg):
     w_page_bytes = w_tensor.buffer_page_size()
     y_page_bytes = y_tensor.buffer_page_size()
 
-    # ---- circular buffers ----
-    x_cb_pages = block_m_tiles * k_block_tiles * x_cb_k_blocks
-    w_cb_pages = k_block_tiles * w_cb_k_blocks * core_n_tiles_max
+    # x and W are whole-K resident: the writer and reader reserve all num_k_blocks blocks up front.
+    x_cb_pages = block_m_tiles * k_block_tiles * num_k_blocks
+    w_cb_pages = k_block_tiles * num_k_blocks * core_n_tiles_max
     y_cb_pages = block_m_tiles * core_n_tiles_max
 
     def cb(index, pages, page_bytes, dtype, cores):

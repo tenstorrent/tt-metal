@@ -79,6 +79,21 @@ Re-run on the intermediate data each stage produces:
 
 Every knob is a parameter: `K_BLOCK_TILES`, the device-derived grid / `num_cores` / `core_n_tiles`, `num_x_injectors`, `w_reads_in_flight`, subblock factors and all CB capacities are computed on the host from those sources and passed as CT/RT args. No kernel contains a literal tile count.
 
+### As built (Phase 0, supersedes the values below where they differ)
+
+The implementer re-tuned four design values on p100a (measured in `agent_logs/ttnn-implementer_breadcrumbs.jsonl`); the tables and prose below still state the planned values.
+
+| Knob | Planned | As built | Evidence |
+|------|---------|----------|----------|
+| `K_BLOCK_TILES` | 8 (`num_k_blocks` = 6) | 6 (`num_k_blocks` = 8) | kb=4: 32.6 µs, kb=16: 30.7 µs, kb=6 best |
+| `w_reads_in_flight` | `min(num_k_blocks, 15)` = 6 | `W_READS_IN_FLIGHT` = 1 | 6 → 1 measured faster |
+| `num_x_injectors` | 6 | `max(2, min(num_k_blocks, grid_x))` = 8 (row 9, x = 3..10) | follows `num_k_blocks` |
+| x multicast protocol | `McastConfig(handshake=False, data_ready=Counter)` | `McastConfig(handshake=True, data_ready=Flag)` (`X_MCAST_LINKED`) | Counter selects unlinked multicast writes; bare broadcast 26.3 → 19.1 µs with Flag |
+
+`x_cb_k_blocks` / `w_cb_k_blocks` are not independent knobs in the code: the writer and reader reserve all `num_k_blocks` blocks up front (whole-K residency), so the CB capacities are written in `num_k_blocks` directly. A ring depth below `num_k_blocks` needs wrap-aware slot math in both kernels.
+
+Verifier ablation (p100a, device kernel ns, 3 calls each): full 26.6 µs; x broadcast + y store only (no W reads, no compute) 25.4 µs; sync-only (one-page multicast per round, no W reads, no compute) 14.7 µs; W-only (one-page x) 20.8 µs; compute-only (one-page x) 15.7 µs. The serialized 8-round x broadcast is the critical path, not the W DRAM stream. See `verification_report.md`.
+
 ### Buffer-depth knobs
 
 | CB | Depth knob | Phase 0 value | What the depth buys |
