@@ -719,9 +719,7 @@ AllocatorState AllocatorImpl::extract_state() const {
         }
     }
 
-    // Copy allocated buffer pointers
-    std::vector<Buffer*> all_allocated_buffers(allocated_buffers_.begin(), allocated_buffers_.end());
-    return AllocatorState(std::move(states_per_buffer_type), std::move(all_allocated_buffers));
+    return AllocatorState(std::move(states_per_buffer_type));
 }
 
 void AllocatorImpl::override_state(const AllocatorState& state) {
