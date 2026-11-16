@@ -4330,6 +4330,9 @@ def test_prefix_cache_async_export_ordering(monkeypatch):
     g = ad._alias[2]
     e256 = pc.store.entries[key256]
     assert pc.stats["export_waits"] == 1 and pc.stats["export_wait_s"] >= 0.1
+    # (256's export was still queued behind 128's, which held the one thread at the gate: the restore took it out of
+    # the queue and assembled it in place once 128's assembly finished, instead of waiting for the thread to reach it)
+    assert pc.stats["export_jumps"] == 1
     assert e256.tier == "device" and backend.imports == [e256.device_entry] and kv.state[B + e256.device_entry] == doc
     assert kv.state[g] == b and int(out[0][0, 0]) == (b[-1] + 1) % VOCAB
     assert pc.stats["restores"] == 1 and pc.stats["attaches"] == 1 and pc.stats["fallbacks"] == 0

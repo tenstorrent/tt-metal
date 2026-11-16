@@ -881,12 +881,13 @@ def _blob_bytes(blob) -> int:
 
 class _PendingExport:
     """a host-tier blob still being assembled off the engine thread (GLM53_PREFIX_ASYNC_EXPORT): ``future`` -> the
-    blob; ``bytes``: the admission bound it was registered with (StackPrefixCache._land swaps in the blob, its size)"""
+    blob; ``bytes``: the admission bound it was registered with (StackPrefixCache._land swaps in the blob, its size);
+    ``run``: the assembly itself (serialized), which a restore runs in place when the export is still queued"""
 
-    __slots__ = ("future", "bytes")
+    __slots__ = ("future", "bytes", "run")
 
-    def __init__(self, future, nbytes: int):
-        self.future, self.bytes = future, int(nbytes)
+    def __init__(self, future, nbytes: int, run=None):
+        self.future, self.bytes, self.run = future, int(nbytes), run
 
 
 class StackPrefixCache:
@@ -974,7 +975,7 @@ class StackPrefixCache:
                       "confirmed_host", "spills", "restores", "restore_failed", "exact_uncut_splits",
                       "keep_prev_kept", "keep_prev_released", "keep_prev_hits", "confirm_memo_hits",
                       "confirm_memo_misses", "spills_async", "spills_async_sync", "exports_landed", "export_failed",
-                      "export_waits")  # fmt: skip
+                      "export_waits", "export_jumps")  # fmt: skip
         }
         self.stats.update(spill_s=0.0, restore_s=0.0, export_wait_s=0.0)
         self.base: dict = {}  # generator slot -> the key of the entry its request attached (dominated past it)
@@ -987,6 +988,7 @@ class StackPrefixCache:
         self.async_export = False  # GLM53_PREFIX_ASYNC_EXPORT (wired by _host_tier)
         self._exports: dict = {}  # key -> its _PendingExport until it lands (_land)
         self._export_pool = None  # the one background thread that assembles them, in spill order
+        self._export_run_lock = threading.Lock()  # one assembly at a time (the thread, or a restore that jumped it)
         self.host = self._host_tier(int(os.environ.get(HOST_BYTES_ENV, "0") or 0))
         self.store.keep_prev_min = PREFIX_KEEP_PREV_MIN  # (only kept entries read it)
         logger.info(
@@ -1077,7 +1079,13 @@ class StackPrefixCache:
         replaced"""
         e = self.store.entries.get(key)
         try:
-            blob = p.future.result()
+            if p.run is not None and p.future.cancel():
+                # still queued behind other exports (served AgentX c16: restores waited up to 110 s, 488 s in an
+                # hour, the device idle): assemble it here, after at most the one assembly already running
+                self.stats["export_jumps"] += 1
+                blob = p.run()
+            else:
+                blob = p.future.result()
         except Exception as exc:  # noqa: BLE001  (an export failure must not fail a request)
             self.stats["export_failed"] += 1
             logger.warning(f"GLM53 stack prefix: an in-flight host-tier export failed, its entry is dropped: {exc}")
@@ -1108,7 +1116,12 @@ class StackPrefixCache:
             res = self.gen.export_snapshot_async(self.kv, int(e.device_entry), n_tokens=int(e.n_tokens))
             if res is not None:
                 finish, nbytes = res
-                p = _PendingExport(self._pool().submit(finish), int(nbytes))
+
+                def run(finish=finish):
+                    with self._export_run_lock:
+                        return finish()
+
+                p = _PendingExport(self._pool().submit(run), int(nbytes), run)
                 self._exports[e.key] = p
                 dt = time.perf_counter() - t0
                 self.stats["spills"] += 1
