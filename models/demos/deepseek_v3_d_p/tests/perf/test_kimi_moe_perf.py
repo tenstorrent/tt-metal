@@ -16,12 +16,14 @@ the LoudBox row (2x4 Fabric2D) is record-only.
 """
 
 import os
+import time
 from dataclasses import dataclass, field
 
 import pytest
 from loguru import logger
 
 import ttnn
+from models.common.ci_failure import assert_perf_gate
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_7_config import KimiK27Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
@@ -30,8 +32,6 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     moe_fabric_payload,
     torus_xy_device_params,
 )
-from models.demos.deepseek_v3_d_p.tests.measure.gate import PerfReport, PerfTarget
-from models.demos.deepseek_v3_d_p.tests.measure.trace import TracedStep, time_traced
 from models.demos.deepseek_v3_d_p.tests.pcc.test_ttnn_moe import run_model
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import routed_expert_combine_overlap_arg
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
@@ -41,6 +41,7 @@ from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS
 from models.demos.deepseek_v3_d_p.utils.perf_utils import adjust_margin_for_ddr_speed
 from models.demos.deepseek_v3_d_p.utils.prefill_summary_utils import emit_perf_metrics
 from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import require_high_power
+from models.demos.deepseek_v3_d_p.utils.sub_device_trace import SubDeviceTraceController
 
 # 640 tokens/chip: the 5k production prefill chunk on SP=8.
 _SEQ_LEN_PER_CHIP = PREFILL_CHUNK_TOKENS_PER_CHIP
@@ -119,6 +120,15 @@ def _perf_params():
     ]
 
 
+def _replay_ns(mesh_device, copy_tid, controller):
+    """Wall-clock of one segmented replay; the input copy runs before the clock starts."""
+    ttnn.execute_trace(mesh_device, copy_tid, cq_id=0, blocking=False)
+    ttnn.synchronize_device(mesh_device)
+    start_ns = time.perf_counter_ns()
+    controller.replay()  # ends in synchronize_device
+    return time.perf_counter_ns() - start_ns
+
+
 @pytest.mark.skipif(not is_blackhole(), reason="Kimi prefill MoE requires Blackhole")
 @pytest.mark.timeout(0)
 @pytest.mark.parametrize(
@@ -134,43 +144,46 @@ def test_kimi_moe_perf(variant, case, config_only, mesh_device, device_params, n
     topology = per_axis_topology(device_params["fabric_config"])
     mesh_tag = "8x4 torus-xy" if is_galaxy else f"{mesh_device.shape[0]}x{mesh_device.shape[1]} fabric2d"
 
-    replays = None
+    replays_ns = []
     trace_info = {}
 
     def measure(forward, tt_moe, tt_x):
-        nonlocal replays
-        state = {}
+        controller = SubDeviceTraceController(mesh_device)
+        copy_tid = None
+        capturing = False
+        tt_moe.set_trace_controller(controller)
+        try:
+            # Compile pass (a capture cannot JIT-build kernels). forward() frees its input, hence clone.
+            compile_out, _ = forward(ttnn.clone(tt_x))
+            ttnn.synchronize_device(mesh_device)
+            ttnn.deallocate(compile_out)
 
-        def step():
-            # forward() frees its input: the compile pass gets a clone, the capture the copy trace's buffer.
-            return forward(state.pop("x") if "x" in state else ttnn.clone(tt_x))
+            # forward() frees its input mid-capture, so its address gets reused inside the trace. A
+            # separate one-op trace refreshes that buffer from tt_x before every replay, keeping the
+            # routed input identical across replays.
+            copy_tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+            x = ttnn.clone(tt_x)
+            ttnn.end_trace_capture(mesh_device, copy_tid, cq_id=0)
 
-        def capture_input_refresh():
-            # forward() frees its input mid-capture, so its address gets reused inside the trace. A separate one-op
-            # trace refreshes that buffer from tt_x before every replay, keeping the routed input identical.
-            state["copy_tid"] = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-            try:
-                state["x"] = ttnn.clone(tt_x)
-            finally:  # closed even if the clone fails, so cleanup can sync and release
-                ttnn.end_trace_capture(mesh_device, state["copy_tid"], cq_id=0)
+            controller.begin_capture()
+            capturing = True
+            result = forward(x)
+            controller.end_capture()
+            capturing = False
+            trace_info["segments"] = controller.num_segments
+            trace_info["bytes"] = controller.trace_bytes()
 
-        def detach():
-            if "copy_tid" in state:
-                ttnn.release_trace(mesh_device, state["copy_tid"])
+            for _ in range(max(1, _REPLAYS)):
+                replays_ns.append(_replay_ns(mesh_device, copy_tid, controller))
+            return result
+        finally:
+            if capturing:  # close the open segment so release() runs and the real error surfaces
+                controller.end_capture()
+            controller.release()
+            if copy_tid is not None:
+                ttnn.release_trace(mesh_device, copy_tid)
             tt_moe.set_trace_controller(None)
             tt_moe.release_sub_device_manager()
-
-        with TracedStep(mesh_device, step, attach=tt_moe.set_trace_controller, detach=detach) as traced:
-            traced.capture(after_compile=capture_input_refresh)
-            trace_info["segments"] = traced.controller.num_segments
-            trace_info["bytes"] = traced.controller.trace_bytes()
-            replays = time_traced(
-                traced,
-                samples=max(1, _REPLAYS),
-                estimator="first",
-                prepare=lambda: ttnn.execute_trace(mesh_device, state["copy_tid"], cq_id=0, blocking=False),
-            )
-            return traced.take_output()  # run_model owns the result
 
     run_model(
         variant,
@@ -195,34 +208,47 @@ def test_kimi_moe_perf(variant, case, config_only, mesh_device, device_params, n
         combine_fwd_vc_pages=case.config.MOE_FWD_VC_PAGES,
     )
 
-    assert replays is not None, f"no traced replay was timed for the {case.label} MoE forward"
+    assert replays_ns, f"no traced replay was timed for the {case.label} MoE forward"
 
+    total_ns = replays_ns[0]
     tag = f"{case.label} moe {mesh_tag} traced replay ({case.shape_note})"
     logger.info(
         f"{tag}: {trace_info['segments']} trace segments, {trace_info['bytes'] / 2**20:.2f} MiB trace region "
         f"of {_TRACE_REGION_SIZE / 2**20:.0f} MiB"
     )
+    if len(replays_ns) > 1:
+        logger.info(f"{tag}: replays (ms) " + " ".join(f"{ns / 1e6:.3f}" for ns in replays_ns))
+
     expected_ns = case.expected_ns if is_galaxy else None
-    margin = adjust_margin_for_ddr_speed(case.margin) if expected_ns is not None else case.margin
-
-    def emit(result):
-        replays_ns = [ms * 1e6 for ms in result.samples.values]
-        emit_perf_metrics(
-            f"{case.label.replace('.', '_')}_moe_{mesh_tag.replace(' ', '_')}",
-            f"{tag} perf",
-            {
-                "mesh": mesh_tag,
-                "measured_ns": result.measured * 1e6,
-                "measured_ms": result.measured,
-                "replays_ns": replays_ns,
-                "expected_ns": expected_ns,
-                "perf_margin_pct": None if expected_ns is None else margin * 100.0,
-                "within_band": None if expected_ns is None else result.within,
-            },
-        )
-
-    report = PerfReport(tag, emit)
-    report.add("traced", replays, PerfTarget(None if expected_ns is None else expected_ns / 1e6, margin))
+    margin = None if expected_ns is None else adjust_margin_for_ddr_speed(case.margin)
+    emit_perf_metrics(
+        f"{case.label.replace('.', '_')}_moe_{mesh_tag.replace(' ', '_')}",
+        f"{tag} perf",
+        {
+            "mesh": mesh_tag,
+            "measured_ns": total_ns,
+            "measured_ms": total_ns / 1e6,
+            "replays_ns": replays_ns,
+            "expected_ns": expected_ns,
+            "perf_margin_pct": None if margin is None else margin * 100.0,
+            "within_band": None
+            if expected_ns is None
+            else expected_ns * (1 - margin) <= total_ns <= expected_ns * (1 + margin),
+        },
+    )
     if expected_ns is None:
-        logger.warning(f"{tag}: {replays.estimate:.3f} ms -- REPORT ONLY, not gated")
-    report.finish(skip_unmeasured=False)
+        logger.warning(f"{tag}: {total_ns:,.0f} ns ({total_ns / 1e6:.3f} ms) -- REPORT ONLY, not gated")
+        return
+
+    lower, upper = expected_ns * (1 - margin), expected_ns * (1 + margin)
+    logger.info(
+        f"{tag}: {total_ns:,.0f} ns ({total_ns / 1e6:.3f} ms), expected {expected_ns:,} ns, "
+        f"band [{lower:,.0f}, {upper:,.0f}] (margin +/- {margin * 100:.1f}%)"
+    )
+    assert_perf_gate(
+        lower <= total_ns <= upper,
+        (
+            f"{case.label}: traced replay {total_ns:,.0f} ns outside band [{lower:,.0f}, {upper:,.0f}] "
+            f"(expected {expected_ns:,} ns, margin +/- {margin * 100:.1f}%)"
+        ),
+    )

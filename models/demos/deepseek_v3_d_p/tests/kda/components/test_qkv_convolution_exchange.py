@@ -31,7 +31,7 @@ from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import (
     make_actual_start,
 )
 from models.demos.deepseek_v3_d_p.tests.kda.utils import kda_device_params
-from models.demos.deepseek_v3_d_p.tests.measure.gate import PerfTarget, band_failure
+from models.demos.deepseek_v3_d_p.tests.measure.gate import band_failure
 from models.demos.deepseek_v3_d_p.tests.measure.trace import TracedStep, time_traced
 from models.demos.deepseek_v3_d_p.tt.kda.kda import _HistoryExchange
 from models.demos.deepseek_v3_d_p.tt.kda.state_contract import KDA_CONVOLUTION_PAGE_CHANNELS
@@ -389,11 +389,11 @@ def test_qkv_convolution_exchange_kimi_k3_perf(
         with TracedStep(mesh_device, calls, compile_runs=0) as traced:  # the checked call above compiled
             traced.capture()
             traced.replay()
-            per_trace = time_traced(traced, samples=_PERF_SAMPLES, estimator="median")
-        samples_us = [ms * 1e3 / _PERF_CALLS_PER_TRACE for ms in per_trace.values]
+            per_trace = time_traced(traced, samples=_PERF_SAMPLES)
+        samples_us = [ms * 1e3 / _PERF_CALLS_PER_TRACE for ms in per_trace]
         median_us = statistics.median(samples_us)
         logger.info(f"qkv_causal_conv1d_silu_with_carry Kimi-K3 perf: {median_us:.1f} us per call, {samples_us}")
-        failure = band_failure("per call", median_us, PerfTarget(reference_us, _PERF_MARGIN), unit="us")
+        failure = band_failure("per call", median_us, reference_us, _PERF_MARGIN, unit="us")
         assert_perf_gate(failure is None, failure or "")
     finally:
         for tensor in (actual_start, actual_end):

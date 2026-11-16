@@ -58,12 +58,11 @@ from loguru import logger
 from ttnn.device import is_blackhole
 
 import ttnn
-from models.common.utility_functions import comp_pcc, skip_with_llk_assert, skip_with_watcher
+from models.common.utility_functions import skip_with_llk_assert, skip_with_watcher
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_xy_device_params
-from models.demos.deepseek_v3_d_p.tests.measure.gate import TRACED_MARGIN, UNTRACED_MARGIN, PerfReport, PerfTarget
-from models.demos.deepseek_v3_d_p.tests.measure.timing import time_untraced
-from models.demos.deepseek_v3_d_p.tests.measure.trace import TracedStep, time_traced
+from models.demos.deepseek_v3_d_p.tests.measure.gate import MARGIN, gate
+from models.demos.deepseek_v3_d_p.tests.measure.trace import TracedStep, measure_host
 from models.demos.deepseek_v3_d_p.tests.sparse_mla.sparse_mla_mesh import detect_num_devices
 from models.demos.deepseek_v3_d_p.tests.sparse_mla.sparse_mla_plugin import is_marker_explicitly_selected
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
@@ -108,8 +107,6 @@ PERF_MARGIN = 0.03
 # Host-time targets (ms), keyed by (box, scenario, mode), at the default sizes; warm and long only (cold captures one
 # trace per start). Report-only until calibrated from CI; the device-time gate above stays until then.
 HOST_PERF_TARGETS_MS: dict[tuple[str, str, str], float] = {}
-HOST_PERF_MARGIN = {"untraced": UNTRACED_MARGIN, "traced": TRACED_MARGIN}
-TRACE_PCC = 0.9999
 
 SCENARIOS = {
     "warm": {"cache": CACHE_TOKENS, "loop": False},
@@ -320,37 +317,17 @@ def _profile_forward(mesh_device, run_fn) -> dict:
     return {"programs": programs, "host_duration_ns": host_duration_ns}
 
 
-def _traced(mesh_device, mla, run_fn) -> TracedStep:
-    return TracedStep(
-        mesh_device, run_fn, attach=mla.set_trace_controller, detach=lambda: mla.set_trace_controller(None)
-    )
-
-
 def _profile_traced_forward(mesh_device, mla, run_fn) -> dict:
     """Compile/capture/warm/measure one forward and release every trace allocation."""
-    with _traced(mesh_device, mla, run_fn) as traced:
+    with TracedStep(
+        mesh_device, run_fn, attach=mla.set_trace_controller, detach=lambda: mla.set_trace_controller(None)
+    ) as traced:
         traced.capture()
         ttnn.synchronize_device(mesh_device)
         _profile_forward(mesh_device, traced.replay)  # exclude first-replay jitter
         measured = _profile_forward(mesh_device, traced.replay)
         measured["trace_segments"] = traced.controller.num_segments
         return measured
-
-
-def _host_times(mesh_device, mla, run_fn):
-    """Host ms of the forward, untraced and traced (tests/measure defaults), and the minimum per-device PCC of the
-    traced output against the last timed eager output."""
-    untraced, eager_out = time_untraced(run_fn, lambda: ttnn.synchronize_device(mesh_device), keep_last=True)
-    try:
-        eager = [ttnn.to_torch(t) for t in ttnn.get_device_tensors(ttnn.from_device(eager_out))]
-    finally:
-        ttnn.deallocate(eager_out)
-    with _traced(mesh_device, mla, run_fn) as traced:
-        traced.capture()
-        traced_samples = time_traced(traced)
-        replayed = [ttnn.to_torch(t) for t in ttnn.get_device_tensors(ttnn.from_device(traced.output))]
-    trace_pcc = min(comp_pcc(a, b, TRACE_PCC)[1] for a, b in zip(eager, replayed))
-    return untraced, traced_samples, trace_pcc
 
 
 def _programs_to_frame(forward: dict) -> pd.DataFrame:
@@ -598,29 +575,21 @@ def test_mla_chunked_perf(request, mesh_device, device_params, scenario, variant
     if not is_cold:
         clock = hold_full_cpu_clock()
         request.addfinalizer(clock.restore)
-        print(f"kimi_k3 MLA {box} {scenario} host: {clock.status}")
-        untraced, traced, trace_pcc = _host_times(mesh_device, mla, lambda: one_forward(cache))
-
-        def emit(result):
-            emit_perf_metrics(
-                f"kimi_k3_mla_{box.lower()}_{scenario}_host_{result.mode}",
-                f"Kimi-K3 MLA {box} {scenario} host ({result.mode})",
-                {
-                    "box": box,
-                    "scenario": scenario,
-                    "mode": result.mode,
-                    "samples_ms": result.samples.values,
-                    "measured_ms": result.measured,
-                    "target_ms": result.target.ms,
-                    "margin_pct": result.target.margin * 100.0,
-                    "within_band": result.within if result.target.ms is not None else None,
-                },
-            )
-
-        host = PerfReport(f"kimi_k3 MLA {box} {scenario}", emit)
+        untraced, traced, trace_pcc = measure_host(
+            mesh_device,
+            lambda: one_forward(cache),
+            attach=mla.set_trace_controller,
+            detach=lambda: mla.set_trace_controller(None),
+        )
+        host = {}
         for mode, samples in (("untraced", untraced), ("traced", traced)):
             target = HOST_PERF_TARGETS_MS.get((box, scenario, mode)) if DEFAULT_SIZES else None
-            host.add(mode, samples, PerfTarget(target, HOST_PERF_MARGIN[mode]))
+            host[mode] = (samples, min(samples), target, MARGIN[mode])
+            emit_perf_metrics(
+                f"kimi_k3_mla_{box.lower()}_{scenario}_host_{mode}",
+                f"Kimi-K3 MLA {box} {scenario} host ({mode})",
+                {"box": box, "scenario": scenario, "mode": mode, "samples_ms": samples, "target_ms": target},
+            )
     target_ns = PERF_TARGETS.get(box, {}).get(scenario)
     measured_ns = by_op["inclusive_ns"].sum()
     if target_ns is None:
@@ -631,10 +600,8 @@ def test_mla_chunked_perf(request, mesh_device, device_params, scenario, variant
         limit_ns = target_ns * (1 + PERF_MARGIN)
         logger.info(f"{box} {scenario} device time: {measured_ns:,.0f} ns; limit: {limit_ns:,.0f} ns")
         assert measured_ns <= limit_ns, f"{box} {scenario} device time {measured_ns:,.0f} ns exceeds {limit_ns:,.0f} ns"
-    if host is not None:
-        correctness = (
-            [f"traced output differs from untraced: min per-device PCC {trace_pcc:.6f}"]
-            if trace_pcc < TRACE_PCC
-            else []
+    if host is not None:  # report-only until HOST_PERF_TARGETS_MS has targets; the device gate above decides
+        pcc_failure = (
+            f"traced output differs from untraced: min per-device PCC {trace_pcc:.6f}" if trace_pcc < 0.9999 else None
         )
-        host.finish(correctness, skip_unmeasured=False)  # the device gate above decides until host targets exist
+        gate(f"kimi_k3 MLA {box} {scenario} host", host, [pcc_failure], skip_unmeasured=False)

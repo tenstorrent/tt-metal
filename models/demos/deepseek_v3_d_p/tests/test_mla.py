@@ -19,7 +19,7 @@ from ttnn.device import is_blackhole
 
 import ttnn
 from models.common.ci_failure import assert_perf_gate
-from models.common.utility_functions import comp_pcc, hf_cache_layer_kv
+from models.common.utility_functions import hf_cache_layer_kv
 from models.demos.deepseek_v3_d_p.reference.mla_reference import create_mla_reference
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     fabric2d_device_params,
@@ -28,15 +28,8 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     torus_y_device_params,
 )
 from models.demos.deepseek_v3_d_p.tests.measure.determinism import RUNS, check_determinism
-from models.demos.deepseek_v3_d_p.tests.measure.gate import (
-    TRACED_MARGIN,
-    UNTRACED_MARGIN,
-    PerfReport,
-    PerfTarget,
-    band_failure,
-)
-from models.demos.deepseek_v3_d_p.tests.measure.timing import time_untraced
-from models.demos.deepseek_v3_d_p.tests.measure.trace import TracedStep, time_traced
+from models.demos.deepseek_v3_d_p.tests.measure.gate import MARGIN, band_failure, gate
+from models.demos.deepseek_v3_d_p.tests.measure.trace import TracedStep, measure_host
 from models.demos.deepseek_v3_d_p.tests.reference_runners import run_reference_mla
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import num_full_indexer_layers, resolve_has_indexer
@@ -540,7 +533,6 @@ K3_CHUNKED_RT_PERF_MARGIN = 0.03
 # Host-time targets (ms) for the same forward, untraced and traced. Report-only until calibrated from CI; the
 # realtime-profiler gate above cannot see sub-device overlap and goes once these exist.
 K3_CHUNKED_HOST_TARGETS_MS = {"untraced": None, "traced": None}
-K3_TRACE_PCC = 0.9999
 # The determinism check and the host-time gate replay a captured forward, so these meshes reserve a trace region.
 _CHUNKED_DEVICE_PARAMS = {"l1_small_size": 1152, "trace_region_size": 16 * 1024 * 1024}
 
@@ -557,24 +549,6 @@ def _rt_profile_forward_ns(mesh_device, run_fn):
         duration_ns = float(record["duration_ns"])
         per_program[runtime_id] = max(per_program.get(runtime_id, 0.0), duration_ns)
     return result, sum(per_program.values())
-
-
-def _host_times(mesh_device, mla_tt, forward):
-    """Host ms of `forward`, untraced and traced (tests/measure defaults), and the minimum per-device PCC of the traced
-    output against the last timed eager output."""
-    untraced, eager_out = time_untraced(forward, lambda: ttnn.synchronize_device(mesh_device), keep_last=True)
-    try:
-        eager = [ttnn.to_torch(t) for t in ttnn.get_device_tensors(ttnn.from_device(eager_out))]
-    finally:
-        ttnn.deallocate(eager_out)
-    with TracedStep(
-        mesh_device, forward, attach=mla_tt.set_trace_controller, detach=lambda: mla_tt.set_trace_controller(None)
-    ) as traced:
-        traced.capture()
-        traced_samples = time_traced(traced)
-        replayed = [ttnn.to_torch(t) for t in ttnn.get_device_tensors(ttnn.from_device(traced.output))]
-    trace_pcc = min(comp_pcc(a, b, K3_TRACE_PCC)[1] for a, b in zip(eager, replayed))
-    return {"untraced": untraced, "traced": traced_samples, "trace_pcc": trace_pcc}
 
 
 def _run_chunked_prefill(
@@ -927,7 +901,12 @@ def _run_chunked_prefill(
                 profiled_ns += fwd_ns
                 logger.info(f"  user {u} iter {i}: forward {fwd_ns / 1e6:.3f} ms (realtime profiler)")
                 if host_times is not None:
-                    host_times.update(_host_times(mesh_device, mla_tt, _forward))
+                    host_times["untraced"], host_times["traced"], host_times["trace_pcc"] = measure_host(
+                        mesh_device,
+                        _forward,
+                        attach=mla_tt.set_trace_controller,
+                        detach=lambda: mla_tt.set_trace_controller(None),
+                    )
             else:
                 tt_out = _forward()
             out_flat = ttnn.to_torch(
@@ -1536,7 +1515,6 @@ def test_mla_chunked_perf_check(request, mesh_device, device_params, variant):
     topology = per_axis_topology(device_params["fabric_config"])
     clock = hold_full_cpu_clock()
     request.addfinalizer(clock.restore)
-    print(f"kimi_k3 MLA chunked 50k+5k host: {clock.status}")
     host = {}
     total_ns = _run_chunked_prefill(
         request,
@@ -1548,9 +1526,7 @@ def test_mla_chunked_perf_check(request, mesh_device, device_params, variant):
         prefill_len=50 * 1024,
         host_times=host,
     )
-    device_failure = band_failure(
-        "device time", total_ns / 1e6, PerfTarget(K3_CHUNKED_RT_PERF_NS / 1e6, K3_CHUNKED_RT_PERF_MARGIN)
-    )
+    device_failure = band_failure("device time", total_ns / 1e6, K3_CHUNKED_RT_PERF_NS / 1e6, K3_CHUNKED_RT_PERF_MARGIN)
     logger.info(
         f"kimi_k3 chunked 50k+5k realtime perf: {total_ns:,.0f} ns ({total_ns / 1e6:.3f} ms), "
         f"expected {K3_CHUNKED_RT_PERF_NS:,} ns ±{K3_CHUNKED_RT_PERF_MARGIN:.0%}"
@@ -1566,15 +1542,15 @@ def test_mla_chunked_perf_check(request, mesh_device, device_params, variant):
             "expected_ns": K3_CHUNKED_RT_PERF_NS,
             "perf_margin_pct": K3_CHUNKED_RT_PERF_MARGIN * 100.0,
             "within_band": device_failure is None,
-            "host_untraced_ms": host["untraced"].estimate,
-            "host_traced_ms": host["traced"].estimate,
+            "host_untraced_ms": min(host["untraced"]),
+            "host_traced_ms": host["traced"][0],
         },
     )
-    report = PerfReport("kimi_k3 MLA chunked 50k+5k host")
-    for mode, margin in (("untraced", UNTRACED_MARGIN), ("traced", TRACED_MARGIN)):
-        report.add(mode, host[mode], PerfTarget(K3_CHUNKED_HOST_TARGETS_MS[mode], margin))
-    assert (
-        host["trace_pcc"] >= K3_TRACE_PCC
-    ), f"traced output differs from untraced: min per-device PCC {host['trace_pcc']:.6f}"
     assert_perf_gate(device_failure is None, device_failure or "")
-    report.finish(skip_unmeasured=False)  # the device gate above decides until host targets exist
+    pcc_failure = (
+        f"traced output differs from untraced: min per-device PCC {host['trace_pcc']:.6f}"
+        if host["trace_pcc"] < 0.9999
+        else None
+    )
+    results = {m: (host[m], min(host[m]), K3_CHUNKED_HOST_TARGETS_MS[m], MARGIN[m]) for m in ("untraced", "traced")}
+    gate("kimi_k3 MLA chunked 50k+5k host", results, [pcc_failure], skip_unmeasured=False)  # report-only for now

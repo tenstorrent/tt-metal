@@ -16,7 +16,7 @@ test_sparse_mla_perf: the CI gate. Warm and long with the production scaled-FP8 
 GATE_CASES, each at its model's fabric packet size: K3.1 (last DSA layer's slot of 24), GLM-5.3 (last full indexer
 layer) and a GLM-5.3 shared layer (no indexer; reuses that layer's top-k). Untraced: fastest of SAMPLES calls after
 WARMUP discarded ones (tests/measure). Traced: one timed replay of the captured trace. Each (case, box, scenario, mode)
-is gated two-sided against PERF_TARGETS_MS ± PERF_MARGIN[mode] (a case without targets only reports), and the traced
+is gated two-sided against PERF_TARGETS_MS ± MARGIN[mode] (a case without targets only reports), and the traced
 output must match the untraced one (one extra untimed run of each, for triage). Each layer runs standalone (no
 next-layer KV prefetch overlapped with its attention); the shared layer reuses its push plan, as it would inside a
 stage.
@@ -44,7 +44,7 @@ from models.demos.deepseek_v3_d_p.tests.sparse_mla.perf_cases import (
     detect_box,
     gate_params,
 )
-from models.demos.deepseek_v3_d_p.tests.measure.gate import TRACED_MARGIN, UNTRACED_MARGIN, PerfReport, PerfTarget
+from models.demos.deepseek_v3_d_p.tests.measure.gate import MARGIN, band_failure, gate
 from models.demos.deepseek_v3_d_p.tests.measure.timing import time_untraced
 from models.demos.deepseek_v3_d_p.tests.measure.trace import TracedStep, time_traced
 from models.demos.deepseek_v3_d_p.tests.sparse_mla.sparse_mla_mesh import detect_num_devices
@@ -89,8 +89,6 @@ PERF_TARGETS_MS = {
     for case, row in rows.items()
     for (scenario, mode), ms in zip([(s, m) for s in SCENARIO_CACHE_TOKENS for m in MODES], row)
 }
-# Both modes are gated two-sided. Untraced is host-bound and takes the fastest sample, so it gets the wider band.
-PERF_MARGIN = {"untraced": UNTRACED_MARGIN, "traced": TRACED_MARGIN}
 # Traced output must match the untraced output of the same forward.
 TRACE_PCC = 0.9999
 CI_RUN = os.environ.get("CI") == "true"
@@ -101,8 +99,8 @@ def _device_tensors(tensor):
 
 
 def _time_untraced(mesh_device, case, start, repeat=None):
-    """Untraced samples (perf gate defaults) and the last timed forward's per-device output; appends one more, untimed
-    forward's output to `repeat`, if given."""
+    """Untraced samples (ms) and the last timed forward's per-device output; appends one more, untimed forward's
+    output to `repeat`, if given."""
     samples, out = time_untraced(
         lambda: case.forward(start), lambda: ttnn.synchronize_device(mesh_device), keep_last=True
     )
@@ -116,8 +114,7 @@ def _time_untraced(mesh_device, case, start, repeat=None):
 
 
 def _time_traced(mesh_device, case, start, repeat=None):
-    """One timed replay (perf gate default) and the trace's per-device output; replays once more, untimed, into `repeat`,
-    if given."""
+    """One timed replay (ms) and the trace's per-device output; replays once more, untimed, into `repeat`, if given."""
     with TracedStep(
         mesh_device,
         lambda: case.forward(start),
@@ -173,35 +170,31 @@ def test_sparse_mla_perf(request, mesh_device, device_params, variant, case_name
         return min(comp_pcc(a, b, TRACE_PCC)[1] for a, b in zip(xs, ys))
 
     trace_pcc = min_pcc(eager_out, traced_out)
-
-    def emit(result):
+    results = {}
+    for mode in MODES:
+        measured, target = min(samples[mode]), PERF_TARGETS_MS.get((case_name, box, scenario, mode))
+        results[mode] = (samples[mode], measured, target, MARGIN[mode])
         emit_perf_metrics(
-            f"{case_name.replace('-', '_')}_sparse_mla_{box.lower().replace(' ', '_')}_{scenario}_{result.mode}",
-            f"{label} ({result.mode})",
+            f"{case_name.replace('-', '_')}_sparse_mla_{box.lower().replace(' ', '_')}_{scenario}_{mode}",
+            f"{label} ({mode})",
             {
                 "box": box,
                 "mesh": f"{BOX.mesh[0]}x{BOX.mesh[1]}",
                 "sp_axis": BOX.sp_axis,
                 "scenario": scenario,
-                "mode": result.mode,
+                "mode": mode,
                 "chunk_tokens": chunk,
                 "cache_tokens": cache,
                 "fabric": device_params["fabric_config"].name,
                 "fabric_payload_bytes": model_fabric_payload(variant.name),
                 "kv_cache_format": "scaled_fp8",
                 "weights": "random",
-                "samples_ms": result.samples.values,
-                "measured_ms": result.measured,
-                "target_ms": result.target.ms,
-                "margin_pct": result.target.margin * 100.0,
-                "within_band": result.within,
+                "samples_ms": samples[mode],
+                "measured_ms": measured,
+                "target_ms": target,
+                "margin_pct": MARGIN[mode] * 100.0,
+                "within_band": target is not None and band_failure(mode, measured, target, MARGIN[mode]) is None,
             },
-        )
-
-    report = PerfReport(label, emit)
-    for mode in MODES:
-        report.add(
-            mode, samples[mode], PerfTarget(PERF_TARGETS_MS.get((case_name, box, scenario, mode)), PERF_MARGIN[mode])
         )
     correctness = []
     if trace_pcc < TRACE_PCC:
@@ -211,7 +204,7 @@ def test_sparse_mla_perf(request, mesh_device, device_params, variant, case_name
             f"traced output differs from untraced: min per-device PCC {trace_pcc:.6f} (eager vs eager "
             f"{min_pcc(eager_repeat[0], eager_out):.6f}, replay vs replay {min_pcc(traced_repeat[0], traced_out):.6f})"
         )
-    report.finish(correctness)
+    gate(label, results, correctness)
 
 
 # ============================================================================
@@ -309,10 +302,7 @@ def test_mla_chunked_perf(
     if scenario != "cold":
         untraced, _ = _time_untraced(mesh_device, case, cache)
         traced, _ = _time_traced(mesh_device, case, cache)
-        print(
-            f"\n{label}: untraced {untraced.fastest:.3f} ms (fastest of {len(untraced.values)}), "
-            f"traced {traced.values[0]:.3f} ms"
-        )
+        print(f"\n{label}: untraced {min(untraced):.3f} ms (fastest of {len(untraced)}), traced {traced[0]:.3f} ms")
         return
 
     # cold: one untimed fill compiles every start; then one timed untraced fill, then each chunk traced.
@@ -327,7 +317,7 @@ def test_mla_chunked_perf(
         ttnn.synchronize_device(mesh_device)
         untraced_rows.append((time.perf_counter() - t0) * 1e3)
         ttnn.deallocate(out)
-    traced_rows = [_time_traced(mesh_device, case, start)[0].values[0] for start in starts]
+    traced_rows = [_time_traced(mesh_device, case, start)[0][0] for start in starts]
     rows = list(zip(starts, untraced_rows, traced_rows))
     print(
         f"\n{label}: {len(starts)} chunks, untraced {sum(r[1] for r in rows):.3f} ms, "

@@ -69,7 +69,7 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     torus_xy_device_params,
     tp_axis_is_wrapped,
 )
-from models.demos.deepseek_v3_d_p.tests.measure.gate import PerfTarget, band_failure
+from models.demos.deepseek_v3_d_p.tests.measure.gate import band_failure
 from models.demos.deepseek_v3_d_p.tests.measure.trace import TracedStep
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res import TtAttnRes
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res_stream import BLOCK_SIZE, TtAttnResWalk
@@ -136,7 +136,7 @@ def _perf_reference_e2e_us(layout: str, mode: str) -> dict[str, float]:
 
 
 def _assert_within_margin(what: str, measured_us: float, reference_us: float, margin: float) -> None:
-    failure = band_failure(what, measured_us, PerfTarget(reference_us, margin), unit="us")
+    failure = band_failure(what, measured_us, reference_us, margin, unit="us")
     assert_perf_gate(failure is None, failure or "")
 
 
@@ -194,8 +194,7 @@ class _Prepared:
             ttnn.synchronize_device(mesh_device)
             self.call = fn
             return
-        # fn's results are its own to free; the trace keeps its captured buffers until release().
-        step = TracedStep(mesh_device, fn, compile_runs=2, release=lambda _: None)
+        step = TracedStep(mesh_device, fn, compile_runs=2)
         try:
             step.capture()
             step.replay()
