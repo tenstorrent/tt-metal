@@ -862,6 +862,7 @@ rk_timeout_say() {
 rk_glx_evidence() {
   local f=${1%.log}_pre.txt miss sh trays t ipmi=${TRAY_REPRO_IPMITOOL:-ipmitool} su=() w=${TRAY_REPRO_EVID_S:-20}
   miss=$(rk_missing); sh=$(rk_short)
+  RK_GLX_MISS=$miss   # this recount's missing chips, as rk_missing: fl_bb_pv_run names each in a DROP line
   [ -n "$miss$sh" ] || return 0
   [ "$(id -u)" = 0 ] || su=(sudo -n)
   # each tray with chips missing, by tray 1-4 and BDF; a tray at 0 of its chips (unpowered or empty) is named so, and the
@@ -2445,7 +2446,9 @@ if [ "$KD_ON" = 1 ] && { [ "$RK_RC" = 9 ] || grep -aq '^RESULT: INCOMPLETE' "$OU
   printf '%s; %s\n' "$(cat "$OUT/result.line")" "$(kd_tag)" > "$OUT/result.line.kd" && mv "$OUT/result.line.kd" "$OUT/result.line"   # the known drop, named too
 fi
 [ -n "$FLEET" ] && { [ "$RK_RC" = 9 ] || [ -n "$RS_BUDGET_INC" ]; } && fl_vd_sum fin   # finished stages' VERDICT lines, then what was not reached, before RESULT: INCOMPLETE
-_r=$(if [ -n "$FLEET" ]; then fl_result_say "$OUT/result.line"; else cat "$OUT/result.line"; fi); echo "$_r; $(pp_tag)$(tdp_tag)${FL_BB_LDLINE:+; $FL_BB_LDLINE}${SR_TAG:-}${FL_PV_SKIP:+; power virus SKIPPED (another process held a Tenstorrent device, or the holder scan was incomplete; see the WARNING above)}${FL_PV_TTXHIT:+; power virus SKIPPED (no run-ttx; see the WARNING above)}${TRAY_STUB:+; STUB MODE: fake devices, not a real test}${TRAY_INJECT:+; TRAY_INJECT active: not a verdict}"; RS_DONE=1   # SR_TAG: the sudo status (lib/sudo_route.sh); power_policy on the RESULT line; tdp_tag: --tdp refused by a gate
+_pvt=${FL_PV_SKIP:+; power virus WARNING (it ran but was stopped early, or its telemetry collector did not come back; see the WARNING above)}   # only the guard's skip (FL_PV_NOTRUN) is NOT RUN
+[ -z "${FL_PV_NOTRUN:-}" ] || _pvt="; power virus SKIPPED, NOT RUN (another process held a Tenstorrent device, or the holder scan was incomplete; see the WARNING above)"
+_r=$(if [ -n "$FLEET" ]; then fl_result_say "$OUT/result.line"; else cat "$OUT/result.line"; fi); echo "$_r; $(pp_tag)$(tdp_tag)${FL_BB_LDLINE:+; $FL_BB_LDLINE}${SR_TAG:-}${_pvt:-}${FL_PV_TTXHIT:+; power virus SKIPPED, NOT RUN (no run-ttx; see the WARNING above)}${TRAY_STUB:+; STUB MODE: fake devices, not a real test}${TRAY_INJECT:+; TRAY_INJECT active: not a verdict}"; RS_DONE=1   # SR_TAG: the sudo status (lib/sudo_route.sh); power_policy on the RESULT line; tdp_tag: --tdp refused by a gate
 [ -z "$FLEET" ] && [ -n "${RK_RESET_FAILS:-}" ] && echo "$RK_RESET_FAILS"   # --mode prints them with its findings
 pinpoint_summary   # the NUMERIC-PINPOINT VERDICT lines, if any
 gd_summary   # GDDR WARN lines (new uncorrected errors, a corrected-error rise) and one GDDR: line
