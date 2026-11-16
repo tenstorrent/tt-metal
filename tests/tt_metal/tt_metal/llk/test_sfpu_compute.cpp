@@ -553,6 +553,28 @@ const map<std::string, std::map<std::string, std::string>> sfpu_binary_op_to_op_
      {{"SFPU_OP_BINARY_MUL_INT_INCLUDE", "1"},
       {"SFPU_OP_INIT_0", "mul_int_tile_init<DataFormat::Int32>();"},
       {"SFPU_OP_CHAIN_0", "mul_int_tile<DataFormat::Int32>(0, 1, 0);"}}},
+    // quant / requant / dequant: both operands are staged as raw 32-bit words in Int32 L1 tiles and
+    // reach DEST unchanged through unpack-to-dest, which is what lets the kernel read operand A as
+    // fp32 (quant) or int32 (requant / dequant) while operand B stays the fp32 scale. The zero point
+    // is an fp32 bit pattern: 3.0f, which dequant takes negated per its init contract.
+    {"quant",
+     {{"SFPU_OP_BINARY_QUANT_INCLUDE", "1"},
+      {"SFPU_OP_INIT_0", "quant_tile_init(0x40400000u);"},
+      {"SFPU_OP_CHAIN_0", "quant_tile(0, 1, 0);"}}},
+    {"requant",
+     {{"SFPU_OP_BINARY_QUANT_INCLUDE", "1"},
+      {"SFPU_OP_INIT_0", "requant_tile_init(0x40400000u);"},
+      {"SFPU_OP_CHAIN_0", "requant_tile(0, 1, 0);"}}},
+    // Same op with the second init argument in play: an output zero point of 2.0f, which the kernel
+    // has to end up adding on top of the 3.0f zero point.
+    {"requant_out_zero_point",
+     {{"SFPU_OP_BINARY_QUANT_INCLUDE", "1"},
+      {"SFPU_OP_INIT_0", "requant_tile_init(0x40400000u, 0x40000000u);"},
+      {"SFPU_OP_CHAIN_0", "requant_tile(0, 1, 0);"}}},
+    {"dequant",
+     {{"SFPU_OP_BINARY_QUANT_INCLUDE", "1"},
+      {"SFPU_OP_INIT_0", "dequant_tile_init(0xC0400000u);"},
+      {"SFPU_OP_CHAIN_0", "dequant_tile(0, 1, 0);"}}},
     {"gt_int",
      {{"SFPU_OP_BINARY_GT_INT_INCLUDE", "1"},
       {"SFPU_OP_INIT_0", "gt_int_tile_init<DataFormat::Int32>();"},
@@ -1489,6 +1511,32 @@ std::vector<uint32_t> compute_packed_int32_binary_golden(
     return packed_golden;
 }
 
+// Quant-family binary ops: both operands are raw 32-bit words that unpack-to-dest moves into a
+// 32-bit DEST bit for bit, so the kernel sees the fp32 / int32 values the host staged.
+bool is_quant_binary_sfpu_op(const std::string& op_name) {
+    return op_name == "quant" || op_name == "requant" || op_name == "requant_out_zero_point" || op_name == "dequant";
+}
+
+// The zero point quant_tile_init / requant_tile_init / dequant_tile_init are given (3.0f).
+// requant_out_zero_point also passes 2.0f, which the kernel adds after rounding.
+float quant_zero_point(const std::string& /*op_name*/) { return 3.0f; }
+
+float quant_out_zero_point(const std::string& op_name) { return op_name == "requant_out_zero_point" ? 2.0f : 0.0f; }
+
+// Full int8 range. The kernel rounds to nearest even, then saturates.
+constexpr int32_t quant_out_min = -128;
+constexpr int32_t quant_out_max = 127;
+
+// Pre-rounding values for quant / requant worth pinning down: both ends of the clamp with the ties
+// either side of them, the ties around zero, and the small negatives whose magnitude rounds to
+// zero. Uniform sampling essentially never lands on an exact .5, so without these a kernel that
+// rounded ties away from zero instead of to even would pass.
+constexpr float quant_edge_case_values[] = {
+    -129.0f, -128.5f, -128.25f, -128.0f, -127.75f, -127.5f, -127.25f, -127.0f, -126.5f, -1.5f,
+    -1.0f,   -0.75f,  -0.5f,    -0.25f,  0.0f,     0.25f,   0.5f,     0.75f,   1.0f,    1.5f,
+    126.5f,  127.0f,  127.25f,  127.5f,  127.75f,  128.0f,  128.25f,  128.5f,  129.0f,
+};
+
 // Scalar golden for the unary SFPU ops, computed in float. Both the bf16 and
 // the Float32 paths share this: bf16 wraps the result in bfloat16,
 // Float32 consumes it directly. Keeping the math in one place is what lets the
@@ -2053,6 +2101,33 @@ std::vector<uint32_t> compute_packed_int8_binary_golden(
     }
     return packed_golden;
 }
+
+// Golden for the quant family, in the packed-word form the packer writes: an Int32 word per element
+// for quant / requant, an fp32 bit pattern for dequant. One word in, one word out.
+std::vector<uint32_t> compute_packed_quant_binary_golden(
+    const std::vector<uint32_t>& packed_lhs, const std::vector<uint32_t>& packed_rhs, const std::string& op_name) {
+    TT_FATAL(packed_lhs.size() == packed_rhs.size(), "lhs/rhs packed size mismatch");
+    std::vector<uint32_t> packed_golden(packed_lhs.size());
+    const float zero_point = quant_zero_point(op_name);
+    const float out_zero_point = quant_out_zero_point(op_name);
+    for (size_t i = 0; i < packed_lhs.size(); ++i) {
+        const float scale = std::bit_cast<float>(packed_rhs[i]);
+        // quant takes an fp32 operand A; requant and dequant take an int32 one.
+        const float lhs = op_name == "quant" ? std::bit_cast<float>(packed_lhs[i])
+                                             : static_cast<float>(std::bit_cast<int32_t>(packed_lhs[i]));
+        if (op_name == "dequant") {
+            packed_golden[i] = std::bit_cast<uint32_t>((lhs - zero_point) * scale);
+            continue;
+        }
+        // Requant adds its output zero point after the round, then the result is saturated.
+        const float scaled = lhs * scale + zero_point;
+        const int32_t rounded = static_cast<int32_t>(std::nearbyint(scaled)) + static_cast<int32_t>(out_zero_point);
+        const int32_t result = std::clamp(rounded, quant_out_min, quant_out_max);  // round half to even
+        packed_golden[i] = std::bit_cast<uint32_t>(result);
+    }
+    return packed_golden;
+}
+
 vector<uint32_t> generate_packed_sfpu_input(const unsigned int numel, const std::string& op_name, const int seed) {
     const auto uniform = [&](float lo, float hi) {
         return generate_packed_uniform_random_vector<uint32_t, bfloat16>(lo, hi, numel, seed);
@@ -2219,6 +2294,37 @@ std::pair<vector<uint32_t>, vector<uint32_t>> generate_packed_sfpu_binary_inputs
     if (is_exact_float_binary_op(op_name)) {
         return generate_fp32_dest_float_binary_inputs(numel, op_name, seed);
     }
+    if (is_quant_binary_sfpu_op(op_name)) {
+        // One raw 32-bit word per element. Operand A is fp32 for quant and int32 for requant /
+        // dequant; operand B is always the fp32 scale, kept small and positive. The operand range
+        // is wide enough that a good share of the products land past the output range on both
+        // sides, so the saturating clamp is exercised and not just the linear region.
+        std::mt19937 rng(seed);
+        std::uniform_real_distribution<float> scale_dist(0.01f, 0.05f);
+        std::uniform_real_distribution<float> float_lhs_dist(-6000.0f, 6000.0f);
+        std::uniform_int_distribution<int32_t> int_lhs_dist(-6000, 6000);
+        const bool lhs_is_int = op_name != "quant";
+        vector<uint32_t> lhs(numel), rhs(numel);
+        for (unsigned int i = 0; i < numel; ++i) {
+            lhs[i] =
+                lhs_is_int ? std::bit_cast<uint32_t>(int_lhs_dist(rng)) : std::bit_cast<uint32_t>(float_lhs_dist(rng));
+            rhs[i] = std::bit_cast<uint32_t>(scale_dist(rng));
+        }
+        // Overwrite the front of the buffer with the quant / requant edge cases. A scale of 0.25
+        // steps the pre-rounding value in quarters while keeping operand A an exact integer, which
+        // requant and dequant need. Dequant computes a different expression and just sees these as
+        // more input values.
+        constexpr float edge_scale = 0.25f;
+        constexpr size_t num_edge_cases = sizeof(quant_edge_case_values) / sizeof(quant_edge_case_values[0]);
+        const float zero_point = quant_zero_point(op_name);
+        for (size_t i = 0; i < num_edge_cases && i < numel; ++i) {
+            const float operand_a = (quant_edge_case_values[i] - zero_point) / edge_scale;
+            lhs[i] = lhs_is_int ? std::bit_cast<uint32_t>(static_cast<int32_t>(operand_a))
+                                : std::bit_cast<uint32_t>(operand_a);
+            rhs[i] = std::bit_cast<uint32_t>(edge_scale);
+        }
+        return {lhs, rhs};
+    }
     const auto uniform = [&](float lo, float hi, int s) {
         return generate_packed_uniform_random_vector<uint32_t, bfloat16>(lo, hi, numel, s);
     };
@@ -2375,13 +2481,15 @@ bool is_close_packed_sfpu_output_f32(
 
 bool is_close_packed_sfpu_output(
     const std::vector<uint32_t>& vec_a, const std::vector<uint32_t>& vec_b, const std::string& op_name) {
-    if (op_name == "div_int32") {
+    if (op_name == "div_int32" || op_name == "dequant") {
         return is_close_packed_sfpu_output_f32(vec_a, vec_b, op_name);
     }
+    // quant / requant round to an integer, so their Int32 output words compare exactly.
     if (is_int8_binary_sfpu_op(op_name) || is_int32_binary_sfpu_op(op_name) || is_exact_float_binary_op(op_name) ||
-        op_name == "rsub_binary_rne" || op_name == "binary_max" || op_name == "binary_min" ||
-        op_name == "reshuffle_rows" || op_name == "copy_dest" || op_name == "mask" || op_name == "mask_posinf" ||
-        op_name == "isclose" || op_name.starts_with("fill_rows_")) {
+        (is_quant_binary_sfpu_op(op_name) && op_name != "dequant") || op_name == "rsub_binary_rne" ||
+        op_name == "binary_max" || op_name == "binary_min" || op_name == "reshuffle_rows" || op_name == "copy_dest" ||
+        op_name == "mask" || op_name == "mask_posinf" || op_name == "isclose" ||
+        op_name.starts_with("fill_rows_")) {
         return vec_a == vec_b;
     }
     if (is_exact_unary_sfpu_op(op_name)) {
@@ -3527,18 +3635,21 @@ bool run_sfpu_binary_two_input_buffer(distributed::MeshDevice& mesh_device, cons
 
     const bool is_int8_op = sfpu_util::is_int8_binary_sfpu_op(test_config.sfpu_op);
     const bool is_int32_op = sfpu_util::is_int32_binary_sfpu_op(test_config.sfpu_op);
+    const bool is_quant_op = sfpu_util::is_quant_binary_sfpu_op(test_config.sfpu_op);
     size_t element_size = sizeof(bfloat16);
     if (is_int8_op) {
         element_size = sizeof(int8_t);
-    } else if (is_int32_op) {
-        element_size = sizeof(int32_t);
+    } else if (is_int32_op || is_quant_op) {
+        element_size = sizeof(uint32_t);
     }
     const uint32_t numel = per_buffer_byte_size_input / element_size;
     const int seed = sfpu_test_seed;
     auto [packed_lhs, packed_rhs] = sfpu_util::generate_packed_sfpu_binary_inputs(numel, test_config.sfpu_op, seed);
 
     std::vector<uint32_t> packed_golden;
-    if (is_int8_op) {
+    if (is_quant_op) {
+        packed_golden = sfpu_util::compute_packed_quant_binary_golden(packed_lhs, packed_rhs, test_config.sfpu_op);
+    } else if (is_int8_op) {
         packed_golden = sfpu_util::compute_packed_int8_binary_golden(packed_lhs, packed_rhs, test_config.sfpu_op);
     } else if (is_int32_op) {
         packed_golden = sfpu_util::compute_packed_int32_binary_golden(packed_lhs, packed_rhs, test_config.sfpu_op);
@@ -3645,9 +3756,11 @@ bool run_sfpu_binary_two_input_buffer(distributed::MeshDevice& mesh_device, cons
             },
     };
 
-    // Native Int32 operands reach Dest through unpack-to-dest, not the FPU.
+    // Native Int32 operands reach Dest through unpack-to-dest, not the FPU. The quant family needs
+    // the same route for both operands, since routing one through an FPU datacopy would not leave it
+    // as the raw 32-bit word the kernel reads.
     ComputeHardwareConfig::ComputeUnpackModes unpack_modes{};
-    if (is_int32_op) {
+    if (is_int32_op || test_config.unpack_to_dest) {
         unpack_modes = {
             {IN0_DFB, tt::tt_metal::UnpackMode::UnpackToDest}, {IN1_DFB, tt::tt_metal::UnpackMode::UnpackToDest}};
     }
@@ -4949,14 +5062,18 @@ void run_binary_sfpu_case(
     // (two's-complement) Int32 L1 inputs. div_binary stays bfloat16.
     const bool is_int8_op = unit_tests::sfpu_util::is_int8_binary_sfpu_op(sfpu_op);
     const bool is_int32_op = unit_tests::sfpu_util::is_int32_binary_sfpu_op(sfpu_op);
+    // quant family: raw 32-bit operands in Int32 L1 tiles, unpacked straight into a 32-bit DEST so
+    // the kernel reads the exact fp32 / int32 words the host staged. dequant alone returns fp32.
+    const bool is_quant_op = unit_tests::sfpu_util::is_quant_binary_sfpu_op(sfpu_op);
     tt::DataFormat data_format_input = tt::DataFormat::Float16_b;
     if (is_int8_op) {
         data_format_input = tt::DataFormat::Int8;
-    } else if (is_int32_op) {
+    } else if (is_int32_op || is_quant_op) {
         data_format_input = tt::DataFormat::Int32;
     }
-    tt::DataFormat data_format_output = (is_int8_op || is_int32_op) ? tt::DataFormat::Int32 : tt::DataFormat::Float16_b;
-    if (sfpu_op == "div_int32") {
+    tt::DataFormat data_format_output =
+        (is_int8_op || is_int32_op || is_quant_op) ? tt::DataFormat::Int32 : tt::DataFormat::Float16_b;
+    if (sfpu_op == "div_int32" || sfpu_op == "dequant") {
         data_format_output = tt::DataFormat::Float32;
     }
     const size_t tile_byte_size = tt::tile_size(data_format_input);
@@ -4971,7 +5088,8 @@ void run_binary_sfpu_case(
         .cores = core_range_set,
         .sfpu_op = sfpu_op,
         .approx_mode = false,
-        .en_32bit_dest = en_32bit_dest};
+        .unpack_to_dest = is_quant_op,
+        .en_32bit_dest = en_32bit_dest || is_quant_op};
     log_info(tt::LogTest, "Testing binary SFPU_OP={} num_tiles={} 32bit_dest={}", sfpu_op, num_tiles, en_32bit_dest);
     for (const auto& device : devices) {
         EXPECT_TRUE(unit_tests::compute::sfpu::run_sfpu_binary_two_input_buffer(*device, test_config));
@@ -5014,6 +5132,10 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(1, "atan2"),
         std::make_tuple(1, "add_int"),
         std::make_tuple(1, "mul_int"),
+        std::make_tuple(1, "quant"),
+        std::make_tuple(1, "requant"),
+        std::make_tuple(1, "requant_out_zero_point"),
+        std::make_tuple(1, "dequant"),
         std::make_tuple(1, "gt_int"),
         std::make_tuple(1, "lt_int32"),
         std::make_tuple(1, "le_int32"),
