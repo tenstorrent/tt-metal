@@ -1,7 +1,8 @@
 ---
 # Checkout cost measurement (torrentci git-mirror checkout analysis, 2026-11-16).
-# The job's own workspace came from the checkout init; each job re-packs it
-# and times index-pack, the connectivity walk and checkout under musl
+# The job's own workspace came from the checkout init; each job prints that
+# checkout's phases from .git file times, then re-packs the workspace and
+# times index-pack, the connectivity walk and checkout under musl
 # (alpine/git v2.47.2, today's checkout image) and glibc (Debian trixie git
 # 2.47.3) at the CPU limit given. No triggers: run it by hand.
 jobs:
@@ -32,6 +33,16 @@ jobs:
               echo "fetch_head_source=$(cut -f3 .git/FETCH_HEAD 2>/dev/null | sed 's/.* of //' | sort -u | tr '\n' ' ')"
               git count-objects -v
               echo "refs=$(git for-each-ref | wc -l) commits=$(git rev-list --count HEAD)"
+              echo "== checkout phases from .git mtimes (seconds after git init)"
+              mt() { stat -c '%Y %y' "$1" | awk '{split($3,a,"."); printf "%s.%s", $1, substr(a[2],1,6)}'; }
+              t0=$(mt .git/description)
+              for f in .git/description .git/objects/pack/* .git/FETCH_HEAD .git/refs/remotes/origin/* .git/packed-refs .git/index .git/config; do
+                [ -e "$f" ] || continue
+                echo "$(mt "$f") $f"
+              done | sort -n | awk -v t0="$t0" '{printf "P %7.2f %s\n", $1-t0, $2}'
+              tags=$(ls .git/refs/tags 2>/dev/null | wc -l)
+              newest=$(ls -t .git/refs/tags 2>/dev/null | head -1)
+              [ -n "$newest" ] && echo "P $(mt ".git/refs/tags/$newest" | awk -v t0="$t0" '{printf "%7.2f", $1-t0}') newest loose tag ($tags loose tags)"
               up() { awk '{print $1}' /proc/uptime; }
               cpu() { awk '/^user_usec|^system_usec/{printf "%s ", $2}' /sys/fs/cgroup/cpu.stat 2>/dev/null; }
               measure() {
@@ -86,6 +97,16 @@ jobs:
               echo "fetch_head_source=$(cut -f3 .git/FETCH_HEAD 2>/dev/null | sed 's/.* of //' | sort -u | tr '\n' ' ')"
               git count-objects -v
               echo "refs=$(git for-each-ref | wc -l) commits=$(git rev-list --count HEAD)"
+              echo "== checkout phases from .git mtimes (seconds after git init)"
+              mt() { stat -c '%Y %y' "$1" | awk '{split($3,a,"."); printf "%s.%s", $1, substr(a[2],1,6)}'; }
+              t0=$(mt .git/description)
+              for f in .git/description .git/objects/pack/* .git/FETCH_HEAD .git/refs/remotes/origin/* .git/packed-refs .git/index .git/config; do
+                [ -e "$f" ] || continue
+                echo "$(mt "$f") $f"
+              done | sort -n | awk -v t0="$t0" '{printf "P %7.2f %s\n", $1-t0, $2}'
+              tags=$(ls .git/refs/tags 2>/dev/null | wc -l)
+              newest=$(ls -t .git/refs/tags 2>/dev/null | head -1)
+              [ -n "$newest" ] && echo "P $(mt ".git/refs/tags/$newest" | awk -v t0="$t0" '{printf "%7.2f", $1-t0}') newest loose tag ($tags loose tags)"
               up() { awk '{print $1}' /proc/uptime; }
               cpu() { awk '/^user_usec|^system_usec/{printf "%s ", $2}' /sys/fs/cgroup/cpu.stat 2>/dev/null; }
               measure() {
@@ -140,6 +161,16 @@ jobs:
               echo "fetch_head_source=$(cut -f3 .git/FETCH_HEAD 2>/dev/null | sed 's/.* of //' | sort -u | tr '\n' ' ')"
               git count-objects -v
               echo "refs=$(git for-each-ref | wc -l) commits=$(git rev-list --count HEAD)"
+              echo "== checkout phases from .git mtimes (seconds after git init)"
+              mt() { stat -c '%Y %y' "$1" | awk '{split($3,a,"."); printf "%s.%s", $1, substr(a[2],1,6)}'; }
+              t0=$(mt .git/description)
+              for f in .git/description .git/objects/pack/* .git/FETCH_HEAD .git/refs/remotes/origin/* .git/packed-refs .git/index .git/config; do
+                [ -e "$f" ] || continue
+                echo "$(mt "$f") $f"
+              done | sort -n | awk -v t0="$t0" '{printf "P %7.2f %s\n", $1-t0, $2}'
+              tags=$(ls .git/refs/tags 2>/dev/null | wc -l)
+              newest=$(ls -t .git/refs/tags 2>/dev/null | head -1)
+              [ -n "$newest" ] && echo "P $(mt ".git/refs/tags/$newest" | awk -v t0="$t0" '{printf "%7.2f", $1-t0}') newest loose tag ($tags loose tags)"
               up() { awk '{print $1}' /proc/uptime; }
               cpu() { awk '/^user_usec|^system_usec/{printf "%s ", $2}' /sys/fs/cgroup/cpu.stat 2>/dev/null; }
               measure() {
@@ -194,6 +225,16 @@ jobs:
               echo "fetch_head_source=$(cut -f3 .git/FETCH_HEAD 2>/dev/null | sed 's/.* of //' | sort -u | tr '\n' ' ')"
               git count-objects -v
               echo "refs=$(git for-each-ref | wc -l) commits=$(git rev-list --count HEAD)"
+              echo "== checkout phases from .git mtimes (seconds after git init)"
+              mt() { stat -c '%Y %y' "$1" | awk '{split($3,a,"."); printf "%s.%s", $1, substr(a[2],1,6)}'; }
+              t0=$(mt .git/description)
+              for f in .git/description .git/objects/pack/* .git/FETCH_HEAD .git/refs/remotes/origin/* .git/packed-refs .git/index .git/config; do
+                [ -e "$f" ] || continue
+                echo "$(mt "$f") $f"
+              done | sort -n | awk -v t0="$t0" '{printf "P %7.2f %s\n", $1-t0, $2}'
+              tags=$(ls .git/refs/tags 2>/dev/null | wc -l)
+              newest=$(ls -t .git/refs/tags 2>/dev/null | head -1)
+              [ -n "$newest" ] && echo "P $(mt ".git/refs/tags/$newest" | awk -v t0="$t0" '{printf "%7.2f", $1-t0}') newest loose tag ($tags loose tags)"
               up() { awk '{print $1}' /proc/uptime; }
               cpu() { awk '/^user_usec|^system_usec/{printf "%s ", $2}' /sys/fs/cgroup/cpu.stat 2>/dev/null; }
               measure() {
@@ -248,6 +289,16 @@ jobs:
               echo "fetch_head_source=$(cut -f3 .git/FETCH_HEAD 2>/dev/null | sed 's/.* of //' | sort -u | tr '\n' ' ')"
               git count-objects -v
               echo "refs=$(git for-each-ref | wc -l) commits=$(git rev-list --count HEAD)"
+              echo "== checkout phases from .git mtimes (seconds after git init)"
+              mt() { stat -c '%Y %y' "$1" | awk '{split($3,a,"."); printf "%s.%s", $1, substr(a[2],1,6)}'; }
+              t0=$(mt .git/description)
+              for f in .git/description .git/objects/pack/* .git/FETCH_HEAD .git/refs/remotes/origin/* .git/packed-refs .git/index .git/config; do
+                [ -e "$f" ] || continue
+                echo "$(mt "$f") $f"
+              done | sort -n | awk -v t0="$t0" '{printf "P %7.2f %s\n", $1-t0, $2}'
+              tags=$(ls .git/refs/tags 2>/dev/null | wc -l)
+              newest=$(ls -t .git/refs/tags 2>/dev/null | head -1)
+              [ -n "$newest" ] && echo "P $(mt ".git/refs/tags/$newest" | awk -v t0="$t0" '{printf "%7.2f", $1-t0}') newest loose tag ($tags loose tags)"
               up() { awk '{print $1}' /proc/uptime; }
               cpu() { awk '/^user_usec|^system_usec/{printf "%s ", $2}' /sys/fs/cgroup/cpu.stat 2>/dev/null; }
               measure() {
