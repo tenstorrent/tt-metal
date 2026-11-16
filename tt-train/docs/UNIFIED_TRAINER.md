@@ -321,15 +321,3 @@ Write it in `ttml/datasets/<dataset>.py` and add it to `providers()` in `ttml/da
 What a trainer uses of a provider: `next_batch()`, the next batch of the epoch as host arrays, or `None` once the
 epoch is over; iterating it, which takes the batches left in the epoch; `len()`, the batches of an epoch; and
 `seek(epoch, batch)`, with which a resumed run continues where the run before it stopped.
-
----
-
-## Tests
-
-```bash
-pytest tt-train/tests/python/unified_trainer
-```
-
-Most tests are device-free: the training loop and callbacks on a fake trainer, configs and recipes, data, the PEFT
-mapping and checkpoint files. The tests marked `requires_device` train a tiny random Llama on a device. They check
-that loss decreases and that HF PEFT loads the adapters with the same logits as ttml.
