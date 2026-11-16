@@ -73,7 +73,11 @@ def _host(t, mesh_device):
 
 
 class _KeepPartial:
-    """Stands in for the decode_ar all-reduce: returns the wo partial sum unreduced."""
+    """Stands in for the decode_ar all-reduce: returns the wo partial sum unreduced. It writes no RES40 partial, so
+    both op sequences end in the same wo matmul (_wo_proj)."""
+
+    def out_matmul(self, x, weight, compute_cfg):
+        return None
 
     def all_reduce(self, partial):
         return partial
