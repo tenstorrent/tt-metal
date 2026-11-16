@@ -32,11 +32,21 @@ jobs:
           sparse-checkout: |
             .github/workflows
             tt_metal/tt-llk/perf
+            tt_metal/tt-llk/tests/python_tests/helpers/perf
             tests/pipeline_reorg
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
         with:
           python-version: '3.10'
       - run: pip install pyyaml
+      - name: "Check: build and toolchain"
+        continue-on-error: true
+        timeout-minutes: 5
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DAY: ${{ inputs.date }}
+        run: |
+          python3 tt_metal/tt-llk/perf/toolchain_check.py report --repo "$GITHUB_REPOSITORY" \
+            ${DAY:+--date "${DAY:0:10}"} --out nightly_checks/build.json
       - name: Check and send
         env:
           GH_TOKEN: ${{ github.token }}
