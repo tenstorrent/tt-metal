@@ -230,8 +230,11 @@ tt::tt_metal::ProgramDescriptor MoeHashGateDeviceOperation::ProgramFactory::crea
     compute_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_kernel_desc.core_ranges = all_cores;
     compute_kernel_desc.named_compile_time_args = std::move(compute_named_compile_time_args);
+    // Due to hardware bug (#38306), HiFi4 + fp32_dest_acc_en can sometime produce incorrect results on Wormhole.
+    // Use HiFi3 when fp32_dest_acc_en is True on Wormhole (less likely to give bad results).
     compute_kernel_desc.config = ComputeConfigDescriptor{
-        .math_fidelity = MathFidelity::HiFi4,
+        .math_fidelity =
+            (fp32_dest_acc_en && device->arch() == tt::ARCH::WORMHOLE_B0) ? MathFidelity::HiFi3 : MathFidelity::HiFi4,
         .fp32_dest_acc_en = fp32_dest_acc_en,
         .dst_full_sync_en = false,
         .math_approx_mode = false,
