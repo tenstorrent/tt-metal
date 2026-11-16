@@ -4,7 +4,9 @@ on:
   pull_request:
     types: [labeled, synchronize]
   schedule:
-    - cron: '0 5 * * *'
+    - cron: '0 5 * * 1-6'
+    # Sunday: the same nightly, and every leg measures its tests a second time (same-code control).
+    - cron: '0 5 * * 0'
   workflow_dispatch:
     inputs:
       perf_run_id:
@@ -42,6 +44,11 @@ on:
         description: "Stage 2 without the test limit, for this PR gate run's stage-1 regressions (posts to its PR)"
         required: false
         type: string
+      same_code_control:
+        description: "Nightly mode: every leg measures its tests a second time from the same build"
+        required: false
+        default: false
+        type: boolean
 permissions:
   actions: read
   contents: read
@@ -425,6 +432,8 @@ jobs:
       perf-run-types: ALL_MODES
       upload-to-warehouse: true
       pipeline: nightly
+      stability-check: true
+      same-code-control: ${{ github.event.schedule == '0 5 * * 0' || inputs.same_code_control == true }}
     secrets: inherit
 
   nightly-gate:

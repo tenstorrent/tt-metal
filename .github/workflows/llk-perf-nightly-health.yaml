@@ -37,6 +37,15 @@ jobs:
         with:
           python-version: '3.10'
       - run: pip install pyyaml
+      - name: Stability on the board
+        continue-on-error: true
+        timeout-minutes: 10
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DAY: ${{ inputs.date }}
+        run: |
+          python3 tt_metal/tt-llk/perf/stability_check.py report \
+            --repo "$GITHUB_REPOSITORY" ${DAY:+--date "${DAY:0:10}"} --out nightly_checks/stability.json
       - name: Check and send
         env:
           GH_TOKEN: ${{ github.token }}
