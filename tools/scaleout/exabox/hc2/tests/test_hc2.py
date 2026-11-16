@@ -114,6 +114,8 @@ def test_stub_run_through_glue(tmp_path):
     env = dict(os.environ, HC2_CORE=str(c), HC2_OUT_DIR=str(tmp_path / "out"), TMPDIR=str(tmp_path))
     env.pop("TRAY_MAXUTIL_BIN", None)
     env["FLEET_MAXUTIL_SKIP"] = "hc2 stub test"
+    # every mode ends with a 60 s wait before the fabric open (core default); the 60 s budget below is for the rest
+    env["FLEET_OPEN_DELAY_S"] = "2"
     t = time.monotonic()
     r = subprocess.run(
         ["bash", str(GLUE), "--stub", "--mode=smoke"],
