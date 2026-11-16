@@ -48,14 +48,14 @@ public:
                                                                                        // output will be treated as unsigned int8 format (1b)
     static constexpr Field SrcBUnsigned {RegisterScope::State, 32, 1, 0, 16, 1, 1, 0}; // srcB unsigned mode (valid only for int8 format) When set unpacker
                                                                                        // output will be treated as unsigned int8 format (1b)
-    static constexpr Field p_srcs::SrcA {RegisterScope::State, 32, 1, 0, 17, 4, 1, 0}; // srcA format spec (4b)
+    static constexpr Field SrcA {RegisterScope::State, 32, 1, 0, 17, 4, 1, 0};         // srcA format spec (4b)
 };
 
 class AluFormatSpecReg1
 { // SrcB spec register - matches unpacker1 dst format
 public:
     // Field {scope, word_size, base, word, shamt0, width, count, sec_bits}
-    static constexpr Field p_srcs::SrcB {RegisterScope::State, 32, 1, 0, 21, 4, 1, 0}; // srcB format spec (4b)
+    static constexpr Field SrcB {RegisterScope::State, 32, 1, 0, 21, 4, 1, 0}; // srcB format spec (4b)
 };
 
 class AluFormatSpecReg2

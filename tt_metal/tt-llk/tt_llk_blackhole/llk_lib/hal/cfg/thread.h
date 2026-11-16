@@ -73,8 +73,8 @@ class ZSelector
 {
 };
 
-inline constexpr SrcASelector p_srcs::SrcA {};
-inline constexpr SrcBSelector p_srcs::SrcB {};
+inline constexpr SrcASelector SrcA {};
+inline constexpr SrcBSelector SrcB {};
 inline constexpr SrcSelector Src {};
 inline constexpr DestSelector Dest {};
 inline constexpr FidelitySelector Fidelity {};
