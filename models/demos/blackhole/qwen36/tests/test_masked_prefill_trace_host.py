@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Host-only (no device): the captured masked-bucket prefill of Qwen36Model (tt/model.py prepare_prefill_traces_masked,
 record_prefill_traces_masked, _replay_masked_trace) and the GDN inputs that make that forward trace-safe
-(gdn.tp.PrefillMasks, PrefillCheckpoint.buffers, TPGatedDeltaNet.forward_prefill ``masks``).
+(gdn.tp.PrefillMasks, PrefillCheckpoint.buffers, TPGatedDeltaNet.forward_prefill ``masks``), and the split delta rule
+that computes a prefill checkpoint (TPGatedDeltaNet._delta_rule_split).
 
 A masked-bucket forward is the prefill of a prompt that fits one 2048-token chunk, and of the partial last chunk of a
 longer one. Eagerly it builds its length-dependent inputs on the host (tokens, RoPE rows, page tables, the GDN masks of
@@ -23,7 +24,7 @@ from models.demos.blackhole.qwen36.tt import model as qwen36_model
 from models.demos.blackhole.qwen36.tt import tp_common as tpc
 from models.demos.blackhole.qwen36.tt.gdn import fused_chunk
 from models.demos.blackhole.qwen36.tt.gdn import tp as gdn_tp
-from models.demos.blackhole.qwen36.tt.gdn.tp import PrefillCheckpoint, PrefillMasks, TPGatedDeltaNet
+from models.demos.blackhole.qwen36.tt.gdn.tp import PrefillMasks, TPGatedDeltaNet
 from models.experimental.gated_attention_gated_deltanet.tt import ttnn_gated_deltanet
 
 KCONV = 4
@@ -373,32 +374,140 @@ def test_gdn_prefill_with_masks_is_the_masked_forward_without_host_writes(monkey
 
 
 def test_gdn_traced_checkpoint_goes_into_the_persistent_buffers(monkeypatch):
-    """A checkpoint in persistent buffers: the checkpoint call's state and history are copied into the layer's
-    checkpoint buffers and freed, and the layer holds the buffers; an eager checkpoint keeps its own tensors."""
+    """A checkpoint in persistent buffers: forward_prefill runs the delta rule through _delta_rule_split with the
+    device masks, copies the checkpoint state it returns and the conv history into the layer's checkpoint buffers and
+    frees them, and the layer holds the buffers; an eager checkpoint keeps its own tensors."""
     log = []
     dn = _gdn_layer(monkeypatch, log)
+
+    def split(delta_fn, call, qkvbg, init_state, checkpoint, valid_len, masks):
+        log.append(("split", checkpoint.length, valid_len, masks is not None, "masks" in call, init_state.name))
+        return Dev("o"), Dev("final_state"), Dev("ck_rec")
+
+    dn._delta_rule_split = split
     T = 256
     x = Dev("x", (1, T, 640))
     masks = SimpleNamespace(T=T, conv_select=Dev("SEL"), gate_mask=Dev("GATE"), qkv_mask=Dev("QKV"))
     bufs = (Dev("ck_rec_buf"), Dev("ck_conv_buf"))
     dn.prefill_checkpoint_buffers = bufs
-    ck = SimpleNamespace(length=None, in_buffers=True, gate_mask=Dev("CK_GATE"), conv_select=Dev("CK_SEL"))
+    ck = SimpleNamespace(length=128, in_buffers=True, conv_select=Dev("CK_SEL"))
     dn.forward_prefill(x, masks=masks, checkpoint=ck)
-    assert ("delta", None, None, True) in log
+    assert ("split", 128, None, True, False, "rec_state") in log and not any(e[0] == "delta" for e in log)
     assert ("copy", "ck_rec", "ck_rec_buf") in log and ("copy", "ck_conv", "ck_conv_buf") in log
     assert ("free", "ck_rec") in log and ("free", "ck_conv") in log
+    assert ("copy", "final_state", "rec_state") in log
     assert dn.prefill_checkpoint == bufs
     # Taking and releasing the buffers frees nothing; an eager checkpoint is freed.
     log.clear()
     dn.release_prefill_checkpoint(*dn.take_prefill_checkpoint())
     assert log == []
-    eager = SimpleNamespace(length=100, in_buffers=False, gate_mask=Dev("CK_GATE"), conv_select=Dev("CK_SEL"))
+    eager = SimpleNamespace(length=128, in_buffers=False, conv_select=Dev("CK_SEL"))
     dn.forward_prefill(x, valid_len=200, checkpoint=eager)
+    assert ("split", 128, 200, False, False, "rec_state") in log
     rec, conv = dn.take_prefill_checkpoint()
     assert (rec.name, conv.name) == ("ck_rec", "ck_conv")
     log.clear()
     dn.release_prefill_checkpoint(rec, conv)
     assert log == [("free", "ck_rec"), ("free", "ck_conv")]
+
+
+@pytest.fixture
+def split_log(monkeypatch):
+    """A TPGatedDeltaNet whose row views, multiplies, concat and frees record their operands, and a delta rule that
+    records each call: (q, k, v, beta, g, initial state, keyword names) -> (o<n>, S<n>)."""
+    log = SimpleNamespace(entries=[])
+    dn = object.__new__(TPGatedDeltaNet)
+    dn.mesh = "mesh"
+    dn._rows = lambda t, start, count: (Dev(f"{t.name}[{start}:{start + count}]"), t.name != "q")
+
+    def delta(q, k, v, beta, g, initial_state=None, **kw):
+        n = sum(1 for e in log.entries if e[0] == "delta")
+        names = tuple(t.name for t in (q, k, v, beta, g, initial_state))
+        log.entries.append(("delta", *names, tuple(sorted(kw))))
+        return Dev(f"o{n}"), Dev(f"S{n}")
+
+    monkeypatch.setattr(ttnn, "multiply", lambda a, b, **kw: Dev(f"{a.name}*{b.name}"))
+    monkeypatch.setattr(
+        ttnn, "concat", lambda ts, dim, **kw: log.entries.append(("concat", tuple(t.name for t in ts), dim)) or Dev("o")
+    )
+    monkeypatch.setattr(ttnn, "deallocate", lambda t: log.entries.append(("free", t.name)))
+    log.dn, log.delta = dn, delta
+    return log
+
+
+def test_the_split_delta_rule_runs_two_calls_and_one_identity_chunk(split_log):
+    """_delta_rule_split with the device masks of a captured forward (T = 2048, checkpoint after 1024): the inputs are
+    masked as the adapter masks them; the first call takes their rows [0, 1024) from the initial state, the second the
+    rows [1024, 2048) from the first call's final state; the outputs are concatenated along the token rows. The
+    checkpoint is one identity chunk: the unmasked q, k, v of rows [1024, 1056), beta and g of those rows times zero,
+    from the first call's final state. No call gets valid_len or masks. Every intermediate is freed, rows that are
+    views of their tensor (here every one but the rows of the unmasked q) excepted."""
+    log, dn = split_log, split_log.dn
+    q, k, v = Dev("q", (1, 2048, 256), "bf16"), Dev("k", (1, 2048, 256), "bf16"), Dev("v", (1, 2048, 768), "bf16")
+    beta, g = Dev("beta", (1, 2048, 6)), Dev("g", (1, 2048, 6))
+    ck = SimpleNamespace(length=1024, zero_rows=Dev("ZERO"))
+    masks = SimpleNamespace(gate_mask=Dev("GATE"), qkv_mask=Dev("QKV", dtype="bf16"))
+    o, final_state, ck_rec = dn._delta_rule_split(
+        log.delta, {"chunk_size": 64}, (q, k, v, beta, g), Dev("S_init"), ck, None, masks
+    )
+    assert (o.name, final_state.name, ck_rec.name) == ("o", "S1", "S2")
+    m = ("q*QKV", "k*QKV", "v*QKV", "beta*GATE", "g*GATE")
+    deltas = [e for e in log.entries if e[0] == "delta"]
+    assert deltas == [
+        ("delta", *(f"{t}[0:1024]" for t in m), "S_init", ("chunk_size",)),
+        ("delta", *(f"{t}[1024:2048]" for t in m), "S0", ("chunk_size",)),
+        (
+            "delta",
+            "q[1024:1056]",
+            "k[1024:1056]",
+            "v[1024:1056]",
+            "beta[1024:1056]*ZERO",
+            "g[1024:1056]*ZERO",
+            "S0",
+            ("chunk_size",),
+        ),
+    ]
+    assert ("concat", ("o0", "o1"), 1) in log.entries
+    freed = [e[1] for e in log.entries if e[0] == "free"]
+    assert sorted(freed) == sorted(
+        ["o0", "o1", "S0", "o2", "beta[1024:1056]*ZERO", "g[1024:1056]*ZERO", *m, "q[1024:1056]"]
+    )
+
+
+def test_the_split_delta_rule_of_an_unmasked_forward_passes_the_inputs_as_given(split_log):
+    """Without masks or a valid_len below T, the halves are rows of the inputs themselves, which are not freed."""
+    log, dn = split_log, split_log.dn
+    t = [Dev(n, (1, 256, 32)) for n in ("q", "k", "v", "beta", "g")]
+    dn._delta_rule_split(
+        log.delta, {}, tuple(t), Dev("S_init"), SimpleNamespace(length=128, zero_rows=Dev("ZERO")), None, None
+    )
+    deltas = [e for e in log.entries if e[0] == "delta"]
+    assert deltas[0][1:6] == tuple(f"{n}[0:128]" for n in ("q", "k", "v", "beta", "g"))
+    assert deltas[1][1:6] == tuple(f"{n}[128:256]" for n in ("q", "k", "v", "beta", "g"))
+    assert not any(e == ("free", n) for e in log.entries for n in ("q", "k", "v", "beta", "g"))
+
+
+def test_rows_are_views_of_aligned_dram_tensors_and_copies_otherwise(monkeypatch):
+    """_rows takes rows [start, start + count) of a [1, T, D] tensor as a ttnn.narrow view when the tensor is
+    DRAM-interleaved and its first such row tile lies in DRAM bank 0 (8 banks here), and as a ttnn.slice copy into DRAM
+    otherwise."""
+    dn = object.__new__(TPGatedDeltaNet)
+    dn.mesh = SimpleNamespace(dram_grid_size=lambda: SimpleNamespace(x=8, y=1))
+    dram = SimpleNamespace(buffer_type=ttnn.BufferType.DRAM, memory_layout=ttnn.TensorMemoryLayout.INTERLEAVED)
+    l1 = SimpleNamespace(buffer_type=ttnn.BufferType.L1, memory_layout=ttnn.TensorMemoryLayout.INTERLEAVED)
+    monkeypatch.setattr(ttnn, "TILE_SIZE", 32)
+    monkeypatch.setattr(ttnn, "narrow", lambda t, dim, start, count: ("view", t.name, dim, start, count))
+    monkeypatch.setattr(ttnn, "slice", lambda t, a, b, **kw: ("copy", t.name, tuple(a), tuple(b)))
+
+    def tensor(name, width, mc):
+        return SimpleNamespace(
+            name=name, shape=(1, 2048, width), padded_shape=(1, 2048, -(-width // 32) * 32), memory_config=lambda: mc
+        )
+
+    assert dn._rows(tensor("q", 256, dram), 1024, 1024) == (("view", "q", 1, 1024, 1024), True)
+    assert dn._rows(tensor("beta", 6, dram), 1024, 32) == (("view", "beta", 1, 1024, 32), True)
+    assert dn._rows(tensor("beta", 6, dram), 32, 32) == (("copy", "beta", (0, 32, 0), (1, 64, 6)), False)
+    assert dn._rows(tensor("q", 256, l1), 1024, 32) == (("copy", "q", (0, 1024, 0), (1, 1056, 256)), False)
 
 
 def test_gdn_masks_and_buffered_checkpoints_are_refused_outside_their_use(monkeypatch, expect_error):
@@ -411,7 +520,7 @@ def test_gdn_masks_and_buffered_checkpoints_are_refused_outside_their_use(monkey
             dn.forward_prefill(x, masks=masks, **kw)
     with expect_error(ValueError, "prefill masks for 128 rows"):
         dn.forward_prefill(x, masks=SimpleNamespace(T=128))
-    ck = SimpleNamespace(length=None, in_buffers=True)
+    ck = SimpleNamespace(length=128, in_buffers=True)
     with expect_error(ValueError, "needs alloc_prefill_trace_buffers first"):
         dn.forward_prefill(
             x, masks=SimpleNamespace(T=256, conv_select=None, gate_mask=None, qkv_mask=None), checkpoint=ck
@@ -456,8 +565,8 @@ def test_gdn_initial_state_buffers(monkeypatch):
 
 @pytest.mark.parametrize("block_size, with_checkpoint", [(1024, [2048]), (512, [1024, 2048]), (2048, [])])
 def test_prepare_compiles_every_variant_before_any_capture(monkeypatch, device_calls, block_size, with_checkpoint):
-    """prepare_prefill_traces_masked allocates every bucket's inputs (a checkpointed variant only for buckets that a
-    KV block boundary falls inside), warms the eager operations around a replay and runs every variant twice; it
+    """prepare_prefill_traces_masked allocates every bucket's inputs (a checkpointed variant for each KV block
+    boundary inside the bucket), warms the eager operations around a replay and runs every variant twice; it
     captures nothing. record_prefill_traces_masked captures each variant once; both are idempotent."""
     m, gdn = _model(monkeypatch, device_calls, block_size=block_size)
     m.prepare_prefill_traces_masked()
@@ -466,7 +575,10 @@ def test_prepare_compiles_every_variant_before_any_capture(monkeypatch, device_c
         ("gdn alloc", i, bool(with_checkpoint)) for i in range(3)
     ]
     assert sorted(m._masked_traces) == [128, 256, 512, 1024, 2048]
-    assert [b for b, tr in sorted(m._masked_traces.items()) if tr.checkpoint is not None] == with_checkpoint
+    assert [b for b, tr in sorted(m._masked_traces.items()) if tr.checkpoints] == with_checkpoint
+    for b, tr in m._masked_traces.items():
+        assert sorted(tr.checkpoints) == list(range(block_size, b, block_size))
+        assert all(ck.length == n and ck.in_buffers for n, ck in tr.checkpoints.items())
     for b, tr in m._masked_traces.items():
         assert tr.tok.shape == (1, b) and tr.full_pt.shape == (1, 32) and tr.chunk_pt.shape == (1, -(-b // block_size))
         assert tr.masks.conv_select.shape == (1, KCONV - 1, KCONV - 1 + b) and tr.sel.shape == (1, 1, 1, b)
@@ -549,7 +661,7 @@ def test_replay_stages_the_inputs_the_eager_forward_builds(monkeypatch, device_c
         assert torch.equal(st[buf], t)
     assert torch.equal(st[tr.masks.qkv_mask], PrefillMasks.host_tensors(2048, 2000, KCONV)[2])
     assert st[tr.sel].reshape(-1).nonzero().reshape(-1).tolist() == [1999]
-    assert tr.checkpoint.gate_mask not in st
+    assert not tr.checkpoints[1024].conv_select in st
     assert [c for c in device_calls if c[0] == "init"] == [("init", i, False) for i in range(3)]
     assert ("replay", tr.trace_ids[False]) in device_calls
     assert [c for c in device_calls if c[0] == "note"] == [("note", i, False) for i in range(3)]
@@ -557,13 +669,14 @@ def test_replay_stages_the_inputs_the_eager_forward_builds(monkeypatch, device_c
     assert not any(c[0] == "sync" for c in device_calls), "a replay overlaps the host work that follows it"
 
 
-def test_replay_with_a_checkpoint_stages_its_selectors(monkeypatch, device_calls):
+def test_replay_with_a_checkpoint_replays_the_variant_of_its_position(monkeypatch, device_calls):
+    """The checkpoint after 1024 tokens has its own variant, whose checkpoint tensors are fixed: the replay stages
+    nothing for it, replays that variant and hands the checkpoint buffers to the GDN layers."""
     m, _ = _captured(monkeypatch, device_calls)
     tr, _ = _replay(m, 2000, checkpoint_len=1024)
     st = _staged(device_calls)
-    gate, select = PrefillCheckpoint.host_tensors(2048, 1024, KCONV)
-    assert torch.equal(st[tr.checkpoint.gate_mask], gate) and torch.equal(st[tr.checkpoint.conv_select], select)
-    assert ("replay", tr.trace_ids[True]) in device_calls
+    assert tr.checkpoints[1024].conv_select not in st and tr.checkpoints[1024].zero_rows not in st
+    assert ("replay", tr.trace_ids[1024]) in device_calls
     assert [c for c in device_calls if c[0] == "note"] == [("note", i, True) for i in range(3)]
 
 
@@ -712,11 +825,11 @@ def _replays(m, calls):
     [
         ("text up to one chunk", dict(end=2000), [(2048, False, 0)]),
         ("short text", dict(end=100), [(128, False, 0)]),
-        ("checkpoint inside the chunk", dict(end=2000, checkpoint=1024), [(2048, True, 0)]),
+        ("checkpoint inside the chunk", dict(end=2000, checkpoint=1024), [(2048, 1024, 0)]),
         ("tail of a long prompt", dict(end=3500), ["chunk", (2048, False, 2048)]),
-        ("checkpoint in the tail", dict(end=3500, checkpoint=3072), ["chunk", (2048, True, 2048)]),
-        ("whole last chunk with a checkpoint", dict(end=4096, checkpoint=3072), ["chunk", (2048, True, 2048)]),
-        ("resumed row", dict(start=2048, end=3764, checkpoint=3072), [(2048, True, 2048)]),
+        ("checkpoint in the tail", dict(end=3500, checkpoint=3072), ["chunk", (2048, 1024, 2048)]),
+        ("whole last chunk with a checkpoint", dict(end=4096, checkpoint=3072), ["chunk", (2048, 1024, 2048)]),
+        ("resumed row", dict(start=2048, end=3764, checkpoint=3072), [(2048, 1024, 2048)]),
         ("resumed long row", dict(start=1024, end=5000), ["chunk", (2048, False, 3072)]),
     ],
 )
@@ -741,7 +854,7 @@ def test_multimodal_rows_splice_their_vision_rows_into_the_replay(monkeypatch, d
     _chunked(m, 2000, checkpoint=1024, vision_tokens=vision)
     first_replay = next(i for i, c in enumerate(device_calls) if c[0] == "replay")
     assert ("vision", 2048, True, 0) in device_calls[:first_replay]
-    assert _replays(m, device_calls) == [(2048, True, 0)]
+    assert _replays(m, device_calls) == [(2048, 1024, 0)]
     device_calls.clear()
     _chunked(m, 3500, vision_tokens=vision)
     assert [c for c in device_calls if c[0] == "vision"] == [("vision", 2048, True, 0), ("vision", 2048, True, 256)]
@@ -756,8 +869,8 @@ def test_the_mtp_chunk_hook_reads_the_trace_hidden(monkeypatch, device_calls):
     on_chunk = lambda hidden, start, n: seen.append((hidden, start, n))
     _chunked(m, 2000, checkpoint=1024, on_chunk=on_chunk)
     tr = m._masked_traces[2048]
-    assert seen == [(tr.outputs[True][0], 0, 2000)]
-    assert not any(c[0] == "free" and c[1] is tr.outputs[True][0] for c in device_calls)
+    assert seen == [(tr.outputs[1024][0], 0, 2000)]
+    assert not any(c[0] == "free" and c[1] is tr.outputs[1024][0] for c in device_calls)
     seen.clear()
     _chunked(m, 3500, on_chunk=on_chunk)
     assert seen == [(m._chunked_trace_output, 0, 2048), (tr.outputs[False][0], 2048, 1452)]
@@ -788,9 +901,9 @@ def test_trace_body_reads_only_persistent_inputs(monkeypatch, device_calls):
     tr = qwen36_model._MaskedPrefillTrace(2048, 2)
     for name in ("tok", "cos", "sin", "csi", "full_pt", "chunk_pt", "sel"):
         setattr(tr, name, Dev(name))
-    tr.masks, tr.checkpoint = SimpleNamespace(name="masks"), SimpleNamespace(name="ck buffers")
+    tr.masks, tr.checkpoints = SimpleNamespace(name="masks"), {1024: SimpleNamespace(name="ck buffers")}
     monkeypatch.setattr(ttnn, "from_torch", host_write)
-    hidden, logits = m._masked_trace_body(tr, True)
+    hidden, logits = m._masked_trace_body(tr, 1024)
     assert [c for c in device_calls if c[0] == "load init"] == [("load init", i) for i in range(3)]
     attn = [kw for full, kw in seen if full]
     gdn_kw = [kw for full, kw in seen if not full]
@@ -808,7 +921,10 @@ def test_trace_body_reads_only_persistent_inputs(monkeypatch, device_calls):
     ]
     assert (
         gdn_kw
-        == [dict(mode="prefill", chunk_size=64, valid_len=None, gdn_masks=tr.masks, gdn_checkpoint=tr.checkpoint)] * 3
+        == [
+            dict(mode="prefill", chunk_size=64, valid_len=None, gdn_masks=tr.masks, gdn_checkpoint=tr.checkpoints[1024])
+        ]
+        * 3
     )
     assert not any(
         c[0] == "free" and c[1] in (tr.tok, tr.cos, tr.sin, tr.csi, tr.full_pt, tr.chunk_pt, tr.sel)
@@ -816,5 +932,5 @@ def test_trace_body_reads_only_persistent_inputs(monkeypatch, device_calls):
     )
     # Without the checkpoint variant the GDN layers get no checkpoint.
     seen.clear()
-    m._masked_trace_body(tr, False)
+    m._masked_trace_body(tr, 0)
     assert all(kw["gdn_checkpoint"] is None for full, kw in seen if not full)

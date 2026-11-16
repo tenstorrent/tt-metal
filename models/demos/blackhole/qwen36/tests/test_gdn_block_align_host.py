@@ -661,21 +661,23 @@ def test_checkpoint_outside_the_last_chunk_is_refused(chunked, expect_error):
 
 
 def test_prefill_checkpoint_constants(monkeypatch, expect_error):
-    """PrefillCheckpoint's gate mask zeroes beta and g from the checkpoint on, and its one-hot rows pick the K - 1
-    inputs before it, the conv history after ``length`` tokens."""
-    from models.demos.blackhole.qwen36.tt.gdn.tp import PrefillCheckpoint
+    """PrefillCheckpoint's one-hot rows pick the K - 1 inputs before the checkpoint, the conv history after ``length``
+    tokens; its zero rows zero beta and g of one identity update chunk. A checkpoint must lie on a chunk of the delta
+    rule with a whole chunk after it."""
+    from models.demos.blackhole.qwen36.tt.gdn.tp import IDENTITY_ROWS, PrefillCheckpoint
 
     monkeypatch.setattr(ttnn, "from_torch", lambda t, **kw: t)
     T, L, kconv = 256, 128, 4
     ck = PrefillCheckpoint(None, T, L, kconv)
-    assert ck.length == L and ck.gate_mask.shape == (1, T, 1)
-    assert ck.gate_mask[0, :L].eq(1).all() and ck.gate_mask[0, L:].eq(0).all()
+    assert ck.length == L and not ck.in_buffers and IDENTITY_ROWS == 32
+    assert ck.zero_rows.shape == (1, IDENTITY_ROWS, 1) and ck.zero_rows.eq(0).all()
     x = torch.randn(1, T, 64).to(torch.bfloat16)
     assert torch.equal((ck.conv_select.float() @ x.float()).to(torch.bfloat16), x[:, L - (kconv - 1) : L])
-    with expect_error(ValueError, "needs 3 <= length < 256"):
-        PrefillCheckpoint(None, T, T, kconv)
-    with expect_error(ValueError, "needs 3 <= length < 256"):
-        PrefillCheckpoint(None, T, 2, kconv)
+    assert torch.equal(ck.conv_select, PrefillCheckpoint.host_tensors(T, L, kconv))
+    assert PrefillCheckpoint.buffers(None, T, kconv, L).in_buffers
+    for bad in (T, T - 16, 100, 0):
+        with expect_error(ValueError, "must be a positive multiple of 32 rows with 32 rows after it"):
+            PrefillCheckpoint(None, T, bad, kconv)
 
 
 def _delta_rule(k, v, beta, g, state):
@@ -686,23 +688,25 @@ def _delta_rule(k, v, beta, g, state):
     return state
 
 
-def test_gate_mask_gives_the_state_at_the_checkpoint(monkeypatch):
-    """Beta and g times PrefillCheckpoint.gate_mask turn every token from the checkpoint on into an identity update,
-    so the recurrence over all T tokens ends at the state after the checkpoint's ``length`` tokens."""
-    from models.demos.blackhole.qwen36.tt.gdn.tp import PrefillCheckpoint
-
-    monkeypatch.setattr(ttnn, "from_torch", lambda t, **kw: t)
+def test_split_recurrence_and_identity_chunk_give_the_end_state_and_the_checkpoint():
+    """The recurrence of the split delta rule (TPGatedDeltaNet._delta_rule_split), in exact arithmetic: the rows after
+    the checkpoint continue from the state at the checkpoint and end at the end state of one pass over all rows; an
+    identity update chunk (beta = g = 0) on the state at the checkpoint returns it, as one pass over all rows with beta
+    and g zero past the checkpoint does."""
     gen = torch.Generator().manual_seed(0)
-    T, L, D = 96, 64, 16
+    T, L, D, n = 96, 64, 16, 32
     k = torch.nn.functional.normalize(torch.randn(T, D, generator=gen, dtype=torch.float64), dim=-1)
     v = torch.randn(T, D, generator=gen, dtype=torch.float64)
     beta = torch.rand(T, generator=gen, dtype=torch.float64)
     g = -torch.rand(T, generator=gen, dtype=torch.float64)
     s0 = torch.randn(D, D, generator=gen, dtype=torch.float64)
-    mask = PrefillCheckpoint(None, T, L, 4).gate_mask.reshape(T).double()
     at_checkpoint = _delta_rule(k[:L], v[:L], beta[:L], g[:L], s0)
+    assert torch.equal(_delta_rule(k[L:], v[L:], beta[L:], g[L:], at_checkpoint), _delta_rule(k, v, beta, g, s0))
+    zero = torch.zeros(n, dtype=torch.float64)
+    identity = _delta_rule(k[L : L + n], v[L : L + n], beta[L : L + n] * zero, g[L : L + n] * zero, at_checkpoint)
+    mask = (torch.arange(T) < L).double()
+    assert torch.equal(identity, at_checkpoint)
     assert torch.equal(_delta_rule(k, v, beta * mask, g * mask, s0), at_checkpoint)
-    assert not torch.allclose(_delta_rule(k, v, beta, g, s0), at_checkpoint)
 
 
 def _gdn_layer():
