@@ -60,10 +60,13 @@ def update_model_config(config, batch_size, sequence_size, device):
     seqL_t = seqL // TILE_HEIGHT  # 32, 64, 96
     seqL_t__y = (batch_size * seqL_t) // core_grid_BLOCK_SHARDED.y  # 4, 8, 12
     dim_t__x = dim_t // core_grid_BLOCK_SHARDED.x  # 2, 4, 6, 8 on an 11-wide grid
+    # A layer norm or matmul output subblock holds at most eight tiles; a narrow grid's blocks are wider.
+    subblock_w = largest_divisor_at_most(dim_t__x, 8)
 
     # When ff1 does not fit, only the qkv, output and MLP projections go through DRAM; their outputs return
-    # to the block-sharded grid, and the rest of the layer stays in L1.
-    projections_in_dram = ff1_exceeds_l1_budget(device, seqL_t__y, dim_t__x)
+    # to the block-sharded grid, and the rest of the layer stays in L1. Blocks wider than eight tiles go there
+    # too: their matmuls' buffers do not fit L1 beside the activations.
+    projections_in_dram = ff1_exceeds_l1_budget(device, seqL_t__y, dim_t__x) or dim_t__x > 8
 
     # 1000 classes padded to 1152
     class__x = class_t // core_grid.x
@@ -80,7 +83,7 @@ def update_model_config(config, batch_size, sequence_size, device):
     program_configs = {
         "layernorm_before_program_config": ttnn.LayerNormShardedMultiCoreProgramConfig(
             compute_with_storage_grid_size=(core_grid_BLOCK_SHARDED.x, core_grid_BLOCK_SHARDED.y),
-            subblock_w=dim_t__x,
+            subblock_w=subblock_w,
             block_h=seqL_t__y,
             block_w=dim_t__x,
             inplace=False,
@@ -90,7 +93,7 @@ def update_model_config(config, batch_size, sequence_size, device):
             # shard_shape_is = [seqL_t__y, dim_t__x], in tiles
             in0_block_w=dim_t__x,
             out_subblock_h=1,
-            out_subblock_w=dim_t__x,
+            out_subblock_w=subblock_w,
             per_core_M=seqL_t__y,
             per_core_N=3 * dim_t__x,
             transpose_mcast=False,
@@ -100,7 +103,7 @@ def update_model_config(config, batch_size, sequence_size, device):
             compute_with_storage_grid_size=(core_grid_BLOCK_SHARDED.x, core_grid_BLOCK_SHARDED.y),
             in0_block_w=dim_t__x,
             out_subblock_h=1,
-            out_subblock_w=dim_t__x,
+            out_subblock_w=subblock_w,
             per_core_M=seqL_t__y,
             per_core_N=dim_t__x,
             transpose_mcast=False,
@@ -108,7 +111,7 @@ def update_model_config(config, batch_size, sequence_size, device):
         ),
         "layernorm_after_output_program_config": ttnn.LayerNormShardedMultiCoreProgramConfig(
             compute_with_storage_grid_size=(core_grid_BLOCK_SHARDED.x, core_grid_BLOCK_SHARDED.y),
-            subblock_w=dim_t__x,
+            subblock_w=subblock_w,
             block_h=seqL_t__y,
             block_w=dim_t__x,
             inplace=False,
@@ -127,7 +130,7 @@ def update_model_config(config, batch_size, sequence_size, device):
             compute_with_storage_grid_size=(core_grid_BLOCK_SHARDED.x, core_grid_BLOCK_SHARDED.y),
             in0_block_w=dim_t__x * 2,
             out_subblock_h=1,
-            out_subblock_w=dim_t__x,
+            out_subblock_w=subblock_w,
             per_core_M=seqL_t__y,
             per_core_N=dim_t__x,
             transpose_mcast=False,
