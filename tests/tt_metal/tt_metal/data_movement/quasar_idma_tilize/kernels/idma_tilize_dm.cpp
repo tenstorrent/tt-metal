@@ -32,18 +32,8 @@
 // 6 x 64 = ~384 cycles, against the ~400 measured. The copies themselves move only ~10 B/cycle.
 //
 // To run (host test: ../test_idma_tilize.cpp, gtest QuasarIdmaTilize.Fp32), from the repo root:
-//
-//   cmake -B build_Release -DTT_METAL_BUILD_TESTS=ON
 //   cmake --build build_Release --target unit_tests_data_movement
-//
-//   export TT_METAL_HOME=$PWD ARCH_NAME=quasar TT_METAL_SLOW_DISPATCH_MODE=1
-//   export TT_METAL_SIMULATOR=<emulator build, e.g. .../tt-umd-simulators/build/emu-quasar-1x3>
-//   export TT_UMD_SIMULATOR_PATH=$TT_METAL_SIMULATOR
-//   export NNG_SOCKET_ADDR=<emulator host, e.g. tcp://tensix-l-04:49879> NNG_SOCKET_LOCAL_PORT=5555
 //   ./build_Release/test/tt_metal/unit_tests_data_movement --gtest_filter="QuasarIdmaTilize.Fp32"
-//
-// The kernel is JIT-compiled at run time, so kernel edits need no rebuild. The results print
-// as one "iDMA tilize, fp32, ..." log line block.
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
