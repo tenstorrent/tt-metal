@@ -37,6 +37,35 @@ jobs:
         with:
           python-version: '3.10'
       - run: pip install pyyaml
+      # The merge queue runs hundreds of times a day, so each day is read once
+      # and carried to the next night in an artifact.
+      - name: Restore the CI trends history
+        continue-on-error: true
+        timeout-minutes: 2
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for run in $(gh run list -R "$GITHUB_REPOSITORY" -w llk-perf-nightly-health.yaml -s success -L 3 --json databaseId --jq '.[].databaseId'); do
+            gh run download "$run" -R "$GITHUB_REPOSITORY" -n llk-ci-trends-history && break
+          done
+      - name: CI cost and reliability
+        continue-on-error: true
+        timeout-minutes: 30
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DAY: ${{ inputs.date }}
+        run: |
+          python3 tt_metal/tt-llk/perf/ci_trends.py --repo "$GITHUB_REPOSITORY" \
+            --history ci_trends_history.json ${DAY:+--date "${DAY:0:10}"}
+      - name: Keep the CI trends history
+        continue-on-error: true
+        timeout-minutes: 2
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: llk-ci-trends-history
+          path: ci_trends_history.json
+          retention-days: 30
+          if-no-files-found: ignore
       - name: Check and send
         env:
           GH_TOKEN: ${{ github.token }}
