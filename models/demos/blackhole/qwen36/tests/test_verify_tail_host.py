@@ -243,6 +243,17 @@ def test_a_logits_verify_reads_the_row_major_copy(monkeypatch):
     assert replays == ["verify"] and logits is None
 
 
+def test_work_enqueued_after_the_replays_runs_before_the_wait(monkeypatch):
+    """``after_enqueue`` runs once every replay of the step is enqueued (here the verify, the logits gather and the
+    sampler), and the wait for the ids follows it."""
+    m, replays = _replay_model(monkeypatch)
+    monkeypatch.setattr(ttnn, "synchronize_device", lambda dev: replays.append("wait"))
+    monkeypatch.setattr(ttnn, "get_device_tensors", lambda t: [t])
+    monkeypatch.setattr(ttnn, "to_torch", lambda t, **kw: torch.arange(32, dtype=torch.int32))
+    m.verify_traced([[1] * 4] * 2, [10, 20], [0, 0], sample_plan=_plan(), after_enqueue=lambda: replays.append("after"))
+    assert replays == ["verify", "gather", "sample", "after", "wait"]
+
+
 def test_the_release_frees_every_verify_trace(monkeypatch):
     released = []
     monkeypatch.setattr(ttnn, "release_trace", lambda dev, tid: released.append(tid))

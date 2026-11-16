@@ -296,8 +296,12 @@ def engine(monkeypatch):
         rope=SimpleNamespace(rope_delta=0),
     )
 
-    def verify_traced(tokens, positions, mi, read_logits=False, page_tables=None, inactive=None, rope_deltas=None):
+    def verify_traced(
+        tokens, positions, mi, read_logits=False, page_tables=None, inactive=None, rope_deltas=None, after_enqueue=None
+    ):
         log.append(("verify", tokens, positions, inactive, rope_deltas))
+        if after_enqueue is not None:
+            after_enqueue()
         return [0] * (B * (K + 1)), "feed", None
 
     model.verify_traced = verify_traced
@@ -305,7 +309,7 @@ def engine(monkeypatch):
     eng.captured, eng.nb, eng.block_size, eng._scratch_block = True, 128, 64, 10**6
     eng._last_hidden = [f"h{u}" for u in range(B)]
     eng._mtp_pt_rows = [f"pt{u}" for u in range(B)]
-    monkeypatch.setattr(eng, "_stage_mtp_tables", lambda pt: log.append(("stage_mtp",)))
+    monkeypatch.setattr(eng, "_stage", lambda host, buf, *a: log.append(("stage", buf, host)))
     monkeypatch.setattr(
         eng, "_warm_mtp_last", lambda h, tok, pos, pt, delta=None: log.append(("mtp_last", h, tok, pos, pt, delta))
     )
@@ -325,8 +329,8 @@ def _verify(eng, starts, active, state="S"):
 
 def test_drafter_starts_after_the_prompts_last_chunk(engine, expect_error):
     """An intermediate chunk keeps no last row and leaves the row out of decode; the last chunk keeps the feed row of
-    the prompt's last token; the row's first verify writes that position's drafter KV with its first token, before
-    the verify tables and the replay, and only once."""
+    the prompt's last token; the row's first verify writes that position's drafter KV with its first token, over the
+    row's own drafter table and no other, after the verify tables and the replay are enqueued, and only once."""
     eng, log = engine
     hook = eng.prefill_hook(2, torch.arange(3000), torch.ones(1, 8), final=False)
     hook("h", 0, 2048)
@@ -343,8 +347,9 @@ def test_drafter_starts_after_the_prompts_last_chunk(engine, expect_error):
     log.clear()
     _verify(eng, [0, 0, 5000, 0], [False, False, True, False])
     names = [e[0] for e in log]
-    assert names == ["stage_mtp", "mtp_last", "tables", "verify"]
-    assert log[1][1:] == ("h2", 2 * eng.T, 4999, "pt2", 0)
+    assert names == ["tables", "verify", "stage", "mtp_last"]
+    assert log[2][1] == "pt2" and torch.equal(log[2][2], torch.ones(1, eng.nb, dtype=torch.int32))
+    assert log[3][1:] == ("h2", 2 * eng.T, 4999, "pt2", 0)
     log.clear()
     _verify(eng, [0, 0, 5002, 0], [False, False, True, False])
     assert [e[0] for e in log] == ["tables", "verify"]

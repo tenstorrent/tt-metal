@@ -2023,6 +2023,7 @@ class Qwen36Model:
         rope_deltas=None,
         sample_plan=None,
         bucket=None,
+        after_enqueue=None,
     ):
         """Replay the captured verify trace for B users x T candidates.
 
@@ -2059,6 +2060,9 @@ class Qwen36Model:
         tables (GdnBlockState.set_verify_blocks) before the replay.
 
         ``bucket``: replay the verify row bucket of that many users instead (verify_enqueue); it makes no logits.
+
+        ``after_enqueue``: called after the replays are enqueued and before the wait, for device work that reads and
+        writes nothing the verify does; its host dispatch overlaps the replay, and the wait covers it.
         """
         if read_logits and bucket is not None and int(bucket) != self._vfy_B:
             raise ValueError("a verify row bucket makes no logits to read")
@@ -2073,6 +2077,8 @@ class Qwen36Model:
             bucket=bucket,
             read_logits=read_logits,
         )
+        if after_enqueue is not None:
+            after_enqueue()
         T, B = self._vfy_T, self._vfy_B
         rows = B * T
         ttnn.synchronize_device(self.device)
