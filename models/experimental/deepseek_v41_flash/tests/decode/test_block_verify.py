@@ -54,7 +54,7 @@ from tests.ttnn.unit_tests.operations.prefetcher_common import tensor_prefetcher
 
 ROWS = 4
 DRAFTS = ROWS - 1
-CORRUPT = 1 / 3
+CORRUPT = float(os.environ.get("DEEPSEEK_V4_SPEC_CORRUPT", 1 / 3))
 N_TOKENS = int(os.environ.get("DEEPSEEK_V4_SPEC_TOKENS", "300"))
 ORACLE = os.environ.get("DEEPSEEK_V4_SPEC_ORACLE", "1") not in ("0", "", "false", "False")
 EXACT = os.environ.get("DEEPSEEK_V4_SPEC_EXACT", "1") != "0"
@@ -146,6 +146,38 @@ def test_block_verify_spec(mesh_device, monkeypatch):
             spec.finish()
             return got
 
+        if os.environ.get("DEEPSEEK_V4_SPEC_ROWCHECK", "0") == "1":
+            # Every block fed the greedy stream: row j's token must be the stream's next token. Counts mismatches by
+            # row, after a one-row prefill and after a block prefill.
+            for how in ("one-row prefill", "block prefill"):
+                if how == "one-row prefill":
+                    model.decode_prompt_traced(prompt, 0)
+                else:
+                    model.prefill_blocks(prompt, 0)
+                    model.spec_fixup([])
+                bad = [0] * ROWS
+                blocks = 0
+                first = None
+                for p in range(len(prompt), len(stream) - ROWS, ROWS):
+                    toks = model.decode_verify_block(stream[p : p + ROWS], p)
+                    blocks += 1
+                    for j in range(ROWS):
+                        if toks[j] != stream[p + j + 1]:
+                            bad[j] += 1
+                            if first is None:
+                                first = (p, j, toks[j], stream[p + j + 1])
+                logger.info(f"rowcheck ({how}): {blocks} blocks, mismatches by row {bad}, first {first}")
+            # The block's logits at the first blocks, eagerly: each row's top two and the stream's token's logit.
+            model.decode_prompt_traced(prompt, 0)
+            for p in range(len(prompt), min(len(stream) - ROWS, len(prompt) + 4 * ROWS), ROWS):
+                logits = model.debug_block_logits(stream[p : p + ROWS], p)
+                for j in range(ROWS):
+                    top = torch.topk(logits[j], 2)
+                    want = stream[p + j + 1]
+                    logger.info(
+                        f"logits p={p} row {j}: top {top.indices.tolist()} {[round(v, 3) for v in top.values.tolist()]}"
+                        f", greedy {want} at {logits[j, want].item():.3f}"
+                    )
         results = {}
         if ORACLE:
             rng = random.Random(0)
