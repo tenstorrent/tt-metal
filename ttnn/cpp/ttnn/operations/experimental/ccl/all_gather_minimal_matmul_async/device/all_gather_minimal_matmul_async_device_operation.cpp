@@ -183,6 +183,12 @@ void AllGatherMinimalMatmulAsyncOp::validate_on_program_cache_miss(
 
     // Device/storage checks, repeated on every cache hit.
     validate_operands_on_device(tensor_args);
+    // MinimalMatmulConfig::transpose_core_grid pins minimal_matmul's grid orientation; this op does not
+    // read it, so refuse it rather than silently run the other orientation.
+    TT_FATAL(
+        !(attributes.config.has_value() && attributes.config->transpose_core_grid.has_value()),
+        "all_gather_minimal_matmul_async ignores MinimalMatmulConfig::transpose_core_grid; pass its own "
+        "transpose_core_grid argument instead");
 
     // Layout requirements: all inputs must be TILE layout
     TT_FATAL(

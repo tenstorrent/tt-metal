@@ -221,6 +221,47 @@ def test_linear_flat_cache_across_rows(device, K, N):
     logger.debug(f"program cache entries after the sweep: {entries}; PCC per (rows, N): {pcc_by_rows}")
 
 
+# A pinned grid orientation keeps one program for row counts on both sides of N; by default the op
+# transposes the grid once M > N, which needs a second program. FLUX.2 klein's addcmul shape.
+@pytest.mark.parametrize("transpose_core_grid", [None, False, True], ids=["default", "untransposed", "transposed"])
+def test_linear_pinned_orientation_across_rows(device, transpose_core_grid):
+    torch.manual_seed(0)
+    K, N = 3072, 1536
+    weight = torch.randn((K, N), dtype=torch.float32)
+    tt_weight = ttnn.from_torch(weight, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+    matmul_config = ttnn.MinimalMatmulConfig(
+        M_block_size=8,
+        K_block_size=8,
+        N_block_size=8,
+        subblock_h=2,
+        subblock_w=2,
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+        transpose_core_grid=transpose_core_grid,
+    )
+    assert matmul_config.transpose_core_grid == transpose_core_grid
+
+    def run(rows):
+        torch_input = torch.randn((rows, K), dtype=torch.float32)
+        tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+        tt_output = ttnn.experimental.minimal_matmul(
+            tt_input, tt_weight, compute_kernel_config=compute_config, config=matmul_config
+        )
+        result = assert_quality(torch_input @ weight, ttnn.to_torch(tt_output))
+        assert result["pcc"] > 0.999_500, f"rows={rows}: PCC {result['pcc']}"
+
+    # Rows below N, then above it (from index 3 on), then below again.
+    variants = [128, 512, 1536, 1568, 2048, 4096, 1024]
+    miss_indices = (3,) if transpose_core_grid is None else ()
+    assert_program_cache_flat(device, run, variants, warm_index=0, miss_indices=miss_indices)
+
+
 # Correctness guard for the granular output-writer path (write_block_sync_granular): each row's
 # write-source reads out of the cb_out slot must be flushed before cb_pop_front releases it back to
 # the compute producer, otherwise the producer can repack the freed slot while the writes are still
