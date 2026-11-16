@@ -79,7 +79,6 @@ from helpers.ulp_table import (
     Metric,
     Reading,
     Row,
-    contracts_of,
     load_table,
     most_specific,
     write_table_file,
@@ -908,7 +907,7 @@ def test_no_cell_left_out_on_blackhole_resolves_to_a_step_budget_there():
         if fp16_dest_unusable(i, o, D_NO, bh)
     ]
     covered = []
-    for op, contracts in contracts_of(load_table(TABLE_PATHS[bh])).items():
+    for op, rows in load_table(TABLE_PATHS[bh]).items():
         for (i, o), approx in product(left_out, (*ApproximationMode, None)):
             query = BudgetKey(
                 approx_mode=approx,
@@ -917,9 +916,9 @@ def test_no_cell_left_out_on_blackhole_resolves_to_a_step_budget_there():
                 dest_acc=D_NO,
                 arch=bh,
             )
-            found = most_specific(contracts, query)
-            if found is not None and found[1].metric is Metric.ULP:
-                covered.append(f"{op.name} {query.describe()}: {found[0].describe()}")
+            row = most_specific(rows, query)
+            if row is not None and row.contract.metric is Metric.ULP:
+                covered.append(f"{op.name} {query.describe()}: {row.key.describe()}")
     assert not covered, covered
 
 
@@ -999,10 +998,10 @@ def test_no_step_budget_names_an_arch_sweep_cells_does_not_filter_for():
     from helpers.sfpu_accuracy_budget import _SFPU_ACCURACY_BUDGET
 
     elsewhere = [
-        (op.name, key)
+        (op.name, row.key)
         for op, rows in _SFPU_ACCURACY_BUDGET.items()
-        for key, contract in rows.items()
-        if contract.metric is Metric.ULP and key.arch not in (None, MEASURED_ARCH)
+        for row in rows
+        if row.contract.metric is Metric.ULP and row.arch not in (None, MEASURED_ARCH)
     ]
     assert elsewhere == []
 
