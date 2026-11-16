@@ -16,8 +16,9 @@ tools_venv_candidates() {
   if [ -z "${TRAY_VENV_SEARCH:-}" ]; then
     printf '%s\n' "$HOME"/venv/bin/python "$HOME"/venv3/bin/python; return
   fi
+  # a leading ~/ is $HOME, expanded after the split so a $HOME with a space stays one path
   # shellcheck disable=SC2086  # word-split and glob-expand the list on purpose
-  for c in $TRAY_VENV_SEARCH; do printf '%s\n' "$c"; done
+  for c in $TRAY_VENV_SEARCH; do case $c in "~/"*) printf '%s\n' "$HOME/${c#\~/}" ;; *) printf '%s\n' "$c" ;; esac; done
 }
 tools_locate() {
   local py=$1 t="" c venvpy=""

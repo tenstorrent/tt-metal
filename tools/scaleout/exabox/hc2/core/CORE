@@ -16,6 +16,7 @@ cpld_5f.py
 dram_dbi.py
 l1_march.py
 load_test.sh
+noc_a2a.py
 noc_snapshot.sh
 numeric_capture.py
 numeric_check.py
@@ -25,12 +26,17 @@ numeric_report.py
 pinpoint_load.py
 pinpoint_verdict.py
 quiet_clock.py
+repro.sh
+rf_walk.py
+run_repro.sh
 ub0_repro.py
 
 # shell and python helpers
 lib/bar_read.py
 lib/bmc_heat.sh
 lib/code_readback.py
+lib/eth_noreset.sh
+lib/drop_stop.sh
 lib/ethctr.py
 lib/exalens_probe.py
 lib/fault_capture.sh
@@ -38,6 +44,7 @@ lib/fleet.sh
 lib/fw_check.sh
 lib/gddr.sh
 lib/gddr_telem.py
+lib/glx_hang_stack.sh
 lib/glxcan.sh
 lib/hc.sh
 lib/heavy_logs.sh
@@ -69,14 +76,21 @@ lib/umd_index.sh
 lib/vcore.sh
 
 # load shapes, stage table, verdict and repair logic
+fleet/agentp.sh
+fleet/agloop.py
+fleet/bb_load.py
+fleet/busbar_confirm.py
 fleet/chunk_load.py
 fleet/chunk_sched.py
 fleet/drop_shapes.py
 fleet/eth_map.txt
+fleet/eth_map_exabox.txt
 fleet/ethmask.py
+fleet/fabric_open.py
 fleet/fabric_repro.py
 fleet/final_verdict.py
 fleet/fleet_py.py
+fleet/fw_reads.py
 fleet/gate.sh
 fleet/link_pattern.py
 fleet/load_line.py
@@ -85,6 +99,7 @@ fleet/long_summary.py
 fleet/maxutil.pin
 fleet/maxutil.py
 fleet/maxutil_pack.sh
+fleet/memlog.py
 fleet/on_hang.sh
 fleet/psu_check.py
 fleet/psu_fast.py
@@ -97,6 +112,7 @@ fleet/stage_load.py
 fleet/stages.tsv
 fleet/stop_signal.py
 fleet/tray_12v.py
+fleet/tray_inject.py
 fleet/tray_lanes.py
 fleet/tray_why.py
 fleet/vcore_chips.py

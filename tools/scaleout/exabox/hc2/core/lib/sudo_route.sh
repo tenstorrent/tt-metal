@@ -11,7 +11,10 @@
 # Sets SR_STATE (full, partial or none), SR_LINE (the WARN line; empty with full sudo) and SR_TAG (the RESULT line suffix;
 # empty with full sudo). Each part is judged by the check its own reader uses: every reader probes its exact command
 # with `sudo -n -l` (never `sudo -n true`, which a fixed-argument sudoers list refuses), so a
-# part works when sudo lists its command. Known gap: -l also lists a rule that wants a password. The rescan part alone
+# part works when sudo lists its command. A route the reader takes as is counts as its reader does:
+# TRAY_REPRO_HSC_IPMITOOL for hsc, clear and drop, TRAY_REPRO_PSU_IPMITOOL for sensors; a 'sudo -n <cmd>' value is
+# judged by `sudo -n -l <cmd> <read>`, any other by its command being on PATH. Known gap: -l also lists a rule that wants
+# a password. The rescan part alone
 # is judged as run.sh's rk_can_root does: root, or NOPASSWD: ALL in `sudo -n -l`.
 SR_STATE="" SR_LINE="" SR_TAG=""
 SR_PROBE_S=${SR_PROBE_S:-5}
@@ -28,13 +31,27 @@ sr_cmds() { case $1 in   # one exact command per line; the part works when any o
   rescan) echo "tee /sys/bus/pci/rescan" ;;
   cycles|recovery) echo "ipmitool raw 0x06 0x52 0x09 0x62 0x00 0x14 0x5F 0x54 0x37 0x53"; echo "ipmitool chassis power cycle" ;;
   esac; }
+sr_route_ok() {  # <part> <route>: the route's reader would run: 'sudo -n <cmd>' when sudo -n -l lists <cmd> <read>, else the command is on PATH
+  local -a r a; local c; read -ra r <<< "$2"
+  if [ "${r[0]:-}" = sudo ]; then r=("${r[@]:1}"); while [ "${r[0]:-}" != "${r[0]#-}" ]; do r=("${r[@]:1}"); done
+    [ ${#r[@]} -gt 0 ] && command -v sudo > /dev/null 2>&1 || return 1
+    while IFS= read -r c; do
+      [ -n "$c" ] || continue; read -ra a <<< "${c#ipmitool }"; [ "$c" = "ipmitool sdr type Power Supply" ] && a=(sdr type "Power Supply")
+      case $c in ipmitool\ *) ;; *) continue ;; esac
+      timeout "$SR_PROBE_S" sudo -n -l "${r[@]}" "${a[@]}" < /dev/null > /dev/null 2>&1 && return 0
+    done < <(sr_cmds "$1"); return 1
+  fi
+  command -v "${r[0]:-}" > /dev/null 2>&1; }
 sr_join() { local o="" x; for x in "$@"; do o+="${o:+, }$x"; done; echo "$o"; }
 sudo_route_check() {
-  local host p c w ok=() off=() l a; host=$(hostname -s 2> /dev/null || echo "?")
+  local host p c v w ok=() off=() l a; host=$(hostname -s 2> /dev/null || echo "?")
   [ "$(id -u)" = 0 ] && { SR_STATE=full SR_LINE="" SR_TAG=""; return 0; }
   for p in "$@"; do
     l=no
-    if [ "$p" = rescan ]; then  # same rule as run.sh rk_can_root: a tee-only rule does not count
+    v=""; case $p in hsc|clear|drop) v=${TRAY_REPRO_HSC_IPMITOOL:-} ;; sensors) v=${TRAY_REPRO_PSU_IPMITOOL:-} ;; esac
+    if [ -n "$v" ]; then  # the reader uses this route as is (hsc_route, hsc_dump, psu_read)
+      sr_route_ok "$p" "$v" && l=yes
+    elif [ "$p" = rescan ]; then  # same rule as run.sh rk_can_root: a tee-only rule does not count
       command -v sudo > /dev/null 2>&1 && timeout "$SR_PROBE_S" sudo -n -l < /dev/null 2> /dev/null | grep -qE 'NOPASSWD: *(.*, *)?ALL *(,|$)' && l=yes
     elif command -v sudo > /dev/null 2>&1; then
       while IFS= read -r c; do

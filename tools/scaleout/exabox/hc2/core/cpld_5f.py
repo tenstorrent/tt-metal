@@ -39,6 +39,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import time
@@ -106,6 +107,10 @@ def parse_raw(out):
 class Reader:
     def __init__(self, ipmitool, dry):
         self.cmd, self.dry, self.t_end = shlex.split(ipmitool), dry, time.monotonic() + DEADLINE_S
+        # the program by its first PATH match only, as the shell runs it: subprocess tries every match in
+        # turn, so a stub sudo (run.sh --stub) that failed to exec fell through to the real sudo later on PATH
+        if self.cmd:
+            self.cmd[0] = shutil.which(self.cmd[0]) or self.cmd[0]
 
     def call(self, *a):
         argv = self.cmd + ["raw", "0x06", "0x52", *a]

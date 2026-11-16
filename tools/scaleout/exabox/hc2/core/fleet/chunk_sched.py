@@ -31,6 +31,12 @@ power. Its launches are chunk 1's (step(0, i)): chunk 1's verify reads their cou
   chunk_sched.py where <rows.jsonl> <epoch> [bdf[@k]...]   where in the schedule <epoch> fell, naming each BDF's tray (and tt-smi k)
   chunk_sched.py stalled <rows.jsonl>               a load hang's PINPOINT line (the chips that stopped, or the whole box), then
                                                    the stopped chips' BDFs on line 2 (empty: the whole box)
+  chunk_sched.py live <rows.jsonl> <seen file>     while the load runs: one 'CHUNK k/N NUMERIC FAIL' line per chip that a chunk-end
+                                                   readback (or a G3/G3b/N1/N2 readback) found wrong since the last call, at once,
+                                                   not when the part ends; <seen file> keeps the readbacks already reported.
+                                                   Each line ends '(provisional: ...)': the part-end report decides. One call
+                                                   at a time per seen file (<seen file>.lock); the seen file is replaced only
+                                                   after the lines are printed, so no line is said twice or lost
 """
 import json
 import math
@@ -137,7 +143,10 @@ class FastPoll:
     """A short fast window at each chunk start, so the PEAK line sees the first bursts' spikes that the 5 s
     C8 sample misses. A thread reads every chip's hwmon power1_input and curr1_input from sysfs every `every` s for `window_s` s
     and appends "<epoch> <bdf> - <uW> <MHz> <mA> - <mA max>" rows (c8_telemetry.txt's format). Read-only: no device open, no
-    write, no sync or readback in the burst; never a power limit."""
+    write, no sync or readback in the burst; never a power limit. A power1_input or curr1_input over UNREAD (all ones
+    while the ARC is not ready, 4294967296) is unreadable (goal 29): written as "-", counted per BDF in unread."""
+
+    UNREAD = 1e9  # uW or mA: over it a read is unreadable, never a chip's power or current
 
     def __init__(self, out, sysroot="/sys", window_s=4.0, every=0.1, clock=time.time, sleep=time.sleep):
         self.out, self.root, self.window_s, self.every, self.clock, self.sleep = (
@@ -150,6 +159,7 @@ class FastPoll:
         )
         self.threads = []
         self.samples = 0
+        self.unread = {}
 
     def chips(self):
         import glob
@@ -169,6 +179,16 @@ class FastPoll:
         except OSError:
             return "-"
 
+    def _ok(self, v):
+        """v, or None when it is unreadable"""
+        try:
+            return v if float(v) <= self.UNREAD else None
+        except ValueError:
+            return v
+
+    def unread_lines(self):
+        return [f"telemetry: {n} unreadable samples on {b}" for b, n in sorted(self.unread.items())]
+
     def poll(self, start):
         cs = self.chips()
         end = start + self.window_s
@@ -176,9 +196,12 @@ class FastPoll:
             while self.clock() < end:
                 t0 = self.clock()
                 for b, h, d in cs:
+                    p, a = self._ok(self._rd(h + "/power1_input")), self._ok(self._rd(h + "/curr1_input"))
+                    if p is None or a is None:
+                        self.unread[b] = self.unread.get(b, 0) + 1
                     f.write(
-                        f"{t0:.3f} {b} - {self._rd(h + '/power1_input')} {self._rd(d + '/tt_aiclk')} "
-                        f"{self._rd(h + '/curr1_input')} - {self._rd(h + '/curr1_max')}\n"
+                        f"{t0:.3f} {b} - {p or '-'} {self._rd(d + '/tt_aiclk')} {a or '-'} - "
+                        f"{self._rd(h + '/curr1_max')}\n"
                     )
                     self.samples += 1
                 f.flush()
@@ -527,12 +550,56 @@ def core_of(r, c, H, W, grid, eltwise=False):
     )
 
 
+HEAVY_COLS_MAX = 512  # ub0_repro.HEAVY_COLS: the 16k heavy matmul's full output width in tile columns
+
+
+def cols_rotation(spec, default=HEAVY_COLS_MAX):
+    """chunk_load.py --heavy-cols-rotate (run.sh: FLEET_HEAVY_COLS_ROTATE, default '512,511'): the heavy
+    matmul's output tile columns per mix chunk, a comma list of 1-512; None or '' = [default] (every chunk the same)."""
+    if spec is None or not str(spec).strip():
+        return [int(default)]
+    out = []
+    for x in str(spec).split(","):
+        x = x.strip()
+        if not x.isdigit() or not 1 <= int(x) <= HEAVY_COLS_MAX:
+            raise ValueError(f"heavy_cols_rotate takes a comma list of 1-{HEAVY_COLS_MAX} tile columns (got '{spec}')")
+        out.append(int(x))
+    return out
+
+
+def chunk_cols(rot, k):
+    """Chunk k's (0-based) heavy tile columns: entry k mod n, so with 512,511 chunks 1 and 3 run 512, chunks 2 and 4 run
+    511."""
+    return rot[k % len(rot)]
+
+
+BANK_TILES_MIN = (
+    4  # a one-bank claim needs this many wrong tiles: 4 tiles spread at random land in one bank 0.2% of the time
+)
+BANK_CONC = 0.8  # pinpoint_verdict.CONC: one bank holding this share of the wrong tiles is the fault's bank
+
+
+def one_bank(l):
+    """A loc_summary() with per-bank counts (a tile-column count not a multiple of 8, the 511 shape: decoupled from the
+    banks) -> (bank, wrong tiles there, wrong tiles) when one bank holds BANK_CONC of at least BANK_TILES_MIN wrong
+    tiles, else None. A 512-column output has no per-bank count, so it never names a bank."""
+    b = (l or {}).get("banks")
+    tot = sum(b or [])
+    if not b or tot < BANK_TILES_MIN:
+        return None
+    i = max(range(len(b)), key=lambda x: b[x])
+    return (i, b[i], tot) if b[i] >= BANK_CONC * tot else None
+
+
 def loc_summary(rows, cols, H, W, grid, eltwise=False):
     """Where wrong elements sit in an H x W matmul output computed on a gx x gy core grid (owning
     core as in core_of()). rows/cols: element indices of the mismatches. Returns {first, tiles, cores, positions, wrong,
     grid}: first = core_of() of the first wrong element plus its row and col, cores = [[x, y, n]] most hit first,
     elements = [[row, col, n]] in-tile positions most hit first, positions = the first POS_MAX wrong elements as
-    [row, col, tile row, tile col, core x, core y, element row, element col]. Pure arithmetic on results already read.
+    [row, col, tile row, tile col, core x, core y, element row, element col], tile_cols = [[tile col, wrong tiles]] most
+    hit first; only when the output's tile-column count Nt is not a multiple of 8 (the 511-column heavy shape)
+    banks = wrong tiles per interleaved DRAM page bank, (tile row * Nt + tile col) mod 8: with Nt a multiple of 8 a tile
+    column is one bank, so a bank count says nothing. Pure arithmetic on results already read.
     """
     rows, cols = list(rows), list(cols)
     if not rows:
@@ -548,7 +615,10 @@ def loc_summary(rows, cols, H, W, grid, eltwise=False):
             pos.append([r, c] + o["tile"] + o["core"] + o["element"])
     first = dict(core_of(rows[0], cols[0], H, W, grid, eltwise), row=rows[0], col=cols[0])
     top = lambda d: sorted(([a, b, n] for (a, b), n in d.items()), key=lambda t: -t[2])[:8]
-    return dict(
+    tcols = {}
+    for _, tc in tiles:
+        tcols[tc] = tcols.get(tc, 0) + 1
+    out = dict(
         first=first,
         tiles=len(tiles),
         positions=pos,
@@ -558,7 +628,14 @@ def loc_summary(rows, cols, H, W, grid, eltwise=False):
         grid=first["grid"],
         shape=[H, W],
         **({"layout": "eltwise tile split"} if eltwise else {}),
+        tile_cols=sorted(([c, n] for c, n in tcols.items()), key=lambda t: (-t[1], t[0]))[:8],
     )
+    nt = -(-int(W) // 32)
+    if nt % 8:
+        out["banks"] = [0] * 8
+        for tr, tc in tiles:
+            out["banks"][(tr * nt + tc) % 8] += 1
+    return out
 
 
 def add_phys(l, fn):
@@ -607,6 +684,18 @@ def loc_text(c):
     return (
         f", first wrong element row {f['row']} col {f['col']} in {loc_where(f)}, {l['tiles']} bad tiles, "
         f"compute cores x,y,n {l['cores']}, in-tile elements row,col,n {l['elements']}"
+        + (f", top wrong tile columns col,n {l['tile_cols']}" if l.get("tile_cols") else "")
+        + (
+            f", wrong tiles per interleaved DRAM page bank 0-7: {'/'.join(map(str, l['banks']))} "
+            f"({-(-l['shape'][1] // 32)} tile columns, not a multiple of 8)"
+            if l.get("banks")
+            else ""
+        )
+        + (
+            f", wrong tiles concentrated in DRAM bank {ob[0]} ({ob[1]}/{ob[2]} tiles; columns decoupled from banks)"
+            if (ob := one_bank(l))
+            else ""
+        )
         + (
             f", first {len(l['positions'])} of {l['wrong']} positions (row,col,tile row,tile col,core x,core y,"
             f"element row,element col) {l['positions']}"
@@ -673,6 +762,7 @@ def _err_text(c):
 def numeric(rows):
     """Per chip over all chunk-end verifies: {bdf: {dev, tray, launches, mismatched, parts, first_chunk, nonfinite}}."""
     out = {}
+    hc = heavy_cols_by_chunk(rows)
     for r in rows:
         if r.get("event") != "verify":
             continue
@@ -701,6 +791,11 @@ def numeric(rows):
                 a["chunks"].add(r["k"])
                 if c.get("mismatched") or c.get("bad_parts"):
                     a["bad_chunks"].add(r["k"])
+                if r["k"] in hc:  # the heavy tile columns of each chunk checked, and of each that mismatched
+                    n = hc[r["k"]]
+                    cc = a.setdefault("cols", {}).setdefault(n, [0, 0])
+                    cc[0] += 1
+                    cc[1] += bool("heavy" in (c.get("bad_parts") or []))
                 if c.get("saturated"):
                     a["sat_chunks"].add(r["k"])
             if end:
@@ -718,8 +813,8 @@ def numeric(rows):
                     wrong_elems=c["wrong_elems"],
                     nonfinite_seen=bool(c.get("nonfinite_seen")),
                 )
-            if c.get("loc") and not a.get("loc"):
-                a["loc"] = c["loc"]
+            if c.get("loc") and (not a.get("loc") or (c["loc"].get("banks") and not a["loc"].get("banks"))):
+                a["loc"] = c["loc"]  # the first, or the first decoupled one: only it can name a bank
             for op, k in (c.get("sfpu_mis") or {}).items():  # heavy SFPU vote: mismatching checks per op
                 a.setdefault("sfpu_mis", {})[op] = a.get("sfpu_mis", {}).get(op, 0) + k
             for op, cs_ in (c.get("sfpu") or {}).items():  # heavy SFPU vote: wrong elements per core x,y
@@ -736,6 +831,28 @@ def numeric(rows):
             if c.get("first_bad") and not a.get("first_bad"):  # the first chunk's
                 a["first_bad"] = dict(c["first_bad"], k=r.get("k", 0))
     return out
+
+
+def heavy_cols_by_chunk(rows):
+    """{k: heavy tile columns} from the chunk rows' load (chunk_load.py); {} when no chunk row names them or
+    every chunk ran the same width (no rotation: the FAIL line stays as it was)."""
+    hc = {
+        r["k"]: r["load"]["heavy_cols"]
+        for r in rows
+        if r.get("event") == "chunk" and isinstance(r.get("load"), dict) and r["load"].get("heavy_cols")
+    }
+    return hc if len(set(hc.values())) > 1 else {}
+
+
+def cols_text(c):
+    """', heavy matmul output tile columns: mismatching chunks 2/2 at 511, 0/2 at 512' when the chip's chunks rotated
+    the heavy matmul's width, else ''."""
+    cc = c.get("cols")
+    if not cc or "heavy" not in c.get("parts", ()):
+        return ""
+    return ", heavy matmul output tile columns: mismatching chunks " + ", ".join(
+        f"{b}/{n} at {w}" for w, (n, b) in sorted(cc.items(), key=lambda kv: (-kv[1][1], kv[0]))
+    )
 
 
 def ccl_groups(rows, chips, skip=()):
@@ -963,6 +1080,28 @@ def power_in(power, start, end):
     )
 
 
+def timing_text(t):
+    """The measured bursts (ub0_repro.BurstGap.timing()): mean and min-max on-time and pause in s,
+    from the load's own timestamps, not the configured burst steps and gap."""
+    if not isinstance(t, dict) or not (t.get("on") or t.get("pause")):
+        return "burst on-time and pause not measured"
+
+    def side(name, v, what):
+        return (
+            f"{name} mean {v['mean']:.3f} s (min {v['min']:.3f}, max {v['max']:.3f}; {v['n']} {what}{'s' if v['n'] != 1 else ''})"
+            if v
+            else f"{name} not measured"
+        )
+
+    pz = t.get("pause")
+    return (
+        "measured burst "
+        + side("on-time", t.get("on"), "burst")
+        + ", "
+        + (side("pause", pz, "pause") if pz else "no pause (back to back)")
+    )
+
+
 def topup_text(t):
     """The pre-ramp's top-up (chunk_load.py's TopUp.info()): which chips got more heavy ops per burst, and why."""
     if not isinstance(t, dict):
@@ -985,7 +1124,8 @@ def topup_text(t):
 def load_line(r, n, power, quiet=None, psu=None, telem=None):
     """One LOAD line per chunk row: the trays' summed kW at the step
     (the first 10 s after the quiet), the chunk mean and the idle just before, from the BMC tray power poll; TFLOP/s per
-    chip from the launch rate (idle: the quiet row just before, if any); the heavy op, run-ahead and checks from the row's "load"; and every fallback.
+    chip from the launch rate (idle: the quiet row just before, if any); the heavy op, run-ahead and checks from the row's "load"; the heavy
+    ops on smaller minimal_matmul blocks ('heavy blocks:'); and every fallback.
     """
     u, ld = r.get("util") or {}, r.get("load")
     ln = f" ({mins(r['chunk_s'])} min)" if r.get("chunk_s") else ""
@@ -1007,6 +1147,8 @@ def load_line(r, n, power, quiet=None, psu=None, telem=None):
             + (f"{kw(sum(idle) / len(idle))} kW, " if idle else "- (no quiet polled before it), ")
         )
     s += f"{u['tflops_chip']:g} TFLOP/s per chip" if u.get("tflops_chip") is not None else "TFLOP/s not reported"
+    if isinstance(ld, dict) and ld.get("heavy"):  # the heavy part's bursts as they ran, next to TFLOP/s
+        s += f", {timing_text(ld.get('timing'))}"
     if r.get("chunk_s"):
         s += f", ends {r['end'] - r['start'] - r['chunk_s']:+.1f} s after plan"
     if mean and psu:  # 12-14 kW through each whole chunk
@@ -1037,6 +1179,8 @@ def load_line(r, n, power, quiet=None, psu=None, telem=None):
         s += f", {ld['topup']}"
     if ld.get("checks") is not None:
         s += f", {ld['checks']} numeric checks ({ld.get('checks_per_launch', '?')} per launch)"
+    if ld.get("heavy_blocks"):  # minimal_matmul on smaller blocks that fit L1: still minimal_matmul, no fallback
+        s += "; heavy blocks: " + ", ".join(ld["heavy_blocks"])
     return s + "; fallback: " + ("; ".join(ld.get("fallback") or []) or "none")
 
 
@@ -1194,9 +1338,8 @@ def report(rows, power=None, psu=None, telem=None, c8=None, limits=None, fast=No
                     + (f", SFPU vote {sfpu_count(c)}" if c.get("sfpu_mis") else "")
                 )
                 + f", "
-                f"first in chunk {c['first_chunk'] + 1}, non-finite elements {c['nonfinite']}{err_text(c)}{first_bad_text(c)}"
+                f"first in chunk {c['first_chunk'] + 1}{cols_text(c)}, non-finite elements {c['nonfinite']}{err_text(c)}{first_bad_text(c)}"
             )
-    # a chunk-end readback that raised: that chip's part was not checked, never a PASS; one line per part if all chips
     order = lambda k: (chips[k]["tray"] is None, chips[k]["tray"] or 0, k)  # noqa: E731
     errs = {}
     for k, c in chips.items():
@@ -1243,8 +1386,10 @@ def report(rows, power=None, psu=None, telem=None, c8=None, limits=None, fast=No
     out += group_lines(rows, chips, groups, n)
     rw_bad = set()
     for r in rows:
-        if r.get("event") in ("rw", "dbi", "l1"):
-            lines, bad = {"rw": rw_lines, "dbi": dbi_lines, "l1": l1_lines}[r["event"]](r, n)
+        if r.get("event") in ("rw", "dbi", "l1", "noc", "rf"):
+            lines, bad = {"rw": rw_lines, "dbi": dbi_lines, "l1": l1_lines, "noc": noc_lines, "rf": rf_lines}[
+                r["event"]
+            ](r, n)
             out += lines
             rw_bad |= bad
     caps = [r for r in rows if r.get("event") == "capture"]
@@ -1507,7 +1652,20 @@ def dbi_lines(r, n):
             + f"banks {pb}, burst byte offsets {offs or '-'}, flipped bits 0x{int(c.get('xor', 0)):02x}, "
             f"patterns {pats or '-'}"
         )
+    wd = r.get("window") or {}
+    for c in (wd.get("chips") or {}).values():
+        if c.get("bad"):
+            bad.add(c.get("tray"))
+            fa = c.get("first_addr")
+            out.append(
+                f"NUMERIC FAIL {short(c.get('pci') or '?')} (tray {c.get('tray') or '?'}) chip {c.get('dev')} [dbi]: G3b "
+                f"DRAM 1 GB window {wd.get('window')} readback {at}: {c['bad']} bytes, first at DRAM bank "
+                f"{c.get('first_bank')} offset {'?' if fa is None else hex(fa)}, banks {c.get('per_bank')}, "
+                f"flipped bits 0x{int(c.get('xor', 0)):02x}"
+            )
     nbad = len(out)
+    if wd.get("error"):
+        out.append(f"NUMERIC WARN G3b DRAM 1 GB window {wd.get('window')} {at} not checked: {str(wd['error'])[:200]}")
     if r.get("error"):
         out.append(f"NUMERIC WARN G3b DRAM byte/DBI pattern readback {at} not checked: {str(r['error'])[:200]}")
     else:
@@ -1520,6 +1678,12 @@ def dbi_lines(r, n):
             f"NUMERIC G3b {at}: {hms(r['start'])}-{hms(r['end'])}, {r.get('passes', 0)} passes of {r.get('patterns', 0)} "
             f"byte/DBI patterns, {r.get('mb', 0):g} MB per chip on {len(cs_)} chips, {cp}, {r.get('wall_s', 0):g} s; "
             + (f"{nbad} chip(s) mismatched" if nbad else "every chip matched" if r.get("passes") else "no pass ran")
+            + (
+                f"; 1 GB window {wd['window']} at DRAM bank offsets {hexa(wd.get('addr'))}-{hexa(wd.get('end'))}, "
+                f"filler {wd.get('filler_mb', 0)} MB"
+                if wd and not wd.get("error")
+                else ""
+            )
         )
     return out, bad
 
@@ -1533,6 +1697,11 @@ def calm(e, n=120):
     (FAIL, HANG, DROP, MISSING, LOST, lost: fl_vd_fin, fl_find) lowercased or reworded, so the line stays a WARN."""
     e = re.sub(r"FAIL|HANG|DROP|MISSING|LOST", lambda m: m.group(0).lower(), str(e)[:n])
     return re.sub(r"lost", "gone", e)
+
+
+def hexa(a):
+    """An L1 or DRAM address as hex, '?' when ttnn could not say."""
+    return "?" if a is None else f"0x{int(a):x}"
 
 
 def l1_lines(r, n):
@@ -1590,12 +1759,152 @@ def l1_lines(r, n):
             if r.get("copy") == "reshard"
             else f"host write and readback only (ttnn.to_memory_config: {calm(r.get('copy_error'))})"
         )
+        mg = f", {r['margin_kb']} KB left free" if r.get("margin_kb") is not None else ""
+        ad = "; ".join(
+            f"{w} source {hexa(a.get('src'))} copy {hexa(a.get('copy'))}"
+            for w, a in sorted((r.get("addrs") or {}).items())
+        )
         out.append(
             f"NUMERIC N1 L1 march {at}: {hms(r['start'])}-{hms(r['end'])}, {r.get('passes', 0)} passes, patterns "
             f"{len(r.get('done') or [])} of {r.get('patterns', 0)} ({','.join(r.get('done') or []) or '-'}), "
-            f"{r.get('kb_per_core', 0)} KB per core on {r.get('cores', 0)} cores, {len(cs_)} chips, {cp}, "
-            f"{r.get('wall_s', 0):g} s; "
+            f"{r.get('kb_per_core', 0)} KB per core{mg} on {r.get('cores', 0)} cores, {len(cs_)} chips, {cp}, "
+            + (f"L1 addresses {ad}, " if ad else "")
+            + f"{r.get('wall_s', 0):g} s; "
             + (f"{nbad} chip(s) mismatched" if nbad else "every chip matched" if r.get("passes") else "no pass ran")
+        )
+    return out, bad
+
+
+def noc_lines(r, n):
+    """A "noc" row (chunk_load.py --noc-wall-s, goal 54 stage 2): N2, the on-chip network-on-chip
+    all-to-all check right after G3b (noc_a2a.a2a_check). One NUMERIC FAIL per chip with a bad word, naming the leg and
+    its source and destination (logical core x,y or DRAM bank) with the most bad words, the bad word count per leg and
+    the XOR of the flipped bits, and, for a wrong semaphore count in the multicast leg L1mc, the chip by tray, ASIC and
+    BDF, the receiver core, its senders, NOC and the counts it got; one NUMERIC WARN per mismatch most chips shared (the
+    op's or software's); then one summary line. A check that raised, or a multicast leg this ttnn could not run, is a
+    NUMERIC WARN, never a pass; a multicast leg that timed out or failed to dispatch is a NUMERIC FAIL. Returns (lines,
+    trays that failed)."""
+    at = f"after chunk {r['k'] + 1}/{n}"
+    cs_ = r.get("chips") or {}
+    order = lambda kv: (kv[1].get("tray") is None, kv[1].get("tray") or 0, str(kv[1].get("pci")))  # noqa: E731
+    out, bad = [], set()
+    for _, c in sorted(cs_.items(), key=order):
+        if not c.get("bad_passes"):
+            continue
+        bad.add(c.get("tray"))
+        pairs = sorted((c.get("pairs") or {}).items(), key=lambda kv: -kv[1])
+        top = "; ".join(f"{k.split('|')[0]} {k.split('|')[1]} -> {k.split('|')[2]} {v} words" for k, v in pairs[:3])
+        legs = ", ".join(f"{L} {v}" for L, v in (c.get("per_leg") or {}).items() if v)
+        ex = (c.get("examples") or [{}])[0]
+        exs = (
+            f", first word row {ex['row']} col {ex['col']} got 0x{ex['got']:08x} want 0x{ex['want']:08x}"
+            if "row" in ex
+            else ""
+        )
+        ft = f" ({hms(c['first_t'])})" if c.get("first_t") else ""
+        sm = ""
+        if c.get("sem"):
+            b, se = short(c.get("pci") or "?"), (c.get("sem_ex") or [{}])[0]
+            asic = int(b[:2], 16) & 0xF if re.match(r"[0-9a-f]{2}:", b) else "?"
+            sm = (
+                f"; semaphore count wrong at {c['sem']} receiver(s) on tray {c.get('tray') or '?'} ASIC {asic} / {b}, "
+                f"first {se.get('core')} on {se.get('noc')} in pass {se.get('k')}: row sender {se.get('row_sender')} "
+                f"{se.get('row')}, column sender {se.get('col_sender')} {se.get('col')} increments, "
+                f"want {se.get('want')}" + (" each (timed out waiting)" if se.get("timed_out") else " each")
+            )
+        out.append(
+            f"NUMERIC FAIL {short(c.get('pci') or '?')} (tray {c.get('tray') or '?'}) chip {c.get('dev')} [noc]: N2 "
+            f"network-on-chip all-to-all {at}: {c['bad_passes']}/{c.get('passes', 0)} passes mismatched, first in "
+            f"pass {c.get('first_pass')}{ft}, {c.get('bad', 0)} words; source -> destination: {top or '-'}; "
+            f"per leg {legs or '-'}; flipped bits 0x{int(c.get('xor', 0)):08x}{exs}{sm}"
+        )
+    nbad = len(out)
+    for cm in (r.get("common") or [])[:3]:
+        out.append(
+            f"NUMERIC WARN N2 network-on-chip all-to-all {at}: {cm.get('chips')} of {cm.get('of')} chips differ the "
+            f"same way in leg {cm.get('leg')} pass {cm.get('k')} ({cm.get('words')} words): the op's or "
+            f"software's, not a chip fault"
+        )
+    if r.get("mc_fail"):  # the mesh-wide op hung or did not dispatch: no chip named, so no tray of it passes
+        bad |= {c.get("tray") for c in cs_.values()}
+        out.append(
+            f"NUMERIC FAIL N2 network-on-chip multicast and semaphore leg L1mc {at}: timed out or failed to dispatch "
+            f"on the mesh of {len(cs_)} chips in pass {r.get('passes', 0)}, no chip named; N2 stopped there: "
+            f"{str(r['mc_fail'])[:200]}"
+        )
+    elif r.get("mc_error") and not r.get("error"):
+        out.append(
+            f"NUMERIC WARN N2 network-on-chip multicast and semaphore leg L1mc {at} not checked: "
+            f"{str(r['mc_error'])[:200]}"
+        )
+    if r.get("error"):
+        out.append(f"NUMERIC WARN N2 network-on-chip all-to-all {at} not checked: {str(r['error'])[:200]}")
+    else:
+        # rows written before mc_nocs existed: two passes or more cover both NOCs
+        legacy = "NOC0 and NOC1" if (r.get("mc_passes") or 0) >= 2 else "NOC0"
+        nocs = " and ".join(f"NOC{p}" for p in r["mc_nocs"]) if r.get("mc_nocs") else legacy
+        mc = f" and a 2D multicast with semaphore counts on {nocs}" if r.get("mc_passes") else ""
+        out.append(
+            f"NUMERIC N2 {at}: {hms(r['start'])}-{hms(r['end'])}, {r.get('passes', 0)} passes of "
+            f"{len(r.get('legs') or [])} legs (DRAM, height and width sharded L1{mc} over the {r.get('grid', '?')} "
+            "grid), "
+            f"{r.get('mb', 0):g} MB per chip on {len(cs_)} chips, {r.get('banks', 0)} banks, {r.get('wall_s', 0):g} s; "
+            + (f"{nbad} chip(s) mismatched" if nbad else "every chip matched" if r.get("passes") else "no pass ran")
+        )
+    return out, bad
+
+
+def bits(m):
+    """A flipped-bit mask's bit numbers, high first: '30,14'."""
+    return ",".join(str(b) for b in range(31, -1, -1) if int(m) >> b & 1) or "-"
+
+
+def rf_lines(r, n):
+    """An "rf" row (chunk_load.py --rf-wall-s): N7, the copy-only register-file walk right after N2 (rf_walk.rf_check).
+    One 'NUMERIC FAIL <BDF> (tray N) chip D [rf]: N7 register-file walk ...: core x,y leg L bits b,.. words k' per chip,
+    core and leg (worst first, L1_CAP per chip, the rest in one more line); one NUMERIC WARN per mismatch most chips
+    shared (test-side) and per leg that raised (not checked); then one summary line. Returns (lines, trays that
+    failed)."""
+    at = f"after chunk {r['k'] + 1}/{n}"
+    cs_ = r.get("chips") or {}
+    order = lambda kv: (kv[1].get("tray") is None, kv[1].get("tray") or 0, str(kv[1].get("pci")))  # noqa: E731
+    out, bad = [], set()
+    for _, c in sorted(cs_.items(), key=order):
+        if not c.get("bad_passes"):
+            continue
+        bad.add(c.get("tray"))
+        who = f"NUMERIC FAIL {short(c.get('pci') or '?')} (tray {c.get('tray') or '?'}) chip {c.get('dev')} [rf]: N7"
+        hits = sorted(
+            ((xy, L, v) for xy, ls in (c.get("cores") or {}).items() for L, v in ls.items()),
+            key=lambda h: (-h[2]["words"], h[0], h[1]),
+        )
+        for xy, L, v in hits[:L1_CAP]:
+            out.append(f"{who} register-file walk {at}: core {xy} leg {L} bits {bits(v['xor'])} words {v['words']}")
+        if len(hits) > L1_CAP:
+            more = hits[L1_CAP:]
+            out.append(
+                f"{who} register-file walk {at}: core {','.join(sorted({h[0] for h in more}))[:80]} and {len(more)} "
+                f"more core/leg entries, words {sum(h[2]['words'] for h in more)}"
+            )
+        if not hits:
+            out.append(f"{who} register-file walk {at}: core ? leg ? words {c.get('bad', 0)}")
+    nbad = len({c.get("pci") for c in cs_.values() if c.get("bad_passes")})
+    for t in (r.get("test_side") or [])[:3]:
+        out.append(
+            f"NUMERIC WARN N7 register-file walk {at}: leg {t.get('leg')} pass {t.get('pass_')}: {t.get('chips')} of "
+            f"{t.get('of')} chips mismatched the same way ({t.get('words')} words): test-side, not judged"
+        )
+    for L, e in (r.get("errors") or {}).items():
+        out.append(f"NUMERIC WARN N7 register-file walk {at}: leg {L} not checked: {calm(e, 200)}")
+    if r.get("error"):
+        out.append(f"NUMERIC WARN N7 register-file walk {at} not checked: {calm(r['error'], 200)}")
+    else:
+        out.append(
+            f"NUMERIC N7 register-file walk {at}: {hms(r['start'])}-{hms(r['end'])}, {r.get('passes', 0)} passes, "
+            f"legs {','.join(r.get('legs') or []) or '-'} (unpack -> Src -> Dest -> pack, walking 1/0), "
+            f"{r.get('tiles_per_core', 0)} tiles per core on {r.get('cores', 0)} cores, {len(cs_)} chips, "
+            f"{r.get('wall_s', 0):g} s; "
+            + (f"{nbad} chip(s) mismatched" if nbad else "every chip matched" if r.get("legs") else "no leg ran")
         )
     return out, bad
 
@@ -1706,10 +2015,85 @@ def stalled(rows):
     return f"PINPOINT: whole box: all {len(chips)} chips ({tr}) {what}", []
 
 
+# the mid-load readbacks (G3, G3b, N1, N2, N7): each row is its own check
+LIVE_EVENTS = ("rw", "dbi", "l1", "noc", "rf")
+LIVE_PROV = "(provisional: the part-end NUMERIC FAIL lines decide; a chip they put in a CCL spread is not a fault)"
+
+
+def live(rows, seen):
+    """The FAIL lines of the readbacks not in <seen> (a set it adds to): fleet.sh says them while the load still runs, so a
+    wrong output is reported when the chunk that read it ends, not when the whole part ends (the mix's FAIL came
+    9-13 min after its bad read). Each line is the part-end report's NUMERIC FAIL line for that chip on the rows up to that
+    readback, behind 'CHUNK k/N NUMERIC FAIL at <time of the read>: ', so the ledger readers that want '^NUMERIC FAIL <BDF>'
+    count only the part-end line, and the verdict, findings and exit codes stay those of the part-end report. Each line
+    ends with LIVE_PROV: a chip named here can still go into a CCL spread at the part's end, which then does not name it.
+    """
+    out = []
+    n = nchunks(rows) or "?"
+    for i, r in enumerate(rows):
+        ev, k = r.get("event"), r.get("k", -1)
+        if ev == "verify" and isinstance(k, int) and k >= 0:
+            key = f"verify:{k}"
+        elif ev in LIVE_EVENTS:
+            key = f"{ev}:{k}:{i}"
+        else:
+            continue
+        if key in seen:
+            continue
+        seen.add(key)
+        at = f"CHUNK {k + 1 if isinstance(k, int) and k >= 0 else '?'}/{n} NUMERIC FAIL at {hms(r.get('start') or r.get('end') or 0)}{time.strftime(' %Z')}"
+        if ev in LIVE_EVENTS:
+            lines, _ = {"rw": rw_lines, "dbi": dbi_lines, "l1": l1_lines, "noc": noc_lines, "rf": rf_lines}[ev](r, n)
+            out += [f"{at}: {l[len('NUMERIC FAIL '):]} {LIVE_PROV}" for l in lines if l.startswith("NUMERIC FAIL ")]
+            continue
+        bad = {
+            c.get("pci") or f"metal{c.get('metal', cid)}"
+            for cid, c in (r.get("chips") or {}).items()
+            if c.get("mismatched") or c.get("bad_parts") or any((c.get("sfpu_mis") or {}).values())
+        }
+        if not bad:
+            continue
+        cut = [x for x in rows[: i + 1] if x.get("event") not in LIVE_EVENTS + ("capture",)]
+        for l in report(cut):
+            if l.startswith("NUMERIC FAIL ") and l[len("NUMERIC FAIL ") :].split(" ", 1)[0] in {short(b) for b in bad}:
+                out.append(f"{at} (chunk {k + 1} readback): {l[len('NUMERIC FAIL '):]} {LIVE_PROV}")
+    return out
+
+
+def live_main(rows_path, seen_path):
+    """chunk_sched.py live: one pass at a time per seen file, so the heartbeat's last pass (still running when hb_stop
+    TERMs or KILLs its shell) and fl_c7's pass after the load never both say a line. The seen file is replaced whole
+    (temp file, rename) before any line is printed: a pass cut while printing (hb_stop's TERM or KILL) has its lines
+    marked seen, so the next pass never says them twice; a line it did not get to print is still in the part's own
+    end-of-load numeric report. None is lost to a half-written seen file."""
+    import fcntl
+
+    with open(seen_path + ".lock", "a") as lk:
+        fcntl.flock(lk, fcntl.LOCK_EX)
+        rows = load(rows_path)
+        try:
+            with open(seen_path, errors="replace") as f:
+                seen = {l.strip() for l in f if l.strip()}
+        except OSError:
+            seen = set()
+        old = set(seen)
+        lines = live(rows, seen)
+        if seen != old:
+            tmp = f"{seen_path}.tmp{os.getpid()}"
+            with open(tmp, "w") as f:
+                f.writelines(f"{x}\n" for x in sorted(seen))
+            os.replace(tmp, seen_path)
+        for line in lines:
+            print(line)
+        sys.stdout.flush()
+    return 0
+
+
 def main(argv):
     if (
         not argv
-        or argv[0] not in ("report", "windows", "sched", "where", "stalled")
+        or argv[0] not in ("report", "windows", "sched", "where", "stalled", "live")
+        or (argv[0] == "live" and len(argv) < 3)
         or (argv[0] != "sched" and len(argv) < 2)
         or (argv[0] == "where" and len(argv) < 3)
     ):
@@ -1719,6 +2103,8 @@ def main(argv):
         chunks, gap = schedule()
         print(len(chunks), f"{sum(chunks):g}", f"{gap:g}", ",".join(mins(c) for c in chunks))
         return 0
+    if argv[0] == "live":
+        return live_main(argv[1], argv[2])
     rows = load(argv[1])
     if argv[0] == "windows":
         for w in windows(rows):

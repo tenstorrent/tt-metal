@@ -1,5 +1,12 @@
 # fleet/pv/pv.pin: the power virus run.sh's bus-bar stage runs (shipped in-tree and in the tgz).
-# run-ttx is BHFT 4.7.4 funtest_bh/tenstorrent/bin/run-ttx (PyInstaller single file, version 2026-04-08-3b82a468ccfe5b48);
-# checked to start from a bare dir holding only these two files (ldd: libdl, libz, libpthread, libc; --help rc 0).
+# run-ttx is BHFT 4.7.4 funtest_bh/tenstorrent/bin/run-ttx (PyInstaller single file, version 2026-04-08-3b82a468ccfe5b48),
+# pv.py's default runner (pv_umd was removed); it programs fixed TLB windows itself.
+# It was checked to start from a bare dir holding only run-ttx and the .ttx (ldd: libdl, libz, libpthread, libc; --help rc 0).
 run-ttx sha256=a7353f97fef1bed6bd216ffdc6d19253f824e0a420bba60a4c57cdf94e6cecad bytes=25141352
 single-core-matrix-pv-fp32-noc.ttx sha256=727de9fd3f1298b1267f08148340b17e8dbf436acf7584f093998553d2d290c1 bytes=178713
+# run-ttx-kmdtlb: run-ttx plus the runtime hook kmdtlb.code (kmdtlb.py marshalled by Python 3.7, built by
+# build-kmdtlb.sh), so every TLB window it uses comes from the driver. pv.py builds it into its scratch dir with repack.py
+# and runs it only when it matches this row. A change to kmdtlb.py needs build-kmdtlb.sh and new rows here.
+kmdtlb.py sha256=2a9413b4a89ec2a0cbae802a043c90ceab9f6067b91dcc5b7754a0b3319bb0af bytes=14850
+kmdtlb.code sha256=6163f182524120df48b6bfd5ab12ddf77177ab668e31b7fa984f360367e5a566 bytes=15170
+run-ttx-kmdtlb sha256=b7166692df4f3fdeb307991e4dacb52f593f5d10fc1c2620e45ccea43d385b25 bytes=25146472

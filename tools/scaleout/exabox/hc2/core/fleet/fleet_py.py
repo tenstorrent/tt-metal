@@ -113,6 +113,10 @@ python); the rest read files or sysfs and run with any python3.
                                         median (and >= 100) are "ETH FEC WARN tray T / QSFP-DD port P / ASIC A / BDF". Never FAIL.
                                         A snapshot with no counters: "ETH FEC: not judged (why)"
   ethsnap <eth_counters.jsonl>          heavy_logs index check: "FLAG ETH bad FCS ..." or "ok (...)"
+  ethparts <map.txt> <prev jsonl> <cur jsonl> <part> <disc.json> [removed bdfs]
+                                        ETH counters per in-box link over one bus-bar part or stage 6: a link up at
+                                        the start that went down or retrained (either end) is "ETH LINK FAIL in <part>: ...";
+                                        bad FCS, FEC or CDR unlocks over FLEET_ETH_*_MAX an "ETH LINK WARN"; then one summary line
   hangpin <map.txt> <pre dir> <post dir> [telem csv]
                                         C4 try hang: "C4 HANG <bdf> (tray N) tt-smi K" per chip whose ETH links sent
                                         under half the median frames between two heavy-logs reads (<dir>/eth_counters.jsonl,
@@ -970,7 +974,7 @@ def ethports(path):  # tt-smi snapshot -> {bdf: set of enabled ETH ports not up}
     return r
 
 
-def ethboth(pre, post, label, host=None, disc=None, held=None):
+def ethboth(pre, post, label, host=None, disc=None, held=None, noreset=None):
     """tt-smi enabled ports down before the run and after the reset -> ETH FAIL. host: the verdict
     on cabled channels is UMD's (ethlinks), so ports 0-7 (= UMD ch 0-7) are left to ethlinks, and ports 10, 11 (= ch 8, 9)
     are dropped where fleet/eth_peers.txt has no cable on that chip and WARNed (cross-quad, not judged) where
@@ -986,7 +990,9 @@ def ethboth(pre, post, label, host=None, disc=None, held=None):
     the C2 snapshot for a later recheck (c3g, c9); a grouped chip whose port was up there came back and dropped again
     during the run, so it keeps its per-chip FAIL (one not read there keeps the WARN). Chips whose inter-host port was down before the run, up there and down again after this later reset are our own reset
     dropping the off-box link (the far host is never reset by us): one test-side WARN per port, not a FAIL. This holds for any number of chips, one chip included; a port never up
-    at C2 on one tray keeps the FAIL. In-box links are judged as before."""
+    at C2 on one tray keeps the FAIL. In-box links are judged as before. noreset: the C2 start reset did not run
+    (NO RESET, its why): no reset brought the inter-host links up, so ports 10-13 down are one INCOMPLETE line per chip,
+    'start reset skipped; ETH not judged', never a FAIL."""
     a, b = ethports(pre), ethports(post)
     h = ethports(held) if held else b
     pm = ethpeers(os.path.join(os.path.dirname(os.path.abspath(__file__)), "eth_peers.txt"), host) if host else {}
@@ -1054,7 +1060,8 @@ def ethboth(pre, post, label, host=None, disc=None, held=None):
             print(
                 f"ETH WARN inter-host QSFP port {p} (trays {','.join(str(t) for t in sorted({ta(x)[0] for x in g}))}): "
                 f"down on {len(g)} chips at once: far end down or resetting; not judged as this host's fault (tt-smi port {p} [ch {p - 2}]: {'; '.join(nm(x) for x in g)}; down before the run; "
-                f"still down after the {label} reset: {'; '.join(nm(x) for x in st)}; far host not inspected)"
+                f"{'start reset skipped, ETH not judged' if noreset else 'still down after the ' + label + ' reset'}: "
+                f"{'; '.join(nm(x) for x in st)}; far host not inspected)"
             )
     for bdf in sorted(set(a) & set(b)):
         ports = sorted(a[bdf] & b[bdf])
@@ -1076,7 +1083,12 @@ def ethboth(pre, post, label, host=None, disc=None, held=None):
             ports = [
                 p for p in ports if not 10 <= p <= 13 and (p >= 8 or (t, s_, p) not in ext) and (t, s_, p) not in wg
             ]
-            if xb and far:
+            if xb and far and noreset:
+                print(
+                    f"ETH INCOMPLETE {nb} ({ubb(bdf)}): inter-host QSFP ETH ports {xb} (ch {[p - 2 for p in xb]}) down "
+                    f"at {label}; start reset skipped ({noreset}); ETH not judged"
+                )
+            elif xb and far:
                 print(
                     f"ETH FAIL {nb} ({ubb(bdf)}): inter-host QSFP ETH ports {xb} (ch {[p - 2 for p in xb]}) down before the "
                     f"run and still down after the {label} reset; far host not inspected (neighbours never gate), "
@@ -1153,7 +1165,7 @@ def platmap(mapf, host):
 
 
 # The valid in-box cabling layouts of a Blackhole galaxy. Each is the fixed
-# in-box links of its board revision (traces and linking boards: the L lines of eth_map.txt, Rev C as on the X16 quad hosts,
+# in-box links of its board revision (on-board traces and the cable cartridge (CC): the L lines of eth_map.txt, Rev C as on the X16 quad hosts,
 # or of eth_map_exabox.txt, Rev A/B, without their QSFP ports) plus the QSFP cables of a tt-CableGen node layout
 # (experiment_topologies BH_GALAXY_REV_{AB,C}_{SC16,ST-SC16}). QSFP_DD ports 1-6 of a tray (UBB_BLACKHOLE, tt-metal
 # tools/scaleout/board/board.cpp) -> (asic, channels); ports 7-14 use channels 8, 9, not judged by C3.
@@ -1290,7 +1302,7 @@ SUBEXT = "host judged sub-torus: fleet/eth_peers.txt is the X16-era SC16 map, no
 
 def cables(miss, wr):
     """missing links -> one phrase per QSFP cable they lie on ("05:00.0<->45:00.0 (tray 1<->2)"), wrap cables first, and how
-    many are wrap cables; a link not on a QSFP port (trace or linking board) is no cable."""
+    many are wrap cables; a link not on a QSFP port (on-board trace or the CC) is no cable."""
     qe = {(a, c): p for p, (a, cs) in QSFP.items() for c in cs}
     wp = {p for ax in wr for p in WRAPS[ax]}
     cs = {}
@@ -1401,6 +1413,8 @@ def tbdf(t, a):  # (tray 1-4, asic 1-8) -> "c5:00.0"
     return f"{({1: 0x00, 2: 0x40, 3: 0xC0, 4: 0x80}[t] | a):02x}:00.0"
 
 
+# fl_find's mark on a finding made after a no-reset fault (tray_why.untag)
+AFTER = re.compile(r" \[(after fault \(.*, no reset\))\]$")
 LOCALFAIL = re.compile(
     r"^ETH FAIL ([0-9a-f]{2}:[0-9a-f]{2}\.[0-7]) \(tray [1-4]\) (\w+): local ETH ports \[([0-9, ]*)\]"
 )
@@ -1458,8 +1472,12 @@ def ethback(findings, stages, d, smi, label, mapf, host=None):
         return
     ch = {}
     for l in lines:
-        m = LOCALFAIL.match(l)
-        if not m or m.group(2) == label or f"; {label} reset: " in l:
+        # the after-fault mark names the fault's own chips (chips lost: 01:00.0): parse the line without it and keep it last,
+        # where tray_why.py and final_verdict.py strip it
+        g = AFTER.search(l)
+        u, tag = (l[: g.start()], f" [{g.group(1)}]") if g else (l, "")
+        m = LOCALFAIL.match(u)
+        if not m or m.group(2) == label or f"; {label} reset: " in u:
             continue
         b = m.group(1)
         t, a = ta(b)
@@ -1484,7 +1502,7 @@ def ethback(findings, stages, d, smi, label, mapf, host=None):
                 + [f"ports {st} still down"] * bool(st)
                 + [f"ports {v} {nt[o]}" for o, v in sorted(off.items())]
             )
-        ch[l] = f"{l}; {label} reset: {w}"
+        ch[l] = f"{u}; {label} reset: {w}{tag}"
     if not ch:
         return
     for f in (findings, stages):
@@ -1570,7 +1588,41 @@ def peermiss(
     return out
 
 
-def ethlinks(d, label, mapf, peers, host=None, since=None, smi=None, named=None, pre=None, pres=None, nc=None):
+def laydown(loc, wr, nw, m, on, smi):
+    """The layout's links not up. closest()'s m counts only links UMD does not list; a link UMD
+    lists but tt-smi shows down at either end (ENABLED_ETH & ~ETH_LIVE_STATUS, ethports) is not up either. The links of an
+    uncabled wrap axis (nw) stay out, as in closest()."""
+    sdn = {(*ta(b), ch) for b, s_ in (ethports(smi) if smi else {}).items() if b.count(":") >= 2 for ch in s_}
+    g = {x for ax in nw for x in wr.get(ax, ())}
+    e = {frozenset((k, v)) for k, v in loc.items() if k[:2] in on and v[:2] in on}
+    return set(m) | {l for l in e if l & sdn and not l & g}
+
+
+def downnames(ls):
+    """Links not up named by cable, each end as tray / QSFP-DD port / ASIC / BDF, the ETH
+    channels only in brackets; an end with no QSFP-DD port (a link inside one tray) names no port."""
+    rq = {(a, ch): p for p, (a, chs) in QSFP.items() for ch in chs}
+    g = {}
+    for l in ls:
+        x, y = sorted(tuple(sorted(l)))
+        g.setdefault((x[:2], y[:2]), []).append((x[2], y[2]))
+
+    def end(t, a, ch, cab):
+        p = rq.get((a, ch)) if cab else None
+        return f"tray {t}{f' QSFP-DD port {p}' if p else ''} (ASIC {a}, {tbdf(t, a)})"
+
+    r = []
+    for (x, y), chs in sorted(g.items()):
+        cab = x[0] != y[0]
+        cx, cy = sorted(c for c, _ in chs), sorted(c for _, c in chs)
+        cs = ",".join(map(str, cx)) + ("" if cx == cy else " <-> " + ",".join(map(str, cy)))
+        r.append(f"{end(*x, cx[0], cab)} <-> {end(*y, cy[0], cab)} [ch {cs}]")
+    return "; ".join(r)
+
+
+def ethlinks(
+    d, label, mapf, peers, host=None, since=None, smi=None, named=None, pre=None, pres=None, nc=None, noreset=None
+):
     """UMD discovery -> per-chip ETH FAIL / WARN lines. Local ports (both ends on this host, eth_map.txt L):
     an endpoint whose partner chip is on PCIe but which UMD does not link is a FAIL. QSFP ports (eth_map.txt Q): a port
     not active is judged only on the cable peers' state read at the same moment (peers: {HOST: (state, why)}): FAIL when
@@ -1612,14 +1664,17 @@ def ethlinks(d, label, mapf, peers, host=None, since=None, smi=None, named=None,
             f"{label} reset, as every wrap port of the {ax}-chip axis: no wrap cable on this box (partial torus): INFO, not judged"
         )
     if lay:
-        name, what, _, _, _, _, nw0, m, u, n = lay
+        name, what, lloc, _, _, lwr, nw0, m, u, n = lay
+        mx = laydown(lloc, lwr, nw0, m, set(at), smi)
         ux = ", ".join(
             f"{tbdf(*x[:2])} (tray {x[0]}) port {x[2]}<->{tbdf(*y[:2])} (tray {y[0]}) port {y[2]}"
             for x, y in sorted(tuple(sorted(l)) for l in u)[:4]
         ) + (" ..." if len(u) > 4 else "")
         what += f", no {' or '.join(nw0)}-chip wrap cables" if nw0 else ""
         print(
-            f"ETH LAYOUT {label}: {name} ({what}), the closest of {n} valid in-box cablings: {len(m)} of its links not up, "
+            f"ETH LAYOUT {label}: {name} ({what}), the closest of {n} valid in-box cablings: {len(mx)} of its links not up"
+            f"{': ' + downnames(mx) if mx else ''}"
+            f"{f' ({len(mx - set(m))} of them listed by UMD but down in tt-smi)' if mx - set(m) else ''}, "
             f"{len(u)} discovered in-box links it does not have{': ' + ux if u else ''}"
         )
         dn = {(*ta(b), ch) for b, s_ in ldown.items() for ch in s_}
@@ -1690,6 +1745,11 @@ def ethlinks(d, label, mapf, peers, host=None, since=None, smi=None, named=None,
             )
         elif pres and (pm_ := peermiss(fe, peerpres(pres))):
             print(f"WARN {nm(b)} (tray {t}) {label}: QSFP ports {qd} down because peer {'; '.join(pm_)}; not this box")
+        elif noreset and label != "pre":  # no start reset brought the cable up, so no cable verdict
+            print(
+                f"ETH INCOMPLETE {nm(b)} (tray {t}) {label}: QSFP ETH ports {qd} not up{far}; start reset skipped "
+                f"({noreset}); ETH not judged"
+            )
         else:
             print(
                 f"ETH FAIL {nm(b)} (tray {t}) {label}: QSFP ETH ports {qd} not up{far}; cable peers {' '.join(sorted(ps))} up and idle"
@@ -2145,6 +2205,91 @@ def ethsnap(
     else:
         u = sum(1 for r in rs if r.get("uncorr_cw", 0))
         print(f"ok ({len(rs)} up ports" + (f"; uncorrected FEC on {u}, judged by run.sh's ETH FEC line)" if u else ")"))
+    return 0
+
+
+# ETH counters after each bus-bar part and stage 6, judged per in-box link, both ends paired by the
+# C2 discovery. A link up (port_status 1, rx_link_up 1) at the part's start that is down at its end, or whose retrain_count
+# rose at either end, is an "ETH LINK FAIL" naming the part, both BDFs, trays and ETH ports. Bad FCS, uncorrected and
+# corrected FEC and CDR unlock transitions over FLEET_ETH_*_MAX are an "ETH LINK WARN" until clean runs justify a FAIL. A link
+# not up at the start stays C3's layout judgement (the exabox port 6 FAILs were a layout misfit: 5088f11). Off-box ends (no
+# peer in the discovery) stay ethfec's: a far box's reset retrains them. Chips the MCE guard removed are listed, not judged.
+ETHP_WARN = (
+    ("frames_rxd_badfcs", "bad FCS", "FLEET_ETH_FCS_MAX", 0),
+    ("uncorr_cw", "uncorrected FEC", "FLEET_ETH_UNCORR_MAX", 100),
+    ("corr_cw", "corrected FEC", "FLEET_ETH_CORR_MAX", 10**9),
+    ("cdr_unlock_transitions", "CDR unlocks", "FLEET_ETH_CDR_MAX", 0),
+)
+
+
+def ethparts(mapf, prev, cur, part, disc, removed=""):
+    sh = lambda b: b[5:] if b.count(":") == 2 else b
+    kmd = {int(f[1]): sh(f[0]) for f in (l.split() for l in open(mapf)) if len(f) >= 2 and f[1].isdigit()}
+    rm = {sh(b) for b in removed.replace(",", " ").split()}
+    peer = {}
+    try:
+        d = json.loads([l for l in open(disc, errors="replace") if l.startswith("{")][-1])
+        bd = {int(i): sh(v) for i, v in d["bdfs"].items()}
+        for i, chs in d["links"].items():
+            for ch, (pi, pc) in chs.items():
+                if int(i) in bd and int(pi) in bd:
+                    peer[(bd[int(i)], int(ch))] = (bd[int(pi)], int(pc))
+    except (OSError, ValueError, KeyError, IndexError, TypeError):
+        pass
+    if not peer:
+        print(f"ETH {part}: links not judged (no discovery with in-box links)")
+        return 0
+    a, b = ({(kmd[n], x - 20): r for (n, x), r in eth_rows(f).items() if n in kmd} for f in (prev, cur))
+    up = lambda r: r.get("port_status") == 1 and r.get("rx_link_up") == 1 and _sane(r)
+    nm = lambda e: f"{e[0]} ({ubb(e[0])}) ETH port {e[1]}"
+    lim = {k: int(os.environ.get(v, "")) if os.environ.get(v, "").isdigit() else dflt for k, _, v, dflt in ETHP_WARN}
+    chips, got = {e[0] for e in a}, {e[0] for e in b}
+    if chips & rm:
+        print(
+            f"ETH {part}: not read, removed by the MCE guard: {', '.join(f'{c} ({ubb(c)})' for c in sorted(chips & rm))}"
+        )
+    if chips - rm - got:
+        print(f"ETH {part}: not read: {', '.join(f'{c} ({ubb(c)})' for c in sorted(chips - rm - got))}")
+    n = bad = rst = nr = 0
+    top = dict.fromkeys(lim, 0)
+    low = lambda q, p, k: isinstance(q.get(k), int) and q[k] < p[k]
+    for lk in sorted({tuple(sorted((e, f))) for e, f in peer.items()}):
+        if any(e[0] not in got or e[0] in rm or not up(a.get(e, {})) for e in lk):
+            continue  # not read now, or not up at the start (C3's layout judgement)
+        if any(e not in b for e in lk):
+            nr += 1  # the chip's read stopped before this port (a crash or the timeout mid-chip)
+            continue
+        if any(low(b[e], a[e], "frames_rxd") or low(b[e], a[e], "retrain_count") for e in lk):
+            rst += 1  # a reset in the part restarted the counters
+            continue
+        n += 1
+        fail, warn = [], []
+        for e in lk:
+            p, q = a[e], b.get(e, {})
+            if q.get("port_status") != 1 or q.get("rx_link_up") != 1:
+                fail.append(f"down at {e[0]} (port_status {q.get('port_status')}, rx_link_up {q.get('rx_link_up')})")
+                continue
+            if not _sane(q):
+                continue
+            if q["retrain_count"] > p["retrain_count"]:
+                fail.append(f"retrained +{q['retrain_count'] - p['retrain_count']} at {e[0]}")
+            for k, what, _, _ in ETHP_WARN:
+                v = q.get(k, 0) - p.get(k, 0)
+                top[k] = max(top[k], v)
+                if v > lim[k]:
+                    warn.append(f"{what} +{v} at {e[0]}")
+        lnk = f"{nm(lk[0])} <-> {nm(lk[1])}"
+        if fail:
+            bad += 1
+            print(f"ETH LINK FAIL in {part}: {lnk}: {'; '.join(fail + warn)}")
+        elif warn:
+            print(f"ETH LINK WARN in {part}: {lnk}: {'; '.join(warn)} (over FLEET_ETH_*_MAX; WARN only, no fail)")
+    print(
+        f"ETH {part}: {n} in-box link(s) up at the start judged, {bad} down or retrained; largest rise at one end: "
+        + ", ".join(f"{w} {top[k]}" for k, w, _, _ in ETHP_WARN)
+        + (f"; {rst} not judged (counters restarted)" if rst else "")
+        + (f"; {nr} not judged (port not read)" if nr else "")
+    )
     return 0
 
 
@@ -2625,7 +2770,7 @@ def main(a):
         ethdown2(a[1], a[2], a[3], a[4] if len(a) > 4 else None)
     elif a[0] == "ethlinks":
         kw = {"host": None, "since": None}
-        while len(a) > 5 and a[-2] in ("--host", "--since", "--smi", "--named", "--pre", "--pres", "--nc"):
+        while len(a) > 5 and a[-2] in ("--host", "--since", "--smi", "--named", "--pre", "--pres", "--nc", "--noreset"):
             k = a[-2][2:]
             kw[k] = a[-1].upper() if k == "host" else int(a[-1]) if k == "since" else a[-1]
             a = a[:-2]
@@ -2645,7 +2790,7 @@ def main(a):
     elif a[0] == "ethdiff":
         ethdiff(last_json(a[1]), last_json(a[2]))
     elif a[0] == "ethboth":
-        o = {"--host": None, "--held": None}
+        o = {"--host": None, "--held": None, "--noreset": None}
         i = 4
         while i + 1 < len(a) and a[i] in o:
             o[a[i]] = a[i + 1]
@@ -2657,6 +2802,7 @@ def main(a):
             o["--host"] and o["--host"].upper(),
             a[i + 1 :] if a[i : i + 1] == ["--map"] else None,
             o["--held"],
+            o["--noreset"],
         )
     elif a[0] == "attr":
         return attr(a[1], a[2:])
@@ -2670,6 +2816,8 @@ def main(a):
         return hangpin(*a[1:5])
     elif a[0] == "ethfec":
         return ethfec(*a[1:5])
+    elif a[0] == "ethparts":
+        return ethparts(*a[1:7])
     elif a[0] == "ethsnap":
         return ethsnap(a[1])
     elif a[0] == "telem":

@@ -137,9 +137,32 @@ fw_nr_settle() {
     done <<< "$FW_NR"
   done
 }
+fw_ready_state() {  # $1 a fw_table file: one reason line while the chips are not ready yet (smoke Slurm 212764, b03u02:
+  # pre started before the chips came up, no tt_*_ver on any of 32 chips, ETH mailbox opens 'No such device'); nothing
+  # when a chip shows a version or no chip is on PCI. No version on any chip with a tt-kmd node missing or a version file
+  # read empty is not ready; every node there with no version file at all is a tt-kmd without them (as before: ready)
+  [ -s "$1" ] && ! grep -q '=' "$1" || return 0
+  local m k f
+  m=$(grep -c . "$1"); k=$(awk '$2 == "-"' "$1" | grep -c .)
+  if [ "$k" -gt 0 ]; then echo "no tt-kmd device node on $k of $m chips"; return 0; fi
+  for f in "${SYS:-/sys}"/bus/pci/devices/*/tenstorrent/tenstorrent!*/tt_*_ver; do
+    [ -e "$f" ] && { echo "tt_*_ver empty on all $m chips"; return 0; }; done
+}
+fw_ready_wait() {  # $1 the table file: fw_table into it until fw_ready_state is empty or FW_READY_T s (60) pass, a read
+  # every FW_READY_POLL s (5); prints the last reason, nothing once ready
+  local t0=$SECONDS r
+  while :; do
+    fw_table > "$1"; r=$(fw_ready_state "$1")
+    [ -n "$r" ] && [ $((SECONDS - t0)) -lt "${FW_READY_T:-60}" ] || break
+    sleep "${FW_READY_POLL:-5}"
+  done
+  echo "$r"
+}
 fw_preflight() {
   local l b c v
-  fw_table > "$OUT/fw.txt"; FW_FAIL=$(fw_uniform "$OUT/fw.txt"); FW_NR=$(fw_notready "$OUT/fw.txt"); FW_NR_DONE=""
+  FW_PRE_NR=$(fw_ready_wait "$OUT/fw.txt")   # waits only while no chip shows a version; set: C0 and C1's reads run after the start reset
+  [ -n "$FW_PRE_NR" ] && { say "C0 firmware: chips not ready at the start after a ${FW_READY_T:-60} s wait ($FW_PRE_NR): versions not compared"; FW_FAIL=""; FW_NR=""; FW_NR_DONE=""; return 0; }
+  FW_FAIL=$(fw_uniform "$OUT/fw.txt"); FW_NR=$(fw_notready "$OUT/fw.txt"); FW_NR_DONE=""
   if [ -n "${KD_TRAY:-}" ]; then   # --known-dropped-tray=N: a tray N chip that reads ffff (every version 255.255.255.255
     # or unread) is the known drop, not a firmware mismatch; a live tray N chip is still compared
     awk -v kd="$KD_TRAY" '{ t = tolower(substr($1, 6, 1)); t = (t == "0" ? 1 : t == "4" ? 2 : t == "c" ? 3 : t == "8" ? 4 : 0)   # as rk_tray

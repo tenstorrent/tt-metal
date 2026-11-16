@@ -112,6 +112,10 @@
 #   run.sh --repro tray-drop <bdf> [--shape h3-replay|h3-cadence|imbalance|weights|cold-full|all] [--tries N] [--dry-run]
 #                 the tray-drop repro: H3-shaped bus-bar loads (fleet/drop_shapes.py) on all 4 trays aimed
 #                 at the bdf's tray; a POWER DROP or CHIP DROP of that tray is the hit (minutes to it, tray, its BDFs);
+#   run.sh --repro busbar-confirm [--tries N] [--dry-run]   (opt-in, not in plain run.sh or --mode=full; no bdf) the confirm step for a box
+#                 the plain feed-peak FAIL flagged: 25 min bus-bar mix, then the heavy chunk with the extra formats over
+#                 its 15 min (about 42 min of load), stop at the first drop; the verdict is the drop, the HSC OFF+IOUT_OC
+#                 latch or the VIN_UV_WARN latch, never a feed peak; a clean run does not clear a box (repro.sh --help)
 #   run.sh --repro warm-reset <bdf> [--tries N] [--dry-run]   the warm-reset loss repro (repro.sh): each try
 #                 is one plain run.sh cut to that fault's stages; it stops at the first hit (FAIL line naming the chip
 #                 by BDF and tray, the exact finding under it, time to failure, exit 8) or prints PASS after N tries.
@@ -120,7 +124,8 @@
 #                 miss, the loop goes on. Options before --repro (--known-dropped-tray, --since, --hwmon-guard,
 #                 --hold, --hold-timeout, --heavy-logs, --dry-run) go to every try.
 #   run.sh [--mode=quick|full] [--dry-run]   the fleet hardware test (lib/fleet.sh);
-#                 no --mode is quick. Gates, C0 preflight, C1 AER/dmesg/SEL deltas + journal/SEL/SDR history, C3 ETH/QSFP counts + ETH ports,
+#                 no --mode is quick. Gates, C0 preflight, C1 AER/dmesg/SEL deltas + journal/SEL/SDR history
+#                 + firmware reads (SPI boot-fs checksums, ETH mailbox words, TLB readback), C3 ETH/QSFP counts + ETH ports,
 #                 C2 start glx_reset (tt-smi -glx_reset) and health recount, then the bus-bar stage first in every mode (set by
 #                 FLEET_BUSBAR_ORDER): two 60 s clock-checked quiets each
 #                 followed by a 30 s lofi_all matmul burst on all 32 chips (qb), then fleet/chunk_load.py chunks of the H3 CCL
@@ -129,11 +134,15 @@
 #                 read back at its end and 10 s of clock-checked quiet after it (FLEET_BUSBAR_CHUNK_MIN, FLEET_GAP_S);
 #                 after chunk 1, before its quiet, G3 (C4d's slot): 15 s of the x/w/y-in-DRAM C4n-size matmul read back and
 #                 compared across chips (FLEET_BUSBAR_RW_AFTER, 0 = off, FLEET_BUSBAR_RW_S), and right after it
-#                 G3b, 10 s (60 s in --mode=full) of DRAM byte/DBI patterns written, copied on the device and read back bit for bit on every chip
-#                 (dram_dbi.py, R03; FLEET_BUSBAR_DBI_WALL_S, 0 = off), and right after it N1, 10 s (60 s in
-#                 --mode=full, with the inverse patterns) of L1 march: one shard per Tensix core written, copied L1 to L1 to the
-#                 next core and read back, 'L1 FAIL <BDF> tray N core x,y pattern P words k' (l1_march.py;
-#                 FLEET_BUSBAR_L1_WALL_S, 0 = off); then
+#                 G3b, 10 s (120 s in --mode=full, its last 60 s a rolling 1 GB DRAM window per chip, window = run count mod 32)
+#                 of DRAM byte/DBI patterns written, copied on the device and read back bit for bit on every chip
+#                 (dram_dbi.py, R03; FLEET_BUSBAR_DBI_WALL_S, 0 = off), and right after it N1, 12 s (60 s in
+#                 --mode=full, with the inverse patterns and the L1 margin cut to the allocator's minimum) of L1 march: one shard
+#                 per Tensix core written, copied L1 to L1 to the next core and back, each pattern both ways, and read back, 'L1 FAIL <BDF> tray N core x,y pattern P words k' (l1_march.py;
+#                 FLEET_BUSBAR_L1_WALL_S, 0 = off), then N2, 5 s (100 s in full), the network-on-chip all-to-all (noc_a2a.py; FLEET_BUSBAR_NOC_WALL_S; its L1mc leg a 2D multicast with semaphore counts),
+#                 then N7, 3 s (15 s in --mode=full) of walking-1/0 bf16 words copied unpack -> Src -> Dest -> pack with
+#                 16-bit and 32-bit Dest, bit for bit, 'NUMERIC FAIL ... [rf]' naming core x,y, leg and bits (rf_walk.py;
+#                 FLEET_BUSBAR_RF_WALL_S, 0 = off); then
 #                 the cold-quiet-to-full-load step (a 10 s quiet + 90 s lofi_all burst); then one 90 s
 #                 heavy chunk, stage 5's DIDT numeric chunk (the DIDT bf16 HiFi2 16k matmul then the bf8 LoFi 16k
 #                 matmul, back to back, each output compared bit-exactly per launch and across chips; FLEET_BUSBAR_HEAVY_S,
@@ -158,6 +167,11 @@
 #                 same code (FLEET stays quick), only every load chunk, burst, heavy chunk, G3 readback, G3b cap, pair round and quiet
 #                 is FLEET_SMOKE_S s (default 2; fl_smoke in lib/fleet.sh); resets, clock checks (5 min cap), the 50 ms
 #                 burst gap, the run budget and every timeout are plain's. For device checks during development.
+#   --open-delay=<s> (env FLEET_OPEN_DELAY_S, default 60, 0 allowed): every mode ends with the C9 glx_reset and recount,
+#                 waits <s> s, opens and closes the fabric of the box's own chips once (fleet/fabric_open.py) with each root
+#                 port's AER counters read before and after it (a rise: AER FAIL by BDF, tray and root port, then glx_reset),
+#                 then reads the HSC under-voltage latches for the after table. The open sits outside the 30 min stage budget;
+#                 the summary prints the delay.
 #   run.sh --mode=... --since <time>   (or --history-since, or env FLEET_HISTORY_SINCE; any `date -d` time, e.g.
 #                 2026-10-22T20:32-07:00): the host's last repair (bus bar or tray swap, reseat). C1's history (SEL,
 #                 kernel journal AER/MCE, all from before the run and WARN only) then counts only events at or after it;
@@ -278,16 +292,21 @@ RS_C5_S=${TRAY_REPRO_C5_S:-120}
 # leg's reset gate took about 290 s there, so the overrun stays within the leg's 60 s margin.
 RS_C9_S=${TRAY_REPRO_C9_S:-180}; RS_TAIL_S=${TRAY_REPRO_TAIL_S:-120}; RS_RUN_S=${TRAY_REPRO_RUN_S:-}; RS_BUDGET_INC=""; RS_BUDGET_WHY=""; HL_DEADLINE=""
 RK_RESETS=""; RK_RESET_LBL="glx_reset (tt-smi -glx_reset)"; RK_GLX_TRIED=""   # RK_GLX_TRIED: a glx_reset was tried in this reset step
-HB_S=${TRAY_REPRO_HEARTBEAT_S:-20}; HB_PID=""
+HB_S=${TRAY_REPRO_HEARTBEAT_S:-20}; HB_LIVE_S=5; HB_PID=""
 hb_start() {  # $1 what runs, $2 its log (optional; its last STRESS line is shown): one line every HB_S s until hb_stop.
               # A job runner reaps a job that prints nothing for about a minute as hung (the device broker: 'no output
               # for 72s; reaping as hung', two test jobs), and the tries and the reset write to their own logs.
               # The loop also ends by itself within 1 s once this shell is gone.
-  hb_stop; local main=$$ what=$1 log=${2:-}; RS_STAGE=$1
+              # $3... (optional): a command and its arguments, run every HB_LIVE_S s while the load runs; each line it
+              # prints is said at once. Kept as words, so a path with a space stays one argument.
+              # (fl_c7: fl_live, a chunk's NUMERIC FAIL lines as soon as its readback ends, not at the part's end).
+  hb_stop; local main=$$ what=$1 log=${2:-}; local -a live=("${@:3}"); RS_STAGE=$1
   [ -n "$log" ] && { RS_PROG_T=$(date +%s); RS_PROG_STAGE=$1; RS_PROG_LOG=$log; }   # a load stage's start is a progress mark (rs_progressing)
-  ( trap - EXIT; sp=""; p0=$!; trap 'kill $sp 2>/dev/null; [ "$!" = "$p0" ] || kill "$!" 2>/dev/null; exit 0' TERM; s0=$(date +%s); k=0   # hb_stop's TERM ends its sleep too ($!: one forked just before sp= is set; p0: not the caller's)
+  ( trap - EXIT; sp=""; p0=$!; trap 'kill $sp 2>/dev/null; [ "$!" = "$p0" ] || kill "$!" 2>/dev/null; exit 0' TERM; s0=$(date +%s); k=0; j=0   # hb_stop's TERM ends its sleep too ($!: one forked just before sp= is set; p0: not the caller's)
     while kill -0 "$main" 2>/dev/null; do
-      sleep 1 > /dev/null 2>&1 & sp=$!; wait "$sp" || exit 0; k=$((k + 1)); [ "$k" -ge "$HB_S" ] || continue; k=0
+      sleep 1 > /dev/null 2>&1 & sp=$!; wait "$sp" || exit 0; k=$((k + 1)); j=$((j + 1))
+      [ "${#live[@]}" -gt 0 ] && [ "$j" -ge "$HB_LIVE_S" ] && { j=0; "${live[@]}"; }
+      [ "$k" -ge "$HB_S" ] || continue; k=0
       last=""; [ -n "$log" ] && last=$(grep -a '^STRESS|' "$log" 2>/dev/null | tail -1 | cut -d'|' -f3- | cut -c1-120)
       say "$what: running, $(( $(date +%s) - s0 )) s${last:+: $last}"
     done ) &
@@ -324,7 +343,12 @@ rs_sw_stop() { local r=$?; [ -n "$RS_SW_PID" ] && kill "$RS_SW_PID" 2>/dev/null;
 # vd_say prints it (the first call wins); the EXIT trap calls vd_exit first, which derives it from the exit code if none was
 # printed. A rc 0 with no RESULT line (--help) prints none.
 VD_DONE=""; VD_TEXT=""; RR_RC=0
-vd_say() { [ -n "$VD_DONE" ] && return 0; VD_DONE=1; VD_TEXT=$*; echo "VERDICT: ${TRAY_STUB:+STUB (fake devices, not a real test) }$*"; }   # --stub: never a bare PASS
+# TRAY_INJECT (test-only fault injection, fleet/tray_inject.py): the caller's, never set by run.sh or any mode;
+# only the checks' compare functions act on it. Set, the verdict is INCOMPLETE, never PASS or FAIL: a FAIL it causes is the
+# injected fault, not the hardware. vd_inj rewrites the verdict text; inj_rc makes the exit code 9 (not for NOT RUN).
+vd_inj() { case "$*" in INCOMPLETE*|NOT\ RUN*) echo "$*" ;; *) echo "INCOMPLETE (TRAY_INJECT active: not a verdict; the checks said: $*)" ;; esac; }
+inj_rc() { [ -n "${TRAY_INJECT:-}" ] || return 0; case $VD_TEXT in NOT\ RUN*) return 0 ;; esac; case $RS_XRC in 6|9|10|11) return 0 ;; esac; exit 9; }
+vd_say() { [ -n "$VD_DONE" ] && return 0; VD_DONE=1; VD_TEXT=$*; [ -n "${TRAY_INJECT:-}" ] && VD_TEXT=$(vd_inj "$*"); echo "VERDICT: ${TRAY_STUB:+STUB (fake devices, not a real test) }$VD_TEXT"; }   # --stub: never a bare PASS
 vd_exit() {
   local rc=$?; RR_RC=$rc; [ -n "$VD_DONE" ] && return 0
   case $rc in
@@ -349,7 +373,7 @@ RR_DIR=$(dirname "$(readlink -f "$0")")
 rr_final() {
   [ -n "$VD_DONE" ] || return 0
   # a run that gave the device to a queued broker job is no fault: nothing to repair
-  [ -n "${FL_YIELD:-}" ] && { echo "Repair recommendation: none (run incomplete: yielded)" >&"${PG_OUT:-1}"; return 0; }
+  [ -n "${FL_YIELD:-}" ] && { echo "Repair recommendation: none (run incomplete: yielded)" >&"${PG_OUT:-1}"; declare -F inj_rc > /dev/null && inj_rc; return 0; }   # TRAY_INJECT: exit 9 here too
   local m=${FLEET:-repro} c r
   [ "${FL_SMOKE:-0}" = 1 ] && m=smoke
   c=$(git -C "$RR_DIR" rev-parse --short HEAD 2> /dev/null || echo "?")
@@ -360,6 +384,7 @@ rr_final() {
   [[ $r == "Repair recommendation: "* ]] || r="Repair recommendation: unknown: see the FAIL lines above"
   [ -n "${FL_VARIANT_WARN:-}" ] && echo "$FL_VARIANT_WARN" >&"${PG_OUT:-1}"   # dev load variant, in the summary
   [ -n "${FL_SWAP_WARN:-}" ] && echo "$FL_SWAP_WARN" >&"${PG_OUT:-1}"   # dev trial knob, in the summary
+  [ -n "${FL_PV_DEV_WARN:-}" ] && echo "$FL_PV_DEV_WARN" >&"${PG_OUT:-1}"   # power virus development knobs, in the summary
   # a plain-words 'Final verdict:' block (what, where by tray / QSFP-DD port / ASIC / BDF, what
   # to do) just before the Repair recommendation line, which stays last; same dying cap as above
   local fv; fv=$(timeout "$([ -n "${PG_DYING:-}" ] && echo 3 || echo 20)" python3 "${TT_DIR:-$RR_DIR}/fleet/final_verdict.py" --rc "$RR_RC" --verdict "$VD_TEXT" --mode "$m" \
@@ -368,6 +393,7 @@ rr_final() {
   [[ $fv == "Final verdict: "* ]] || fv="Final verdict: see the FAIL lines above"
   echo "$fv" >&"${PG_OUT:-1}"
   echo "$r" >&"${PG_OUT:-1}"
+  declare -F inj_rc > /dev/null && inj_rc   # TRAY_INJECT: exit 9 (INCOMPLETE), last, after the verdict lines
 }
 # layout: run.sh at the repo root, its code under traytest/; a flat copy (the tests) has lib/ beside it
 TT_TOP=$(dirname "$(readlink -f "${BASH_SOURCE[0]}")"); TT_DIR=$TT_TOP; [ -d "$TT_TOP/traytest/lib" ] && TT_DIR=$TT_TOP/traytest
@@ -375,7 +401,7 @@ TT_TOP=$(dirname "$(readlink -f "${BASH_SOURCE[0]}")"); TT_DIR=$TT_TOP; [ -d "$T
 [ -n "${FLEET_MAXUTIL_SKIP:-}" ] || FLEET_MAXUTIL_SKIP=$(hc_site maxutil_skip)
 # a subshell killed before its own 'trap - EXIT' (hb_start's heartbeat under a loaded CPU) runs this inherited trap
 # on its way out (bash runs the EXIT trap on a fatal signal): only run.sh's own shell does the exit work; rc kept for vd_exit
-trap 'RS_XRC=$?; [ "$BASHPID" = "$$" ] || exit "$RS_XRC"; (exit "$RS_XRC"); vd_exit; rs_sw_stop; declare -F by_stop > /dev/null && by_stop; declare -F pg_reap > /dev/null && pg_reap exit; declare -F fl_psu_reap > /dev/null && fl_psu_reap; declare -F pf_reap > /dev/null && pf_reap; { declare -F mg_recover > /dev/null && [ ${#MG_REMOVED[@]} -gt 0 ] && mg_recover; }; declare -F tdp_exit > /dev/null && tdp_exit; hb_stop; fault_exit; declare -F kp_restore > /dev/null && kp_restore; rr_final' EXIT   # kp_restore: lib/kmd_policy.sh (--kmd-power-policy); pg_reap: lib/pgroups.sh; fl_psu_reap: lib/psu_check.sh; pf_reap: lib/psu_fast.sh; fault_exit: lib/fault_capture.sh (a no-op before a fault, and when sourced)
+trap 'RS_XRC=$?; [ "$BASHPID" = "$$" ] || exit "$RS_XRC"; FL_BB_AFTER=""; (exit "$RS_XRC"); vd_exit; rs_sw_stop; declare -F by_stop > /dev/null && by_stop; declare -F pg_reap > /dev/null && pg_reap exit; declare -F fl_pv_resume > /dev/null && fl_pv_resume "run.sh exit" "run.sh exiting, rc $RS_XRC"; declare -F fl_psu_reap > /dev/null && fl_psu_reap; declare -F pf_reap > /dev/null && pf_reap; { declare -F mg_recover > /dev/null && [ ${#MG_REMOVED[@]} -gt 0 ] && mg_recover; }; declare -F tdp_exit > /dev/null && tdp_exit; hb_stop; fault_exit; declare -F kp_restore > /dev/null && kp_restore; rr_final' EXIT   # kp_restore: lib/kmd_policy.sh (--kmd-power-policy); pg_reap: lib/pgroups.sh; fl_pv_resume: lib/fleet.sh (the collector the power virus guard stopped); fl_psu_reap: lib/psu_check.sh; pf_reap: lib/psu_fast.sh; fault_exit: lib/fault_capture.sh (a no-op before a fault, and when sourced)
 fault_exit() { :; }
 # TERM/INT/HUP from the start (pg_traps, lib/pgroups.sh): reap every recorded process group (the running try,
 # any load) and exit 143/130/129; the EXIT trap above then runs. Set before any step, not only once $OUT exists.
@@ -437,6 +463,8 @@ rs_kids() {  # $1 the deadline (us since the epoch): TERM this shell's own desce
 RS_DIE_S=${TRAY_REPRO_DIE_S:-5}; RS_COUNT_MS=${TRAY_REPRO_DIE_COUNT_MS:-1500}; RS_CLOSE_MS=${TRAY_REPRO_DIE_CLOSE_MS:-1000}
 rs_dying() {  # $1 TERM|INT|HUP, $2 the exit code
   trap '' TERM INT HUP PIPE; PG_DYING=$1; HB_PID=""   # the heartbeat loop is a descendant: rs_kids ends it
+  FL_BB_AFTER=""   # the bus-bar after-fault mark (fl_bb_cont) ends here too, as at fl_loads' return: the stage summaries,
+  # the VERDICT and the EXIT trap's lines are not results of the parts run after the fault (the EXIT trap clears it on any exit)
   # PIPE: the run's output pipe can be gone first (an ssh drop on 'run.sh | tee'); a write then fails with EPIPE
   # instead of killing this shell (exit 141) before the recorded groups and its descendants are reaped
   # the signal can land while this shell waits inside a step's own redirect (pg_run ... > file, heavy_logs.sh):
@@ -651,6 +679,21 @@ rk_trays() {  # "<bdf> <chip> <state>" lines -> "tray 1 (chips 0-7); tray 4 (chi
          END { for (i = 1; i <= n; i++) print o[i] "|" l[o[i]] }' |
     while IFS='|' read -r k cs; do echo "tray $k (chips $(echo "$cs" | rk_list))"; done | paste -sd';' | sed 's/;/; /g'
 }
+rk_power_lost() {  # "<bdf> <chip> <state>" lines -> "tray 2 lost (POWER: HSC 0x40 OFF + VIN_UV_WARN, sag 12.5 mOhm
+  # top of 8)", when every tray with a missing chip lost all its chips and an HSC of it was set OFF during the run
+  # (hsc_tray_power); nothing when any missing chip is not explained that way. Reads only; no reset reporting change (sa3).
+  declare -F hsc_tray_power > /dev/null || return 0
+  local t p o="" ts
+  ts=$(while read -r b c st; do [ -n "$b" ] && echo "$(rk_tray "$b") ${st:-?}"; done |
+    awk '{ n[$1]++; if ($2 != "ok") m[$1]++ } END { for (t in m) print t, (m[t] == n[t] ? "all" : "part") }' | sort)
+  [ -n "$ts" ] || return 0
+  while read -r t p; do
+    [ "$p" = all ] && [ "$t" != "?" ] || return 0
+    p=$(hsc_tray_power "$t"); [ -n "$p" ] || return 0
+    o=${o:+$o; }"tray $t lost (POWER: $p)"
+  done <<< "$ts"
+  echo "$o"
+}
 rk_loss_chips() {  # chips named by the FIRST LOSS text in a log ("chip(s) [24, 25]"), space separated
   grep -a -o 'chip(s) \[[0-9, ]*\]' "$1" 2>/dev/null | head -1 | tr -cs '0-9' ' '
 }
@@ -850,7 +893,7 @@ rk_glx_evidence() {
     echo "$sh" | tr ';' '\n' | sed -n 's/^ *tray \([1-4]\) .*/\1/p'; } | awk '!s[$1]++')" || :
 }
 rk_glx() {  # $1 a log path: the tray re-power, tt-smi -glx_reset. Sets RK_GLX_OK (1/0), RK_GLX_WHY and RK_GLX_SKIP (as rk_reset)
-  local t0 rc n0 smi=${TRAY_REPRO_TT_SMI:-tt-smi}
+  local t0 rc n0 again hs smi=${TRAY_REPRO_TT_SMI:-tt-smi}
   t0=$(date +%s); RK_GLX_OK=0; RK_GLX_RAN=0; RK_GLX_WHY=""; RK_GLX_SKIP=""; RK_IPMI_DEAD=""; RK_IPMI_SETUP=""
   if rk_noglx; then   # nothing runs, not even the gate; RK_GLX_SKIP set so no caller rescans or calls it a tray drop
     RK_GLX_SKIP="TRAY_REPRO_NO_GLX=1"; RK_GLX_WHY="skipped by TRAY_REPRO_NO_GLX=1"; rk_noglx_say; return 0
@@ -867,7 +910,25 @@ rk_glx() {  # $1 a log path: the tray re-power, tt-smi -glx_reset. Sets RK_GLX_O
     hd_latch "${1%.log}_latch.txt" "the glx_reset (${RK_STEP:-reset})" || :   # all 8 HSCs' latches, every reset
     n0=$(grep -c '' "$1")
     echo "glx_reset command: ${RK_GLX_SUDO:+$RK_GLX_SUDO }$smi -glx_reset" >> "$1"
-    pg_run timeout "$RK_TIMEOUT_S" $RK_GLX_SUDO "$smi" -glx_reset < /dev/null >> "$1" 2>&1; rc=$?; rk_hook post "${RK_STEP:-reset}-glx" $rc
+    for again in 0 1; do
+      # after the power virus, a tt-smi still running near its timeout after all its chips came back gets its native stack,
+      # KMD version and thread wait channels written to the log first (lib/glx_hang_stack.sh; tt-umd issue #3912)
+      hs=(); [ "${RK_STEP:-}" != PV ] || hs=("$TT_DIR/lib/glx_hang_stack.sh" "$1" "$n0" "$RK_TIMEOUT_S")
+      pg_run timeout "$RK_TIMEOUT_S" "${hs[@]}" $RK_GLX_SUDO "$smi" -glx_reset < /dev/null >> "$1" 2>&1; rc=$?; rk_hook post "${RK_STEP:-reset}-glx" $rc
+      # every chip came back on PCIe ('All N chips found') and tt-smi then hung opening them again (POST_RESET or its
+      # re-init through tt-umd). Beside a live telemetry collector that open can sleep without end in tt-umd's KMD lock
+      # poll (on one galaxy: 3 of 15 resets after a power virus hung in the re-init, 0 of 5 without, the next glx_reset
+      # passed 3 of 3; Slurm 212839 hung before POST_RESET). After the power virus the whole glx_reset runs once more.
+      [ $again = 0 ] && [ $rc = 124 ] && [ "${RK_STEP:-}" = PV ] && tail -n +$((n0 + 1)) "$1" | grep -aqE 'All [0-9]+ chips found' || break
+      say "reset: ${RK_STEP}: tt-smi -glx_reset hung after all its chips came back on PCIe (POST_RESET or its re-init, $RK_TIMEOUT_S s); the whole glx_reset runs once more"
+      # the second reset gets its own gate and hook pre (pre/post paired again), and the fleet gates (gate.sh, this host's
+      # serving gate) in every case: rk_pre runs them only with a hook on; a refusal keeps the first try's timeout
+      if ! rk_gate || ! rk_pre "${RK_STEP}-glx" || { [ -z "${TRAYTEST_RESET_HOOK:-}${TRAYTEST_RESET_SYNC_DIR:-}" ] \
+        && declare -F fl_regate > /dev/null && ! fl_regate "${RK_STEP}-glx"; }; then [ -n "$RK_GATE_WHY" ] || RK_GATE_WHY=refused
+        say "reset: ${RK_STEP}: the second glx_reset SKIPPED-GATE: $RK_GATE_WHY; the first try's timeout stands"
+        echo "=== glx_reset again skipped by the gate: $RK_GATE_WHY" >> "$1"; break; fi
+      echo "=== glx_reset again: the first hung after all its chips came back on PCIe" >> "$1"; n0=$(grep -c '' "$1")
+    done
     if [ $rc = 0 ]; then RK_GLX_OK=1; RK_CHIPRESET_T=$(date +%s)
     elif grep -q 'Driver not loaded with' "$1"; then RK_GLX_OK=1; RK_CHIPRESET_T=$(date +%s)   # the reset ran; tt-smi gave up waiting for 32
     elif [ $rc = 124 ]; then RK_GLX_WHY="tt-smi -glx_reset timed out after $RK_TIMEOUT_S s"
@@ -1569,7 +1630,7 @@ rk_end() {
       || [ "$(date +%s)" -lt "$(cat "$RK_ROUND_F.end" 2> /dev/null || echo 0)" ]; do
       sleep 1 < /dev/null > /dev/null 2>&1 & s=$!; wait "$s" || exit 0; done
     kill -USR1 $$ 2> /dev/null; rs_kids ) & RK_BOUND_PID=$!
-  hb_start "reset and re-check"; rk_tmark "${RK_RESET_TIMES:-}" begin "${RK_STEP:-reset}"; rk_end_ "$@"; rc=$?; rk_tmark "${RK_RESET_TIMES:-}" end "${RK_STEP:-reset}"; hb_stop
+  hb_start "reset and re-check"; rk_tmark "${RK_RESET_TIMES:-}" begin "${RK_STEP:-reset}"; rk_end_ "$@"; rc=$?; rk_tmark "${RK_RESET_TIMES:-}" end "${RK_STEP:-reset}"; declare -F fl_mem > /dev/null && fl_mem "reset:${RK_STEP:-reset}"; hb_stop
   RK_BOUND_ON=""; rm -f "$RK_ROUND_F" "$RK_ROUND_F.end"; rs_stop_pid "$RK_BOUND_PID"; RK_BOUND_PID=""; exec {RK_BOUND_FD}>&-
   echo "after the ${RK_STEP:-} reset step ($(( $(date +%s) - t )) s of its $b s bound): $(rs_count)"
   l=$(rs_left); [ -n "$l" ] && [ "$l" -lt 0 ] && echo "run budget: overrun $(( -l )) s past TRAY_REPRO_RUN_S=$RS_RUN_S at the end of the ${RK_STEP:-} reset step (the numeric pinpoint and the C9 reset are never cut for the budget)"
@@ -1666,6 +1727,13 @@ rk_end_() {
   fi
   if [ -n "$gskip" ] && { [ -n "$gone" ] || [ "$seen" != 1 ]; }; then   # a reset the gate skipped: neither a pass nor a
     # tray drop (no reset ran that could prove the loss unrecoverable); a chip drop that came back stays a chip drop
+    if [ -n "$gone" ] && [ -z "$short" ]; then   # a whole tray whose HSC was set OFF is a power loss, reset or not
+      local pw; pw=$(echo "$RK_AFTER" | rk_power_lost)
+      if [ -n "$pw" ]; then
+        RK_RC=3; RK_TRAYS="$(echo "$RK_AFTER" | awk '$3 != "ok"' | rk_trays) (POWER, no reset could run)"
+        RK_WHAT="FAIL: $pw; tray drop: $RK_TRAYS; $gskip did not run (${glab:-SKIPPED-GATE})"; return
+      fi
+    fi
     RK_RC=9
     if [ -n "$gone" ]; then
       missing=$(echo "$RK_AFTER" | awk '$3 != "ok"' | rk_bdfs); [ -n "$short" ] && missing=${missing:+$missing; }$short
@@ -1714,6 +1782,14 @@ rk_abort_lines() {
 # summary stays as it is and does not count it: its lines are "Chips dropped"/"FAIL tray", these are not.
 rk_drop_now() {
   local b c st l; local f=${OUT:-.}/drops_early.txt
+  # with --mode, a chip gone while another process holds the chips is not judged (fl_taken names the holder)
+  if [ -n "${FL_OUT:-}" ] && declare -F fl_taken > /dev/null && fl_taken; then
+    rk_snap | awk '$3 != "ok" { print $1 }' | while read -r b; do
+      grep -qsxF "$b" "$FL_OUT/nj_drop.txt" && continue; echo "$b" >> "$FL_OUT/nj_drop.txt"
+      l="DROP FAIL $b (tray $(rk_tray "$b" | cut -d' ' -f1)): off PCIe, first seen by the in-run monitor at $(date '+%F %T %Z') in ${1:-unknown stage}"
+      echo "$l" >> "$FL_OUT/not_judged.txt"; say "NOT JUDGED (chips taken by another process): $l"
+    done; return 0
+  fi
   rk_snap | awk '$3 != "ok"' | while read -r b c st; do
     grep -qs "^DROP FAIL $b " "$f" && continue
     l="DROP FAIL $b (tray $(rk_tray "$b" | cut -d' ' -f1)): off PCIe, first seen by the in-run monitor at $(date '+%F %T %Z') in ${1:-unknown stage}"
@@ -1831,10 +1907,26 @@ kd_tag() {  # an INCOMPLETE RESULT with --known-dropped-tray keeps its reason an
   local b m=""; for b in $(kd_bdfs "$KD_TRAY"); do [ "$(rk_state "0000:$b")" = ok ] || m="$m $b"; done
   echo "known drop: tray $KD_TRAY (--known-dropped-tray=$KD_TRAY, not tested):${m:- none missing at the end}; $(kd_end) chips answer at the end"
 }
+# pv_planned: the plan has a power virus part (the first-line no-run-ttx WARNING below; tests source it)
+pv_planned() {
+  [ "${TRAYTEST_MIX_SWAP:-}" = virus ] && return 0
+  [ "${FLEET_PV_SWAP:-}" = maxutil ] && return 1
+  [ -n "${FLEET_MAXUTIL_SKIP:-}" ] || [ -n "$(hc_site maxutil_skip)" ] && return 1
+  case ",${FLEET_BUSBAR_ORDER:-pv}," in *,pv,*) return 0 ;; esac; return 1
+}
 [[ ${BASH_SOURCE[0]} != "$0" ]] && { declare -F pg_run > /dev/null || . "$TT_DIR/lib/pgroups.sh"; return 0; }   # sourced (the tests): the functions only, no test; pg_run (rk_reset) from lib/pgroups.sh
 SELF=$(readlink -f "$0"); cd "$TT_DIR"
 unset TRAY_STUB   # only --stub sets it (lib/stubhost.sh); an inherited value would skip setup and label a real run STUB
 case " $* " in *" --stub "*) . ./lib/stubhost.sh; SYS=$TRAY_REPRO_SYS ;; esac   # --stub: fake healthy host, WARNING first (lib/stubhost.sh); SYS was set above
+INJ_WARN=""   # TRAY_INJECT set by the caller: a loud first line and again in the summary; a bad spec runs nothing
+if [ -n "${TRAY_INJECT:-}" ]; then INJ_WARN="WARNING: TRAY_INJECT active: not a verdict (test-only injected faults: $TRAY_INJECT)"; echo "$INJ_WARN"
+  _ie=$(python3 "$TT_DIR/fleet/tray_inject.py" 2>&1) || { echo "TRAY_INJECT refused: $_ie" >&2; vd_say "NOT RUN (bad TRAY_INJECT: $_ie)"; exit 1; }; fi
+# no run-ttx for the power virus (HC_RUN_TTX unset and none beside the core): a loud WARNING as the first line, at each
+# power virus part and in the summary (lib/fleet.sh fl_pv_ttx: never a silent skip). Only when the plan has a power virus
+# part: not swapped to max-util (FLEET_PV_SWAP), not dropped by a max-util site skip or FLEET_BUSBAR_ORDER; the
+# TRAYTEST_MIX_SWAP=virus segments run it in any plan
+case " $* " in *" -h "*|*" --help "*|*" --repro"*) ;; *) ! pv_planned || [ -x "${HC_RUN_TTX:-${FLEET_PV_DIR:-$TT_DIR/fleet/pv}/run-ttx}" ] \
+  || echo "WARNING: power virus SKIPPED this run: no run-ttx at ${HC_RUN_TTX:-${FLEET_PV_DIR:-$TT_DIR/fleet/pv}/run-ttx} (set HC_RUN_TTX to the pinned binary, fleet/pv/pv.pin)" ;; esac
 # RK_SETTLE_S was set above from the caller's env, before the stub set its 1 s settle; read it
 # again so a stub reset waits 1 s, not 60. A real run's value is unchanged (60 s unless TRAY_REPRO_RESET_SETTLE_S is set).
 [ -n "${TRAY_STUB:-}" ] && { RK_SETTLE_S=$TRAY_REPRO_RESET_SETTLE_S; echo "stub mode: reset settle ${RK_SETTLE_S} s"; }
@@ -1860,11 +1952,12 @@ while [ $# -gt 0 ]; do
     --mode=*) FLEET=${1#--mode=}; MODE_SET=1 ;;
     --mode) FLEET=${2:?--mode needs quick, full, smoke, long or repro}; MODE_SET=1; shift ;;
     --repro=*) REPRO=${1#*=}
-      case $REPRO in numeric|warm-reset|tray-drop) echo "--repro $REPRO is spelled --repro $REPRO <bdf> [...], last on the line (run.sh --help)" >&2; exit 1 ;; esac ;;
-    --repro) case ${2:-} in numeric|warm-reset|tray-drop) shift   # fast repro of one known fault (repro.sh): repro.sh runs plain run.sh per try until the first hit
+      case $REPRO in numeric|warm-reset|tray-drop) echo "--repro $REPRO is spelled --repro $REPRO <bdf> [...], last on the line (run.sh --help)" >&2; exit 1 ;;
+        busbar-confirm) echo "--repro busbar-confirm is spelled --repro busbar-confirm [...], last on the line (run.sh --help)" >&2; exit 1 ;; esac ;;
+    --repro) case ${2:-} in numeric|warm-reset|tray-drop|busbar-confirm) shift   # fast repro of one known fault (repro.sh): repro.sh runs plain run.sh per try until the first hit
         [ -z "$FLEET" ] && [ "$TRIES" = 0 ] && [ -z "$REPRO" ] || { echo "--repro takes no --mode, --tries or --ag-tries (repro.sh picks the stages)" >&2; exit 1; }
         hf_stop; TRAY_REPRO_HEAVY_LOGS=$HEAVY exec bash ./repro.sh "$@" "${ARGV0[@]:0:$(( ${#ARGV0[@]} - $# - 1 ))}" ;; esac
-      REPRO=${2:?--repro needs a repro name: link-a, abort-fabric, numeric, warm-reset or tray-drop}; shift   # --repro <name> [<bdf>]
+      REPRO=${2:?--repro needs a repro name: link-a, abort-fabric, numeric, warm-reset, tray-drop or busbar-confirm}; shift   # --repro <name> [<bdf>]
       if [[ ${2:-} =~ ^([0-9a-fA-F]{4}:)?[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-7]$ ]]; then REPRO_BDF=$2; shift; fi ;;
     --fleet=*|--fleet)   # the old name, kept for launchers during the switch-over; c7 (sustained) is retired
       if [ "$1" = --fleet ]; then FLEET=${2:?--mode needs quick, full, smoke, long or repro}; shift; else FLEET=${1#--fleet=}; fi
@@ -1876,6 +1969,8 @@ while [ $# -gt 0 ]; do
     --since|--history-since) [ $# -ge 2 ] || { echo "$1 needs a time, e.g. 2026-10-22T20:32-07:00 (or '' for none)" >&2; exit 1; }
       FLEET_HISTORY_SINCE=$2; shift ;;
     --known-dropped-tray=*) KD_TRAY=${1#*=} ;;
+    --open-delay=*) FLEET_OPEN_DELAY_S=${1#*=}; [ -n "$FLEET_OPEN_DELAY_S" ] || { echo "--open-delay takes whole seconds, 0 or more (got '')" >&2; exit 1; } ;;   # s between the C9 recount and the fabric open; fl_init checks it
+    --open-delay) FLEET_OPEN_DELAY_S=${2:?--open-delay needs seconds}; shift ;;
     --known-dropped-tray) KD_TRAY=${2:?--known-dropped-tray needs a tray number 1-4}; shift ;;
     --kmd-power-policy=*) KP_OPT=${1#*=} ;;
     --kmd-power-policy) KP_OPT=${2:?--kmd-power-policy needs 0 or 1}; shift ;;
@@ -1910,7 +2005,8 @@ if [ -n "$REPRO" ]; then
     abort-fabric) [ -z "$REPRO_BDF" ] || { echo "--repro abort-fabric takes no chip BDF (it runs on all of this host's chips)" >&2; exit 1; }
       FLEET=repro-abortfab ;;
     numeric|warm-reset|tray-drop) echo "--repro $REPRO is spelled --repro $REPRO <bdf> [...], last on the line (run.sh --help)" >&2; exit 1 ;;
-    *) echo "--repro takes link-a, abort-fabric, numeric, warm-reset or tray-drop (got '$REPRO')" >&2; exit 1 ;;
+    busbar-confirm) echo "--repro busbar-confirm is spelled --repro busbar-confirm [...], last on the line (run.sh --help)" >&2; exit 1 ;;
+    *) echo "--repro takes link-a, abort-fabric, numeric, warm-reset, tray-drop or busbar-confirm (got '$REPRO')" >&2; exit 1 ;;
   esac
 elif [ "$FLEET" = repro-linka ]; then echo "--mode=repro-linka is spelled --repro link-a" >&2; exit 1
 elif [ "$FLEET" = repro-abortfab ]; then echo "--mode=repro-abortfab is spelled --repro abort-fabric" >&2; exit 1; fi
@@ -1953,7 +2049,8 @@ if command -v flock > /dev/null && { [ -e "$RUN_LOCK" ] || : > "$RUN_LOCK"; } 2>
   if flock -w 3 9; then export TRAY_RUN_LOCK_HELD=$RUN_LOCK; else TRAY_RUN_LOCK_BUSY=1; echo "run lock $RUN_LOCK: held by another run" >&2; fi   # BUSY: no TDP open (lib/tdp.sh)
 else echo "WARNING: no run lock ($RUN_LOCK): other runs' gates cannot see this run" >&2; fi
 [ -n "${UB0_PYTHON:-}" ] || [ -z "${HC_SETUP:-}" ] || [ -x "${HC_VENV:-venv}/bin/python" ] || echo "first run: setting up ./venv (about 375 MB of pip packages and the SFPI compiler; a few minutes)..."
-H=$(hostname -s); say() { echo "$(date '+%F %T %Z') $H: $*"; }
+H=$(hostname -s); say() { local m=""; [ -z "${FL_BB_AFTER:-}" ] || case "$*" in *"after fault ("*) ;; *PASS*|*FAIL*|*WARN*|*HANG*|*LOST*|*DROP*|*MISSING*|*clean*|*mismatch*) m=" [$FL_BB_AFTER]" ;; esac; echo "$(date '+%F %T %Z') $H: $*$m"; }
+# FL_BB_AFTER (lib/fleet.sh fl_bb_cont): after a bus-bar fault no glx_reset could clear, each result line is marked with it
 FL_BOOT_UP0=$(cut -d' ' -f1 "${FLEET_PROC:-/proc}/uptime" 2> /dev/null); FL_BOOT_UP0=${FL_BOOT_UP0%%.*}   # uptime at run start (lib/fleet.sh fl_boot_recount)
 # the KMD power_policy value run's header prints (bank-3-only numeric fails were tied to it)
 TRAY_POWER_POLICY=$(cat /sys/module/tenstorrent/parameters/power_policy 2> /dev/null | tr -d '[:space:]'); export TRAY_POWER_POLICY; [ -n "$TRAY_POWER_POLICY" ] || TRAY_POWER_POLICY=unknown
@@ -2228,12 +2325,14 @@ if [ "$RK_N" != "$RK_WANT" ] || [ -n "$(lost_trays)" ]; then   # a fault before 
   fault_name "missing at the start" $(rk_snap | awk '$3 != "ok" { print $2 }'); fault_snapshot start-missing
 fi
 if [ -n "$FLEET" ]; then fl_start "$OUT"; else lk_check pre; rk_start "$OUT"; tdp_start; fi; n=$RK_N; mg_arm   # chips missing before any load: the same reset and re-check first, else exit 6 (fault_exit)
+fe_none_start   # FE_NONE, why no start reset ran (non-fleet only; fleet uses FL_C2_NONE): an in-box ETH core not active again at mesh open is then not judged
 gd_read start   # per-chip GDDR telemetry after the start reset (a reset clears its counters)
 heavy_logs_snapshot pre
-SEL_BASE=""   # without --heavy-logs: one SEL read a run (about 9 s) that a loss in any try is read against
-if [ "$HX_SUDO" = 1 ] && [ "$HEAVY" != 1 ]; then SEL_BASE=$OUT/sel_baseline.txt
-  timeout 30 sudo -n ipmitool sel elist last 40 > "$SEL_BASE" 2> /dev/null || : > "$SEL_BASE"; fi
 n1=$(echo $QUIETS | wc -w); n2=$(echo $AG_QUIETS | wc -w); total=$(( n1 + n2 ))
+SEL_BASE=""   # without --heavy-logs: one SEL read a run (9-80 s) that a loss in any try is read against; only try_args reads it,
+# so a run with no tries planned (plain, smoke, full: 0 tries) skips it (16-97 s of plain's setup)
+if [ "$HX_SUDO" = 1 ] && [ "$HEAVY" != 1 ] && [ "$total" -gt 0 ]; then SEL_BASE=$OUT/sel_baseline.txt
+  timeout 30 sudo -n ipmitool sel elist last 40 > "$SEL_BASE" 2> /dev/null || : > "$SEL_BASE"; fi
 i=0; T0=$(date +%s); seen=0; chips=""; failed=""; infra=""; at=""; ccl=""; lab=""   # set per try; a hang in an earlier stage with no tries planned reaches the hangpin below with it empty
 PLAN=(); for q in $QUIETS; do PLAN+=("ub0 $q"); done; for q in $AG_QUIETS; do PLAN+=("allgather $q"); done
 [ -n "$FLEET" ] && fl_plan   # C8 on; no tries
@@ -2284,6 +2383,7 @@ done
 [ -n "$FLEET" ] && { rk_tmark "$FL_OUT/load_times.tsv" begin loads; fl_loads; rk_tmark "$FL_OUT/load_times.tsv" end loads; by_stop; }   # stage 4, the bus-bar stage (with stage 5 numeric verify inside it), then stage 6, C5
 # a fault (lib/fault_capture.sh): name it, then capture before the reset. A CCL hang:
 # the NOC snapshot of ub0_repro.py's suspects (none: every chip); a loss: a snapshot and the NOC one
+FE_TRY_NJ=""   # fe_try_fail sets it when the failed try is only a not-judged ETH core line
 if [ "$seen" = 1 ]; then
   fault_name "lost in $at" $chips
   declare -F mg_loss > /dev/null && { mg_loss "lost in $at" $(fault_bdfs $chips) || true; }   # the guard's cut before any read
@@ -2293,10 +2393,7 @@ elif [ -n "$ccl" ] && [ -z "$TRY_HUNG" ]; then   # a try hang was captured while
   fault_name_hang "CCL hang in $at" "$OUT/try$i.json"; ! rs_step "fault capture (CCL hang in $at)" || fault_hang $(fault_bdfs $FC_SUS)
   hold_point "CCL hang in $at" "" $(fault_bdfs $FC_SUS); hold_done   # --hold: before the reset (ub0_repro.py already exited)
 elif [ -n "$failed" ]; then
-  # the chips the try's own error names; else each chip probed alone; else UNATTRIBUTED with every candidate.
-  fault_attr "$failed" 1 "$OUT/try$i.log" "$OUT/try$i.json" || :
-  fault_eth "$OUT/try$i.log"
-  ! rs_step "fault capture ($failed)" || fault_snapshot failed
+  fe_try_fail "$failed" "$OUT/try$i.log" "$OUT/try$i.json"   # lib/fault_capture.sh: attribution, ETH core lines, fault capture
 fi
 ! rs_step "pre-reset heavy-log snapshot" || heavy_logs_snapshot pre-reset
 [ -n "$TRY_HUNG" ] && [ -z "${FC_SUS// /}" ] && try_hangpin "$i" "${lab:-before the tries} hang"   # the chip that stopped
@@ -2324,7 +2421,7 @@ say "hang timeout: TRAY_REPRO_HANG_S=$HANG_S s with no progress cuts a stage as 
 { if [ -n "${FL_RESULT:-}" ]; then echo "RESULT: $FL_RESULT"
 else case $RK_RC in
   0) if [ -n "$ccl" ]; then echo "RESULT: $ccl, at $at; after the reset: no loss"; RK_RC=7
-     elif [ -n "$failed" ]; then echo "RESULT: $failed; after the reset: no loss"; RK_RC=1
+     elif [ -n "$failed" ]; then fe_try_result "$failed" "no loss"   # rc 1, or rc 9 INCOMPLETE for a not-judged ETH core line
      elif [ -n "$infra" ]; then echo "RESULT: INCOMPLETE: no loss, but $infra"; RK_RC=9
      elif [ -z "$FLEET" ] && [ -n "${FW_FAIL:-}" ]; then   # C0 firmware FAIL: rc 8 as in --mode
        echo "RESULT: FIRMWARE FAIL: $(echo "$FW_FAIL" | grep -c .) chip(s) off the others' firmware (C0), see fault.txt; no loss ($total/$total tries)"; RK_RC=8
@@ -2334,10 +2431,10 @@ else case $RK_RC in
   1) echo "RESULT: $RK_WHAT${failed:+; $failed}" ;;
   9) if [[ $RK_WHAT != "INCOMPLETE: no loss"* ]]; then echo "RESULT: $RK_WHAT${failed:+; $failed}, at $at"
      elif [ -n "$ccl" ]; then echo "RESULT: $ccl, at $at; after the reset: $RK_WHAT"; RK_RC=7
-     elif [ -n "$failed" ]; then echo "RESULT: $failed; after the reset: $RK_WHAT"; RK_RC=1
+     elif [ -n "$failed" ]; then fe_try_result "$failed" "$RK_WHAT"
      else echo "RESULT: $RK_WHAT ($total/$total tries, $(( ($(date +%s) - T0) / 60 )) min)"; fi ;;
   14) if [ -n "$ccl" ]; then echo "RESULT: $ccl, at $at; after the reset: $RK_WHAT"; RK_RC=7
-      elif [ -n "$failed" ]; then echo "RESULT: $failed; after the reset: $RK_WHAT"; RK_RC=1
+      elif [ -n "$failed" ]; then fe_try_result "$failed" "$RK_WHAT" keep   # rc 1; a not-judged ETH core line keeps rc 14, the failed glx_reset
       else echo "RESULT: $RK_WHAT ($total/$total tries, $(( ($(date +%s) - T0) / 60 )) min)"; fi ;;
   3) if [ "$seen" != 1 ] && [ -z "$ccl$failed" ] && [ -z "$FLEET" ] && [ -n "$(echo "${RK_AFTER:-}" | awk '$3 != "ok"')" ]; then
        echo "RESULT: $(rk_end_loss "$RK_RESET_LOG" "$RK_AFTER")"   # every try was clean: not a tray drop in a try
@@ -2348,7 +2445,7 @@ if [ "$KD_ON" = 1 ] && { [ "$RK_RC" = 9 ] || grep -aq '^RESULT: INCOMPLETE' "$OU
   printf '%s; %s\n' "$(cat "$OUT/result.line")" "$(kd_tag)" > "$OUT/result.line.kd" && mv "$OUT/result.line.kd" "$OUT/result.line"   # the known drop, named too
 fi
 [ -n "$FLEET" ] && { [ "$RK_RC" = 9 ] || [ -n "$RS_BUDGET_INC" ]; } && fl_vd_sum fin   # finished stages' VERDICT lines, then what was not reached, before RESULT: INCOMPLETE
-_r=$(if [ -n "$FLEET" ]; then fl_result_say "$OUT/result.line"; else cat "$OUT/result.line"; fi); echo "$_r; $(pp_tag)$(tdp_tag)${SR_TAG:-}${FL_PV_SKIP:+; power virus SKIPPED (another process held a Tenstorrent device, or the holder scan was incomplete; see the WARNING above)}${TRAY_STUB:+; STUB MODE: fake devices, not a real test}"; RS_DONE=1   # SR_TAG: the sudo status (lib/sudo_route.sh); power_policy on the RESULT line; tdp_tag: --tdp refused by a gate
+_r=$(if [ -n "$FLEET" ]; then fl_result_say "$OUT/result.line"; else cat "$OUT/result.line"; fi); echo "$_r; $(pp_tag)$(tdp_tag)${FL_BB_LDLINE:+; $FL_BB_LDLINE}${SR_TAG:-}${FL_PV_SKIP:+; power virus SKIPPED (another process held a Tenstorrent device, or the holder scan was incomplete; see the WARNING above)}${FL_PV_TTXHIT:+; power virus SKIPPED (no run-ttx; see the WARNING above)}${TRAY_STUB:+; STUB MODE: fake devices, not a real test}${TRAY_INJECT:+; TRAY_INJECT active: not a verdict}"; RS_DONE=1   # SR_TAG: the sudo status (lib/sudo_route.sh); power_policy on the RESULT line; tdp_tag: --tdp refused by a gate
 [ -z "$FLEET" ] && [ -n "${RK_RESET_FAILS:-}" ] && echo "$RK_RESET_FAILS"   # --mode prints them with its findings
 pinpoint_summary   # the NUMERIC-PINPOINT VERDICT lines, if any
 gd_summary   # GDDR WARN lines (new uncorrected errors, a corrected-error rise) and one GDDR: line
@@ -2356,6 +2453,7 @@ gd_summary   # GDDR WARN lines (new uncorrected errors, a corrected-error rise) 
 lk_report   # without --mode the host-link findings (rc 8 for a FAIL); the fix per tray with a PCIe link FAIL
 if [ -n "${SR_LINE:-}" ]; then echo "$SR_LINE"; fi   # the startup sudo warning again in the summary
 if [ -n "${TRAY_STUB:-}" ]; then echo "$STUB_WARN"; fi   # --stub: the first line again in the summary
+if [ -n "$INJ_WARN" ]; then echo "$INJ_WARN"; fi   # TRAY_INJECT: the first line again in the summary
 if [ "$KD_ON" = 1 ]; then   # never a PASS: the known drop is the verdict when nothing else is wrong
   [ "$RK_RC" = 0 ] && RK_RC=12
   [ -n "${RK_RESET_KDONLY:-}" ] && RK_RESETS="$RK_RESETS; tt-umd failed only on tray $KD_TRAY (the known drop)"

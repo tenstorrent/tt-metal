@@ -130,6 +130,18 @@ def bank_lane(torch, nb):
     return (((rr // 32) * (N // 32) + cc // 32) % nb).reshape(-1), (cc % 2).reshape(-1)
 
 
+def inject(gt, pci):
+    """gt, or with TRAY_INJECT naming G3 and this chip a copy with one bit flipped in word 0 (DRAM bank 0, even
+    lane)."""
+    import tray_inject
+
+    s = tray_inject.want("G3", pci)
+    if s is None:
+        return gt
+    tray_inject.applied(s, where="bank=0")
+    return tray_inject.flip_tensor(s, gt, 0)
+
+
 def rw_check(ttnn, torch, mesh, chips, burst_s, wall_s, per_check=8, check_s=3.0, nb=8, beat=None, say=None):
     """G3: rw_burst() on a mesh another stage already opened (chunk_load.py, after bus-bar chunk
     1). chips: mesh index -> dict(pci, tray, dev). Returns rw_burst()'s dict plus banks and, per mesh index, checks,
@@ -161,6 +173,7 @@ def rw_check(ttnn, torch, mesh, chips, burst_s, wall_s, per_check=8, check_s=3.0
                 ),
             )
             s["checks"] += 1
+            gt = inject(gt, chips.get(i, {}).get("pci"))  # TRAY_INJECT: test-only flip of this chip's host copy
             gf = gt.reshape(-1)
             bad = torch.nonzero(gf != e).flatten()
             if not bad.numel():

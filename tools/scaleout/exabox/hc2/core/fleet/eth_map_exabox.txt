@@ -1,0 +1,184 @@
+# fleet/eth_map_exabox.txt: the in-box ETH cabling of an exabox node (bh-glx-*), same format as
+# fleet/eth_map.txt (tray asic chan; asic 1-8 = bus low nibble, tray 1-4 = bus 0x00/0x40/0xC0/0x80). Built from UMD's link
+# map of one exabox galaxy (tests/fleet/disc_exabox_b02u08_pre.json, md5 ad8c68b4d801b0367da95053937d7306, 2026-10-24): every link with
+# both ends on the box. A second node's run of the same day shows the same set of linked and unlinked ports
+# 0-7 under C3 (only ports 0,1 of asic 4 unlinked); its peers were not recorded. fleet_py.py ethlinks and ethback read
+# this file instead of eth_map.txt where ethext's platform is exabox (FLEET_PLATFORM=exabox, else a bh-glx-* hostname
+# not in fleet/eth_peers.txt). 36 of the quad map's 120 links differ here, and 40 of this map's 124 links are not in
+# the quad map (e.g. 04:00.0 ports 4,5 go to
+# 44:00.0 ports 4,5, not c4; ports 0,1 of asic 1/2 link tray 1 <-> 3 and 2 <-> 4), and the quad's QSFP ports (asic 1, 5
+# ports 2, 3) are in-box links here, so there are no Q lines.
+# L: an in-box link, channels 0-7 (124 links). Channels 8, 9 are not listed (not judged by C3, as on quad hosts), though
+# on exabox 16 of them are in-box links too: 03/04 tray 1 <-> 3, 07/08 tray 1 <-> 2, 03/04 tray 2 <-> 4, 07/08 tray 3 <-> 4.
+# X exabox tray asic chan: a port that is not an in-box link (ports 0,1 of asic 4, trays 1-4).
+# W exabox axis tray asic chan: a wrap port of the 4x8 mesh, i.e. an L link that
+# closes a ring. axis 8: ch 2,3 of asic 1, 5 (tray 1 <-> 2, 3 <-> 4); axis 4: ch 0,1 of asic 1, 2 (tray 1 <-> 3, 2 <-> 4) (the
+# axis-4 wraps on ch 8,9 are not judged, as above). A box cabled without one axis's wraps (partial torus) shows every
+# port of that axis down: when all of them are down at pre and still down after C2, ethlinks says ETH NOT-CABLED (INFO)
+# instead of FAIL; a group only partly down stays FAIL. fl_bb_step runs the bus-bar CCL linear unless every wrap is up.
+# H platform regex: fleet_py.py hostplat reads this map on a host whose short name matches regex (site data)
+H exabox ^bh-glx-
+L 1 1 0 3 1 0
+L 1 1 1 3 1 1
+L 1 1 2 2 1 2
+L 1 1 3 2 1 3
+L 1 1 4 1 2 2
+L 1 1 5 1 2 3
+L 1 1 6 1 5 0
+L 1 1 7 1 5 1
+L 1 2 0 3 2 0
+L 1 2 1 3 2 1
+L 1 2 4 1 3 2
+L 1 2 5 1 3 3
+L 1 2 6 1 6 0
+L 1 2 7 1 6 1
+L 1 3 0 2 3 0
+L 1 3 1 2 3 1
+L 1 3 4 1 4 2
+L 1 3 5 1 4 3
+L 1 3 6 1 7 0
+L 1 3 7 1 7 1
+L 1 4 4 2 4 4
+L 1 4 5 2 4 5
+L 1 4 6 1 8 0
+L 1 4 7 1 8 1
+L 1 5 2 2 5 2
+L 1 5 3 2 5 3
+L 1 5 4 1 6 2
+L 1 5 5 1 6 3
+L 1 5 6 3 5 6
+L 1 5 7 3 5 7
+L 1 6 4 1 7 2
+L 1 6 5 1 7 3
+L 1 6 6 3 6 6
+L 1 6 7 3 6 7
+L 1 7 4 1 8 2
+L 1 7 5 1 8 3
+L 1 7 6 3 7 6
+L 1 7 7 3 7 7
+L 1 8 4 2 8 4
+L 1 8 5 2 8 5
+L 1 8 6 3 8 6
+L 1 8 7 3 8 7
+L 2 1 0 4 1 0
+L 2 1 1 4 1 1
+L 2 1 4 2 2 2
+L 2 1 5 2 2 3
+L 2 1 6 2 5 0
+L 2 1 7 2 5 1
+L 2 2 0 4 2 0
+L 2 2 1 4 2 1
+L 2 2 4 2 3 2
+L 2 2 5 2 3 3
+L 2 2 6 2 6 0
+L 2 2 7 2 6 1
+L 2 3 4 2 4 2
+L 2 3 5 2 4 3
+L 2 3 6 2 7 0
+L 2 3 7 2 7 1
+L 2 4 6 2 8 0
+L 2 4 7 2 8 1
+L 2 5 4 2 6 2
+L 2 5 5 2 6 3
+L 2 5 6 4 5 6
+L 2 5 7 4 5 7
+L 2 6 4 2 7 2
+L 2 6 5 2 7 3
+L 2 6 6 4 6 6
+L 2 6 7 4 6 7
+L 2 7 4 2 8 2
+L 2 7 5 2 8 3
+L 2 7 6 4 7 6
+L 2 7 7 4 7 7
+L 2 8 6 4 8 6
+L 2 8 7 4 8 7
+L 3 1 2 4 1 2
+L 3 1 3 4 1 3
+L 3 1 4 3 2 2
+L 3 1 5 3 2 3
+L 3 1 6 3 5 0
+L 3 1 7 3 5 1
+L 3 2 4 3 3 2
+L 3 2 5 3 3 3
+L 3 2 6 3 6 0
+L 3 2 7 3 6 1
+L 3 3 0 4 3 0
+L 3 3 1 4 3 1
+L 3 3 4 3 4 2
+L 3 3 5 3 4 3
+L 3 3 6 3 7 0
+L 3 3 7 3 7 1
+L 3 4 4 4 4 4
+L 3 4 5 4 4 5
+L 3 4 6 3 8 0
+L 3 4 7 3 8 1
+L 3 5 2 4 5 2
+L 3 5 3 4 5 3
+L 3 5 4 3 6 2
+L 3 5 5 3 6 3
+L 3 6 4 3 7 2
+L 3 6 5 3 7 3
+L 3 7 4 3 8 2
+L 3 7 5 3 8 3
+L 3 8 4 4 8 4
+L 3 8 5 4 8 5
+L 4 1 4 4 2 2
+L 4 1 5 4 2 3
+L 4 1 6 4 5 0
+L 4 1 7 4 5 1
+L 4 2 4 4 3 2
+L 4 2 5 4 3 3
+L 4 2 6 4 6 0
+L 4 2 7 4 6 1
+L 4 3 4 4 4 2
+L 4 3 5 4 4 3
+L 4 3 6 4 7 0
+L 4 3 7 4 7 1
+L 4 4 6 4 8 0
+L 4 4 7 4 8 1
+L 4 5 4 4 6 2
+L 4 5 5 4 6 3
+L 4 6 4 4 7 2
+L 4 6 5 4 7 3
+L 4 7 4 4 8 2
+L 4 7 5 4 8 3
+X exabox 1 4 0
+X exabox 1 4 1
+X exabox 2 4 0
+X exabox 2 4 1
+X exabox 3 4 0
+X exabox 3 4 1
+X exabox 4 4 0
+X exabox 4 4 1
+W exabox 8 1 1 2
+W exabox 8 2 1 2
+W exabox 8 1 1 3
+W exabox 8 2 1 3
+W exabox 8 1 5 2
+W exabox 8 2 5 2
+W exabox 8 1 5 3
+W exabox 8 2 5 3
+W exabox 8 3 5 2
+W exabox 8 4 5 2
+W exabox 8 3 5 3
+W exabox 8 4 5 3
+W exabox 8 3 1 2
+W exabox 8 4 1 2
+W exabox 8 3 1 3
+W exabox 8 4 1 3
+W exabox 4 1 1 0
+W exabox 4 3 1 0
+W exabox 4 1 1 1
+W exabox 4 3 1 1
+W exabox 4 1 2 0
+W exabox 4 3 2 0
+W exabox 4 1 2 1
+W exabox 4 3 2 1
+W exabox 4 2 1 0
+W exabox 4 4 1 0
+W exabox 4 2 1 1
+W exabox 4 4 1 1
+W exabox 4 2 2 0
+W exabox 4 4 2 0
+W exabox 4 2 2 1
+W exabox 4 4 2 1

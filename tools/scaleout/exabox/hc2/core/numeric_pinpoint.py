@@ -979,6 +979,8 @@ def main(argv=None):
                 close_mesh()
             if T is not None:
                 T.commit()
+                for line in T.unread_lines():
+                    log(line)
             save()
         log(
             f"done in {res['s']} s, {st['pass_']} pass(es): splits {[s['name'] for s in res['splits']]}, "

@@ -29,6 +29,10 @@ else /tmp; never under /data) once per pin. No pin, no archive or a sha256 misma
 "MAXUTIL ERROR setup: <why>" and exit 3: fleet.sh makes the run INCOMPLETE, never a silent skip.
 Lines for fleet.sh start with "MAXUTIL ": "MAXUTIL FAIL <chip> <why>" names a chip by its tt-kmd number
 (the test's device id is its PCIe id, UMD's "Opening local chip ids/PCIe ids" line); fleet.sh adds BDF and tray.
+Output CRCs: the test logs "Device N: output crc core x,y 0x........", one CRC-32 per worker core of
+its last output tile. Inputs are fixed-seed and every core runs the same math, so per core the CRCs are voted across
+chips: a chip that differs from the majority is "MAXUTIL FAIL <chip> output mismatch core x,y" (logical core);
+fleet.sh (fl_mu_numeric) files those as one stage 5 "NUMERIC FAIL <bdf> (tray N) chip <chip> [max-util]: ..." per chip.
 """
 import hashlib
 import json
@@ -71,6 +75,10 @@ BADV = re.compile(rb"Device (\d+)[: ][^\n]*?(validation (?:failed|FAILED|mismatc
 UTIL = re.compile(rb"Device (\d+) FPU utilization: [^\n]*?measured=([0-9.]+)%")
 OPEN = re.compile(rb"Opening local chip ids/PCIe ids: \{([0-9, ]*)\}")
 ITER = re.compile(rb"Iteration (\d+)/(\d+)")
+CRC = re.compile(
+    rb"Device (\d+): output crc core (\d+),(\d+) 0x([0-9a-fA-F]{8})"
+)  # one per worker core, last output tile
+CRC_LINES = 4  # mismatch lines per chip; more cores fold into one count line
 
 
 def size(seconds, rate):
@@ -96,6 +104,10 @@ class SetupError(Exception):
 # lib found elsewhere on the box (TRAY_MAXUTIL_LIB_SEARCH dirs, else DEFAULT_LIB_SEARCH) goes on LD_LIBRARY_PATH: nothing
 # is installed or shipped (no outside packages on lab boxes)
 LOADER = re.compile(rb"error while loading shared libraries[^\n]*|[^\n]*cannot open shared object file[^\n]*")
+# tt-metal's fast dispatch refusing the test's own program (b03u02 job 197651, tt-metal 58a6d0b1: the checkout-built test puts
+# its ETH DRAM streaming kernels on active ETH cores, which that tree's dispatch no longer runs; gtest rc 1 before any chip
+# ran): a build that cannot run this test, test-infra, never a chip FAIL
+DISPATCH = re.compile(rb"Fast dispatch to \w+ cores is unsupported[^\n\"]*")
 DEFAULT_LIB_SEARCH = ("~/tt-metal", "~/.venv", "~/venv", "~/tt-metal-venv", "/opt", "/usr/local/lib")
 LIB_SEARCH_DEPTH, LIB_SEARCH_S = 6, 20
 
@@ -555,15 +567,39 @@ def summary(log, marks=None):
         badv.setdefault(int(m.group(1)), m.group(0).decode(errors="replace")[:160])
     util = {int(m.group(1)): float(m.group(2)) for m in UTIL.finditer(log)}
     it = [(int(a), int(b)) for a, b in ITER.findall(log)]
+    crc = {}
+    for m in CRC.finditer(log):
+        crc.setdefault(int(m.group(1)), {})[(int(m.group(2)), int(m.group(3)))] = m.group(4).decode().lower()
     return {
         "chips": chips,
         "passed": ok,
         "failed": badv,
         "util": util,
+        "crc": crc,
         "iterations": it[-1][1] if it else None,
         "last_iteration": it[-1][0] if it else None,
         "marks": marks or {},
     }
+
+
+def vote(crc):
+    """per core, the CRC most chips agree on (more than half of the chips that report the core, at least 3);
+    returns ({chip: [core, ...]} that differ, [core, ...] with no majority, cores voted)"""
+    cores = sorted({k for v in crc.values() for k in v})
+    bad, split, n = {}, [], 0
+    for k in cores:
+        vals = {c: v[k] for c, v in crc.items() if k in v}
+        if len(vals) < 3:
+            continue
+        top, cnt = max(((x, list(vals.values()).count(x)) for x in set(vals.values())), key=lambda t: (t[1], t[0]))
+        if 2 * cnt <= len(vals):
+            split.append(k)
+            continue
+        n += 1
+        for c, x in vals.items():
+            if x != top:
+                bad.setdefault(c, []).append(k)
+    return bad, split, n
 
 
 def judge(s, rc, stopped=None):
@@ -580,6 +616,20 @@ def judge(s, rc, stopped=None):
                 out.append(f"MAXUTIL FAIL {c} no 'compute output validation passed' line after a clean exit")
     if not want or not s["passed"]:
         out.append("MAXUTIL FAIL - no chip passed its output check")
+    bad, split, n = vote(s.get("crc") or {})
+    for c, ks in sorted(bad.items()):
+        for x, y in ks[:CRC_LINES]:
+            out.append(f"MAXUTIL FAIL {c} output mismatch core {x},{y}")
+        if len(ks) > CRC_LINES:
+            out.append(f"MAXUTIL FAIL {c} output mismatch on {len(ks) - CRC_LINES} more cores")
+    if split:
+        out.append(
+            f"MAXUTIL WARN output CRCs have no majority across chips on {len(split)} cores (first {split[0][0]},{split[0][1]})"
+        )
+    if s.get("crc"):
+        out.append(
+            f"MAXUTIL output CRCs voted on {n} cores across {len(s['crc'])} chips, {sum(len(v) for v in bad.values())} mismatches"
+        )
     u = sorted(s["util"].values())
     out.append(
         f"MAXUTIL {len(s['passed'])}/{len(want) or '?'} chips passed their output check"
@@ -804,6 +854,7 @@ def run(a):
             "failed": s["failed"],
             "util": s["util"],
             "chips": s["chips"],
+            "crc_mismatch": {str(c): [f"{x},{y}" for x, y in ks] for c, ks in sorted(vote(s["crc"])[0].items())},
             "stopped": stop.get("sig"),
             "stop_s": round(marks["end"] - stop["t"], 1) if stop.get("t") else None,
         },
@@ -831,10 +882,20 @@ def run(a):
         flush=True,
     )
     ld = LOADER.search(bytes(buf))
+    dr = None if ld else DISPATCH.search(bytes(buf))
     if (
-        not s["passed"] and not s["failed"] and not limited and (rc in (126, 127) or ld)
+        not s["passed"] and not s["failed"] and not limited and (rc in (126, 127) or ld or dr)
     ):  # it never ran: test-infra, not a chip FAIL
-        why = ld.group(0).decode(errors="replace").strip()[-300:] if ld else "the test binary did not start"
+        why = (
+            ld.group(0).decode(errors="replace").strip()[-300:]
+            if ld
+            else (
+                f"this tt-metal build refuses the test's program ({dr.group(0).decode(errors='replace').strip()[:200]});"
+                " no chip ran, use a max-util test built for this dispatch"
+                if dr
+                else "the test binary did not start"
+            )
+        )
         print(
             f"MAXUTIL NOT_RUN test-infra: {os.path.basename(a.bin)} rc {rc} on {socket.gethostname().split('.')[0]}: {why}",
             flush=True,

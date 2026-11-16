@@ -370,30 +370,43 @@ def _cooldown_due(cooldowns: list, elapsed: float, end_s: float):
 
 
 class _Power:
-    """Sum of every chip's hwmon power1_input while a gen runs (chip kW, not box kW)."""
+    """Sum of every chip's hwmon power1_input while a gen runs (chip kW, not box kW). A read over 1e9 uW (all ones,
+    4293967296 uW, while the chip's ARC is not ready) is unreadable: left out of the sum and counted per chip."""
 
-    def __init__(self):
+    UNREAD_UW = 1e9
+
+    def __init__(self, root="/sys/class/hwmon"):
         self.paths = sorted(
             p
-            for p in Path("/sys/class/hwmon").glob("hwmon*/power1_input")
+            for p in Path(root).glob("hwmon*/power1_input")
             if os.path.basename(os.path.realpath(p.parent / "device" / "driver")) == "tenstorrent"
         )
         self.samples: list[float] = []
+        self.unread: dict[str, int] = {}
         self._stop = threading.Event()
         self._thread = None
 
+    def _sample(self):
+        total = 0.0
+        for p in self.paths:
+            try:
+                uw = int(p.read_text())
+            except (OSError, ValueError):
+                continue
+            if uw > self.UNREAD_UW:
+                b = os.path.basename(os.path.realpath(p.parent / "device")).removeprefix("0000:")
+                self.unread[b] = self.unread.get(b, 0) + 1
+                continue
+            total += uw / 1e6
+        self.samples.append(total / 1000.0)
+
     def _run(self):
         while not self._stop.wait(1.0):
-            total = 0.0
-            for p in self.paths:
-                try:
-                    total += int(p.read_text()) / 1e6
-                except (OSError, ValueError):
-                    pass
-            self.samples.append(total / 1000.0)
+            self._sample()
 
     def __enter__(self):
         self.samples = []
+        self.unread = {}
         self._stop.clear()
         if self.paths:
             self._thread = threading.Thread(target=self._run, daemon=True)
@@ -407,12 +420,13 @@ class _Power:
         return False
 
     def summary(self) -> str:
+        bad = "".join(f"; {n} unreadable samples on {b}" for b, n in sorted(self.unread.items()))
         if not self.samples:
-            return f"chips={len(self.paths)} no-samples meter=chip_hwmon"
+            return f"chips={len(self.paths)} no-samples meter=chip_hwmon{bad}"
         s = sorted(self.samples)
         return (
             f"chips={len(self.paths)} n={len(s)} mean_kw={sum(s) / len(s):.2f} p95_kw={s[int(0.95 * (len(s) - 1))]:.2f}"
-            f" max_kw={s[-1]:.2f} meter=chip_hwmon"
+            f" max_kw={s[-1]:.2f} meter=chip_hwmon{bad}"
         )
 
 

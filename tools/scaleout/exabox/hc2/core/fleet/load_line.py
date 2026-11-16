@@ -38,7 +38,7 @@ import sys
 from datetime import datetime
 
 from chunk_sched import load as load_rows
-from chunk_sched import nchunks, tray_of
+from chunk_sched import nchunks, timing_text, tray_of
 from fleet_py import BDF_RE, c8_faults  # fault cut-off: first-fault epochs from fault_times.tsv and in-sample
 
 AT_LIMIT = 0.97  # mean power >= 97% of TDP or mean current >= 97% of TDC
@@ -265,6 +265,8 @@ def line(power, result, label, c8=None, limits=None, telem=None):
         if tf is not None
         else "TFLOP/s not reported (no burst)"
     )
+    if b:  # the bursts as they ran (BurstGap's own timestamps), next to TFLOP/s
+        tail += f", {timing_text(b.get('timing'))}"
     if b.get("op"):  # the op that ran, and why minimal_matmul did not
         tail += f", op {b['op']}" + (f" (fallback: {b['fallback']})" if b.get("fallback") else "")
     if b.get("load"):  # the load and its gap, and any part of it that fell back

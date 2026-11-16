@@ -68,7 +68,20 @@ def main():
     )
     ap.add_argument("--cursor-file", help="--code: next core is kept here, so budgeted runs rotate over the box")
     ap.add_argument("--scope", choices=["plain", "full", "smoke"], default="plain")
-    ap.add_argument("--elf-dir", help="--code: <RISC>.elf files to compare executable PT_LOAD segments with")
+    ap.add_argument(
+        "--elf-dir",
+        help="--code: <risc>.elf firmware files: their executable sections set the windows and are compared",
+    )
+    ap.add_argument(
+        "--fw-elf-root",
+        action="append",
+        help="--code: where firmware ELF sets are found (repeatable; default TT_METAL_CACHE and ttnn's pre-compiled)",
+    )
+    ap.add_argument(
+        "--kernel-elf-root",
+        action="append",
+        help="--code: where kernel ELFs (kernels/<name>/<hash>/<risc>/<risc>.elf) are found (default TT_METAL_CACHE)",
+    )
     ap.add_argument("--umd-log", help="--code: a log with UMD's chip open lines, for BDFs when exalens gives none")
     ap.add_argument(
         "--region", action="append", default=[], help="--code: RISC:name:base:size (replaces the default table)"
@@ -224,6 +237,8 @@ def code_main(a):
         read_block=getattr(lib, "read_from_device", None),
         out=lambda m: print(m, flush=True),
         fw_of=cr.fw_from_sysfs(bdf_of, sys_root),
+        fw_roots=a.fw_elf_root,
+        kernel_roots=a.kernel_elf_root,
     )
     if a.out:
         json.dump(res, open(a.out, "w"), indent=1, default=str)

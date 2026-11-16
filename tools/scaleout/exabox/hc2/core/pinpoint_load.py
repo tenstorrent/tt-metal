@@ -24,6 +24,7 @@ import time
 
 TEMP_MAX = 150.0  # fleet_py.TEMP_MAX: hotter is a garbage read (all ones scales to 4.29e6)
 W_MAX = 1000.0  # a 4293 W reading once seen was a garbage read
+UNREAD_C = 200.0  # goal 29's rule: a temperature at or over 200 C (all ones, 65535999 m-degC) or power over W_MAX is unreadable
 
 
 def parse(s, heavy, ub):
@@ -39,6 +40,7 @@ def parse(s, heavy, ub):
     p.add_argument("--sfpu-par", type=int, default=1)
     p.add_argument("--sfpu-act", default=ub.SFPU_ACT)
     p.add_argument("--cqs", type=int, default=2)
+    p.add_argument("--heavy-cols", type=int, default=None)  # the heavy matmul's output tile columns
     p.add_argument("--variant", default="")  # only no-gap runs here (its 0 ms gap); named in the load line
     a, _ = p.parse_known_args(s.split())
     a.burst_steps = max(1, a.burst_steps)
@@ -92,6 +94,7 @@ class Load:
                 heavy=la.heavy,
                 heavy_act=la.sfpu_act if la.sfpu_par else None,
                 heavy_pcie_mb=la.heavy_pcie_mb,
+                heavy_cols=getattr(la, "heavy_cols", None),
                 m=32,
                 k=k,
                 n=32,
@@ -180,6 +183,7 @@ class Tele:
         self.chips, self.targets, self.path, self.log = chips, set(targets), path, log
         self.reader = reader or read_chip
         self.n, self.pend, self.fault, self.kw, self.dropped = 0, None, {}, [], 0
+        self.unread = {}  # bdf -> unreadable samples (goal 29's rule), one 'N unreadable samples on <BDF>' line each
         self.peak = {}
         open(path, "w").close()
 
@@ -193,6 +197,8 @@ class Tele:
             except Exception:
                 w = c = None
             pw, pc = plaus(w, W_MAX), plaus(c, TEMP_MAX)
+            if (w is not None and w > W_MAX) or (c is not None and c >= UNREAD_C):
+                self.unread[bdf] = self.unread.get(bdf, 0) + 1
             if (w is not None and pw is None) or (c is not None and pc is None):  # read but implausible (all ones,
                 self.dropped += 1  # out of range): a fault of its own,
                 self.fault.setdefault(bdf, self.n)  # no later temperature counts
@@ -236,12 +242,16 @@ class Tele:
             f"LOAD launch {row['launch']} {row['split']}: box {row['box_kw']} kW ({row['chips_w']} chips' W); {tg}"
         )
 
+    def unread_lines(self):
+        return [f"telemetry: {n} unreadable samples on {b}" for b, n in sorted(self.unread.items())]
+
     def summary(self):
         return dict(
             launches=self.n,
             box_kw_mean=round(sum(self.kw) / len(self.kw), 3) if self.kw else None,
             box_kw_max=max(self.kw) if self.kw else None,
             dropped_reads=self.dropped,
+            unreadable=dict(sorted(self.unread.items())),
             faults={b: n for b, n in sorted(self.fault.items())},
             chips={b: p for b, p in sorted(self.peak.items())},
         )
