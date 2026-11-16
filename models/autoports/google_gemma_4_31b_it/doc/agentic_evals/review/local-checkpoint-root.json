@@ -1,0 +1,21 @@
+{
+  "recorded_unix": 1794787281.579549,
+  "repo": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline",
+  "branch": "v5-extended-run",
+  "evidence_commit": "44d4cfb52795005693351db98eb2d55210f1a59e",
+  "commit_kind": "evidence_only_not_passed_yet",
+  "push_performed": false,
+  "review_verdict": "more-work-needed",
+  "review": "review/stage12-final-review.md",
+  "required_next_step": "Human authorization of continuation-proposal.json",
+  "checks": {
+    "host_tests": "62 passed plus60 subtests; review/post-format-host-tests.json",
+    "repository_hooks": "final2194 curated paths passed; commit hooks also passed",
+    "stage_gate": "exit2: solved null for3 unresolved outcomes; n85 known"
+  },
+  "unrelated_staged_blobs_preserved": {
+    "models/autoports/google_gemma_4_31b_it/doc/benchmark/run/REPORT.md": "3f8bff3255e7c639da7e26cbe66175fefa6ba313",
+    "models/autoports/google_gemma_4_31b_it/doc/benchmark/stage_usage.json": "e1b67ab6f59e89a5227d47c89a4670d5862adc68"
+  },
+  "telemetry_packet": "/home/mvasiljevic/v5-agentic/logs/telemetry/packets/11ae0f9c-df27-4fdd-95fe-cf14076f2e61.json"
+}
