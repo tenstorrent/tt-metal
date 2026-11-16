@@ -86,7 +86,7 @@ constexpr DataFormat dest_src_format(const DataFormat dest_format)
 }
 
 // Rows one FPU instruction covers: 8 on the base Quasar part, 4 on the narrow one.
-constexpr static std::uint32_t ELTWISE_MATH_ROWS = MATH_ROWS;
+constexpr std::uint32_t ELTWISE_MATH_ROWS = MATH_ROWS;
 static_assert(ELTWISE_MATH_ROWS == 4 || ELTWISE_MATH_ROWS == 8, "the math LLKs support a 4-row or 8-row FPU");
 
 template <std::uint32_t NUM_ROWS>
@@ -104,19 +104,19 @@ constexpr auto fpu_row_offsets()
     return rows;
 }
 
-constexpr static std::uint32_t FPU_MOV_ROWS = (ELTWISE_MATH_ROWS == 8) ? p_mov_src_to_dest::MOV_8_ROWS : p_mov_src_to_dest::MOV_4_ROWS;
+constexpr std::uint32_t FPU_MOV_ROWS = (ELTWISE_MATH_ROWS == 8) ? p_mov_src_to_dest::MOV_8_ROWS : p_mov_src_to_dest::MOV_4_ROWS;
 static_assert(FPU_MOV_ROWS == (ELTWISE_MATH_ROWS == 8 ? p_movd2a::MOV_8_ROWS : p_movd2a::MOV_4_ROWS));
 static_assert(FPU_MOV_ROWS == (ELTWISE_MATH_ROWS == 8 ? p_movd2b::MOV_8_ROWS : p_movd2b::MOV_4_ROWS));
 static_assert(FPU_MOV_ROWS == (ELTWISE_MATH_ROWS == 8 ? p_movb2a::MOV_8_ROWS : p_movb2a::MOV_4_ROWS));
 
-constexpr static bool FPU_SPLITS_DEST_ROW_GROUP = ELTWISE_MATH_ROWS < MAX_FPU_ROWS; // a dest row group takes several FPU issues
+constexpr bool FPU_SPLITS_DEST_ROW_GROUP = ELTWISE_MATH_ROWS < MAX_FPU_ROWS; // a dest row group takes several FPU issues
 
-constexpr static std::uint32_t MOVE_MATH_ROWS[3] = {8, 4, 1};
-constexpr static unsigned int SFP_ROWS           = 2;
+constexpr std::uint32_t MOVE_MATH_ROWS[3] = {8, 4, 1};
+constexpr unsigned int SFP_ROWS           = 2;
 
 // SFPU register-file base addresses: dest region vs SrcS (used by SFPU load/store)
-constexpr static unsigned int SFPU_DEST_BASE_ADDR = 0x0;
-constexpr static unsigned int SFPU_SRCS_BASE_ADDR = 0x400;
+constexpr unsigned int SFPU_DEST_BASE_ADDR = 0x0;
+constexpr unsigned int SFPU_SRCS_BASE_ADDR = 0x400;
 
 // Struct for the ALU addresses
 constexpr std::uint32_t NUM_WORDS_ALU_FORMAT = 3;

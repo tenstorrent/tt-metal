@@ -235,7 +235,7 @@ inline void sync_regfile_write(const std::uint32_t index);
 
 // Field value overflow check
 template <typename T>
-static constexpr bool is_valid(const T val, const std::uint8_t wid)
+constexpr bool is_valid(const T val, const std::uint8_t wid)
 {
     const T mask = (1 << wid) - 1;
     return (val & mask) == val;
@@ -621,12 +621,12 @@ inline void record_kernel_runtime(std::uint64_t kernel_runtime)
 // example, a TRISC access to an unpacker 1 register and an UNPACR
 // instruction that targets unpacker 0).
 //
-constexpr static std::uint32_t TRACK_GLOBAL_CFG             = 1 << 0;
-constexpr static std::uint32_t EN_SUBDIVIDED_CFG_FOR_UNPACR = 1 << 1;
-constexpr static std::uint32_t TRACK_GPR                    = 1 << 2;
-constexpr static std::uint32_t TRACK_TDMA                   = 1 << 3;
-constexpr static std::uint32_t TRACK_TENSIX_INSTRUCTIONS    = 1 << 4;
-constexpr static std::uint32_t TRACK_ALL                    = 0x1F;
+constexpr std::uint32_t TRACK_GLOBAL_CFG             = 1 << 0;
+constexpr std::uint32_t EN_SUBDIVIDED_CFG_FOR_UNPACR = 1 << 1;
+constexpr std::uint32_t TRACK_GPR                    = 1 << 2;
+constexpr std::uint32_t TRACK_TDMA                   = 1 << 3;
+constexpr std::uint32_t TRACK_TENSIX_INSTRUCTIONS    = 1 << 4;
+constexpr std::uint32_t TRACK_ALL                    = 0x1F;
 
 // Uses a template to guarantee compile time execution (could probably
 // get away with constexpr but this seems better)
