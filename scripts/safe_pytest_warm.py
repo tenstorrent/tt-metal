@@ -15,6 +15,12 @@ them, and serves each run by forking a child from it. To a test, the child is a 
 Only third-party modules are preloaded, so repo code is always imported fresh. If a preloaded file changes on
 disk, the server retires and the client starts a new one.
 
+Fork safety: the server only imports, it never computes. After preloading it checks that no thread is running
+except the ones known to survive fork (OpenBLAS's worker pool, jemalloc's background thread); otherwise it records
+why in <sock>.unsafe and exits, and clients for that environment run cold until `safe_pytest_warm.py stop` (or a
+change to this file). It then freezes the preloaded objects (gc.freeze) so the children's garbage collector never
+writes to them and their memory pages stay shared.
+
 Failure model (the device must never see two runs at once, and a killed run must never keep running):
   * Until the server answers "started", any problem makes the client run the command cold. The server answers
     only after the child has finished its setup; if that fails, it kills and reaps the child first.
@@ -39,6 +45,7 @@ import array
 import ctypes
 import errno
 import fcntl
+import gc
 import hashlib
 import importlib
 import io
@@ -54,9 +61,14 @@ import stat
 import struct
 import subprocess
 import sys
+import threading
 import time
 
-# Preloaded by the server. Third-party only: repo code must be imported fresh by the child. Never ttnn (loading
+# Preloaded by the server. The server must ONLY import these: never call into numpy/torch/BLAS or anything that
+# starts a thread. Thread pools created in the server are copied into every forked child without their threads,
+# and a lock another thread held at fork time stays locked there forever. serve() enforces this after preloading
+# (see _fork_hazard); a module added here that starts threads at import makes clients fall back to cold runs.
+# Third-party only: repo code must be imported fresh by the child. Never ttnn (loading
 # _ttnn.so starts Tracy threads a forked child would not have), and never a module of a distribution that ships
 # a pytest plugin, or anything that imports one (pytest warns "Module already imported so cannot be
 # rewritten"); _preload() reports any.
@@ -119,6 +131,10 @@ REPO_DIR = os.path.dirname(os.path.dirname(SELF_PATH))
 MAX_MSG = 16 * 1024 * 1024
 MAX_FDS = 250  # SCM_RIGHTS limit is 253 per message
 PR_SET_PDEATHSIG = 1
+# Native threads a preloaded module may start that are safe to fork over: jemalloc (pulled in by pandas/pyarrow)
+# registers fork handlers and restarts its background thread lazily. OpenBLAS's unnamed workers are counted
+# separately in _fork_hazard: OpenBLAS shuts its pool down before a fork (pthread_atfork) and the child restarts it.
+FORK_SAFE_THREAD_NAMES = ("jemalloc_bg_thd",)
 
 
 def _log(msg: str) -> None:
@@ -304,6 +320,55 @@ def _await_child_ready(ack_r: int) -> str | None:
     return None
 
 
+def _openblas_threads() -> int:
+    """Size of OpenBLAS's thread pool if a loaded library is OpenBLAS (a getter: it starts no threads), else 0."""
+    paths = set()
+    try:
+        with open("/proc/self/maps") as maps:
+            for line in maps:
+                path = line.rstrip("\n").split(maxsplit=5)[-1]
+                if "openblas" in os.path.basename(path).lower() and path.startswith("/"):
+                    paths.add(path)
+    except OSError:
+        return 0
+    for path in paths:
+        try:
+            lib = ctypes.CDLL(path)  # already loaded: returns the same handle
+        except OSError:
+            continue
+        for sym in ("openblas_get_num_threads64_", "openblas_get_num_threads"):
+            fn = getattr(lib, sym, None)
+            if fn is not None:
+                return int(fn())
+    return 0
+
+
+def _fork_hazard() -> str | None:
+    """Why forking this process is unsafe, or None: a thread other than the main one that is not known to survive
+    fork. Python threads never are; native ones are allowed by name (FORK_SAFE_THREAD_NAMES) or as OpenBLAS
+    workers (unnamed, so they carry the main thread's name; at most pool size - 1 of them)."""
+    others = [t.name for t in threading.enumerate() if t is not threading.main_thread()]
+    if others:
+        return f"Python thread(s) running: {', '.join(sorted(others))}"
+    try:
+        main_name = open("/proc/self/comm").read().strip()
+        names = [
+            open(f"/proc/self/task/{tid}/comm").read().strip()
+            for tid in os.listdir("/proc/self/task")
+            if int(tid) != os.getpid()
+        ]
+    except OSError as e:
+        return f"cannot list threads: {e}"
+    unknown = sorted({n for n in names if n != main_name and n not in FORK_SAFE_THREAD_NAMES})
+    if unknown:
+        return f"native thread(s) {unknown} started by a preloaded module"
+    unnamed = sum(1 for n in names if n == main_name)
+    blas_workers = max(_openblas_threads() - 1, 0)
+    if unnamed > blas_workers:
+        return f"{unnamed} unnamed native thread(s), but only {blas_workers} are OpenBLAS workers"
+    return None
+
+
 def serve(sock_path: str, key: str):
     """Server loop. Returns a request dict in a forked child (the caller runs it); never returns otherwise."""
     # One server per socket path.
@@ -315,6 +380,16 @@ def serve(sock_path: str, key: str):
         os._exit(0)
 
     fingerprints = _preload()
+    hazard = _fork_hazard()
+    if hazard:
+        _log(f"not serving: {hazard}; clients for this environment run cold")
+        with open(sock_path + ".unsafe", "w") as f:
+            f.write(hazard + "\n")
+        os._exit(3)
+    # Move every preloaded object out of the collector's reach: a child's GC pass would otherwise write to all of
+    # their headers and copy the pages the child shares with the server (copy-on-write).
+    gc.collect()
+    gc.freeze()
     signal.signal(signal.SIGPIPE, signal.SIG_IGN)
     sys.stdout.flush()
     sys.stderr.flush()
@@ -803,6 +878,11 @@ def client_run(mode: str, module: str | None, argv: list[str]) -> int:
         if len(fds) > MAX_FDS or not {0, 1, 2} <= set(fds):
             raise RuntimeError(f"cannot forward fds {fds[:8]}...")
         sock_path = _socket_path(key)
+        try:
+            with open(sock_path + ".unsafe") as f:
+                raise RuntimeError(f"warm path disabled for this environment: {f.read().strip()}")
+        except FileNotFoundError:
+            pass
         for _attempt in range(3):
             s = _connect(sock_path)
             started_server = False
@@ -876,6 +956,11 @@ def client_stop() -> int:
         return 0
     repo_tag = hashlib.sha256(REPO_DIR.encode()).hexdigest()[:10]
     for name in os.listdir(base):
+        if name.startswith(repo_tag) and name.endswith(".unsafe"):  # let the next run re-check this environment
+            try:
+                os.unlink(os.path.join(base, name))
+            except FileNotFoundError:
+                pass
         if name.startswith(repo_tag) and name.endswith(".sock"):
             s = _connect(os.path.join(base, name))
             if s is None:
