@@ -3386,6 +3386,15 @@ class DeepSeekV41Model(DeepSeekV4Model):
                 self.dspark.draft()
             ttnn.end_trace_capture(device, tid, cq_id=0)
             self._spec_tids["draft"] = tid
+            if self.dspark.block_mode:
+                # The block draft's programs key on their L1 inputs' placement, which the captures above moved: warm
+                # them up again on the allocator state the capture sees.
+                entries = device.num_program_cache_entries()
+                self.dspark.draft(greedy=True)
+                ttnn.synchronize_device(device)
+                logger.info(
+                    f"drafter block draft warm-up before capture: {device.num_program_cache_entries() - entries} new programs"
+                )
             tid = ttnn.begin_trace_capture(device, cq_id=0)
             with _trace_capture_guard():
                 self.dspark.draft(greedy=True)

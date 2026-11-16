@@ -151,6 +151,18 @@ def test_dspark_draft_perf(mesh_device):
         drafter.draft(greedy=GREEDY)
         _flush(device)
         ttnn.synchronize_device(device)
+        # DSPARK_PERF_SHIFT_L1=1: an L1 buffer allocated between the compile and the capture (as a model's other
+        # captures do), to catch programs whose cache key depends on where their inputs sit in L1.
+        shift = None
+        if os.environ.get("DSPARK_PERF_SHIFT_L1", "0") == "1":
+            shift = ttnn.from_torch(
+                torch.zeros(1, 1, 32, 4096),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+            )
         tid = ttnn.begin_trace_capture(device, cq_id=0)
         with _trace_capture_guard():
             out = drafter.draft(greedy=GREEDY)
