@@ -37,6 +37,7 @@ from models.demos.gpt_oss.tt.ccl import CCLManager
 # WS2 glue cut (perf/WS2.md). Each switch defaults on; "0" restores the previous decode path for A/B runs.
 WS2_HEADS = os.environ.get("GEMMA4_26B_WS2_HEADS", "1") != "0"
 WS2_NORMS = os.environ.get("GEMMA4_26B_WS2_NORMS", "1") != "0"
+WS2_GEGLU = os.environ.get("GEMMA4_26B_WS2_GEGLU", "1") != "0"
 
 
 class DecodeRopeRows:
@@ -290,14 +291,6 @@ class _LocalAttention(OptimizedAttention):
         sdpa = self.decode_sdpa
         direct = self.output_program is not None and getattr(self, "decode_output_dram", None) is None
         direct = direct and not getattr(self, "output_input_bfp8", False)
-        heads_memory = ttnn.create_sharded_memory_config(
-            (32, cfg.head_dim),
-            ttnn.CoreGrid(x=1, y=1),
-            ttnn.ShardStrategy.HEIGHT,
-            ttnn.ShardOrientation.ROW_MAJOR,
-            use_height_and_width_as_shard_shape=True,
-        )
-        # SDPA writes the concat-heads layout directly except for GQA (sharded GQA output is unsupported).
         attention = ttnn.transformer.paged_scaled_dot_product_attention_decode(
             q,
             k_cache,
@@ -308,17 +301,15 @@ class _LocalAttention(OptimizedAttention):
             sliding_window_size=sdpa.config.sliding_window if sdpa.config.is_sliding else None,
             program_config=sdpa.program,
             compute_kernel_config=sdpa.compute,
-            memory_config=(heads_memory if direct and cfg.num_key_value_heads == 1 else ttnn.L1_MEMORY_CONFIG),
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         if not direct:
             return self.project(attention, True)
-        if not attention.is_sharded():
-            attention = ttnn.to_memory_config(attention, heads_memory)
-        # SDPA wrote the concat-heads input layout; the projection emits the collective dtype directly.
-        combined = ttnn.experimental.nlp_concat_heads_decode(attention, num_heads=cfg.num_attention_heads)
-        width = cfg.num_attention_heads * cfg.head_dim
-        combined = ttnn.reshape(combined, (1, 1, 1, width), (1, 1, 32, width))
-        combined = ttnn.to_memory_config(combined, ttnn.L1_MEMORY_CONFIG)
+        # One program from the SDPA output to the O-projection input (models/demos/gemma4 ConcatHeadsDecode);
+        # the projection emits the collective dtype directly.
+        from models.demos.gemma4.custom_ops.concat_heads_decode import ConcatHeadsDecode
+
+        combined = ConcatHeadsDecode.op(attention, cfg.num_attention_heads)
         projected = ttnn.linear(
             combined,
             self.source.weights.o_proj,
@@ -513,8 +504,13 @@ class _SharedMLP:
             if decode
             else self.gate_up(x)
         )
-        up, gate = gu[..., : self.width], gu[..., self.width :]
-        hidden = ttnn.mul(gate, up, input_tensor_a_activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU, 0.0)])
+        if decode and WS2_GEGLU and gu.dtype == ttnn.bfloat16:
+            from models.demos.gemma4.custom_ops.geglu_decode import GegluDecode
+
+            hidden = GegluDecode.op(gu)  # up * gelu(gate) over the packed [up | gate] rows, one program
+        else:
+            up, gate = gu[..., : self.width], gu[..., self.width :]
+            hidden = ttnn.mul(gate, up, input_tensor_a_activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU, 0.0)])
         if decode and getattr(self, "input_bfp8", False):
             hidden = ttnn.typecast(hidden, ttnn.bfloat8_b)
         output = (
