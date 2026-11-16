@@ -248,7 +248,7 @@ tt_fabric::FabricManagerMode MetalEnvImpl::get_fabric_manager() const { return f
 
 uint8_t MetalEnvImpl::get_num_fabric_active_routing_planes() const { return num_fabric_active_routing_planes_; }
 
-void MetalEnvImpl::configure_fabric(const FabricConfigDescriptor& fabric) {
+void MetalEnvImpl::configure_fabric(const FabricSettings& fabric) {
     // The control plane is the first object built from the fabric configuration, so its existence marks the
     // configuration as committed.
     std::lock_guard<std::mutex> lock(control_plane_mutex_);
@@ -627,8 +627,8 @@ void MetalEnvImpl::construct_control_plane() {
     fabric_config_ = control_plane_->get_fabric_config();
 }
 
-FabricConfigDescriptor MetalEnvImpl::control_plane_config() const {
-    return FabricConfigDescriptor{
+FabricSettings MetalEnvImpl::control_plane_config() const {
+    return FabricSettings{
         .fabric_config = fabric_config_,
         .reliability_mode = fabric_reliability_mode_,
         .num_routing_planes = num_fabric_active_routing_planes_,
@@ -763,11 +763,9 @@ MetalEnv::~MetalEnv() {
 
 const MetalEnvDescriptor& MetalEnv::get_descriptor() const { return impl_->get_descriptor(); }
 
-void MetalEnv::configure_fabric(const FabricConfigDescriptor& fabric) { impl_->configure_fabric(fabric); }
+void MetalEnv::configure_fabric(const FabricSettings& fabric) { impl_->configure_fabric(fabric); }
 
-const FabricConfigDescriptor& MetalEnv::get_fabric_config_descriptor() const {
-    return impl_->get_fabric_config_descriptor();
-}
+const FabricSettings& MetalEnv::get_fabric_settings() const { return impl_->get_fabric_settings(); }
 
 uint32_t MetalEnv::get_num_pcie_devices() const { return impl_->get_cluster().number_of_pci_devices(); }
 uint32_t MetalEnv::get_num_available_devices() const { return impl_->get_cluster().number_of_user_devices(); }
