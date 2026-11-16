@@ -14,7 +14,6 @@ test_vision_tower_l1_clash_falls_back_to_dram, which forces a buffer clash in L1
 from __future__ import annotations
 
 import math
-import os
 
 import torch
 from loguru import logger
@@ -36,6 +35,7 @@ from .vision_helpers import (
     L1_VS_DRAM_CI_GRIDS,
     MAX_REL_L2,
     VISION_GRIDS,
+    all_grids,
     assert_close,
     grid_name,
     parametrize_vision_grids,
@@ -178,7 +178,7 @@ def test_vision_tower_l1_vs_dram(mesh_device, device_params, grid_thw, vision_re
 
 # Only in the full-grid run (M3_VISION_ALL_GRIDS=1): alone, its kernel builds take longer than the CI entry can spare.
 # Otherwise it is left out rather than skipped, as the extra grids are.
-if os.getenv("M3_VISION_ALL_GRIDS") == "1":
+if all_grids():
 
     @torch.no_grad()
     @parametrize_mesh_with_fabric(mesh_shapes=[(1, 1)])

@@ -34,7 +34,9 @@ VISION_GRIDS = {
     "h34w46": (1, 34, 46),  # 640x480 like models/sample_data/huggingface_cat_image.jpg: 1564 patches, not whole tiles
     "h40w54": (1, 40, 54),  # 4:3 photos of 800x600 and larger, resized to 756x560: 2160 patches, not whole tiles
     "h36w36": (1, 36, 36),  # 504x504: 1296 patches, not whole tiles; 1 tile of rows on a transposed split's last core
-    "h18w18": (1, 18, 18),  # 252x252: 324 patches, not whole tiles, where QKV and fc1 keep ttnn's own config
+    # 252x252: 324 patches, not whole tiles, where QKV and fc1 keep ttnn's own config, and SDPA masks 188 of its 512
+    # padded keys
+    "h18w18": (1, 18, 18),
     # 168x168: 144 patches, where only the patch embed, the out projection and fc2 get a program config, and SDPA
     # masks 112 of its 256 keys
     "h12w12": (1, 12, 12),
@@ -46,8 +48,6 @@ VISION_GRIDS = {
 # h36w36 covers what h16w16 does not: transposed matmul splits, the MLP's shards, partial row tiles, padded SDPA keys
 # and the RoPE op's reload kernels. M3_VISION_ALL_GRIDS=1 adds the other grids, left out rather than skipped.
 CI_GRIDS = ("h16w16", "h36w36")
-# The attention test also runs h18w18 in CI, where SDPA masks 188 of its 512 padded keys, the largest share in CI.
-ATTENTION_CI_GRIDS = CI_GRIDS + ("h18w18",)
 # The CI grids of the tower test of L1 against DRAM. Both use L1 on 11x10, 12x10 and 13x10, and h36w36 shards the MLP.
 # h36w36 also adds a partial tile row, a partial last shard, and splits that leave cores out on 12x10 and 13x10.
 L1_VS_DRAM_CI_GRIDS = ("h16w16", "h36w36")
@@ -75,6 +75,11 @@ MAX_REL_L2 = {
 }
 
 
+def all_grids() -> bool:
+    """True with M3_VISION_ALL_GRIDS=1, as the weekly entry runs: every grid, and the tests that only it runs."""
+    return os.getenv("M3_VISION_ALL_GRIDS") == "1"
+
+
 def parametrize_vision_grids(ci_grids=CI_GRIDS, grids=VISION_GRIDS):
     """Parametrize grid_thw over ci_grids, or over all of grids when M3_VISION_ALL_GRIDS=1.
 
@@ -83,7 +88,7 @@ def parametrize_vision_grids(ci_grids=CI_GRIDS, grids=VISION_GRIDS):
     unknown = sorted(set(ci_grids) - grids.keys())
     if unknown:
         raise ValueError(f"grid ids {unknown} of ci_grids are not among the {len(grids)} grids to take them from")
-    run_all = os.getenv("M3_VISION_ALL_GRIDS") == "1"
+    run_all = all_grids()
     params = [pytest.param(grid, id=grid_id) for grid_id, grid in grids.items() if run_all or grid_id in ci_grids]
     return pytest.mark.parametrize("grid_thw", params)
 

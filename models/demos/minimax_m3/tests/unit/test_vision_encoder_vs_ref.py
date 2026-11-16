@@ -10,8 +10,6 @@ seeded random weights, so no checkpoint is needed. The encoder's host tests are 
 """
 from __future__ import annotations
 
-import os
-
 import numpy as np
 import pytest
 import torch
@@ -22,7 +20,7 @@ from models.demos.minimax_m3.vision import format as media_format
 from models.demos.minimax_m3.vision.encoder import TtMiniMaxM3VisionEncoder, read_embeddings, vision_config
 
 from ..test_factory import parametrize_mesh_with_fabric
-from .vision_helpers import CI_GRIDS, MAX_REL_L2, VISION_GRIDS, assert_close, grid_name
+from .vision_helpers import CI_GRIDS, MAX_REL_L2, VISION_GRIDS, all_grids, assert_close, grid_name
 
 # Resized image sizes in pixels as (height, width), by their patch grid: the CI grids of the vision tests, and for the
 # full-grid run h40w54 and h4w6.
@@ -36,7 +34,7 @@ GUARD = 0xA5
 
 
 def _parametrize_sizes():
-    run_all = os.getenv("M3_VISION_ALL_GRIDS") == "1"
+    run_all = all_grids()
     params = [pytest.param(size, id=size_id) for size_id, size in SIZES.items() if run_all or size_id in CI_GRIDS]
     return pytest.mark.parametrize("size", params)
 
