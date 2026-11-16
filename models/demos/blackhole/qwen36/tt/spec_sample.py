@@ -27,6 +27,13 @@ Device graph (``VerifySampler.body``, a trace of its own after the verify trace)
 top-32 (``ttnn.topk``), the candidates' global ids are the local ids plus the chunk offset, then ``ttnn.manual_seed``
 and one ``ttnn.sampling`` with the per-row parameters write one draw per row. Top-k above 32 never reaches it: the
 plugin samples such a row on the host (``max_device_top_k``).
+
+The chunks are stacked as rows of one [1, chunks, B*T, V / chunks] tensor and take their top-32 in one ``ttnn.topk``
+call: the routed top-k reduces every row on its own core in one sequential pass over the row, so one call over
+chunks x B*T rows takes about one chunk's time (two when the rows outnumber the worker cores) instead of one per chunk,
+and each row gets the values and ids, in the same order, that a call over that chunk alone gives it. The candidates' order is part of the draw:
+``ttnn.sampling`` ranks equal values by their position among the candidates, and the routed top-k orders equal values
+by its merge sequence, which depends on the row's width. So the chunk width and the chunk order stay fixed.
 """
 
 import secrets
@@ -248,31 +255,51 @@ class VerifySampler:
         """The chain program wrote the seeds buffer: the next host plan copies its seeds again."""
         self._staged.pop("seeds", None)
 
-    def body(self, logits):
-        """``logits`` [1, 1, rows, vocab] bfloat16 TILE, replicated. Writes one draw per row into ``draws``."""
-        parts = ttnn.split(logits, self.vocab // self.chunks, dim=3) if self.chunks > 1 else [logits]
-        values, indices = [], []
-        for part in parts:
-            v, i = ttnn.topk(part, k=SAMPLER_TOP_K, dim=-1)
-            values.append(v)
-            indices.append(ttnn.typecast(i, ttnn.int32))
+    def candidates(self, logits):
+        """The sampler's candidates of ``logits`` [1, 1, rows, vocab] bfloat16 TILE: (values [1, 1, rows, chunks * 32]
+        bfloat16 TILE, global ids [1, 1, rows, chunks * 32] uint32 ROW_MAJOR), chunk c's top-32 at columns 32c ..
+        32c + 31 in the order ``ttnn.topk`` returns them."""
+        rows = int(logits.shape[2])
+        if self.chunks == 1:
+            vals, i = ttnn.topk(logits, k=SAMPLER_TOP_K, dim=-1)
+            idx = ttnn.typecast(i, ttnn.int32)
             ttnn.deallocate(i)
-            if part is not logits:
+        else:
+            parts = ttnn.split(logits, self.vocab // self.chunks, dim=3)
+            stacked = ttnn.concat(parts, dim=1)
+            for part in parts:
                 ttnn.deallocate(part)
-        vals = ttnn.concat(values, dim=3) if self.chunks > 1 else values[0]
-        idx = ttnn.concat(indices, dim=3) if self.chunks > 1 else indices[0]
-        if self.chunks > 1:
-            for t in values + indices:
-                ttnn.deallocate(t)
+            v, i = ttnn.topk(stacked, k=SAMPLER_TOP_K, dim=-1)
+            ttnn.deallocate(stacked)
+            i32 = ttnn.typecast(i, ttnn.int32)
+            ttnn.deallocate(i)
+            vals, idx = (self._unstack(t, rows) for t in (v, i32))
         gidx = ttnn.add(self.offsets, idx, dtype=ttnn.uint32)
         ttnn.deallocate(idx)
         gidx_rm = ttnn.untilize(gidx, use_multicore=True)
         ttnn.deallocate(gidx)
+        return vals, gidx_rm
+
+    def _unstack(self, t, rows):
+        """[1, chunks, rows, 32] -> [1, 1, rows, chunks * 32], chunk c at columns 32c .. 32c + 31; frees ``t``."""
+        parts = [ttnn.slice(t, (0, c, 0, 0), (1, c + 1, rows, SAMPLER_TOP_K)) for c in range(self.chunks)]
+        ttnn.deallocate(t)
+        out = ttnn.concat(parts, dim=3)
+        for part in parts:
+            ttnn.deallocate(part)
+        return out
+
+    def draw(self, vals, gidx_rm):
+        """Seed the drawing rows' cores and write one draw per row of the candidates into ``draws``; frees both."""
         ttnn.manual_seed(seeds=self.seeds, user_ids=self.user_ids)
         ttnn.sampling(vals, gidx_rm, k=self.k, p=self.p, temp=self.temp, output_tensor=self.draws)
         ttnn.deallocate(vals)
         ttnn.deallocate(gidx_rm)
         return self.draws
+
+    def body(self, logits):
+        """``logits`` [1, 1, rows, vocab] bfloat16 TILE, replicated. Writes one draw per row into ``draws``."""
+        return self.draw(*self.candidates(logits))
 
     def read(self):
         """The draws of the last replay, one per row, from the device-0 replica."""
