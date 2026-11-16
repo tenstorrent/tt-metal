@@ -119,14 +119,15 @@ def qkv_heads_norm_rope_b1(x, hq, hkv, head_dim, gq, gk, cos, sin, eps, v_core=t
 PACK_KERNELS = Path(__file__).resolve().parent / "kernels"
 
 
-def pack_rows(a, b):
+def pack_rows(a, b=None):
     """Row 0 of every tile of ``a`` and ``b`` ([1, 1, 1, W] bf16 TILE interleaved) as one dense
     ``[1, 1, 32, 32 * n]`` bf16 TILE L1 tensor (n a multiple of 4, the collective's chip count). A batch-1
     all-reduce of the packed tensor moves n tiles instead of the inputs' na + nb mostly-padding tiles."""
-    for t in (a, b):
+    for t in (a,) if b is None else (a, b):
         assert t.layout == ttnn.TILE_LAYOUT and t.dtype == ttnn.bfloat16 and not t.is_sharded(), t
         assert [int(v) for v in t.shape][:3] == [1, 1, 1], t.shape
-    na, nb = int(a.shape[-1]) // TILE, int(b.shape[-1]) // TILE
+    na, nb = int(a.shape[-1]) // TILE, 0 if b is None else int(b.shape[-1]) // TILE
+    b_or_a = a if b is None else b
     n_out = (na + nb + TILE - 1) // TILE
     n_out = (n_out + 3) // 4 * 4
     device = a.device()
@@ -143,11 +144,11 @@ def pack_rows(a, b):
         ],
     )
     ct = [0, na, nb]
-    for t in (a, b, out):
+    for t in (a, b_or_a, out):
         ct += ttnn.TensorAccessorArgs(t).get_compile_time_args()
     rt = ttnn.RuntimeArgs()
     for T, core in enumerate(cores):
-        rt[core.x][core.y] = [a.buffer_address(), b.buffer_address(), out.buffer_address(), T]
+        rt[core.x][core.y] = [a.buffer_address(), b_or_a.buffer_address(), out.buffer_address(), T]
     kernel = ttnn.KernelDescriptor(
         kernel_source=str(PACK_KERNELS / "pack_rows.cpp"),
         core_ranges=core_set,
@@ -155,10 +156,11 @@ def pack_rows(a, b):
         runtime_args=rt,
         config=ttnn.ReaderConfigDescriptor(),
     )
-    return ttnn.generic_op([a, b, out], ttnn.ProgramDescriptor(kernels=[kernel], semaphores=[], cbs=[cb]))
+    io = [a, out] if b is None else [a, b, out]
+    return ttnn.generic_op(io, ttnn.ProgramDescriptor(kernels=[kernel], semaphores=[], cbs=[cb]))
 
 
-def unpack_rows(packed, na, width, memory):
+def unpack_rows(packed, na, width, memory, count=2):
     """Inverse of ``pack_rows`` into two ``[1, 1, 1, width]`` bf16 TILE tensors in the WIDTH_SHARDED ``memory``
     (one row tile), each shard core building its own tiles; rows 1-31 of every tile are zero."""
     assert packed.layout == ttnn.TILE_LAYOUT and packed.dtype == ttnn.bfloat16 and not packed.is_sharded()
@@ -177,13 +179,13 @@ def unpack_rows(packed, na, width, memory):
     device = packed.device()
     outs = [
         ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, 1, width]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, memory)
-        for _ in range(2)
+        for _ in range(count)
     ]
     core_set = shard.grid
-    ct = [per, na] + ttnn.TensorAccessorArgs(packed).get_compile_time_args()
+    ct = [per, na, count] + ttnn.TensorAccessorArgs(packed).get_compile_time_args()
     rt = ttnn.RuntimeArgs()
     for k, core in enumerate(cores):
-        rt[core.x][core.y] = [packed.buffer_address(), outs[0].buffer_address(), outs[1].buffer_address(), k]
+        rt[core.x][core.y] = [packed.buffer_address(), outs[0].buffer_address(), outs[-1].buffer_address(), k]
     kernel = ttnn.KernelDescriptor(
         kernel_source=str(PACK_KERNELS / "unpack_rows.cpp"),
         core_ranges=core_set,
@@ -192,4 +194,4 @@ def unpack_rows(packed, na, width, memory):
         config=ttnn.ReaderConfigDescriptor(),
     )
     ttnn.generic_op([packed] + outs, ttnn.ProgramDescriptor(kernels=[kernel], semaphores=[], cbs=[]))
-    return outs[0], outs[1]
+    return tuple(outs)

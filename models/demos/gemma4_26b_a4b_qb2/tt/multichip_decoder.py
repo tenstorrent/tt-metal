@@ -43,6 +43,7 @@ WS2_FUSED_CACHE = os.environ.get("GEMMA4_26B_WS2_FUSED_CACHE", "1") != "0"
 WS2_FOLD_SHARED = os.environ.get("GEMMA4_26B_WS2_FOLD_SHARED", "1") != "0"
 WS2_GATHER_SHARDED = os.environ.get("GEMMA4_26B_WS2_GATHER_SHARDED", "1") != "0"
 WS2_PACK_MOE = os.environ.get("GEMMA4_26B_WS2_PACK_MOE", "1") != "0"
+WS2_PACK_ATTN = os.environ.get("GEMMA4_26B_WS2_PACK_ATTN", "1") != "0"
 # Fabric links per decode all-reduce (QB2 Linear 1x4). 2 measured ~35% faster than 1 at decode-row sizes.
 WS2_CCL_LINKS = int(os.environ.get("GEMMA4_26B_WS2_CCL_LINKS", "2"))
 
@@ -338,14 +339,19 @@ class _LocalAttention(OptimizedAttention):
         from models.demos.gemma4.custom_ops.concat_heads_decode import ConcatHeadsDecode
 
         combined = ConcatHeadsDecode.op(attention, cfg.num_attention_heads)
+        pack_memory = getattr(self, "ws2_pack_memory", None)
         projected = ttnn.linear(
             combined,
             self.source.weights.o_proj,
-            dtype=self.collective_dtype,
+            dtype=ttnn.bfloat16 if pack_memory is not None else self.collective_dtype,
             program_config=self.output_program,
             compute_kernel_config=self.output_compute,
             memory_config=self.output_memory,
         )
+        if pack_memory is not None:
+            # Row 0 only: all-reduce 4 dense bf16 tiles and unpack into the batch-1 norm layout.
+            reduced = self.allreduce(pack_rows(projected), role="attention_packed")
+            return unpack_rows(reduced, projected.shape[-1] // 32, projected.shape[-1], pack_memory, count=1)[0]
         return self.allreduce(projected, role="attention", output_memory=self.ws2_gather_memory)
 
     def rotary(self, value, cos, sin, *, decode=False):
@@ -1183,6 +1189,13 @@ class MultichipDecoder(OptimizedDecoder):
         attention.ws2_gather_memory = (
             self.ws2_norm.memory
             if self.ws2_norm is not None and self.attention_ccl_dtype == ttnn.bfloat16 and WS2_GATHER_SHARDED
+            else None
+        )
+        # Layers without the bf16 sharded gather (full layers: BFP8 attention collective) all-reduce a packed
+        # bf16 row instead; on sliding layers packing measured no faster and costs two programs.
+        attention.ws2_pack_memory = (
+            self.ws2_norm.memory
+            if self.ws2_norm is not None and WS2_PACK_ATTN and attention.ws2_gather_memory is None
             else None
         )
         self.layer.self_attn = attention
