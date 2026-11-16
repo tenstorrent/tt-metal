@@ -452,7 +452,8 @@ class TPGatedDeltaNet:
         # Spec decode only (set by SpeculativeDecoder): run the ONE fused recurrent device op in
         # forward_decode instead of the composite, so decode and hybrid verify share GDN math.
         # Full-batch (B == self.B) only — it has no bucketed B<Bmax state slice/writeback.
-        self.use_fused_recurrent_decode = False
+        # QWEN36_GDN_REC1=1 (default off): the same op in plain chain decode (measurement switch; B == Bmax only).
+        self.use_fused_recurrent_decode = os.environ.get("QWEN36_GDN_REC1") == "1"
         self.conv_carry = None  # cross-chunk prefill conv carry [1, K-1, qkv_dim_tp]
         # Which causal conv runs the single-sequence prefill when valid_len is None (masked buckets always
         # keep the MAC FIR, whose one-hot new_state selection they need):
