@@ -77,6 +77,28 @@ def test_sharded_rmsnorm_rows(device, rows, h, replicated_weight, out_mode):
         assert passing, f"row {j}: PCC {pcc}"
 
 
+@pytest.mark.parametrize("rows, h", [(4, 4), (2, 2), (5, 8), (1, 1)], ids=lambda v: str(v))
+@pytest.mark.parametrize("buffer", ["dram", "l1"])
+def test_sharded_rmsnorm_rows_row_major(device, rows, h, buffer):
+    """The block's rows un-tiled: ROW_MAJOR [1, 1, rows, D] interleaved, one page per row."""
+    x, w, x_tt, w_tt = _block_inputs(device, rows, h, True)
+    ref = _ref(x, w)
+    mem = ttnn.DRAM_MEMORY_CONFIG if buffer == "dram" else ttnn.L1_MEMORY_CONFIG
+    tiled = ttnn.to_torch(ttnn.experimental.deepseek.sharded_rmsnorm(x_tt, w_tt, epsilon=EPS)).float()
+    for _ in range(2):  # the second call runs from the program cache
+        out_tt = ttnn.experimental.deepseek.sharded_rmsnorm(
+            x_tt, w_tt, epsilon=EPS, memory_config=mem, output_layout=ttnn.ROW_MAJOR_LAYOUT
+        )
+    assert out_tt.layout == ttnn.ROW_MAJOR_LAYOUT
+    assert tuple(out_tt.shape) == (1, 1, rows, D)
+    out = ttnn.to_torch(out_tt).float()
+    # Bit-identical to the tiled output, row for row.
+    assert torch.equal(out, tiled), (out - tiled).abs().max()
+    for j in range(rows):
+        passing, pcc = comp_pcc(ref[..., j, :], out[..., j, :], 0.999)
+        assert passing, f"row {j}: PCC {pcc}"
+
+
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 10240}], indirect=True)
 def test_sharded_rmsnorm_rows_perf(device):
     """Production shape: D = 5120 on the 8 collapse cores. s = 1 is today's ROW_MAJOR row (ROW_MAJOR L1 output,
@@ -107,6 +129,9 @@ def test_sharded_rmsnorm_rows_perf(device):
             x4_tt, w4_tt, epsilon=EPS, memory_config=ttnn.DRAM_MEMORY_CONFIG
         ),
         "s4_w32": lambda: ttnn.experimental.deepseek.sharded_rmsnorm(x4_tt, w4_t32, epsilon=EPS),
+        "s4_rm_dram": lambda: ttnn.experimental.deepseek.sharded_rmsnorm(
+            x4_tt, w4_tt, epsilon=EPS, memory_config=ttnn.DRAM_MEMORY_CONFIG, output_layout=ttnn.ROW_MAJOR_LAYOUT
+        ),
     }
     for name, fn in cases.items():
         ttnn.deallocate(fn())
