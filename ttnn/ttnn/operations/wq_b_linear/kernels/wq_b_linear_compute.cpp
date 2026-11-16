@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // y block (block_m_tiles x core_n_tiles) = x (resident, K-blocked) @ W (streamed, K-blocked),
-// accumulated in place in cb_y_tiles via packer L1 accumulation.
+// accumulated in place in cb_y_tiles via packer L1 accumulation. The last K-block runs column group by column group
+// and releases each group to the y store as soon as it is packed.
 // Regime R4 (has_slices): a core may also own a K-slice (slice_k_blocks K-blocks from slice_kb_start) of one
 // leftover column. That matmul runs nested in the main one, after main K-block slice_after_block, reading x
 // through cb_x_slice (an alias of cb_x_resident with its own FIFO pointers) and packing to cb_partial. The owner
@@ -19,6 +20,60 @@
 #include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 
 using namespace compute_kernel_lib;
+
+// Raw-LLK last K-block (bypasses compute_kernel_lib::matmul_block): with caller_owns_pack_target the helper pushes
+// nothing until the caller's single push after the whole K-loop, and its L1-accumulation switch is keyed on the block
+// index within one call, so a separate one-block helper call would overwrite the earlier blocks' partials. This loop
+// issues the helper's LLK sequence for that block (same subblocks, same per-tile k order, L1-accumulating pack) with
+// column groups outermost, and pushes sb_w tiles after each group but the last. Each push moves the write pointer
+// sb_w tiles on, so later packs subtract the tiles pushed so far. Returns the tiles pushed.
+ALWI uint32_t last_k_block_by_column(
+    CircularBuffer& x_buf,
+    CircularBuffer& w_buf,
+    CircularBuffer& y_buf,
+    uint32_t block_m_tiles,
+    uint32_t core_n_tiles,
+    uint32_t sb_h,
+    uint32_t sb_w,
+    uint32_t k_block_tiles,
+    bool first_k_block) {
+    const uint32_t cb_x = x_buf.get_cb_id();
+    const uint32_t cb_w = w_buf.get_cb_id();
+    const uint32_t cb_y = y_buf.get_cb_id();
+    if (first_k_block) {
+        ckernel::matmul_block_init(cb_x, cb_w, false, sb_w, sb_h, k_block_tiles);
+    }
+    x_buf.wait_front(block_m_tiles * k_block_tiles);
+    w_buf.wait_front(k_block_tiles * core_n_tiles);
+    PACK((llk_pack_reconfig_l1_acc(first_k_block ? 0 : 1)));
+    uint32_t pushed = 0;
+    for (uint32_t n0 = 0; n0 < core_n_tiles; n0 += sb_w) {
+        for (uint32_t m0 = 0; m0 < block_m_tiles; m0 += sb_h) {
+            tile_regs_acquire();
+#ifndef SKIP_COMPUTE
+            for (uint32_t k = 0; k < k_block_tiles; ++k) {
+                ckernel::matmul_block(
+                    cb_x, cb_w, m0 * k_block_tiles + k, n0 + k * core_n_tiles, 0, false, sb_w, sb_h, k_block_tiles);
+            }
+#endif
+            tile_regs_commit();
+            tile_regs_wait();
+            for (uint32_t r = 0; r < sb_h; ++r) {
+                for (uint32_t c = 0; c < sb_w; ++c) {
+                    pack_tile<true>(r * sb_w + c, cb_y, (m0 + r) * core_n_tiles + n0 + c - pushed);
+                }
+            }
+            tile_regs_release();
+        }
+        if (n0 + sb_w < core_n_tiles) {
+            y_buf.push_back(sb_w);
+            pushed += sb_w;
+        }
+    }
+    x_buf.pop_front(block_m_tiles * k_block_tiles);
+    w_buf.pop_front(k_block_tiles * core_n_tiles);
+    return pushed;
+}
 
 template <typename PostKBlockFn>
 ALWI void accumulate_block(
@@ -79,6 +134,7 @@ void kernel_main() {
         MatmulBlockShape::of(block_m_tiles / sb_h, core_n_tiles / sb_w, sb_h, sb_w, k_block_tiles, num_k_blocks);
 
     y_buf.reserve_back(y_tiles);
+    uint32_t pushed = 0;
     {
         MaybeDeviceZoneScope("compute_first_kblock_wait");
         x_buf.wait_front(block_m_tiles * k_block_tiles);
@@ -161,7 +217,18 @@ void kernel_main() {
         };
         accumulate_block(x_buf, w_buf, y_buf, main_shape, between_k_blocks);
     } else {
-        accumulate_block(x_buf, w_buf, y_buf, main_shape, NoPostKBlock{});
+        if constexpr (num_k_blocks > 1) {
+            accumulate_block(
+                x_buf,
+                w_buf,
+                y_buf,
+                MatmulBlockShape::of(
+                    block_m_tiles / sb_h, core_n_tiles / sb_w, sb_h, sb_w, k_block_tiles, num_k_blocks - 1),
+                NoPostKBlock{});
+        }
+        MaybeDeviceZoneScope("compute_last_kblock");
+        pushed = last_k_block_by_column(
+            x_buf, w_buf, y_buf, block_m_tiles, core_n_tiles, sb_h, sb_w, k_block_tiles, num_k_blocks == 1);
     }
-    y_buf.push_back(y_tiles);
+    y_buf.push_back(y_tiles - pushed);
 }

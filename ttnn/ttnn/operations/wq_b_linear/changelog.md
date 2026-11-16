@@ -108,3 +108,48 @@ One cell, one kernel path × layout × placement. Golden `eval/golden_tests/wq_b
 
 ### Helper bypasses — none
 New code uses `Noc` / `TensorAccessor` / `CircularBuffer` and plain local semaphores; no raw LLK.
+
+## Perf 2
+- Date: 2026-11-16
+- Board: Blackhole p100a, 110 workers, 7 DRAM banks, AICLK 1350 MHz. Metric: `DEVICE KERNEL DURATION [ns]` from `_op_bench.py --profile`. Focus case = the only cell (LOOSE_CASES perf flag), SOL 16,018 ns, pcc_threshold 0.9998.
+- Instrumentation: zones from Perf 1 kept; new `compute_last_kblock` (TRISC 0/1/2) around the raw last K-block. `reader_y_wait` / `writer_y_wait` now cover the wait for column 0 only; later column waits fall inside `*_y_store`.
+- `_op_bench.py`: `no_y_write` needle was stale after Perf 1 (assert failed); fixed, and both W and y gating needles moved to the new read/store lines.
+
+### Measured breakdown (before)
+
+| Variant | Device ns | Part | Part SOL ns | Gap |
+|---|---|---|---|---|
+| full | 22,313 / 22,410 / 22,333 | whole op | 16,018 | 1.39× |
+| no_y_write | 21,736 | y store exposed ≈600 | 237 | — |
+| w_compute | 21,543 | W + compute | — | — |
+| no_compute | 21,476 | W + x + y | — | — |
+| w_only | 20,696 | W stream (`reader_w_stream` end p50 18,840 / max 19,512) | 14,921 (6,684,672 B / 448 GB/s) | 1.31× (stream end) |
+| x + y only | 16,081 | x broadcast (x phase end 14,740) | 5,690 | 2.6×, off the critical path |
+| mcast_only | 13,643 | x multicast without prefetch | 5,690 | 2.4× |
+| compute_only | 16,130 | matmul (math span 13,870) | 11,378 (480 tile-matmuls × 32 cycles) | 1.22× |
+| sync_only | 9,201 | floor | 0 | — |
+
+Cumulative peel: full 22,333 → −x 21,543 → −compute 20,696 → −W 9,201. Overlap loss = full − w_only = 1,637 ns (W ends 0.7 µs later in the full op than alone, plus the tail). Slowest core: W end 20.18 → math end 21.07 → pack end 21.46 → y store end 22.29 µs.
+Ranked: (1) W stream, 1.31× its SOL, on the critical path; (2) post-W tail 2.1 µs (last K-block math 0.9, pack 0.4, y store 0.8); (3) x broadcast, off the critical path.
+
+### Portfolio (cap: 2 experiments)
+Floated: `w_dram_port_spread` (read each W bank through more than its one preferred NoC0 DRAM endpoint); `y_last_kblock_early_release` (pack and release y per output column on the last K-block so the store overlaps the remaining math + pack); route-aware dual-NoC W reads from NCRISC (needs dynamic NoC mode); a smaller last K-block (inexpressible with the fixed-k helper). Tested: the first two.
+
+### Verdicts
+- `w_dram_port_spread`: WIN, graduated. Mechanism: the cap is per DRAM port (≈50 GB/s per bank on one NoC2AXI port), not the row egress links (forcing distinct egress rows was inconclusive: 17.7 / 19.0 µs). W stream alone: TensorAccessor 19,123–19,550 → `rot2` (alternate the NoC0 endpoint and the bank's free port by k row) 16,219–16,336 (1.09× its SOL); `rot` (all 3 ports) 15,944–16,186. Whole op (subagent): `rot2` 20,930 / 20,988; `rot` 23,330, a regression: W on the NoC1 endpoint port queues the x prefetch behind it (round-0 prefetch barrier 0.6 → 3.1 µs). Graduated `rot2`. Domain (W stream alone, `acc` → `rot2`): N=7168 −13%, bf16 W −17%, K=768 −12%. Measured regression at N=2048 (36 cores, below the port cap): 12,739 → 13,879 (+9%); not a supported cell, so no carve-out. PCC 0.999972, bit-identical.
+- `y_last_kblock_early_release`: WIN, graduated. Whole op (subagent): 22,371 (median of 12) → 22,040 (median of 9), candidate faster in 8/8 same-session pairs; slowest-core tail after W 2,146 → 1,742. Options: column release share 4 (graduated) ≈ row release share 4 (22,019); row share 0 21,873 (n=5, inside noise). Domain: CORE_N_TILES=4 −4.5%, K=96 −9%, CORE_N_TILES=0 / M=32 / M=64 / R4 flat; no exceptions. PCC 0.999972, bit-identical.
+
+### Graduated
+- W read (`kernels/wq_b_linear_w_read.hpp`): one path. Odd k rows go to the bank's free NoC2AXI port, even rows to TensorAccessor's preferred endpoint; port coordinates derived on device from `dram_bank_to_noc_xy`, no host change. Carve-outs (all correctness/expressibility, written as `if (cannot) preferred endpoint`): non-Blackhole builds; Blackhole with programmable DRAM cores enabled (non-endpoint ports are in stream mode and return wrong bytes; checked at runtime via `tensor_prefetcher_signal_noc_xy`); DRAM coordinates not matching the Blackhole port layout; W not in DRAM. The prefetcher fallback was not run on device.
+- Last K-block (`kernels/wq_b_linear_compute.cpp`): the helper runs K-blocks 0..N-2, a raw-LLK loop runs the last block with column groups outermost and pushes each group as it is packed. y store (`wq_b_linear_y_store.hpp`, reader + writer): column by column after `wait_front(n + 1)`; in each column the reader (NoC0) stores the last `round(0.4 · block_m)` rows and the writer (NoC1) the rest. The old slot-order split (`reader_owns_y_slot`) was deleted. Carve-out: the parked R4 path (`K_REMAINDER_SPLIT`) keeps the single helper call, because its leftover-column combine packs at write-pointer offsets that assume nothing was pushed yet; its DM side uses the column-wise store (correct, flat).
+- Whole op on the focus cell, coordinator A/B (3 alternated sessions × 3 calls, HEAD kernels vs new): median 22,346 → 20,509 ns (−8.2%), 1.40× → 1.28× SOL. Port spread alone (2 sessions × 3 calls): median ≈21,037; adding the column release: 20,476.
+- After: W stream ends max 17.71 µs, math ends max 19.08, y store ends 20.56. Compute now trails W by ≈1.4 µs: its first K-block waits for x round 0 until 6.6 µs and then needs 12.2 µs of math. Next round's bottleneck is x round-0 arrival + math (Perf 1's NULL `x_bcast_active_rect`, which brought round 0 to 2.6 µs, now addresses the critical path).
+
+### Guard set / correctness
+One cell, one kernel path × layout × placement. Golden `eval/golden_tests/wq_b_linear/` 3/3; `tests/ttnn/unit_tests/operations/wq_b_linear/` 49/49 (incl. R4, x-mcast and W-stream knob cases). No regression.
+
+### Helper bypasses
+| helper | kind | what was missing / hard | helper ns | raw ns | site |
+|---|---|---|---|---|---|
+| `TensorAccessor` page read (`noc.async_read(accessor, ...)`) | capability | always addresses a DRAM bank's one preferred endpoint per NoC; no way to target the bank's other NoC2AXI ports, and one port caps a bank at ≈50 GB/s | 19,123–19,550 (W stream alone); 22,346 whole op | 16,219–16,336; ≈21,037 whole op | `kernels/wq_b_linear_w_read.hpp:78` |
+| `compute_kernel_lib::matmul_block` | capability | (1) no per-subblock / per-column-group push on the last K-block under `caller_owns_pack_target`; (2) the L1-accumulation switch is keyed on the block index inside one call, so a separate one-block call for the last K-block overwrites the earlier partials instead of accumulating; (3) no column-outer subblock order on the last block | ≈21,037 (whole op, port spread only) | 20,476 | `kernels/wq_b_linear_compute.cpp:30` |

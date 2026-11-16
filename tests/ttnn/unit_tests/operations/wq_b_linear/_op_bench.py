@@ -40,11 +40,11 @@ _W_READ_HEADER = "ttnn/ttnn/operations/wq_b_linear/kernels/wq_b_linear_w_read.hp
 def _gated_w_header():
     src = (pd.KERNEL_DIR / "wq_b_linear_w_read.hpp").read_text()
     for needle in (
-        "noc.async_read(w, cb_w, w_page_bytes, {.page_id = row_page + n}, {.offset_bytes = offset});",
-        "noc.async_read(w, cb_w, run_bytes, {.page_id = row_page}, {.offset_bytes = offset});",
+        "noc.async_read(PrecomposedUnicastEndpoint{}, cb_w, bytes, {.noc_addr = src}, {.offset_bytes = offset});",
+        "noc.async_read(w, cb_w, bytes, {.page_id = page_id}, {.offset_bytes = offset});",
     ):
         assert needle in src
-        src = src.replace(needle, "if (row_page == 0xFFFFFFFF) { " + needle + " }")
+        src = src.replace(needle, "if (page_id == 0xFFFFFFFF) { " + needle + " }")
     path = _tmp_dir / "wq_b_linear_w_read_gated.hpp"
     path.write_text(src)
     return str(path)
@@ -82,10 +82,10 @@ _Y_STORE_HEADER = "ttnn/ttnn/operations/wq_b_linear/kernels/wq_b_linear_y_store.
 
 def _no_y_write_kernel(name):
     hdr = (pd.KERNEL_DIR / "wq_b_linear_y_store.hpp").read_text()
-    write = "noc.async_write(\n                    cb_y, y, y_page_bytes, {.offset_bytes = offset}, {.page_id = row_page + n * n_stride});"
+    write = "            noc.async_write(\n                cb_y,"
     assert write in hdr
     gated_hdr = _tmp_dir / "wq_b_linear_y_store_gated.hpp"
-    gated_hdr.write_text(hdr.replace(write, "if (row_page == 0xFFFFFFFF) { " + write + " }"))
+    gated_hdr.write_text(hdr.replace(write, "            if (m == 0xFFFFFFFF) noc.async_write(\n                cb_y,"))
     src = (pd.KERNEL_DIR / name).read_text()
     assert _Y_STORE_HEADER in src
     path = _tmp_dir / name.replace(".cpp", "_no_y_write.cpp")

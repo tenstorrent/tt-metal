@@ -8,8 +8,9 @@
 //   per_round: round r travels on its own fixed-sender channel x_mcast_r, fired once per launch.
 //   rotating:  all rounds travel on x_mcast_0 with rotating senders.
 // Chained rounds go out in order (the round-r injector has received round r - 1 first); concurrent rounds go
-// out at once. Then the core writes its (block_m_tiles x core_n_tiles) y block to L1-interleaved y, less the
-// y_reader_tiles the reader stores on NoC0; it pops cb_y_tiles once the reader's y_done semaphore is raised.
+// out at once. Then the core writes its (block_m_tiles x core_n_tiles) y block to L1-interleaved y column by column
+// as compute releases them, less the rows the reader stores on NoC0; it pops cb_y_tiles once the reader's y_done
+// semaphore is raised.
 // With w_noc1_k_blocks > 0 this kernel also reads the last w_noc1_k_blocks W K-blocks on NoC1 into their
 // cb_w_stream slots (the reader owns the CB and pushes them) and raises the reader's handoff semaphore once
 // they landed; the x prefetch then waits on its own trid instead of every outstanding read. The reads go out
@@ -323,22 +324,13 @@ void kernel_main() {
     const uint32_t y_tiles = y_block_tiles + (owns_leftover ? block_m_tiles : 0);
     {
         MaybeDeviceZoneScope("writer_y_wait");
-        cb_y.wait_front(y_tiles);
+        cb_y.wait_front(1);
     }
     MaybeDeviceZoneScope("writer_y_store");
-    const uint32_t reader_tiles = y_reader_tiles(y_block_tiles, y_reader_share_tenths);
+    const uint32_t reader_rows = y_reader_tiles(block_m_tiles, y_reader_share_tenths);
     store_y_share(
-        noc,
-        cb_y,
-        y,
-        y_page_bytes,
-        block_m_tiles,
-        core_n_tiles,
-        tensor_n_tiles,
-        n_start,
-        n_stride,
-        reader_tiles,
-        false);
+        noc, cb_y, y, y_page_bytes, block_m_tiles, core_n_tiles, tensor_n_tiles, n_start, n_stride, reader_rows, false);
+    cb_y.wait_front(y_tiles);
     uint32_t offset = y_block_tiles * y_page_bytes;
     if (owns_leftover) {
         for (uint32_t m = 0; m < block_m_tiles; ++m) {
@@ -347,7 +339,7 @@ void kernel_main() {
         }
     }
     noc.async_write_barrier();
-    if (reader_tiles > 0) {
+    if (reader_rows > 0) {
         auto* y_done = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(y_done_sem_id));
         noc_semaphore_wait(y_done, 1);
         noc_semaphore_set(y_done, 0);

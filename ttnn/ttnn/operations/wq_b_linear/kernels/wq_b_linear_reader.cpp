@@ -7,9 +7,9 @@
 // their slots; this kernel stays the CB's only producer and pushes them once the writer's handoff semaphore
 // says they landed. A core with a K-slice of a leftover column (regime R4) first reads that slice into
 // cb_w_slice under its own trid, so it is resident before compute reaches it.
-// Once its W stream is done, this kernel also stores y_reader_tiles of the core's y block on NoC0 beside the
-// writer's NoC1 share (see wq_b_linear_y_store.hpp). It only peeks cb_y_tiles; the writer stays its only consumer
-// and pops once the y_done semaphore says these writes landed.
+// Once its W stream is done, this kernel also stores the last y_reader_tiles rows of every y column on NoC0 beside
+// the writer's NoC1 share, each column as compute releases it (see wq_b_linear_y_store.hpp). It only peeks cb_y_tiles;
+// the writer stays its only consumer and pops once the y_done semaphore says these writes landed.
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
@@ -129,9 +129,8 @@ void kernel_main() {
         }
     }
 
-    const uint32_t y_block_tiles = block_m_tiles * core_n_tiles;
-    const uint32_t reader_tiles = y_reader_tiles(y_block_tiles, y_reader_share_tenths);
-    if (reader_tiles == 0) {
+    const uint32_t reader_rows = y_reader_tiles(block_m_tiles, y_reader_share_tenths);
+    if (reader_rows == 0) {
         return;
     }
     const uint32_t y_page_bytes = get_tile_size(cb_y_tiles);
@@ -139,11 +138,11 @@ void kernel_main() {
     CircularBuffer cb_y(cb_y_tiles);
     {
         MaybeDeviceZoneScope("reader_y_wait");
-        cb_y.wait_front(y_block_tiles);
+        cb_y.wait_front(1);
     }
     MaybeDeviceZoneScope("reader_y_store");
     store_y_share(
-        noc, cb_y, y, y_page_bytes, block_m_tiles, core_n_tiles, tensor_n_tiles, n_start, n_stride, reader_tiles, true);
+        noc, cb_y, y, y_page_bytes, block_m_tiles, core_n_tiles, tensor_n_tiles, n_start, n_stride, reader_rows, true);
     noc.async_write_barrier();
     noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(y_done_sem_id)), 1);
 }
