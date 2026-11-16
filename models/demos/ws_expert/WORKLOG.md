@@ -582,3 +582,30 @@ Rule from the repro: on a group's multicast NoC nothing may enter the group rect
   27% (torus, G 4) against the proxy, with larger x waits and weight waits appearing on the torus. x waits dominate
   everywhere. The proxy's slots are untyped (any x 4, keep 0) while the fabric runs use d0,d1,d0d1,any with keep 2, so
   part of the fabric gap may be the typed-slot schedule rather than the links.
+
+## Stage 9: every expert's outputs written by default (out_all)
+- Until now the lane runs wrote only each group's last expert's down rows (the rest were computed and dropped), so the
+  perf numbers left out almost all output traffic. LCfg.out_all is now True by default (3ea09c9a45f): QY on the NCRISC
+  (NOC1) writes every expert's rows, packed in compute order per group; the tests size the output block for every
+  expert (soak included), allocate it on the device without a host copy, and check a sample (WS_PCC_EXPERTS: each
+  group's last expert plus k evenly spaced; WS_PCC_CHIPS) read back row block by row block. out_all=0 restores the old
+  behaviour.
+- No-hang layout (bcast + noc_split), 20 warm-up + 5 measured, hold 215516 on bh-glx-110-c10u20, out_all on vs off:
+| case | out_all on | out_all off | output writes a chip |
+|---|---|---|---|
+| tray, 32 experts, M 586 | 42.7% (40.5-43.5) | 45.4% (42.0-48.4) | 49 GB/s |
+| tray, 32 experts, M 2048 | 48.9% (48.6-49.7) | 54.3% (53.8-54.5) | 57 GB/s |
+| tray soak load (160 experts a lane, T 31250, M 586), 180 s | 40.9% | 47.1% | |
+| one chip, G 4, M 586 | 36.4% | 46.1% | 84 GB/s |
+| one chip, G 2, M 586 | 46.0% | 53.0% | 53 GB/s |
+| one chip, G 4, M 2048 | 44.5% | 53.5% | 103 GB/s |
+| one chip, G 2, M 2048 | 49.9% | 55.0% | 57 GB/s |
+| Galaxy torus, 640 experts, M 586 | 27.2% (26.4-28.1) | 33.8% | 62 GB/s |
+| Galaxy torus, 640 experts, M 2048 | 43.3% (42.2-43.9) | not run | about 99 GB/s |
+  Correctness with out_all: tray M 586 every expert PCC 0.99994, M 0, M 5, dynamic M min 0.99992; one chip 64 experts
+  every expert 0.99994; torus PCC 0.99994 on the sampled experts of chips 0, 13, 31. About 48 ms a layer on the torus
+  at M 586 (640 x 75.3 us), 103 ms at M 2048 (640 x 161 us).
+- The output writes cost 3-10 points; they go out from the NCRISC on NOC1, the RISC and NoC that also carry the x
+  funnel, the token-row gather and the fabric forwarding: on the torus at M 586 the compute cores' x waits grow from
+  20.7M to 31.2M cycles (chip 0) and the NCRISC weight-queue loop time from 27.5M to 39.4M. QY retires each output row
+  with a write barrier inside the NCRISC loop.
