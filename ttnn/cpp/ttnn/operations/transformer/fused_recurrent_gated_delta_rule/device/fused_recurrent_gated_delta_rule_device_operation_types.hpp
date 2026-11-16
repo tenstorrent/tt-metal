@@ -43,6 +43,13 @@ struct FusedRecurrentGatedDeltaRuleParams {
 //
 // "Ring" mode (initial_state_block_idx present): initial_state is the [BH*T, K, V] ring and also the state output;
 // see the Python binding for the contract.
+//
+// Outputs (fp32, TILE layout, interleaved):
+//   o     : [BH*T, 1, V], head-major. Only the first 2048 B (faces 0 and 1, rows 0-15) of each 32x32 tile page is
+//           written: row 0 holds o, rows 1-15 are exactly zero, and rows 16-31 are UNDEFINED (whatever the new
+//           allocation held). Consumers must read only the logical row 0 (as the wrapper's to_layout(ROW_MAJOR)
+//           does) and must not assume zero tile padding, e.g. for a whole-tile reduction or as a matmul operand.
+//   state : per-token [BH*T, K, V] (token-major: slab t*BH + h), else final [BH, K, V]; full tiles are written.
 struct FusedRecurrentGatedDeltaRuleInputs {
     Tensor q;
     Tensor k;
