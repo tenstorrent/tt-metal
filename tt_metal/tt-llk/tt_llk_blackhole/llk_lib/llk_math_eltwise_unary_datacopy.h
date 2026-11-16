@@ -355,6 +355,15 @@ inline void _llk_math_eltwise_unary_datacopy_block_(
                 dst_format_masked == (std::uint32_t)DataFormat::Float32 || dst_format_masked == (std::uint32_t)DataFormat::Int32 ||
                 dst_format_masked == (std::uint32_t)DataFormat::UInt32);
             const std::uint32_t tiles_per_bank = clear_fp32 ? 4 : 8;
+            // A block that fills its half takes one clear instead of one per face: the clears sit between the unpack drain and the post
+            if constexpr (Dst == DstSync::SyncHalf)
+            {
+                if (num_tiles == tiles_per_bank && (start_dst_index & (tiles_per_bank - 1)) == 0)
+                {
+                    TT_ZEROACC(p_zeroacc::CLR_HALF, clear_fp32, 1 /*clear zero flags*/, ADDR_MOD_3, dest_offset_id % 2);
+                    return;
+                }
+            }
 #pragma GCC unroll 0
             for (std::uint32_t tile = 0; tile < num_tiles; tile++)
             {
