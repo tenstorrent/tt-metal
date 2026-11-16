@@ -6,14 +6,20 @@
 another. This gates each op's device kernel duration: the slowest chip's realtime-profiler window for
 the op's program, the median over `_ITERATIONS` runs.
 
-The ops run as one boundary block issues them, at K3's shapes: the 5120-token chunk over the SP axis
-(640 rows per chip on 8x4, 1280 on a 4x4 stage), `d = 7168` over TP4, six inherited snapshots plus the
-sealed live stream, and 25 read sites with the owed read closed. Each iteration is
+The ops run as the boundary layer of a non-first pipeline rank issues them (`TtAttnResWalk`), at K3's
+shapes: the 5120-token chunk over the SP axis (640 rows per chip on 8x4, 1280 on a 4x4 stage) and
+`d = 7168` over TP4. Each iteration is two batches, each followed by a read of its site 0:
 
-    attn_res_block_stats -> attn_res_block_mix -> attn_res_gather_softmax (site 0, settling a write)
+    owed:  attn_res_block_stats -> attn_res_block_mix -> attn_res_gather_softmax
+           the read owed across the rank boundary, one site over the six inherited snapshots; it
+           settles nothing, as the walk opens on the live stream the upstream rank handed over
+    block: attn_res_block_stats -> attn_res_block_mix -> attn_res_gather_softmax
+           the boundary block's 24 sites over those and the sealed live stream, and an ordinary
+           read of it, settling a write
 
-with the persistent gather buffer, exchange scratch and semaphores held across iterations the way
-`TtAttnRes` holds them. The read between two blocks is also what makes reusing the gather buffer safe.
+with one persistent gather buffer per sealed depth, exchange scratch and semaphores held across
+iterations the way `TtAttnRes` holds them. The read after each batch is also what makes reusing the
+gather buffers safe.
 
 The 4x4 arm needs the Galaxy carved to a subtorus (see `harness.SUBTORUS_4X4_ENV`):
     TT_VISIBLE_DEVICES=2,3,6,7,10,11,14,15,18,19,22,23,26,27,30,31
@@ -47,40 +53,70 @@ pytestmark = [run_for_blackhole(), pytest.mark.perf, pytest.mark.timeout(900)]
 GLOBAL_TOKENS = 5120
 TP_AXIS = 1
 SP_AXIS = 0
-# The boundary block's sealed set: six inherited snapshots and the sealed live stream.
+# The boundary layer's sealed set: six inherited snapshots and the sealed live stream.
 PLANES = (6, 1)
-NUM_SITES = 25
-NUM_CLOSED = 1
+# Each batch as (snapshots it scores, a prefix of PLANES; read sites), in dispatch order.
+BATCHES = {"owed": (1, 1), "block": (2, 24)}
 _WARMUP = 3
 _ITERATIONS = 20
 # Set to report without gating, e.g. while re-baselining.
 _REPORT_ONLY = os.environ.get("ATTN_RES_PERF_REPORT_ONLY") == "1"
 # Band around each op's reference. block_stats' window runs until the slowest peer's statistics land, so it also
-# times how far the chips are apart, and that differs by machine: two CI Galaxies put its median at 139.0 and 119.0
-# us, each tight on its own. Its band covers both and still catches a regression of more than ~15%.
+# times how far apart the chips start, which is why its band is wider (it gates only SP4xTP4; see below).
 _MARGIN = {"attn_res_block_stats": 0.15, "attn_res_block_mix": 0.05, "attn_res_gather_softmax": 0.05}
 # Each op's program, by the kernel directory it is built from.
 OPS = ("attn_res_block_stats", "attn_res_block_mix", "attn_res_gather_softmax")
+# One iteration's programs in dispatch order, each gated on its own.
+STEPS = tuple(f"{batch}/{op}" for batch in BATCHES for op in OPS)
 
-# Device kernel duration (us) per op, as CI hardware (bh_sc1_high_power) measures it. SP8xTP4 is the mean of two CI
-# Galaxies' medians over 20 synced blocks, runs 41962421284 and 42058182913: block_stats 139.0 / 119.0, block_mix
-# 275.5 / 275.6, gather_softmax 67.5 / 68.2.
+# Device kernel duration (us) per step, as CI hardware (bh_sc1_high_power) measures it. None reports without gating.
+#
+# Before the exact boundary read the boundary was one 25-site batch over C = 7 with the owed read closed; the CI pool
+# measured it (runs 41962421284 and 42058182913, medians over 20 synced blocks: block_stats 139.0 / 119.0, block_mix
+# 275.5 / 275.6, gather_softmax 67.5 / 68.2; run 42340900388: 137.8 / 275.0 / 69.0).
+#
+# SP8xTP4 block references are derived, not measured on the pool: each step's median on one off-pool Galaxy at 130 W
+# (bh-glx-120-b07u08, 2026-11-08, 10 runs: block_mix 290.6, gather_softmax 68.6 us) times that Galaxy's pool ratio for
+# the same op, from run 42340900388's commit dbc10eb0a4c run there interleaved (3 runs: block_mix 292.2, gather_softmax
+# 68.1 us). That Galaxy runs block_mix ~6% slower than the pool and gather_softmax at about the pool's speed.
+# The pool confirmed both (run 42490578916: block_mix 274.4, gather_softmax 70.0 us). On bh-glx-120-b08u02
+# (2026-11-13, interleaved with the old code on the same host) these steps and their new/old ratios match b07u08's.
+# owed/attn_res_block_mix is the pool's own reading: runs 42490578916 and 42494997776 (two runners), medians
+# 85.4 / 85.5 us, every sample within 84.7-86.1 us.
+# block_stats only reports, in both batches: it settles per process into one of three levels, ~105 / ~117 / ~136 us
+# across 27 pool readings (2026-11-05..08, medians 101.5-139.6, one Galaxy showing all three; b07u08 adds ~76). The
+# level correlates with host launch skew (a cheaper host dispatch made the low level likely), which is the suspected
+# cause but is not established. No band around one reference fits that spread and still catches a regression.
+# owed/attn_res_gather_softmax only reports: its two pool medians agree (73.1 / 73.3 us), but its samples spread far
+# wider than the block read's (pool 71.4-91.7 us in one process, b08u02 51-114 us, medians 83-85 us), so two
+# readings do not yet show that a 5% band around one median holds.
 #
 # SP4xTP4 has no CI job: it was measured on a Galaxy off the CI pool (bh-glx-120-b07u02, 2026-11-05), which runs the
 # end-to-end boundary layer of `test_attn_res_perf.py` at ~416 us against its 394 us CI reference, and is scaled by
 # 394 / 416. Local medians, synced: block_stats 209.9 / 218.4 / 208.4, block_mix 568.4 / 570.2 / 570.2,
-# gather_softmax 120.2 / 121.2 / 123.4. Locally, run with ATTN_RES_PERF_REPORT_ONLY=1.
+# gather_softmax 120.2 / 121.2 / 123.4. That measurement predates the exact boundary read: it is of the old 25-site
+# batch over C = 7 with the owed read closed, not of the 24-site block batch its block/* steps now gate, and nothing
+# measured the owed batch, so the owed steps only report. The block/* references carry over unmeasured on this shape
+# because on SP8xTP4 the same change kept these steps in place: same host, new block_mix over old 0.992-0.994 (b07u08,
+# b08u02), and the pool's new block gather_softmax (70.0 / 67.6) within the old readings' spread (67.5-69.0).
+# Locally, run with ATTN_RES_PERF_REPORT_ONLY=1.
 _CI_OVER_LOCAL = 394.0 / 416.0
 _REFERENCE_US = {
     "SP8xTP4": {
-        "attn_res_block_stats": 129.0,
-        "attn_res_block_mix": 275.6,
-        "attn_res_gather_softmax": 67.9,
+        "owed/attn_res_block_stats": None,
+        "owed/attn_res_block_mix": 85.4,
+        "owed/attn_res_gather_softmax": None,
+        "block/attn_res_block_stats": None,
+        "block/attn_res_block_mix": 273.6,
+        "block/attn_res_gather_softmax": 69.5,
     },
     "SP4xTP4": {
-        "attn_res_block_stats": round(209.9 * _CI_OVER_LOCAL, 1),
-        "attn_res_block_mix": round(570.2 * _CI_OVER_LOCAL, 1),
-        "attn_res_gather_softmax": round(121.2 * _CI_OVER_LOCAL, 1),
+        "owed/attn_res_block_stats": None,
+        "owed/attn_res_block_mix": None,
+        "owed/attn_res_gather_softmax": None,
+        "block/attn_res_block_stats": round(209.9 * _CI_OVER_LOCAL, 1),
+        "block/attn_res_block_mix": round(570.2 * _CI_OVER_LOCAL, 1),
+        "block/attn_res_gather_softmax": round(121.2 * _CI_OVER_LOCAL, 1),
     },
 }
 
@@ -94,6 +130,10 @@ def _assert_within_margin(what: str, measured_us: float, reference_us: float, ma
             f"(reference {reference_us:.1f} us ± {margin:.0%})"
         ),
     )
+
+
+def _op(step: str) -> str:
+    return step.split("/", 1)[1]
 
 
 def _mapper(mesh_device, sp_dim, tp_dim):
@@ -129,13 +169,13 @@ def _semaphore(mesh_device, cores):
     indirect=True,
 )
 def test_attn_res_op_perf(mesh_device, device_params):
-    """Gate each AttnRes op's device kernel duration at K3's boundary-block shapes."""
+    """Gate each AttnRes op's device kernel duration at K3's boundary-layer shapes."""
     mesh_shape = tuple(mesh_device.shape)
     tp_factor, sp_factor = mesh_shape[TP_AXIS], mesh_shape[SP_AXIS]
     layout = f"SP{sp_factor}xTP{tp_factor}"
     require_high_power(f"kimi_k3 AttnRes op {layout} perf")
     references = _REFERENCE_US[layout]
-    assert set(references) == set(OPS), f"{layout} references name {sorted(references)}, not {sorted(OPS)}"
+    assert set(references) == set(STEPS), f"{layout} references name {sorted(references)}, not {sorted(STEPS)}"
     require_realtime_profiler("the AttnRes op perf gate")
     num_links = get_num_links(mesh_device, TP_AXIS)
     topology = per_axis_topology()[TP_AXIS]
@@ -146,24 +186,31 @@ def test_attn_res_op_perf(mesh_device, device_params):
         _to_device(mesh_device, deterministic_input(1, planes, GLOBAL_TOKENS, HIDDEN_SIZE, seed=i), stream_mapper)
         for i, planes in enumerate(PLANES)
     ]
-    queries = torch.zeros(1, 1, HIDDEN_SIZE, 32)
-    queries[..., 1 : 1 + NUM_SITES] = deterministic_input(
-        HIDDEN_SIZE, NUM_SITES, seed=len(PLANES), scale=0.02, dtype=torch.float32
-    )
-    queries = _to_device(mesh_device, queries, _mapper(mesh_device, None, 2))
-    gathered = _to_device(
-        mesh_device,
-        torch.zeros(1, sum(PLANES), GLOBAL_TOKENS, 32 * tp_factor),
-        _mapper(mesh_device, 2, None),
-        ttnn.float32,
-    )
-    stats_semaphore = _semaphore(
-        mesh_device,
-        ttnn.CoreRange(ttnn.CoreCoord(grid.x - num_links, grid.y - 1), ttnn.CoreCoord(grid.x - 1, grid.y - 1)),
-    )
+
+    def score_columns(num_sites):
+        columns = torch.zeros(1, 1, HIDDEN_SIZE, 32)
+        columns[..., 1 : 1 + num_sites] = deterministic_input(
+            HIDDEN_SIZE, num_sites, seed=len(PLANES), scale=0.02, dtype=torch.float32
+        )
+        return _to_device(mesh_device, columns, _mapper(mesh_device, None, 2))
+
+    def gathered(num_snapshots):
+        zeros = torch.zeros(1, sum(PLANES[:num_snapshots]), GLOBAL_TOKENS, 32 * tp_factor)
+        return _to_device(mesh_device, zeros, _mapper(mesh_device, 2, None), ttnn.float32)
+
     running_sum, pending = (
         _to_device(mesh_device, deterministic_input(1, 1, GLOBAL_TOKENS, HIDDEN_SIZE, seed=seed), stream_mapper)
         for seed in (10, 11)
+    )
+    # Per batch: its sealed set, score columns, persistent gather buffer, sites, and the write its read
+    # settles: none for the owed read, one for the block's.
+    batches = [
+        (sealed[:num_snapshots], score_columns(num_sites), gathered(num_snapshots), num_sites, batch_pending)
+        for (num_snapshots, num_sites), batch_pending in zip(BATCHES.values(), (None, pending))
+    ]
+    stats_semaphore = _semaphore(
+        mesh_device,
+        ttnn.CoreRange(ttnn.CoreCoord(grid.x - num_links, grid.y - 1), ttnn.CoreCoord(grid.x - 1, grid.y - 1)),
     )
     query = _to_device(
         mesh_device, deterministic_input(1, 1, 1, HIDDEN_SIZE, seed=12, scale=0.05), _mapper(mesh_device, None, 3)
@@ -176,36 +223,37 @@ def test_attn_res_op_perf(mesh_device, device_params):
     )
 
     def block():
-        stats = ttnn.experimental.deepseek_prefill.attn_res_block_stats(
-            sealed,
-            queries,
-            gathered=gathered,
-            cluster_axis=TP_AXIS,
-            semaphore=stats_semaphore,
-            topology=topology,
-            num_links=num_links,
-            compute_kernel_config=STATS_FIDELITY,
-        )
-        partials, shifts, masses, closed = ttnn.experimental.deepseek_prefill.attn_res_block_mix(
-            sealed, stats, num_sites=NUM_SITES, eps=EPS, num_closed_sites=NUM_CLOSED
-        )
-        read, settled = ttnn.experimental.deepseek_prefill.attn_res_gather_softmax(
-            partials,
-            running_sum,
-            shifts,
-            masses,
-            query,
-            exchange,
-            read_semaphore,
-            site=0,
-            cluster_axis=TP_AXIS,
-            topology=topology,
-            inv_hidden_size=1.0 / HIDDEN_SIZE,
-            eps=EPS,
-            pending=pending,
-        )
-        for tensor in (partials, shifts, masses, closed, read, settled):
-            ttnn.deallocate(tensor)
+        for batch_sealed, columns, batch_gathered, num_sites, batch_pending in batches:
+            stats = ttnn.experimental.deepseek_prefill.attn_res_block_stats(
+                batch_sealed,
+                columns,
+                gathered=batch_gathered,
+                cluster_axis=TP_AXIS,
+                semaphore=stats_semaphore,
+                topology=topology,
+                num_links=num_links,
+                compute_kernel_config=STATS_FIDELITY,
+            )
+            partials, shifts, masses = ttnn.experimental.deepseek_prefill.attn_res_block_mix(
+                batch_sealed, stats, num_sites=num_sites, eps=EPS
+            )
+            outputs = ttnn.experimental.deepseek_prefill.attn_res_gather_softmax(
+                partials,
+                running_sum,
+                shifts,
+                masses,
+                query,
+                exchange,
+                read_semaphore,
+                site=0,
+                cluster_axis=TP_AXIS,
+                topology=topology,
+                inv_hidden_size=1.0 / HIDDEN_SIZE,
+                eps=EPS,
+                pending=batch_pending,
+            )
+            for tensor in (partials, shifts, masses, *outputs):
+                ttnn.deallocate(tensor)
 
     def run():
         # Synced per block: `attn_res_block_stats`' window runs until its slowest peer's statistics land, so
@@ -219,30 +267,35 @@ def test_attn_res_op_perf(mesh_device, device_params):
     ttnn.synchronize_device(mesh_device)
     _, per_program = profile_realtime_program_merged(mesh_device, run)
 
-    durations_us = {op: [] for op in OPS}
+    # The window's programs in dispatch order, each matched to its step by position and checked by its op.
+    durations_us = {step: [] for step in STEPS}
+    position = 0
     for entry in per_program.values():
         sources = [source.replace("\\", "/") for source in entry["kernel_sources"]]
         matched = [op for op in OPS if any(f"/{op}/" in source for source in sources)]
         assert len(matched) <= 1, f"a program matches several ops: {matched}"
         if matched:
-            durations_us[matched[0]].append(entry["duration_ns"] / 1e3)
-    for op, samples in durations_us.items():
-        assert len(samples) == _ITERATIONS, f"expected {_ITERATIONS} {op} programs in the window, got {len(samples)}"
-    device_us = {op: statistics.median(samples) for op, samples in durations_us.items()}
+            step = STEPS[position % len(STEPS)]
+            assert step.endswith("/" + matched[0]), f"program {position} is {matched[0]}, expected step {step}"
+            durations_us[step].append(entry["duration_ns"] / 1e3)
+            position += 1
+    for step, samples in durations_us.items():
+        assert len(samples) == _ITERATIONS, f"expected {_ITERATIONS} {step} programs in the window, got {len(samples)}"
+    device_us = {step: statistics.median(samples) for step, samples in durations_us.items()}
 
     fabric = ttnn.get_fabric_config().name
     logger.info(
-        f"AttnRes ops, C = {sum(PLANES)}, {NUM_SITES} sites ({NUM_CLOSED} closed), {GLOBAL_TOKENS} tokens "
+        f"AttnRes ops, (C, sites) per batch "
+        f"{ {batch: (sum(PLANES[:n]), sites) for batch, (n, sites) in BATCHES.items()} }, {GLOBAL_TOKENS} tokens "
         f"({GLOBAL_TOKENS // sp_factor}/chip), {layout} {fabric}, {num_links} links, median of {_ITERATIONS}:"
     )
     within_band = {}
-    for op in OPS:
-        line = (
-            f"  {op:26s} {device_us[op]:8.1f} us   (min {min(durations_us[op]):.1f}, max {max(durations_us[op]):.1f})"
-        )
-        if references[op] is not None:
-            within_band[op] = abs(device_us[op] - references[op]) <= references[op] * _MARGIN[op]
-            line += f"   ref {references[op]:8.1f} ±{_MARGIN[op]:.0%}  {'ok' if within_band[op] else 'OUT OF BAND'}"
+    for step in STEPS:
+        samples, margin = durations_us[step], _MARGIN[_op(step)]
+        line = f"  {step:32s} {device_us[step]:8.1f} us   (min {min(samples):.1f}, max {max(samples):.1f})"
+        if references[step] is not None:
+            within_band[step] = abs(device_us[step] - references[step]) <= references[step] * margin
+            line += f"   ref {references[step]:8.1f} ±{margin:.0%}  {'ok' if within_band[step] else 'OUT OF BAND'}"
         logger.info(line)
 
     result = {
@@ -250,8 +303,9 @@ def test_attn_res_op_perf(mesh_device, device_params):
         "fabric_config": fabric,
         "mesh": list(mesh_shape),
         "tokens": GLOBAL_TOKENS,
-        "num_candidates": sum(PLANES),
-        "num_sites": NUM_SITES,
+        "batches": {
+            batch: {"num_candidates": sum(PLANES[:n]), "num_sites": sites} for batch, (n, sites) in BATCHES.items()
+        },
         "num_links": num_links,
         "device_us": device_us,
         "device_samples_us": durations_us,
@@ -260,7 +314,7 @@ def test_attn_res_op_perf(mesh_device, device_params):
     }
     print("ATTN_RES_OP_PERF=" + json.dumps(result, sort_keys=True))
     tp_wrapped = tp_axis_is_wrapped(mesh_device)
-    gated_ops = [op for op in OPS if references[op] is not None]
+    gated_steps = [step for step in STEPS if references[step] is not None]
     gated = not _REPORT_ONLY and tp_wrapped
     emit_perf_metrics(
         f"kimi_k3_attn_res_ops_{layout}",
@@ -271,5 +325,5 @@ def test_attn_res_op_perf(mesh_device, device_params):
         pytest.skip("ATTN_RES_PERF_REPORT_ONLY=1; not gating")
     if not tp_wrapped:
         pytest.skip(f"TP axis not wrapped: the {layout} references assume the TP ring")
-    for op in gated_ops:
-        _assert_within_margin(f"{layout} {op}", device_us[op], references[op], _MARGIN[op])
+    for step in gated_steps:
+        _assert_within_margin(f"{layout} {step}", device_us[step], references[step], _MARGIN[_op(step)])
