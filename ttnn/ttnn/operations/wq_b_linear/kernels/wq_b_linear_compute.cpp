@@ -16,6 +16,7 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 
 using namespace compute_kernel_lib;
 
@@ -78,6 +79,12 @@ void kernel_main() {
         MatmulBlockShape::of(block_m_tiles / sb_h, core_n_tiles / sb_w, sb_h, sb_w, k_block_tiles, num_k_blocks);
 
     y_buf.reserve_back(y_tiles);
+    {
+        MaybeDeviceZoneScope("compute_first_kblock_wait");
+        x_buf.wait_front(block_m_tiles * k_block_tiles);
+        w_buf.wait_front(k_block_tiles * core_n_tiles);
+    }
+    MaybeDeviceZoneScope("compute_matmul");
     if constexpr (has_slices) {
         auto restore_main = [&]() {
             reconfig_data_format(cb_w_stream, cb_x_resident);

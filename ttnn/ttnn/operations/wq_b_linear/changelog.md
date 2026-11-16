@@ -68,3 +68,43 @@
 - Golden test progress: 3/3 passing (2 registry cells + regression bit-identity)
 - Issues encountered: `matmul_block` returns with packer L1 accumulation enabled. The first combine pass therefore accumulated onto stale L1 (Inf / p0+p1 on the leftover columns); `pack_reconfig_l1_acc(0)` before the combine chain fixes it. Found with DEVICE_PRINT: the sender partial and the landed slot matched the reference slice exactly.
 - Tests added: `test_wq_b_linear_w_stream_knobs.py` gains 4 R4 cases (default positions, slice + combine last, slices first, `K_BLOCK_TILES=4`), each checking correctness and bit-identity across calls. Probes 004–014 under `probes/`.
+
+## Perf 1
+- Date: 2026-11-16
+- Board: Blackhole p100a, 11x10 = 110 worker cores, AICLK 1350 MHz. Metric: `DEVICE KERNEL DURATION [ns]` (column 20 of this build's ops_perf_results CSV; column 19 is `DEVICE FW DURATION`, about 2.3 µs longer). Focus case = the only cell (LOOSE_CASES perf flag), SOL 16,018 ns.
+- Instrumentation (permanent): added `ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp` (`MaybeDeviceZoneScope`). Zones: reader `reader_w_stream` / `reader_w_first_issue` / `reader_w_issue` / `reader_w_barrier` / `reader_y_wait` / `reader_y_store`; writer `writer_x_phase` / `writer_x_prefetch_issue` / `writer_x_prefetch_barrier` / `writer_x_send` / `writer_x_receive` / `writer_y_wait` / `writer_y_store`; compute `compute_first_kblock_wait` (unpack-side wait for K-block 0, hoisted out of the helper) / `compute_matmul`. No measurable overhead (24.86 µs FW duration with and without). Summarizer: `perf_experiments/breakdown/zones.py`.
+
+### Measured breakdown (before)
+
+| Variant (`_op_bench.py`) | Device ns | Part | Part SOL ns | Gap |
+|---|---|---|---|---|
+| full | 22,609 | whole op | 16,018 | 1.41× |
+| w_only | 19,819 | W DRAM stream (NCRISC span p50 19,085; slowest core ends 20,300) | 14,920 (6,684,672 B / 448 GB/s; busiest core 104,448 B / 86.4 GB/s = 1,209) | 1.33× raw (floor 9,874 is hidden under W, so not subtracted) |
+| x + y only | 16,736 | x broadcast (phase ends 14,350; round 0 lands 6,100) | 5,690 (491,520 B per core / 86.4 GB/s) | 2.52× |
+| mcast_only | 14,465 | x multicast without prefetch | 5,690 | 2.54× |
+| compute_only | 16,783 | matmul (math span 12,300) | 11,380 (480 tile-matmuls × 32 cycles) | 1.08× |
+| no_y_write | 21,840 | y store exposed cost 769; per core p50 870 / max 1,540 | 240 (20,480 B / 86.4 GB/s) | 3.6–6.4× |
+| no_compute | 21,033 | x + W + y | — | — |
+| w_compute | 21,778 | W + compute | — | — |
+| sync_only | 9,874 | floor (pack of 160 L1-acc tiles under SKIP_COMPUTE: 7.25 µs; 4 one-page rounds; y store) | 0 | — |
+
+Overlap loss = full − w_only = 2,790 ns. Slowest core: W stream ends 20.30 µs → last K-block math 21.27 → pack 21.66 → y store 22.70.
+Ranked: (1) W stream, 1.33× on the critical path; the parked NoC1 W share is blocked because the x phase holds BRISC/NoC1 until 14.4 µs. (2) The post-W tail, 2.4 µs (math 1.0, pack 0.4, y store 1.0). (3) The x broadcast, 2.5×, off the critical path except as the NoC1 blocker.
+
+### Portfolio (cap: 2 experiments)
+Floated: `x_bcast_active_rect` (multicast x only to the active-core rectangle from idle injectors outside it, to free NoC1 for the W share); `y_store_dual_noc` (split the y store across NCRISC/NoC0 and BRISC/NoC1); per-subblock early y release on the last K-block (needs a helper change); position-aware W column assignment (W end spreads 17.4–20.3 µs by core position); idle-core W forwarding on NoC1. Tested: the first two.
+
+### Verdicts
+- `x_bcast_active_rect`: NULL on the focus cell. Whole op 22,617–22,847 vs base median ≈22,670; graduate copy on/off 22,633 / 22,642. The x part alone does improve: x-only 14,666 → 12,253 with active rectangle + outside injectors + a 1:3:4:4:4 round split; round 0 lands 6.1 → 2.6 µs; x phase ends 14.6 → 12.7 µs. The premise failed: the NoC1 W share still loses at every setting (23.2–34.7 µs). NoC1 DRAM reads run at ≈185 GB/s, and the x phase would need to end by ≈8–9 µs, below the chained-multicast floor (≈40–48 B/cycle; shrinking 110 → 66 receivers barely changes the rate). NCRISC/NoC0 injector prefetch is fastest for x alone (11,098) but regresses the whole op +3.5% (contends with W on NoC0). Concurrent rounds: +35%. Domain: −8% on the non-shipped `CORE_N_TILES=3/4` splits (compute-bound there, mostly from the small first round); inexpressible where fewer idle cores than rounds sit outside the active rectangle. Not graduated (flat on the only supported cell; it would add a chain semaphore and a fallback path). Artifacts: `perf_experiments/x_bcast_active_rect/` (incl. `graduate/graduate.patch`).
+- `y_store_dual_noc`: WIN, graduated. Isolated 65-core store (all cores at once): 2,310 → 1,544 ns. Whole op, subagent (3 alternated sessions): 22,672 / 22,733 / 22,745 → 22,315 / 22,314 / 22,317. Coordinator A/B (3 alternated sessions × 3 calls, `Y_READER_SHARE_TENTHS` 0 vs 4): median 22,681 → 22,441 (−240 ns, −1.1%; share 4 lower in 66 of 81 pairs). This sits inside the nominal 2–3% band, so the claim rests on the repeated direction and on the zone-level tail: slowest core, last pack → y end 1,040 → 780 ns; exposed y cost (full − no_y_write) 769 → 516 ns. Options: share 3/10 ≈ 4/10; 2/10 22,438; 5/10 and above flat to worse; 10/10 (all on NoC0) 23,705, a regression, because NoC0 still carries other cores' W responses. Split order: column-major ≥ row-major ≈ alternate. Only column-major was kept. Domain: everywhere tested, including the parked R4 path (flat, correct). No exceptions. PCC 0.999972, bit-identical repeats.
+
+### Graduated
+- The y store is one path: the reader stores the last `round(0.4 · 5·core_n)` y slots in column-major order on NoC0 after its W stream, peeking `cb_y_tiles`. The writer stores the rest on NoC1, then waits on `Y_DONE_SEMAPHORE_ID` and pops, so it stays the only consumer. The writer's old store loop was deleted; the shared loop lives in `kernels/wq_b_linear_y_store.hpp`. The subagent's row-major / alternate split orders were dropped, leaving no dual path. `Y_READER_SHARE_TENTHS` is a count, not a second implementation. No carve-outs.
+- Whole op on the focus cell: 22,681 → 22,441 ns (median of 9), 1.40× SOL.
+- `_op_bench.py` `no_y_write` now gates the writes inside `wq_b_linear_y_store.hpp` for both reader and writer.
+
+### Guard set / correctness
+One cell, one kernel path × layout × placement. Golden `eval/golden_tests/wq_b_linear/` 3/3; `tests/ttnn/unit_tests/operations/wq_b_linear/` 49/49 (acceptance 18, x-mcast knobs 7, W-stream knobs incl. 4 R4 cases 16, precision baseline 8). No regression.
+
+### Helper bypasses — none
+New code uses `Noc` / `TensorAccessor` / `CircularBuffer` and plain local semaphores; no raw LLK.

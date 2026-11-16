@@ -1,0 +1,26 @@
+run 1024 freq 1350.0 MHz
+risc    zone                             cores  dur_p50  dur_max start_p50  end_p50  end_max
+BRISC   writer_x_prefetch_issue            110       56     2723       236      294     2988
+BRISC   writer_x_prefetch_barrier            4       48      623      7814     7862    12041
+BRISC   writer_x_send                        4     2323     2350      7894    10237    14382
+BRISC   writer_x_receive                   110    13736    13924       347    14491    14578
+BRISC   writer_x_phase                     110    14363    14553       218    14608    14701
+BRISC   BRISC-KERNEL                       110    20580    22470        93    20659    22622
+BRISC   writer_y_wait                       65     6309     7157     14659    20986    21830
+BRISC   writer_y_store                      65      755     1398     21022    21739    22582
+NCRISC  reader_w_first_issue                65      287      297       193      481      569
+NCRISC  reader_w_issue                      65     3326     3333      1761    19148    20021
+NCRISC  reader_w_barrier                    65    14904    15511       527    19916    20508
+NCRISC  reader_w_stream                     65    19790    20397       176    19987    20579
+NCRISC  reader_y_wait                       65      928     1534     20025    20989    21833
+NCRISC  reader_y_store                      65      667     1371     21015    21645    22493
+NCRISC  NCRISC-KERNEL                       65    21572    22359        90    21661    22510
+TRISC_0 compute_first_kblock_wait           65     5977     6067       204     6197     6270
+TRISC_0 compute_matmul                      65    14201    14987      6223    20421    21268
+TRISC_0 TRISC-KERNEL                        65    20319    21122        95    20437    21284
+TRISC_1 compute_first_kblock_wait           65       13       18       174      187      269
+TRISC_1 compute_matmul                      65    20318    21120       203    20542    21387
+TRISC_1 TRISC-KERNEL                        65    20444    21244        96    20559    21404
+TRISC_2 compute_first_kblock_wait           65       13       15       260      275      366
+TRISC_2 compute_matmul                      65    20616    21427       290    20935    21779
+TRISC_2 TRISC-KERNEL                        65    20830    21644        87    20951    21795

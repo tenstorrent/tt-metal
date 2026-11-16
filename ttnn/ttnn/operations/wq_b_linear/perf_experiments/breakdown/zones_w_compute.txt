@@ -1,0 +1,24 @@
+run 1024 freq 1350.0 MHz
+risc    zone                             cores  dur_p50  dur_max start_p50  end_p50  end_max
+BRISC   writer_x_prefetch_issue            110       56      735       241      297     1011
+BRISC   writer_x_prefetch_barrier            4       49       55      2340     2392     3604
+BRISC   writer_x_send                        4      387      394      2423     2810     4005
+BRISC   writer_x_receive                   110     3348     3517       353     4105     4187
+BRISC   writer_x_phase                     110     3973     4159       223     4220     4304
+BRISC   BRISC-KERNEL                       110    19369    21630        90    19456    21778
+BRISC   writer_y_wait                       65    15708    16366      4280    19964    20657
+BRISC   writer_y_store                      65      911     1521     19991    20987    21739
+NCRISC  reader_w_first_issue                65      284      298       195      479      562
+NCRISC  reader_w_issue                      65     3421     3430      1547    18161    18856
+NCRISC  reader_w_barrier                    65    13688    14249       521    18751    19348
+NCRISC  reader_w_stream                     65    18641    19208       178    18821    19418
+NCRISC  NCRISC-KERNEL                       65    18739    19310        93    18838    19435
+TRISC_0 compute_first_kblock_wait           65     1593     1888       201     1827     2188
+TRISC_0 compute_matmul                      65    17507    18091      1851    19407    20101
+TRISC_0 TRISC-KERNEL                        65    19311    19953        90    19424    20117
+TRISC_1 compute_first_kblock_wait           65       13       18       169      182      271
+TRISC_1 compute_matmul                      65    19314    19961       198    19528    20221
+TRISC_1 TRISC-KERNEL                        65    19439    20090        87    19544    20238
+TRISC_2 compute_first_kblock_wait           65       13       19       260      274      357
+TRISC_2 compute_matmul                      65    19621    20253       289    19919    20613
+TRISC_2 TRISC-KERNEL                        65    19837    20467        90    19936    20630

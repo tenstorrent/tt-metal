@@ -142,6 +142,12 @@ W end to compute end shrinks from ≈ 1.35 µs to ≈ 0.6 µs. But the W stream 
 ends at NCRISC p50 20.2–20.6 µs, against 19.3 µs on Refinement 2's 65 cores of 2176 B bank-coalesced reads. The
 binding term is still W transfer efficiency at the NoC0 links next to DRAM, not per-core imbalance.
 
+### As built (Perf 1: y store split across both NoCs)
+
+| Knob | Value | Evidence (p100a, device kernel ns, 9 calls per arm) |
+|------|-------|----------|
+| `Y_READER_SHARE_TENTHS` | 4 | 0 (writer stores all): median 22,681; 4: median 22,441. The reader (NCRISC, NoC0, idle once its W stream ends) stores the last `round(0.4 · 5·core_n)` y slots in column-major order (`kernels/wq_b_linear_y_store.hpp`), peeking `cb_y_tiles` without popping; the writer stores the rest, waits on `Y_DONE_SEMAPHORE_ID` (id 2; x channels now start at id 3) and stays the only consumer. Leftover-column tiles (R4) stay on the writer. 10/10 on NoC0: 23.7 µs |
+
 `x_cb_k_blocks` / `w_cb_k_blocks` are not independent knobs in the code: the writer and reader reserve all `num_k_blocks` blocks up front (whole-K residency), so the CB capacities are written in `num_k_blocks` directly. A ring depth below `num_k_blocks` needs wrap-aware slot math in both kernels.
 
 Verifier ablation (p100a, device kernel ns, 3 calls each): full 26.6 µs; x broadcast + y store only (no W reads, no compute) 25.4 µs; sync-only (one-page multicast per round, no W reads, no compute) 14.7 µs; W-only (one-page x) 20.8 µs; compute-only (one-page x) 15.7 µs. The serialized 8-round x broadcast is the critical path, not the W DRAM stream. See `verification_report.md`.

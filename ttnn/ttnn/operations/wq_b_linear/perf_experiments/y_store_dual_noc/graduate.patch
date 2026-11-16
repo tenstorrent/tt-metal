@@ -1,0 +1,320 @@
+diff -ruN a/ttnn/ttnn/operations/wq_b_linear/kernels/wq_b_linear_reader.cpp b/ttnn/ttnn/operations/wq_b_linear/kernels/wq_b_linear_reader.cpp
+--- a/ttnn/ttnn/operations/wq_b_linear/kernels/wq_b_linear_reader.cpp	2026-11-16 17:41:51.626440672 +0000
++++ b/ttnn/ttnn/operations/wq_b_linear/kernels/wq_b_linear_reader.cpp	2026-11-16 17:41:51.630440654 +0000
+@@ -7,6 +7,9 @@
+ // their slots; this kernel stays the CB's only producer and pushes them once the writer's handoff semaphore
+ // says they landed. A core with a K-slice of a leftover column (regime R4) first reads that slice into
+ // cb_w_slice under its own trid, so it is resident before compute reaches it.
++// Once its W stream is done, this kernel also stores y_reader_tiles of the core's y block on NoC0 beside the
++// writer's NoC1 share (see wq_b_linear_y_store.hpp). It only peeks cb_y_tiles; the writer stays its only consumer
++// and pops once the y_done semaphore says these writes landed.
+ 
+ #include <cstdint>
+ #include "api/dataflow/dataflow_api.h"
+@@ -15,6 +18,7 @@
+ #include "ttnn/cpp/ttnn/kernel_lib/local_copy_helpers_dataflow.hpp"
+ #include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
+ #include "ttnn/ttnn/operations/wq_b_linear/kernels/wq_b_linear_w_read.hpp"
++#include "ttnn/ttnn/operations/wq_b_linear/kernels/wq_b_linear_y_store.hpp"
+ 
+ void kernel_main() {
+     constexpr uint32_t cb_w_stream = get_compile_time_arg_val(0);
+@@ -25,7 +29,13 @@
+     constexpr uint32_t w_noc1_k_blocks = get_compile_time_arg_val(5);
+     constexpr uint32_t w_handoff_sem_id = get_compile_time_arg_val(6);
+     constexpr uint32_t cb_w_slice = get_compile_time_arg_val(7);
+-    constexpr auto w_args = TensorAccessorArgs<8>();
++    constexpr uint32_t cb_y_tiles = get_compile_time_arg_val(8);
++    constexpr uint32_t block_m_tiles = get_compile_time_arg_val(9);
++    constexpr uint32_t y_reader_share_tenths = get_compile_time_arg_val(10);
++    constexpr auto y_split_order = static_cast<YSplitOrder>(get_compile_time_arg_val(11));
++    constexpr uint32_t y_done_sem_id = get_compile_time_arg_val(12);
++    constexpr auto w_args = TensorAccessorArgs<13>();
++    constexpr auto y_args = TensorAccessorArgs<w_args.next_compile_time_args_offset()>();
+     constexpr uint32_t slice_trid = w_reads_in_flight + 1;
+     static_assert(slice_trid <= NOC_MAX_TRANSACTION_ID);
+     constexpr uint32_t num_own_k_blocks = num_k_blocks - w_noc1_k_blocks;
+@@ -38,6 +48,7 @@
+     const uint32_t slice_n = get_arg_val<uint32_t>(4);
+     const uint32_t slice_kb_start = get_arg_val<uint32_t>(5);
+     const uint32_t slice_k_blocks = get_arg_val<uint32_t>(6);
++    const uint32_t y_addr = get_arg_val<uint32_t>(7);
+ 
+     const uint32_t w_page_bytes = get_tile_size(cb_w_stream);
+     const auto w = TensorAccessor(w_args, w_addr, w_page_bytes);
+@@ -86,34 +97,55 @@
+         }
+     }
+ 
+-    MaybeDeviceZoneScope("reader_w_stream");
+     {
+-        MaybeDeviceZoneScope("reader_w_first_issue");
+-        for (uint32_t b = 0; b < w_reads_in_flight; ++b) {
+-            issue_block(b, 0);
+-        }
+-    }
+-    if (slice_k_blocks > 0) {
+-        dataflow_kernel_lib::async_read_barrier_with_trid(noc, slice_trid);
+-        cb_ws.push_back(slice_k_blocks * k_block_tiles);
+-    }
+-    for (uint32_t b = 0; b < num_own_k_blocks; ++b) {
++        MaybeDeviceZoneScope("reader_w_stream");
+         {
+-            MaybeDeviceZoneScope("reader_w_barrier");
+-            dataflow_kernel_lib::async_read_barrier_with_trid(noc, trid_for(b));
++            MaybeDeviceZoneScope("reader_w_first_issue");
++            for (uint32_t b = 0; b < w_reads_in_flight; ++b) {
++                issue_block(b, 0);
++            }
++        }
++        if (slice_k_blocks > 0) {
++            dataflow_kernel_lib::async_read_barrier_with_trid(noc, slice_trid);
++            cb_ws.push_back(slice_k_blocks * k_block_tiles);
+         }
+-        if (b + w_reads_in_flight < num_own_k_blocks) {
+-            MaybeDeviceZoneScope("reader_w_issue");
+-            issue_block(b + w_reads_in_flight, b);
++        for (uint32_t b = 0; b < num_own_k_blocks; ++b) {
++            {
++                MaybeDeviceZoneScope("reader_w_barrier");
++                dataflow_kernel_lib::async_read_barrier_with_trid(noc, trid_for(b));
++            }
++            if (b + w_reads_in_flight < num_own_k_blocks) {
++                MaybeDeviceZoneScope("reader_w_issue");
++                issue_block(b + w_reads_in_flight, b);
++            }
++            cb_w.push_back(block_tiles);
++        }
++        dataflow_kernel_lib::set_read_trid(noc, 0);
++
++        if constexpr (w_noc1_k_blocks > 0) {
++            auto* handoff = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(w_handoff_sem_id));
++            noc_semaphore_wait(handoff, 1);
++            noc_semaphore_set(handoff, 0);
++            cb_w.push_back(w_noc1_k_blocks * block_tiles);
+         }
+-        cb_w.push_back(block_tiles);
+     }
+-    dataflow_kernel_lib::set_read_trid(noc, 0);
+ 
+-    if constexpr (w_noc1_k_blocks > 0) {
+-        auto* handoff = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(w_handoff_sem_id));
+-        noc_semaphore_wait(handoff, 1);
+-        noc_semaphore_set(handoff, 0);
+-        cb_w.push_back(w_noc1_k_blocks * block_tiles);
++    const uint32_t y_block_tiles = block_m_tiles * core_n_tiles;
++    const uint32_t reader_tiles = y_reader_tiles(y_block_tiles, y_reader_share_tenths);
++    if (reader_tiles == 0) {
++        return;
++    }
++    const uint32_t y_page_bytes = get_tile_size(cb_y_tiles);
++    const auto y = TensorAccessor(y_args, y_addr, y_page_bytes);
++    CircularBuffer cb_y(cb_y_tiles);
++    {
++        MaybeDeviceZoneScope("reader_y_wait");
++        cb_y.wait_front(y_block_tiles);
+     }
++    MaybeDeviceZoneScope("reader_y_store");
++    store_y_share(
++        noc, cb_y, y, y_page_bytes, block_m_tiles, core_n_tiles, tensor_n_tiles, n_start, n_stride, y_split_order,
++        reader_tiles, true);
++    noc.async_write_barrier();
++    noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(y_done_sem_id)), 1);
+ }
+diff -ruN a/ttnn/ttnn/operations/wq_b_linear/kernels/wq_b_linear_writer.cpp b/ttnn/ttnn/operations/wq_b_linear/kernels/wq_b_linear_writer.cpp
+--- a/ttnn/ttnn/operations/wq_b_linear/kernels/wq_b_linear_writer.cpp	2026-11-16 17:41:51.626440672 +0000
++++ b/ttnn/ttnn/operations/wq_b_linear/kernels/wq_b_linear_writer.cpp	2026-11-16 17:41:51.630440654 +0000
+@@ -8,7 +8,8 @@
+ //   per_round: round r travels on its own fixed-sender channel x_mcast_r, fired once per launch.
+ //   rotating:  all rounds travel on x_mcast_0 with rotating senders.
+ // Chained rounds go out in order (the round-r injector has received round r - 1 first); concurrent rounds go
+-// out at once. Then the core writes its (block_m_tiles x core_n_tiles) y block to L1-interleaved y.
++// out at once. Then the core writes its (block_m_tiles x core_n_tiles) y block to L1-interleaved y, less the
++// y_reader_tiles the reader stores on NoC0; it pops cb_y_tiles once the reader's y_done semaphore is raised.
+ // With w_noc1_k_blocks > 0 this kernel also reads the last w_noc1_k_blocks W K-blocks on NoC1 into their
+ // cb_w_stream slots (the reader owns the CB and pushes them) and raises the reader's handoff semaphore once
+ // they landed; the x prefetch then waits on its own trid instead of every outstanding read. The reads go out
+@@ -28,6 +29,7 @@
+ #include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
+ #include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
+ #include "ttnn/ttnn/operations/wq_b_linear/kernels/wq_b_linear_w_read.hpp"
++#include "ttnn/ttnn/operations/wq_b_linear/kernels/wq_b_linear_y_store.hpp"
+ 
+ using namespace dataflow_kernel_lib;
+ 
+@@ -80,7 +82,10 @@
+     constexpr uint32_t cb_partial = get_compile_time_arg_val(17);
+     constexpr uint32_t cb_landing = get_compile_time_arg_val(18);
+     constexpr uint32_t landing_sem_id = get_compile_time_arg_val(19);
+-    constexpr auto x_args = TensorAccessorArgs<20>();
++    constexpr uint32_t y_reader_share_tenths = get_compile_time_arg_val(20);
++    constexpr auto y_split_order = static_cast<YSplitOrder>(get_compile_time_arg_val(21));
++    constexpr uint32_t y_done_sem_id = get_compile_time_arg_val(22);
++    constexpr auto x_args = TensorAccessorArgs<23>();
+     constexpr auto y_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
+     constexpr auto w_args = TensorAccessorArgs<y_args.next_compile_time_args_offset()>();
+     constexpr uint32_t x_prefetch_trid = 1;
+@@ -322,14 +327,11 @@
+         cb_y.wait_front(y_tiles);
+     }
+     MaybeDeviceZoneScope("writer_y_store");
+-    uint32_t offset = 0;
+-    for (uint32_t m = 0; m < block_m_tiles; ++m) {
+-        const uint32_t row_page = m * tensor_n_tiles + n_start;
+-        for (uint32_t n = 0; n < core_n_tiles; ++n) {
+-            noc.async_write(cb_y, y, y_page_bytes, {.offset_bytes = offset}, {.page_id = row_page + n * n_stride});
+-            offset += y_page_bytes;
+-        }
+-    }
++    const uint32_t reader_tiles = y_reader_tiles(y_block_tiles, y_reader_share_tenths);
++    store_y_share(
++        noc, cb_y, y, y_page_bytes, block_m_tiles, core_n_tiles, tensor_n_tiles, n_start, n_stride, y_split_order,
++        reader_tiles, false);
++    uint32_t offset = y_block_tiles * y_page_bytes;
+     if (owns_leftover) {
+         for (uint32_t m = 0; m < block_m_tiles; ++m) {
+             noc.async_write(cb_y, y, y_page_bytes, {.offset_bytes = offset}, {.page_id = m * tensor_n_tiles + slice_n});
+@@ -337,5 +339,10 @@
+         }
+     }
+     noc.async_write_barrier();
++    if (reader_tiles > 0) {
++        auto* y_done = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(y_done_sem_id));
++        noc_semaphore_wait(y_done, 1);
++        noc_semaphore_set(y_done, 0);
++    }
+     cb_y.pop_front(y_tiles);
+ }
+diff -ruN a/ttnn/ttnn/operations/wq_b_linear/kernels/wq_b_linear_y_store.hpp b/ttnn/ttnn/operations/wq_b_linear/kernels/wq_b_linear_y_store.hpp
+--- a/ttnn/ttnn/operations/wq_b_linear/kernels/wq_b_linear_y_store.hpp	1970-01-01 00:00:00.000000000 +0000
++++ b/ttnn/ttnn/operations/wq_b_linear/kernels/wq_b_linear_y_store.hpp	2026-11-16 17:41:51.630440654 +0000
+@@ -0,0 +1,62 @@
++// SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
++// SPDX-License-Identifier: Apache-2.0
++
++#pragma once
++
++#include <cstdint>
++#include "api/dataflow/dataflow_api.h"
++#include "api/dataflow/noc.h"
++#include "api/dataflow/circular_buffer.h"
++
++// The y block (block_m_tiles x core_n_tiles, tile (m, n) at CB slot m * core_n_tiles + n) is stored by two RISCs:
++// the reader (NoC0) owns reader_tiles of the block's T tiles, the writer (NoC1) the rest.
++//   order 0: the reader owns the last reader_tiles slots in row-major (m, n) order.
++//   order 1: the reader owns the last reader_tiles slots in column-major (n, m) order (whole columns first).
++//   order 2: the reader owns every other slot (odd row-major index), up to reader_tiles of them.
++enum class YSplitOrder : uint32_t { RowMajor = 0, ColMajor = 1, Alternate = 2 };
++
++FORCE_INLINE uint32_t y_reader_tiles(uint32_t total_tiles, uint32_t share_tenths) {
++    return (total_tiles * share_tenths + 5) / 10;
++}
++
++FORCE_INLINE bool reader_owns_y_slot(
++    YSplitOrder order, uint32_t m, uint32_t n, uint32_t block_m_tiles, uint32_t core_n_tiles, uint32_t reader_tiles) {
++    const uint32_t total = block_m_tiles * core_n_tiles;
++    if (order == YSplitOrder::RowMajor) {
++        return m * core_n_tiles + n >= total - reader_tiles;
++    }
++    if (order == YSplitOrder::ColMajor) {
++        return n * block_m_tiles + m >= total - reader_tiles;
++    }
++    const uint32_t f = m * core_n_tiles + n;
++    return (f & 1) && (f >> 1) < reader_tiles;
++}
++
++// Writes this RISC's share of the y block from cb_y (read pointer = slot 0) to the interleaved y pages
++// m * tensor_n_tiles + n_start + n * n_stride. The caller has waited for the block and issues the barrier.
++template <typename Accessor>
++FORCE_INLINE void store_y_share(
++    Noc& noc,
++    CircularBuffer& cb_y,
++    const Accessor& y,
++    uint32_t y_page_bytes,
++    uint32_t block_m_tiles,
++    uint32_t core_n_tiles,
++    uint32_t tensor_n_tiles,
++    uint32_t n_start,
++    uint32_t n_stride,
++    YSplitOrder order,
++    uint32_t reader_tiles,
++    bool is_reader) {
++    uint32_t offset = 0;
++    for (uint32_t m = 0; m < block_m_tiles; ++m) {
++        const uint32_t row_page = m * tensor_n_tiles + n_start;
++        for (uint32_t n = 0; n < core_n_tiles; ++n) {
++            if (reader_owns_y_slot(order, m, n, block_m_tiles, core_n_tiles, reader_tiles) == is_reader) {
++                noc.async_write(
++                    cb_y, y, y_page_bytes, {.offset_bytes = offset}, {.page_id = row_page + n * n_stride});
++            }
++            offset += y_page_bytes;
++        }
++    }
++}
+diff -ruN a/ttnn/ttnn/operations/wq_b_linear/wq_b_linear_program_descriptor.py b/ttnn/ttnn/operations/wq_b_linear/wq_b_linear_program_descriptor.py
+--- a/ttnn/ttnn/operations/wq_b_linear/wq_b_linear_program_descriptor.py	2026-11-16 17:41:51.626440672 +0000
++++ b/ttnn/ttnn/operations/wq_b_linear/wq_b_linear_program_descriptor.py	2026-11-16 17:41:51.630440654 +0000
+@@ -58,6 +58,11 @@
+ # The owner combines after main K-block num_k_blocks - 1 - COMBINE_EARLY_K_BLOCKS (not before its own slice),
+ # inside the W-bound main loop instead of on the tail after the last W block.
+ COMBINE_EARLY_K_BLOCKS = 6
++# Tenths of each core's y block the reader (NCRISC, NoC0; idle once its W stream ends) stores beside the writer's
++# NoC1 share; 0 = the writer stores it all. Leftover-column tiles (R4) stay on the writer.
++Y_READER_SHARE_TENTHS = 4
++# Which slots the reader stores: 0 the last ones row-major, 1 the last ones column-major, 2 every other one.
++Y_SPLIT_ORDER = 1
+ 
+ CB_X_RESIDENT = 0
+ CB_W_STREAM = 1
+@@ -69,7 +74,8 @@
+ 
+ W_HANDOFF_SEMAPHORE_ID = 0
+ LANDING_SEMAPHORE_ID = 1
+-MCAST_FIRST_SEMAPHORE_ID = 2
++Y_DONE_SEMAPHORE_ID = 2
++MCAST_FIRST_SEMAPHORE_ID = 3
+ 
+ 
+ def _largest_divisor_at_most(n, cap):
+@@ -349,11 +355,22 @@
+             w_noc1_k_blocks,
+             W_HANDOFF_SEMAPHORE_ID,
+             CB_W_SLICE,
++            CB_Y_TILES,
++            block_m_tiles,
++            Y_READER_SHARE_TENTHS,
++            Y_SPLIT_ORDER,
++            Y_DONE_SEMAPHORE_ID,
+         ]
+         reader_ct.extend(ttnn.TensorAccessorArgs(w_tensor).get_compile_time_args())
++        reader_ct.extend(ttnn.TensorAccessorArgs(y_tensor).get_compile_time_args())
+         reader_rt = ttnn.RuntimeArgs()
+         for c in cores:
+-            reader_rt[c.x][c.y] = [w_tensor.buffer_address(), *assignment[(c.x, c.y)], *slice_args(c)[:3]]
++            reader_rt[c.x][c.y] = [
++                w_tensor.buffer_address(),
++                *assignment[(c.x, c.y)],
++                *slice_args(c)[:3],
++                y_tensor.buffer_address(),
++            ]
+         reader_kernels.append(
+             ttnn.KernelDescriptor(
+                 kernel_source=str(KERNEL_DIR / "wq_b_linear_reader.cpp"),
+@@ -388,6 +405,9 @@
+         CB_PARTIAL,
+         CB_LANDING,
+         LANDING_SEMAPHORE_ID,
++        Y_READER_SHARE_TENTHS,
++        Y_SPLIT_ORDER,
++        Y_DONE_SEMAPHORE_ID,
+     ]
+     writer_ct.extend(ttnn.TensorAccessorArgs(x_tensor).get_compile_time_args())
+     writer_ct.extend(ttnn.TensorAccessorArgs(y_tensor).get_compile_time_args())
+@@ -449,6 +469,7 @@
+     semaphores = [
+         ttnn.SemaphoreDescriptor(id=W_HANDOFF_SEMAPHORE_ID, core_ranges=all_cores, initial_value=0),
+         ttnn.SemaphoreDescriptor(id=LANDING_SEMAPHORE_ID, core_ranges=all_cores, initial_value=0),
++        ttnn.SemaphoreDescriptor(id=Y_DONE_SEMAPHORE_ID, core_ranges=all_cores, initial_value=0),
+     ]
+     descriptor = ttnn.ProgramDescriptor(kernels=[], semaphores=semaphores, cbs=cbs)
+ 

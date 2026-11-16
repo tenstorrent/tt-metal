@@ -1,0 +1,24 @@
+run 1024 freq 1350.0 MHz
+risc    zone                             cores  dur_p50  dur_max start_p50  end_p50  end_max
+BRISC   writer_x_prefetch_issue            110       55      734       240      298     1010
+BRISC   writer_x_prefetch_barrier            4       48       50      5237     5286     9430
+BRISC   writer_x_send                        4     2313     2338      5319     7651    11730
+BRISC   writer_x_receive                   110    11079    11272       352    11835    11919
+BRISC   writer_x_phase                     110    11701    11891       222    11949    12033
+BRISC   writer_y_wait                       65       30       30     11998    12027    12091
+BRISC   BRISC-KERNEL                       110    13140    14343        97    13191    14465
+BRISC   writer_y_store                      65     1701     2393     12052    13719    14427
+NCRISC  reader_w_first_issue                65      153      164       193      347      449
+NCRISC  reader_w_issue                      65     1689     1696       452     3645     3747
+NCRISC  reader_w_barrier                    65      549      557       391     3728     3829
+NCRISC  reader_w_stream                     65     3621     3636       175     3797     3900
+NCRISC  NCRISC-KERNEL                       65     3722     3739        90     3814     3918
+TRISC_0 compute_first_kblock_wait           65     3424     3514       201     3643     3719
+TRISC_0 compute_matmul                      65     8326     8441      3667    12030    12093
+TRISC_0 TRISC-KERNEL                        65    11907    12099        94    12047    12113
+TRISC_1 compute_first_kblock_wait           65       14       17       168      182      279
+TRISC_1 compute_matmul                      65     5632     5650       197     5828     5921
+TRISC_1 TRISC-KERNEL                        65     5756     5775        91     5845     5938
+TRISC_2 compute_first_kblock_wait           65       13       16       259      272      370
+TRISC_2 compute_matmul                      65     7256     7263       287     7544     7644
+TRISC_2 TRISC-KERNEL                        65     7470     7486        90     7560     7661

@@ -77,13 +77,19 @@ def _tiny_x_writer(shrink_send=True, gate_w=False):
     return str(path)
 
 
-def _no_y_write_writer():
-    src = (pd.KERNEL_DIR / "wq_b_linear_writer.cpp").read_text()
-    write = "noc.async_write(cb_y, y, y_page_bytes, {.offset_bytes = offset}, {.page_id = row_page + n * n_stride});"
-    assert write in src
-    src = src.replace(write, "if (y_addr == 0xFFFFFFFF) { " + write + " }")
-    path = _tmp_dir / "wq_b_linear_writer_no_y_write.cpp"
-    path.write_text(src)
+_Y_STORE_HEADER = "ttnn/ttnn/operations/wq_b_linear/kernels/wq_b_linear_y_store.hpp"
+
+
+def _no_y_write_kernel(name):
+    hdr = (pd.KERNEL_DIR / "wq_b_linear_y_store.hpp").read_text()
+    write = "noc.async_write(\n                    cb_y, y, y_page_bytes, {.offset_bytes = offset}, {.page_id = row_page + n * n_stride});"
+    assert write in hdr
+    gated_hdr = _tmp_dir / "wq_b_linear_y_store_gated.hpp"
+    gated_hdr.write_text(hdr.replace(write, "if (row_page == 0xFFFFFFFF) { " + write + " }"))
+    src = (pd.KERNEL_DIR / name).read_text()
+    assert _Y_STORE_HEADER in src
+    path = _tmp_dir / name.replace(".cpp", "_no_y_write.cpp")
+    path.write_text(src.replace(_Y_STORE_HEADER, str(gated_hdr)))
     return str(path)
 
 
@@ -111,8 +117,10 @@ def _patched_create(*args, **kwargs):
                 path = _tmp_dir / "wq_b_linear_writer_no_w_read.cpp"
                 path.write_text(src)
                 k.kernel_source = str(path)
-        if VARIANT == "no_y_write" and k.kernel_source.endswith("wq_b_linear_writer.cpp"):
-            k.kernel_source = _no_y_write_writer()
+        if VARIANT == "no_y_write":
+            for name in ("wq_b_linear_writer.cpp", "wq_b_linear_reader.cpp"):
+                if k.kernel_source.endswith(name):
+                    k.kernel_source = _no_y_write_kernel(name)
     desc.kernels = kernels
     return desc
 

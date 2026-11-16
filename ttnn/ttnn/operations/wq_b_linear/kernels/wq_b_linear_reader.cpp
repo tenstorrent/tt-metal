@@ -7,13 +7,18 @@
 // their slots; this kernel stays the CB's only producer and pushes them once the writer's handoff semaphore
 // says they landed. A core with a K-slice of a leftover column (regime R4) first reads that slice into
 // cb_w_slice under its own trid, so it is resident before compute reaches it.
+// Once its W stream is done, this kernel also stores y_reader_tiles of the core's y block on NoC0 beside the
+// writer's NoC1 share (see wq_b_linear_y_store.hpp). It only peeks cb_y_tiles; the writer stays its only consumer
+// and pops once the y_done semaphore says these writes landed.
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/local_copy_helpers_dataflow.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 #include "ttnn/ttnn/operations/wq_b_linear/kernels/wq_b_linear_w_read.hpp"
+#include "ttnn/ttnn/operations/wq_b_linear/kernels/wq_b_linear_y_store.hpp"
 
 void kernel_main() {
     constexpr uint32_t cb_w_stream = get_compile_time_arg_val(0);
@@ -24,7 +29,12 @@ void kernel_main() {
     constexpr uint32_t w_noc1_k_blocks = get_compile_time_arg_val(5);
     constexpr uint32_t w_handoff_sem_id = get_compile_time_arg_val(6);
     constexpr uint32_t cb_w_slice = get_compile_time_arg_val(7);
-    constexpr auto w_args = TensorAccessorArgs<8>();
+    constexpr uint32_t cb_y_tiles = get_compile_time_arg_val(8);
+    constexpr uint32_t block_m_tiles = get_compile_time_arg_val(9);
+    constexpr uint32_t y_reader_share_tenths = get_compile_time_arg_val(10);
+    constexpr uint32_t y_done_sem_id = get_compile_time_arg_val(11);
+    constexpr auto w_args = TensorAccessorArgs<12>();
+    constexpr auto y_args = TensorAccessorArgs<w_args.next_compile_time_args_offset()>();
     constexpr uint32_t slice_trid = w_reads_in_flight + 1;
     static_assert(slice_trid <= NOC_MAX_TRANSACTION_ID);
     constexpr uint32_t num_own_k_blocks = num_k_blocks - w_noc1_k_blocks;
@@ -37,6 +47,7 @@ void kernel_main() {
     const uint32_t slice_n = get_arg_val<uint32_t>(4);
     const uint32_t slice_kb_start = get_arg_val<uint32_t>(5);
     const uint32_t slice_k_blocks = get_arg_val<uint32_t>(6);
+    const uint32_t y_addr = get_arg_val<uint32_t>(7);
 
     const uint32_t w_page_bytes = get_tile_size(cb_w_stream);
     const auto w = TensorAccessor(w_args, w_addr, w_page_bytes);
@@ -85,26 +96,54 @@ void kernel_main() {
         }
     }
 
-    for (uint32_t b = 0; b < w_reads_in_flight; ++b) {
-        issue_block(b, 0);
-    }
-    if (slice_k_blocks > 0) {
-        dataflow_kernel_lib::async_read_barrier_with_trid(noc, slice_trid);
-        cb_ws.push_back(slice_k_blocks * k_block_tiles);
-    }
-    for (uint32_t b = 0; b < num_own_k_blocks; ++b) {
-        dataflow_kernel_lib::async_read_barrier_with_trid(noc, trid_for(b));
-        if (b + w_reads_in_flight < num_own_k_blocks) {
-            issue_block(b + w_reads_in_flight, b);
+    {
+        MaybeDeviceZoneScope("reader_w_stream");
+        {
+            MaybeDeviceZoneScope("reader_w_first_issue");
+            for (uint32_t b = 0; b < w_reads_in_flight; ++b) {
+                issue_block(b, 0);
+            }
         }
-        cb_w.push_back(block_tiles);
-    }
-    dataflow_kernel_lib::set_read_trid(noc, 0);
+        if (slice_k_blocks > 0) {
+            dataflow_kernel_lib::async_read_barrier_with_trid(noc, slice_trid);
+            cb_ws.push_back(slice_k_blocks * k_block_tiles);
+        }
+        for (uint32_t b = 0; b < num_own_k_blocks; ++b) {
+            {
+                MaybeDeviceZoneScope("reader_w_barrier");
+                dataflow_kernel_lib::async_read_barrier_with_trid(noc, trid_for(b));
+            }
+            if (b + w_reads_in_flight < num_own_k_blocks) {
+                MaybeDeviceZoneScope("reader_w_issue");
+                issue_block(b + w_reads_in_flight, b);
+            }
+            cb_w.push_back(block_tiles);
+        }
+        dataflow_kernel_lib::set_read_trid(noc, 0);
 
-    if constexpr (w_noc1_k_blocks > 0) {
-        auto* handoff = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(w_handoff_sem_id));
-        noc_semaphore_wait(handoff, 1);
-        noc_semaphore_set(handoff, 0);
-        cb_w.push_back(w_noc1_k_blocks * block_tiles);
+        if constexpr (w_noc1_k_blocks > 0) {
+            auto* handoff = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(w_handoff_sem_id));
+            noc_semaphore_wait(handoff, 1);
+            noc_semaphore_set(handoff, 0);
+            cb_w.push_back(w_noc1_k_blocks * block_tiles);
+        }
     }
+
+    const uint32_t y_block_tiles = block_m_tiles * core_n_tiles;
+    const uint32_t reader_tiles = y_reader_tiles(y_block_tiles, y_reader_share_tenths);
+    if (reader_tiles == 0) {
+        return;
+    }
+    const uint32_t y_page_bytes = get_tile_size(cb_y_tiles);
+    const auto y = TensorAccessor(y_args, y_addr, y_page_bytes);
+    CircularBuffer cb_y(cb_y_tiles);
+    {
+        MaybeDeviceZoneScope("reader_y_wait");
+        cb_y.wait_front(y_block_tiles);
+    }
+    MaybeDeviceZoneScope("reader_y_store");
+    store_y_share(
+        noc, cb_y, y, y_page_bytes, block_m_tiles, core_n_tiles, tensor_n_tiles, n_start, n_stride, reader_tiles, true);
+    noc.async_write_barrier();
+    noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(y_done_sem_id)), 1);
 }

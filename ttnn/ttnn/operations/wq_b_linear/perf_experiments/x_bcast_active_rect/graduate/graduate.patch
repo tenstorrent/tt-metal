@@ -1,0 +1,344 @@
+--- a/ttnn/ttnn/operations/wq_b_linear/wq_b_linear_program_descriptor.py
++++ b/ttnn/ttnn/operations/wq_b_linear/wq_b_linear_program_descriptor.py
+@@ -34,6 +34,13 @@
+ W_NOC1_AFTER_X = True
+ # Compute K-blocks per x multicast round (raised if needed to fit MAX_X_MCAST_CHANNELS); one injector per round.
+ X_ROUND_K_BLOCKS = 4
++# per_round only: K-blocks in round 0 (0 = X_ROUND_K_BLOCKS); a small first round lands sooner, so compute
++# starts earlier. The other K-blocks are split into rounds of at most X_ROUND_K_BLOCKS, smaller ones first.
++X_FIRST_ROUND_K_BLOCKS = 1
++# per_round only: multicast x to the bounding rectangle of the active cores, injected by idle cores outside it,
++# instead of to the full grid by injectors inside it. Falls back to the full grid when fewer than num_x_rounds
++# idle cores lie outside that rectangle.
++X_ACTIVE_RECT = True
+ # "per_round": one fixed-sender Flag channel per round, each fired once per launch, so no ready handshake.
+ # "rotating": one channel with rotating senders; Flag + ready handshake when chained, Counter when concurrent.
+ X_MCAST_CHANNELS = "per_round"
+@@ -70,6 +77,8 @@
+ W_HANDOFF_SEMAPHORE_ID = 0
+ LANDING_SEMAPHORE_ID = 1
+ MCAST_FIRST_SEMAPHORE_ID = 2
++# Outside injectors only: raised by the round-r injector on the round-(r + 1) injector once round r is out.
++X_CHAIN_SEMAPHORE_ID = MCAST_FIRST_SEMAPHORE_ID + MAX_X_MCAST_CHANNELS
+ 
+ 
+ def _largest_divisor_at_most(n, cap):
+@@ -191,6 +200,44 @@
+     return d
+ 
+ 
++def _x_round_starts(num_k_blocks):
++    """K-block boundaries of the x rounds: round r covers [starts[r], starts[r + 1])."""
++    uniform = _x_round_k_blocks(num_k_blocks)
++    sizes = [uniform] * (num_k_blocks // uniform)
++    first = X_FIRST_ROUND_K_BLOCKS
++    if X_MCAST_CHANNELS == "per_round" and 0 < first < num_k_blocks:
++        rest = num_k_blocks - first
++        num_rest = -(-rest // X_ROUND_K_BLOCKS)
++        if num_rest + 1 <= MAX_X_MCAST_CHANNELS:
++            base, extra = divmod(rest, num_rest)
++            sizes = [first] + [base] * (num_rest - extra) + [base + 1] * extra
++    starts = [0]
++    for size in sizes:
++        starts.append(starts[-1] + size)
++    return starts
++
++
++def _bounding_rect(cores):
++    return ttnn.CoreRange(
++        ttnn.CoreCoord(min(c.x for c in cores), min(c.y for c in cores)),
++        ttnn.CoreCoord(max(c.x for c in cores), max(c.y for c in cores)),
++    )
++
++
++def _outside_injectors(grid, rect, num_injectors):
++    """num_injectors idle cores outside rect: a diagonal over the full rows outside it when there are enough
++    (distinct rows and columns, so their prefetches share no links), else strided over all outside cores.
++    None when fewer than num_injectors cores lie outside rect."""
++    outside = [ttnn.CoreCoord(x, y) for y in range(grid.y) for x in range(grid.x) if not rect.contains(ttnn.CoreCoord(x, y))]
++    if len(outside) < num_injectors:
++        return None
++    full_rows = sorted({c.y for c in outside if sum(1 for o in outside if o.y == c.y) == grid.x})
++    if len(full_rows) >= num_injectors:
++        rows = full_rows[len(full_rows) - num_injectors :]
++        return [ttnn.CoreCoord(r * grid.x // num_injectors, rows[r]) for r in range(num_injectors)]
++    return _strided_pick(outside, num_injectors)
++
++
+ def _x_injectors(grid, num_injectors):
+     assert X_INJECTOR_PLACEMENT in ("diagonal", "last_row"), X_INJECTOR_PLACEMENT
+     if X_INJECTOR_PLACEMENT == "diagonal" and num_injectors <= min(grid.x, grid.y):
+@@ -201,7 +248,9 @@
+ 
+ 
+ def _attach_x_mcast(descriptor, device, writer_kernel, grid_cores, injectors, num_x_rounds):
+-    """Attach channels x_mcast_0 .. x_mcast_{MAX_X_MCAST_CHANNELS-1}; unused ones are absent."""
++    """Attach channels x_mcast_0 .. x_mcast_{MAX_X_MCAST_CHANNELS-1}; unused ones are absent.
++
++    grid_cores is the receiver rectangle; a per_round injector outside it is an explicit fixed sender."""
+     num_grid_cores = grid_cores.num_cores()
+     if X_MCAST_CHANNELS == "rotating":
+         if X_ROUNDS_CONCURRENT:
+@@ -221,10 +270,15 @@
+         index_of = {(c.x, c.y): i for i, c in enumerate(grid_row_major)}
+         semaphore_id = MCAST_FIRST_SEMAPHORE_ID
+         for r in range(num_x_rounds):
+-            sender = ttnn.McastFixedSenderConfig(sender_index=index_of[(injectors[r].x, injectors[r].y)])
++            key = (injectors[r].x, injectors[r].y)
++            if key in index_of:
++                sender = ttnn.McastFixedSenderConfig(sender_index=index_of[key])
++            else:
++                sender = ttnn.McastExplicitFixedSenderConfig([injectors[r]])
+             mcast = ttnn.Mcast(device, cfg, grid_cores, num_grid_cores, sender)
+             mcast.attach(descriptor, f"x_mcast_{r}", [writer_kernel], semaphore_id)
+             semaphore_id = mcast.next_semaphore_id()
++        assert semaphore_id <= X_CHAIN_SEMAPHORE_ID
+         num_present = num_x_rounds
+     for r in range(num_present, MAX_X_MCAST_CHANNELS):
+         ttnn.attach_absent_mcast(writer_kernel, f"x_mcast_{r}")
+@@ -252,7 +306,8 @@
+     num_k_blocks = tensor_k_tiles // k_block_tiles
+     w_noc1_k_blocks = min(W_NOC1_K_BLOCKS, num_k_blocks - 1)
+     x_round_k_blocks = _x_round_k_blocks(num_k_blocks)
+-    num_x_rounds = num_k_blocks // x_round_k_blocks
++    x_round_starts = _x_round_starts(num_k_blocks)
++    num_x_rounds = len(x_round_starts) - 1
+ 
+     grid = device.compute_with_storage_grid_size()
+     grid_cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
+@@ -280,7 +335,18 @@
+         num_x_injectors = num_x_rounds
+     else:
+         num_x_injectors = max(2, min(num_x_rounds, grid.x))
+-    x_injectors = _x_injectors(grid, num_x_injectors)
++    x_rect = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))
++    x_injectors = None
++    if X_ACTIVE_RECT and X_MCAST_CHANNELS == "per_round":
++        active_rect = _bounding_rect([c for cores, _ in n_groups for c in cores])
++        x_injectors = _outside_injectors(grid, active_rect, num_x_injectors)
++        if x_injectors:
++            x_rect = active_rect
++    if not x_injectors:
++        x_injectors = _x_injectors(grid, num_x_injectors)
++    x_rect_cores = ttnn.CoreRangeSet([x_rect])
++    inject_outside = not x_rect.contains(x_injectors[0])
++    injector_index = {(c.x, c.y): r for r, c in enumerate(x_injectors)}
+ 
+     x_page_bytes = x_tensor.buffer_page_size()
+     w_page_bytes = w_tensor.buffer_page_size()
+@@ -388,10 +454,22 @@
+         CB_PARTIAL,
+         CB_LANDING,
+         LANDING_SEMAPHORE_ID,
++        int(inject_outside),
++        X_CHAIN_SEMAPHORE_ID,
++        *x_round_starts,
++        *[x_round_starts[-1]] * (MAX_X_MCAST_CHANNELS + 1 - len(x_round_starts)),
+     ]
+     writer_ct.extend(ttnn.TensorAccessorArgs(x_tensor).get_compile_time_args())
+     writer_ct.extend(ttnn.TensorAccessorArgs(y_tensor).get_compile_time_args())
+     writer_ct.extend(ttnn.TensorAccessorArgs(w_tensor).get_compile_time_args())
++    def next_injector(core):
++        """(noc x, noc y, 1) of the next round's injector on an outside injector, else (0, 0, 0)."""
++        r = injector_index.get((core.x, core.y))
++        if not inject_outside or r is None or r + 1 >= num_x_rounds:
++            return [0, 0, 0]
++        nxt = device.worker_core_from_logical_core(x_injectors[r + 1])
++        return [nxt.x, nxt.y, 1]
++
+     writer_rt = ttnn.RuntimeArgs()
+     for core in grid_row_major:
+         writer_rt[core.x][core.y] = [
+@@ -400,6 +478,7 @@
+             *assignment.get((core.x, core.y), (0, 0, 1)),
+             w_tensor.buffer_address(),
+             *slice_args(core),
++            *next_injector(core),
+         ]
+     writer_kernel = ttnn.KernelDescriptor(
+         kernel_source=str(KERNEL_DIR / "wq_b_linear_writer.cpp"),
+@@ -450,9 +529,13 @@
+         ttnn.SemaphoreDescriptor(id=W_HANDOFF_SEMAPHORE_ID, core_ranges=all_cores, initial_value=0),
+         ttnn.SemaphoreDescriptor(id=LANDING_SEMAPHORE_ID, core_ranges=all_cores, initial_value=0),
+     ]
++    if inject_outside:
++        semaphores.append(
++            ttnn.SemaphoreDescriptor(id=X_CHAIN_SEMAPHORE_ID, core_ranges=_core_range_set(x_injectors), initial_value=0)
++        )
+     descriptor = ttnn.ProgramDescriptor(kernels=[], semaphores=semaphores, cbs=cbs)
+ 
+-    _attach_x_mcast(descriptor, device, writer_kernel, grid_cores, x_injectors, num_x_rounds)
++    _attach_x_mcast(descriptor, device, writer_kernel, x_rect_cores, x_injectors, num_x_rounds)
+ 
+     descriptor.kernels = [*reader_kernels, writer_kernel, *compute_kernels]
+     return descriptor
+--- a/ttnn/ttnn/operations/wq_b_linear/kernels/wq_b_linear_writer.cpp
++++ b/ttnn/ttnn/operations/wq_b_linear/kernels/wq_b_linear_writer.cpp
+@@ -1,8 +1,11 @@
+ // SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+ // SPDX-License-Identifier: Apache-2.0
+ 
+-// x broadcast + y store. x is cut into num_x_rounds multicast rounds of x_round_k_blocks compute K-blocks.
+-// Each round's injector prefetches its slot and multicasts it in place; every other core receives it. Each
++// x broadcast + y store. x is cut into num_x_rounds multicast rounds; round r covers compute K-blocks
++// [round_start[r], round_start[r + 1]). Each round's injector prefetches its slot and multicasts it in place; every
++// receiver receives it. With inject_outside the injectors are idle cores outside the receiver rectangle: they
++// receive nothing, so chained rounds are ordered by a chain semaphore the round-r injector raises on the
++// round-(r + 1) injector once its multicast is out. Each
+ // round lands in its own write-once slot of cb_x_resident, laid out as consecutive
+ // (block_m_tiles x k_block_tiles) K-blocks, and is released to compute per K-block.
+ //   per_round: round r travels on its own fixed-sender channel x_mcast_r, fired once per launch.
+@@ -50,6 +53,7 @@
+ X_MCAST_CHANNEL(6)
+ X_MCAST_CHANNEL(7)
+ constexpr uint32_t num_declared_x_channels = 8;
++constexpr uint32_t max_x_mcast_round_bounds = num_declared_x_channels + 1;
+ 
+ template <uint32_t I, uint32_t N, typename F>
+ FORCE_INLINE void for_each_x_channel(F& f) {
+@@ -80,7 +84,19 @@
+     constexpr uint32_t cb_partial = get_compile_time_arg_val(17);
+     constexpr uint32_t cb_landing = get_compile_time_arg_val(18);
+     constexpr uint32_t landing_sem_id = get_compile_time_arg_val(19);
+-    constexpr auto x_args = TensorAccessorArgs<20>();
++    constexpr bool inject_outside = get_compile_time_arg_val(20) != 0;
++    constexpr uint32_t chain_sem_id = get_compile_time_arg_val(21);
++    constexpr uint32_t round_start[max_x_mcast_round_bounds] = {
++        get_compile_time_arg_val(22),
++        get_compile_time_arg_val(23),
++        get_compile_time_arg_val(24),
++        get_compile_time_arg_val(25),
++        get_compile_time_arg_val(26),
++        get_compile_time_arg_val(27),
++        get_compile_time_arg_val(28),
++        get_compile_time_arg_val(29),
++        get_compile_time_arg_val(30)};
++    constexpr auto x_args = TensorAccessorArgs<31>();
+     constexpr auto y_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
+     constexpr auto w_args = TensorAccessorArgs<y_args.next_compile_time_args_offset()>();
+     constexpr uint32_t x_prefetch_trid = 1;
+@@ -101,6 +117,9 @@
+     const uint32_t owner_noc_x = get_arg_val<uint32_t>(11);
+     const uint32_t owner_noc_y = get_arg_val<uint32_t>(12);
+     const bool owns_leftover = slice_k_blocks > 0 && slice_idx == 0;
++    const uint32_t next_injector_noc_x = get_arg_val<uint32_t>(13);
++    const uint32_t next_injector_noc_y = get_arg_val<uint32_t>(14);
++    const bool has_next_injector = get_arg_val<uint32_t>(15) != 0;
+ 
+     const uint32_t x_page_bytes = get_tile_size(cb_x_resident);
+     const uint32_t y_page_bytes = get_tile_size(cb_y_tiles);
+@@ -108,16 +127,16 @@
+     const auto y = TensorAccessor(y_args, y_addr, y_page_bytes);
+ 
+     constexpr uint32_t k_block_x_tiles = block_m_tiles * k_block_tiles;
+-    constexpr uint32_t round_tiles = k_block_x_tiles * x_round_k_blocks;
+-    const uint32_t round_bytes = round_tiles * x_page_bytes;
++    constexpr uint32_t x_tiles = k_block_x_tiles * round_start[num_x_rounds];
++    const uint32_t k_block_bytes = k_block_x_tiles * x_page_bytes;
+ 
+     Noc noc;
+     CircularBuffer cb_x(cb_x_resident);
+-    cb_x.reserve_back(round_tiles * num_x_rounds);
++    cb_x.reserve_back(x_tiles);
+     const uint32_t x_base = cb_x.get_write_ptr();
+     CircularBuffer cb_xs(cb_x_slice);
+     if constexpr (has_slices) {
+-        cb_xs.reserve_back(round_tiles * num_x_rounds);
++        cb_xs.reserve_back(x_tiles);
+     }
+ 
+     const bool reads_w = w_noc1_k_blocks > 0 && core_n_tiles > 0;
+@@ -159,8 +178,8 @@
+         if constexpr (w_noc1_k_blocks > 0) {
+             dataflow_kernel_lib::set_read_trid(noc, x_prefetch_trid);
+         }
+-        uint32_t offset = r * round_bytes;
+-        for (uint32_t b = r * x_round_k_blocks; b < (r + 1) * x_round_k_blocks; ++b) {
++        uint32_t offset = round_start[r] * k_block_bytes;
++        for (uint32_t b = round_start[r]; b < round_start[r + 1]; ++b) {
+             for (uint32_t m = 0; m < block_m_tiles; ++m) {
+                 const uint32_t row_page = m * tensor_k_tiles + b * k_block_tiles;
+                 for (uint32_t kk = 0; kk < k_block_tiles; ++kk) {
+@@ -184,12 +203,28 @@
+             }
+             prefetch_landed = true;
+         }
+-        const uint32_t slot = x_base + r * round_bytes;
+-        MaybeDeviceZoneScope("writer_x_send");
+-        send_pipe.send(slot, slot, round_bytes);
++        if constexpr (inject_outside && !x_rounds_concurrent) {
++            if (r > 0) {
++                MaybeDeviceZoneScope("writer_x_chain_wait");
++                auto* chain = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(chain_sem_id));
++                noc_semaphore_wait(chain, 1);
++                noc_semaphore_set(chain, 0);
++            }
++        }
++        const uint32_t slot = x_base + round_start[r] * k_block_bytes;
++        {
++            MaybeDeviceZoneScope("writer_x_send");
++            send_pipe.send(slot, slot, (round_start[r + 1] - round_start[r]) * k_block_bytes);
++        }
++        if constexpr (inject_outside && !x_rounds_concurrent) {
++            if (has_next_injector) {
++                noc_semaphore_inc(
++                    get_noc_addr(next_injector_noc_x, next_injector_noc_y, get_semaphore(chain_sem_id)), 1);
++            }
++        }
+     };
+-    auto release_round = [&]() {
+-        for (uint32_t b = 0; b < x_round_k_blocks; ++b) {
++    auto release_round = [&](uint32_t r) {
++        for (uint32_t b = round_start[r]; b < round_start[r + 1]; ++b) {
+             cb_x.push_back(k_block_x_tiles);
+             if constexpr (has_slices) {
+                 cb_xs.push_back(k_block_x_tiles);
+@@ -217,11 +252,11 @@
+                 }
+             };
+             for_each_x_channel<0, num_x_rounds>(send);
+-            auto receive = [&](auto ch, auto) {
++            auto receive = [&](auto ch, auto r) {
+                 if (ch.can_receive()) {
+                     ch.receiver(noc).receive(0);
+                 }
+-                release_round();
++                release_round(r);
+             };
+             for_each_x_channel<0, num_x_rounds>(receive);
+         } else {
+@@ -233,7 +268,7 @@
+                     MaybeDeviceZoneScope("writer_x_receive");
+                     ch.receiver(noc).receive(0);
+                 }
+-                release_round();
++                release_round(r);
+             };
+             for_each_x_channel<0, num_x_rounds>(send_or_receive);
+         }
+@@ -265,7 +300,7 @@
+                 recv_pipe->receive(num_x_rounds - 1);
+             }
+             for (uint32_t r = 0; r < num_x_rounds; ++r) {
+-                release_round();
++                release_round(r);
+             }
+         } else {
+             for (uint32_t r = 0; r < num_x_rounds; ++r) {
+@@ -274,7 +309,7 @@
+                 } else {
+                     recv_pipe->receive(r);
+                 }
+-                release_round();
++                release_round(r);
+             }
+         }
+     }
+@@ -312,6 +347,7 @@
+     }
+ 
+     if (core_n_tiles == 0) {
++        noc_async_atomic_barrier();
+         return;
+     }
+     CircularBuffer cb_y(cb_y_tiles);

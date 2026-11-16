@@ -58,6 +58,9 @@ SLICE_EARLY_K_BLOCKS = 9
 # The owner combines after main K-block num_k_blocks - 1 - COMBINE_EARLY_K_BLOCKS (not before its own slice),
 # inside the W-bound main loop instead of on the tail after the last W block.
 COMBINE_EARLY_K_BLOCKS = 6
+# Tenths of each core's y block the reader (NCRISC, NoC0; idle once its W stream ends) stores beside the writer's
+# NoC1 share; 0 = the writer stores it all. Leftover-column tiles (R4) stay on the writer.
+Y_READER_SHARE_TENTHS = 4
 
 CB_X_RESIDENT = 0
 CB_W_STREAM = 1
@@ -69,7 +72,8 @@ CB_LANDING = 18
 
 W_HANDOFF_SEMAPHORE_ID = 0
 LANDING_SEMAPHORE_ID = 1
-MCAST_FIRST_SEMAPHORE_ID = 2
+Y_DONE_SEMAPHORE_ID = 2
+MCAST_FIRST_SEMAPHORE_ID = 3
 
 
 def _largest_divisor_at_most(n, cap):
@@ -349,11 +353,21 @@ def create_program_descriptor(x_tensor, w_tensor, y_tensor, compute_cfg):
             w_noc1_k_blocks,
             W_HANDOFF_SEMAPHORE_ID,
             CB_W_SLICE,
+            CB_Y_TILES,
+            block_m_tiles,
+            Y_READER_SHARE_TENTHS,
+            Y_DONE_SEMAPHORE_ID,
         ]
         reader_ct.extend(ttnn.TensorAccessorArgs(w_tensor).get_compile_time_args())
+        reader_ct.extend(ttnn.TensorAccessorArgs(y_tensor).get_compile_time_args())
         reader_rt = ttnn.RuntimeArgs()
         for c in cores:
-            reader_rt[c.x][c.y] = [w_tensor.buffer_address(), *assignment[(c.x, c.y)], *slice_args(c)[:3]]
+            reader_rt[c.x][c.y] = [
+                w_tensor.buffer_address(),
+                *assignment[(c.x, c.y)],
+                *slice_args(c)[:3],
+                y_tensor.buffer_address(),
+            ]
         reader_kernels.append(
             ttnn.KernelDescriptor(
                 kernel_source=str(KERNEL_DIR / "wq_b_linear_reader.cpp"),
@@ -388,6 +402,8 @@ def create_program_descriptor(x_tensor, w_tensor, y_tensor, compute_cfg):
         CB_PARTIAL,
         CB_LANDING,
         LANDING_SEMAPHORE_ID,
+        Y_READER_SHARE_TENTHS,
+        Y_DONE_SEMAPHORE_ID,
     ]
     writer_ct.extend(ttnn.TensorAccessorArgs(x_tensor).get_compile_time_args())
     writer_ct.extend(ttnn.TensorAccessorArgs(y_tensor).get_compile_time_args())
@@ -449,6 +465,7 @@ def create_program_descriptor(x_tensor, w_tensor, y_tensor, compute_cfg):
     semaphores = [
         ttnn.SemaphoreDescriptor(id=W_HANDOFF_SEMAPHORE_ID, core_ranges=all_cores, initial_value=0),
         ttnn.SemaphoreDescriptor(id=LANDING_SEMAPHORE_ID, core_ranges=all_cores, initial_value=0),
+        ttnn.SemaphoreDescriptor(id=Y_DONE_SEMAPHORE_ID, core_ranges=all_cores, initial_value=0),
     ]
     descriptor = ttnn.ProgramDescriptor(kernels=[], semaphores=semaphores, cbs=cbs)
 
