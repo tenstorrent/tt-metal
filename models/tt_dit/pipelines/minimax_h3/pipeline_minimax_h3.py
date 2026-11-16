@@ -67,7 +67,12 @@ from ...encoders.qwen3vl.loader_minimax_h3 import (
     build_minimax_h3_vision_tower,
     load_minimax_h3_text_encoder_weights,
 )
-from ...encoders.qwen3vl.model_qwen3vl import create_rope_tensors, mrope_position_ids, vision_token_runs
+from ...encoders.qwen3vl.model_qwen3vl import (
+    create_rope_tensors,
+    dynamic_length_warm_rows,
+    mrope_position_ids,
+    vision_token_runs,
+)
 from ...encoders.qwen3vl.vision_qwen3vl import pad_patches_for_sp
 from ...encoders.vision import vision_cu_seqlens
 from ...layers.audio_ops import weights_variant
@@ -2697,9 +2702,11 @@ class MiniMaxH3Pipeline:
 
         reduced = self._reduced_prompt_warm
         if reduced:
-            # A length-free encoder has two program sets at most, met at its shortest and longest length.
-            ends = (alignment, align_up(caps.prompt)) if self.encoder_dynamic_length else None
-            walk = prompt_warm_walk(spans, alignment, lengths=ends)
+            lengths = None
+            if self.encoder_dynamic_length:
+                rows = dynamic_length_warm_rows(max(last for _, last in spans) // self.sp_factor)
+                lengths = [n * self.sp_factor for n in rows]
+            walk = prompt_warm_walk(spans, alignment, lengths=lengths)
         else:
             walk = [
                 (unit, bucket)
@@ -2732,7 +2739,7 @@ class MiniMaxH3Pipeline:
             self._warm_encoder_layers = None
 
         self._warm_prompt_pad(spec, range(alignment, caps.prompt, alignment))
-        # The length-free encoder's merge is keyed on the tower size alone.
+        # The `dynamic_length` encoder's merge is keyed on the tower size alone.
         merge_lengths = range(alignment, align_up(caps.prompt) + 1, alignment)
         if reduced and self.encoder_dynamic_length:
             merge_lengths = merge_lengths[-1:]

@@ -367,7 +367,7 @@ _DYNAMIC_RING = {**ring_params_8k_req_exact_devices, "l1_small_size": 65536}
     indirect=["mesh_device", "device_params"],
 )
 def test_decoder_block_dynamic_length(mesh_device, capacity, expect_error):
-    """`dynamic_length` tracks the default layer and adds no program of its own for a new length."""
+    """`dynamic_length` tracks the default layer; a new length adds programs only up to 128 rows per chip."""
     if mesh_device.arch() != ttnn.device.Arch.BLACKHOLE:
         pytest.skip("dynamic_length is Blackhole only")
     torch.manual_seed(0)
@@ -422,6 +422,8 @@ def test_decoder_block_dynamic_length(mesh_device, capacity, expect_error):
         expected, _ = run(default)
         assert_quality(expected, got, pcc=0.9999)
     logger.info(f"programs added by the dynamic layer per length: {added}")
-    assert added[1:] == [1, 0, 0, 0, 0], f"programs added per length: {added}"
+    # Up to 128 rows: four 1D matmuls and the attention at a chunk of those rows (128 is the fixed chunk); 32 also
+    # meets the K rotation's second program.
+    assert added[1:] == [6, 5, 5, 4, 0], f"programs added per length: {added}"
     with expect_error(ValueError, "logical_n"):
         run(dynamic)

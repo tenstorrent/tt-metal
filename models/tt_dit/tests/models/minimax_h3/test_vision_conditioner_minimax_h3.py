@@ -741,7 +741,7 @@ def test_fused_conditioner_t2va_real_weights(
     conditioner, mesh_device, submesh_shape, tp_axis, sp_on, is_fsdp, num_links, dynamic_length, check_pcc, seq_len
 ):
     """The `t2va` conditioner: text-only presentation on released weights; no vision tower, decoder only.
-    `dynamic_length` runs the encoder's one-program-set path, which needs SP and two K heads per chip (TP=4)."""
+    `dynamic_length` takes the row count at run time, which needs SP and two K heads per chip (TP=4)."""
     path, reference = conditioner
     if dynamic_length and mesh_device.arch() != ttnn.device.Arch.BLACKHOLE:
         pytest.skip("dynamic_length is Blackhole only")

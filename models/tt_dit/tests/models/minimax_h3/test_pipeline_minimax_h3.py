@@ -346,7 +346,7 @@ def _assert_no_denoise_misses(pipeline, warm_s: int, measured_s: int) -> None:
 @pytest.mark.parametrize("encoder_dynamic_length", [None, False], ids=["encoder_default", "encoder_per_length"])
 def test_prompt_encoder_warm_walk_leaves_no_program(mesh_device, reset_seeds, encoder_dynamic_length):
     """The reduced prompt-encoder warm-up compiles everything the full layout x length product does, with the
-    length-free encoder and with one program set per length."""
+    `dynamic_length` encoder and with one program set per length."""
     pipeline = MiniMaxH3Pipeline.create_pipeline(
         mesh_device=mesh_device,
         weights_dir=weights_dir("transformer", "text_encoder", "vae", "audio_vae"),

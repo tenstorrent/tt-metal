@@ -15,7 +15,7 @@ from loguru import logger
 import ttnn
 
 from ...layers.embeddings import Embedding
-from ...layers.linear import ColParallelLinear, RowParallelLinear
+from ...layers.linear import MAX_1D_MATMUL_ROWS, ColParallelLinear, RowParallelLinear
 from ...layers.module import Module, ModuleList
 from ...layers.normalization import RMSNorm
 from ...parallel.config import EncoderParallelConfig
@@ -55,7 +55,8 @@ class Qwen3VlContext:
     # Ring K/V gather rows to allocate, so every sequence length up to it shares one buffer pair.
     kv_gather_capacity: int | None = None
     use_persistent_ccl_buffers: bool = True
-    # One program set for every sequence length up to `kv_gather_capacity`; inputs arrive split per chip.
+    # One program set for every sequence length up to `kv_gather_capacity`, bar the 1D matmul and the attention
+    # chunk up to their row limits; inputs arrive split per chip.
     dynamic_length: bool = False
 
     def __post_init__(self) -> None:
@@ -692,7 +693,7 @@ class Qwen3VlAttention(Module):
     ) -> ttnn.Tensor:
         """`logical_n`, the padded sequence length as a `[1, 1, 1, 1]` uint32 device tensor, makes the ring
         attention's row count a runtime argument (`dynamic_length` only)."""
-        x = self.qkv_proj.forward(x, matmul_config=self._qkv_config)
+        x = self.qkv_proj.forward(x, matmul_config=_above_1d_rows(self._qkv_config, x))
 
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
             ttnn.unsqueeze(x, 1),
@@ -731,7 +732,7 @@ class Qwen3VlAttention(Module):
                 x, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=True, hyperparam_rows=self._row_capacity
             )
 
-        x = self.o_proj.forward(x, matmul_config=self._o_config)
+        x = self.o_proj.forward(x, matmul_config=_above_1d_rows(self._o_config, x))
 
         if self._tp_axis is not None:
             x = self._ccl_manager.all_gather(
@@ -800,8 +801,8 @@ class Qwen3VlAttention(Module):
         local_seq_len = q.shape[2]
         if self._dynamic_length and logical_n is None:
             raise ValueError("dynamic_length needs logical_n")
-        # With the length as a runtime argument the chunks are fixed, so the config never changes the program.
-        config_rows = SEQ_BUCKET_SIZE if self._dynamic_length else local_seq_len
+        # With the length as a runtime argument the chunks follow the rows up to one bucket only, then stay fixed.
+        config_rows = min(local_seq_len, SEQ_BUCKET_SIZE) if self._dynamic_length else local_seq_len
         pc, worker_grid = self._ring_program_config(config_rows)
         compute_kernel_config = self._ring_compute_kernel_config(config_rows)
         empty_q, empty_kv = self._empty_joint
@@ -903,13 +904,15 @@ class Qwen3VlMlp(Module):
         self._reduce_scatter_topology = ttnn.Topology.Linear if ctx.dynamic_length else None
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        x = self.act_fn(self.gate_proj.forward(x, matmul_config=self._up_config)) * self.up_proj.forward(
-            x, matmul_config=self._up_config
+        up_config = _above_1d_rows(self._up_config, x)
+        down_config = _above_1d_rows(self._down_config, x)
+        x = self.act_fn(self.gate_proj.forward(x, matmul_config=up_config)) * self.up_proj.forward(
+            x, matmul_config=up_config
         )
         x = self.down_proj(
             x,
             use_persistent_buffer=self._use_persistent_ccl_buffers,
-            matmul_config=self._down_config,
+            matmul_config=down_config,
             reduce_scatter_topology=self._reduce_scatter_topology,
         )
 
@@ -937,10 +940,22 @@ class Qwen3VlRmsNorm(RMSNorm):
 
 
 def _pinned_matmul_config(ctx: Qwen3VlContext, in_features: int, out_features: int):
-    """The central table's blocking at the row capacity, so every length runs one program. Blackhole only."""
+    """The central table's blocking at the row capacity, one program for every length it is used at. Blackhole only."""
     if not ctx.dynamic_length:
         return None
     return get_matmul_config(ctx.row_capacity, in_features, out_features, get_matmul_core_grid(ctx.device))
+
+
+def _above_1d_rows(config, x: ttnn.Tensor):
+    """`config` past the 1D matmul's row limit. Up to it the 1D kernel is faster, at one program per length."""
+    return config if math.prod(list(x.padded_shape)[:-1]) > MAX_1D_MATMUL_ROWS else None
+
+
+def dynamic_length_warm_rows(row_capacity: int) -> tuple[int, ...]:
+    """Rows per chip that reach every program of a `dynamic_length` decoder: each row count up to the 1D matmul's and
+    the attention chunk's limit, and the capacity."""
+    short = min(max(MAX_1D_MATMUL_ROWS, SEQ_BUCKET_SIZE), row_capacity)
+    return (*range(ttnn.TILE_SIZE, short + 1, ttnn.TILE_SIZE), *((row_capacity,) if row_capacity > short else ()))
 
 
 def _apply_rope(x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor, rotate_half) -> ttnn.Tensor:
