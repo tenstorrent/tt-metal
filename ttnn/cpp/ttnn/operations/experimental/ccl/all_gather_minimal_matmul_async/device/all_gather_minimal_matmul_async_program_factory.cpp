@@ -1302,7 +1302,7 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
     std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode;
     if (direct_out) {
         unpack_to_dest_mode.assign(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
-        unpack_to_dest_mode[tt::CBIndex::c_3] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[intermediate_cb_id] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
     if (topology == ttnn::ccl::Topology::Linear) {
         compute_defines["IS_LINEAR"] = "1";

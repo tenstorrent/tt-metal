@@ -40,6 +40,7 @@ def _run(
     subblock_h,
     subblock_w,
     rows_per_call=None,
+    gelu=False,
 ):
     """Runs the calls (rows per device of each in rows_per_call) and returns how many programs they added."""
     rows_per_call = rows_per_call or [rows_per_device] * NUM_CALLS
@@ -120,6 +121,7 @@ def _run(
             num_workers_per_link=grid.y // NUM_LINKS,
             num_buffers_per_channel=24,
             force_transpose=False,
+            fused_activation=(ttnn.UnaryOpType.GELU, False) if gelu else None,
         )[0]
         for tt_input in tt_inputs
     ]
@@ -132,6 +134,8 @@ def _run(
     composer = ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=shape, dims=dims(0, 1))
     for call, (rows, torch_input, tt_output) in enumerate(zip(rows_per_call, torch_inputs, outputs)):
         expected = torch_input.to(torch.bfloat16).float() @ device_weight
+        if gelu:
+            expected = torch.nn.functional.gelu(expected)
         actual = ttnn.to_torch(tt_output, mesh_composer=composer).float()
         assert actual.shape == expected.shape, (call, actual.shape, expected.shape)
         for i in range(others):
@@ -167,7 +171,10 @@ _CASES = [
     pytest.param(dict(_KDA, rows_per_device=960), id="short_last_m_block"),
     # One K block per device: each fabric core's first forward is also its last.
     pytest.param(dict(_KDA, K=1024), id="one_k_block_per_device"),
+    # 2-row subblocks: the last K block goes through the partials and the output epilogue, not straight to the output.
     pytest.param(dict(_KDA, subblock_h=2, subblock_w=2), id="subblock_2x2"),
+    # A fused activation also takes the epilogue, with in1 in chunks.
+    pytest.param(dict(_KDA, gelu=True), id="fused_gelu"),
     # 24-column N blocks: in1 goes in two chunks of 12 columns.
     pytest.param(dict(_KDA, n_per_device=11 * 24 * 32, N_block=24), id="two_in1_chunks"),
     # The SP ring of 8: K gathered over 8 devices, 2 K blocks per device.
