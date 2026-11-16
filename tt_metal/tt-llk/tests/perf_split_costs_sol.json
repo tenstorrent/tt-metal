@@ -47,13 +47,6 @@
   "perf_matmul_row_mop": 1.0,
   "perf_matmul_unpack_ttsync": 1.0,
   "perf_math_matmul_cov": 1.0,
-  "perf_matmul_dyn0": 1.0,
-  "perf_matmul_dyn1": 1.0,
-  "perf_matmul_dyn2": 1.0,
-  "perf_matmul_dyn3": 1.0,
-  "perf_matmul_dyn4": 1.0,
-  "perf_matmul_dynr3": 1.0,
-  "perf_matmul_dynr4": 1.0,
   "perf_matmul_forms": 1.0,
   "perf_matmul_ttsync_excl": 1.0
  },
@@ -105,13 +98,6 @@
   "perf_matmul_row_mop": 1.0,
   "perf_matmul_unpack_ttsync": 1.0,
   "perf_math_matmul_cov": 1.0,
-  "perf_matmul_dyn0": 1.0,
-  "perf_matmul_dyn1": 1.0,
-  "perf_matmul_dyn2": 1.0,
-  "perf_matmul_dyn3": 1.0,
-  "perf_matmul_dyn4": 1.0,
-  "perf_matmul_dynr3": 1.0,
-  "perf_matmul_dynr4": 1.0,
   "perf_matmul_forms": 1.0,
   "perf_matmul_ttsync_excl": 1.0
  }

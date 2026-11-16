@@ -139,7 +139,6 @@ class TestConfig:
     MATMUL_PACK_SHIM_TESTS: ClassVar[tuple] = (
         "matmul_test.cpp",
         "math_matmul_test.cpp",
-        "matmul_dyn_test.cpp",
     )
 
     # Architecture Selection
