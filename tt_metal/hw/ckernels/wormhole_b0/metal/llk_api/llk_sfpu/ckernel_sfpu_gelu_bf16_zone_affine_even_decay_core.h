@@ -2,8 +2,26 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 namespace ckernel::sfpu::ttpoly::gelu {
-using namespace ::sfpi;
+using ::sfpi::as;
+using ::sfpi::convert;
 using ::sfpi::DataLayout;
+using ::sfpi::dst_reg;
+using ::sfpi::exexp;
+using ::sfpi::exman;
+using ::sfpi::ExponentMode;
+using ::sfpi::MantissaMode;
+using ::sfpi::RoundMode;
+using ::sfpi::setman;
+using ::sfpi::shft;
+using ::sfpi::ShiftMode;
+using ::sfpi::vConstFloatPrgm0;
+using ::sfpi::vConstFloatPrgm1;
+using ::sfpi::vConstFloatPrgm2;
+using ::sfpi::vFloat;
+using ::sfpi::vFloat16b;
+using ::sfpi::vInt;
+using ::sfpi::vMag;
+using ::sfpi::vUInt;
 constexpr float zone_exp_fraction_scale(int power) {
     float scale = 1.0f;
     for (int index = 0; index < power; ++index) {
