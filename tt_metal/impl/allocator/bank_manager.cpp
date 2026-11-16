@@ -17,6 +17,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include "tt_metal/impl/allocator/algorithms/free_list_opt.hpp"
 #include "tt_metal/impl/allocator/algorithms/address_ranges.hpp"
+#include "tt_metal/impl/allocator/allocation_request.hpp"
 
 namespace tt::tt_metal {
 
@@ -351,25 +352,18 @@ uint64_t BankManager::allocate_buffer(
     auto* alloc = this->get_allocator_from_id(allocator_id);
     TT_FATAL(alloc, "Allocator not initialized!");
 
-    uint32_t num_banks = this->num_banks();
-    bool is_sharded = false;
-    if (num_shards.has_value()) {
-        auto num_compute_banks = compute_grid.num_cores();
-        is_sharded = true;
-        TT_FATAL(
-            num_shards.value() <= num_compute_banks,
-            "Expected number of shards {} to be less than or equal to total number of L1 banks {} in compute cores",
-            num_shards.value(),
-            num_compute_banks);
-        num_banks = num_shards.value();
-    }
-    DeviceAddr size_per_bank =
-        tt::tt_metal::detail::calculate_bank_size_spread(size, page_size, num_banks, alignment_bytes_);
-    DeviceAddr address_limit = 0;
-    if (!is_sharded and buffer_type_ == BufferType::L1) {
-        address_limit = interleaved_address_limit_;
-        TT_FATAL(address_limit > 0, "Address limit {} needs to be larger than zero.", address_limit);
-    }
+    const allocator::BankRequest request = allocator::compute_bank_request(
+        buffer_type_,
+        size,
+        page_size,
+        this->num_banks(),
+        alignment_bytes_,
+        interleaved_address_limit_,
+        compute_grid,
+        num_shards);
+    const uint32_t num_banks = request.num_banks;
+    const DeviceAddr size_per_bank = request.size_per_bank;
+    const DeviceAddr address_limit = request.address_limit;
 
     // If there are no dependent allocators, fall back to allocator's single allocator strategy
     const auto& dependent_allocators = allocator_dependencies_.dependencies[allocator_id.get()];

@@ -244,14 +244,18 @@ def _resolve_denoise_path(
     `dynamic_length` resolves kwarg > MINIMAX_H3_DYNAMIC_LENGTH > preset, and the preset's dynamic default
     yields to a caller that pinned the bucketed path by any of `trace_denoise`, `bucket_denoise` or
     `bucket_ladder`; the topology does not enter (a line's unfused collectives key without the row count too). A
-    dynamic request with `trace_denoise` or `bucket_denoise=True` is contradictory and raises; a ladder beside it
-    only supplies the default `max_sequence_length`.
+    preset's `trace_denoise` belongs to its bucketed path (the quad's), so a dynamic request (kwarg or env) takes
+    the eager path instead of it. A dynamic request beside an explicit `trace_denoise=True` or
+    `bucket_denoise=True` is contradictory and raises; a ladder beside it only supplies the default
+    `max_sequence_length`.
     """
     trace = (preset.get("trace_denoise", False) if trace_denoise is None else trace_denoise) and coresident
     pinned = trace_denoise is not None or bucket_denoise is not None or bucket_ladder is not None
     dynamic, from_env = _requested_dynamic_length(dynamic_length, preset.get("dynamic_length", False) and not pinned)
     if dynamic and trace:
-        raise ValueError("dynamic_length is eager-only: a captured denoise trace cannot take a new length")
+        if trace_denoise:
+            raise ValueError("dynamic_length is eager-only: a captured denoise trace cannot take a new length")
+        trace = False
     if dynamic and bucket_denoise:
         raise ValueError("dynamic_length and bucket_denoise=True select both denoise paths; pass one of them")
     bucket = preset.get("bucket_denoise", False) if bucket_denoise is None else bucket_denoise
@@ -431,6 +435,11 @@ _PRESETS_BH: dict[tuple[int, ...], dict] = {
         "coresident": True,
         "trace_denoise": True,
         "use_persistent_ccl_buffers": True,
+        # Unsharded on both paths, as the bucketed quad has always run: the dynamic-ref2va FSDP default is a 4x8
+        # rule and a 32-way weight all-gather is unmeasured. Dynamic ref2va on the quad is unmeasured too: its
+        # cap-sized K/V gather pair is the 4x8's 2.34 GB per device (it is sized on the global packed length, not
+        # per device), so it may not fit beside unsharded weights; MINIMAX_H3_DIT_FSDP=1 opts into the sharding.
+        "dit_fsdp": False,
         "bucket_ladder": {"t2va": MINIMAX_H3_BUCKET_LADDER, "ref2va": MINIMAX_H3_REF2VA_BUCKET_LADDER},
         "audio_t_shard": True,
         "audio_t_factor": 32,
