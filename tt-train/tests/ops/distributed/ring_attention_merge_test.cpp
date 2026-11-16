@@ -5,8 +5,8 @@
 // Single-device tests for the online-softmax merge that ring attention runs after every ring
 // step (ttml::ops::distributed::detail::online_softmax_merge), against a float64 host reference.
 // Covers the "no contribution" lse of -inf on either side, lse values large enough that a naive
-// log(exp(a) + exp(b)) overflows FP32, large gaps between the two lse values, and a full ring of
-// merges compared with the direct softmax-weighted combination.
+// log(exp(a) + exp(b)) overflows FP32, large gaps between the two lse values, outputs near the top
+// of the FP32 range, and a full ring of merges compared with the direct softmax-weighted combination.
 
 #include <fmt/format.h>
 #include <gtest/gtest.h>
@@ -314,6 +314,51 @@ static void check_single_merge(const MergeShape& shape) {
 // The ring passes the SDPA kernel's BFLOAT16 output.
 TEST_P(RingAttentionMergeTest, SingleMergeMatchesReference) {
     check_single_merge(GetParam());
+}
+
+// Finite outputs of opposite sign near the top of the FP32 range: O_i - O = +-2^128 overflows even
+// though the merged value lies between O and O_i. Rows alternate between equal lse (w = 1/2) and
+// unequal lse; every fourth row has O and O_i of the same sign, so the merged value stays near 2^127.
+TEST_P(RingAttentionMergeTest, LargeOppositeSignOutputsStayFinite) {
+    const auto [B, H, S_param, D] = GetParam();
+    const uint32_t S = resolve_seq_len(S_param);
+    const std::array<size_t, 4> full_shape{B, H, S, D};
+    const std::array<size_t, 4> lse_shape{B, H, S, 1};
+    const std::array<size_t, 4> inter_shape{B, H, S, kIntermediatesWidth};
+    constexpr float kBig = 0x1p127F;  // exact in bf16
+
+    MergeInputs in{
+        .accum = xt::zeros<float>(full_shape),
+        .running_lse = xt::zeros<float>(lse_shape),
+        .step_output = xt::zeros<float>(full_shape),
+        .intermediates = ttml::test_utils::make_uniform_xarray<float>(inter_shape, -1.0F, 1.0F, /*seed=*/11U),
+    };
+    for (uint32_t b = 0; b < B; ++b) {
+        for (uint32_t h = 0; h < H; ++h) {
+            for (uint32_t s = 0; s < S; ++s) {
+                in.running_lse(b, h, s, 0) = (s % 2U == 0U) ? 0.0F : 1.0F;
+                in.intermediates(b, h, s, 0) = 0.0F;
+                const bool same_sign = s % 4U == 3U;
+                for (uint32_t d = 0; d < D; ++d) {
+                    const float sign = ((s + d) % 2U == 0U) ? 1.0F : -1.0F;
+                    in.accum(b, h, s, d) = sign * kBig;
+                    in.step_output(b, h, s, d) = same_sign ? sign * kBig : -sign * kBig;
+                }
+            }
+        }
+    }
+    DeviceMergeInputs dev = upload(in);
+    const MergeResult ref = reference_merge(in);
+
+    ttml::ops::distributed::detail::online_softmax_merge(
+        dev.accum, dev.running_lse, dev.step_output, dev.intermediates);
+
+    const auto accum = ttml::core::to_xtensor<float>(dev.accum);
+    const ErrorStats accum_err = compare(accum, ref.accum);  // fails on any non-finite element
+    const double err_over_big = accum_err.max_abs / static_cast<double>(kBig);
+    fmt::print("[merge, |O| = 2^127] accum max_abs / 2^127 {:.3e}\n", err_over_big);
+    // A few FP32 ulps of the inputs, from rounding the weights.
+    EXPECT_LT(err_over_big, 1.0e-5);
 }
 
 // A full ring of merges starting from (O = 0, L = -inf), some steps skipped, against the direct
