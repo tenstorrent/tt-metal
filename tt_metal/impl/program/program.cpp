@@ -2824,12 +2824,15 @@ void detail::ProgramImpl::validate_circular_buffer_core_ranges(const IDevice* de
 }
 
 void detail::ProgramImpl::init_semaphores(
-    const IDevice& device, const CoreCoord& logical_core, uint32_t programmable_core_type_index) const {
+    const IDevice& device,
+    const CoreCoord& logical_core,
+    uint32_t programmable_core_type_index,
+    uint64_t kernel_config_base) const {
     MetalContext& metal_ctx = MetalContext::instance(context_id_);
     const auto& hal = metal_ctx.hal();
     HalProgrammableCoreType programmable_core_type = hal.get_programmable_core_type(programmable_core_type_index);
-    uint64_t kernel_config_base = hal.get_dev_noc_addr(programmable_core_type, HalL1MemAddrType::KERNEL_CONFIG);
-    uint64_t addr = kernel_config_base + this->program_configs_[programmable_core_type_index].sem_offset;
+    uint64_t addr = kernel_config_base + hal.get_l1_noc_offset(programmable_core_type) +
+                    this->program_configs_[programmable_core_type_index].sem_offset;
     CoreType core_type = hal.get_core_type(programmable_core_type_index);
     auto semaphores_on_core = this->semaphores_on_core(logical_core, core_type);
     for (auto semaphore : semaphores_on_core) {
@@ -3715,6 +3718,10 @@ std::vector<std::reference_wrapper<const Semaphore>> detail::ProgramImpl::semaph
     return semaphores;
 }
 
+uint32_t kernel_config_footprint(const KernelGroup& kernel_group, const ProgramConfig& program_config) {
+    return std::max(program_config.kernel_text_offset, kernel_text_end(kernel_group));
+}
+
 bool detail::ProgramImpl::is_finalized() const { return this->finalized_; }
 void detail::ProgramImpl::set_finalized() { this->finalized_ = true; }
 
@@ -3800,16 +3807,16 @@ void detail::ProgramImpl::finalize_offsets(IDevice* device) {
     set_finalized();
 }
 
-// Compute relative offsets (wrt the start of the kernel config ring buffer) and sizes of all
-// program data structures in L1. Will be used when assembling dispatch commands for this program
-uint32_t detail::ProgramImpl::finalize_program_offsets(
+// Compute relative offsets (wrt the start of the kernel config block) and sizes of all program data
+// structures in L1, per programmable core type. Will be used when assembling dispatch commands.
+std::vector<detail::ProgramOffsetsState> detail::ProgramImpl::compute_program_offsets_and_size(
     ContextId context_id,
     IDevice* device,
     const KernelsGetter& kernels_getter,
     const KernelGroupsGetter& kernel_groups_getter,
     const SemaphoresGetter& semaphores_getter,
     ttsl::Span<ProgramImpl*> programs) {
-    ProgramOffsetsState state;
+    std::vector<ProgramOffsetsState> states;
 
     const MetalContext& metal_ctx = MetalContext::instance(context_id);
     const auto& hal = metal_ctx.hal();
@@ -3828,8 +3835,10 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
         }
     }
 
+    states.reserve(hal.get_programmable_core_type_count());
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
-        HalProgrammableCoreType programmable_core_type = hal.get_programmable_core_type(index);
+        // Each core type lays out its own block; `config_base_offset` is 0 for every one of them.
+        ProgramOffsetsState& state = states.emplace_back();
         state.offset = program_dispatch::finalize_rt_args(
             metal_ctx,
             kernels_getter(index),
@@ -3894,21 +3903,32 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
             state.kernel_text_size);
 
         TT_ASSERT(state.offset == tt::align(state.offset, hal.get_alignment(HalMemType::L1)));
+    }
+    return states;
+}
+
+uint32_t detail::ProgramImpl::finalize_program_offsets(
+    ContextId context_id,
+    IDevice* device,
+    const KernelsGetter& kernels_getter,
+    const KernelGroupsGetter& kernel_groups_getter,
+    const SemaphoresGetter& semaphores_getter,
+    ttsl::Span<ProgramImpl*> programs) {
+    const MetalContext& metal_ctx = MetalContext::instance(context_id);
+    const auto& hal = metal_ctx.hal();
+
+    const std::vector<ProgramOffsetsState> states = compute_program_offsets_and_size(
+        context_id, device, kernels_getter, kernel_groups_getter, semaphores_getter, programs);
+
+    for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
+        HalProgrammableCoreType programmable_core_type = hal.get_programmable_core_type(index);
+        const ProgramOffsetsState& state = states[index];
 
         size_t max_size = get_ringbuffer_size(device, programmable_core_type);
         const auto breakdown = [&] {
             return program_config_breakdown(
                 metal_ctx, programmable_core_type, state, kernel_groups_getter(index), kernels_getter(index));
         };
-
-        TT_FATAL(
-            state.offset <= max_size,
-            "Program size ({}) too large for kernel config buffer ({}) on {}, {} B over:{}",
-            state.offset,
-            max_size,
-            enchantum::to_string(programmable_core_type),
-            state.offset - max_size,
-            format_rows(breakdown()));
 
         // Recorded here, not per program: `state` is computed once per core type and then copied
         // into every program in the span, so recording inside the loop below would log the same
@@ -3927,10 +3947,12 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
             record_size("program_config_size.dataflow_buffer", state.dfb_size);
             record_size("program_config_size.kernel_text", state.kernel_text_size);
             record_size("program_config_size.total", state.offset);
-            // Bytes left in the kernel config buffer; its min is how close any program came to the
-            // TT_FATAL above. Core types the program doesn't use (offset 0) are skipped: their headroom
-            // is the whole buffer, which would only inflate the metric's mean and max.
-            if (state.offset != 0) {
+            // Bytes left in the kernel config buffer; its min is how close any program came to failing
+            // check_kernel_config_fits_window. Core types the program doesn't use (offset 0) are skipped:
+            // their headroom is the whole buffer, which would only inflate the metric's mean and max. So is
+            // a block that outgrows the window, as one that runs from a kernel config buffer may: it has no
+            // headroom there.
+            if (state.offset != 0 && state.offset <= max_size) {
                 const auto limit = static_cast<uint32_t>(max_size);
                 const uint32_t headroom = limit - state.offset;
                 record_size("program_config_size.headroom", headroom);
@@ -3960,6 +3982,66 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
         max_program_sizeB = std::max(max_program_sizeB, binary_sizeB);
     }
     return max_program_sizeB;
+}
+
+void detail::ProgramImpl::check_kernel_config_fits_window(IDevice* device, bool tensix_from_buffer) {
+    if (!is_finalized()) {
+        return;
+    }
+    detail::KernelsGetter kernels_getter =
+        [this](uint32_t index) -> std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& {
+        return this->get_kernels(index);
+    };
+    detail::KernelGroupsGetter kernel_groups_getter =
+        [this](uint32_t index) -> std::vector<std::shared_ptr<KernelGroup>>& { return this->get_kernel_groups(index); };
+    check_kernel_config_fits_window(
+        extract_context_id(device), device, kernels_getter, kernel_groups_getter, *this, tensix_from_buffer);
+}
+
+void detail::ProgramImpl::check_kernel_config_fits_window(
+    ContextId context_id,
+    IDevice* device,
+    const KernelsGetter& kernels_getter,
+    const KernelGroupsGetter& kernel_groups_getter,
+    const ProgramImpl& program,
+    bool tensix_from_buffer) {
+    const MetalContext& metal_ctx = MetalContext::instance(context_id);
+    const auto& hal = metal_ctx.hal();
+    for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
+        const HalProgrammableCoreType programmable_core_type = hal.get_programmable_core_type(index);
+        if (tensix_from_buffer && programmable_core_type == HalProgrammableCoreType::TENSIX) {
+            continue;
+        }
+        const uint32_t size = program.program_config_sizes_[index];
+        const size_t max_size = get_ringbuffer_size(device, programmable_core_type);
+        if (size <= max_size) {
+            continue;
+        }
+        // The layout finalize stored on the program, for the breakdown.
+        const ProgramConfig& config = program.get_program_config(index);
+        ProgramOffsetsState state;
+        state.offset = size;
+        state.rta_offset = config.rta_offset;
+        state.sem_offset = config.sem_offset;
+        state.sem_size = config.sem_size;
+        state.cb_offset = config.cb_offset;
+        state.cb_size = config.cb_size;
+        state.local_cb_size = config.local_cb_size;
+        state.dfb_offset = config.dfb_offset;
+        state.dfb_size = config.dfb_size;
+        state.cross_node_dfb_offset = config.cross_node_dfb_offset;
+        state.prefetcher_pipe_offset = config.prefetcher_pipe_offset;
+        state.kernel_text_offset = config.kernel_text_offset;
+        state.kernel_text_size = config.kernel_text_size;
+        TT_THROW(
+            "Program size ({}) too large for kernel config buffer ({}) on {}, {} B over:{}",
+            size,
+            max_size,
+            enchantum::to_string(programmable_core_type),
+            size - max_size,
+            format_rows(program_config_breakdown(
+                metal_ctx, programmable_core_type, state, kernel_groups_getter(index), kernels_getter(index))));
+    }
 }
 
 std::unordered_map<uint64_t, ProgramCommandSequence>&

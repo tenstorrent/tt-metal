@@ -160,4 +160,21 @@ void prepare_generic_op(
     using OperationType = ttnn::operations::generic::GenericOpDeviceOperation;
     ttnn::device_operation::prepare<OperationType>(operation_attributes, make_tensor_args(io_tensors));
 }
+
+ttnn::device_operation::CompiledProgram compile_generic_op(
+    const std::vector<Tensor>& io_tensors,
+    const ttnn::operations::generic::operation_attributes_t& operation_attributes) {
+    using OperationType = ttnn::operations::generic::GenericOpDeviceOperation;
+    return ttnn::device_operation::compile<OperationType>(operation_attributes, make_tensor_args(io_tensors));
+}
+
+ttnn::operations::generic::tensor_return_value_t run_compiled_generic_op(
+    ttnn::device_operation::CompiledProgram& compiled,
+    const std::vector<Tensor>& io_tensors,
+    const ttnn::operations::generic::operation_attributes_t& operation_attributes,
+    const tt::tt_metal::experimental::KernelConfigBuffer* kernel_config_buffer) {
+    using OperationType = ttnn::operations::generic::GenericOpDeviceOperation;
+    return ttnn::device_operation::run<OperationType>(
+        compiled, operation_attributes, make_tensor_args(io_tensors), kernel_config_buffer);
+}
 }  // namespace ttnn::prim

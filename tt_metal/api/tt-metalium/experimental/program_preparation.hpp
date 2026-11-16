@@ -19,4 +19,11 @@ namespace tt::tt_metal::experimental::program_preparation {
 /// the kernel-configuration buffer.
 void prepare(distributed::MeshDevice& mesh_device, distributed::MeshWorkload& workload);
 
+/// Compiles the kernels of `workload` and lays out its programs for `mesh_device` as its enqueue would, without
+/// dispatching it. Unlike `prepare`, does not check the kernel-configuration blocks against the KERNEL_CONFIG window in
+/// slow dispatch: launch checks them against the window, or against the kernel config buffer it runs from
+/// (experimental::CreateKernelConfigBuffer). Fast dispatch launches only from the window, so there it is `prepare`.
+/// Throws if `mesh_device` has no local devices, if `workload` has no programs, or if compilation fails.
+void compile(distributed::MeshDevice& mesh_device, distributed::MeshWorkload& workload);
+
 }  // namespace tt::tt_metal::experimental::program_preparation

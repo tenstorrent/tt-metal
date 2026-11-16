@@ -109,6 +109,7 @@
 #include "ttnn/operations/experimental/deepseek_prefill/pack_scaled_fp8_kv_cache/pack_scaled_fp8_kv_cache_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/per_token_cast_back/per_token_cast_back_nanobind.hpp"
 #include "ttnn/operations/experimental/fusion/fusion_dispatch_op_nanobind.hpp"
+#include "ttnn-nanobind/compiled_program.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/extract/extract_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/insert/insert_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/moe_grouped_topk/moe_grouped_topk_nanobind.hpp"
@@ -126,6 +127,8 @@ namespace ttnn::operations::experimental {
 void py_module(nb::module_& mod) {
     ttnn::operations::generic::bind_generic_operation_program_spec(mod);
     ttnn::operations::generic::bind_generic_operation_preparation(mod);
+    ttnn::compiled_program::py_module(mod);
+    ttnn::operations::generic::bind_generic_operation_compilation(mod);
     slice_write::bind_slice_write(mod);
     padded_slice::bind_padded_slice(mod);
 

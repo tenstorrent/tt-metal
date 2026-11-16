@@ -46,6 +46,7 @@
 #include "impl/buffers/semaphore.hpp"
 #include "impl/kernels/kernel.hpp"
 #include "impl/lightmetal/host_api_capture_helpers.hpp"
+#include "impl/program/slow_dispatch.hpp"
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include "llrt/tt_cluster.hpp"
 #include "sub_device_types.hpp"
@@ -693,6 +694,7 @@ void MeshWorkloadImpl::compile(MeshDevice* mesh_device) {
     // 1. Compile Kernel Binaries
     // 2. Allocate and Validate CBs
     // 3. Finalize: Compute relative offsets for all data structures in L1
+    // 4. Check the kernel-config block fits the KERNEL_CONFIG window it is dispatched to
     // This runs on every enqueue, not just the first. Once the workload has been finalized its
     // programs are already compiled and laid out, so compile_program is a flag check per program;
     // handing those to the thread pool costs a worker wake-up and a join for no work. Only the
@@ -711,6 +713,9 @@ void MeshWorkloadImpl::compile(MeshDevice* mesh_device) {
         mesh_device->wait_for_thread_pool();
     }
     finalize_offsets(mesh_device);
+    // Every time, not only on the first compile: a workload whose first enqueue failed this check is
+    // still finalized, and must keep failing.
+    check_kernel_config_fits_window(mesh_device);
 }
 
 void MeshWorkloadImpl::load_binaries(MeshCommandQueue& mesh_cq) {
@@ -1050,6 +1055,26 @@ void MeshWorkloadImpl::finalize_offsets(MeshDevice* mesh_device) {
     set_finalized(max_program_kernels_sizeB, mesh_device->id());
 }
 
+void MeshWorkloadImpl::check_kernel_config_fits_window(MeshDevice* mesh_device) {
+    if (programs_.empty()) {
+        return;
+    }
+    tt::tt_metal::detail::KernelsGetter kernels_getter =
+        [this](uint32_t index) -> std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& {
+        return this->get_kernels(index);
+    };
+    tt::tt_metal::detail::KernelGroupsGetter kernel_groups_getter =
+        [this](uint32_t index) -> std::vector<std::shared_ptr<KernelGroup>>& { return this->get_kernel_groups(index); };
+    // The programs share one layout, so any of them holds its sizes.
+    tt::tt_metal::detail::ProgramImpl::check_kernel_config_fits_window(
+        mesh_device->impl().get_context_id(),
+        mesh_device,
+        kernels_getter,
+        kernel_groups_getter,
+        programs_.begin()->second.impl(),
+        /*tensix_from_buffer=*/false);
+}
+
 // MeshWorkload PIMPL Implementation
 
 MeshWorkload::MeshWorkload() : pimpl_(std::make_unique<MeshWorkloadImpl>()) {}
@@ -1122,6 +1147,29 @@ void prepare(distributed::MeshDevice& mesh_device, distributed::MeshWorkload& wo
     // check would leave the caller unable to fix the workload and retry.
     TT_FATAL(!workload.get_programs().empty(), "Cannot prepare a MeshWorkload that has no programs");
     workload.impl().compile(&mesh_device);
+}
+
+void compile(distributed::MeshDevice& mesh_device, distributed::MeshWorkload& workload) {
+    TT_FATAL(!mesh_device.get_device_ids().empty(), "Cannot compile a MeshWorkload for an inactive MeshDevice");
+    TT_FATAL(!workload.get_programs().empty(), "Cannot compile a MeshWorkload that has no programs");
+    if (distributed::uses_fd_program_configs(mesh_device.impl().metal_env())) {
+        workload.impl().compile(&mesh_device);
+        return;
+    }
+    // Slow dispatch launches each program on its own (slow_dispatch::LaunchProgramAsync), compiling and laying it out
+    // on the first device it runs on and reusing that on the others. Do the same on the first local device.
+    for (auto& [device_range, program] : workload.get_programs()) {
+        IDevice* first_device = nullptr;
+        for (const auto& coord : device_range) {
+            if (mesh_device.is_local(coord)) {
+                first_device = mesh_device.impl().get_device(coord);
+                break;
+            }
+        }
+        if (first_device != nullptr) {
+            slow_dispatch::PrepareProgram(*first_device, program);
+        }
+    }
 }
 
 }  // namespace tt::tt_metal::experimental::program_preparation

@@ -120,6 +120,7 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn-nanobind/__init__.cpp
     cpp/ttnn-nanobind/activation.cpp
     cpp/ttnn-nanobind/cluster.cpp
+    cpp/ttnn-nanobind/compiled_program.cpp
     cpp/ttnn-nanobind/core.cpp
     cpp/ttnn-nanobind/device.cpp
     cpp/ttnn-nanobind/events.cpp

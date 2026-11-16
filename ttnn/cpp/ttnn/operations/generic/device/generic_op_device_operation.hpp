@@ -12,6 +12,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "generic_op_program_factory.hpp"
 #include "generic_op_device_operation_types.hpp"
+#include "ttnn/compiled_program.hpp"
 #include "ttnn/types.hpp"
 
 namespace ttnn::operations::generic {
@@ -47,4 +48,12 @@ ttnn::operations::generic::tensor_return_value_t generic_op(
 void prepare_generic_op(
     const std::vector<Tensor>& io_tensors,
     const ttnn::operations::generic::operation_attributes_t& operation_attributes);
+ttnn::device_operation::CompiledProgram compile_generic_op(
+    const std::vector<Tensor>& io_tensors,
+    const ttnn::operations::generic::operation_attributes_t& operation_attributes);
+ttnn::operations::generic::tensor_return_value_t run_compiled_generic_op(
+    ttnn::device_operation::CompiledProgram& compiled,
+    const std::vector<Tensor>& io_tensors,
+    const ttnn::operations::generic::operation_attributes_t& operation_attributes,
+    const tt::tt_metal::experimental::KernelConfigBuffer* kernel_config_buffer);
 }  // namespace ttnn::prim

@@ -143,6 +143,11 @@ struct ProgramConfig {
     uint32_t kernel_text_size;    // max size of all kernel bins across all kernel groups
 };
 
+// Bytes from kernel_config_base to the end of `kernel_group`'s part of the kernel-config block: its
+// packed kernel text, or the start of the text section when the group packs none. Each core needs
+// only its group's footprint; the program's block size is the largest footprint.
+uint32_t kernel_config_footprint(const KernelGroup& kernel_group, const ProgramConfig& program_config);
+
 // Represents the status of Program Kernel Binaries in Device DRAM with respect to the dispatcher
 enum class ProgramBinaryStatus : uint8_t {
     NotSent = 0,    // Binaries have not been written
@@ -269,8 +274,13 @@ public:
     std::vector<CoreRange> dataflow_buffers_unique_coreranges() const;
     std::vector<std::reference_wrapper<const Semaphore>> semaphores_on_core(
         const CoreCoord& core, CoreType core_type) const;
+    // Writes the semaphores' initial values into the block at `kernel_config_base` on `logical_core`: the HAL
+    // KERNEL_CONFIG address, or the core's kernel config buffer address when the program runs from one.
     void init_semaphores(
-        const IDevice& device, const CoreCoord& logical_core, uint32_t programmable_core_type_index) const;
+        const IDevice& device,
+        const CoreCoord& logical_core,
+        uint32_t programmable_core_type_index,
+        uint64_t kernel_config_base) const;
     std::vector<std::vector<CoreCoord>> logical_cores() const;
     /// Compiles all kernels in the program for `device`. Binaries are written to
     /// `<cache root>/<build key>/kernels/<kernel name>/<kernel hash>/`, where the cache root is TT_METAL_CACHE
@@ -356,11 +366,26 @@ public:
 
     void populate_dispatch_data(IDevice* device);
 
+    // Lays out the program's kernel-config block. Checks no size limit: where the block runs is only
+    // known at launch, which checks it with check_kernel_config_fits_window or against a kernel config
+    // buffer.
     void finalize_offsets(IDevice* device);
 
-    // Helper function to finalize program offsets with custom getters. Returns the maximum kernel binaries size among
-    // all the programs, to determine whether the mesh workload can fit in the prefetcher cache all of the programs in
-    // it.
+    // Lays out the kernel-config block of `programs` for each programmable core type, in core-type
+    // index order. Writes each kernel group's offsets (RTAs, kernel text) into the group and returns
+    // the program-level offsets and size; checks no size limit and stores nothing on the programs.
+    static std::vector<ProgramOffsetsState> compute_program_offsets_and_size(
+        ContextId context_id,
+        IDevice* device,
+        const KernelsGetter& kernels_getter,
+        const KernelGroupsGetter& kernel_groups_getter,
+        const SemaphoresGetter& semaphores_getter,
+        ttsl::Span<ProgramImpl*> programs);
+
+    // Helper function to finalize program offsets with custom getters: lays out the block and stores it
+    // on the programs, checking no size limit. Returns the maximum kernel binaries size among all the
+    // programs, to determine whether the mesh workload can fit in the prefetcher cache all of the
+    // programs in it.
     // context_id is which context the program and device belong to
     static uint32_t finalize_program_offsets(
         ContextId context_id,
@@ -369,6 +394,22 @@ public:
         const KernelGroupsGetter& kernel_groups_getter,
         const SemaphoresGetter& semaphores_getter,
         ttsl::Span<ProgramImpl*> programs);
+
+    // Throws if this program's kernel-config block does not fit the KERNEL_CONFIG window of a core type
+    // it runs on. Skips Tensix when `tensix_from_buffer`: that block runs from a kernel config buffer,
+    // which ValidateKernelConfigBuffer checks. Does nothing for a program that is not finalized.
+    void check_kernel_config_fits_window(IDevice* device, bool tensix_from_buffer = false);
+
+    // The same check for programs laid out together, as a MeshWorkload's are: `program` is any of them,
+    // since they share one layout, and the getters name the kernels of all of them, for the error's
+    // breakdown.
+    static void check_kernel_config_fits_window(
+        ContextId context_id,
+        IDevice* device,
+        const KernelsGetter& kernels_getter,
+        const KernelGroupsGetter& kernel_groups_getter,
+        const ProgramImpl& program,
+        bool tensix_from_buffer);
 
     std::vector<uint32_t>& get_program_config_sizes() noexcept { return program_config_sizes_; }
 
@@ -875,7 +916,7 @@ private:
     ContextId context_id_{DEFAULT_CONTEXT_ID};
     uint32_t programmable_core_count_;
     uint32_t max_dfbs_;  // Architecture-specific max DFBs
-    uint64_t id;        // Need to make non-const due to move constructor
+    uint64_t id;         // Need to make non-const due to move constructor
     uint64_t runtime_id{0};
     static std::atomic<uint64_t> program_counter;
     // Programmable core type index -> KernelHandle -> Kernel
