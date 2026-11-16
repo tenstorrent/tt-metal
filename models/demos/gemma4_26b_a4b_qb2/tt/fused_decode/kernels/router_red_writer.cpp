@@ -31,22 +31,24 @@ void kernel_main() {
     noc_async_read(s_p.get_noc_addr(0), pes_l1, E * 2);
     cb_wait_front(cb_logits, E / 32);
     volatile tt_l1_ptr uint32_t* src = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_logits));
-    volatile tt_l1_ptr uint32_t* logit = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scr);
-    for (uint32_t n = 0; n < E / 32; ++n) {
-        for (uint32_t c = 0; c < 16; ++c) {
-            logit[32 * n + c] = src[1024 * n + c];             // face 0 row 0
-            logit[32 * n + 16 + c] = src[1024 * n + 256 + c];  // face 1 row 0
-        }
-    }
     noc_async_read_barrier();
 #ifdef DEBUG_LOGITS
     constexpr auto d_args = TensorAccessorArgs<o_args.next_compile_time_args_offset()>();
+    {
+        volatile tt_l1_ptr uint32_t* logit = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scr);
+        for (uint32_t n = 0; n < E / 32; ++n) {
+            for (uint32_t c = 0; c < 16; ++c) {
+                logit[32 * n + c] = src[1024 * n + c];
+                logit[32 * n + 16 + c] = src[1024 * n + 256 + c];
+            }
+        }
+    }
     noc_async_write(scr, TensorAccessor(d_args, get_arg_val<uint32_t>(2), E * 4).get_noc_addr(0), E * 4);
     noc_async_write_barrier();
 #endif
     volatile tt_l1_ptr uint16_t* row = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(scr + E * 4 + E * 2);
     volatile tt_l1_ptr uint16_t* picks = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(scr + E * 4 + E * 2 + 4 * n);
-    router_tail::topk_softmax<E, k>(logit, reinterpret_cast<volatile tt_l1_ptr uint16_t*>(pes_l1), picks);
+    router_tail::topk_softmax_tiles<E, k>(src, reinterpret_cast<volatile tt_l1_ptr uint16_t*>(pes_l1), picks);
     // [w_0 .. w_{k-1}, 1 x extra | id_0 .. id_{k-1}, E .. E + extra - 1]
     for (uint32_t i = 0; i < k; ++i) {
         row[i] = picks[i];
