@@ -412,7 +412,8 @@ inline void update_dest_offset_id()
 
 inline std::uint32_t get_dest_buffer_base()
 {
-    return (0 != dest_offset_id) ? DEST_REGISTER_HALF_SIZE : 0x0;
+    // dest_offset_id is 0 or 1 (reset_dest_offset_id, update_dest_offset_id)
+    return dest_offset_id * DEST_REGISTER_HALF_SIZE;
 }
 
 // MOP run version without zmask
