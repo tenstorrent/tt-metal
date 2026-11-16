@@ -38,11 +38,15 @@ ALWI void fill_zeros_pages(DFB& dfb, uint32_t num_pages, uint32_t page_size) {
 }  // namespace
 
 void kernel_main() {
-    const uint32_t num_input_blocks = get_arg(args::num_input_blocks);
-    const uint32_t num_real_input_rows = get_arg(args::num_real_input_rows);
-    // Shrink-case output cap: emit real rows only. Padded rows would OOB the output DRAM buffer.
-    const uint32_t num_real_output_rows = get_arg(args::num_real_output_rows);
-    if (num_input_blocks == 0 || num_real_output_rows == 0) {
+    // The core's units run contiguously across the outer slices of the tensor; the counts below locate the
+    // first one in its slice. Each slice is padded to its own tile height on each side, so the rows a unit
+    // reads (growing) or writes (shrinking) depend on its position in the slice.
+    const uint32_t num_units = get_arg(args::num_units);
+    const uint32_t first_unit_in_slice = get_arg(args::first_unit_in_slice);
+    const uint32_t units_per_slice = get_arg(args::units_per_slice);
+    const uint32_t slice_in_rows = get_arg(args::slice_in_rows);
+    const uint32_t slice_out_rows = get_arg(args::slice_out_rows);
+    if (num_units == 0) {
         return;
     }
 
@@ -68,24 +72,28 @@ void kernel_main() {
     constexpr uint32_t block_pages = in_rows_per_iter * tiles_per_block;
     constexpr uint32_t words_per_out_tile_row = (tiles_per_block * out_tile_size) >> 4;
 
-    const uint32_t num_iters = num_input_blocks / in_rows_per_iter;
-
     compute_kernel_hw_startup(dfb::src, dfb::mid);
 
     DataflowBuffer mid(dfb::mid);
     DataflowBuffer mid_view(dfb::mid_view);
     DataflowBuffer out_dfb(dfb::out);
 
-    uint32_t emitted_output_rows = 0;
-
-    for (uint32_t b = 0; b < num_iters; ++b) {
-        // Rows beyond num_real_input_rows are grow-case height padding: they don't exist in DRAM,
-        // so they are zero-filled into the intermediate instead of untilized from the input.
-        const uint32_t block_in_row_start = b * in_rows_per_iter;
+    uint32_t unit_in_slice = first_unit_in_slice;
+    for (uint32_t b = 0; b < num_units; ++b) {
+        // Input rows past the slice's height are grow-case height padding: they don't exist in DRAM, so they
+        // are zero-filled into the intermediate instead of untilized from the input. Output rows past it are
+        // shrink-case padding of the input's taller tile: not written, so they don't land in the next slice.
+        const uint32_t in_row_start = unit_in_slice * (shrink ? 1u : ratio);
+        const uint32_t out_row_start = unit_in_slice * (shrink ? ratio : 1u);
         uint32_t real_rows = 0;
-        if (block_in_row_start < num_real_input_rows) {
-            const uint32_t rem = num_real_input_rows - block_in_row_start;
+        if (in_row_start < slice_in_rows) {
+            const uint32_t rem = slice_in_rows - in_row_start;
             real_rows = rem < in_rows_per_iter ? rem : in_rows_per_iter;
+        }
+        uint32_t out_rows = 0;
+        if (out_row_start < slice_out_rows) {
+            const uint32_t rem = slice_out_rows - out_row_start;
+            out_rows = rem < out_rows_per_iter ? rem : out_rows_per_iter;
         }
         const uint32_t pad_rows = in_rows_per_iter - real_rows;
 
@@ -111,15 +119,11 @@ void kernel_main() {
         // So set its read cursor directly to the block base plus each output tile-row's offset.
         pack_reconfig_data_format(dfb::mid, dfb::out);
         tilize_init(dfb::mid_view, tiles_per_block, dfb::out);
-        for (uint32_t r = 0; r < out_rows_per_iter; ++r) {
-            if (emitted_output_rows >= num_real_output_rows) {
-                break;
-            }
+        for (uint32_t r = 0; r < out_rows; ++r) {
             UNPACK({ mid_view.evil_set_read_ptr(block_rd_ptr + r * words_per_out_tile_row); })
             out_dfb.reserve_back(tiles_per_block);
             tilize_block(dfb::mid_view, tiles_per_block, dfb::out);
             out_dfb.push_back(tiles_per_block);
-            ++emitted_output_rows;
         }
         tilize_uninit(dfb::mid_view, dfb::out);
 
@@ -128,8 +132,6 @@ void kernel_main() {
         reconfig_data_format_srca(dfb::mid_view, dfb::src);
         pack_reconfig_data_format(dfb::out, dfb::mid);
 
-        if (emitted_output_rows >= num_real_output_rows) {
-            break;
-        }
+        unit_in_slice = unit_in_slice + 1 == units_per_slice ? 0 : unit_in_slice + 1;
     }
 }
