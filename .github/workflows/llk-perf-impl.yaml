@@ -69,6 +69,16 @@ on:
         required: false
         default: true
         type: boolean
+      stability-check:
+        description: "In leg 1 of each arch: measure the sentinel tests twice and in another order, report-only"
+        required: false
+        default: false
+        type: boolean
+      same-code-control:
+        description: "In every leg: measure the leg's tests a second time from the same build, report-only"
+        required: false
+        default: false
+        type: boolean
       shadow-compile-runner:
         description: "Also build each shard on this CPU runner, measure it on the board and compare, report-only (blank = off)"
         required: false
@@ -491,6 +501,49 @@ jobs:
           name: llk-perf-stage2-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}${{ inputs.artifact-suffix }}
           # One search path: with two, upload-artifact uploaded only one of the files in the leg container.
           path: ${{ runner.temp }}/stage2/stage2.*
+          if-no-files-found: ignore
+
+      # Stability steps: after the official upload, report-only, llk-perf-stability-* artifacts only.
+      - name: "Stability: measure the leg's tests again from the same build"
+        if: ${{ success() && inputs.same-code-control }}
+        continue-on-error: true
+        timeout-minutes: 30
+        shell: bash
+        working-directory: ${{ env.LLK_PATH }}
+        env:
+          SPEED_OF_LIGHT: ${{ inputs.speed-of-light }}
+          LLK_PERF_DEBUG_SYMBOLS: ${{ inputs.debug-symbols }}
+          TT_LLK_DISABLE_ASSERTS: "1"
+          PIPELINE: ${{ inputs.pipeline }}
+          LLK_PERF_RUN_TYPES: ${{ inputs.perf-run-types }}
+          LLK_PERF_PHASE: run
+          LLK_PERF_EXITFIRST: "false"
+          LLK_PERF_REPORT_TAG: "-again"
+          MATRIX_CMD: ${{ matrix.test-group.cmd }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/stability"
+          PERF_RUN_TAG="${PERF_RUN_TAG}-again" bash -c "$MATRIX_CMD" || true
+          python3 perf/stability_check.py compare "perf_data/runs/${PERF_RUN_TAG}" "perf_data/runs/${PERF_RUN_TAG}-again" \
+            --out "$RUNNER_TEMP/stability/control.json"
+      - name: "Stability: measure the sentinel tests twice and in another order"
+        if: ${{ success() && inputs.stability-check && matrix.test-group.split_group == 1 }}
+        continue-on-error: true
+        timeout-minutes: 20
+        shell: bash
+        working-directory: ${{ env.LLK_PATH }}
+        env:
+          LLK_PERF_DEBUG_SYMBOLS: ${{ inputs.debug-symbols }}
+          TT_LLK_DISABLE_ASSERTS: "1"
+          PIPELINE: ${{ inputs.pipeline }}
+          LLK_PERF_RUN_TYPES: ${{ inputs.perf-run-types }}
+        run: tests/run_llk_perf_sentinel.sh "$RUNNER_TEMP/stability"
+      - name: "Stability: upload the results"
+        if: ${{ !cancelled() && (inputs.same-code-control || inputs.stability-check) }}
+        continue-on-error: true
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: llk-perf-stability-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}${{ inputs.artifact-suffix }}
+          path: ${{ runner.temp }}/stability/
           if-no-files-found: ignore
 
       # Shadow steps: after the official upload, report-only, llk-shadow-* artifacts only.
