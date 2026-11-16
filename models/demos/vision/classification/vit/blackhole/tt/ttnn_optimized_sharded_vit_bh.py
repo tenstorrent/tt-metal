@@ -152,7 +152,8 @@ def update_model_config(config, batch_size, device):
             compute_with_storage_grid_size=grid_size,
             in0_block_w=dim_t__x,
             out_subblock_h=1,
-            out_subblock_w=(dim_t__x * 4) // 2,
+            # Half the output block, and at most the eight tiles the destination registers hold.
+            out_subblock_w=largest_divisor_at_most(dim_t__x * 4, min(8, dim_t__x * 2)),
             per_core_M=seqL_t__y,
             per_core_N=dim_t__x * 4,
             transpose_mcast=False,
