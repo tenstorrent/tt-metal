@@ -36,6 +36,7 @@ from models.demos.gpt_oss.tt.ccl import CCLManager
 
 # WS2 glue cut (perf/WS2.md). Each switch defaults on; "0" restores the previous decode path for A/B runs.
 WS2_HEADS = os.environ.get("GEMMA4_26B_WS2_HEADS", "1") != "0"
+WS2_NORMS = os.environ.get("GEMMA4_26B_WS2_NORMS", "1") != "0"
 
 
 class DecodeRopeRows:
@@ -995,6 +996,33 @@ class MultichipDecoder(OptimizedDecoder):
             norm_weight(getattr(self.layer, name).tt_weight, config.hidden_size)
             for name in ("post_feedforward_layernorm_1", "post_feedforward_layernorm_2", "post_feedforward_layernorm")
         )
+        self.ws2_norm = None
+        if WS2_NORMS and optimized_decode and not sharded_residual:
+            # Batch-1 residual stream: bf16, width-sharded over 11x4 cores (two column tiles per core).
+            grid = (11, 4)
+            per = config.hidden_size // 32 // (grid[0] * grid[1])
+            memory = ttnn.create_sharded_memory_config(
+                shape=(32, per * 32),
+                core_grid=ttnn.CoreGrid(x=grid[0], y=grid[1]),
+                strategy=ttnn.ShardStrategy.WIDTH,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+            program = ttnn.LayerNormShardedMultiCoreProgramConfig(
+                compute_with_storage_grid_size=grid, subblock_w=per, block_h=1, block_w=per, inplace=False
+            )
+            names = {
+                "input": "input_layernorm",
+                "post_attention": "post_attention_layernorm",
+                "ff1": "post_feedforward_layernorm_1",
+                "ff2": "post_feedforward_layernorm_2",
+                "ff": "post_feedforward_layernorm",
+            }
+            self.ws2_norm = SimpleNamespace(
+                memory=memory,
+                program=program,
+                gamma={key: getattr(self.layer, name).tt_weight for key, name in names.items()},
+            )
         compute = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -1698,6 +1726,8 @@ class MultichipDecoder(OptimizedDecoder):
     def _forward(self, x, **attention_kwargs):
         if self.sharded_residual:
             return self._sharded_forward(x, **attention_kwargs)
+        if self.ws2_norm is not None and x.shape[-2] == 1 and attention_kwargs.get("is_decode", False):
+            return self._ws2_decode(x, **attention_kwargs)
         memory = getattr(self, "decode_residual_memory", None) if x.shape[-2] == 1 else None
         if memory is not None:
             x = ttnn.to_memory_config(x, memory)
@@ -1728,6 +1758,52 @@ class MultichipDecoder(OptimizedDecoder):
         )
         combined = self.normalize(combined, eps, self.tail_weights[2])
         return ttnn.typecast(ttnn.mul(ttnn.add(residual, combined), self.layer.layer_scalar), ttnn.bfloat16)
+
+    def _ws2_decode(self, x, **attention_kwargs):
+        """Batch-1 decode layer with the residual stream width-sharded in L1 between the norms.
+
+        Norm gammas are applied inside the sharded RMSNorm, the post-feedforward pair feeds the final norm
+        through its residual input, and the residual add and layer scalar are one sharded add. The layer
+        returns the bf16 residual in ``ws2_norm.memory``; the next layer consumes it without a reshard."""
+        cfg = self.ws2_norm
+        eps, compute = self.config.rms_norm_eps, self.layer.self_attn.compute
+
+        def norm(value, gamma, residual=None):
+            return ttnn.rms_norm(
+                value,
+                residual_input_tensor=residual,
+                epsilon=eps,
+                weight=None if gamma is None else cfg.gamma[gamma],
+                program_config=cfg.program,
+                memory_config=cfg.memory,
+                compute_kernel_config=compute,
+            )
+
+        def shard(value):
+            return ttnn.interleaved_to_sharded(value, cfg.memory, output_dtype=ttnn.bfloat16)
+
+        # Keep the caller's layout: sharded in (the model's batch-1 layer chain), sharded out.
+        out_memory = cfg.memory if x.is_sharded() else ttnn.DRAM_MEMORY_CONFIG
+        if not x.is_sharded():
+            x = shard(x)
+        normed = ttnn.to_memory_config(norm(x, "input"), ttnn.L1_MEMORY_CONFIG)
+        attention = self.layer.self_attn(normed, **attention_kwargs)
+        residual = ttnn.add(x, norm(shard(attention), "post_attention"), memory_config=cfg.memory)
+        normalized = ttnn.sharded_to_interleaved(norm(residual, None), ttnn.L1_MEMORY_CONFIG, output_dtype=ttnn.float32)
+        routes = self.layer.moe.router(residual, normalized=normalized)
+        expert_input = ttnn.mul(normalized, self.expert_norm_weight, dtype=ttnn.bfloat16)
+        routed = self.layer.moe.experts(expert_input, routes)
+        shared_input = ttnn.mul(normalized, self.shared_norm_weight, dtype=ttnn.bfloat16)
+        shared = self.layer.shared_mlp(shared_input, reduce_output=False)
+        shared, routed = self._reduce_moe_pair(shared, routed)
+        combined = norm(norm(shard(shared), "ff1"), "ff", residual=norm(shard(routed), "ff2"))
+        return ttnn.add(
+            residual,
+            combined,
+            dtype=ttnn.bfloat16,
+            memory_config=out_memory,
+            activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.MUL_UNARY_SFPU, self.layer.layer_scalar)],
+        )
 
     def _fused_tail(self, residual, shared, routed, decode):
         layer = self.layer

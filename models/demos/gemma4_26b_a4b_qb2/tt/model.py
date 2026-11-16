@@ -242,6 +242,10 @@ class Gemma4Model:
         active = tuple(range(batch)) if active_slots is None else tuple(active_slots)
         # Batch 1: gather the RoPE rows once per step and layer type, not once per layer.
         rope_rows = {}
+        ws2_norm = getattr(self.layers[0], "ws2_norm", None)
+        if batch == 1 and len(active) == 1 and ws2_norm is not None:
+            # Layers pass the width-sharded residual to each other (perf/WS2.md).
+            hidden = ttnn.interleaved_to_sharded(hidden, ws2_norm.memory)
         for layer_number, (layer, cache, index) in enumerate(zip(self.layers, kv_cache, self.layer_indices)):
             layer_table = page_table[layer_number] if isinstance(page_table, (tuple, list)) else page_table
             kind = self.config.layer_types[index]
@@ -276,4 +280,6 @@ class Gemma4Model:
                     else:
                         rows.append(self.zero_hidden)
                 hidden = ttnn.concat(rows, dim=2)
+        if hidden.is_sharded():
+            hidden = ttnn.to_memory_config(hidden, ttnn.DRAM_MEMORY_CONFIG)
         return self.logits(hidden)
