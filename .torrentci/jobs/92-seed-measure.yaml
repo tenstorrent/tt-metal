@@ -1,0 +1,43 @@
+---
+# Seed-pack checkout measurement (torrentci design #2852, slice S0).
+# Prod CPU and disk only, over file://: TLS and network are out of scope.
+# Each job builds a bare mirror and a week-old default-branch seed from its
+# own workspace, then times the plain path against the seed path (install,
+# delta fetch, drift check, checkout, commit-DAG rehash, HEAD-tree rebuild)
+# at 4 CPU and checks the results are equal. See
+# .torrentci/scripts/seed-measure.sh. No triggers: run it by hand.
+jobs:
+  - id: seed-measure-musl-4cpu
+    description: Time the seed-pack checkout against the plain path, musl git, 4 CPU
+    timeout: 45m
+    runs-on:
+      kubernetes:
+        os: linux
+        arch: amd64
+        image: docker.io/alpine/git@sha256:062a01ad7a0eb17cff382bc5e26086b4d710e56dfdfdf001109a49b6d9bd378c
+        resources:
+          requests: {cpu: '4', memory: 8Gi, ephemeral-storage: 10Gi}
+          limits: {cpu: '4', memory: 8Gi, ephemeral-storage: 14Gi}
+    steps:
+      - id: measure
+        kind: shell
+        shell:
+          run:
+            - ./.torrentci/scripts/seed-measure.sh 4 3
+  - id: seed-measure-glibc-4cpu
+    description: Time the seed-pack checkout against the plain path, glibc git, 4 CPU
+    timeout: 45m
+    runs-on:
+      kubernetes:
+        os: linux
+        arch: amd64
+        image: docker.io/library/buildpack-deps@sha256:4f34e1d673fdb65371de9f88bdd32c4e30152fe692b35604aef5c0b3c0e6da10
+        resources:
+          requests: {cpu: '4', memory: 8Gi, ephemeral-storage: 10Gi}
+          limits: {cpu: '4', memory: 8Gi, ephemeral-storage: 14Gi}
+    steps:
+      - id: measure
+        kind: shell
+        shell:
+          run:
+            - ./.torrentci/scripts/seed-measure.sh 4 3
