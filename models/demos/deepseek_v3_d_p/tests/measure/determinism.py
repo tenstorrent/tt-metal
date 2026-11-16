@@ -89,10 +89,9 @@ def check_determinism(mesh_device, step, traced):
             markers["eager runs"] = fold_mismatches(markers.get("eager runs"), reference, out)
             free(last)  # safe: later work reusing it runs after the queued compare (one CQ)
             last = out
+        copies = [[ttnn.clone(x) for x in reference] for _ in range(RUNS)]  # before the capture
         with traced() as t:
-            t.capture(
-                before_capture=lambda out: copies.extend([ttnn.clone(x) for x in tensors(out)] for _ in range(RUNS))
-            )
+            t.capture()
             for copy in copies:  # one CQ: each copy runs after its replay, before the next
                 t.replay(sync=False)
                 for src, dst in zip(tensors(t.output), copy, strict=True):

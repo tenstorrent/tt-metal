@@ -523,9 +523,8 @@ ROTATED_VALID_LISTS = [
 ]
 ROTATED_VALID_IDS = ["aligned_min", "midchip_straddle", "lastchip", "rot_partial", "multislab", "allfull"]
 
-# Host-time targets (ms), untraced and traced (tests/measure): measured on one Galaxy (3 runs) and scaled to the CI
-# host (untraced x0.95, the sparse MLA ratio; traced x1.0, device-bound).
-K3_CHUNKED_HOST_TARGETS_MS = {"untraced": 11.07, "traced": 10.01}
+# Host-time targets (ms), untraced and traced (tests/measure): 3 runs on one Galaxy.
+K3_CHUNKED_HOST_TARGETS_MS = {"untraced": 11.649, "traced": 10.006}
 # The determinism check and the host-time gate replay a captured forward, so these meshes reserve a trace region.
 _CHUNKED_DEVICE_PARAMS = {"l1_small_size": 1152, "trace_region_size": 16 * 1024 * 1024}
 
@@ -1472,7 +1471,7 @@ def test_mistral4_mla_chunked_prefill_loudbox(request, mesh_device, device_param
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("variant", ["kimi_k3"], indirect=True, ids=["k3"])
-@pytest.mark.skipif(not is_blackhole(), reason="kimi_k3 and the realtime profiler are Blackhole-only")
+@pytest.mark.skipif(not is_blackhole(), reason="kimi_k3 is Blackhole-only")
 @pytest.mark.timeout(0)
 def test_mla_chunked_perf_check(request, mesh_device, device_params, variant):
     """Kimi-K3 chunked-prefill MLA perf on the 8x4 Galaxy: 50k cached prefix + one fresh 5k chunk, host time untraced

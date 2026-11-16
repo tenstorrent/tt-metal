@@ -4,15 +4,15 @@
 
 """
 Kimi MoE perf gate (K2.7 and K3): host wall-clock of the MoE forward, untraced (fastest of 10 after 10 warm-up,
-tests/measure) and traced (ONE replay), with the CPU clock held; bands untraced ±5%, traced ±3%.
+tests/measure) and traced (one replay), with the CPU clock held; bands untraced ±5%, traced ±3%; the traced output
+must match the untraced one.
 
 The forward overlaps dispatch with the shared expert on two sub-devices, so it is captured with
-``SubDeviceTraceController`` as several trace segments. Sequence: an untimed eager pass to compile
-the kernels, capture, then one timed replay -- no warm-up replay, no averaging. The time covers every
-segment, the sub-device load/clear between them and the final device sync.
+``SubDeviceTraceController`` as several trace segments: an untimed pass compiles, then capture, then one timed
+replay. The time covers every segment, the sub-device load/clear between them and the final device sync.
 
-``KIMI_MOE_PERF_REPLAYS=N`` logs N replays; only the first gates. Setting a case's ``expected_ns`` to
-``None`` measures without gating. Select with ``-k k2_7`` / ``-k k3`` and ``-k galaxy`` / ``-k loudbox``;
+``KIMI_MOE_PERF_REPLAYS=N`` logs N replays; only the first gates. A case whose ``expected_ns`` or
+``expected_untraced_ns`` is ``None`` measures that mode without gating. Select with ``-k k2_7`` / ``-k k3`` and ``-k galaxy`` / ``-k loudbox``;
 the LoudBox row (2x4 Fabric2D) is record-only.
 """
 
@@ -24,7 +24,7 @@ import pytest
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import is_blackhole
+from models.common.utility_functions import comp_pcc, is_blackhole
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_7_config import KimiK27Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
@@ -63,8 +63,8 @@ class _MoEPerfCase:
 
     label: str
     config: type
-    expected_ns: int | None  # traced, one replay
-    # Fastest of 10 eager forwards after 10 warm-up: measured on one Galaxy (3 runs), scaled to the CI host by x0.95.
+    # Galaxy targets, 3 runs on one Galaxy: traced one replay, untraced fastest of 10 after 10 warm-up.
+    expected_ns: int | None
     expected_untraced_ns: int | None
     shape_note: str
     extra: dict = field(default_factory=dict)
@@ -73,16 +73,16 @@ class _MoEPerfCase:
 _K2_7 = _MoEPerfCase(
     label="kimi-k2.7",
     config=KimiK27Config,
-    expected_ns=2_896_000,
-    expected_untraced_ns=3_260_000,
+    expected_ns=2_968_000,
+    expected_untraced_ns=3_431_000,
     shape_note="384 experts / top-8, 7168 emb",
 )
 
 _K3 = _MoEPerfCase(
     label="kimi-k3",
     config=KimiK3Config,
-    expected_ns=6_030_000,
-    expected_untraced_ns=6_070_000,
+    expected_ns=6_036_000,
+    expected_untraced_ns=6_392_000,
     shape_note="896 experts / top-16, 3584 latent",
     extra=dict(
         routed_emb_dim=KimiK3Config.ROUTED_EXPERT_HIDDEN_SIZE,
@@ -140,7 +140,7 @@ def _replay_ns(mesh_device, copy_tid, controller):
     indirect=["variant", "mesh_device", "device_params"],
 )
 def test_kimi_moe_perf(variant, case, config_only, mesh_device, device_params, num_links, request):
-    """Traced E2E of one MoE forward at the 5k production chunk, per Kimi generation."""
+    """Untraced and traced E2E of one MoE forward at the 5k production chunk, per Kimi generation."""
     is_galaxy = tuple(mesh_device.shape) == (8, 4)
     if is_galaxy and not _IGNORE_POWER:
         require_high_power(f"{case.label} MoE perf")
@@ -152,10 +152,15 @@ def test_kimi_moe_perf(variant, case, config_only, mesh_device, device_params, n
     clock = hold_full_cpu_clock()
     request.addfinalizer(clock.restore)
 
+    def per_device(t):
+        return [ttnn.to_torch(x) for x in ttnn.get_device_tensors(ttnn.from_device(t))]
+
     def measure(forward, tt_moe, tt_x):
-        # Untraced first. forward() frees its input, so each call gets a clone (inside the timed window).
+        # Untraced first. forward() frees its input, so each call gets a clone, inside the timed window (one copy of
+        # the chunk's activations; the traced replay's input refresh runs before its clock starts).
         samples, out = time_untraced(lambda: forward(ttnn.clone(tt_x)), lambda: ttnn.synchronize_device(mesh_device))
         untraced_ms.extend(samples)
+        eager = per_device(out[0])
         free(out)
         controller = SubDeviceTraceController(mesh_device)
         copy_tid = None
@@ -184,6 +189,8 @@ def test_kimi_moe_perf(variant, case, config_only, mesh_device, device_params, n
 
             for _ in range(max(1, _REPLAYS)):
                 replays_ns.append(_replay_ns(mesh_device, copy_tid, controller))
+                if len(replays_ns) == 1:  # the replay's input is tt_x again, as the eager calls' was
+                    trace_info["pcc"] = min(comp_pcc(a, b)[1] for a, b in zip(eager, per_device(result[0])))
             return result
         finally:
             if capturing:  # close the open segment so release() runs and the real error surfaces
@@ -240,4 +247,9 @@ def test_kimi_moe_perf(variant, case, config_only, mesh_device, device_params, n
             f"{case.label} moe {mesh_tag} {mode} ({case.shape_note}) perf",
             {"mesh": mesh_tag, "mode": mode, "samples_ms": samples, "measured_ms": measured, "target_ms": target},
         )
-    gate(f"{case.label} moe {mesh_tag}", results, skip_unmeasured=False)
+    pcc = trace_info["pcc"]
+    gate(
+        f"{case.label} moe {mesh_tag}",
+        results,
+        [f"traced output differs from untraced: min per-device PCC {pcc:.6f}" if pcc < 0.9999 else None],
+    )

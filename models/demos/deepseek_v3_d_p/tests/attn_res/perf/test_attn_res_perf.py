@@ -76,6 +76,7 @@ from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res_stream import BLOCK_SIZE,
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.residual import TtAttnResResidual
 from models.demos.deepseek_v3_d_p.utils.prefill_summary_utils import emit_perf_metrics
 from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import require_high_power
+from tt_py_test_utils_common.perf.cpu_clock import hold_full_cpu_clock
 from tt_py_test_utils_common.realtime_profiler_utils import profile_realtime_program_merged, require_realtime_profiler
 
 pytestmark = [run_for_blackhole(), pytest.mark.perf, pytest.mark.timeout(1800)]
@@ -287,7 +288,7 @@ _TRACE_REGION_SIZE = 128 * 1024 * 1024
     ],
     indirect=True,
 )
-def test_attn_res_layer_perf(mesh_device, device_params, mode):
+def test_attn_res_layer_perf(request, mesh_device, device_params, mode):
     """Gate the AttnRes end-to-end time of a boundary layer and an ordinary layer on LoudBox and Galaxy,
     and report their device time."""
     op = TtAttnRes(mesh_device, hidden_size=HIDDEN_SIZE, eps=EPS)
@@ -298,6 +299,8 @@ def test_attn_res_layer_perf(mesh_device, device_params, mode):
     # Before measuring, so a gated run without its SKU opt-in fails fast.
     references = None if report_only else _perf_reference_e2e_us(layout, mode)
     require_realtime_profiler("the AttnRes device-time report")
+    clock = hold_full_cpu_clock()
+    request.addfinalizer(clock.restore)
     num_tokens = _CHUNK_TOKENS.get(layout, PER_CHIP_TOKENS * op.sp_factor)
 
     rng = generator(0)

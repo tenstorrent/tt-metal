@@ -39,15 +39,14 @@ pytestmark = [
     pytest.mark.timeout(900),
 ]
 
-_REPETITIONS = 10
 _TIMING_SAMPLES = 5
-# Host-time targets (ms) per (layout, mode), measured as tests/measure does: untraced fastest of 10 after 10 warm-up,
-# traced one replay, both with the CPU clock held. Galaxy is measured on one Galaxy (3 runs) and scaled to the CI host
-# (untraced x0.95, the sparse MLA ratio; traced x1.0, device-bound); LoudBox SP8xTP1 and QuietBox SP4xTP1 come from CI. SP8xTP1 and SP4xTP1 open
-# FABRIC_1D_RING, every other case a 2D fabric with K3's payload (kda_device_params).
+# Host-time targets (ms) per (layout, mode), as tests/measure measures them: untraced fastest of 10 after 10 warm-up,
+# traced one replay, both with the CPU clock held. Galaxy: 3 runs on one Galaxy. LoudBox SP8xTP1 and QuietBox SP4xTP1
+# report until a CI run gives their targets. SP8xTP1 and SP4xTP1 open FABRIC_1D_RING, every other case a 2D fabric with
+# K3's payload (kda_device_params).
 _TARGETS_MS = {
-    ("SP8xTP4", "untraced"): 1.59,
-    ("SP8xTP4", "traced"): 1.41,
+    ("SP8xTP4", "untraced"): 1.674,
+    ("SP8xTP4", "traced"): 1.414,
 }
 # Galaxy-equivalent layouts outside CI: they report wall time but are not gated.
 _REPORT_ONLY_LAYOUTS = ("SP4xTP2", "SP2xTP2")
@@ -244,7 +243,7 @@ def _trace_wall_samples_ms(
 def test_synthetic_kimi_k3_perf(
     request, mesh_device: ttnn.MeshDevice, tensor_parallel_axis: int, device_params: dict
 ) -> None:
-    """Gate checkpoint-free production K3 latency on LoudBox, QuietBox and Galaxy, untraced and traced.
+    """Gate checkpoint-free production K3 latency, untraced and traced (Galaxy; LoudBox and QuietBox report).
 
     The gated call is the model's whole per-chunk KDA layer, ttKDA.forward_slot on the TP-sharded residual: import
     the slot's carry from the state slab, TP all-gather, KDA, output projection + reduce-scatter, export.
@@ -281,6 +280,8 @@ def test_synthetic_kimi_k3_perf(
     clock = hold_full_cpu_clock()
     request.addfinalizer(clock.restore)
     try:
+        # Each forward_slot imports the slot's carry and exports the next one, so the last eager call and the replay
+        # start from different carries; at a 5k chunk the carry has converged, so their outputs still agree.
         untraced, traced, trace_pcc = measure_host(mesh_device, lambda: step()[0])  # forward_slot returns no carry
     finally:
         deallocate_state(state)

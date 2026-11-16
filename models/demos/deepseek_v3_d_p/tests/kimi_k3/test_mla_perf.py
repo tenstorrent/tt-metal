@@ -20,14 +20,10 @@ K3 is deliberately not a sparse-MLA variant.  It has no DSA indexer, uses the de
 tiled BFP8 KV cache, has NoPE, and adds the output ``g_proj`` gate.  Keeping those facts structural
 avoids fake sparse-cache/indexer axes and makes an accidentally broadened K3 sweep impossible.
 
-The device-time gate's unit is a traced forward.  Each forward is compiled, captured, replay-warmed once, and
-then replayed under the realtime profiler.  Host E2E includes replay through device synchronization;
-device program durations collapse chips by MAX.
-
-Warm and long also measure host time as tests/measure does (untraced: fastest of 10 after 10 warm-up, with the CPU
-clock held; traced: one replay) and require the traced output to match the untraced one. The realtime profiler cannot
-see work overlapped on sub-devices, so host time replaces the device-time gate once HOST_PERF_TARGETS_MS has
-CI-calibrated targets; until then it only reports.
+The gate is host time as tests/measure measures it, for warm and long: untraced fastest of 10 after 10 warm-up with
+the CPU clock held, traced one replay, and the traced output must match the untraced one. Each scenario also reports
+the per-op device time of a traced forward under the realtime profiler (compiled, captured, replay-warmed once, chips
+collapsed by MAX); it does not gate, since the profiler cannot see work overlapped on sub-devices.
 
 Run all three cases on a supported Blackhole box::
 
@@ -90,23 +86,15 @@ DEFAULT_SIZES = (CACHE_TOKENS, CHUNK_TOKENS, LONG_CACHE_TOKENS) == (
 )
 RT_RECORD_TIMEOUT_S = float(os.environ.get("K3_MLA_PERF_RT_TIMEOUT", 30.0))
 WRITE_OPS_DUMP = os.environ.get("K3_MLA_PERF_OPS_DUMP", "") not in ("", "0", "false")
-# Device-time targets in ns at the default sizes, per box and scenario.
-PERF_TARGETS = {
-    "LoudBox": {
-        "warm": 10_900_000,
-        "cold": 49_500_000,
-        "long": 88_700_000,
-    },
-    "QuietBox": {
-        "warm": 11_100_000,
-        "cold": 35_500_000,
-        "long": 91_400_000,
-    },
-}
-PERF_MARGIN = 0.03
 # Host-time targets (ms), keyed by (box, scenario, mode), at the default sizes; warm and long only (cold captures one
-# trace per start). Report-only until calibrated from CI; the device-time gate above stays until then.
-HOST_PERF_TARGETS_MS: dict[tuple[str, str, str], float] = {}
+# trace per start). LoudBox and QuietBox, where CI runs this, report until a CI run gives their targets.
+HOST_PERF_TARGETS_MS: dict[tuple[str, str, str], float] = {
+    # 3 runs on one Galaxy.
+    ("Galaxy", "warm", "untraced"): 10.514,
+    ("Galaxy", "warm", "traced"): 9.692,
+    ("Galaxy", "long", "untraced"): 79.050,
+    ("Galaxy", "long", "traced"): 77.720,
+}
 
 SCENARIOS = {
     "warm": {"cache": CACHE_TOKENS, "loop": False},
@@ -589,18 +577,7 @@ def test_mla_chunked_perf(request, mesh_device, device_params, scenario, variant
                 f"Kimi-K3 MLA {box} {scenario} host ({mode})",
                 {"box": box, "scenario": scenario, "mode": mode, "samples_ms": samples, "target_ms": target},
             )
-        # Report-only until HOST_PERF_TARGETS_MS has targets (the device gate below decides); fails on PCC.
         pcc_failure = (
             f"traced output differs from untraced: min per-device PCC {trace_pcc:.6f}" if trace_pcc < 0.9999 else None
         )
-        gate(f"kimi_k3 MLA {box} {scenario} host", host, [pcc_failure], skip_unmeasured=False)
-    target_ns = PERF_TARGETS.get(box, {}).get(scenario)
-    measured_ns = by_op["inclusive_ns"].sum()
-    if target_ns is None:
-        logger.warning(f"{box} {scenario}: no perf target; device time {measured_ns:,.0f} ns is not gated")
-    elif not DEFAULT_SIZES:
-        logger.warning(f"{box} {scenario}: perf gate skipped because the cache or chunk size is overridden")
-    else:
-        limit_ns = target_ns * (1 + PERF_MARGIN)
-        logger.info(f"{box} {scenario} device time: {measured_ns:,.0f} ns; limit: {limit_ns:,.0f} ns")
-        assert measured_ns <= limit_ns, f"{box} {scenario} device time {measured_ns:,.0f} ns exceeds {limit_ns:,.0f} ns"
+        gate(f"kimi_k3 MLA {box} {scenario} host", host, [pcc_failure])

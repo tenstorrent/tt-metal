@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """A traced step through SubDeviceTraceController, which also captures models that load sub-device managers
-mid-forward. capture(): attach the controller, run `compile_runs` untimed calls, call `before_capture` on the last
-one's output (allocate replay copy buffers here: a buffer allocated while the trace is live can land on its scratch),
-then capture one call into `output`. Leaving the `with` ends an open capture, syncs, releases and frees `output`; a
+mid-forward. capture(): attach the controller, run `compile_runs` untimed calls, then capture one call into `output`.
+Allocate anything a replay writes into before capture(): a buffer allocated while the trace is live can land on its
+scratch. Leaving the `with` ends an open capture, syncs, releases and frees `output`; a
 cleanup error never replaces the error in flight."""
 
 import time
@@ -34,16 +34,11 @@ class TracedStep:
     def __enter__(self):
         return self
 
-    def capture(self, before_capture=None):
+    def capture(self):
         if self._attach is not None:
             self._attach(self.controller)
-        for i in range(self.compile_runs):
-            out = self.step()
-            try:
-                if before_capture is not None and i == self.compile_runs - 1:
-                    before_capture(out)
-            finally:
-                free(out)
+        for _ in range(self.compile_runs):
+            free(self.step())
         ttnn.synchronize_device(self.mesh_device)
         self._capturing = True
         self.controller.begin_capture()
