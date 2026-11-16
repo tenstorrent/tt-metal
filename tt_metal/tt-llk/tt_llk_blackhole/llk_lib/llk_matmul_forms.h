@@ -2867,7 +2867,9 @@ constexpr bool matmul_kernel_ttsync_block(
     const bool l1_acc            = false)
 {
     // one k step, and the Bfp8_b 3x1 block of two, measured slower than the polling production block (G2 census, 10 of 10 points)
-    if (matmul_kernel_ttsync(fidelity, full_sync, fp32_dest, formats) || rt == 0 || ct == 0 || kt < 2 ||
+    // the LoFi class rule serves one-tile blocks only (llk_matmul_unpack_ttsync), so a larger LoFi block keeps its cell pick
+    const bool class_serves = matmul_kernel_ttsync(fidelity, full_sync, fp32_dest, formats) && !(fidelity == MathFidelity::LoFi && !(rt == 1 && ct == 1));
+    if (class_serves || rt == 0 || ct == 0 || kt < 2 ||
         (in0 == DataFormat::Bfp8_b && in1 == DataFormat::Bfp8_b && rt == 3 && ct == 1 && kt == 2))
     {
         return false;
