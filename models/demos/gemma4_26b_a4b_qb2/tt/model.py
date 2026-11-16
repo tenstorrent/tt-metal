@@ -294,14 +294,18 @@ class Gemma4Model:
         """``return_hidden`` (WS6): return ``(logits, post-final-norm hidden)``. ``kv_write_rows`` (WS6 verify):
         one int32 cache-position tensor per row, each with only that row's position set (-1 elsewhere); the
         batched layers then write K/V one row per program, in row order, because verify rows sit at consecutive
-        positions of one page and a single batched cache update would race on the shared tile."""
+        positions of one page and a single batched cache update would race on the shared tile. Or an object with
+        ``positions`` (one [1] int32 tensor per row) and ``page_table`` ([1, blocks]): one ``PagedUpdateRows``
+        program per tensor writes all rows of the one user."""
         # Sampler output is the persistent [1,1,1,32] token input. Only live slots
         # are embedded; the model trace fixes the slot count at request setup.
         if len(kv_cache) != len(self.layers):
             raise ValueError("KV cache must contain one pair per model layer")
         if kv_write_rows is not None:
             for layer in self.layers:
-                layer.layer.self_attn.kv_write_rows = tuple(kv_write_rows)
+                layer.layer.self_attn.kv_write_rows = (
+                    tuple(kv_write_rows) if isinstance(kv_write_rows, (tuple, list)) else kv_write_rows
+                )
             try:
                 return self.decode_forward(
                     tokens,
