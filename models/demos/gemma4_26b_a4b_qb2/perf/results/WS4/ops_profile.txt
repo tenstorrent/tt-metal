@@ -1,0 +1,72 @@
+Device 0 programs per layer, layer_profile.py batch-1 decode (WS4 gate). Kernel duration in us.
+MoE scope: router = BinaryNg(scale) .. GenericOp(router_topk_b1, 1 core) + expert-input BinaryNg; experts = GenericOp 72 cores (gate|up) + GenericOp 88 cores (down).
+
+LAYER_0: 32 programs, 224.4 us; router (4 programs) 25.8 us; routed experts (2 programs) 34.5 us; router+experts 60.3 us
+  InterleavedToShardedDeviceOperation             1.29  cores=44
+  LayerNormDeviceOperation                        6.19  cores=44
+  ShardedToInterleavedDeviceOperation             1.14  cores=44
+  MatmulDeviceOperation                          18.95  cores=32
+  GenericOpDeviceOperation                       13.33  cores=3
+  PagedFusedUpdateCacheDeviceOperation            4.16  cores=2
+  SdpaDecodeDeviceOperation                      11.04  cores=64
+  GenericOpDeviceOperation                        3.33  cores=32
+  MatmulDeviceOperation                          11.16  cores=88
+  ReduceScatterMinimalAsyncDeviceOperation        9.98  cores=6
+  AllGatherAsyncDeviceOperation                  10.11  cores=4
+  LayerNormDeviceOperation                        6.26  cores=44
+  BinaryNgDeviceOperation                         0.87  cores=110
+  LayerNormDeviceOperation                        5.86  cores=44
+  ShardedToInterleavedDeviceOperation             1.73  cores=44
+  BinaryNgDeviceOperation                         3.15  cores=110 <- router
+  MatmulDeviceOperation                          13.42  cores=4 <- router
+  GenericOpDeviceOperation                        6.05  cores=1 <- router
+  BinaryNgDeviceOperation                         3.22  cores=110 <- router
+  GenericOpDeviceOperation                       22.90  cores=72 <- experts
+  GenericOpDeviceOperation                       11.56  cores=88 <- experts
+  MatmulDeviceOperation                          14.41  cores=18
+  GenericOpDeviceOperation                        3.71  cores=17
+  MatmulDeviceOperation                           6.07  cores=44
+  GenericOpDeviceOperation                        2.25  cores=8
+  ReduceScatterMinimalAsyncDeviceOperation        5.54  cores=6
+  AllGatherAsyncDeviceOperation                   3.36  cores=4
+  GenericOpDeviceOperation                        1.63  cores=44
+  LayerNormDeviceOperation                        6.34  cores=44
+  LayerNormDeviceOperation                        6.23  cores=44
+  LayerNormDeviceOperation                        6.53  cores=44
+  BinaryNgDeviceOperation                         2.62  cores=110
+
+LAYER_5: 34 programs, 239.1 us; router (4 programs) 24.4 us; routed experts (2 programs) 34.6 us; router+experts 59.1 us
+  InterleavedToShardedDeviceOperation             1.30  cores=44
+  LayerNormDeviceOperation                        6.22  cores=44
+  ShardedToInterleavedDeviceOperation             1.16  cores=44
+  MatmulDeviceOperation                          27.52  cores=48
+  GenericOpDeviceOperation                       23.27  cores=3
+  PagedFusedUpdateCacheDeviceOperation            4.12  cores=2
+  SdpaDecodeDeviceOperation                      11.37  cores=64
+  GenericOpDeviceOperation                        3.48  cores=64
+  MatmulDeviceOperation                          17.44  cores=88
+  GenericOpDeviceOperation                        2.14  cores=4
+  ReduceScatterMinimalAsyncDeviceOperation        4.48  cores=6
+  AllGatherAsyncDeviceOperation                   2.98  cores=4
+  GenericOpDeviceOperation                        1.33  cores=44
+  LayerNormDeviceOperation                        6.21  cores=44
+  BinaryNgDeviceOperation                         0.87  cores=110
+  LayerNormDeviceOperation                        5.86  cores=44
+  ShardedToInterleavedDeviceOperation             1.77  cores=44
+  BinaryNgDeviceOperation                         3.08  cores=110 <- router
+  MatmulDeviceOperation                          12.29  cores=4 <- router
+  GenericOpDeviceOperation                        5.88  cores=1 <- router
+  BinaryNgDeviceOperation                         3.20  cores=110 <- router
+  GenericOpDeviceOperation                       23.08  cores=72 <- experts
+  GenericOpDeviceOperation                       11.55  cores=88 <- experts
+  MatmulDeviceOperation                          13.70  cores=44
+  GenericOpDeviceOperation                        3.70  cores=17
+  MatmulDeviceOperation                           6.15  cores=44
+  GenericOpDeviceOperation                        2.24  cores=8
+  ReduceScatterMinimalAsyncDeviceOperation        6.26  cores=6
+  AllGatherAsyncDeviceOperation                   3.17  cores=4
+  GenericOpDeviceOperation                        1.65  cores=44
+  LayerNormDeviceOperation                        6.35  cores=44
+  LayerNormDeviceOperation                        6.25  cores=44
+  LayerNormDeviceOperation                        6.52  cores=44
+  BinaryNgDeviceOperation                         2.49  cores=110
