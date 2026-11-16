@@ -37,14 +37,14 @@ jobs:
             - echo "T uvinstall-end $(date +%s.%N)"
             - python3 -m uv venv /tmp/venv --python python3
             - echo "T venv-end $(date +%s.%N)"
-            - python3 -m uv pip install --python /tmp/venv/bin/python --index-strategy unsafe-best-match -r tt_metal/tt-llk/tests/requirements.txt
+            - python3 -m uv pip install --python /tmp/venv/bin/python --index-strategy unsafe-best-match -r tt_metal/tt-llk/tests/requirements.txt pip==23.0.1 setuptools==79.0.1
             - echo "T install-end $(date +%s.%N)"
             - python3 -m uv pip freeze --python /tmp/venv/bin/python | sort > /tmp/freeze.txt && cat /tmp/freeze.txt
             - echo "T freeze-end $(date +%s.%N)"
-            - . /tmp/venv/bin/activate && cd tt_metal/tt-llk/tests && ./setup_testing_env.sh
+            - PATH=/tmp/venv/bin:$PATH VIRTUAL_ENV=/tmp/venv; export PATH VIRTUAL_ENV; command -v python3 pytest; cd tt_metal/tt-llk/tests && ./setup_testing_env.sh
             - echo "T sfpi-end $(date +%s.%N)"
       - id: hardware-free
         kind: shell
         shell:
           run:
-            - . /tmp/venv/bin/activate && cd tt_metal/tt-llk && ./tests/run_hardware_free.sh
+            - PATH=/tmp/venv/bin:$PATH VIRTUAL_ENV=/tmp/venv; export PATH VIRTUAL_ENV; command -v python3 pytest; cd tt_metal/tt-llk && ./tests/run_hardware_free.sh
