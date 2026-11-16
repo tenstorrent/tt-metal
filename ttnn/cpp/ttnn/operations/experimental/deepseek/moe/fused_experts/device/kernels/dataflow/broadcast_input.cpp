@@ -175,6 +175,10 @@ void kernel_main() {
         shared.gate_up_addr = fe_header(kFeHdrSharedGateUp);
         shared.down_addr = fe_header(kFeHdrSharedDown);
 #endif
+        // FE_NATIVE_ONE_ROW: a one-row request runs on the tile-shaped CBs' 1x32 aliases (persistent.h).
+        const bool one_row = fe_one_row();
+        const uint32_t cb_input_iter = fe_cb(cb_input_id, one_row);
+        (void)cb_input_iter;
 #if defined(INPUT_RM_ROWS)
         // Several ROW_MAJOR rows: every core's writer (this one's included) restripes them into its own
         // cb_input, so there is nothing to read, broadcast or publish here.
@@ -195,7 +199,7 @@ void kernel_main() {
         (void)input_args;
         (void)src_tiles_per_page;
         (void)sem_input_id;
-        publish_input(cb_input_id, input_num_pages);
+        publish_input(cb_input_iter, input_num_pages);
 #else
         const auto input = TensorAccessor(input_args, input_addr);
 
@@ -251,12 +255,12 @@ void kernel_main() {
             gate_up_tile_bytes,
             down_slice_tiles,
             down_tile_bytes,
-            act_tile_bytes,
+            one_row ? FE_ONE_ROW_ACT_TILE_BYTES : act_tile_bytes,
             num_producers,
             cb_bcast_id,
             cb_weights_id,
             cb_down_w_id,
-            cb_act_id,
+            fe_cb(cb_act_id, one_row),
             sem_gather_id,
             sem_bcast_id,
             mcast_start_x,
@@ -268,24 +272,24 @@ void kernel_main() {
             kHitGateUpAddrs,
             down_args,
             kHitDownAddrs,
-            cb_rscalar_id,
+            fe_cb(cb_rscalar_id, one_row),
             num_weights,
             down_prefetch,
             batch,
             experts_block,
             gate_up_reserve_tiles,
             down_reserve_tiles,
-            rscalar_tile_h,
-            rscalar_face_r_dim,
-            rscalar_num_face_rows,
-            rscalar_tile_bytes,
+            one_row ? 1u : rscalar_tile_h,
+            one_row ? 1u : rscalar_face_r_dim,
+            one_row ? 1u : rscalar_num_face_rows,
+            one_row ? FE_ONE_ROW_SCALAR_TILE_BYTES : rscalar_tile_bytes,
             cores_per_expert,
             shards_per_core,
             i_shards_per_core,
             num_expert_groups,
             gather,
             sem_reduce_id,
-            cb_reduce_id,
+            fe_cb(cb_reduce_id, one_row),
             get_arg_val<uint32_t>(11),
             shared,
             shared_gate_up_args,

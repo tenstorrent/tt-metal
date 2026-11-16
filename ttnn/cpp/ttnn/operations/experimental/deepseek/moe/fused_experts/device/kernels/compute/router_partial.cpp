@@ -6,6 +6,8 @@
 #include "api/compute/experimental/custom_mm.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/tile_move_copy.h"
+#include "api/compute/reconfig_data_format.h"
+#include "api/compute/pack.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/debug/kernel_profiler.hpp"
 #include "../persistent.h"
@@ -31,30 +33,41 @@ void kernel_main() {
     constexpr uint32_t k_slice = get_compile_time_arg_val(4);
     const uint32_t k_start = get_arg_val<uint32_t>(0);
 
-    CircularBuffer in_cb(cb_rin_id);
     CircularBuffer w_cb(cb_rw_id);
-    CircularBuffer out_cb(cb_part_id);
 
     constexpr bool transpose = false;
     constexpr auto layout = CustomMmDestLayout::DefaultSplitAcc;
     // SrcOrder::Reverse: SrcA holds the weight (in1), SrcB the activation (in0).
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_rin_id, cb_rw_id, cb_part_id);
 
+    // The tile shape the unpacker and packer are set up for (FE_NATIVE_ONE_ROW: a one-row iteration's 1x32 aliases).
+    bool shape_one_row = false;
     for (uint32_t iter = 0; fe_wait_go(iter); ++iter) {
         fe_rewind_cbs();
+        const bool one_row = fe_one_row();
+        const uint32_t cb_rin = fe_cb(cb_rin_id, one_row);
+        const uint32_t cb_part = fe_cb(cb_part_id, one_row);
+        if (one_row != shape_one_row) {
+            // SrcB (the row) and the packer's tile shape; custom_mm's init below takes SrcB's face rows.
+            reconfig_full_operand<SrcOrder::Reverse>(cb_rin, cb_rw_id);
+            pack_reconfig_data_format<true>(cb_part);
+            shape_one_row = one_row;
+        }
+        CircularBuffer in_cb(cb_rin);
+        CircularBuffer out_cb(cb_part);
         out_cb.reserve_back(1);
         in_cb.wait_front(k_tiles);
         w_cb.wait_front(k_slice);
         tile_regs_acquire();
-        custom_mm_block_init_short<transpose, layout>(cb_rin_id, cb_rw_id, cb_part_id, 1);
+        custom_mm_block_init_short<transpose, layout>(cb_rin, cb_rw_id, cb_part, 1);
         {
             DeviceZoneScopedN("FE_R_PART_MM");
-            custom_mm_block<layout, true>(cb_rin_id, cb_rw_id, k_start, 0, 0, k_slice, 1);
+            custom_mm_block<layout, true>(cb_rin, cb_rw_id, k_start, 0, 0, k_slice, 1);
         }
-        custom_mm_block_uninit<layout>(cb_part_id);
+        custom_mm_block_uninit<layout>(cb_part);
         tile_regs_commit();
         tile_regs_wait();
-        pack_tile(0, cb_part_id);
+        pack_tile(0, cb_part);
         tile_regs_release();
         out_cb.push_back(1);
         w_cb.pop_front(k_slice);

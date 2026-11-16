@@ -448,6 +448,11 @@ void kernel_main() {
                     auto* all_sets = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(FE_CAND_ADDR);
                     auto* half_cur = all_sets + hdr(kFeHdrRequester) * num_router_cores * slot_words;
                     const uint32_t counted_before = num_router_cores * iter;
+                    // A request of fewer rows than the block (persistent.h kFeHdrRows): only its rows are merged (a
+                    // native one-row request's slots hold just row 0; the other rows' are stale).
+                    invalidate_l1_cache();
+                    const uint32_t request_rows = hdr(kFeHdrRows);
+                    const uint32_t live_rows = request_rows != 0u && request_rows < batch ? request_rows : batch;
                     uint32_t merged = 0;  // slots of the current half merged so far
                     uint32_t merged_mask = 0;
                     while (merged < num_router_cores) {
@@ -476,7 +481,7 @@ void kernel_main() {
                             // Each row's slot list is best first, so its candidates enter the running top_k (an
                             // insertion) only while they beat the running worst: a slot costs a compare or two per
                             // row once the running lists are full.
-                            for (uint32_t b = 0; b < batch; ++b) {
+                            for (uint32_t b = 0; b < live_rows; ++b) {
                                 uint32_t* rk = run_key + b * top_k;
                                 uint32_t* ri = run_id + b * top_k;
                                 uint32_t* rs = run_score + b * top_k;
@@ -512,15 +517,18 @@ void kernel_main() {
                     invalidate_l1_cache();
                     const uint32_t layer_k = hdr(kFeHdrTopK);
                     const uint32_t row_k = layer_k != 0u && layer_k < top_k ? layer_k : top_k;
-                    // A request of fewer rows than the block (persistent.h kFeHdrRows): the other rows hold no token,
-                    // so their selections are dropped too -- the union is the request's rows' alone.
-                    const uint32_t request_rows = hdr(kFeHdrRows);
-                    const uint32_t live_rows = request_rows != 0u && request_rows < batch ? request_rows : batch;
+                    // The other rows of a request of fewer rows than the block hold no token, so they select
+                    // nothing -- the union is the request's rows' alone.
                     for (uint32_t b = 0; b < batch; ++b) {
                         for (uint32_t j = 0; j < top_k; ++j) {
+                            if (b >= live_rows) {
+                                router_score_bits[b * top_k + j] = 0u;
+                                sel_ids[b * top_k + j] = static_cast<uint16_t>(num_weights);
+                                continue;
+                            }
                             const uint16_t e = static_cast<uint16_t>(run_id[b * top_k + j]);
                             router_score_bits[b * top_k + j] = run_score[b * top_k + j];
-                            if (j < row_k && b < live_rows) {
+                            if (j < row_k) {
                                 sel_ids[b * top_k + j] = e;
                                 bitmap[e >> 5] |= 1u << (e & 31u);
                             } else {

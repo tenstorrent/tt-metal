@@ -44,6 +44,9 @@
 //   over them)   11: rows (the op's block rows: a one-row request's partial is row 0 of each sub-part's (rows x 32)
 //   tiles, compacted in place and sent as a one-row slot, its flag where a block's goes; see persistent.h kFeHdrRows)
 //
+// FE_NATIVE_ONE_ROW: a one-row request runs in one-row tiles, whose partial the writers stage compacted at the front
+// of the iteration's half (one_row_sub_bytes per sum core), so it goes out as it sits.
+//
 // Runtime args: num_cores (this link's output cores), the source ring's address, then per requester: the
 // connection its sends leave by, its partials buffer address, this link's sub_parts sum cores' NoC xs, then ys,
 // its number
@@ -236,40 +239,61 @@ void kernel_main() {
                 }
             }
         }
-        DeviceZoneScopedN("FE_RED_SEND");
         invalidate_l1_cache();
         const uint32_t entry = source[iter % kFeSourceRing];
         const uint32_t k = entry & 0xFFu;
         const bool one_row = block_rows > 1u && (entry >> 8) == 1u;
         const uint32_t src = staging_addr + (iter & 1u) * part_bytes;
-        // A one-row request: each sub-part's row 0, compacted to the front of the sub-part (in place, front to back:
-        // chunk c moves from c * block_rows to c, never past one not yet moved).
-        if (one_row) {
-            DeviceZoneScopedN("FE_RED_COMPACT");
-            invalidate_l1_cache();
-            for (uint32_t p = 0; p < sub_parts; ++p) {
-                auto* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src + p * sub_bytes);
-                for (uint32_t c = 1; c < one_row_sub_bytes / row_chunk_bytes; ++c) {
-                    for (uint32_t w = 0; w < row_chunk_bytes / 4u; ++w) {
-                        words[c * (row_chunk_bytes / 4u) + w] = words[c * block_rows * (row_chunk_bytes / 4u) + w];
+        auto send = [&](uint32_t sub_stride, uint32_t send_bytes) {
+            // Every sum core of the requester holds its own columns' slots, at the same address; the flags follow a
+            // block's slots whatever the request's rows.
+            const uint32_t slot = partials_addr[k] + my_chip * send_bytes;
+            const uint32_t flag = partials_addr[k] + num_slots * sub_bytes + my_chip * 4u;
+            auto* sender = &fabric_connection.get(connection[k]).sender;
+            size_t idx = route_args[k];
+            send_headers.reset();
+            for (uint32_t r = 0; r < num_routes[k]; ++r) {
+                const D2DRoute route = read_d2d_route(idx);
+                for (uint32_t p = 0; p < sub_parts; ++p) {
+                    d2d_send_flagged<max_payload>(
+                        sender,
+                        send_headers,
+                        route,
+                        src + p * sub_stride,
+                        send_bytes,
+                        sum_x[k][p],
+                        sum_y[k][p],
+                        slot,
+                        flag);
+                }
+            }
+        };
+        if (!one_row) {
+            DeviceZoneScopedN("FE_RED_SEND");
+            send(sub_bytes, sub_bytes);
+        } else {
+#if defined(FE_NATIVE_ONE_ROW)
+            // Staged in one-row tiles: sum core p's columns at p * one_row_sub_bytes.
+            DeviceZoneScopedN("FE_RED_SEND_1R");
+            send(one_row_sub_bytes, one_row_sub_bytes);
+#else
+            DeviceZoneScopedN("FE_RED_SEND");
+            // Each sub-part's row 0, compacted to the front of the sub-part (in place, front to back: chunk c moves
+            // from c * block_rows to c, never past one not yet moved).
+            {
+                DeviceZoneScopedN("FE_RED_COMPACT");
+                invalidate_l1_cache();
+                for (uint32_t p = 0; p < sub_parts; ++p) {
+                    auto* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src + p * sub_bytes);
+                    for (uint32_t c = 1; c < one_row_sub_bytes / row_chunk_bytes; ++c) {
+                        for (uint32_t w = 0; w < row_chunk_bytes / 4u; ++w) {
+                            words[c * (row_chunk_bytes / 4u) + w] = words[c * block_rows * (row_chunk_bytes / 4u) + w];
+                        }
                     }
                 }
             }
-        }
-        const uint32_t send_bytes = one_row ? one_row_sub_bytes : sub_bytes;
-        // Every sum core of the requester holds its own columns' slots, at the same address; the flags follow a
-        // block's slots whatever the request's rows.
-        const uint32_t slot = partials_addr[k] + my_chip * send_bytes;
-        const uint32_t flag = partials_addr[k] + num_slots * sub_bytes + my_chip * 4u;
-        auto* sender = &fabric_connection.get(connection[k]).sender;
-        size_t idx = route_args[k];
-        send_headers.reset();
-        for (uint32_t r = 0; r < num_routes[k]; ++r) {
-            const D2DRoute route = read_d2d_route(idx);
-            for (uint32_t p = 0; p < sub_parts; ++p) {
-                d2d_send_flagged<max_payload>(
-                    sender, send_headers, route, src + p * sub_bytes, send_bytes, sum_x[k][p], sum_y[k][p], slot, flag);
-            }
+            send(sub_bytes, one_row_sub_bytes);
+#endif
         }
         // The staging half is refilled two iterations on, so every packet has to have left it.
         noc_async_writes_flushed();

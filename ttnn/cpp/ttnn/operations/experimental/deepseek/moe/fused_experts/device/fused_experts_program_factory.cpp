@@ -4,6 +4,7 @@
 
 #include "fused_experts_device_operation.hpp"
 #include "d2d_routes.hpp"
+#include "persistent_moe_request_device_operation.hpp"
 
 #include <algorithm>
 #include <array>
@@ -672,6 +673,24 @@ ProgramDescriptor build_program_descriptor(
                                   (input_tile_h == 1 || input_tile_h == 2 || input_tile_h == 4 || input_tile_h == 8);
     const tt::DataFormat act_df = expert_custom_mm ? tt::DataFormat::Float16_b : tt::DataFormat::Bfp8_b;
     const uint32_t act_tile_bytes = input_tile.get_tile_size(act_df);
+    // The persistent op built for several-row blocks runs one-row requests natively (in 1x32 tiles, through the
+    // tile-shaped CBs' one-row aliases) unless DEEPSEEK_V41_MOE_NATIVE_ONE_ROW=0 (the padded mode: a one-row request
+    // rides row 0 of a block). See kernels/persistent.h kFeOneRowCbOffset.
+    const bool native_one_row = persistent != nullptr && batch > 1u && persistent_moe_native_one_row();
+    constexpr uint32_t kOneRowCbOffset = 32;
+    TT_FATAL(
+        !native_one_row || (expert_custom_mm && act_df == tt::DataFormat::Float16_b && input_df == act_df),
+        "fused_experts: native one-row requests need the bf16 custom_mm path (DEEPSEEK_V41_MOE_NATIVE_ONE_ROW=0 runs "
+        "them padded)");
+    auto add_native_one_row_defines = [&](KernelDescriptor& kernel) {
+        const tt::tt_metal::Tile one_row({1u, tt::constants::TILE_WIDTH});
+        kernel.defines.emplace_back("FE_NATIVE_ONE_ROW", "1");
+        kernel.defines.emplace_back("FE_BLOCK_ROWS", std::to_string(batch) + "u");
+        kernel.defines.emplace_back("FE_ONE_ROW_ACT_TILE_BYTES", std::to_string(one_row.get_tile_size(act_df)) + "u");
+        kernel.defines.emplace_back("FE_ONE_ROW_OUT_TILE_BYTES", std::to_string(one_row.get_tile_size(out_df)) + "u");
+        kernel.defines.emplace_back(
+            "FE_ONE_ROW_SCALAR_TILE_BYTES", std::to_string(one_row.get_tile_size(tt::DataFormat::Float16_b)) + "u");
+    };
 
     // SwiGLU clamp limit, passed to the compute kernel as a bit-cast float (the kernel
     // derives -limit internally).
@@ -2624,11 +2643,62 @@ ProgramDescriptor build_program_descriptor(
                 "fused_experts: the persistent op needs the router (sharded over its chips, each layer's gate column "
                 "from the layer table) and the one-row input replica");
 
-            uint32_t rewind_cbs = 0;
+            // Native one-row requests (persistent_moe_native_one_row, an op built for several-row blocks): every
+            // tile-shaped CB gets a 1x32 alias, buffer index + kOneRowCbOffset, over the same memory -- the compute
+            // LLKs take a CB's tile shape from its index, so a one-row request's iteration runs on the aliases
+            // (kernels/persistent.h kFeOneRowCbOffset).
+            if (native_one_row) {
+                const tt::tt_metal::Tile one_row_tile({1u, tt::constants::TILE_WIDTH});
+                const TileDescriptor one_row_tile_desc(one_row_tile);
+                const std::array<uint32_t, 14> tile_cbs = {
+                    cb_input,
+                    cb_out,
+                    cb_mm,
+                    cb_act,
+                    cb_rscalar,
+                    cb_down_out,
+                    cb_acc,
+                    cb_wtmp,
+                    cb_reduce,
+                    cb_rin,
+                    cb_rbias,
+                    cb_rout,
+                    cb_rpart,
+                    cb_rparts};
+                for (auto& cb : desc.cbs) {
+                    std::vector<CBFormatDescriptor> aliases;
+                    for (const auto& f : cb.format_descriptors) {
+                        if (std::find(tile_cbs.begin(), tile_cbs.end(), f.buffer_index) == tile_cbs.end()) {
+                            continue;
+                        }
+                        TT_FATAL(
+                            f.buffer_index < kOneRowCbOffset && f.buffer_index + kOneRowCbOffset < 64u,
+                            "fused_experts: CB {} has no one-row alias index",
+                            f.buffer_index);
+                        CBFormatDescriptor alias = f;
+                        alias.buffer_index = f.buffer_index + kOneRowCbOffset;
+                        alias.page_size = one_row_tile.get_tile_size(f.data_format);
+                        alias.tile = one_row_tile_desc;
+                        TT_FATAL(
+                            cb.total_size % alias.page_size == 0 && alias.page_size * batch == f.page_size,
+                            "fused_experts: CB {} ({} B, {} B pages) does not hold whole one-row {} B tiles, {} to a "
+                            "{}-row one",
+                            f.buffer_index,
+                            cb.total_size,
+                            f.page_size,
+                            alias.page_size,
+                            batch,
+                            batch);
+                        aliases.push_back(alias);
+                    }
+                    cb.format_descriptors.insert(cb.format_descriptors.end(), aliases.begin(), aliases.end());
+                }
+            }
+            uint64_t rewind_cbs = 0;
             for (const auto& cb : desc.cbs) {
                 for (const auto& f : cb.format_descriptors) {
                     if (f.buffer_index != cb_ar_scratch) {
-                        rewind_cbs |= 1u << f.buffer_index;
+                        rewind_cbs |= uint64_t{1} << f.buffer_index;
                     }
                 }
             }
@@ -2636,7 +2706,11 @@ ProgramDescriptor build_program_descriptor(
             for (auto& kernel : desc.kernels) {
                 kernel.defines.emplace_back("FE_PERSISTENT", "1");
                 kernel.defines.emplace_back("FE_HDR_ADDR", std::to_string(persistent->header->address()));
-                kernel.defines.emplace_back("FE_REWIND_CBS", std::to_string(rewind_cbs) + "u");
+                kernel.defines.emplace_back("FE_REWIND_CBS", std::to_string(rewind_cbs & 0xFFFFFFFFu) + "u");
+                kernel.defines.emplace_back("FE_REWIND_CBS_HI", std::to_string(rewind_cbs >> 32) + "u");
+                if (native_one_row) {
+                    add_native_one_row_defines(kernel);
+                }
                 kernel.defines.emplace_back("FE_SEM_WRITER_DONE", std::to_string(sem_writer_done_id));
                 // Each stage reports to its own count: the router row (router cores and route merge) runs a
                 // row ahead of the worker grid, the reduce senders a row behind it.
@@ -2724,6 +2798,9 @@ ProgramDescriptor build_program_descriptor(
             ctrl_desc.defines = {
                 {"FE_HDR_ADDR", std::to_string(persistent->header->address())},
                 {"FE_SEM_READY", std::to_string(sem_ready_id)}};
+            if (native_one_row) {
+                add_native_one_row_defines(ctrl_desc);
+            }
             std::vector<std::variant<uint32_t, Buffer*>> ctrl_rt_args = {layer_table_buffer, input_buffer};
             for (const auto& s : ar_senders) {
                 ctrl_rt_args.push_back(static_cast<uint32_t>(device->worker_core_from_logical_core(s).x));
