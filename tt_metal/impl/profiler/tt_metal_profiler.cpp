@@ -728,23 +728,10 @@ void ProfilerSync(MetalContext& ctx, ProfilerSyncState state) {
 #endif
 }
 
-void ProfilerSync(ProfilerSyncState state) {
-#if defined(TRACY_ENABLE)
-    ProfilerRegistry::instance().for_each_attached(
-        [state](ProfilerStateManager& profiler_state_manager) { ProfilerSync(profiler_state_manager.ctx_, state); });
-#endif
-}
-
 void ClearProfilerControlBuffer(IDevice* device) {
 #if defined(TRACY_ENABLE)
     std::vector<uint32_t> control_buffer(kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE, 0);
     detail::setControlBuffer(MetalContext::instance(extract_context_id(device)), nullptr, device, control_buffer);
-#endif
-}
-
-void InitDeviceProfiler(IDevice* device) {
-#if defined(TRACY_ENABLE)
-    InitDeviceProfiler(MetalContext::instance(extract_context_id(device)), device);
 #endif
 }
 

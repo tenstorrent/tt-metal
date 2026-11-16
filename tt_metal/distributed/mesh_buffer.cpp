@@ -607,22 +607,4 @@ std::pair<bool, bool> MeshBuffer::replicated_dims() const {
     return this->global_shard_spec().replicated_dims();
 }
 
-AnyBuffer::AnyBuffer(std::shared_ptr<Buffer> buffer) : buffer_(buffer.get()), holder_(std::move(buffer)) {}
-AnyBuffer::AnyBuffer(std::shared_ptr<MeshBuffer> buffer) :
-    buffer_(buffer->get_reference_buffer()), holder_(std::move(buffer)) {}
-
-Buffer* AnyBuffer::get_buffer() const { return buffer_; }
-
-bool AnyBuffer::is_mesh_buffer() const { return get_mesh_buffer() != nullptr; }
-
-std::shared_ptr<MeshBuffer> AnyBuffer::get_mesh_buffer() const {
-    if (const auto* mesh_buffer_ptr = std::get_if<std::shared_ptr<MeshBuffer>>(&holder_)) {
-        auto mesh_buffer = *mesh_buffer_ptr;
-        if (mesh_buffer->is_allocated()) {
-            return mesh_buffer;
-        }
-    }
-    return nullptr;
-}
-
 }  // namespace tt::tt_metal::distributed

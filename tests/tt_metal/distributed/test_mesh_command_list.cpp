@@ -39,6 +39,7 @@
 #include "distributed/mesh_device_impl.hpp"
 #include "tt_metal/distributed/fd_mesh_command_queue.hpp"
 #include "tt_metal/distributed/mesh_workload_impl.hpp"
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include "tt_metal/impl/allocator/allocator.hpp"
 
 namespace tt::tt_metal::experimental::test {
@@ -333,12 +334,12 @@ CmdListParameters patchable_input(const Program& program, const CmdListTensorArg
 }
 
 void write_tensor(const MeshTensor& tensor, const std::vector<uint32_t>& data) {
-    ::tt::tt_metal::detail::WriteToBuffer(*tensor.mesh_buffer().get_reference_buffer(), data);
+    ::tt::tt_metal::slow_dispatch::WriteToBuffer(tensor.mesh_buffer(), data);
 }
 
 std::vector<uint32_t> read_tensor(const MeshTensor& tensor) {
     std::vector<uint32_t> result;
-    ::tt::tt_metal::detail::ReadFromBuffer(*tensor.mesh_buffer().get_reference_buffer(), result);
+    ::tt::tt_metal::slow_dispatch::ReadFromBuffer(tensor.mesh_buffer(), result);
     return result;
 }
 
