@@ -10,7 +10,7 @@ only).
 ## What's here
 
 - `test_tt_transformers_text_demo.py` — a **vendored copy** of
-  `models/tt_transformers/demo/simple_text_demo.py`. The only deltas from
+  `models/ttt_compat/demo/simple_text_demo.py`. The only deltas from
   upstream are two lines tagged `# emule:` (see the file header):
   1. `_supports_on_device_sampling = False` — force host sampling.
   2. `enable_trace = False` — emule is slow-dispatch / teacher-forcing only.

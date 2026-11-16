@@ -22,12 +22,12 @@ Automated test are run by:
 
 ```
     cd $TT_METAL_HOME
-    pytest -svvv tests/tt_metal/tools/profiler/test_device_logs.py
+    pytest -svvv tests/tt_metal/tools/profiler/test_device_profiler.py
 ```
 
 #### Adding device log file test
 
-For device log file test executed by `test_device_logs.py`, when new features are added which require
+For device log file test executed by `test_device_profiler.py`, when new features are added which require
 modifying some or all of the golden artifacts, the following script can be used to populate the golden directory with the new format.
 
 ```

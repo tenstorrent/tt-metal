@@ -98,7 +98,7 @@ See **[GUIDE.md](GUIDE.md)** for the full workflow: tracing, loading into the da
 - **Trace Selection Registry**: `model_tracer/trace_selection_registry.yaml` - Controls which traces are included in test reconstruction
 - **Master JSON**: `model_tracer/traced_operations/ttnn_operations_master.json` - Contains all traced configurations
 - **Analyzer**: `model_tracer/analyze_operations.py` - Query and view configurations
-- **Config Loader**: `tests/sweep_framework/master_config_loader.py` - Converts JSON configs to sweep test parameters
+- **Config Loader**: `tests/sweep_framework/master_config_loader_v2.py` - Converts JSON configs to sweep test parameters
 
 ---
 
@@ -289,7 +289,7 @@ python model_tracer/generic_ops_tracer.py --from-trace-dir /tmp/traces/<test_nam
 
 **Note:** After tracing, if the summary shows operations that don't have corresponding `*_model_traced.py` test files in `tests/sweep_framework/sweeps/model_traced/`, you'll need to create test files for those operations to use the traced configurations in sweep tests.
 
-**Note:** Some operations may require custom parameter extraction code in `model_tracer/operation_parameter_extractors.py` if the default extraction doesn't properly parse operation-specific parameters (e.g., `output_dtype` for `typecast`, `dims` for `permute`). Check existing extractors in that file for examples.
+**Note:** Some operations may require custom parameter extraction code in `tests/sweep_framework/operation_parameter_extractors.py` if the default extraction doesn't properly parse operation-specific parameters (e.g., `output_dtype` for `typecast`, `dims` for `permute`). Check existing extractors in that file for examples.
 
 
 ### 2. View Configurations
@@ -338,7 +338,7 @@ tt-metal/
 │   └── traced_operations/
 │       └── ttnn_operations_master.json # Master config storage
 └── tests/sweep_framework/
-    ├── master_config_loader.py        # Config loader & utilities
+    ├── master_config_loader_v2.py     # Config loader & utilities
     ├── sweeps_parameter_generator.py  # Generate test vectors
     ├── sweeps_runner.py               # Run individual sweep tests
     └── sweeps/

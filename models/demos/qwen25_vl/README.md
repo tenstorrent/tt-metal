@@ -47,7 +47,7 @@ MESH_DEVICE=TG HF_MODEL=Qwen/Qwen2.5-VL-7B-Instruct pytest models/demos/qwen25_v
 ```
 `TT_DATA_PARALLEL=<n>` overrides the number of lanes; `1` disables the split and keeps all 32 chips in a single tensor-parallel mesh.
 Models whose head counts do not divide across 8 chips (7B: 28 query / 4 KV heads; 3B: 16 / 2) are
-padded to 32 / 8 heads per lane (`PAD_HEADS_FOR_TP_MODELS` in `models/tt_transformers/tt/model_config.py`).
+padded to 32 / 8 heads per lane (`PAD_HEADS_FOR_TP_MODELS` in `models/ttt_compat/tt/model_config.py`).
 
 ## Details
 - On the first execution of each model, TTNN will create weight cache files for that model, to speed up future runs.
