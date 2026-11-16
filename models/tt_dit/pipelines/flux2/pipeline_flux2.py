@@ -22,6 +22,7 @@ from PIL import Image
 import ttnn
 from models.tt_dit.pipelines.events import PipelineEventCallback, SectionEnd, SectionStart, event_section, null_callback
 
+from ...blocks.attention_opt import total_sequence_length_tensor
 from ...models.transformers.transformer_flux2 import Flux2Transformer
 from ...models.vae.vae_flux2 import Flux2VaeDecoder, Flux2VaeEncoder
 from ...parallel.config import DiTGParallelConfigNoCFG, EncoderParallelConfig, Flux2VaeParallelConfig, ParallelFactor
@@ -646,6 +647,14 @@ class Flux2Pipeline:
         self.ts._tt_embedded_prompt.update(self.transformer.context_embedder(tt_prompt_embeds), traced)
         ttnn.deallocate(tt_prompt_embeds)
 
+        # The token count the attention reads at run time. Traced, it goes in as a host tensor, which
+        # the step's Tracer copies into the trace's own input on every replay.
+        total_sequence_length = total_sequence_length_tensor(
+            spatial_sequence_length + reference_sequence_length + prompt_sequence_length,
+            self._mesh_device,
+            on_host=traced,
+        )
+
         with event_section(on_event, "denoising"):
             for i, t in enumerate(tqdm.tqdm(timesteps)):
                 with event_section(on_event, f"denoising_step_{i}"):
@@ -677,6 +686,7 @@ class Flux2Pipeline:
                         "combined_rope": (state.combined_rope_cos.data, state.combined_rope_sin.data),
                         "spatial_sequence_length": spatial_sequence_length + reference_sequence_length,
                         "prompt_sequence_length": prompt_sequence_length,
+                        "total_sequence_length": total_sequence_length,
                     }
                     state.step_tracer(**step_inputs, traced=traced)
 
@@ -822,6 +832,7 @@ class Flux2Pipeline:
         combined_rope: tuple[ttnn.Tensor, ttnn.Tensor],
         spatial_sequence_length: int,
         prompt_sequence_length: int,
+        total_sequence_length: ttnn.Tensor,
     ) -> None:
         noise_pred = self.transformer.forward(
             spatial=ttnn.concat([spatial, reference], dim=1) if reference is not None else spatial,
@@ -833,6 +844,7 @@ class Flux2Pipeline:
             combined_rope=combined_rope,
             spatial_sequence_length=spatial_sequence_length,
             prompt_sequence_length=prompt_sequence_length,
+            total_sequence_length=total_sequence_length,
         )
         if reference is not None:
             noise_pred = noise_pred[:, : spatial.shape[1], :]

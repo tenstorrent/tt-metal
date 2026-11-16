@@ -19,6 +19,7 @@ from ..utils.matmul import get_matmul_config, get_matmul_core_grid
 from ..utils.mochi import get_rot_transformation_mat
 from ..utils.padding import PaddingConfig, pad_weight_tensor
 from ..utils.substate import pop_substate
+from ..utils.tensor import from_torch
 
 if TYPE_CHECKING:
     pass
@@ -39,6 +40,18 @@ _FLUX2_MATMUL_CORE_GRIDS: dict[tuple[int, int, int], tuple[int, int]] = {
     (1024, 6144, 2304): ttnn.CoreCoord(12, 9),
     (512, 6144, 2304): ttnn.CoreCoord(12, 9),
 }
+
+
+def total_sequence_length_tensor(count: int, mesh_device: ttnn.MeshDevice, *, on_host: bool = False) -> ttnn.Tensor:
+    """The token count as the one-element uint32 tensor, replicated on the mesh, that the ring SDPA
+    reads at run time; on the host with ``on_host``, for a trace input."""
+    return from_torch(
+        torch.tensor([count], dtype=torch.int64).reshape(1, 1, 1, 1),
+        device=mesh_device,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        on_host=on_host,
+    )
 
 
 # adapted from https://github.com/huggingface/diffusers/blob/v0.31.0/src/diffusers/models/attention_processor.py
@@ -98,7 +111,10 @@ class Attention(Module):
     ) -> None:
         """`row_capacity` is the largest per-device row count of `sequence_1` (a multiple of 32). With
         it, the Q/K norms and the head split and merge take the row count at run time, so one program
-        serves every row count up to it; None keeps one program per row count."""
+        serves every row count up to it; None keeps one program per row count. Ring SDPA then takes
+        the token count at run time too, where the rows per device are whole tiles (see
+        `_ring_sdpa_dynamic`); with a sharded prompt, `row_capacity` must also hold the prompt's
+        shard, which ring SDPA folds into the sequence."""
         super().__init__()
 
         self.head_dim = head_dim
@@ -300,6 +316,45 @@ class Attention(Module):
             return (full_grid.x, full_grid.y - 1)
         else:
             return (full_grid.x, full_grid.y - 1)
+
+    def _ring_sdpa_dynamic(
+        self, q: ttnn.Tensor, k: ttnn.Tensor, v: ttnn.Tensor, *, logical_n: ttnn.Tensor
+    ) -> ttnn.Tensor:
+        """Ring SDPA without a joint stream that takes the token count at run time.
+
+        `dynamic_local_n` leaves the rows per device out of the program, so one program serves every
+        token count up to `row_capacity` rows per device. `logical_n` is the token count as a
+        one-element uint32 device tensor (`total_sequence_length_tensor`). Its masks cover only the global tail, so the
+        rows per device must be whole tiles, all real but the tail of the last device. The program
+        config and the gather buffers are the same for every token count.
+        """
+        sp_axis = self.parallel_config.sequence_parallel.mesh_axis
+        capacity = self.row_capacity * self.parallel_config.sequence_parallel.factor
+        grid = self.get_ring_sdpa_core_grid(-1)
+        out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
+            q,
+            k,
+            v,
+            None,
+            None,
+            None,
+            persistent_output_buffer_k=self.ccl_manager.get_ag_ping_pong_buffer(k.shape, 2, sp_axis, capacity=capacity),
+            persistent_output_buffer_v=self.ccl_manager.get_ag_ping_pong_buffer(v.shape, 2, sp_axis, capacity=capacity),
+            joint_strategy="rear",
+            logical_n=logical_n,
+            program_config=self.get_ring_sdpa_program_config(-1),
+            compute_kernel_config=self.sdpa_compute_kernel_config,
+            dim=2,
+            multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(sp_axis),
+            num_links=self.ccl_manager.num_links,
+            cluster_axis=sp_axis,
+            mesh_device=self.mesh_device,
+            topology=self.ccl_manager.topology,
+            subdevice_id=self.ccl_manager.ccl_sub_device_id,
+            ccl_core_grid_offset=(0, grid[1]),
+            dynamic_local_n=True,
+        )
+        return out
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         weight, bias = self._reshape_and_merge_qkv(
@@ -510,12 +565,16 @@ class Attention(Module):
         addcmul_spatial_gate: ttnn.Tensor | None = None,
         addcmul_prompt_residual: ttnn.Tensor | None = None,
         addcmul_prompt_gate: ttnn.Tensor | None = None,
+        total_sequence_length: ttnn.Tensor | None = None,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor | None]:
         """Forward with optional fused to_out + addcmul.
 
         Ring callers pass spatial/prompt fractured on TP (fused AG+matmul inside);
         Linear callers must all-gather first. addcmul_*_residual+gate fuse the
-        out projection's residual+gate when both are provided.
+        out projection's residual+gate when both are provided. With `row_capacity`, `total_sequence_length`
+        holds the attended token count (sequence_1_length, plus sequence_2_length with a prompt
+        projection) as a `total_sequence_length_tensor`, for the ring SDPA that takes the token count at run
+        time; without it, that SDPA builds one for this call, so a traced caller must pass it.
         """
 
         assert len(sequence_1.shape) == 3
@@ -621,7 +680,42 @@ class Attention(Module):
                 persistent_joint_k = self.ccl_manager.get_ag_ping_pong_buffer(add_k.shape, 2, sp_axis)
                 persistent_joint_v = self.ccl_manager.get_ag_ping_pong_buffer(add_v.shape, 2, sp_axis)
 
-        if self.parallel_config.sequence_parallel.factor > 1:
+        has_prompt = self.add_qkv_proj is not None and sequence_2 is not None
+
+        def _whole_tiles(*tensors: ttnn.Tensor) -> bool:
+            return all(t.shape[2] == t.padded_shape[2] for t in tensors)
+
+        # A replicated prompt, folded here or concatenated by the single blocks, would repeat its keys
+        # on every device.
+        dynamic_sdpa = (
+            runtime_rows
+            and shard_prompt
+            and _whole_tiles(q, k, v)
+            and (not has_prompt or _whole_tiles(add_q, add_k, add_v))
+        )
+
+        if dynamic_sdpa and total_sequence_length is None:
+            count = sequence_1_length + sequence_2_length if has_prompt else sequence_1_length
+            total_sequence_length = total_sequence_length_tensor(count, self.mesh_device)
+
+        if dynamic_sdpa and has_prompt:
+            # Attention is the same for any order of the keys, so the prompt shard is folded in front
+            # of each device's spatial shard; with whole tiles per device, nothing needs masking.
+            prompt_rows = add_q.shape[2]
+            out = self._ring_sdpa_dynamic(
+                ttnn.concat([add_q, q], dim=2),
+                ttnn.concat([add_k, k], dim=2),
+                ttnn.concat([add_v, v], dim=2),
+                logical_n=total_sequence_length,
+            )
+            heads, rows, head_dim = out.shape[1], out.shape[2], out.shape[3]
+            sequence_2 = ttnn.slice(out, [0, 0, 0, 0], [1, heads, prompt_rows, head_dim])
+            spatial = ttnn.slice(out, [0, 0, prompt_rows, 0], [1, heads, rows, head_dim])
+            ttnn.deallocate(out)
+        elif dynamic_sdpa:
+            spatial = self._ring_sdpa_dynamic(q, k, v, logical_n=total_sequence_length)
+            sequence_2 = None
+        elif self.parallel_config.sequence_parallel.factor > 1:
             spatial, sequence_2, _lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
                 q,
                 k,
