@@ -1,0 +1,73 @@
+{
+ "note": "first traced version: demo drafter (bf16), one paged_update_cache per verify row, sampler argmax for drafts",
+ "summary": {
+  "K3": {
+   "mean_accepted": 1.9875389408099688,
+   "tps_mean_of_prompts": 125.89078801223971,
+   "ms_per_round": 24.13921468535482,
+   "first_diff_vs_plain_b1": [
+    84,
+    139,
+    145,
+    76,
+    35,
+    47,
+    112,
+    96,
+    34,
+    58
+   ]
+  },
+  "K4": {
+   "mean_accepted": 2.3653846153846154,
+   "tps_mean_of_prompts": 127.82351194690177,
+   "ms_per_round": 27.04596309140017,
+   "first_diff_vs_plain_b1": [
+    84,
+    139,
+    145,
+    76,
+    35,
+    47,
+    112,
+    96,
+    34,
+    58
+   ]
+  },
+  "K5": {
+   "mean_accepted": 2.6755725190839694,
+   "tps_mean_of_prompts": 127.58894106111379,
+   "ms_per_round": 29.82564092582991,
+   "first_diff_vs_plain_b1": [
+    84,
+    139,
+    145,
+    76,
+    35,
+    47,
+    112,
+    96,
+    34,
+    58
+   ]
+  },
+  "K6": {
+   "mean_accepted": 2.8257425742574256,
+   "tps_mean_of_prompts": 122.70040922012649,
+   "ms_per_round": 32.6104456085634,
+   "first_diff_vs_plain_b1": [
+    84,
+    139,
+    145,
+    76,
+    35,
+    47,
+    112,
+    96,
+    34,
+    58
+   ]
+  }
+ }
+}

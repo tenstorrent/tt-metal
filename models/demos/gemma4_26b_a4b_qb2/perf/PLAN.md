@@ -16,6 +16,7 @@ batch 1 **53.8 tok/s/user** (18.6 ms); batches 8 / 16 / 32 step 129 / 255 / 501 
 | WS4 | B | `moe_decode` op (Python `generic_op` + kernels, gemma4 custom_ops style): per-DRAM-bank streaming experts, GeGLU/SwiGLU, BFP8/BFP4 | expert read ≥ 400 GB/s/chip |
 | WS5 | B | Fused decode (gpt-oss `fused_decode` style) | B1 3-5 ms |
 | WS6 | A | MTP speculative decoding (port from `models/demos/gemma4`, #62806) | B1 ×1.5-2 effective |
+| WS7 | A | WS6 in vLLM serving (the plugin's speculative contract, as `models/demos/gemma4` `Gemma4MTPContractForCausalLM`) + adaptive fallback to plain decode on low acceptance | served 1-user tok/s ≥ 1.3× plain served |
 
 Machines: **A** = qb2-120-p01t07 (lead Claude, terminal `qb2-120-p01t07/t21`),
 **B** = qb2-120-p04t04 (Herdr address qb2-120-p04t04/gemma26-b; ssh alias qb2-49-14) (stage agent). Each agent uses **only its own QB2's chips**.
@@ -40,7 +41,7 @@ reconcile it at merge. Do not keep private copies of shared helpers: put shared 
 
 ## No waiting
 
-Each machine runs its own chain (A: WS1 → WS6, B: WS2 → WS4 → WS5) and never waits for the other.
+Each machine runs its own chain (A: WS1 → WS6 → WS7, B: WS2 → WS4 → WS5) and never waits for the other.
 No stage needs a stage from the other machine.
 - Start each stage from `hub/integration`. If the other machine landed nothing new, that is simply your own
   last landed stage; continue from it.
@@ -82,7 +83,9 @@ Common to every stage (protects the other machine's work):
 2. Full-model timing: `python perf/tools/decode_timing.py --output <json>` (batch 1 at 128 and 4K, batches 8/16/32; ~10 min).
    **No regression:** batch-1 step and batch-32 step each at most 3% slower than the previous `integration`'s proof,
    unless the stage's own target is that metric.
-3. Agreement: greedy 128 tokens vs the previous `integration`, top-1 agreement ≥ 99%.
+3. Agreement: greedy 128 tokens vs the previous `integration`, top-1 agreement ≥ 99%. If it lands between 98% and 99%
+   (near-tie flips from summation order), the stage passes only when teacher-forced top-1 parity against HF (CPU
+   reference, same prompts and tokens) is no worse than the previous `integration`'s, and `perf/WSN.md` reports both.
 4. Serving and GPQA (CI is unavailable; run locally): `perf/tools/serve_bench.sh qb2port <out> perf,gpqa`.
    GPQA-10 ≥ 8/10; serving 128/128 at 1 and 16 users completes with no failed requests.
 
@@ -96,6 +99,7 @@ stated as such in `perf/WSN.md` with the gap; less than that does not land):
 | WS3 | stopped (see "WS3 decision") |
 | WS4 | `moe_decode` is the **batch-1** MoE op (batch 2-32 stays on WS1's expert-parallel path, already ~490-500 GB/s); op unit tests pass vs torch at B=1 for Gemma (H 2816, I 704, E 128, k 8) and gpt-oss (H 2880, I 2880, E 32, k 4, bias) shapes, BFP8 and BFP4; expert weight read ≥ 400 GB/s per chip; MoE block ≤ 35 µs per layer in the model |
 | WS5 | batch-1 native step ≤ 5 ms; 2-layer fused decode vs HF over 8 steps PCC ≥ 0.995 |
+| WS7 | vLLM serving with `--speculative-config` (custom_class, K=5): 1-user 128/128 and the 10 MTP prompts served at ≥ 1.3× the plain served tok/s; greedy served output identical to `generate_speculative`; sampled / logprob requests take the plain path; no prompt slower than plain by > 3 % (adaptive fallback); 16-user serving and GPQA-10 unchanged vs plain within the common gate |
 | WS6 | greedy speculative output token-identical on 10 prompts to plain greedy decoded with the verify's numerics (the WS1 batched path, one token per step); teacher-forced top-1 agreement of the batched path vs batch-1 `integration` ≥ 99 % (batch-1 and batched decode differ only at near ties); effective batch-1 tok/s/user ≥ 1.5× the previous `integration` on real prompts |
 
 **Combined check** once WS1 and WS2 have both landed: ≤ 50 device programs per sliding decode layer at batch 1.
@@ -109,7 +113,7 @@ rerun the quick check at their stage's batch size as well as yours. Never revert
 if it breaks yours, tell them and adapt on your side.
 
 The hub enforces part of this: `integration` only fast-forwards, `wsN-done` tags cannot move, and each machine can
-push only its own stage branches (A: ws0/ws1/ws3/ws6, B: ws2/ws4/ws5).
+push only its own stage branches (A: ws0/ws1/ws3/ws6/ws7, B: ws2/ws4/ws5).
 
 Release cohort (Terminal/SWE) only at the end of the plan, run locally overnight on whichever machine is free.
 

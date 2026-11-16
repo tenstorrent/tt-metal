@@ -1,0 +1,12 @@
+[
+  "Explain, step by step, why the sky appears blue during the day and red at sunset.",
+  "Write a short Python function that returns the n-th Fibonacci number iteratively, then explain it.",
+  "What are the main differences between TCP and UDP? Give one use case for each.",
+  "Summarize the causes and consequences of the French Revolution in a few paragraphs.",
+  "Write a polite email to a colleague asking to reschedule tomorrow's meeting to Friday afternoon.",
+  "A train travels 180 km in 2 hours and then 120 km in 1.5 hours. What is its average speed? Show your work.",
+  "List five practical tips for improving sleep quality, with a one-sentence explanation for each.",
+  "Write a SQL query that returns the top three customers by total order value from tables customers(id, name) and orders(id, customer_id, amount), and explain how it works.",
+  "Write a short story (about 150 words) about a robot that learns to paint.",
+  "Explain what a hash table is, how collisions are handled, and the average time complexity of lookups."
+]

@@ -315,15 +315,36 @@ class _LocalAttention(OptimizedAttention):
             rope.sin,
             cfg.rms_norm_eps,
         )
-        for cache, update in ((k_cache, k), (v_cache, v)):
-            ttnn.experimental.paged_update_cache(
-                cache,
-                update,
-                update_idxs_tensor=cache_pos,
-                page_table=page_table,
-                block_size=cache.shape[-2],
-                num_kv_heads=cfg.num_key_value_heads,
-            )
+        # WS6 verify: rows at consecutive positions of one page (see model.decode_forward).
+        writes = getattr(self, "kv_write_rows", None)
+        if writes is not None and not isinstance(writes, (tuple, list)):
+            # One program per tensor: the gemma4 PagedUpdateRows op (one core per (row, KV head) tile row).
+            from models.demos.gemma4.custom_ops.paged_update_rows import PagedUpdateRows
+
+            for cache, update in ((k_cache, k), (v_cache, v)):
+                rows_first = ttnn.transpose(ttnn.to_memory_config(update, ttnn.L1_MEMORY_CONFIG), 1, 2)
+                PagedUpdateRows.op(
+                    cache,
+                    rows_first,
+                    writes.positions,
+                    writes.page_table,
+                    batch=1,
+                    num_kv_heads=cfg.num_key_value_heads,
+                    block_size=cache.shape[-2],
+                )
+            return self._ws2_attend(q, k_cache, v_cache, cache_pos, page_table)
+        # Otherwise one paged_update_cache per row (masked positions), in row order.
+        row_positions = writes or (cache_pos,)
+        for positions in row_positions:
+            for cache, update in ((k_cache, k), (v_cache, v)):
+                ttnn.experimental.paged_update_cache(
+                    cache,
+                    update,
+                    update_idxs_tensor=positions,
+                    page_table=page_table,
+                    block_size=cache.shape[-2],
+                    num_kv_heads=cfg.num_key_value_heads,
+                )
         return self._ws2_attend(q, k_cache, v_cache, cache_pos, page_table)
 
     def _ws2_attend(self, q, k_cache, v_cache, cache_pos, page_table):

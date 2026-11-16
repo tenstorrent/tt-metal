@@ -236,7 +236,7 @@ class Gemma4Model:
         self.precision_observations["embedding_output"] = dtype_name(value.dtype)
         return value
 
-    def _fused_decode(self, hidden, current_pos, cache_pos, page_table, kv_cache):
+    def _fused_decode(self, hidden, current_pos, cache_pos, page_table, kv_cache, return_hidden=False):
         """WS5 batch-1 decode: entry boundary (residual = the embedded token, first input norm), the layers between
         fused boundaries, the LM head on the last boundary's output (the final norm already applied)."""
         x = self.fused_b1.boundary.entry(hidden, self.fused_b1.g_entry)
@@ -254,16 +254,22 @@ class Gemma4Model:
                 page_table=layer_table,
                 kv_cache=cache,
             )
-        return self.logits(x, normed=True)
+        if return_hidden:
+            # x is the boundary's persistent buffer: hand out a DRAM copy (the final_norm contract).
+            normed = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+            return self.head_logits(normed), normed
+        return self.head_logits(x)
 
-    def logits(self, hidden, normed=False):
+    def logits(self, hidden):
+        return self.head_logits(self.final_norm(hidden))
+
+    def final_norm(self, hidden):
+        """Post-final-norm hidden (bf16, DRAM interleaved): the LM head input and the MTP drafter seed."""
         if hidden.dtype != ttnn.bfloat16:
             raise ValueError("Decoder output residual must be BF16")
         self.precision_observations["decoder_output"] = dtype_name(hidden.dtype)
         ws2_norm = getattr(self.layers[0], "ws2_norm", None)
-        if normed:
-            pass  # WS5: the last fused boundary applied the final norm (row 0 of an L1 TILE tensor)
-        elif hidden.is_sharded() and ws2_norm is not None:
+        if hidden.is_sharded() and ws2_norm is not None:
             # Batch 1: the last layer hands over the width-sharded residual; one sharded norm (gamma inside).
             hidden = ttnn.rms_norm(
                 hidden,
@@ -278,6 +284,9 @@ class Gemma4Model:
             if hidden.is_sharded():
                 hidden = ttnn.to_memory_config(hidden, ttnn.DRAM_MEMORY_CONFIG)
             hidden = ttnn.typecast(rms_norm(hidden, self.config.rms_norm_eps, self.norm), ttnn.bfloat16)
+        return hidden
+
+    def head_logits(self, hidden):
         logits = ttnn.linear(
             hidden,
             self.head,
@@ -303,7 +312,9 @@ class Gemma4Model:
         self.precision_observations["logits_output"] = dtype_name(logits.dtype)
         return logits
 
-    def prefill_forward(self, tokens, *, page_table, kv_cache, user_id=0, return_all_logits=False, start_pos=0):
+    def prefill_forward(
+        self, tokens, *, page_table, kv_cache, user_id=0, return_all_logits=False, start_pos=0, return_hidden=False
+    ):
         if len(kv_cache) != len(self.layers):
             raise ValueError("KV cache must contain one pair per model layer")
         hidden = self.embed(tokens)
@@ -319,18 +330,60 @@ class Gemma4Model:
             )
         if not return_all_logits:
             hidden = hidden[:, :, -1:, :]
+        if return_hidden:
+            # WS6 (MTP): also hand back the post-final-norm hidden, the drafter's seed.
+            normed = self.final_norm(hidden)
+            return self.head_logits(normed), normed
         return self.logits(hidden)
 
-    def decode_forward(self, tokens, *, current_pos, cache_pos, page_table, kv_cache, batch, active_slots=None):
+    def decode_forward(
+        self,
+        tokens,
+        *,
+        current_pos,
+        cache_pos,
+        page_table,
+        kv_cache,
+        batch,
+        active_slots=None,
+        return_hidden=False,
+        kv_write_rows=None,
+    ):
+        """``return_hidden`` (WS6): return ``(logits, post-final-norm hidden)``. ``kv_write_rows`` (WS6 verify):
+        one int32 cache-position tensor per row, each with only that row's position set (-1 elsewhere); the
+        batched layers then write K/V one row per program, in row order, because verify rows sit at consecutive
+        positions of one page and a single batched cache update would race on the shared tile. Or an object with
+        ``positions`` (one [1] int32 tensor per row) and ``page_table`` ([1, blocks]): one ``PagedUpdateRows``
+        program per tensor writes all rows of the one user."""
         # Sampler output is the persistent [1,1,1,32] token input. Only live slots
         # are embedded; the model trace fixes the slot count at request setup.
         if len(kv_cache) != len(self.layers):
             raise ValueError("KV cache must contain one pair per model layer")
+        if kv_write_rows is not None:
+            for layer in self.layers:
+                layer.layer.self_attn.kv_write_rows = (
+                    tuple(kv_write_rows) if isinstance(kv_write_rows, (tuple, list)) else kv_write_rows
+                )
+            try:
+                return self.decode_forward(
+                    tokens,
+                    current_pos=current_pos,
+                    cache_pos=cache_pos,
+                    page_table=page_table,
+                    kv_cache=kv_cache,
+                    batch=batch,
+                    active_slots=active_slots,
+                    return_hidden=return_hidden,
+                )
+            finally:
+                for layer in self.layers:
+                    layer.layer.self_attn.kv_write_rows = None
         active = tuple(range(batch)) if active_slots is None else tuple(active_slots)
-        if batch == 1 and len(active) == 1 and self.fused_b1 is not None:
+        per_row_writes = getattr(self.layers[0].layer.self_attn, "kv_write_rows", None) is not None
+        if batch == 1 and len(active) == 1 and self.fused_b1 is not None and not per_row_writes:
             # The entry boundary gathers row 0 with 32 B reads: its source must be in L1.
             hidden = self.embed(tokens[..., :1], memory_config=ttnn.L1_MEMORY_CONFIG)
-            return self._fused_decode(hidden, current_pos, cache_pos, page_table, kv_cache)
+            return self._fused_decode(hidden, current_pos, cache_pos, page_table, kv_cache, return_hidden)
         hidden = self.embed(tokens[..., :batch])
         # Batch 1: gather the RoPE rows once per step and layer type, not once per layer.
         rope_rows = {}
@@ -375,4 +428,7 @@ class Gemma4Model:
                     else:
                         rows.append(self.zero_hidden)
                 hidden = ttnn.concat(rows, dim=2)
+        if return_hidden:
+            normed = self.final_norm(hidden)
+            return self.head_logits(normed), normed
         return self.logits(hidden)
