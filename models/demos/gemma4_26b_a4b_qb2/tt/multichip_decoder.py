@@ -57,6 +57,8 @@ WS5_SHARED_B1 = os.environ.get("GEMMA4_26B_WS5_SHARED_B1", "1") != "0"
 # WS5: ... and as always-routed virtual experts inside the routed experts' programs (one gate|up and one down program
 # for both; both pre-norm gammas folded into the weights, so the batch-1 path needs WS5_FUSED).
 WS5_MERGED = os.environ.get("GEMMA4_26B_WS5_MERGED", "1") != "0"
+# WS5: batch-1 q / k / v norm + RoPE one head per core (fused_decode/heads.py).
+WS5_HEADS = os.environ.get("GEMMA4_26B_WS5_HEADS", "1") != "0"
 
 
 class DecodeRopeRows:
@@ -292,6 +294,14 @@ class _LocalAttention(OptimizedAttention):
         rope = DecodeRopeRows.gather(kwargs["rope_mats"], kwargs["position_idx"])
         cache_pos, page_table = kwargs["position_idx_cache"], kwargs["page_table"]
         k_cache, v_cache = kwargs["kv_cache"]
+        heads_b1 = getattr(self, "heads_b1", None)
+        if WS2_FUSED_CACHE and rows == 1 and heads_b1 is not None and getattr(self, "fused_partial", False):
+            # WS5: one head per core (fused_decode/heads.py), same outputs as qkv_heads_norm_rope_b1
+            q, k, v = heads_b1(qkv, rope.cos, rope.sin)
+            ttnn.experimental.paged_fused_update_cache(
+                k_cache, k, v_cache, v, update_idxs_tensor=cache_pos, page_table=page_table
+            )
+            return self._ws2_attend(q, k_cache, v_cache, cache_pos, page_table)
         if WS2_FUSED_CACHE and rows == 1:
             # v on its own core, so one program writes both caches.
             q, k, v = qkv_heads_norm_rope_b1(
@@ -2257,6 +2267,20 @@ class MultichipDecoder(OptimizedDecoder):
                 extra=getattr(self.moe_b1, "shared_slots", 0) if self.moe_b1.merged is not None else 0,
             )
         assert self.moe_b1.merged is None or (boundary.flat_router and boundary.flat_moe), "merged MoE: flat boundary"
+        attention = layer.self_attn
+        if WS5_HEADS and getattr(attention, "fused_heads", False):
+            from models.demos.gemma4_26b_a4b_qb2.tt.fused_decode.heads import HeadsB1
+
+            cfg = attention.source.config
+            attention.heads_b1 = HeadsB1(
+                boundary.mesh,
+                cfg.num_attention_heads,
+                cfg.num_key_value_heads,
+                cfg.head_dim,
+                ttnn.to_torch(ttnn.get_device_tensors(attention.q_gamma)[0]).float().reshape(-1)[: cfg.head_dim],
+                ttnn.to_torch(ttnn.get_device_tensors(attention.k_gamma)[0]).float().reshape(-1)[: cfg.head_dim],
+                cfg.rms_norm_eps,
+            )
 
     def fused_decode(self, x, *, rope_mats, current_pos, cache_pos, page_table, kv_cache):
         """WS5 batch-1 decode layer between two fused boundaries: x is this layer's normed input (the previous
