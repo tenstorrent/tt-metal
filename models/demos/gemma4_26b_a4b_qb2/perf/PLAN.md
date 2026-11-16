@@ -13,7 +13,7 @@ batch 1 **53.8 tok/s/user** (18.6 ms); batches 8 / 16 / 32 step 129 / 255 / 501 
 | WS1 | A | Batched decode: attention, router and experts once for all users; 32 whole experts per chip; batch trace buckets | 32 users: step ≤ 35 ms (from 501) |
 | WS2 | B | Glue-op cut at batch 1: norms, residual, dtypes, layouts, RoPE tables, one reduction op | B1 step ~11 ms (from 18.6) |
 | WS3 | A | **Stopped 16 Nov** (see below): batch 32 is expert-bandwidth-bound after WS1 | - |
-| WS4 | B | `moe_decode` ttnn op: per-DRAM-bank streaming experts, GeGLU/SwiGLU, BFP8/BFP4 | expert read ≥ 400 GB/s/chip |
+| WS4 | B | `moe_decode` op (Python `generic_op` + kernels, gemma4 custom_ops style): per-DRAM-bank streaming experts, GeGLU/SwiGLU, BFP8/BFP4 | expert read ≥ 400 GB/s/chip |
 | WS5 | B | Fused decode (gpt-oss `fused_decode` style) | B1 3-5 ms |
 | WS6 | A | MTP speculative decoding (port from `models/demos/gemma4`, #62806) | B1 ×1.5-2 effective |
 
@@ -30,7 +30,7 @@ All work happens in `models/demos/gemma4_26b_a4b_qb2/` (plus new op dirs for WS4
 | WS1 | batch dimension in every decode path; per-slot loops (`tt/optimized_decoder.py` decode_forward, `tt/multichip_decoder.py` `_decode_shared_batch`, `tt/model.py` decode); attention batching (RoPE per user, QKV heads, cache update, SDPA); **router**; **expert placement and MoE decode**; trace buckets in `tt/generator.py` / `tt/generator_vllm.py` | norm/residual/dtype/layout code paths except for adding the batch dimension; CCL op form |
 | WS2 | RMSNorms and residual adds, layer scalar, typecasts and dtype per segment, sharded↔interleaved moves, RoPE table layout, **CCL op form** (RS+AG → one reduction) | router, experts, attention batching |
 | WS3 | a new dense-expert module selected by batch size | sparse path from WS1 |
-| WS4 | new op under `ttnn/cpp/ttnn/operations/experimental/moe_decode/` + its tests; then the MoE call site | anything else |
+| WS4 | new `tt/moe_decode/` package (Python `ProgramDescriptor` op with its kernels beside it, like `models/demos/gemma4/custom_ops`) + its tests; then the MoE call site. A C++ ttnn device op only if another model adopts it | anything else |
 | WS5 | new `tt/fused_decode/` package + kernels; then the decode-layer switch | the non-fused path |
 | WS6 | new `tt/mtp/` + vLLM adapter hooks | decode internals |
 
@@ -94,9 +94,9 @@ stated as such in `perf/WSN.md` with the gap; less than that does not land):
 | WS1 | batch-32 native step ≤ 35 ms (WS0: 501); batched vs serialized per user PCC ≥ 0.999 at B 2/3/8/32 with mixed positions and pages; KV writes exact per slot; inactive slots untouched; 16-user serving tok/s/user ≥ 25 ; router + experts ≤ 10 device programs per decode layer at batch 1 and 32 (WS0: 34) |
 | WS2 | batch-1 native step ≤ 11.5 ms (WS0: 18.6); device programs per sliding decode layer **in WS2's scope** (everything except router and experts) ≤ 30 in a 2-layer device profile (WS0: ~98 of 132) |
 | WS3 | stopped (see "WS3 decision") |
-| WS4 | op unit tests pass vs torch for Gemma (H 2816, I 704, E 32/128, k 8, B 1/8/32) and gpt-oss (H 2880, I 2880, E 32, k 4, bias) shapes, BFP8 and BFP4; expert weight read ≥ 400 GB/s per chip; MoE block ≤ 35 µs per layer in the model |
+| WS4 | `moe_decode` is the **batch-1** MoE op (batch 2-32 stays on WS1's expert-parallel path, already ~490-500 GB/s); op unit tests pass vs torch at B=1 for Gemma (H 2816, I 704, E 128, k 8) and gpt-oss (H 2880, I 2880, E 32, k 4, bias) shapes, BFP8 and BFP4; expert weight read ≥ 400 GB/s per chip; MoE block ≤ 35 µs per layer in the model |
 | WS5 | batch-1 native step ≤ 5 ms; 2-layer fused decode vs HF over 8 steps PCC ≥ 0.995 |
-| WS6 | greedy speculative output token-identical to plain greedy on 10 prompts; effective batch-1 tok/s/user ≥ 1.5× the previous `integration` on real prompts |
+| WS6 | greedy speculative output token-identical on 10 prompts to plain greedy decoded with the verify's numerics (the WS1 batched path, one token per step); teacher-forced top-1 agreement of the batched path vs batch-1 `integration` ≥ 99 % (batch-1 and batched decode differ only at near ties); effective batch-1 tok/s/user ≥ 1.5× the previous `integration` on real prompts |
 
 **Combined check** once WS1 and WS2 have both landed: ≤ 50 device programs per sliding decode layer at batch 1.
 
