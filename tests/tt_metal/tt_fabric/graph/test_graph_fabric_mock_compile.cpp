@@ -107,7 +107,9 @@ INSTANTIATE_TEST_SUITE_P(
     [](const auto& info) { return std::string(enchantum::to_string(info.param)); });
 
 // Inter-domain on: builds every chip, then checks the perimeter inferred from the mock's unused links.
-// TT_FABRIC_EXPECT_PERIMETER / _UNTRAINED=<n> pin the counts for the mock (and FSD) in use.
+// TT_FABRIC_EXPECT_PERIMETER / _UNTRAINED=<n> pin the counts for the mock (and FSD) in use. For an untrained
+// link, take an SC16 aisle D host's mock, delete one ethernet_connections_to_remote_devices entry, and run with
+// that pod's FSD: the cable comes back as one untrained port.
 class GraphFabricInterDomain : public ::testing::Test {
 protected:
     void SetUp() override {
