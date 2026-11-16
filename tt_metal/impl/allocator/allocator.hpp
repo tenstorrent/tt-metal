@@ -78,6 +78,12 @@ public:
     void deallocate_buffer(Buffer* buffer);
     void deallocate_buffers();
 
+    // Books [address, address + size) in `logical_core`'s per-core L1 allocator (HYBRID), so no allocation lands there
+    // until release_per_core_range. For L1 something outside the allocator uses at a fixed address, such as the
+    // fast-dispatch kernels' queues on a dispatch core. Fails if any of it is already allocated.
+    void reserve_per_core_range(const CoreCoord& logical_core, DeviceAddr address, DeviceAddr size);
+    void release_per_core_range(const CoreCoord& logical_core, DeviceAddr address);
+
     std::unordered_set<Buffer*> get_allocated_buffers() const;
     size_t get_num_allocated_buffers() const;
     // Live DRAM allocations as disjoint per-bank [begin, end) ranges in address order. Scans every allocation.

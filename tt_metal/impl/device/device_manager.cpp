@@ -520,6 +520,18 @@ void DeviceManager::initialize_dispatch_firmware(bool force_recreate_topology) {
     init_done_.insert(DispatchKernelInitializer::key);
 }
 
+void DeviceManager::release_dispatch_l1() {
+    if (!initializers_.contains(DispatchKernelInitializer::key)) {
+        return;
+    }
+    auto* dispatch_kernel_initializer =
+        dynamic_cast<DispatchKernelInitializer*>(initializers_.at(DispatchKernelInitializer::key).get());
+    TT_ASSERT(
+        dispatch_kernel_initializer != nullptr,
+        "Expected DispatchKernelInitializer but got different FirmwareInitializer subclass");
+    dispatch_kernel_initializer->release_dispatch_l1();
+}
+
 const std::unordered_set<CoreCoord>& DeviceManager::get_virtual_dispatch_cores(ChipId dev_id) const {
     if (!initializers_.contains(DispatchKernelInitializer::key)) {
         // Dispatch firmware is not initialized in minimal mode

@@ -75,6 +75,7 @@ namespace experimental {
 class GlobalCircularBuffer;
 class CrossNodeDFB;
 class PrefetcherPipeImpl;
+class KernelConfigBufferImpl;
 }  // namespace experimental
 
 namespace program_dispatch {
@@ -208,8 +209,12 @@ public:
     // Finalize program offsets for all programs in the group
     void finalize_offsets();
 
-    // Write runtime args for all programs in the group
-    void write_runtime_args(bool force_slow_dispatch);
+    // Write runtime args for all programs in the group, into `kernel_config_buffer` for Tensix cores when one is given
+    void write_runtime_args(
+        bool force_slow_dispatch, const experimental::KernelConfigBufferImpl* kernel_config_buffer = nullptr);
+
+    // The group's programs with their devices
+    std::vector<std::pair<IDevice*, Program*>> programs();
 
     // Remove and return a program from the compile group
     std::unique_ptr<Program> remove_program(IDevice* device);

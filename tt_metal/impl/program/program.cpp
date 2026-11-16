@@ -71,6 +71,7 @@
 #include "program_device_map.hpp"
 #include "program_impl.hpp"
 #include "slow_dispatch.hpp"
+#include "kernel_config_buffer_impl.hpp"
 #include "tt-metalium/program.hpp"
 #include <tt_stl/span.hpp>
 #include <tt_stl/strong_type.hpp>
@@ -4078,11 +4079,27 @@ void detail::ProgramCompileGroup::finalize_offsets() {
     }
 }
 
-void detail::ProgramCompileGroup::write_runtime_args(bool force_slow_dispatch) {
+void detail::ProgramCompileGroup::write_runtime_args(
+    bool force_slow_dispatch, const experimental::KernelConfigBufferImpl* kernel_config_buffer) {
     std::lock_guard lock(mutex_);
     for (auto& [device, program] : program_device_map_) {
-        slow_dispatch::WriteRuntimeArgsToDevice(*device, *program, force_slow_dispatch);
+        slow_dispatch::WriteRuntimeArgsToDevice(
+            *device,
+            *program,
+            force_slow_dispatch,
+            kernel_config_buffer != nullptr && kernel_config_buffer->has_shard_on(device->id()) ? kernel_config_buffer
+                                                                                                : nullptr);
     }
+}
+
+std::vector<std::pair<IDevice*, Program*>> detail::ProgramCompileGroup::programs() {
+    std::lock_guard lock(mutex_);
+    std::vector<std::pair<IDevice*, Program*>> result;
+    result.reserve(program_device_map_.size());
+    for (auto& [device, program] : program_device_map_) {
+        result.emplace_back(device, program.get());
+    }
+    return result;
 }
 
 std::unique_ptr<Program> detail::ProgramCompileGroup::remove_program(tt::tt_metal::IDevice* device) {

@@ -371,6 +371,61 @@ TEST_F(DispatchContextFixture, RefusesPerCoreResidentL1OnDispatchCores) {
     EXPECT_NE(error.find("core (12,1)"), std::string::npos);
 }
 
+// WHAT: the mesh opened with a 16 KB KERNEL_CONFIG window, smaller than the dispatch kernels' blocks (cq_prefetch's
+//       is about 31 KB), then two manual fast-dispatch sessions, each moving a DRAM page. Needs HYBRID=1.
+// WHY:  the dispatch kernels then run from a kernel config buffer on the dispatch cores, which teardown must free:
+//       the second session's preflight refuses if it is still allocated there.
+// EXPECT: both sessions start and round-trip the page through fast dispatch; slow dispatch works afterwards.
+TEST_F(DispatchContextFixture, DispatchKernelsRunFromKernelConfigBufferWhenWindowIsSmall) {
+    if (auto reason = fd_preflight_skip_reason(); reason.has_value()) {
+        GTEST_SKIP() << *reason;
+    }
+    if (!MetalContext::instance().rtoptions().get_allocator_mode_hybrid()) {
+        GTEST_SKIP()
+            << "A kernel config buffer is allocated per core, which requires TT_METAL_ALLOCATOR_MODE_HYBRID=1.";
+    }
+
+    const auto& hal = MetalContext::instance().hal();
+    // The largest worker_l1_size leaves the window empty; keep 16 KB of it.
+    constexpr size_t window_size = 16 * 1024;
+    const size_t worker_l1_size = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE) +
+                                  hal.get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE) -
+                                  hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::KERNEL_CONFIG) -
+                                  window_size;
+    const MeshShape system_shape = MetalContext::instance().get_system_mesh().shape();
+    auto mesh = MeshDevice::create(
+        MeshDeviceConfig(system_shape),
+        DEFAULT_L1_SMALL_SIZE,
+        DEFAULT_TRACE_REGION_SIZE,
+        /*num_command_queues=*/1,
+        DispatchCoreConfig{},
+        /*l1_bank_remap=*/{},
+        worker_l1_size);
+    if (!has_expected_dispatch_column(*mesh)) {
+        GTEST_SKIP() << "This test expects Blackhole dispatch cores (12,0) and (12,1).";
+    }
+
+    constexpr uint32_t page_size = 4096;
+    DeviceLocalBufferConfig dram{.page_size = page_size, .buffer_type = BufferType::DRAM, .bottom_up = true};
+    ReplicatedBufferConfig dram_global{.size = page_size};
+    for (uint32_t session = 0; session < 2; session++) {
+        ASSERT_NO_THROW(experimental::DispatchContext::get().initialize_fast_dispatch(mesh.get()))
+            << "fast-dispatch session " << session;
+        auto probe = MeshBuffer::create(dram_global, dram, mesh.get());
+        std::vector<uint32_t> src(page_size / sizeof(uint32_t));
+        std::iota(src.begin(), src.end(), 100 * (session + 1));
+        EnqueueWriteMeshBuffer(mesh->mesh_command_queue(), probe, src);
+        Finish(mesh->mesh_command_queue());
+        std::vector<uint32_t> dst;
+        ReadShard(mesh->mesh_command_queue(), dst, probe, MeshCoordinate(0, 0));
+        EXPECT_EQ(dst, src) << "fast-dispatch DRAM round trip failed in session " << session;
+        probe.reset();
+        ASSERT_NO_THROW(experimental::DispatchContext::get().terminate_fast_dispatch(mesh.get()))
+            << "fast-dispatch session " << session;
+    }
+    expect_slow_dispatch_dram_round_trip(mesh.get(), 300);
+}
+
 // WHAT: a persistent-arena region on (12,1), booked in the MESH allocator's arena.
 // WHY:  arena regions are not buffers and are not in the allocator's free lists; the guard must read
 //       the arena separately or it misses them.
