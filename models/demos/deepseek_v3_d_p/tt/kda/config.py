@@ -142,6 +142,8 @@ class KDAProgramConfig:
     # Use the projection matmul schedules tuned at _TUNED_PROJECTION_ROWS; False keeps the
     # auto-selected ttnn.linear configs.
     tuned_projection_matmuls: bool = False
+    # Fused output projection + reduce-scatter: its CCL port cores in the last grid column instead of the first row.
+    output_projection_column_major_ccl: bool = False
     # Channels per page of the convolution tail (``KdaState.convolution``); None keeps it token-paged.
     convolution_page_channels: int | None = None
     # Blackhole di/dt: the input and decay projections run on at most this many cores (matmul_grid).
@@ -258,6 +260,8 @@ def kimi_k3_program_config(*, active_seq_len_local: int, tp_ccl_topology: ttnn.T
         projection_dtype=KIMI_K3_PROJECTION_DTYPE,
         # Galaxy SP8xTP4 at T=5120; other geometries keep the auto-selected projection configs.
         tuned_projection_matmuls=active_seq_len_local == _TUNED_PROJECTION_ROWS,
+        # Tuned on Galaxy (12x10 grid, TP4).
+        output_projection_column_major_ccl=True,
         # The state migration contract's segment, so a slab copy of the convolution tail is a page copy.
         convolution_page_channels=KDA_CONVOLUTION_PAGE_CHANNELS,
     )
