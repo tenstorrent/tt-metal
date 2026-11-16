@@ -99,7 +99,7 @@ stated as such in `perf/WSN.md` with the gap; less than that does not land):
 | WS6 | greedy speculative output token-identical to plain greedy on 10 prompts; effective batch-1 tok/s/user ≥ 1.5× the previous `integration` on real prompts |
 
 **Proof files:** commit the gate's evidence next to the report, in `perf/results/WSN/`: `decode_timing.json`,
-the numerics log lines (`DECODER_NUMERICS ...`), the agreement result, `gpqa/summary.json` and the serving summaries
+`numerics.txt` (the `DECODER_NUMERICS ...` lines), the agreement result, `gpqa/summary.json` and the serving summaries
 (small JSON only, no logs over 1 MB). `perf/WSN.md` quotes the numbers and states done or partial.
 
 **Merging someone else's code:** when resolving a conflict in code the other stage owns, keep their behaviour and
