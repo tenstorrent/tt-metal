@@ -23,8 +23,6 @@
         <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
         <script src="../_static/copybutton.js?v=d122708d"></script>
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
-        <script>window.MathJax = {"tex": {"inlineMath": [["$", "$"], ["\\(", "\\)"]], "processEscapes": true}, "options": {"ignoreHtmlClass": "tex2jax_ignore|mathjax_ignore|document", "processHtmlClass": "tex2jax_process|mathjax_process|math|output_area"}}</script>
-        <script defer="defer" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
         <script src="../_static/posthog.js?v=aa5946f9"></script>
     <script src="../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../genindex.html" />
@@ -1500,7 +1498,7 @@ use <code class="docutils literal notranslate"><span class="pre">align_shape_to_
 </div>
 <div class="tt-api-card docutils container">
 <p class="tt-api-card-name"><a class="reference internal" href="api/ttnn.normalize_global.html#ttnn.normalize_global" title="ttnn.normalize_global"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.normalize_global</span></code></a></p>
-<p class="tt-api-card-desc">Normalizes <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> over all of its elements as <span class="math notranslate nohighlight">\((x - \mu) / \sigma\)</span>, where <span class="math notranslate nohighlight">\(\mu\)</span> and <span class="math notranslate nohighlight">\(\sigma\)</span> are the mean and the population standard deviation over N, C, H and W.</p>
+<p class="tt-api-card-desc">Performs normalize_global function on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>.</p>
 </div>
 <div class="tt-api-card docutils container">
 <p class="tt-api-card-name"><a class="reference internal" href="api/ttnn.normalize_hw.html#ttnn.normalize_hw" title="ttnn.normalize_hw"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.normalize_hw</span></code></a></p>
@@ -2084,7 +2082,15 @@ use <code class="docutils literal notranslate"><span class="pre">align_shape_to_
 </div>
 <div class="tt-api-card docutils container">
 <p class="tt-api-card-name"><a class="reference internal" href="api/ttnn.concat.html#ttnn.concat" title="ttnn.concat"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.concat</span></code></a></p>
-<p class="tt-api-card-desc">Concatenates the input tensors along dimension <cite>dim</cite>.</p>
+<p class="tt-api-card-desc"></p>
+<dl class="field-list simple">
+<dt class="field-odd">param input_tensor<span class="colon">:</span>
+</dt>
+<dd class="field-odd">
+<p>the input tensors.</p>
+</dd>
+</dl>
+
 </div>
 <div class="tt-api-card docutils container">
 <p class="tt-api-card-name"><a class="reference internal" href="api/ttnn.copy.html#ttnn.copy" title="ttnn.copy"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.copy</span></code></a></p>
@@ -2144,7 +2150,7 @@ use <code class="docutils literal notranslate"><span class="pre">align_shape_to_
 </div>
 <div class="tt-api-card docutils container">
 <p class="tt-api-card-name"><a class="reference internal" href="api/ttnn.nonzero.html#ttnn.nonzero" title="ttnn.nonzero"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.nonzero</span></code></a></p>
-<p class="tt-api-card-desc">Finds the non-zero elements of a rank-4 input tensor and returns their count and indices.</p>
+<p class="tt-api-card-desc">Returns the number of elements (N) that are non-zero as well as a tensor of the same shape as input where the first N elements are the indices of non-zero elements.</p>
 </div>
 <div class="tt-api-card docutils container">
 <p class="tt-api-card-name"><a class="reference internal" href="api/ttnn.pad.html#ttnn.pad" title="ttnn.pad"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.pad</span></code></a></p>
@@ -2160,11 +2166,11 @@ use <code class="docutils literal notranslate"><span class="pre">align_shape_to_
 </div>
 <div class="tt-api-card docutils container">
 <p class="tt-api-card-name"><a class="reference internal" href="api/ttnn.repeat_interleave.html#ttnn.repeat_interleave" title="ttnn.repeat_interleave"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.repeat_interleave</span></code></a></p>
-<p class="tt-api-card-desc">Repeats each element of <cite>input_tensor</cite> <cite>repeats</cite> times along dimension <cite>dim</cite>.</p>
+<p class="tt-api-card-desc">Repeats elements of a <code class="xref py py-attr docutils literal notranslate"><span class="pre">tensor</span></code> in the given <code class="xref py py-attr docutils literal notranslate"><span class="pre">dim</span></code>.</p>
 </div>
 <div class="tt-api-card docutils container">
 <p class="tt-api-card-name"><a class="reference internal" href="api/ttnn.reshape.html#ttnn.reshape" title="ttnn.reshape"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.reshape</span></code></a></p>
-<p class="tt-api-card-desc">Returns a tensor with the same data and number of elements as <cite>input_tensor</cite>, but with the given shape.</p>
+<p class="tt-api-card-desc">Note: for a 0 cost view, the following conditions must be met:</p>
 </div>
 <div class="tt-api-card docutils container">
 <p class="tt-api-card-name"><a class="reference internal" href="api/ttnn.reshape_on_device.html#ttnn.reshape_on_device" title="ttnn.reshape_on_device"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.reshape_on_device</span></code></a></p>
@@ -2196,7 +2202,7 @@ use <code class="docutils literal notranslate"><span class="pre">align_shape_to_
 </div>
 <div class="tt-api-card docutils container">
 <p class="tt-api-card-name"><a class="reference internal" href="api/ttnn.slice.html#ttnn.slice" title="ttnn.slice"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.slice</span></code></a></p>
-<p class="tt-api-card-desc">Returns a slice of the input tensor, given the start and end indices of each dimension and an optional step.</p>
+<p class="tt-api-card-desc">Returns a sliced tensor.</p>
 </div>
 <div class="tt-api-card docutils container">
 <p class="tt-api-card-name"><a class="reference internal" href="api/ttnn.sort.html#ttnn.sort" title="ttnn.sort"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.sort</span></code></a></p>

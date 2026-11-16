@@ -375,82 +375,43 @@
 </h1>
 <span class="target" id="id1"></span><dl class="py function">
 <dt class="sig sig-object py" id="ttnn.slice">
-<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">slice</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">slice_start</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">List</span><span class="p"><span class="pre">[</span></span><span class="pre">int</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">slice_end</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">List</span><span class="p"><span class="pre">[</span></span><span class="pre">int</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">slice_step</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">List</span><span class="p"><span class="pre">[</span></span><span class="pre">int</span><span class="p"><span class="pre">]</span></span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">memory_config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.MemoryConfig</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">output_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pad_value</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">float</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sub_core_grids</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.CoreRangeSet</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn.Tensor</span></span></span><a class="headerlink" href="#ttnn.slice" title="Permalink to this definition"></a>
+<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">slice</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="pre">input_tensor:</span> <span class="pre">ttnn.Tensor,</span> <span class="pre">slice_start:</span> <span class="pre">List[int],</span> <span class="pre">slice_end:</span> <span class="pre">List[int],</span> <span class="pre">slice_step:</span> <span class="pre">List[int]</span> <span class="pre">=</span> <span class="pre">``None``</span> <span class="pre">(step</span> <span class="pre">=</span> <span class="pre">1</span> <span class="pre">for</span> <span class="pre">all</span> <span class="pre">dims,</span> <span class="pre">*,</span> <span class="pre">memory_config:</span> <span class="pre">ttnn.MemoryConfig</span> <span class="pre">=</span> <span class="pre">the</span> <span class="pre">input</span> <span class="pre">tensor's</span> <span class="pre">memory</span> <span class="pre">config,</span> <span class="pre">output_tensor:</span> <span class="pre">ttnn.Tensor</span> <span class="pre">=</span> <span class="pre">``None``,</span> <span class="pre">pad_value:</span> <span class="pre">float</span> <span class="pre">|</span> <span class="pre">None,</span> <span class="pre">sub_core_grids:</span> <span class="pre">ttnn.CoreRangeSet</span> <span class="pre">=</span> <span class="pre">None</span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn.Tensor</span></span></span><a class="headerlink" href="#ttnn.slice" title="Permalink to this definition"></a>
 </dt>
 <dd>
-<p>Returns a slice of the input tensor, given the start and end indices of each dimension and an optional step.</p>
-<p><code class="docutils literal notranslate"><span class="pre">slice_start</span></code> and <code class="docutils literal notranslate"><span class="pre">slice_end</span></code> can also be passed positionally as <code class="docutils literal notranslate"><span class="pre">ttnn.Tensor</span></code> objects; that overload also
-takes the <code class="docutils literal notranslate"><span class="pre">slice_dim</span></code> and <code class="docutils literal notranslate"><span class="pre">num_devices</span></code> keywords.</p>
+<p>Returns a sliced tensor. If the input tensor is on host, the slice will be performed on host, and if its on device it will be performed on device.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
 <ul class="simple">
-<li><p><span class="tt-api-param-name"><strong>input_tensor</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">Input tensor, on device.</span></p></li>
-<li><p><span class="tt-api-param-name"><strong>slice_start</strong> (<em>List</em><em>[</em><em>int</em><em>]</em>)</span><span class="tt-api-param-desc">Start indices of input tensor. Negative values count from the end of the dim; other values must be in <code class="docutils literal notranslate"><span class="pre">[0,</span> <span class="pre">input_tensor_shape[i])</span></code>.</span></p></li>
-<li><p><span class="tt-api-param-name"><strong>slice_end</strong> (<em>List</em><em>[</em><em>int</em><em>]</em>)</span><span class="tt-api-param-desc">End indices of input tensor (exclusive). Negative values count from the end of the dim; other values must be in <code class="docutils literal notranslate"><span class="pre">(0,</span> <span class="pre">input_tensor_shape[i]]</span></code>.</span></p></li>
-<li><p><span class="tt-api-param-name"><strong>slice_step</strong> (<em>List</em><em>[</em><em>int</em><em>]</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Step size for each dim. Defaults to <cite>None</cite>, which uses a step of 1 for every dim.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>input_tensor</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">Input tensor.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>slice_start</strong> (<em>List</em><em>[</em><em>int</em><em>]</em>)</span><span class="tt-api-param-desc">Start indices of input tensor. Values along each dim must be in <code class="docutils literal notranslate"><span class="pre">[0,</span> <span class="pre">input_tensor_shape[i])</span></code>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>slice_end</strong> (<em>List</em><em>[</em><em>int</em><em>]</em>)</span><span class="tt-api-param-desc">End indices of input tensor (exclusive). Values along each dim must be in <code class="docutils literal notranslate"><span class="pre">(0,</span> <span class="pre">input_tensor_shape[i]]</span></code>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>slice_step</strong> (<em>List</em><em>[</em><em>int</em><em>]</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Step size for each dim. Defaults to <code class="docutils literal notranslate"><span class="pre">None</span></code> (step = 1 for all dims).</span></p></li>
 </ul>
 </dd>
 <dt class="field-even">Keyword Arguments<span class="colon">:</span>
 </dt>
 <dd class="field-even">
 <ul class="simple">
-<li><p><span class="tt-api-param-name"><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Memory configuration for the output tensor. Defaults to <cite>None</cite>, which uses the input tensor’s memory configuration.</span></p></li>
-<li><p><span class="tt-api-param-name"><strong>output_tensor</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Pre-allocated output tensor. Its shape must match the slice output. Defaults to <cite>None</cite>.</span></p></li>
-<li><p><span class="tt-api-param-name"><strong>pad_value</strong> (<em>float</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Fill value for the implicit tile padding of a TILE output. It is applied when a unit-step slice, with start indices in the last two dims that are multiples of 32, changes the size of one of the last two dims to a size that is not a multiple of 32. Defaults to <cite>None</cite>, which leaves the padding undefined.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Memory configuration for the output tensor. Defaults to the input tensor’s memory config.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>output_tensor</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Pre-allocated output tensor. Its shape must match the slice output. Defaults to <code class="docutils literal notranslate"><span class="pre">None</span></code>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>pad_value</strong> (<em>float</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Fill value for implicit tile padding on tiled tensors. Padding is undefined by default.</span></p></li>
 <li><p><span class="tt-api-param-name"><strong>sub_core_grids</strong> (<em>ttnn.CoreRangeSet</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">sub core grids for the operation. Defaults to <cite>None</cite>.</span></p></li>
 </ul>
-</dd>
-<dt class="field-odd">Returns<span class="colon">:</span>
-</dt>
-<dd class="field-odd">
-<p><span class="tt-api-param-name"><em>ttnn.Tensor</em></span><span class="tt-api-param-desc">the output tensor.</span></p>
 </dd>
 </dl>
 <div class="admonition note">
 <p class="admonition-title">Note</p>
-<p>Supported dtypes and layouts:</p>
-<table class="docutils align-default">
-<thead>
-<tr class="row-odd">
-<th class="head"><p>Dtypes</p></th>
-<th class="head"><p>Layouts</p></th>
-</tr>
-</thead>
-<tbody>
-<tr class="row-even">
-<td><p>BFLOAT16, FLOAT32, INT32, UINT32</p></td>
-<td><p>TILE, ROW_MAJOR</p></td>
-</tr>
-<tr class="row-odd">
-<td><p>UINT16</p></td>
-<td><p>TILE, ROW_MAJOR</p></td>
-</tr>
-<tr class="row-even">
-<td><p>UINT8</p></td>
-<td><p>ROW_MAJOR</p></td>
-</tr>
-<tr class="row-odd">
-<td><p>BFLOAT8_B</p></td>
-<td><p>TILE</p></td>
-</tr>
-</tbody>
-</table>
-<p><code class="docutils literal notranslate"><span class="pre">BFLOAT8_B</span></code> tensors need a <code class="docutils literal notranslate"><span class="pre">slice_step</span></code> of 1.</p>
-<p><code class="docutils literal notranslate"><span class="pre">BFLOAT16</span></code> TILE input values must not be NaN when a <code class="docutils literal notranslate"><span class="pre">slice_step</span></code> value is not 1, or when the start
-index of the last dim is not a multiple of 32.</p>
+<p>Strided slicing (<code class="docutils literal notranslate"><span class="pre">slice_step</span> <span class="pre">!=</span> <span class="pre">1</span></code>) is not supported for <code class="docutils literal notranslate"><span class="pre">bfloat8_b</span></code> tensors.</p>
 <p>TILE layout tensors must use the standard 32x32 tile, and a pre-allocated <code class="docutils literal notranslate"><span class="pre">output_tensor</span></code> must
 carry the same tile as the input.</p>
 </div>
-<dl class="simple">
-<dt>Memory Support:</dt>
-<dd>
-<ul class="simple">
-<li><p>Interleaved: DRAM and L1</p></li>
-<li><p>Sharded: HEIGHT_SHARDED, WIDTH_SHARDED and BLOCK_SHARDED input and output; DRAM-sharded input is also accepted with an interleaved output</p></li>
-<li><p>ND sharded: input and output, for tensors of rank 2 or more</p></li>
-</ul>
+<dl class="field-list simple">
+<dt class="field-odd">Returns<span class="colon">:</span>
+</dt>
+<dd class="field-odd">
+<p><span class="tt-api-param-name"><em>ttnn.Tensor</em></span><span class="tt-api-param-desc">the output tensor.</span></p>
 </dd>
 </dl>
 <div class="admonition-example admonition">
@@ -461,12 +422,12 @@ carry the same tile as the input.</p>
 
 <span class="c1"># Slice the tensor</span>
 <span class="n">sliced_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">slice</span><span class="p">(</span><span class="n">input_tensor</span><span class="p">,</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">64</span><span class="p">,</span> <span class="mi">16</span><span class="p">],</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">1</span><span class="p">])</span>
-<span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Sliced Tensor Shape: </span><span class="si">{</span><span class="n">sliced_tensor</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>  <span class="c1"># Shape([1, 1, 32, 16])</span>
+<span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">"Sliced Tensor Shape:"</span><span class="p">,</span> <span class="n">sliced_tensor</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span>  <span class="c1"># Sliced Tensor Shape: Shape([1, 1, 32, 16])</span>
 
 <span class="c1"># Create a tensor to slice without step</span>
 <span class="n">input_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">rand</span><span class="p">((</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">64</span><span class="p">,</span> <span class="mi">32</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">Layout</span><span class="o">.</span><span class="n">TILE</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
 <span class="n">output</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">slice</span><span class="p">(</span><span class="n">input_tensor</span><span class="p">,</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">32</span><span class="p">,</span> <span class="mi">32</span><span class="p">])</span>
-<span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Sliced Tensor Shape: </span><span class="si">{</span><span class="n">output</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>  <span class="c1"># Shape([1, 1, 32, 32])</span>
+<span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">"Sliced Tensor Shape:"</span><span class="p">,</span> <span class="n">output</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span>  <span class="c1"># Sliced Tensor Shape: Shape([1, 1, 32, 32])</span>
 </pre></div>
 </div>
 </div>
