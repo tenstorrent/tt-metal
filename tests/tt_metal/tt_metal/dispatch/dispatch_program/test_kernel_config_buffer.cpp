@@ -38,7 +38,7 @@ protected:
 
     void SetUp() override {
         if (!validate_dispatch_mode()) {
-            GTEST_SKIP();
+            GTEST_SKIP() << "This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset";
         }
         arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         // These tests are only supported on Wormhole and Blackhole (skip Quasar)
@@ -92,7 +92,7 @@ class KernelSizeTestBigBuffer : public KernelSizeTestDefaultBuffer {
 protected:
     void SetUp() override {
         if (!validate_dispatch_mode()) {
-            GTEST_SKIP();
+            GTEST_SKIP() << "This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset";
         }
         arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
 

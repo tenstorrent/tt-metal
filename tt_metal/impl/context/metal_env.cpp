@@ -168,7 +168,7 @@ void MetalEnvImpl::initialize_base_objects() {
     this->rtoptions_ = std::make_unique<llrt::RunTimeOptions>();
 
     if (descriptor_.is_mock_device()) {
-        log_info(tt::LogMetal, "Using programmatically configured mock mode: {}", *descriptor_.mock_cluster_desc_path);
+        log_debug(tt::LogMetal, "Using programmatically configured mock mode: {}", *descriptor_.mock_cluster_desc_path);
         this->rtoptions_->set_mock_cluster_desc(*descriptor_.mock_cluster_desc_path);
     }
 
@@ -212,7 +212,7 @@ void MetalEnvImpl::initialize_base_objects() {
         // just take the descriptor of the first device
         this->cluster_->get_quasar_ip_variant());
     if (platform_arch == tt::ARCH::QUASAR) {
-        log_info(tt::LogMetal, "Quasar IP variant: {}", this->cluster_->get_quasar_ip_variant());
+        log_debug(tt::LogMetal, "Quasar IP variant: {}", this->cluster_->get_quasar_ip_variant());
     }
 
     this->rtoptions_->ParseAllFeatureEnv(*hal_);
@@ -568,7 +568,7 @@ void MetalEnvImpl::initialize_control_plane_impl() {
         this->construct_control_plane(mesh_graph_desc_path);
         return;
     }
-    log_info(tt::LogDistributed, "Using auto discovery to generate mesh graph.");
+    log_debug(tt::LogDistributed, "Using auto discovery to generate mesh graph.");
 
     if (*distributed_context_->size() == 1) {
         this->construct_control_plane();
@@ -621,7 +621,7 @@ void MetalEnvImpl::construct_control_plane() {
             "Mapping will be ignored. Please provide a custom mesh graph descriptor path for custom logical to "
             "physical mapping.");
     }
-    log_info(tt::LogDistributed, "Constructing control plane using auto-discovery (no mesh graph descriptor).");
+    log_debug(tt::LogDistributed, "Constructing control plane using auto-discovery (no mesh graph descriptor).");
     control_plane_ = std::make_unique<tt::tt_fabric::ControlPlane>(
         get_cluster(), *rtoptions_, get_hal(), *distributed_context_, this->control_plane_config());
     fabric_config_ = control_plane_->get_fabric_config();

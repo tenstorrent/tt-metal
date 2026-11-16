@@ -23,7 +23,7 @@ void CommandQueueInitializer::init(
     devices_ = devices;
 
     if (descriptor_->is_mock_device()) {
-        log_info(tt::LogMetal, "Skipping host-side CQ initialization for mock devices");
+        log_debug(tt::LogMetal, "Skipping host-side CQ initialization for mock devices");
         initialized_ = true;
         return;
     }

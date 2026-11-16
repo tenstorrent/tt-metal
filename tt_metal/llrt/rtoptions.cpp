@@ -402,7 +402,7 @@ RunTimeOptions::RunTimeOptions() : system_kernel_dir("/usr/share/tenstorrent/ker
     // ttsim exits on any access to the ECC registers, so the L1 ECC halt is forced off too.
     if (this->runtime_target_device_ == tt::TargetDevice::Simulator ||
         this->runtime_target_device_ == tt::TargetDevice::Emule) {
-        log_info(tt::LogMetal, "Disabling multi-erisc mode with simulator/emule target device");
+        log_debug(tt::LogMetal, "Disabling multi-erisc mode with simulator/emule target device");
         this->enable_2_erisc_mode = false;
         this->disable_l1_ecc_halt = true;
     }

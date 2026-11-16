@@ -64,9 +64,9 @@ inline tt::ARCH detect_arch() { return tt::get_arch_from_string(tt::test_utils::
 
 inline void log_dispatch_mode(bool slow_dispatch) {
     if (slow_dispatch) {
-        log_info(tt::LogTest, "Running test using Slow Dispatch");
+        log_debug(tt::LogTest, "Running test using Slow Dispatch");
     } else {
-        log_info(tt::LogTest, "Running test using Fast Dispatch");
+        log_debug(tt::LogTest, "Running test using Fast Dispatch");
     }
 }
 

@@ -31,7 +31,7 @@ protected:
 
     void SetUp() override {
         if (!this->validate_dispatch_mode()) {
-            GTEST_SKIP();
+            GTEST_SKIP() << "This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset";
         }
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         this->create_devices();
@@ -48,7 +48,6 @@ protected:
         this->slow_dispatch_ = false;
         auto* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (slow_dispatch) {
-            log_info(tt::LogTest, "This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
             this->slow_dispatch_ = false;
             return false;
         }
@@ -90,7 +89,7 @@ class UnitMeshCQTraceFixture : public UnitMeshCQFixture {
 protected:
     void SetUp() override {
         if (!this->validate_dispatch_mode()) {
-            GTEST_SKIP();
+            GTEST_SKIP() << "This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset";
         }
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         init_max_dfbs();
@@ -106,7 +105,7 @@ protected:
 
     void SetUp() override {
         if (!this->validate_dispatch_mode()) {
-            GTEST_SKIP();
+            GTEST_SKIP() << "This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset";
         }
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         this->create_devices();
@@ -126,7 +125,6 @@ protected:
         this->slow_dispatch_ = false;
         auto* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (slow_dispatch) {
-            log_info(tt::LogTest, "This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
             this->slow_dispatch_ = false;
             return false;
         }
@@ -193,7 +191,7 @@ class UnitMeshCQSingleCardTraceFixture : virtual public UnitMeshCQSingleCardFixt
 protected:
     void SetUp() override {
         if (!this->validate_dispatch_mode()) {
-            GTEST_SKIP();
+            GTEST_SKIP() << "This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset";
         }
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         this->create_devices(90000000);
@@ -226,7 +224,7 @@ protected:
 
     void SetUp() override {
         if (!validate_dispatch_mode()) {
-            GTEST_SKIP();
+            GTEST_SKIP() << "This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset";
         }
         arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
 
@@ -256,7 +254,6 @@ private:
         slow_dispatch_ = false;
         auto* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (slow_dispatch) {
-            log_info(tt::LogTest, "This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
             return false;
         }
         return true;
@@ -328,9 +325,8 @@ protected:
         this->slow_dispatch_ = false;
         auto* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (slow_dispatch) {
-            log_info(tt::LogTest, "This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
             this->slow_dispatch_ = true;
-            GTEST_SKIP();
+            GTEST_SKIP() << "This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset";
         }
 
         arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());

@@ -368,7 +368,7 @@ void FabricFirmwareInitializer::init(
 void FabricFirmwareInitializer::configure() {
     // Mock/Emule: no router ever runs, so the sync below would spin to its timeout and throw.
     if (descriptor_->is_mock_device() || skip_fabric_fw_for_emule(cluster_)) {
-        log_info(tt::LogMetal, "Skipping fabric configure (router sync) for mock/emule devices");
+        log_debug(tt::LogMetal, "Skipping fabric configure (router sync) for mock/emule devices");
         initialized_.test_and_set();
         return;
     }
@@ -383,7 +383,7 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
         !init_done.contains(InitializerKey::Dispatch),
         "FabricFirmwareInitializer must be torn down after DispatchKernelInitializer");
     if (descriptor_->is_mock_device() || skip_fabric_fw_for_emule(cluster_)) {
-        log_info(tt::LogMetal, "Skipping fabric teardown for mock/emule devices");
+        log_debug(tt::LogMetal, "Skipping fabric teardown for mock/emule devices");
         // Free any compiled fabric programs, but leave devices_/initialized_ as they were.
         fabric_programs_.clear();
         init_done.erase(key);
