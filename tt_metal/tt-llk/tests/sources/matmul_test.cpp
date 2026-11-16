@@ -409,6 +409,7 @@ constexpr bool matmul_tile_mop = !matmul_math_row_form<MATH_FIDELITY, dest_sync,
 // (MATMUL_KERNEL_FORMATS, partials included) and the test's in0, in1 and output
 #ifdef RUNTIME_FORMATS
 constexpr bool matmul_prod_may_pack_32bit = true;
+constexpr bool matmul_prod_lofi_wide      = true;
 #else
 constexpr bool matmul_prod_kernel_has_32bit_cb()
 {
@@ -425,8 +426,9 @@ constexpr bool matmul_prod_may_pack_32bit = matmul_prod_kernel_has_32bit_cb() ||
                                             ckernel::matmul_format_is_32bit(static_cast<DataFormat>(UNPACK_A_IN)) ||
                                             ckernel::matmul_format_is_32bit(static_cast<DataFormat>(UNPACK_B_IN)) ||
                                             ckernel::matmul_format_is_32bit(static_cast<DataFormat>(PACK_OUT));
+constexpr bool matmul_prod_lofi_wide = ckernel::matmul_kernel_lofi_wide(MATMUL_KERNEL_FORMATS);
 #endif
-constexpr bool matmul_tile_mop = MATMUL_FE_FORM_KT == 0 ? !matmul_plain_row_form<MATH_FIDELITY, dest_sync, is_fp32_dest_acc_en>(matmul_prod_may_pack_32bit)
+constexpr bool matmul_tile_mop = MATMUL_FE_FORM_KT == 0 ? !matmul_plain_row_form<MATH_FIDELITY, dest_sync, is_fp32_dest_acc_en>(matmul_prod_may_pack_32bit, matmul_prod_lofi_wide)
                                                         : !matmul_math_row_form<MATH_FIDELITY, dest_sync, is_fp32_dest_acc_en, MATMUL_FE_FORM_KT, MATMUL_FE_FORM_OUT>();
 #else
 constexpr bool matmul_tile_mop = false;

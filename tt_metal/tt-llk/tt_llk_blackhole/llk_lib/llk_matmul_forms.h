@@ -213,13 +213,28 @@ constexpr char matmul_default_form()
 
 // The math form of a call that keys no k steps per DEST section (a plain matmul_block), from constants of the whole kernel so its init
 // and calls agree: the row form, but at LoFi full sync, whose plain calls may take another reuse direction (at half sync they all run
-// direction 0), and at LoFi and HiFi2 half sync with a 32-bit DEST where a section may pack to Float32.
+// direction 0), at HiFi2 half sync with a 32-bit DEST where a section may pack to Float32, and at LoFi half sync with a 32-bit DEST where
+// a 32-bit format is an operand or the output (lofi_wide: a Tf32 CB, or a Float32 CB besides the one Float32 partials CB).
 template <MathFidelity math_fidelity, DstSync dst_sync, bool fp32_dest>
-constexpr bool matmul_plain_row_form(const bool may_pack_32bit)
+constexpr bool matmul_plain_row_form(const bool may_pack_32bit, const bool lofi_wide)
 {
     return !(math_fidelity == MathFidelity::LoFi && dst_sync == DstSync::SyncFull) &&
-           !((math_fidelity == MathFidelity::LoFi || math_fidelity == MathFidelity::HiFi2) && dst_sync == DstSync::SyncHalf && fp32_dest &&
-             may_pack_32bit);
+           !(math_fidelity == MathFidelity::HiFi2 && dst_sync == DstSync::SyncHalf && fp32_dest && may_pack_32bit) &&
+           !(math_fidelity == MathFidelity::LoFi && dst_sync == DstSync::SyncHalf && fp32_dest && lofi_wide);
+}
+
+// lofi_wide of matmul_plain_row_form over the kernel's CB formats
+template <std::size_t N>
+constexpr bool matmul_kernel_lofi_wide(const std::uint8_t (&formats)[N])
+{
+    std::uint32_t f32 = 0;
+    bool tf32         = false;
+    for (const std::uint8_t f : formats)
+    {
+        f32 += f == static_cast<std::uint8_t>(DataFormat::Float32);
+        tf32 = tf32 || f == static_cast<std::uint8_t>(DataFormat::Tf32);
+    }
+    return tf32 || f32 >= 2;
 }
 
 // Half sync tile MOP cells where the HiFi phase end op can ride on the last MVMUL (end_fold): HiFi4, and HiFi3 with a 16-bit DEST except Bfp8_b in0 against
