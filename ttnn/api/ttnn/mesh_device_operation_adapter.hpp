@@ -907,10 +907,19 @@ public:
         static bool bindings_need_refinement(
             const std::vector<ResolvedTensorBinding>& bindings,
             const std::vector<std::reference_wrapper<const tt::tt_metal::MeshTensor>>& io_mesh_tensors) {
+            // Any two candidate sets are either identical or disjoint (a miss creates them as
+            // pointer-identity classes and each refinement splits them by one hit's classes), so a
+            // group is identified by its first index.
+            ttsl::SmallVector<std::size_t, 4> checked_groups;
             for (const auto& b : bindings) {
                 if (b.candidate_indices.size() <= 1) {
                     continue;
                 }
+                if (std::find(checked_groups.begin(), checked_groups.end(), b.candidate_indices[0]) !=
+                    checked_groups.end()) {
+                    continue;
+                }
+                checked_groups.push_back(b.candidate_indices[0]);
                 const auto* first = &io_mesh_tensors.at(b.candidate_indices[0]).get();
                 for (std::size_t i = 1; i < b.candidate_indices.size(); ++i) {
                     if (&io_mesh_tensors.at(b.candidate_indices[i]).get() != first) {
@@ -1229,22 +1238,17 @@ public:
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value) {
             const auto io_mesh_tensors = SpecBindingSupport::collect_mesh_tensors(tensor_args, tensor_return_value);
-            bool needs_refinement = false;
-            bool has_op_owned_tensors = false;
-            for (const auto& [coordinate_range, _] : cached_workload.workload.get_programs()) {
-                const auto& sv = cached_workload.shared_variables.at(coordinate_range);
-                if (SpecBindingSupport::bindings_need_refinement(sv.bindings, io_mesh_tensors)) {
-                    needs_refinement = true;
-                    has_op_owned_tensors =
-                        has_op_owned_tensors || (sv.op_owned_tensors && !sv.op_owned_tensors->empty());
-                }
-            }
-            if (needs_refinement) {
-                if (has_op_owned_tensors) {
+            // Every range holds a copy of the same bindings, built and refined from one
+            // ProgramArtifacts, so checking any one range decides for all of them.
+            const auto& programs = cached_workload.workload.get_programs();
+            TT_FATAL(!programs.empty(), "Cached ProgramSpec workload has no programs");
+            const auto& representative_sv = cached_workload.shared_variables.at(programs.begin()->first);
+            if (SpecBindingSupport::bindings_need_refinement(representative_sv.bindings, io_mesh_tensors)) {
+                if (representative_sv.op_owned_tensors && !representative_sv.op_owned_tensors->empty()) {
                     assert_safe_to_reinvoke_op_owned_factory(tensor_args, tensor_return_value);
                 }
                 auto fresh_artifacts = SpecFactory::create_program_artifacts(attrs, tensor_args, tensor_return_value);
-                for (const auto& [coordinate_range, _] : cached_workload.workload.get_programs()) {
+                for (const auto& [coordinate_range, _] : programs) {
                     auto& sv = cached_workload.shared_variables.at(coordinate_range);
                     SpecBindingSupport::refine_bindings(
                         sv.bindings, fresh_artifacts.run_params.tensor_args, io_mesh_tensors);
@@ -1405,12 +1409,21 @@ public:
                 if (tensor_coords != nullptr) {
                     auto fresh_artifacts = WorkloadSpecFactory::create_mesh_workload_artifacts(
                         attrs, tensor_args, tensor_return_value, *tensor_coords);
+                    TT_FATAL(
+                        fresh_artifacts.programs.size() == cached_workload.shared_variables.size(),
+                        "create_mesh_workload_artifacts returned {} programs on a cache hit, but the cached workload "
+                        "has {}: the factory must be deterministic for a given tensor_coords",
+                        fresh_artifacts.programs.size(),
+                        cached_workload.shared_variables.size());
                     for (auto& per_coord : fresh_artifacts.programs) {
-                        if (auto it = cached_workload.shared_variables.find(per_coord.range);
-                            it != cached_workload.shared_variables.end()) {
-                            SpecBindingSupport::refine_bindings(
-                                it->second.bindings, per_coord.run_params.tensor_args, io_mesh_tensors);
-                        }
+                        auto it = cached_workload.shared_variables.find(per_coord.range);
+                        TT_FATAL(
+                            it != cached_workload.shared_variables.end(),
+                            "create_mesh_workload_artifacts returned range {} on a cache hit, which the cached "
+                            "workload does not have: the factory must be deterministic for a given tensor_coords",
+                            per_coord.range);
+                        SpecBindingSupport::refine_bindings(
+                            it->second.bindings, per_coord.run_params.tensor_args, io_mesh_tensors);
                     }
                 }
                 SpecBindingSupport::refresh_tensor_args(cached_workload, io_mesh_tensors);

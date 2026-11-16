@@ -14,6 +14,8 @@
 #include "ttnn/operation_concepts.hpp"
 #include "ttnn/operations/examples/example/device/example_device_operation.hpp"
 #include "ttnn/operations/reduction/prod/device/prod_all_device_operation.hpp"
+#include "ttnn/operations/reduction/sampling/device/sampling_device_operation.hpp"
+#include "ttnn/operations/reduction/sampling/device/sampling_program_factory.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
@@ -653,6 +655,17 @@ TEST_F(LaunchOperation2x4Test, OutputTensorTopologyMultipleShardDims) {
         (ttsl::SmallVector<distributed::MeshMapperConfig::Placement>{distributed::MeshMapperConfig::Shard{0}}));
 }
 
+template <typename Bindings>
+ttsl::SmallVector<std::size_t, 2> find_candidates(const Bindings& bindings, std::string_view name) {
+    for (const auto& b : bindings) {
+        if (b.tensor_parameter_name == tt::tt_metal::TensorParamName{std::string(name)}) {
+            return b.candidate_indices;
+        }
+    }
+    ADD_FAILURE() << "missing binding for " << name;
+    return {};
+}
+
 TEST_F(LaunchOperation2x4Test, SpecBindingSupportResolvesAndRefinesAliasedBindings) {
     using Adapter = device_operation::MeshDeviceOperationAdapter<
         ProgramSpecMinimalOp>::ProgramSpecMeshWorkloadFactoryAdapter<ProgramSpecFactory>;
@@ -663,16 +676,6 @@ TEST_F(LaunchOperation2x4Test, SpecBindingSupportResolvesAndRefinesAliasedBindin
     const tt::tt_metal::TensorSpec spec(
         ttnn::Shape{1, 1, 32, 32}, tt::tt_metal::TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
     auto make_tensor = [&]() { return ttnn::create_device_tensor(spec, mesh_device_.get()); };
-
-    const auto find_candidates = [](const auto& bindings, std::string_view name) {
-        for (const auto& b : bindings) {
-            if (b.tensor_parameter_name == TensorParamName{std::string(name)}) {
-                return b.candidate_indices;
-            }
-        }
-        ADD_FAILURE() << "missing binding for " << name;
-        return ttsl::SmallVector<std::size_t, 2>{};
-    };
 
     // 1. Out-of-order Table parameters primed with aliased inputs (SamplingInputs pattern:
     //    io enumeration order is [k=0, p=1, temp=2, out=3], while Table lists temp before p).
@@ -801,6 +804,232 @@ TEST_F(LaunchOperation2x4Test, SpecBindingSupportResolvesAndRefinesAliasedBindin
         EXPECT_THAT(find_candidates(bindings, "dst"), ElementsAre(1u));
         EXPECT_FALSE(Adapter::bindings_need_refinement(bindings, io));
     }
+}
+
+// Sampling inserts the temp TensorArgument before p, while the io enumeration of SamplingInputs is
+// [input_values, input_indices, k, p, temp] followed by the output.
+using SamplingOp = ttnn::prim::SamplingDeviceOperation;
+constexpr std::size_t kSamplingPSlot = 3;
+constexpr std::size_t kSamplingTempSlot = 4;
+
+// A per-user BFLOAT16 [32] tensor, the shape and layout sampling requires of p and temp.
+Tensor make_sampling_user_tensor(MeshDevice* mesh_device) {
+    return ttnn::create_device_tensor(
+        tt::tt_metal::TensorSpec(
+            ttnn::Shape{32}, tt::tt_metal::TensorLayout(DataType::BFLOAT16, Layout::ROW_MAJOR, MemoryConfig{})),
+        mesh_device);
+}
+
+struct SamplingTensors {
+    Tensor values;
+    Tensor indices;
+    Tensor k;
+
+    explicit SamplingTensors(MeshDevice* mesh_device) :
+        values(ttnn::create_device_tensor(
+            tt::tt_metal::TensorSpec(
+                ttnn::Shape{1, 1, 32, 64},
+                tt::tt_metal::TensorLayout(DataType::BFLOAT16, Layout::TILE, MemoryConfig{})),
+            mesh_device)),
+        indices(ttnn::create_device_tensor(
+            tt::tt_metal::TensorSpec(
+                ttnn::Shape{1, 1, 32, 64},
+                tt::tt_metal::TensorLayout(DataType::INT32, Layout::ROW_MAJOR, MemoryConfig{})),
+            mesh_device)),
+        k(ttnn::create_device_tensor(
+            tt::tt_metal::TensorSpec(
+                ttnn::Shape{32}, tt::tt_metal::TensorLayout(DataType::INT32, Layout::ROW_MAJOR, MemoryConfig{})),
+            mesh_device)) {}
+
+    SamplingOp::tensor_args_t args(const Tensor& p, const Tensor& temp) const {
+        return {
+            .input_values = values,
+            .input_indices = indices,
+            .k = k,
+            .p = p,
+            .temp = temp,
+            .preallocated_output = std::nullopt};
+    }
+};
+
+// Sampling plus one op-owned scratch tensor, so the adapter parks it and the cache-hit refinement
+// takes the op-owned branch.
+struct SamplingWithScratchFactory {
+    static std::atomic<int> calls;
+
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
+        const SamplingOp::operation_attributes_t& attrs,
+        const SamplingOp::tensor_args_t& tensor_args,
+        Tensor& tensor_return_value) {
+        ++calls;
+        auto artifacts =
+            ttnn::prim::SamplingProgramFactory::create_program_artifacts(attrs, tensor_args, tensor_return_value);
+        auto scratch = make_sampling_user_tensor(tensor_args.p.device());
+        artifacts.op_owned_tensors.push_back(scratch.device_storage().release_mesh_tensor());
+        return artifacts;
+    }
+};
+std::atomic<int> SamplingWithScratchFactory::calls{0};
+
+static_assert(ttnn::device_operation::ProgramSpecFactoryConcept<SamplingWithScratchFactory>);
+
+using SamplingScratchAdapter = device_operation::MeshDeviceOperationAdapter<
+    SamplingOp>::ProgramSpecMeshWorkloadFactoryAdapter<SamplingWithScratchFactory>;
+
+TEST_F(LaunchOperation2x4Test, ProgramSpecAdapterRefinesAliasedBindingsWithOpOwnedTensors) {
+    const SamplingTensors sampling(mesh_device_.get());
+    const auto shared = make_sampling_user_tensor(mesh_device_.get());
+    const auto p = make_sampling_user_tensor(mesh_device_.get());
+    const auto temp = make_sampling_user_tensor(mesh_device_.get());
+    const auto aliased_args = sampling.args(shared, shared);
+    const auto distinct_args = sampling.args(p, temp);
+
+    const SamplingOp::operation_attributes_t attrs{};
+    auto output = SamplingOp::create_output_tensors(attrs, aliased_args);
+    ttnn::MeshCoordinateRangeSet tensor_coords;
+    tensor_coords.merge(ttnn::MeshCoordinateRange(mesh_device_->shape()));
+
+    auto cached = SamplingScratchAdapter::create_mesh_workload(attrs, tensor_coords, aliased_args, output);
+    ASSERT_EQ(cached.shared_variables.size(), 1u);
+    auto& sv = cached.shared_variables.begin()->second;
+    EXPECT_THAT(find_candidates(sv.bindings, "p"), ElementsAre(kSamplingPSlot, kSamplingTempSlot));
+    EXPECT_THAT(find_candidates(sv.bindings, "temp"), ElementsAre(kSamplingPSlot, kSamplingTempSlot));
+    ASSERT_NE(sv.op_owned_tensors, nullptr);
+    ASSERT_EQ(sv.op_owned_tensors->size(), 1u);
+    const auto* parked_op_owned_tensors = sv.op_owned_tensors.get();
+    const auto* parked_scratch = &sv.op_owned_tensors->front();
+
+    // The first distinct hit re-runs the factory once to narrow the bindings, despite temp preceding p
+    // in the factory's Table, and keeps the op-owned tensor allocated on the miss.
+    SamplingWithScratchFactory::calls = 0;
+    SamplingScratchAdapter::apply_descriptor(cached, attrs, distinct_args, output);
+    EXPECT_EQ(SamplingWithScratchFactory::calls.load(), 1);
+    EXPECT_THAT(find_candidates(sv.bindings, "p"), ElementsAre(kSamplingPSlot));
+    EXPECT_THAT(find_candidates(sv.bindings, "temp"), ElementsAre(kSamplingTempSlot));
+    EXPECT_EQ(sv.op_owned_tensors.get(), parked_op_owned_tensors);
+    EXPECT_EQ(&sv.op_owned_tensors->front(), parked_scratch);
+
+    // Resolved bindings serve both distinct and aliased hits without the factory.
+    SamplingScratchAdapter::apply_descriptor(cached, attrs, distinct_args, output);
+    SamplingScratchAdapter::apply_descriptor(cached, attrs, aliased_args, output);
+    EXPECT_EQ(SamplingWithScratchFactory::calls.load(), 1);
+}
+
+TEST_F(LaunchOperation2x4Test, ProgramSpecAdapterAliasRefinementDuringTraceCapture) {
+    const SamplingTensors sampling(mesh_device_.get());
+    const auto shared = make_sampling_user_tensor(mesh_device_.get());
+    const auto p = make_sampling_user_tensor(mesh_device_.get());
+    const auto temp = make_sampling_user_tensor(mesh_device_.get());
+    const auto aliased_args = sampling.args(shared, shared);
+    const auto distinct_args = sampling.args(p, temp);
+
+    const SamplingOp::operation_attributes_t attrs{};
+    auto output = SamplingOp::create_output_tensors(attrs, aliased_args);
+    ttnn::MeshCoordinateRangeSet tensor_coords;
+    tensor_coords.merge(ttnn::MeshCoordinateRange(mesh_device_->shape()));
+    auto& cq = mesh_device_->mesh_command_queue();
+
+    // Unresolved bindings would re-run a factory that allocates op-owned tensors: rejected before
+    // the factory is called.
+    {
+        auto cached = SamplingScratchAdapter::create_mesh_workload(attrs, tensor_coords, aliased_args, output);
+        SamplingWithScratchFactory::calls = 0;
+        const auto trace_id = mesh_device_->begin_mesh_trace(cq);
+        EXPECT_ANY_THROW(SamplingScratchAdapter::apply_descriptor(cached, attrs, distinct_args, output));
+        mesh_device_->end_mesh_trace(cq, trace_id);
+        mesh_device_->release_mesh_trace(trace_id);
+        EXPECT_EQ(SamplingWithScratchFactory::calls.load(), 0);
+    }
+
+    // A distinct-input warmup resolves the bindings, after which capture needs no factory call.
+    {
+        auto cached = SamplingScratchAdapter::create_mesh_workload(attrs, tensor_coords, aliased_args, output);
+        SamplingScratchAdapter::apply_descriptor(cached, attrs, distinct_args, output);
+        const auto p_capture = make_sampling_user_tensor(mesh_device_.get());
+        const auto temp_capture = make_sampling_user_tensor(mesh_device_.get());
+        const auto capture_args = sampling.args(p_capture, temp_capture);
+        SamplingWithScratchFactory::calls = 0;
+        const auto trace_id = mesh_device_->begin_mesh_trace(cq);
+        EXPECT_NO_THROW(SamplingScratchAdapter::apply_descriptor(cached, attrs, capture_args, output));
+        mesh_device_->end_mesh_trace(cq, trace_id);
+        mesh_device_->release_mesh_trace(trace_id);
+        EXPECT_EQ(SamplingWithScratchFactory::calls.load(), 0);
+    }
+}
+
+// One single-coordinate sampling program per coordinate; odd columns bind p and temp to each
+// other's tensor, so each range maps the same parameters to different io slots.
+struct PerCoordSamplingFactory {
+    static std::atomic<int> calls;
+    static bool swaps_p_and_temp(const ttnn::MeshCoordinate& coord) { return coord[1] % 2 == 1; }
+
+    static ttnn::device_operation::MeshWorkloadArtifacts create_mesh_workload_artifacts(
+        const SamplingOp::operation_attributes_t& attrs,
+        const SamplingOp::tensor_args_t& tensor_args,
+        Tensor& tensor_return_value,
+        const ttnn::MeshCoordinateRangeSet& tensor_coords) {
+        ++calls;
+        auto swapped_args = tensor_args;
+        std::swap(swapped_args.p, swapped_args.temp);
+        ttnn::device_operation::MeshWorkloadArtifacts artifacts;
+        for (const auto& range : tensor_coords.ranges()) {
+            for (const auto& coord : range) {
+                auto program = ttnn::prim::SamplingProgramFactory::create_program_artifacts(
+                    attrs, swaps_p_and_temp(coord) ? swapped_args : tensor_args, tensor_return_value);
+                artifacts.programs.push_back(
+                    {.range = ttnn::MeshCoordinateRange(coord),
+                     .spec = std::move(program.spec),
+                     .run_params = std::move(program.run_params)});
+            }
+        }
+        return artifacts;
+    }
+};
+std::atomic<int> PerCoordSamplingFactory::calls{0};
+
+TEST_F(LaunchOperation2x4Test, MeshWorkloadSpecAdapterRefinesAliasedBindingsPerRange) {
+    using Adapter = device_operation::MeshDeviceOperationAdapter<SamplingOp>::MeshWorkloadSpecFactoryAdapter<
+        PerCoordSamplingFactory>;
+    static_assert(ttnn::device_operation::MeshWorkloadSpecFactoryConcept<PerCoordSamplingFactory>);
+    static_assert(!Adapter::has_override_runtime_arguments());
+
+    const SamplingTensors sampling(mesh_device_.get());
+    const auto shared = make_sampling_user_tensor(mesh_device_.get());
+    const auto p = make_sampling_user_tensor(mesh_device_.get());
+    const auto temp = make_sampling_user_tensor(mesh_device_.get());
+    const auto aliased_args = sampling.args(shared, shared);
+    const auto distinct_args = sampling.args(p, temp);
+
+    const SamplingOp::operation_attributes_t attrs{};
+    auto output = SamplingOp::create_output_tensors(attrs, aliased_args);
+    ttnn::MeshCoordinateRangeSet tensor_coords;
+    tensor_coords.merge(ttnn::MeshCoordinateRange(mesh_device_->shape()));
+
+    auto cached = Adapter::create_mesh_workload(attrs, tensor_coords, aliased_args, output);
+    ASSERT_EQ(cached.shared_variables.size(), mesh_device_->num_devices());
+    for (const auto& [range, sv] : cached.shared_variables) {
+        EXPECT_THAT(find_candidates(sv.bindings, "p"), ElementsAre(kSamplingPSlot, kSamplingTempSlot))
+            << "range " << range;
+        EXPECT_THAT(find_candidates(sv.bindings, "temp"), ElementsAre(kSamplingPSlot, kSamplingTempSlot))
+            << "range " << range;
+    }
+
+    // One factory call over the saved tensor_coords narrows every range to its own mapping.
+    PerCoordSamplingFactory::calls = 0;
+    Adapter::apply_descriptor(cached, attrs, distinct_args, output);
+    EXPECT_EQ(PerCoordSamplingFactory::calls.load(), 1);
+    for (const auto& [range, sv] : cached.shared_variables) {
+        const bool swapped = PerCoordSamplingFactory::swaps_p_and_temp(range.start_coord());
+        EXPECT_THAT(find_candidates(sv.bindings, "p"), ElementsAre(swapped ? kSamplingTempSlot : kSamplingPSlot))
+            << "range " << range;
+        EXPECT_THAT(find_candidates(sv.bindings, "temp"), ElementsAre(swapped ? kSamplingPSlot : kSamplingTempSlot))
+            << "range " << range;
+    }
+
+    // Resolved bindings serve both distinct and aliased hits without the factory.
+    Adapter::apply_descriptor(cached, attrs, distinct_args, output);
+    Adapter::apply_descriptor(cached, attrs, aliased_args, output);
+    EXPECT_EQ(PerCoordSamplingFactory::calls.load(), 1);
 }
 
 }  // namespace
