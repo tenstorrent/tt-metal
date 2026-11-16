@@ -61,7 +61,7 @@ ALWI void decode_block(const uint32_t nc, const uint32_t nca, const uint32_t gro
     if constexpr (!decode_block_fits<fmt>()) {
         return;
     }
-    auto out_of = [](uint32_t set) -> uint32_t { return set ? 4 : 1; };
+    constexpr auto out_of = [](uint32_t set) -> uint32_t { return set ? 4 : 1; };
     const uint32_t tiles = groups * nc * L.group_tiles;
     MATH((_llk_math_pack_sync_init_<DstSync::SyncFull, DST_ACCUM_MODE>()));
     PACK((_llk_pack_dest_init_<DstSync::SyncFull, DST_ACCUM_MODE>()));
@@ -86,8 +86,11 @@ ALWI void decode_block(const uint32_t nc, const uint32_t nca, const uint32_t gro
                 p_stall::STALL_ON_ZERO);
             t6_semaphore_get<p_stall::NONE>(semaphore::PACK_DONE);
         }));
-        if (group_step && t < 2) {
-            gguf_decode_group<fmt>(out_of(set));
+        // The group step at t = 0 (set 0), copied to set 1 at t = 1.
+        if (group_step && t == 0) {
+            gguf_decode_group<fmt>(out_of(0));
+        } else if (group_step && t == 1) {
+            gguf_decode_group_copy<fmt, int(out_of(1)) - int(out_of(0))>(out_of(0));
         }
         gguf_decode_tile<fmt, GgufDecodeThread::Math, true>(out_of(set), t);
         if (!beside && i + 1 < tiles) {
