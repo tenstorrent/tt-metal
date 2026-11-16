@@ -171,6 +171,15 @@ PREP_NORM_MAX_ROWS = 4
 # DEST (the rhs of M in one window: no packed reads, no subtraction window) and starts the output's window with the q
 # read. Same operands and fp32 accumulation as the separate read.
 STATE_FUSED_RHS = True
+# R-PREP head block: row scalings as FPU products (ELWMUL) instead of fp32 SFPU products; the scaling vector then
+# passes the 19-bit operands like kn / qn themselves. A mask: 1 beta exp(c) (*) kn, 2 exp(c) (*) qn,
+# 4 kn^T (*) exp(c_last - c)^T.
+PREP_SCALE_FPU = 7
+# A scaling vector of PREP_SCALE_FPU that reaches the state (masks 1 and 4) is scaled up by this factor (fp32 bits)
+# first: an FPU operand is truncated to 10 mantissa bits, a mean loss of 0.36 units in the last place at each of the
+# truncations on the way to the state (the vector, its product, the product as the state core's operand).
+# 1 + 1.5 * 2^-10; state_carry_one_call_f32 relative RMS 1.45e-3 (SFPU) / 1.90e-3 (factor 1) / 0.90e-3.
+PREP_FPU_UNBIAS_BITS = 0x3F803000
 ROW_DEPTH = 2  # tile rows of gate / z / output tiles in flight
 # Per-unit inputs (S0, conv / gate / norm weights) in flight on a core that runs several units: the next unit's reads
 # overlap this unit's compute instead of waiting for its last pop (decode B=16: 2 units on most cores).
@@ -345,6 +354,7 @@ CB_S0_GO = 53  # S0_WRITER_AFTER_INPUTS: reader-to-writer token, the first unit'
 # SMALL_INPUTS_MCAST: the q core's reads of the small inputs, multicast to the same address on the state cores. Tiles:
 # A_log, dt_bias, b, a (each the gate column tile of the key head), then norm_weight's Vt.
 CB_SMALL_IN = 54
+CB_CHUNK_VEC_MM = 55  # PREP_SCALE_FPU: cb_chunk_vec as an FPU operand (same pages)
 SMALL_IN_GATE_PAGES = 4
 SMALL_MCAST_NAMES = ("CB_SMALL_IN", "SMALL_IN_GATE_PAGES")
 NUM_CB_SLOTS = 64
@@ -479,7 +489,7 @@ def _cb_plan(Kt, Vt, conv_on_fpu=False, pieces=1, chunked=False, tokens=0, unit_
         # R-CHUNK: [Kn Kn^T; Qn Kn^T]; chunk vectors / decay matrix; solve and output-matmul operands;
         # U scaled by exp(c_last - c) (update operand); the lower-triangular mask (built once).
         ((CB_GRAM,), 2 * trb if chunked else 0),
-        ((CB_CHUNK_VEC,), CHUNK_VEC_PAGES if chunked else 0),
+        ((CB_CHUNK_VEC, CB_CHUNK_VEC_MM), CHUNK_VEC_PAGES if chunked else 0),
         ((CB_CHUNK_MAT,), CHUNK_MAT_PAGES if chunked else 0),
         ((CB_UW,), Vt if chunked else 0),
         ((CB_TRI_MASK,), 2 if chunked else 0),  # the mask, then the identity (R-PREP inverse of I + L)
@@ -1696,6 +1706,8 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
             ("GDN_DECAY_ONE_PASS", str(int(DECAY_ONE_PASS))),
             ("GDN_PREP_NORM_SPLIT", str(int(norm_split))),
             ("GDN_STATE_FUSED_RHS", str(int(prep is not None and STATE_FUSED_RHS))),
+            ("GDN_PREP_SCALE_FPU", str(int(PREP_SCALE_FPU) if prep is not None else 0)),
+            ("GDN_FPU_UNBIAS_BITS", f"{PREP_FPU_UNBIAS_BITS:#x}u"),
         ]
     )
     program_values = {}
