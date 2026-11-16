@@ -63,6 +63,26 @@ def test_prep_vs_local(device, monkeypatch, offload, inputs, poison):
     check_call(returned, expected, inputs)
 
 
+@pytest.mark.parametrize("mask", [0, 1, 2, 4, 7])
+@pytest.mark.parametrize(
+    "inputs",
+    [
+        pytest.param(((1, 200, 256), (1, 3, 32, 64)), id="t200"),
+        pytest.param(((1, 70, 2560), (1, 12, 128, 128)), id="chip_t70"),
+    ],
+)
+def test_prep_scale_fpu(device, monkeypatch, inputs, mask):
+    """Refinement 26: each head-block scaling as an SFPU or an FPU product (PREP_SCALE_FPU mask), against the
+    reference."""
+    monkeypatch.setattr(gdn_pd, "PREP_MIN_TILE_ROWS", 1)
+    monkeypatch.setattr(gdn_pd, "PREP_SCALE_FPU", mask)
+    torch.manual_seed(11)
+    tensors = make_inputs(inputs)
+    expected = reference(*(tensors[name] for name in ORDER))
+    returned = gated_delta_net(*to_device(tensors, device), compute_kernel_config=compute_config())
+    check_call(returned, expected, inputs)
+
+
 def test_prep_state_carry(device, monkeypatch):
     """Two R-PREP calls (T = 100, 40) then a decode call, each from the previous call's states."""
     monkeypatch.setattr(gdn_pd, "PREP_MIN_TILE_ROWS", 1)

@@ -61,6 +61,7 @@
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/sfpu_binary_bcast.h"
 #include "api/compute/bcast.h"
+#include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_unary/exp.h"
 #include "api/compute/eltwise_unary/softplus.h"
 #include "api/compute/eltwise_unary/negative.h"
@@ -151,6 +152,7 @@ constexpr uint32_t cb_v_prep = GDN_CB_V_PREP;
 constexpr uint32_t cb_o_in = GDN_CB_O_IN;
 constexpr uint32_t cb_zw = GDN_CB_ZW;
 constexpr uint32_t cb_rinv_in = GDN_CB_RINV_IN;
+constexpr uint32_t cb_chunk_vec_mm = GDN_CB_CHUNK_VEC_MM;
 
 constexpr uint32_t TILE_ROWS = 32;
 constexpr uint32_t COEF_ALPHA_SEL = 0;  // alpha_p at row p, 0 elsewhere

@@ -15,6 +15,13 @@ namespace {
 // The writer then adds a coefficient page with -beta.
 constexpr bool FUSED_RHS = GDN_STATE_FUSED_RHS != 0;
 constexpr uint32_t CHUNK_BEC_BETA = PREP && FUSED_RHS ? 2 : CHUNK_BETA;
+// Host PREP_SCALE_FPU, a mask: 1 beta exp(c) (*) kn, 2 exp(c) (*) qn, 4 kn^T (*) exp(c_last - c)^T as FPU products.
+constexpr uint32_t SCALE_FPU = PREP ? GDN_PREP_SCALE_FPU : 0;
+constexpr bool FPU_KN = SCALE_FPU % 2 == 1;
+constexpr bool FPU_QN = SCALE_FPU / 2 % 2 == 1;
+constexpr bool FPU_KNT = SCALE_FPU / 4 % 2 == 1;
+// Host PREP_FPU_UNBIAS_BITS: the mean truncation loss of the FPU operands on the way to the state, scaled back in.
+constexpr uint32_t FPU_UNBIAS_BITS = GDN_FPU_UNBIAS_BITS;
 
 // ---------------------------------------------------------------- one chunk step (R-CHUNK)
 // [Kn Kn^T; Qn Kn^T] -> cb_gram (2 tiles, left waited for head_prep); per key head, shared by its value heads.
@@ -71,6 +78,7 @@ ALWI void head_prep_vectors(uint32_t row_last) {
     pack_at(1, cb_chunk_vec, CV_C);
     tile_regs_release();
     cb_push_back(cb_chunk_vec, 2);
+    GDN_MARK("m_hv1");
 
     cb_wait_front(cb_chunk_vec, 2);
     const uint32_t c_last_bits = read_tile_value(cb_chunk_vec, CV_C, elem_index(row_last, 0));
@@ -89,6 +97,10 @@ ALWI void head_prep_vectors(uint32_t row_last) {
     exp_tile<false>(3);
     sfpu_bcast_col_init();
     sfpu_mul_bcast_col(3, 2);  // beta exp(c) (FUSED_RHS prep core: -beta exp(c))
+    if constexpr (FPU_KN) {
+        binop_with_scalar_tile_init();
+        mul_unary_tile(3, FPU_UNBIAS_BITS);
+    }
     tile_regs_commit();
     tile_regs_wait();
     pack_first(0, cb_chunk_vec, CV_EC - 2);
@@ -100,6 +112,7 @@ ALWI void head_prep_vectors(uint32_t row_last) {
     }
     tile_regs_release();
     cb_push_back(cb_chunk_vec, GDN_CHUNK_VEC_PAGES - 2);
+    GDN_MARK("m_hv2");
 }
 
 ALWI void head_prep_matrices() {
@@ -129,6 +142,7 @@ ALWI void head_prep_matrices() {
     tile_regs_release();
     cb_push_back(cb_chunk_mat, PREP ? 1 : GDN_CHUNK_MAT_PAGES);
     cb_wait_front(cb_chunk_vec, GDN_CHUNK_VEC_PAGES);
+    GDN_MARK("m_hm");
 }
 
 ALWI void head_prep(uint32_t row_last) {
@@ -149,6 +163,10 @@ ALWI void head_block(uint32_t head) {
     load(cb_chunk_vec, CV_W, 2);
     triangle_solve_tile_init();
     triangle_solve_tile<DataFormat::Float32>(cb_chunk_mat, CM_L, 0, 1);
+    if constexpr (FPU_KNT) {
+        binop_with_scalar_tile_init();
+        mul_unary_tile(2, FPU_UNBIAS_BITS);
+    }
     // exp(c_last - c)^T, kept fp32 (exp(c_last - c) is constant along a row of the vector tiles) ->
     // cb_chunk_vec[CV_WT].
     wait_sfpu_before_fpu();
@@ -163,12 +181,35 @@ ALWI void head_block(uint32_t head) {
     cb_pop_front(cb_chunk_mat, 1);
     cb_push_back(cb_chunk_vec, 1);
     cb_push_back(cb_prep_send, 1);
+    GDN_MARK("m_hb_m");
 
     cb_reserve_back(cb_prep_send, 2 * Kt);
 
-    // [beta exp(c) (*) kn, exp(c) (*) qn], one key column tile of each per window. kn, qn, kn^T load through srcA
-    // (19-bit, as every matmul reads them); the scalings stay fp32.
-    for (uint32_t kt = 0; kt < Kt; ++kt) {
+    // [beta exp(c) (*) kn, exp(c) (*) qn]. FPU products: the Kt tiles of kn, then of qn, one window each, the scaling
+    // vector read through cb_chunk_vec_mm: the same pages at the indices of cb_chunk_vec, whose read pointer is back
+    // at the base at every head (a head pushes and pops exactly the buffer's pages).
+    static_assert(Kt <= ckl::DEST_AUTO_LIMIT || SCALE_FPU == 0);
+    for (uint32_t part = 0; part < 2; ++part) {
+        if (!(part == 0 ? FPU_KN : FPU_QN)) {
+            continue;
+        }
+        tile_regs_acquire();
+        reconfig_data_format(cb_kq_rows, cb_chunk_vec_mm);
+        mul_init(cb_kq_rows, cb_chunk_vec_mm);
+        for (uint32_t kt = 0; kt < Kt; ++kt) {
+            mul_tiles(cb_kq_rows, cb_chunk_vec_mm, part * Kt + kt, part == 0 ? CV_BEC : CV_EC, kt);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_first(0, cb_prep_send, part * Kt);
+        for (uint32_t i = 1; i < Kt; ++i) {
+            pack_at(i, cb_prep_send, part * Kt + i);
+        }
+        tile_regs_release();
+    }
+    // SFPU products, one key column tile of each per window. kn, qn, kn^T load through srcA (19-bit, as every matmul
+    // reads them); the scalings stay fp32.
+    for (uint32_t kt = 0; !(FPU_KN && FPU_QN) && kt < Kt; ++kt) {
         tile_regs_acquire();
         begin_loads(cb_chunk_vec);
         load(cb_chunk_vec, CV_BEC, 1);
@@ -177,19 +218,44 @@ ALWI void head_block(uint32_t head) {
         load(cb_kq_rows, kt, 0);
         load(cb_kq_rows, Kt + kt, 2);
         mul_binary_tile_init();
-        mul_binary_tile(0, 1, 0);
-        mul_binary_tile(2, 3, 2);
+        if constexpr (!FPU_KN) {
+            mul_binary_tile(0, 1, 0);
+        }
+        if constexpr (!FPU_QN) {
+            mul_binary_tile(2, 3, 2);
+        }
         tile_regs_commit();
         tile_regs_wait();
-        pack_first(0, cb_prep_send, kt);
-        pack_at(2, cb_prep_send, Kt + kt);
+        pack_reconfig_data_format(cb_prep_send);
+        if constexpr (!FPU_KN) {
+            pack_at(0, cb_prep_send, kt);
+        }
+        if constexpr (!FPU_QN) {
+            pack_at(2, cb_prep_send, Kt + kt);
+        }
         tile_regs_release();
     }
     cb_push_back(cb_prep_send, 2 * Kt);
+    GDN_MARK("m_hb_kq");
     cb_reserve_back(cb_prep_send, Kt);
     cb_wait_front(cb_chunk_vec, CV_WT + 1);
     constexpr uint32_t BATCH = ckl::DEST_AUTO_LIMIT - 1;  // data tiles per window beside the scaling tile
-    for (uint32_t kt0 = 0; kt0 < Kt; kt0 += BATCH) {
+    if constexpr (FPU_KNT) {
+        tile_regs_acquire();
+        reconfig_data_format(cb_knT, cb_chunk_vec_mm);
+        mul_init(cb_knT, cb_chunk_vec_mm);
+        for (uint32_t kt = 0; kt < Kt; ++kt) {
+            mul_tiles(cb_knT, cb_chunk_vec_mm, kt, CV_WT, kt);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_first(0, cb_prep_send, 0);
+        for (uint32_t i = 1; i < Kt; ++i) {
+            pack_at(i, cb_prep_send, i);
+        }
+        tile_regs_release();
+    }
+    for (uint32_t kt0 = 0; !FPU_KNT && kt0 < Kt; kt0 += BATCH) {
         const uint32_t n = (Kt - kt0) < BATCH ? (Kt - kt0) : BATCH;
         tile_regs_acquire();
         begin_loads(cb_chunk_vec);
@@ -211,6 +277,7 @@ ALWI void head_block(uint32_t head) {
         tile_regs_release();
     }
     cb_push_back(cb_prep_send, Kt);
+    GDN_MARK("m_hb_knt");
     cb_reserve_back(cb_prep_send, HEAD_V_TILES);
     for (uint32_t vt0 = 0; vt0 < HEAD_V_TILES; vt0 += BATCH) {
         const uint32_t n = (HEAD_V_TILES - vt0) < BATCH ? (HEAD_V_TILES - vt0) : BATCH;
@@ -233,6 +300,7 @@ ALWI void head_block(uint32_t head) {
         tile_regs_release();
     }
     cb_push_back(cb_prep_send, HEAD_V_TILES);
+    GDN_MARK("m_hb_v");
     cb_pop_front(cb_chunk_vec, CV_WT + 1);
     cb_pop_front(cb_tok_coef, GDN_CHUNK_COEF_PAGES);
 }
