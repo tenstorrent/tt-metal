@@ -1,0 +1,56 @@
+{
+  "measured_unix": 1794791626.4897661,
+  "load_wall_s": 72.52086114883423,
+  "precision": {
+    "config_id": "stage12_bf16_hifi4_diagnostic",
+    "weight_groups": {
+      "attention": "bf16",
+      "mlp": "bf16",
+      "down": "bf16",
+      "lm_head": "bf16"
+    },
+    "layer_exceptions": {},
+    "compute_fidelities": {
+      "attention": "HiFi4",
+      "mlp": "HiFi4",
+      "down": "HiFi4",
+      "lm_head": "HiFi4"
+    },
+    "activation_dtype": "bfloat16",
+    "residual_dtype": "bfloat16",
+    "ccl_dtype": {
+      "prefill": "bfloat16",
+      "decode": "bfloat16"
+    },
+    "kv_cache_dtype": "bfloat16",
+    "logits_dtype": "bfloat16",
+    "sampling_dtype": "bfloat16",
+    "embedding_dtype": "bfloat16",
+    "norm_dtype": "bfloat16",
+    "max_seq_len": 262144,
+    "sdpa_compute_fidelity": "HiFi4"
+  },
+  "device_ids": [
+    0,
+    1,
+    2,
+    3
+  ],
+  "allocator": {
+    "num_banks": 8,
+    "total_bytes_per_bank": 4255564160,
+    "total_bytes_allocated_per_bank": 2248098048,
+    "total_bytes_free_per_bank": 2007466112,
+    "largest_contiguous_bytes_free_per_bank": 1953996672
+  },
+  "model_allocations": {
+    "before_model": 0,
+    "terminal_ccl": 0,
+    "decoder_stack": 15769651200,
+    "embedding": 16474294272,
+    "lm_head": 17179133952,
+    "final_norm": 17179478016,
+    "rope_tables": 17984784384
+  },
+  "scope": "Normal Gemma4Model construction, same path as adapter; no KV allocation, generator or device profiler. Shared mesh allocator applies uniformly; not independent device samples. Trace region already excluded. Serving must revalidate its actual launch after reserves."
+}

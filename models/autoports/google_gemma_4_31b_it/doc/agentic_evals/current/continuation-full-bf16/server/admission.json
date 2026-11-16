@@ -1,0 +1,29 @@
+{
+  "command": [
+    "timeout",
+    "2100",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tools/benchmark_server.py",
+    "--max-num-seqs",
+    "8",
+    "--output",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/continuation-full-bf16/server/perf-b8-server.json",
+    "--expected-precision",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_config.json"
+  ],
+  "started_unix": 1794791724.3027976,
+  "implementation_commit": "ac79c7b5b83e77148a2248bc05c4fa4427f9ac26",
+  "pool_ids": 10752,
+  "server_lifetime_seconds": 10800,
+  "forecast_seconds": {
+    "low": 180,
+    "point": 400,
+    "high": 1200
+  },
+  "basis": "Prior head-BFP8 B32 startup234s; current full-BF16 model-only load72.5s; B8 full-policy warmup kernels may compile. No throughput inference.",
+  "sampling_default_override": {
+    "top_k": 32
+  },
+  "max_model_len": 262144,
+  "size_plan": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/continuation-kv-bfp8/serving-size-plan.json"
+}

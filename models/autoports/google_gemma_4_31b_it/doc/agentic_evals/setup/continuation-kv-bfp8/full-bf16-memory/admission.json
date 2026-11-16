@@ -1,0 +1,33 @@
+{
+  "command": [
+    "timeout",
+    "600",
+    "env",
+    "HF_HUB_OFFLINE=1",
+    "HF_DATASETS_OFFLINE=1",
+    "HF_HUB_DISABLE_TELEMETRY=1",
+    "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+    "READINESS_TRACE_REGION_SIZE=134217728",
+    "OMP_NUM_THREADS=16",
+    "MKL_NUM_THREADS=16",
+    "OPENBLAS_NUM_THREADS=16",
+    "TT_METAL_TRACE_ALLOC_TRACKING=1",
+    "TT_METAL_DEVICE_PROFILER=0",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/continuation-kv-bfp8/measure_model_free.py",
+    "--precision",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_config.json",
+    "--output",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/continuation-kv-bfp8/full-bf16-memory/memory.json"
+  ],
+  "started_unix": 1794791550.4648573,
+  "forecast_seconds": {
+    "low": 60,
+    "point": 90,
+    "high": 300
+  },
+  "basis": "Current panel model load79.679s; model-only load omits generator/cache warmup. Existing full-BF16 weights cached.",
+  "owner_check": [],
+  "helper_hooks": "pre-commit --files measure_model_free.py inspect_panel.py exit0; HTTPS git disabled",
+  "trace_region_size": 134217728
+}

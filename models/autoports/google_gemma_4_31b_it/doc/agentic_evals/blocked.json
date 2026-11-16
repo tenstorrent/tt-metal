@@ -1,5 +1,5 @@
 {
-  "status": "blocked_pending_operator_authorization",
+  "status": "resolved_by_operator_decision",
   "recorded_unix": 1794786787.9455175,
   "stage": "12-agentic-evals",
   "reason": "The remaining precision-policy serving validation, measured-memory sizing, matched vLLM rates and retained85-task repair have no admitted plan within the current50-hour window. Completed diagnostics and all original scores are retained.",
@@ -13,5 +13,7 @@
   "score_reporting": "Extended SWE not passed yet;23\u201326/85 bounds, null point score, no denominator exclusions.",
   "no_current_model_jobs": true,
   "goal_status_update": "All authorized closure work recorded; remaining substantive work requires a new authorized window.",
-  "evidence_commit": "44d4cfb52795005693351db98eb2d55210f1a59e"
+  "evidence_commit": "44d4cfb52795005693351db98eb2d55210f1a59e",
+  "resolution": "inputs.json authorizes +4h local only, stage budget54h. No further time extension requested.",
+  "resolved_unix": 1794787651.13914
 }

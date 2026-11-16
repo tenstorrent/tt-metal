@@ -1,0 +1,112 @@
+{
+  "written_unix": 1794792813.7612298,
+  "basis": "Full-BF16/HiFi4 diagnostic B1 decode16.26 versus selected head-BFP8 about34.25t/s anchors roughly0.47x. BF16 body, CCL and cache increase transfers and HiFi4 work; larger-batch/prefill overlap differs. Wide0.35\u20130.75 decode and0.25\u20130.70 prefill ratios versus preserved stage11 BFP4 controls;1.4\u20134.5 duration. These are predictions, not device or serving measurements. Q32 is the correctness-required full-precision production geometry.",
+  "original_row": {
+    "id": "b8-c1-i28672-swe",
+    "batch": 8,
+    "concurrency": 1,
+    "input_tokens": 28672,
+    "output_tokens": 128,
+    "sampling": "swe",
+    "requests": 2,
+    "headline": false,
+    "predicted": {
+      "decode_tok_s_user": 27.917731989772896,
+      "decode_tok_s_user_low": 20.93829899232967,
+      "decode_tok_s_user_high": 34.89716498721612,
+      "prefill_tok_s": 3486.05577689243,
+      "prefill_tok_s_low": 2614.5418326693225,
+      "prefill_tok_s_high": 4357.5697211155375,
+      "ttft_s": 9.399734857142859,
+      "step_ms": 35.81952861952862,
+      "basis": "Stage10 short/long prefill and cadence estimates with linear KV-length cost; request TTFT includes serialized prefill at full concurrency.",
+      "prefill_aggregate_original": {
+        "prefill_tok_s": 3486.05577689243,
+        "prefill_tok_s_low": 2614.5418326693225,
+        "prefill_tok_s_high": 4357.5697211155375
+      },
+      "prefill_unit_conversion": "Original aggregate rate divided by request concurrency. Algebraic unit conversion, no measured-value fitting."
+    },
+    "route": "eval",
+    "endpoint": "/v1/chat/completions",
+    "prefix_caching": true,
+    "prefill_tok_s": 3980.918353745574,
+    "decode_tok_s_user": 30.261882749931342,
+    "ttft_s": 7.202358212904073,
+    "step_ms": 33.04487061375151,
+    "aggregate_output_tok_s": 11.228447674329978,
+    "planned_requests": 2,
+    "completed": 2,
+    "duration_s": 22.799233467085287,
+    "raw": "run/supplement-b8/grid/b8-c1-i28672-swe/perf-b8.json",
+    "sampling_modes": {
+      "prefill:host_compatibility": 26,
+      "prefill:device": 2,
+      "decode:device": 254
+    },
+    "server_identity": "run/supplement-b8/grid/b8-c1-i28672-swe/perf-b8-server.json",
+    "phase_accounting": "run/supplement-b8/grid/b8-c1-i28672-swe/roofline.json",
+    "prefill_flops_pct_host_wall": 10.495997760044835,
+    "decode_dram_pct_host_wall": 29.567810227196926,
+    "decode_phase_mean_step_ms": 33.34013213779527,
+    "modeled_decode_bytes_per_step": 20189075456.0,
+    "prefill_fraction_of_window": 0.6285562028493479
+  },
+  "original_source_commits": {
+    "tt-metal": "262d3a3cc8b9af24a048d75211a7b3e520a1790b",
+    "vllm-tt-plugin": "90f33d2e392eb8bfda6948df9dabe712a724cb1a",
+    "vllm": null
+  },
+  "candidate_source_commits": {
+    "tt-metal": "ac79c7b5b83e77148a2248bc05c4fa4427f9ac26",
+    "vllm-tt-plugin": "90f33d2e392eb8bfda6948df9dabe712a724cb1a",
+    "vllm": null
+  },
+  "original_configuration_evidence_sha256": "247769062825f8633ef57ae642d02f27ca3d2c284d4833bb58729dc57963dd17",
+  "candidate_configuration_evidence_sha256": "39fa6bf09b262b29082c2332acd2148af4add7df884178957a779d573f18b422",
+  "ranges": {
+    "decode_tok_s_user": {
+      "prior": 30.261882749931342,
+      "ratio_low": 0.35,
+      "ratio_high": 0.75,
+      "low": 10.59165896247597,
+      "high": 22.696412062448506
+    },
+    "prefill_tok_s": {
+      "prior": 3980.918353745574,
+      "ratio_low": 0.25,
+      "ratio_high": 0.7,
+      "low": 995.2295884363936,
+      "high": 2786.6428476219016
+    },
+    "duration_s": {
+      "prior": 22.799233467085287,
+      "ratio_low": 1.4,
+      "ratio_high": 4.5,
+      "low": 31.918926853919398,
+      "high": 102.59655060188379
+    }
+  },
+  "row": {
+    "id": "b8-c1-i28672-swe",
+    "batch": 8,
+    "concurrency": 1,
+    "input_tokens": 28672,
+    "output_tokens": 128,
+    "sampling": "swe",
+    "requests": 2,
+    "headline": false,
+    "predicted": {
+      "decode_tok_s_user": 27.917731989772896,
+      "decode_tok_s_user_low": 20.93829899232967,
+      "decode_tok_s_user_high": 34.89716498721612,
+      "prefill_tok_s": 3486.05577689243,
+      "prefill_tok_s_low": 2614.5418326693225,
+      "prefill_tok_s_high": 4357.5697211155375,
+      "ttft_s": 9.399734857142859,
+      "step_ms": 35.81952861952862,
+      "basis": "Stage10 short/long prefill and cadence estimates with linear KV-length cost; request TTFT includes serialized prefill at full concurrency."
+    }
+  },
+  "estimated_seconds": 153.8948259028257
+}

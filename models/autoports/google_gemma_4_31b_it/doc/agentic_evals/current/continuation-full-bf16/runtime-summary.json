@@ -1,0 +1,686 @@
+{
+  "scope": "Candidate full-BF16 B8 startup, logging probe, readiness probe and seven SWE rate rows including warmups; no eval task run",
+  "server_log": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/continuation-full-bf16/server/server-b8/server.log",
+  "log_byte_range": [
+    0,
+    3684298
+  ],
+  "sampling_steps": {
+    "prefill:device": 62,
+    "decode:device": 2479,
+    "prefill:host_compatibility": 645
+  },
+  "decode_page_only_refreshes": 183,
+  "decode_full_reloads": 252,
+  "decode_unchanged_steps": 2044,
+  "batched_prefill_groups": [],
+  "preparation": [
+    {
+      "event": "generator_trace_prepare",
+      "batch": 8,
+      "layers": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+        25,
+        26,
+        27,
+        28,
+        29,
+        30,
+        31,
+        32,
+        33,
+        34,
+        35,
+        36,
+        37,
+        38,
+        39,
+        40,
+        41,
+        42,
+        43,
+        44,
+        45,
+        46,
+        47,
+        48,
+        49,
+        50,
+        51,
+        52,
+        53,
+        54,
+        55,
+        56,
+        57,
+        58,
+        59
+      ],
+      "cache_shapes": [
+        [
+          10752,
+          4,
+          32,
+          256
+        ],
+        [
+          10752,
+          4,
+          32,
+          256
+        ],
+        [
+          10752,
+          4,
+          32,
+          256
+        ],
+        [
+          10752,
+          4,
+          32,
+          256
+        ],
+        [
+          10752,
+          4,
+          32,
+          256
+        ],
+        [
+          21504,
+          1,
+          32,
+          512
+        ],
+        [
+          10752,
+          4,
+          32,
+          256
+        ],
+        [
+          10752,
+          4,
+          32,
+          256
+        ],
+        [
+          10752,
+          4,
+          32,
+          256
+        ],
+        [
+          10752,
+          4,
+          32,
+          256
+        ],
+        [
+          10752,
+          4,
+          32,
+          256
+        ],
+        [
+          21504,
+          1,
+          32,
+          512
+        ],
+        [
+          10752,
+          4,
+          32,
+          256
+        ],
+        [
+          10752,
+          4,
+          32,
+          256
+        ],
+        [
+          10752,
+          4,
+          32,
+          256
+        ],
+        [
+          10752,
+          4,
+          32,
+          256
+        ],
+        [
+          10752,
+          4,
+          32,
+          256
+        ],
+        [
+          21504,
+          1,
+          32,
+          512
+        ],
+        [
+          10752,
+          4,
+          32,
+          256
+        ],
+        [
+          10752,
+          4,
+          32,
+          256
+        ],
+        [
+          10752,
+          4,
+          32,
+          256
+        ],
+        [
+          10752,
+          4,
+          32,
+          256
+        ],
+        [
+          10752,
+          4,
+          32,
+          256
+        ],
+        [
+          21504,
+          1,
+          32,
+          512
+        ],
+        [
+          10752,
+          4,
+          32,
+          256
+        ],
+        [
+          10752,
+          4,
+          32,
+          256
+        ],
+        [
+          10752,
+          4,
+          32,
+          256
+        ],
+        [
+          10752,
+          4,
+          32,
+          256
+        ],
+        [
+          10752,
+          4,
+          32,
+          256
+        ],
+        [
+          21504,
+          1,
+          32,
+          512
+        ],
+        [
+          10752,
+          4,
+          32,
+          256
+        ],
+        [
+          10752,
+          4,
+          32,
+          256
+        ],
+        [
+          10752,
+          4,
+          32,
+          256
+        ],
+        [
+          10752,
+          4,
+          32,
+          256
+        ],
+        [
+          10752,
+          4,
+          32,
+          256
+        ],
+        [
+          21504,
+          1,
+          32,
+          512
+        ],
+        [
+          10752,
+          4,
+          32,
+          256
+        ],
+        [
+          10752,
+          4,
+          32,
+          256
+        ],
+        [
+          10752,
+          4,
+          32,
+          256
+        ],
+        [
+          10752,
+          4,
+          32,
+          256
+        ],
+        [
+          10752,
+          4,
+          32,
+          256
+        ],
+        [
+          21504,
+          1,
+          32,
+          512
+        ],
+        [
+          10752,
+          4,
+          32,
+          256
+        ],
+        [
+          10752,
+          4,
+          32,
+          256
+        ],
+        [
+          10752,
+          4,
+          32,
+          256
+        ],
+        [
+          10752,
+          4,
+          32,
+          256
+        ],
+        [
+          10752,
+          4,
+          32,
+          256
+        ],
+        [
+          21504,
+          1,
+          32,
+          512
+        ],
+        [
+          10752,
+          4,
+          32,
+          256
+        ],
+        [
+          10752,
+          4,
+          32,
+          256
+        ],
+        [
+          10752,
+          4,
+          32,
+          256
+        ],
+        [
+          10752,
+          4,
+          32,
+          256
+        ],
+        [
+          10752,
+          4,
+          32,
+          256
+        ],
+        [
+          21504,
+          1,
+          32,
+          512
+        ],
+        [
+          10752,
+          4,
+          32,
+          256
+        ],
+        [
+          10752,
+          4,
+          32,
+          256
+        ],
+        [
+          10752,
+          4,
+          32,
+          256
+        ],
+        [
+          10752,
+          4,
+          32,
+          256
+        ],
+        [
+          10752,
+          4,
+          32,
+          256
+        ],
+        [
+          21504,
+          1,
+          32,
+          512
+        ]
+      ],
+      "prefill_buckets": [
+        32,
+        64,
+        96,
+        128,
+        160,
+        192,
+        224,
+        256,
+        288,
+        320,
+        352,
+        384,
+        416,
+        448,
+        480,
+        512,
+        544,
+        576,
+        608,
+        640,
+        672,
+        704,
+        736,
+        768,
+        800,
+        832,
+        864,
+        896,
+        928,
+        960,
+        992,
+        1024
+      ],
+      "batched_prefill_buckets": [
+        [
+          2,
+          32
+        ],
+        [
+          4,
+          32
+        ],
+        [
+          8,
+          32
+        ],
+        [
+          2,
+          64
+        ],
+        [
+          4,
+          64
+        ],
+        [
+          8,
+          64
+        ],
+        [
+          2,
+          96
+        ],
+        [
+          4,
+          96
+        ],
+        [
+          8,
+          96
+        ],
+        [
+          2,
+          128
+        ],
+        [
+          4,
+          128
+        ],
+        [
+          8,
+          128
+        ]
+      ],
+      "batched_prefill_bytes_per_device": 33122304,
+      "traces": {
+        "decode": "MeshTraceId(0)",
+        "sample": "MeshTraceId(1)",
+        "buffered_sample": "MeshTraceId(2)"
+      },
+      "capture_seconds": {
+        "prefill": 0.0,
+        "decode": 0.1876470830757171,
+        "sample": 0.004740288946777582,
+        "buffered_sample": 0.01055388618260622
+      },
+      "warmup_seconds": {
+        "prefill": 227.55628175404854,
+        "decode": 4.620163731044158,
+        "sample": 0.11401061108335853
+      },
+      "timing_basis": "host wall including compilation and synchronized warmup; not device timings",
+      "prefill_execution": "eager prepared buckets; no prefill traces",
+      "programs_before": 41,
+      "programs_warmed": 2837,
+      "programs_after_capture": 2837,
+      "captures": 3,
+      "retirements": 0,
+      "preparation_seconds": 232.97055990900844,
+      "log_line": 7868
+    }
+  ],
+  "registration": [
+    {
+      "event": "autoport_registration",
+      "class": "models.autoports.google_gemma_4_31b_it.tt.generator_vllm:Gemma4ForCausalLM",
+      "module_file": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/generator_vllm.py",
+      "device_ids": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "mesh_shape": "MeshShape([1, 4])",
+      "layers": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+        25,
+        26,
+        27,
+        28,
+        29,
+        30,
+        31,
+        32,
+        33,
+        34,
+        35,
+        36,
+        37,
+        38,
+        39,
+        40,
+        41,
+        42,
+        43,
+        44,
+        45,
+        46,
+        47,
+        48,
+        49,
+        50,
+        51,
+        52,
+        53,
+        54,
+        55,
+        56,
+        57,
+        58,
+        59
+      ],
+      "precision": {
+        "config_id": "stage12_bf16_hifi4_diagnostic",
+        "weight_groups": {
+          "attention": "bf16",
+          "mlp": "bf16",
+          "down": "bf16",
+          "lm_head": "bf16"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "HiFi4",
+          "mlp": "HiFi4",
+          "down": "HiFi4",
+          "lm_head": "HiFi4"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat16",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144,
+        "sdpa_compute_fidelity": "HiFi4"
+      },
+      "log_line": 132
+    }
+  ],
+  "source_hashes_at_audit": {
+    "tt/batched_prefill.py": "ab99ab9c8c54f206d16a56df1dc02bc3c4da14db003ea52d6e45d7f679af8df8",
+    "tt/benchmark_phases.py": "659d7a4aa043f30dc1313a0cfedd68265a3d17b03db7a2a2bf9b5be253f46f9e",
+    "tt/functional_decoder.py": "a9d4f4d8ba3c710fb7508e0f0804e499a1312a847484f4d4e6668bd6b4334731",
+    "tt/fused_decoder.py": "cc1b358f90a2fadab24cbb3dd9826ffe32015fab46ccefac25c0c6c11c658149",
+    "tt/generator.py": "3276fd7427898077ab25e139f89a7b03d2a968cd9bafb79e9aa08bb975016f22",
+    "tt/generator_contract.py": "b5af096ae1b99d19a48786c089a790778faf1c228a45b4a8933a447dfba95f24",
+    "tt/generator_vllm.py": "5a19558b9b28b6a5586cc985bedebdd88671ba07b453ced2890935552937b734",
+    "tt/kv_pool_budget.py": "67739175d88efe9e02cdbd5b5b559b4bac047ab7e57d7dc24ac47cff888ba081",
+    "tt/model.py": "c65ed33bb175f63603946eea561a2623cad0b70521428bdf888bd9445457a01e",
+    "tt/multichip_decoder.py": "6e3bbdb61f210dc57564ad28025a563136406d5ee49ba57a8010c505e9185474",
+    "tt/native_log_formatter.py": "b3fab5ef1cbf13d2907378e2d58e98dedd716fe8d8932b3a9513387b5cb37c13",
+    "tt/optimized_decoder.py": "c0f2e5e1ac4517b435d3943fcce44071ac087f9ec214ea46fd0b06f773d68815",
+    "tt/precision.py": "2f223a118fe713677b9ce4fb3beb2f563e26af56ef45a98b2e03fad1e25664a9",
+    "tt/prefill.py": "4208b8362e997db1845fd98043df9b183e8e17ed789ff5b5ea839739cd0b1f91",
+    "tt/response_logging.py": "825fa2d47bcac886724fd9186f1162b468c8f275602c2cd48cbdd443887eb7e8",
+    "tt/serving_memory.py": "cfe9191dbb8f57fa8390388576bb1a6d4163bf0e319dc287dd4ddde0af81171d",
+    "tt/weights.py": "bca69b111c9c9cbf9bc620c3dc6bee873abdecdd75f08d5b8b93638e881868cd"
+  },
+  "limitations": [
+    "Counts cover the named log interval, including any benchmark warmup/test requests in it.",
+    "Source hashes are audit-time state; launch provenance must establish that the loaded source matches."
+  ]
+}

@@ -1,0 +1,849 @@
+{
+  "schema_version": 1,
+  "status": "completed",
+  "config_label": "stage12_bf16_hifi4_diagnostic",
+  "precision_sha256": "d92c9b377550e9850d2efc948624e8a5832da827eedc5f910bf3ca92e1617a09",
+  "server_config": {
+    "model": "google/gemma-4-31B-it",
+    "implementation": "models/autoports/google_gemma_4_31b_it",
+    "generator_module": "models.autoports.google_gemma_4_31b_it.tt.generator_vllm",
+    "model_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+    "tokenizer_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+    "precision": {
+      "config_id": "stage12_bf16_hifi4_diagnostic",
+      "weight_groups": {
+        "attention": "bf16",
+        "mlp": "bf16",
+        "down": "bf16",
+        "lm_head": "bf16"
+      },
+      "layer_exceptions": {},
+      "compute_fidelities": {
+        "attention": "HiFi4",
+        "mlp": "HiFi4",
+        "down": "HiFi4",
+        "lm_head": "HiFi4"
+      },
+      "activation_dtype": "bfloat16",
+      "residual_dtype": "bfloat16",
+      "ccl_dtype": {
+        "prefill": "bfloat16",
+        "decode": "bfloat16"
+      },
+      "kv_cache_dtype": "bfloat16",
+      "logits_dtype": "bfloat16",
+      "sampling_dtype": "bfloat16",
+      "embedding_dtype": "bfloat16",
+      "norm_dtype": "bfloat16",
+      "max_seq_len": 262144,
+      "sdpa_compute_fidelity": "HiFi4"
+    },
+    "layer_count": 60,
+    "configured_layer_count": 60,
+    "source_commits": {
+      "tt-metal": "ac79c7b5b83e77148a2248bc05c4fa4427f9ac26",
+      "vllm-tt-plugin": "90f33d2e392eb8bfda6948df9dabe712a724cb1a",
+      "vllm": null
+    },
+    "observation_provenance": {
+      "launch_commit": "ac79c7b5b83e77148a2248bc05c4fa4427f9ac26",
+      "observer_commit": "ac79c7b5b83e77148a2248bc05c4fa4427f9ac26",
+      "host_only_committed_changes": []
+    },
+    "hardware": "P300x2; Blackhole mesh 1x4; TP4",
+    "server_command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "vllm.entrypoints.openai.api_server",
+      "--model",
+      "/home/mvasiljevic/.cache/huggingface/hub/models--google--gemma-4-31B-it/snapshots/842da3794eaa0b77d5f08bae87a17459d91ff475",
+      "--block_size",
+      "32",
+      "--max_num_seqs",
+      "8",
+      "--port",
+      "8000",
+      "--max_model_len",
+      "262144",
+      "--enable-prefix-caching",
+      "--additional-config",
+      "{\"tt\": {\"sample_on_device_mode\": \"all\", \"trace_region_size\": 134217728, \"fabric_config\": \"FABRIC_1D_RING\"}}",
+      "--revision",
+      "842da3794eaa0b77d5f08bae87a17459d91ff475",
+      "--tokenizer-revision",
+      "842da3794eaa0b77d5f08bae87a17459d91ff475",
+      "--language-model-only",
+      "--middleware",
+      "models.autoports.google_gemma_4_31b_it.tt.response_logging.ResponseLoggingMiddleware",
+      "--async-scheduling",
+      "--reasoning-parser",
+      "gemma4",
+      "--tool-call-parser",
+      "gemma4",
+      "--enable-auto-tool-choice",
+      "--enable-prompt-tokens-details",
+      "--override-generation-config",
+      "{\"top_k\":32}",
+      "--served-model-name",
+      "google/gemma-4-31B-it",
+      "--max-num-seqs",
+      "8",
+      "/home/mvasiljevic/.cache/huggingface/hub/models--google--gemma-4-31B-it/snapshots/842da3794eaa0b77d5f08bae87a17459d91ff475"
+    ],
+    "prefix_caching": true,
+    "max_num_seqs": 8,
+    "max_model_len": 262144,
+    "base_url": "http://127.0.0.1:8000",
+    "phase_log": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/continuation-full-bf16/server/phase-b8.jsonl",
+    "server_log": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/continuation-full-bf16/server/server-b8/server.log",
+    "configuration_evidence": "configuration-b8.json",
+    "configuration_evidence_sha256": "39fa6bf09b262b29082c2332acd2148af4add7df884178957a779d573f18b422",
+    "startup_seconds": 342.4087867180351,
+    "pid": 2530,
+    "module_file": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/generator_vllm.py",
+    "device_ids": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "observed_registration": {
+      "event": "autoport_registration",
+      "class": "models.autoports.google_gemma_4_31b_it.tt.generator_vllm:Gemma4ForCausalLM",
+      "module_file": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/generator_vllm.py",
+      "device_ids": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "mesh_shape": "MeshShape([1, 4])",
+      "layers": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+        25,
+        26,
+        27,
+        28,
+        29,
+        30,
+        31,
+        32,
+        33,
+        34,
+        35,
+        36,
+        37,
+        38,
+        39,
+        40,
+        41,
+        42,
+        43,
+        44,
+        45,
+        46,
+        47,
+        48,
+        49,
+        50,
+        51,
+        52,
+        53,
+        54,
+        55,
+        56,
+        57,
+        58,
+        59
+      ],
+      "precision": {
+        "config_id": "stage12_bf16_hifi4_diagnostic",
+        "weight_groups": {
+          "attention": "bf16",
+          "mlp": "bf16",
+          "down": "bf16",
+          "lm_head": "bf16"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "HiFi4",
+          "mlp": "HiFi4",
+          "down": "HiFi4",
+          "lm_head": "HiFi4"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat16",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144,
+        "sdpa_compute_fidelity": "HiFi4"
+      }
+    },
+    "vllm_package": {
+      "version": "0.31.0+empty",
+      "direct_url": null
+    }
+  },
+  "server": {
+    "model": "google/gemma-4-31B-it",
+    "implementation": "models/autoports/google_gemma_4_31b_it",
+    "generator_module": "models.autoports.google_gemma_4_31b_it.tt.generator_vllm",
+    "model_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+    "tokenizer_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+    "precision": {
+      "config_id": "stage12_bf16_hifi4_diagnostic",
+      "weight_groups": {
+        "attention": "bf16",
+        "mlp": "bf16",
+        "down": "bf16",
+        "lm_head": "bf16"
+      },
+      "layer_exceptions": {},
+      "compute_fidelities": {
+        "attention": "HiFi4",
+        "mlp": "HiFi4",
+        "down": "HiFi4",
+        "lm_head": "HiFi4"
+      },
+      "activation_dtype": "bfloat16",
+      "residual_dtype": "bfloat16",
+      "ccl_dtype": {
+        "prefill": "bfloat16",
+        "decode": "bfloat16"
+      },
+      "kv_cache_dtype": "bfloat16",
+      "logits_dtype": "bfloat16",
+      "sampling_dtype": "bfloat16",
+      "embedding_dtype": "bfloat16",
+      "norm_dtype": "bfloat16",
+      "max_seq_len": 262144,
+      "sdpa_compute_fidelity": "HiFi4"
+    },
+    "layer_count": 60,
+    "configured_layer_count": 60,
+    "source_commits": {
+      "tt-metal": "ac79c7b5b83e77148a2248bc05c4fa4427f9ac26",
+      "vllm-tt-plugin": "90f33d2e392eb8bfda6948df9dabe712a724cb1a",
+      "vllm": null
+    },
+    "observation_provenance": {
+      "launch_commit": "ac79c7b5b83e77148a2248bc05c4fa4427f9ac26",
+      "observer_commit": "ac79c7b5b83e77148a2248bc05c4fa4427f9ac26",
+      "host_only_committed_changes": []
+    },
+    "hardware": "P300x2; Blackhole mesh 1x4; TP4",
+    "server_command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "vllm.entrypoints.openai.api_server",
+      "--model",
+      "/home/mvasiljevic/.cache/huggingface/hub/models--google--gemma-4-31B-it/snapshots/842da3794eaa0b77d5f08bae87a17459d91ff475",
+      "--block_size",
+      "32",
+      "--max_num_seqs",
+      "8",
+      "--port",
+      "8000",
+      "--max_model_len",
+      "262144",
+      "--enable-prefix-caching",
+      "--additional-config",
+      "{\"tt\": {\"sample_on_device_mode\": \"all\", \"trace_region_size\": 134217728, \"fabric_config\": \"FABRIC_1D_RING\"}}",
+      "--revision",
+      "842da3794eaa0b77d5f08bae87a17459d91ff475",
+      "--tokenizer-revision",
+      "842da3794eaa0b77d5f08bae87a17459d91ff475",
+      "--language-model-only",
+      "--middleware",
+      "models.autoports.google_gemma_4_31b_it.tt.response_logging.ResponseLoggingMiddleware",
+      "--async-scheduling",
+      "--reasoning-parser",
+      "gemma4",
+      "--tool-call-parser",
+      "gemma4",
+      "--enable-auto-tool-choice",
+      "--enable-prompt-tokens-details",
+      "--override-generation-config",
+      "{\"top_k\":32}",
+      "--served-model-name",
+      "google/gemma-4-31B-it",
+      "--max-num-seqs",
+      "8",
+      "/home/mvasiljevic/.cache/huggingface/hub/models--google--gemma-4-31B-it/snapshots/842da3794eaa0b77d5f08bae87a17459d91ff475"
+    ],
+    "prefix_caching": true,
+    "max_num_seqs": 8,
+    "max_model_len": 262144,
+    "base_url": "http://127.0.0.1:8000",
+    "phase_log": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/continuation-full-bf16/server/phase-b8.jsonl",
+    "server_log": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/continuation-full-bf16/server/server-b8/server.log",
+    "configuration_evidence": "configuration-b8.json",
+    "configuration_evidence_sha256": "39fa6bf09b262b29082c2332acd2148af4add7df884178957a779d573f18b422",
+    "startup_seconds": 342.4087867180351,
+    "pid": 2530,
+    "module_file": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/generator_vllm.py",
+    "device_ids": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "observed_registration": {
+      "event": "autoport_registration",
+      "class": "models.autoports.google_gemma_4_31b_it.tt.generator_vllm:Gemma4ForCausalLM",
+      "module_file": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/generator_vllm.py",
+      "device_ids": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "mesh_shape": "MeshShape([1, 4])",
+      "layers": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+        25,
+        26,
+        27,
+        28,
+        29,
+        30,
+        31,
+        32,
+        33,
+        34,
+        35,
+        36,
+        37,
+        38,
+        39,
+        40,
+        41,
+        42,
+        43,
+        44,
+        45,
+        46,
+        47,
+        48,
+        49,
+        50,
+        51,
+        52,
+        53,
+        54,
+        55,
+        56,
+        57,
+        58,
+        59
+      ],
+      "precision": {
+        "config_id": "stage12_bf16_hifi4_diagnostic",
+        "weight_groups": {
+          "attention": "bf16",
+          "mlp": "bf16",
+          "down": "bf16",
+          "lm_head": "bf16"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "HiFi4",
+          "mlp": "HiFi4",
+          "down": "HiFi4",
+          "lm_head": "HiFi4"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat16",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144,
+        "sdpa_compute_fidelity": "HiFi4"
+      }
+    },
+    "vllm_package": {
+      "version": "0.31.0+empty",
+      "direct_url": null
+    }
+  },
+  "validated_batches": [
+    8
+  ],
+  "rows": [
+    {
+      "id": "b8-c8-i4096-swe",
+      "batch": 8,
+      "concurrency": 8,
+      "input_tokens": 4096,
+      "output_tokens": 128,
+      "sampling": "swe",
+      "requests": 8,
+      "headline": false,
+      "predicted": {
+        "decode_tok_s_user": 32.265774378585085,
+        "decode_tok_s_user_low": 24.199330783938812,
+        "decode_tok_s_user_high": 40.33221797323136,
+        "prefill_tok_s": 4095.163806552262,
+        "prefill_tok_s_low": 3071.3728549141965,
+        "prefill_tok_s_high": 5118.954758190328,
+        "ttft_s": 8.001633523809524,
+        "step_ms": 30.992592592592594,
+        "basis": "Stage10 short/long prefill and cadence estimates with linear KV-length cost; request TTFT includes serialized prefill at full concurrency."
+      },
+      "config_label": "stage12_bf16_hifi4_diagnostic",
+      "precision_sha256": "d92c9b377550e9850d2efc948624e8a5832da827eedc5f910bf3ca92e1617a09",
+      "prefill_tok_s": 598.526547750299,
+      "decode_tok_s_user": 9.565557640685013,
+      "ttft_s": 6.843472550041042,
+      "step_ms": 104.54173583636339,
+      "duration_s": 20.37404221110046,
+      "completed": 8,
+      "raw": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/continuation-full-bf16/rates/grid/b8-c8-i4096-swe/perf-b8.json",
+      "server_identity": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/continuation-full-bf16/rates/grid/b8-c8-i4096-swe/perf-b8-server.json",
+      "phase_accounting": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/continuation-full-bf16/rates/grid/b8-c8-i4096-swe/roofline.json",
+      "prediction": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/continuation-full-bf16/rates/grid/b8-c8-i4096-swe/prediction.json",
+      "prediction_comparison": {
+        "rates": {
+          "decode_tok_s_user": {
+            "measured": 9.565557640685013,
+            "ratio_to_prior": 0.502640191892083,
+            "range_hit": true,
+            "explanation_required": false
+          },
+          "prefill_tok_s": {
+            "measured": 598.526547750299,
+            "ratio_to_prior": 0.5310184153422146,
+            "range_hit": true,
+            "explanation_required": false
+          },
+          "duration_s": {
+            "measured": 20.37404221110046,
+            "ratio_to_prior": 1.9506073675886635,
+            "range_hit": true,
+            "explanation_required": false
+          }
+        },
+        "explanation_required": false,
+        "explanation": null
+      }
+    },
+    {
+      "id": "b8-c8-i22420-swe",
+      "batch": 8,
+      "concurrency": 8,
+      "input_tokens": 22420,
+      "output_tokens": 128,
+      "sampling": "swe",
+      "requests": 8,
+      "headline": false,
+      "predicted": {
+        "decode_tok_s_user": 29.34492639067286,
+        "decode_tok_s_user_low": 22.008694793004643,
+        "decode_tok_s_user_high": 36.68115798834108,
+        "prefill_tok_s": 3683.8066001534917,
+        "prefill_tok_s_low": 2762.8549501151188,
+        "prefill_tok_s_high": 4604.758250191864,
+        "ttft_s": 48.68876666666667,
+        "step_ms": 34.07744107744107,
+        "basis": "Stage10 short/long prefill and cadence estimates with linear KV-length cost; request TTFT includes serialized prefill at full concurrency."
+      },
+      "config_label": "stage12_bf16_hifi4_diagnostic",
+      "precision_sha256": "d92c9b377550e9850d2efc948624e8a5832da827eedc5f910bf3ca92e1617a09",
+      "prefill_tok_s": 440.71104027310224,
+      "decode_tok_s_user": 2.6945615874921667,
+      "ttft_s": 50.87233572843252,
+      "step_ms": 371.11788598259574,
+      "duration_s": 99.301095334813,
+      "completed": 8,
+      "raw": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/continuation-full-bf16/rates/grid/b8-c8-i22420-swe/perf-b8.json",
+      "server_identity": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/continuation-full-bf16/rates/grid/b8-c8-i22420-swe/perf-b8-server.json",
+      "phase_accounting": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/continuation-full-bf16/rates/grid/b8-c8-i22420-swe/roofline.json",
+      "prediction": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/continuation-full-bf16/rates/grid/b8-c8-i22420-swe/prediction.json",
+      "prediction_comparison": {
+        "rates": {
+          "decode_tok_s_user": {
+            "measured": 2.6945615874921667,
+            "ratio_to_prior": 0.49022728060042187,
+            "range_hit": true,
+            "explanation_required": false
+          },
+          "prefill_tok_s": {
+            "measured": 440.71104027310224,
+            "ratio_to_prior": 0.4901466640458573,
+            "range_hit": true,
+            "explanation_required": false
+          },
+          "duration_s": {
+            "measured": 99.301095334813,
+            "ratio_to_prior": 2.038305737225865,
+            "range_hit": true,
+            "explanation_required": false
+          }
+        },
+        "explanation_required": false,
+        "explanation": null
+      }
+    },
+    {
+      "id": "b8-c8-i28672-swe",
+      "batch": 8,
+      "concurrency": 8,
+      "input_tokens": 28672,
+      "output_tokens": 128,
+      "sampling": "swe",
+      "requests": 8,
+      "headline": false,
+      "predicted": {
+        "decode_tok_s_user": 27.917731989772896,
+        "decode_tok_s_user_low": 20.93829899232967,
+        "decode_tok_s_user_high": 34.89716498721612,
+        "prefill_tok_s": 3486.05577689243,
+        "prefill_tok_s_low": 2614.5418326693225,
+        "prefill_tok_s_high": 4357.5697211155375,
+        "ttft_s": 75.19787885714287,
+        "step_ms": 35.81952861952862,
+        "basis": "Stage10 short/long prefill and cadence estimates with linear KV-length cost; request TTFT includes serialized prefill at full concurrency."
+      },
+      "config_label": "stage12_bf16_hifi4_diagnostic",
+      "precision_sha256": "d92c9b377550e9850d2efc948624e8a5832da827eedc5f910bf3ca92e1617a09",
+      "prefill_tok_s": 407.93341219404033,
+      "decode_tok_s_user": 2.0202824443528837,
+      "ttft_s": 70.28598085601698,
+      "step_ms": 494.9802948568955,
+      "duration_s": 134.80290504009463,
+      "completed": 8,
+      "raw": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/continuation-full-bf16/rates/grid/b8-c8-i28672-swe/perf-b8.json",
+      "server_identity": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/continuation-full-bf16/rates/grid/b8-c8-i28672-swe/perf-b8-server.json",
+      "phase_accounting": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/continuation-full-bf16/rates/grid/b8-c8-i28672-swe/roofline.json",
+      "prediction": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/continuation-full-bf16/rates/grid/b8-c8-i28672-swe/prediction.json",
+      "prediction_comparison": {
+        "rates": {
+          "decode_tok_s_user": {
+            "measured": 2.0202824443528837,
+            "ratio_to_prior": 0.4796343768185125,
+            "range_hit": true,
+            "explanation_required": false
+          },
+          "prefill_tok_s": {
+            "measured": 407.93341219404033,
+            "ratio_to_prior": 0.4742176873026226,
+            "range_hit": true,
+            "explanation_required": false
+          },
+          "duration_s": {
+            "measured": 134.80290504009463,
+            "ratio_to_prior": 2.094843773077307,
+            "range_hit": true,
+            "explanation_required": false
+          }
+        },
+        "explanation_required": false,
+        "explanation": null
+      }
+    },
+    {
+      "id": "b8-c1-i4096-swe",
+      "batch": 8,
+      "concurrency": 1,
+      "input_tokens": 4096,
+      "output_tokens": 128,
+      "sampling": "swe",
+      "requests": 2,
+      "headline": false,
+      "predicted": {
+        "decode_tok_s_user": 32.265774378585085,
+        "decode_tok_s_user_low": 24.199330783938812,
+        "decode_tok_s_user_high": 40.33221797323136,
+        "prefill_tok_s": 4095.163806552262,
+        "prefill_tok_s_low": 3071.3728549141965,
+        "prefill_tok_s_high": 5118.954758190328,
+        "ttft_s": 1.0002041904761905,
+        "step_ms": 30.992592592592594,
+        "basis": "Stage10 short/long prefill and cadence estimates with linear KV-length cost; request TTFT includes serialized prefill at full concurrency."
+      },
+      "config_label": "stage12_bf16_hifi4_diagnostic",
+      "precision_sha256": "d92c9b377550e9850d2efc948624e8a5832da827eedc5f910bf3ca92e1617a09",
+      "prefill_tok_s": 2764.9621716174906,
+      "decode_tok_s_user": 17.002703710350016,
+      "ttft_s": 1.4813945890637115,
+      "step_ms": 58.81417550029248,
+      "duration_s": 17.90252133179456,
+      "completed": 2,
+      "raw": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/continuation-full-bf16/rates/grid/b8-c1-i4096-swe/perf-b8.json",
+      "server_identity": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/continuation-full-bf16/rates/grid/b8-c1-i4096-swe/perf-b8-server.json",
+      "phase_accounting": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/continuation-full-bf16/rates/grid/b8-c1-i4096-swe/roofline.json",
+      "prediction": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/continuation-full-bf16/rates/grid/b8-c1-i4096-swe/prediction.json",
+      "prediction_comparison": {
+        "rates": {
+          "decode_tok_s_user": {
+            "measured": 17.002703710350016,
+            "ratio_to_prior": 0.4841136956514076,
+            "range_hit": true,
+            "explanation_required": false
+          },
+          "prefill_tok_s": {
+            "measured": 2764.9621716174906,
+            "ratio_to_prior": 0.533726675743294,
+            "range_hit": true,
+            "explanation_required": false
+          },
+          "duration_s": {
+            "measured": 17.90252133179456,
+            "ratio_to_prior": 2.0310963555094115,
+            "range_hit": true,
+            "explanation_required": false
+          }
+        },
+        "explanation_required": false,
+        "explanation": null
+      }
+    },
+    {
+      "id": "b8-c1-i22420-swe",
+      "batch": 8,
+      "concurrency": 1,
+      "input_tokens": 22420,
+      "output_tokens": 128,
+      "sampling": "swe",
+      "requests": 2,
+      "headline": false,
+      "predicted": {
+        "decode_tok_s_user": 29.34492639067286,
+        "decode_tok_s_user_low": 22.008694793004643,
+        "decode_tok_s_user_high": 36.68115798834108,
+        "prefill_tok_s": 3683.8066001534917,
+        "prefill_tok_s_low": 2762.8549501151188,
+        "prefill_tok_s_high": 4604.758250191864,
+        "ttft_s": 6.086095833333334,
+        "step_ms": 34.07744107744107,
+        "basis": "Stage10 short/long prefill and cadence estimates with linear KV-length cost; request TTFT includes serialized prefill at full concurrency."
+      },
+      "config_label": "stage12_bf16_hifi4_diagnostic",
+      "precision_sha256": "d92c9b377550e9850d2efc948624e8a5832da827eedc5f910bf3ca92e1617a09",
+      "prefill_tok_s": 2047.4194517245446,
+      "decode_tok_s_user": 16.003450434556783,
+      "ttft_s": 10.950369735481218,
+      "step_ms": 62.48652464600177,
+      "duration_s": 37.77341654803604,
+      "completed": 2,
+      "raw": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/continuation-full-bf16/rates/grid/b8-c1-i22420-swe/perf-b8.json",
+      "server_identity": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/continuation-full-bf16/rates/grid/b8-c1-i22420-swe/perf-b8-server.json",
+      "phase_accounting": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/continuation-full-bf16/rates/grid/b8-c1-i22420-swe/roofline.json",
+      "prediction": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/continuation-full-bf16/rates/grid/b8-c1-i22420-swe/prediction.json",
+      "prediction_comparison": {
+        "rates": {
+          "decode_tok_s_user": {
+            "measured": 16.003450434556783,
+            "ratio_to_prior": 0.5108220552487228,
+            "range_hit": true,
+            "explanation_required": false
+          },
+          "prefill_tok_s": {
+            "measured": 2047.4194517245446,
+            "ratio_to_prior": 0.48198534880408683,
+            "range_hit": true,
+            "explanation_required": false
+          },
+          "duration_s": {
+            "measured": 37.77341654803604,
+            "ratio_to_prior": 2.023821799122597,
+            "range_hit": true,
+            "explanation_required": false
+          }
+        },
+        "explanation_required": false,
+        "explanation": null
+      }
+    },
+    {
+      "id": "b8-c1-i28672-swe",
+      "batch": 8,
+      "concurrency": 1,
+      "input_tokens": 28672,
+      "output_tokens": 128,
+      "sampling": "swe",
+      "requests": 2,
+      "headline": false,
+      "predicted": {
+        "decode_tok_s_user": 27.917731989772896,
+        "decode_tok_s_user_low": 20.93829899232967,
+        "decode_tok_s_user_high": 34.89716498721612,
+        "prefill_tok_s": 3486.05577689243,
+        "prefill_tok_s_low": 2614.5418326693225,
+        "prefill_tok_s_high": 4357.5697211155375,
+        "ttft_s": 9.399734857142859,
+        "step_ms": 35.81952861952862,
+        "basis": "Stage10 short/long prefill and cadence estimates with linear KV-length cost; request TTFT includes serialized prefill at full concurrency."
+      },
+      "config_label": "stage12_bf16_hifi4_diagnostic",
+      "precision_sha256": "d92c9b377550e9850d2efc948624e8a5832da827eedc5f910bf3ca92e1617a09",
+      "prefill_tok_s": 1880.2338724978943,
+      "decode_tok_s_user": 15.692422948823536,
+      "ttft_s": 15.249166829395108,
+      "step_ms": 63.72502214993958,
+      "duration_s": 46.685623900033534,
+      "completed": 2,
+      "raw": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/continuation-full-bf16/rates/grid/b8-c1-i28672-swe/perf-b8.json",
+      "server_identity": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/continuation-full-bf16/rates/grid/b8-c1-i28672-swe/perf-b8-server.json",
+      "phase_accounting": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/continuation-full-bf16/rates/grid/b8-c1-i28672-swe/roofline.json",
+      "prediction": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/continuation-full-bf16/rates/grid/b8-c1-i28672-swe/prediction.json",
+      "prediction_comparison": {
+        "rates": {
+          "decode_tok_s_user": {
+            "measured": 15.692422948823536,
+            "ratio_to_prior": 0.5185540859601387,
+            "range_hit": true,
+            "explanation_required": false
+          },
+          "prefill_tok_s": {
+            "measured": 1880.2338724978943,
+            "ratio_to_prior": 0.47231158878925916,
+            "range_hit": true,
+            "explanation_required": false
+          },
+          "duration_s": {
+            "measured": 46.685623900033534,
+            "ratio_to_prior": 2.047683926191311,
+            "range_hit": true,
+            "explanation_required": false
+          }
+        },
+        "explanation_required": false,
+        "explanation": null
+      }
+    },
+    {
+      "id": "b8-c1-i131072-swe",
+      "batch": 8,
+      "concurrency": 1,
+      "input_tokens": 131072,
+      "output_tokens": 128,
+      "sampling": "swe",
+      "requests": 2,
+      "headline": false,
+      "predicted": {
+        "decode_tok_s_user": 19.095257689538112,
+        "decode_tok_s_user_low": 14.321443267153583,
+        "decode_tok_s_user_high": 23.86907211192264,
+        "prefill_tok_s": 2308.7071240105543,
+        "prefill_tok_s_low": 1731.5303430079157,
+        "prefill_tok_s_high": 2885.883905013193,
+        "ttft_s": 56.772900571428565,
+        "step_ms": 52.369023569023575,
+        "basis": "Stage10 short/long prefill and cadence estimates with linear KV-length cost; request TTFT includes serialized prefill at full concurrency."
+      },
+      "config_label": "stage12_bf16_hifi4_diagnostic",
+      "precision_sha256": "d92c9b377550e9850d2efc948624e8a5832da827eedc5f910bf3ca92e1617a09",
+      "prefill_tok_s": 809.3188152813941,
+      "decode_tok_s_user": 11.85432515253577,
+      "ttft_s": 161.95348177396227,
+      "step_ms": 84.35739589833075,
+      "duration_s": 345.33561865403317,
+      "completed": 2,
+      "raw": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/continuation-full-bf16/rates/grid/b8-c1-i131072-swe/perf-b8.json",
+      "server_identity": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/continuation-full-bf16/rates/grid/b8-c1-i131072-swe/perf-b8-server.json",
+      "phase_accounting": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/continuation-full-bf16/rates/grid/b8-c1-i131072-swe/roofline.json",
+      "prediction": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/continuation-full-bf16/rates/grid/b8-c1-i131072-swe/prediction.json",
+      "prediction_comparison": {
+        "rates": {
+          "decode_tok_s_user": {
+            "measured": 11.85432515253577,
+            "ratio_to_prior": 0.6155796636571772,
+            "range_hit": true,
+            "explanation_required": false
+          },
+          "prefill_tok_s": {
+            "measured": 809.3188152813941,
+            "ratio_to_prior": 0.4087530196963266,
+            "range_hit": true,
+            "explanation_required": false
+          },
+          "duration_s": {
+            "measured": 345.33561865403317,
+            "ratio_to_prior": 2.3719786556990683,
+            "range_hit": true,
+            "explanation_required": false
+          }
+        },
+        "explanation_required": false,
+        "explanation": null
+      }
+    }
+  ],
+  "missing_rows": [],
+  "sampling_policies": {
+    "gpqa": {
+      "temperature": 1,
+      "top_p": 0.95,
+      "top_k": 20,
+      "seed": 42
+    },
+    "swe": {
+      "temperature": 1,
+      "top_p": 0.95,
+      "top_k": 20,
+      "seed": null
+    }
+  }
+}

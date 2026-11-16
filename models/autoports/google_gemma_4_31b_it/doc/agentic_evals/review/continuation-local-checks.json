@@ -1,0 +1,11 @@
+{
+  "utc": "2026-11-16T01:52:52.807590+00:00",
+  "helper_py_compile": "pass",
+  "selected_evidence_json_parse": "pass",
+  "credential_key_scan": "no populated credential-like keys",
+  "git_diff_check": "pass",
+  "selected_files_pre_commit": "pass",
+  "telemetry_template_identifiers_and_workload": "exact_match",
+  "telemetry_device_metrics": "null; no vLLM profiling",
+  "gate": "exit2; missing candidate scored rerun and unknown verifier grades"
+}

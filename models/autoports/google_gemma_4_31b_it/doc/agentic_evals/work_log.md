@@ -509,3 +509,27 @@ The wrapper exited143. The actual model and timeout processes ended after1,346.7
 2026-11-16 — Local evidence checkpoint; authorization required
 
 Local tt-metal branch `v5-extended-run` checkpoint `44d4cfb52795005693351db98eb2d55210f1a59e` records stage-owned code, all counted outcomes, compact investigation evidence and the independent `more-work-needed` review. This is not a clean-pass or release checkpoint. Final host checks passed62 tests plus60 subtests; cached repository hooks passed and commit hooks passed. The stage checker remains exit2 because solved is unknown for3 verifier outcomes while n=85 is preserved. The two unrelated staged benchmark blobs remain unchanged; nothing was pushed. Full-BF16 diagnostic prerequisites are collected, but candidate selection, serving sizing/rates and retained85-task repair require the proposed additional local window in `continuation-proposal.json`. Packet identifiers and headline vLLM workload were validated; unavailable device metrics remain null. Final runner-owned usage is collected by the pipeline at terminal status.
+
+
+2026-11-16 — Authorized continuation
+
+Read operator +4h decision in inputs.json; prior time-authorization blocker resolved. Stage deadline is05:15:25Z, checkpoint by06:00Z. Admit KV-only BFP8 candidate on unchanged108 panel, forecast3300/4000/6000s, timeout6600s. No subagent sweeps. All original results and unknown grades preserved. Candidate remains unselected.
+
+
+2026-11-16 — KV-only candidate rejected
+
+The108-case Q32 panel completed exit0 in3547.345s (3300–6000s forecast). Three cap extensions completed exit0 in281.467s (200–900s forecast), preserving all original prefixes. Final88normal/20native motifs/0other/0inconclusive. Compared with full-BF1690/18, cases37 and42 regress to caret loops. Case55 initial root misclassification corrected by boundary audit before selection. Diagnostic median16.3017t/s versus full16.2603t/s is no meaningful demonstrated gain. Choose full-BF16 for serving validation, leaving the scored head-BFP8 selection unchanged pending evaluation. Full-BF16 resume/broad evidence is reused with its recorded exit-status limitation.
+
+
+2026-11-16 — Full-BF16 serving candidate admission
+
+Model-only free-memory probe completed exit0 in72.521s load time. Shared mesh allocator reports16,059,728,896B free and15,631,973,376B contiguous per device before KV. Proposed10752 normalized BF16 cache IDs consume14,092,861,440B/device, retaining recorded reserves plus512MiB additional transient headroom. Capacity3 planning agents at131072 tokens; batch8 is the smallest validated batch holding3. Full262144 context stays advertised/served, with2 full-context planning slots. Actual server launch must revalidate. Temporarily wire full-BF16 through the normal selected config for candidate serving measurements; retain scored head-BFP8 artifact for restoration if no accepted rerun. No score changes.
+
+
+2026-11-16 — Serving measurements and rerun admission
+
+Candidate commitac79c7b5 loaded fullBF16 via normal adapter; startup342.409s inside180–1200s forecast. Actual allocator matched preflight;3agents/B8,10752IDs,262144context. READY response logging passed. Seven B8 SWE rate rows completed exit0 in1294.716s with all forecast ranges met. Prospective retained85 replay19.969h; optimistic single-request rates7.878h;3.522h remained. Even output-only5-agent sensitivity3.928h exceeds remaining time. Rerun not admitted per operator decision; no further time requested. Server stopped idle; scored default restored. Existing scores and null grades unchanged. Candidate rates catalogued separately in benchmark/serving_rates.json. Final independent review pending.
+
+Closure verification: the three new continuation helpers compile, all125 selected JSON/Python evidence artifacts parse (JSON files), and `git diff --check` passes. The refreshed `review/continuation-gate-check.json` retains exit2 for the unknown SWE85 point score and missing full-BF16 scored rerun; no verifier result was invented. The candidate server is stopped; the scored precision default is restored. Independent continuation review is in progress.
+
+Independent continuation review: `review/stage12-continuation-review.md`, verdict **more-work-needed**. Candidate validation, measured memory/rates and conditional no-rerun admission are supported. Extended SWE remains below band, three grades unknown, and no candidate scored rerun; no clean-pass or stage-complete claim. Operator-directed closure requires no further experiment or time request. Temporary full-BF16 serving checkpoint: `ac79c7b5b83e77148a2248bc05c4fa4427f9ac26` (tt-metal, branch `v5-extended-run`, local only). Scored head-BFP8 default restored in the evidence checkpoint.

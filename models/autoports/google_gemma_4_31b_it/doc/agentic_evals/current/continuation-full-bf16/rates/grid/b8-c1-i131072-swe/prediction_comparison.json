@@ -1,0 +1,24 @@
+{
+  "rates": {
+    "decode_tok_s_user": {
+      "measured": 11.85432515253577,
+      "ratio_to_prior": 0.6155796636571772,
+      "range_hit": true,
+      "explanation_required": false
+    },
+    "prefill_tok_s": {
+      "measured": 809.3188152813941,
+      "ratio_to_prior": 0.4087530196963266,
+      "range_hit": true,
+      "explanation_required": false
+    },
+    "duration_s": {
+      "measured": 345.33561865403317,
+      "ratio_to_prior": 2.3719786556990683,
+      "range_hit": true,
+      "explanation_required": false
+    }
+  },
+  "explanation_required": false,
+  "explanation": null
+}

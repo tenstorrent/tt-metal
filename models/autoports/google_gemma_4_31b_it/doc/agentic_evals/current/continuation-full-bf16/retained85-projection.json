@@ -1,0 +1,1089 @@
+{
+  "status": "prospective_projection_not_scored_run",
+  "recorded_unix": 1794793447.082199,
+  "source": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/swe-extended85-head-bfp8/collected-final/calls.json",
+  "source_sha256": "2d3016eb651e188bd88758782b5b3df6b4e16868e3039868717144a9fb956dda",
+  "rates": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/continuation-full-bf16/rates/serving_rates-swe.json",
+  "rates_sha256": "a6e5f3905e38da3341496ecfb44880fbd818457f9ba9f2ce1ab31623e1c3ac3e",
+  "oracle": "/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/scripts/explain_hours.py",
+  "oracle_sha256": "a2d97160f68dbec9e0fa50d6b490bfa91b9194d863a174cf41ab7d2c9fb72ee6",
+  "tasks": 85,
+  "agents": 3,
+  "server_batch": 8,
+  "output_tokens": 1202253,
+  "output_only_hours_at_best_measured_rate": 6.547177679421588,
+  "output_only_basis": "Optimistic arithmetic under fastest measured grid rate, ignoring every input token and all outside time; not an observed run or guarantee outside measured grid.",
+  "scenarios": {
+    "observed_lifecycle_three_slots": {
+      "explained_hours": 19.968,
+      "approximate": true,
+      "reasons": [
+        "contexts above the longest measured row (28672 at batch 8) are extrapolated"
+      ],
+      "agents": 3,
+      "longest_context": 77096,
+      "longest_row": 131072,
+      "tasks": [
+        {
+          "task": "astropy__astropy-13398",
+          "hours": 0.29,
+          "server_s": 979.1,
+          "outside_s": 64.9
+        },
+        {
+          "task": "astropy__astropy-13579",
+          "hours": 1.6998,
+          "server_s": 6009.6,
+          "outside_s": 109.8
+        },
+        {
+          "task": "astropy__astropy-14096",
+          "hours": 0.3772,
+          "server_s": 1249.1,
+          "outside_s": 109.0
+        },
+        {
+          "task": "astropy__astropy-14309",
+          "hours": 0.1851,
+          "server_s": 580.6,
+          "outside_s": 85.9
+        },
+        {
+          "task": "astropy__astropy-14598",
+          "hours": 0.2344,
+          "server_s": 761.8,
+          "outside_s": 82.1
+        },
+        {
+          "task": "astropy__astropy-14995",
+          "hours": 0.3369,
+          "server_s": 1128.0,
+          "outside_s": 84.7
+        },
+        {
+          "task": "astropy__astropy-7336",
+          "hours": 0.1315,
+          "server_s": 439.0,
+          "outside_s": 34.3
+        },
+        {
+          "task": "astropy__astropy-8872",
+          "hours": 0.4341,
+          "server_s": 1468.1,
+          "outside_s": 94.7
+        },
+        {
+          "task": "django__django-11299",
+          "hours": 0.2909,
+          "server_s": 1016.8,
+          "outside_s": 30.4
+        },
+        {
+          "task": "django__django-11790",
+          "hours": 0.2315,
+          "server_s": 803.3,
+          "outside_s": 30.2
+        },
+        {
+          "task": "django__django-13363",
+          "hours": 0.1351,
+          "server_s": 458.7,
+          "outside_s": 27.6
+        },
+        {
+          "task": "django__django-14007",
+          "hours": 0.3712,
+          "server_s": 1305.5,
+          "outside_s": 30.7
+        },
+        {
+          "task": "django__django-14011",
+          "hours": 0.2795,
+          "server_s": 977.2,
+          "outside_s": 29.1
+        },
+        {
+          "task": "django__django-14999",
+          "hours": 0.5258,
+          "server_s": 1866.2,
+          "outside_s": 26.7
+        },
+        {
+          "task": "django__django-15037",
+          "hours": 0.2907,
+          "server_s": 1018.2,
+          "outside_s": 28.4
+        },
+        {
+          "task": "django__django-16950",
+          "hours": 1.4123,
+          "server_s": 5047.4,
+          "outside_s": 36.9
+        },
+        {
+          "task": "matplotlib__matplotlib-20488",
+          "hours": 1.1311,
+          "server_s": 4005.5,
+          "outside_s": 66.6
+        },
+        {
+          "task": "matplotlib__matplotlib-23412",
+          "hours": 0.2733,
+          "server_s": 943.6,
+          "outside_s": 40.4
+        },
+        {
+          "task": "matplotlib__matplotlib-24149",
+          "hours": 0.3334,
+          "server_s": 1055.4,
+          "outside_s": 144.7
+        },
+        {
+          "task": "matplotlib__matplotlib-25332",
+          "hours": 0.4924,
+          "server_s": 1699.4,
+          "outside_s": 73.2
+        },
+        {
+          "task": "matplotlib__matplotlib-25479",
+          "hours": 0.2968,
+          "server_s": 991.5,
+          "outside_s": 76.8
+        },
+        {
+          "task": "matplotlib__matplotlib-25960",
+          "hours": 0.3901,
+          "server_s": 1314.7,
+          "outside_s": 89.5
+        },
+        {
+          "task": "matplotlib__matplotlib-26208",
+          "hours": 1.0539,
+          "server_s": 3646.5,
+          "outside_s": 147.5
+        },
+        {
+          "task": "matplotlib__matplotlib-26291",
+          "hours": 0.2928,
+          "server_s": 978.5,
+          "outside_s": 75.6
+        },
+        {
+          "task": "mwaskom__seaborn-3069",
+          "hours": 0.6397,
+          "server_s": 2243.0,
+          "outside_s": 60.0
+        },
+        {
+          "task": "mwaskom__seaborn-3187",
+          "hours": 0.4514,
+          "server_s": 1521.1,
+          "outside_s": 103.8
+        },
+        {
+          "task": "pallets__flask-5014",
+          "hours": 0.1754,
+          "server_s": 601.0,
+          "outside_s": 30.4
+        },
+        {
+          "task": "psf__requests-1142",
+          "hours": 0.2282,
+          "server_s": 798.8,
+          "outside_s": 22.7
+        },
+        {
+          "task": "psf__requests-1724",
+          "hours": 0.2078,
+          "server_s": 722.4,
+          "outside_s": 25.7
+        },
+        {
+          "task": "psf__requests-1766",
+          "hours": 0.1699,
+          "server_s": 586.6,
+          "outside_s": 25.0
+        },
+        {
+          "task": "psf__requests-1921",
+          "hours": 0.2256,
+          "server_s": 786.1,
+          "outside_s": 26.0
+        },
+        {
+          "task": "psf__requests-2317",
+          "hours": 0.2821,
+          "server_s": 583.0,
+          "outside_s": 432.7
+        },
+        {
+          "task": "psf__requests-2931",
+          "hours": 1.7037,
+          "server_s": 6109.9,
+          "outside_s": 23.4
+        },
+        {
+          "task": "psf__requests-5414",
+          "hours": 4.6095,
+          "server_s": 16570.9,
+          "outside_s": 23.3
+        },
+        {
+          "task": "psf__requests-6028",
+          "hours": 0.8436,
+          "server_s": 2946.6,
+          "outside_s": 90.4
+        },
+        {
+          "task": "pydata__xarray-3095",
+          "hours": 1.36,
+          "server_s": 4844.8,
+          "outside_s": 51.3
+        },
+        {
+          "task": "pydata__xarray-3993",
+          "hours": 0.1291,
+          "server_s": 372.7,
+          "outside_s": 92.2
+        },
+        {
+          "task": "pydata__xarray-4094",
+          "hours": 0.2122,
+          "server_s": 710.3,
+          "outside_s": 53.6
+        },
+        {
+          "task": "pydata__xarray-4629",
+          "hours": 0.1022,
+          "server_s": 327.1,
+          "outside_s": 40.7
+        },
+        {
+          "task": "pydata__xarray-4687",
+          "hours": 0.9632,
+          "server_s": 3421.8,
+          "outside_s": 45.8
+        },
+        {
+          "task": "pydata__xarray-6461",
+          "hours": 0.319,
+          "server_s": 1103.2,
+          "outside_s": 45.2
+        },
+        {
+          "task": "pydata__xarray-6992",
+          "hours": 0.16,
+          "server_s": 507.1,
+          "outside_s": 68.9
+        },
+        {
+          "task": "pydata__xarray-7233",
+          "hours": 0.1549,
+          "server_s": 512.5,
+          "outside_s": 45.3
+        },
+        {
+          "task": "pylint-dev__pylint-4551",
+          "hours": 0.8664,
+          "server_s": 3087.2,
+          "outside_s": 31.7
+        },
+        {
+          "task": "pylint-dev__pylint-4604",
+          "hours": 0.4592,
+          "server_s": 1617.7,
+          "outside_s": 35.4
+        },
+        {
+          "task": "pylint-dev__pylint-4661",
+          "hours": 0.3563,
+          "server_s": 1251.6,
+          "outside_s": 30.9
+        },
+        {
+          "task": "pylint-dev__pylint-4970",
+          "hours": 0.4563,
+          "server_s": 1612.5,
+          "outside_s": 30.2
+        },
+        {
+          "task": "pylint-dev__pylint-6386",
+          "hours": 0.6474,
+          "server_s": 2304.0,
+          "outside_s": 26.8
+        },
+        {
+          "task": "pylint-dev__pylint-6903",
+          "hours": 0.1824,
+          "server_s": 621.6,
+          "outside_s": 34.9
+        },
+        {
+          "task": "pylint-dev__pylint-7277",
+          "hours": 0.1281,
+          "server_s": 422.4,
+          "outside_s": 38.7
+        },
+        {
+          "task": "pylint-dev__pylint-8898",
+          "hours": 0.5613,
+          "server_s": 1988.9,
+          "outside_s": 31.9
+        },
+        {
+          "task": "pytest-dev__pytest-10051",
+          "hours": 0.3434,
+          "server_s": 1207.9,
+          "outside_s": 28.3
+        },
+        {
+          "task": "pytest-dev__pytest-10356",
+          "hours": 0.4571,
+          "server_s": 1618.1,
+          "outside_s": 27.4
+        },
+        {
+          "task": "pytest-dev__pytest-5787",
+          "hours": 1.244,
+          "server_s": 4437.1,
+          "outside_s": 41.3
+        },
+        {
+          "task": "pytest-dev__pytest-5840",
+          "hours": 0.4128,
+          "server_s": 1461.4,
+          "outside_s": 24.6
+        },
+        {
+          "task": "pytest-dev__pytest-6197",
+          "hours": 0.323,
+          "server_s": 1133.3,
+          "outside_s": 29.5
+        },
+        {
+          "task": "pytest-dev__pytest-7432",
+          "hours": 2.2206,
+          "server_s": 7963.0,
+          "outside_s": 31.1
+        },
+        {
+          "task": "pytest-dev__pytest-7521",
+          "hours": 0.1949,
+          "server_s": 671.6,
+          "outside_s": 30.0
+        },
+        {
+          "task": "pytest-dev__pytest-7571",
+          "hours": 0.4451,
+          "server_s": 1575.1,
+          "outside_s": 27.1
+        },
+        {
+          "task": "pytest-dev__pytest-7982",
+          "hours": 0.1601,
+          "server_s": 548.2,
+          "outside_s": 28.0
+        },
+        {
+          "task": "scikit-learn__scikit-learn-10908",
+          "hours": 0.5157,
+          "server_s": 1817.2,
+          "outside_s": 39.3
+        },
+        {
+          "task": "scikit-learn__scikit-learn-13135",
+          "hours": 0.2131,
+          "server_s": 732.0,
+          "outside_s": 35.2
+        },
+        {
+          "task": "scikit-learn__scikit-learn-13328",
+          "hours": 0.3688,
+          "server_s": 1286.8,
+          "outside_s": 41.0
+        },
+        {
+          "task": "scikit-learn__scikit-learn-14053",
+          "hours": 0.4099,
+          "server_s": 1423.8,
+          "outside_s": 51.9
+        },
+        {
+          "task": "scikit-learn__scikit-learn-14629",
+          "hours": 0.4742,
+          "server_s": 1657.0,
+          "outside_s": 50.1
+        },
+        {
+          "task": "scikit-learn__scikit-learn-14983",
+          "hours": 0.4067,
+          "server_s": 1426.1,
+          "outside_s": 38.1
+        },
+        {
+          "task": "scikit-learn__scikit-learn-25102",
+          "hours": 1.1594,
+          "server_s": 4098.1,
+          "outside_s": 75.9
+        },
+        {
+          "task": "scikit-learn__scikit-learn-25747",
+          "hours": 0.6191,
+          "server_s": 2096.2,
+          "outside_s": 132.4
+        },
+        {
+          "task": "sphinx-doc__sphinx-10323",
+          "hours": 1.7809,
+          "server_s": 6378.5,
+          "outside_s": 32.9
+        },
+        {
+          "task": "sphinx-doc__sphinx-10614",
+          "hours": 0.8342,
+          "server_s": 2976.4,
+          "outside_s": 26.6
+        },
+        {
+          "task": "sphinx-doc__sphinx-11510",
+          "hours": 4.4154,
+          "server_s": 15856.2,
+          "outside_s": 39.2
+        },
+        {
+          "task": "sphinx-doc__sphinx-7590",
+          "hours": 0.352,
+          "server_s": 1234.6,
+          "outside_s": 32.7
+        },
+        {
+          "task": "sphinx-doc__sphinx-8638",
+          "hours": 0.2879,
+          "server_s": 1003.0,
+          "outside_s": 33.6
+        },
+        {
+          "task": "sphinx-doc__sphinx-9281",
+          "hours": 0.4509,
+          "server_s": 1592.2,
+          "outside_s": 30.9
+        },
+        {
+          "task": "sphinx-doc__sphinx-9461",
+          "hours": 2.1124,
+          "server_s": 7567.5,
+          "outside_s": 37.1
+        },
+        {
+          "task": "sphinx-doc__sphinx-9673",
+          "hours": 0.9584,
+          "server_s": 3417.6,
+          "outside_s": 32.6
+        },
+        {
+          "task": "sympy__sympy-12489",
+          "hours": 0.5415,
+          "server_s": 1922.3,
+          "outside_s": 27.2
+        },
+        {
+          "task": "sympy__sympy-13091",
+          "hours": 0.3376,
+          "server_s": 1185.6,
+          "outside_s": 29.7
+        },
+        {
+          "task": "sympy__sympy-13480",
+          "hours": 0.1582,
+          "server_s": 534.6,
+          "outside_s": 34.8
+        },
+        {
+          "task": "sympy__sympy-13551",
+          "hours": 0.3424,
+          "server_s": 1194.4,
+          "outside_s": 38.4
+        },
+        {
+          "task": "sympy__sympy-13878",
+          "hours": 1.5337,
+          "server_s": 5329.3,
+          "outside_s": 192.2
+        },
+        {
+          "task": "sympy__sympy-14248",
+          "hours": 3.3071,
+          "server_s": 11871.2,
+          "outside_s": 34.5
+        },
+        {
+          "task": "sympy__sympy-14711",
+          "hours": 0.2636,
+          "server_s": 919.6,
+          "outside_s": 29.5
+        },
+        {
+          "task": "sympy__sympy-18763",
+          "hours": 0.2098,
+          "server_s": 728.4,
+          "outside_s": 27.0
+        },
+        {
+          "task": "sympy__sympy-23262",
+          "hours": 0.1508,
+          "server_s": 515.1,
+          "outside_s": 27.7
+        }
+      ],
+      "modelled_peak_request_concurrency": 3,
+      "global_outside_trials_s": 3.4214460849761963,
+      "projected_total_hours": 19.96895040169027
+    },
+    "single_request_rates_optimistic": {
+      "explained_hours": 7.877,
+      "approximate": true,
+      "reasons": [
+        "contexts above the longest measured row (28672 at batch 8) are extrapolated"
+      ],
+      "agents": 3,
+      "longest_context": 77096,
+      "longest_row": 131072,
+      "tasks": [
+        {
+          "task": "astropy__astropy-13398",
+          "hours": 0.1703,
+          "server_s": 548.1,
+          "outside_s": 64.9
+        },
+        {
+          "task": "astropy__astropy-13579",
+          "hours": 0.6796,
+          "server_s": 2336.6,
+          "outside_s": 109.8
+        },
+        {
+          "task": "astropy__astropy-14096",
+          "hours": 0.2224,
+          "server_s": 691.7,
+          "outside_s": 109.0
+        },
+        {
+          "task": "astropy__astropy-14309",
+          "hours": 0.1253,
+          "server_s": 365.3,
+          "outside_s": 85.9
+        },
+        {
+          "task": "astropy__astropy-14598",
+          "hours": 0.1421,
+          "server_s": 429.4,
+          "outside_s": 82.1
+        },
+        {
+          "task": "astropy__astropy-14995",
+          "hours": 0.196,
+          "server_s": 620.8,
+          "outside_s": 84.7
+        },
+        {
+          "task": "astropy__astropy-7336",
+          "hours": 0.0917,
+          "server_s": 295.8,
+          "outside_s": 34.3
+        },
+        {
+          "task": "astropy__astropy-8872",
+          "hours": 0.2078,
+          "server_s": 653.5,
+          "outside_s": 94.7
+        },
+        {
+          "task": "django__django-11299",
+          "hours": 0.152,
+          "server_s": 516.8,
+          "outside_s": 30.4
+        },
+        {
+          "task": "django__django-11790",
+          "hours": 0.1233,
+          "server_s": 413.8,
+          "outside_s": 30.2
+        },
+        {
+          "task": "django__django-13363",
+          "hours": 0.0978,
+          "server_s": 324.5,
+          "outside_s": 27.6
+        },
+        {
+          "task": "django__django-14007",
+          "hours": 0.2035,
+          "server_s": 702.0,
+          "outside_s": 30.7
+        },
+        {
+          "task": "django__django-14011",
+          "hours": 0.1334,
+          "server_s": 451.3,
+          "outside_s": 29.1
+        },
+        {
+          "task": "django__django-14999",
+          "hours": 0.2344,
+          "server_s": 817.3,
+          "outside_s": 26.7
+        },
+        {
+          "task": "django__django-15037",
+          "hours": 0.1534,
+          "server_s": 523.9,
+          "outside_s": 28.4
+        },
+        {
+          "task": "django__django-16950",
+          "hours": 0.4034,
+          "server_s": 1415.3,
+          "outside_s": 36.9
+        },
+        {
+          "task": "matplotlib__matplotlib-20488",
+          "hours": 0.4077,
+          "server_s": 1401.3,
+          "outside_s": 66.6
+        },
+        {
+          "task": "matplotlib__matplotlib-23412",
+          "hours": 0.1452,
+          "server_s": 482.4,
+          "outside_s": 40.4
+        },
+        {
+          "task": "matplotlib__matplotlib-24149",
+          "hours": 0.1876,
+          "server_s": 530.6,
+          "outside_s": 144.7
+        },
+        {
+          "task": "matplotlib__matplotlib-25332",
+          "hours": 0.2583,
+          "server_s": 856.5,
+          "outside_s": 73.2
+        },
+        {
+          "task": "matplotlib__matplotlib-25479",
+          "hours": 0.1482,
+          "server_s": 456.8,
+          "outside_s": 76.8
+        },
+        {
+          "task": "matplotlib__matplotlib-25960",
+          "hours": 0.1964,
+          "server_s": 617.7,
+          "outside_s": 89.5
+        },
+        {
+          "task": "matplotlib__matplotlib-26208",
+          "hours": 0.4418,
+          "server_s": 1443.1,
+          "outside_s": 147.5
+        },
+        {
+          "task": "matplotlib__matplotlib-26291",
+          "hours": 0.1837,
+          "server_s": 585.6,
+          "outside_s": 75.6
+        },
+        {
+          "task": "mwaskom__seaborn-3069",
+          "hours": 0.2891,
+          "server_s": 980.6,
+          "outside_s": 60.0
+        },
+        {
+          "task": "mwaskom__seaborn-3187",
+          "hours": 0.2277,
+          "server_s": 716.0,
+          "outside_s": 103.8
+        },
+        {
+          "task": "pallets__flask-5014",
+          "hours": 0.0961,
+          "server_s": 315.7,
+          "outside_s": 30.4
+        },
+        {
+          "task": "psf__requests-1142",
+          "hours": 0.1336,
+          "server_s": 458.3,
+          "outside_s": 22.7
+        },
+        {
+          "task": "psf__requests-1724",
+          "hours": 0.121,
+          "server_s": 409.9,
+          "outside_s": 25.7
+        },
+        {
+          "task": "psf__requests-1766",
+          "hours": 0.1115,
+          "server_s": 376.5,
+          "outside_s": 25.0
+        },
+        {
+          "task": "psf__requests-1921",
+          "hours": 0.1399,
+          "server_s": 477.6,
+          "outside_s": 26.0
+        },
+        {
+          "task": "psf__requests-2317",
+          "hours": 0.2306,
+          "server_s": 397.3,
+          "outside_s": 432.7
+        },
+        {
+          "task": "psf__requests-2931",
+          "hours": 0.6968,
+          "server_s": 2485.1,
+          "outside_s": 23.4
+        },
+        {
+          "task": "psf__requests-5414",
+          "hours": 1.8875,
+          "server_s": 6771.8,
+          "outside_s": 23.3
+        },
+        {
+          "task": "psf__requests-6028",
+          "hours": 0.3741,
+          "server_s": 1256.3,
+          "outside_s": 90.4
+        },
+        {
+          "task": "pydata__xarray-3095",
+          "hours": 0.4746,
+          "server_s": 1657.4,
+          "outside_s": 51.3
+        },
+        {
+          "task": "pydata__xarray-3993",
+          "hours": 0.0946,
+          "server_s": 248.4,
+          "outside_s": 92.2
+        },
+        {
+          "task": "pydata__xarray-4094",
+          "hours": 0.1262,
+          "server_s": 400.8,
+          "outside_s": 53.6
+        },
+        {
+          "task": "pydata__xarray-4629",
+          "hours": 0.0739,
+          "server_s": 225.5,
+          "outside_s": 40.7
+        },
+        {
+          "task": "pydata__xarray-4687",
+          "hours": 0.301,
+          "server_s": 1037.7,
+          "outside_s": 45.8
+        },
+        {
+          "task": "pydata__xarray-6461",
+          "hours": 0.1646,
+          "server_s": 547.3,
+          "outside_s": 45.2
+        },
+        {
+          "task": "pydata__xarray-6992",
+          "hours": 0.1069,
+          "server_s": 315.8,
+          "outside_s": 68.9
+        },
+        {
+          "task": "pydata__xarray-7233",
+          "hours": 0.0976,
+          "server_s": 306.0,
+          "outside_s": 45.3
+        },
+        {
+          "task": "pylint-dev__pylint-4551",
+          "hours": 0.2792,
+          "server_s": 973.3,
+          "outside_s": 31.7
+        },
+        {
+          "task": "pylint-dev__pylint-4604",
+          "hours": 0.1714,
+          "server_s": 581.6,
+          "outside_s": 35.4
+        },
+        {
+          "task": "pylint-dev__pylint-4661",
+          "hours": 0.1641,
+          "server_s": 560.0,
+          "outside_s": 30.9
+        },
+        {
+          "task": "pylint-dev__pylint-4970",
+          "hours": 0.1816,
+          "server_s": 623.4,
+          "outside_s": 30.2
+        },
+        {
+          "task": "pylint-dev__pylint-6386",
+          "hours": 0.1919,
+          "server_s": 664.2,
+          "outside_s": 26.8
+        },
+        {
+          "task": "pylint-dev__pylint-6903",
+          "hours": 0.1017,
+          "server_s": 331.3,
+          "outside_s": 34.9
+        },
+        {
+          "task": "pylint-dev__pylint-7277",
+          "hours": 0.0934,
+          "server_s": 297.4,
+          "outside_s": 38.7
+        },
+        {
+          "task": "pylint-dev__pylint-8898",
+          "hours": 0.2788,
+          "server_s": 971.8,
+          "outside_s": 31.9
+        },
+        {
+          "task": "pytest-dev__pytest-10051",
+          "hours": 0.1676,
+          "server_s": 575.1,
+          "outside_s": 28.3
+        },
+        {
+          "task": "pytest-dev__pytest-10356",
+          "hours": 0.2206,
+          "server_s": 766.8,
+          "outside_s": 27.4
+        },
+        {
+          "task": "pytest-dev__pytest-5787",
+          "hours": 0.4572,
+          "server_s": 1604.6,
+          "outside_s": 41.3
+        },
+        {
+          "task": "pytest-dev__pytest-5840",
+          "hours": 0.1898,
+          "server_s": 658.7,
+          "outside_s": 24.6
+        },
+        {
+          "task": "pytest-dev__pytest-6197",
+          "hours": 0.1514,
+          "server_s": 515.4,
+          "outside_s": 29.5
+        },
+        {
+          "task": "pytest-dev__pytest-7432",
+          "hours": 0.8653,
+          "server_s": 3083.9,
+          "outside_s": 31.1
+        },
+        {
+          "task": "pytest-dev__pytest-7521",
+          "hours": 0.1097,
+          "server_s": 364.8,
+          "outside_s": 30.0
+        },
+        {
+          "task": "pytest-dev__pytest-7571",
+          "hours": 0.2004,
+          "server_s": 694.4,
+          "outside_s": 27.1
+        },
+        {
+          "task": "pytest-dev__pytest-7982",
+          "hours": 0.0971,
+          "server_s": 321.5,
+          "outside_s": 28.0
+        },
+        {
+          "task": "scikit-learn__scikit-learn-10908",
+          "hours": 0.2082,
+          "server_s": 710.4,
+          "outside_s": 39.3
+        },
+        {
+          "task": "scikit-learn__scikit-learn-13135",
+          "hours": 0.1255,
+          "server_s": 416.5,
+          "outside_s": 35.2
+        },
+        {
+          "task": "scikit-learn__scikit-learn-13328",
+          "hours": 0.1924,
+          "server_s": 651.8,
+          "outside_s": 41.0
+        },
+        {
+          "task": "scikit-learn__scikit-learn-14053",
+          "hours": 0.1663,
+          "server_s": 546.7,
+          "outside_s": 51.9
+        },
+        {
+          "task": "scikit-learn__scikit-learn-14629",
+          "hours": 0.2138,
+          "server_s": 719.6,
+          "outside_s": 50.1
+        },
+        {
+          "task": "scikit-learn__scikit-learn-14983",
+          "hours": 0.1929,
+          "server_s": 656.5,
+          "outside_s": 38.1
+        },
+        {
+          "task": "scikit-learn__scikit-learn-25102",
+          "hours": 0.4174,
+          "server_s": 1426.8,
+          "outside_s": 75.9
+        },
+        {
+          "task": "scikit-learn__scikit-learn-25747",
+          "hours": 0.2797,
+          "server_s": 874.4,
+          "outside_s": 132.4
+        },
+        {
+          "task": "sphinx-doc__sphinx-10323",
+          "hours": 0.4646,
+          "server_s": 1639.8,
+          "outside_s": 32.9
+        },
+        {
+          "task": "sphinx-doc__sphinx-10614",
+          "hours": 0.3151,
+          "server_s": 1107.8,
+          "outside_s": 26.6
+        },
+        {
+          "task": "sphinx-doc__sphinx-11510",
+          "hours": 1.0516,
+          "server_s": 3746.6,
+          "outside_s": 39.2
+        },
+        {
+          "task": "sphinx-doc__sphinx-7590",
+          "hours": 0.1759,
+          "server_s": 600.7,
+          "outside_s": 32.7
+        },
+        {
+          "task": "sphinx-doc__sphinx-8638",
+          "hours": 0.1361,
+          "server_s": 456.3,
+          "outside_s": 33.6
+        },
+        {
+          "task": "sphinx-doc__sphinx-9281",
+          "hours": 0.1882,
+          "server_s": 646.6,
+          "outside_s": 30.9
+        },
+        {
+          "task": "sphinx-doc__sphinx-9461",
+          "hours": 0.5485,
+          "server_s": 1937.6,
+          "outside_s": 37.1
+        },
+        {
+          "task": "sphinx-doc__sphinx-9673",
+          "hours": 0.3046,
+          "server_s": 1064.1,
+          "outside_s": 32.6
+        },
+        {
+          "task": "sympy__sympy-12489",
+          "hours": 0.2577,
+          "server_s": 900.4,
+          "outside_s": 27.2
+        },
+        {
+          "task": "sympy__sympy-13091",
+          "hours": 0.1929,
+          "server_s": 664.7,
+          "outside_s": 29.7
+        },
+        {
+          "task": "sympy__sympy-13480",
+          "hours": 0.1088,
+          "server_s": 356.8,
+          "outside_s": 34.8
+        },
+        {
+          "task": "sympy__sympy-13551",
+          "hours": 0.2042,
+          "server_s": 696.7,
+          "outside_s": 38.4
+        },
+        {
+          "task": "sympy__sympy-13878",
+          "hours": 0.5486,
+          "server_s": 1782.6,
+          "outside_s": 192.2
+        },
+        {
+          "task": "sympy__sympy-14248",
+          "hours": 1.0109,
+          "server_s": 3604.7,
+          "outside_s": 34.5
+        },
+        {
+          "task": "sympy__sympy-14711",
+          "hours": 0.1464,
+          "server_s": 497.6,
+          "outside_s": 29.5
+        },
+        {
+          "task": "sympy__sympy-18763",
+          "hours": 0.1419,
+          "server_s": 483.7,
+          "outside_s": 27.0
+        },
+        {
+          "task": "sympy__sympy-23262",
+          "hours": 0.1083,
+          "server_s": 362.1,
+          "outside_s": 27.7
+        }
+      ],
+      "modelled_peak_request_concurrency": 1,
+      "global_outside_trials_s": 3.4214460849761963,
+      "projected_total_hours": 7.877950401690271
+    }
+  },
+  "remaining_stage_hours": 3.5216438335842555,
+  "run_timeout_hours": 12,
+  "planning_margin": 1.25,
+  "admit": false,
+  "limitations": [
+    "Retains all85 task histories, including anomalies and fetched solutions; a new precision could change trajectories and scores.",
+    "Observed-lifecycle scenario places original task durations and call offsets on3 slots before repricing. It is not iterated to concurrency self-consistency.",
+    "Optimistic scenario prices every call at measured C1 rates while scheduling task costs on3 slots; synthetic request timestamps are not observed execution evidence.",
+    "Input-length/concurrency extrapolation is reported by the installed oracle. No new eval was launched by this script.",
+    "Global outside time is added once. New setup/verifier recovery or longer successful trajectories could add cost."
+  ],
+  "observed_working_set_sensitivity": {
+    "working_set_tokens": 77096,
+    "pool_ids": 10752,
+    "ids_per_agent": 2011,
+    "max_agents": 5,
+    "basis": "Optimistic sensitivity only: interpolate existing hybrid accounting2854 IDs at131072 and4902 at262144 as ceil(tokens/64)+806. Uses observed maximum context, without extra output-cap reserve; not a new launch plan.",
+    "output_only_hours_at_best_measured_rate": 3.928306607652952
+  },
+  "decision": "not_admitted",
+  "reason": "Both primary and optimistic3-slot projections exceed remaining stage time. Even optimistic5-slot observed-working-set output-only arithmetic exceeds remaining time before any prefill/tool work. Operator explicitly directs closure without a rerun when it does not fit; no further time requested."
+}

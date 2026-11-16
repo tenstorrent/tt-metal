@@ -1,0 +1,31 @@
+{
+  "8": {
+    "performance_sha256": "e55c96f621b7fba37a06c3ba45b9ff77f4bf65f3a2265f8bbbb14f9e75730f23",
+    "server_identity_sha256": "3cb1193e8ac22dd6b379f61ffd2a13ff557e648d20cd7e8f5905d6dba07b019f",
+    "requests": 2,
+    "input_tokens": 262144,
+    "output_tokens": 256,
+    "prefill": {
+      "timing_scope": "full_phase_wall_time",
+      "timing_method": "Disjoint intervals between consecutive adapter-observed async completions, attributed to the ending completion phase; first interval starts at first client request. Plugin host sampling/output/scheduling, communication and idle gaps after adapter return fall inside following intervals; final client tail assigned to last phase. Operator decision4 approved attribution. No extra synchronization or live device profiler. Host wall time, not device time.",
+      "work_method": "tools/benchmark_work.py; per-completed-step executed shape accounting, assumptions and component totals in evidence",
+      "peak_source": "doc/optimized_decoder/peak_basis.json: 4 whole P300c Blackhole ASICs, 120 cores/ASIC,1.35GHz,4096 LoFi FLOPs/core/cycle;512GB/s DRAM/ASIC",
+      "evidence": "roofline-b8-evidence.json",
+      "evidence_sha256": "e6bcf9c3a51cc4e9cfb0bf8895ed3e533304c015949630e5c491afda3579cc1d",
+      "flops": 27052213968830464,
+      "seconds": 323.69814262899996,
+      "peak_flops_per_second": 2654208000000000
+    },
+    "decode": {
+      "timing_scope": "full_phase_wall_time",
+      "timing_method": "Disjoint intervals between consecutive adapter-observed async completions, attributed to the ending completion phase; first interval starts at first client request. Plugin host sampling/output/scheduling, communication and idle gaps after adapter return fall inside following intervals; final client tail assigned to last phase. Operator decision4 approved attribution. No extra synchronization or live device profiler. Host wall time, not device time.",
+      "work_method": "tools/benchmark_work.py; per-completed-step executed shape accounting, assumptions and component totals in evidence",
+      "peak_source": "doc/optimized_decoder/peak_basis.json: 4 whole P300c Blackhole ASICs, 120 cores/ASIC,1.35GHz,4096 LoFi FLOPs/core/cycle;512GB/s DRAM/ASIC",
+      "evidence": "roofline-b8-evidence.json",
+      "evidence_sha256": "e6bcf9c3a51cc4e9cfb0bf8895ed3e533304c015949630e5c491afda3579cc1d",
+      "dram_bytes": 19388626004992.0,
+      "seconds": 21.63642330799999,
+      "peak_dram_bytes_per_second": 2048000000000
+    }
+  }
+}

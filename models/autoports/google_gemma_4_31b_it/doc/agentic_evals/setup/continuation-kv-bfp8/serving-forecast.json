@@ -1,0 +1,18 @@
+{
+  "written_unix": 1794791615.3448126,
+  "ratio_ranges": {
+    "decode_tok_s_user": [
+      0.35,
+      0.75
+    ],
+    "prefill_tok_s": [
+      0.25,
+      0.7
+    ],
+    "duration_s": [
+      1.4,
+      4.5
+    ]
+  },
+  "basis": "Full-BF16/HiFi4 diagnostic B1 decode16.26 versus selected head-BFP8 about34.25t/s anchors roughly0.47x. BF16 body, CCL and cache increase transfers and HiFi4 work; larger-batch/prefill overlap differs. Wide0.35\u20130.75 decode and0.25\u20130.70 prefill ratios versus preserved stage11 BFP4 controls;1.4\u20134.5 duration. These are predictions, not device or serving measurements. Q32 is the correctness-required full-precision production geometry."
+}

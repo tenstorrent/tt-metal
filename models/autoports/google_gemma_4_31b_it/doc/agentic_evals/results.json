@@ -1,7 +1,14 @@
 {
   "schema_version": 1,
   "mode": "extended",
-  "stage_timing": "stage_timing.json",
+  "stage_timing": {
+    "started_unix": 1794611725,
+    "phase1_deadline_unix": 1794654925,
+    "stage_deadline_unix": 1794806125,
+    "phase1_hours": 12,
+    "stage_budget_hours": 54,
+    "basis": "Goal creation; setup included in stage time; operator extended +4h 2026-11-16T00:15Z"
+  },
   "task_lists": {
     "r1_gpqa_diamond": {
       "suite": "r1_gpqa_diamond",
@@ -3745,7 +3752,7 @@
             "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/gpqa-extended198-head-bfp8/digest/48.json",
             "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/gpqa-extended198-head-bfp8/digest/coordinator.json"
           ],
-          "analysis": "Full-channel audit corrects prior decision. Coordinator inspected8000–15000 and28000–end reasoning: repeated unchanged bond-breaking/forming/ring reconstruction loops persist without resolving their contradiction. Accept semantic anomaly; progress on another reaction does not erase it. Original first attempt remains counted.",
+          "analysis": "Full-channel audit corrects prior decision. Coordinator inspected8000\u201315000 and28000\u2013end reasoning: repeated unchanged bond-breaking/forming/ring reconstruction loops persist without resolving their contradiction. Accept semantic anomaly; progress on another reaction does not erase it. Original first attempt remains counted.",
           "rerun": {
             "tried": [],
             "counted": false
@@ -4054,7 +4061,7 @@
             "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/gpqa-extended198-head-bfp8/digest/130.json",
             "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/gpqa-extended198-head-bfp8/digest/coordinator.json"
           ],
-          "analysis": "Coordinator read latter-half reasoning: sustained identical diene-name/symmetry/proton-count reconsideration around12000–18000 characters constitutes semantic repetition. Subsequent alternative NOESY comparisons and normal final answer do not erase that section. Add short served/full controls; first attempt remains counted.",
+          "analysis": "Coordinator read latter-half reasoning: sustained identical diene-name/symmetry/proton-count reconsideration around12000\u201318000 characters constitutes semantic repetition. Subsequent alternative NOESY comparisons and normal final answer do not erase that section. Add short served/full controls; first attempt remains counted.",
           "rerun": {
             "tried": [],
             "counted": false
@@ -4068,7 +4075,7 @@
             "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/gpqa-extended198-head-bfp8/digest/139.json",
             "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/gpqa-extended198-head-bfp8/digest/coordinator.json"
           ],
-          "analysis": "Full-channel triage and coordinator inspection of13000–18000 and28000–31000 confirm sustained candidate/gas/precipitate mismatch cycles. Partial late D2O insight does not erase repeated unresolved loops. Short served/full controls prepared; first attempt retained.",
+          "analysis": "Full-channel triage and coordinator inspection of13000\u201318000 and28000\u201331000 confirm sustained candidate/gas/precipitate mismatch cycles. Partial late D2O insight does not erase repeated unresolved loops. Short served/full controls prepared; first attempt retained.",
           "rerun": {
             "tried": [],
             "counted": false
@@ -4082,7 +4089,7 @@
             "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/gpqa-extended198-head-bfp8/digest/145.json",
             "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/gpqa-extended198-head-bfp8/digest/coordinator.json"
           ],
-          "analysis": "Full-channel audit corrected initial final-answer-only review. Coordinator inspected reasoning10000-end: sustained repeated syn/anti/priority reconsideration and malformed I’-ve’ve fragment warrant anomaly controls. Preserve initial-content-only triage. Original first attempt remains counted.",
+          "analysis": "Full-channel audit corrected initial final-answer-only review. Coordinator inspected reasoning10000-end: sustained repeated syn/anti/priority reconsideration and malformed I\u2019-ve\u2019ve fragment warrant anomaly controls. Preserve initial-content-only triage. Original first attempt remains counted.",
           "rerun": {
             "tried": [],
             "counted": false
@@ -5920,7 +5927,7 @@
           "cause": "wrong",
           "evidence": [
             "digest/astropy__astropy-14598.triage.json",
-            "setup/swe-jobs/swe-extended85-head-bfp8/astropy__astropy-14598__WyUMZu3/verifier/test-stdout.txt:1099–1124 and1312–1316"
+            "setup/swe-jobs/swe-extended85-head-bfp8/astropy__astropy-14598__WyUMZu3/verifier/test-stdout.txt:1099\u20131124 and1312\u20131316"
           ],
           "rerun": {
             "tried": false,
@@ -6022,7 +6029,7 @@
           "cause": "wrong",
           "evidence": [
             "digest/matplotlib__matplotlib-25479.triage.json",
-            "setup/swe-jobs/swe-extended85-head-bfp8/matplotlib__matplotlib-25479__GUjytDq/verifier/test-stdout.txt:118–155,422–425"
+            "setup/swe-jobs/swe-extended85-head-bfp8/matplotlib__matplotlib-25479__GUjytDq/verifier/test-stdout.txt:118\u2013155,422\u2013425"
           ],
           "rerun": {
             "tried": false,
@@ -6136,7 +6143,7 @@
           "cause": "wrong",
           "evidence": [
             "digest/django__django-15037.triage.json",
-            "setup/swe-jobs/swe-extended85-head-bfp8/django__django-15037__cRxSkzP/verifier/test-stdout.txt:118–175"
+            "setup/swe-jobs/swe-extended85-head-bfp8/django__django-15037__cRxSkzP/verifier/test-stdout.txt:118\u2013175"
           ],
           "rerun": {
             "tried": false,
@@ -6396,7 +6403,7 @@
           "cause": "wrong",
           "evidence": [
             "digest/django__django-14007.triage.json",
-            "setup/swe-jobs/swe-extended85-head-bfp8/django__django-14007__CuovU2W/verifier/test-stdout.txt:191–196"
+            "setup/swe-jobs/swe-extended85-head-bfp8/django__django-14007__CuovU2W/verifier/test-stdout.txt:191\u2013196"
           ],
           "rerun": {
             "tried": false,
@@ -6605,7 +6612,7 @@
           "cause": "fetched_solution",
           "evidence": [
             "digest/astropy__astropy-8872.triage.json",
-            "native trajectory messages16–23 and47"
+            "native trajectory messages16\u201323 and47"
           ],
           "rerun": {
             "tried": false,
@@ -7005,7 +7012,7 @@
       },
       "changed": "Selected head_bfp8_lofi LM-head after diagnostic bisection/acceptance;15policy-specific vLLM rows remeasured. Same-list GPQA rerun completed8/10; original6/10 retained.",
       "hours": 1.9,
-      "hours_basis": "Approximate coordinator-recorded diagnostic/acceptance wall interval02:34–04:28UTC on2026-11-14; includes repairs and controls, not additive device-time billing. Exact per-run logs and timers retained.",
+      "hours_basis": "Approximate coordinator-recorded diagnostic/acceptance wall interval02:34\u201304:28UTC on2026-11-14; includes repairs and controls, not additive device-time billing. Exact per-run logs and timers retained.",
       "configs_tried": [
         {
           "config": "served",
@@ -7668,7 +7675,7 @@
           }
         }
       },
-      "interpretation": "Full precision preserves all decisive chosen/correct top1 choices but whole-reply agreement0.9295–0.9486 leaves earlier reasoning precision sensitivity unresolved; do not say precision ruled out. Task195 collapse disappeared in tested full/headBFP8 panels; two faster tested headBFP4 policies still collapsed.",
+      "interpretation": "Full precision preserves all decisive chosen/correct top1 choices but whole-reply agreement0.9295\u20130.9486 leaves earlier reasoning precision sensitivity unresolved; do not say precision ruled out. Task195 collapse disappeared in tested full/headBFP8 panels; two faster tested headBFP4 policies still collapsed.",
       "reconstruction_limit": "Native sampled token IDs were absent. Pinned-template prompt counts match; continuations retokenized from native reasoning/content. Task7/93/167 counts differ native by11/3/1. Task195 tests retain prefix up to first stray char8692 and use a coherent counterfactual sentence plus official answerB, not unique next-token truth.",
       "repairs": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-phase1-precision/repair_attempts.json",
       "cleanup_failure": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-phase1-precision/task167.served.cleanup_failure.json",
@@ -8394,7 +8401,7 @@
             "forecast_range_hit": true
           }
         },
-        "next": "The two progressing samples were extended to2048 and both resolved as other anomalies (Requests5414 call10 served seed42 and call11 full seed42); full call11 seed43’s localized stray own remains a separate affirmative other anomaly."
+        "next": "The two progressing samples were extended to2048 and both resolved as other anomalies (Requests5414 call10 served seed42 and call11 full seed42); full call11 seed43\u2019s localized stray own remains a separate affirmative other anomaly."
       },
       "adaptive_suffix4096_controls": {
         "status": "completed_all25_root_reviewed",
@@ -8429,7 +8436,7 @@
           "verdict": "plausible_HF_reference_sampling_branch_for_localized_contraction",
           "evidence": "setup/swe85-conditional-hf/revision-adaptive-expanded-call91-8192-reviewed/reviewed/targeted-review-matplotlib20488-call86-b-item3-c.json",
           "evidence_sha256": "c2d8cb9f0554780936cb537804e71354d3309ad904a828894855bc8c86499798",
-          "scope": "Exact last4096 IDs from the46118-ID source prompt; served and full TT seed43 share first four motif IDs. HF free seed43 took a different coherent branch. Conditioned HF positions0–2 give raw probabilities0.265575,0.995036,0.255686 (position2 top1=0.289730); forced tokens remain eligible under top_k20/top_p0.95 at temperature1.",
+          "scope": "Exact last4096 IDs from the46118-ID source prompt; served and full TT seed43 share first four motif IDs. HF free seed43 took a different coherent branch. Conditioned HF positions0\u20132 give raw probabilities0.265575,0.995036,0.255686 (position2 top1=0.289730); forced tokens remain eligible under top_k20/top_p0.95 at temperature1.",
           "limitations": "No exact native seed/token identity, no unforced HF reproduction, no precision cause, and no full-prompt conclusion. Full-prompt HF is not needed for this scoped branch-plausibility finding."
         }
       },
@@ -9191,7 +9198,7 @@
         },
         "pass": false
       },
-      "changed": "Original165 paired controls and cap/prefix followups preserved. P3 downBFP8/LoFi resolves original targets but adds regressions; P6 attention/downBFP8 fixed108 completed and was rejected (80normal,20native,4other,4progressingcaps). P7/P8 focused controls and P8–P20 accuracy round are recorded. P17 and P19 pass fresh readiness/natural accuracy; P19 is fastest tested passing, and its unchanged108 anomaly panel plus five cap extensions are complete. The HiFi4 Q32 source geometry is implemented but awaits fresh-path acceptance. All9 initial HF controls and later conditional31 rows completed; Requests5414 HF1024 remains progressing without matched ellipsis and Matplotlib fullTT extension terminated. Remaining reference coverage and candidate acceptance/rerun are open. No change to scores or served default.",
+      "changed": "Original165 paired controls and cap/prefix followups preserved. P3 downBFP8/LoFi resolves original targets but adds regressions; P6 attention/downBFP8 fixed108 completed and was rejected (80normal,20native,4other,4progressingcaps). P7/P8 focused controls and P8\u2013P20 accuracy round are recorded. P17 and P19 pass fresh readiness/natural accuracy; P19 is fastest tested passing, and its unchanged108 anomaly panel plus five cap extensions are complete. The HiFi4 Q32 source geometry is implemented but awaits fresh-path acceptance. All9 initial HF controls and later conditional31 rows completed; Requests5414 HF1024 remains progressing without matched ellipsis and Matplotlib fullTT extension terminated. Remaining reference coverage and candidate acceptance/rerun are open. No change to scores or served default.",
       "hours": null,
       "missing_reasons": {
         "measurements": "P19 fixed108 anomaly panel and five cap extensions are complete; overall acceptance remains open. HF22 completed and was independently identity-reviewed. The exact original-prompt Sklearn HF conditional comparison is admitted/running. No free-run inference, global reference-behavior waiver, policy selection, or phase acceptance follows. The implemented HiFi4 Q32 geometry still needs fresh accuracy, qualitative, fixed108, and performance validation; whole85 rerun and serving sizing also remain open."
@@ -9601,7 +9608,7 @@
       },
       "p9_execution": {
         "status": "rejected_natural_accuracy",
-        "change": "AllBFP8 projection fidelityLoFi→HiFi2, otherpolicyfields fixed",
+        "change": "AllBFP8 projection fidelityLoFi\u2192HiFi2, otherpolicyfields fixed",
         "selected": false,
         "evidence": "setup/mlp-attention-down-accuracy-p9/root-terminal-review.json",
         "forecast_seconds": [
@@ -9854,15 +9861,65 @@
       },
       "current_hf_disposition": "setup/swe85-hf-current-disposition-c.json",
       "historical_snapshot_note": "Nested precision followup status fields are historical snapshots; use setup/p19-final-disposition-c.json and anomalies[3].precision_bisect.production_q32_acceptance for current Q32 terminal status."
+    },
+    {
+      "phase": "extended",
+      "tasks": [
+        "pytest-dev__pytest-7432",
+        "psf__requests-2931"
+      ],
+      "test": "Same fixed108 precision_repro_batch commands in setup/continuation-kv-bfp8/fixed108/admission.json and extensions/admission.json; full-TT controls in setup/full-q32-production-validation/fixed108/.",
+      "prompt": "setup/swe85-precision-bisect/p19-down-bfp8-fixed108-root/candidate-cases.json",
+      "seed": [
+        42,
+        43,
+        44
+      ],
+      "served": {
+        "precision": "setup/head_bfp8_precision_config.json",
+        "result": "Original served-policy anomaly controls and below-band analyses retained in existing entries; no new scored served-policy run in continuation."
+      },
+      "full_precision": {
+        "precision": "setup/full_precision_config.json",
+        "result": "FullBF16 exact sampled continuations37/42 complete coherently; KV-only BFP8 loops. Full fixed108 retains18 controlled native motifs and90normal; this is not a zero-anomaly or task-score claim.",
+        "pass": true,
+        "pass_scope": "The two matched continuation regressions37/42, not full-suite correctness"
+      },
+      "changed": "Rejected KV-only BFP8 after108cases and3extensions. FullBF16 serving candidate validated and7relevant rows remeasured; retained85 rerun not admitted by measured projection. Scored head-BFP8 default restored.",
+      "hours": 1.063558819161521,
+      "configs_tried": [
+        {
+          "config": "stage12_bf16_hifi4_kv_bfp8_protocol_probe",
+          "pass": false,
+          "decode_tok_s_user": 16.301653798716032
+        },
+        {
+          "config": "stage12_bf16_hifi4_diagnostic",
+          "pass": true,
+          "decode_tok_s_user": 16.260315352826154
+        }
+      ],
+      "speed_regime": "Median batch1 traced diagnostic token-out wall rate over108saved continuations; not vLLM. Full control measured in prior current-v5 checkpoint.",
+      "chosen": "FullBF16 for candidate serving validation only; no new scored selection",
+      "remeasured_rows": [
+        "b8-c8-i4096-swe",
+        "b8-c8-i22420-swe",
+        "b8-c8-i28672-swe",
+        "b8-c1-i4096-swe",
+        "b8-c1-i22420-swe",
+        "b8-c1-i28672-swe",
+        "b8-c1-i131072-swe"
+      ],
+      "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/continuation-kv-bfp8/decision.json"
     }
   ],
   "pipeline": {
     "mode": "extended",
     "current_stage": 12,
-    "status": "evidence_checkpoint_more_work_needed_new_authorization_required",
+    "status": "not_passed_yet_extended_swe; continuation_closed_rerun_not_admitted",
     "phase1": "passed: selected head BFP8/LoFi 8/10; original 6/10 retained",
     "phase2": "passed: fixed10 score4/10 within reference band, time1.403611h vs approximate1.523058h explained; Astropy behavior reproduced in pinned HF on two shortened diagnostic inputs.",
-    "extended": "Corrected GPQA157/198 passed. SWE85 remains23–26/85 with three unresolved verifier outcomes, below the reference; point score unknown. P19 remains unselected/rejected. Current-Q32 all-group full-BF16/HiFi4 fixed108 and required caps are root-reviewed:90 normal,18 native motifs,0 other,0 inconclusive. Both exact two-case protocol-isolation arms are terminal: KV-only BFP8 passed both sampled controls; down BFP8 plus LoFi produced a malformed Sympy opener and valid Sphinx protocol. The down arm changes dtype and fidelity together, so the joint-P19 Sphinx defect remains unattributed. Full-BF16 resume passed14/14 with24 negative controls failing as expected. Broad output checks were root-reviewed, but the wrapper exited143 and child exit statuses are unknown; do not infer an exit0 run. Full-BF16 remains unselected. Serving sizing/rates/list gates and retained85 rerun require a new authorized window. No score, bound or serving-rate change.",
+    "extended": "Corrected GPQA157/198 passed. SWE85 remains23\u201326/85 with three unresolved verifier outcomes, below the reference; point score unknown. P19 remains unselected/rejected. Current-Q32 all-group full-BF16/HiFi4 fixed108 and required caps are root-reviewed:90 normal,18 native motifs,0 other,0 inconclusive. Both exact two-case protocol-isolation arms are terminal: KV-only BFP8 passed both sampled controls; down BFP8 plus LoFi produced a malformed Sympy opener and valid Sphinx protocol. The down arm changes dtype and fidelity together, so the joint-P19 Sphinx defect remains unattributed. Full-BF16 resume passed14/14 with24 negative controls failing as expected. Broad output checks were root-reviewed, but the wrapper exited143 and child exit statuses are unknown; do not infer an exit0 run. Full-BF16 remains unselected. Serving sizing/rates/list gates and retained85 rerun require a new authorized window. No score, bound or serving-rate change.",
     "phase1_deadline_utc": "2026-11-14T11:15:25Z"
   },
   "public_artifacts": {
@@ -10181,8 +10238,73 @@
     "full_bf16_resume": "passed_14_of_14;24 negative controls expected fail",
     "full_bf16_broad": "outputs reviewed; wrapper143; child exit status unknown",
     "serving_policy_selected": false,
-    "remaining": "Requires new authorized window: candidate acceptance, memory/sizing, matched vLLM rates, retained85 rerun and verifier recovery. SWE85 remains23–26/85 with null point score and3 unknown outcomes.",
+    "remaining": "Requires new authorized window: candidate acceptance, memory/sizing, matched vLLM rates, retained85 rerun and verifier recovery. SWE85 remains23\u201326/85 with null point score and3 unknown outcomes.",
     "final_gate_check": "review/final-gate-check.json",
-    "final_gate_exit_code": 2
+    "final_gate_exit_code": 2,
+    "continuation": {
+      "authorization_source": "bringup/agentic_evals/inputs.json decisions[0]",
+      "stage_deadline_unix": 1794806125,
+      "checkpoint_deadline_utc": "2026-11-16T06:00:00Z",
+      "status": "closed_without_retained85_rerun_per_operator_admission_rule",
+      "precision_decision": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/continuation-kv-bfp8/decision.json",
+      "panel": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/continuation-kv-bfp8/fixed108/root-semantic-review.json",
+      "server_size_preflight": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/continuation-kv-bfp8/serving-size-plan.json",
+      "server_launch_commit": "ac79c7b5",
+      "scored_precision_unchanged": true,
+      "rerun_admission": "Await relevant measured serving rates; retain85 only if projection fits remaining window and12h run limit; otherwise report not done.",
+      "new_task_scores": false,
+      "candidate_rates": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/continuation-full-bf16/rates/serving_rates-swe.json",
+      "candidate_rate_rows_completed": 7,
+      "projection": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/continuation-full-bf16/retained85-projection.json",
+      "retained85_rerun": "not_done_projection_exceeds_remaining_window",
+      "predicted_hours": 19.96895040169027,
+      "optimistic_hours": 7.877950401690271,
+      "available_hours_at_decision": 3.5216438335842555,
+      "logging_check": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/continuation-full-bf16/logging_check.json",
+      "server_size": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/continuation-full-bf16/sizing/swe_server_size_full_bf16.json",
+      "candidate_sampling_steps": {
+        "prefill:device": 62,
+        "decode:device": 2479,
+        "prefill:host_compatibility": 645
+      },
+      "server_stopped": true,
+      "scored_default_restored": true,
+      "no_further_time_requested": true
+    }
+  },
+  "continuation": {
+    "authorization_source": "bringup/agentic_evals/inputs.json decisions[0]",
+    "stage_deadline_unix": 1794806125,
+    "checkpoint_deadline_utc": "2026-11-16T06:00:00Z",
+    "status": "closed_without_retained85_rerun_per_operator_admission_rule",
+    "precision_decision": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/continuation-kv-bfp8/decision.json",
+    "panel": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/continuation-kv-bfp8/fixed108/root-semantic-review.json",
+    "server_size_preflight": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/continuation-kv-bfp8/serving-size-plan.json",
+    "server_launch_commit": "ac79c7b5",
+    "scored_precision_unchanged": true,
+    "rerun_admission": "Not admitted: seven candidate rate rows measured; primary19.969h and optimistic7.878h projections exceed3.522h remaining. Closed per operator decision.",
+    "new_task_scores": false,
+    "candidate_rates": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/continuation-full-bf16/rates/serving_rates-swe.json",
+    "candidate_rate_rows_completed": 7,
+    "projection": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/continuation-full-bf16/retained85-projection.json",
+    "retained85_rerun": "not_done_projection_exceeds_remaining_window",
+    "predicted_hours": 19.96895040169027,
+    "optimistic_hours": 7.877950401690271,
+    "available_hours_at_decision": 3.5216438335842555,
+    "logging_check": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/continuation-full-bf16/logging_check.json",
+    "server_size": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/continuation-full-bf16/sizing/swe_server_size_full_bf16.json",
+    "candidate_sampling_steps": {
+      "prefill:device": 62,
+      "decode:device": 2479,
+      "prefill:host_compatibility": 645
+    },
+    "server_stopped": true,
+    "scored_default_restored": true,
+    "no_further_time_requested": true,
+    "review": {
+      "verdict": "more-work-needed",
+      "path": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/review/stage12-continuation-review.md",
+      "closure": "operator-directed bounded closure; not stage completion"
+    }
   }
 }

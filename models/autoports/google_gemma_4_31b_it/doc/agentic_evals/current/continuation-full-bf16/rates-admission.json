@@ -1,0 +1,38 @@
+{
+  "command": [
+    "timeout",
+    "5500",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tools/remeasure_agentic_rates.py",
+    "--output",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/continuation-full-bf16/rates",
+    "--expected-precision",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_config.json",
+    "--server-identity",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/continuation-full-bf16/server/perf-b8-server.json",
+    "--batch",
+    "8",
+    "--original-rates",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/benchmark/serving_rates-stage11-head_bfp4.json",
+    "--budget-seconds",
+    "5400",
+    "--row-timeout-seconds",
+    "1800",
+    "--stop-file",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/continuation-full-bf16/stop-rates",
+    "--sampling",
+    "swe",
+    "--forecast",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/continuation-kv-bfp8/serving-forecast.json"
+  ],
+  "started_unix": 1794792141.0108683,
+  "forecast_total_seconds": {
+    "low": 500,
+    "point": 1400,
+    "high": 3200
+  },
+  "basis": "Seven preserved B8 SWE rows, same populations and input lengths. Prior measured row total319.379832s plus warmups; full-policy ratios prewritten in serving-forecast.json. Only these rows support candidate SWE replay.",
+  "logging_check": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/continuation-full-bf16/logging_check.json",
+  "server_sizing": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/continuation-full-bf16/sizing/swe_server_size_full_bf16.json",
+  "prior_measured_row_seconds": 319.37983242818154
+}

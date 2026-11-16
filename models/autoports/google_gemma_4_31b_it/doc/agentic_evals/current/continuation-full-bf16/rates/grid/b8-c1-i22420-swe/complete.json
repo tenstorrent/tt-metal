@@ -1,0 +1,24 @@
+{
+  "row": {
+    "id": "b8-c1-i22420-swe",
+    "batch": 8,
+    "concurrency": 1,
+    "input_tokens": 22420,
+    "output_tokens": 128,
+    "sampling": "swe",
+    "requests": 2,
+    "headline": false,
+    "predicted": {
+      "decode_tok_s_user": 29.34492639067286,
+      "decode_tok_s_user_low": 22.008694793004643,
+      "decode_tok_s_user_high": 36.68115798834108,
+      "prefill_tok_s": 3683.8066001534917,
+      "prefill_tok_s_low": 2762.8549501151188,
+      "prefill_tok_s_high": 4604.758250191864,
+      "ttft_s": 6.086095833333334,
+      "step_ms": 34.07744107744107,
+      "basis": "Stage10 short/long prefill and cadence estimates with linear KV-length cost; request TTFT includes serialized prefill at full concurrency."
+    }
+  },
+  "finished_unix": 1794792813.7577612
+}

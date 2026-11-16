@@ -1,0 +1,1088 @@
+{
+  "status": "complete_candidate_rejected",
+  "reviewed_unix": 1794791226.0226498,
+  "rows": [
+    {
+      "index": 0,
+      "name": "anomaly.call88.canonicalprefix.seed42.cap1024",
+      "result_sha256": "c4a271cd5c4e8c85a422bee1df6accea025dbe1979dff4171c467192089ca949",
+      "verdict": "normal",
+      "evidence": "Coherent repair-script continuation with natural token50 tool stop; no claim of patch correctness.",
+      "tokens": 679,
+      "stop": 50
+    },
+    {
+      "index": 1,
+      "name": "anomaly.call88.canonicalprefix.seed43.cap1024",
+      "result_sha256": "1785b64d34e224416b20c8c09ee19c3021f1536cee77042b535a7b1434e1c7a2",
+      "verdict": "normal",
+      "evidence": "Coherent repair-script continuation with natural token50 tool stop; no claim of patch correctness.",
+      "tokens": 678,
+      "stop": 50
+    },
+    {
+      "index": 2,
+      "name": "anomaly.call88.canonicalprefix.seed44.cap1024",
+      "result_sha256": "2f55bccbcf68681cd54da7ba2b539e15efbfdc7fef5194b685b1bd9daaceb879",
+      "verdict": "normal",
+      "evidence": "Coherent repair-script continuation with natural token50 tool stop; no claim of patch correctness.",
+      "tokens": 838,
+      "stop": 50
+    },
+    {
+      "index": 3,
+      "name": "anomaly.call91.canonicalprefix.seed42.cap256",
+      "result_sha256": "341d59a9437bb976e12d9111d28f046f6686fdb03f4025071866bc871ca96447",
+      "verdict": "normal",
+      "evidence": "Coherent repair-script continuation with natural token50 tool stop; no claim of patch correctness.",
+      "tokens": 45,
+      "stop": 50
+    },
+    {
+      "index": 4,
+      "name": "anomaly.call91.canonicalprefix.seed43.cap256",
+      "result_sha256": "e0b53cd987570a42f413675e36cdd801c8b162cc2f5f576636f8670e08df76f9",
+      "verdict": "reproduced_native_motif",
+      "evidence": "Generated repeated contraction ve-ve at saved boundary, same motif as full-BF16 index4; natural tool stop does not erase anomaly.",
+      "tokens": 99,
+      "stop": 50
+    },
+    {
+      "index": 5,
+      "name": "anomaly.call91.canonicalprefix.seed44.cap1024",
+      "result_sha256": "c59b13aad7d0f86a0efc8c0ee3190557a19dcc6f48a6c1b360852315935d2676",
+      "verdict": "normal",
+      "evidence": "Coherent repair-script continuation with natural token50 tool stop; no claim of patch correctness.",
+      "tokens": 106,
+      "stop": 50
+    },
+    {
+      "index": 6,
+      "name": "anomaly.matplotlib__matplotlib-20488.call82.onset.seed42.cap512",
+      "result_sha256": "ed8f8768f88bf1881d0362bc544d4cf4b1aba1d7c0ac3764bb71299cbd6a6784",
+      "verdict": "normal",
+      "evidence": "Coherent repair reasoning and canonical bash call; natural token50 stop, no correctness claim.",
+      "tokens": 68,
+      "stop": 50
+    },
+    {
+      "index": 7,
+      "name": "anomaly.matplotlib__matplotlib-20488.call82.onset.seed43.cap256",
+      "result_sha256": "8fee8d1eee9082cf2679a83b7fadae46e63a55d904dddd266ad74d6f5d998e69",
+      "verdict": "normal",
+      "evidence": "Coherent repair reasoning and canonical bash call; natural token50 stop, no correctness claim.",
+      "tokens": 96,
+      "stop": 50
+    },
+    {
+      "index": 8,
+      "name": "anomaly.matplotlib__matplotlib-20488.call82.onset.seed44.cap256",
+      "result_sha256": "df8fead9acba959a0dcdddd55f7b7887fb4d25770f2fea592a7798cc1d5a22cc",
+      "verdict": "normal",
+      "evidence": "Coherent repair reasoning and canonical bash call; natural token50 stop, no correctness claim.",
+      "tokens": 119,
+      "stop": 50
+    },
+    {
+      "index": 9,
+      "name": "anomaly.matplotlib__matplotlib-20488.call86.onset.seed42.cap256",
+      "result_sha256": "e70c56b022686d8867d45b2d68646753779ca4f020d264e9578e8782a3627f3a",
+      "verdict": "normal",
+      "evidence": "Coherent repair reasoning and canonical bash call; natural token50 stop, no correctness claim.",
+      "tokens": 95,
+      "stop": 50
+    },
+    {
+      "index": 10,
+      "name": "anomaly.matplotlib__matplotlib-20488.call86.onset.seed43.cap256",
+      "result_sha256": "6fd3312cef506cd80f6fc20e5aafcdede22d0bf28d1bff7d019c400d12bed693",
+      "verdict": "reproduced_native_motif",
+      "evidence": "Repeated contraction at saved boundary, then natural tool stop.",
+      "tokens": 168,
+      "stop": 50
+    },
+    {
+      "index": 11,
+      "name": "anomaly.matplotlib__matplotlib-20488.call86.onset.seed44.cap1024",
+      "result_sha256": "399d9c84684bb60d5fb020c75f82442ce1ca7643ef3d5dd71e775d0f1b806a25",
+      "verdict": "normal",
+      "evidence": "Coherent repair reasoning or short directory-listing tool call, natural token50 stop; boundary interpreted against same saved fixture.",
+      "tokens": 199,
+      "stop": 50,
+      "equal_full": false
+    },
+    {
+      "index": 12,
+      "name": "anomaly.psf__requests-1921.call1.onset.seed42.cap256",
+      "result_sha256": "fab46cabf0a84b0e792d9f439d094e65968d8ed0c1e5722dfb4bc9c1555d33ca",
+      "verdict": "normal",
+      "evidence": "Coherent repair reasoning or short directory-listing tool call, natural token50 stop; boundary interpreted against same saved fixture.",
+      "tokens": 16,
+      "stop": 50,
+      "equal_full": false
+    },
+    {
+      "index": 13,
+      "name": "anomaly.psf__requests-1921.call1.onset.seed43.cap256",
+      "result_sha256": "28ac584d665176682fa085a8baaa1a21a3c0dba2adfb381193f3d7d4a84c9dd9",
+      "verdict": "normal",
+      "evidence": "Coherent repair reasoning or short directory-listing tool call, natural token50 stop; boundary interpreted against same saved fixture.",
+      "tokens": 15,
+      "stop": 50,
+      "equal_full": true
+    },
+    {
+      "index": 14,
+      "name": "anomaly.psf__requests-1921.call1.onset.seed44.cap256",
+      "result_sha256": "9a29442d03f1f14bc01a452777c160d644a6397daa539410da78143053b15f2c",
+      "verdict": "normal",
+      "evidence": "Coherent repair reasoning or short directory-listing tool call, natural token50 stop; boundary interpreted against same saved fixture.",
+      "tokens": 16,
+      "stop": 50,
+      "equal_full": false
+    },
+    {
+      "index": 15,
+      "name": "anomaly.psf__requests-5414.call10.onset.seed42.cap256",
+      "result_sha256": "36ca72c9847a041ad3f4d3c00a1590867047e267ffea9f0c4dc47014fc91f5ff",
+      "verdict": "reproduced_native_motif",
+      "evidence": "Caret-token172109 loop through256 cap, known full-TT/HF controlled motif; no progressing-cap claim.",
+      "tokens": 256,
+      "stop": 172109,
+      "equal_full": true
+    },
+    {
+      "index": 16,
+      "name": "anomaly.psf__requests-5414.call10.onset.seed43.cap256",
+      "result_sha256": "95d1390564768e74310dd60d7438bc98e9133c90ba69fe18408b220711e571a5",
+      "verdict": "reproduced_native_motif",
+      "evidence": "Caret-token172109 loop through256 cap, known full-TT/HF controlled motif; no progressing-cap claim.",
+      "tokens": 256,
+      "stop": 172109,
+      "equal_full": true
+    },
+    {
+      "index": 17,
+      "name": "anomaly.psf__requests-5414.call10.onset.seed44.cap256",
+      "result_sha256": "a8076ae85120fd2dfe15494874fe2266d00763b50b5a95d8410baf6aae9c0f9a",
+      "verdict": "reproduced_native_motif",
+      "evidence": "Caret-token172109 loop through256 cap, known full-TT/HF controlled motif; no progressing-cap claim.",
+      "tokens": 256,
+      "stop": 172109,
+      "equal_full": true
+    },
+    {
+      "index": 18,
+      "name": "anomaly.psf__requests-5414.call11.onset.seed42.cap256",
+      "result_sha256": "16dd2077c3fd6b41aeff875be255b91bf5a925534fc606cf3d1199a9824a9991",
+      "verdict": "reproduced_native_motif",
+      "evidence": "Known caret loop through256 cap; full baseline motif retained.",
+      "tokens": 256,
+      "stop": 172109,
+      "equal_full": true
+    },
+    {
+      "index": 19,
+      "name": "anomaly.psf__requests-5414.call11.onset.seed43.cap256",
+      "result_sha256": "a587770dbeddea3d1c13b3a7b79d3c0607b5d9f568e9d79db48ede0636bb56a1",
+      "verdict": "reproduced_native_motif",
+      "evidence": "Known caret loop through256 cap; full baseline motif retained.",
+      "tokens": 256,
+      "stop": 172109,
+      "equal_full": true
+    },
+    {
+      "index": 20,
+      "name": "anomaly.psf__requests-5414.call11.onset.seed44.cap256",
+      "result_sha256": "2e474d65aeb9228fb8fc393041a33b7dbd52806e4162c0038c9a2669a06b49c7",
+      "verdict": "reproduced_native_motif",
+      "evidence": "Known caret loop through256 cap; full baseline motif retained.",
+      "tokens": 256,
+      "stop": 172109,
+      "equal_full": true
+    },
+    {
+      "index": 21,
+      "name": "anomaly.psf__requests-5414.call9.onset.seed42.cap256",
+      "result_sha256": "9fde583dd95ee27473af9df2ccc7a743e8353b940330aada9952db49d18279f4",
+      "verdict": "reproduced_native_motif",
+      "evidence": "Known caret loop through256 cap; full baseline motif retained.",
+      "tokens": 256,
+      "stop": 172109,
+      "equal_full": true
+    },
+    {
+      "index": 22,
+      "name": "anomaly.psf__requests-5414.call9.onset.seed43.cap256",
+      "result_sha256": "7c7c8f4747a3299a3f19d64e4d65e0b0991cda4505794a2cc8b881aed6809be8",
+      "verdict": "reproduced_native_motif",
+      "evidence": "Known caret loop through256 cap; full baseline motif retained.",
+      "tokens": 256,
+      "stop": 172109,
+      "equal_full": true
+    },
+    {
+      "index": 23,
+      "name": "anomaly.psf__requests-5414.call9.onset.seed44.cap256",
+      "result_sha256": "af1bf9f80173218adf8592d0c99a1abca685b33af7d9bbfad54e37cdebf942b3",
+      "verdict": "reproduced_native_motif",
+      "evidence": "Known caret loop through256 cap; full baseline motif retained.",
+      "tokens": 256,
+      "stop": 172109,
+      "equal_full": false
+    },
+    {
+      "index": 24,
+      "name": "anomaly.pylint-dev__pylint-4551.call1.onset.seed42.cap256",
+      "result_sha256": "bc7686d5ff726f8626857c923e000046ba938dea84a14d554e66cd0d0f2a30a2",
+      "verdict": "normal",
+      "evidence": "Exact token IDs of reviewed normal full-BF16 control on same fixture.",
+      "tokens": 16,
+      "stop": 50,
+      "equal_full": true
+    },
+    {
+      "index": 25,
+      "name": "anomaly.pylint-dev__pylint-4551.call1.onset.seed43.cap256",
+      "result_sha256": "69dbe66f39c170bfaa41d95e90f0a641e017ca1994b4d5c484098c3f1a5fe184",
+      "verdict": "normal",
+      "evidence": "Exact token IDs of reviewed normal full-BF16 control on same fixture.",
+      "tokens": 20,
+      "stop": 50,
+      "equal_full": true
+    },
+    {
+      "index": 26,
+      "name": "anomaly.pylint-dev__pylint-4551.call1.onset.seed44.cap256",
+      "result_sha256": "c09b541a385667234865687e2cb064e20baa34db4a2833783619d6a4506c146c",
+      "verdict": "normal",
+      "evidence": "Coherent diagnostic shell command, natural token50 stop; indices30\u201332 exact reviewed full-BF16 token IDs.",
+      "tokens": 16,
+      "stop": 50
+    },
+    {
+      "index": 27,
+      "name": "anomaly.pylint-dev__pylint-4604.call45.onset.seed42.cap256",
+      "result_sha256": "a08ae7b452e6cd984d6ea2a2c16edc0ccfa43fd218c013b8353fd8463889773c",
+      "verdict": "normal",
+      "evidence": "Coherent diagnostic shell command, natural token50 stop; indices30\u201332 exact reviewed full-BF16 token IDs.",
+      "tokens": 50,
+      "stop": 50
+    },
+    {
+      "index": 28,
+      "name": "anomaly.pylint-dev__pylint-4604.call45.onset.seed43.cap256",
+      "result_sha256": "389d03934b50af136b96f482607f6ab0b61547bbeb5e9eabb174cf3ef00938f4",
+      "verdict": "normal",
+      "evidence": "Coherent diagnostic shell command, natural token50 stop; indices30\u201332 exact reviewed full-BF16 token IDs.",
+      "tokens": 54,
+      "stop": 50
+    },
+    {
+      "index": 29,
+      "name": "anomaly.pylint-dev__pylint-4604.call45.onset.seed44.cap256",
+      "result_sha256": "d3f64343c22bbf68412905c59df8c8863114682cd70da5a2143447fa9103abad",
+      "verdict": "normal",
+      "evidence": "Coherent diagnostic shell command, natural token50 stop; indices30\u201332 exact reviewed full-BF16 token IDs.",
+      "tokens": 74,
+      "stop": 50
+    },
+    {
+      "index": 30,
+      "name": "anomaly.pytest-dev__pytest-5787.call1.onset.seed42.cap256",
+      "result_sha256": "c54da5ed401aee62f162dfb69efffaf6d1bde655d92631553998dc6a95d76869",
+      "verdict": "normal",
+      "evidence": "Coherent diagnostic shell command, natural token50 stop; indices30\u201332 exact reviewed full-BF16 token IDs.",
+      "tokens": 15,
+      "stop": 50
+    },
+    {
+      "index": 31,
+      "name": "anomaly.pytest-dev__pytest-5787.call1.onset.seed43.cap256",
+      "result_sha256": "a6b76164fd1a6a33e6bdcfb93f207eb6476fcab0bb1d992bb8e830d73d7ca266",
+      "verdict": "normal",
+      "evidence": "Coherent diagnostic shell command, natural token50 stop; indices30\u201332 exact reviewed full-BF16 token IDs.",
+      "tokens": 15,
+      "stop": 50
+    },
+    {
+      "index": 32,
+      "name": "anomaly.pytest-dev__pytest-5787.call1.onset.seed44.cap256",
+      "result_sha256": "2b7f69bacb0e9e44b5f5cfa7bb4bba5ece3a27f3efdb7715e9650d601bb8c540",
+      "verdict": "normal",
+      "evidence": "Coherent diagnostic shell command, natural token50 stop; indices30\u201332 exact reviewed full-BF16 token IDs.",
+      "tokens": 15,
+      "stop": 50
+    },
+    {
+      "index": 33,
+      "name": "anomaly.pytest-dev__pytest-5787.call65.onset.seed42.cap2048",
+      "result_sha256": "2cfae4be08f0ddcbc1a45b647ada98db47595079908963e731758dbd07121f23",
+      "verdict": "normal",
+      "evidence": "Read complete1682-token pytest report-editing script: coherent code and bounded local correction, natural tool stop; patch correctness untested.",
+      "tokens": 1682,
+      "stop": 50
+    },
+    {
+      "index": 34,
+      "name": "anomaly.pytest-dev__pytest-5787.call65.onset.seed43.cap2048",
+      "result_sha256": "b9db458b37c8e0aea2ef7b2af656e7e363e4655a033c02a55511d4e8e77bc82e",
+      "verdict": "normal",
+      "evidence": "Read complete1485-token serialization-method replacement script; coherent bounded code generation and correction, natural tool stop. Script correctness untested.",
+      "tokens": 1485,
+      "stop": 50
+    },
+    {
+      "index": 35,
+      "name": "anomaly.pytest-dev__pytest-5787.call65.onset.seed44.cap4096",
+      "result_sha256": "910083d1806b0d2bf4deb8cd3f42e062a52ca18c6081a871404bd00886722c20",
+      "verdict": "normal",
+      "evidence": "Coherent editing continuation with natural tool stop.",
+      "tokens": 62,
+      "stop": 50
+    },
+    {
+      "index": 36,
+      "name": "anomaly.pytest-dev__pytest-7432.call19.onset.seed42.cap256",
+      "result_sha256": "e25ae4abc34969d67e899a2054af9e9bcde1d0e50700146b30f01f2a9a73605b",
+      "verdict": "reproduced_native_motif",
+      "evidence": "Same known caret motif. Exact full baseline matches for36/38. Index37 candidate loops entirely; full same-seed control was progressing at256 and completed normally after extension; candidate regression on this sampled continuation, no statistical incidence claim.",
+      "tokens": 256,
+      "stop": 172109
+    },
+    {
+      "index": 37,
+      "name": "anomaly.pytest-dev__pytest-7432.call19.onset.seed43.cap256",
+      "result_sha256": "f67a017941b359ee093c0358d3c2ce0ef8020a80453b7b0cd2075f011bbe12cc",
+      "verdict": "reproduced_native_motif",
+      "evidence": "Same known caret motif. Exact full baseline matches for36/38. Index37 candidate loops entirely; full same-seed control was progressing at256 and completed normally after extension; candidate regression on this sampled continuation, no statistical incidence claim.",
+      "tokens": 256,
+      "stop": 172109
+    },
+    {
+      "index": 38,
+      "name": "anomaly.pytest-dev__pytest-7432.call19.onset.seed44.cap256",
+      "result_sha256": "f1b9939a479b072d5b253a8d39e82f8ef5fcbe42f7b219daff2842c113ad406a",
+      "verdict": "reproduced_native_motif",
+      "evidence": "Same known caret motif. Exact full baseline matches for36/38. Index37 candidate loops entirely; full same-seed control was progressing at256 and completed normally after extension; candidate regression on this sampled continuation, no statistical incidence claim.",
+      "tokens": 256,
+      "stop": 172109
+    },
+    {
+      "index": 39,
+      "name": "anomaly.pytest10356-call14.canonicalprefix.seed42.cap256",
+      "result_sha256": "8681117f4fdb40aaaac7e46383e32a1b9b5d0dbcceaaa06b20f1b6ede8895f2c",
+      "verdict": "normal",
+      "evidence": "Coherent command or final repair explanation with natural tool stop; diagnostic does not grade patch correctness or fetching.",
+      "tokens": 35,
+      "stop": 50
+    },
+    {
+      "index": 40,
+      "name": "anomaly.pytest10356-call14.canonicalprefix.seed43.cap256",
+      "result_sha256": "db103cf4fa7f1a1e068c0c357ba3aabf0e048cb8b67004d000c73c32b779c6f1",
+      "verdict": "normal",
+      "evidence": "Coherent command or final repair explanation with natural tool stop; diagnostic does not grade patch correctness or fetching.",
+      "tokens": 33,
+      "stop": 50
+    },
+    {
+      "index": 41,
+      "name": "anomaly.pytest10356-call14.canonicalprefix.seed44.cap256",
+      "result_sha256": "67f290475cf99d609ead148de4a515fc3c9252ff5d3ad0c013b3bf5cefdbedab",
+      "verdict": "normal",
+      "evidence": "Coherent command or final repair explanation with natural tool stop; diagnostic does not grade patch correctness or fetching.",
+      "tokens": 34,
+      "stop": 50
+    },
+    {
+      "index": 42,
+      "name": "anomaly.requests2931.call20.canonicalprefix.seed42.cap256",
+      "result_sha256": "9257a28ea7a26033a3e2329bf419f143c06ec42f723cf3bcfe4a99b96a87199a",
+      "verdict": "reproduced_native_motif",
+      "evidence": "Extended1024 tokens: sustained caret loop, unlike full same-seed control which completed normally.",
+      "tokens": 256,
+      "stop": 172109,
+      "initial_verdict": "cap_inconclusive",
+      "extension": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/continuation-kv-bfp8/fixed108/extensions/runs/anomaly.requests2931.call20.canonicalprefix.seed42.cap256-extended.json",
+      "extension_sha256": "c680012f7aad953a7fe27f84d9656d5e146f7089ac0bb0d57c6f9950b5a2949d",
+      "extension_tokens": 1024,
+      "extension_prefix_exact": true
+    },
+    {
+      "index": 43,
+      "name": "anomaly.requests2931.call20.canonicalprefix.seed43.cap256",
+      "result_sha256": "7b5c0339e0d757fdaa6e7510869fa50295777e200c336008f415019d2f996d8b",
+      "verdict": "reproduced_native_motif",
+      "evidence": "Traceback collapses into sustained caret repetition through cap; known native motif.",
+      "tokens": 256,
+      "stop": 172109
+    },
+    {
+      "index": 44,
+      "name": "anomaly.requests2931.call20.canonicalprefix.seed44.cap256",
+      "result_sha256": "2d4f64a30d08853381cdb486bf30af1223c56090eda901dc387f020bff862547",
+      "verdict": "normal",
+      "evidence": "Extension preserves original token prefix, completes coherent response and naturally stops at token50.",
+      "tokens": 256,
+      "stop": 147,
+      "initial_verdict": "cap_inconclusive",
+      "extension": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/continuation-kv-bfp8/fixed108/extensions/runs/anomaly.requests2931.call20.canonicalprefix.seed44.cap256-extended.json",
+      "extension_sha256": "f2412b83b8144db78e6e31fca80b3dc9a30cde0679dc005e3274324063e2e469",
+      "extension_tokens": 494,
+      "extension_prefix_exact": true
+    },
+    {
+      "index": 45,
+      "name": "anomaly.scikit-learn__scikit-learn-13135.call29.onset.seed42.cap1024",
+      "result_sha256": "3f79dcedd4bd39b149ae70b02a9fa5825cec729dec3d959c1d8e11a8a20e4f84",
+      "verdict": "normal",
+      "evidence": "Coherent command or final repair explanation with natural tool stop; diagnostic does not grade patch correctness or fetching.",
+      "tokens": 282,
+      "stop": 50
+    },
+    {
+      "index": 46,
+      "name": "anomaly.scikit-learn__scikit-learn-13135.call29.onset.seed43.cap512",
+      "result_sha256": "f596f06e3a86a3a0db75da3194641b214c590d49c6f34ca2be0d5241199dd5dc",
+      "verdict": "normal",
+      "evidence": "Coherent command or final repair explanation with natural tool stop; diagnostic does not grade patch correctness or fetching.",
+      "tokens": 187,
+      "stop": 50
+    },
+    {
+      "index": 47,
+      "name": "anomaly.scikit-learn__scikit-learn-13135.call29.onset.seed44.cap512",
+      "result_sha256": "4cad58a8eeaf68af6163c1f2be6bc884f2cadfd7967868db01f137a0a5327793",
+      "verdict": "normal",
+      "evidence": "Read complete coherent code-inspection reasoning and canonical bash call; natural token50 stop.",
+      "tokens": 88,
+      "stop": 50
+    },
+    {
+      "index": 48,
+      "name": "anomaly.sphinx-doc__sphinx-10323.call57.onset.seed42.cap512",
+      "result_sha256": "c3d74f361ee794d713bb95944e2315b89e027a5d39f3f4e5166fc32608e7031c",
+      "verdict": "normal",
+      "evidence": "Read complete coherent code-inspection reasoning and canonical bash call; natural token50 stop.",
+      "tokens": 422,
+      "stop": 50
+    },
+    {
+      "index": 49,
+      "name": "anomaly.sphinx-doc__sphinx-10323.call57.onset.seed43.cap256",
+      "result_sha256": "cbecdf7c80a6d5eb9e5550c89952bce4d9e38c663afbec981c16b779bf441ade",
+      "verdict": "normal",
+      "evidence": "Coherent Sphinx filter inspection and canonical bash call, natural token50 stop.",
+      "tokens": 129,
+      "stop": 50
+    },
+    {
+      "index": 50,
+      "name": "anomaly.sphinx-doc__sphinx-10323.call57.onset.seed44.cap512",
+      "result_sha256": "6801934f43c9f2e68ea09653519bedce70993e13556c9213f28ca0baf886fe66",
+      "verdict": "normal",
+      "evidence": "Coherent Sphinx filter inspection and canonical bash call, natural token50 stop.",
+      "tokens": 83,
+      "stop": 50
+    },
+    {
+      "index": 51,
+      "name": "anomaly.sphinx-doc__sphinx-10323.call68.onset.seed42.cap256",
+      "result_sha256": "57e7a544315e5400645929aa3cd813a0257b0efa84760d1651ddbb6b2729fb96",
+      "verdict": "normal",
+      "evidence": "Coherent command/submission continuation; exact full control for51/53; canonical tool opener at54, natural token50 stop.",
+      "tokens": 38,
+      "stop": 50
+    },
+    {
+      "index": 52,
+      "name": "anomaly.sphinx-doc__sphinx-10323.call68.onset.seed43.cap256",
+      "result_sha256": "f3dd4c765af3b029d229ad4e600f538582014d747e09a3fdb81726d92d0d33f2",
+      "verdict": "normal",
+      "evidence": "Coherent command/submission continuation; exact full control for51/53; canonical tool opener at54, natural token50 stop.",
+      "tokens": 116,
+      "stop": 50
+    },
+    {
+      "index": 53,
+      "name": "anomaly.sphinx-doc__sphinx-10323.call68.onset.seed44.cap256",
+      "result_sha256": "f82a30e5014b3dd7843a5b0ea7c69099d7d6c8aedec7ebd53692e3ea8815109d",
+      "verdict": "normal",
+      "evidence": "Coherent command/submission continuation; exact full control for51/53; canonical tool opener at54, natural token50 stop.",
+      "tokens": 38,
+      "stop": 50
+    },
+    {
+      "index": 54,
+      "name": "anomaly.sphinx-doc__sphinx-10323.call70.onset.seed42.cap256",
+      "result_sha256": "41f2e2e4396fe8c96347bd536de9c0d7ebce89feafc0dd3c9d98c5e379fdd0b2",
+      "verdict": "normal",
+      "evidence": "Coherent command/submission continuation; exact full control for51/53; canonical tool opener at54, natural token50 stop.",
+      "tokens": 48,
+      "stop": 50
+    },
+    {
+      "index": 55,
+      "name": "anomaly.sphinx-doc__sphinx-10323.call70.onset.seed43.cap256",
+      "result_sha256": "fa11fc2bf32cbb576b03c0470703178ba19706ea015b3cc57221fd703dc3d5ff",
+      "verdict": "reproduced_native_motif",
+      "evidence": "Boundary audit: prompt ends ASCII Ive contraction; generated curly-apostrophe ve duplicates it. Exact IDs match full control, whose verdict is reproduced_native_motif, not normal. Later coherent tool call does not erase it.",
+      "tokens": 39,
+      "stop": 50
+    },
+    {
+      "index": 56,
+      "name": "anomaly.sphinx-doc__sphinx-10323.call70.onset.seed44.cap256",
+      "result_sha256": "ae3e700dc21ef00fb3bcf964434dd2ac68fac6761bd39d68f2e32fbad83f7c35",
+      "verdict": "normal",
+      "evidence": "Coherent task submission and canonical tool syntax, natural token50 stop;55 exact reviewed full control.",
+      "tokens": 46,
+      "stop": 50
+    },
+    {
+      "index": 57,
+      "name": "anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.seed42.cap2048",
+      "result_sha256": "c2f46cf4bf64006eb95e9363efea817219942f36a189b459599fdefe57870e29",
+      "verdict": "normal",
+      "evidence": "Prompt ends see if it; generated apostrophe-s completes contraction. Read679-token coherent Sphinx debugging and canonical tool call; natural stop.",
+      "tokens": 679,
+      "stop": 50
+    },
+    {
+      "index": 58,
+      "name": "anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.seed43.cap2048",
+      "result_sha256": "a1558cf3df158c185f1bd7d86a483a3af628d43247dd147dbe8de46b7a514b0c",
+      "verdict": "normal",
+      "evidence": "Same inherited it boundary as57; contraction completes normally. Coherent debugging followed by canonical bash call and natural stop.",
+      "tokens": 519,
+      "stop": 50
+    },
+    {
+      "index": 59,
+      "name": "anomaly.sphinx-doc__sphinx-11510.call101.contraction.onset.seed44.cap1024",
+      "result_sha256": "8908e818e5cd958b4a9d92b312bf57da30098644f83b94fdf09b5472b38548d8",
+      "verdict": "normal",
+      "evidence": "Same inherited it boundary as57; contraction completes normally. Coherent debugging followed by canonical bash call and natural stop.",
+      "tokens": 546,
+      "stop": 50
+    },
+    {
+      "index": 60,
+      "name": "anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset.seed42.cap256",
+      "result_sha256": "ae35636525516701a66ec33ab0b74240837a3f4be5ca0d08f4ee07707908eda7",
+      "verdict": "normal",
+      "evidence": "Inherited prefix ends call:bash, generated command arguments correctly close it. Coherent diagnostic command; natural stop.60 exact full control.",
+      "tokens": 115,
+      "stop": 50
+    },
+    {
+      "index": 61,
+      "name": "anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset.seed43.cap256",
+      "result_sha256": "c2ec9ba30151141f516ef021fedf4a62d9b86d90b5c9254058e810ce27ab03fd",
+      "verdict": "normal",
+      "evidence": "Inherited prefix ends call:bash, generated command arguments correctly close it. Coherent diagnostic command; natural stop.60 exact full control.",
+      "tokens": 85,
+      "stop": 50
+    },
+    {
+      "index": 62,
+      "name": "anomaly.sphinx-doc__sphinx-11510.call101.protocol.onset.seed44.cap256",
+      "result_sha256": "dcb7eb601b6c3c5e3831eed794b12b86b83809baf9e0b24bcfe9aa5811aaf566",
+      "verdict": "normal",
+      "evidence": "Exact output IDs and same fixture as independently reviewed full control: Pinned prompt ends with an open `call:bash`; generated `{command:...}` is a valid argument fragment and closes with the tool-response terminator. Natural stop and exact equality with matched P19 IDs/text.",
+      "tokens": 47,
+      "stop": 50
+    },
+    {
+      "index": 63,
+      "name": "anomaly.sphinx-doc__sphinx-11510.call108.onset.seed42.cap256",
+      "result_sha256": "d4a72888e4a2cc02f291d77ebd25f1282ca1a7f6c0d946a5898df126d13670af",
+      "verdict": "normal",
+      "evidence": "Exact output IDs and same fixture as independently reviewed full control: Prompt ends mid-path at `/opt/miniconda3/lib/python3`; generated `.11/site-packages/...` completes it and forms a coherent shell command, with canonical argument close/tool response and natural stop.",
+      "tokens": 36,
+      "stop": 50
+    },
+    {
+      "index": 64,
+      "name": "anomaly.sphinx-doc__sphinx-11510.call108.onset.seed43.cap256",
+      "result_sha256": "4cfb5c13e9da4403f110109b1cf15ef28275de0421aa70d093c2995d32b89558",
+      "verdict": "normal",
+      "evidence": "64/65 exact reviewed full control;66 complete coherent docutils editing command with inherited bash opener and natural tool stop. No patch-correctness claim.",
+      "tokens": 36,
+      "stop": 50
+    },
+    {
+      "index": 65,
+      "name": "anomaly.sphinx-doc__sphinx-11510.call108.onset.seed44.cap256",
+      "result_sha256": "40956d4689e7d1bf7de8136af351f4df940269440d96b22dd8e36852e898ac71",
+      "verdict": "normal",
+      "evidence": "64/65 exact reviewed full control;66 complete coherent docutils editing command with inherited bash opener and natural tool stop. No patch-correctness claim.",
+      "tokens": 36,
+      "stop": 50
+    },
+    {
+      "index": 66,
+      "name": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed42.cap1024",
+      "result_sha256": "2ba910be0dad97816a979ae82932888547559ba336ae0a8d8799a23d65e6817b",
+      "verdict": "normal",
+      "evidence": "64/65 exact reviewed full control;66 complete coherent docutils editing command with inherited bash opener and natural tool stop. No patch-correctness claim.",
+      "tokens": 457,
+      "stop": 50
+    },
+    {
+      "index": 67,
+      "name": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed43.cap2048",
+      "result_sha256": "c25eea7c7d786e16af92c625d23754d66ea3011ea0ca5f1ea5f055db2f49a255",
+      "verdict": "normal",
+      "evidence": "Read complete752-token docutils editing script. Coherent control flow and inherited bash argument fragment; natural tool stop, no patch-correctness claim.",
+      "tokens": 752,
+      "stop": 50
+    },
+    {
+      "index": 68,
+      "name": "anomaly.sphinx-doc__sphinx-11510.call119.protocol.onset.seed44.cap1024",
+      "result_sha256": "3eb5adad3d8a03db95d507c312b9e836c1551afa6d89e798da4ceb8cfe133e0c",
+      "verdict": "normal",
+      "evidence": "Read complete coherent Sphinx/docutils replacement script continuing inherited code/tool boundary; natural tool stop. No correctness claim.",
+      "tokens": 972,
+      "stop": 50
+    },
+    {
+      "index": 69,
+      "name": "anomaly.sphinx-doc__sphinx-11510.call28.onset.seed42.cap1024",
+      "result_sha256": "0ecd49d4a19abdd38578db473f0015a6ac5b84ca3b7f28c2686c32152e413394",
+      "verdict": "normal",
+      "evidence": "Read complete coherent Sphinx/docutils replacement script continuing inherited code/tool boundary; natural tool stop. No correctness claim.",
+      "tokens": 637,
+      "stop": 50
+    },
+    {
+      "index": 70,
+      "name": "anomaly.sphinx-doc__sphinx-11510.call28.onset.seed43.cap1024",
+      "result_sha256": "a0639b8b1e4d7cba624699a670fddd79c250e8a5d3d0415682559d5ab96ea08a",
+      "verdict": "normal",
+      "evidence": "Read complete coherent Sphinx/docutils replacement script continuing inherited code/tool boundary; natural tool stop. No correctness claim.",
+      "tokens": 567,
+      "stop": 50
+    },
+    {
+      "index": 71,
+      "name": "anomaly.sphinx-doc__sphinx-11510.call28.onset.seed44.cap1024",
+      "result_sha256": "279f895f234b1045f552fcac26d1ddede76ced310c6b7323a1d26cabf09b6848",
+      "verdict": "normal",
+      "evidence": "Read536-token coherent Sphinx include-method replacement continuing saved code boundary; natural tool stop.",
+      "tokens": 536,
+      "stop": 50
+    },
+    {
+      "index": 72,
+      "name": "anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.seed42.cap1024",
+      "result_sha256": "b629ec3201fdc659d9748e355dd14f2c95062cc4dce74373b3749a5eaf4396d4",
+      "verdict": "normal",
+      "evidence": "Coherent docutils replacement script;72 closes tool call naturally;73 reaches1024 while finishing shell command, extend to2048.",
+      "tokens": 853,
+      "stop": 50
+    },
+    {
+      "index": 73,
+      "name": "anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.seed43.cap1024",
+      "result_sha256": "2921341bc1f839e456a33f285c934bc0534c1a95778553e29a3117d43721b3ce",
+      "verdict": "normal",
+      "evidence": "Extension preserves original token prefix, completes coherent response and naturally stops at token50.",
+      "tokens": 1024,
+      "stop": 236786,
+      "initial_verdict": "cap_inconclusive",
+      "extension": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/continuation-kv-bfp8/fixed108/extensions/runs/anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.seed43.cap1024-extended.json",
+      "extension_sha256": "793265045c5f248edfd6d392a9e65b8aa6ae299812a54e970865c538127e2688",
+      "extension_tokens": 1033,
+      "extension_prefix_exact": true
+    },
+    {
+      "index": 74,
+      "name": "anomaly.sphinx-doc__sphinx-11510.call86.protocol.onset.seed44.cap1024",
+      "result_sha256": "d1d805ffbb62079fd07e6ae5c180af5508316e4ea9d68c515bc085b3cd4e3b1d",
+      "verdict": "normal",
+      "evidence": "Read965-token coherent docutils replacement command; valid inherited tool boundary, natural stop before1024cap.",
+      "tokens": 965,
+      "stop": 50
+    },
+    {
+      "index": 75,
+      "name": "anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.seed42.cap1024",
+      "result_sha256": "901927b13a128c5d3cbb52885ed75ee68b806a060ae48c91f37418539a2848a4",
+      "verdict": "normal",
+      "evidence": "Read849-token coherent Sphinx extension/replacement diagnostic script; natural stop and valid inherited tool boundary.",
+      "tokens": 849,
+      "stop": 50
+    },
+    {
+      "index": 76,
+      "name": "anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.seed43.cap1024",
+      "result_sha256": "b1984ec68b0c54da699e0f57dc99b96e5438b3b525882faa8164d0a3fc8d9ab9",
+      "verdict": "normal",
+      "evidence": "Read complete coherent code/script or explanation with natural token50 stop and canonical inherited tool boundary; no patch correctness claim.",
+      "tokens": 854,
+      "stop": 50,
+      "equal_full": false
+    },
+    {
+      "index": 77,
+      "name": "anomaly.sphinx-doc__sphinx-11510.call95.protocol.onset.seed44.cap1024",
+      "result_sha256": "30c85ed84395efe1d573a08a3ccdea226ee1c6707c8eeb0d4bce619806462dc8",
+      "verdict": "normal",
+      "evidence": "Exact token IDs of reviewed full control: Complete coherent Sphinx extension script and build command; normal token50 tool yield. No malformed native tool-name pattern or semantic loop.",
+      "tokens": 827,
+      "stop": 50,
+      "equal_full": true
+    },
+    {
+      "index": 78,
+      "name": "anomaly.sphinx-doc__sphinx-9461.call184.onset.seed42.cap1024",
+      "result_sha256": "52714ea6e34b35d5d9e29737068eb1a745fcf11140fc0ee481f98bfa3119398e",
+      "verdict": "normal",
+      "evidence": "Read complete coherent code/script or explanation with natural token50 stop and canonical inherited tool boundary; no patch correctness claim.",
+      "tokens": 434,
+      "stop": 50,
+      "equal_full": false
+    },
+    {
+      "index": 79,
+      "name": "anomaly.sphinx-doc__sphinx-9461.call184.onset.seed43.cap2048",
+      "result_sha256": "64c19eb006a5fc27c6e8790446b15bef472d075b3f4264ac71d376d62a2684c7",
+      "verdict": "normal",
+      "evidence": "Read complete coherent code/script or explanation with natural token50 stop and canonical inherited tool boundary; no patch correctness claim.",
+      "tokens": 512,
+      "stop": 50,
+      "equal_full": false
+    },
+    {
+      "index": 80,
+      "name": "anomaly.sphinx-doc__sphinx-9461.call184.onset.seed44.cap1024",
+      "result_sha256": "497cf33e7d17961efc8e1e901df8806d9efa690c74cd6c5d05bc74f856e27d21",
+      "verdict": "normal",
+      "evidence": "Read complete coherent code/script or explanation with natural token50 stop and canonical inherited tool boundary; no patch correctness claim.",
+      "tokens": 613,
+      "stop": 50,
+      "equal_full": false
+    },
+    {
+      "index": 81,
+      "name": "anomaly.sympy__sympy-13480.call1.onset.seed42.cap256",
+      "result_sha256": "706e3f6182eb2c339d4505a4957eb996c78e6cc414acddb8b26a7fc0f1efb793",
+      "verdict": "normal",
+      "evidence": "Read complete coherent code/script or explanation with natural token50 stop and canonical inherited tool boundary; no patch correctness claim.",
+      "tokens": 206,
+      "stop": 50,
+      "equal_full": false
+    },
+    {
+      "index": 82,
+      "name": "anomaly.sympy__sympy-13480.call1.onset.seed43.cap256",
+      "result_sha256": "de006ec1d86c77756e91aa9c0cc90da9bff8027e509fa82e62fed6f07ffe119f",
+      "verdict": "normal",
+      "evidence": "Read complete coherent code/script or explanation with natural token50 stop and canonical inherited tool boundary; no patch correctness claim.",
+      "tokens": 207,
+      "stop": 50,
+      "equal_full": false
+    },
+    {
+      "index": 83,
+      "name": "anomaly.sympy__sympy-13480.call1.onset.seed44.cap256",
+      "result_sha256": "6d2287d5543857531031591b12a614814f3d2069c03a310affbbd2dbb0355301",
+      "verdict": "normal",
+      "evidence": "Read complete coherent code/script or explanation with natural token50 stop and canonical inherited tool boundary; no patch correctness claim.",
+      "tokens": 206,
+      "stop": 50,
+      "equal_full": false
+    },
+    {
+      "index": 84,
+      "name": "anomaly.sympy__sympy-13551.call1.onset.seed42.cap256",
+      "result_sha256": "e241f7f9c832175d2e0743b5e875dceb10438152363e18782edfbd80780e3ed7",
+      "verdict": "normal",
+      "evidence": "Exact token IDs of reviewed full control: Complete coherent script/reproducer and token50 tool-yield. No repeated collapse or malformed protocol in this continuation.",
+      "tokens": 166,
+      "stop": 50,
+      "equal_full": true
+    },
+    {
+      "index": 85,
+      "name": "anomaly.sympy__sympy-13551.call1.onset.seed43.cap512",
+      "result_sha256": "b187fa55e58a3da4974487d7fc406edd451cd5a98c48806a3955832935f804f1",
+      "verdict": "normal",
+      "evidence": "Read complete coherent code/script or explanation with natural token50 stop and canonical inherited tool boundary; no patch correctness claim.",
+      "tokens": 232,
+      "stop": 50,
+      "equal_full": false
+    },
+    {
+      "index": 86,
+      "name": "anomaly.sympy__sympy-13551.call1.onset.seed44.cap256",
+      "result_sha256": "6fbbd1d7d5dadf07be0b7556092aa61b7f49fe1035b234885a87d5b1a84ef04d",
+      "verdict": "normal",
+      "evidence": "Read complete coherent code/script or explanation with natural token50 stop and canonical inherited tool boundary; no patch correctness claim.",
+      "tokens": 203,
+      "stop": 50,
+      "equal_full": false
+    },
+    {
+      "index": 87,
+      "name": "anomaly.sympy__sympy-13878.call1.onset.seed42.cap256",
+      "result_sha256": "7963bbd91924e5a587c34edaef52bc2b249937354486aa695d9b3473f5f0c8d1",
+      "verdict": "normal",
+      "evidence": "Exact token IDs of reviewed full control: Canonical tool sequence `call:bash {command:...} <tool_call|><tool_response>` then token50 yield. Seed44 current full result matches saved earlier Full-BF16 canonical full-protocol control at 19 tokens; P19 distinct sample also completed canonically.",
+      "tokens": 22,
+      "stop": 50,
+      "equal_full": true
+    },
+    {
+      "index": 88,
+      "name": "anomaly.sympy__sympy-13878.call1.onset.seed43.cap256",
+      "result_sha256": "e4f9e0f6d6faedccd93885b854dcc8d2306ec1cbd378c2013e82168b2c21bce9",
+      "verdict": "normal",
+      "evidence": "Exact token IDs of reviewed full control: Canonical tool sequence `call:bash {command:...} <tool_call|><tool_response>` then token50 yield. Seed44 current full result matches saved earlier Full-BF16 canonical full-protocol control at 19 tokens; P19 distinct sample also completed canonically.",
+      "tokens": 21,
+      "stop": 50,
+      "equal_full": true
+    },
+    {
+      "index": 89,
+      "name": "anomaly.sympy__sympy-13878.call1.onset.seed44.cap256",
+      "result_sha256": "467c671609cdf455d7d3b81886c07c43bc4f32f5fbeb3727e33486dd044c67f8",
+      "verdict": "normal",
+      "evidence": "Exact token IDs of reviewed full control: Canonical tool sequence `call:bash {command:...} <tool_call|><tool_response>` then token50 yield. Seed44 current full result matches saved earlier Full-BF16 canonical full-protocol control at 19 tokens; P19 distinct sample also completed canonically.",
+      "tokens": 19,
+      "stop": 50,
+      "equal_full": true
+    },
+    {
+      "index": 90,
+      "name": "anomaly.sympy__sympy-14248.call53.onset.seed42.cap256",
+      "result_sha256": "b7441f17ec4b7979357c06c56d81db1e1d0c10432fa92cfdb0cb373a802eff97",
+      "verdict": "reproduced_native_motif",
+      "evidence": "Exact token IDs of reviewed full control: All 256 generated IDs are caret token 172109, as in native collapse motif; same fixture and seed reproduce the identical caret IDs in P19. Capped at 256 without recovery; reproduced native motif.",
+      "tokens": 256,
+      "stop": 172109,
+      "equal_full": true
+    },
+    {
+      "index": 91,
+      "name": "anomaly.sympy__sympy-14248.call53.onset.seed43.cap256",
+      "result_sha256": "5fafd6fb9201a1fbd034bf5c2e4267239aa5ef60962267112fe49a358d51f2c0",
+      "verdict": "reproduced_native_motif",
+      "evidence": "Exact token IDs of reviewed full control: All 256 generated IDs are caret token 172109, as in native collapse motif; same fixture and seed reproduce the identical caret IDs in P19. Capped at 256 without recovery; reproduced native motif.",
+      "tokens": 256,
+      "stop": 172109,
+      "equal_full": true
+    },
+    {
+      "index": 92,
+      "name": "anomaly.sympy__sympy-14248.call53.onset.seed44.cap256",
+      "result_sha256": "18c621f440af0e197614ba7f58805a6699553e35d96b4233d190a67de902cb78",
+      "verdict": "reproduced_native_motif",
+      "evidence": "Exact token IDs of reviewed full control: All 256 generated IDs are caret token 172109, as in native collapse motif; same fixture and seed reproduce the identical caret IDs in P19. Capped at 256 without recovery; reproduced native motif.",
+      "tokens": 256,
+      "stop": 172109,
+      "equal_full": true
+    },
+    {
+      "index": 93,
+      "name": "anomaly.sympy__sympy-14711.call1.onset.seed42.cap256",
+      "result_sha256": "1a23cd0f2302a6527cbd0fd19354f1e4944d86451a0cf5dc588af91738d2f950",
+      "verdict": "normal",
+      "evidence": "Exact token IDs of reviewed full control: Starts with the source-associated localized `<channel|>I will start...` planning text, then the repeated channel boundary and canonical bash call. The same exact 139 generated IDs occur in P19 and the saved all-group BF16 control; it naturally yields token50. This is a localized source-associated form, not a newly introduced full-BF16 anomaly, and no repeated semantic loop.",
+      "tokens": 139,
+      "stop": 50,
+      "equal_full": true
+    },
+    {
+      "index": 94,
+      "name": "anomaly.sympy__sympy-14711.call1.onset.seed43.cap256",
+      "result_sha256": "7ea234d566a623180f2367a3111f6273459db79631a373a48cbf435c7b09e8c0",
+      "verdict": "normal",
+      "evidence": "Exact token IDs of reviewed full control: Continuation has a localized initial channel/planning phrase then a canonical bash call and coherent reproducer script. It yields normally at token50. Same source-associated form seen in seed42 and prior controls; no sustained protocol loop or semantic collapse.",
+      "tokens": 135,
+      "stop": 50,
+      "equal_full": true
+    },
+    {
+      "index": 95,
+      "name": "anomaly.sympy__sympy-14711.call1.onset.seed44.cap256",
+      "result_sha256": "014142e2e6b97815f1841d864d3ecbb2aea3d162d12812e713aa2bf019427372",
+      "verdict": "normal",
+      "evidence": "Exact token IDs of reviewed full control: Continuation has a localized initial channel/planning phrase then a canonical bash call and coherent reproducer script. It yields normally at token50. Same source-associated form seen in seed42 and prior controls; no sustained protocol loop or semantic collapse.",
+      "tokens": 139,
+      "stop": 50,
+      "equal_full": true
+    },
+    {
+      "index": 96,
+      "name": "anomaly.sympy__sympy-18763.call1.onset.seed42.cap256",
+      "result_sha256": "cf7976fa70dffc8562a31a5909880c05f438f93fded4787d9af990f90112ec80",
+      "verdict": "normal",
+      "evidence": "Read complete coherent code/script or explanation with natural token50 stop and canonical inherited tool boundary; no patch correctness claim.",
+      "tokens": 132,
+      "stop": 50,
+      "equal_full": false
+    },
+    {
+      "index": 97,
+      "name": "anomaly.sympy__sympy-18763.call1.onset.seed43.cap256",
+      "result_sha256": "472cde0666f9b6e9c59caaaf9bc3691e25d835d95881ff6a343b2740479717a3",
+      "verdict": "normal",
+      "evidence": "Exact token IDs of reviewed full control: Coherent SymPy reproducer script and canonical bash tool-yield token50; no malformed protocol or loop.",
+      "tokens": 182,
+      "stop": 50,
+      "equal_full": true
+    },
+    {
+      "index": 98,
+      "name": "anomaly.sympy__sympy-18763.call1.onset.seed44.cap256",
+      "result_sha256": "e6bcdfa3bb951566ca509cd111b1485a9bce711d0addfb5c1e8becf6aae237ec",
+      "verdict": "normal",
+      "evidence": "Read complete coherent code/script or explanation with natural token50 stop and canonical inherited tool boundary; no patch correctness claim.",
+      "tokens": 173,
+      "stop": 50,
+      "equal_full": false
+    },
+    {
+      "index": 99,
+      "name": "anomaly.sympy__sympy-18763.call10.onset.seed42.cap256",
+      "result_sha256": "f2b9c275ce4939eb27278b63c1424837202124cd15434edc039461c239c50c5a",
+      "verdict": "normal",
+      "evidence": "Exact token IDs of reviewed full control: Canonical inherited bash argument is a grep command; canonical tool-yield token50 follows. No malformed tool name or anomaly loop.",
+      "tokens": 22,
+      "stop": 50,
+      "equal_full": true
+    },
+    {
+      "index": 100,
+      "name": "anomaly.sympy__sympy-18763.call10.onset.seed43.cap256",
+      "result_sha256": "5cfffcd8936e32218d6248bf7b3a71bcccf57b0029de3f769cf7ec626b8712ba",
+      "verdict": "normal",
+      "evidence": "Exact token IDs of reviewed full control: Canonical inherited bash argument is a grep command; canonical tool-yield token50 follows. No malformed tool name or anomaly loop.",
+      "tokens": 22,
+      "stop": 50,
+      "equal_full": true
+    },
+    {
+      "index": 101,
+      "name": "anomaly.sympy__sympy-18763.call10.onset.seed44.cap256",
+      "result_sha256": "298c04ea8aee93fd6ca1b30f56699602fedf756b3341efaacf9df9c66f1ec0d8",
+      "verdict": "normal",
+      "evidence": "Exact token IDs of reviewed full control: Canonical inherited bash argument is a grep command; canonical tool-yield token50 follows. No malformed tool name or anomaly loop.",
+      "tokens": 22,
+      "stop": 50,
+      "equal_full": true
+    },
+    {
+      "index": 102,
+      "name": "anomaly.xarray3095-call53.canonicalprefix.seed42.cap256",
+      "result_sha256": "6d467b22e1a69566e1c82c8da45aa43e57a1c31b8e25a7798751d291a48f0800",
+      "verdict": "normal",
+      "evidence": "Exact token IDs of reviewed full control: Canonical inherited bash argument is a source-inspection command; normal token50 tool-yield follows. No malformed tool name or anomaly loop.",
+      "tokens": 34,
+      "stop": 50,
+      "equal_full": true
+    },
+    {
+      "index": 103,
+      "name": "anomaly.xarray3095-call53.canonicalprefix.seed43.cap256",
+      "result_sha256": "7b43bd31013d9f2d785a84594bee56d4d1f39c1c863a8ac1d40b6e28e4241c44",
+      "verdict": "normal",
+      "evidence": "Exact token IDs of reviewed full control: Canonical inherited bash argument is a source-inspection command; normal token50 tool-yield follows. No malformed tool name or anomaly loop.",
+      "tokens": 34,
+      "stop": 50,
+      "equal_full": true
+    },
+    {
+      "index": 104,
+      "name": "anomaly.xarray3095-call53.canonicalprefix.seed44.cap256",
+      "result_sha256": "31ffcc1e3d8c096a34c39ab7c17455b584521411a8d1811e61a983f3fa604e9d",
+      "verdict": "normal",
+      "evidence": "Exact token IDs of reviewed full control: Canonical inherited bash source-inspection command, normal tool-yield token50. No malformed marker or loop.",
+      "tokens": 34,
+      "stop": 50,
+      "equal_full": true
+    },
+    {
+      "index": 105,
+      "name": "anomaly.xarray7233-call1.canonicalprefix.seed42.cap1024",
+      "result_sha256": "cccaa9c1fc046ef01becc594cf2620171e7b733795a8ba9b7f4f59e917b0cb59",
+      "verdict": "normal",
+      "evidence": "Complete coherent Xarray reproduction script, natural tool stop.105/107 use the valid open thought-channel form at the same reconstructed boundary reviewed in full control; no HF equivalence claim.",
+      "tokens": 312,
+      "stop": 50
+    },
+    {
+      "index": 106,
+      "name": "anomaly.xarray7233-call1.canonicalprefix.seed43.cap512",
+      "result_sha256": "759aa1be2b1f37aed61357aaa008ab38ee75adb3db7a22802ed4b180de4e4cc3",
+      "verdict": "normal",
+      "evidence": "Complete coherent Xarray reproduction script, natural tool stop.105/107 use the valid open thought-channel form at the same reconstructed boundary reviewed in full control; no HF equivalence claim.",
+      "tokens": 283,
+      "stop": 50
+    },
+    {
+      "index": 107,
+      "name": "anomaly.xarray7233-call1.canonicalprefix.seed44.cap1024",
+      "result_sha256": "7e11d0a36859b7329b7c5fbb0fd2d9c4a216144de9e55c87875d47874a61f976",
+      "verdict": "normal",
+      "evidence": "Complete coherent Xarray reproduction script, natural tool stop.105/107 use the valid open thought-channel form at the same reconstructed boundary reviewed in full control; no HF equivalence claim.",
+      "tokens": 447,
+      "stop": 50
+    }
+  ],
+  "initial_counts": {
+    "normal": 86,
+    "reproduced_native_motif": 19,
+    "other_anomaly": 0,
+    "cap_inconclusive": 3
+  },
+  "validation": {
+    "source_pins_matched": 125,
+    "runtime_policies_matched": 108,
+    "seeds_matched": 108,
+    "completion": {
+      "exit_code": 0,
+      "ended_unix": 1794791198.482844,
+      "wall_s": 3547.344783782959
+    }
+  },
+  "corrections": [
+    {
+      "index": 55,
+      "old": "normal",
+      "new": "reproduced_native_motif",
+      "reason": "Coordinator copied equality without checking the full-control verdict; reread exact boundary and corrected before selection.",
+      "recorded_unix": 1794791283.5650258
+    }
+  ],
+  "final_counts": {
+    "normal": 88,
+    "reproduced_native_motif": 20,
+    "other_anomaly": 0,
+    "cap_inconclusive": 0
+  },
+  "extensions": [
+    {
+      "index": 42,
+      "tokens": 1024,
+      "stop": 172109,
+      "prefix_exact": true
+    },
+    {
+      "index": 44,
+      "tokens": 494,
+      "stop": 50,
+      "prefix_exact": true
+    },
+    {
+      "index": 73,
+      "tokens": 1033,
+      "stop": 50,
+      "prefix_exact": true
+    }
+  ]
+}

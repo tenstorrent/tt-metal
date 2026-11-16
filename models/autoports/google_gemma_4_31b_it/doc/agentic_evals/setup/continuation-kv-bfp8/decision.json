@@ -1,0 +1,36 @@
+{
+  "recorded_unix": 1794791550.4639537,
+  "chosen_for_serving_validation": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_config.json",
+  "runtime_selected_policy_unchanged": true,
+  "kv_only_rejected": true,
+  "evidence": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/continuation-kv-bfp8/fixed108/root-semantic-review.json",
+  "kv_final_counts": {
+    "normal": 88,
+    "reproduced_native_motif": 20,
+    "other_anomaly": 0,
+    "cap_inconclusive": 0
+  },
+  "full_counts": {
+    "normal": 90,
+    "reproduced_native_motif": 18
+  },
+  "regressions": [
+    37,
+    42
+  ],
+  "configs_tried": [
+    {
+      "config": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/continuation-kv-bfp8/fixed108",
+      "median_diagnostic_decode_tok_s_user": 16.301653798716032,
+      "cases": 108
+    },
+    {
+      "config": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full-q32-production-validation/fixed108",
+      "median_diagnostic_decode_tok_s_user": 16.260315352826154,
+      "cases": 108
+    }
+  ],
+  "basis": "KV-only BFP8 fails the two exact prompt/seed continuations that full BF16 completes coherently. Median diagnostic rates differ by0.25%, not a demonstrated serving gain or statistical incidence comparison. Full-BF16 current-Q32 resume and broad output prerequisites already reviewed; unknown broad child exit status retained. Proceed to measured-memory serving validation; do not repeat completed broad checks merely for exit status.",
+  "selected_eval_policy": "stage12_head_bfp8_lofi",
+  "no_new_task_scores": true
+}

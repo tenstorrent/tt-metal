@@ -1,0 +1,44 @@
+{
+  "started_unix": 1794791226.0509233,
+  "command": [
+    "timeout",
+    "1200",
+    "env",
+    "HF_HUB_OFFLINE=1",
+    "HF_DATASETS_OFFLINE=1",
+    "HF_HUB_DISABLE_TELEMETRY=1",
+    "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+    "READINESS_TRACE_REGION_SIZE=134217728",
+    "OMP_NUM_THREADS=16",
+    "MKL_NUM_THREADS=16",
+    "OPENBLAS_NUM_THREADS=16",
+    "TT_METAL_TRACE_ALLOC_TRACKING=1",
+    "TT_METAL_DEVICE_PROFILER=0",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+    "-m",
+    "models.autoports.google_gemma_4_31b_it.tools.precision_repro_batch",
+    "--cases",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/continuation-kv-bfp8/fixed108/extensions/cases.json",
+    "--build-kwargs-file",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full-q32-production-validation/protocol-group-bisect/arm-a-kv-bfp8-only/build-kwargs.json",
+    "--output-dir",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/continuation-kv-bfp8/fixed108/extensions/runs"
+  ],
+  "forecast_seconds": {
+    "low": 200,
+    "point": 450,
+    "high": 900
+  },
+  "basis": "Same model load79.7s; three original prefixes plus extended outputs. Requests42/44 cap1024 based on previous full-control lengths532/773; case73 cap2048 doubles progressing1024. No policy selection.",
+  "source_validation": {
+    "source_pins_matched": 125,
+    "runtime_policies_matched": 108,
+    "seeds_matched": 108,
+    "completion": {
+      "exit_code": 0,
+      "ended_unix": 1794791198.482844,
+      "wall_s": 3547.344783782959
+    }
+  },
+  "owners": []
+}

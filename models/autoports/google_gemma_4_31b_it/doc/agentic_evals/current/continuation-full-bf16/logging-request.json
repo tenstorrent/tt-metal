@@ -1,0 +1,17 @@
+{
+  "model": "google/gemma-4-31B-it",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Reply with the word READY."
+    }
+  ],
+  "max_tokens": 32,
+  "temperature": 0,
+  "top_k": 20,
+  "top_p": 0.95,
+  "chat_template_kwargs": {
+    "enable_thinking": false
+  },
+  "stream": false
+}
