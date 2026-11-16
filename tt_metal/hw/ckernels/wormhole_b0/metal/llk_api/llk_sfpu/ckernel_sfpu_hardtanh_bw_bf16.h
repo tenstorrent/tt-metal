@@ -17,6 +17,7 @@ inline void calculate_hardtanh_bw_bf16() {
     for (int d = 0; d < ITERATIONS; d++) {
         vFloat x = dst_reg[d];
         vFloat grad = dst_reg[32 + d];
+        // Not a no-op: the pack stores a negative NaN as -inf; the positive NaN stores as +inf, TT-NN's NaN.
         v_if((as<vInt>(grad) & magnitude) > infinity) { grad = std::numeric_limits<float>::quiet_NaN(); }
         v_endif;
         vFloat result = 0.0f;

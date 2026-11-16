@@ -291,6 +291,8 @@ def _hardtanh_bw_placements(shape):
         "sharded_output_without_spec",
         "float32",
         "other_scalars",
+        "other_min",
+        "other_max",
     ],
 )
 def test_hardtanh_bw_runs_the_fused_program_only_where_it_applies(call, device):
@@ -309,7 +311,16 @@ def test_hardtanh_bw_runs_the_fused_program_only_where_it_applies(call, device):
     )
     tt_g = ttnn.from_torch(g, dtype=dtype, layout=grad_layout, device=device, memory_config=grad_memory)
     tt_x = ttnn.from_torch(x, dtype=dtype, layout=input_layout, device=device, memory_config=input_memory)
-    scalars = HARDTANH_BW_OTHER_SCALARS if call == "other_scalars" else {"min": HARDTANH_BW_MIN, "max": HARDTANH_BW_MAX}
+    scalars = {"min": HARDTANH_BW_MIN, "max": HARDTANH_BW_MAX}
+    if call.startswith("other_"):
+        # Every scalar, or the one the call names, off its fitted value.
+        scalars.update(
+            {
+                name: value
+                for name, value in HARDTANH_BW_OTHER_SCALARS.items()
+                if call in ("other_scalars", f"other_{name}")
+            }
+        )
     memory = {} if output_memory is None else {"memory_config": output_memory}
 
     result, error, trace = _hardtanh_bw_device_operations(lambda: ttnn.hardtanh_bw(tt_g, tt_x, **scalars, **memory)[0])
