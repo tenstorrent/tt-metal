@@ -123,7 +123,7 @@ def _command(world, command, ckpt, steps):
     mgd = world["args"][world["args"].index("--mgd") + 1]
     # DCP_MPI_ARGS adds mpirun options, e.g. "-x TT_METAL_OPERATION_TIMEOUT_SECONDS" to forward a dispatch timeout
     # (and its triage command) to every rank; see tools/tt-triage.py.
-    return tt_run_command(mgd, ",".join(world["hosts"]), args, os.environ.get("DCP_MPI_ARGS", "--tag-output"))
+    return tt_run_command(mgd, ",".join(world["hosts"]), DRIVER + args, os.environ.get("DCP_MPI_ARGS", "--tag-output"))
 
 
 def _run(world, command, ckpt, steps, what):
