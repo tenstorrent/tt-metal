@@ -50,6 +50,7 @@ auto launch_mux_workers(
     // L1 there, and the program's L1 validation keeps it below L1 buffers such as carried semaphores (#56769). Its
     // addresses are offsets until the mux publishes the map's base.
     auto mux_kernel_config = tt::tt_fabric::FabricMuxConfig(
+        mesh_device,
         num_full_size_channels,
         num_header_only_channels,
         num_buffers_full_size_channels,
@@ -95,7 +96,7 @@ auto launch_mux_workers(
 
             const auto dst_node_id = mesh_device.get_fabric_node_id(neighbor_coord);
             auto mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args<tt::tt_metal::ProgramDescriptor>(
-                src_node_id, dst_node_id, link, desc, mux_logical_core);
+                mesh_device, src_node_id, dst_node_id, link, desc, mux_logical_core);
             tt::tt_metal::KernelDescriptor::RTArgList mux_args;
             mux_args.append(mux_rt_args);
             mux_kernel.emplace_runtime_args(mux_logical_core, mux_args);
@@ -107,11 +108,13 @@ auto launch_mux_workers(
     return std::make_tuple(std::move(mux_kernel), mux_kernel_config, std::move(mux_neigbor_core_maps));
 }
 
-uint32_t get_num_pages(const ttnn::Tensor& tensor) { return (uint32_t)tensor.buffer()->num_pages(); }
+uint32_t get_num_pages(const ttnn::Tensor& tensor) { return (uint32_t)tensor.mesh_buffer().num_pages(); }
 
-uint32_t get_page_size(const ttnn::Tensor& tensor) { return (uint32_t)tensor.buffer()->page_size(); }
+uint32_t get_page_size(const ttnn::Tensor& tensor) { return (uint32_t)tensor.mesh_buffer().page_size(); }
 
-uint32_t get_aligned_page_size(const ttnn::Tensor& tensor) { return (uint32_t)tensor.buffer()->aligned_page_size(); }
+uint32_t get_aligned_page_size(const ttnn::Tensor& tensor) {
+    return (uint32_t)tensor.mesh_buffer().aligned_page_size();
+}
 
 uint32_t get_num_rows(const ttnn::Tensor& tensor) {
     auto logical_volume = tensor.logical_shape().volume();
@@ -221,8 +224,8 @@ tt::tt_metal::ProgramDescriptor build_all_to_all_dispatch_metadata_program_descr
     log_debug(
         tt::LogOp,
         "Metadata tensor buffer address: {} size: {}",
-        metadata_tensor.buffer()->address(),
-        metadata_tensor.buffer()->size());
+        metadata_tensor.mesh_buffer().address(),
+        metadata_tensor.mesh_buffer().device_local_size());
 
     // drain_sync_tilizer_core is resolved in the invoke function (all_to_all_dispatch_metadata.cpp)
     // - Either explicitly provided by the caller, OR
@@ -663,8 +666,8 @@ tt::tt_metal::ProgramDescriptor build_all_to_all_dispatch_metadata_program_descr
     log_debug(
         tt::LogOp,
         "Address comparison - metadata_tensor: {} (size: {}), cross_device_semaphore: {}, init_semaphore: {}",
-        metadata_tensor.buffer()->address(),
-        metadata_tensor.buffer()->size(),
+        metadata_tensor.mesh_buffer().address(),
+        metadata_tensor.mesh_buffer().device_local_size(),
         cross_device_semaphore.address(),
         init_semaphore.has_value() ? init_semaphore->address() : 0);
     log_debug(

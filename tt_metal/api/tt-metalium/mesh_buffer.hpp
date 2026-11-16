@@ -5,6 +5,7 @@
 #pragma once
 
 #include <stdint.h>
+#include <atomic>
 #include <memory>
 #include <cstdint>
 #include <optional>
@@ -159,6 +160,9 @@ public:
     // The backing buffer represents the buffer object keeping the MeshBuffer alive/allocated
     // at its specific address. The backing buffer will not be populated if an address was passed
     // into the creation API.
+    [[deprecated(
+        "Use unique_id() to identify the allocation, get_device_buffer() for per-device attributes, or a MeshTensor "
+        "to bind a circular buffer. This API will be removed after 2026-12-03.")]]
     Buffer* get_backing_buffer() const;
 
     // Identifies the device allocation this MeshBuffer owns. The Buffers holding the allocation share this ID, so the
@@ -188,7 +192,8 @@ private:
         device_local_size_(device_local_size),
         buffers_(MeshShape(mesh_device->shape())),
         unique_id_(backing_buffer->unique_id()),
-        state_(OwnedBufferState{std::move(backing_buffer)}) {}
+        state_(OwnedBufferState{std::move(backing_buffer)}),
+        built_device_buffers_(std::make_unique<std::atomic<Buffer*>[]>(buffers_.shape().mesh_size())) {}
 
     // Creates a non-owning `MeshBuffer` as "view" over an existing `address`.
     MeshBuffer(
@@ -203,7 +208,8 @@ private:
         address_(address),
         device_local_size_(device_local_size),
         buffers_(MeshShape(mesh_device->shape())),
-        state_(ExternallyOwnedState{}) {}
+        state_(ExternallyOwnedState{}),
+        built_device_buffers_(std::make_unique<std::atomic<Buffer*>[]>(buffers_.shape().mesh_size())) {}
 
     void initialize_device_buffers();
     MeshBufferConfig config_;
@@ -226,6 +232,11 @@ private:
     struct DeallocatedState {};
     using MeshBufferState = std::variant<OwnedBufferState, ExternallyOwnedState, DeallocatedState>;
     MeshBufferState state_;
+    // The built entries of buffers_ by linear index, read by get_device_buffer() without its lock; cleared on
+    // deallocation.
+    std::unique_ptr<std::atomic<Buffer*>[]> built_device_buffers_;
+    // MeshDeviceImpl::close_count() when the entries were last checked against a live MeshDevice.
+    mutable std::atomic<uint64_t> cached_close_count_ = 0;
 
     friend tt::tt_metal::distributed::MeshBuffer
     tt::tt_metal::experimental::per_core_allocation::create_sram_buffer_view(

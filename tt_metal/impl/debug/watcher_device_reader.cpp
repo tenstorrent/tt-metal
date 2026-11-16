@@ -295,7 +295,7 @@ string get_l1_target_str(
     return out;
 }
 
-// Quasar's MPSC head (api/debug/ring_buffer.h). A read at +4*(inc+8) posts `inc` and returns the
+// Quasar Tensix MPSC head (api/debug/ring_buffer.h). A read at +4*(inc+8) posts `inc` and returns the
 // pre-increment value, so inc == 0 reads the head without changing it.
 constexpr uint64_t watcher_ring_buf_sem_peek_addr =
     TENSIX_GLOBAL_REGS_SEMAPHORE_REGS_SEMAPHORE_31__REG_ADDR + 4 * (0 + 8);
@@ -350,7 +350,7 @@ private:
     std::string core_str_;
     std::vector<std::byte> l1_read_buf_;
     // Quasar MPSC head, read at snapshot time
-    uint32_t sem_head_ = 0;
+    uint32_t ring_buf_head_ = 0;
     dev_msgs::mailboxes_t::ConstView mbox_data_;
     dev_msgs::launch_msg_t::ConstView launch_msg_;
     const WatcherDeviceReader& reader_;
@@ -384,7 +384,7 @@ private:
         HalProgrammableCoreType programmable_core_type,
         std::string core_str,
         std::vector<std::byte> l1_read_buf,
-        uint32_t sem_head,
+        uint32_t ring_buf_head,
         dev_msgs::Factory dev_msgs_factory,
         const WatcherDeviceReader& reader,
         DumpData& dump_data) :
@@ -392,7 +392,7 @@ private:
         programmable_core_type_(programmable_core_type),
         core_str_(std::move(core_str)),
         l1_read_buf_(std::move(l1_read_buf)),
-        sem_head_(sem_head),
+        ring_buf_head_(ring_buf_head),
         mbox_data_(dev_msgs_factory.create_view<dev_msgs::mailboxes_t>(l1_read_buf_.data())),
         launch_msg_(get_valid_launch_message(mbox_data_)),
         reader_(reader),
@@ -674,17 +674,17 @@ WatcherDeviceReader::Core WatcherDeviceReader::Core::Create(
     reader.env.get_cluster().read_core(
         l1_read_buf.data(), l1_read_buf.size(), {static_cast<size_t>(reader.device_id), virtual_coord}, mailbox_addr);
 
-    // Quasar's MPSC head lives in a semaphore register rather than the mailbox. Read it here with the
-    // rest of the snapshot. Gated on the same condition as DumpRingBuffer(), the only consumer: with
-    // the ring buffer disabled the device firmware never initializes semaphore 31, so touching it at
-    // all would fault.
-    uint32_t sem_head = 0;
+    // Quasar's MPSC head lives outside the mailbox: in a semaphore register on Tensix, in its own L1 line on
+    // dispatch engines. Read it here with the rest of the snapshot. Gated on the same condition as
+    // DumpMpscRingBuffer(), the only consumer: on Tensix, with the ring buffer disabled the firmware never
+    // initializes semaphore 31, so touching it would fault.
+    uint32_t ring_buf_head = 0;
     if (hal.get_arch() == tt::ARCH::QUASAR && !rtoptions.watcher_ring_buffer_disabled()) {
+        uint64_t head_addr = (programmable_core_type == HalProgrammableCoreType::DISPATCH)
+                                 ? hal.get_dev_noc_addr(programmable_core_type, HalL1MemAddrType::RING_BUF_HEAD)
+                                 : watcher_ring_buf_sem_peek_addr;
         reader.env.get_cluster().read_core(
-            &sem_head,
-            sizeof(sem_head),
-            {static_cast<size_t>(reader.device_id), virtual_coord},
-            watcher_ring_buf_sem_peek_addr);
+            &ring_buf_head, sizeof(ring_buf_head), {static_cast<size_t>(reader.device_id), virtual_coord}, head_addr);
     }
 
     return Core(
@@ -692,7 +692,7 @@ WatcherDeviceReader::Core WatcherDeviceReader::Core::Create(
         programmable_core_type,
         std::move(core_str),
         std::move(l1_read_buf),
-        sem_head,
+        ring_buf_head,
         dev_msgs_factory,
         reader,
         dump_data);
@@ -1134,8 +1134,8 @@ void WatcherDeviceReader::Core::DumpMpscRingBuffer(bool to_stdout) const {
 
     uint32_t capacity = hal.get_ring_buffer_capacity();
     uint32_t mask = capacity - 1;  // capacity is a power of two
-    // Quasar keeps head in a semaphore register, snapshotted alongside the mailbox.
-    uint32_t head = (hal.get_arch() == tt::ARCH::QUASAR) ? sem_head_ : rb->head;
+    // Quasar keeps head outside the mailbox, snapshotted alongside it.
+    uint32_t head = (hal.get_arch() == tt::ARCH::QUASAR) ? ring_buf_head_ : rb->head;
 
     // Check every slot: head restarts at 0 after a rewind, so a small head doesn't mean few entries.
     std::vector<uint32_t> data, thread_indices;  // newest first
@@ -1174,12 +1174,14 @@ void WatcherDeviceReader::Core::DumpRunState(uint32_t state) const {
         code = 'W';
     } else if (state == dev_msgs::RUN_SYNC_MSG_INIT_SYNC_REGISTERS) {
         code = 'S';
+    } else if (state == dev_msgs::RUN_SYNC_MSG_DFB_DRAINING) {
+        code = 'E';
     }
     if (code == 'U') {
         LogRunningKernels();
         TT_THROW(
-            "Watcher data corruption, unexpected run state on core{}: {} (expected {}, {}, {}, {}, {}, {}, {}, {}, or "
-            "{})",
+            "Watcher data corruption, unexpected run state on core{}: {} (expected {}, {}, {}, {}, {}, {}, {}, {}, {}, "
+            "or {})",
             virtual_coord_.str(),
             state,
             dev_msgs::RUN_MSG_INIT,
@@ -1190,7 +1192,8 @@ void WatcherDeviceReader::Core::DumpRunState(uint32_t state) const {
             dev_msgs::RUN_MSG_REPLAY_TRACE,
             dev_msgs::RUN_SYNC_MSG_LOAD,
             dev_msgs::RUN_SYNC_MSG_WAITING_FOR_RESET,
-            dev_msgs::RUN_SYNC_MSG_INIT_SYNC_REGISTERS);
+            dev_msgs::RUN_SYNC_MSG_INIT_SYNC_REGISTERS,
+            dev_msgs::RUN_SYNC_MSG_DFB_DRAINING);
     } else {
         fprintf(reader_.f, "%c", code);
     }

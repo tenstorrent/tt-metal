@@ -24,8 +24,8 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 
 #include <unordered_map>
 
@@ -122,7 +122,7 @@ ValidatorGeometry compute_validator_geometry(const ttnn::Tensor& source_tensor, 
     // WIDTH_SHARDED (one shard per bank) and ND_SHARDED (num_shards = ring_size,
     // receiver-contiguous) layouts. The per-(ring_pos, block) tile mapping is
     // layout-mode-invariant; only the ring_pos -> (bank, recv_idx) formula differs.
-    Buffer* tensor_buffer = source_tensor.buffer();
+    const auto* tensor_buffer = &source_tensor.mesh_buffer();
     const auto& padded_shape = source_tensor.padded_shape();
     TT_FATAL(
         padded_shape.rank() >= 2,
@@ -164,12 +164,14 @@ ValidatorGeometry compute_validator_geometry(const ttnn::Tensor& source_tensor, 
     // pairing is strided (bank b feeds ring positions b, b + num_senders, ...). Under
     // CONTIGUOUS_1D, bank b owns a contiguous run of shards, so it feeds the contiguous ring arc
     // b*R .. b*R+R-1 (same pairing as legacy WIDTH_SHARDED).
-    const bool is_recv_contig = source_tensor.memory_config().memory_layout() == TensorMemoryLayout::ND_SHARDED &&
-                                tensor_buffer->buffer_distribution_spec().has_value() &&
-                                tensor_buffer->buffer_distribution_spec()->num_shards() == ring_size;
+    const bool is_recv_contig =
+        source_tensor.memory_config().memory_layout() == TensorMemoryLayout::ND_SHARDED &&
+        tensor_buffer->device_local_config().sharding_args.buffer_distribution_spec().has_value() &&
+        tensor_buffer->device_local_config().sharding_args.buffer_distribution_spec()->num_shards() == ring_size;
     const bool is_shard_contiguous_recv_contig =
-        is_recv_contig && tensor_buffer->buffer_distribution_spec()->shard_distribution_strategy() ==
-                              ShardDistributionStrategy::CONTIGUOUS_1D;
+        is_recv_contig &&
+        tensor_buffer->device_local_config().sharding_args.buffer_distribution_spec()->shard_distribution_strategy() ==
+            ShardDistributionStrategy::CONTIGUOUS_1D;
     const bool strided_pairing = is_recv_contig && !is_shard_contiguous_recv_contig;
 
     // Per-receiver plan.
@@ -245,7 +247,7 @@ ttsl::hash::hash_t DramPrefetcherValidatorDeviceOperation::compute_program_hash(
     // On the tensor side, create_at derives k_tiles, total_n_tiles, n_per_recv_tiles, is_recv_contig,
     // tile_bytes and the CB page sizes from the real shape, tile and memory config, and emits
     // TensorAccessorArgs as compile-time args, so the address alone is not a sufficient identity.
-    const auto* tensor_buffer = tensor_args.source_tensor.buffer();
+    const auto* tensor_buffer = &tensor_args.source_tensor.mesh_buffer();
     const tt::DataFormat dataformat = tt::tt_metal::datatype_to_dataformat_converter(tensor_args.source_tensor.dtype());
     return ttsl::hash::hash_objects_with_default_seed(
         ttsl::hash::type_hash<DramPrefetcherValidatorDeviceOperation>,
@@ -281,7 +283,7 @@ DramPrefetcherValidatorDeviceOperation::ProgramFactory::create_at(
 
     const ValidatorGeometry geom = compute_validator_geometry(
         source_tensor, bank_plan_from_factory_order_mapping(global_cb.sender_receiver_core_mapping()));
-    Buffer* tensor_buffer = source_tensor.buffer();
+    const auto* tensor_buffer = &source_tensor.mesh_buffer();
     const CoreRangeSet receiver_cores = global_cb.receiver_cores();
 
     Program program = CreateProgram();
@@ -403,7 +405,7 @@ tt::tt_metal::distributed::MeshWorkload make_tensor_prefetcher_pipe_validator_wo
 
     std::vector<metal_exp::PrefetcherPipeParamName> names;
     std::vector<metal_exp::PrefetcherPipeParameter> parameters;
-    metal_exp::ProgramRunArgs run_args;
+    ProgramRunArgs run_args;
     for (size_t i = 0; i < prefetcher_pipes.size(); ++i) {
         metal_exp::PrefetcherPipeParamName name{fmt::format("pipe_{}", i)};
         names.push_back(name);
@@ -412,12 +414,13 @@ tt::tt_metal::distributed::MeshWorkload make_tensor_prefetcher_pipe_validator_wo
              .receivers = prefetcher_pipes[i]->receiver_cores(),
              .ring_size = prefetcher_pipes[i]->ring_size(),
              .entry_size = geom.page_bytes_per_recv});
-        run_args.advanced_options.prefetcher_pipe_args.emplace(name, metal_exp::PrefetcherPipeArgument{*prefetcher_pipes[i]});
+        run_args.advanced_options.prefetcher_pipe_args.emplace(
+            name, metal_exp::PrefetcherPipeArgument{*prefetcher_pipes[i]});
     }
-    const metal_exp::TensorParamName source_name{"source_tensor"};
-    const metal_exp::ScratchpadSpecName scratch_name{"expected"};
-    metal_exp::KernelSpec receiver{
-        .unique_id = metal_exp::KernelSpecName{"receiver"},
+    const TensorParamName source_name{"source_tensor"};
+    const ScratchpadSpecName scratch_name{"expected"};
+    KernelSpec receiver{
+        .unique_id = KernelSpecName{"receiver"},
         .source =
             std::filesystem::path{"tests/tt_metal/tt_metal/test_kernels/misc/prefetcher_pipe_validator_receiver.cpp"}};
     receiver.tensor_bindings = {{.tensor_parameter_name = source_name, .accessor_name = "source_tensor"}};
@@ -436,24 +439,22 @@ tt::tt_metal::distributed::MeshWorkload make_tensor_prefetcher_pipe_validator_wo
         "n_per_recv_tiles",
         "n_col_start",
         "lead_block"};
-    receiver.hw_config = metal_exp::DataMovementHardwareConfig{
-        .config_1xx = metal_exp::DataMovementHardwareConfig::DataMovement1XXConfig{
+    receiver.hw_config = DataMovementHardwareConfig{
+        .config_1xx = DataMovementHardwareConfig::DataMovement1XXConfig{
             .processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0}};
-    metal_exp::ProgramSpec spec{
+    ProgramSpec spec{
         .name = "tensor_prefetcher_pipe_validator",
         .kernels = {std::move(receiver)},
         .scratchpads = {{.unique_id = scratch_name, .size_per_node = geom.page_bytes_per_recv}},
         .tensor_parameters = {{.unique_id = source_name, .spec = source_tensor.tensor_spec()}},
         .work_units =
-            {{.name = "receiver_wu",
-              .kernels = {metal_exp::KernelSpecName{"receiver"}},
-              .target_nodes = receiver_cores}},
+            {{.name = "receiver_wu", .kernels = {KernelSpecName{"receiver"}}, .target_nodes = receiver_cores}},
         .advanced_options = {.prefetcher_pipe_parameters = std::move(parameters)}};
     Program program = metal_exp::MakeProgramFromSpec(*mesh_device, spec);
 
-    metal_exp::ProgramRunArgs::KernelRunArgs kernel_args{.kernel = metal_exp::KernelSpecName{"receiver"}};
+    ProgramRunArgs::KernelRunArgs kernel_args{.kernel = KernelSpecName{"receiver"}};
     for (const auto& plan : geom.receivers) {
-        metal_exp::AddRuntimeArgsForNode(
+        AddRuntimeArgsForNode(
             kernel_args.runtime_arg_values,
             plan.core,
             {{"bank_id", plan.bank_id},
@@ -465,7 +466,7 @@ tt::tt_metal::distributed::MeshWorkload make_tensor_prefetcher_pipe_validator_wo
              {"lead_block", lead_block_for(rotation, plan.ring_pos)}});
     }
     run_args.kernel_run_args.push_back(std::move(kernel_args));
-    run_args.tensor_args.emplace(source_name, metal_exp::TensorArgument{source_tensor.mesh_tensor()});
+    run_args.tensor_args.emplace(source_name, TensorArgument{source_tensor.mesh_tensor()});
     metal_exp::SetProgramRunArgs(program, run_args);
 
     tt::tt_metal::distributed::MeshWorkload workload;

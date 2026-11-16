@@ -2454,8 +2454,7 @@ void assemble_device_commands(
         metal_ctx, mesh_device, constants, program, batched_transfers, absolute_cross_node_config_transfers);
 
     PrefetcherPipeCommandGenerator prefetcher_pipe_command_generator;
-    prefetcher_pipe_command_generator.construct_commands(
-        metal_ctx, mesh_device, constants, program, batched_transfers);
+    prefetcher_pipe_command_generator.construct_commands(metal_ctx, mesh_device, constants, program, batched_transfers);
 
     BatchedTransferGenerator batched_transfer_generator;
     batched_transfer_generator.construct_commands(metal_ctx, batched_transfers, program_config_buffer_calculator);
@@ -2768,6 +2767,7 @@ void update_program_dispatch_commands(
     ProgramBinaryStatus program_binary_status) {
     TT_ASSERT(cached_program_command_sequence.ctx != nullptr);
     MetalContext& metal_ctx = *cached_program_command_sequence.ctx;
+    program.validate_scratchpad_bindings();
 
     static constexpr uint32_t wait_count_offset = (sizeof(CQPrefetchCmd) + offsetof(CQDispatchCmd, wait.count));
     static constexpr uint32_t write_offsets_offset = (sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd));
@@ -3243,6 +3243,7 @@ void write_program_command_sequence(
 
 TraceNode create_trace_node(
     ProgramImpl& program, distributed::MeshDevice* mesh_device, uint32_t num_workers, bool use_prefetcher_cache) {
+    program.validate_scratchpad_bindings();
     std::vector<SubDeviceId> sub_device_ids{program.determine_sub_device_ids(mesh_device)};
     program.generate_trace_dispatch_commands(mesh_device, use_prefetcher_cache);
     uint64_t command_hash = *mesh_device->get_active_sub_device_manager_id();
@@ -3404,7 +3405,7 @@ void reset_worker_dispatch_state_on_device(
     ttsl::Span<const vector_aligned<uint32_t>> setup_commands) {
     auto num_sub_devices = mesh_device->num_sub_devices();
 
-    MetalContext& metal_ctx = MetalContext::instance(manager.get_context_id());
+    MetalContext& metal_ctx = manager.metal_context();
     tt::tt_metal::DeviceCommandCalculator calculator(metal_ctx);
     if (reset_launch_msg_state) {
         for (int i = 0; i < num_sub_devices; ++i) {
@@ -3500,7 +3501,7 @@ static HostMemDeviceCommand build_set_num_worker_sems_on_dispatch(
     SystemMemoryManager& manager, uint32_t num_worker_sems, ttsl::Span<const uint32_t> workers_per_sub_device) {
     TT_ASSERT(num_worker_sems <= DispatchSettings::DISPATCH_MESSAGE_ENTRIES);
     TT_ASSERT(workers_per_sub_device.size() == num_worker_sems);
-    MetalContext& metal_ctx = MetalContext::instance(manager.get_context_id());
+    MetalContext& metal_ctx = manager.metal_context();
     tt::tt_metal::DeviceCommandCalculator calculator(metal_ctx);
     if (metal_ctx.get_dispatch_query_manager().dispatch_s_enabled()) {
         calculator.add_dispatch_set_num_worker_sems();

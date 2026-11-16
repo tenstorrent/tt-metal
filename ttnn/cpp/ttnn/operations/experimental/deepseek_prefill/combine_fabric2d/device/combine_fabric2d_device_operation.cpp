@@ -65,10 +65,14 @@ void CombineFabric2dDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     TT_FATAL(args.device != nullptr, "combine_fabric2d requires a mesh device in attributes");
     TT_FATAL(args.num_links >= 1 && args.num_links <= 4, "num_links must be between 1 and 4 (got {})", args.num_links);
-    // Zero would divide the dense region by nothing. Any value >= 1 is legal -- the movement-class split
-    // means no size can deadlock the ring -- and the page floor catches a factor large enough to round a
-    // channel away, so this only rejects the one value that has no meaning.
-    TT_FATAL(args.fwd_reduction >= 1, "combine_fabric2d: fwd_reduction must be >= 1 (got {})", args.fwd_reduction);
+    // The movement-class split means no depth can deadlock the ring, so the only floor is the credit
+    // scheme's own: a channel returns credits every quarter of its depth, which must stay at least one page.
+    TT_FATAL(
+        args.fwd_vc_pages >= cmbf2d::MIN_VC_PAGES,
+        "combine_fabric2d: fwd_vc_pages must be at least {} (got {}); the credit threshold is a quarter of a "
+        "channel and has to stay >= 1, and a channel shallower than a read batch spends all its time announcing",
+        cmbf2d::MIN_VC_PAGES,
+        args.fwd_vc_pages);
     TT_FATAL(
         !args.output_mem_config.is_sharded(),
         "combine_fabric2d: output memory config must be interleaved, not sharded");
@@ -101,10 +105,9 @@ void CombineFabric2dDeviceOperation::validate_on_program_cache_miss(
     // ---- Token data. The last dim is the embedding and the rest is the flat slot index. BFLOAT16 in either
     // layout, or BFLOAT8_B TILE, which the untilizer cores unpack to BFLOAT16 rows. Tokens move as BFLOAT16
     // from there on, so the output is BFLOAT16 whatever the input.
-    // The id table is what the overlapped fork needs and the standalone op never passes, and unlike the
-    // routed-expert fields it is already set by the time validation runs -- those are filled in later,
-    // by the program factory.
-    const bool overlapped = tensor_args.global_expert_idx_table.has_value();
+    // The id table is optional: without one the ring's experts are contiguous. Unlike the routed-expert fields
+    // it is already set by the time validation runs -- those are filled in later, by the program factory.
+    const bool has_expert_table = tensor_args.global_expert_idx_table.has_value();
     const auto& buf = tensor_args.dispatched_buffer;
     validate_dram_interleaved(buf, "dispatched_buffer");
     TT_FATAL(
@@ -124,10 +127,10 @@ void CombineFabric2dDeviceOperation::validate_on_program_cache_miss(
     const uint32_t token_page = token_size_bytes(tensor_args);
     TT_FATAL(
         buf.layout() == tt::tt_metal::Layout::TILE ||
-            token_page == static_cast<uint32_t>(buf.buffer()->aligned_page_size()),
+            token_page == static_cast<uint32_t>(buf.mesh_buffer().aligned_page_size()),
         "combine_fabric2d: ROW_MAJOR dispatched_buffer pages by {} B but a token is {} B; one row must be "
         "exactly one page",
-        buf.buffer()->aligned_page_size(),
+        buf.mesh_buffer().aligned_page_size(),
         token_page);
     // A token is the payload of a NoC transfer, which needs 16-byte alignment.
     TT_FATAL(
@@ -224,7 +227,7 @@ void CombineFabric2dDeviceOperation::validate_on_program_cache_miss(
     validate_control_tensor(tensor_args.expert_token_counts, 1, num_routed_experts, "expert_token_counts");
     validate_control_tensor(tensor_args.expert_region_offsets, 1, num_routed_experts, "expert_region_offsets");
     validate_control_tensor(tensor_args.expert_offsets, extent, num_routed_experts, "expert_offsets");
-    if (!overlapped) {
+    if (!has_expert_table) {
         return;
     }
     const auto& table = *tensor_args.global_expert_idx_table;
@@ -280,7 +283,7 @@ ttnn::Tensor combine_fabric2d(
     uint32_t seq_len_per_chip,
     uint32_t axis,
     uint32_t num_links,
-    uint32_t fwd_reduction,
+    uint32_t fwd_vc_pages,
     tt::tt_fabric::Topology topology,
     const tt::tt_metal::MemoryConfig& memory_config) {
     using OperationType =
@@ -293,7 +296,7 @@ ttnn::Tensor combine_fabric2d(
             .seq_len_per_chip = seq_len_per_chip,
             .axis = axis,
             .num_links = num_links,
-            .fwd_reduction = fwd_reduction,
+            .fwd_vc_pages = fwd_vc_pages,
             .topology = topology,
             .output_mem_config = memory_config},
         OperationType::tensor_args_t{

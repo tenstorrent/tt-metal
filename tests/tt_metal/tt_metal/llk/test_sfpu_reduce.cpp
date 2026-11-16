@@ -327,7 +327,7 @@ double reduce_tolerance(const SfpuReduceConfig& config, std::uint32_t cols, doub
 void run_single_core_sfpu_reduce(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device, const SfpuReduceConfig& config) {
     auto& cq = mesh_device->mesh_command_queue();
-    const experimental::NodeCoord node{0, 0};
+    const NodeCoord node{0, 0};
 
     const std::uint32_t elem_bytes = datum_bytes(config.format);
     const std::uint32_t single_tile_size = kTileWidth * kTileHeight * elem_bytes;
@@ -352,48 +352,48 @@ void run_single_core_sfpu_reduce(
     auto dst_dram_buffer = distributed::MeshBuffer::create(
         distributed::ReplicatedBufferConfig{.size = buffer_size}, dram_config, mesh_device.get());
 
-    const experimental::DFBSpecName IN_DFB{"in_dfb"};
-    const experimental::DFBSpecName OUT_DFB{"out_dfb"};
-    const experimental::KernelSpecName READER{"reader"};
-    const experimental::KernelSpecName WRITER{"writer"};
-    const experimental::KernelSpecName COMPUTE{"compute"};
+    const DFBSpecName IN_DFB{"in_dfb"};
+    const DFBSpecName OUT_DFB{"out_dfb"};
+    const KernelSpecName READER{"reader"};
+    const KernelSpecName WRITER{"writer"};
+    const KernelSpecName COMPUTE{"compute"};
 
     // Room for two blocks, not one. A block has to be resident all at once (a row reduce reaches
     // across every tile in its tile row), and sizing to exactly one block leaves no slack: the
     // reader cannot fill the next block while this one is in flight, and the writer cannot drain
     // the last one while the next is being packed.
-    experimental::DataflowBufferSpec in_dfb_spec{
+    DataflowBufferSpec in_dfb_spec{
         .unique_id = IN_DFB,
         .entry_size = single_tile_size,
         .num_entries = 2 * tiles_per_block,
         .data_format_metadata = config.format,
     };
-    experimental::DataflowBufferSpec out_dfb_spec{
+    DataflowBufferSpec out_dfb_spec{
         .unique_id = OUT_DFB,
         .entry_size = single_tile_size,
         .num_entries = 2 * tiles_per_block,
         .data_format_metadata = config.format,
     };
 
-    experimental::KernelSpec reader_spec{
+    KernelSpec reader_spec{
         .unique_id = READER,
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_reader_unary_2_0.cpp",
         .num_threads = 1,
-        .dfb_bindings = {experimental::ProducerOf(IN_DFB, "out")},
+        .dfb_bindings = {ProducerOf(IN_DFB, "out")},
         .runtime_arg_schema = {.runtime_arg_names = {"src_addr", "src_bank_id", "num_tiles", "dram_page_stride"}},
-        .hw_config = experimental::DataMovementHardwareConfig{},
+        .hw_config = DataMovementHardwareConfig{},
     };
 
-    experimental::KernelSpec writer_spec{
+    KernelSpec writer_spec{
         .unique_id = WRITER,
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_writer_unary_2_0.cpp",
         .num_threads = 1,
-        .dfb_bindings = {experimental::ConsumerOf(OUT_DFB, "in")},
+        .dfb_bindings = {ConsumerOf(OUT_DFB, "in")},
         .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "dst_bank_id", "num_tiles", "dram_page_stride"}},
-        .hw_config = experimental::DataMovementHardwareConfig{},
+        .hw_config = DataMovementHardwareConfig{},
     };
 
-    experimental::KernelSpec::CompilerOptions::Defines defines{
+    KernelSpec::CompilerOptions::Defines defines{
         {"REDUCE_POOL_TYPE", pool_type_define(config.pool)},
         {"REDUCE_FORMAT", format_define(config.format)},
     };
@@ -401,30 +401,30 @@ void run_single_core_sfpu_reduce(
         defines["REDUCE_AXIS_ROW"] = "1";
     }
 
-    experimental::KernelSpec compute_spec{
+    KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source = "tests/tt_metal/tt_metal/test_kernels/compute/sfpu_reduce_quasar.cpp",
         .num_threads = 1,
         .compiler_options = {.defines = defines},
-        .dfb_bindings = {experimental::ConsumerOf(IN_DFB, "in"), experimental::ProducerOf(OUT_DFB, "out")},
+        .dfb_bindings = {ConsumerOf(IN_DFB, "in"), ProducerOf(OUT_DFB, "out")},
         .compile_time_args =
             {{"block_ct_dim", config.block_ct_dim},
              {"block_rt_dim", config.block_rt_dim},
              {"num_blocks", config.num_blocks}},
         // A 32-bit Dest makes the unpack mode a mandatory choice; see unpack_mode_for.
         .hw_config =
-            experimental::ComputeHardwareConfig{
+            ComputeHardwareConfig{
                 .enable_32_bit_dest = config.wide_dest || needs_fp32_dest_acc(config.format),
                 .unpack_modes = {{IN_DFB, unpack_mode_for(config.format)}}},
     };
 
-    experimental::WorkUnitSpec wu{
+    WorkUnitSpec wu{
         .name = "main",
         .kernels = {READER, WRITER, COMPUTE},
         .target_nodes = node,
     };
 
-    experimental::ProgramSpec spec{
+    ProgramSpec spec{
         .name = "sfpu_reduce",
         .kernels = {reader_spec, writer_spec, compute_spec},
         .dataflow_buffers = {in_dfb_spec, out_dfb_spec},
@@ -450,19 +450,19 @@ void run_single_core_sfpu_reduce(
     const std::uint32_t src_page_stride = single_tile_size;
     const std::uint32_t dst_page_stride = single_tile_size;
 
-    experimental::ProgramRunArgs params;
+    ProgramRunArgs params;
     params.kernel_run_args = {
-        experimental::ProgramRunArgs::KernelRunArgs{
+        ProgramRunArgs::KernelRunArgs{
             .kernel = READER,
-            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(
                 node,
                 {{"src_addr", src_dram_buffer->address()},
                  {"src_bank_id", 0u},
                  {"num_tiles", num_tiles},
                  {"dram_page_stride", src_page_stride}})},
-        experimental::ProgramRunArgs::KernelRunArgs{
+        ProgramRunArgs::KernelRunArgs{
             .kernel = WRITER,
-            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(
                 node,
                 {{"dst_addr", dst_dram_buffer->address()},
                  {"dst_bank_id", 0u},

@@ -15,7 +15,6 @@
 #include <array>
 #include <core/xtensor_utils.hpp>
 #include <tt-metalium/distributed_context.hpp>
-#include <tt-umd-workload/cluster.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "core/distributed/socket_manager.hpp"
@@ -28,19 +27,17 @@
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn_fixed/distributed/tt_metal.hpp"
 
-static bool check_32_chips() {
-    auto cluster_desc = tt::umd::Cluster::create_cluster_descriptor();
-    auto all_chips = cluster_desc->get_all_chips();
-    return all_chips.size() == 32;
-}
-
 class GalaxyRingSDPATest : public ::testing::Test {
 public:
+    static inline const tt::tt_metal::distributed::MeshShape kMeshShape{8, 4};
+
     static void SetUpTestSuite() {
-        if (check_32_chips()) {
-            ttml::autograd::ctx().initialize_distributed_context(0, nullptr);
-            ttml::ttnn_fixed::distributed::enable_fabric(32);
-            ttml::autograd::ctx().open_device(tt::tt_metal::distributed::MeshShape(8, 4));
+        if (ttml::test_utils::system_supports_mesh(kMeshShape)) {
+            if (!ttml::autograd::ctx().is_distributed_context_initialized()) {
+                ttml::autograd::ctx().initialize_distributed_context(0, nullptr);
+            }
+            ttml::ttnn_fixed::distributed::enable_fabric(static_cast<uint32_t>(kMeshShape.mesh_size()));
+            ttml::autograd::ctx().open_device(kMeshShape);
             ttml::autograd::ctx().set_seed(42);
             ttml::autograd::ctx().initialize_socket_manager(ttnn::distributed::SocketType::FABRIC);
 
@@ -50,15 +47,13 @@ public:
         }
     }
     static void TearDownTestSuite() {
-        if (check_32_chips()) {
+        if (ttml::test_utils::system_supports_mesh(kMeshShape)) {
             ttml::autograd::ctx().close_device();
         }
     }
 
     void SetUp() override {
-        if (!check_32_chips()) {
-            GTEST_SKIP() << "Skipping Galaxy specific tests";
-        }
+        SKIP_UNLESS_MESH_SUPPORTED(kMeshShape);
     }
 };
 

@@ -19,6 +19,8 @@ using namespace tt::tt_metal::quasar::dispatch;
 #include "noc/noc_parameters.h"
 #include <tt-metalium/math.hpp>
 #include <tt-umd/types/core_coordinates.hpp>
+#include <tt_stl/assert.hpp>
+#include <enchantum/enchantum.hpp>
 
 #define GET_MAILBOX_ADDRESS_HOST(x) ((uint64_t)&(((mailboxes_t*)MEM_MAILBOX_BASE)->x))
 
@@ -36,7 +38,7 @@ namespace dispatch_realtime_profiler_msgs {
 #include "hal/generated/realtime_profiler_msgs_impl.hpp"
 }
 
-HalCoreInfoType create_dispatch_mem_map() {
+HalCoreInfoType create_dispatch_mem_map(IpVariant variant) {
     uint32_t max_alignment = std::max(DRAM_ALIGNMENT, L1_ALIGNMENT);
 
     static constexpr DeviceAddr dispatch_dm_kernel_bases[] = {
@@ -102,12 +104,21 @@ HalCoreInfoType create_dispatch_mem_map() {
         MEM_DISPATCH_TENSIX_FABRIC_CONNECTIONS_BASE;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_CONNECTION_LOCK)] =
         MEM_DISPATCH_FABRIC_CONNECTION_LOCK_BASE;
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::RING_BUF_HEAD)] = MEM_DISPATCH_WATCHER_RING_HEAD;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::DEFAULT_UNRESERVED)] =
         tt::align(DISPATCH_MEM_MAP_END, max_alignment);
 
     std::vector<uint32_t> mem_map_sizes;
     mem_map_sizes.resize(static_cast<std::size_t>(HalL1MemAddrType::COUNT), 0);
-    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::BASE)] = MEM_L1_SIZE;
+    const uint32_t l1_size = get_l1_size(variant);
+    const DeviceAddr unreserved_base = mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::DEFAULT_UNRESERVED)];
+    TT_FATAL(
+        unreserved_base <= l1_size,
+        "Dispatch engine L1 layout ends at {} but {} L1 is {} bytes",
+        unreserved_base,
+        enchantum::to_string(variant),
+        l1_size);
+    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::BASE)] = l1_size;
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::BARRIER)] = sizeof(uint32_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::MAILBOX)] = MEM_DISPATCH_MAILBOX_SIZE;
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::LAUNCH)] = sizeof(launch_msg_t);
@@ -124,8 +135,9 @@ HalCoreInfoType create_dispatch_mem_map() {
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::TENSIX_FABRIC_CONNECTIONS)] =
         MEM_TENSIX_FABRIC_CONNECTIONS_SIZE;
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_CONNECTION_LOCK)] = MEM_FABRIC_CONNECTION_LOCK_SIZE;
+    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::RING_BUF_HEAD)] = sizeof(uint32_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::DEFAULT_UNRESERVED)] =
-        MEM_L1_SIZE - mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::DEFAULT_UNRESERVED)];
+        l1_size - mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::DEFAULT_UNRESERVED)];
 
     assert_kernel_config_no_overlap(mem_map_bases, mem_map_sizes, HalL1MemAddrType::DEFAULT_UNRESERVED, "Dispatch");
 
