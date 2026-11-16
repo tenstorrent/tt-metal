@@ -6,7 +6,7 @@ score[r, t] = sum_h w[r,h] * relu(q[r,h] . k[t])  for S <= 16 query rows (decode
 The stock ``indexer_score_dsa`` pads the query rows to a 32-row tile and runs 32 heads x 4 matmul tile ops per key tile (25x too many for S=1); here the HEADS are the M rows:
   phase A: relu(Q_r [32 heads x 128] @ K^T) = 4 matmul tile ops per (key tile, r), packed with relu;  phase B: w_r [row r] @ qk = one matmul tile op, accumulated over r.
 Inputs:  q [S,1,32,128] bf16 TILE (head h = tile row h of query row s: ``q_headrows``), keys [1,1,n,128] bf8 TILE (n % 32 == 0), w = the stock weights [1,1,32,32] bf16 TILE (row r = query row r, col = head).
-Output:  [1,1,S,n] bf16 ROW_MAJOR (what the stock op returns for S rows), consumed by topk_large_indices.
+Output:  [1,1,S,n] bf16 ROW_MAJOR ([1,1,S*blocks,n/blocks] when blocks > 1: the same bytes, page = one block) (what the stock op returns for S rows), consumed by topk_large_indices.
 """
 import os
 
@@ -26,7 +26,9 @@ def q_headrows(q, S):
     return ttnn.to_layout(x, ttnn.TILE_LAYOUT)
 
 
-def idx_score(q, keys, w, kv_len, S, ncores=None, kc=None, out=None, fid=None, kvt=None, n_rows=None, kvt_rows=False):
+def idx_score(
+    q, keys, w, kv_len, S, ncores=None, kc=None, out=None, fid=None, kvt=None, n_rows=None, kvt_rows=False, blocks=1
+):
     """kvt (optional): uint32/int32 ROW_MAJOR [.,16] per-device tensor whose element 0 is the number of valid keys of THIS device (trace-safe; kv_len is then ignored).
     kvt_rows=True (verify rows, S <= 16): element r is the number of valid keys of query row r (row r sees the keys up to its own position: causal among the verify rows).
     """
@@ -59,7 +61,11 @@ def idx_score(q, keys, w, kv_len, S, ncores=None, kc=None, out=None, fid=None, k
     core_set = ttnn.CoreRangeSet(rngs)
     if out is None:
         out = ttnn.allocate_tensor_on_device(
-            ttnn.Shape([1, 1, S, n]), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, md, ttnn.DRAM_MEMORY_CONFIG
+            ttnn.Shape([1, 1, S * blocks, n // blocks]),
+            ttnn.bfloat16,
+            ttnn.ROW_MAJOR_LAYOUT,
+            md,
+            ttnn.DRAM_MEMORY_CONFIG,
         )
     Q, W, K, TMP, QK, OUT, STRIP, KVCB = range(8)
     bf = ttnn.bfloat16
@@ -104,7 +110,17 @@ def idx_score(q, keys, w, kv_len, S, ncores=None, kc=None, out=None, fid=None, k
         kernel_source=f"{KDIR}/isc_writer.cpp",
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=core_set,
-        compile_time_args=[S, KC, OUT, STRIP, n * 2, maxr, (2 if kvt_rows else 1) if kvt is not None else 0, KVCB]
+        compile_time_args=[
+            S,
+            KC,
+            OUT,
+            STRIP,
+            n * 2 // blocks,
+            maxr,
+            (2 if kvt_rows else 1) if kvt is not None else 0,
+            KVCB,
+            blocks,
+        ]
         + _acc(out)
         + (_acc(kvt) if kvt is not None else []),
         runtime_args=rt_w,
@@ -139,6 +155,7 @@ def idx_score(q, keys, w, kv_len, S, ncores=None, kc=None, out=None, fid=None, k
                 str(fid),
                 int(kvt is not None),
                 int(kvt_rows),
+                blocks,
                 tuple(_acc(keys)),
                 tuple(_acc(q)),
                 tuple(_acc(w)),

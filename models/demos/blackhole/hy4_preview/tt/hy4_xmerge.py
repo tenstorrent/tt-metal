@@ -27,8 +27,12 @@ def _cores(lst):
 
 class XMerge:
     def __init__(self, md, S, nsplit=None, links=2, compact=None, lanes=None):
-        nsplit = nsplit or int(os.environ.get("HY4_XM_NSPLIT", "4" if int(os.environ.get("HY4_XM_COMPACT", "0")) else "2"))
-        compact = int(os.environ.get("HY4_XM_COMPACT", "0")) if compact is None else int(compact)  # 1 = compact 8x32 tiles: WORK IN PROGRESS (S=1 PCC 0.71, S=2 hang, see RESULT.md), default OFF
+        nsplit = nsplit or int(
+            os.environ.get("HY4_XM_NSPLIT", "4" if int(os.environ.get("HY4_XM_COMPACT", "0")) else "2")
+        )
+        compact = (
+            int(os.environ.get("HY4_XM_COMPACT", "0")) if compact is None else int(compact)
+        )  # 1 = compact 8x32 tiles: WORK IN PROGRESS (S=1 PCC 0.71, S=2 hang, see RESULT.md), default OFF
         assert tuple(md.shape)[1] == RING and 16 % nsplit == 0 and (16 // nsplit) % 2 == 0
         self.md, self.S, self.nsplit, self.links, self.compact = md, S, nsplit, links, compact
         self.tb = 512 if compact else 2048
@@ -59,8 +63,12 @@ class XMerge:
             memory_config=mc,
             mesh_mapper=ttnn.ReplicateTensorToMesh(md),
         )
+        # HY4_ATTN_HM=1 (S == 1, non-compact): the writer scatters the 8 head rows into the head-major tensor [1,8,1,512] (no to_layout/slice/permute/to_layout glue after the merge)
+        self.hm = int(os.environ.get("HY4_ATTN_HM", "0")) == 1 and S == 1 and not compact
         self.out = ttnn.from_torch(
-            torch.zeros(1, S, 32, 512, dtype=torch.bfloat16),
+            torch.zeros(1, 8, 1, 512, dtype=torch.bfloat16)
+            if self.hm
+            else torch.zeros(1, S, 32, 512, dtype=torch.bfloat16),
             device=md,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
@@ -99,7 +107,9 @@ class XMerge:
                 tdesc = ttnn.TileDescriptor(8, 32) if self.compact else None
                 cb_land.total_size = NC * LT * self.tb
                 cb_land.format_descriptors = [
-                    ttnn.CBFormatDescriptor(buffer_index=A, data_format=bf, page_size=self.tb, **({"tile": tdesc} if tdesc else {}))
+                    ttnn.CBFormatDescriptor(
+                        buffer_index=A, data_format=bf, page_size=self.tb, **({"tile": tdesc} if tdesc else {})
+                    )
                 ]
 
                 def cb(i, n_, cores, page=None, tiny=True):
@@ -108,7 +118,9 @@ class XMerge:
                     return ttnn.CBDescriptor(
                         total_size=page * n_,
                         core_ranges=cores,
-                        format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=i, data_format=bf, page_size=page, **kw)],
+                        format_descriptors=[
+                            ttnn.CBFormatDescriptor(buffer_index=i, data_format=bf, page_size=page, **kw)
+                        ],
                     )
 
                 comm_set = _cores(list(self.comm.values()))
@@ -118,7 +130,7 @@ class XMerge:
                     cb(W, NC, self.mset),
                     cb(R, 1, self.mset),
                     cb(ONE, 1, self.mset),
-                    cb(OUT, tpc, self.mset),
+                    cb(OUT, tpc + (8 if self.hm else 0), self.mset),
                     cb(PKT, pk_max, comm_set, page=2 * T, tiny=False),
                 ]
                 rt_r, rt_w, rt_c = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
@@ -132,13 +144,16 @@ class XMerge:
                         kernel_source=f"{KDIR}/{'xm_reader' if self.compact else 'xm_reader_v1'}.cpp",
                         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
                         core_ranges=self.mset,
-                        compile_time_args=[S, tpc, ST, A, ONE, min(1, int(os.environ.get("HY4_XM_DBG", "0")))] + ([self.compact] if self.compact else []) + _acc(x) + _acc(sink),
+                        compile_time_args=[S, tpc, ST, A, ONE, min(1, int(os.environ.get("HY4_XM_DBG", "0")))]
+                        + ([self.compact] if self.compact else [])
+                        + _acc(x)
+                        + _acc(sink),
                         runtime_args=rt_r,
                         common_runtime_args=[x.buffer_address(), sink.buffer_address(), gsem_addr],
                         config=ttnn.ReaderConfigDescriptor(),
                     ),
                     ttnn.KernelDescriptor(
-                        kernel_source=f"{KDIR}/{'xm_writer' if self.compact else 'mrg_writer'}.cpp",
+                        kernel_source=f"{KDIR}/{'xm_writer' if self.compact else ('mrg_writer_hm' if self.hm else 'mrg_writer')}.cpp",
                         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
                         core_ranges=self.mset,
                         compile_time_args=[tpc, OUT] + ([self.compact] if self.compact else []) + _acc(self.out),
@@ -170,7 +185,20 @@ class XMerge:
                                 kernel_source=f"{KDIR}/{'xm_comm' if self.compact else 'xm_comm_v1'}.cpp",
                                 source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
                                 core_ranges=_cores([(cx, cy)]),
-                                compile_time_args=[dr, ndist, S, tpc, ns, lk, self.lanes, PKT, fab_base, int(os.environ.get("HY4_XM_DBG", "0"))] + ([self.compact] if self.compact else []) + _acc(x),
+                                compile_time_args=[
+                                    dr,
+                                    ndist,
+                                    S,
+                                    tpc,
+                                    ns,
+                                    lk,
+                                    self.lanes,
+                                    PKT,
+                                    fab_base,
+                                    int(os.environ.get("HY4_XM_DBG", "0")),
+                                ]
+                                + ([self.compact] if self.compact else [])
+                                + _acc(x),
                                 runtime_args=rt,
                                 common_runtime_args=[x.buffer_address(), self.land.buffer_address(), gsem_addr],
                                 config=ttnn.WriterConfigDescriptor(),
@@ -181,10 +209,27 @@ class XMerge:
                 for (name, lk), ki in comm_kidx.items():
                     dst = fwd_n if name == "fwd" else bwd_n
                     cx, cy = self.comm[(0 if name == "fwd" else 1, lk)]
-                    fargs = ttnn.setup_routing_plane_connection(src, [dst], [lk % self.links], prog, ki, ttnn.CoreCoord(cx, cy))
+                    fargs = ttnn.setup_routing_plane_connection(
+                        src, [dst], [lk % self.links], prog, ki, ttnn.CoreCoord(cx, cy)
+                    )
                     prog.kernels[ki].runtime_args[cx][cy].extend(fargs)
                 prog.custom_program_hash = (0x7A2 << 40) | (
-                    hash((S, ns, self.links, self.lanes, self.compact, col, os.environ.get("HY4_XM_DBG", "0"), tuple(_acc(x)), tuple(_acc(sink)), tuple(_acc(self.out)))) & ((1 << 40) - 1)
+                    hash(
+                        (
+                            S,
+                            ns,
+                            self.links,
+                            self.lanes,
+                            self.compact,
+                            self.hm,
+                            col,
+                            os.environ.get("HY4_XM_DBG", "0"),
+                            tuple(_acc(x)),
+                            tuple(_acc(sink)),
+                            tuple(_acc(self.out)),
+                        )
+                    )
+                    & ((1 << 40) - 1)
                 )
                 mpd[ttnn.MeshCoordinateRange(coord, coord)] = prog
         ttnn.generic_op([x, sink, self.out, self.land], mpd)
@@ -204,7 +249,14 @@ class XMergeFused(XMerge):
         # merge cores below the split cores (8 S G <= 64 cores), comm cores on the last row
         y0 = int(os.environ.get("HY4_XM_Y0", "7"))
         self.mcores = [(i % grid.x, y0 + i // grid.x) for i in range(S * nsplit)]
-        self.comm = {(d, l): (links * d + l + int(os.environ.get("HY4_XM_CX", "0")), int(os.environ.get("HY4_XM_CY", str(grid.y - 1)))) for d in (0, 1) for l in range(links)}
+        self.comm = {
+            (d, l): (
+                links * d + l + int(os.environ.get("HY4_XM_CX", "0")),
+                int(os.environ.get("HY4_XM_CY", str(grid.y - 1))),
+            )
+            for d in (0, 1)
+            for l in range(links)
+        }
         # rebuild the landing tensor on the new merge cores
         self.mset = _cores(self.mcores)
         w = NC * self.lt * self.tb // 2
@@ -215,7 +267,10 @@ class XMergeFused(XMerge):
         )
         self.land = ttnn.from_torch(
             torch.zeros(len(self.mcores), w, dtype=torch.bfloat16),
-            device=md, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, memory_config=mc,
+            device=md,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.bfloat16,
+            memory_config=mc,
             mesh_mapper=ttnn.ReplicateTensorToMesh(md),
         )
         self.gper = len(range(0, nsplit, links))
@@ -224,12 +279,16 @@ class XMergeFused(XMerge):
         cset = _cores(list(self.comm.values()))
         sw = stage_pkts * 4096 // 2
         smc = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1,
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
             ttnn.ShardSpec(cset, [1, sw], ttnn.ShardOrientation.ROW_MAJOR),
         )
         self.stage = ttnn.from_torch(
             torch.zeros(len(self.comm), sw, dtype=torch.bfloat16),
-            device=md, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, memory_config=smc,
+            device=md,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.bfloat16,
+            memory_config=smc,
             mesh_mapper=ttnn.ReplicateTensorToMesh(md),
         )
         ttnn.synchronize_device(md)
@@ -277,7 +336,22 @@ class XMergeFused(XMerge):
                             ent += [cx, cy, stage_base + k_run * self.pk_run * PK]
                     return [flag, tpc, ns, PK, gsem_addr, self.SEMX] + ent
 
-                parts = mod.sparse_sdpa_split(qg, kv, idx8, 512, scale, kc, G, ckc, None, emit_stats=3, owner_s=S, xchg=xchg, build_only=True, out=out_split)
+                parts = mod.sparse_sdpa_split(
+                    qg,
+                    kv,
+                    idx8,
+                    512,
+                    scale,
+                    kc,
+                    G,
+                    ckc,
+                    None,
+                    emit_stats=3,
+                    owner_s=S,
+                    xchg=xchg,
+                    build_only=True,
+                    out=out_split,
+                )
                 out_split = parts["out"]
                 kernels = list(parts["kernels"])
                 cbs = list(parts["cbs"])
@@ -285,15 +359,27 @@ class XMergeFused(XMerge):
 
                 def cb(i, n_, cores, page=T):
                     return ttnn.CBDescriptor(
-                        total_size=page * n_, core_ranges=cores,
-                        format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=i, data_format=ttnn.bfloat16, page_size=page)],
+                        total_size=page * n_,
+                        core_ranges=cores,
+                        format_descriptors=[
+                            ttnn.CBFormatDescriptor(buffer_index=i, data_format=ttnn.bfloat16, page_size=page)
+                        ],
                     )
 
                 cb_land = ttnn.cb_descriptor_from_sharded_tensor(A, dev_land[idx])
                 cb_land.core_ranges = self.mset
                 cb_land.total_size = NC * LT * T
-                cb_land.format_descriptors = [ttnn.CBFormatDescriptor(buffer_index=A, data_format=ttnn.bfloat16, page_size=T)]
-                cbs += [cb_land, cb(ST, 1, self.mset), cb(W, NC, self.mset), cb(R, 1, self.mset), cb(ONE, 1, self.mset), cb(OUT, tpc, self.mset)]
+                cb_land.format_descriptors = [
+                    ttnn.CBFormatDescriptor(buffer_index=A, data_format=ttnn.bfloat16, page_size=T)
+                ]
+                cbs += [
+                    cb_land,
+                    cb(ST, 1, self.mset),
+                    cb(W, NC, self.mset),
+                    cb(R, 1, self.mset),
+                    cb(ONE, 1, self.mset),
+                    cb(OUT, tpc, self.mset),
+                ]
                 rt_r, rt_w, rt_c = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
                 for m, (cx, cy) in enumerate(self.mcores):
                     s, g = m // ns, m % ns
@@ -302,23 +388,41 @@ class XMergeFused(XMerge):
                     rt_c[cx][cy] = []
                 if os.environ.get("HY4_XM_NOMERGE") == "1":
                     cbs = [c_ for c_ in cbs if c_ is not cb_land]
-                kernels += [] if os.environ.get("HY4_XM_NOMERGE") == "1" else [
-                    ttnn.KernelDescriptor(
-                        kernel_source=f"{KDIR}/xm_reader_v2.cpp", source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
-                        core_ranges=self.mset, compile_time_args=[S, tpc, ST, A, ONE, int(os.environ.get("HY4_XM_DBG", "0"))] + _acc(sink),
-                        runtime_args=rt_r, common_runtime_args=[0, sink.buffer_address(), gsem_addr],
-                        config=ttnn.ReaderConfigDescriptor()),
-                    ttnn.KernelDescriptor(
-                        kernel_source=f"{KDIR}/mrg_writer.cpp", source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
-                        core_ranges=self.mset, compile_time_args=[tpc, OUT] + _acc(self.out),
-                        runtime_args=rt_w, common_runtime_args=[self.out.buffer_address()],
-                        config=ttnn.WriterConfigDescriptor()),
-                    ttnn.KernelDescriptor(
-                        kernel_source=f"{KDIR}/mrg2_compute.cpp", source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
-                        core_ranges=self.mset, compile_time_args=[tpc, ST, A, W, R, ONE, OUT],
-                        runtime_args=rt_c, common_runtime_args=[],
-                        config=ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True)),
-                ]
+                kernels += (
+                    []
+                    if os.environ.get("HY4_XM_NOMERGE") == "1"
+                    else [
+                        ttnn.KernelDescriptor(
+                            kernel_source=f"{KDIR}/xm_reader_v2.cpp",
+                            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+                            core_ranges=self.mset,
+                            compile_time_args=[S, tpc, ST, A, ONE, int(os.environ.get("HY4_XM_DBG", "0"))] + _acc(sink),
+                            runtime_args=rt_r,
+                            common_runtime_args=[0, sink.buffer_address(), gsem_addr],
+                            config=ttnn.ReaderConfigDescriptor(),
+                        ),
+                        ttnn.KernelDescriptor(
+                            kernel_source=f"{KDIR}/mrg_writer.cpp",
+                            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+                            core_ranges=self.mset,
+                            compile_time_args=[tpc, OUT] + _acc(self.out),
+                            runtime_args=rt_w,
+                            common_runtime_args=[self.out.buffer_address()],
+                            config=ttnn.WriterConfigDescriptor(),
+                        ),
+                        ttnn.KernelDescriptor(
+                            kernel_source=f"{KDIR}/mrg2_compute.cpp",
+                            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+                            core_ranges=self.mset,
+                            compile_time_args=[tpc, ST, A, W, R, ONE, OUT],
+                            runtime_args=rt_c,
+                            common_runtime_args=[],
+                            config=ttnn.ComputeConfigDescriptor(
+                                math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True
+                            ),
+                        ),
+                    ]
+                )
                 comm_kidx = {}
                 if os.environ.get("HY4_XM_NOCOMM") != "1":
                     rt = ttnn.RuntimeArgs()
@@ -326,25 +430,58 @@ class XMergeFused(XMerge):
                         for lk in range(self.links):
                             cx, cy = self.comm[(dr, lk)]
                             rt[cx][cy] = [col, dr, ndist, lk] + [v for xy in m_xy for v in xy]
-                    kernels.append(ttnn.KernelDescriptor(
-                        kernel_source=f"{KDIR}/xm_comm_v3.cpp", source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
-                        core_ranges=_cores(list(self.comm.values())),
-                        compile_time_args=[0, 0, S, tpc, ns, 0, self.links, self.SEMX, 4 + 2 * len(m_xy), int(os.environ.get("HY4_XM_DBG", "0"))],
-                        runtime_args=rt, common_runtime_args=[stage_base, land_base, gsem_addr],
-                        config=ttnn.WriterConfigDescriptor()))
+                    kernels.append(
+                        ttnn.KernelDescriptor(
+                            kernel_source=f"{KDIR}/xm_comm_v3.cpp",
+                            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+                            core_ranges=_cores(list(self.comm.values())),
+                            compile_time_args=[
+                                0,
+                                0,
+                                S,
+                                tpc,
+                                ns,
+                                0,
+                                self.links,
+                                self.SEMX,
+                                4 + 2 * len(m_xy),
+                                int(os.environ.get("HY4_XM_DBG", "0")),
+                            ],
+                            runtime_args=rt,
+                            common_runtime_args=[stage_base, land_base, gsem_addr],
+                            config=ttnn.WriterConfigDescriptor(),
+                        )
+                    )
                     ki = len(kernels) - 1
                     for name, ndist, dr in (("fwd", 4, 0), ("bwd", 3, 1)):
                         for lk in range(self.links):
                             comm_kidx[(name, lk)] = ki
                 sem_cores = _cores(list(parts["cores"]) + list(self.comm.values()))
-                sems = list(parts["semaphores"]) + [ttnn.SemaphoreDescriptor(self.SEMX, ttnn.CoreType.WORKER, sem_cores, 0)]
+                sems = list(parts["semaphores"]) + [
+                    ttnn.SemaphoreDescriptor(self.SEMX, ttnn.CoreType.WORKER, sem_cores, 0)
+                ]
                 prog = ttnn.ProgramDescriptor(kernels=kernels, semaphores=sems, cbs=cbs)
                 for (name, lk), ki in comm_kidx.items():
                     dst = fwd_n if name == "fwd" else bwd_n
                     cx, cy = self.comm[(0 if name == "fwd" else 1, lk)]
                     fargs = ttnn.setup_routing_plane_connection(src, [dst], [lk], prog, ki, ttnn.CoreCoord(cx, cy))
                     prog.kernels[ki].runtime_args[cx][cy].extend(fargs)
-                prog.custom_program_hash = (0x7B3 << 40) | (hash((parts["hash_parts"], os.environ.get("HY4_XM_DBG", "0"), os.environ.get("HY4_XM_NOCOMM", "0"), os.environ.get("HY4_XM_NOMERGE", "0"), ns, self.links, col, tuple(_acc(sink)), tuple(_acc(self.out)))) & ((1 << 40) - 1))
+                prog.custom_program_hash = (0x7B3 << 40) | (
+                    hash(
+                        (
+                            parts["hash_parts"],
+                            os.environ.get("HY4_XM_DBG", "0"),
+                            os.environ.get("HY4_XM_NOCOMM", "0"),
+                            os.environ.get("HY4_XM_NOMERGE", "0"),
+                            ns,
+                            self.links,
+                            col,
+                            tuple(_acc(sink)),
+                            tuple(_acc(self.out)),
+                        )
+                    )
+                    & ((1 << 40) - 1)
+                )
                 mpd[ttnn.MeshCoordinateRange(coord, coord)] = prog
         ttnn.generic_op([qg, kv, idx8, out_split, self.out, self.land, self.stage, sink], mpd)
         return self.out

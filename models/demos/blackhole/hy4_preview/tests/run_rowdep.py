@@ -119,6 +119,10 @@ def main():
         for v in VARS:
             results[v] = run(v)
             res(event="ran", variant=v)
+            if os.environ.get(
+                "SAVE_LOGITS"
+            ):  # verify-opt track: per-round logits [R, S, V] for an A/B PCC between flag sets (tests/vopt_cmp.py)
+                torch.save(torch.stack(results[v][0]), f"{OUT}/{TAG}_{v}_logits.pt")
         ref_l, ref_d = results[VARS[0]]
         for v in VARS[1:]:
             l, d = results[v]

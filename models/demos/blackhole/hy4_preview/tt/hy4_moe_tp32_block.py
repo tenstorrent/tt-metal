@@ -27,6 +27,7 @@ class Hy4MoeTp32Block:
     def __init__(self, md, ccl, gate, tpe: Tp32Experts, T):
         """gate: Hy4Gate; tpe: Tp32Experts on the 4x8 mesh (chip rank = mesh_row * 8 + col); T = tokens per mesh row (T * 4 <= 8)."""
         self.md, self.ccl, self.gate, self.tpe, self.T = md, ccl, gate, tpe, T
+        self.shared_fuse = None  # B19 (HY4_MOE_FUSE=1): hy4_skinny.SkinnyShared (1/4-scaled w2) run inside the tp24 program on all Tt tokens
         self.rows, self.cols = tuple(md.shape)
         assert T * self.rows <= (
             16 if type(tpe).__name__ == "Tp24Experts" else 8
@@ -121,7 +122,7 @@ class Hy4MoeTp32Block:
         )
 
     # ------------------------------------------------------------------ forward
-    def forward_partial(self, tt_x_gate, tt_x_tokens=None, forced_routing=None, fold=None):
+    def forward_partial(self, tt_x_gate, tt_x_tokens=None, forced_routing=None, fold=None, defer_fold=False):
         """router + gathers + TP32 kernel + shared-expert fold -> the un-reduced [1,1,4T,HID] bf16 TILE partial of this chip (rows = the Tt tokens of the 4 mesh rows in row order)."""
         T, Tt = self.T, self.Tt
         route_all = None
@@ -140,10 +141,19 @@ class Hy4MoeTp32Block:
             x_all = ttnn.to_layout(
                 ttnn.reshape(self._ag_rows(tt_x_tokens, 0), [1, 1, Tt, HID]), ttnn.TILE_LAYOUT
             )  # tokens [T,1,1,HID] RM -> [Tt,1,1,HID] -> [1,1,Tt,HID]
+        if self.shared_fuse is not None and fold is None:
+            part = self.tpe(
+                x_all, route_all, Tt, shared=self.shared_fuse
+            )  # routed + shared (w2 scaled 1/4, every mesh row computes all Tt tokens: the row reduction restores 1x)
+            ttnn.deallocate(x_all)
+            ttnn.deallocate(route_all)
+            return part
         part = self.tpe(x_all, route_all, Tt)  # [1,1,Tt,HID] bf16 TILE partial
         ttnn.deallocate(x_all)
         ttnn.deallocate(route_all)
-        if fold is not None:
+        if (
+            fold is not None and not defer_fold
+        ):  # defer_fold (HY4_BOUNDARY_FUSE=fold): the caller hands `fold` to the rows-reduce program
             fp = ttnn.matmul(
                 self.mask, fold, compute_kernel_config=self.ckc
             )  # [1,1,Tt,T] x fold [1,1,T,HID] -> [1,1,Tt,HID]

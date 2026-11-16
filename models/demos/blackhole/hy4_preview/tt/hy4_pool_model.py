@@ -272,7 +272,9 @@ class Hy4PoolDecoder(Hy4Decoder):
     def _dump(self, name, i, t):
         """diagnostic (verify-round track): self.dump = list -> host copies [32 devices, ...] of intermediate tensors (eager runs only)."""
         d = getattr(self, "dump", None)
-        if d is not None:
+        if (
+            d is not None and getattr(t, "part", None) is None
+        ):  # a FusedPartial (all-reduce deferred into the next pre) has no host copy
             ttnn.synchronize_device(self.md)
             d.append((name, i, ttnn.to_torch(t, mesh_composer=ttnn.ConcatMeshToTensor(self.md, dim=0)).float()))
 
@@ -295,26 +297,44 @@ class Hy4PoolDecoder(Hy4Decoder):
         )  # packed: row 4t + i = stream i of token t
         ttnn.deallocate(e_rm)
         y = pp_m = None
+        from models.demos.blackhole.hy4_preview.tt import hy4_fuse_ar as FAR
+
+        # HY4_FUSE_AR=1 (+ HY4_FAR_T16=1 for S*... rows > 8): the attention o-proj partial's all-reduce runs inside the next iHC pre (FusedPartial), as in the plain step_fused (verify-opt track)
+        pre = (
+            (lambda ihc, x_, w, y_, pp, xo: FAR.pre_with(ihc, self.far, x_, w, y_, pp, xo))
+            if self.far is not None
+            else (lambda ihc, x_, w, y_, pp, xo: ihc.pre(x_, w, y=y_, pp_prev=pp, x_out=xo))
+        )
         for i, ly in enumerate(ch.layers):
             wa, wm = ly.ihcf_a.norm_weight(ly.hw_in, S), ly.ihcf_m.norm_weight(ly.hw_post, S)
             if y is None:
                 h, _, pp_a = ly.ihcf_a.pre(x, wa)
             else:
-                h, _, pp_a, x = ly.ihcf_a.pre(x, wa, y=y, pp_prev=pp_m, x_out=x)
-                ttnn.deallocate(y)
+                h, _, pp_a, x = pre(ly.ihcf_a, x, wa, y, pp_m, x)
+                if getattr(y, "part", None) is None:
+                    ttnn.deallocate(y)
             a = self._attn(ly, None, h)
-            self._dump("h_in", i, h)
-            self._dump("attn", i, a)
+            if getattr(a, "part", None) is None:
+                self._dump("h_in", i, h)
+                self._dump("attn", i, a)
             ttnn.deallocate(h)
-            h2, _, pp_m, x = ly.ihcf_m.pre(x, wm, y=a, pp_prev=pp_a, x_out=x)
-            ttnn.deallocate(a)
+            h2, _, pp_m, x = pre(ly.ihcf_m, x, wm, a, pp_a, x)
+            if getattr(a, "part", None) is None:
+                ttnn.deallocate(a)
             self._dump("h2", i, h2)
             y = self._mlp_rows(i, ly, h2)
             self._dump("mlp", i, y)
             ttnn.deallocate(h2)
         last = ch.layers[-1]
-        _, _, _, x = last.ihcf_m.pre(x, last.ihcf_m.norm_weight(last.hw_post, S), y=y, pp_prev=pp_m, x_out=x)
-        ttnn.deallocate(y)
+        _, _, _, x = pre(last.ihcf_m, x, last.ihcf_m.norm_weight(last.hw_post, S), y, pp_m, x)
+        if getattr(y, "part", None) is None:
+            ttnn.deallocate(y)
+        if (
+            os.environ.get("HY4_HEAD_FAST", "0") == "1"
+        ):  # verify-opt: head on the packed streams (no permute churn, split-K reductions)
+            hn, logits = ch.head_packed(x)
+            ttnn.deallocate(x)
+            return hn, logits
         x4 = ttnn.to_layout(
             ttnn.permute(ttnn.reshape(ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT), [1, S, NSTREAM, HID]), (0, 2, 1, 3)),
             ttnn.TILE_LAYOUT,
@@ -329,7 +349,7 @@ class Hy4PoolDecoder(Hy4Decoder):
         ch, S = self.ch, self.S
         if ly.spec.mlp == DENSE:
             return D.allreduce_cols(self.mlp[i].forward(h))
-        part = self.mlp[i].forward(h)
+        part = None if getattr(self._blks[i], "shared_fuse", None) is not None else self.mlp[i].forward(h)
         if (
             os.environ.get("HY4_VERIFY_MOE_SPLIT", "0") == "1"
         ):  # diagnostic: S separate T=1-shaped MoE calls (the plain decode shape) instead of one T=S call
@@ -348,8 +368,21 @@ class Hy4PoolDecoder(Hy4Decoder):
             return y
         tok = ttnn.reshape(ttnn.to_layout(h, ttnn.ROW_MAJOR_LAYOUT), [S, 1, 1, HID])
         blk = self._blks[i]
+        if getattr(self, "rp_v", None) is not None and hasattr(blk, "forward_partial"):
+            # HY4_TP32_TAIL=oneshot at the verify shape (verify-opt track): rows-phase reduce (packed T = S rows, nrp 24) + column all-reduce + the next iHC pre in ONE mesh program
+            from models.demos.blackhole.hy4_preview.tt.hy4_decode import bfuse
+            from models.demos.blackhole.hy4_preview.tt.hy4_fuse_ar import FusedPartial
+
+            if bfuse("fold"):
+                pt = blk.forward_partial(h, tok, fold=part, defer_fold=True)
+                return FusedPartial(pt, rp=self.rp_v, fold=part)
+            pt = blk.forward_partial(h, tok, fold=part)
+            if part is not None:
+                ttnn.deallocate(part)
+            return FusedPartial(pt, rp=self.rp_v)
         out = blk.forward(h, tok, fold=part)
-        ttnn.deallocate(part)
+        if part is not None:
+            ttnn.deallocate(part)
         out = ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG)
         y = ch.mc.allgather(out, ch.ccl, axis=1, dim=3)
         ttnn.deallocate(out)
@@ -358,6 +391,15 @@ class Hy4PoolDecoder(Hy4Decoder):
     def prepare_blocks(self):
         """per-layer MoE blocks at batch_per_device = S (weights shared with the S = 1 blocks: ``for_batch``); call BEFORE any trace capture."""
         self._blks, self.blk_buffers = [], None
+        self.rp_v = None
+        if (
+            getattr(self, "far", None) is not None
+            and os.environ.get("HY4_TP32_TAIL", "") == "oneshot"
+            and os.environ.get("HY4_MOE_TP32", "0") == "1"
+        ):
+            from models.demos.blackhole.hy4_preview.tt import hy4_fuse_ar as FAR
+
+            self.rp_v = FAR.shared_rp(self.md, self.S)  # built outside any trace, after the CCLManager / Hy4FuseAR
         for ly in self.ch.layers:
             if ly.spec.mlp == DENSE:
                 self._blks.append(None)
@@ -373,6 +415,8 @@ class Hy4PoolDecoder(Hy4Decoder):
                 from models.demos.blackhole.hy4_preview.tt.hy4_moe_tp32_block import Hy4MoeTp32Block
 
                 assert self.S * int(self.md.shape[0]) <= 16, "TP32 verify block: S * 4 <= 16 tokens"
-                self._blks.append(Hy4MoeTp32Block(self.md, self.ch.ccl, nb.gate, ly.blk_tp.tpe, self.S))
+                _b = Hy4MoeTp32Block(self.md, self.ch.ccl, nb.gate, ly.blk_tp.tpe, self.S)
+                _b.shared_fuse = ly.blk_tp.shared_fuse
+                self._blks.append(_b)
                 continue
             self._blks.append(nb)

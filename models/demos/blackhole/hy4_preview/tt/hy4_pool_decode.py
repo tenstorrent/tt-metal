@@ -29,6 +29,8 @@ K = 2048
 
 def q_headrows(q, S):
     """stock-layout q [1,32,S,128] -> [S,1,32,128] TILE (tile row = head)."""
+    if os.environ.get("HY4_IDX_QFAST", "0") == "1":  # one TILE permute instead of to_layout + permute + to_layout
+        return ttnn.permute(q, (2, 0, 1, 3))
     x = ttnn.to_layout(q, ttnn.ROW_MAJOR_LAYOUT)
     x = ttnn.permute(x, (2, 0, 1, 3))
     return ttnn.to_layout(x, ttnn.TILE_LAYOUT)
@@ -117,6 +119,9 @@ class PoolCtx:
             )  # ONE per process, before the first trace capture
         # compact attend (HY4_VR_COMPACT: 1 on, 0 off, default on for S >= 2): the split kernel packs the 8 real head rows of up to 4 users into one 32-row tile (all_to_all payload 4x smaller), the A1 merge works on TR = ceil(S/4) tile rows
         self.compact = (os.environ.get("HY4_VR_COMPACT", "1") == "1") and S > 1 and not self.xchg
+        self.hm_compact = (
+            self.compact and os.environ.get("HY4_ATTN_HM", "0") == "1" and S <= 16
+        )  # HY4_ATTN_HM=1: head-major merge output (no post-merge layout glue)
         self.ids8 = {}  # index-source layer -> idx8 tensor of the current step
         self.ids8_dense = None
         self.step_pos = None
@@ -209,10 +214,10 @@ class PoolCtx:
             ttnn.Shape([1, 1, NC * self.S, K]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, self.md, ttnn.DRAM_MEMORY_CONFIG
         )
 
-    def attend(self, qfull, kv_pool, idx8, sink):
-        """qfull [1,8,S,576] TILE bf16 (the column's 8 heads) -> o_lat [1,8,S,512] TILE bf16 (merged over the 8 columns, sink included)."""
+    def attend(self, qfull, kv_pool, idx8, sink, q_rm=False):
+        """qfull [1,8,S,576] TILE bf16 (the column's 8 heads; q_rm=True: already ROW_MAJOR, B17 fused q-prep) -> o_lat [1,8,S,512] TILE bf16 (merged over the 8 columns, sink included)."""
         S = self.S
-        q_rm = ttnn.to_layout(qfull, ttnn.ROW_MAJOR_LAYOUT)
+        q_rm = qfull if q_rm else ttnn.to_layout(qfull, ttnn.ROW_MAJOR_LAYOUT)
         qg = self.gather_q(q_rm)  # [1,8,8S,576]
         ttnn.deallocate(q_rm)
         out = self.mod.sparse_sdpa_split(
@@ -237,6 +242,10 @@ class PoolCtx:
             x = ttnn.experimental.all_to_all_async_generic(
                 out, in_dim=1, out_dim=0, num_links=2, topology=ttnn.Topology.Ring, cluster_axis=1
             )
+            if self.hm_compact:
+                return hy4_merge.merge_fused(
+                    x, sink, TR, full=S > 2, hm_users=S
+                )  # head-major [1,8,S,512] TILE (persistent) straight from the merge writer
             res = hy4_merge.merge_fused(x, sink, TR, full=S > 2)  # [1,TR,32,512]: rows 8*(s%4)+h of tile row s//4
             r = ttnn.to_layout(res, ttnn.ROW_MAJOR_LAYOUT)
             r = ttnn.reshape(r, [TR * 4, 8, 512])
@@ -247,6 +256,8 @@ class PoolCtx:
             return ttnn.to_layout(r, ttnn.TILE_LAYOUT)
         if self.xm is not None:
             res = self.xm(out, sink)
+            if getattr(self.xm, "hm", False):
+                return res  # head-major [1,8,S,512] TILE straight from the merge writer (persistent: the caller must not deallocate it)
         elif self.fuse_sparse:
             from models.demos.blackhole.hy4_preview.tt import hy4_merge
 
@@ -285,11 +296,16 @@ def select_global(ctx, qh, w32, key_view):
     from models.demos.blackhole.hy4_preview.tt.hy4_idx_select import select_v2
 
     S, n = ctx.S, ctx.n_local
-    score = IS.idx_score(qh, key_view, w32, 0, S, kvt=ctx.kvcnt, n_rows=n, kvt_rows=ctx.perrow)  # [1,1,S,n]
     sel = ctx.sel
     B = max(1, min(sel["B"], n // sel["kb"]))
     kb, kloc = min(sel["kb"], n // B), min(sel["kloc"], n)
-    gids = select_v2(ctx.ag, ctx.colid, score, n, B, kb, kloc, K, sel["split"], False, None)
+    blk = (
+        os.environ.get("HY4_IDX_BLK", "0") == "1" and B > 1
+    )  # score written as [1,1,S*B,n/B] + cs_cand2 blocked outputs (no reshape copies)
+    score = IS.idx_score(
+        qh, key_view, w32, 0, S, kvt=ctx.kvcnt, n_rows=n, kvt_rows=ctx.perrow, blocks=B if blk else 1
+    )  # [1,1,S,n]
+    gids = select_v2(ctx.ag, ctx.colid, score, n, B, kb, kloc, K, sel["split"], False, None, blocked=blk)
     ttnn.deallocate(score)
     return gids
 
@@ -322,6 +338,21 @@ class Hy4AttentionPool(Hy4AttentionOpt):
 
     # ------------------------------------------------------------------ pieces
     def pool_append_kv(self, lat, k_pe):
+        from models.demos.blackhole.hy4_preview.tt import hy4_fuse_attn as FA
+
+        S = int(lat.shape[2])
+        if (
+            FA.kv_enabled()
+            and S <= 8
+            and not lat.memory_config().is_sharded()
+            and not k_pe.memory_config().is_sharded()
+            and lat.layout == ttnn.TILE_LAYOUT
+            and k_pe.layout == ttnn.TILE_LAYOUT
+            and lat.dtype == ttnn.bfloat16
+            and k_pe.dtype == ttnn.bfloat16
+        ):  # HY4_KV_FUSE=1: quantise + pack + row write in ONE program
+            FA.fused_kv_append(lat, k_pe, self.ctx.wr, self.kv_pool, S)
+            return
         dp = ttnn.experimental.deepseek_prefill
         dram = (
             ttnn.DRAM_MEMORY_CONFIG
@@ -348,7 +379,9 @@ class Hy4AttentionPool(Hy4AttentionOpt):
         q = self.idx_q(o, d, tabs)  # [1,32,S,128]
         qh = q_headrows(q, S)
         ttnn.deallocate(q)
-        w32 = _pad_rows(d["iw"], 32)
+        w32 = (
+            d["iw"] if os.environ.get("HY4_IDX_QFAST", "0") == "1" else _pad_rows(d["iw"], 32)
+        )  # QFAST: the score kernel reads tile pages and only rows r < S; the tile padding rows are never used
         gids = select_global(ctx, qh, w32, self.key_view)
         for t in (qh, w32):
             ttnn.deallocate(t)
@@ -358,8 +391,18 @@ class Hy4AttentionPool(Hy4AttentionOpt):
     def decode_step_pool(self, h, o, tabs, dense_ids8=None):
         """h [1,1,S,6144] (post input norm). Returns out [1,1,S,6144]; the layer's idx8 is left in ctx.ids8[layer]."""
         ctx = self.ctx
-        d = self.front(h, o, tabs)
-        self.pool_append_kv(d["lat"], d["k_pe"])
+        from models.demos.blackhole.hy4_preview.tt import hy4_fuse_attn as FA
+
+        qrm = (
+            FA.enabled("q")
+            and ctx.S <= 4
+            and o.rope1
+            and self.w_uk.dtype == ttnn.bfloat16
+            and tuple(self.w_uk.shape)[1:] == (8, 192, 512)
+        )
+        d = self.front(h, o, tabs, qrm=qrm, kvf=(ctx.wr, self.kv_pool))
+        if not d.get("kv_done"):
+            self.pool_append_kv(d["lat"], d["k_pe"])
         for t in (d["lat"], d["k_pe"]):
             ttnn.deallocate(t)
         if self.has_indexer:
@@ -373,8 +416,9 @@ class Hy4AttentionPool(Hy4AttentionOpt):
             ctx.ids8[self.layer] = idx8
         else:
             idx8 = dense_ids8 if ctx.mode == "dense" else ctx.ids8[self.spec.indexer_source]
-        o_lat = ctx.attend(d["qfull"], self.kv_pool, idx8, self.sink_pool)
+        o_lat = ctx.attend(d["qfull"], self.kv_pool, idx8, self.sink_pool, q_rm=d.get("qrm", False))
         ttnn.deallocate(d["qfull"])
-        out = self.back(o, o_lat, d["g"])
-        ttnn.deallocate(o_lat)
+        out = self.back(o, o_lat, d["g"], d.get("gfold", False))
+        if not (getattr(ctx.xm, "hm", False) or ctx.hm_compact):
+            ttnn.deallocate(o_lat)
         return out

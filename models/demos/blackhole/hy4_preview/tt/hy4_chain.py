@@ -323,6 +323,11 @@ class Hy4ChainLayer:
                 self.blk_tp = Hy4MoeTp32Block(
                     md, ch.ccl, self.blk.gate, tpe, int(os.environ.get("HY4_MOE_TP32_T", "1"))
                 )
+                if os.environ.get("HY4_MOE_FUSE", "0") == "1" and hasattr(tpe, "shared_cores"):
+                    # B19: shared expert beside the tp24 kernel in one program: w2 scaled by 1/4 (all 4 mesh rows compute all Tt tokens, the row reduction sums them back to 1x)
+                    from models.demos.blackhole.hy4_preview.tt.hy4_skinny import SkinnyShared
+
+                    self.blk_tp.shared_fuse = SkinnyShared(md, sw[0], sw[1], sw[2] * 0.25, limit=D.NO_CLAMP)
                 self.blk_pf = None
                 if (
                     os.environ.get("HY4_TP32_PF", "0") == "1"
@@ -566,6 +571,73 @@ class Hy4Chain:
                 hb, weight=self.final_norm, epsilon=self.cfg.rms_norm_eps, compute_kernel_config=self.ckc_norm
             )
         # HY4_HEAD_FP32=1 (device loop, D12-1): fp32 logits out of the lm_head (bf16 weights, fp32 accumulation), as the checkpoint's enable_lm_head_fp32
+        logits = ttnn.linear(
+            hn,
+            self.lm_head,
+            compute_kernel_config=self.ckc_head,
+            dtype=ttnn.float32 if os.environ.get("HY4_HEAD_FP32", "0") == "1" else None,
+        )
+        return hn, logits
+
+    def head_packed(self, x):
+        """HY4_HEAD_FAST=1 (verify-opt track): ``head`` on the PACKED streams x [1,1,4n,D] fp32 TILE (row 4t + i = stream i of token t) without the permute / layout churn, and with the
+        D-long reductions split 8 ways over a batch dim (the stock sum / matmul on 4n <= 16 rows run on ONE core per 192 K tiles: 55-200 us each). Same math as ``head`` (fp32): the
+        4-stream mix is a [n, 4n] x [4n, D] matmul, the mixes / sum of squares come from the split-K partials. Returns (hn bf16 [1,1,n,D], logits).
+        """
+        n = int(x.shape[2]) // 4
+        NC_ = 8
+        DC = HID // NC_
+        key = ("hf", n)
+        if not hasattr(self, "_hf"):
+            self._hf = {}
+        if key not in self._hf:
+            import torch as _t
+
+            md = self.md
+            up = lambda t: upload(md, t.contiguous(), ttnn.float32)
+            hw = (
+                ttnn.to_torch(ttnn.get_device_tensors(self.hh_w)[0]).float().reshape(NSTREAM, HID, NSTREAM)
+            )  # [i, d, o]
+            hhc = hw.permute(1, 0, 2).reshape(HID, NSTREAM * NSTREAM)  # [d, 4i+o]
+            hhb = hhc.reshape(NC_, DC, NSTREAM * NSTREAM).reshape(1, NC_, DC, NSTREAM * NSTREAM)
+            r4 = _t.arange(4 * n)
+            G = (r4[None, :] // 4 == _t.arange(n)[:, None]).float()  # [n, 4n]
+            Mk = (r4[:, None] % 4 == _t.arange(16)[None, :] // 4).float()  # [4n, 16]
+            Fm = (_t.arange(16)[:, None] % 4 == _t.arange(4)[None, :]).float()  # [16, 4]
+            E = (_t.arange(4 * n)[None, :] % 4 == _t.arange(4)[:, None]).float()  # [4, 4n]
+            self._hf[key] = (up(hhb),) + tuple(up(t.reshape(1, 1, *t.shape)) for t in (G, Mk, Fm, E))
+        hhb, G, Mk, Fm, E = self._hf[key]
+        xb = ttnn.concat(
+            [ttnn.slice(x, [0, 0, 0, c * DC], [1, 1, 4 * n, (c + 1) * DC]) for c in range(NC_)], dim=1
+        )  # [1,8,4n,768]
+        m8 = ttnn.matmul(xb, hhb, compute_kernel_config=self.ckc_head, dtype=ttnn.float32)  # [1,8,4n,16]
+        mm = ttnn.multiply(ttnn.sum(m8, dim=1, keepdim=True), Mk)  # [1,1,4n,16]: only the own-stream block of each row
+        ttnn.deallocate(m8)
+        m = ttnn.matmul(
+            G,
+            ttnn.matmul(mm, Fm, compute_kernel_config=self.ckc_head, dtype=ttnn.float32),
+            compute_kernel_config=self.ckc_head,
+            dtype=ttnn.float32,
+        )  # [1,1,n,4]
+        sq = ttnn.multiply(xb, xb)
+        ttnn.deallocate(xb)
+        ss = ttnn.matmul(
+            G,
+            ttnn.sum(ttnn.sum(sq, dim=3, keepdim=True), dim=1, keepdim=True),
+            compute_kernel_config=self.ckc_head,
+            dtype=ttnn.float32,
+        )  # [1,1,n,1]
+        ttnn.deallocate(sq)
+        r = ttnn.rsqrt(ttnn.add(ttnn.multiply(ss, 1.0 / (NSTREAM * HID)), self.cfg.rms_norm_eps))
+        m = ttnn.multiply(m, r)
+        w = ttnn.add(
+            ttnn.sigmoid(ttnn.add(ttnn.multiply(m, self.hh_scale), self.hh_base)), self.cfg.hc_eps
+        )  # [1,1,n,4]
+        W = ttnn.multiply(
+            ttnn.matmul(w, E, compute_kernel_config=self.ckc_head, dtype=ttnn.float32), G
+        )  # [1,1,n,4n]: W[t, 4t+i] = w[t,i]
+        h = ttnn.matmul(W, x, compute_kernel_config=self.ckc_head, dtype=ttnn.float32)  # [1,1,n,D] fp32
+        hn = rms_exact(h, self.final_norm32, self.cfg.rms_norm_eps)
         logits = ttnn.linear(
             hn,
             self.lm_head,

@@ -11,13 +11,16 @@ void kernel_main() {
     constexpr uint32_t KC = get_compile_time_arg_val(1);
     constexpr uint32_t CB_OUT = get_compile_time_arg_val(2);
     constexpr uint32_t CB_STRIP = get_compile_time_arg_val(3);
-    constexpr uint32_t ROW_B = get_compile_time_arg_val(4);   // output page bytes (n * 2)
+    constexpr uint32_t ROW_B = get_compile_time_arg_val(4);   // output page bytes (n * 2 / PPR)
     constexpr uint32_t MAXR = get_compile_time_arg_val(5);    // max key row tiles per core
     constexpr uint32_t KVT = get_compile_time_arg_val(
         6);  // 1: kv_len is element 0 of a device tensor (trace-safe: per-device count of valid keys), else the runtime
              // arg; 2: element r is the count of query row r (verify rows: causal per row)
     constexpr uint32_t CB_KV = get_compile_time_arg_val(7);
-    constexpr auto o_args = TensorAccessorArgs<8, 1>();
+    constexpr uint32_t PPR =
+        get_compile_time_arg_val(8);  // output pages per query row (1 = out [1,1,S,n]; B = out [1,1,S*B,n/B],
+                                      // HY4_IDX_BLK=1: the blocked layout of the select pipeline, no reshape copies)
+    constexpr auto o_args = TensorAccessorArgs<9, 1>();
     constexpr auto k_args = TensorAccessorArgs<o_args.next_compile_time_args_offset(), o_args.next_common_runtime_args_offset()>();
     constexpr uint32_t TILE_B = 2048;
     const uint32_t o_addr = get_common_arg_val<uint32_t>(0);
@@ -78,7 +81,15 @@ void kernel_main() {
         }
     }
     for (uint32_t r = 0; r < S; ++r) {
-        noc_async_write(strip + r * SROW, oa.get_noc_addr(r, first * 2), nrows * 64);
+        uint32_t src = strip + r * SROW, off = first * 2, rem = nrows * 64;
+        while (rem) {  // split at output page boundaries (PPR > 1)
+            const uint32_t pg = off / ROW_B, po = off % ROW_B;
+            const uint32_t nn = (rem < ROW_B - po) ? rem : (ROW_B - po);
+            noc_async_write(src, oa.get_noc_addr(r * PPR + pg, po), nn);
+            src += nn;
+            off += nn;
+            rem -= nn;
+        }
     }
     noc_async_write_barrier();
 }

@@ -19,7 +19,11 @@ def _acc(t):
     return list(ttnn.TensorAccessorArgs(t).get_compile_time_args())
 
 
-def merge_fused(x, sink, S, nsplit=None, out=None, full=False):
+_HM_OUT = {}
+
+
+def merge_fused(x, sink, S, nsplit=None, out=None, full=False, hm_users=0):
+    """hm_users > 0 (HY4_ATTN_HM=1, compact verify rows): S = tile rows TR, the writer scatters into the PERSISTENT head-major tensor [1,8,hm_users,512] (shared by all layers; the caller must not deallocate it)."""
     md = x.device()
     assert x.layout == ttnn.TILE_LAYOUT and x.dtype == ttnn.bfloat16
     nsplit = nsplit or int(
@@ -30,6 +34,20 @@ def merge_fused(x, sink, S, nsplit=None, out=None, full=False):
     grid = md.compute_with_storage_grid_size()
     n_cores = S * nsplit
     assert n_cores <= grid.x * grid.y
+    if hm_users:
+        import torch
+
+        key = (id(md), hm_users)
+        if key not in _HM_OUT:
+            _HM_OUT[key] = ttnn.from_torch(
+                torch.zeros(1, 8, hm_users, 512, dtype=torch.bfloat16),
+                device=md,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(md),
+            )
+        out = _HM_OUT[key]
     if out is None:
         out = ttnn.allocate_tensor_on_device(
             ttnn.Shape([1, S, 32, 512]), ttnn.bfloat16, ttnn.TILE_LAYOUT, md, ttnn.DRAM_MEMORY_CONFIG
@@ -70,10 +88,10 @@ def merge_fused(x, sink, S, nsplit=None, out=None, full=False):
         config=ttnn.ReaderConfigDescriptor(),
     )
     writer = ttnn.KernelDescriptor(
-        kernel_source=f"{KDIR}/mrg_writer.cpp",
+        kernel_source=f"{KDIR}/{'mrg_writer_hmc' if hm_users else 'mrg_writer'}.cpp",
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=core_set,
-        compile_time_args=[tpc, OUT] + _acc(out),
+        compile_time_args=[tpc, OUT] + ([hm_users] if hm_users else []) + _acc(out),
         runtime_args=rt_w,
         common_runtime_args=[out.buffer_address()],
         config=ttnn.WriterConfigDescriptor(),
@@ -97,6 +115,7 @@ def merge_fused(x, sink, S, nsplit=None, out=None, full=False):
                 S,
                 nsplit,
                 int(full),
+                hm_users,
                 os.environ.get("HY4_MRG_DBG", "0"),
                 tuple(_acc(x)),
                 tuple(_acc(sink)),

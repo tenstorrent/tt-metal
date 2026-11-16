@@ -438,10 +438,16 @@ class Hy4IHCFused:
                 len(fuse) > 2
             ):  # (far, partial, Hy4RowsReduce): the rows-phase reduce of the TP32 partial joins this program
                 rr = fuse[2]
+                fold = fuse[3] if len(fuse) > 3 else None
                 par, rr._par = rr._par, 1 - rr._par
                 ttnn.generic_op(
-                    tens + [part, rr.recvs[par], rr.out, far.recv, far.out],
-                    far._build(rr.out, T, ihc=([reader, writer, compute], cbs), rp=(rr, part, par)),
+                    tens + [part, rr.recvs[par], rr.out, far.recv, far.out] + ([fold] if fold is not None else []),
+                    far._build(
+                        rr.out,
+                        T,
+                        ihc=([reader, writer, compute], cbs),
+                        rp=(rr, part, par) + ((fold,) if fold is not None else ()),
+                    ),
                 )
             else:
                 ttnn.generic_op(

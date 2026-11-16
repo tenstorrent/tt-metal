@@ -8,6 +8,7 @@ step), KV cache = persistent TILE bf16 [1,1,Tcap,576] per layer written IN PLACE
 Inputs that change per step (token ids, position, rope tables, ids) are persistent device tensors overwritten with ``copy_host_to_device_tensor``; the whole step is one trace.
 """
 import copy
+import os
 
 import torch
 
@@ -19,6 +20,12 @@ from models.demos.blackhole.hy4_preview.tt.hy4_common import SENTINEL, upload  #
 from models.demos.blackhole.hy4_preview.tt.hy4_rope import rope_tables
 
 ROWS = 4
+
+
+def bfuse(name):
+    """HY4_BOUNDARY_FUSE (B18, default off): '1'/'all' or a comma list of {fold, ...}."""
+    v = os.environ.get("HY4_BOUNDARY_FUSE", "")
+    return v in ("1", "all") or name in v.split(",")
 
 
 def with_decode_cfg(sh, g1=(12, 8), g2=(12, 8), pn1=1, pn2=4, bw1=32, bw2=4):
@@ -167,7 +174,8 @@ class Hy4Decoder:
         ch = self.ch
         if ly.spec.mlp == DENSE:
             return D.allreduce_cols(self.mlp[i].forward(h))
-        part = self.mlp[i].forward(h)
+        _bt = getattr(ly, "blk_tp", None)
+        part = None if (_bt is not None and getattr(_bt, "shared_fuse", None) is not None) else self.mlp[i].forward(h)
         tok = ttnn.to_layout(h, ttnn.ROW_MAJOR_LAYOUT)
         tok = ttnn.reshape(tok, [1, 1, 1, HID])
         if (
@@ -178,11 +186,16 @@ class Hy4Decoder:
             ):  # HY4_TP32_TAIL=oneshot: partial -> Hy4RowsReduce + Hy4FuseAR + iHC pre in one program (next pre call)
                 from models.demos.blackhole.hy4_preview.tt.hy4_fuse_ar import FusedPartial
 
+                if bfuse("fold"):
+                    pt = ly.blk_tp.forward_partial(h, tok, fold=part, defer_fold=True)
+                    return FusedPartial(pt, rp=self.rp, fold=part)  # fold freed after the fused program
                 pt = ly.blk_tp.forward_partial(h, tok, fold=part)
-                ttnn.deallocate(part)
+                if part is not None:
+                    ttnn.deallocate(part)
                 return FusedPartial(pt, rp=self.rp)
             out = ly.blk_tp.forward(h, tok, fold=part)
-            ttnn.deallocate(part)
+            if part is not None:
+                ttnn.deallocate(part)
             out = ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG)
             y = ch.mc.allgather(out, ch.ccl, axis=1, dim=3)
             ttnn.deallocate(out)

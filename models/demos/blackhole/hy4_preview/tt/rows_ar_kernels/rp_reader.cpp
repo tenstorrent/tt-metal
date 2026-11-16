@@ -20,7 +20,11 @@ void kernel_main() {
     constexpr uint32_t H = get_compile_time_arg_val(6);
     constexpr uint32_t CB_STG = get_compile_time_arg_val(7);
     constexpr uint32_t CB_SCR = get_compile_time_arg_val(8);
-    constexpr auto in_args = TensorAccessorArgs<9>();
+    constexpr uint32_t CB_FOLD = get_compile_time_arg_val(9);
+    constexpr auto in_args = TensorAccessorArgs<10>();
+#ifdef RP_FOLD
+    constexpr auto fold_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
+#endif
     constexpr uint32_t NB = 4;
     constexpr uint32_t NR = NB - 1;
 #ifdef RP_PK
@@ -43,6 +47,12 @@ void kernel_main() {
     const uint32_t by = get_arg_val<uint32_t>(7);
     const uint32_t sid = get_arg_val<uint32_t>(8);
     const auto in_acc = TensorAccessor(in_args, in_addr, 2048);
+#ifdef RP_FOLD
+    const uint32_t fold_addr = get_common_arg_val<uint32_t>(2);
+    const auto fold_acc = TensorAccessor(fold_args, fold_addr, 2048);
+    cb_reserve_back(CB_FOLD, NTC);
+    const uint32_t fold_cb = get_write_ptr(CB_FOLD);
+#endif
 
     cb_reserve_back(CB_RECV, NR * NTC);
     cb_reserve_back(CB_OWN, NTC);
@@ -54,16 +64,27 @@ void kernel_main() {
         // DRAM reads must be 64 B aligned: block b is read from the tile row A = (b T) & ~1 (even row = 64 B aligned),
         // H rows: the token row b T sits at tile row (b T - A) <= 1 of the wire tile
 #ifdef RP_PK
-        const uint32_t scr = get_write_ptr(CB_SCR);  // [b][i][f] 64 B pieces
+        constexpr uint32_t RB = (T >= 2) ? 32 * T : 64;  // read piece: T rows of one face (T = 4: 128 B, 64 B aligned)
+        const uint32_t scr = get_write_ptr(CB_SCR);      // [b][i][f] RB-byte pieces
         for (uint32_t b = 0; b < NB; ++b) {
             const uint32_t A = (b * T) & ~1u;
             for (uint32_t i = 0; i < Q; ++i) {
                 for (uint32_t f = 0; f < 2; ++f) {
                     noc_async_read(
-                        in_acc.get_noc_addr(p * Q + i, f * 512 + A * 32), scr + ((b * Q + i) * 2 + f) * 64, 64);
+                        in_acc.get_noc_addr(p * Q + i, f * 512 + A * 32), scr + ((b * Q + i) * 2 + f) * RB, RB);
                 }
             }
         }
+#ifdef RP_FOLD
+        {  // the chip's own fold rows 0..T-1 of tile column p Q + i (same pieces/layout as the own block; no row shift)
+            const uint32_t scrf = scr + NB * Q * 2 * RB;
+            for (uint32_t i = 0; i < Q; ++i) {
+                for (uint32_t f = 0; f < 2; ++f) {
+                    noc_async_read(fold_acc.get_noc_addr(p * Q + i, f * 512), scrf + (i * 2 + f) * RB, RB);
+                }
+            }
+        }
+#endif
         noc_async_read_barrier();
         for (uint32_t b = 0; b < NB;
              ++b) {  // repack: token row t of tile column i -> row y = i T + t of the block's wire tile
@@ -74,13 +95,29 @@ void kernel_main() {
                     for (uint32_t t = 0; t < T; ++t) {
                         const uint32_t y = i * T + t;
                         noc_async_write(
-                            scr + ((b * Q + i) * 2 + f) * 64 + (sh + t) * 32,
+                            scr + ((b * Q + i) * 2 + f) * RB + (sh + t) * 32,
                             get_noc_addr(base + ((y >> 4) * 2 + f) * 512 + (y & 15) * 32),
                             32);
                     }
                 }
             }
         }
+#ifdef RP_FOLD
+        {
+            const uint32_t scrf = scr + NB * Q * 2 * RB;
+            for (uint32_t i = 0; i < Q; ++i) {
+                for (uint32_t f = 0; f < 2; ++f) {
+                    for (uint32_t t = 0; t < T; ++t) {
+                        const uint32_t y = i * T + t;
+                        noc_async_write(
+                            scrf + (i * 2 + f) * RB + t * 32,
+                            get_noc_addr(fold_cb + ((y >> 4) * 2 + f) * 512 + (y & 15) * 32),
+                            32);
+                    }
+                }
+            }
+        }
+#endif
         noc_async_write_barrier();
 #else
         for (uint32_t b = 0; b < NB; ++b) {
@@ -123,5 +160,8 @@ void kernel_main() {
     }
     noc_semaphore_set(sem, 0);
     cb_push_back(CB_OWN, NTC);
+#ifdef RP_FOLD
+    cb_push_back(CB_FOLD, NTC);
+#endif
     cb_push_back(CB_RECV, NR * NTC);
 }

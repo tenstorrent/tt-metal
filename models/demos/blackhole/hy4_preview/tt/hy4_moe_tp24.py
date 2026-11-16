@@ -20,6 +20,9 @@ def pick_cores(md, banks):
     g = md.compute_with_storage_grid_size()
     used = {(c.x, c.y) for c in banks}
     ov = [e for e in os.environ.get("HY4_TP24_EXTRA", "").split("/") if e]
+    # SKEW track (default off): HY4_TP24_PLACE=east -> extras of every bank core go to the free cores on its +x side only
+    # (default order 1,-1,2,... puts the 2nd extra of the east banks (x=6) at x=5); NL=16 trace-only -40 us (RESULT_SKEW.md)
+    dxs = (1, 2, 3, 4, 5, 6) if os.environ.get("HY4_TP24_PLACE", "") == "east" else (1, -1, 2, -2, 3, -3, 4, -4)
     out = []
     for b, c in enumerate(banks):
         out.append(ttnn.CoreCoord(c.x, c.y))
@@ -28,7 +31,7 @@ def pick_cores(md, banks):
                 x, y = map(int, ov[2 * b + i].split("."))
             else:
                 x = y = None
-                for dx in (1, -1, 2, -2, 3, -3, 4, -4):
+                for dx in dxs:
                     cx = c.x + dx
                     if 0 <= cx < g.x and (cx, c.y) not in used:
                         x, y = cx, c.y
@@ -67,7 +70,31 @@ class Tp24Experts(Tp32Experts):
             "rt": 64 * T,
         }
 
-    def __call__(self, h, route, T, out=None):
+    def shared_cores(self):
+        """B19: 8 more cores (entry b serves DRAM bank b): the nearest cores of bank core b's row that the 24 tp24 cores do not use (env HY4_SH_EXTRA='x.y/x.y/...' overrides)"""
+        if getattr(self, "_shc", None) is None:
+            g = self.md.compute_with_storage_grid_size()
+            used = {(c.x, c.y) for c in self.cores}
+            ov = [e for e in os.environ.get("HY4_SH_EXTRA", "").split("/") if e]
+            out = []
+            for b, c in enumerate(self.cores8):
+                if ov:
+                    x, y = map(int, ov[b].split("."))
+                else:
+                    x = y = None
+                    for dx in (1, -1, 2, -2, 3, -3, 4, -4, 5, -5, 6, -6):
+                        cx = c.x + dx
+                        if 0 <= cx < g.x and (cx, c.y) not in used:
+                            x, y = cx, c.y
+                            break
+                    assert x is not None, f"no free shared-expert core near bank core {(c.x, c.y)}"
+                used.add((x, y))
+                out.append(ttnn.CoreCoord(x, y))
+            self._shc = out
+        return self._shc
+
+    def __call__(self, h, route, T, out=None, shared=None):
+        """shared: a hy4_skinny.SkinnyShared (weights with 1/4-scaled down projection) run by the SAME program on 8 other cores on h (all T tokens); its 24 output tiles per bank land in the bank leader's L1 and are summed into `out` with the routed partial (B19, HY4_MOE_FUSE=1)."""
         assert 1 <= T <= 16
         md = self.md
         MT = 2 if T > 8 else 1
@@ -104,7 +131,7 @@ class Tp24Experts(Tp32Experts):
             _alias_cb(core_set, CB_ACTL, CB_ACTL16, 4 * MT),
             SK._tiny_cb(core_set, CB_ACT, 2 * NQ * MT, rows=R),
             _alias_cb(core_set, CB_O, CB_O16, 24 * MT),
-            _alias_cb(core_set, CB_LND, CB_LND16, 48 * MT),
+            _alias_cb(core_set, CB_LND, CB_LND16, (72 if shared is not None else 48) * MT),
             _alias_cb(core_set, CB_FIN, CB_FIN16, 24 * MT),
             ttnn.CBDescriptor(
                 total_size=64 + 64 * T,
@@ -138,6 +165,10 @@ class Tp24Experts(Tp32Experts):
         common_w = [h.buffer_address(), route.buffer_address(), out.buffer_address()]
         for q in self.phys:
             common_w += [q.x, q.y]
+        if shared is not None:
+            shared.relocate(self.shared_cores())
+            for q in shared.phys:  # shared-expert core b: handshake target of leader b
+                common_w += [q.x, q.y]
         writer = ttnn.KernelDescriptor(
             kernel_source=f"{KDIR}/tp24_writer.cpp",
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
@@ -160,7 +191,8 @@ class Tp24Experts(Tp32Experts):
             ]
             + _acc(h)
             + _acc(route)
-            + _acc(out),
+            + _acc(out)
+            + [1 if shared is not None else 0],
             runtime_args=rt_w,
             common_runtime_args=common_w,
             config=ttnn.WriterConfigDescriptor(),
@@ -197,6 +229,7 @@ class Tp24Experts(Tp32Experts):
                     CB_LND16,
                     CB_FIN,
                     CB_FIN16,
+                    1 if shared is not None else 0,
                 ],
                 runtime_args=ttnn.RuntimeArgs(),
                 common_runtime_args=[],
@@ -205,13 +238,21 @@ class Tp24Experts(Tp32Experts):
                 ),
             )
 
-        prog = ttnn.ProgramDescriptor(
-            kernels=[reader, writer, compute(leaders, 1), compute(others, 0)],
-            semaphores=[ttnn.SemaphoreDescriptor(id=i, core_ranges=core_set, initial_value=0) for i in range(3)],
-            cbs=cbs,
-        )
+        kernels = [reader, writer, compute(leaders, 1), compute(others, 0)]
+        sems = [
+            ttnn.SemaphoreDescriptor(id=i, core_ranges=core_set, initial_value=0)
+            for i in range(4 if shared is not None else 3)
+        ]
+        shp = ()
+        if shared is not None:
+            _, k2, s2, c2, shp = shared.build(
+                h, T, h, leaders=[(self.phys[3 * b].x, self.phys[3 * b].y) for b in range(8)]
+            )
+            kernels, sems, cbs = kernels + k2, sems + s2, cbs + c2
+        prog = ttnn.ProgramDescriptor(kernels=kernels, semaphores=sems, cbs=cbs)
         prog.custom_program_hash = _hash(
             0x7C24,
+            shp,
             T,
             R,
             self.w01.buffer_address(),
@@ -220,5 +261,8 @@ class Tp24Experts(Tp32Experts):
             tuple(_acc(route)),
             tuple(_acc(out)),
         )
+        if shared is not None:
+            ttnn.generic_op([h, route, self.w01, self.w2, shared.w01, shared.w2, out], prog)
+            return out
         ttnn.generic_op([h, route, self.w01, self.w2, out], prog)
         return out
