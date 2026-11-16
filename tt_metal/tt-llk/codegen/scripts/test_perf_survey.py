@@ -76,6 +76,7 @@ def _fake_diagnose(results):
                 measured=200.0,
                 floor=200.0 * (1 - headroom / 100),
                 stall_headroom_pct=headroom,
+                bound={"kind": "issue", "thread": "math", "occupancy_pct": 90.0},
                 top_causes=[[top, 12.5]],
             )
         else:

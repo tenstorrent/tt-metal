@@ -127,10 +127,9 @@ def _row(entry: Entry, out_dir: Path, candidate_pct: float) -> dict:
     )
     top = (diag.get("top_causes") or [[None, None]])[0]
     hr = diag.get("stall_headroom_pct")
-    bound = diag.get("bound")
-    # Only an issue-bound kernel has a meaningful stall headroom. Results written before the
-    # bound existed fall back to the old rule (SFPU tests only).
-    judged = bound["kind"] == "issue" if bound else entry.sfpu
+    bound = diag.get("bound")  # absent when the diagnosis failed or was skipped
+    # Only an issue-bound kernel has a meaningful stall headroom.
+    judged = bound is not None and bound["kind"] == "issue"
     candidate = (
         diag.get("status") == "ok" and judged and hr is not None and hr >= candidate_pct
     )

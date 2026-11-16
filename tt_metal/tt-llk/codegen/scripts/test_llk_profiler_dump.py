@@ -6,7 +6,6 @@
 
 import enum
 import importlib.util
-import types
 from pathlib import Path
 
 _PATH = Path(__file__).parent / "pytest_plugins" / "llk_profiler_dump.py"
@@ -30,48 +29,32 @@ class _Data:
 
 class RunType(enum.Enum):
     MATH_ISOLATE = 3
+    L1_TO_L1 = 1
 
 
-def _fake_profiler_module():
-    module = types.ModuleType("fake_profiler")
-
-    class Profiler:
-        @staticmethod
-        def get_data(test_name, variant_id, location="0,0"):
-            return _Data(f"{test_name},{variant_id}\n")
-
-    module.Profiler = Profiler
-    return module
-
-
-def test_wrapped_get_data_dumps_with_caller_run_type(tmp_path):
-    module = _fake_profiler_module()
-    plugin.install(module, tmp_path)
-
-    def caller():
-        run_type = (
-            RunType.MATH_ISOLATE
-        )  # noqa: F841 - read from the frame by the plugin
-        run_index = 0  # noqa: F841
-        return module.Profiler.get_data("t", "v")
-
-    result = caller()
-    assert isinstance(result, _Data)
+def test_each_readout_is_dumped_with_its_run_type_and_index(tmp_path):
+    hooks = []
+    plugin.install(hooks, tmp_path)
+    for hook in hooks:
+        hook(RunType.MATH_ISOLATE, 0, _Data("t,v\n"))
+        hook(RunType.L1_TO_L1, 1, _Data("u,w\n"))
     files = sorted(p.name for p in tmp_path.iterdir())
-    assert files == ["000_MATH_ISOLATE_run0.csv"]
+    assert files == ["000_MATH_ISOLATE_run0.csv", "001_L1_TO_L1_run1.csv"]
     assert (tmp_path / files[0]).read_text() == "t,v\n"
 
 
-def test_install_is_idempotent_and_numbers_calls(tmp_path):
-    module = _fake_profiler_module()
-    plugin.install(module, tmp_path)
-    first = module.Profiler.__dict__["get_data"]
-    plugin.install(module, tmp_path)
-    # a second install must not wrap the wrapper (both layers would write 000_...)
-    assert module.Profiler.__dict__["get_data"] is first
-    module.Profiler.get_data("t", "v")
-    module.Profiler.get_data("t", "v")
-    assert sorted(p.name for p in tmp_path.iterdir()) == [
-        "000_unknown_run0.csv",
-        "001_unknown_run0.csv",
-    ]
+def test_install_is_idempotent(tmp_path):
+    hooks = []
+    plugin.install(hooks, tmp_path)
+    plugin.install(hooks, tmp_path)
+    # a second install must not add a second dumper (both would write 000_...)
+    assert len(hooks) == 1
+
+
+def test_the_hook_is_called_by_the_perf_harness():
+    """helpers/perf/core.py calls PROFILER_READOUT_HOOKS right after Profiler.get_data."""
+    core = (
+        Path(__file__).resolve().parents[2] / "tests/python_tests/helpers/perf/core.py"
+    ).read_text()
+    assert "PROFILER_READOUT_HOOKS: list[" in core
+    assert "hook(run_type, run_index, profiler_data)" in core

@@ -4,54 +4,56 @@
 
 from __future__ import annotations
 
-import importlib.util
 import json
-import sys
 from pathlib import Path
 
-_PATH = Path(__file__).parent / "perf_gap_summary.py"
-_SPEC = importlib.util.spec_from_file_location("perf_gap_summary", _PATH)
-gaps = importlib.util.module_from_spec(_SPEC)
-sys.modules["perf_gap_summary"] = gaps
-_SPEC.loader.exec_module(gaps)
+import perf_gap_summary as gaps
+import perf_headroom as ph
 
 NAMES = {
     "0x99": "SFPNONLINEAR",
+    "0x9a": "SFPNONLINEAR",
     "0x72": "SFPSTORE",
     "0x70": "SFPLOAD",
     "0x37": "SETRWC",
 }
+RATES = {"default": {"cycles": 1, "source": "s"}, "opcodes": {}}
+TILES = 128
 
 
-def _kernel(
-    root: Path, module: str, op: str, per_tile: float, bubbles, status="complete"
-):
+def _thread(window, bubbles):
+    gap_cycles = sum(c for *_, c in bubbles)
+    return {
+        "issue": window - gap_cycles,
+        "stall": {},
+        "idle": gap_cycles,
+        "unknown": 0,
+        "instructions_issued": window - gap_cycles,
+        "instructions_by_opcode": {},
+        "bubbles": [
+            dict(after=a, before=b, count=n, cycles=c) for a, b, n, c in bubbles
+        ],
+    }
+
+
+def _kernel(root: Path, module: str, op: str, per_tile: float, bubbles):
+    """A survey entry as perf_diagnose leaves it: a real verdict.json."""
     d = root / module / op
     d.mkdir(parents=True)
-    tiles = 128
+    window = int(per_tile * TILES)
     report = {
-        "status": status,
-        "window": {"cycles": int(per_tile * tiles)},
+        "status": "complete",
+        "window": {"cycles": window},
         "threads": {
-            "math": {
-                "bubbles": [
-                    dict(after=a, before=b, count=n, cycles=c) for a, b, n, c in bubbles
-                ]
-            },
-            "unpack": {
-                "bubbles": [dict(after="0x37", before="0x70", count=999, cycles=999)]
-            },
+            "math": _thread(window, bubbles),
+            "unpack": _thread(window, [("0x37", "0x70", 99, 99)]),
         },
     }
-    (d / "perf_MATH_ISOLATE.json").write_text(json.dumps(report))
-    (d / "verdict.json").write_text(
-        json.dumps(
-            {"bottleneck": "math", "reconcile": {"wave_per_tile": per_tile, "ok": True}}
-        )
+    row = {"loop_factor": "32", "tile_cnt": "4", "mean(MATH_ISOLATE)": str(per_tile)}
+    verdict = ph.headroom_verdict(
+        report, row, RATES, run_type="MATH_ISOLATE", opcode_names=NAMES
     )
-    (d / "diag.json").write_text(
-        json.dumps({"status": "ok" if status == "complete" else "failed"})
-    )
+    (d / "verdict.json").write_text(json.dumps(verdict))
 
 
 def test_pairs_are_aggregated_over_kernels_on_the_bottleneck_thread(tmp_path):
@@ -63,7 +65,7 @@ def test_pairs_are_aggregated_over_kernels_on_the_bottleneck_thread(tmp_path):
         170.0,
         [("0x37", "0x70", 256, 3584), ("0x99", "0x72", 128, 128)],
     )
-    rows = gaps.summarize(tmp_path, NAMES)
+    rows = gaps.summarize(tmp_path)
     by_pair = {r["pair"]: r for r in rows}
     nl = by_pair["SFPNONLINEAR->SFPSTORE"]
     assert nl["kernels"] == 2
@@ -77,19 +79,29 @@ def test_pairs_are_aggregated_over_kernels_on_the_bottleneck_thread(tmp_path):
     ), "ranked by total cycles per tile across kernels"
 
 
-def test_incomplete_captures_are_skipped(tmp_path):
+def test_a_kernel_counts_once_per_pair(tmp_path):
+    # Two hex opcodes with one mnemonic: one named pair, one kernel, summed cycles.
     _kernel(
         tmp_path,
         "m",
-        "Cos",
-        300.0,
-        [("0x99", "0x72", 10, 10)],
-        status="capture_clipped",
+        "Sigmoid",
+        267.0,
+        [("0x99", "0x72", 2048, 2048), ("0x9a", "0x72", 1024, 2048)],
     )
-    assert gaps.summarize(tmp_path, NAMES) == []
+    (row,) = gaps.summarize(tmp_path)
+    assert row["kernels"] == 1
+    assert row["max_cyc_per_tile"] == 32.0
+    assert row["sum_cyc_per_tile"] == 32.0
+    assert row["cycles_per_gap"] == 1.33
+
+
+def test_entries_without_a_verdict_are_skipped(tmp_path):
+    (tmp_path / "m" / "Cos").mkdir(parents=True)
+    (tmp_path / "m" / "Cos" / "diag.json").write_text(json.dumps({"status": "failed"}))
+    assert gaps.summarize(tmp_path) == []
 
 
 def test_markdown_table(tmp_path):
     _kernel(tmp_path, "m", "Sigmoid", 267.0, [("0x99", "0x72", 4096, 4096)])
-    md = gaps.to_markdown(gaps.summarize(tmp_path, NAMES))
+    md = gaps.to_markdown(gaps.summarize(tmp_path))
     assert "| SFPNONLINEAR->SFPSTORE | 1 | 1.0 | 32.0 | m/Sigmoid |" in md

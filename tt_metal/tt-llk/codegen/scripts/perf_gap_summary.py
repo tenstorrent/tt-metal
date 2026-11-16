@@ -3,9 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """Every issue gap a headroom survey saw, per instruction pair, across all kernels.
 
-Reads <survey>/<module>/<op>/perf_<RUN_TYPE>.json and verdict.json (complete captures
-only), takes the bottleneck thread's gaps ("A->B": B could not issue the cycle after A)
-and aggregates them per pair:
+Reads <survey>/<module>/<op>/verdict.json (written only for captures that could be
+judged), takes the bottleneck thread's gaps ("A->B": B could not issue the cycle after
+A, already named and merged per pair by perf_headroom) and aggregates them per pair:
 
     pair | kernels | cycles per gap | max cyc/tile (worst kernel) | sum cyc/tile
 
@@ -19,21 +19,13 @@ from __future__ import annotations
 
 import argparse
 import csv
-import importlib.util
 import json
 import sys
 from collections import defaultdict
 from pathlib import Path
 
-_HERE = Path(__file__).resolve().parent
-_ASSEMBLY = _HERE.parents[1] / "tt_llk_quasar" / "instructions" / "assembly.yaml"
 
-
-def _name(opcode: str, names: dict[str, str]) -> str:
-    return names.get(opcode, opcode)
-
-
-def summarize(root: Path, names: dict[str, str]) -> list[dict]:
+def summarize(root: Path) -> list[dict]:
     pairs: dict[str, dict] = defaultdict(
         lambda: {
             "kernels": 0,
@@ -44,27 +36,18 @@ def summarize(root: Path, names: dict[str, str]) -> list[dict]:
             "worst": "",
         }
     )
-    for report_path in sorted(root.glob("*/*/perf_*.json")):
-        kernel_dir = report_path.parent
-        verdict_path = kernel_dir / "verdict.json"
-        report = json.loads(report_path.read_text())
-        if (
-            report.get("status") not in ("complete", "missing_signals")
-            or not verdict_path.is_file()
-        ):
-            continue
+    for verdict_path in sorted(root.glob("*/*/verdict.json")):
+        kernel_dir = verdict_path.parent
         verdict = json.loads(verdict_path.read_text())
-        per_tile = verdict["reconcile"]["wave_per_tile"]
-        tiles = report["window"]["cycles"] / per_tile if per_tile else 0
-        thread = report["threads"].get(verdict["bottleneck"]) or {}
+        tiles = verdict["tiles"]
         kernel = f"{kernel_dir.parent.name}/{kernel_dir.name}"
-        for gap in thread.get("bubbles") or []:
-            pair = f"{_name(gap['after'], names)}->{_name(gap['before'], names)}"
+        # One entry per pair and kernel: perf_headroom merges repeats of a pair.
+        for pair, gap in verdict["units"][verdict["bottleneck"]]["gaps"].items():
             p = pairs[pair]
             p["kernels"] += 1
             p["count"] += gap["count"]
             p["cycles"] += gap["cycles"]
-            cpt = gap["cycles"] / tiles if tiles else 0.0
+            cpt = gap["cycles"] / tiles
             p["sum"] += cpt
             if cpt > p["max"]:
                 p["max"], p["worst"] = cpt, kernel
@@ -95,15 +78,6 @@ def to_markdown(rows: list[dict]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _load_names() -> dict[str, str]:
-    spec = importlib.util.spec_from_file_location(
-        "perf_headroom", _HERE / "perf_headroom.py"
-    )
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module.load_opcode_names(_ASSEMBLY) if _ASSEMBLY.exists() else {}
-
-
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -119,7 +93,7 @@ def main(argv: list[str] | None = None) -> int:
     args = p.parse_args(argv)
     rows = [
         r
-        for r in summarize(args.survey, _load_names())
+        for r in summarize(args.survey)
         if r["max_cyc_per_tile"] >= args.min_cyc_per_tile
     ]
     if args.csv:

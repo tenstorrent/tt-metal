@@ -131,6 +131,7 @@ def test_unit_floor_uses_default_and_reports_it(tmp_path):
     assert perf_headroom.unit_floor_cycles(thread, _base_rates(tmp_path)) == (
         6,
         ["FOO"],
+        False,
     )
 
 
@@ -147,13 +148,14 @@ def test_unit_floor_prices_opcodes_from_the_rate_table(tmp_path):
         ]
     )
     thread = _thread(8, by_opcode={"SFPSWAP": 2, "SFPMAD": 4, "FOO": 2})
-    assert perf_headroom.unit_floor_cycles(thread, rates) == (12, ["FOO"])
+    assert perf_headroom.unit_floor_cycles(thread, rates) == (12, ["FOO"], False)
 
 
 def test_unit_floor_without_opcodes_defaults_everything(tmp_path):
     assert perf_headroom.unit_floor_cycles(_thread(7), _base_rates(tmp_path)) == (
         7,
-        ["<all>"],
+        [],
+        True,
     )
 
 
@@ -370,6 +372,25 @@ def test_repeated_bubble_pairs_accumulate(tmp_path):
     causes = dict((name, value) for name, value in verdict["causes"])
     assert causes["math.bubble.SFPNONLINEAR->SFPSTORE"] == 4.0
     assert causes["math.idle"] == 26.0
+    assert verdict["units"]["math"]["gaps"] == {
+        "SFPNONLINEAR->SFPSTORE": {"count": 128, "cycles": 512}
+    }
+
+
+def test_two_hex_opcodes_with_one_mnemonic_merge_into_one_gap(tmp_path):
+    thread = _thread(2560, idle=3840)
+    thread["bubbles"] = [
+        {"after": "0x99", "before": "0x72", "count": 64, "cycles": 256},
+        {"after": "0x9a", "before": "0x72", "count": 32, "cycles": 64},
+    ]
+    names = {"0x99": "SFPNONLINEAR", "0x9a": "SFPNONLINEAR", "0x72": "SFPSTORE"}
+    verdict = _verdict(
+        tmp_path, _report(6400, {"math": thread}), _csv_row(50.0), opcode_names=names
+    )
+    assert verdict["tiles"] == TILES
+    assert verdict["units"]["math"]["gaps"] == {
+        "SFPNONLINEAR->SFPSTORE": {"count": 96, "cycles": 320}
+    }
 
 
 def test_bottleneck_is_busiest_issuer_not_the_waiting_thread(tmp_path):
@@ -552,3 +573,47 @@ def test_no_thread_busy_most_of_the_time_is_sync_bound():
     )
     assert v["bound"]["kind"] == "sync"
     assert v["stall_headroom_pct"] is None
+
+
+@pytest.mark.parametrize(
+    "row",
+    [
+        _csv_row(0.0),
+        _csv_row(50.0, loop_factor="0"),
+        _csv_row(50.0, tile_cnt="0"),
+    ],
+)
+def test_zero_in_the_csv_is_a_value_error_not_a_crash(tmp_path, row):
+    report = _report(6400, {"math": _thread(2560, idle=3840)})
+    with pytest.raises(ValueError):
+        _verdict(tmp_path, report, row)
+
+
+def test_verdict_contract():
+    """Keys read by perf_diagnose.py, perf_gap_summary.py and the llk-perf-tuner agent.
+
+    A rename must update those readers too; this test is the reminder.
+    """
+    t = 128
+    v = _bound_verdict({"math": _thread(30 * t, idle=10 * t)}, 40.0)
+    assert {
+        "bound",
+        "occupancy_pct",
+        "floor_check",
+        "tiles",
+        "reconcile",
+        "units",
+        "bottleneck",
+        "waiting_threads",
+        "stall_headroom_pct",
+        "causes",
+    } <= set(v)
+    assert {"kind", "thread", "occupancy_pct"} <= set(v["bound"])
+    assert {"csv_per_tile", "delta_pct", "ok"} <= set(v["reconcile"])
+    assert {
+        "floor_per_tile",
+        "stall_per_tile",
+        "bubbles_per_tile",
+        "gaps",
+        "instructions_by_opcode",
+    } <= set(v["units"][v["bottleneck"]])

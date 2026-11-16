@@ -6,11 +6,11 @@ import glob
 import os
 import re
 import shutil
-from dataclasses import fields
+from dataclasses import fields, replace
 from datetime import datetime, timezone
 from functools import reduce
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any, Callable, ClassVar
 
 import pandas as pd
 import pytest
@@ -25,7 +25,12 @@ from ..metrics import compute_metrics, export_counters, export_metrics
 from ..profiler import Profiler, ProfilerData
 from ..stimuli_config import StimuliConfig
 from ..test_config import BuildMode, ProfilerBuild, TestConfig
-from ..test_variant_parameters import PERF_RUN_TYPE, RuntimeParameter, TemplateParameter
+from ..test_variant_parameters import (
+    LOOP_FACTOR,
+    PERF_RUN_TYPE,
+    RuntimeParameter,
+    TemplateParameter,
+)
 from .schema import (
     FLAG_HEADERS,
     FORMAT_HEADERS,
@@ -799,6 +804,36 @@ def _selected_run_types(run_types):
     return [rt for rt in run_types if rt.name in names]
 
 
+def _loop_factor_override(params):
+    """LLK_PERF_LOOP_FACTOR replaces every LOOP_FACTOR of a perf run. Empty keeps them.
+
+    It shortens a perf run without changing its test id: a Quasar emulator wave dump
+    holds ~3.4 ms of design time, so wave captures of slow kernels use a smaller factor.
+    The perf CSV's loop_factor column records the value used.
+    """
+    text = os.environ.get("LLK_PERF_LOOP_FACTOR", "").strip()
+    if not text:
+        return list(params)
+    try:
+        value = int(text)
+    except ValueError:
+        value = 0
+    if value <= 0:
+        raise ValueError(
+            f"LLK_PERF_LOOP_FACTOR must be a positive integer, got {text!r}"
+        )
+    return [
+        replace(p, loop_factor=value) if isinstance(p, LOOP_FACTOR) else p
+        for p in params
+    ]
+
+
+# Called with (run_type, run_index, profiler_data) after every profiler readout of a
+# perf run. Tooling appends to it (codegen/scripts/pytest_plugins/llk_profiler_dump.py
+# dumps the raw zones); perf results never depend on it.
+PROFILER_READOUT_HOOKS: list[Callable[[PerfRunType, int, ProfilerData], None]] = []
+
+
 class PerfConfig(TestConfig):
     # === STATIC VARIABLES ===
     TEST_COUNTER: ClassVar[int] = 0
@@ -821,6 +856,9 @@ class PerfConfig(TestConfig):
         compile_time_formats: bool = False,
     ):
 
+        # Some tests compile LOOP_FACTOR in (a template), most pass it at run time.
+        templates = _loop_factor_override(templates)
+        runtimes = _loop_factor_override(runtimes)
         # Initialize passed templates and runtimes here so we don't get variant hash issues
         # when we reasign them in run method of PerfConfig
         self.passed_templates = templates.copy()
@@ -1049,6 +1087,8 @@ class PerfConfig(TestConfig):
                 profiler_data = Profiler.get_data(
                     self.test_name, self.variant_id, TestConfig.TENSIX_LOCATION
                 )
+                for hook in PROFILER_READOUT_HOOKS:
+                    hook(run_type, run_index, profiler_data)
                 assert_zones_dont_overlap(profiler_data)
 
                 if TestConfig.ENABLE_PERF_COUNTERS:

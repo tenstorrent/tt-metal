@@ -1236,24 +1236,31 @@ _perf_diag_wait() {
 # PERF_TUNE=false opts out.
 # ===========================================================================
 
-# Field of the latest diagnosis' diag.json (empty when missing).
-_diag_field() {
+# The latest diagnosis' diag.json in one interpreter, as four fields separated by \x1f
+# (not whitespace, so empty fields survive `read`):
+#   <stall headroom %> <bound, e.g. "issue-bound (math)"> <top cause> <below>
+# below=1 when the headroom is missing or under $1 percent. Fields are empty when
+# diag.json is missing or has no such key.
+#   IFS=$'\x1f' read -r hr bound top below < <(_diag_summary "$min")
+_diag_summary() {
     python - "$(sg PERF_DIAG_DIR)/diag.json" "$1" <<'PY' 2>/dev/null
 import json, sys
 try:
-    v = json.load(open(sys.argv[1])).get(sys.argv[2])
-except Exception:
-    v = None
-if isinstance(v, list) and v and isinstance(v[0], list):
-    v = v[0][0]                      # top cause name
-elif isinstance(v, dict) and "kind" in v:
-    v = f"{v['kind']}-bound ({v.get('thread', '?')})"   # bound
-print("" if v is None else v)
+    d = json.load(open(sys.argv[1]))
+except (OSError, ValueError):
+    d = {}
+hr = d.get("stall_headroom_pct")
+bound = d.get("bound")
+causes = d.get("top_causes") or []
+below = hr is None or float(hr) < float(sys.argv[2])
+print("\x1f".join([
+    "" if hr is None else str(hr),
+    f"{bound['kind']}-bound ({bound['thread']})" if bound else "",
+    causes[0][0] if causes else "",
+    "1" if below else "0",
+]))
 PY
 }
-
-# 0 when $1 < $2 (floats).
-_lt() { python -c 'import sys; sys.exit(0 if float(sys.argv[1]) < float(sys.argv[2]) else 1)' "$1" "$2" 2>/dev/null; }
 
 execute_step_perf_tune_gate() {
     local _L; _L="$(_LOG)"
@@ -1263,15 +1270,15 @@ execute_step_perf_tune_gate() {
     ss PERF_TUNE_ATTEMPTS 0 --json
     ss PERF_TUNE_KEPT 0 --json
     ss PERF_TUNE_LAST_RESULT ""
-    hr="$(_diag_field stall_headroom_pct)"
-    local bound; bound="$(_diag_field bound)"
+    local bound top below
+    IFS=$'\x1f' read -r hr bound top below < <(_diag_summary "$min")
     if [ "$(sg PERF_ENABLED)" != "true" ]; then why="perf not enabled"
     elif [ "$(sg PERF_TUNE)" = "false" ]; then why="PERF_TUNE=false"
     elif [ "$(sg KERNEL_TYPE)" != "sfpu" ]; then why="tuning is sfpu-only (KERNEL_TYPE=$(sg KERNEL_TYPE))"
     elif [ "$(sg PERF_DIAG_STATUS)" != "ok" ]; then why="diagnosis status $(sg PERF_DIAG_STATUS) (need ok)"
     elif [ -n "$bound" ] && [ "${bound#issue-bound}" = "$bound" ]; then
         why="kernel is ${bound}; the issue floor does not describe it, so there is nothing to tune against"
-    elif [ -z "$hr" ] || _lt "$hr" "$min"; then why="stall headroom ${hr:-?}% below ${min}%"
+    elif [ "$below" != 0 ]; then why="stall headroom ${hr:-?}% below ${min}%"
     fi
     if [ -n "$why" ]; then
         ss PERF_TUNE_STATUS skipped
@@ -1281,26 +1288,27 @@ execute_step_perf_tune_gate() {
     fi
     ss PERF_TUNE_STATUS run
     rj message --message "Perf tuning: stall headroom ${hr}% — up to ${max} diagnosis-guided attempts"
-    echo "PERF_TUNE: run next=tune_1 headroom=${hr}% top=$(_diag_field top_causes) attempts=0/${max}"
+    echo "PERF_TUNE: run next=tune_1 headroom=${hr}% top=${top} attempts=0/${max}"
 }
 
 # After each tune attempt (and the re-diagnosis of a kept one): next=tune_N or next=done.
 execute_step_perf_tune_next() {
     local _L; _L="$(_LOG)"
-    local n max min last hr why=""
+    local n max min last hr bound top below why=""
     n="$(sg PERF_TUNE_ATTEMPTS)"; n="${n:-0}"; max="$(sg PERF_TUNE_MAX_ATTEMPTS)"; min="$(sg PERF_TUNE_MIN_HEADROOM_PCT)"
-    last="$(sg PERF_TUNE_LAST_RESULT)"; hr="$(_diag_field stall_headroom_pct)"
+    last="$(sg PERF_TUNE_LAST_RESULT)"
+    IFS=$'\x1f' read -r hr bound top below < <(_diag_summary "${min:-5}")
     if [ "$(sg PERF_TUNE_STATUS)" != "run" ]; then why="tuning not running ($(sg PERF_TUNE_STATUS))"
     elif [ "$n" -ge "${max:-2}" ]; then why="all ${max} attempts used"
     elif [ "$last" = "reverted" ]; then why="the last change did not help"
     elif [ "$(sg PERF_DIAG_STATUS)" != "ok" ]; then why="no ok diagnosis of the kept change ($(sg PERF_DIAG_STATUS))"
-    elif [ -z "$hr" ] || _lt "$hr" "${min:-5}"; then why="stall headroom ${hr:-?}% below ${min:-5}%"
+    elif [ "$below" != 0 ]; then why="stall headroom ${hr:-?}% below ${min:-5}%"
     fi
     if [ -n "$why" ]; then
         echo "PERF_TUNE: next=done reason='${why}' attempts=${n}/${max} kept=$(sg PERF_TUNE_KEPT)"
         return 0
     fi
-    echo "PERF_TUNE: next=tune_$((n + 1)) headroom=${hr}% top=$(_diag_field top_causes) attempts=${n}/${max}"
+    echo "PERF_TUNE: next=tune_$((n + 1)) headroom=${hr}% top=${top} attempts=${n}/${max}"
 }
 
 # ===========================================================================
