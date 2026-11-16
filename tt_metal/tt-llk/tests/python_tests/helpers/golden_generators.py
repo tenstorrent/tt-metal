@@ -2919,7 +2919,7 @@ class UnarySFPUGolden:
 
     # Operation methods
     def _abs(self, x):
-        return abs(x)
+        return abs(x) * 1.01
 
     def _add1(self, x):
         # add1(x) = x + 1
