@@ -34,14 +34,21 @@ inline void llk_math_reduce_init(const std::uint32_t operandA, const std::uint32
     const bool src_2x = pool_type != PoolType::MAX && reduce_dim == ReduceDim::REDUCE_COL &&
                         get_operand_src_format(operandA_id) == static_cast<std::uint32_t>(DataFormat::MxFp4) &&
                         get_operand_src_format(operandB_id) == static_cast<std::uint32_t>(DataFormat::MxFp4);
-    const DataFormat data_format = static_cast<DataFormat>(unpack_dst_format[operandA_id]);
-    const DataFormat scaler_format = static_cast<DataFormat>(unpack_dst_format[operandB_id]);
-    const DataFormat srcA_format = src_2x ? DataFormat::MxFp4_2x_B : (swap_operands ? scaler_format : data_format);
-    const DataFormat srcB_format = src_2x ? DataFormat::MxFp4_2x_B : (swap_operands ? data_format : scaler_format);
+    // MxFp4_2x_B deviates from unpack_dst_format[]; the tracker keys on formats, so it is still programmed.
+    const DataFormat data_format =
+        src_2x ? DataFormat::MxFp4_2x_B : static_cast<DataFormat>(unpack_dst_format[operandA_id]);
+    const DataFormat scaler_format =
+        src_2x ? DataFormat::MxFp4_2x_B : static_cast<DataFormat>(unpack_dst_format[operandB_id]);
+    const DataFormat srcA_format = swap_operands ? scaler_format : data_format;
+    const DataFormat srcB_format = swap_operands ? data_format : scaler_format;
 
-    // When srcA_2x, srcA_format deviates from the op-agnostic unpack_dst_format[] table. The tracker
-    // keys on the formats, so the deviation is programmed and a repeat call is free.
-    _configure_alu_cfg_<AluCfgType::DEFAULT, EN_32BIT_DEST>(srcA_format, srcB_format);
+    // Declare the Dest-derived width for operands copied back from Dest; init still takes the unpacked formats.
+    const auto alu_format = [](const DataFormat format) {
+        return reduce_moves_dest_to_src<pool_type, reduce_dim>() ? ckernel::math::dest_src_format<EN_32BIT_DEST>(format)
+                                                                 : format;
+    };
+
+    _configure_alu_cfg_<AluCfgType::DEFAULT, EN_32BIT_DEST>(alu_format(srcA_format), alu_format(srcB_format));
     _llk_math_reduce_init_<pool_type, reduce_dim, EN_32BIT_DEST, math_fidelity>(srcA_format, srcB_format, tensor_shape);
 }
 
