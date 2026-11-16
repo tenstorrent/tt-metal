@@ -20,7 +20,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.v4_attention_base import TtV4AttentionB
 def _cache_write_rows(chunk_entries: int) -> int:
     """How many cache rows one write covers: this chunk's new entries plus the 0..31 rows already sitting in
     the last tile. The cache is written a whole tile at a time, so this rounds up to whole tiles -- 64 rows
-    for a 4096-token chunk, 96 for 5120."""
+    for a 4096-token chunk, 96 for a 5k one."""
     return -(-(ttnn.TILE_SIZE - 1 + chunk_entries) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
 
 
@@ -154,7 +154,7 @@ class TtHCA(TtV4AttentionBase):
 
         One entry is one row, so the offset advances by ``chunk/compress_rate`` per chunk -- a multiple of
         TILE_SIZE only for chunks of 4096 tokens. ``fill_cache_for_user_`` needs that alignment
-        which a 5120-token chunk does not give it, so the write goes through ``_write_tail_tile`` instead.
+        which the production chunk does not give it, so the write goes through ``_write_tail_tile`` instead.
 
         The whole padded width is written, not just the real entries, so the width is the same for every
         chunk; the mask -infs everything past ``total_entries`` anyway."""
