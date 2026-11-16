@@ -136,7 +136,7 @@ def test_unary_min_fp32(input_shapes, low, high, scalar, device):
         ttnn.uint32,
     ],
 )
-def test_unary_min_int32(input_shapes, low, high, scalar, ttnn_dtype, device):
+def test_unary_min_uint32(input_shapes, low, high, scalar, ttnn_dtype, device):
     num_elements = torch.prod(torch.tensor(input_shapes)).item()
     torch_input = torch.linspace(high, low, num_elements, dtype=torch.int32)
     torch_input = torch_input[:num_elements].reshape(input_shapes)
