@@ -5,10 +5,17 @@
 #include "fabric_graph_inputs.hpp"
 
 #include <algorithm>
+#include <set>
 #include <tuple>
 
+#include <enchantum/enchantum.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
+#include <tt-metalium/experimental/fabric/topology_mapper.hpp>
 #include <tt_stl/assert.hpp>
+
+#include "llrt/tt_cluster.hpp"
 
 namespace tt::tt_fabric::graph {
 
@@ -20,6 +27,25 @@ PortDirection port_direction(RoutingDirection direction) {
         "fabric graph: {} is not a port direction",
         static_cast<int>(direction));
     return PortDirection{direction};
+}
+
+// first mesh-edge side (N, E, S, W), then Z, that the chip isn't using yet
+std::optional<RoutingDirection> free_direction(
+    const FabricNodeId& node, const MeshGraph& mesh_graph, const std::set<RoutingDirection>& taken) {
+    const auto c = mesh_graph.chip_to_coordinate(node.mesh_id, node.chip_id);
+    const auto shape = mesh_graph.get_mesh_shape(node.mesh_id);
+    const std::pair<RoutingDirection, bool> candidates[] = {
+        {RoutingDirection::N, c[0] == 0},
+        {RoutingDirection::E, c[1] + 1 == shape[1]},
+        {RoutingDirection::S, c[0] + 1 == shape[0]},
+        {RoutingDirection::W, c[1] == 0},
+        {RoutingDirection::Z, mesh_graph.get_chip_spec().num_z_ports > 0}};
+    for (const auto& [d, ok] : candidates) {
+        if (ok && !taken.contains(d)) {
+            return d;
+        }
+    }
+    return std::nullopt;
 }
 
 }  // namespace
@@ -85,6 +111,109 @@ std::vector<Port> with_live_planes(const std::vector<Port>& ports, const Control
         }
     }
     return live;
+}
+
+std::vector<UnusedLink> unused_links(const ControlPlane& control_plane, const tt::Cluster& cluster) {
+    const auto& psd = control_plane.get_physical_system_descriptor();
+    const auto& mapper = control_plane.get_topology_mapper();
+    auto node_of = [&](uint64_t asic) -> std::optional<FabricNodeId> {
+        const auto id = psd.find_physical_node_id(tt::tt_metal::AsicID{asic});
+        return id ? mapper.find_fabric_node_id_from_physical_node_id(*id) : std::nullopt;
+    };
+
+    std::vector<UnusedLink> links;
+    const auto& asics = cluster.get_unique_chip_ids();
+    const auto& local = cluster.get_ethernet_connections();
+    const auto& remote = cluster.get_ethernet_connections_to_remote_devices();
+    for (const auto& [chip, asic] : asics) {
+        const auto node = node_of(asic);
+        if (!node) {
+            continue;  // not a fabric chip
+        }
+        std::set<chan_id_t> used;
+        for (const auto& [chan, direction] : control_plane.get_active_fabric_eth_channels(*node)) {
+            used.insert(chan);
+        }
+        auto add = [&](chan_id_t chan, uint64_t peer_asic) {
+            if (used.contains(chan)) {
+                return;
+            }
+            const auto core = cluster.get_soc_desc(chip).get_eth_core_for_channel(chan, CoordSystem::LOGICAL);
+            links.push_back(UnusedLink{
+                .node = *node,
+                .chan = chan,
+                .peer_asic = peer_asic,
+                .peer_in_domain = node_of(peer_asic).has_value(),
+                .trained = cluster.is_ethernet_link_up(chip, core)});
+        };
+        if (auto it = local.find(chip); it != local.end()) {
+            for (const auto& [chan, peer] : it->second) {
+                add(chan, asics.at(std::get<0>(peer)));
+            }
+        }
+        if (auto it = remote.find(chip); it != remote.end()) {
+            for (const auto& [chan, peer] : it->second) {
+                add(chan, std::get<0>(peer));
+            }
+        }
+    }
+    std::sort(links.begin(), links.end(), [](const UnusedLink& a, const UnusedLink& b) {
+        return std::tie(a.node, a.chan) < std::tie(b.node, b.chan);
+    });
+    return links;
+}
+
+std::vector<PerimeterPort> perimeter_ports(
+    const std::vector<UnusedLink>& links,
+    const std::vector<Port>& ports,
+    const MeshGraph& mesh_graph,
+    Topology topology) {
+    TT_FATAL(
+        is_2D_topology(topology),
+        "fabric graph: inter-domain needs a 2D fabric, got {}",
+        enchantum::to_string(topology));
+    std::map<FabricNodeId, std::set<RoutingDirection>> taken;
+    for (const auto& p : ports) {
+        taken[p.node].insert(*p.direction);
+    }
+    auto sorted = links;
+    std::sort(sorted.begin(), sorted.end(), [](const UnusedLink& a, const UnusedLink& b) {
+        return std::tie(a.node, a.chan) < std::tie(b.node, b.chan);
+    });
+
+    // one direction per peer chip, like an intermesh link
+    std::map<std::pair<FabricNodeId, uint64_t>, std::optional<RoutingDirection>> direction_of;
+    std::map<std::pair<FabricNodeId, RoutingDirection>, uint32_t> planes;
+    std::vector<PerimeterPort> out;
+    for (const auto& l : sorted) {
+        if (l.peer_in_domain) {
+            continue;  // folds back into the domain
+        }
+        auto [it, fresh] = direction_of.try_emplace({l.node, l.peer_asic});
+        if (fresh) {
+            it->second = free_direction(l.node, mesh_graph, taken[l.node]);
+            if (it->second) {
+                taken[l.node].insert(*it->second);
+            }
+        }
+        if (!it->second) {
+            log_warning(tt::LogFabric, "fabric graph: no free direction for perimeter link {} chan {}", l.node, l.chan);
+            continue;
+        }
+        if (!l.trained) {
+            log_warning(tt::LogFabric, "fabric graph: perimeter link {} chan {} is down", l.node, l.chan);
+        }
+        out.push_back(PerimeterPort{
+            .node = l.node,
+            .eth_chan = l.chan,
+            .direction = PortDirection{*it->second},
+            .plane = planes[{l.node, *it->second}]++,
+            .link_trained = l.trained});
+    }
+    std::sort(out.begin(), out.end(), [](const PerimeterPort& a, const PerimeterPort& b) {
+        return std::tie(a.node, a.direction, a.plane) < std::tie(b.node, b.direction, b.plane);
+    });
+    return out;
 }
 
 }  // namespace tt::tt_fabric::graph

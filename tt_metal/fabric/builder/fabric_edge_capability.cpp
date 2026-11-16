@@ -49,7 +49,8 @@ ZPortRole z_role_of(const PerDirectionCapabilities& caps) {
     if (!z.has_value()) {
         return ZPortRole::NONE;
     }
-    return *z == EdgeCapability::INTERMESH ? ZPortRole::INTERMESH_BOUNDARY : ZPortRole::EXPRESS_CHORD;
+    return *z == EdgeCapability::INTERMESH || *z == EdgeCapability::INTERDOMAIN ? ZPortRole::INTERMESH_BOUNDARY
+                                                                                : ZPortRole::EXPRESS_CHORD;
 }
 
 void validate_facing_role_consistency(RoutingDirection facing, EdgeCapability edge_capability, ZPortRole chip_z_role) {
@@ -64,6 +65,7 @@ void validate_facing_role_consistency(RoutingDirection facing, EdgeCapability ed
     }
     switch (edge_capability) {
         case EdgeCapability::INTERMESH:
+        case EdgeCapability::INTERDOMAIN:
             TT_FATAL(
                 chip_z_role == ZPortRole::INTERMESH_BOUNDARY,
                 "A Z-facing intermesh edge means the chip's Z port is the boundary: role must be "
