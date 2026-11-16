@@ -16,6 +16,9 @@
 #ifdef FUSE_BIAS
 #include "api/compute/bcast.h"
 #endif
+#ifdef FUSE_BIAS_SFPU
+#include "api/compute/sfpu_binary_bcast.h"
+#endif
 
 #include "api/compute/eltwise_binary.h"
 #include "experimental/kernel_args.h"
@@ -601,6 +604,70 @@ void kernel_main() {
 #ifdef PACKER_L1_ACC
                 PACK((llk_pack_reconfig_l1_acc(0)));
 #endif
+#ifdef FUSE_BIAS_SFPU
+                // FP32 bias on FP32 partials: an FPU add reads both through SrcA/SrcB as TF32, which drops the
+                // bias's low 13 mantissa bits, a per-column error that does not average out. Both buffers
+                // unpack to DEST unchanged instead, and the SFPU adds the bias's row 0 to every row in FP32.
+                // Each output tile takes two of the four FP32 DEST tiles (its partials and its bias tile).
+                static_assert(row_broadcast_bias, "FUSE_BIAS_SFPU takes a row-broadcast bias");
+                constexpr uint32_t sfpu_bias_tiles_per_acquire = 2;
+                reconfig_data_format_srca(in1_dfb_id, mm_partials_dfb_id);
+                if (bias_per_group || (b == 0 && bh == 0) || num_blocks_w_dim > 1) {
+                    bias_dfb.wait_front(bias_ntiles);
+                }
+                for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
+                    uint32_t in1_index_subblock_offset = 0;
+                    for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
+                        const bool is_last_in1_subblock_padded =
+                            last_subblock_padded && (in1_subblock == in1_num_subblocks - 1);
+                        mm_partials_dfb.wait_front(out_subblock_num_tiles);
+                        untilize_mode_out_dfb.reserve_back(out_subblock_num_tiles);
+                        for (uint32_t first = 0; first < out_subblock_num_tiles; first += sfpu_bias_tiles_per_acquire) {
+                            const uint32_t count = (out_subblock_num_tiles - first < sfpu_bias_tiles_per_acquire)
+                                                       ? out_subblock_num_tiles - first
+                                                       : sfpu_bias_tiles_per_acquire;
+                            tile_regs_acquire();
+                            copy_init(mm_partials_dfb_id);
+                            for (uint32_t t = 0; t < count; t++) {
+                                copy_tile(mm_partials_dfb_id, first + t, t);
+                            }
+                            copy_init(bias_dfb_id);
+                            for (uint32_t t = 0; t < count; t++) {
+                                const uint32_t k = (first + t) % out_subblock_w;
+                                // Padded output columns of the last in1 subblock read bias tile 0; the
+                                // writer drops them.
+                                const uint32_t bias_tile_idx =
+                                    (is_last_in1_subblock_padded && k >= last_subblock_w_valid)
+                                        ? 0u
+                                        : in1_index_subblock_offset + k;
+                                copy_tile(bias_dfb_id, bias_tile_idx, sfpu_bias_tiles_per_acquire + t);
+                            }
+                            sfpu_add_bcast_row_init();
+                            for (uint32_t t = 0; t < count; t++) {
+                                sfpu_add_bcast_row(t, sfpu_bias_tiles_per_acquire + t);
+                            }
+                            tile_regs_commit();
+#ifdef SFPU_ACTIVATION
+                            apply_activation_from_pack<
+                                activation_type,
+                                activation_param0,
+                                activation_param1,
+                                activation_param2>(count);
+#else
+                            tile_regs_wait();
+#endif
+                            for (uint32_t t = 0; t < count; t++) {
+                                pack_tile<true>(t, untilize_mode_out_dfb_id, first + t);
+                            }
+                            tile_regs_release();
+                        }
+                        mm_partials_dfb.pop_front(out_subblock_num_tiles);
+                        untilize_mode_out_dfb.push_back(out_subblock_num_tiles);
+
+                        in1_index_subblock_offset += out_subblock_w;
+                    }
+                }
+#else
                 reconfig_data_format(in1_dfb_id, mm_partials_dfb_id, in0_dfb_id, bias_dfb_id);
                 if constexpr (row_broadcast_bias) {
                     add_bcast_rows_init(mm_partials_dfb_id, bias_dfb_id);
@@ -697,6 +764,7 @@ void kernel_main() {
                         in1_index_subblock_offset += out_subblock_w;
                     }
                 }
+#endif  // FUSE_BIAS_SFPU
                 if constexpr (bias_per_group || num_blocks_w_dim > 1) {
                     bias_dfb.pop_front(bias_ntiles);
                 }
