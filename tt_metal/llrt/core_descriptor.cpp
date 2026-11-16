@@ -245,10 +245,11 @@ const tt::core_descriptor_t& MetalEnvImpl::get_core_descriptor_config(
     // A worker-grid override (TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE) is honoured on the dispatch-engine
     // path too, falling through to the descriptor-derived grid below.
     // In slow dispatch, silicon and the Wormhole/Blackhole simulator get the full grid; the emulator and other
-    // simulators keep the descriptor grid.
+    // simulators keep the descriptor grid. The simulator keeps a worker-grid override.
     const bool full_grid_target =
         !get_rtoptions().is_simulator_or_emulated() ||
-        (get_rtoptions().get_simulator_enabled() && (arch == tt::ARCH::WORMHOLE_B0 || arch == tt::ARCH::BLACKHOLE));
+        (get_rtoptions().get_simulator_enabled() && !get_rtoptions().is_core_grid_override_todeprecate() &&
+         (arch == tt::ARCH::WORMHOLE_B0 || arch == tt::ARCH::BLACKHOLE));
     const bool slow_dispatch_full_grid = !fast_dispatch && full_grid_target;
     if (slow_dispatch_full_grid ||
         (quasar_dispatch_engine_fd && !get_rtoptions().is_core_grid_override_todeprecate())) {
