@@ -3,8 +3,9 @@
 """
 Accuracy of the MiniMax-M3 vision encoder with the checkpoint's weights, against Hugging Face goldens.
 
-Builds TtMiniMaxM3VisionEncoder with from_weights_path and runs each golden image through the media module's
-prepare, then forward and read_embeddings. Each image must pass check_close against the goldens:
+Builds TtMiniMaxM3VisionEncoder with from_weights_path, as the media module's load() does. Runs each golden image
+through the media module's prepare, then forward and read_embeddings, as its encode() does. Each image must pass
+check_close against the goldens:
   - vision tokens: PCC >= 0.998 and relative L2 error <= 0.10;
   - tower output (forward_tower): PCC no more than 0.002 below Hugging Face's own bf16 run, relative L2 error <= 0.12;
   - no NaN or Inf in either.
