@@ -12,7 +12,11 @@
 // (gguf_matmul_writer.cpp) on a request per record, the compute kernel the rest. GGUF_EXPANDED: the pages hold the
 // level codes already (gguf_host_packing.cpp), each K tile without its index words, and no lookups run. Compile args:
 // format id, c_0 pages, one-page groups per unit, staging slots, the lookup request, answer and page address
-// semaphores, reads in flight, then the weight's TensorAccessorArgs.
+// semaphores, reads in flight, then the weight's TensorAccessorArgs. Decode, one-page groups: once the writer of this
+// core streams (answer semaphore nonzero), it reads every other unit on its own NoC, so that a core's reads use both
+// NoC ports of their DRAM bank; this kernel reserves the unit's pages, grants it (page address semaphore: its first
+// record, request semaphore: the count of grants) and pushes it when the writer has landed it (answer semaphore: 1 +
+// units landed).
 // Runtime args: weight address, N tiles, runs, then per run its N tile, first and end K group. With GGUF_PREFILL:
 // weight address, N tiles, first N tile, N tiles of this core, K groups, M chunks, first K group, N tiles per pass.
 
@@ -100,17 +104,35 @@ void kernel_main() {
         uint32_t pushed = 0;
         auto offset = [&](uint32_t idx) { return (((pushed + idx) % ring) - (pushed % ring)) * page; };
         uint32_t issued = 0, pending = 0, units_issued = 0, units_done = 0, sizes[in_flight];
+#ifdef GGUF_PREFILL
+        constexpr bool stream = false;
+#else
+        constexpr bool stream = true;
+#endif
+        Semaphore grants(request_sem), first(address_sem), landed(answer_sem);
+        uint32_t granted = 0;
+        bool by_writer[in_flight];
         auto issue = [&]() {
             const uint32_t n = total - issued < unit ? total - issued : unit;
             pages.reserve_back(pending + n);
+            const bool to_writer = stream && units_issued % 2 == 1 && landed.value() > 0;
+            by_writer[units_issued % in_flight] = to_writer;
             for (uint32_t j = 0; j < n; j++) {
-                noc.async_read<NocOptions::TXN_ID>(
-                    weights,
-                    pages,
-                    record,
-                    {.page_id = next_record()},
-                    {.offset_bytes = offset(pending + j)},
-                    {.trid = 1 + units_issued % in_flight});
+                const uint32_t id = next_record();
+                if (!to_writer) {
+                    noc.async_read<NocOptions::TXN_ID>(
+                        weights,
+                        pages,
+                        record,
+                        {.page_id = id},
+                        {.offset_bytes = offset(pending + j)},
+                        {.trid = 1 + units_issued % in_flight});
+                }
+            }
+            if (to_writer) {
+                first.set(issued);
+                asm volatile("fence" ::: "memory");  // the first record before the grant
+                grants.set(++granted);
             }
             sizes[units_issued % in_flight] = n;
             pending += n;
@@ -120,8 +142,13 @@ void kernel_main() {
         while (units_issued < in_flight && issued < total) {
             issue();
         }
+        uint32_t writer_units = 0;
         while (units_done < units_issued) {
-            noc.async_read_barrier<NocOptions::TXN_ID>({.trid = 1 + units_done % in_flight});
+            if (by_writer[units_done % in_flight]) {
+                landed.wait_min(1 + ++writer_units);
+            } else {
+                noc.async_read_barrier<NocOptions::TXN_ID>({.trid = 1 + units_done % in_flight});
+            }
             const uint32_t n = sizes[units_done % in_flight];
             pages.push_back(n);
             pushed += n;

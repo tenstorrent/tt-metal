@@ -15,6 +15,7 @@ namespace ttnn::prim {
 struct GgufMatmulSharedVariables {
     std::array<tt::tt_metal::KernelHandle, 2> reader{}, writer{};  // by the core's column parity
     std::vector<CoreCoord> cores;
+    bool writer_weight = false;  // decode with a streaming writer: the weight address is its last runtime arg
 };
 
 // One row block of the input. The weight's (N tile, K group) records are split evenly over the grid, so an N tile can

@@ -26,7 +26,7 @@ namespace {
 
 constexpr uint32_t kMaxPartials = 7;    // a finishing core adds its fp32 partial and up to 7 others in DEST's 8 tiles
 constexpr uint32_t kInputChunk = 16;    // input tiles per multicast
-constexpr uint32_t kMaxSegments = 64;   // keeps each kernel's runtime arguments within the limit
+constexpr uint32_t kMaxSegments = 46;   // keeps each kernel's runtime arguments within the limit (writer: 7 a segment)
 constexpr uint32_t kScaleTiles = 3;     // TQ2_0: scale tiles in c_3
 constexpr uint32_t kTq2Unit = 2;        // TQ2_0: records per unit of reads (measured, decode)
 constexpr uint32_t kTq2Units = 8;       // TQ2_0: units c_0 holds
@@ -374,6 +374,13 @@ GgufMatmulProgramFactory::cached_program_t GgufMatmulProgramFactory::create(
         TensorAccessorArgs(*weight.buffer()).append_to(reader_ct);
     }
     const uint32_t chunk = std::min(kInputChunk, band_tiles);
+    // The writer streams the weight units the reader grants it when each N tile's records sit in at most two banks, for
+    // the one-page formats where that was faster (measured): with records spread over more banks, and for Q8_0, IQ4_NL,
+    // NVFP4 and TQ1_0, the second NoC was slower or no faster.
+    const DataType dtype = weight.dtype();
+    const bool stream = (dtype == DataType::GGUF_Q4_0 || dtype == DataType::GGUF_Q4_1 || dtype == DataType::GGUF_Q5_0 ||
+                         dtype == DataType::GGUF_Q5_1) &&
+                        n_tiles % std::max(banks / 2, 1u) == 0;
     std::vector<uint32_t> writer_ct = {
         band_tiles,
         chunk,
@@ -387,9 +394,17 @@ GgufMatmulProgramFactory::cached_program_t GgufMatmulProgramFactory::create(
         bands.size() > 1 ? 1u : 0u};
     TensorAccessorArgs(*input.buffer()).append_to(writer_ct);
     TensorAccessorArgs(*output.buffer()).append_to(writer_ct);
+    if (stream) {
+        writer_ct.insert(writer_ct.end(), {kPageUnits * reader_unit(f), reader_unit(f)});
+        TensorAccessorArgs(*weight.buffer()).append_to(writer_ct);
+    }
+
+    std::map<std::string, std::string> writer_defines = defines;
+    writer_defines["GGUF_STREAM"] = stream ? "1" : "0";
 
     shared_variables_t shared;
     shared.cores = cores;
+    shared.writer_weight = stream;
     for (uint32_t parity = 0; parity < 2; parity++) {
         std::vector<CoreCoord> sub;
         for (const CoreCoord& c : cores) {
@@ -409,7 +424,7 @@ GgufMatmulProgramFactory::cached_program_t GgufMatmulProgramFactory::create(
             reader_ct,
             writer_ct,
             defines,
-            defines,
+            writer_defines,
             shared);
     }
     // One compute kernel per band: the band's first K tile and K tiles are compile-time.
@@ -465,6 +480,11 @@ GgufMatmulProgramFactory::cached_program_t GgufMatmulProgramFactory::create(
         }
         if (bands.size() > 1) {
             writer_args.insert(writer_args.end(), {k0, band_k});
+        }
+        if (stream) {
+            writer_args.insert(writer_args.end(), {n_tiles, reader_args[2]});
+            writer_args.insert(writer_args.end(), reader_args.begin() + 3, reader_args.end());
+            writer_args.push_back(uint32_t(weight.buffer()->address()));
         }
         SetRuntimeArgs(program, shared.reader[parity], cores[i], reader_args);
         SetRuntimeArgs(program, shared.writer[parity], cores[i], writer_args);

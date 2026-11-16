@@ -10,13 +10,17 @@
 // a tail sends its fp32 partial (c_17) into its slot of the finishing core's c_18 and counts it on that core's
 // semaphore; a head moves its partial into this core's c_20; the first finish waits for all of this core's partials,
 // and each hands its own to the compute kernel. Codebook formats: the writer also runs its part of the grid lookups of
-// each record the reader asks for, between its own waits. TQ2_0 with one input row (gguf_matmul_tq2_compute.cpp): the
-// collector zeroes every row of each input tile but row 0 before the multicast, and c_1 counts 32-byte pages. Compile
-// args: K tiles (c_1's; of the largest band), tiles per chunk, input semaphore, partial semaphore, format id, the
-// lookup request, answer and page address semaphores, one-row TQ2_0 (0 / 1), K bands (0 / 1), the input's and the
-// output's TensorAccessorArgs. Runtime args: collector, input address, output address, multicast rectangle (NoC x / y
-// start, x / y end, in this writer's NoC order), cores in it, segments, then per segment: tail: slot, role, finishing
-// core NoC x, y; else: N tile, role, partials, 0; with K bands, the band's first K tile and K tiles.
+// each record the reader asks for, between its own waits. GGUF_STREAM (decode, Q4_0 / Q4_1 / Q5_0 / Q5_1): between its
+// waits, and once its own input reads are over, the writer also reads the weight units the reader grants it
+// (gguf_matmul_reader.cpp) on this NoC. TQ2_0 with one input row (gguf_matmul_tq2_compute.cpp): the collector zeroes
+// every row of each input tile but row 0 before the multicast, and c_1 counts 32-byte pages. Compile args: K tiles
+// (c_1's; of the largest band), tiles per chunk, input semaphore, partial semaphore, format id, the lookup request,
+// answer and page address semaphores, one-row TQ2_0 (0 / 1), K bands (0 / 1), the input's and the output's
+// TensorAccessorArgs; GGUF_STREAM: c_0 pages, records per unit, the weight's TensorAccessorArgs. Runtime args:
+// collector, input address, output address, multicast rectangle (NoC x / y start, x / y end, in this writer's NoC
+// order), cores in it, segments, then per segment: tail: slot, role, finishing core NoC x, y; else: N tile, role,
+// partials, 0; with K bands, the band's first K tile and K tiles; GGUF_STREAM: N tiles, runs, per run its N tile,
+// first and end K group (the reader's), and the weight address.
 
 #include <cstdint>
 
@@ -80,6 +84,61 @@ void kernel_main() {
     if constexpr (split) {
         table = local_level_table<FMT>(table_copy);
     }
+#if GGUF_STREAM
+    // Weight units granted by the reader: its records into their c_0 pages, one unit at a time, with transaction id 1;
+    // the answer semaphore counts 1 + units landed (1: this writer streams).
+    static_assert(P == 1);
+    constexpr auto weight_args = TensorAccessorArgs<output_args.next_compile_time_args_offset() + 2>();
+    constexpr uint32_t ring = get_compile_time_arg_val(output_args.next_compile_time_args_offset());
+    constexpr uint32_t unit = get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 1);
+    constexpr uint32_t record = L.scale_rows * 64 + L.code_bytes, weight_trid = 1;
+    const uint32_t runs_arg = 9 + 4 * segments + (banded ? 2 : 0);
+    const uint32_t n_tiles = get_arg_val<uint32_t>(runs_arg), runs = get_arg_val<uint32_t>(runs_arg + 1);
+    auto run_arg = [&](uint32_t r, uint32_t i) { return get_arg_val<uint32_t>(runs_arg + 2 + 3 * r + i); };
+    uint32_t total = 0;
+    for (uint32_t r = 0; r < runs; r++) {
+        total += run_arg(r, 2) - run_arg(r, 1);
+    }
+    const auto weights = TensorAccessor(weight_args, get_arg_val<uint32_t>(runs_arg + 2 + 3 * runs));
+    const uint32_t ring_base = CircularBuffer(tt::CBIndex::c_0).get_write_ptr();  // never moved by this kernel
+    uint32_t run = 0, group = runs > 0 ? run_arg(0, 1) : 0, passed = 0, taken = 0, landed = 0;
+    bool reading = false;
+    auto next_record = [&]() {
+        const uint32_t id = group * n_tiles + run_arg(run, 0);
+        if (++group == run_arg(run, 2) && ++run < runs) {
+            group = run_arg(run, 1);
+        }
+        passed++;
+        return id;
+    };
+    auto pump = [&]() {
+        if (reading) {
+            if (!noc_cmd_buf_ready(noc.get_noc_id(), read_cmd_buf) || !noc.is_read_trid_flushed(weight_trid)) {
+                return;
+            }
+            reading = false;
+            answers.set(1 + ++landed);
+        }
+        if (requests.value() > taken) {
+            taken++;
+            const uint32_t r0 = address.value();
+            const uint32_t n = total - r0 < unit ? total - r0 : unit;
+            while (passed < r0) {
+                next_record();
+            }
+            for (uint32_t j = 0; j < n; j++) {
+                noc.async_read<NocOptions::TXN_ID>(
+                    weights,
+                    CoreLocalMem<uint32_t>(ring_base + (r0 + j) % ring * page),
+                    record,
+                    {.page_id = next_record()},
+                    {},
+                    {.trid = weight_trid});
+            }
+            reading = true;
+        }
+    };
+#endif
     auto serve = [&]() {
         if constexpr (split) {
             if (requests.value() > served) {
@@ -99,8 +158,16 @@ void kernel_main() {
                 answers.set(++served);
             }
         }
+#if GGUF_STREAM
+        pump();
+#endif
     };
 
+#if GGUF_STREAM
+    if (!collector) {
+        answers.set(1);
+    }
+#endif
     in_cb.reserve_back(k_tiles * in_pages);
     const uint32_t base = in_cb.get_write_ptr();
     // Collector: chunk c + 1 is read while chunk c is multicast.
@@ -155,6 +222,11 @@ void kernel_main() {
         }
         in_cb.push_back(n * in_pages);
     }
+#if GGUF_STREAM
+    if (collector) {
+        answers.set(1);  // its input reads are over
+    }
+#endif
 
     // K bands: a core may finish several N tiles, and partials of a later finish may land first, so the first finish
     // waits for all of them.
@@ -208,4 +280,7 @@ void kernel_main() {
     }
     noc.async_write_barrier();
     noc.async_atomic_barrier();
+#if GGUF_STREAM
+    noc_async_read_set_trid(0, noc.get_noc_id());
+#endif
 }

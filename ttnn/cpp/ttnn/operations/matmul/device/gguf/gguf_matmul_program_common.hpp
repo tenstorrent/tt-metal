@@ -154,7 +154,7 @@ inline void add_movers(
 }
 
 // override_runtime_arguments of both programs: the weight address is the reader's runtime arg 0, the input and output
-// addresses the writer's args writer_input and writer_input + 1.
+// addresses the writer's args writer_input and writer_input + 1 (and its last arg with shared.writer_weight).
 template <typename CachedProgram>
 void override_addresses(
     CachedProgram& cached_program, const GgufMatmulInputs& inputs, const Tensor& output, uint32_t writer_input) {
@@ -165,6 +165,9 @@ void override_addresses(
         auto& writer_args = GetRuntimeArgs(cached_program.program, shared.writer[parity], core);
         writer_args[writer_input] = inputs.input.buffer()->address();
         writer_args[writer_input + 1] = output.buffer()->address();
+        if (shared.writer_weight) {
+            writer_args[writer_args.size() - 1] = inputs.weight.buffer()->address();
+        }
     }
 }
 
