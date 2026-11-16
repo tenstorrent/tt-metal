@@ -12,7 +12,11 @@ import torch
 
 import ttnn
 from models.common.utility_functions import comp_pcc
-from models.demos.gemma4_26b_a4b_qb2.tt.fused_decode.boundary import GemmaBoundary, flat_from_tile_rows
+from models.demos.gemma4_26b_a4b_qb2.tt.fused_decode.boundary import (
+    GemmaBoundary,
+    flat_from_tile_rows,
+    flat_to_tile_rows,
+)
 
 H, EPS = 2816, 1e-6
 
@@ -27,9 +31,10 @@ def rows0(t):
     return [ttnn.to_torch(x).float().reshape(-1, t.padded_shape[-1])[0, :H] for x in ttnn.get_device_tensors(t)]
 
 
+@pytest.mark.parametrize("pregathered", [False, True], ids=["gather", "pregathered"])
 @pytest.mark.parametrize("round_n", [True, False], ids=["round_n", "fp32_n"])
 @pytest.mark.parametrize("sharded", [False, True], ids=["interleaved", "sharded"])
-def test_gemma_boundary(qb2_mesh, sharded, round_n):
+def test_gemma_boundary(qb2_mesh, sharded, round_n, pregathered):
     mesh = qb2_mesh
     torch.manual_seed(0)
     b = GemmaBoundary(mesh, H, EPS, shared_dtype=ttnn.bfloat16, round_n=round_n)
@@ -92,7 +97,28 @@ def test_gemma_boundary(qb2_mesh, sharded, round_n):
     check("attn_residual", [res1_dev], res1.float(), 0.9999)
 
     # moe: res = (res + ff_norm(ff1_norm(sum shared) + ff2_norm(sum routed))) * layer_scalar; x = next_norm(res)
-    x = b.moe(s_t, r_t, b.gammas([g["f1"], g["f2"], g["f"], g["nx"]]), scalar)
+    g_moe = b.gammas([g["f1"], g["f2"], g["f"], g["nx"]])
+    if pregathered:
+        # the producers' flat partials, written straight into the boundary's partial buffer (moe_decode flat_out)
+        T = b.T
+        flat = torch.stack(
+            [
+                flat_to_tile_rows(torch.cat([s_parts[d].float(), torch.zeros(T * 1024 - H), r_parts[d].float()]), 2 * T)
+                for d in range(4)
+            ]
+        )[:, None]
+        staged = ttnn.from_torch(
+            flat.bfloat16(),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh,
+            memory_config=b.part.memory_config(),
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=0),
+        )
+        ttnn.copy(staged, b.part)
+        x = b.moe_pregathered(g_moe, scalar)
+    else:
+        x = b.moe(s_t, r_t, g_moe, scalar)
     c = rms(sum(p.float() for p in s_parts), g["f1"]) + rms(sum(p.float() for p in r_parts), g["f2"])
     res2 = ((res1.float() + rms(c, g["f"])) * scalar).bfloat16()
     check("moe_residual", [b.residual()], res2.float(), 0.9999)

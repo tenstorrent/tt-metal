@@ -3,20 +3,23 @@
 
 // Gemma decode layer boundary, reader (NCRISC) (fused_decode/boundary.py: GemmaBoundary).
 //
-// 1. Gathers row 0 of the `parts` producer outputs (BF16 TILE tensors [1, 1, 32, hidden], e.g. the o_proj or the
-//    shared-MLP / routed-expert partial sums) into the flat partial buffer (cb_part, value h at byte 2 h of part p's
-//    `tiles` pages) and hands it to the fabric sender (bnd_sender.cpp). entry: gathers the embedding row into the
-//    residual (cb_res) instead.
+// 1. Gathers row 0 of tiles [htiles / 2, htiles) of the `parts` producer outputs (BF16 TILE [1, 1, 32, hidden]) into
+//    the flat partial buffer (cb_part: part p's value h at byte 2 h of its `tiles` pages); bnd_sender.cpp gathers the
+//    first half and waits for cb_sync. pregathered: the producers wrote the flat partial themselves (no gather).
+//    entry: gathers all of the embedding row into the residual (cb_res) instead.
 // 2. Reads the flat norm weights (cb_g: `gammas` x `tiles` BF16 pages, one DRAM page), the FP32 vector (cb_vf, the
 //    router input scale) and builds the reduce scaler.
 // 3. Waits until every device's flat partial has arrived in the receive slots (the receive semaphore reaches
 //    `expected`), resets the semaphore and publishes the slots (cb_recv) to the compute.
+// 4. Writes row 0 of tiles [htiles / 2, htiles) of each of the `outs` row outputs (bnd_sender.cpp the first half).
 //
-// runtime args: [part0_addr, part1_addr, gamma_addr, vf_addr, sem_addr]
+// runtime args: [part0_addr, part1_addr, gamma_addr, vf_addr, sem_addr, out0_addr, out1_addr, out2_addr]
 
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/debug/kernel_profiler.hpp"
+#include "bnd_rows.hpp"
 
 void kernel_main() {
     const uint32_t part0_addr = get_arg_val<uint32_t>(0);
@@ -24,6 +27,7 @@ void kernel_main() {
     const uint32_t gamma_addr = get_arg_val<uint32_t>(2);
     const uint32_t vf_addr = get_arg_val<uint32_t>(3);
     const uint32_t sem_addr = get_arg_val<uint32_t>(4);
+    const uint32_t out_addr[3] = {get_arg_val<uint32_t>(5), get_arg_val<uint32_t>(6), get_arg_val<uint32_t>(7)};
 
     constexpr uint32_t cb_part = get_compile_time_arg_val(0);
     constexpr uint32_t cb_res = get_compile_time_arg_val(1);
@@ -39,34 +43,39 @@ void kernel_main() {
     constexpr uint32_t htiles = get_compile_time_arg_val(11);  // hidden / 32
     constexpr uint32_t gammas = get_compile_time_arg_val(12);
     constexpr uint32_t has_vf = get_compile_time_arg_val(13);
-    constexpr auto p0_args = TensorAccessorArgs<14>();
+    constexpr uint32_t cb_sync = get_compile_time_arg_val(14);
+    constexpr uint32_t pregathered = get_compile_time_arg_val(15);
+    constexpr uint32_t outs = get_compile_time_arg_val(16);
+    constexpr uint32_t cb_out0 = get_compile_time_arg_val(17);
+    constexpr uint32_t fp32_mask = get_compile_time_arg_val(18);
+    constexpr auto p0_args = TensorAccessorArgs<19>();
     constexpr auto p1_args = TensorAccessorArgs<p0_args.next_compile_time_args_offset()>();
     constexpr auto g_args = TensorAccessorArgs<p1_args.next_compile_time_args_offset()>();
     constexpr auto vf_args = TensorAccessorArgs<g_args.next_compile_time_args_offset()>();
+    constexpr auto o0_args = TensorAccessorArgs<vf_args.next_compile_time_args_offset()>();
+    constexpr auto o1_args = TensorAccessorArgs<o0_args.next_compile_time_args_offset()>();
+    constexpr auto o2_args = TensorAccessorArgs<o1_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t page = 2048;  // BF16 32x32 tile
-    constexpr uint32_t face = 512;   // BF16 16x16 face
+    constexpr uint32_t half = htiles / 2;
 
-    // Row 0 of tile j: face 0 row 0 (values 32 j .. 32 j + 15) at byte 0, face 1 row 0 at byte 512.
-    auto gather = [&](const auto& src, uint32_t dst) {
-        for (uint32_t j = 0; j < htiles; ++j) {
-            noc_async_read(src.get_noc_addr(j, 0), dst + 64 * j, 32);
-            noc_async_read(src.get_noc_addr(j, face), dst + 64 * j + 32, 32);
-        }
-    };
-
-    if constexpr (parts > 0) {
-        const auto s0 = TensorAccessor(p0_args, part0_addr, page);
+    if constexpr (parts > 0 && !pregathered) {
+        DeviceZoneScopedN("BND_GATHER");
+        constexpr uint32_t j0 = entry ? 0 : half;  // entry: no sender, all tiles here
         const uint32_t cb = entry ? cb_res : cb_part;
-        cb_reserve_back(cb, parts * tiles);
         const uint32_t dst = get_write_ptr(cb);
-        gather(s0, dst);
+        gather_rows(TensorAccessor(p0_args, part0_addr, page), dst, j0, htiles);
         if constexpr (parts > 1) {
-            const auto s1 = TensorAccessor(p1_args, part1_addr, page);
-            gather(s1, dst + tiles * page);
+            gather_rows(TensorAccessor(p1_args, part1_addr, page), dst + tiles * page, j0, htiles);
         }
         noc_async_read_barrier();
-        cb_push_back(cb, parts * tiles);
+        if constexpr (entry) {
+            cb_reserve_back(cb_res, tiles);
+            cb_push_back(cb_res, tiles);
+        } else {
+            cb_reserve_back(cb_sync, 1);
+            cb_push_back(cb_sync, 1);
+        }
     }
     if constexpr (!entry) {
         cb_reserve_back(cb_res, tiles);
@@ -105,9 +114,40 @@ void kernel_main() {
 
     if constexpr (slots > 0) {
         volatile tt_l1_ptr uint32_t* sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr);
+        DeviceZoneScopedN("BND_WAIT_RECV");
         noc_semaphore_wait_min(sem, expected);
         noc_semaphore_set(sem, 0);
         cb_reserve_back(cb_recv, slots * parts * tiles);
         cb_push_back(cb_recv, slots * parts * tiles);
     }
+
+    // Second half of every row output (bnd_sender.cpp writes the first half).
+    if constexpr (outs > 0) {
+        cb_wait_front(cb_out0, tiles);
+        write_rows(
+            TensorAccessor(o0_args, out_addr[0], (fp32_mask & 1) ? 4096 : 2048),
+            get_read_ptr(cb_out0),
+            half,
+            htiles,
+            fp32_mask & 1);
+    }
+    if constexpr (outs > 1) {
+        cb_wait_front(cb_out0 + 1, tiles);
+        write_rows(
+            TensorAccessor(o1_args, out_addr[1], (fp32_mask & 2) ? 4096 : 2048),
+            get_read_ptr(cb_out0 + 1),
+            half,
+            htiles,
+            fp32_mask & 2);
+    }
+    if constexpr (outs > 2) {
+        cb_wait_front(cb_out0 + 2, tiles);
+        write_rows(
+            TensorAccessor(o2_args, out_addr[2], (fp32_mask & 4) ? 4096 : 2048),
+            get_read_ptr(cb_out0 + 2),
+            half,
+            htiles,
+            fp32_mask & 4);
+    }
+    noc_async_write_barrier();
 }

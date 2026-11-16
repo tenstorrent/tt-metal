@@ -22,6 +22,7 @@ the slots in slot order (bit-identical on every device) and writes its outputs a
                                  x = next_norm(res) (the next layer's input norm, or the final norm) -> qkv_in
 """
 
+import os
 import struct
 from pathlib import Path
 
@@ -33,6 +34,7 @@ KERNELS = Path(__file__).resolve().parent / "kernels"
 TILE = 32
 PAGE = TILE * TILE * 2  # BF16 tile page
 SITES = ("attn", "moe")
+FAST_RECONFIG = os.environ.get("GEMMA4_26B_WS5_BND_FAST", "0") != "0"
 
 
 def _f32_bits(v):
@@ -42,14 +44,17 @@ def _f32_bits(v):
 class GemmaBoundary:
     """Persistent state of the batch-1 decode boundaries (module doc); one instance per model."""
 
-    CB_PART, CB_RES, CB_RECV, CB_G, CB_SCALER, CB_VF = 0, 1, 2, 3, 4, 5
+    CB_PART, CB_RES, CB_RECV, CB_G, CB_SCALER, CB_VF, CB_SYNC = 0, 1, 2, 3, 4, 5, 6
     CB_A, CB_B, CB_SS, CB_RS, CB_NB = 8, 9, 10, 11, 12
     CB_RES_OUT, CB_O0 = 16, 17  # outputs CB_O0 .. CB_O0 + 2
 
-    def __init__(self, mesh, hidden, eps, *, core=(0, 0), shared_dtype=ttnn.float32, round_n=True):
+    def __init__(self, mesh, hidden, eps, *, core=(0, 0), shared_dtype=ttnn.float32, round_n=True, flat_moe=False):
         """round_n: the attn boundary rounds its normed vector to BF16 before the router / expert / shared scales (as
-        the ttnn RMSNorm output of the unfused path); False keeps it FP32."""
+        the ttnn RMSNorm output of the unfused path); False keeps it FP32. flat_moe: expert_in and shared_in are flat
+        BF16 vectors on the boundary core (moe_decode x_flat consumers) instead of row 0 of TILE tensors."""
         self.round_n = round_n
+        self.flat_moe = flat_moe
+        assert not flat_moe or shared_dtype == ttnn.bfloat16
         self.mesh = mesh
         self.hidden, self.eps = hidden, eps
         self.ring = mesh.shape[1]
@@ -102,8 +107,9 @@ class GemmaBoundary:
         # Consumer inputs: row 0 rewritten by every boundary, rows 1..31 zero.
         self.qkv_in = rows(ttnn.bfloat16)
         self.router_in = rows(ttnn.float32)
-        self.expert_in = rows(ttnn.bfloat16)
-        self.shared_in = rows(shared_dtype)  # the plain normed vector (shared-MLP gamma folded into its weights)
+        # shared_in: the plain normed vector (shared-MLP gamma folded into its weights)
+        self.expert_in = flat(self.T) if flat_moe else rows(ttnn.bfloat16)
+        self.shared_in = flat(self.T) if flat_moe else rows(shared_dtype)
         max_payload = int(ttnn.get_tt_fabric_max_payload_size_bytes())
         self.max_chunk = max_payload // PAGE * PAGE
 
@@ -147,7 +153,24 @@ class GemmaBoundary:
             return cb
         return ttnn.CBDescriptor(total_size=pages * page, core_ranges=self.cores, format_descriptors=fmt)
 
-    def _run(self, mode, parts, gamma, gcount, res_in, res_out, outs, vf=None, scalar=1.0, out2_gamma=False):
+    def _run(
+        self,
+        mode,
+        parts,
+        gamma,
+        gcount,
+        res_in,
+        res_out,
+        outs,
+        vf=None,
+        scalar=1.0,
+        out2_gamma=False,
+        flat_outs=(),
+        pregathered=False,
+    ):
+        """outs: written as row 0 of TILE tensors (half each by bnd_reader.cpp / bnd_sender.cpp); flat_outs: the next
+        compute outputs, packed straight into flat tensors on the boundary core. pregathered: the producers wrote the
+        flat partial buffer (self.part) themselves; `parts` are then placeholders."""
         T = self.T
         for part in parts:
             # 32 B face-row reads: a DRAM source would need 64 B aligned destinations (Blackhole).
@@ -167,6 +190,7 @@ class GemmaBoundary:
             self._cb(self.CB_SS, 2, ttnn.float32),
             self._cb(self.CB_RS, 2, ttnn.float32),
             self._cb(self.CB_NB, T, ttnn.bfloat16 if self.round_n else ttnn.float32),
+            self._cb(self.CB_SYNC, 1),
         ]
         if mode:
             cbs += [
@@ -180,6 +204,9 @@ class GemmaBoundary:
         for i, o in enumerate(outs):
             cbs.append(self._cb(self.CB_O0 + i, T, o.dtype))
             fp32_mask |= (o.dtype == ttnn.float32) << i
+        for i, o in enumerate(flat_outs):
+            # packed by the compute straight into a flat tensor on the boundary core (no row writes)
+            cbs.append(self._cb(self.CB_O0 + len(outs) + i, T, o.dtype, tensor=o))
 
         def acc(t):
             return ttnn.TensorAccessorArgs(t).get_compile_time_args()
@@ -189,7 +216,9 @@ class GemmaBoundary:
         vft = vf if vf is not None else gamma
         reader_ct = [self.CB_PART, self.CB_RES, self.CB_RECV, self.CB_G, self.CB_SCALER, self.CB_VF, T, npart]
         reader_ct += [slots, self.ring, 1 if mode == 0 else 0, self.htiles, gcount, 1 if vf is not None else 0]
-        reader_ct += acc(p0) + acc(p1) + acc(gamma) + acc(vft)
+        o = list(outs) + [outs[0]] * (3 - len(outs))
+        reader_ct += [self.CB_SYNC, 1 if pregathered else 0, len(outs), self.CB_O0, fp32_mask]
+        reader_ct += acc(p0) + acc(p1) + acc(gamma) + acc(vft) + acc(o[0]) + acc(o[1]) + acc(o[2])
         reader_rt = ttnn.RuntimeArgs()
         reader_rt[self.core.x][self.core.y] = [
             p0.buffer_address(),
@@ -197,16 +226,16 @@ class GemmaBoundary:
             gamma.buffer_address(),
             vft.buffer_address(),
             sem_addr,
-        ]
+        ] + [t.buffer_address() for t in o]
         compute_ct = [self.CB_RECV, self.CB_RES, self.CB_G, self.CB_SCALER, self.CB_VF, self.CB_A, self.CB_B]
         compute_ct += [self.CB_SS, self.CB_RS, self.CB_RES_OUT, self.CB_O0, T, slots, max(npart, 1), mode]
         compute_ct += [_f32_bits(1.0 / self.hidden), _f32_bits(self.eps), 1 if out2_gamma else 0, self.CB_NB]
         compute_rt = ttnn.RuntimeArgs()
         compute_rt[self.core.x][self.core.y] = [_f32_bits(scalar)]
-        o = list(outs) + [outs[0]] * (3 - len(outs))
         payload = npart * T * PAGE
         chunk = min(payload, self.max_chunk) if payload else PAGE
-        io = list(parts) + [gamma, res_in, res_out] + list(outs) + ([vf] if vf is not None else [])
+        io = list(parts) + [gamma, res_in, res_out] + list(outs) + list(flat_outs)
+        io += [vf] if vf is not None else []
         if site:
             io.append(recv)
 
@@ -216,14 +245,19 @@ class GemmaBoundary:
             fwd, bwd = (self.ring - 1 - c, c) if site else (0, 0)
             sender_ct = [payload, chunk, fwd, bwd, slots, self.CB_PART, npart * T, T, self.htiles, len(outs)]
             sender_ct += [self.CB_O0, fp32_mask] + acc(o[0]) + acc(o[1]) + acc(o[2])
+            sender_ct += [self.CB_SYNC, 1 if pregathered else 0, npart] + acc(p0) + acc(p1)
             sender_rt = ttnn.RuntimeArgs()
-            sender_rt[self.core.x][self.core.y] = [
-                self.part.buffer_address(),
-                (recv.buffer_address() + c * payload) if site else 0,
-                self.noc_xy[0],
-                self.noc_xy[1],
-                sem_addr,
-            ] + [t.buffer_address() for t in o]
+            sender_rt[self.core.x][self.core.y] = (
+                [
+                    self.part.buffer_address(),
+                    (recv.buffer_address() + c * payload) if site else 0,
+                    self.noc_xy[0],
+                    self.noc_xy[1],
+                    sem_addr,
+                ]
+                + [t.buffer_address() for t in o]
+                + [p0.buffer_address(), p1.buffer_address()]
+            )
             kernels = [
                 ttnn.KernelDescriptor(
                     kernel_source=str(KERNELS / "bnd_reader.cpp"),
@@ -239,6 +273,7 @@ class GemmaBoundary:
                     core_ranges=self.cores,
                     compile_time_args=compute_ct,
                     runtime_args=compute_rt,
+                    defines=[("FAST_RECONFIG", "1")] if FAST_RECONFIG else [],
                     config=ttnn.ComputeConfigDescriptor(
                         math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, math_approx_mode=False
                     ),
@@ -292,11 +327,28 @@ class GemmaBoundary:
             3 if shared_gamma else 2,
             self.res[0],
             self.res[1],
-            outs,
+            outs[:1] if self.flat_moe else outs,
             vf=router_scale,
             out2_gamma=shared_gamma,
+            flat_outs=outs[1:] if self.flat_moe else (),
         )
         return self.router_in, self.expert_in, self.shared_in
+
+    def moe_pregathered(self, gamma, layer_scalar):
+        """moe() with the shared / routed partials already written flat into self.part (pages [0, T) / [T, 2 T)) by
+        their producers (moe_decode flat_out=(boundary.part, 0 / T * 2048))."""
+        self._run(
+            2,
+            [self.part, self.part],
+            gamma,
+            4,
+            self.res[1],
+            self.res[0],
+            [self.qkv_in],
+            scalar=layer_scalar,
+            pregathered=True,
+        )
+        return self.qkv_in
 
     def moe(self, shared, routed, gamma, layer_scalar):
         """shared, routed: this device's shared-MLP and routed-expert partial sums ([1, 1, 32, hidden] BF16 TILE, row
@@ -316,3 +368,10 @@ def flat_from_tile_rows(mat, hidden):
     pages = mat.shape[-1] // TILE
     t = mat.reshape(2, 16, pages, 2, 16).permute(2, 0, 3, 1, 4)
     return t.reshape(-1)[:hidden]
+
+
+def flat_to_tile_rows(vec, pages):
+    """Host helper: a flat vector -> the [32, 32 * pages] matrix whose TILE-layout device bytes are the vector."""
+    flat = torch.zeros(pages * TILE * TILE, dtype=vec.dtype)
+    flat[: vec.numel()] = vec.reshape(-1)
+    return flat.reshape(pages, 2, 2, 16, 16).permute(1, 3, 0, 2, 4).reshape(TILE, pages * TILE)

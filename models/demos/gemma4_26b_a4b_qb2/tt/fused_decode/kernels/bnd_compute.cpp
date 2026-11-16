@@ -27,6 +27,7 @@
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/eltwise_unary/rsqrt.h"
 #include "api/compute/pack.h"
+#include "api/compute/reconfig_data_format.h"
 #include "api/compute/reduce.h"
 #include "api/compute/tile_move_copy.h"
 
@@ -50,6 +51,16 @@ constexpr uint32_t eps = get_compile_time_arg_val(16);         // float bits
 constexpr uint32_t out2_gamma = get_compile_time_arg_val(17);  // attn: out2 = n * g2 (else n)
 constexpr uint32_t cb_n = get_compile_time_arg_val(18);  // attn: n (FP32, or BF16 = rounded as a ttnn RMSNorm output)
 static_assert(T <= 3, "a vector plus one operand fit the 4 FP32 DST tiles");
+
+// FAST_RECONFIG: the elementwise phases only reconfigure the unpacker / packer data formats; the scalar reduce keeps
+// the full hardware startup.
+#ifdef FAST_RECONFIG
+#define STARTUP(a, b, o)            \
+    reconfig_data_format((a), (b)); \
+    pack_reconfig_data_format(o)
+#else
+#define STARTUP(a, b, o) compute_kernel_hw_startup((a), (b), (o))
+#endif
 
 constexpr uint32_t kScalarIters = 1;
 template <int OP>
@@ -87,7 +98,7 @@ ALWI void pack_vec(uint32_t cb) {
 
 // cb_out <- sum over the slots of part p (slot order, identical on every device).
 ALWI void sum_slots(uint32_t p, uint32_t cb_out) {
-    compute_kernel_hw_startup(cb_recv, cb_recv, cb_out);
+    STARTUP(cb_recv, cb_recv, cb_out);
     tile_regs_acquire();
     for (uint32_t t = 0; t < T; ++t) {
         add_init(cb_recv, cb_recv);
@@ -104,7 +115,7 @@ ALWI void sum_slots(uint32_t p, uint32_t cb_out) {
 
 // cb_ss += one tile: the elementwise sum over the T tiles of v^2.
 ALWI void sumsq(uint32_t cb_v) {
-    compute_kernel_hw_startup(cb_v, cb_v, cb_ss);
+    STARTUP(cb_v, cb_v, cb_ss);
     cb_wait_front(cb_v, T);
     tile_regs_acquire();
     mul_init(cb_v, cb_v);
@@ -150,7 +161,7 @@ ALWI void rstat() {
 // DST[0..T) = v * rs (front of cb_rs, popped) [* gamma gi]. Leaves DST acquired.
 ALWI void scaled(uint32_t cb_v, int gi) {
     cb_wait_front(cb_rs, 1);
-    compute_kernel_hw_startup(cb_v, cb_rs, cb_a);
+    STARTUP(cb_v, cb_rs, cb_a);
     tile_regs_acquire();
     mul_bcast_scalar_init(cb_v, cb_rs);
     for (uint32_t t = 0; t < T; ++t) {
@@ -181,6 +192,9 @@ ALWI void mul_vec(uint32_t cb_x, uint32_t first) {
 }
 
 void kernel_main() {
+#ifdef FAST_RECONFIG
+    compute_kernel_hw_startup(cb_res, cb_res, cb_res_out);
+#endif
     static_assert(mode == 0 || slots >= 2, "the all-reduce sums at least two slots");
     if constexpr (mode == 0) {
         // entry: x = norm(res, g0)
@@ -215,7 +229,7 @@ void kernel_main() {
         // out0 = n * vf (FP32), out1 = n * g1, out2 = n * g2 or n
         cb_wait_front(cb_n, T);
         cb_wait_front(cb_vf, T);
-        compute_kernel_hw_startup(cb_n, cb_vf, cb_o0);
+        STARTUP(cb_n, cb_vf, cb_o0);
         tile_regs_acquire();
         mul_init(cb_n, cb_vf);
         for (uint32_t t = 0; t < T; ++t) {
