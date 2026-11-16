@@ -24,8 +24,12 @@ public:
         FabricContext& fabric_context,
         CoreType dispatch_core_type) const override;
 
+    // empty unless inter-domain is on
+    const std::vector<PerimeterPort>& perimeter() const { return perimeter_; }
+
 private:
     std::optional<PhysicalGraph> graph_;
+    std::vector<PerimeterPort> perimeter_;
 };
 
 }  // namespace tt::tt_fabric::graph

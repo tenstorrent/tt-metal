@@ -606,5 +606,95 @@ TEST(FabricGraphRouterInputs, PeerLayoutAcrossIntermesh) {
     EXPECT_EQ(pg.layouts[z].receivers[1][0].num_slots, 12u);
 }
 
+// ---------------------------------------------------------------- inter-domain perimeter
+
+UnusedLink unused(uint32_t chip, chan_id_t chan, uint64_t peer, bool in_domain = false, bool trained = true) {
+    return UnusedLink{
+        .node = FabricNodeId(MeshId{0}, chip),
+        .chan = chan,
+        .peer_asic = peer,
+        .peer_in_domain = in_domain,
+        .trained = trained};
+}
+
+std::vector<PerimeterPort> perimeter(
+    const std::string& mgd,
+    tt::tt_metal::ClusterType cluster,
+    const std::vector<UnusedLink>& links,
+    Topology topology = Topology::Mesh) {
+    MeshGraph mesh_graph(cluster, metal_mgd(mgd).string());
+    return perimeter_ports(links, ports_from_mesh_graph(mesh_graph, {}), mesh_graph, topology);
+}
+
+const auto kP150 = tt::tt_metal::ClusterType::P150;
+const auto kGalaxy = tt::tt_metal::ClusterType::BLACKHOLE_GALAXY;
+
+// bringup: one chip per domain, two links to the other domain's chip
+TEST(FabricGraphPerimeter, OneChipDomain) {
+    const auto p = perimeter("p150_mesh_graph_descriptor.textproto", kP150, {unused(0, 9, 7), unused(0, 8, 7)});
+    ASSERT_EQ(p.size(), 2u);
+    for (uint32_t i = 0; i < 2; ++i) {
+        EXPECT_EQ(p[i].direction, PortDirection{RoutingDirection::N});
+        EXPECT_EQ(p[i].plane, i);
+        EXPECT_EQ(p[i].eth_chan, 8 + i);
+        EXPECT_TRUE(p[i].link_trained);
+    }
+}
+
+// like intermesh: a side per peer chip, N, E, S, W then Z; past that the link is dropped
+TEST(FabricGraphPerimeter, SidePerPeer) {
+    std::vector<UnusedLink> links;
+    for (chan_id_t c = 1; c <= 6; ++c) {
+        links.push_back(unused(0, c, 100 + c));
+    }
+    const auto p = perimeter("p150_mesh_graph_descriptor.textproto", kP150, links);
+    ASSERT_EQ(p.size(), 5u);
+    const RoutingDirection order[] = {
+        RoutingDirection::N, RoutingDirection::E, RoutingDirection::S, RoutingDirection::W, RoutingDirection::Z};
+    for (uint32_t i = 0; i < 5; ++i) {
+        EXPECT_EQ(p[i].direction, PortDirection{order[i]});
+        EXPECT_EQ(p[i].eth_chan, i + 1);
+        EXPECT_EQ(p[i].plane, 0u);
+    }
+}
+
+// a link back into the domain (a torus wrap under a mesh MGD) is not perimeter; sides the MGD uses are taken
+TEST(FabricGraphPerimeter, FoldBackExcluded) {
+    const auto p = perimeter(
+        "single_bh_galaxy_mesh_graph_descriptor.textproto",
+        kGalaxy,
+        {unused(0, 0, 31, /*in_domain=*/true),
+         unused(0, 1, 200),
+         unused(3, 2, 28, /*in_domain=*/true),
+         unused(5, 3, 300)});
+    ASSERT_EQ(p.size(), 2u);
+    EXPECT_EQ(p[0].node, FabricNodeId(MeshId{0}, 0));
+    EXPECT_EQ(p[0].direction, PortDirection{RoutingDirection::N});  // corner chip 0 uses E and S
+    EXPECT_EQ(p[1].node, FabricNodeId(MeshId{0}, 5));
+    EXPECT_EQ(p[1].direction, PortDirection{RoutingDirection::Z});  // interior chip: only Z is free
+}
+
+// a dead link still makes a port, with the failed link train recorded
+TEST(FabricGraphPerimeter, DeadLinkRecorded) {
+    const auto p = perimeter(
+        "p150_mesh_graph_descriptor.textproto",
+        kP150,
+        {unused(0, 8, 7, /*in_domain=*/false, /*trained=*/false), unused(0, 9, 7)});
+    ASSERT_EQ(p.size(), 2u);
+    EXPECT_FALSE(p[0].link_trained);
+    EXPECT_TRUE(p[1].link_trained);
+}
+
+TEST(FabricGraphPerimeter, TwoDimensionalOnly) {
+    for (const auto topology : {Topology::NeighborExchange, Topology::Linear, Topology::Ring}) {
+        EXPECT_ANY_THROW(perimeter("p150_mesh_graph_descriptor.textproto", kP150, {}, topology));
+    }
+    EXPECT_NO_THROW(perimeter("p150_mesh_graph_descriptor.textproto", kP150, {}, Topology::Torus));
+}
+
+TEST(FabricGraphPerimeter, NoLinksNoPorts) {
+    EXPECT_TRUE(perimeter("single_bh_galaxy_mesh_graph_descriptor.textproto", kGalaxy, {}).empty());
+}
+
 }  // namespace
 }  // namespace tt::tt_fabric::graph

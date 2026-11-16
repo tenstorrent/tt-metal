@@ -63,7 +63,9 @@ void check_link_peers(const PhysicalGraph& graph, const ControlPlane& control_pl
 }  // namespace
 
 GraphFabricBuildSession::GraphFabricBuildSession(FabricContext& fabric_context) {
+    const bool inter_domain = fabric_context.get_rtoptions().get_fabric_inter_domain();
     if (fabric_context.is_tensix_enabled()) {
+        TT_FATAL(!inter_domain, "fabric graph: inter-domain doesn't support tensix fabrics");
         log_info(tt::LogFabric, "fabric graph: tensix fabric, using the stock builder");
         return;
     }
@@ -81,7 +83,16 @@ GraphFabricBuildSession::GraphFabricBuildSession(FabricContext& fabric_context) 
     }
 
     // logical: topology and turns
-    const auto ports = with_live_planes(ports_from_mesh_graph(control_plane.get_mesh_graph(), express_axis), control_plane);
+    const auto mgd_ports = ports_from_mesh_graph(control_plane.get_mesh_graph(), express_axis);
+    const auto ports = with_live_planes(mgd_ports, control_plane);
+    if (inter_domain) {
+        perimeter_ = perimeter_ports(
+            unused_links(control_plane, fabric_context.get_cluster()),
+            mgd_ports,
+            control_plane.get_mesh_graph(),
+            topology);
+        log_info(tt::LogFabric, "fabric graph: {} perimeter ports", perimeter_.size());
+    }
     const WiringOptions options{
         .topology = topology,
         .vc_config = fabric_context.get_builder_context().get_intermesh_vc_config(),

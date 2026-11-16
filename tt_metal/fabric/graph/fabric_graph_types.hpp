@@ -11,6 +11,7 @@
 #include <string_view>
 #include <vector>
 
+#include <hostdevcommon/fabric_common.h>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt_stl/strong_type.hpp>
@@ -43,13 +44,29 @@ struct Vc {
     std::string name;
 };
 
+// A live eth link that leaves the fabric domain. Its peer is bound at connect time.
+struct PerimeterPort {
+    FabricNodeId node{MeshId{0}, 0};
+    chan_id_t eth_chan = 0;
+    PortDirection direction{RoutingDirection::N};
+    uint32_t plane = 0;
+    bool link_trained = true;  // false: the link was down at build, connect on it will fail
+};
+
 using RouterIndex = uint32_t;
 using ChannelIndex = uint32_t;
+
+// inter-domain router features
+struct Capabilities {
+    bool rt_lookup = false;        // looks the workload FNID up in a routing table
+    bool dynamic_connect = false;  // peer bound at runtime
+};
 
 // One router per port.
 struct LogicalRouter {
     std::string id;
     Port port;
+    Capabilities capabilities;
     std::optional<RouterIndex> peer;  // router at the other end of the link
     std::vector<ChannelIndex> channels;
 };
@@ -61,12 +78,14 @@ struct LogicalChannel {
     uint32_t vc = 0;
     ChannelKind kind = ChannelKind::Sender;
     bool injection = false;
+    bool host_rdma = false;             // injection sender fed by the host request service core
     std::optional<PortDirection> from;  // forwarding sender: where its traffic came in
 };
 
 enum class Transport : uint8_t {
-    Eth,  // sender -> peer's receiver
-    Noc,  // receiver -> sender on another router of the same chip
+    Eth,      // sender -> peer's receiver
+    Noc,      // receiver -> sender on another router of the same chip
+    Dynamic,  // sender -> a remote domain's receiver, bound at connect
 };
 
 struct LogicalEdge {

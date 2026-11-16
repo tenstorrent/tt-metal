@@ -394,6 +394,9 @@ class RunTimeOptions {
     // EXPERIMENTAL: Build fabric routers from the fabric graph instead of the stock builder
     bool fabric_graph_builder = false;
 
+    // EXPERIMENTAL: inter-domain fabric (graph builder only)
+    bool fabric_inter_domain = false;
+
     // Enable fabric telemetry
     bool enable_fabric_telemetry = false;
     FabricTelemetrySettings fabric_telemetry_settings;
@@ -976,6 +979,10 @@ public:
     // EXPERIMENTAL: graph-based fabric builder
     bool get_fabric_graph_builder() const { return fabric_graph_builder; }
     void set_fabric_graph_builder(bool enable) { fabric_graph_builder = enable; }
+
+    // EXPERIMENTAL: inter-domain fabric
+    bool get_fabric_inter_domain() const { return fabric_inter_domain; }
+    void set_fabric_inter_domain(bool enable) { fabric_inter_domain = enable; }
 
     // Reliability mode override accessor
     std::optional<tt::tt_fabric::FabricReliabilityMode> get_reliability_mode() const { return reliability_mode; }
