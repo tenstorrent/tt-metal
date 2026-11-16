@@ -60,7 +60,8 @@ class DraftArgmax:
         cols = ttnn.transpose(logits, -2, -1)  # [1, 1, V/4, R]: vocab on rows, logit rows on columns
         rows = int(cols.shape[-1])
         blocks = ttnn.reshape(cols, (1, self.SPLIT, self.block, rows))
-        local = ttnn.max(ttnn.max(blocks, dim=-2, keepdim=True), dim=1, keepdim=True)  # [1, 1, 1, 32]
+        partial = ttnn.max(blocks, dim=-2, keepdim=True)  # [1, S, 1, R]
+        local = ttnn.max(ttnn.reshape(partial, (1, 1, self.SPLIT, rows)), dim=-2, keepdim=True)  # [1, 1, 1, R]
         gathered = self.ccl.gather(local)  # [1, 1, 1, 4R]: chip c's maxima at columns Rc..Rc+R-1
         best = ttnn.max(ttnn.reshape(gathered, (1, 1, 4, rows)), dim=-2, keepdim=True)  # [1, 1, 1, R]
         mask = ttnn.reshape(ttnn.ge(cols, best), (1, self.SPLIT, self.block, rows))

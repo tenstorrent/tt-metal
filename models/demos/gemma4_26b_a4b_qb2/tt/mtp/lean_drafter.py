@@ -236,6 +236,8 @@ class LeanDrafter:
                 activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.MUL_UNARY_SFPU, layer["scalar"])],
             )
         normed = self._flat(self._norm(h, self.final_norm))
-        logits = self._linear(normed, self.lm_head, memory=ttnn.DRAM_MEMORY_CONFIG)
+        # All 32 tile rows logical (row 0 is the draft): the argmax reductions then need no padding fills.
+        rows = ttnn.reshape(normed, (1, 1, 32, self.hidden), (1, 1, 32, self.hidden))
+        logits = self._linear(rows, self.lm_head, memory=ttnn.DRAM_MEMORY_CONFIG)
         next_hidden = self._linear(normed, self.post_projection, memory=ttnn.DRAM_MEMORY_CONFIG)
         return logits, next_hidden
