@@ -5,8 +5,8 @@
 #pragma once
 
 namespace ckernel::sfpu::ttpoly::multigammaln {
-using namespace ::sfpi;
 using ::sfpi::DataLayout;
+using ::sfpi::vFloat;
 __attribute__((always_inline)) inline vFloat raw_daz_action_coordinate(vFloat x_raw) {
     constexpr float min_normal = std::numeric_limits<float>::min();
     vFloat effective = x_raw;

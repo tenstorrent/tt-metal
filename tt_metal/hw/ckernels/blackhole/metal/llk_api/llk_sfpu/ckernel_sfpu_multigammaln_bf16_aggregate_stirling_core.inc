@@ -40,16 +40,20 @@ __attribute__((always_inline)) inline vFloat selected_stirling_correction(vFloat
 
 // Natural log of a positive normal argument from its mantissa in [0.75, 1.5).
 __attribute__((always_inline)) inline vFloat selected_stirling_positive_log(vFloat a) {
-    vInt exponent = exexp(a, ExponentMode::Biased);
     vFloat mantissa = setexp(a, 127);
-    v_if(mantissa >= 1.5f) {
+    vFloat over = mantissa - 1.5f;
+    // The unbiased exponent needs no later subtract, and fills the slot after the subtract above.
+    vInt exponent = exexp(a);
+    v_if(over >= 0.0f) {
         mantissa = mantissa * 0.5f;
         exponent = exponent + 1;
     }
     v_endif;
     vFloat residual = mantissa - 1.0f;
-    vFloat log_mantissa = residual * selected_stirling_log_ratio(residual);
-    vFloat exponent_float = convert<vFloat>(convert<vSMag>(exponent - 127), RoundMode::Nearest);
+    vFloat ratio = selected_stirling_log_ratio(residual);
+    // Fills the slot after the ratio's last multiply-add.
+    vFloat exponent_float = convert<vFloat>(convert<vSMag>(exponent), RoundMode::Nearest);
+    vFloat log_mantissa = residual * ratio;
     return log_mantissa + exponent_float * 0.6931471805599453f;
 }
 
