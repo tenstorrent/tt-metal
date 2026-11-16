@@ -18,19 +18,19 @@ void kernel_main() {
     constexpr auto p_args = TensorAccessorArgs<2>();
     constexpr uint32_t tile_bytes = 2048, face_bytes = 512, row_bytes = 32;
     const auto s_p = TensorAccessor(p_args, packed_addr, tile_bytes);
+    // Zero every output tile from the core's hardware zeros region, then fill row 0 (faces 0 and 1).
+    const uint64_t zeros = get_noc_addr(MEM_ZEROS_BASE);
+    for (uint32_t which = 0; which < 2; ++which) {
+        const uint32_t base = which == 0 ? a_addr : b_addr;
+        for (uint32_t off = 0; off < per * tile_bytes; off += MEM_ZEROS_SIZE) {
+            noc_async_read(zeros, base + off, MEM_ZEROS_SIZE);
+        }
+    }
+    noc_async_read_barrier();
     for (uint32_t which = 0; which < 2; ++which) {
         const uint32_t base = which == 0 ? a_addr : b_addr;
         for (uint32_t t = 0; t < per; ++t) {
             const uint32_t local = base + t * tile_bytes;
-            volatile tt_l1_ptr uint32_t* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(local);
-            // rows 1-31 are zero; row 0 (faces 0 and 1, first 32 bytes each) comes from the read below
-            for (uint32_t w = 0; w < tile_bytes / 4; ++w) {
-                const uint32_t in_face = w & (face_bytes / 4 - 1);
-                if (w < 2 * (face_bytes / 4) && in_face < row_bytes / 4) {
-                    continue;
-                }
-                words[w] = 0;
-            }
             const uint32_t i = (which == 0 ? 0 : na) + k * per + t;
             const uint32_t r = i & 31;
             const uint64_t src = s_p.get_noc_addr(i >> 5) + (r >> 4) * 2 * face_bytes + (r & 15) * row_bytes;

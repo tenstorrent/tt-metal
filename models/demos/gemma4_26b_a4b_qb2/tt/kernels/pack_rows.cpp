@@ -28,11 +28,19 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base);
     // rows past the last input tile are zero; the reads below write every other row
     const uint32_t first_empty = (na + nb > T * 32) ? (na + nb - T * 32 < 32 ? na + nb - T * 32 : 32) : 0;
-    for (uint32_t r = first_empty; r < 32; ++r) {
-        const uint32_t word = (r >> 4) * 2 * (face_bytes / 4) + (r & 15) * (row_bytes / 4);
-        for (uint32_t j = 0; j < row_bytes / 4; ++j) {
-            words[word + j] = 0;
-            words[word + face_bytes / 4 + j] = 0;
+    if (first_empty % 16 == 0) {
+        // whole empty faces: zero them from the core's hardware zeros region (disjoint from the reads below)
+        const uint64_t zeros = get_noc_addr(MEM_ZEROS_BASE);
+        for (uint32_t off = (first_empty / 16) * 2 * face_bytes; off < tile_bytes; off += MEM_ZEROS_SIZE) {
+            noc_async_read(zeros, base + off, MEM_ZEROS_SIZE);
+        }
+    } else {
+        for (uint32_t r = first_empty; r < 32; ++r) {
+            const uint32_t word = (r >> 4) * 2 * (face_bytes / 4) + (r & 15) * (row_bytes / 4);
+            for (uint32_t j = 0; j < row_bytes / 4; ++j) {
+                words[word + j] = 0;
+                words[word + face_bytes / 4 + j] = 0;
+            }
         }
     }
     for (uint32_t r = 0; r < 32; ++r) {
