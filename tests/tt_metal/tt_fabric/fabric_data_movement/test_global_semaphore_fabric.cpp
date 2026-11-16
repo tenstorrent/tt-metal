@@ -53,7 +53,7 @@ constexpr const char* kReceiverKernelSource = R"(
 void kernel_main() {
     const uint32_t report_addr = get_arg_val<uint32_t>(0);
     const uint32_t expected = get_arg_val<uint32_t>(1);
-    GlobalSemaphore sem(GlobalSemaphoreBindingToken{0});
+    GlobalSemaphore sem(get_common_arg_val<uint32_t>(0));
     sem.down(expected);
     volatile tt_l1_ptr uint32_t* report = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(report_addr);
     report[0] = expected;

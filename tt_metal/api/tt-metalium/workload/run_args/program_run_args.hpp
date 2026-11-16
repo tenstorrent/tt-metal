@@ -155,8 +155,11 @@ struct ProgramRunArgs {
     //
     // The supplied GlobalSemaphore MUST live on the MeshDevice the Program was built for.
     //
-    // CAUTION: The user is responsible for keeping the GlobalSemaphore alive until the last Program
-    //          execution that uses it has completed on the device.
+    // CAUTION: GlobalSemaphore is an RAII object; copies share the same L1 allocation. The user is
+    //          responsible for keeping it (or a copy of it) alive until the last Program execution that
+    //          uses it has completed on the device. A stale binding to a destroyed GlobalSemaphore
+    //          (e.g. one retained by an UpdateProgramRunArgs call that omits it) will produce undefined
+    //          behavior.
     Table<GlobalSemaphoreParamName, GlobalSemaphoreArgument> global_semaphore_args;
 
     ////////////////////////////////////////////////////////////////////////

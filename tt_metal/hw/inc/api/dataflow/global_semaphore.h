@@ -48,9 +48,12 @@ namespace fabric_api = tt::tt_fabric::linear::experimental;
 /**
  * @brief A semaphore that kernels can share across programs and chips.
  *
- * Construct it from a GlobalSemaphoreBindingToken: `GlobalSemaphore s(token);`. The token names the common
- * runtime arg that holds the semaphore's address. The address is the same on every core and chip the semaphore
- * was created on, so the remote calls only need the destination core.
+ * Construct it from the generated binding token in Metal 2.0 kernels, and from the semaphore's L1 address in
+ * other kernels:
+ *   GlobalSemaphore a(global_sem::my_sem);               // Metal 2.0
+ *   GlobalSemaphore b(get_common_arg_val<uint32_t>(0));  // Non-Metal-2.0 only
+ * The address is the same on every core and chip the semaphore was created on, so the remote calls only need
+ * the destination core.
  *
  * Use it as a counter. Producers call up(), on this core, another core, or another chip. One consumer (a single
  * thread on one core) calls down() or wait_min(). up() and down() are atomic, so increments that arrive at the
@@ -64,8 +67,13 @@ namespace fabric_api = tt::tt_fabric::linear::experimental;
  */
 class GlobalSemaphore {
 public:
+    // Metal 2.0: from the generated binding token, global_sem::<accessor_name>.
     explicit FORCE_INLINE GlobalSemaphore(const GlobalSemaphoreBindingToken& token) :
         l1_addr_(get_common_arg_val<uint32_t>(token.crta_offset_)) {}
+
+    // Non-Metal-2.0: from the semaphore's L1 address (the host's GlobalSemaphore::address(), passed as a
+    // runtime arg). Metal 2.0 kernels must use the binding token and never pass the address.
+    explicit FORCE_INLINE GlobalSemaphore(uint32_t l1_addr) : l1_addr_(l1_addr) {}
 
     // ---- This core's copy ----
 

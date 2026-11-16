@@ -26,8 +26,8 @@ namespace tt::tt_metal {
 //   KernelSpec::global_semaphore_bindings, and constructs the device object from
 //   the binding token (api/dataflow/global_semaphore.h):
 //     GlobalSemaphore sem(global_sem::<accessor_name>);
-//   The semaphore's address is passed as a common runtime arg, so binding a
-//   different GlobalSemaphore does not recompile the kernel.
+//   A different GlobalSemaphore may be supplied for each Program execution;
+//   switching GlobalSemaphores does not recompile the kernel.
 //
 // ============================================================================
 

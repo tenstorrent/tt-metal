@@ -17,8 +17,6 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 
-constexpr GlobalSemaphoreBindingToken sem_token{0};
-
 void kernel_main() {
     size_t arg_idx = 0;
     const uint32_t dst_noc_x = get_arg_val<uint32_t>(arg_idx++);
@@ -41,7 +39,7 @@ void kernel_main() {
     sender.open();
     auto* hdr = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(PacketHeaderPool::allocate_header());
 
-    GlobalSemaphore sem(sem_token);
+    GlobalSemaphore sem(get_common_arg_val<uint32_t>(0));
     Noc noc;
 #if defined(GLOBAL_SEM_WRITE_AND_UP)
     volatile tt_l1_ptr uint32_t* payload = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src_addr);
