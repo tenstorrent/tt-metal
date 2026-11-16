@@ -10,11 +10,12 @@
 
 namespace ttnn::operations::experimental::deepseek_prefill::attn_res_block_mix {
 
-std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> attn_res_block_mix(
+std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, std::optional<ttnn::Tensor>> attn_res_block_mix(
     const std::vector<ttnn::Tensor>& sealed,
     const ttnn::Tensor& stats,
     uint32_t num_sites,
     float eps,
+    uint32_t num_closed_sites,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
     TT_FATAL(!sealed.empty(), "AttnResBlockMix needs at least one sealed snapshot tensor");
@@ -28,8 +29,18 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> attn_res_block_mix(
         /*default_fp32_acc=*/true);
 
     auto outputs = ttnn::prim::attn_res_block_mix(
-        sealed, stats, num_sites, eps, memory_config.value_or(sealed.front().memory_config()), kernel_config_val);
-    return {std::move(outputs[0]), std::move(outputs[1]), std::move(outputs[2])};
+        sealed,
+        stats,
+        num_sites,
+        eps,
+        num_closed_sites,
+        memory_config.value_or(sealed.front().memory_config()),
+        kernel_config_val);
+    std::optional<ttnn::Tensor> closed;
+    if (outputs.size() > 3) {
+        closed = std::move(outputs[3]);
+    }
+    return {std::move(outputs[0]), std::move(outputs[1]), std::move(outputs[2]), std::move(closed)};
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::attn_res_block_mix

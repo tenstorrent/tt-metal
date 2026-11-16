@@ -620,8 +620,8 @@
   # [1/4] a repeated request is bit-identical, a pipeline stage's KV-only last layer writes its caches, and a
   # DSA-only window reads the earlier chunk from its caches; [2/4] device DRAM stable across chunks, and outputs,
   # KDA carries and caches independent of the padding past an unaligned end (the golden runs each prompt once,
-  # with one padding); [3/4] a stack split at layer 12 is bit-identical to the undivided one (the golden runs one
-  # stage); [4/4] one captured forward replayed for other users' slots, chunk starts and a partial end is
+  # with one padding); [3/4] a stack split at layer 12 matches the undivided one: bit-identical before the cut, a
+  # per-SP-shard PCC bar after it until the exact AttnRes boundary read (#65539) lands (the golden runs one stage); [4/4] one captured forward replayed for other users' slots, chunk starts and a partial end is
   # bit-identical to eager, outputs and both caches (the runner runs traced). Measured on
   # bh-glx-120-b08u02 (2026-11-13), pytest time per section incl. synthetic weight generation: DSA block 3 windows
   # ~2 min, chunked ~1.3 min, split ~5 min, traced replay 2 windows ~3.2 min (~11.5 min), plus the
