@@ -118,6 +118,21 @@ TOP_P = float(os.environ.get("DEEPSEEK_V4_SPEC_TOP_P", "1"))
 # eager verify blocks and save, per position, the tap rows the drafter receives, the target-layer stream means, the
 # block path's argmax, and the device drafter's greedy proposals at every frontier (see _dump_drafter_inputs).
 DUMP_PATH = os.environ.get("DEEPSEEK_V4_SPEC_DUMP", "")
+# DEEPSEEK_V4_SPEC_PROMPT (block verify): the user turn, a name in _PROMPTS or the text itself (default the demo's).
+PROMPT = os.environ.get("DEEPSEEK_V4_SPEC_PROMPT", "demo")
+_PROMPTS = {
+    "demo": _DEFAULT_TEXT,
+    # GSM8K test problems (the domain of the CPU reference's published acceptance).
+    "gsm8k": (
+        "Solve these three problems step by step, and give each final answer as a number.\n"
+        "1. Janet's ducks lay 16 eggs per day. She eats three for breakfast every morning and bakes muffins for her "
+        "friends every day with four. She sells the remainder at the farmers' market daily for $2 per fresh duck egg. "
+        "How much in dollars does she make every day at the farmers' market?\n"
+        "2. A robe takes 2 bolts of blue fiber and half that much white fiber. How many bolts in total does it take?\n"
+        "3. Josh decides to try flipping a house. He buys a house for $80,000 and then puts in $50,000 in repairs. "
+        "This increased the value of the house by 150%. How much profit did he make?"
+    ),
+}
 # test_parallel_verify_rows' decode rows; the eighth row is the drafter's.
 DECODE_STAGES = 7
 # Asked in order, one after each end of sentence, with the conversation so far as context.
@@ -415,7 +430,7 @@ def _block_spec_decode(mesh_device) -> None:
     if _available_bytes() < ENGRAM_RAM_MARGIN * nbytes:
         pytest.skip(f"needs {nbytes / 1e9:.0f} GB of free memory for the Engram tables")
     eos_id = tokenizer.convert_tokens_to_ids(eos_token)
-    prompt = _tokenize_chat(tokenizer, _DEFAULT_TEXT)
+    prompt = _tokenize_chat(tokenizer, _PROMPTS.get(PROMPT, PROMPT))
     dense_limit = config.index_topk - 2 * rows  # every compressed group in the dense select
     n_tokens = min(int(os.environ.get("DEEPSEEK_V4_SPEC_TOKENS", "300")), dense_limit - len(prompt))
     max_seq = _traced_max_seq(config, len(prompt) + n_tokens + 2 * rows, config.num_hidden_layers)
