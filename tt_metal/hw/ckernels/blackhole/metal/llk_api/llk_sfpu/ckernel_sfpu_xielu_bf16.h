@@ -8,7 +8,6 @@ struct XieluBf16Config {
     static constexpr uint32_t kSegments = 4u;
     static constexpr uint32_t kCoefficientOffset = kSegments + 1;
     static constexpr uint32_t kCoefficientsPerSegment = 10u;
-    // Fit: degree-9 polynomial on [-7.0001, 2.06158e+19], 3 segments, max pure (continuous) ULP 0.5.
     static constexpr uint32_t kDegree[] = {1, 9, 2, 2};
     static constexpr uint32_t kLutBits[] = {
         0xff7fffffu, 0xc0e00000u, 0xb58637bdu, 0x00000001u, 0x5f8f0d18u, 0xbf4ccccdu, 0xbe99999au, 0x00000000u,
@@ -17,17 +16,10 @@ struct XieluBf16Config {
         0x34820000u, 0xb556bf8eu, 0xbe99999au, 0x3b0fa562u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u,
         0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x3f000000u, 0x3f4ccccdu, 0x00000000u, 0x00000000u,
         0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u};
-    static constexpr int kParkRows[] = {-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-                                        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-                                        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1};
-    static constexpr uint32_t kRowBase = 32u;
-    static constexpr uint32_t kRowLimit = 128u;
-    static constexpr uint32_t kParkedCount = 0u;
     static constexpr uint32_t kLowerBits = 0xff800000u;
     static constexpr uint32_t kTerminalBits = 0xff800000u;
     static constexpr bool kOrdered = false;
     static constexpr uint32_t degree(uint32_t segment) { return kDegree[segment]; }
-    static constexpr int park_row(uint32_t index) { return kParkRows[index]; }
     static constexpr float lut(uint32_t index) { return __builtin_bit_cast(float, kLutBits[index]); }
 };
 }  // namespace ckernel::sfpu
@@ -49,7 +41,7 @@ inline bool bf16_dest_xielu() {
 #endif
 }
 template <int ITERATIONS = 32>
-inline void calculate_xielu_bf16() {
+__attribute__((noinline)) inline void calculate_xielu_bf16() {
     ckernel::sfpu::bf16::xielu::calculate_dense_polynomial<ckernel::sfpu::XieluBf16Config, ITERATIONS>();
 }
 

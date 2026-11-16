@@ -11,11 +11,8 @@ namespace ckernel::sfpu::bf16::xielu {
 template <typename Config, int Iterations = 32>
 inline void calculate_dense_polynomial() {
     static_assert(Iterations == 32, "dense polynomial requires one complete tile");
-    static_assert(Config::kRowBase == 32 && Config::kRowLimit == 128 && !Config::kOrdered);
-    static_assert(Config::kRowBase + Config::kParkedCount <= Config::kRowLimit);
+    static_assert(!Config::kOrdered);
     using Transport = ttpoly::xielu::dense_polynomial_transport<Config>;
-    Transport::template park_boundaries<1>();
-    Transport::template park_coeffs<0>();
     for (int d = 0; d < 32; d += 2) {
         sfpi::vFloat x_raw1 = sfpi::dst_reg[d];
         sfpi::vFloat x_raw2 = sfpi::dst_reg[d + 1];
