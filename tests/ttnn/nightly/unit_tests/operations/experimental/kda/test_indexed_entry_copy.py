@@ -339,6 +339,15 @@ def test_paired_copy_needs_both_paired_tensors(device, expect_error):
         )
 
 
+def test_paired_copy_rejects_shared_buffers(device, expect_error):
+    """The two copies run in parallel: a pair reading the other's destination would race it."""
+    a, b, c = (_to_device(torch.zeros(1, 32, 32), device, ttnn.float32, ttnn.TILE_LAYOUT) for _ in range(3))
+    with expect_error(RuntimeError, "destination and paired_source must be different tensors"):
+        ttnn.experimental.kda.indexed_entry_copy(
+            a, b, _index(device, 0), index_scale=1, index_offset=0, paired_source=b, paired_destination=c
+        )
+
+
 def test_zero_fill_at_zero_rejects_a_non_uint32_word(device, expect_error):
     source = _to_device(torch.zeros(1, 32, 32), device, ttnn.float32, ttnn.TILE_LAYOUT)
     destination = _to_device(torch.zeros(4, 32, 32), device, ttnn.float32, ttnn.TILE_LAYOUT)

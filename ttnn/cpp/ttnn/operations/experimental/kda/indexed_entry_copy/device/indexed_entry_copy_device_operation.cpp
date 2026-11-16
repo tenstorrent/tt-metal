@@ -78,6 +78,19 @@ void validate_pair(const IndexedEntryCopyInputs& inputs, const Tensor& source, c
         destination_shape);
 }
 
+// The two copies run in parallel, so neither may touch the other's buffers. Aliasing is not in the cache key: checked
+// on every call.
+void check_pair_buffers(const IndexedEntryCopyInputs& inputs) {
+    if (inputs.paired_source.has_value()) {
+        kda_factory_detail::check_distinct_buffers(
+            {{&inputs.source, "source"},
+             {&inputs.destination, "destination"},
+             {&*inputs.paired_source, "paired_source"},
+             {&*inputs.paired_destination, "paired_destination"}},
+            kOperation);
+    }
+}
+
 }  // namespace
 
 void IndexedEntryCopyDeviceOperation::validate_on_program_cache_miss(
@@ -90,6 +103,7 @@ void IndexedEntryCopyDeviceOperation::validate_on_program_cache_miss(
     if (inputs.paired_source.has_value()) {
         validate_pair(inputs, *inputs.paired_source, *inputs.paired_destination);
     }
+    check_pair_buffers(inputs);
     TT_FATAL(params.index_scale >= 1, "{}: index_scale must be at least 1", kOperation);
     if (inputs.zero_fill_at_zero.has_value()) {
         kda_factory_detail::check_device_scalar(
@@ -99,21 +113,18 @@ void IndexedEntryCopyDeviceOperation::validate_on_program_cache_miss(
 
 void IndexedEntryCopyDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t&, const tensor_args_t& inputs) {
-    // Shapes, layouts and memory configs are in the program-cache key; a hit only needs the tensors allocated.
-    const auto check = [](const Tensor& tensor) {
-        TT_FATAL(
-            tensor.storage_type() == StorageType::DEVICE && tensor.is_allocated(),
-            "{}: every tensor must be allocated on the device",
-            kOperation);
-    };
-    check(inputs.source);
-    check(inputs.destination);
-    check(inputs.index);
-    for (const auto* tensor : {&inputs.zero_fill_at_zero, &inputs.paired_source, &inputs.paired_destination}) {
-        if (tensor->has_value()) {
-            check(**tensor);
-        }
-    }
+    // Shapes, layouts and memory configs are in the program-cache key; allocation, device and aliasing are not.
+    const auto optional = [](const std::optional<Tensor>& tensor) { return tensor ? &*tensor : nullptr; };
+    kda_factory_detail::check_allocated_on_device(
+        inputs.source,
+        {{&inputs.source, "source"},
+         {&inputs.destination, "destination"},
+         {&inputs.index, "index"},
+         {optional(inputs.zero_fill_at_zero), "zero_fill_at_zero"},
+         {optional(inputs.paired_source), "paired_source"},
+         {optional(inputs.paired_destination), "paired_destination"}},
+        kOperation);
+    check_pair_buffers(inputs);
 }
 
 IndexedEntryCopyDeviceOperation::spec_return_value_t IndexedEntryCopyDeviceOperation::compute_output_specs(
