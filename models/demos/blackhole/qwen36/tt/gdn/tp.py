@@ -42,6 +42,9 @@ _GDN_PACKED = _GDN_FUSED and os.environ.get("QWEN36_GDN_PACKED", "1") != "0"
 # DRAM above. At T=2048 the L1 rows sit below the op's CB bound (address 1140480 in the model) and the op's prep plan
 # loses its norm split to fit under them: 491 us against 401 from DRAM. 2048 keeps them in L1.
 _GDN_ROWS_L1_MAX = int(os.environ.get("QWEN36_GDN_ROWS_L1_MAX", "1024"))
+# QWEN36_GDN_TAPS_LATE (default 1): fused prefill copies the decode conv taps after the output projection is launched.
+# Before it, the 11 short programs keep the dispatcher from writing the projection ahead: it started 19.9 us late.
+_GDN_TAPS_LATE = os.environ.get("QWEN36_GDN_TAPS_LATE", "1") != "0"
 # (call, path) -> number of forward calls (a traced call counts once, at capture).
 GDN_PATH_CALLS = collections.Counter()
 
@@ -1136,15 +1139,25 @@ class TPGatedDeltaNet:
             # Split inputs from DRAM.
             qkv, z, a, b = self._project_qkvzab(x, T)
             gated = self._gdn_fused_op(qkv, z, a, b, self.conv_carry)
-        if capture_state:
-            # Decode conv window, as the chain: taps 1..K-1 = the last K-1 conv inputs, tap 0 = zero.
-            ttnn.copy(self._zero_conv0, self.conv_states[0])
-            for j in range(self.K - 1):
-                src = ttnn.slice(self.conv_carry, (0, j, 0), (1, j + 1, D))
-                ttnn.copy(src, self.conv_states[j + 1])
-                ttnn.deallocate(src)
-            self._conv_taps_stale = False
-            self._conv_win_stale = True
+        if capture_state and not _GDN_TAPS_LATE:
+            self._capture_conv_taps(D)
+        out = self._fused_out_proj(gated, T)
+        if capture_state and _GDN_TAPS_LATE:
+            self._capture_conv_taps(D)
+        return out
+
+    def _capture_conv_taps(self, D):
+        """Decode conv window, as the chain: taps 1..K-1 = the last K-1 conv inputs, tap 0 = zero."""
+        ttnn.copy(self._zero_conv0, self.conv_states[0])
+        for j in range(self.K - 1):
+            src = ttnn.slice(self.conv_carry, (0, j, 0), (1, j + 1, D))
+            ttnn.copy(src, self.conv_states[j + 1])
+            ttnn.deallocate(src)
+        self._conv_taps_stale = False
+        self._conv_win_stale = True
+
+    def _fused_out_proj(self, gated, T):
+        tw = self.tw
         if self._out_colpar_prefill:
             _bf8 = getattr(self.args, "prefill_agmm_bf8", False)
             out = tpc.all_gather_matmul_prefill(
