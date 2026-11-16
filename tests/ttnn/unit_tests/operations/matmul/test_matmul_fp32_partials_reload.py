@@ -306,6 +306,8 @@ def test_matmul_fp32_partials_reload_fused_bias(device, factory, packer_l1_acc, 
 @pytest.mark.parametrize("activation", [None, "sigmoid"])
 @pytest.mark.parametrize("in0_block_w, packer_l1_acc", [(8, False), (2, False), (2, True)])
 def test_matmul_2d_mcast_fp32_bias_added_in_fp32(device, in0_block_w, packer_l1_acc, activation):
+    if device.arch() == ttnn.device.Arch.QUASAR:
+        pytest.skip("the matmul's FP32 SFPU bias add is not built for Quasar")
     torch.manual_seed(0)
     m, k, n = 256, 256, 384
     grid = ttnn.CoreCoord(4, 4)

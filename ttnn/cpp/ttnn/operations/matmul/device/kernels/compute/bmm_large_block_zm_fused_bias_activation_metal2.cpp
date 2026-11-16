@@ -629,6 +629,12 @@ void kernel_main() {
 #ifdef PACKER_L1_ACC
                 PACK((llk_pack_reconfig_l1_acc(0)));
 #endif
+                // Reader only pushes bias once when num_blocks_w_dim == 1;
+                // the tiles stay in the buffer for reuse across bh/batch iterations.
+                // With BIAS_PER_GROUP (sparse matmul, per-group bias) every batch gets its own tiles.
+                if (bias_per_group || (b == 0 && bh == 0) || num_blocks_w_dim > 1) {
+                    bias_dfb.wait_front(bias_ntiles);
+                }
 #ifdef FUSE_BIAS_SFPU
                 // FP32 bias on FP32 partials: an FPU add reads both through SrcA/SrcB as TF32, which drops the
                 // bias's low 13 mantissa bits, a per-column error that does not average out. Both buffers
@@ -637,9 +643,6 @@ void kernel_main() {
                 static_assert(row_broadcast_bias, "FUSE_BIAS_SFPU takes a row-broadcast bias");
                 constexpr uint32_t sfpu_bias_tiles_per_acquire = 2;
                 reconfig_data_format_srca(in1_dfb_id, mm_partials_dfb_id);
-                if (bias_per_group || (b == 0 && bh == 0) || num_blocks_w_dim > 1) {
-                    bias_dfb.wait_front(bias_ntiles);
-                }
                 for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
                     uint32_t in1_index_subblock_offset = 0;
                     for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
@@ -648,9 +651,8 @@ void kernel_main() {
                         mm_partials_dfb.wait_front(out_subblock_num_tiles);
                         untilize_mode_out_dfb.reserve_back(out_subblock_num_tiles);
                         for (uint32_t first = 0; first < out_subblock_num_tiles; first += sfpu_bias_tiles_per_acquire) {
-                            const uint32_t count = (out_subblock_num_tiles - first < sfpu_bias_tiles_per_acquire)
-                                                       ? out_subblock_num_tiles - first
-                                                       : sfpu_bias_tiles_per_acquire;
+                            const uint32_t count =
+                                std::min<uint32_t>(sfpu_bias_tiles_per_acquire, out_subblock_num_tiles - first);
                             tile_regs_acquire();
                             copy_init(mm_partials_dfb_id);
                             for (uint32_t t = 0; t < count; t++) {
@@ -708,12 +710,6 @@ void kernel_main() {
                     add_bcast_rows_init(mm_partials_dfb_id, bias_dfb_id);
                 } else {
                     add_init(mm_partials_dfb_id, bias_dfb_id);
-                }
-                // Reader only pushes bias once when num_blocks_w_dim == 1;
-                // the tiles stay in the buffer for reuse across bh/batch iterations.
-                // With BIAS_PER_GROUP (sparse matmul, per-group bias) every batch gets its own tiles.
-                if (bias_per_group || (b == 0 && bh == 0) || num_blocks_w_dim > 1) {
-                    bias_dfb.wait_front(bias_ntiles);
                 }
 #ifdef ARCH_QUASAR
                 // Quasar (§7): the accumulation above left the pack BFD on mm_partials_dfb_id; the bias pack

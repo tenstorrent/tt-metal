@@ -208,9 +208,12 @@ class ttKDA:
         self.active_seq_len_local = active_seq_len // self.sequence_parallel_size
         self._is_sequence_parallel = self.sequence_parallel_size > 1
         self._tp_cluster_axis = None if not self._is_sequence_parallel else self.tensor_parallel_axis
-        # A bounded gate is sigmoid(scale * (x @ W + bias)), applied by the add after the decay projection; chunk
-        # preparation applies the lower bound. The softplus gate applies its own activation after the projection.
+        # A bounded gate is sigmoid(scale * (x @ W + bias)), applied by the decay projection; chunk preparation
+        # applies the lower bound. The softplus gate applies its own activation after the projection.
         self._bounded_gate = config.gate_lower_bound is not None
+        if self._bounded_gate and mesh_device.arch() == ttnn.device.Arch.QUASAR:
+            # The projection keeps the FP32 offset exact only with the matmul's SFPU bias add, not built for Quasar.
+            raise ValueError("a bounded KDA gate is not supported on Quasar")
         uses_grouped_scan = (
             self.sequence_parallel_size > 1 or program_config.recurrence.local_scan_strategy == "grouped"
         )
