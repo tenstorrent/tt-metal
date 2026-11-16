@@ -12,7 +12,6 @@
 #include <cstdint>
 #include <stdexcept>
 #include <string>
-#include <tt_stl/reflection.hpp>
 #include <vector>
 #include <xtensor-blas/xlinalg.hpp>
 #include <xtensor/core/xmath.hpp>
@@ -20,9 +19,8 @@
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "test_utils/program_cache.hpp"
 #include "test_utils/random_data.hpp"
-#include "ttnn/graph/graph_processor.hpp"
-#include "ttnn/graph/graph_trace_utils.hpp"
 #include "ttnn/operations/matmul/device/matmul_device_operation.hpp"
 
 namespace {
@@ -42,18 +40,10 @@ struct MatmulFrozenCase {
     uint32_t batch = 0;
 };
 
-// Small integers keep every product and partial sum exact in bf16: |a|, |b| <= 2 and |out_grad| <= 1 bound each grad
+// make_small_ints keeps every product and partial sum exact in bf16: |a|, |b| <= 2 and |out_grad| <= 1 bound each grad
 // entry by 2 * max(batch * M, N) <= 192 < 256, so the device grads must equal the host reference bit for bit.
-xt::xarray<float> make_small_ints(const std::vector<uint32_t>& shape, float bound, uint32_t seed) {
-    return xt::round(ttml::test_utils::make_uniform_xarray<float>(shape, -bound, bound, seed));
-}
-
-// Copy of t with its leading dims flattened into rows: [..., rows, cols] -> [volume / cols, cols].
-xt::xarray<float> flatten_rows(const xt::xarray<float>& t) {
-    xt::xarray<float> flat = t;
-    flat.reshape(std::vector<size_t>{t.size() / t.shape().back(), t.shape().back()});
-    return flat;
-}
+using ttml::test_utils::flatten_rows;
+using ttml::test_utils::make_small_ints;
 
 // Host inputs plus the autograd graph of out = matmul_op(a, b), with out's grad set and backward not yet run.
 struct MatmulFrozenGraph {
@@ -88,16 +78,8 @@ MatmulFrozenGraph build_graph(const MatmulFrozenCase& c) {
 
 }  // namespace
 
-class MatmulOpTest : public ::testing::Test {
+class MatmulOpTest : public ttml::test_utils::DeviceSuiteTest {
 protected:
-    static void SetUpTestSuite() {
-        ttml::autograd::ctx().open_device();
-    }
-
-    static void TearDownTestSuite() {
-        ttml::autograd::ctx().close_device();
-    }
-
     void TearDown() override {
         ttml::autograd::ctx().reset_graph();
     }
@@ -156,14 +138,10 @@ TEST_P(MatmulOpFrozenInputTest, BackwardComputesOnlyTrainableGrads) {
         return;
     }
 
-    // The scoped capture ends even if backward throws, so a failing row cannot leave later tests capturing.
-    ttnn::graph::ScopedGraphCapture capture(ttnn::graph::GraphProcessor::RunMode::NORMAL);
-    g.out->backward();
-    const auto calls = ttnn::graph::extract_calltrace(capture.end_graph_capture());
+    const auto calls = ttml::test_utils::backward_calltrace(g.out);
 
-    // One grad matmul per trainable input. The name comes from the op type, so renaming the op breaks the build rather
-    // than silently counting zero.
-    const std::string matmul_name{ttsl::get_type_name<ttnn::prim::MatmulDeviceOperation>()};
+    // One grad matmul per trainable input.
+    const auto matmul_name = ttml::test_utils::op_name<ttnn::prim::MatmulDeviceOperation>();
     const auto num_matmuls = std::ranges::count(calls, matmul_name);
     const auto expected_matmuls = static_cast<int>(c.a_requires_grad) + static_cast<int>(c.b_requires_grad);
     EXPECT_EQ(num_matmuls, expected_matmuls)

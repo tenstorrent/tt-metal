@@ -447,11 +447,11 @@ TEST_F(LayerNormBackwardOpTest, MetalLayerNormBw_CacheHit_PreallocatedOutputsAdd
 // ============================================================================
 // Skipping grads in the LayerNorm backward kernel
 // ============================================================================
-// layernorm_bw takes a flag for each of dx, dgamma and dbeta. A skipped grad is nullopt. dbeta is reduced from dL_dout
-// on the host, so only dx and dgamma reach the kernel, which drops a skipped grad's compute and output CB and, for dx,
-// gamma and both row sums. Rows cover dx off on both kernel paths (everything in L1, with several rows per core so
-// gamma is read once, and not), dgamma and dbeta each skipped, and each output as the one the writer takes its tile
-// size from.
+// layernorm_bw takes a flag for each of dx, dgamma and dbeta. A skipped grad is nullopt. The wrapper reduces dbeta from
+// dL_dout on the device, outside the kernel, so only dx and dgamma reach the kernel, which drops a skipped grad's
+// compute and output CB and, for dx, gamma and both row sums. Rows cover dx off on both kernel paths (everything in L1,
+// with several rows per core so gamma is read once, and not), dgamma and dbeta each skipped, and each output as the one
+// the writer takes its tile size from.
 // ============================================================================
 
 namespace {
@@ -491,16 +491,8 @@ LayerNormBwInputs make_layernorm_bw_inputs(const std::vector<uint32_t>& shape, u
 
 }  // namespace
 
-class LayerNormBwSkipTest : public ::testing::TestWithParam<LayerNormBwSkipCase> {
-protected:
-    static void SetUpTestSuite() {
-        ttml::autograd::ctx().open_device();
-    }
-
-    static void TearDownTestSuite() {
-        ttml::autograd::ctx().close_device();
-    }
-};
+class LayerNormBwSkipTest : public LayerNormBackwardOpTest,
+                            public ::testing::WithParamInterface<LayerNormBwSkipCase> {};
 
 // Each requested grad must equal the one from the full backward bit for bit: the kernel does the same per-tile
 // arithmetic either way. The dx and dgamma flags are compile-time, so a first skipping run that changes them must
@@ -598,7 +590,8 @@ INSTANTIATE_TEST_SUITE_P(
             .compute_grad_beta = false}),
     [](const ::testing::TestParamInfo<LayerNormBwSkipCase>& info) { return info.param.name; });
 
-// A call that requests no grad must be refused.
+// A call that requests no grad must be refused, by the wrapper and by the device op. The device op must also refuse a
+// preallocated output for a grad that is not requested.
 TEST_F(LayerNormBackwardOpTest, BackwardRejectsNoRequestedGrad) {
     const LayerNormBwInputs in = make_layernorm_bw_inputs({1U, 1U, 32U, 64U}, 1U);
     EXPECT_THAT(
@@ -608,4 +601,46 @@ TEST_F(LayerNormBackwardOpTest, BackwardRejectsNoRequestedGrad) {
         },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("at least one of grads.input, grads.gamma and grads.beta must be set")));
+    EXPECT_THAT(
+        [&in] {
+            ttnn::prim::ttml_layernorm_bw(
+                in.input,
+                in.gamma,
+                in.mean,
+                in.rstd,
+                in.dL_dout,
+                {.grad_input = false, .grad_gamma = false},
+                /* preallocated_dx */ std::nullopt,
+                /* preallocated_dgamma_components */ std::nullopt);
+        },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("at least one of outputs.grad_input and outputs.grad_gamma must be set")));
+    EXPECT_THAT(
+        [&in] {
+            ttnn::prim::ttml_layernorm_bw(
+                in.input,
+                in.gamma,
+                in.mean,
+                in.rstd,
+                in.dL_dout,
+                {.grad_input = false},
+                /* preallocated_dx */ ttml::core::zeros_like(in.input),
+                /* preallocated_dgamma_components */ std::nullopt);
+        },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("preallocated dx given but outputs.grad_input is false")));
+    EXPECT_THAT(
+        [&in] {
+            ttnn::prim::ttml_layernorm_bw(
+                in.input,
+                in.gamma,
+                in.mean,
+                in.rstd,
+                in.dL_dout,
+                {.grad_gamma = false},
+                /* preallocated_dx */ std::nullopt,
+                /* preallocated_dgamma_components */ ttml::core::zeros_like(in.input));
+        },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("preallocated dgamma_components given but outputs.grad_gamma is false")));
 }

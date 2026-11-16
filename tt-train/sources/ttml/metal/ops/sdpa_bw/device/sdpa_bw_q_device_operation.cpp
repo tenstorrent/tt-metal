@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <ttnn/tensor/tensor_utils.hpp>
 
+#include "metal/common/program_utils.hpp"
 #include "metal/common/tensor_validation.hpp"
 #include "ttnn/device_operation.hpp"
 
@@ -311,33 +312,11 @@ SDPABackwardQDeviceOperation::tensor_return_value_t SDPABackwardQDeviceOperation
 
     auto* device = tensor_args.query.device();
 
-    std::optional<ttnn::Tensor> grad_query = std::nullopt;
-    if (grad_query_spec.has_value()) {
-        grad_query = tensor_args.preallocated_grad_query.has_value()
-                         ? tensor_args.preallocated_grad_query.value()
-                         : ttnn::create_device_tensor(grad_query_spec.value(), device);
-    }
-
-    std::optional<ttnn::Tensor> u_scaler = std::nullopt;
-    if (u_scaler_spec.has_value()) {
-        u_scaler = tensor_args.preallocated_u_scaler.has_value()
-                       ? tensor_args.preallocated_u_scaler.value()
-                       : ttnn::create_device_tensor(u_scaler_spec.value(), device);
-    }
-
-    std::optional<ttnn::Tensor> grad_gate = std::nullopt;
-    if (grad_gate_spec.has_value()) {
-        grad_gate = tensor_args.preallocated_grad_gate.has_value()
-                        ? tensor_args.preallocated_grad_gate.value()
-                        : ttnn::create_device_tensor(grad_gate_spec.value(), device);
-    }
-
-    std::optional<ttnn::Tensor> gated_grad_output = std::nullopt;
-    if (gated_grad_output_spec.has_value()) {
-        gated_grad_output = ttnn::create_device_tensor(gated_grad_output_spec.value(), device);
-    }
-
-    return {grad_query, u_scaler, grad_gate, gated_grad_output};
+    return {
+        create_optional_output_tensor(grad_query_spec, tensor_args.preallocated_grad_query, device),
+        create_optional_output_tensor(u_scaler_spec, tensor_args.preallocated_u_scaler, device),
+        create_optional_output_tensor(grad_gate_spec, tensor_args.preallocated_grad_gate, device),
+        create_optional_output_tensor(gated_grad_output_spec, /*preallocated=*/std::nullopt, device)};
 }
 
 }  // namespace ttml::metal::ops::sdpa_bw::device

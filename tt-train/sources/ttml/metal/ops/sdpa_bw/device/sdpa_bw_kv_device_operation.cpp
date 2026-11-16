@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <ttnn/tensor/tensor_utils.hpp>
 
+#include "metal/common/program_utils.hpp"
 #include "metal/common/tensor_validation.hpp"
 #include "ttnn/device_operation.hpp"
 
@@ -245,23 +246,10 @@ SDPABackwardKVDeviceOperation::tensor_return_value_t SDPABackwardKVDeviceOperati
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     auto [grad_key_spec, grad_value_spec] = compute_output_specs(operation_attributes, tensor_args);
 
-    // Handle grad_key
-    std::optional<ttnn::Tensor> grad_key = std::nullopt;
-    if (grad_key_spec.has_value()) {
-        grad_key = tensor_args.preallocated_grad_key.has_value()
-                       ? tensor_args.preallocated_grad_key.value()
-                       : ttnn::create_device_tensor(grad_key_spec.value(), tensor_args.key.device());
-    }
-
-    // Handle grad_value
-    std::optional<ttnn::Tensor> grad_value = std::nullopt;
-    if (grad_value_spec.has_value()) {
-        grad_value = tensor_args.preallocated_grad_value.has_value()
-                         ? tensor_args.preallocated_grad_value.value()
-                         : ttnn::create_device_tensor(grad_value_spec.value(), tensor_args.value.device());
-    }
-
-    return {grad_key, grad_value};
+    return {
+        create_optional_output_tensor(grad_key_spec, tensor_args.preallocated_grad_key, tensor_args.key.device()),
+        create_optional_output_tensor(
+            grad_value_spec, tensor_args.preallocated_grad_value, tensor_args.value.device())};
 }
 
 }  // namespace ttml::metal::ops::sdpa_bw::device

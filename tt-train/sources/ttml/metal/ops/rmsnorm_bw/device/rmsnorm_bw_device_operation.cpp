@@ -4,6 +4,7 @@
 
 #include "rmsnorm_bw_device_operation.hpp"
 
+#include "metal/common/program_utils.hpp"
 #include "metal/common/tensor_validation.hpp"
 #include "metal/ops/common/rmsnorm_common.hpp"
 #include "rmsnorm_bw_program_factory.hpp"
@@ -116,22 +117,10 @@ tensor_return_value_t RMSNormBackwardDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const spec_return_value_t output_specs = compute_output_specs(args, tensor_args);
     auto* device = tensor_args.input.device();
-    const auto create = [device](
-                            const std::optional<tt::tt_metal::TensorSpec>& spec,
-                            const std::optional<ttnn::Tensor>& preallocated) -> std::optional<ttnn::Tensor> {
-        if (!spec.has_value()) {
-            return std::nullopt;
-        }
-        if (preallocated.has_value()) {
-            return preallocated;
-        }
-        return ttnn::create_device_tensor(spec.value(), device);
-    };
-
     return {
-        create(output_specs[0], tensor_args.preallocated_da),
-        create(output_specs[1], tensor_args.preallocated_dgamma_components),
-        create(output_specs[2], tensor_args.preallocated_dgate),
+        create_optional_output_tensor(output_specs[0], tensor_args.preallocated_da, device),
+        create_optional_output_tensor(output_specs[1], tensor_args.preallocated_dgamma_components, device),
+        create_optional_output_tensor(output_specs[2], tensor_args.preallocated_dgate, device),
     };
 }
 

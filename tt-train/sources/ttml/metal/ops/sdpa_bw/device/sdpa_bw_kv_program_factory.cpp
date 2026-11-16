@@ -363,15 +363,15 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
     auto* query_buffer = query.buffer();
     auto* key_buffer = key.buffer();
     auto* value_buffer = value.buffer();
-    auto* mask_buffer = tensor_args.attn_mask.has_value() ? tensor_args.attn_mask.value().buffer() : nullptr;
+    auto* mask_buffer = get_buffer_or_null(tensor_args.attn_mask);
     auto* intermediates_buffer = intermediates.buffer();
-    auto* u_scaler_buffer = tensor_args.u_scaler.has_value() ? tensor_args.u_scaler.value().buffer() : nullptr;
+    auto* u_scaler_buffer = get_buffer_or_null(tensor_args.u_scaler);
 
     // An output is nullopt when it was not requested; its buffer is then null and gets placeholder accessor args
     // and a 0 address, so the writer's accessor offsets do not depend on the flags.
     auto& [grad_key, grad_value] = output;
-    auto* grad_key_buffer = grad_key.has_value() ? grad_key.value().buffer() : nullptr;
-    auto* grad_value_buffer = grad_value.has_value() ? grad_value.value().buffer() : nullptr;
+    auto* grad_key_buffer = get_buffer_or_null(grad_key);
+    auto* grad_value_buffer = get_buffer_or_null(grad_value);
 
     // Configure defines
     std::map<std::string, std::string> reader_defines;
@@ -637,13 +637,13 @@ void SDPABackwardKVProgramFactory::override_runtime_arguments(
     const auto* query_buffer = &tensor_args.query.mesh_buffer();
     const auto* key_buffer = &tensor_args.key.mesh_buffer();
     const auto* value_buffer = &tensor_args.value.mesh_buffer();
-    const auto* mask_buffer = tensor_args.attn_mask.has_value() ? tensor_args.attn_mask.value().buffer() : nullptr;
+    const auto* mask_buffer = get_buffer_or_null(tensor_args.attn_mask);
     const auto* intermediates_buffer = &tensor_args.intermediates.mesh_buffer();
-    const auto* u_scaler_buffer = tensor_args.u_scaler.has_value() ? tensor_args.u_scaler.value().buffer() : nullptr;
+    const auto* u_scaler_buffer = get_buffer_or_null(tensor_args.u_scaler);
 
     auto& [grad_key, grad_value] = tensor_return_value;
-    const auto* grad_key_buffer = grad_key.has_value() ? grad_key.value().buffer() : nullptr;
-    const auto* grad_value_buffer = grad_value.has_value() ? grad_value.value().buffer() : nullptr;
+    const auto* grad_key_buffer = get_buffer_or_null(grad_key);
+    const auto* grad_value_buffer = get_buffer_or_null(grad_value);
 
     auto& reader_runtime_args = GetRuntimeArgs(program, sdpa_bw_reader_kernel);
     auto& writer_runtime_args = GetRuntimeArgs(program, sdpa_bw_writer_kernel);

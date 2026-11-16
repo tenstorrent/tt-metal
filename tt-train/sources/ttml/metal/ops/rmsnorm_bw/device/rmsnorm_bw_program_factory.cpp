@@ -95,10 +95,10 @@ RMSNormBackwardBuffers get_buffers(const tensor_args_t& tensor_args, const tenso
         .gamma = tensor_args.gamma.buffer(),
         .rms = tensor_args.rms.buffer(),
         .dL_dout = tensor_args.dL_dout.buffer(),
-        .gate = tensor_args.gate.has_value() ? tensor_args.gate->buffer() : nullptr,
-        .da = output[0].has_value() ? output[0]->buffer() : nullptr,
-        .dgamma_components = output[1].has_value() ? output[1]->buffer() : nullptr,
-        .dgate = output[2].has_value() ? output[2]->buffer() : nullptr,
+        .gate = get_buffer_or_null(tensor_args.gate),
+        .da = get_buffer_or_null(output[0]),
+        .dgamma_components = get_buffer_or_null(output[1]),
+        .dgate = get_buffer_or_null(output[2]),
     };
 }
 

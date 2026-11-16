@@ -6,19 +6,10 @@
 
 #include "autograd/auto_context.hpp"
 #include "autograd/graph_utils.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn_fixed/matmuls.hpp"
 
 namespace ttml::ops {
-
-namespace {
-
-uint64_t batch_volume(const ttnn::Tensor& t) {
-    const auto& shape = t.logical_shape();
-    const uint64_t matrix_volume = shape.rank() > 2U ? static_cast<uint64_t>(shape[-2]) * shape[-1] : 0U;
-    return matrix_volume != 0U ? t.logical_volume() / matrix_volume : 1U;
-}
-
-}  // namespace
 
 autograd::TensorPtr matmul_op(
     const autograd::TensorPtr& a, const autograd::TensorPtr& b, bool transpose_a, bool transpose_b) {
@@ -33,7 +24,7 @@ autograd::TensorPtr matmul_op(
         // With transpose_a, a's stored rows are op(a)'s columns, so flattening a batched a misaligns its rows with
         // dL/dout's: dA would come back scrambled and dB would fail on a shape mismatch.
         if (transpose_a) {
-            const uint64_t a_batch = batch_volume(a->get_value());
+            const uint32_t a_batch = ttnn::get_batch_size(a->get_value().logical_shape());
             TT_FATAL(
                 a_batch == 1U,
                 "matmul_op backward does not support transpose_a with a batched a: got a of shape {} (batch {}).",
@@ -41,7 +32,7 @@ autograd::TensorPtr matmul_op(
                 a_batch);
         }
         // Backward reduces dB over all of a's flattened rows, so b must be shared across the batch.
-        const uint64_t b_batch = batch_volume(b->get_value());
+        const uint32_t b_batch = ttnn::get_batch_size(b->get_value().logical_shape());
         TT_FATAL(
             b_batch == 1U,
             "matmul_op backward does not support a batched b: got b of shape {} (batch {}).",

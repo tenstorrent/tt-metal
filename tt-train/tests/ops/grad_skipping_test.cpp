@@ -11,7 +11,6 @@
 #include <optional>
 #include <ostream>
 #include <string>
-#include <tt_stl/reflection.hpp>
 #include <vector>
 #include <xtensor/core/xmath.hpp>
 #include <xtensor/generators/xbuilder.hpp>
@@ -28,9 +27,8 @@
 #include "ops/rmsnorm_op.hpp"
 #include "ops/scaled_dot_product_attention.hpp"
 #include "ops/swiglu_op.hpp"
+#include "test_utils/program_cache.hpp"
 #include "test_utils/random_data.hpp"
-#include "ttnn/graph/graph_processor.hpp"
-#include "ttnn/graph/graph_trace_utils.hpp"
 #include "ttnn/operations/data_movement/concat/device/concat_device_operation.hpp"
 #include "ttnn/operations/eltwise/binary_ng/device/binary_ng_device_operation.hpp"
 #include "ttnn/operations/eltwise/unary/device/unary_device_operation.hpp"
@@ -78,12 +76,7 @@ void PrintTo(const GradSkipCase& c, std::ostream* os) {
     *os << c.name;
 }
 
-// Device-op names as the graph capture records them. They come from the op types, so renaming an op breaks the build
-// rather than silently counting zero.
-template <typename Op>
-std::string op_name() {
-    return std::string(ttsl::get_type_name<Op>());
-}
+using ttml::test_utils::op_name;
 
 const std::string kBinary = op_name<ttnn::operations::binary_ng::BinaryNgDeviceOperation>();
 const std::string kUnary = op_name<ttnn::operations::unary::UnaryDeviceOperation>();
@@ -135,12 +128,7 @@ BackwardRun run_backward(
     }
 
     BackwardRun run;
-    {
-        // The scoped capture ends even if backward throws, so a failing row cannot leave later tests capturing.
-        ttnn::graph::ScopedGraphCapture capture(ttnn::graph::GraphProcessor::RunMode::NORMAL);
-        out->backward();
-        run.calls = ttnn::graph::extract_calltrace(capture.end_graph_capture());
-    }
+    run.calls = ttml::test_utils::backward_calltrace(out);
     for (const auto& input : inputs) {
         run.grads.push_back(
             input->is_grad_initialized() ? std::optional(ttml::core::to_xtensor(input->get_grad())) : std::nullopt);
@@ -278,16 +266,8 @@ TensorPtr mul_op(const TensorPtr& a, const TensorPtr& b) {
 
 }  // namespace
 
-class GradSkippingTest : public ::testing::TestWithParam<GradSkipCase> {
+class GradSkippingTest : public ttml::test_utils::DeviceSuiteTest, public ::testing::WithParamInterface<GradSkipCase> {
 protected:
-    static void SetUpTestSuite() {
-        ttml::autograd::ctx().open_device();
-    }
-
-    static void TearDownTestSuite() {
-        ttml::autograd::ctx().close_device();
-    }
-
     void TearDown() override {
         ttml::autograd::ctx().reset_graph();
     }

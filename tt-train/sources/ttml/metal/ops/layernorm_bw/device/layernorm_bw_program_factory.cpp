@@ -125,14 +125,6 @@ bool fits_in_l1_check(
 
 namespace ttml::metal::ops::layernorm_bw::device {
 
-namespace {
-
-tt::tt_metal::Buffer* get_output_buffer_or_null(const std::optional<ttnn::Tensor>& output) {
-    return output.has_value() ? output->buffer() : nullptr;
-}
-
-}  // namespace
-
 tt::tt_metal::ProgramDescriptor LayerNormBackwardProgramFactory::create_descriptor(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
@@ -292,8 +284,8 @@ tt::tt_metal::ProgramDescriptor LayerNormBackwardProgramFactory::create_descript
     auto* rstd_buffer = rstd.buffer();
     auto* dLdout_buffer = dLdout.buffer();
     // An output is nullopt when its grad is not requested; its buffer is then nullptr.
-    auto* dx_buffer = get_output_buffer_or_null(output[0]);
-    auto* dgamma_components_buffer = get_output_buffer_or_null(output[1]);
+    auto* dx_buffer = get_buffer_or_null(output[0]);
+    auto* dgamma_components_buffer = get_buffer_or_null(output[1]);
 
     std::map<std::string, std::string> defines;
     if (mask_w != 0) {
@@ -388,8 +380,8 @@ void LayerNormBackwardProgramFactory::override_runtime_arguments(
     const uint32_t rstd_addr = tensor_args.rstd.buffer()->address();
     const uint32_t dLdout_addr = tensor_args.dL_dout.buffer()->address();
     // A skipped output's address is 0, as in create_descriptor().
-    const uint32_t dx_addr = get_address_or_zero(get_output_buffer_or_null(output[0]));
-    const uint32_t dgamma_components_addr = get_address_or_zero(get_output_buffer_or_null(output[1]));
+    const uint32_t dx_addr = get_address_or_zero(get_buffer_or_null(output[0]));
+    const uint32_t dgamma_components_addr = get_address_or_zero(get_buffer_or_null(output[1]));
 
     auto& reader_runtime_args = tt::tt_metal::GetRuntimeArgs(program, kReaderKernelIdx);
     auto& writer_runtime_args = tt::tt_metal::GetRuntimeArgs(program, kWriterKernelIdx);

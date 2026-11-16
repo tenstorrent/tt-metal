@@ -5,6 +5,7 @@
 #include "layernorm_bw_device_operation.hpp"
 
 #include "layernorm_bw_program_factory.hpp"
+#include "metal/common/program_utils.hpp"
 #include "metal/common/tensor_validation.hpp"
 #include "ttnn/device_operation.hpp"
 
@@ -90,23 +91,12 @@ tensor_return_value_t LayerNormBackwardDeviceOperation::create_output_tensors(
 
     spec_return_value_t output_specs = compute_output_specs(args, tensor_args);
 
-    const auto create_output = [&](const std::optional<tt::tt_metal::TensorSpec>& spec,
-                                   const std::optional<ttnn::Tensor>& preallocated,
-                                   const ttnn::Tensor& device_source) -> std::optional<ttnn::Tensor> {
-        if (!spec.has_value()) {
-            return std::nullopt;
-        }
-        if (preallocated.has_value()) {
-            return preallocated.value();
-        }
-        return ttnn::create_device_tensor(*spec, device_source.device());
-    };
-
     // dx
-    output_tensors.push_back(create_output(output_specs[0], tensor_args.preallocated_dx, tensor_args.input));
-    // dgamma_components
     output_tensors.push_back(
-        create_output(output_specs[1], tensor_args.preallocated_dgamma_components, tensor_args.gamma));
+        create_optional_output_tensor(output_specs[0], tensor_args.preallocated_dx, tensor_args.input.device()));
+    // dgamma_components
+    output_tensors.push_back(create_optional_output_tensor(
+        output_specs[1], tensor_args.preallocated_dgamma_components, tensor_args.gamma.device()));
 
     return output_tensors;
 }

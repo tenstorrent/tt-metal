@@ -46,8 +46,8 @@ void kernel_main() {
     for (uint32_t r = start_row; r < end_row; ++r) {
         // Write dx (gradient w.r.t. input) and dgamma_components (partial gradients w.r.t. gamma) in blocks.
         // We interleave the writes to avoid waiting for the entire Wt tiles at once.
-        // NOTE: The final dL_dgamma (gradient w.r.t. gamma) requires reduction across batches, which is performed
-        // on the host. Here, we output the per-tile components for host-side reduction.
+        // NOTE: The final dL_dgamma (gradient w.r.t. gamma) requires reduction across batches, which the layernorm_bw
+        // wrapper performs on the device after this op. Here, we output the per-tile components for that reduction.
 
         for (uint32_t c = 0; c < Wt; c += block_size) {
             // Calculate actual number of tiles in this block (handles last block when Wt % block_size != 0)

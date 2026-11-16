@@ -10,7 +10,6 @@
 #include <algorithm>
 #include <cstdint>
 #include <string>
-#include <tt_stl/reflection.hpp>
 #include <vector>
 #include <xtensor-blas/xlinalg.hpp>
 #include <xtensor/core/xmath.hpp>
@@ -20,9 +19,8 @@
 #include "core/compute_kernel_config.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "init/tensor_initializers.hpp"
+#include "test_utils/program_cache.hpp"
 #include "test_utils/random_data.hpp"
-#include "ttnn/graph/graph_processor.hpp"
-#include "ttnn/graph/graph_trace_utils.hpp"
 #include "ttnn/operations/matmul/device/matmul_device_operation.hpp"
 #include "ttnn/operations/moreh/moreh_sum/device/moreh_sum_device_operation.hpp"
 
@@ -173,32 +171,17 @@ struct LinearFrozenCase {
 
 constexpr uint32_t kBatch = 2U, kSeq = 32U, kIn = 64U, kOut = 96U;
 
-// Small integers keep every product and partial sum exact in bf16: |x|, |W| <= 2 and |out_grad| <= 1 bound dW by
+// make_small_ints keeps every product and partial sum exact in bf16: |x|, |W| <= 2 and |out_grad| <= 1 bound dW by
 // 2 * batch * S = 128, dx by 2 * out = 192 and db by batch * S = 64, all < 256, so the device grads must equal the host
 // reference bit for bit.
-xt::xarray<float> make_small_ints(const std::vector<uint32_t>& shape, float bound, uint32_t seed) {
-    return xt::round(ttml::test_utils::make_uniform_xarray<float>(shape, -bound, bound, seed));
-}
-
-// Copy of t with its leading dims flattened into rows: [..., rows, cols] -> [volume / cols, cols].
-xt::xarray<float> flatten_rows(const xt::xarray<float>& t) {
-    xt::xarray<float> flat = t;
-    flat.reshape(std::vector<size_t>{t.size() / t.shape().back(), t.shape().back()});
-    return flat;
-}
+using ttml::test_utils::flatten_rows;
+using ttml::test_utils::make_small_ints;
 
 }  // namespace
 
-class LinearOpFrozenInputTest : public ::testing::TestWithParam<LinearFrozenCase> {
+class LinearOpFrozenInputTest : public ttml::test_utils::DeviceSuiteTest,
+                                public ::testing::WithParamInterface<LinearFrozenCase> {
 protected:
-    static void SetUpTestSuite() {
-        ttml::autograd::ctx().open_device();
-    }
-
-    static void TearDownTestSuite() {
-        ttml::autograd::ctx().close_device();
-    }
-
     void TearDown() override {
         ttml::autograd::ctx().reset_graph();
     }
@@ -230,15 +213,11 @@ TEST_P(LinearOpFrozenInputTest, BackwardComputesOnlyTrainableGrads) {
     }
     out->set_grad(ttml::core::from_xtensor(out_grad, device));
 
-    // The scoped capture ends even if backward throws, so a failing row cannot leave later tests capturing.
-    ttnn::graph::ScopedGraphCapture capture(ttnn::graph::GraphProcessor::RunMode::NORMAL);
-    out->backward();
-    const auto calls = ttnn::graph::extract_calltrace(capture.end_graph_capture());
+    const auto calls = ttml::test_utils::backward_calltrace(out);
 
-    // One matmul each for dW and dx, one reduction for db. The names come from the op types, so renaming an op breaks
-    // the build rather than silently counting zero.
-    const std::string matmul_name{ttsl::get_type_name<ttnn::prim::MatmulDeviceOperation>()};
-    const std::string sum_name{ttsl::get_type_name<ttnn::operations::moreh::moreh_sum::MorehSumOperation>()};
+    // One matmul each for dW and dx, one reduction for db.
+    const auto matmul_name = ttml::test_utils::op_name<ttnn::prim::MatmulDeviceOperation>();
+    const auto sum_name = ttml::test_utils::op_name<ttnn::operations::moreh::moreh_sum::MorehSumOperation>();
     const auto trace_msg = fmt::format("{} backward ops: {}", c.name, fmt::join(calls, ", "));
     EXPECT_EQ(
         std::ranges::count(calls, matmul_name),

@@ -49,7 +49,10 @@ class FunctionContext:
 
     @property
     def needs_input_grad(self) -> Tuple[bool, ...]:
-        """One bool per input to forward(): True for each tensor that requires grad."""
+        """One bool per input to forward(): True for each tensor that required grad when apply() ran.
+
+        It is a snapshot taken in apply(), unlike the C++ grad functions, which read requires_grad when backward runs.
+        """
         if self._needs_input_grad_error is not None:
             raise RuntimeError(self._needs_input_grad_error)
         return self._needs_input_grad

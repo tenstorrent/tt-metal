@@ -1734,17 +1734,7 @@ void expect_requested_grads(const SDPABackwardSkipCase& c, const SdpaBwGrads& sk
 
 }  // namespace
 
-class SDPABackwardSkipTest : public ::testing::TestWithParam<SDPABackwardSkipCase> {
-protected:
-    void SetUp() override {
-        ttml::autograd::ctx().open_device();
-        ttml::autograd::ctx().set_seed(42);
-    }
-
-    void TearDown() override {
-        ttml::autograd::ctx().close_device();
-    }
-};
+class SDPABackwardSkipTest : public SDPABackwardTest, public ::testing::WithParamInterface<SDPABackwardSkipCase> {};
 
 TEST_P(SDPABackwardSkipTest, RequestedGradsMatchFullBackward) {
     using namespace ttml;

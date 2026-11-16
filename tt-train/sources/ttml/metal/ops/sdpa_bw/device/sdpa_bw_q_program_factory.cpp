@@ -460,7 +460,7 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
     auto* query_buffer = query.buffer();
     auto* key_buffer = key.buffer();
     auto* value_buffer = value.buffer();
-    auto* attn_mask_buffer = tensor_args.attn_mask.has_value() ? tensor_args.attn_mask.value().buffer() : nullptr;
+    auto* attn_mask_buffer = get_buffer_or_null(tensor_args.attn_mask);
     auto* intermediates_buffer = intermediates.buffer();
 
     auto* gate_buffer = args.has_gate ? gate.value().buffer() : nullptr;
@@ -468,11 +468,10 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
     // An output is nullopt when it was not requested; its buffer is then null and gets placeholder accessor args
     // and a 0 address, so the writer's accessor offsets do not depend on the flags.
     auto& [grad_query_output, u_scaler_output, grad_gate_output, gated_grad_output_output] = output;
-    auto* grad_query_buffer = grad_query_output.has_value() ? grad_query_output.value().buffer() : nullptr;
-    auto* u_scaler_buffer = u_scaler_output.has_value() ? u_scaler_output.value().buffer() : nullptr;
-    auto* grad_gate_buffer = grad_gate_output.has_value() ? grad_gate_output.value().buffer() : nullptr;
-    auto* gated_grad_output_buffer =
-        gated_grad_output_output.has_value() ? gated_grad_output_output.value().buffer() : nullptr;
+    auto* grad_query_buffer = get_buffer_or_null(grad_query_output);
+    auto* u_scaler_buffer = get_buffer_or_null(u_scaler_output);
+    auto* grad_gate_buffer = get_buffer_or_null(grad_gate_output);
+    auto* gated_grad_output_buffer = get_buffer_or_null(gated_grad_output_output);
 
     // Configure defines
     std::map<std::string, std::string> reader_defines;
@@ -760,16 +759,15 @@ void SDPABackwardQProgramFactory::override_runtime_arguments(
     const auto* query_buffer = &tensor_args.query.mesh_buffer();
     const auto* key_buffer = &tensor_args.key.mesh_buffer();
     const auto* value_buffer = &tensor_args.value.mesh_buffer();
-    const auto* mask_buffer = tensor_args.attn_mask.has_value() ? tensor_args.attn_mask.value().buffer() : nullptr;
+    const auto* mask_buffer = get_buffer_or_null(tensor_args.attn_mask);
     const auto* intermediates_buffer = &tensor_args.intermediates.mesh_buffer();
-    const auto* gate_buffer = tensor_args.gate.has_value() ? tensor_args.gate.value().buffer() : nullptr;
+    const auto* gate_buffer = get_buffer_or_null(tensor_args.gate);
 
     auto& [grad_query_tensor, u_scaler_tensor, grad_gate_tensor, gated_grad_output_tensor] = tensor_return_value;
-    const auto* grad_query_buffer = grad_query_tensor.has_value() ? grad_query_tensor.value().buffer() : nullptr;
-    const auto* u_scaler_buffer = u_scaler_tensor.has_value() ? u_scaler_tensor.value().buffer() : nullptr;
-    const auto* grad_gate_buffer = grad_gate_tensor.has_value() ? grad_gate_tensor.value().buffer() : nullptr;
-    const auto* gated_grad_output_buffer =
-        gated_grad_output_tensor.has_value() ? gated_grad_output_tensor.value().buffer() : nullptr;
+    const auto* grad_query_buffer = get_buffer_or_null(grad_query_tensor);
+    const auto* u_scaler_buffer = get_buffer_or_null(u_scaler_tensor);
+    const auto* grad_gate_buffer = get_buffer_or_null(grad_gate_tensor);
+    const auto* gated_grad_output_buffer = get_buffer_or_null(gated_grad_output_tensor);
 
     auto& reader_runtime_args = GetRuntimeArgs(program, sdpa_bw_reader_kernel);
     auto& writer_runtime_args = GetRuntimeArgs(program, sdpa_bw_writer_kernel);
