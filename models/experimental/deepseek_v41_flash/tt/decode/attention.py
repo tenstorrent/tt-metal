@@ -99,6 +99,10 @@ DECODE_LAYOUTS = {
     "indexer.wq_b": {"K": 1280, "N": 4096, "n_blocks": 64},
     "indexer.weights_proj": {"K": 5120, "N": 32, "n_blocks": 1},
 }
+# The scoring select's DRAM-weight matmuls (unfused q_a, the indexer's weights_proj) read a per-core slab larger
+# than this through two K-block pages instead of whole: whole, q_a's ~450 KiB slab clashes with the persistent L1 a
+# verify-block model holds (the 4-row MoE partials, the Engram block gates). 0: read whole.
+_SELECT_DRAM_STREAM_BYTES = int(os.environ.get("DEEPSEEK_V41_SELECT_DRAM_STREAM_BYTES", str(128 * 1024)))
 # A one-row step without a scoring select runs q, kv and ring write as one ``attention_qkv_decode``
 # (``DEEPSEEK_V41_FUSED_QKV=0``: q_a, q_b, kv, their RoPE and the ring write as separate ops).
 _FUSED_QKV = os.environ.get("DEEPSEEK_V41_FUSED_QKV", "1") not in ("0", "", "false", "False")
@@ -273,6 +277,9 @@ class DeepSeekV41Indexer(DeepSeekV4Indexer):
                 else ttnn.CoreRangeSet({ttnn.CoreRange(first_token_core, first_token_core)})
             ),
         )
+        # Only the scoring select runs the indexer's projections.
+        self.q_b_proj.set_dram_stream(_SELECT_DRAM_STREAM_BYTES)
+        self.weights_proj.set_dram_stream(_SELECT_DRAM_STREAM_BYTES)
 
     def select_kv(
         self,
@@ -742,6 +749,10 @@ class DeepSeekV41Attention(DeepSeekV4Module):
         )
         # o_b reads o_a's result as replicated ROW_MAJOR HEIGHT_SHARDED A; NOC mcast needs a filled rectangle.
         self.o_a_proj.set_output_core_grid(ttnn.CoreRangeSet({self.o_b_proj.b_core_grid().bounding_box()}))
+        if self.fused_qkv:
+            # With attention_qkv_decode serving every other step, these matmul_decodes run only for a scoring select.
+            for proj in (self.q_a_proj, self.q_b_proj, self.kv_proj):
+                proj.set_dram_stream(_SELECT_DRAM_STREAM_BYTES)
 
         # SDPA-decode multiplies ``scale`` into the sink too; the reference leaves it unscaled.
         sinks = weights["sinks"]

@@ -716,6 +716,8 @@ class LinearDecode(DeepSeekV4Module):
         self.output_core_grid = None
         self.cache_file_name = cache_file_name
         self.dram_sharded_weight = dram_sharded_weight and not use_prefetcher
+        # A DRAM weight's slab is read into L1 whole unless it exceeds this (see :meth:`set_dram_stream`).
+        self.dram_stream_bytes = 0
         self.dram_weight_grid = None
 
         assert K != -1 and N != -1, "K and N must be set"
@@ -911,6 +913,33 @@ class LinearDecode(DeepSeekV4Module):
         if len(dest) != len(xs) * len(ys) or len(xs) != max(xs) - min(xs) + 1 or len(ys) != max(ys) - min(ys) + 1:
             raise ValueError(f"output mcast needs a filled rectangle of cores, but got {sorted(dest)}")
         self.output_core_grid = grid
+
+    def set_dram_stream(self, max_bytes: int) -> None:
+        """Read a DRAM weight's per-core slab as K-blocks through two pages of L1 when the whole slab is larger than
+        ``max_bytes``: the fewest K-blocks (an even number of K tiles each) whose two pages fit in ``max_bytes``. For
+        matmuls whose whole slab would crowd the L1 that persistent buffers hold. 0 (the default) is off."""
+        self.dram_stream_bytes = max_bytes
+
+    def _dram_k_blocks(self) -> int:
+        """How many K-blocks :meth:`forward` streams the DRAM slab in (1: whole); see :meth:`set_dram_stream`."""
+        if not self.dram_stream_bytes or self.partial_width_sharded:
+            return 1
+        tile_bytes = {ttnn.bfloat4_b: 576, ttnn.bfloat8_b: 1088, ttnn.bfloat16: 2048, ttnn.float32: 4096}.get(
+            self.weight.dtype
+        )
+        if tile_bytes is None:
+            return 1
+        k_tiles = self.K // ttnn.TILE_SIZE
+        n_tiles = -(-(self.N // self.num_inputB_cores) // ttnn.TILE_SIZE)
+        if k_tiles * n_tiles * tile_bytes <= self.dram_stream_bytes:
+            return 1
+        for k_blocks in range(2, k_tiles + 1):
+            block = k_tiles // k_blocks
+            if k_tiles % k_blocks or block % 2:
+                continue
+            if 2 * block * n_tiles * tile_bytes <= self.dram_stream_bytes:
+                return k_blocks
+        return 1
 
     def _epilogue_kwargs(self, output_memory_config: ttnn.MemoryConfig) -> dict:
         """``output_mem_config`` / ``output_core_grid`` (mutually exclusive) plus fused RMSNorm.
@@ -1333,12 +1362,15 @@ class LinearDecode(DeepSeekV4Module):
                 ),
             )
         if self.dram_sharded_weight:
+            k_blocks = self._dram_k_blocks()
+            stream = {"prefetch_k_blocks": k_blocks} if k_blocks > 1 else {}
             return ttnn.experimental.matmul_decode(
                 x,
                 self.weight,
                 partial_width_sharded=self.partial_width_sharded,
                 mesh_coords=mesh_coords,
                 weight_core_grid=self.dram_weight_grid,
+                **stream,
                 **self._epilogue_kwargs(output_memory_config),
             )
         result = ttnn.experimental.matmul_decode(

@@ -1133,10 +1133,11 @@ ttnn::operations::experimental::matmul_decode::MatmulDecodeDeviceOperation::tens
     // factories; these two only need the arguments.
     TT_FATAL(
         prefetch_k_blocks >= 1, "matmul_decode prefetch_k_blocks must be at least 1, but got {}", prefetch_k_blocks);
+    // A DRAM weight streams too: its slab is read as prefetch_k_blocks pages through two pages of L1.
     TT_FATAL(
-        !prefetcher_pipes.empty() || prefetch_k_blocks == 1,
-        "matmul_decode prefetch_k_blocks ({}) applies only to the prefetcher_pipes path: without pipes the weight is "
-        "already L1-resident and there is nothing to stream",
+        !prefetcher_pipes.empty() || prefetch_k_blocks == 1 || dram_weight_grid.has_value(),
+        "matmul_decode prefetch_k_blocks ({}) applies only to the prefetcher_pipes and DRAM-weight paths: an L1 "
+        "weight is already resident and there is nothing to stream",
         prefetch_k_blocks);
     if (!prefetcher_pipes.empty()) {
         TT_FATAL(
