@@ -231,6 +231,10 @@ sfpi_inline void q40_params_regs()
     sfpi::dst_reg[PM + pidx(1, 1, 0)] = m3;
 }
 
+// Q5_K phase 1 (defined below).
+template <int TI>
+sfpi_inline void k5_params();
+
 // Phase 1 of the linear formats. TI = tile index inside the scale page's group of K-tiles.
 template <int FMT, int TI>
 sfpi_inline void linear_params()
@@ -242,6 +246,11 @@ sfpi_inline void linear_params()
     if constexpr (q40_params<FMT>)
     {
         q40_params_regs<FMT, TI>();
+        return;
+    }
+    if constexpr (FMT == Q5_K && LOADMACRO)
+    {
+        k5_params<TI>();
         return;
     }
 #pragma GCC unroll 2
@@ -396,9 +405,10 @@ sfpi_inline void k4_ld(const unsigned r, const int a, const int b, const int v)
     TTI_SFPLOAD(r, sfpi::SFPLOAD_MOD0_FMT_INT32, ADDR_MOD_7, 2 * (K4 + 4 * (2 * a + b) + TI / 4 + 2 * v));
 }
 
+template <int FMT = Q4_K>
 sfpi_inline void k4_ldf(const unsigned r, const int a, const int b, const int F)
 {
-    TTI_SFPLOAD(r, 0, ADDR_MOD_7, 2 * pf32_idx<Q4_K>(F, b, a));
+    TTI_SFPLOAD(r, 0, ADDR_MOD_7, 2 * pf32_idx<FMT>(F, b, a));
 }
 
 template <int TI>
@@ -478,6 +488,57 @@ sfpi_inline void k4_params_regs()
         TTI_SFPNOP;
         TTI_SFPNOP;
     }
+}
+
+// Phase 1 of Q5_K (Q4_K's group words), all four column groups stored: per word parity a, the scale / min fields of
+// both column halves (L0..L3) and d / dmin (L4..L7), each step over four independent registers, then S = d sc and
+// M = -(dmin m) as k4_params_regs forms them. Four stores and two NOPs keep the body's first macro six instructions
+// after the last SFPMUL.
+template <int TI>
+sfpi_inline void k5_params()
+{
+    constexpr unsigned shl = 26 - 8 * (TI % 4), shr = static_cast<unsigned>(-26) & 0xFFFu;
+#pragma GCC unroll 2
+    for (int a = 0; a < 2; a++)
+    {
+        k4_ld<TI>(0, a, 0, 0);
+        k4_ld<TI>(1, a, 0, 1);
+        k4_ld<TI>(2, a, 1, 0);
+        k4_ld<TI>(3, a, 1, 1);
+        k4_ldf<Q5_K>(4, a, 0, 0);
+        k4_ldf<Q5_K>(5, a, 0, 1);
+        k4_ldf<Q5_K>(6, a, 1, 0);
+        k4_ldf<Q5_K>(7, a, 1, 1);
+#pragma GCC unroll 4
+        for (unsigned r = 0; r < 4; r++)
+        {
+            TTI_SFPSHFT(shl, r, r, SHIFT_IMM_OF_C);
+        }
+#pragma GCC unroll 4
+        for (unsigned r = 0; r < 4; r++)
+        {
+            TTI_SFPSHFT(shr, r, r, SHIFT_IMM_OF_C);
+        }
+#pragma GCC unroll 4
+        for (unsigned r = 0; r < 4; r++)
+        {
+            TTI_SFPCAST(r, r, sfpi::SFPCAST_MOD1_SM32_TO_FP32_RNE);
+        }
+#pragma GCC unroll 2
+        for (unsigned b = 0; b < 2; b++)
+        {
+            TTI_SFPMUL(4 + 2 * b, 2 * b, p_sfpu::LCONST_0, 4 + 2 * b, 0);
+            TTI_SFPMUL(5 + 2 * b, 2 * b + 1, p_sfpu::LCONST_0, 5 + 2 * b, 1);
+        }
+#pragma GCC unroll 2
+        for (unsigned b = 0; b < 2; b++)
+        {
+            TTI_SFPSTORE(4 + 2 * b, 0, ADDR_MOD_7, 2 * (PS + pidx(a, b, 0)));
+            TTI_SFPSTORE(5 + 2 * b, 0, ADDR_MOD_7, 2 * (PM + pidx(a, b, 0)));
+        }
+    }
+    TTI_SFPNOP;
+    TTI_SFPNOP;
 }
 
 // The issue stream of the macro bodies, planned at compile time (make_mplan). A stall of the issue (a DEST access
