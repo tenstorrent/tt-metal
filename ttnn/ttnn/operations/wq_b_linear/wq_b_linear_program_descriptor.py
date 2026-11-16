@@ -1,7 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""wq_b_linear program descriptor — regime R1 `n_split_x_bcast_resident`.
+"""wq_b_linear program descriptor — regime R1 `n_split_x_bcast_resident` (R4 `n_split_k_remainder_combine` behind
+K_REMAINDER_SPLIT).
 
 n is split across the full device grid; x is read once from DRAM by per-round injectors and
 multicast into every core's resident cb_x_resident; each core streams its own W columns and
@@ -48,11 +49,15 @@ MAX_X_MCAST_CHANNELS = 8
 # Regime R4: every core owns one full column; the columns left over after one per core are cut into K-slices
 # spread over the cores. Slice cores unicast their partial to the column owner (the slice-0 core), which sums
 # its own partial and the landed ones in slice order. Falls back to the CORE_N_TILES split when the grid is too
-# small for two slices per remaining column.
-K_REMAINDER_SPLIT = True
-# A core computes its K-slice after main K-block min(slice end, num_k_blocks - 1 - SLICE_EARLY_K_BLOCKS), so
-# late slices are not left to the end of the kernel, where the owner would wait on them.
-SLICE_EARLY_K_BLOCKS = 4
+# small for two slices per leftover column. Parked off: 22.7 us vs 22.4 us for the CORE_N_TILES split, because
+# 110 single-column cores stream W (1088 B reads) slower than 65 bank-coalesced two-column cores (2176 B reads).
+K_REMAINDER_SPLIT = False
+# A core computes its K-slice after main K-block min(slice end, num_k_blocks - 1 - SLICE_EARLY_K_BLOCKS), so its
+# partial reaches the owner before the owner's combine.
+SLICE_EARLY_K_BLOCKS = 9
+# The owner combines after main K-block num_k_blocks - 1 - COMBINE_EARLY_K_BLOCKS (not before its own slice),
+# inside the W-bound main loop instead of on the tail after the last W block.
+COMBINE_EARLY_K_BLOCKS = 6
 
 CB_X_RESIDENT = 0
 CB_W_STREAM = 1
@@ -429,7 +434,8 @@ def create_program_descriptor(x_tensor, w_tensor, y_tensor, compute_cfg):
         for c in cores:
             _, kb_start, kb_count, s, num_slices, _, _ = slice_args(c)
             num_landed = num_slices - 1 if kb_count and s == 0 else 0
-            compute_rt[c.x][c.y] = [kb_start, kb_count, slice_after_block(c), num_landed]
+            combine_after = max(slice_after_block(c), num_k_blocks - 1 - COMBINE_EARLY_K_BLOCKS)
+            compute_rt[c.x][c.y] = [kb_start, kb_count, slice_after_block(c), num_landed, combine_after]
         compute_kernels.append(
             ttnn.KernelDescriptor(
                 kernel_source=str(KERNEL_DIR / "wq_b_linear_compute.cpp"),

@@ -49,3 +49,22 @@
 - Golden test progress: 3/3 passing (2 registry cells + regression bit-identity)
 - Issues encountered: the W reader on NoC1 for the whole stream (both data-movement RISCs on NoC1) hung once at 110 cores. Only the experiment knob was affected; it was removed, and the shipped NoC1 share runs on BRISC, which already owns NoC1.
 - Tests added: `test_wq_b_linear_w_stream_knobs.py` (12 knob settings: split, placement, coalescing, per-group depth, NoC1 share with both x channel modes; correctness + bit-identity). `_op_bench.py`: `no_y_write` ablation; W gating now patches the shared read header, so the W ablations also cover the writer's NoC1 share.
+
+## Refinement 3 — Balanced W split: n + K-remainder with deterministic combine (design R4)
+- Date: 2026-11-16
+- What was done: Built regime R4 `n_split_k_remainder_combine` in the shared kernels and descriptor, behind `K_REMAINDER_SPLIT` (parked at `False`, so the Refinement 2 split stays the default). With it on, 110 cores each own one full column and the 18 leftover columns are cut into 6 K-slices of 2–3 K-blocks over 108 cores. The reader reads a core's slice into `cb_w_slice` first. x reaches the slice through `cb_x_slice`, an alias index on `cb_x_resident`'s allocation that the writer pushes alongside it. The slice is a second `matmul_block` call into `cb_partial`, nested in the main call's `PostKBlockFn` at a host-chosen K-block (`SLICE_EARLY_K_BLOCKS`). Slice cores unicast their partial into the owner's grid-wide `cb_landing` and bump `LANDING_SEMAPHORE_ID`. The owner (slice 0) combines in the same functor at `COMBINE_EARLY_K_BLOCKS`: an `eltwise_chain` copy of its own partial, then L1-accumulating copies (`L1Accumulation::AddToExisting`) of the landed partials in slice order. Reused: x broadcast, W read helper, main matmul call, y store. Added: slice/combine stages, 3 CBs + 1 alias index, 1 semaphore (x channels now start at semaphore id 2).
+- Performance (p100a, `_op_bench.py --profile`, median of 5 calls per run):
+
+  | Variant | µs |
+  |---|---|
+  | Refinement 2 split (default), 3 runs | 22.40 / 22.60 / 22.32 |
+  | R4, slice 9 / combine 6, 3 runs | 22.70 / 22.78 / 22.34 |
+  | R4, slice at its K end, combine after the main loop | 24.0–24.2 |
+  | R4 `w_only` / `w_compute` / x only (first placement) | 23.25 / 23.58 / 17.61 |
+
+  R4 does what it was meant to: busiest-core W 104,448 → 62,016 B, compute 480 → 285 tile-matmuls, and the gap from W end to compute end goes ≈ 1.35 → ≈ 0.6 µs. But the W stream itself is slower: 110 cores of single-tile 1088 B reads end at NCRISC p50 20.2–20.6 µs, against 19.3 µs for 65 cores of bank-coalesced 2176 B reads. Placement matters: with the slice computed at its K end and the combine after the main loop, the owners trail by 2 µs (waiting for late partials, then 30 single-tile combine passes).
+- Bottleneck: unchanged from Refinement 2. W transfer efficiency at the NoC0 links next to DRAM binds; per-core imbalance does not (Refinement 2's W-reader max/p50 is already 1.045). Next: coalesced R4 (core pairs share a bank-strided column pair and split its K, so reads stay 2176 B while compute halves), or the y store overlap (≈ 0.9 µs after compute on every core in both regimes).
+- Accuracy achieved: default path unchanged, PCC=0.999972, relative RMS=0.0077. R4: PCC=0.999973, relative RMS=0.0076, leftover-column max abs error 0.029 (main columns 0.047), on [1,1,160,1536] x [1536,4096] seed 0.
+- Golden test progress: 3/3 passing (2 registry cells + regression bit-identity)
+- Issues encountered: `matmul_block` returns with packer L1 accumulation enabled. The first combine pass therefore accumulated onto stale L1 (Inf / p0+p1 on the leftover columns); `pack_reconfig_l1_acc(0)` before the combine chain fixes it. Found with DEVICE_PRINT: the sender partial and the landed slot matched the reference slice exactly.
+- Tests added: `test_wq_b_linear_w_stream_knobs.py` gains 4 R4 cases (default positions, slice + combine last, slices first, `K_BLOCK_TILES=4`), each checking correctness and bit-identity across calls. Probes 004–014 under `probes/`.

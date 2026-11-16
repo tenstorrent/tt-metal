@@ -6,8 +6,8 @@
 // Regime R4 (has_slices): a core may also own a K-slice (slice_k_blocks K-blocks from slice_kb_start) of one
 // leftover column. That matmul runs nested in the main one, after main K-block slice_after_block, reading x
 // through cb_x_slice (an alias of cb_x_resident with its own FIFO pointers) and packing to cb_partial. The owner
-// (num_landed > 0) then writes the leftover column into cb_y_tiles after its own block as
-// own partial + landed partials in slice order.
+// (num_landed > 0), after main K-block combine_after_block, writes the leftover column into cb_y_tiles after
+// its own block as own partial + landed partials in slice order.
 
 #include <cstdint>
 #include "api/compute/compute_kernel_hw_startup.h"
@@ -64,6 +64,7 @@ void kernel_main() {
     const uint32_t slice_k_blocks = get_arg_val<uint32_t>(1);
     const uint32_t slice_after_block = get_arg_val<uint32_t>(2);
     const uint32_t num_landed = get_arg_val<uint32_t>(3);
+    const uint32_t combine_after_block = get_arg_val<uint32_t>(4);
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_x_resident, cb_w_stream, cb_y_tiles);
 
@@ -78,10 +79,12 @@ void kernel_main() {
 
     y_buf.reserve_back(y_tiles);
     if constexpr (has_slices) {
-        auto slice_matmul = [&](uint32_t block, uint32_t, bool) {
-            if (slice_k_blocks == 0 || block != slice_after_block) {
-                return;
-            }
+        auto restore_main = [&]() {
+            reconfig_data_format(cb_w_stream, cb_x_resident);
+            PACK((pack_reconfig_data_format(cb_y_tiles)));
+            ckernel::matmul_block_init(cb_x_resident, cb_w_stream, false, sb_w, sb_h, k_block_tiles);
+        };
+        auto slice_matmul = [&]() {
             CircularBuffer xs_buf(cb_x_slice);
             CircularBuffer ws_buf(cb_w_slice);
             CircularBuffer partial_buf(cb_partial);
@@ -98,14 +101,8 @@ void kernel_main() {
                 MatmulBlockShape::of(1, 1, block_m_tiles, 1, k_block_tiles, slice_k_blocks),
                 NoPostKBlock{});
             partial_buf.push_back(block_m_tiles);
-            // Restore the main matmul's unpack/math/pack state.
-            reconfig_data_format(cb_w_stream, cb_x_resident);
-            PACK((pack_reconfig_data_format(cb_y_tiles)));
-            ckernel::matmul_block_init(cb_x_resident, cb_w_stream, false, sb_w, sb_h, k_block_tiles);
         };
-        accumulate_block(x_buf, w_buf, y_buf, main_shape, slice_matmul);
-
-        if (num_landed > 0) {
+        auto combine_leftover = [&]() {
             // matmul_block leaves packer L1 accumulation on; the chain below assumes it starts off.
             pack_reconfig_l1_acc(0);
             DataflowBuffer partial_dfb(cb_partial);
@@ -143,7 +140,19 @@ void kernel_main() {
                         L1Accumulation::AddToExisting)>{y_dfb, y_block_tiles + t});
             }
             landing_dfb.pop_front(num_landed * block_m_tiles);
-        }
+        };
+        // Both stages run between main K-blocks; the host orders slice_after_block <= combine_after_block.
+        auto between_k_blocks = [&](uint32_t block, uint32_t, bool) {
+            if (slice_k_blocks > 0 && block == slice_after_block) {
+                slice_matmul();
+                restore_main();
+            }
+            if (num_landed > 0 && block == combine_after_block) {
+                combine_leftover();
+                restore_main();
+            }
+        };
+        accumulate_block(x_buf, w_buf, y_buf, main_shape, between_k_blocks);
     } else {
         accumulate_block(x_buf, w_buf, y_buf, main_shape, NoPostKBlock{});
     }

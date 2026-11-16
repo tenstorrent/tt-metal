@@ -3,7 +3,7 @@
 """Correctness of the W-stream / n-split knob settings that are not the shipped defaults.
 
 Each case overrides program-descriptor knobs (core n share, placement, bank-coalesced columns, per-group read
-depth, NoC1 share of the W read) and checks the output plus bit-identity across two calls.
+depth, NoC1 share of the W read, the R4 K-remainder split and its slice / combine positions) and checks the output plus bit-identity across two calls.
 """
 
 import pytest
@@ -27,6 +27,14 @@ KNOB_CASES = {
     "noc1_w_4_blocks_fill_grid": {"CORE_N_TILES": 0, "W_NOC1_K_BLOCKS": 4},
     "noc1_w_6_blocks_even_coalesced": {"CORE_N_TILES": 2, "W_BANK_COALESCE": True, "W_NOC1_K_BLOCKS": 6},
     "noc1_w_all_but_one": {"W_NOC1_K_BLOCKS": 64},
+    "k_remainder": {"K_REMAINDER_SPLIT": True},
+    "k_remainder_slices_and_combine_last": {
+        "K_REMAINDER_SPLIT": True,
+        "SLICE_EARLY_K_BLOCKS": 0,
+        "COMBINE_EARLY_K_BLOCKS": 0,
+    },
+    "k_remainder_slices_first": {"K_REMAINDER_SPLIT": True, "SLICE_EARLY_K_BLOCKS": 64},
+    "k_remainder_kb4": {"K_REMAINDER_SPLIT": True, "K_BLOCK_TILES": 4, "X_ROUND_K_BLOCKS": 3},
     "noc1_w_rotating_x": {
         "X_MCAST_CHANNELS": "rotating",
         "K_BLOCK_TILES": 6,
