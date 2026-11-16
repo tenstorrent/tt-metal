@@ -77,6 +77,13 @@ def _ci_unsupported_param_combos(**params):
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
             id="torus-x-4x4-tp0",
         ),
+        pytest.param(
+            (4, 4),
+            torus_xy_device_params(),
+            0,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+            id="torus-xy-4x4-tp0",
+        ),
     ],
     indirect=["mesh_device", "device_params"],
 )

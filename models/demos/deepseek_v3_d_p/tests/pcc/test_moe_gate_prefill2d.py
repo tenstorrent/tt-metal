@@ -246,6 +246,14 @@ FORWARD_PASS_MESH_CONFIGS = [pytest.param(*p.values, 0, marks=p.marks, id=p.id) 
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
         id="torus-x-4x4-sp1",
     ),
+    pytest.param(
+        (4, 4),
+        torus_xy_device_params(),
+        2,
+        1,
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+        id="torus-xy-4x4-sp1",
+    ),
 ]
 
 # Blackhole LoudBox puts all 8 P150s on the SP axis, so TP is 1 and the gate does no TP all-reduce.

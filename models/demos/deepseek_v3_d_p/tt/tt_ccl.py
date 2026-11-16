@@ -849,21 +849,34 @@ def get_num_links(mesh_device: ttnn.MeshDevice, cluster_axis: int | None = None)
     return min(device_links)
 
 
+def _fabric_wraps_axis(fabric_config, cluster_axis: int) -> bool:
+    """Whether `fabric_config` closes mesh axis `cluster_axis` into a ring (axis 0 is Y, axis 1 is X)."""
+    wrapped = {
+        ttnn.FabricConfig.FABRIC_2D_TORUS_X: (1,),
+        ttnn.FabricConfig.FABRIC_2D_TORUS_Y: (0,),
+        ttnn.FabricConfig.FABRIC_2D_TORUS_XY: (0, 1),
+    }
+    return cluster_axis in wrapped.get(fabric_config, ())
+
+
 def _live_links_on_axis(mesh_device: ttnn.MeshDevice, cluster_axis: int) -> int | None:
     """The fewest fabric links any hop along `cluster_axis` forwards on, or None where the
-    fabric is not up to ask."""
+    fabric is not up to ask. On an axis the fabric wraps, the last-to-first hop counts too."""
     shape = tuple(mesh_device.shape)
     if len(shape) != 2 or shape[cluster_axis] < 2:
         return None
+    wrapped = shape[cluster_axis] > 2 and _fabric_wraps_axis(ttnn.get_fabric_config(), cluster_axis)
     try:
         fewest = None
         for row in range(shape[0]):
             for col in range(shape[1]):
                 src = [row, col]
-                if src[cluster_axis] + 1 == shape[cluster_axis]:
-                    continue
                 dst = list(src)
                 dst[cluster_axis] += 1
+                if dst[cluster_axis] == shape[cluster_axis]:
+                    if not wrapped:
+                        continue
+                    dst[cluster_axis] = 0
                 src_node = mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(src))
                 dst_node = mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(dst))
                 count = len(ttnn.get_forwarding_link_indices(mesh_device, src_node, dst_node))

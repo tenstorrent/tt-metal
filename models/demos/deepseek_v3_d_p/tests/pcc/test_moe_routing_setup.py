@@ -78,6 +78,14 @@ from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
             id="torus-x-4x4-sp1",
         ),
+        pytest.param(
+            (4, 4),
+            torus_xy_device_params(fabric_payload_size=7 * 1024),
+            2,
+            1,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+            id="torus-xy-4x4-sp1",
+        ),
     ],
     indirect=["mesh_device", "device_params"],
 )
