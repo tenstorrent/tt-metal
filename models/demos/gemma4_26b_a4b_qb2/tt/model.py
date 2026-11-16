@@ -99,6 +99,8 @@ class Gemma4Model:
         del embedding
         norm = checkpoint.load("model.language_model.norm.")["weight"]
         self.norm = self.upload(norm.float().reshape(1, 1, 1, -1), dtype=ttnn.float32)
+        # Row-major bf16 gamma for the batch-1 sharded final norm (the checkpoint gamma is bf16).
+        self.norm_rows = self.upload(norm.reshape(1, 1, -1, 32), layout=ttnn.ROW_MAJOR_LAYOUT)
         self.embed_scale = float(torch.tensor(self.config.hidden_size**0.5, dtype=torch.bfloat16))
         self.compute = ttnn.WormholeComputeKernelConfig(
             math_fidelity=policy_fidelity(self.precision_config["model"]["head_fidelity"]),
@@ -199,7 +201,22 @@ class Gemma4Model:
         if hidden.dtype != ttnn.bfloat16:
             raise ValueError("Decoder output residual must be BF16")
         self.precision_observations["decoder_output"] = dtype_name(hidden.dtype)
-        hidden = ttnn.typecast(rms_norm(hidden, self.config.rms_norm_eps, self.norm), ttnn.bfloat16)
+        ws2_norm = getattr(self.layers[0], "ws2_norm", None)
+        if hidden.is_sharded() and ws2_norm is not None:
+            # Batch 1: the last layer hands over the width-sharded residual; one sharded norm (gamma inside).
+            hidden = ttnn.rms_norm(
+                hidden,
+                epsilon=self.config.rms_norm_eps,
+                weight=self.norm_rows,
+                program_config=ws2_norm.program,
+                memory_config=ws2_norm.memory,
+                compute_kernel_config=self.layers[0].layer.self_attn.compute,
+            )
+            hidden = ttnn.to_memory_config(hidden, ttnn.DRAM_MEMORY_CONFIG)
+        else:
+            if hidden.is_sharded():
+                hidden = ttnn.to_memory_config(hidden, ttnn.DRAM_MEMORY_CONFIG)
+            hidden = ttnn.typecast(rms_norm(hidden, self.config.rms_norm_eps, self.norm), ttnn.bfloat16)
         logits = ttnn.linear(
             hidden,
             self.head,
@@ -209,7 +226,17 @@ class Gemma4Model:
             program_config=self.head_program if hidden.shape[-2] <= 32 else None,
         )
         cap = self.config.final_logit_softcapping
-        logits = ttnn.mul(ttnn.tanh(ttnn.mul(logits, 1.0 / cap)), cap) if cap else logits
+        if cap:
+            # tanh(logits / cap) * cap as one program over the vocab shard (was three).
+            logits = ttnn.unary_chain(
+                logits,
+                [
+                    ttnn.UnaryWithParam(ttnn.UnaryOpType.MUL_UNARY_SFPU, 1.0 / cap),
+                    ttnn.UnaryWithParam(ttnn.UnaryOpType.TANH, 0.0),
+                    ttnn.UnaryWithParam(ttnn.UnaryOpType.MUL_UNARY_SFPU, float(cap)),
+                ],
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
         if logits.dtype != ttnn.bfloat16:
             raise ValueError("Logits and sampler input must be BF16")
         self.precision_observations["logits_output"] = dtype_name(logits.dtype)
@@ -280,6 +307,4 @@ class Gemma4Model:
                     else:
                         rows.append(self.zero_hidden)
                 hidden = ttnn.concat(rows, dim=2)
-        if hidden.is_sharded():
-            hidden = ttnn.to_memory_config(hidden, ttnn.DRAM_MEMORY_CONFIG)
         return self.logits(hidden)
