@@ -37,6 +37,13 @@ jobs:
         with:
           python-version: '3.10'
       - run: pip install pyyaml
+      - name: "Check: stability-sensitive merges"
+        continue-on-error: true
+        timeout-minutes: 5
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DAY: ${{ inputs.date }}
+        run: python3 tt_metal/tt-llk/perf/stability_inputs.py --repo "$GITHUB_REPOSITORY" ${DAY:+--date "${DAY:0:10}"}
       - name: Check and send
         env:
           GH_TOKEN: ${{ github.token }}
