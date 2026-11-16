@@ -914,7 +914,9 @@ class GeneralizedRouter:
     def __getattr__(self, name):
         return getattr(self.original, name)
 
-    def __call__(self, x, normalized=None):
+    def __call__(self, x, normalized=None, decode_rows=False):
+        if x.shape[-2] != 1 and decode_rows and self.direct_projection and x.shape[-2] <= 32:
+            return self._decode_rows(normalized)
         if x.shape[-2] != 1:
             return self.original(x, normalized=normalized)
 
@@ -975,6 +977,34 @@ class GeneralizedRouter:
         routing = ttnn.scatter(ttnn.zeros_like(rounded), dim=-1, index=indices, src=values)
         return ttnn.mul(routing, router.per_expert_scale)
 
+    def _decode_rows(self, normalized):
+        """Batched decode (WS1): the batch-1 scoring (direct projection, centered logits rounded to bf16)
+        for up to 32 rows, then top-8 / softmax per row."""
+        source = self.original.source
+        router = source.source
+        scaled = ttnn.mul(
+            normalized,
+            source.scale,
+            activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.MUL_UNARY_SFPU, router.scalar_root_size)],
+        )
+        if scaled.is_sharded():
+            scaled = ttnn.to_memory_config(scaled, ttnn.L1_MEMORY_CONFIG)
+        scores = ttnn.linear(
+            scaled,
+            self.projection_weight,
+            dtype=ttnn.float32,
+            program_config=self.projection_program,
+            compute_kernel_config=self.projection_compute,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        if self.center_logits:
+            scores = ttnn.subtract(scores, ttnn.max(scores, dim=-1, keepdim=True))
+        rounded = ttnn.typecast(scores, ttnn.bfloat16)
+        selected, indices = ttnn.topk(rounded, k=8, dim=-1)
+        values = ttnn.softmax(selected, dim=-1)
+        routing = ttnn.scatter(ttnn.zeros_like(rounded), dim=-1, index=indices, src=values)
+        return ttnn.mul(routing, router.per_expert_scale)
+
     def decode_indices(self):
         if self.last_decode_indices is None:
             raise RuntimeError("Indexed expert projection must follow decode routing")
@@ -1028,7 +1058,9 @@ class LanePartitionRouter:
             normalization="original BroadcastRouter",
         )
 
-    def __call__(self, x, normalized=None):
+    def __call__(self, x, normalized=None, decode_rows=False):
+        if x.shape[-2] != 1 and decode_rows and self.direct_projection and x.shape[-2] <= 32:
+            return self._decode_rows(normalized)
         if x.shape[-2] != 1:
             return self.original(x, normalized=normalized)
         source = self.source
