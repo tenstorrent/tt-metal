@@ -4,6 +4,8 @@
 
 #include "graph_fabric_build_session.hpp"
 
+#include <algorithm>
+
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt_stl/assert.hpp>
@@ -63,7 +65,8 @@ void check_link_peers(const PhysicalGraph& graph, const ControlPlane& control_pl
 }  // namespace
 
 GraphFabricBuildSession::GraphFabricBuildSession(FabricContext& fabric_context) {
-    const bool inter_domain = fabric_context.get_rtoptions().get_fabric_inter_domain();
+    const auto& rtoptions = fabric_context.get_rtoptions();
+    const bool inter_domain = rtoptions.get_fabric_inter_domain();
     if (fabric_context.is_tensix_enabled()) {
         TT_FATAL(!inter_domain, "fabric graph: inter-domain doesn't support tensix fabrics");
         log_info(tt::LogFabric, "fabric graph: tensix fabric, using the stock builder");
@@ -86,12 +89,18 @@ GraphFabricBuildSession::GraphFabricBuildSession(FabricContext& fabric_context) 
     const auto mgd_ports = ports_from_mesh_graph(control_plane.get_mesh_graph(), express_axis);
     const auto ports = with_live_planes(mgd_ports, control_plane);
     if (inter_domain) {
+        // this host's perimeter; other hosts add theirs
         perimeter_ = perimeter_ports(
-            unused_links(control_plane, fabric_context.get_cluster()),
+            unused_links(
+                control_plane,
+                fabric_context.get_cluster(),
+                rtoptions.has_factory_system_descriptor_path() ? rtoptions.get_factory_system_descriptor_path() : ""),
             mgd_ports,
             control_plane.get_mesh_graph(),
             topology);
-        log_info(tt::LogFabric, "fabric graph: {} perimeter ports", perimeter_.size());
+        const auto down =
+            std::count_if(perimeter_.begin(), perimeter_.end(), [](const auto& p) { return !p.link_trained; });
+        log_info(tt::LogFabric, "fabric graph: {} perimeter ports, {} untrained", perimeter_.size(), down);
     }
     const WiringOptions options{
         .topology = topology,

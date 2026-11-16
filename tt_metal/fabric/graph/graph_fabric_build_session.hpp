@@ -24,7 +24,7 @@ public:
         FabricContext& fabric_context,
         CoreType dispatch_core_type) const override;
 
-    // empty unless inter-domain is on
+    // this host's perimeter ports; empty unless inter-domain is on
     const std::vector<PerimeterPort>& perimeter() const { return perimeter_; }
 
 private:

@@ -5,12 +5,16 @@
 #include "fabric_graph_inputs.hpp"
 
 #include <algorithm>
+#include <map>
 #include <set>
+#include <string>
 #include <tuple>
 
 #include <enchantum/enchantum.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/physical_descriptor_builder.hpp>
+#include <tt-metalium/experimental/fabric/physical_node_id.hpp>
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include <tt-metalium/experimental/fabric/topology_mapper.hpp>
 #include <tt_stl/assert.hpp>
@@ -113,7 +117,9 @@ std::vector<Port> with_live_planes(const std::vector<Port>& ports, const Control
     return live;
 }
 
-std::vector<UnusedLink> unused_links(const ControlPlane& control_plane, const tt::Cluster& cluster) {
+std::vector<UnusedLink> unused_links(
+    const ControlPlane& control_plane, const tt::Cluster& cluster, const std::string& fsd_path) {
+    using tt::tt_metal::experimental::PhysicalNodeId;
     const auto& psd = control_plane.get_physical_system_descriptor();
     const auto& mapper = control_plane.get_topology_mapper();
     auto node_of = [&](uint64_t asic) -> std::optional<FabricNodeId> {
@@ -121,7 +127,16 @@ std::vector<UnusedLink> unused_links(const ControlPlane& control_plane, const tt
         return id ? mapper.find_fabric_node_id_from_physical_node_id(*id) : std::nullopt;
     };
 
+    // UMD only lists trained links, so a cable that never came up is only in the FSD. The whole FSD, not
+    // the job's slice: perimeter cables mostly go to hosts outside the job.
+    std::optional<tt::tt_metal::PhysicalSystemDescriptor> fsd;
+    if (!fsd_path.empty()) {
+        fsd.emplace(tt::tt_metal::experimental::tt_fabric::build_physical_descriptor_from_file(fsd_path));
+    }
+
+    // this host's chips only: each host builds its own routers, so it only needs its own ports
     std::vector<UnusedLink> links;
+    std::vector<UnusedLink> missing;
     const auto& asics = cluster.get_unique_chip_ids();
     const auto& local = cluster.get_ethernet_connections();
     const auto& remote = cluster.get_ethernet_connections_to_remote_devices();
@@ -134,9 +149,20 @@ std::vector<UnusedLink> unused_links(const ControlPlane& control_plane, const tt
         for (const auto& [chan, direction] : control_plane.get_active_fabric_eth_channels(*node)) {
             used.insert(chan);
         }
-        auto add = [&](chan_id_t chan, uint64_t peer_asic) {
+        std::map<chan_id_t, uint64_t> live;  // every trained chan -> peer chip
+        if (auto it = local.find(chip); it != local.end()) {
+            for (const auto& [chan, peer] : it->second) {
+                live[chan] = asics.at(std::get<0>(peer));
+            }
+        }
+        if (auto it = remote.find(chip); it != remote.end()) {
+            for (const auto& [chan, peer] : it->second) {
+                live[chan] = std::get<0>(peer);
+            }
+        }
+        for (const auto& [chan, peer_asic] : live) {
             if (used.contains(chan)) {
-                return;
+                continue;
             }
             const auto core = cluster.get_soc_desc(chip).get_eth_core_for_channel(chan, CoordSystem::LOGICAL);
             links.push_back(UnusedLink{
@@ -145,16 +171,47 @@ std::vector<UnusedLink> unused_links(const ControlPlane& control_plane, const tt
                 .peer_asic = peer_asic,
                 .peer_in_domain = node_of(peer_asic).has_value(),
                 .trained = cluster.is_ethernet_link_up(chip, core)});
-        };
-        if (auto it = local.find(chip); it != local.end()) {
-            for (const auto& [chan, peer] : it->second) {
-                add(chan, asics.at(std::get<0>(peer)));
+        }
+
+        const auto address = psd.find_physical_node_id(tt::tt_metal::AsicID{asic});
+        const auto fsd_asic = fsd && address ? fsd->find_asic_id(*address) : std::nullopt;
+        if (!fsd_asic) {
+            continue;
+        }
+        for (const auto& peer : fsd->get_asic_neighbors(*fsd_asic)) {
+            const auto peer_address = fsd->get_physical_node_id(peer);
+            const auto cables = fsd->get_eth_connections(*fsd_asic, peer);
+            // the peer chip as live knows it (a trained cable to it, or discovery), else by address
+            const auto peer_id = psd.find_asic_id(peer_address);
+            uint64_t key = peer_id ? **peer_id : std::hash<PhysicalNodeId>{}(peer_address);
+            for (const auto& c : cables) {
+                if (auto it = live.find(c.src_chan); it != live.end()) {
+                    key = it->second;
+                }
+            }
+            for (const auto& c : cables) {
+                if (!live.contains(c.src_chan)) {
+                    missing.push_back(UnusedLink{
+                        .node = *node,
+                        .chan = c.src_chan,
+                        .peer_asic = key,
+                        .peer_in_domain = mapper.find_fabric_node_id_from_physical_node_id(peer_address).has_value(),
+                        .trained = false});
+                }
             }
         }
-        if (auto it = remote.find(chip); it != remote.end()) {
-            for (const auto& [chan, peer] : it->second) {
-                add(chan, std::get<0>(peer));
-            }
+    }
+    return with_missing_links(std::move(links), missing);
+}
+
+std::vector<UnusedLink> with_missing_links(std::vector<UnusedLink> links, const std::vector<UnusedLink>& missing) {
+    std::set<std::pair<FabricNodeId, chan_id_t>> listed;
+    for (const auto& l : links) {
+        listed.insert({l.node, l.chan});
+    }
+    for (const auto& m : missing) {
+        if (listed.insert({m.node, m.chan}).second) {
+            links.push_back(m);
         }
     }
     std::sort(links.begin(), links.end(), [](const UnusedLink& a, const UnusedLink& b) {

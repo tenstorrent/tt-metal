@@ -71,7 +71,7 @@ INSTANTIATE_TEST_SUITE_P(
     [](const auto& info) { return std::string(enchantum::to_string(info.param)); });
 
 // Inter-domain on: builds every chip, then checks the perimeter inferred from the mock's unused links.
-// TT_FABRIC_EXPECT_PERIMETER=<n> pins the port count for the mock in use.
+// TT_FABRIC_EXPECT_PERIMETER / _UNTRAINED=<n> pin the counts for the mock (and FSD) in use.
 class GraphFabricInterDomain : public ::testing::Test {
 protected:
     void SetUp() override {
@@ -91,13 +91,18 @@ protected:
 };
 
 TEST_F(GraphFabricInterDomain, PerimeterLeavesTheDomain) {
-    SetFabricConfig(FabricConfig::FABRIC_2D);
+    // relaxed: FSD and subset-MGD runs need it
+    SetFabricConfig(FabricConfig::FABRIC_2D, FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
     using namespace tt::tt_metal::distributed;
     auto mesh = MeshDevice::create(MeshDeviceConfig(SystemMesh::instance().shape()));
 
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& mesh_graph = control_plane.get_mesh_graph();
-    const auto links = unused_links(control_plane, tt::tt_metal::MetalContext::instance().get_cluster());
+    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    const auto links = unused_links(
+        control_plane,
+        tt::tt_metal::MetalContext::instance().get_cluster(),
+        rtoptions.has_factory_system_descriptor_path() ? rtoptions.get_factory_system_descriptor_path() : "");
     const auto ports = perimeter_ports(links, ports_from_mesh_graph(mesh_graph, {}), mesh_graph, Topology::Mesh);
 
     size_t leaving = 0;
@@ -114,9 +119,14 @@ TEST_F(GraphFabricInterDomain, PerimeterLeavesTheDomain) {
         ASSERT_NE(it, links.end());
         EXPECT_FALSE(it->peer_in_domain);
     }
-    std::cout << links.size() << " unused links, " << ports.size() << " perimeter ports" << std::endl;
+    const auto untrained = std::count_if(ports.begin(), ports.end(), [](const auto& p) { return !p.link_trained; });
+    std::cout << links.size() << " unused links, " << ports.size() << " perimeter ports, " << untrained << " untrained"
+              << std::endl;
     if (const char* expect = std::getenv("TT_FABRIC_EXPECT_PERIMETER")) {
         EXPECT_EQ(ports.size(), std::stoul(expect));
+    }
+    if (const char* expect = std::getenv("TT_FABRIC_EXPECT_UNTRAINED")) {
+        EXPECT_EQ(untrained, std::stol(expect));
     }
     mesh->close();
 }
