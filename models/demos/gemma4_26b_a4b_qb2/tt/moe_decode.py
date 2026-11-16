@@ -41,6 +41,20 @@ def gate_up_layout(gate, up, banks):
     return torch.cat(list(blocks), dim=1)
 
 
+def gate_up_local_layout(gate, up, banks, readers):
+    """``gate`` / ``up`` ``[E, H, I]`` -> ``[rows, banks * 32]`` for the bank-local gate|up: column block b holds
+    K slice b of every (expert, reader) as one chunk ``[g_j, u_j, g_j+1, u_j+1, ...][k]`` (reader r owns pairs
+    ``[r * pr, (r + 1) * pr)``, pr = pairs / readers)."""
+    E, H, inter = gate.shape
+    kt, pairs = H // TILE, inter // TILE
+    assert kt % banks == 0 and pairs % readers == 0
+    ks, pr = kt // banks, pairs // readers
+    g, u = (w.reshape(E, banks, ks, TILE, pairs, TILE).permute(1, 0, 4, 2, 3, 5) for w in (gate, up))
+    # [banks, E, pairs, ks, 32, 32] -> [banks, E, readers, pr, gate/up, ks, 32, 32]
+    tiles = torch.stack((g, u), dim=3).reshape(banks, E, readers, pr * 2, ks, TILE, TILE)
+    return torch.cat(list(tiles.reshape(banks, E * readers * pr * 2 * ks * TILE, TILE)), dim=1)
+
+
 def down_layout(down, banks):
     """``down`` ``[E, I, H]`` -> ``[rows, banks * 32]``: column block b holds output columns
     ``[b * cpb, (b + 1) * cpb)`` of every expert as ``[expert][column][k]`` tiles."""
@@ -76,7 +90,7 @@ def upload_per_chip(mesh, per_chip, dtype):
     )
 
 
-def tp_expert_layouts(state, *, tp, banks, inter_pad):
+def tp_expert_layouts(state, *, tp, banks, inter_pad, local_readers=None):
     """Checkpoint experts (``experts.gate_up_proj [E, 2I, H]``, ``experts.down_proj [E, H, I]``) -> per chip, the
     tensor-parallel slice of the intermediate dimension (I padded to ``inter_pad``, split ``tp`` ways) in the
     bank-sharded gate|up and down layouts."""
@@ -85,7 +99,10 @@ def tp_expert_layouts(state, *, tp, banks, inter_pad):
     gate, up = (torch.nn.functional.pad(t.transpose(-2, -1), (0, pad)) for t in (gate, up))  # [E, H, Ip]
     down = torch.nn.functional.pad(state["experts.down_proj"].transpose(-2, -1), (0, 0, 0, pad))  # [E, Ip, H]
     gates, ups, downs = gate.chunk(tp, dim=-1), up.chunk(tp, dim=-1), down.chunk(tp, dim=-2)
-    gu = [gate_up_layout(g.contiguous(), u.contiguous(), banks) for g, u in zip(gates, ups)]
+    if local_readers:
+        gu = [gate_up_local_layout(g.contiguous(), u.contiguous(), banks, local_readers) for g, u in zip(gates, ups)]
+    else:
+        gu = [gate_up_layout(g.contiguous(), u.contiguous(), banks) for g, u in zip(gates, ups)]
     dn = [down_layout(d.contiguous(), banks) for d in downs]
     return gu, dn
 
@@ -166,6 +183,76 @@ class MoeDecodeB1:
                 ),
             ),
         ]
+
+    def gate_up_local(self, x, route, w_gul, readers=3):
+        """Bank-local gate|up (kernels gu_local_*.cpp): ``readers`` cores on each DRAM bank's row read only that
+        bank (K slice b of their columns of the routed experts) and push fp32 partial (g, u) tiles to one reducer
+        core per (slot, pair), which sums the banks and applies GeGLU and the routing weight."""
+        from models.demos.gpt_oss.tt.fused_decode.stream import row_placement
+
+        device = x.device()
+        h = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([self.k * self.pairs, TILE]), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, device, ttnn.L1_MEMORY_CONFIG
+        )
+        assert self.pairs % readers == 0
+        nr = 2 * self.pairs // readers
+        assert nr <= 4, "a bank reader's nr output tiles must fit DST with fp32 accumulation (<= 4)"
+        ks = self.kt // self.banks
+        placed = row_placement(self.mesh, readers)
+        reader_cores = [(placed[b][r], b, r) for b in range(self.banks) for r in range(readers)]
+        used = {(c.x, c.y) for c, _, _ in reader_cores}
+        free = [ttnn.CoreCoord(x_, y_) for y_ in range(self.gy) for x_ in range(self.gx) if (x_, y_) not in used]
+        reducers = free[: self.k * self.pairs]
+        cores = [c for c, _, _ in reader_cores] + reducers
+        core_set = self._coalesce(cores)
+        cb_x, cb_w, cb_part, cb_recv, cb_hout, cb_route, cb_scr = 0, 1, 2, 3, 16, 5, 6
+        part = 4 * TILE
+        cbs = [
+            self._cb(cb_x, ttnn.bfloat16, TINY_BYTES, ks, core_set, tiny=True),
+            self._cb(cb_w, self.dtype, self.tile_bytes, self.k * nr * ks, core_set),
+            self._cb(cb_part, ttnn.float32, part, 2 * nr, core_set, tiny=True),
+            self._cb(cb_recv, ttnn.float32, part, 2 * self.banks, core_set, tiny=True),
+            self._cb(cb_hout, ttnn.bfloat16, TINY_BYTES, 1, core_set, tiny=True),
+            self._cb(cb_route, ttnn.bfloat16, self.route_page, 1, core_set),
+            self._cb(cb_scr, ttnn.bfloat16, self.route_page, 1, core_set),
+        ]
+        sem = 0
+        sems = [ttnn.SemaphoreDescriptor(sem, ttnn.CoreType.WORKER, core_set, 0)]
+        red_noc = [v for c in reducers for n in (device.worker_core_from_logical_core(c),) for v in (n.x, n.y)]
+        reader_ct = [
+            cb_w,
+            cb_route,
+            cb_recv,
+            ks,
+            nr,
+            readers,
+            self.k,
+            self.tile_bytes,
+            self.route_page,
+            sem,
+            self.banks,
+        ]
+        reader_ct += ttnn.TensorAccessorArgs(route).get_compile_time_args()
+        writer_ct = [cb_x, cb_part, cb_recv, cb_hout, cb_scr, ks, nr, self.pairs, self.k, self.route_page, sem]
+        for t in (x, h, route):
+            writer_ct += ttnn.TensorAccessorArgs(t).get_compile_time_args()
+        compute_ct = [cb_x, cb_w, cb_part, cb_recv, cb_hout, ks, nr, self.k, self.banks]
+        reader_rt, writer_rt, compute_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
+        addrs = [x.buffer_address(), h.buffer_address(), route.buffer_address()]
+        for c, b, r in reader_cores:
+            reader_rt[c.x][c.y] = [w_gul.buffer_address(), route.buffer_address(), 1, b, r]
+            writer_rt[c.x][c.y] = addrs + [1, b, r, 0, 0] + red_noc
+            compute_rt[c.x][c.y] = [1]
+        for u, c in enumerate(reducers):
+            slot, pair = divmod(u, self.pairs)
+            reader_rt[c.x][c.y] = [w_gul.buffer_address(), route.buffer_address(), 2, 0, 0]
+            writer_rt[c.x][c.y] = addrs + [2, 0, 0, slot, pair] + red_noc
+            compute_rt[c.x][c.y] = [2]
+        kernels = self._kernels(
+            "gu_local", core_set, (reader_ct, reader_rt), (writer_ct, writer_rt), compute_ct, compute_rt
+        )
+        ttnn.generic_op([w_gul, x, route, h], ttnn.ProgramDescriptor(kernels=kernels, semaphores=sems, cbs=cbs))
+        return h
 
     def gate_up(self, x, route, w_gu):
         device = x.device()
@@ -269,6 +356,10 @@ class MoeDecodeB1:
         return out
 
     def __call__(self, x, route, w_gu, w_down):
+        """``w_gu`` in the bank-local layout when ``self.local_readers`` is set (``gate_up_local``), else the
+        cross-bank one (``gate_up``)."""
+        if getattr(self, "local_readers", None):
+            return self.down(self.gate_up_local(x, route, w_gu, readers=self.local_readers), route, w_down)
         return self.down(self.gate_up(x, route, w_gu), route, w_down)
 
 

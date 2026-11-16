@@ -1400,7 +1400,8 @@ class MultichipDecoder(OptimizedDecoder):
 
             banks = mesh_device.dram_grid_size().x
             inter_pad = -(-config.moe_intermediate_size // (4 * 32)) * 4 * 32
-            gu, dn = tp_expert_layouts(state_dict, tp=4, banks=banks, inter_pad=inter_pad)
+            local_readers = 3  # bank-local gate|up: 3 readers on each DRAM bank's row (measured 3 = 6 > 2 invalid)
+            gu, dn = tp_expert_layouts(state_dict, tp=4, banks=banks, inter_pad=inter_pad, local_readers=local_readers)
             gate_dtype, down_dtype = experts.gate_up.dtype, experts.down.dtype
             self.moe_b1 = SimpleNamespace(
                 op=MoeDecodeB1(
@@ -1416,6 +1417,7 @@ class MultichipDecoder(OptimizedDecoder):
                 gate_dtype=gate_dtype,
                 down_dtype=down_dtype,
             )
+            self.moe_b1.op.local_readers = local_readers
             del gu, dn
             for name in ("gate_up", "down"):
                 ttnn.deallocate(getattr(experts, name))
