@@ -488,3 +488,22 @@ then 20 + 5 plain and WS_DEFER; stage B (cmds/ws_sf_b.sh) once the tray is clean
   util tile 42.5%, hung after about 150-200 launches (device timeout at 00:47:36), host MMIO reads to device 5 timed
   out (4 B load 56 ms), the watcher cancelled the test step, and the node went down and rebooted (boot 00:49:23).
   Router atomics are not the cause either. Not run: (c) column 0's multicasts on NOC1 (WL_MC_NOC1, built, untested).
+- Wedge isolation, continued (hold 214691 on bh-glx-110-c10u20, tray soak at the 640-expert lane load, 4 slots):
+  - (c) column 0's multicasts on NOC1 (WL_MC_NOC1, ws_lane_s3): hung in under 50 launches. Device 2, one group's
+    cores (4,8) and (5,8), both NCRISCs stuck inside their own group multicasts on NOC1 (an h-row flag write not
+    accepted by the command buffer, an x multicast not flushed). The wedge follows the multicasts to the other NoC.
+  - (d) one multicaster a group a NoC (LCfg.bcast, ed5d86fc17f): every core's x blocks from its BRISC on NOC0 in
+    stream order (one x multicast in flight), h tiles gathered on core 0 and each row multicast from its NCRISC on
+    NOC1 (one h multicast in flight). Tray PCC 0.99994, M 0 / 5 pass, dynamic M min 0.99992, util 24.6% (x waits:
+    one serialized x stream from 20 sources). Soak (ws_lane_s4): hung in under 50 launches. Device 0 core (1,4)
+    BRISC NOC0: 2 writes of one x multicast issued but not sent, 40 acks missing; no other multicast in its group.
+  - (e) the same with each multicaster at its NoC's multicast start corner (237feae6653): x blocks funneled on NOC1
+    into core 0's 2 funnel slots and multicast from core 0 on NOC0; h rows multicast from core 19 on NOC1; x staging
+    2 blocks smaller (L1 unchanged). Tray PCC 0.99994, M 0 / 5 pass, dynamic M min 0.99992, util 44.9% (20 + 5).
+    Soak: launch 50 at 44-45% (7 s), hung before launch 100. Device 4 core 0 (logical (1,0), NOC0's start corner)
+    BRISC NOC0: its x multicast (payload + flag) issued but not sent, 40 acks missing; every other RISC polling.
+  - So the wedge is not concurrent multicasts into one rectangle, not the multicast's path around the chip to its
+    start corner, not NOC0 or NOC1 in particular, not linking and not router atomics: a single multicast from the
+    group's corner, alone on its NoC in that group, cannot leave its core once the lane design's fabric traffic is
+    running. Not tested: the routers' landing writes into the group cores, the cores' NOC1 writes into the mux
+    cores, DRAM read responses into the group, the BRISC's DRAM reads with transaction ids while it multicasts.
