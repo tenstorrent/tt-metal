@@ -113,11 +113,12 @@ TT_KERNEL void compute() {
                 compute_kernel_lib::ReduceInputBlockShape::row(kt),
                 compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
                 compute_kernel_lib::NoAccumulation{},
+                // The row means are in column 0, all the column broadcast reads.
                 [](uint32_t dst) {
                     binop_with_scalar_tile_init();
-                    add_unary_tile(dst, epsilon_bits);
+                    add_unary_tile(dst, epsilon_bits, VectorMode::C);
                     rsqrt_tile_init();
-                    rsqrt_tile<RsqrtMode::Fast>(dst);
+                    rsqrt_tile<RsqrtMode::Fast>(dst, VectorMode::C);
                 });
         // Per block, x * inv_rms on the FPU, sigmoid(gate) in the DST slots after it on the SFPU, their product, and
         // the weight on the FPU again from DST.
