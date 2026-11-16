@@ -509,10 +509,11 @@ void CommandListBuilder::record(
     tt::tt_metal::distributed::MeshWorkload& workload,
     std::span<const device_operation::detail::CmdListProgramBindings> programs) {
     detail::RecordedParameters parameters;
+    std::vector<ActiveBind*> matched;
     for (const auto& program : programs) {
         for (auto& active : binds_) {
             if (detail::match_cmd_list_bind(program, active.bind, parameters)) {
-                active.claimed = true;
+                matched.push_back(&active);
             }
         }
     }
@@ -550,6 +551,9 @@ void CommandListBuilder::record(
     }
     metal_builder_.add(device().mesh_command_queue(binary_upload_cq_id.get()), workload, metal_parameters);
     layout_ = std::move(layout);
+    for (ActiveBind* active : matched) {
+        active->claimed = true;
+    }
 }
 
 void CommandListBuilder::push_binds(std::string op_name, std::vector<CmdListBind> binds) {
