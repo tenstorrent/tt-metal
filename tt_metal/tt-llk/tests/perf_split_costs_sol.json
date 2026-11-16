@@ -65,6 +65,7 @@
   "perf_mul_reduce_scalar_chunked": 89.1,
   "perf_pack": 543.9,
   "perf_pack_l1_acc": 4.4,
+  "perf_pack_rows": 321.4,
   "perf_pack_rows_to_addr": 400.6,
   "perf_pack_tiny_tile_block": 548.5,
   "perf_pack_tiny_tile_reconfig": 340.9,
