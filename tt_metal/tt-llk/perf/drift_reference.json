@@ -1,0 +1,13 @@
+{
+    "_note": "Pinned nightly per workflow for nightly_stability.py. Artifacts expire 90 days after the date; re-pin before day 80.",
+    "llk-perf.yaml": {
+        "run_id": 42441234332,
+        "sha": "c38964cd417a7c619314ced781a3fd8e8eb1d428",
+        "date": "2026-11-08"
+    },
+    "llk-perf-gate.yaml": {
+        "run_id": 42449250714,
+        "sha": "63b1a60d4630a583df47d812912f996c0c057d6c",
+        "date": "2026-11-08"
+    }
+}

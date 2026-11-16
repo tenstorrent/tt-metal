@@ -30,13 +30,24 @@ jobs:
         with:
           fetch-depth: 1
           sparse-checkout: |
+            .github/scripts
             .github/workflows
             tt_metal/tt-llk/perf
+            tt_metal/tt-llk/tests/python_tests
             tests/pipeline_reorg
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
         with:
           python-version: '3.10'
       - run: pip install pyyaml
+      - name: Same code on a quiet day, and drift
+        continue-on-error: true
+        timeout-minutes: 20
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DAY: ${{ inputs.date }}
+        run: |
+          python3 tt_metal/tt-llk/perf/nightly_stability.py --repo "$GITHUB_REPOSITORY" \
+            ${DAY:+--date "${DAY:0:10}"} --cache "$RUNNER_TEMP/perf_data"
       - name: Check and send
         env:
           GH_TOKEN: ${{ github.token }}
