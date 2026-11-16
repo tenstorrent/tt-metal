@@ -17,7 +17,11 @@
 #include "api/compute/bcast.h"
 #endif
 #ifdef FUSE_BIAS_SFPU
-#include "api/compute/sfpu_binary_bcast.h"
+#include "api/compute/compute_kernel_api.h"
+#ifdef TRISC_PACK
+#include "ckernel_sfpu_binary_bcast.h"
+#include "llk_math_eltwise_binary_sfpu_macros.h"
+#endif
 #endif
 
 #include "api/compute/eltwise_binary.h"
@@ -176,6 +180,27 @@ inline void reblock_and_untilize(
     }
     interm_dfb.pop_front(static_cast<uint16_t>(num_tiles_in_row_of_subblocks));
 }
+
+#ifdef FUSE_BIAS_SFPU
+// DEST[dst_data] += row 0 of DEST[dst_row] in FP32, from the pack thread. The fused activation also runs on the pack
+// thread, and the SFPU's registers are shared: running the add on the math thread would let it overlap the previous
+// tiles' activation.
+FORCE_INLINE void sfpu_add_bcast_row_init_pack() {
+    PACK((SFPU_BINARY_INIT_FN(unused, sfpu::_sfpu_binary_bcast_init_, (ckernel::BroadcastType::ROW))));
+}
+
+FORCE_INLINE void sfpu_add_bcast_row_pack(uint32_t dst_data, uint32_t dst_row) {
+    PACK((SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        _calculate_sfpu_binary_bcast_full_tile_,
+        (ckernel::BinaryOp::ADD, ckernel::BroadcastType::ROW),
+        dst_data,
+        dst_row,
+        dst_data,
+        VectorMode::None)));
+}
+#endif
 
 void kernel_main() {
 // RUNTIME ARGS
@@ -642,20 +667,30 @@ void kernel_main() {
                                         : in1_index_subblock_offset + k;
                                 copy_tile(bias_dfb_id, bias_tile_idx, sfpu_bias_tiles_per_acquire + t);
                             }
-                            sfpu_add_bcast_row_init();
-                            for (uint32_t t = 0; t < count; t++) {
-                                sfpu_add_bcast_row(t, sfpu_bias_tiles_per_acquire + t);
-                            }
                             tile_regs_commit();
+                            // As in apply_activation_from_pack: wait for the math thread's DEST, then address
+                            // the packer's half of it.
+                            PACK(TTI_SEMWAIT(
+                                p_stall::STALL_TDMA | p_stall::STALL_CFG,
+                                semaphore::t6_sem(semaphore::MATH_PACK),
+                                p_stall::STALL_ON_ZERO));
+                            PACK(TT_SETC16(
+                                DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
+                            sfpu_add_bcast_row_init_pack();
+                            for (uint32_t t = 0; t < count; t++) {
+                                sfpu_add_bcast_row_pack(t, sfpu_bias_tiles_per_acquire + t);
+                            }
 #ifdef SFPU_ACTIVATION
-                            apply_activation_from_pack<
-                                activation_type,
-                                activation_param0,
-                                activation_param1,
-                                activation_param2>(count);
-#else
-                            tile_regs_wait();
+                            ActivationInitHelper<activation_type, activation_param0, activation_param1>::init();
+                            for (uint32_t t = 0; t < count; t++) {
+                                ActivationApplyHelper<
+                                    activation_type,
+                                    activation_param0,
+                                    activation_param1,
+                                    activation_param2>::apply(t);
+                            }
 #endif
+                            PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
                             for (uint32_t t = 0; t < count; t++) {
                                 pack_tile<true>(t, untilize_mode_out_dfb_id, first + t);
                             }

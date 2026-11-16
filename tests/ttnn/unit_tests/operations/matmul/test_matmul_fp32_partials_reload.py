@@ -297,3 +297,66 @@ def test_matmul_fp32_partials_reload_fused_bias(device, factory, packer_l1_acc, 
     err = _rel_max_err(output.reshape(reference.shape), reference)
     tol = BIAS_REL_TOL if output_dtype == ttnn.float32 else BIAS_REL_TOL_BF16
     assert err < tol, f"relative max error {err:.3e}"
+
+
+# The 2D multicast factory adds an FP32 row-broadcast bias to FP32 partials on the SFPU, in FP32. Through SrcB the
+# bias would be truncated to TF32 (10 mantissa bits): an offset of ~1000 then loses up to 2^-1, a per-column error
+# that the matmul's own ~1e-4 does not hide. A 3-tile subblock leaves an odd tile after the SFPU's pairs.
+@pytest.mark.parametrize("activation", [None, "sigmoid"])
+@pytest.mark.parametrize("in0_block_w, packer_l1_acc", [(8, False), (2, False), (2, True)])
+def test_matmul_2d_mcast_fp32_bias_added_in_fp32(device, in0_block_w, packer_l1_acc, activation):
+    torch.manual_seed(0)
+    m, k, n = 256, 256, 384
+    grid = ttnn.CoreCoord(4, 4)
+    per_core_m, per_core_n = m // 32 // grid.y, n // 32 // grid.x
+    # Centred, then rounded to BF16 so the device's operands equal the reference's.
+    a, b = (_bf16_rand(1, 1, m, k) - 0.5).bfloat16().float(), (_bf16_rand(1, 1, k, n) - 0.5).bfloat16().float()
+    if activation is None:
+        bias = 1000.0 + torch.randn(1, 1, 1, n)
+    else:
+        # A sigmoid argument whose offset BF16 or TF32 would visibly shift.
+        bias = 3.0 * torch.randn(1, 1, 1, n)
+    program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=grid,
+        in0_block_w=in0_block_w,
+        out_subblock_h=1,
+        out_subblock_w=per_core_n,
+        out_block_h=per_core_m,
+        out_block_w=per_core_n,
+        per_core_M=per_core_m,
+        per_core_N=per_core_n,
+        transpose_mcast=False,
+        fused_activation=None if activation is None else ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID),
+        fuse_batch=True,
+    )
+    a_tt = ttnn.from_torch(a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    b_tt = ttnn.from_torch(b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    bias_tt = ttnn.from_torch(bias.reshape(1, 1, n), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    output = ttnn.linear(
+        a_tt,
+        b_tt,
+        bias=bias_tt,
+        program_config=program_config,
+        dtype=ttnn.float32,
+        compute_kernel_config=_compute_config(device, packer_l1_acc),
+    )
+    output = ttnn.to_torch(output).double().reshape(1, 1, m, n)
+    logits = torch.matmul(a.double(), b.double()) + bias.double()
+    if activation is None:
+        # FP32 accumulation of 256 products of |x| < 0.25 plus one FP32 rounding of ~1000 (2^-14).
+        assert (output - logits).abs().max() < 1e-3
+    else:
+        # The fused sigmoid must match the unfused chain: the same FP32 logits, then ttnn.sigmoid.
+        program_config.fused_activation = None
+        unfused = ttnn.linear(
+            a_tt,
+            b_tt,
+            bias=bias_tt,
+            program_config=program_config,
+            dtype=ttnn.float32,
+            compute_kernel_config=_compute_config(device, packer_l1_acc),
+        )
+        unfused = ttnn.to_torch(ttnn.sigmoid(unfused)).double().reshape(1, 1, m, n)
+        assert torch.equal(output, unfused)
+        # The SFPU sigmoid's own error (2.4e-4 here).
+        assert (output - torch.sigmoid(logits)).abs().max() < 5e-4
