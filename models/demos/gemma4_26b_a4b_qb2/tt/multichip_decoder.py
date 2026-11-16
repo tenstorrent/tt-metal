@@ -50,6 +50,8 @@ WS4_MOE_DECODE = os.environ.get("GEMMA4_26B_WS4_MOE_DECODE", "1") != "0"
 WS2_CCL_LINKS = int(os.environ.get("GEMMA4_26B_WS2_CCL_LINKS", "2"))
 # WS1: decode 2-32 users in one pass per layer (attention, router and experts batched; perf/WS1.md).
 WS1_BATCHED = os.environ.get("GEMMA4_26B_WS1_BATCHED", "1") != "0"
+# WS5: batch-1 decode with the fused layer boundaries (fused_decode/boundary.py; perf/WS5.md).
+WS5_FUSED = os.environ.get("GEMMA4_26B_WS5_FUSED", "1") != "0"
 
 
 class DecodeRopeRows:
@@ -346,6 +348,7 @@ class _LocalAttention(OptimizedAttention):
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         if not direct:
+            assert not getattr(self, "fused_partial", False), "WS5 fused boundaries need the direct o_proj path"
             return self.project(attention, True)
         # One program from the SDPA output to the O-projection input (models/demos/gemma4 ConcatHeadsDecode);
         # the projection emits the collective dtype directly.
@@ -353,14 +356,18 @@ class _LocalAttention(OptimizedAttention):
 
         combined = ConcatHeadsDecode.op(attention, cfg.num_attention_heads)
         pack_memory = getattr(self, "ws2_pack_memory", None)
+        fused = getattr(self, "fused_partial", False) and combined.shape[-2] == 1
         projected = ttnn.linear(
             combined,
             self.source.weights.o_proj,
-            dtype=ttnn.bfloat16 if pack_memory is not None else self.collective_dtype,
+            dtype=ttnn.bfloat16 if pack_memory is not None or fused else self.collective_dtype,
             program_config=self.output_program,
             compute_kernel_config=self.output_compute,
             memory_config=self.output_memory,
         )
+        if fused:
+            # WS5: this device's partial sum; the fused boundary all-reduces it (fused_decode/boundary.py).
+            return projected
         if pack_memory is not None and projected.shape[-2] == 1:
             # Row 0 only: all-reduce 4 dense bf16 tiles and unpack into the batch-1 norm layout.
             reduced = self.allreduce(pack_rows(projected), role="attention_packed")
@@ -2057,6 +2064,62 @@ class MultichipDecoder(OptimizedDecoder):
             compute_kernel_config=self.layer.self_attn.compute,
         )
         return ttnn.to_memory_config(normed, ttnn.L1_MEMORY_CONFIG)
+
+    def fused_setup(self, boundary, next_gamma):
+        """WS5: this layer's flat boundary weights (fused_decode/boundary.py). next_gamma: [hidden] torch weight of the
+        next layer's input norm (the final norm after the last layer)."""
+        hidden = self.config.hidden_size
+        layer = self.layer
+
+        def vec(t):
+            return ttnn.to_torch(ttnn.get_device_tensors(t)[0]).float().reshape(-1)[:hidden]
+
+        assert self.moe_b1 is not None and getattr(layer.shared_mlp, "input_gamma_folded", False)
+        source = layer.moe.router.original.source
+        self.fused = SimpleNamespace(
+            boundary=boundary,
+            input_gamma=vec(layer.input_layernorm.tt_weight),
+            g_attn=boundary.gammas([vec(layer.post_attention_layernorm.tt_weight), vec(self.expert_norm_weight)]),
+            router_scale=boundary.fp32_vector(vec(source.scale) * float(source.source.scalar_root_size)),
+            g_moe=boundary.gammas(
+                [
+                    vec(layer.post_feedforward_layernorm_1.tt_weight),
+                    vec(layer.post_feedforward_layernorm_2.tt_weight),
+                    vec(layer.post_feedforward_layernorm.tt_weight),
+                    next_gamma,
+                ]
+            ),
+            layer_scalar=float(layer.layer_scalar),
+        )
+
+    def fused_decode(self, x, *, rope_mats, current_pos, cache_pos, page_table, kv_cache):
+        """WS5 batch-1 decode layer between two fused boundaries: x is this layer's normed input (the previous
+        boundary's qkv_in); returns the next layer's normed input. The residual stays in the boundary's flat buffers.
+        Programs: attention (QKV, heads, cache, SDPA, o_proj) -> attn boundary -> router linear + top-k ->
+        moe_decode gate|up + down and the shared MLP -> moe boundary."""
+        f = self.fused
+        attention = self.layer.self_attn
+        attention.fused_partial = True
+        try:
+            partial = attention(
+                x,
+                rope_mats=rope_mats,
+                position_idx=current_pos,
+                position_idx_cache=cache_pos,
+                page_table=page_table,
+                kv_cache=kv_cache,
+                is_decode=True,
+            )
+        finally:
+            attention.fused_partial = False
+        router_in, expert_in, shared_in = f.boundary.attn(partial, f.g_attn, f.router_scale)
+        packed = self.layer.moe.router.decode_packed(router_in, prescaled=True)
+        moe = self.moe_b1
+        routed = moe.op(expert_in, packed, moe.w_gu, moe.w_down)
+        shared = self.layer.shared_mlp(
+            shared_in, reduce_output=False, normalized_input=True, output_dtype=ttnn.bfloat16
+        )
+        return f.boundary.moe(shared, routed, f.g_moe, f.layer_scalar)
 
     def _ws2_decode(self, x, **attention_kwargs):
         """Batch-1 decode layer with the residual stream width-sharded in L1 between the norms.

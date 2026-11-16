@@ -3,7 +3,9 @@
 """Gemma4 text stack using the accepted TP4/EP4 decoder policy."""
 
 import json
+import os
 from pathlib import Path
+from types import SimpleNamespace
 
 import torch
 from huggingface_hub import hf_hub_download
@@ -15,6 +17,7 @@ import ttnn
 from models.demos.gemma4.tt.model import _get_lm_head_program_config
 from models.demos.gemma4_26b_a4b_qb2.tt.multichip_decoder import (
     WS1_BATCHED,
+    WS5_FUSED,
     CollectiveBufferPool,
     DecodeRopeRows,
     MultichipDecoder,
@@ -127,8 +130,39 @@ class Gemma4Model:
             self.rope_prefill[kind] = tuple(self.upload(x.unsqueeze(0)) for x in (cos, sin))
             self.rope_decode[kind] = tuple(self.upload(x.squeeze(0), layout=ttnn.ROW_MAJOR_LAYOUT) for x in (cos, sin))
         self.zero_hidden = self.upload(torch.zeros(1, 1, 1, self.config.hidden_size))
+        self.fused_b1 = self._fused_setup(norm) if WS5_FUSED else None
         self.precision_summary()
         print("MODEL_READY", flush=True)
+
+    def _fused_setup(self, final_norm):
+        """WS5: batch-1 decode through the fused layer boundaries (fused_decode/boundary.py) when every layer has the
+        batch-1 moe_decode experts and the WS2 norm path; None otherwise (the WS2/WS4 path decodes batch 1)."""
+        layers = self.layers
+        if not layers or not all(
+            getattr(layer, "moe_b1", None) is not None
+            and getattr(layer, "ws2_norm", None) is not None
+            and layer.layer.self_attn.fused_heads
+            for layer in layers
+        ):
+            return None
+        from models.demos.gemma4_26b_a4b_qb2.tt.fused_decode.boundary import GemmaBoundary
+
+        boundary = GemmaBoundary(
+            self.mesh,
+            self.config.hidden_size,
+            self.config.rms_norm_eps,
+            round_n=os.environ.get("GEMMA4_26B_WS5_ROUND_N", "1") != "0",
+        )
+        hidden = self.config.hidden_size
+
+        def input_gamma(layer):
+            weight = layer.layer.input_layernorm.tt_weight
+            return ttnn.to_torch(ttnn.get_device_tensors(weight)[0]).float().reshape(-1)[:hidden]
+
+        for n, layer in enumerate(layers):
+            nxt = input_gamma(layers[n + 1]) if n + 1 < len(layers) else final_norm.float()
+            layer.fused_setup(boundary, nxt)
+        return SimpleNamespace(boundary=boundary, g_entry=boundary.gammas([input_gamma(layers[0])]))
 
     def precision_summary(self):
         """Validate requested precision against allocated weights and bound kernels."""
@@ -192,22 +226,44 @@ class Gemma4Model:
         self.precision_observations["cache_dtypes"] = [[dtype_name(t.dtype) for t in pair] for pair in caches]
         return caches, table
 
-    def embed(self, tokens):
+    def embed(self, tokens, memory_config=None):
         value = ttnn.embedding(tokens, self.embedding, layout=ttnn.TILE_LAYOUT)
         value = ttnn.reshape(value, (1, 1, -1, self.config.hidden_size // 4))
         value = self.layers[0].gather(value)
-        value = ttnn.mul(value, self.embed_scale)
+        value = ttnn.mul(value, self.embed_scale, memory_config=memory_config)
         if value.dtype != ttnn.bfloat16:
             raise ValueError("Embedding activation must be BF16")
         self.precision_observations["embedding_output"] = dtype_name(value.dtype)
         return value
 
-    def logits(self, hidden):
+    def _fused_decode(self, hidden, current_pos, cache_pos, page_table, kv_cache):
+        """WS5 batch-1 decode: entry boundary (residual = the embedded token, first input norm), the layers between
+        fused boundaries, the LM head on the last boundary's output (the final norm already applied)."""
+        x = self.fused_b1.boundary.entry(hidden, self.fused_b1.g_entry)
+        rope_rows = {}
+        for layer_number, (layer, cache, index) in enumerate(zip(self.layers, kv_cache, self.layer_indices)):
+            layer_table = page_table[layer_number] if isinstance(page_table, (tuple, list)) else page_table
+            kind = self.config.layer_types[index]
+            if kind not in rope_rows:
+                rope_rows[kind] = DecodeRopeRows.gather(self.rope_decode[kind], current_pos)
+            x = layer.fused_decode(
+                x,
+                rope_mats=rope_rows[kind],
+                current_pos=current_pos,
+                cache_pos=cache_pos,
+                page_table=layer_table,
+                kv_cache=cache,
+            )
+        return self.logits(x, normed=True)
+
+    def logits(self, hidden, normed=False):
         if hidden.dtype != ttnn.bfloat16:
             raise ValueError("Decoder output residual must be BF16")
         self.precision_observations["decoder_output"] = dtype_name(hidden.dtype)
         ws2_norm = getattr(self.layers[0], "ws2_norm", None)
-        if hidden.is_sharded() and ws2_norm is not None:
+        if normed:
+            pass  # WS5: the last fused boundary applied the final norm (row 0 of an L1 TILE tensor)
+        elif hidden.is_sharded() and ws2_norm is not None:
             # Batch 1: the last layer hands over the width-sharded residual; one sharded norm (gamma inside).
             hidden = ttnn.rms_norm(
                 hidden,
@@ -270,8 +326,12 @@ class Gemma4Model:
         # are embedded; the model trace fixes the slot count at request setup.
         if len(kv_cache) != len(self.layers):
             raise ValueError("KV cache must contain one pair per model layer")
-        hidden = self.embed(tokens[..., :batch])
         active = tuple(range(batch)) if active_slots is None else tuple(active_slots)
+        if batch == 1 and len(active) == 1 and self.fused_b1 is not None:
+            # The entry boundary gathers row 0 with 32 B reads: its source must be in L1.
+            hidden = self.embed(tokens[..., :1], memory_config=ttnn.L1_MEMORY_CONFIG)
+            return self._fused_decode(hidden, current_pos, cache_pos, page_table, kv_cache)
+        hidden = self.embed(tokens[..., :batch])
         # Batch 1: gather the RoPE rows once per step and layer type, not once per layer.
         rope_rows = {}
         ws2_norm = getattr(self.layers[0], "ws2_norm", None)
