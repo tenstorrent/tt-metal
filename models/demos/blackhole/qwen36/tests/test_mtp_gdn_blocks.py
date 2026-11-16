@@ -16,6 +16,11 @@ be rejected), so every count from 1 to K + 1, a rejection at every draft positio
 EOS or length cut (a count below the matched drafts) occur. The block ids follow the plugin's rule
 (tests/spec_block_helpers.py) in mamba_cache_mode "none" and "align".
 
+test_a_chained_run_across_block_boundaries_equals_a_drained_run runs the MTP class alone, as the plugin runs it under
+asynchronous scheduling, twice on the same blocks: once reading every verify before the next, once chaining every
+verify over the unread one (supports_chained_spec_verify), across block boundaries; the committed tokens, counts and
+GDN states must be equal bit for bit.
+
     MESH_DEVICE=P150x8 HF_MODEL=<Qwen3.8-27B dir> pytest models/demos/blackhole/qwen36/tests/test_mtp_gdn_blocks.py
 """
 
@@ -53,7 +58,16 @@ class Pair:
     block layout, the same attention block ids per row and state blocks from the plugin's rule."""
 
     def __init__(
-        self, mesh_device, monkeypatch, K, mode, pool_rows=BMAX, n_layers=N_LAYERS, bmax=BMAX, spec_sample=False
+        self,
+        mesh_device,
+        monkeypatch,
+        K,
+        mode,
+        pool_rows=BMAX,
+        n_layers=N_LAYERS,
+        bmax=BMAX,
+        spec_sample=False,
+        block_size=None,
     ):
         stub_vllm_if_missing(monkeypatch)
         from models.demos.blackhole.qwen36.tt.qwen36_vllm import Qwen36ForCausalLM, Qwen36MTPContractForCausalLM
@@ -71,11 +85,13 @@ class Pair:
         self.ref_model = build(False) if (n_layers, bmax) != (N_LAYERS, BMAX) else _build(mesh_device)
         self.spec = Qwen36MTPContractForCausalLM([self.spec_model], [self.spec_model.args], mesh_device)
         self.ref = Qwen36ForCausalLM([self.ref_model], [self.ref_model.args], mesh_device)
-        probe = PluginLayout.for_model(self.spec_model, num_blocks=1)
+        probe = PluginLayout.for_model(self.spec_model, num_blocks=1, block_size=block_size)
         self.bs = probe.block_size
         self.bpu = -(-(CTX + 2 * (K + 1)) // self.bs)  # attention blocks per row
         state_blocks = probe.num_groups * (CTX // self.bs + 2 * (K + 1)) * pool_rows
-        layout = PluginLayout.for_model(self.spec_model, num_blocks=1 + self.bmax * self.bpu + state_blocks)
+        layout = PluginLayout.for_model(
+            self.spec_model, num_blocks=1 + self.bmax * self.bpu + state_blocks, block_size=block_size
+        )
         self.layout = layout
         self.kv_spec = self.spec.allocate_kv_cache_per_layer(layout.per_layer_specs)
         self.kv_ref = self.ref.allocate_kv_cache_per_layer(layout.per_layer_specs)
@@ -548,3 +564,207 @@ def test_device_sampled_verify_draws_from_the_target(mesh_device, K, monkeypatch
     )
     for v, a in steps:
         pair.verify({1: (v, a), 3: (v, a)}, "argmax_ids", sampling)
+
+
+def _walk(drafts, ids):
+    """The runner's greedy accept walk: 1 + the leading drafts equal to the id of the column before them."""
+    j = 0
+    while j < len(drafts) and drafts[j] == ids[j]:
+        j += 1
+    return j + 1
+
+
+def _async_run(pair, prompts, chained, hint, steps):
+    """Run ``prompts`` {row: tokens} through Qwen36MTPContractForCausalLM as vllm-tt-plugin runs them under
+    asynchronous scheduling in mode "align": a prefill per row, one ordinary [B, 1] decode of all rows, then ``steps``
+    verifies of all rows. vLLM schedules each verify after the first while the one before it is unread and counts that
+    one's drafts as accepted, so the window follows that count (SpecBlocks ``scheduled``). Drained: the runner reads,
+    walks and proposes each verify before it builds the next, which reads the start block of the committed count.
+    Chained: the runner submits each verify over the unread one (``spec_predecessor``, ``start_blocks_by_count``,
+    placeholders), then reads, walks and proposes the unread one, whose drafts fill the chained verify's rows.
+    ``hint(row, p0)``: the row's valid drafts in the verify after its verify at column-0 position p0.
+
+    Returns (per verify {row: (column-0 position, committed tokens)}, per row the GDN state of its last committed count,
+    {predecessor count: chained verifies whose window begins one column past the column of their last query token})."""
+    K, T, B, bs, vocab = pair.K, pair.K + 1, pair.bmax, pair.bs, pair.vocab
+    spec, kv = pair.spec, pair.kv_spec
+    blocks = SpecBlocks(pair.layout, K, "align", free=range(1 + B * pair.bpu, pair.layout.num_blocks))
+    rows = sorted(prompts)
+    pt = torch.zeros(B, pair.bpu, dtype=torch.int32)
+    for r in rows:
+        pt[r] = pair.pages(r)
+    # vLLM's new_block_ids_to_zero, so that both runs start from the same bytes.
+    spec.zero_kv_cache_blocks(kv, list(range(1, pair.layout.num_blocks)))
+    nxt = {}
+    for r in rows:
+        prompt = list(prompts[r])
+        blocks.admit(r)
+        state = blocks.state({r: blocks.prefill(r, 0, len(prompt))}, B, intermediate=())
+        logits, _ = spec.prefill_forward(
+            torch.tensor([prompt], dtype=torch.int64),
+            pt[r].reshape(1, -1),
+            kv,
+            [len(prompt)],
+            start_pos=[0],
+            empty_slots=[r],
+            mamba_state=SliceRows(state, r),
+        )
+        nxt[r] = int(logits[0, 0, :vocab].argmax())
+
+    # The ordinary decode after the prefills, and its proposal.
+    tok = torch.zeros(B, 1, dtype=torch.int32)
+    pos = torch.full((B,), -1, dtype=torch.int32)
+    sel = {}
+    for r in rows:
+        tok[r, 0], pos[r] = nxt[r], len(prompts[r])
+        sel[r] = blocks.decode(r, len(prompts[r]), 1)
+    out = spec.decode_forward(
+        tokens=tok,
+        start_pos=pos,
+        page_table=pt,
+        kv_cache=kv,
+        enable_trace=True,
+        read_from_device=False,
+        mamba_state=blocks.state(sel, B),
+        **_decode_flags(),
+    )
+    committed = torch.full((B, T), -1, dtype=torch.int32)
+    cpos = torch.full((B, T), -1, dtype=torch.int32)
+    for r in rows:
+        blocks.commit(r, 1)
+        committed[r, 0], cpos[r, 0] = int(out[r, -1, :vocab].argmax()), len(prompts[r]) + 1
+    drafted = spec.propose_draft_tokens(K, committed, cpos, torch.ones(B, dtype=torch.int32))
+    cur = {}
+    for r in rows:
+        n = min(K, int(drafted.num_valid[r]))
+        cur[r] = (int(cpos[r, 0]), [int(committed[r, 0])] + drafted.draft_token_ids[r, :n].tolist())
+
+    def submit(cur, sel, counts, predecessor=None, by_count=None, hints=None):
+        tokens = torch.full((B, T), -1, dtype=torch.int32)
+        start = torch.full((B, T), -1, dtype=torch.int32)
+        nv = torch.zeros(B, dtype=torch.int32)
+        acc = torch.ones(B, dtype=torch.int32)
+        for r, (p0, block) in cur.items():
+            if predecessor is None:
+                tokens[r, : len(block)] = torch.tensor(block, dtype=torch.int32)
+                start[r, : len(block)] = torch.arange(p0, p0 + len(block), dtype=torch.int32)
+                nv[r], acc[r] = len(block) - 1, counts[r]
+            else:
+                # Placeholders: the positions of a predecessor that accepted all its drafts.
+                start[r] = torch.arange(p0 + T, p0 + 2 * T, dtype=torch.int32)
+                nv[r] = hints[r]
+        return spec.decode_forward(
+            tokens=tokens,
+            start_pos=start,
+            page_table=pt,
+            kv_cache=kv,
+            enable_trace=True,
+            read_from_device=False,
+            num_valid_drafts=nv,
+            accepted_counts=acc,
+            spec_mode="argmax_ids",
+            mamba_state=blocks.state(sel, B, by_count=by_count),
+            **({} if predecessor is None else {"spec_predecessor": predecessor}),
+            **_decode_flags(),
+        )
+
+    def finish(out, cur):
+        """Read, walk and propose the verify ``out`` of blocks ``cur``: (counts, committed tokens, drafts, offered)."""
+        ids = spec.read_decode_output(out.argmax_ids)
+        committed = torch.full((B, T), -1, dtype=torch.int32)
+        cpos = torch.full((B, T), -1, dtype=torch.int32)
+        counts, commits = {}, {}
+        acc = torch.ones(B, dtype=torch.int32)
+        for r, (p0, block) in cur.items():
+            c = _walk(block[1:], ids[r].tolist())
+            counts[r], commits[r] = c, [int(t) for t in ids[r, :c]]
+            committed[r, :c] = ids[r, :c]
+            cpos[r, :c] = torch.arange(p0 + 1, p0 + 1 + c, dtype=torch.int32)
+            acc[r] = c
+        drafted = spec.propose_draft_tokens(K, committed, cpos, acc)
+        return counts, commits, drafted.draft_token_ids, drafted.num_valid
+
+    sel = {r: blocks.decode(r, cur[r][0], T) for r in rows}
+    out = submit(cur, sel, {r: 1 for r in rows})
+    record, moved = [], {}
+    for step in range(steps):
+        last = step == steps - 1
+        if chained and not last:
+            hints = {r: hint(r, cur[r][0]) for r in rows}
+            sel, by_count = {}, {}
+            for r in rows:
+                win, by_count[r] = blocks.chained(r, scheduled=cur[r][0] + T)
+                sel[r] = (win, None)
+            following = submit(cur, sel, None, predecessor=out, by_count=by_count, hints=hints)
+        counts, commits, drafts, offered = finish(out, cur)
+        record.append({r: (cur[r][0], commits[r]) for r in rows})
+        if last:
+            break
+        if not chained:
+            hints = {r: hint(r, cur[r][0]) for r in rows}
+        following_cur = {}
+        for r in rows:
+            p0, c = cur[r][0], counts[r]
+            n = min(hints[r], int(offered[r]))
+            following_cur[r] = (p0 + c, [commits[r][-1]] + drafts[r, :n].tolist())
+            if chained and (p0 + T + K) // bs != (p0 + c + K) // bs:
+                moved[c] = moved.get(c, 0) + 1
+        if not chained:
+            sel = {}
+            for r in rows:
+                blocks.commit(r, counts[r])
+                sel[r] = blocks.decode(r, following_cur[r][0], T, scheduled=cur[r][0] + T)
+            following = submit(following_cur, sel, counts)
+        out, cur = following, following_cur
+    states = {r: pair.state(pair.spec_model, [w[counts[r] - 1] for w in blocks.last[r]]) for r in rows}
+    for r in rows:
+        spec.release_request(r)
+    return record, states, moved
+
+
+@torch.no_grad()
+@pytest.mark.timeout(3600)
+@_parametrize
+def test_a_chained_run_across_block_boundaries_equals_a_drained_run(mesh_device, monkeypatch, reset_seeds, ensure_gc):
+    """K = 3, mode "align", 1024-token blocks as served, four rows whose prompts end 31 to 40 tokens before a block
+    boundary (two before 1024 tokens, two before 2048). vLLM schedules a verify over the unread one counting that one's drafts as accepted, so next
+    to a boundary the verify's window begins one column past the column of its last query token at a low count, and the
+    start block of a low count is then the block before the window or an earlier window column than count - 1. Each
+    row walks to 7 positions before its boundary with verifies of no valid drafts and then commits at most 1, 2 or 3
+    tokens there, so the chained verify after it has such a window. The chained run (every verify submitted over the
+    unread one) equals the drained run (every verify read first) on the same blocks: the committed tokens and counts
+    of every verify, and the GDN state of every row's last committed count, bit for bit. QWEN36_PAIR_LAYERS sets the
+    layer count."""
+    K, steps = 3, 60
+    n_layers = int(os.environ.get("QWEN36_PAIR_LAYERS", N_LAYERS))
+    pair = Pair(mesh_device, monkeypatch, K, "align", n_layers=n_layers, block_size=1024)
+    bs = pair.bs
+    lens = {0: bs - 40, 1: bs - 37, 2: 2 * bs - 34, 3: 2 * bs - 31}
+    target = {0: 1, 1: 2, 2: 3, 3: 1}
+    prompts = {r: p[: lens[r]].tolist() for r, p in zip(lens, _prompts(4, 2 * bs, seed=41))}
+
+    def hint(row, p0):
+        # The valid drafts of the verify after the one at p0: one position per verify from 16 positions before the
+        # next boundary, then at most target[row] tokens committed at 7 positions before it.
+        d = (p0 // bs + 1) * bs - p0
+        if 8 < d <= 16:
+            return 0
+        if d == 8:
+            return target[row] - 1
+        return K
+
+    drained, drained_states, _ = _async_run(pair, prompts, False, hint, steps)
+    chained, chained_states, moved = _async_run(pair, prompts, True, hint, steps)
+    engine = pair.spec._engine()
+    logger.info(
+        f"chained run: moved windows after predecessor counts {moved}; chained verifies built on the device "
+        f"{engine.chained_steps}, from a read predecessor {engine.materialized_steps}"
+    )
+    assert engine.chained_steps, "no chained verify ran the chain program"
+    for step, (a, b) in enumerate(zip(drained, chained)):
+        assert a == b, f"verify {step}: drained {a}, chained {b}"
+    for r in prompts:
+        for layer, devices in drained_states[r].items():
+            for d, ((rec_a, hist_a), (rec_b, hist_b)) in enumerate(zip(devices, chained_states[r][layer])):
+                assert torch.equal(rec_a, rec_b) and torch.equal(hist_a, hist_b), f"row {r} layer {layer} device {d}"
+    assert moved.get(1), f"no chained verify with a moved window after a count of 1: {moved}"

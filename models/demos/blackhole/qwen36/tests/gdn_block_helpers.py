@@ -18,6 +18,7 @@ class GroupState:
     windows: torch.Tensor
     start_blocks: torch.Tensor
     checkpoint_blocks: torch.Tensor | None = None
+    start_blocks_by_count: torch.Tensor | None = None
 
 
 @dataclass(frozen=True)

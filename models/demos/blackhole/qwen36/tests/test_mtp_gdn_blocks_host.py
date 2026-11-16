@@ -8,6 +8,8 @@
 * The rule against the plugin's block selection (tests/spec_block_helpers.py) on a ledger of what every block holds:
   over random acceptance, row moves, padding rows, block crossings (mode "align") and block reuse, every verify reads
   the state of exactly the tokens its request committed.
+* A chained verify at a block crossing under asynchronous scheduling: the ctrl start words of the device count
+  (GdnBlockState.ctrl_candidates) and the window equal those of the drained verify of the same step.
 * GdnBlockState.set_verify_blocks: one ctrl page and one index per MambaSpec group, bound per group at allocation.
 * MTPBlockEngine's bookkeeping: the drafter starts only after a prompt's last chunk, a row's first verify writes the
   drafter KV of the prompt's last position before the verify, and a row move moves no GDN state.
@@ -272,6 +274,66 @@ def test_verify_tables_refuse_other_groupings_and_short_windows(copies, expect_e
     st2, _ = _block_state()
     with expect_error(ValueError, "state blocks per row"):
         st2.set_verify_blocks(state.__class__(groups=tuple(narrow)))
+
+
+@pytest.mark.parametrize("K", [1, 3])
+def test_a_chained_verify_at_a_block_crossing_names_the_drained_verifys_blocks(copies, K):
+    """Mode "align" under asynchronous scheduling, 64-token blocks (many crossings): vLLM schedules each verify while
+    the one before it is unread and counts that one's drafts as accepted, and the window follows that count, so next to
+    a crossing it begins one column past the column of the last query token at a low count. For the count the device
+    computes, the ctrl start words that the chain program picks from GdnBlockState.ctrl_candidates equal those of the
+    drained verify of the same step, which reads the start block of that count, and both write the same window; every
+    verify reads the state its request committed. Such moved windows follow every count 1 to K."""
+    T, rows, nv = K + 1, 4, TP8.nv
+    st, _ = _block_state(T=T, bmax=rows)
+    small = PluginLayout(ATTENTION, 1, 256, TP8, True, num_blocks=NUM_BLOCKS, block_size=64)
+    chained, drained = SpecBlocks(small, K, "align"), SpecBlocks(small, K, "align")
+    ledger = Ledger(st.layout)
+    rng = random.Random(11 + K)
+    p0 = {}  # row -> column-0 position of its current verify (its request is the row)
+    for row in range(rows):
+        p0[row] = rng.randint(5, 300)
+        for blocks in (chained, drained):
+            blocks.admit(row)
+            dest, _ = blocks.prefill(row, 0, p0[row])
+        ledger.blocks[dest[0]] = (row, p0[row])
+    # The first verify after the prefills: nothing is in flight when vLLM schedules it.
+    sel = {r: chained.decode(r, p0[r], T) for r in range(rows)}
+    for r in range(rows):
+        drained.decode(r, p0[r], T)
+    g0 = chained.state(sel, rows).groups[0]
+    ctrl, idx = st.layout.verify_tables(g0.start_blocks, g0.windows, NUM_BLOCKS, rows)
+    moved = set()
+    for step in range(150):
+        read = ledger.verify(ctrl, idx, rows, T, {r: (r, p0[r], K) for r in range(rows)})
+        assert read == {r: (r, p0[r]) for r in range(rows)}, f"step {step}: {read}"
+        counts = {r: rng.randint(1, T) for r in range(rows)}
+        sel_c, by_count, sel_d = {}, {}, {}
+        for r in range(rows):
+            scheduled = p0[r] + T
+            win, by_count[r] = chained.chained(r, scheduled)
+            sel_c[r] = (win, None)
+            drained.commit(r, counts[r])
+            sel_d[r] = drained.decode(r, p0[r] + counts[r], T, scheduled=scheduled)
+            assert win == sel_d[r][0], f"step {step} row {r}: chained window {win}, drained {sel_d[r][0]}"
+            if (scheduled + K) // small.block_size != (p0[r] + counts[r] + K) // small.block_size:
+                moved.add(counts[r])
+            p0[r] += counts[r]
+        state_c = chained.state(sel_c, rows, by_count=by_count)
+        st.set_verify_blocks(state_c, stage_ctrl=False)
+        cand = st.ctrl_candidates(state_c).to(torch.int64)
+        for g, group in enumerate(drained.state(sel_d, rows).groups):
+            k = st._verify_order[1][g]
+            want, want_idx = st.layout.verify_tables(group.start_blocks, group.windows, NUM_BLOCKS, rows)
+            picked = torch.zeros_like(want)
+            for r in range(rows):
+                words = cand[(counts[r] - 1) * rows + r, 2 * nv * k : 2 * nv * (k + 1)].to(torch.int32)
+                picked[0, 1 + rows + r * nv : 1 + rows + (r + 1) * nv] = words[:nv]
+                picked[0, 1 + rows + rows * nv + r * nv : 1 + rows + rows * nv + (r + 1) * nv] = words[nv:]
+            assert torch.equal(picked, want), f"step {step} group {g}: the chained ctrl words differ from the drained"
+            if g == 0:
+                ctrl, idx = picked, want_idx
+    assert moved == set(range(1, T)), f"moved windows after counts {sorted(moved)}"
 
 
 # ----------------------------------------------------------------------------------------- MTPBlockEngine
