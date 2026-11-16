@@ -5,6 +5,7 @@
 #pragma once
 
 #include <map>
+#include <set>
 
 #include "physical_graph_lowering.hpp"
 #include "tt_metal/fabric/builder/router_wiring_rules.hpp"
@@ -13,8 +14,9 @@
 
 namespace tt::tt_fabric::graph {
 
-// Builds one chip's routers and connections from the graph. Stock discovery still supplies the
-// live eth channels; the stock router builders then emit the kernels.
+// Builds one chip's routers and connections from the graph: their eth channels, channel layouts, link
+// peers, sender flags and the chip's handshake master. Stock discovery only checks the eth channels; the
+// stock router builders then emit the kernels.
 class GraphFabricBuilder : public FabricBuilder {
 public:
     GraphFabricBuilder(
@@ -28,15 +30,17 @@ public:
 
 protected:
     std::unique_ptr<FabricRouterBuilder> make_router(const RouterLocation& location) override;
+    chan_id_t pick_master_router_chan() const override;
+    KernelCreationContext kernel_creation_context() const override;
 
 private:
     RouterVcShape shape_of(RouterIndex router) const;
-    void check_layout(RouterIndex router, const FabricRouterBuilder& built) const;
+    RouterGraphInputs inputs_of(RouterIndex router) const;
     ComputeMeshRouterBuilder& builder_of(RouterIndex router);
 
     const PhysicalGraph& graph_;
-    std::map<std::pair<RoutingDirection, uint32_t>, RouterIndex> on_chip_;  // (direction, plane) -> this chip's routers
-    std::map<RouterIndex, chan_id_t> eth_chan_;
+    std::map<chan_id_t, RouterIndex> on_chip_;  // this chip's routers by eth channel
+    std::set<ChannelIndex> fed_;                // senders another router feeds over the noc
 };
 
 }  // namespace tt::tt_fabric::graph

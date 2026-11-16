@@ -736,7 +736,8 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
     std::optional<std::array<std::size_t, builder_config::MAX_NUM_VCS>> actual_sender_channels_per_vc,
     std::optional<std::array<std::size_t, builder_config::MAX_NUM_VCS>> actual_receiver_channels_per_vc,
     std::optional<ChannelTrimmingOverrides> channel_trimming_overrides,
-    std::optional<Vc0TrimFastPathInfo> vc0_trim_fast_path_info) :
+    std::optional<Vc0TrimFastPathInfo> vc0_trim_fast_path_info,
+    const RouterGraphInputs* graph_inputs) :
     FabricDatamoverBuilderBase(my_noc_x, my_noc_y, direction),
     fabric_context_(fabric_context),
     dispatch_core_type_(dispatch_core_type),
@@ -812,7 +813,11 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
             bool services_receivers =
                 should_risc_service_receiver_channels(this->config.arch, this->config.num_riscv_cores, risc_id);
 
-            if (services_senders) {
+            if (services_senders && graph_inputs != nullptr) {
+                for (size_t i = 0; i < graph_inputs->serviced.size(); ++i) {
+                    this->is_sender_channel_serviced_[risc_id][i] = graph_inputs->serviced[i];
+                }
+            } else if (services_senders) {
                 size_t sender_offset = 0;
                 for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
                     size_t num_channels = sender_counts[vc];
@@ -850,6 +855,13 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
         sender_channel_connection_liveness_check_disable_array.begin(),
         sender_channel_connection_liveness_check_disable_array.end(),
         false);
+    if (graph_inputs != nullptr) {
+        std::copy(
+            graph_inputs->static_peer.begin(),
+            graph_inputs->static_peer.end(),
+            sender_channel_connection_liveness_check_disable_array.begin());
+        graph_peer_layout_ = graph_inputs->peer_layout;
+    }
 
     TT_FATAL(
         config.channel_allocator.get() != nullptr,
@@ -862,7 +874,9 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
         "error.");
     // Lay out this router's own sender channels; its link peer and upstream routers read the result from it.
     auto router_allocator =
-        std::make_shared<tt::tt_fabric::FabricStaticSizedChannelsAllocator>(*fabric_allocator, sender_counts);
+        graph_inputs != nullptr
+            ? std::make_shared<tt::tt_fabric::FabricStaticSizedChannelsAllocator>(*fabric_allocator, graph_inputs->layout)
+            : std::make_shared<tt::tt_fabric::FabricStaticSizedChannelsAllocator>(*fabric_allocator, sender_counts);
     this->config.allocated_l1_end_address = router_allocator->get_channel_buffers_end_address();
     this->config.channel_allocator = router_allocator;
     auto* static_allocator = router_allocator.get();
@@ -1040,11 +1054,15 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
         sender_channel_to_check);
     TT_FATAL(receiver_channel_num_buffers > 0, "Receiver channel num buffers must be greater than 0");
 
-    // The router across the link published its receivers before any kernel is emitted (FabricBuilderContext).
-    const auto [link_peer_node, link_peer_chan] =
-        control_plane.get_connected_mesh_chip_chan_ids(this->local_fabric_node_id, this->my_eth_channel);
-    const RouterChannelLayout& peer_layout =
-        fabric_context.get_builder_context().get_router_channel_layout(link_peer_node, link_peer_chan);
+    // The router across the link: the graph's, or the one published before any kernel is emitted
+    // (FabricBuilderContext).
+    const RouterChannelLayout* link_peer_layout = graph_peer_layout_ ? &*graph_peer_layout_ : nullptr;
+    if (link_peer_layout == nullptr) {
+        const auto [link_peer_node, link_peer_chan] =
+            control_plane.get_connected_mesh_chip_chan_ids(this->local_fabric_node_id, this->my_eth_channel);
+        link_peer_layout = &fabric_context.get_builder_context().get_router_channel_layout(link_peer_node, link_peer_chan);
+    }
+    const RouterChannelLayout& peer_layout = *link_peer_layout;
 
     constexpr bool enable_risc_cpu_data_cache = false;
 
@@ -1773,7 +1791,8 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
     std::optional<std::array<std::size_t, builder_config::MAX_NUM_VCS>> actual_sender_channels_per_vc,
     std::optional<std::array<std::size_t, builder_config::MAX_NUM_VCS>> actual_receiver_channels_per_vc,
     std::optional<ChannelTrimmingOverrides> channel_trimming_overrides,
-    std::optional<Vc0TrimFastPathInfo> vc0_trim_fast_path_info) {
+    std::optional<Vc0TrimFastPathInfo> vc0_trim_fast_path_info,
+    const RouterGraphInputs* graph_inputs) {
     std::array<size_t, builder_config::num_max_sender_channels> sender_channels_buffer_index_semaphore_id{};
     std::array<size_t, builder_config::num_max_sender_channels> sender_channels_flow_control_semaphore_id{};
     std::array<size_t, builder_config::num_max_sender_channels> sender_channels_connection_semaphore_id{};
@@ -1867,7 +1886,8 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
         actual_sender_channels_per_vc,
         actual_receiver_channels_per_vc,
         channel_trimming_overrides,
-        vc0_trim_fast_path_info);
+        vc0_trim_fast_path_info,
+        graph_inputs);
 }
 
 SenderWorkerAdapterSpec FabricEriscDatamoverBuilder::build_connection_to_fabric_channel(

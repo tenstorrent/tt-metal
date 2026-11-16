@@ -55,6 +55,10 @@ public:
         const FabricStaticSizedChannelsAllocator& reference,
         const std::array<size_t, builder_config::MAX_NUM_VCS>& num_sender_channels_per_vc);
 
+    // The reference's channels at the addresses `layout` gives them (a fabric graph's placement).
+    FabricStaticSizedChannelsAllocator(
+        const FabricStaticSizedChannelsAllocator& reference, const RouterChannelLayout& layout);
+
     RouterChannelLayout get_layout() const;
 
     void emit_ct_args(std::vector<uint32_t>& ct_args) const override;

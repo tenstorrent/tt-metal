@@ -244,6 +244,54 @@ FabricStaticSizedChannelsAllocator::FabricStaticSizedChannelsAllocator(
     assign_base_addresses();
 }
 
+namespace {
+
+std::array<size_t, builder_config::MAX_NUM_VCS> sender_counts_of(const RouterChannelLayout& layout) {
+    std::array<size_t, builder_config::MAX_NUM_VCS> counts{};
+    for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
+        counts[vc] = layout.senders[vc].size();
+    }
+    return counts;
+}
+
+}  // namespace
+
+FabricStaticSizedChannelsAllocator::FabricStaticSizedChannelsAllocator(
+    const FabricStaticSizedChannelsAllocator& reference, const RouterChannelLayout& layout) :
+    FabricStaticSizedChannelsAllocator(reference, sender_counts_of(layout)) {
+    size_t end = buffer_region_start;
+    const auto place = [&](const RouterChannelLayout::Channel& channel, size_t& base, size_t& num_buffers, size_t& size) {
+        base = channel.base_address;
+        num_buffers = channel.num_slots;
+        size = channel.num_slots * channel_buffer_size_bytes;
+        end = std::max(end, base + size);
+    };
+    for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
+        TT_FATAL(
+            layout.receivers[vc].size() == num_used_receiver_channels_per_vc[vc],
+            "Layout has {} VC{} receivers, the fabric {}",
+            layout.receivers[vc].size(),
+            vc,
+            num_used_receiver_channels_per_vc[vc]);
+        for (size_t i = 0; i < layout.senders[vc].size(); ++i) {
+            place(
+                layout.senders[vc][i],
+                sender_channels_base_address[vc][i],
+                sender_channels_num_buffers[vc][i],
+                sender_channels_size_bytes[vc][i]);
+        }
+        for (size_t i = 0; i < layout.receivers[vc].size(); ++i) {
+            place(
+                layout.receivers[vc][i],
+                receiver_channels_base_address[vc][i],
+                receiver_channels_num_buffers[vc][i],
+                receiver_channels_size_bytes[vc][i]);
+        }
+    }
+    TT_FATAL(end <= max_l1_loading_size, "Layout spills past the end of usable L1 ({:#x} > {:#x})", end, max_l1_loading_size);
+    channel_buffers_end_address = end;
+}
+
 RouterChannelLayout FabricStaticSizedChannelsAllocator::get_layout() const {
     RouterChannelLayout layout;
     for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {

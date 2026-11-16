@@ -23,9 +23,13 @@ GraphFabricBuilder::GraphFabricBuilder(
     const PhysicalGraph& graph) :
     FabricBuilder(device, program, fabric_context, dispatch_core_type), graph_(graph) {
     for (RouterIndex r = 0; r < graph_.logical.routers.size(); ++r) {
-        const auto& port = graph_.logical.routers[r].port;
-        if (port.node == local_node_) {
-            on_chip_.emplace(std::pair{*port.direction, port.plane}, r);
+        if (graph_.logical.routers[r].port.node == local_node_) {
+            on_chip_.emplace(graph_.eth_chans[r], r);
+        }
+    }
+    for (const auto& e : graph_.logical.edges) {
+        if (e.transport == Transport::Noc) {
+            fed_.insert(e.to);
         }
     }
 }
@@ -45,50 +49,68 @@ RouterVcShape GraphFabricBuilder::shape_of(RouterIndex router) const {
     return shape;
 }
 
-// the built router must have its channels where the graph put them
-void GraphFabricBuilder::check_layout(RouterIndex router, const FabricRouterBuilder& built) const {
-    const auto layout = built.get_channel_layout();
-    TT_FATAL(layout.has_value(), "fabric graph: router {} has no channel layout", graph_.logical.routers[router].id);
-    for (ChannelIndex c : graph_.logical.routers[router].channels) {
-        const auto& ch = graph_.logical.channels[c];
-        const auto& want = graph_.addresses[c];
-        const auto& have = ch.kind == ChannelKind::Sender ? layout->senders[ch.vc] : layout->receivers[ch.vc];
-        const uint32_t i = ch.kind == ChannelKind::Sender ? graph_.index_in_vc[c] : 0;
-        TT_FATAL(
-            i < have.size() && have[i].base_address == want.base && have[i].num_slots == want.slots,
-            "fabric graph: {} vc{} {} is at {:#x} x{} in the graph but not in the built router",
-            graph_.logical.routers[router].id,
-            ch.vc,
-            channel_name(ch),
-            want.base,
-            want.slots);
+// layouts and per-slot sender flags, legacy slots included
+RouterGraphInputs GraphFabricBuilder::inputs_of(RouterIndex router) const {
+    const auto& g = graph_.logical;
+    const auto& counts = graph_.sender_counts[router];
+    std::vector<uint32_t> base(counts.size(), 0);
+    for (size_t vc = 1; vc < counts.size(); ++vc) {
+        base[vc] = base[vc - 1] + counts[vc - 1];
     }
+    const size_t num_senders = base.back() + counts.back();
+    RouterGraphInputs in{
+        .layout = graph_.layouts[router],
+        .injection = std::vector<bool>(num_senders, false),
+        .serviced = std::vector<bool>(num_senders, false),
+        .static_peer = std::vector<bool>(num_senders, false)};
+    if (const auto peer = g.routers[router].peer) {
+        in.peer_layout = graph_.layouts[*peer];
+    }
+    for (ChannelIndex c : g.channels_of(router, ChannelKind::Sender)) {
+        const uint32_t i = base[g.channels[c].vc] + graph_.index_in_vc[c];
+        in.injection[i] = graph_.enters_ring[c];
+        in.serviced[i] = true;
+        in.static_peer[i] = fed_.contains(c);
+    }
+    for (const auto& slot : graph_.legacy_slots) {
+        if (slot.router == router) {
+            const uint32_t i = base[slot.vc] + slot.index;
+            in.injection[i] = slot.enters_ring;
+            in.serviced[i] = true;
+        }
+    }
+    return in;
 }
 
 ComputeMeshRouterBuilder& GraphFabricBuilder::builder_of(RouterIndex router) {
-    return static_cast<ComputeMeshRouterBuilder&>(*routers_.at(eth_chan_.at(router)));
+    return static_cast<ComputeMeshRouterBuilder&>(*routers_.at(graph_.eth_chans[router]));
 }
 
-// the graph router on this live eth channel, with the graph's shape
+// the graph router bound to this eth channel; discovery must agree with the graph
 std::unique_ptr<FabricRouterBuilder> GraphFabricBuilder::make_router(const RouterLocation& location) {
-    const auto& chans = channels_by_direction_.at(location.direction);
-    const auto plane = static_cast<uint32_t>(std::ranges::find(chans, location.eth_chan) - chans.begin());
-    const auto it = on_chip_.find({location.direction, plane});
+    const auto it = on_chip_.find(location.eth_chan);
     TT_FATAL(
         it != on_chip_.end(),
-        "fabric graph: chip {} has a live eth channel facing {} plane {} but no graph router",
+        "fabric graph: chip {} has a live eth channel {} facing {} but no graph router on it",
         local_node_,
-        enchantum::to_string(location.direction),
-        plane);
+        location.eth_chan,
+        enchantum::to_string(location.direction));
     const RouterIndex r = it->second;
     const auto& router = graph_.logical.routers[r];
+    TT_FATAL(
+        *router.port.direction == location.direction,
+        "fabric graph: router {} is on eth channel {}, which discovery has facing {}",
+        router.id,
+        location.eth_chan,
+        enchantum::to_string(location.direction));
+    TT_FATAL(router.peer.has_value(), "fabric graph: router {} has no link peer", router.id);
     TT_FATAL(
         router.port.peer == location.remote_node,
         "fabric graph: router {} links to {}, but the live link goes to {}",
         router.id,
         router.port.peer,
         location.remote_node);
-    auto built = ComputeMeshRouterBuilder::build(
+    return ComputeMeshRouterBuilder::build(
         fabric_context_,
         dispatch_core_type_,
         device_,
@@ -97,20 +119,37 @@ std::unique_ptr<FabricRouterBuilder> GraphFabricBuilder::make_router(const Route
         location,
         chip_facts_,
         nullptr,
-        RouterArchetype{.shape = shape_of(r), .turns = {}});
-    check_layout(r, *built);
-    eth_chan_[r] = location.eth_chan;
-    return built;
+        RouterArchetype{.shape = shape_of(r), .turns = {}},
+        inputs_of(r));
+}
+
+chan_id_t GraphFabricBuilder::pick_master_router_chan() const {
+    const chan_id_t chan = graph_.eth_chans[graph_.handshake_masters.at(local_node_)];
+    TT_FATAL(routers_.contains(chan), "fabric graph: chip {} handshake master {} was not built", local_node_, chan);
+    return chan;
+}
+
+KernelCreationContext GraphFabricBuilder::kernel_creation_context() const {
+    uint32_t mask = 0;
+    for (const auto& [chan, r] : on_chip_) {
+        mask |= 1u << chan;
+    }
+    return KernelCreationContext{
+        .is_2D_routing = fabric_context_.is_2D_routing_enabled(),
+        .master_router_chan = graph_.eth_chans[graph_.handshake_masters.at(local_node_)],
+        .num_local_fabric_routers = on_chip_.size(),
+        .router_channels_mask = mask,
+    };
 }
 
 // one connection per graph noc edge, into the slot the graph gave it; then the graph's link pairings
 void GraphFabricBuilder::connect_routers() {
     TT_FATAL(
-        eth_chan_.size() == on_chip_.size(),
+        routers_.size() == on_chip_.size(),
         "fabric graph: chip {} has {} graph routers but {} live eth channels",
         local_node_,
         on_chip_.size(),
-        eth_chan_.size());
+        routers_.size());
     const auto& g = graph_.logical;
     for (const auto& e : g.edges) {
         const RouterIndex up = g.channels[e.from].router;

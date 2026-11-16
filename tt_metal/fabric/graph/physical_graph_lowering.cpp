@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <map>
+#include <unordered_map>
 #include <utility>
 
 #include <tt_stl/assert.hpp>
@@ -22,7 +23,16 @@ PhysicalGraph lower_to_physical(ChannelGraph graph, const ChannelAllocator& allo
     for (RouterIndex r = 0; r < g.routers.size(); ++r) {
         std::array<size_t, builder_config::MAX_NUM_VCS> counts{};
         std::copy(pg.sender_counts[r].begin(), pg.sender_counts[r].end(), counts.begin());
-        const RouterChannelLayout layout = allocate(counts);
+        const RouterChannelLayout& layout = pg.layouts.emplace_back(allocate(counts));
+        for (uint32_t vc = 0; vc < pg.sender_counts[r].size(); ++vc) {
+            TT_FATAL(
+                layout.senders[vc].size() == pg.sender_counts[r][vc],
+                "fabric graph: the allocator gave {} {} vc{} senders, not {}",
+                g.routers[r].id,
+                layout.senders[vc].size(),
+                vc,
+                pg.sender_counts[r][vc]);
+        }
         for (ChannelIndex c : g.routers[r].channels) {
             const auto& ch = g.channels[c];
             const bool sender = ch.kind == ChannelKind::Sender;
@@ -38,6 +48,50 @@ PhysicalGraph lower_to_physical(ChannelGraph graph, const ChannelAllocator& allo
         }
     }
     return pg;
+}
+
+std::vector<chan_id_t> bind_eth_channels(const LogicalGraph& g, const LiveEthChannels& live) {
+    std::vector<chan_id_t> chans;
+    for (const auto& r : g.routers) {
+        const auto planes = live(r.port.node, *r.port.direction);
+        TT_FATAL(
+            r.port.plane < planes.size(),
+            "fabric graph: router {} has no live eth channel ({} live that way)",
+            r.id,
+            planes.size());
+        chans.push_back(planes[r.port.plane]);
+    }
+    return chans;
+}
+
+std::map<FabricNodeId, RouterIndex> legacy_handshake_masters(
+    const LogicalGraph& g, const std::vector<chan_id_t>& eth_chans) {
+    // FabricBuilder::discover_channels, then create_routers: directions in FabricContext::routing_directions
+    // order into one hash map, then each direction's channels by plane into another; the master is its first.
+    std::map<FabricNodeId, std::map<RoutingDirection, std::vector<RouterIndex>>> chips;
+    for (RouterIndex r = 0; r < g.routers.size(); ++r) {
+        const auto& p = g.routers[r].port;
+        auto& planes = chips[p.node][*p.direction];
+        planes.resize(std::max<size_t>(planes.size(), p.plane + 1));
+        planes[p.plane] = r;
+    }
+    std::map<FabricNodeId, RouterIndex> masters;
+    for (const auto& [node, dirs] : chips) {
+        std::unordered_map<RoutingDirection, std::vector<RouterIndex>> by_direction;
+        for (const auto d : {RoutingDirection::N, RoutingDirection::S, RoutingDirection::E, RoutingDirection::W, RoutingDirection::Z}) {
+            if (dirs.contains(d)) {
+                by_direction[d] = dirs.at(d);
+            }
+        }
+        std::unordered_map<chan_id_t, RouterIndex> routers;
+        for (const auto& [d, planes] : by_direction) {
+            for (RouterIndex r : planes) {
+                routers.insert({eth_chans.at(r), r});
+            }
+        }
+        masters[node] = routers.begin()->second;
+    }
+    return masters;
 }
 
 std::vector<LinkPairing> legacy_link_pairings(
