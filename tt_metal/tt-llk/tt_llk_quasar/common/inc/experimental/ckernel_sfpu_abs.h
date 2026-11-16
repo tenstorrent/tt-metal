@@ -40,3 +40,4 @@ inline void _calculate_abs_()
 
 } // namespace sfpu
 } // namespace ckernel
+// P15 test K8
