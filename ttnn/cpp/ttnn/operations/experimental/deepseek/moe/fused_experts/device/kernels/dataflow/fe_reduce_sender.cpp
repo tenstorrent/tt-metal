@@ -41,7 +41,8 @@
 //   sem_ar_ready   3: sem_go   4: cb_scratch (the staging, at the scratch address)   5: num_requesters   6: max_payload
 //   (fabric packet bytes)   7: num_slots (chips, the slots of a partials buffer)   8: cand_slot_bytes   9: sem_router
 //   (on the route merge) 10: sub_parts (the requester's sum cores per link: this link's part of a row splits evenly
-//   over them)
+//   over them)   11: rows (the op's block rows: a one-row request's partial is row 0 of each sub-part's (rows x 32)
+//   tiles, compacted in place and sent as a one-row slot, its flag where a block's goes; see persistent.h kFeHdrRows)
 //
 // Runtime args: num_cores (this link's output cores), the source ring's address, then per requester: the
 // connection its sends leave by, its partials buffer address, this link's sub_parts sum cores' NoC xs, then ys,
@@ -63,6 +64,10 @@ constexpr uint32_t cand_slot_bytes = get_compile_time_arg_val(8);
 constexpr uint32_t sem_router_id = get_compile_time_arg_val(9);
 constexpr uint32_t sub_parts = get_compile_time_arg_val(10);
 constexpr uint32_t sub_bytes = part_bytes / sub_parts;
+constexpr uint32_t block_rows = get_compile_time_arg_val(11);
+// A one-row request's sub-part: row 0 of each 32-column tile's two faces, 32 B each, every 32 * block_rows B.
+constexpr uint32_t row_chunk_bytes = 32;
+constexpr uint32_t one_row_sub_bytes = sub_bytes / block_rows;
 constexpr uint32_t kMaxExchangeRoutes = 4;
 // The partials' header ring: with the exchange's kMaxExchangeRoutes, within a RISC's 12 pool headers.
 constexpr uint32_t kSendHeaders = 6;
@@ -233,10 +238,28 @@ void kernel_main() {
         }
         DeviceZoneScopedN("FE_RED_SEND");
         invalidate_l1_cache();
-        const uint32_t k = source[iter % kFeSourceRing];
+        const uint32_t entry = source[iter % kFeSourceRing];
+        const uint32_t k = entry & 0xFFu;
+        const bool one_row = block_rows > 1u && (entry >> 8) == 1u;
         const uint32_t src = staging_addr + (iter & 1u) * part_bytes;
-        // Every sum core of the requester holds its own columns' slots, at the same address.
-        const uint32_t slot = partials_addr[k] + my_chip * sub_bytes;
+        // A one-row request: each sub-part's row 0, compacted to the front of the sub-part (in place, front to back:
+        // chunk c moves from c * block_rows to c, never past one not yet moved).
+        if (one_row) {
+            DeviceZoneScopedN("FE_RED_COMPACT");
+            invalidate_l1_cache();
+            for (uint32_t p = 0; p < sub_parts; ++p) {
+                auto* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src + p * sub_bytes);
+                for (uint32_t c = 1; c < one_row_sub_bytes / row_chunk_bytes; ++c) {
+                    for (uint32_t w = 0; w < row_chunk_bytes / 4u; ++w) {
+                        words[c * (row_chunk_bytes / 4u) + w] = words[c * block_rows * (row_chunk_bytes / 4u) + w];
+                    }
+                }
+            }
+        }
+        const uint32_t send_bytes = one_row ? one_row_sub_bytes : sub_bytes;
+        // Every sum core of the requester holds its own columns' slots, at the same address; the flags follow a
+        // block's slots whatever the request's rows.
+        const uint32_t slot = partials_addr[k] + my_chip * send_bytes;
         const uint32_t flag = partials_addr[k] + num_slots * sub_bytes + my_chip * 4u;
         auto* sender = &fabric_connection.get(connection[k]).sender;
         size_t idx = route_args[k];
@@ -245,7 +268,7 @@ void kernel_main() {
             const D2DRoute route = read_d2d_route(idx);
             for (uint32_t p = 0; p < sub_parts; ++p) {
                 d2d_send_flagged<max_payload>(
-                    sender, send_headers, route, src + p * sub_bytes, sub_bytes, sum_x[k][p], sum_y[k][p], slot, flag);
+                    sender, send_headers, route, src + p * sub_bytes, send_bytes, sum_x[k][p], sum_y[k][p], slot, flag);
             }
         }
         // The staging half is refilled two iterations on, so every packet has to have left it.

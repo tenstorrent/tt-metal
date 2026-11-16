@@ -24,9 +24,15 @@
 // bytes_sent by its own bytes; the main core bumps it by the rest of what the socket push added. The page counts
 // at the receivers only once both halves have landed.
 //
+// A one-row request to an op built for blocks of block_rows rows (the socket's page a block's): its row goes into
+// row 0 of the block's (rows x 32) tiles -- each 32 B face row of the input every 32 * block_rows B of the page,
+// read straight from DRAM -- with kFeHdrRows (header word 9) set to 1; the page's other rows are never used. The main
+// core sends the whole page (no partner).
+//
 // Compile-time args:
-//   0: request socket config address   1: row_bytes   2: max_payload (fabric packet bytes)   3: cb_page
-//   4+: TensorAccessorArgs(input)
+//   0: request socket config address   1: row_bytes (the input's)   2: max_payload (fabric packet bytes)   3: cb_page
+//   4: page_row_bytes (the socket page's row: row_bytes, or a block's)   5: block_rows (page_row_bytes / row_bytes)
+//   6+: TensorAccessorArgs(input)
 //
 // Runtime args:
 //   0: layer   1: input address   2: send_start (0 on the main core)   3: send_bytes   4: the partner's NoC x
@@ -40,9 +46,14 @@ void kernel_main() {
     constexpr uint32_t row_bytes = get_compile_time_arg_val(1);
     constexpr uint32_t max_payload = get_compile_time_arg_val(2);
     constexpr uint32_t cb_page = get_compile_time_arg_val(3);
-    constexpr auto input_args = TensorAccessorArgs<4>();
+    constexpr uint32_t page_row_bytes = get_compile_time_arg_val(4);
+    constexpr uint32_t block_rows = get_compile_time_arg_val(5);
+    constexpr auto input_args = TensorAccessorArgs<6>();
     constexpr uint32_t kHdrBytes = 64;
-    constexpr uint32_t page_bytes = kHdrBytes + row_bytes;
+    constexpr uint32_t page_bytes = kHdrBytes + page_row_bytes;
+    // persistent.h kFeHdrRows.
+    constexpr uint32_t kHdrRowsWord = 9;
+    constexpr uint32_t kFaceRowBytes = 32;
     constexpr uint32_t kMaxRoutes = 16;
     constexpr uint32_t kSendHeaders = 8;  // of the RISC's 12 in the pool
 
@@ -101,7 +112,16 @@ void kernel_main() {
         header[w] = 0;
     }
     header[0] = layer;
-    noc_async_read(input.get_noc_addr(0), page_l1 + kHdrBytes, send_bytes - kHdrBytes);
+    if constexpr (block_rows > 1u) {
+        header[kHdrRowsWord] = 1u;
+        const uint64_t src = input.get_noc_addr(0);
+        for (uint32_t c = 0; c < row_bytes / kFaceRowBytes; ++c) {
+            noc_async_read(
+                src + c * kFaceRowBytes, page_l1 + kHdrBytes + c * block_rows * kFaceRowBytes, kFaceRowBytes);
+        }
+    } else {
+        noc_async_read(input.get_noc_addr(0), page_l1 + kHdrBytes, send_bytes - kHdrBytes);
+    }
     noc_async_read_barrier();
 
     SocketSenderInterface request = create_sender_socket_interface(request_config_addr);

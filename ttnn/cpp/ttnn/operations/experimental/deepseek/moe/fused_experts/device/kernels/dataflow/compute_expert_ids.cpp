@@ -512,11 +512,15 @@ void kernel_main() {
                     invalidate_l1_cache();
                     const uint32_t layer_k = hdr(kFeHdrTopK);
                     const uint32_t row_k = layer_k != 0u && layer_k < top_k ? layer_k : top_k;
+                    // A request of fewer rows than the block (persistent.h kFeHdrRows): the other rows hold no token,
+                    // so their selections are dropped too -- the union is the request's rows' alone.
+                    const uint32_t request_rows = hdr(kFeHdrRows);
+                    const uint32_t live_rows = request_rows != 0u && request_rows < batch ? request_rows : batch;
                     for (uint32_t b = 0; b < batch; ++b) {
                         for (uint32_t j = 0; j < top_k; ++j) {
                             const uint16_t e = static_cast<uint16_t>(run_id[b * top_k + j]);
                             router_score_bits[b * top_k + j] = run_score[b * top_k + j];
-                            if (j < row_k) {
+                            if (j < row_k && b < live_rows) {
                                 sel_ids[b * top_k + j] = e;
                                 bitmap[e >> 5] |= 1u << (e & 31u);
                             } else {

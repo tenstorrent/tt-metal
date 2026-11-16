@@ -2493,7 +2493,14 @@ ProgramDescriptor build_program_descriptor(
                 router_cand_slot_bytes,
                 sem_router_id,
                 params.sub_parts,
+                // The block rows: a one-row request's partial is row 0 of them (see persistent.h kFeHdrRows).
+                batch,
             };
+            TT_FATAL(
+                batch == 1u || (part_bytes / params.sub_parts) % (32u * batch) == 0u,
+                "fused_experts: a sum core's part of a {}-row block ({} B) is not whole (rows x 32) tile faces",
+                batch,
+                part_bytes / params.sub_parts);
         } else {
             ar_sender.kernel_source = std::string(kKernelDir) + "/dataflow/ar_sender.cpp";
             ar_sender.compile_time_args = {
