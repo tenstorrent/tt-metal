@@ -411,11 +411,27 @@ struct llk_pack_lofi_api
     static constexpr bool value = false;
 };
 
+// Specialized from the kernel's DEST mode and CB formats (llk_pack_common_api.h): fp32 DEST, in0 at 32 bit and an in1 that is not.
+template <int api>
+struct llk_pack_in0_only32
+{
+    static constexpr bool value = false;
+};
+
 // Only a kernel with a matmul API reaches the matmul contexts; dep, a template parameter of the caller, delays the lookup.
 template <std::uint32_t dep>
 constexpr bool llk_pack_matmul_kernel()
 {
     return llk_pack_matmul_api<dep * 0 + 1>::value || llk_pack_matmul_api<dep * 0 + 2>::value || llk_pack_matmul_api<dep * 0 + 3>::value;
+}
+
+// A LoFi fp32 DEST matmul whose in0 alone is 32 bit binds on its pack (a 32-bit output at the 32-bit rate, mm_r3_1), and
+// unpacker A, which an early release costs L1 grants, reads a 16-bit in1.
+template <std::uint32_t dep>
+constexpr bool llk_pack_matmul_pack_bound()
+{
+    return llk_pack_lofi_api<dep * 0 + 1>::value && llk_pack_in0_only32<dep * 0 + 1>::value && llk_pack_matmul_kernel<dep>() &&
+           !llk_pack_norm_api<dep * 0 + 1>::value;
 }
 
 // A matmul kernel other than a norm one, whose unpackers bound it: at half sync with fp32 DEST or at LoFi an earlier pack start

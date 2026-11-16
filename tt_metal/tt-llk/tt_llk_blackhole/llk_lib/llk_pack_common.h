@@ -99,9 +99,11 @@ inline void _llk_pack_dest_section_done_()
     constexpr bool by_branch   = (words & 2) != 0;
     // The packer takes the DEST offset when it accepts a PACR, so the next half's offset goes ahead of the drain wait, except with
     // fp32 DEST and an unpack to DEST, or an unpack-bound matmul (llk_pack_late_start), where the earlier pack start contends
-    // with the unpackers for L1.
-    constexpr bool offset_first = Dst == DstSync::SyncHalf && !(is_fp32_dest_acc_en && pack_reconfig_u2d<Dst>) && !pack_size_mode<Dst> &&
-                                  !ckernel::packer::llk_pack_late_start<static_cast<std::uint32_t>(Dst)>(is_fp32_dest_acc_en);
+    // with the unpackers for L1; a pack-bound matmul takes it there too.
+    constexpr bool pack_bound   = ckernel::packer::llk_pack_matmul_pack_bound<static_cast<std::uint32_t>(Dst)>();
+    constexpr bool offset_first = Dst == DstSync::SyncHalf && !pack_size_mode<Dst> &&
+                                  (pack_bound || !((is_fp32_dest_acc_en && pack_reconfig_u2d<Dst>) ||
+                                                   ckernel::packer::llk_pack_late_start<static_cast<std::uint32_t>(Dst)>(is_fp32_dest_acc_en)));
     if constexpr (Dst == DstSync::SyncHalf && by_branch)
     {
         if (dest_offset_id == 0)

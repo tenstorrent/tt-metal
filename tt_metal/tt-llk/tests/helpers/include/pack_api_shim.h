@@ -146,6 +146,14 @@ struct llk_pack_lofi_api<1>
 {
     static constexpr bool value = MATH_FIDELITY == MathFidelity::LoFi;
 };
+
+// in0 is unpacker B, in1 unpacker A (production's CB 0 and CB 1)
+template <>
+struct llk_pack_in0_only32<1>
+{
+    static constexpr bool value =
+        is_fp32_dest_acc_en && llk_pack_out32(static_cast<unsigned char>(UNPACK_B_IN)) && !llk_pack_out32(static_cast<unsigned char>(UNPACK_A_IN));
+};
 } // namespace ckernel::packer
 #endif
 #if PACK_API_SHIM_PR && defined(PACK_API_SHIM_SFPU)
