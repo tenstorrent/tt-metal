@@ -49,7 +49,9 @@ def _runs_fused(call):
         call()
     finally:
         graph = ttnn.graph.end_graph_capture()
-    return "UnaryBackwardDeviceOperation" in ttnn.graph.extract_calltrace(graph)
+    return "UnaryBackwardOpType::EXPM1_BW" in " ".join(
+        str(argument) for node in graph for argument in node.get("arguments", [])
+    )
 
 
 @IN_PROFILER

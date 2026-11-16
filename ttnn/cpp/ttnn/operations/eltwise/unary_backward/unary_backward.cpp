@@ -397,7 +397,7 @@ std::vector<std::optional<Tensor>> exp_bw(
     // other call keeps the composite below.
     if (generated_bf16_kernel_applies(grad, input, output_mem_config, input_grad)) {
         return {ttnn::operations::unary_backward::launch_unary_backward(
-            ttnn::operations::unary_backward::UnaryBackwardOpType::EXP_BW,
+            ttnn::operations::unary_backward::UnaryBackwardOpType::EXPM1_BW,
             grad,
             input,
             input.dtype(),
@@ -741,7 +741,7 @@ std::vector<Tensor> hardsigmoid_bw(
             std::nullopt,
             output_mem_config),
         0.f,
-        ttnn::multiply(grad, 1.0f / 6.0f),
+        ttnn::multiply(grad, 1.0f / 6.0f, std::nullopt, output_mem_config),
         output_mem_config);
     grad_tensor.emplace_back(grad_a);
     return grad_tensor;

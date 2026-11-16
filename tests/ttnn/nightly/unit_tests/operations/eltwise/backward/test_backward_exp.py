@@ -110,7 +110,8 @@ def _exp_bw_torch_reference(grad, x, flush):
 
 
 def _exp_bw_reference(grad, x, flush):
-    """Torch, except on the declared lanes."""
+    """Torch, except: 0 where f'(x) alone is subnormal; grad times a signed infinity where f'(x) alone overflows
+    FP32, for a nonzero grad."""
     result = _exp_bw_torch_reference(grad, x, flush)
     unit = _exp_bw_torch_reference(torch.ones_like(grad), x, flush)
     g = _exp_bw_flush(grad.to(torch.float64)) if flush else grad.to(torch.float64)
@@ -239,8 +240,11 @@ def _exp_bw_device_operations(call):
         result = call()
     except RuntimeError as raised:
         error = raised
-    trace = ttnn.graph.extract_calltrace(ttnn.graph.end_graph_capture())
-    return result, error, trace
+    graph = ttnn.graph.end_graph_capture()
+    trace = ttnn.graph.extract_calltrace(graph)
+    # The device operation's arguments name the op type it runs.
+    launched = " ".join(str(argument) for node in graph for argument in node.get("arguments", []))
+    return result, error, trace, launched
 
 
 def _exp_bw_placements(shape):
@@ -342,9 +346,9 @@ def test_exp_bw_runs_the_fused_program_only_where_it_applies(call, device):
     outputs = {} if tt_input_grad is None else {"input_grad": tt_input_grad}
     memory = {} if output_memory is None else {"memory_config": output_memory}
 
-    result, error, trace = _exp_bw_device_operations(lambda: ttnn.exp_bw(tt_g, tt_x, **memory, **outputs)[0])
+    result, error, trace, launched = _exp_bw_device_operations(lambda: ttnn.exp_bw(tt_g, tt_x, **memory, **outputs)[0])
 
-    assert ("UnaryBackwardDeviceOperation" in trace) == (call in EXP_BW_FUSED_CALLS), trace
+    assert ("UnaryBackwardOpType::EXPM1_BW" in launched) == (call in EXP_BW_FUSED_CALLS), trace
     if call not in EXP_BW_FUSED_CALLS and (tt_input_grad is None or error is not None):
         # The composite's refusal of a call (some refuse row-major operands) is its tests' to judge; a result it
         # returns is held to torch as the fused program's is.
