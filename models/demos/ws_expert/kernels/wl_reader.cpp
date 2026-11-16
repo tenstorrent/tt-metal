@@ -49,14 +49,20 @@ constexpr uint32_t SEM_HARR = 1, SEM_SCR2 = 3, SEM_SCRH = 5;
 constexpr uint32_t K = WL_K;  // weight slots a core
 static_assert(K >= 1 && K <= 4);  // (2-bit slot fields in the tables)
 
-// A group multicast and its flag through the same command buffer: the payload linked (its path kept for the flag),
-// the flag as an unlinked 4-byte multicast write that closes the path, not noc_semaphore_set_multicast. On this
-// architecture the write and write-register command buffers are not sent in issue order, so a flag from the other
-// buffer can overtake its payload and leave the linked payload as the source's last multicast, its path reserved (a
-// group's other multicast senders then cannot get theirs out). From one buffer the flag always follows its payload.
+// A group multicast and its flag through the same command buffer, the flag as a 4-byte multicast write (not
+// noc_semaphore_set_multicast): on this architecture the write and write-register command buffers are not sent in
+// issue order, so a flag from the other buffer could overtake its payload; from one buffer, on one NoC and virtual
+// channel, the flag lands after its payload. The payload is unlinked: a linked multicast keeps its path reserved
+// until the source's next write, and several sources multicast into a group's rectangle on each NoC
+// (WL_MCAST_LINKED links it, the flag then closing the path). Callers flush after each pair, so a core has at most
+// one multicast in its NoC's queue.
 FORCE_INLINE void mcast_with_flag(
     uint32_t src, uint64_t dst, uint32_t bytes, uint32_t n, uint32_t flag_src, uint64_t flag_dst) {
+#ifdef WL_MCAST_LINKED
     noc_async_write_multicast_loopback_src(src, dst, bytes, n, true);
+#else
+    noc_async_write_multicast_loopback_src(src, dst, bytes, n, false);
+#endif
     noc_async_write_multicast_loopback_src(flag_src, flag_dst, 4, n, false);
 }
 

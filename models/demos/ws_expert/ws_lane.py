@@ -51,6 +51,7 @@ class LCfg:
     keep: int = 1  # schedule: slots an owner leaves free when it injects
     out_all: bool = False  # every expert's down rows to DRAM (WL_OUT_ALL), not only each group's last
     wpoll: int = 2  # the reader serves its weight queues every wpoll turns of its loop (WL_WPOLL)
+    mcast_linked: bool = False  # group multicast payloads linked to their flags (WL_MCAST_LINKED)
 
 
 def lane_cores(g):
@@ -243,6 +244,7 @@ def build_lane(mesh, cfg: GCfg, lc: LCfg, x_t, idx_t, counts_t, ws_t, out_t, tab
     ]
     ydefs = [("WG_XORDER", str(cfg.xorder)), ("WG_Y_NCRISC", "1"), ("WL_K", str(K))]
     ydefs += [("WL_OUT_ALL", "1")] if lc.out_all else []
+    ydefs += [("WL_MCAST_LINKED", "1")] if lc.mcast_linked else []
     XST = -(-cfg.LOOK // GC) + 4
     mpd = ttnn.MeshProgramDescriptor()
     for r in range(R):

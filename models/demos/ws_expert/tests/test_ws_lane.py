@@ -353,7 +353,7 @@ def lcfg_from_env(**kw):
     """LCfg with overrides from WS_LANE (e.g. "nbuf=3;D=4;out_all=1;slots=d0,d1,d0d1,any")."""
     for item in filter(None, os.environ.get("WS_LANE", "").split(";")):
         k, v = item.split("=")
-        kw[k] = bool(int(v)) if k == "out_all" else (v if k == "slots" else int(v))
+        kw[k] = bool(int(v)) if k in ("out_all", "mcast_linked") else (v if k == "slots" else int(v))
     return LCfg(**kw)
 
 
@@ -525,3 +525,46 @@ def test_ws_lane_glx_dynm(mesh_device):
     cfg = gcfg(128, 4, 31250)
     lc = lcfg_from_env(cycles=torus_cycles(*tuple(mesh_device.shape)))
     run_dynm(mesh_device, cfg, lc, "glx", check_chips=(0, 1, 2, 13, 31))
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+@pytest.mark.parametrize("device_params", [FAB], indirect=True)
+def test_ws_lane_tray_soak(mesh_device):
+    """Soak on the tray at the 640-expert torus load of a lane (160 experts a lane, T 31250, M 586; G 2): launches
+    until WS_SOAK_SECS (default 900) or WS_SOAK_MAX launches, the util of every 50th launch logged, PCC (each group's
+    last expert) on the last."""
+    import time
+
+    cfg, lc = gcfg(320, 2, 31250), lcfg_from_env()
+    Ms = [586] * cfg.nexp
+    mesh = mesh_device
+    N = mesh.get_num_devices()
+    T = make_tables(tuple(mesh.shape), cfg, lc)
+    out_rows = (586 + 31) // 32
+    dev, refs = make_inputs(mesh, cfg, lc, T, Ms, out_rows)
+    tab_t = tables_tensor(mesh, T["tabs"])
+    secs, mx = float(os.environ.get("WS_SOAK_SECS", "900")), int(os.environ.get("WS_SOAK_MAX", "100000"))
+    logger.info(f"WSK soak: {T['E']} experts a lane, {secs:.0f} s or {mx} launches, {lc}")
+    t0, i, utils = time.time(), 0, []
+    while i < mx and time.time() - t0 < secs:
+        mpd, io, st = build_lane(
+            mesh, cfg, lc, dev["x_t"], dev["idx_t"], dev["counts_t"], dev["ws_t"], dev["out_t"], tab_t, T, out_rows
+        )
+        ttnn.synchronize_device(mesh)
+        ttnn.generic_op(io, mpd)
+        ttnn.synchronize_device(mesh)
+        i += 1
+        if i % 50 == 0:
+            sts = ttnn.get_device_tensors(st)
+            u = [100 * chip_time(cfg, Ms, T, ci, sts[ci])[1] for ci in range(N)]
+            utils += u
+            logger.info(f"WSK soak launch {i}, {time.time() - t0:.0f} s: util tile per chip {[round(x, 1) for x in u]}")
+            del sts
+        del mpd, io, st
+    outs = ttnn.get_device_tensors(dev["out_t"])
+    pcs = {ci: chip_pcc(refs, ci, cfg.G, outs[ci]) for ci in range(N)}
+    logger.info(
+        f"WSK soak SUMMARY: {i} launches in {time.time() - t0:.0f} s without a hang, util tile median "
+        f"{statistics.median(utils) if utils else 0:.1f}% over the logged launches, min pcc {min(pcs.values()):.5f}"
+    )
+    assert min(pcs.values()) > 0.999
