@@ -7,4 +7,7 @@
 from .base import Trainer
 from .sft import SFTTrainer
 
-__all__ = ["SFTTrainer", "Trainer"]
+# The trainers `python -m ttml.unified_trainer --trainer <name>` runs, by name.
+TRAINERS: dict[str, type[Trainer]] = {"sft": SFTTrainer}
+
+__all__ = ["SFTTrainer", "TRAINERS", "Trainer"]

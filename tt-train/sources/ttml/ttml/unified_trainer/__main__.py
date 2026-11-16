@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""python -m ttml.unified_trainer --config <recipe.yaml> [--set dotted.key=value ...]"""
+"""python -m ttml.unified_trainer --config <recipe.yaml> [--trainer sft] [--set dotted.key=value ...]"""
 
 from __future__ import annotations
 
@@ -11,14 +11,20 @@ from typing import Optional, Sequence
 
 from .callbacks import CheckpointCallback, MetricsCallback
 from .configs import load_config
-from .implementations import SFTTrainer
+from .implementations import TRAINERS
 
 
 def main(argv: Optional[Sequence[str]] = None) -> None:
     parser = argparse.ArgumentParser(
         prog="python -m ttml.unified_trainer", description="Fine-tune an HF model on ttml."
     )
-    parser.add_argument("--config", required=True, help="YAML recipe: the fields of SFTTrainerConfig")
+    parser.add_argument("--config", required=True, help="YAML recipe: the fields of the trainer's config")
+    parser.add_argument(
+        "--trainer",
+        default="sft",
+        choices=sorted(TRAINERS),
+        help="the trainer the recipe is for (default: %(default)s)",
+    )
     parser.add_argument(
         "--set",
         dest="overrides",
@@ -29,8 +35,9 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     )
     args = parser.parse_args(argv)
 
-    config = load_config(args.config, args.overrides)
-    trainer = SFTTrainer(callbacks=[MetricsCallback(), CheckpointCallback()])
+    trainer_class = TRAINERS[args.trainer]
+    config = load_config(args.config, args.overrides, trainer_class.config_class)
+    trainer = trainer_class(callbacks=[MetricsCallback(), CheckpointCallback()])
     try:
         trainer.setup(config)
         trainer.train()

@@ -19,6 +19,7 @@ python -m ttml.unified_trainer \
 ```
 
 Each `--set key=value` overrides one field; dotted keys reach into sections, and values are parsed as YAML.
+`--trainer` names the trainer the recipe is for; `sft`, the default, is the only one so far.
 
 From Python:
 
@@ -321,3 +322,15 @@ Write it in `ttml/datasets/<dataset>.py` and add it to `providers()` in `ttml/da
 What a trainer uses of a provider: `next_batch()`, the next batch of the epoch as host arrays, or `None` once the
 epoch is over; iterating it, which takes the batches left in the epoch; `len()`, the batches of an epoch; and
 `seek(epoch, batch)`, with which a resumed run continues where the run before it stopped.
+
+---
+
+## Adding a trainer
+
+A trainer subclasses `Trainer` in `ttml/unified_trainer/implementations/base.py`, which runs the training loop, and
+implements its abstract methods: loading the data, the model and the optimizer, and the forward, backward and optimizer
+steps. It sets `config_class` to its config, a subclass of `TrainerConfig`, which a recipe for it validates as.
+
+Write it in `ttml/unified_trainer/implementations/<trainer>.py` and add it to `TRAINERS` in
+`ttml/unified_trainer/implementations/__init__.py`, keyed by the name `--trainer` takes. `SFTTrainer` in
+`ttml/unified_trainer/implementations/sft.py` is the reference.

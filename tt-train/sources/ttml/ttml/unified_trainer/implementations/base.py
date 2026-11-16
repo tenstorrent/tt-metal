@@ -11,7 +11,7 @@ import sys
 import traceback
 from abc import ABC, abstractmethod
 from contextlib import contextmanager
-from typing import Any, Iterable, Iterator, Optional
+from typing import Any, ClassVar, Iterable, Iterator, Optional
 
 import numpy as np
 from tqdm import tqdm
@@ -37,6 +37,9 @@ class Trainer(ABC):
             finally:
                 trainer.cleanup()
     """
+
+    # The config the trainer takes; `python -m ttml.unified_trainer` validates a recipe as it.
+    config_class: ClassVar[type[TrainerConfig]] = TrainerConfig
 
     def __init__(self, callbacks: Any = None) -> None:
         self.callback_handler = CallbackHandler(self, callbacks)

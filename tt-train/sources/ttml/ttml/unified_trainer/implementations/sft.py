@@ -53,6 +53,7 @@ class SFTTrainer(Trainer):
     Losses are read back to host floats once per micro-batch, as ttml's other trainers do.
     """
 
+    config_class = SFTTrainerConfig
     config: SFTTrainerConfig
 
     def _check_config(self) -> None:
