@@ -723,7 +723,9 @@ std::string resolve_git_ref(const fs::path& git_dir, const std::string& ref) {
 
 std::string current_tree_commit(const std::string& root_dir) {
     if (const char* v = env_or_null("TT_METAL_KERNEL_PREWARM_TREE_COMMIT")) {
-        return is_commit_id(v) ? std::string(v) : std::string();
+        std::string id(v);
+        std::transform(id.begin(), id.end(), id.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        return is_commit_id(id) ? id : std::string();
     }
     if (root_dir.empty()) {
         return {};

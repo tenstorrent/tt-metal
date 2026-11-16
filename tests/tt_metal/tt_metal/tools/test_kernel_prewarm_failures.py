@@ -480,6 +480,11 @@ void current_fast_path() {
  fs::path kdir = d / "tt-metal-cache7" / "kernels" / "k1";
  write_file(kdir.string() + "/.prewarm-failed-first", "prewarm-failure-v1 other\n");
  current_checks = 0; assert(offline(d) == 3 && current_checks == 2);  // k1's recorded failure: regular path
+ // a fast-path build that throws falls through to the failure policy, which builds again (attempts == 2) and counts it failed
+ g_manifest = {req(7, "k9", C, false)};
+ auto e = fresh("current-throw"); fast_current = true;
+ fs::create_directories(e / "tt-metal-cache7" / "kernels" / "k9" / "first"); write_file((e / "tt-metal-cache7" / "kernels" / "k9" / "first" / "complete").string(), "ok");
+ current_checks = 0; assert(offline(e) == 0 && current_checks == 1 && attempts == 2);
 }
 
 
@@ -506,6 +511,7 @@ void commit_sources() {
  // The override wins, and an invalid one means unknown rather than falling back to another source.
  setenv("TT_METAL_KERNEL_PREWARM_TREE_COMMIT", E.c_str(), 1); assert(current_tree_commit((t / "detached").string() + "/") == E);
  setenv("TT_METAL_KERNEL_PREWARM_TREE_COMMIT", "xyz", 1); assert(current_tree_commit((t / "detached").string() + "/").empty());
+ { std::string up = E; for (auto& ch : up) ch = std::toupper(ch); setenv("TT_METAL_KERNEL_PREWARM_TREE_COMMIT", up.c_str(), 1); assert(current_tree_commit((t / "detached").string() + "/") == E); }
  assert(from_other_commit(A, B) && !from_other_commit(A, A) && !from_other_commit("", B) && !from_other_commit(A, ""));
 }
 
@@ -716,6 +722,79 @@ class PrewarmFailureTests(unittest.TestCase):
             for mode in ("filters", "stale", "commit", "current", "open", "open-cold"):
                 with self.subTest(mode=mode):
                     subprocess.run([str(path / "test"), str(path / mode), mode], env=env, check=True, timeout=120)
+
+    def test_manifest_round_trips_tree_commit(self):
+        """The real append_manifest_entry and read_manifest carry treeCommit (needs a capnp build tree)."""
+        build = Path(os.environ.get("TT_METAL_CAPNP_BUILD_DIR", "/home/smarton/tt-metal-ltx-rt/build_Release"))
+        capnp_dir = build / "_deps/capnproto-build/c++/src"
+        needed = [build / "bin/capnp", build / "bin/capnpc-c++", capnp_dir / "capnp/libcapnp.a", capnp_dir / "capnp/libcapnp-rpc.a", capnp_dir / "kj/libkj.a", capnp_dir / "kj/libkj-async.a"]
+        if not all(f.exists() for f in needed):
+            self.skipTest("no built capnp (set TT_METAL_CAPNP_BUILD_DIR to a tt-metal build tree)")
+        source = (ROOT / "tt_metal/impl/program/kernel_prewarm.cpp").read_text()
+        manifest_state = source[source.index("std::mutex g_manifest_mutex;") : source.index("// Prewarm orchestration.")]
+        append = source[source.index("void append_manifest_entry(") : source.index("void maybe_launch_prewarm(")]
+        harness = r"""
+#include <fcntl.h>
+#include <sys/file.h>
+#include <unistd.h>
+#include <cassert>
+#include <filesystem>
+#include <mutex>
+#include <string>
+#include <unordered_set>
+#include <vector>
+#include <capnp/message.h>
+#include <capnp/serialize.h>
+#include <kj/io.h>
+#include "impl/jit_server/rpc.capnp.h"
+#include "impl/jit_server/types.hpp"
+namespace tt { struct LogT {}; inline LogT LogMetal; template <class... A> void log_warning(LogT, const char*, A&&...) {} }
+namespace tt::tt_metal::kernel_prewarm {
+namespace {
+"""
+        harness += manifest_state + "}\n"
+        harness += (
+            'const char* manifest_write_path() { return g_capture_path.empty() ? nullptr : g_capture_path.c_str(); }\n'
+            + append
+            + r"""
+void run(const char* path) {
+ const std::string C(40, 'c'), D(40, 'd');
+ g_capture_path = path;
+ for (const std::string& commit : {C, D, std::string()}) {
+  g_tree_commit = commit;
+  jit_server::CompileRequest r; r.build_key = 7; r.kernel_name = "k-" + commit.substr(0, 1) + "x"; r.gpp = "g++";
+  jit_build::TargetRecipe t; t.target_name = "first"; r.targets = {t};
+  append_manifest_entry(r);
+ }
+ auto m = read_manifest(path);
+ assert(m.size() == 3);
+ assert(m[0].tree_commit == C && m[1].tree_commit == D && m[2].tree_commit.empty());
+ assert(m[0].build_key == 7 && m[0].kernel_name == "k-cx" && m[0].targets.size() == 1);
+}
+}
+int main(int, char** argv) { tt::tt_metal::kernel_prewarm::run(argv[1]); return 0; }
+"""
+        )
+        with tempfile.TemporaryDirectory(prefix="prewarm-roundtrip-") as work:
+            path = Path(work)
+            schema = path / "gen/impl/jit_server"
+            schema.mkdir(parents=True)
+            (schema / "rpc.capnp").write_text((ROOT / "tt_metal/impl/jit_server/rpc.capnp").read_text())
+            subprocess.run(
+                [str(build / "bin/capnp"), "compile", f"-I{build}/include", f"-o{build}/bin/capnpc-c++:{path}/gen",
+                 "--src-prefix", str(path / "gen"), str(schema / "rpc.capnp")],
+                check=True, timeout=60, cwd=path / "gen",
+            )
+            (path / "test.cpp").write_text(harness)
+            subprocess.run(
+                ["c++", "-std=c++20", "-Wall", "-Wextra", "-Werror", "-pthread", "-I", str(path / "gen"),
+                 "-I", str(ROOT / "tt_metal"), "-I", str(build / "include"), str(path / "test.cpp"),
+                 str(schema / "rpc.capnp.c++"), str(capnp_dir / "capnp/libcapnp-rpc.a"), str(capnp_dir / "capnp/libcapnp.a"),
+                 str(capnp_dir / "kj/libkj-async.a"), str(capnp_dir / "kj/libkj.a"),
+                 "-o", str(path / "test")],
+                check=True, timeout=300,
+            )
+            subprocess.run([str(path / "test"), str(path / "kernel_prewarm.manifest")], check=True, timeout=30)
 
     def test_native_failure_policy(self):
         with tempfile.TemporaryDirectory(prefix="prewarm-policy-") as work:
