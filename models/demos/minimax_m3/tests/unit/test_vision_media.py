@@ -173,20 +173,27 @@ def test_encode_writes_every_item_of_a_call():
 
 
 def test_encode_checks_its_slots_and_state_first(expect_error):
-    """encode raises ValueError for a slot of the wrong size before it writes any slot.
+    """encode raises ValueError for a slot of the wrong size, read-only or not C-contiguous, before it writes any slot.
 
     It raises RuntimeError before load and after close.
     """
     media = MiniMaxM3Media(CONFIG)
     item = media.prepare("image", rgb(100, 60))
-    good = memoryview(bytearray(b"\x01" * media.stored_nbytes(item)))
+    size = media.stored_nbytes(item)
+    good = memoryview(bytearray(b"\x01" * size))
     with expect_error(RuntimeError, "encode before load"):
         media.encode([item], [good])
     media.load(None, "", "image", {"stub_embeddings": True})
     row = media_format.stored_nbytes(2, 64) - media_format.stored_nbytes(1, 64)
-    for size in (media.stored_nbytes(item) + row, media.stored_nbytes(item) - row):  # one row more, one row less
-        with expect_error(ValueError, "needs"):
-            media.encode([item, item], [good, memoryview(bytearray(size))])
+    bad_slots = (
+        ("needs", memoryview(bytearray(size + row))),  # one row more
+        ("needs", memoryview(bytearray(size - row))),  # one row less
+        ("read-only", memoryview(bytes(size))),
+        ("not C-contiguous", memoryview(bytearray(2 * size))[::2]),  # the right size, every other byte
+    )
+    for message, bad in bad_slots:
+        with expect_error(ValueError, message):
+            media.encode([item, item], [good, bad])
         assert bytes(good) == b"\x01" * len(good), "encode wrote into a slot before it checked them all"
     media.close()
     with expect_error(RuntimeError, "after close"):

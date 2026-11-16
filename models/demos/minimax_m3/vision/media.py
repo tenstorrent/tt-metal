@@ -213,10 +213,15 @@ class MiniMaxM3Media:
         encoder even while the caller still holds the error.
 
         Raises:
-            ValueError: for a slot of the wrong size, before encode writes anything.
+            ValueError: for a slot that is read-only, not C-contiguous or of the wrong size, before encode writes
+                anything.
             RuntimeError: before load or after close.
         """
         for item, buf in zip(items, out, strict=True):
+            if buf.readonly:
+                raise ValueError("a read-only slot: encode writes into its slots")
+            if not buf.c_contiguous:
+                raise ValueError("a slot that is not C-contiguous: a stored value is one run of bytes")
             size = self.stored_nbytes(item)
             if buf.nbytes != size:
                 raise ValueError(
