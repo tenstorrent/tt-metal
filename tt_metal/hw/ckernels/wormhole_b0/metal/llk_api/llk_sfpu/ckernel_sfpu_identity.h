@@ -18,7 +18,7 @@ namespace sfpu {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_identity() {
-    static_assert(ITERATIONS % 2 == 0);
+    static_assert(ITERATIONS % 2 == 0, "calculate_identity processes two rows per iteration");
     // Two rows per iteration share one dst_reg increment.
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d += 2) {
@@ -32,7 +32,7 @@ inline void calculate_identity() {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_identity_uint() {
-    static_assert(ITERATIONS % 2 == 0);
+    static_assert(ITERATIONS % 2 == 0, "calculate_identity_uint processes two rows per iteration");
     // Two rows per iteration share one dst_reg increment.
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d += 2) {
