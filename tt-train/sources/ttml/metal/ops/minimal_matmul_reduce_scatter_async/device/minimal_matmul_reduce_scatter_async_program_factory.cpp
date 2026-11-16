@@ -5,10 +5,13 @@
 #include "minimal_matmul_reduce_scatter_async_program_factory.hpp"
 
 #include <algorithm>
+#include <internal/mesh_device.hpp>
 #include <map>
+#include <set>
 #include <string>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/experimental/device.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -449,11 +452,49 @@ MinimalMatmulReduceScatterAsyncProgramFactory::create_at(
     }
 
     std::array<std::vector<SenderPlacement>, 2> senders_by_dir;
-    const uint32_t total_senders = num_dirs * num_links;
+    const tt::tt_metal::IDevice* chip = tt::tt_metal::internal::get_device(*device, mesh_coordinate);
+    const auto sender_node_id = device->get_fabric_node_id(mesh_coordinate);
+    std::set<uint32_t> sender_columns;
     for (uint32_t link = 0; link < num_links; ++link) {
         for (uint32_t dir = 0; dir < num_dirs; ++dir) {
-            const uint32_t sender_index = (link * num_dirs) + dir;
-            const ttnn::CoreCoord core{1 + ((sender_index * (grid_size.x - 1)) / total_senders), sink_row};
+            const auto& peer = dir == mmrs::kForward ? forward_coord : backward_coord;
+            const auto peer_node_id = device->get_fabric_node_id(peer.value());
+            const auto fabric_links = tt::tt_fabric::get_forwarding_link_indices(*device, sender_node_id, peer_node_id);
+            TT_FATAL(
+                link < fabric_links.size(),
+                "num_links={} but only {} fabric links lead to the neighbour in direction {}",
+                num_links,
+                fabric_links.size(),
+                dir);
+            const ttnn::CoreCoord eth_core =
+                tt::tt_fabric::get_forwarding_eth_core(*device, sender_node_id, peer_node_id, fabric_links[link]);
+            const auto closest =
+                tt::tt_metal::experimental::Device::get_closest_worker_to_eth_core(*chip, eth_core, large_input_noc);
+            uint32_t best_column = 0;
+            uint32_t best_hops = 0;
+            for (uint32_t x = 1; x < grid_size.x; ++x) {
+                if (sender_columns.contains(x)) {
+                    continue;
+                }
+                const uint32_t hops =
+                    closest.distance_in_noc_hops +
+                    tt::tt_metal::experimental::Device::get_worker_noc_hop_distance(
+                        device, mesh_coordinate, ttnn::CoreCoord{x, sink_row}, closest.logical_coord, large_input_noc);
+                if (best_column == 0 || hops < best_hops) {
+                    best_column = x;
+                    best_hops = hops;
+                }
+            }
+            TT_FATAL(
+                best_column != 0,
+                "No free core on the sink row for the sender of link {} in direction {}: {} senders need {} columns "
+                "past column 0",
+                link,
+                dir,
+                num_dirs * num_links,
+                grid_size.x - 1);
+            sender_columns.insert(best_column);
+            const ttnn::CoreCoord core{best_column, sink_row};
             senders_by_dir[dir].push_back({core, device->worker_core_from_logical_core(core)});
         }
     }
