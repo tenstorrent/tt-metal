@@ -36,33 +36,38 @@ constexpr size_t connection_args = 4;
 constexpr size_t teardown_arg = 2;
 constexpr size_t buffer_index_arg = 3;
 
-template <
-    uint32_t channel_tiles,
-    uint32_t max_payload,
-    uint32_t named_runtime_args,
-    uint32_t num_connections,
-    uint32_t forward_connection,
-    uint32_t forward_range,
-    uint32_t backward_connection,
-    uint32_t backward_range,
-    uint32_t successor_connection,
-    uint32_t successor_hops,
-    uint32_t successor_chip,
-    uint32_t successor_mesh,
-    uint32_t num_convolution_cores,
-    uint32_t sp_rank,
-    uint32_t sp_size,
-    uint32_t local_rows,
-    uint32_t has_actual_end,
-    uint32_t token_paged,
-    uint32_t page_channels,
-    uint32_t unicast_peers,
-    uint32_t slab,
-    uint32_t slab_index_limit,
-    uint32_t slab_scale,
-    uint32_t slab_offset,
-    uint32_t entry_pages>
-TT_KERNEL void exchange(uint32_t entry_semaphore, uint32_t predecessor_semaphore, uint32_t carry_semaphore) {
+// The routes array holds the fabric connections, then each convolution core's NoC x and y, then (unicast_peers)
+// each other rank's connection, chip and mesh; the kernel reads it by runtime-arg index. sp_rank, the successor and
+// the routes are per device, so one program serves a whole range.
+void kernel_main() {
+    constexpr uint32_t channel_tiles = get_arg(args::channel_tiles);
+    constexpr uint32_t max_payload = get_arg(args::max_payload);
+    constexpr uint32_t num_connections = get_arg(args::num_connections);
+    constexpr uint32_t forward_connection = get_arg(args::forward_connection);
+    constexpr uint32_t forward_range = get_arg(args::forward_range);
+    constexpr uint32_t backward_connection = get_arg(args::backward_connection);
+    constexpr uint32_t backward_range = get_arg(args::backward_range);
+    constexpr uint32_t successor_connection = get_arg(args::successor_connection);
+    constexpr uint32_t successor_hops = get_arg(args::successor_hops);
+    constexpr uint32_t num_convolution_cores = get_arg(args::num_convolution_cores);
+    constexpr uint32_t sp_size = get_arg(args::sp_size);
+    constexpr uint32_t local_rows = get_arg(args::local_rows);
+    constexpr uint32_t has_actual_end = get_arg(args::has_actual_end);
+    constexpr uint32_t token_paged = get_arg(args::token_paged);
+    constexpr uint32_t page_channels = get_arg(args::page_channels);
+    constexpr uint32_t unicast_peers = get_arg(args::unicast_peers);
+    constexpr uint32_t slab = get_arg(args::slab);
+    constexpr uint32_t slab_index_limit = get_arg(args::slab_index_limit);
+    constexpr uint32_t slab_scale = get_arg(args::slab_scale);
+    constexpr uint32_t slab_offset = get_arg(args::slab_offset);
+    constexpr uint32_t entry_pages = get_arg(args::entry_pages);
+    const uint32_t entry_semaphore = get_arg(args::entry_semaphore);
+    const uint32_t predecessor_semaphore = get_arg(args::predecessor_semaphore);
+    const uint32_t carry_semaphore = get_arg(args::carry_semaphore);
+    const uint32_t sp_rank = get_arg(args::sp_rank);
+    const uint32_t successor_chip = get_arg(args::successor_chip);
+    const uint32_t successor_mesh = get_arg(args::successor_mesh);
+    constexpr size_t routes_arg = args::routes.byte_offset / sizeof(uint32_t);
     constexpr uint32_t row_bytes = channel_tiles * tile_row_bytes;
     static_assert(max_payload % read_alignment == 0, "row chunks must stay aligned in DRAM");
     // `history` and `final_history` are token-paged or channel-paged (qkv_conv_dataflow.hpp); the exchange buffer and
@@ -132,12 +137,12 @@ TT_KERNEL void exchange(uint32_t entry_semaphore, uint32_t predecessor_semaphore
         const uint32_t teardown[] = {sem::teardown0.id, sem::teardown1.id, sem::teardown2.id, sem::teardown3.id};
         const uint32_t buffer_index[] = {
             sem::buffer_index0.id, sem::buffer_index1.id, sem::buffer_index2.id, sem::buffer_index3.id};
-        auto* connection_arg_words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_addr(named_runtime_args));
+        auto* connection_arg_words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_addr(routes_arg));
         for (uint32_t c = 0; c < num_connections; ++c) {
             connection_arg_words[c * connection_args + teardown_arg] = teardown[c];
             connection_arg_words[c * connection_args + buffer_index_arg] = buffer_index[c];
         }
-        size_t arg_index = named_runtime_args;
+        size_t arg_index = routes_arg;
         tt::tt_fabric::RoutingPlaneConnectionManager connections;
         open_connections(connections, num_connections, arg_index);
         const size_t convolution_core_args = arg_index;
