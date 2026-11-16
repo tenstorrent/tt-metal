@@ -598,7 +598,7 @@ TEST_F(NormalizationSmoke, RmsNormSharded1x1) {
 
 // LayerNormMultiCoreProgramFactory with FLOAT32 input -- the fp32-accumulation precision
 // class tracked in #48824. The default compute config (layernorm_default_compute_config:
-// HiFi4, approx off, fp32_acc=true) enables fp32_dest_acc_en, so the whole reduction and
+// HiFi4 / HiFi3 on WH, approx off, fp32_acc=true) enables fp32_dest_acc_en, so the whole reduction and
 // float32_reduction path stay in fp32. Tight tolerance is the point of this cell: a
 // silent fall-back to bf16 intermediates would miss atol=1e-3 by an order of magnitude
 // (one bf16 ulp at 1.0 is 2^-7 ~= 0.0078). Same exact +-1 pattern: mean 0 / var 1 are
