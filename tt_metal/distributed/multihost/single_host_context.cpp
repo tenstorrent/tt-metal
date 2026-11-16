@@ -159,7 +159,7 @@ ContextPtr SingleHostContext::duplicate() const { return std::make_shared<Single
 
 ContextPtr SingleHostContext::split(Color color [[maybe_unused]], Key key [[maybe_unused]]) const {
     // nop on single-host context
-    return current_world_;
+    return duplicate();
 }
 
 ContextPtr SingleHostContext::create_sub_context(ttsl::Span<int> ranks) const {
