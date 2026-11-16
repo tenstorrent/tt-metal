@@ -69,6 +69,8 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     torus_xy_device_params,
     tp_axis_is_wrapped,
 )
+from models.demos.deepseek_v3_d_p.tests.measure.gate import PerfTarget, band_failure
+from models.demos.deepseek_v3_d_p.tests.measure.trace import TracedStep
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res import TtAttnRes
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res_stream import BLOCK_SIZE, TtAttnResWalk
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.residual import TtAttnResResidual
@@ -134,16 +136,8 @@ def _perf_reference_e2e_us(layout: str, mode: str) -> dict[str, float]:
 
 
 def _assert_within_margin(what: str, measured_us: float, reference_us: float, margin: float) -> None:
-    lower = reference_us * (1.0 - margin)
-    upper = reference_us * (1.0 + margin)
-    assert_perf_gate(
-        lower <= measured_us <= upper,
-        (
-            f"{what} {measured_us:.1f} us is outside performance range "
-            f"[{lower:.1f}, {upper:.1f}] us "
-            f"(reference {reference_us:.1f} us ± {margin:.0%})"
-        ),
-    )
+    failure = band_failure(what, measured_us, PerfTarget(reference_us, margin), unit="us")
+    assert_perf_gate(failure is None, failure or "")
 
 
 @pytest.mark.parametrize("mode", ["traced", "untraced"])
@@ -154,9 +148,9 @@ def test_attn_res_performance_uses_two_sided_margin(mode, monkeypatch, expect_er
         margin = _MARGIN[mode][layer]
         _assert_within_margin(layer, reference_us * (1 - 0.99 * margin), reference_us, margin)
         _assert_within_margin(layer, reference_us * (1 + 0.99 * margin), reference_us, margin)
-        with expect_error(AssertionError, "outside performance range"):
+        with expect_error(AssertionError, "us outside"):
             _assert_within_margin(layer, reference_us * (0.99 - margin), reference_us, margin)
-        with expect_error(AssertionError, "outside performance range"):
+        with expect_error(AssertionError, "us outside"):
             _assert_within_margin(layer, reference_us * (1.01 + margin), reference_us, margin)
 
 
@@ -190,33 +184,32 @@ def _profiled(mesh_device, fn) -> list[dict]:
 
 
 class _Prepared:
-    """A forward ready to time: called eagerly, or captured once and replayed."""
+    """A forward ready to time: called eagerly, or captured once and replayed. Two untimed calls first."""
 
     def __init__(self, mesh_device, fn, traced):
-        self.mesh_device, self.trace_id = mesh_device, None
-        fn()  # compile
-        fn()
-        ttnn.synchronize_device(mesh_device)
+        self.traced = None
         if not traced:
+            fn()  # compile
+            fn()
+            ttnn.synchronize_device(mesh_device)
             self.call = fn
             return
-        # The caller only holds this object once construction returns, so a failure past this point must
-        # close the capture and release the trace here, or it would leave the mesh unusable for later params.
-        self.trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        # fn's results are its own to free; the trace keeps its captured buffers until release().
+        step = TracedStep(mesh_device, fn, compile_runs=2, release=lambda _: None)
         try:
-            try:
-                fn()
-            finally:
-                ttnn.end_trace_capture(mesh_device, self.trace_id, cq_id=0)
-            ttnn.execute_trace(mesh_device, self.trace_id, cq_id=0, blocking=True)
-        except BaseException:
-            self.release()
+            step.capture()
+            step.replay()
+        except BaseException as e:
+            # The caller only holds this object once construction returns: close the capture and release here.
+            step.__exit__(type(e), e, e.__traceback__)
             raise
-        self.call = lambda: ttnn.execute_trace(mesh_device, self.trace_id, cq_id=0, blocking=False)
+        self.traced = step
+        self.call = lambda: step.replay(sync=False)
 
     def release(self):
-        if self.trace_id is not None:
-            ttnn.release_trace(self.mesh_device, self.trace_id)
+        if self.traced is not None:
+            self.traced.__exit__(None, None, None)
+            self.traced = None
 
 
 def _interleaved_walls_us(mesh_device, calls) -> dict[str, list[float]]:

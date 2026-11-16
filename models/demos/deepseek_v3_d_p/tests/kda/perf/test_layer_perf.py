@@ -28,6 +28,9 @@ from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     make_kimi_k3_device_case,
     make_synthetic_kimi_k3_test_case,
 )
+from models.demos.deepseek_v3_d_p.tests.measure.gate import PerfTarget, band_failure
+from models.demos.deepseek_v3_d_p.tests.measure.timing import time_untraced
+from models.demos.deepseek_v3_d_p.tests.measure.trace import TracedStep, time_traced
 from models.demos.deepseek_v3_d_p.tt.kda.config import KDA_PARTIAL_OUTPUT_L1_BYTES_PER_CORE, l1_when_it_fits
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState, reduce_scatter_tp_partials, ttKDA
 from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import KdaContractGeometry, KdaStates, device_scalar
@@ -201,16 +204,8 @@ def _layer_call(
 
 
 def _assert_within_margin(what: str, measured_ms: float, reference_ms: float, margin: float) -> None:
-    lower = reference_ms * (1.0 - margin)
-    upper = reference_ms * (1.0 + margin)
-    assert_perf_gate(
-        lower <= measured_ms <= upper,
-        (
-            f"{what} {measured_ms:.3f} ms is outside performance range "
-            f"[{lower:.3f}, {upper:.3f}] ms "
-            f"(reference {reference_ms:.3f} ms ± {margin:.0%})"
-        ),
-    )
+    failure = band_failure(what, measured_ms, PerfTarget(reference_ms, margin))
+    assert_perf_gate(failure is None, failure or "")
 
 
 @pytest.mark.parametrize(
@@ -233,9 +228,9 @@ def test_synthetic_performance_uses_two_sided_margin(layout, sku, traced, monkey
     margin = _perf_margin(layout, traced)
     _assert_within_margin(layout, reference_ms * (1 - 0.99 * margin), reference_ms, margin)
     _assert_within_margin(layout, reference_ms * (1 + 0.99 * margin), reference_ms, margin)
-    with expect_error(AssertionError, "outside performance range"):
+    with expect_error(AssertionError, "ms outside"):
         _assert_within_margin(layout, reference_ms * (0.99 - margin), reference_ms, margin)
-    with expect_error(AssertionError, "outside performance range"):
+    with expect_error(AssertionError, "ms outside"):
         _assert_within_margin(layout, reference_ms * (1.01 + margin), reference_ms, margin)
 
 
@@ -243,16 +238,16 @@ def test_synthetic_device_performance_uses_two_sided_margin(monkeypatch, expect_
     monkeypatch.setenv("KDA_PERF_SKU", _QUIETBOX_PERF_SKU)
     reference_ms = _device_perf_reference_ms("SP4xTP1")
     _assert_within_margin("SP4xTP1", reference_ms * (1 + 0.99 * _DEVICE_PERF_MARGIN), reference_ms, _DEVICE_PERF_MARGIN)
-    with expect_error(AssertionError, "outside performance range"):
+    with expect_error(AssertionError, "ms outside"):
         _assert_within_margin("SP4xTP1", reference_ms * (1.01 + _DEVICE_PERF_MARGIN), reference_ms, _DEVICE_PERF_MARGIN)
 
 
-def _profile_replay(mesh_device: ttnn.MeshDevice, trace_id: int) -> tuple[float, float]:
+def _profile_replay(mesh_device: ttnn.MeshDevice, traced: TracedStep) -> tuple[float, float]:
     """Return the host wall and device time (ms) of one profiled trace replay."""
 
     def replay() -> float:
         start = time.perf_counter()
-        ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+        traced.replay(sync=False)
         ttnn.synchronize_device(mesh_device)
         return (time.perf_counter() - start) * 1e3
 
@@ -260,56 +255,29 @@ def _profile_replay(mesh_device: ttnn.MeshDevice, trace_id: int) -> tuple[float,
     return wall_ms, sum(program["duration_ns"] for program in programs.values()) / 1e6
 
 
-@dataclass
-class _LayerTrace:
-    """A traced layer call and the device buffers it holds until released."""
-
-    state: KdaState
-    trace_id: int | None = None
-    output: ttnn.Tensor | None = None
-    next_state: KdaState | None = None
-
-
-def _capture_layer_trace(
+def _layer_step(
     mesh_device: ttnn.MeshDevice,
     layer: ttKDA,
     hidden: ttnn.Tensor,
     actual_start: int = 0,
     actual_end: int | None = None,
     slots: _Slots | None = None,
-) -> _LayerTrace:
-    """Capture one layer call in a trace after a warm-up call, and replay it once."""
+) -> tuple[Callable[[], tuple], Callable[[tuple], None], KdaState]:
+    """One layer call on a fresh state: (step, release of its output, the state, which the caller frees)."""
     actual_start_tt = make_actual_start(mesh_device, actual_start)
     actual_end_tt = None if actual_end is None else make_actual_start(mesh_device, actual_end)
-    trace = _LayerTrace(state=_allocate_state(layer))
-    try:
-        warm_output, warm_state = _layer_call(layer, hidden, trace.state, actual_start_tt, actual_end_tt, slots)
-        ttnn.synchronize_device(mesh_device)
-        ttnn.deallocate(warm_output)
-        if warm_state is not None:
-            deallocate_state(warm_state)
+    state = _allocate_state(layer)
 
-        trace.trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-        trace.output, trace.next_state = _layer_call(layer, hidden, trace.state, actual_start_tt, actual_end_tt, slots)
-        ttnn.end_trace_capture(mesh_device, trace.trace_id, cq_id=0)
-        ttnn.execute_trace(mesh_device, trace.trace_id, cq_id=0, blocking=False)
-        ttnn.synchronize_device(mesh_device)
-    except BaseException:
-        _release_layer_trace(mesh_device, trace)
-        raise
-    return trace
+    def step() -> tuple:
+        return _layer_call(layer, hidden, state, actual_start_tt, actual_end_tt, slots)
 
+    def release(out: tuple) -> None:
+        output, next_state = out
+        ttnn.deallocate(output)
+        if next_state is not None:
+            deallocate_state(next_state)
 
-def _release_layer_trace(mesh_device: ttnn.MeshDevice, trace: _LayerTrace) -> None:
-    try:
-        if trace.trace_id is not None:
-            ttnn.release_trace(mesh_device, trace.trace_id)
-    finally:
-        if trace.output is not None:
-            ttnn.deallocate(trace.output)
-        if trace.next_state is not None:
-            deallocate_state(trace.next_state)
-        deallocate_state(trace.state)
+    return step, release, state
 
 
 def _trace_wall_samples_ms(
@@ -322,28 +290,27 @@ def _trace_wall_samples_ms(
     actual_end: int | None = None,
     slots: _Slots | None = None,
 ) -> tuple[list[float], dict[str, float] | None]:
-    trace = _capture_layer_trace(mesh_device, layer, hidden, actual_start, actual_end, slots)
+    """Host ms per traced call: _TIMING_SAMPLES samples of `repetitions` back-to-back replays through one sync, after
+    one warm-up call, the capture and one replay (validated if asked)."""
+    step, release, state = _layer_step(mesh_device, layer, hidden, actual_start, actual_end, slots)
     try:
-        validation = (
-            validate_first_replay(
-                trace.next_state,
-                trace.output,
-                nrmse=LayerNrmseThresholds(output=0.03, recurrent=0.04, convolution=KIMI_K3_CONVOLUTION_NRMSE),
+        with TracedStep(mesh_device, step, release=release) as traced:
+            traced.capture()
+            traced.replay()
+            output, next_state = traced.output
+            validation = (
+                validate_first_replay(
+                    next_state,
+                    output,
+                    nrmse=LayerNrmseThresholds(output=0.03, recurrent=0.04, convolution=KIMI_K3_CONVOLUTION_NRMSE),
+                )
+                if validate_first_replay is not None
+                else None
             )
-            if validate_first_replay is not None
-            else None
-        )
-
-        samples_ms = []
-        for _ in range(_TIMING_SAMPLES):
-            start = time.perf_counter()
-            for _ in range(repetitions):
-                ttnn.execute_trace(mesh_device, trace.trace_id, cq_id=0, blocking=False)
-            ttnn.synchronize_device(mesh_device)
-            samples_ms.append((time.perf_counter() - start) * 1e3 / repetitions)
-        return samples_ms, validation
+            samples = time_traced(traced, samples=_TIMING_SAMPLES, calls_per_sample=repetitions, estimator="median")
+        return samples.values, validation
     finally:
-        _release_layer_trace(mesh_device, trace)
+        deallocate_state(state)
 
 
 def _trace_device_samples_ms(
@@ -355,12 +322,15 @@ def _trace_device_samples_ms(
     slots: _Slots | None = None,
 ) -> tuple[list[float], list[float]]:
     """Return the host wall and device time (ms) of single profiled trace replays, never back to back."""
-    trace = _capture_layer_trace(mesh_device, layer, hidden, actual_start, actual_end, slots)
+    step, release, state = _layer_step(mesh_device, layer, hidden, actual_start, actual_end, slots)
     try:
-        _profile_replay(mesh_device, trace.trace_id)  # exclude first-replay jitter
-        samples = [_profile_replay(mesh_device, trace.trace_id) for _ in range(_TIMING_SAMPLES)]
+        with TracedStep(mesh_device, step, release=release) as traced:
+            traced.capture()
+            traced.replay()
+            _profile_replay(mesh_device, traced)  # exclude first-replay jitter
+            samples = [_profile_replay(mesh_device, traced) for _ in range(_TIMING_SAMPLES)]
     finally:
-        _release_layer_trace(mesh_device, trace)
+        deallocate_state(state)
     return [wall for wall, _ in samples], [device for _, device in samples]
 
 
@@ -373,27 +343,17 @@ def _untraced_wall_samples_ms(
     slots: _Slots | None = None,
 ) -> list[float]:
     """_trace_wall_samples_ms with layer.forward() in place of the trace replay."""
-    actual_start_tt = make_actual_start(mesh_device, actual_start)
-    actual_end_tt = None if actual_end is None else make_actual_start(mesh_device, actual_end)
-    state = _allocate_state(layer)
-
-    def call() -> None:
-        output, next_state = _layer_call(layer, hidden, state, actual_start_tt, actual_end_tt, slots)
-        ttnn.deallocate(output)
-        if next_state is not None:
-            deallocate_state(next_state)
-
+    step, release, state = _layer_step(mesh_device, layer, hidden, actual_start, actual_end, slots)
     try:
-        call()
-        ttnn.synchronize_device(mesh_device)
-        samples_ms = []
-        for _ in range(_TIMING_SAMPLES):
-            start = time.perf_counter()
-            for _ in range(_REPETITIONS):
-                call()
-            ttnn.synchronize_device(mesh_device)
-            samples_ms.append((time.perf_counter() - start) * 1e3 / _REPETITIONS)
-        return samples_ms
+        samples, _ = time_untraced(
+            lambda: release(step()),  # freed inside the timed window, as the layer frees after use
+            lambda: ttnn.synchronize_device(mesh_device),
+            warmup=1,
+            samples=_TIMING_SAMPLES,
+            calls_per_sample=_REPETITIONS,
+            estimator="median",
+        )
+        return samples.values
     finally:
         deallocate_state(state)
 
@@ -630,21 +590,18 @@ def test_kimi_k3_tp_reduce_scatter_perf(
     passed, pcc = comp_pcc(expected, output.float(), 0.9999)
     assert passed, f"{layout} PCC {pcc}"
 
-    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-    for _ in range(_REDUCE_SCATTER_CALLS_PER_TRACE):
-        # Released inside the trace, as the layer releases its reduced output after use.
-        ttnn.deallocate(reduce_scatter())
-    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+    def calls() -> None:
+        for _ in range(_REDUCE_SCATTER_CALLS_PER_TRACE):
+            # Released inside the trace, as the layer releases its reduced output after use.
+            ttnn.deallocate(reduce_scatter())
+
     try:
-        ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
-        samples_ms = []
-        for _ in range(_TIMING_SAMPLES):
-            start = time.perf_counter()
-            ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
-            ttnn.synchronize_device(mesh_device)
-            samples_ms.append((time.perf_counter() - start) * 1e3 / _REDUCE_SCATTER_CALLS_PER_TRACE)
+        with TracedStep(mesh_device, calls, compile_runs=0) as traced:  # the warm call above compiled
+            traced.capture()
+            traced.replay()
+            per_trace = time_traced(traced, samples=_TIMING_SAMPLES, estimator="median")
+        samples_ms = [ms / _REDUCE_SCATTER_CALLS_PER_TRACE for ms in per_trace.values]
     finally:
-        ttnn.release_trace(mesh_device, trace_id)
         ttnn.deallocate(partials_tt)
     median_wall_ms = statistics.median(samples_ms)
     result = {
