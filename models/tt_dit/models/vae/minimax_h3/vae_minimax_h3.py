@@ -43,6 +43,7 @@ from loguru import logger
 
 import ttnn
 
+from ....utils.host_buffers import empty_uint8
 from ....utils.tensor import fast_device_to_host, float_to_uint8, local_device_to_torch
 from ....utils.yuv_d2h import fast_device_to_host_yuv, replicated_to_host_yuv
 from .encoder_minimax_h3 import MiniMaxH3Encoder3d
@@ -199,7 +200,9 @@ def assemble_clip_parts(parts: list[tuple], frame_overlap: int):
     total = sum(clip_num_frames(segment) for segment, _ in parts)
     first = parts[0][0]
     if isinstance(first, np.ndarray):
-        out = np.empty((total, *first.shape[1:]), dtype=first.dtype)
+        shape = (total, *first.shape[1:])
+        # A fresh buffer this size faults in page by page; a released one is already mapped.
+        out = empty_uint8(shape) if first.dtype == np.uint8 else np.empty(shape, dtype=first.dtype)
     else:
         shape = list(first.shape)
         shape[2] = total

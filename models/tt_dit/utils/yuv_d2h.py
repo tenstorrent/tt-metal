@@ -22,6 +22,7 @@ from loguru import logger
 import ttnn
 
 from . import timing_tree
+from .host_buffers import empty_uint8
 from .planar_concat import HAS_CPP_PLANAR_CONCAT
 from .planar_concat import planar_concat_cpp as _planar_concat_cpp_impl
 from .tensor import _get_inter_host_axis, _host_buffer_to_torch, _to_torch_zero_copy
@@ -276,7 +277,7 @@ def _yuv_planar_d2h(
         out_hw, out_uv = out_H * out_W, out_Hu * out_Wu
         out_row = out_hw + 2 * out_uv
 
-        out = np.empty((T, out_row), dtype=np.uint8)
+        out = empty_uint8((T, out_row))
         out_t = torch.from_numpy(out)
         y_view = out_t.as_strided((T, out_H, out_W), (out_row, out_W, 1), 0)
         u_view = out_t.as_strided((T, out_Hu, out_Wu), (out_row, out_Wu, 1), out_hw)

@@ -25,6 +25,8 @@ from typing import TYPE_CHECKING, Sequence
 
 import numpy as np
 
+from .host_buffers import empty_uint8
+
 if TYPE_CHECKING:
     pass
 
@@ -192,10 +194,9 @@ if HAS_CPP_PLANAR_CONCAT:
             mesh_shape: ``(TP, SP)``.  Defaults to ``(4, 8)``.
             out: Optional pre-allocated output buffer of shape
                 ``(T, H*W + 2*(H/2 * W/2))`` uint8.  When ``None``, a fresh
-                ``np.empty`` is allocated each call (matches the convention
-                of the other variants in the test harness).  Reusing a
-                buffer across calls eliminates ~50 ms of first-touch page
-                faults per call on systems without THP=always.
+                buffer comes from :func:`host_buffers.empty_uint8`, which
+                reuses a released one: a fresh buffer's first-touch page
+                faults cost up to 1 s per call on a loaded serving box.
 
         Returns:
             ``np.ndarray`` of shape ``(T, H*W + 2*(H/2 * W/2))``, dtype
@@ -220,7 +221,7 @@ if HAS_CPP_PLANAR_CONCAT:
         row_stride = oH * oW + 2 * oHu * oWu
 
         if out is None:
-            out = np.empty((T, row_stride), dtype=np.uint8)
+            out = empty_uint8((T, row_stride))
         elif out.shape != (T, row_stride) or out.dtype != np.uint8 or not out.flags.c_contiguous:
             raise ValueError(
                 f"out must be C-contiguous uint8 with shape ({T}, {row_stride}); "
