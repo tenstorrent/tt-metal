@@ -924,57 +924,36 @@ void pytensor_module(nb::module_& mod) {
         )doc")
         .def(
             "cpu",
-            [](const Tensor& self,
-               bool blocking,
-               std::optional<ttnn::QueueId> cq_id,
-               const std::optional<std::vector<tt::tt_metal::distributed::MeshCoordinate>>& coords) {
-                if (!coords.has_value()) {
-                    return self.cpu(blocking, cq_id);
-                }
-                TT_FATAL(is_device_tensor(self), "cpu(coords=...) needs a device tensor, got {}", self.storage_type());
-                TT_FATAL(!coords->empty(), "cpu(coords=...) needs at least one coordinate");
-                const auto& held = self.device_storage().get_coords();
-                for (size_t i = 0; i < coords->size(); ++i) {
-                    const auto& coord = (*coords)[i];
-                    TT_FATAL(
-                        std::find(held.begin(), held.end(), coord) != held.end(),
-                        "cpu(coords=...): the tensor holds no shard at {}",
-                        coord);
-                    TT_FATAL(
-                        std::find(coords->begin(), coords->begin() + i, coord) == coords->begin() + i,
-                        "cpu(coords=...): coordinate {} is listed twice",
-                        coord);
-                }
-                // A storage restricted to `coords` shares the mesh tensor; reading it populates the host tensor at
-                // those coordinates only. The subset carries no label of its own, so the read labels the host tensor
-                // with the MeshTensor's full label; relabel it with `self`'s, so that a per-device tensor
-                // (get_device_tensors) keeps its one-coordinate label as cpu() without coords does. The relabel is
-                // host-side only: nothing on this path writes a label back to the mesh tensor (only
-                // combine_device_storages does that).
-                Tensor subset(DeviceStorage(self.device_storage(), *coords));
-                Tensor host = subset.cpu(blocking, cq_id);
-                host.update_tensor_topology(self.tensor_topology());
-                return host;
+            [](const Tensor& self, bool blocking, std::optional<ttnn::QueueId> cq_id) {
+                return self.cpu(blocking, cq_id);
             },
             nb::arg("blocking") = true,
             nb::arg("cq_id") = nb::none(),
-            nb::arg("coords") = nb::none(),
             nb::call_guard<nb::gil_scoped_release>(),
             R"doc(
             Move TT Tensor from TT accelerator device to host device.
 
-            With ``coords``, read only the shards at those mesh coordinates, in one command-queue batch: the host
-            tensor is populated at those coordinates only (``host_buffer().get_shard(c)`` is None elsewhere) and
-            carries the device tensor's own topology label, which the device tensor keeps unchanged (a per-device
-            tensor from ``get_device_tensors`` keeps its one-coordinate label). Every coordinate must be one the
-            tensor holds a shard at (``device_coords()``), and none may repeat. The result is populated at a subset
-            of the coordinates its label lists, so it is a readback for its bytes, not a tensor to assemble, move or
-            serialize as a whole.
-
             .. code-block:: python
 
                 tt_tensor = tt_tensor.cpu()
-                one_replica = tt_tensor.cpu(coords=[ttnn.MeshCoordinate(0, 0)])
+        )doc")
+        .def(
+            "cpu_shards",
+            &Tensor::cpu_shards,
+            nb::arg("coords"),
+            nb::arg("blocking") = true,
+            nb::arg("cq_id") = nb::none(),
+            nb::call_guard<nb::gil_scoped_release>(),
+            R"doc(
+            Read the shards at the given mesh coordinates to the host, in one command-queue batch.
+
+            Returns one single-device host tensor per coordinate, in the order given, as ``ttnn.get_device_tensors``
+            returns a host tensor's shards. Every coordinate must be one the tensor holds a shard at
+            (``device_coords()``), and none may repeat. The device tensor and its topology label are untouched.
+
+            .. code-block:: python
+
+                owned = tt_tensor.cpu_shards([ttnn.MeshCoordinate(0, 0), ttnn.MeshCoordinate(1, 1)])
         )doc")
         .def(
             "item",
