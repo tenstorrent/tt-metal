@@ -23,19 +23,24 @@ def _tensor(address, shape):
     return SimpleNamespace(buffer_address=lambda: address, shape=shape)
 
 
-def _runtime(first, count, num_users=1, dflash=False):
+def _runtime(first, count, num_users=1, dflash=False, cache_num_users=None):
     runtime = TtKimiK3Runtime.__new__(TtKimiK3Runtime)
     runtime.config = SimpleNamespace(
-        first_layer_idx=first, num_layers=count, num_users=num_users, dflash_enabled=dflash
+        first_layer_idx=first,
+        num_layers=count,
+        num_users=num_users,
+        cache_num_users=cache_num_users or num_users,
+        dflash_enabled=dflash,
     )
     return runtime
 
 
-def _caches(first, count, num_users=1, *, kvpe=True, kda=True):
+def _caches(first, count, num_users=1, *, kvpe=True, kda=True, kvpe_slots=None):
     schedule = KimiK3LayerSchedule.build(KimiK3Config, first, count)
     kvpe_cache = None
     if kvpe and schedule.num_mla_layers:
-        kvpe_cache = SimpleNamespace(storage=_tensor(0x1000, (num_users * schedule.num_mla_layers, 1, 7040, 576)))
+        slots = kvpe_slots or num_users
+        kvpe_cache = SimpleNamespace(storage=_tensor(0x1000, (slots * schedule.num_mla_layers, 1, 7040, 576)))
     kda_states = None
     ids = schedule.rank_kda_layer_ids()
     if kda and ids:
@@ -69,6 +74,14 @@ def test_compacted_kda_slots_tile_the_model():
 
 def test_single_galaxy_24_layer_rank():
     stages = _runtime(0, 24).kv_migration_stages(_caches(0, 24))
+    assert [(s.first_layer, s.count) for s in stages] == [(0, 6), (0, 18), (0, 18)]
+
+
+@pytest.mark.parametrize("num_users", [1, 4])
+def test_traced_packed_scratch_slot_is_not_counted_as_layers(num_users):
+    """A traced packed forward allocates the KVPE cache with one extra (scratch) slot, but not the KDA slabs."""
+    runtime = _runtime(0, 24, num_users=num_users, cache_num_users=num_users + 1)
+    stages = runtime.kv_migration_stages(_caches(0, 24, num_users=num_users, kvpe_slots=num_users + 1))
     assert [(s.first_layer, s.count) for s in stages] == [(0, 6), (0, 18), (0, 18)]
 
 

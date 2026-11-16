@@ -138,6 +138,7 @@ def build_and_serialize_kv_chunk_table(
     num_users,
     chunk_size_global,
     path,
+    cache_num_users=None,
     index_kv_cache=None,
     dflash_caches=None,
     dflash_spec=None,
@@ -200,6 +201,10 @@ def build_and_serialize_kv_chunk_table(
     per-stage layout per block-cyclic cache (config order), so rank 0 builds one table spanning every
     stage while the collectives ran on all ranks. Leave it None to gather inline (single-rank / tests).
 
+    ``cache_num_users``: slots the caches are allocated with, when more than the ``num_users`` the table
+    publishes. A traced packed forward adds a scratch slot after them (``kv_cache_slots``); it only changes
+    the layer count derived from a cache's folded batch dim. Defaults to ``num_users``.
+
     KV dedup is read from the KVPE cache's declared topology (is_tp_deduped_kv_cache), so the table cannot
     disagree with the allocation. ``tp_axis`` is the dflash head-count geometry, not the dedup switch."""
 
@@ -230,6 +235,7 @@ def build_and_serialize_kv_chunk_table(
             num_users=num_users,
             chunk_size_global=chunk_size_global,
             path=path,
+            cache_num_users=cache_num_users,
             stage_layouts=stage_layouts,
             index_layer_ids=index_layer_ids,
             dflash_first_layer=dflash_first_layer,
@@ -258,6 +264,7 @@ def build_and_serialize_kv_chunk_table(
             layer_rows=layer_rows,
             tp_axis=tp_axis if kv_dedup else None,
             chunk_size_global=chunk_size_global,
+            cache_num_users=cache_num_users,
         )
 
     return serialize_kv_chunk_table(
@@ -283,6 +290,7 @@ def _build_and_serialize_merged_kv_chunk_table(
     path,
     tp_axis,
     chunk_size_global=None,
+    cache_num_users=None,
     stage_layouts=None,
     index_layer_ids=None,
     dflash_first_layer=0,
@@ -396,7 +404,7 @@ def _build_and_serialize_merged_kv_chunk_table(
                 int(cache.buffer_address()),
                 mesh_shape,
                 first_layer_idx=0,
-                num_my_layers=_num_layers_from_cache(cache, num_users),
+                num_my_layers=_num_layers_from_cache(cache, cache_num_users or num_users),
             )
             for _, cache in block_cyclic
         ]
