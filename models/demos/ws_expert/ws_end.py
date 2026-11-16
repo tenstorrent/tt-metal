@@ -26,10 +26,11 @@ def token_ranges(T, C):
     return list(zip(starts, n))
 
 
-def build_end(mesh, T, K, H, rows_t, w_t, y_t, nbuf=4, fidelity=ttnn.MathFidelity.HiFi4, split_noc=True):
-    """generic_op mesh program of the end pass (nbuf: tokens of reads in flight a core; split_noc: half the cores read
-    on NOC0 and write on NOC1, the other half the other way round, so the reads use both NoCs); returns (mesh program,
-    io tensors, stamps)."""
+def build_end(mesh, T, K, H, rows_t, w_t, y_t, nbuf=4, fidelity=ttnn.MathFidelity.HiFi4, read_noc=0):
+    """generic_op mesh program of the end pass (nbuf: tokens of reads in flight a core; read_noc: the NoC of every
+    core's reads, 0 or 1, the writes on the other; or "split": half the cores read on NOC0 and write on NOC1, the
+    other half the other way round, which puts DRAM reads and acknowledged DRAM writes on both NoCs - a mix that can
+    hang Blackhole - so not the default); returns (mesh program, io tensors, stamps)."""
     S = K + 1
     assert H * 2 <= TPR * 2048 and K <= 16
     cores = end_cores(mesh)
@@ -46,7 +47,10 @@ def build_end(mesh, T, K, H, rows_t, w_t, y_t, nbuf=4, fidelity=ttnn.MathFidelit
         processor=ttnn.DataMovementProcessor.RISCV_0 if risc == 0 else ttnn.DataMovementProcessor.RISCV_1,
         noc=ttnn.NOC.NOC_0 if noc == 0 else ttnn.NOC.NOC_1,
     )
-    sets = [[c for c in cores if (c[0] + c[1]) % 2 == p] for p in (0, 1)] if split_noc else [[], cores]
+    if read_noc == "split":
+        sets = [[c for c in cores if (c[0] + c[1]) % 2 == p] for p in (0, 1)]
+    else:
+        sets = [cores, []] if int(read_noc) == 0 else [[], cores]
     rng = dict(zip(cores, token_ranges(T, len(cores))))
     cp_rt = ttnn.RuntimeArgs()
     for (x, y), (t0, n) in rng.items():

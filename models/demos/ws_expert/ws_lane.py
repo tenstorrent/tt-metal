@@ -69,10 +69,11 @@ class LCfg:
     # forwarded; with cycles of that one chip, the per-chip load of the lane design without its fabric traffic. On a
     # mesh every chip runs the same one-chip program on its own inputs (the tables of the one-chip cycles on each)
     nofab: bool = False
-    # every expert's down rows in expert-id order from tile row out_rows (WL_OUT_EORD): expert e at out_rows + the sum
-    # of ceil(M / 32) over the experts before it, whatever the arrival order (needs noc_split: each core reads its
-    # counts)
-    out_eord: bool = False
+    # row-major outputs (WL_Y_RM): each down row of each expert to its own row of a row-major [rows, H] output, the
+    # row given by the expert's destination list (build_lane's dest_t, the token lists' layout); needs noc_split
+    y_rm: bool = False
+    y_nowrite: bool = False  # (a diagnostic, WL_Y_NOWRITE) y_rm without the row writes: destinations read, rows dropped
+    y_posted: bool = True  # y_rm's row writes posted (no acks; WL_Y_POSTED)
 
 
 def lane_cores(g):
@@ -200,9 +201,10 @@ def tables_tensor(mesh, tabs):
     )
 
 
-def build_lane(mesh, cfg: GCfg, lc: LCfg, x_t, idx_t, counts_t, ws_t, out_t, tab_t, T, out_rows):
+def build_lane(mesh, cfg: GCfg, lc: LCfg, x_t, idx_t, counts_t, ws_t, out_t, tab_t, T, out_rows, dest_t=None):
     """generic_op mesh program of the lane design; returns (mesh program, io tensors, stamps). T: make_tables();
-    out_rows: tile rows of an output block (a group's last expert, or with out_all a group's experts)."""
+    out_rows: tile rows of an output block (a group's last expert, or with out_all a group's experts); with y_rm, out_t
+    is row-major [rows, H] and dest_t the destination lists [nexp, RMAX 32] uint32 (out_rows unused)."""
     R, Cn = tuple(mesh.shape)
     N, G, GC = R * Cn, cfg.G, cfg.GC
     assert GC == 20 and cfg.PAIRS == GC and cfg.DCOLS * GC == cfg.HT
@@ -238,9 +240,7 @@ def build_lane(mesh, cfg: GCfg, lc: LCfg, x_t, idx_t, counts_t, ws_t, out_t, tab
     xin = sharded_l1(mesh, C, [lc.xf * BK * 32, 32], cfg.x_dt, ttnn.TILE_LAYOUT) if lc.bcast else None
     xinf = w16(lc.xf) if lc.bcast else None
     # DRAM -> L1 reads need the L1 address congruent to the DRAM one mod 64: 64-aligned landing spots inside these
-    # (the counts at word 16; with out_eord the group's experts' first output rows past them)
-    cw = 32 + max(4, cfg.nexp) + (16 + cfg.nexp // G if lc.out_eord else 0)
-    counts_l1 = sharded_l1(mesh, C, [1, cw], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, torch.int32)
+    counts_l1 = sharded_l1(mesh, C, [1, 32 + max(4, cfg.nexp)], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, torch.int32)
     idx_l1 = sharded_l1(mesh, C, [4, 32], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, torch.int32)
     table_l1 = sharded_l1(mesh, C, [1, TLW + 16], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, torch.int32)
     a64 = lambda a: (a + 63) // 64 * 64
@@ -248,7 +248,10 @@ def build_lane(mesh, cfg: GCfg, lc: LCfg, x_t, idx_t, counts_t, ws_t, out_t, tab
         table_l1.buffer_address()
     )
     st = stamps_tensor(mesh, C)
-    assert not lc.out_eord or lc.noc_split, "out_eord computes the output rows from each core's own counts read"
+    assert not lc.y_rm or (lc.noc_split and dest_t is not None), "y_rm: destination lists, read on NOC1 by QY"
+    # (y_rm: the row writes need CB 17 64 B aligned)
+    ysh = sharded_l1(mesh, C, [2 * cfg.DCOLS * 32, 32], cfg.out_dt, ttnn.TILE_LAYOUT) if lc.y_rm else None
+    dest_t = dest_t if lc.y_rm else idx_t
     if lc.nofab:
         mcfg, ctype, client_ct, mesh_id = None, None, [0] * 5, 0  # (the reader's mux CT args are placeholders)
     else:
@@ -284,7 +287,9 @@ def build_lane(mesh, cfg: GCfg, lc: LCfg, x_t, idx_t, counts_t, ws_t, out_t, tab
         ydefs += [("WL_BCAST", str(hcnt.buffer_address())), ("WL_XIN", str(xin.buffer_address()))]
         ydefs += [("WL_XINF", str(xinf.buffer_address())), ("WL_XF", str(lc.xf))]
     ydefs += [("WL_OUT_ALL", "1")] if lc.out_all else []
-    ydefs += [("WL_OUT_EORD", "1")] if lc.out_eord else []
+    ydefs += [("WL_Y_RM", "1")] if lc.y_rm else []
+    ydefs += [("WL_Y_NOWRITE", "1")] if lc.y_nowrite else []
+    ydefs += [("WL_Y_POSTED", "1")] if lc.y_rm and lc.y_posted else []
     ydefs += [("WL_MCAST_LINKED", "1")] if lc.mcast_linked else []
     ydefs += [] if lc.own_read else [("WL_NO_OWN_READ", "1")]
     ydefs += [] if lc.gather else [("WG_NO_GATHER", "1")]
@@ -331,6 +336,7 @@ def build_lane(mesh, cfg: GCfg, lc: LCfg, x_t, idx_t, counts_t, ws_t, out_t, tab
                         counts_t.buffer_address(),
                         tab_t.buffer_address(),
                         ws_t.buffer_address(),
+                        dest_t.buffer_address(),
                     ]
                 kernels.append(
                     ttnn.KernelDescriptor(
@@ -371,6 +377,7 @@ def build_lane(mesh, cfg: GCfg, lc: LCfg, x_t, idx_t, counts_t, ws_t, out_t, tab
                         + list(ttnn.TensorAccessorArgs(counts_t).get_compile_time_args())
                         + list(ttnn.TensorAccessorArgs(tab_t).get_compile_time_args())
                         + list(ttnn.TensorAccessorArgs(ws_t).get_compile_time_args())
+                        + list(ttnn.TensorAccessorArgs(dest_t).get_compile_time_args())
                         + [cfg.RMAX, cfg.H * 2, cfg.nexp, TLW * 4, idx_addr, lc.D],
                         runtime_args=rd_rt,
                         defines=ydefs
@@ -388,6 +395,7 @@ def build_lane(mesh, cfg: GCfg, lc: LCfg, x_t, idx_t, counts_t, ws_t, out_t, tab
                         named_compile_time_args=[("expert_activation", 0)],
                         defines=act_defs
                         + [("DN_LAG", str(cfg.dn_lag)), ("WC_GLU", str(cfg.glu))]
+                        + ([("WL_Y_RM", "1")] if lc.y_rm else [])
                         + ([("WX_X_FMT_DIFFERS", "1")] if cfg.x_dt != cfg.h_dt else []),
                         runtime_args=cp_rt,
                         config=ccfg,
@@ -422,7 +430,7 @@ def build_lane(mesh, cfg: GCfg, lc: LCfg, x_t, idx_t, counts_t, ws_t, out_t, tab
                 cb(7, ttnn.bfloat16, cfg.XRM * BK, cset),
                 cb(8, cfg.x_dt, XST * BK, cset),
                 cb(16, cfg.h_dt, 2, cset),
-                cb(17, cfg.out_dt, 2 * DC, cset),
+                ttnn.cb_descriptor_from_sharded_tensor(17, ysh) if lc.y_rm else cb(17, cfg.out_dt, 2 * DC, cset),
             ]
             sems = [ttnn.SemaphoreDescriptor(id=s, core_ranges=cset, initial_value=0) for s in range(6)]
             p = ttnn.ProgramDescriptor(kernels=kernels, semaphores=sems, cbs=cbs)
@@ -464,5 +472,6 @@ def build_lane(mesh, cfg: GCfg, lc: LCfg, x_t, idx_t, counts_t, ws_t, out_t, tab
             mc = ttnn.MeshCoordinate(r, c)
             mpd[ttnn.MeshCoordinateRange(mc, mc)] = p
     io = [x_t, idx_t, counts_t, ws_t, tab_t, wgu_ring, wd_ring, hring, hflags, xring, xflags, xprog, counts_l1]
-    io += [idx_l1, table_l1, warr, cred, freew, arr_stage] + ([hcnt, xin, xinf] if lc.bcast else []) + [st, out_t]
+    io += [idx_l1, table_l1, warr, cred, freew, arr_stage] + ([hcnt, xin, xinf] if lc.bcast else [])
+    io += ([ysh, dest_t] if lc.y_rm else []) + [st, out_t]
     return mpd, io, st

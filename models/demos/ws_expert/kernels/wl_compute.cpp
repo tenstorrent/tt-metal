@@ -11,6 +11,9 @@
 // a down op of the oldest h row once it is DN_LAG rows old (h ring CB 2) -> CB 17. RT: 0 stamps, 1 j, 2 g, 3 experts
 // of the group (order length). CT: 0 KT, 1 BK, 2 KTD, 3 DCOLS, 4 DB, 5 NX, 6 LOOK, 7 counts L1 (word 0 ready, word
 // 16 + e: M of expert e), 8 G, 9 GC, 10 order table L1. Stamps: 256 + n the end of the n-th expert, 63 the end.
+// WL_Y_RM: the down row tile is pack-untilized into CB 17 (32 rows x DCOLS * 32 columns, row after row; DB-tile
+// blocks of the DCOLS) for the reader's row writes. DEST's untilize read remap is enabled once at the start (the
+// gate/up packs and the tilize work with it on), so the per-row switch is only the packer's init / uninit.
 #ifndef DN_LAG
 #define DN_LAG 1
 #endif
@@ -23,6 +26,9 @@
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/moe_block/common/kernels/expert_activation.hpp"
 #include "glu_fused.hpp"
+#ifdef WL_Y_RM
+#include "api/compute/pack_untilize.h"
+#endif
 #ifndef WC_GLU
 #define WC_GLU 3
 #endif
@@ -109,6 +115,9 @@ FORCE_INLINE void down_row() {
         t_ww += wall() - a;
     }
     cb_reserve_back(y_cb, dcols);
+#ifdef WL_Y_RM
+    pack_untilize_dest_init<DB, dcols, false, TILE_C_DIM, false, false /*configure_remap*/>(y_cb);
+#endif
     for (uint32_t b = 0; b < dcols / DB; ++b) {
         tile_regs_acquire();
         for (uint32_t k = 0; k < ktd; ++k) {
@@ -116,11 +125,18 @@ FORCE_INLINE void down_row() {
         }
         tile_regs_commit();
         tile_regs_wait();
+#ifdef WL_Y_RM
+        pack_untilize_dest<DB, dcols>(y_cb, 1, b);
+#else
         for (uint32_t t = 0; t < DB; ++t) {
             pack_tile<true>(t, y_cb, b * DB + t);
         }
+#endif
         tile_regs_release();
     }
+#ifdef WL_Y_RM
+    pack_untilize_uninit(y_cb);
+#endif
     cb_pop_front(hr_cb, ktd);
     cb_push_back(y_cb, dcols);
     SRCB_TO_X();
@@ -133,6 +149,9 @@ void kernel_main() {
     g_ = get_arg_val<uint32_t>(2);
     nexp_g = get_arg_val<uint32_t>(3);
     compute_kernel_hw_startup<SrcOrder::Reverse>(xr_cb, w_cb, h_cb);
+#ifdef WL_Y_RM
+    MATH((llk_math_reconfig_remap(true)));
+#endif
 #if WC_GLU == 0
     expert_activation::init<expert_activation::Kind::Silu>();
 #else

@@ -40,9 +40,9 @@ def test_ws_end_chip(mesh_device, T, nbuf):
     w_t = ttnn.from_torch(w, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, memory_config=dram)
     y_t = ttnn.empty([T, H], dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, memory_config=dram)
     fid = os.environ.get("WSE_FID", "HiFi4")
-    split = os.environ.get("WSE_SPLIT", "1") == "1"
+    rnoc = os.environ.get("WSE_READ_NOC", "0")
     mpd, io, st = build_end(
-        mesh_device, T, K, H, rows_t, w_t, y_t, nbuf=nbuf, fidelity=getattr(ttnn.MathFidelity, fid), split_noc=split
+        mesh_device, T, K, H, rows_t, w_t, y_t, nbuf=nbuf, fidelity=getattr(ttnn.MathFidelity, fid), read_noc=rnoc
     )
     clk = aiclk_mhz(first_visible())
     wall, dev = [], []
@@ -66,7 +66,8 @@ def test_ws_end_chip(mesh_device, T, nbuf):
     gb = T * (S * H * 2 + 64 + H * 2) / 1e9
     dm, wm = statistics.median(dev), statistics.median(wall)
     logger.info(
-        f"WSE end pass T {T} on {len(end_cores(mesh_device))} cores, {nbuf} tokens in flight a core, {fid}, split NoCs {split}, {WARM} warm-up + {MEAS} measured launches, aiclk "
+        f"WSE end pass T {T} on {len(end_cores(mesh_device))} cores, {nbuf} tokens in flight a core, {fid}, reads on "
+        f"NoC {rnoc}, {WARM} warm-up + {MEAS} measured launches, aiclk "
         f"{clk} MHz: device ms median {dm:.3f} (min {min(dev):.3f}), wall ms median {wm:.3f}; {gb:.2f} GB moved, "
         f"{gb / dm * 1e3:.0f} GB/s at device time; pcc {p:.6f}, max error {err:.2e} of max |y|; waits (K cycles, "
         f"core mean) {end_waits_k(st, 0)}"

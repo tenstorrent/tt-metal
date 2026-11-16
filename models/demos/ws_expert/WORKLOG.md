@@ -682,3 +682,63 @@ Rule from the repro: on a group's multicast NoC nothing may enter the group rect
   - The MoE block's moe_head and routed_experts_combine are not reused: they are built around dispatch (TP all-gather,
     routing exchange, fabric combine), not a chip's own tokens against streamed weights.
   - Only softmax scoring has been tested; sigmoid is selectable but untested.
+
+## Stage 11: custom end pass and row-major stream outputs (hold 215516, bh-glx-110-c10u20)
+The phases now meet in a row-major result buffer [T S, H] bf16, S = K + 1: row t S + k holds token t's k-th routed
+expert's output, row t S + K its shared expert's. The ttnn combine (untilize, embedding gather, batched matmul) and
+the expert-id-ordered outputs (out_eord) are gone.
+
+### End pass (ws_end.py, kernels we_*.cpp)
+- What it computes: y[t] = sum over k of w[t, k] row t S + k, plus row t S + K. Every core takes a contiguous range of
+  tokens.
+- Reader:
+  - Reads a token's S rows: S page reads of 7680 B, each row into 4 tile slots of contiguous elements.
+  - The 4th slot's 512-B tail is zeroed once and never written, so it stays finite.
+  - Up to 4 tokens are in flight, each on its own read transaction id.
+  - Writes the gate weights as bf16 at element 0 of scalar tiles, plus 1.0 for the shared row.
+- Compute: SCALAR-broadcast ELWMULs at HiFi4 accumulate into 4 fp32 DEST tiles. On Blackhole ELWMUL adds its product
+  into DEST, and the standard binary path never clears DEST, so the plain broadcast multiply is the MAC.
+- Writer: writes y rows (row-major [T, H], what the stream's x reader takes).
+- One chip, T 31250, 20 + 5 launches; PCC 0.999999 on every token in all cases:
+| reads | device ms | GB/s |
+|---|---|---|
+| every core on NOC1 (writes NOC0) | 12.92 | 260 |
+| half the cores on each NoC | 7.54 | 446 |
+| every core on NOC0 (writes NOC1): the default | 7.85 | 428 |
+  - With all reads on NOC1 the pass is NoC-bound: compute waited for input 58% of the time, LoFi vs HiFi4 made no
+    difference, and 2, 4 or 6 tokens in flight made no difference.
+  - The half-and-half split is faster, but it puts DRAM reads and acknowledged DRAM writes on both NoCs. That mix can
+    hang the chip (below), so NOC0 reads / NOC1 writes is the default.
+
+### Stream: row-major outputs (LCfg.y_rm)
+- The down row tile is pack-untilized (pack_untilize_dest<3, 6>). DEST's untilize read remap is enabled once at the
+  compute's start.
+- QY (NCRISC, NOC1):
+  - Reads the row tile's 32 result rows from the expert's destination list (same layout as the token lists), on its
+    own transaction id, before the data is ready.
+  - Writes each row's 384 B (this core's 6 columns) to its result row as posted writes.
+  - Flushes them before the kernel exits.
+- The head (still ttnn ops) builds the destination lists t S + k with the same scatter as the token lists.
+- The hang:
+  - With acknowledged (non-posted) row writes on NOC1, next to the NCRISC's NOC1 DRAM reads (weights, token rows,
+    lists), one chip at T 31250 hung in the first launch, every time. The chip stopped answering MMIO, so triage could
+    not attach.
+  - The same code completed at T 2048 / 64 experts and at T 8192 / 640 experts (about 0.75 GB of rows, against
+    2.88 GB and about 7.5 M writes a chip at T 31250).
+  - At T 31250 with the writes compiled out (WL_Y_NOWRITE) the stream completed, and the head was exact.
+  - Posted writes ran 25 layers clean.
+  - The cause is still unknown. The trigger scales with the volume of acknowledged DRAM writes on a NoC that also
+    carries DRAM reads, like the ring all-gather's NOC1 read + write hang.
+  - Rules adopted for every op of the layer:
+    - DRAM reads and acknowledged DRAM writes never share a NoC (posted writes are exempt).
+    - Nothing enters a multicast rectangle from outside on its NoC (read responses, write acks).
+    - No DRAM data written on one NoC is read back on the other within an op.
+- Results, 20 + 5 layers; the end pass ran split NoCs here; the shared rows are not written yet, so y is the routed
+  sum:
+| case | stream device ms (tile outputs) | output writes | rows PCC | y PCC | end pass device ms |
+|---|---|---|---|---|---|
+| one chip, T 31250 (proxy) | 36.68 (34.70) | 79 GB/s | 0.99994 | 0.99994 | 7.56 |
+| Galaxy torus, chips 0 / 31 | 49.26 (48.38) | 58 GB/s | 0.99994 | 0.99994 | 7.63 |
+- Head exactness: exact in every run (counts, token lists, destination lists).
+- Every token, one chip at T 31250: the result buffer read twice around a device sync is identical. y against the
+  host's sum of the rows as read: worst token 0.0038 relative, none over 2e-2.

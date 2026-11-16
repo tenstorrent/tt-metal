@@ -21,19 +21,21 @@
 // next kind << 20 (kind: 1 own, 2 from direction 0, 3 from direction 1), s'0 | k'0 << 2, s'1 | k'1 << 2, own index.
 // RT: 0 j, 1 g, 2 order length, 3 col x NOC (c 0), 4 col x NOC (c 1), 5 row 0 y NOC, 6 stamps, 7 out addr, 8 mesh id,
 //     9 next chip direction 0, 10 next chip direction 1, 11 this core's xy, 12 x addr, 13 idx addr, 14 counts addr,
-//     15 table addr, 16 own slices addr, then the mux client RT args (17 words) of direction 0 and of direction 1
+//     15 table addr, 16 own slices addr, 17 destination lists addr (WL_Y_RM), then the mux client RT args (17 words) of
+//     direction 0 and of direction 1
 // CT: 0 KT, 1 BK, 2 KTD, 3 DCOLS, 4 GC, 5 G, 6 NS, 7 NX, 8 hflags, 9 xring, 10 xflags, 11 xprog, 12-15 group rect
 //     for NOC1, 16 x tile bytes, 17 counts L1, 18 table L1, 19 hring, 20 h tile bytes, 21 warr (arrivals a slot,
-//     16 B apart), 22 ORMAX (output tile rows a group; WL_OUT_EORD: the first output tile row), 23 HT, 24 wgu ring,
+//     16 B apart), 22 ORMAX (output tile rows a group), 23 HT, 24 wgu ring,
 //     25 wd ring, 26 cred (2K words), 27 FREEW (K words), 28 CHT, 29 W tile bytes, 30-34 mux client CT args
 //     (buffers, buffer bytes, status, termination signal, clients), then TensorAccessorArgs(out), (x), (idx),
-//     (counts), (table), (own slices), then RMAX, x row bytes, NEXP, table page bytes, idx scratch L1, D (own chunk
-//     reads in flight)
+//     (counts), (table), (own slices), (destination lists), then RMAX, x row bytes, NEXP, table page bytes, idx
+//     scratch L1 (Q1's token ids at +0, QY's destinations at +256), D (own chunk reads in flight)
 // WL_NO_FABRIC (one chip, every expert its own): no mux connections and no mux client RT args, nothing forwarded
 // and no credits sent; CT 30-34 are placeholders.
-// WL_OUT_EORD: every expert's down rows in expert-id order, expert e from tile row ORMAX + sum over e' < e of
-// ceil(M_e' / 32) (computed from the counts into the counts L1 past them, for this group's experts e = i G + g only),
-// so a token's output row follows from the counts alone, whatever order the experts arrive in.
+// WL_Y_RM: row-major outputs. The compute pack-untilizes each down row tile (32 rows x DCOLS * 32 columns, row after
+// row in CB 17); each of its rows goes to its own row of the row-major output, at this core's columns: the row's entry
+// in the expert's destination list (same layout as the token lists: expert e's page, entry p for its p-th token).
+// Rows past the expert's count are not written.
 #include "api/dataflow/dataflow_api.h"
 #ifndef WL_NO_FABRIC
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux_interface.hpp"
@@ -128,7 +130,8 @@ void kernel_main() {
     constexpr auto cargs = TensorAccessorArgs<iargs.next_compile_time_args_offset()>();
     constexpr auto targs = TensorAccessorArgs<cargs.next_compile_time_args_offset()>();
     constexpr auto wargs = TensorAccessorArgs<targs.next_compile_time_args_offset()>();
-    constexpr uint32_t RB = wargs.next_compile_time_args_offset();
+    [[maybe_unused]] constexpr auto dargs = TensorAccessorArgs<wargs.next_compile_time_args_offset()>();
+    constexpr uint32_t RB = dargs.next_compile_time_args_offset();
     [[maybe_unused]] constexpr uint32_t RMAX = get_compile_time_arg_val(RB), xrow = get_compile_time_arg_val(RB + 1);
     [[maybe_unused]] constexpr uint32_t NEXP = get_compile_time_arg_val(RB + 2), TB = get_compile_time_arg_val(RB + 3);
     [[maybe_unused]] constexpr uint32_t idx_l1 = get_compile_time_arg_val(RB + 4);
@@ -166,18 +169,6 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* tab = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(table_l1);
     volatile tt_l1_ptr uint32_t* order = tab + 16;
     auto rows_of = [&](uint32_t n) { return (counts[16 + (order[n] & 0xFFFF)] + 31) / 32; };
-#ifdef WL_OUT_EORD
-    constexpr uint32_t EB0 = 16 + ((NEXP + 15) & ~15u);  // expert i G + g's first output tile row at counts[EB0 + i]
-    {
-        uint32_t s = ORMAX;
-        for (uint32_t e = 0; e < NEXP; ++e) {
-            if (e % G == g) {
-                counts[EB0 + e / G] = s;
-            }
-            s += (counts[16 + e] + 31) / 32;
-        }
-    }
-#endif
     uint32_t total_rows = 0, total_x = 0;
     for (uint32_t n = 0; n < nexp_g; ++n) {
         total_rows += rows_of(n);
@@ -191,7 +182,7 @@ void kernel_main() {
     uint32_t term_sync[2], tmx[2], tmy[2];
     uint8_t muxx[2], muxy[2];
     for (uint32_t d = 0; d < 2; ++d) {
-        size_t a_ = 17 + 17 * d;
+        size_t a_ = 18 + 17 * d;
         a_++;  // connection valid
         master[d] = get_arg_val<uint32_t>(a_++) != 0;
         muxx[d] = get_arg_val<uint32_t>(a_++);
@@ -814,12 +805,72 @@ void kernel_main() {
 #endif
 #ifdef WG_Y_NCRISC
     // ---- QY: down outputs (CB 17) to DRAM, on NOC1 (the BRISC's NOC0 keeps the DRAM reads): the group's last
-    // expert's rows at tile row g ORMAX, or (WL_OUT_ALL) every expert's, packed in order from g ORMAX, or
-    // (WL_OUT_EORD) every expert's at its expert-id-ordered tile row
+    // expert's rows at tile row g ORMAX, or (WL_OUT_ALL) every expert's, packed in order from g ORMAX, or (WL_Y_RM)
+    // each row of a row tile to its destination row
     constexpr uint32_t y_cb = tt::CBIndex::c_17;
+    uint32_t drained = 0, d_n = 0, d_r = 0;
+#ifdef WL_Y_RM
+    // a state machine (0: next row tile, 1: its 32 destinations requested, 2: its rows written): the destinations are
+    // read on their own transaction id before the row tile is computed, and the pages are freed once the writes left
+    constexpr uint32_t Y_TRID = 0xD;  // (own chunk reads use 1..D)
+    static_assert(D < Y_TRID);
+    constexpr uint32_t seg = DCOLS * 64;  // a row's bytes at this core's columns
+    const auto os = TensorAccessor(oargs, get_arg_val<uint32_t>(7), HT * 64);
+    const auto ds = TensorAccessor(dargs, get_arg_val<uint32_t>(17), RMAX * 32 * 4);
+    constexpr uint32_t dst_l1 = idx_l1 + 256;
+    volatile tt_l1_ptr uint32_t* dst = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst_l1);
+    uint32_t y_state = 0;
+    auto qy = [&]() -> bool {
+        if (y_state == 2) {
+#ifdef WL_Y_POSTED
+            if (!ncrisc_noc_posted_writes_sent(noc_index)) {
+#else
+            if (!ncrisc_noc_nonposted_writes_sent(noc_index)) {
+#endif
+                return false;
+            }
+            cb_pop_front(y_cb, DCOLS);
+            ++d_r;
+            ++drained;
+            y_state = 0;
+            return true;
+        }
+        if (y_state == 1) {
+            if (!ncrisc_noc_read_with_transaction_id_flushed(noc_index, Y_TRID) ||
+                !cb_pages_available_at_front(y_cb, DCOLS)) {
+                return false;
+            }
+            invalidate_l1_cache();
+            const uint32_t m = counts[16 + (order[d_n] & 0xFFFF)] - d_r * 32;
+            uint32_t l1 = get_read_ptr(y_cb);
+#ifndef WL_Y_NOWRITE
+            for (uint32_t r = 0; r < (m < 32 ? m : 32); ++r, l1 += seg) {
+#ifdef WL_Y_POSTED
+                noc_async_write<NOC_MAX_BURST_SIZE + 1, true, true>(l1, os.get_noc_addr(dst[r], J * seg), seg);
+#else
+                noc_async_write(l1, os.get_noc_addr(dst[r], J * seg), seg);
+#endif
+            }
+#endif
+            y_state = 2;
+            return true;
+        }
+        if (drained >= total_rows) {
+            return false;
+        }
+        while (d_r >= rows_of(d_n)) {
+            ++d_n;
+            d_r = 0;
+        }
+        noc_async_read_set_trid(Y_TRID);
+        noc_async_read(ds.get_noc_addr(order[d_n] & 0xFFFF) + d_r * 128, dst_l1, 128);
+        noc_async_read_set_trid(0);
+        y_state = 1;
+        return true;
+    };
+#else
     const uint32_t obytes = get_tile_size(y_cb);
     const auto os = TensorAccessor(oargs, get_arg_val<uint32_t>(7), obytes);
-    uint32_t drained = 0, d_n = 0, d_r = 0;
     [[maybe_unused]] uint32_t d_base = 0;
     bool y_sent = false;  // a row's writes issued, its CB 17 pages still held
     auto qy = [&]() -> bool {
@@ -843,10 +894,7 @@ void kernel_main() {
             ++d_n;
             d_r = 0;
         }
-#if defined(WL_OUT_EORD)
-        if (true) {
-            const uint32_t row = counts[EB0 + (order[d_n] & 0xFFFF) / G] + d_r;
-#elif defined(WL_OUT_ALL)
+#ifdef WL_OUT_ALL
         if (true) {
             const uint32_t row = g * ORMAX + d_base + d_r;
 #else
@@ -865,6 +913,7 @@ void kernel_main() {
         ++drained;
         return true;
     };
+#endif
 #else
     const uint32_t drained = total_rows;
     auto qy = []() -> bool { return false; };
@@ -902,6 +951,9 @@ void kernel_main() {
     }
     noc_async_write_barrier();
     noc_async_atomic_barrier();
+#ifdef WL_Y_POSTED
+    noc_async_posted_writes_flushed();
+#endif
 #ifndef WL_NO_FABRIC
     // mux teardown: every client disconnects; client 0 of each mux stops it once all others have
     for (uint32_t d = 0; d < 2; ++d) {
