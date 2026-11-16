@@ -17,8 +17,8 @@ disk, the server retires and the client starts a new one.
 
 Fork safety: the server only imports, it never computes. After preloading it checks that no thread is running
 except the ones known to survive fork (OpenBLAS's worker pool, jemalloc's background thread); otherwise it records
-why in <sock>.unsafe and exits, and clients for that environment run cold until `safe_pytest_warm.py stop` (or a
-change to this file). It then freezes the preloaded objects (gc.freeze) so the children's garbage collector never
+why in <sock>.unsafe and exits, and clients for that environment run cold for the next hour (then a new server
+checks again), or until `safe_pytest_warm.py stop` or a change to this file. It then freezes the preloaded objects (gc.freeze) so the children's garbage collector never
 writes to them and their memory pages stay shared.
 
 Failure model (the device must never see two runs at once, and a killed run must never keep running):
@@ -122,6 +122,7 @@ KEY_ENV_PREFIXES = (
 RLIMITS = ("RLIMIT_NOFILE", "RLIMIT_MEMLOCK", "RLIMIT_CORE", "RLIMIT_STACK", "RLIMIT_AS", "RLIMIT_NPROC")
 
 IDLE_TIMEOUT_S = int(os.environ.get("SAFE_PYTEST_WARM_IDLE_S", "3600"))
+UNSAFE_TTL_S = 3600  # how long a "not fork-safe" verdict sends clients straight to cold runs before a re-check
 START_TIMEOUT_S = 120
 CHILD_SETUP_TIMEOUT_S = 30
 SELF_PATH = os.path.realpath(__file__)
@@ -355,19 +356,23 @@ def _openblas_workers() -> int:
 def _fork_hazard() -> str | None:
     """Why forking this process is unsafe, or None: a thread other than the main one that is not known to survive
     fork. Python threads never are; native ones are allowed by name (FORK_SAFE_THREAD_NAMES) or as OpenBLAS
-    workers (unnamed, so they carry the main thread's name; at most pool size - 1 of them)."""
+    workers (unnamed, so they carry the main thread's name; at most pool size - 1 of them). An unnamed thread of
+    another library is indistinguishable from an OpenBLAS worker by name, so it passes while the count fits."""
     others = [t.name for t in threading.enumerate() if t is not threading.main_thread()]
     if others:
         return f"Python thread(s) running: {', '.join(sorted(others))}"
     try:
         main_name = open("/proc/self/comm").read().strip()
-        names = [
-            open(f"/proc/self/task/{tid}/comm").read().strip()
-            for tid in os.listdir("/proc/self/task")
-            if int(tid) != os.getpid()
-        ]
+        tids = [tid for tid in os.listdir("/proc/self/task") if int(tid) != os.getpid()]
     except OSError as e:
         return f"cannot list threads: {e}"
+    names = []
+    for tid in tids:
+        try:
+            with open(f"/proc/self/task/{tid}/comm") as f:
+                names.append(f.read().strip())
+        except FileNotFoundError:
+            continue  # the thread exited after listdir: it can no longer be copied into a child
     unknown = sorted({n for n in names if n != main_name and n not in FORK_SAFE_THREAD_NAMES})
     if unknown:
         return f"native thread(s) {unknown} started by a preloaded module"
@@ -392,8 +397,10 @@ def serve(sock_path: str, key: str):
     hazard = _fork_hazard()
     if hazard:
         _log(f"not serving: {hazard}; clients for this environment run cold")
-        with open(sock_path + ".unsafe", "w") as f:
+        tmp = f"{sock_path}.unsafe.{os.getpid()}"
+        with open(tmp, "w") as f:
             f.write(hazard + "\n")
+        os.replace(tmp, sock_path + ".unsafe")  # readers never see a half-written reason
         os._exit(3)
     # Move every preloaded object out of the collector's reach: a child's GC pass would otherwise write to all of
     # their headers and copy the pages the child shares with the server (copy-on-write).
@@ -795,6 +802,20 @@ def _ping(sock_path: str) -> bool:
         s.close()
 
 
+def _unsafe_reason(sock_path: str) -> str | None:
+    """Why a server refused to fork in this environment, if it did within the last UNSAFE_TTL_S. An older marker
+    is removed so the next server checks again (the offending package may have been fixed)."""
+    path = sock_path + ".unsafe"
+    try:
+        if time.time() - os.stat(path).st_mtime > UNSAFE_TTL_S:
+            os.unlink(path)
+            return None
+        with open(path) as f:
+            return f.read().strip() or "unknown reason"
+    except FileNotFoundError:
+        return None
+
+
 def _start_server(sock_path: str, key: str) -> None:
     log_path = sock_path[: -len(".sock")] + ".log"
     with open(log_path, "ab") as log:
@@ -811,6 +832,9 @@ def _start_server(sock_path: str, key: str) -> None:
     while time.monotonic() < deadline:
         if _ping(sock_path):
             return
+        reason = _unsafe_reason(sock_path)  # the server that won the startup race refused to fork
+        if reason:
+            raise RuntimeError(f"warm path disabled for this environment: {reason}")
         rc = proc.poll()
         # rc 0 = it lost the startup race to a concurrent server for the same socket: wait for that one.
         if rc is not None and rc != 0:
@@ -887,11 +911,9 @@ def client_run(mode: str, module: str | None, argv: list[str]) -> int:
         if len(fds) > MAX_FDS or not {0, 1, 2} <= set(fds):
             raise RuntimeError(f"cannot forward fds {fds[:8]}...")
         sock_path = _socket_path(key)
-        try:
-            with open(sock_path + ".unsafe") as f:
-                raise RuntimeError(f"warm path disabled for this environment: {f.read().strip()}")
-        except FileNotFoundError:
-            pass
+        reason = _unsafe_reason(sock_path)
+        if reason:
+            raise RuntimeError(f"warm path disabled for this environment: {reason}")
         for _attempt in range(3):
             s = _connect(sock_path)
             started_server = False

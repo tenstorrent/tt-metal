@@ -31,6 +31,7 @@ def warm(tmp_path):
     sock_dir = tmp_path / "sock"
     sock_dir.mkdir(mode=0o700)
     env = dict(os.environ)
+    env.pop("SAFE_PYTEST_WARM_JOB", None)  # set when this suite itself runs under a warm server
     env["SAFE_PYTEST_WARM_DIR"] = str(sock_dir)
     env["PATH"] = os.path.dirname(sys.executable) + os.pathsep + env.get("PATH", "")
     work = tmp_path / "work"  # outside the repo, so the repo's conftest.py is not loaded by the children
@@ -174,3 +175,18 @@ def test_fork_hazard_accepts_openblas_pools():
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=120)
     assert out.returncode == 0, out.stderr
     assert out.stdout.strip().splitlines()[-1] == "None", out.stdout
+
+
+def test_unsafe_marker_expires(tmp_path):
+    """A fresh "not fork-safe" marker sends clients cold; an expired one is removed so a new server re-checks."""
+    spec = importlib.util.spec_from_file_location("safe_pytest_warm", SCRIPT)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    sock = str(tmp_path / "x.sock")
+    assert mod._unsafe_reason(sock) is None
+    Path(sock + ".unsafe").write_text("native thread(s) ['leaky'] started by a preloaded module\n")
+    assert "leaky" in mod._unsafe_reason(sock)
+    old = time.time() - mod.UNSAFE_TTL_S - 1
+    os.utime(sock + ".unsafe", (old, old))
+    assert mod._unsafe_reason(sock) is None
+    assert not os.path.exists(sock + ".unsafe")
