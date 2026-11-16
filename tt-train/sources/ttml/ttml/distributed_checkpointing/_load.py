@@ -24,7 +24,7 @@ import numpy as np
 import ttnn
 
 from ._errors import CheckpointError, IncompleteCheckpointError, MissingKeyError
-from ._index import Index, is_complete, read_header_json, read_index
+from ._index import Index, is_complete, read_checked_header, read_index
 from ._planner import KeyPlan, LoadPlan, ReadItem, create_load_plan
 from ._safetensors import pread_all, read_file_header
 from ._state_dict import (
@@ -218,7 +218,7 @@ def load(
             f"{ckpt_dir} is not a complete checkpoint (staging directory or missing index.json)"
         )
     index: Index = read_index(ckpt_dir)
-    header = read_header_json(ckpt_dir)
+    header = read_checked_header(ckpt_dir)
     world_rank = world_record()["ranks"][0]["world_rank"]
     train_state = header[TRAIN_STATE_KEY]
     missing_state = missing_train_state(train_state, scheduler=scheduler, dataloader=dataloader, rng=rng)
