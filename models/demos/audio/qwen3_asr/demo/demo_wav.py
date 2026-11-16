@@ -31,7 +31,7 @@ import audio_encoder_ref as ref  # noqa: E402
 from asr_output import parse_asr  # noqa: E402
 from qwen3_asr_decoder import Qwen3ASRDecoder  # noqa: E402
 
-WAV_DIR = os.environ.get("WAV_DIR", "/ttwork/qwen3_asr_wav")
+WAV_DIR = os.environ.get("QWEN3ASR_WAV_DIR", os.environ.get("WAV_DIR", "/ttwork/qwen3_asr_wav"))
 CKPT = os.environ.get("HF_MODEL", "/ttwork/qwen3_asr_text_decoder")
 AUDIO_TOKEN_ID = 151676
 
