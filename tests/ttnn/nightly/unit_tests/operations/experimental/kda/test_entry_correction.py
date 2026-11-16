@@ -104,9 +104,10 @@ def _device_inputs(device, correction: EntryCorrection, host: tuple[torch.Tensor
 
 
 def _terms(correction: EntryCorrection, zero: torch.Tensor, identity: torch.Tensor) -> torch.Tensor:
-    """F(0) and F(I) [BH, NC, 32, K] as the summary emits them: each core's chunk rows of F(0), then of F(I)."""
+    """F(0) and F(I) [BH, NC, 32, K] as the summary emits them: a block's chunk rows of F(0), then of F(I). Sharded, a
+    block is one core's chunks; streamed from DRAM, it is a whole head's (the summary's emit_block_chunks)."""
     heads, *_, key = zero.shape
-    blocks = heads * correction.cores_per_head
+    blocks = heads * (correction.cores_per_head if correction.terms_memory_config.is_sharded() else 1)
     return torch.stack([zero.reshape(blocks, -1, key), identity.reshape(blocks, -1, key)], dim=1)
 
 
