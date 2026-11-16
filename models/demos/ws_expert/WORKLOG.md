@@ -507,3 +507,26 @@ then 20 + 5 plain and WS_DEFER; stage B (cmds/ws_sf_b.sh) once the tray is clean
     group's corner, alone on its NoC in that group, cannot leave its core once the lane design's fabric traffic is
     running. Not tested: the routers' landing writes into the group cores, the cores' NOC1 writes into the mux
     cores, DRAM read responses into the group, the BRISC's DRAM reads with transaction ids while it multicasts.
+
+- Single-chip data-movement repro of the NOC0 group multicast wedge (tests/test_mcast_wedge.py, kernels/mw_mcast.cpp,
+  mw_recv.cpp, mw_bg.cpp; no compute, no fabric). The lane group's x multicast exactly (21,760 B payload + 4-byte flag,
+  loopback, unlinked, 20 destinations in the 2 x 10 group, flag from the payload's command buffer, flush only) from the
+  group's NOC0 start corner (BRISC), NX 9 ring slots acknowledged by every receiver's NCRISC on NOC1; switchable NOC0
+  background (MW_BG gather / own / h / stream, MW_SELF, MW_MC=0 control, MW_BG_NOC1, MW_GQ, MW_MC_BARRIER).
+  bh-glx-110-c10u20 chip 5 (TT_VISIBLE_DEVICES=5), cmds/mc_wedge_1..4.sh:
+
+  | Step | Traffic | Result |
+  |---|---|---|
+  | m0_alone | multicast only, 180 s | 208.4M multicasts clean, 25.2 GB/s |
+  | c1 | gather + own DRAM reads on 19 receivers and the multicaster, no multicast, 60 s | clean |
+  | c2 | multicast + the multicaster's own DRAM reads, 120 s | 61.2M multicasts clean |
+  | m1_A | multicast + gather + own reads on the 19 receivers (NOC0) + the multicaster's | dead in about 3 s: MMIO timeouts, host rebooted |
+  | c3 | multicast + gather reads on the 19 receivers (NOC0) | dead at once: MMIO timeouts, host rebooted |
+  | d2 | as c3, 4 reads in flight a core | hang in seconds: multicaster (1,0) BRISC NOC0 2 writes issued not sent, 40 acks missing (the lane signature); 16 receivers' BRISCs in noc_async_read_barrier; chips reset, host up |
+  | d3 | as c3, write barrier after each multicast | dead in seconds: MMIO timeouts, host rebooted |
+  | d1 | as c3, the receivers' reads on NOC1 (NCRISC) | 124.3M multicasts in 120 s clean, 22.5 GB/s |
+
+  Minimal trigger: a NOC0 multicast into the group while DRAM read responses stream into the receiving cores on NOC0
+  (even 4 x 1280 B reads in flight a core). Reads into the multicaster alone, and the reads without the multicast, run
+  clean. Capping the reads or a barrier after each multicast does not help; the same reads on NOC1 do. Not run: stream
+  (mux-like) and h traffic alone, own-expert reads alone, the NOC1 fix with own reads.
