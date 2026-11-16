@@ -80,6 +80,7 @@ from models.experimental.deepseek_v41_flash.tt.decode.attention import (
 )
 from models.experimental.deepseek_v41_flash.tt.decode.decode_prefetch import SHARED_RING_PAGES, make_prefetch_buffers
 from models.experimental.deepseek_v41_flash.tt.decode.decoder_layer import (
+    _gain_block,
     DeepSeekV41DecoderLayer,
     DeepSeekV41PersistentMoeDecoderLayer,
 )
@@ -338,7 +339,8 @@ class DeepSeekV41Model(DeepSeekV4Model):
                     f"persistent_moe serves one requester stage (its requests go in strict turn), got {num_stages}"
                 )
             unsupported = {
-                "verify_rows > 1": verify_rows > 1,
+                # A verify block runs every layer as (verify_rows, 32)-tiled block ops (decode_verify).
+                "verify_rows other than 1 or 4": verify_rows not in (1, 4),
                 "image_rows": bool(image_rows),
                 "vision_stage": vision_stage is not None,
                 "prefill_layer_submesh_ids": prefill_layer_submesh_ids is not None,
@@ -360,6 +362,8 @@ class DeepSeekV41Model(DeepSeekV4Model):
                 )
         self.image_rows = image_rows
         self.verify_rows = verify_rows
+        # The persistent stage's verify: one traced step of every layer's block ops (_block_verify_stage).
+        self._block_verify = persistent_moe and verify_rows > 1
         self.balance_dram_banks = balance_dram_banks
         self.loader = loader
         self.device = full_device
@@ -571,6 +575,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
                         use_prefetcher=self.use_prefetcher,
                         prefetch_buffers=prefetch_buffers,
                         engram_sockets=engram_sockets.get(li),
+                        verify_rows=verify_rows,
                     )
                     _profile(current_device)
                     logger.debug(f"Layer {li} built: {_l1_report(current_device)}")
@@ -775,7 +780,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
             raise NotImplementedError(f"V4.1 decode supports batch 1, got batch={batch}")
         if device_sampling and lm_head is None:
             raise ValueError("device_sampling samples from the folded-in lm_head; pass lm_head")
-        if device_sampling and self.verify_rows > 1:
+        if device_sampling and self.verify_rows > 1 and not self._block_verify:
             raise NotImplementedError("the verify blocks read their rows' logits off the decode socket")
         if num_sessions < 1:
             raise ValueError(f"num_sessions must be at least 1, got {num_sessions}")
@@ -843,7 +848,14 @@ class DeepSeekV41Model(DeepSeekV4Model):
         # A verify block's packet (_verify_packet) shares the socket, so the page holds the larger of the two.
         t = self.verify_rows
         self._verify_fields = {}
-        if t > 1:
+        if self._block_verify:
+            # _block_verify_packet: the block's tokens, positions, the starts of the ratio-2 groups it closes and
+            # the drafter ring rows; every other per-row integer is a decode_step_context term of these.
+            offset = 0
+            for name, size in {"token": t, "pos": t, "start2": t // 2, "dspark_slot": t}.items():
+                self._verify_fields[name] = (offset, size)
+                offset += size
+        elif t > 1:
             sizes = {"token": t, "pos": t, "sliding_pos": t, "ring_rows": t * t, "sliding_curpos": t}
             sizes.update(win_prev=1, stash_slot=t, dspark_slot=t)
             for r in sorted(ratios):
@@ -1810,6 +1822,8 @@ class DeepSeekV41Model(DeepSeekV4Model):
             raise RuntimeError("call activate_sessions() before decoding")
         sid = self._resident[0]
         image = token_id is not None and self._has_image_token(token_id)
+        if self._block_verify:
+            self._use_server_rows(1)
         if self._eager_decode:
             self._packet_sids.append((sid, image))
             self._eager_pending.append((pos, sid))
@@ -2031,7 +2045,10 @@ class DeepSeekV41Model(DeepSeekV4Model):
                     [1],
                     [term(2, mode="mod", div=win_rows or ratio, add_field=5 if win_base else -1)],
                 )
-            if ratio > 1 and win_rows and r2_pool:
+                if win_rows and not win_base:
+                    # The speculative window's slot of pos - 1, which compress_pool_decode pairs with.
+                    sb.add_int(("prev_slot", ratio), [1], [term(2, pre_add=win_rows - 1, mode="mod", div=win_rows)])
+            if ratio > 1 and win_rows and r2_pool and win_base:
                 win_prev_ratios.append(ratio)
             if ratio == 1 or (ratio == 2 and r2_pool):
                 if ratio != 1:
@@ -2070,6 +2087,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
             "mask": {},
             "curpos": {},
             "win_slot": {r: out[("win_slot", r)] for r in sm["kv_ratios"] if r > 1},
+            "prev_slot": {r: out[("prev_slot", r)] for r in sm["kv_ratios"] if ("prev_slot", r) in out},
             "win_prev": {},
             "win_rope": {},
             "entry": {r: out[("entry", r)] for r in entry_ratios},
@@ -2191,6 +2209,8 @@ class DeepSeekV41Model(DeepSeekV4Model):
                 inputs["win_slot"] = ctx["win_slot"][ratio]
                 inputs["win_prev"] = ctx["win_prev"].get(ratio)
                 inputs["win_offset"] = ctx["win_offset"]
+                if ctx.get("prev_slot", {}).get(ratio) is not None:
+                    inputs["prev_slot"] = ctx["prev_slot"][ratio]
             if pool:
                 inputs["cos_win"], inputs["sin_win"] = ctx["win_rope"][ratio]
                 inputs["entry"] = ctx["entry"][ratio]
@@ -3094,7 +3114,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
             raise RuntimeError("call prepare_spec_decode() before the decode traces are compiled")
         if self._slotted and self.verify_rows > 1:
             raise NotImplementedError("several sessions' rings decode one row at a time: use verify_rows=1")
-        if self.device_sampler is not None:
+        if self.device_sampler is not None and not self._block_verify:
             raise NotImplementedError(
                 "speculative decode accepts against the steps' logits: prepare without device_sampling"
             )
@@ -3154,7 +3174,9 @@ class DeepSeekV41Model(DeepSeekV4Model):
                     device=device,
                 )
         t = self.verify_rows
-        if t > 1:
+        if self._block_verify:
+            self._prepare_block_verify()
+        elif t > 1:
             split = [
                 layer.layer_idx
                 for layer in self.layers
@@ -3299,11 +3321,14 @@ class DeepSeekV41Model(DeepSeekV4Model):
         """
         if self.spec_window_rows is None:
             raise RuntimeError("call prepare_spec_decode() first")
-        verify = self.verify_rows > 1 and self._lm_head_traced is not None
+        verify = self.verify_rows > 1 and self._lm_head_traced is not None and not self._block_verify
         if verify and self._eager_decode:
             self._compile_verify(token_id)
+        self._use_server_rows(1)
         self.compile_traces(token_id, pos)
         verify_variants = self._compile_verify_traces(token_id) if verify and not self._eager_decode else []
+        if self._block_verify:
+            self._compile_block_verify(token_id)
         for sm in self.submeshes_io:
             self._spec_fixup(sm)
             if "fix_slot" in sm:
@@ -3361,13 +3386,15 @@ class DeepSeekV41Model(DeepSeekV4Model):
                 self._spec_write_step()
             ttnn.end_trace_capture(device, tid, cq_id=0)
             self._spec_tids["write_step"] = tid
-            if verify_variants:
+            if verify_variants or self._block_verify:
                 tid = ttnn.begin_trace_capture(device, cq_id=0)
                 with _trace_capture_guard():
                     self._spec_write_verified()
                 ttnn.end_trace_capture(device, tid, cq_id=0)
                 self._spec_tids["write_verified"] = tid
         self._capture_verify_traces(verify_variants)
+        if self._block_verify:
+            self._capture_block_verify()
 
     def spec_fixup(self, rejected) -> None:
         """Queue every stage's fixup ahead of a verify round: restore the ring slots of the resident session's
@@ -3609,7 +3636,12 @@ class DeepSeekV41Model(DeepSeekV4Model):
 
         moes = pmoe.build_moe_layers(self.config, self.loader, self.moe_mesh, self.cache, range(num_layers), log=log)
         self.moe_server = pmoe.PersistentMoE(
-            self.moe_mesh, [self.submeshes[0]], moes, single_senders=pmoe.single_senders([pmoe.REQUESTER_ROW])
+            self.moe_mesh,
+            [self.submeshes[0]],
+            moes,
+            single_senders=pmoe.single_senders([pmoe.REQUESTER_ROW]),
+            # A verify block's requests: the server switches between the two (_use_server_rows).
+            block_rows=self.verify_rows if self.verify_rows > 1 else 0,
         )
         logger.info(f"persistent MoE launched over layers 0..{num_layers - 1} ({time.perf_counter() - start:.0f}s)")
         logger.debug(f"stage before its layers: {_l1_report(self.submeshes[0])}")
@@ -3675,6 +3707,328 @@ class DeepSeekV41Model(DeepSeekV4Model):
         )
         slots = ttnn.reshape(ttnn.slice(pkt, [0, 0, 0, slot_at], [1, 1, 1, slot_at + t]), [t])
         self.dspark.write_rows(rows, positions, slots)
+
+    # -- DSpark verify on the persistent stage: every layer as (T, 32)-tiled block ops, one traced step -- #
+    def _use_server_rows(self, rows: int) -> None:
+        """Have the persistent MoE serve ``rows``-row requests (one row for plain decode, ``verify_rows`` for a verify
+        block), switching once every step already dispatched is in the stage's queue."""
+        server = self.moe_server
+        if server is None or server.rows == rows:
+            return
+        self._wait_replays_dispatched()
+        t0 = time.perf_counter()
+        server.use_rows(rows)
+        logger.info(f"persistent MoE now serves {rows}-row requests ({1000 * (time.perf_counter() - t0):.1f} ms)")
+
+    def _prepare_block_verify(self) -> None:
+        """What the block verify step reads besides the layers' own buffers: the staging tensor of the block's new kv
+        rows, ``pre_mix`` of the first layer, the final norm's and the drafter taps' gains as ``(T, 32)`` blocks, the
+        stage's ``(T, 32)`` streams layout and a ``T``-row device sampler (whose page is the decode output's).
+        Called from :meth:`prepare_spec_decode`."""
+        if len(self.submeshes_io) != 1:
+            raise NotImplementedError("the block verify runs on the persistent layout's one stage")
+        if self.device_sampler is None or self._lm_head_traced is None:
+            raise NotImplementedError(
+                "the block verify sends its rows' tokens in the decode output's pages: prepare with device_sampling"
+            )
+        cfg, t = self.config, self.verify_rows
+        hc, d = cfg.hc_mult, cfg.hidden_size
+        sm = self.submeshes_io[0]
+        device = sm["device"]
+        tile = ttnn.Tile((t, ttnn.TILE_SIZE))
+
+        def const(x, layout=ttnn.TILE_LAYOUT, **kw):
+            return ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=layout, device=device, **kw)
+
+        sm["block_streams_config"] = self.moe_server.streams_memory_config(device, hc, rows=t)
+        sm["block_staging"] = const(
+            torch.zeros(1, 1, ttnn.TILE_SIZE, cfg.head_dim), memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        one_hot = torch.zeros(1, t, 1, hc)
+        one_hot[..., 0] = 1
+        sm["block_pre_mix_init"] = const(one_hot)
+        sm["block_page_row"] = _device_zeros([1], device, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+        sm["block_final_gain"] = _gain_block(self.norm.weight, t, device)
+        # The taps are stream means: the block hyper-connection's collapse with a uniform pre_mix, through its fused
+        # norm with eps 2^40 and gain 2^20, which leaves x * (1 + O(mean(x^2) / 2^41)) -- the same factor on every
+        # row, which the drafter's own RMSNorm of its main projection cancels.
+        sm["block_tap_pre_mix"] = const(torch.full((1, t, 1, hc), 1.0 / hc))
+        sm["block_tap_gain"] = const(
+            torch.full((1, 1, t, d), float(2**20)), tile=tile, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        sm["block_tids"], sm["block_outs"] = {}, {}
+        self.verify_sampler = DeepSeekV41DeviceSampler(
+            self._lm_head_traced.device,
+            self._lm_head_traced.weight.shape[-1],
+            self.system_config.pipeline.pcie_alignment,
+            rows=t,
+        )
+        if self.verify_sampler.out_words != self.device_sampler.out_words:
+            raise NotImplementedError("the verify block's token page must be the decode output's page")
+
+    def _block_dense(self, pos: int) -> bool:
+        """Whether every compressed group still selects densely (at most ``index_topk`` closed groups) at the block's
+        last row: the only select the block verify runs so far."""
+        t, topk = self.verify_rows, self.config.index_topk
+        ratios = {int(r) for r in self.config.compress_ratios[: self.num_layers] if int(r)}
+        return all((pos + t) // r <= topk for r in ratios)
+
+    def _block_verify_packet(self, ids: list[int], pos: int) -> torch.Tensor:
+        t = self.verify_rows
+        positions = list(range(pos, pos + t))
+        values = {
+            "token": ids,
+            "pos": positions,
+            "start2": [p - 1 for p in positions if (p + 1) % 2 == 0],
+            "dspark_slot": [self.dspark.ring_row(0, p) for p in positions] if self.dspark is not None else [0] * t,
+        }
+        packet = torch.zeros(1, 1, 1, self._pkt_w, dtype=torch.int32)
+        for name, (offset, _) in self._verify_fields.items():
+            row = values[name]
+            packet[0, 0, 0, offset : offset + len(row)] = torch.tensor(row, dtype=torch.int32)
+        return packet
+
+    def _block_context(self, sm: dict, pkt: ttnn.Tensor, odd: bool) -> dict:
+        """The block's per-row integers and RoPE rows, from one decode_step_context program."""
+        t, window, topk = self.verify_rows, self.sliding_window, self.config.index_topk
+        win_rows = self.spec_window_rows
+        tok0, pos0, st0 = (self._verify_fields[n][0] for n in ("token", "pos", "start2"))
+        sb = StepContextBuilder(pkt, sm["rope_tables"])
+        sb.add_int("token", [1, t], [term(tok0 + j) for j in range(t)], ttnn.uint32)
+        sb.add_int("ring_slots", [t], [term(pos0 + j, mode="mod", div=window) for j in range(t)])
+        for family in sm["rope_tables"]:
+            sb.add_rope(("rope", family), family, pos0, rows=t, tile_height=t)
+        zero = term(-1, mul=0)
+        for ratio in [0] + list(sm["ratios"]):
+            counts = [
+                term(pos0 + j, pre_add=1, mode="div", div=ratio, clamp_max=topk) if ratio else zero for j in range(t)
+            ]
+            sb.add_int(("lengths", ratio), [1, 1, 1, 4 + t], [term(pos0), zero, zero, zero] + counts)
+        if 2 in sm["kv_ratios"]:
+            sb.add_int(("win_slot", 2), [t], [term(pos0 + j, mode="mod", div=win_rows) for j in range(t)])
+            sb.add_int(("prev_slot", 2), [1], [term(pos0, pre_add=win_rows - 1, mode="mod", div=win_rows)])
+            sb.add_rope(("win_rope", 2), "compress", st0, rows=t // 2)
+            sb.add_int(("entry", 2), [t // 2], [term(st0 + g, pre_add=1, mode="div", div=2) for g in range(t // 2)])
+        if 1 in sm["kv_ratios"]:
+            sb.add_int(("entry", 1), [t], [term(pos0 + j) for j in range(t)])
+        out = sb.run()
+        ctx = {
+            "token": out["token"],
+            "ring_slots": out["ring_slots"],
+            "rope": {family: out[("rope", family)] for family in sm["rope_tables"]},
+            "lengths": {r: out[("lengths", r)] for r in [0] + list(sm["ratios"])},
+            "win_slot": out.get(("win_slot", 2)),
+            "prev_slot": out.get(("prev_slot", 2)),
+            "win_rope": out.get(("win_rope", 2)),
+            "entry": {r: out[("entry", r)] for r in sm["kv_ratios"]},
+            "odd": odd,
+            "staging": sm["block_staging"],
+            "page_row": sm["block_page_row"],
+        }
+        return ctx
+
+    def _block_attention_inputs(self, attn, ctx: dict) -> dict:
+        r = attn.compress_ratio
+        cos, sin, neg_sin = ctx["rope"]["main" if r == 0 else "compress"]
+        inputs = dict(
+            cos=cos,
+            sin=sin,
+            neg_sin=neg_sin,
+            staging=ctx["staging"],
+            lengths=ctx["lengths"][r],
+            ring_slots=ctx["ring_slots"],
+        )
+        if attn.is_kv_source:
+            # A dense group's entry is its dense_kv row too (one session).
+            inputs.update(
+                entry=ctx["entry"][r], dense_entry=ctx["entry"][r], page_row=ctx["page_row"], start_odd=ctx["odd"]
+            )
+            if r == 2:
+                cos_win, sin_win, _ = ctx["win_rope"]
+                inputs.update(win_slot=ctx["win_slot"], prev_slot=ctx["prev_slot"], cos_win=cos_win, sin_win=sin_win)
+            else:
+                inputs.update(cos_win=cos, sin_win=sin)
+        return inputs
+
+    def _block_rows(self, hc_module, streams: ttnn.Tensor, pre_mix: ttnn.Tensor, gain, eps: float) -> ttnn.Tensor:
+        """``rms_norm(sum_h pre_mix[j, h] * streams[h, j]) * gain`` of every block row, as ROW_MAJOR ``[1, 1, T, D]``
+        DRAM: the block hyper-connection's collapse and fused norm (its own mixes are dropped), then the
+        ``tile_rows`` row unpermuted."""
+        t, d = self.verify_rows, self.config.hidden_size
+        post, comb, row, pre = hc_module(streams, pre_mix=pre_mix, norm=(gain, eps))
+        for x in (post, comb, pre):
+            ttnn.deallocate(x)
+        rows = ttnn.reshape(ttnn.transpose(ttnn.reshape(row, [1, d // 16, t, 16]), 1, 2), [1, 1, t, d])
+        ttnn.deallocate(row)
+        return rows
+
+    def _block_verify_stage(self, sm: dict, odd: bool) -> ttnn.Tensor:
+        """The traced verify step of a block starting at an even or ``odd`` position, on the persistent stage: the
+        packet off the H2D socket, every layer's :meth:`~.decode.decoder_layer.DeepSeekV41PersistentMoeDecoderLayer.
+        decode_block`, the final norm, ``lm_head`` and the ``T``-row sampler (greedy: each row's argmax), whose page
+        goes out the D2H socket. With a drafter, the target layers' stream means and the packet go to it after the
+        last tap (:meth:`_spec_write_verified`)."""
+        cfg, t = self.config, self.verify_rows
+        hc, d = cfg.hc_mult, cfg.hidden_size
+        layers = sm["layers"]
+        pkt = sm["pkt"]
+        ttnn.experimental.recv_async_h2d(pkt, self._pkt_socket)
+        if self.tp_size > 1:
+            pkt = ttnn.broadcast(pkt, ttnn.MeshCoordinate(0, 0), cluster_axis=1, topology=CCL_TOPOLOGY)
+        if self.use_prefetcher:
+            self.layers[layers[0]].prefetch_weights(one_row=True, fused_qkv=True)
+        ctx = self._block_context(sm, pkt, odd)
+        with _region("EMBED"):
+            embedded = ttnn.embedding(ctx["token"], self.embed_tokens.embedding_weight, layout=ttnn.ROW_MAJOR_LAYOUT)
+            stacked = ttnn.repeat(ttnn.reshape(embedded, [1, 1, t, d]), ttnn.Shape([1, 1, hc, 1]))
+            streams = ttnn.tilize(
+                stacked, tile=ttnn.Tile((t, ttnn.TILE_SIZE)), memory_config=sm["block_streams_config"]
+            )
+            ttnn.deallocate(stacked)
+        pre_mix = sm["block_pre_mix_init"]
+        taps = sm.get("taps", {})
+        tapped = {}
+        for li in layers:
+            layer = self.layers[li]
+            if self.use_prefetcher and li != layers[-1]:
+                self.layers[li + 1].prefetch_weights(one_row=True, fused_qkv=True)
+            if li in taps:
+                with _region("TAP"):
+                    tapped[li] = self._block_rows(
+                        layer.attn_hc, streams, sm["block_tap_pre_mix"], sm["block_tap_gain"], float(2**40)
+                    )
+                if len(tapped) == len(taps):
+                    rows = ttnn.concat([tapped[target] for target in taps], dim=-1)
+                    ttnn.experimental.send_direct_async(rows, self.dspark.link[0])
+                    ttnn.experimental.send_direct_async(pkt, self.dspark.link[0])
+                    rows.deallocate(True)
+                    for part in tapped.values():
+                        part.deallocate(True)
+            streams, new_pre = layer.decode_block(
+                streams, pre_mix, sm["scaches"][li], **self._block_attention_inputs(layer.self_attn, ctx)
+            )
+            if pre_mix is not sm["block_pre_mix_init"]:
+                ttnn.deallocate(pre_mix)
+            pre_mix = new_pre
+        with _region("HEAD"):
+            last = self.layers[layers[-1]]
+            hidden = self._block_rows(last.ffn_hc, streams, pre_mix, sm["block_final_gain"], self.norm.eps)
+            ttnn.deallocate(streams)
+            ttnn.deallocate(pre_mix)
+            logits = self._lm_head_traced.linear(ttnn.to_layout(hidden, ttnn.TILE_LAYOUT))
+            ttnn.deallocate(hidden)
+            out = self.verify_sampler(logits)
+            ttnn.deallocate(logits)
+        self._send_output(out)
+        return out
+
+    def _run_block_verify(self, dispatch: Callable[[], None], ids: list[int], pos: int, engram_rows: dict) -> list[int]:
+        """``dispatch`` the block's step, feed it its packet and Engram rows from a second thread (a block's rows
+        outnumber an Engram socket's pages), and return its rows' tokens."""
+        packet = self._block_verify_packet(ids, pos)
+
+        def feed() -> None:
+            self._pkt_socket.write_tensor(packet)
+            for layer_idx, engram in self._engram_layers:
+                engram.write_rows(engram_rows[layer_idx])
+
+        writer = ThreadPoolExecutor(max_workers=1, thread_name_prefix="verify_feed")
+        try:
+            fed = writer.submit(feed)
+            dispatch()
+            out = self._read_socket_output().reshape(-1)[: self.verify_rows]
+            fed.result()
+            return [int(x) for x in out]
+        finally:
+            writer.shutdown(wait=False)
+
+    def _compile_block_verify(self, token_id) -> None:
+        """Pass 1 of the block verify traces: one executed step per variant (even / odd start), before any capture,
+        then rewind the resident session."""
+        t = self.verify_rows
+        self._use_server_rows(t)
+        zeros = {li: torch.zeros(t, engram.kin, dtype=torch.bfloat16) for li, engram in self._engram_layers}
+        sm = self.submeshes_io[0]
+        for odd in (False, True):
+            start = int(odd)
+            self.ensure_session_capacity(start + t - 1)
+            logger.info(f"[block-verify] compiling the {'odd' if odd else 'even'} block at {start}")
+            outs = []
+
+            def dispatch() -> None:
+                outs.append(self._block_verify_stage(sm, odd))
+                if self.dspark is not None:
+                    self._spec_write_verified()
+
+            self._run_block_verify(dispatch, [int(token_id)] * t, start, zeros)
+            for out in outs:
+                out.deallocate(True)
+        self.reset_session(self._resident[0])
+
+    def _capture_block_verify(self) -> None:
+        sm = self.submeshes_io[0]
+        for odd in (False, True):
+            logger.info(f"[block-verify] capturing the {'odd' if odd else 'even'} block")
+            tid = ttnn.begin_trace_capture(sm["device"], cq_id=0)
+            with _trace_capture_guard():
+                out = self._block_verify_stage(sm, odd)
+            ttnn.end_trace_capture(sm["device"], tid, cq_id=0)
+            sm["block_tids"][odd], sm["block_outs"][odd] = tid, out
+
+    def decode_verify_block(self, token_ids, pos: int) -> list[int]:
+        """One block verify step on the persistent stage: tokens ``token_ids`` (``verify_rows`` of them) at positions
+        ``pos ..``, every layer at once; returns each row's greedy token (row ``j``'s is the target's pick for
+        ``pos + j + 1``). The step commits all its rows into the rings, writes them into the drafter's rings and keys
+        its compressed state by position, as ``verify_rows`` single steps would, so :meth:`spec_fixup` undoes the
+        rejected ones. Blocks past the dense select are not supported yet."""
+        t = self.verify_rows
+        ids = [int(i) for i in token_ids]
+        if len(ids) != t:
+            raise ValueError(f"a verify step takes {t} tokens, got {len(ids)}")
+        if not self._block_dense(pos):
+            raise NotImplementedError(f"the block at {pos} is past the dense select, which the block verify needs")
+        sm = self.submeshes_io[0]
+        if not sm["block_tids"]:
+            raise RuntimeError("capture the verify traces first (capture_spec_traces)")
+        self._wait_replays_dispatched()
+        self._use_server_rows(t)
+        sid = self._resident[0]
+        with self._cq_lock:
+            self.ensure_session_capacity(pos + t - 1, sid)
+            self._session_pos[sid] = pos + t
+            self._spec_dirty.add(self._resident_slot())
+            engram_rows = {}
+            if self._engram_layers:
+                lookup = self._engram_lookup
+                hashes = lookup.hash_session(self._slot_of.get(sid, 0), torch.tensor([ids], dtype=torch.long), pos)
+                for layer_idx, _ in self._engram_layers:
+                    ids_of_layer = hashes[:, :, lookup.layout.layer_ids.index(layer_idx)]
+                    engram_rows[layer_idx] = lookup.gather(layer_idx, ids_of_layer).flatten(-2)
+            tid = sm["block_tids"][pos % 2 == 1]
+
+            def replay() -> None:
+                ttnn.execute_trace(sm["device"], tid, cq_id=0, blocking=False)
+                if self.dspark is not None:
+                    ttnn.execute_trace(self.dspark.device, self._spec_tids["write_verified"], cq_id=0, blocking=False)
+
+            return self._run_block_verify(replay, ids, pos, engram_rows)
+
+    def prefill_blocks(self, token_ids, start: int) -> tuple[int, list[int]]:
+        """Feed known ``token_ids`` at ``start ..`` as verify blocks (the last one padded by repeating its last token);
+        returns the greedy token after them and the padded positions, which the caller's next :meth:`spec_fixup`
+        must restore. The rings are snapshot right before the last block, so its padding rows are undone exactly."""
+        t = self.verify_rows
+        ids = [int(i) for i in token_ids]
+        token = None
+        for i in range(0, len(ids), t):
+            chunk = ids[i : i + t]
+            n = len(chunk)
+            if i + t >= len(ids):
+                self.spec_fixup([])
+            token = self.decode_verify_block(chunk + [chunk[-1]] * (t - n), start + i)[n - 1]
+        end = start + len(ids)
+        padded = list(range(end, start + -(-len(ids) // t) * t))
+        return token, padded
 
     def spec_seed(self, positions) -> None:
         """Write every one of ``positions`` into the drafter rings, ``main_rows`` at a time."""

@@ -207,6 +207,21 @@ class DeepSeekV41Engram(DeepSeekV4Module):
             if verify_rows > 1
             else None
         )
+        # A verify block in (R, 32) tiles (see :meth:`forward_block`): engram_gate's gate weight row r holds copy
+        # (r // R) % hc, the stream of the block's tile row r // R.
+        self.block_gate_weight = None
+        if verify_rows > 1:
+            # From the one-row weight (row i holds copy i % hc), so no cache file of its own.
+            rows = ttnn.to_torch(ttnn.get_device_tensors(self.gate_weight)[0]).float().reshape(ttnn.TILE_SIZE, d)
+            block_weight = rows[(torch.arange(ttnn.TILE_SIZE) // verify_rows) % hc].reshape(1, 1, ttnn.TILE_SIZE, d)
+            self.block_gate_weight = ttnn.from_torch(
+                block_weight,
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=width_sharded_l1_config(ttnn.TILE_SIZE, d, device, num_cores=GATE_CORES),
+                mesh_mapper=ttnn.ReplicateTensorToMesh(device) if device.get_num_devices() > 1 else None,
+            )
         if sockets is None:
             sockets = open_rows_sockets(device, self.page_bytes, fifo_pages, socket_core)
         if len(sockets) != device.get_num_devices():
@@ -284,3 +299,42 @@ class DeepSeekV41Engram(DeepSeekV4Module):
         out = ttnn.experimental.deepseek.engram_gate(users, kv, self.gate_weight, self.eps)
         ttnn.deallocate(kv)
         return out if s == 1 else ttnn.experimental.view(out, [b, s, hc, d])
+
+    def forward_block(self, streams: ttnn.Tensor) -> ttnn.Tensor:
+        """:meth:`forward` of a verify block: ``streams`` ``(R, 32)``-tiled ``[1, 1, hc * R, D]`` stream-major on the
+        collapse cores (``R == verify_rows``) -> the same, with the block's ``R`` rows (one :meth:`write_rows` of
+        ``[R, kin]``) gated in."""
+        r = self.verify_rows
+        rows_in = self.verify_rows_in
+        for socket in self.sockets:
+            ttnn.experimental.recv_async_h2d(rows_in, socket)
+        local_rows = rows_in
+        if self.tp_size > 1:
+            local_rows = ttnn.slice(rows_in, [0, 0, 0, 0], [1, 1, r, self.local_kin])
+        one_core = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+        block = ttnn.tilize(
+            local_rows,
+            tile=ttnn.Tile((r, ttnn.TILE_SIZE)),
+            memory_config=ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(one_core, [r, self.local_kin], ttnn.ShardOrientation.ROW_MAJOR),
+            ),
+        )
+        if local_rows is not rows_in:
+            ttnn.deallocate(local_rows)
+        replica = ttnn.experimental.deepseek.all_gather_for_matmul(
+            block, ttnn.CoreRangeSet({self.wkv.b_core_grid().bounding_box()})
+        )
+        ttnn.deallocate(block)
+        kv = self.wkv(replica)
+        ttnn.deallocate(replica)
+        if self.tp_size > 1:
+            partial = kv
+            kv = ttnn.experimental.deepseek.width_sharded_all_reduce(
+                partial, cluster_axis=_tp_cluster_axis(self.device), num_links=2, topology=CCL_TOPOLOGY
+            )
+            ttnn.deallocate(partial)
+        out = ttnn.experimental.deepseek.engram_gate(streams, kv, self.block_gate_weight, self.eps)
+        ttnn.deallocate(kv)
+        return out

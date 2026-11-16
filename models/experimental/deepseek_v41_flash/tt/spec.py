@@ -243,6 +243,12 @@ class DSparkSpeculator:
                 "and drafts < block"
             )
         self.device_accept = device_accept
+        # The persistent stage's block verify returns each row's greedy token, not its logits.
+        self.block_verify = parallel_verify and getattr(model, "_block_verify", False)
+        if self.block_verify and temperature != 0:
+            raise NotImplementedError("the block verify samples greedily on device: temperature 0 only")
+        # A block round queues the next round's fixup behind its draft, so the next round need not.
+        self._fixed = False
         self.streaming = not parallel_verify and not device_accept and not model._eager_decode
         if model.dspark is not None and propose is None:
             model.dspark.set_sampling(temperature)
@@ -364,6 +370,15 @@ class DSparkSpeculator:
                 model.capture_spec_traces(prompt[0], start_pos)
             finally:
                 self._stall.cancel()
+        if self.block_verify:
+            self._stall.enter("prefill: prefill_blocks")
+            try:
+                token, padded = model.prefill_blocks(prompt, start_pos)
+            finally:
+                self._stall.cancel()
+            first = self.start(token, start_pos + len(prompt))
+            self._rejected = padded
+            return first
         self._stall.enter("prefill: decode_prompt_traced")
         try:
             out = model.decode_prompt_traced(prompt, start_pos)
@@ -380,6 +395,7 @@ class DSparkSpeculator:
         self._pos = pos
         self._rejected = []
         self._ahead = 0
+        self._fixed = False
         self._stall.enter("start: draft")
         try:
             self._proposals = self._draft(token, pos - 1)
@@ -587,6 +603,8 @@ class DSparkSpeculator:
         if self.streaming:
             self.dispatch()
             return self._collect(budget, stop_ids, ahead)
+        if self.block_verify:
+            return self._block_step(budget, stop_ids)
         model, k = self.model, self.drafts
         t0 = time.perf_counter()
         p = self._pos
@@ -653,6 +671,66 @@ class DSparkSpeculator:
         self.stats.accepted.append(m)
         self.stats.seconds += t4 - t0
         emitted = inputs[1 : m + 1] + [token]
+        if _VERBOSE:
+            _log_round(self, p, emitted, phases)
+        return emitted
+
+    def _block_step(self, budget: Optional[int] = None, stop_ids: Sequence[int] = ()) -> list[int]:
+        """A block-verify round: verify ``[next, d_1 .. d_k]`` in one step, accept greedily on the host, then queue the
+        draft from the result and, while the drafter runs, the fixup of this round's rejected rows on the stage --
+        unless this is the caller's last round (a stop id or the budget), which a cut may still shorten: its rows stay
+        rejected for the next fixup, whose snapshot must predate them."""
+        model, k = self.model, self.drafts
+        t0 = time.perf_counter()
+        p = self._pos
+        inputs = [self._next] + self._proposals
+        if not self._fixed:
+            self._stall.enter(f"round p={p}: spec_fixup({self._rejected})")
+            try:
+                model.spec_fixup(self._rejected)
+            finally:
+                self._stall.cancel()
+        self._fixed = False
+        t1 = time.perf_counter()
+        self._stall.enter(f"round p={p}: block verify")
+        try:
+            tokens = model.decode_verify_block(inputs, p)
+        finally:
+            self._stall.cancel()
+        t2 = time.perf_counter()
+        m = 0
+        while m < k and inputs[m + 1] == tokens[m]:
+            m += 1
+        token = tokens[m]
+        self._rejected = list(range(p + m + 1, p + len(inputs)))
+        self._next = token
+        self._pos = p + m + 1
+        t3 = time.perf_counter()
+        emitted = inputs[1 : m + 1] + [token]
+        last = any(t in stop_ids for t in emitted) or (budget is not None and len(emitted) >= budget)
+        self._stall.enter(f"round p={p}: draft (frontier {self._pos - 1})")
+        try:
+            self._queue_draft(self._next, self._pos - 1)
+            t_q = time.perf_counter()
+            if not last:
+                model.spec_fixup(self._rejected)
+                self._fixed = True
+                self._rejected = []
+            t_fix = time.perf_counter()
+            self._proposals = self._drafted()[:k]
+        finally:
+            self._stall.cancel()
+        t4 = time.perf_counter()
+        phases = {
+            "fixup": t1 - t0 + t_fix - t_q,
+            "verify": t2 - t1,
+            "accept": t3 - t2,
+            "draft": t_q - t3 + t4 - t_fix,
+        }
+        for phase, seconds in phases.items():
+            self.stats.add(phase, seconds)
+        self.stats.accepted.append(m)
+        self.stats.seconds += t4 - t0
         if _VERBOSE:
             _log_round(self, p, emitted, phases)
         return emitted

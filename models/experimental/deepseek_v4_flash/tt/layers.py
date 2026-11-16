@@ -940,7 +940,9 @@ class LinearDecode(DeepSeekV4Module):
         """
         if not x.is_sharded():
             return False
-        if x.layout != ttnn.ROW_MAJOR_LAYOUT and x.get_tile().tile_shape[0] != 1:
+        # A (h, 32) row block (h = 2 / 4 / 8, a DSpark verify block) is matmul_decode's replicated A too: one in0
+        # tile per K step for all h rows.
+        if x.layout != ttnn.ROW_MAJOR_LAYOUT and x.get_tile().tile_shape[0] not in (1, 2, 4, 8):
             return False
         mem = x.memory_config()
         return mem.memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED and mem.shard_spec is not None
@@ -1778,12 +1780,11 @@ class BatchedLinearDecode(DeepSeekV4Module):
         """
         m = x.shape[-2]
         rm_hs = (
-            x.layout == ttnn.ROW_MAJOR_LAYOUT
+            (x.layout == ttnn.ROW_MAJOR_LAYOUT or x.get_tile().tile_shape[0] in (2, 4, 8))
             and x.is_sharded()
             and x.memory_config().memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
             and x.memory_config().shard_spec is not None
         )
-        print("rm_hs:", rm_hs)
         if rm_hs:
             shard_h = x.memory_config().shard_spec.shape[0]
             if shard_h % self.batch:
