@@ -523,7 +523,6 @@ void kernel_main() {
                 // Several rows: H-slice s's block -- [shared | expert 0 | ... | expert n-1], kOutTiles each, the
                 // compute's per-expert terms -- goes to the slice's folder (group s's core of this down slot), at
                 // this group's place in its cb_reduce.
-                DeviceZoneScopedN("FE_W_FOLD_SEND");
                 constexpr uint32_t kSliceBlock = (1u + FE_GROUP_EXPERTS) * kOutTiles;
                 constexpr uint32_t kSliceBytes = kSliceBlock * out_tile_bytes;
                 const uint32_t group_hits = fe_group_hits(fe_wait_hits(iter), expert_group, num_expert_groups);
@@ -552,7 +551,6 @@ void kernel_main() {
             if (expert_group < shards_per_core) {
                 // This core folds H-slice expert_group of its down slot: the sum goes to its columns of the slot's
                 // place in the link sender's staging.
-                DeviceZoneScopedN("FE_W_FOLD_OUT");
                 constexpr uint32_t core_bytes = shards_per_core * kOutTiles * out_tile_bytes;
                 CircularBuffer cb_fold(FE_CB_ACC);
                 cb_fold.wait_front(kOutTiles);

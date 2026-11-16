@@ -865,7 +865,6 @@ void kernel_main() {
                 // terms in group order, then the experts in hit order (hit h is group h % 6's expert h / 6: ascending
                 // ids) -- so a row's sum is its own shared terms and then its own experts in ascending id, every other
                 // term an exact zero: the same bits whatever the other rows route to.
-                DeviceZoneScopedN("FE_C_FOLD");
                 const uint32_t hits = fe_wait_hits(fe_iter);
                 reduce_cb.wait_front(num_expert_groups * kSliceBlock);
                 acc_cb.reserve_back(kOutTilesPerCore);
