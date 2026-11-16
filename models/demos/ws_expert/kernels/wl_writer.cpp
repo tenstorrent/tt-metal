@@ -30,10 +30,16 @@ constexpr uint32_t SEM_HARR = 1, SEM_SCR = 2, SEM_SCRX = 4;
 #define WL_K 3
 #endif
 constexpr uint32_t K = WL_K;  // weight slots a core
-#ifdef WL_MC_NOC1
-constexpr bool MC_COL0 = false;  // (column 0's multicasts go out from its NCRISC on NOC1)
+// columns whose x blocks (X_COLS) and h leader rows (H_COLS) this BRISC multicasts on NOC0 (bit c)
+#if defined(WL_BCAST)
+// WL_BCAST: one multicaster a group a NoC. Every core's x blocks go out from its BRISC on NOC0 in stream order (one
+// x multicast in flight); every core sends its h tile of a row to core 0, whose NCRISC multicasts the whole row on
+// NOC1 (one h multicast in flight). WL_BCAST is the L1 address of NS per-slot arrival counters (16 B apart).
+constexpr uint32_t X_COLS = 3, H_COLS = 0;
+#elif defined(WL_MC_NOC1)
+constexpr uint32_t X_COLS = 0, H_COLS = 0;  // (column 0's multicasts go out from its NCRISC on NOC1)
 #else
-constexpr bool MC_COL0 = true;
+constexpr uint32_t X_COLS = 1, H_COLS = 1;
 #endif
 
 // A group multicast and its flag through the same command buffer, the flag as a 4-byte multicast write (not
@@ -229,18 +235,30 @@ void kernel_main() {
         }
         return !o_busy;
     };
-    // ---- Q2: h tile -> column leader
+    // ---- Q2: h tile -> column leader (WL_BCAST: -> core 0, counted in the row's ring slot)
     uint32_t sent = 0;
     const uint32_t harr = get_semaphore(SEM_HARR);
     auto q2 = [&]() -> bool {
         if (sent >= total_rows || !cb_pages_available_at_front(h_cb, 1)) {
             return false;
         }
-        const uint32_t lx = cxs[C], ly = ny0 + sent % HALF;
+#ifdef WL_BCAST
+        // core 0's ring slot sent % NS holds row sent - NS until that row's multicast has been read out of it: its
+        // last flag landing here shows the whole row has left core 0
+        if (sent >= NS) {
+            invalidate_l1_cache();
+            if (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(hflags + ((sent % NS) * 2 + 1) * 16) < sent - NS + 1) {
+                return false;
+            }
+        }
+        const uint32_t lx = cxs[0], ly = ny0, arr = WL_BCAST + (sent % NS) * 16;
+#else
+        const uint32_t lx = cxs[C], ly = ny0 + sent % HALF, arr = harr;
+#endif
         noc_async_write(
             get_read_ptr(h_cb), get_noc_addr(lx, ly, hring + ((sent % NS) * KTD + C * HALF + Y) * htile), htile);
         noc_async_write_barrier();
-        noc_semaphore_inc(get_noc_addr(lx, ly, harr), 1);
+        noc_semaphore_inc(get_noc_addr(lx, ly, arr), 1);
         cb_pop_front(h_cb, 1);
         ++sent;
         return true;
@@ -251,7 +269,7 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* scr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scr_addr);
     constexpr uint32_t ngroup = (gx1 - gx0 + 1) * (gy1 - gy0 + 1);
     auto q3 = [&]() -> bool {
-        if (!MC_COL0 || C != 0 || lq >= total_rows) {  // (column 1's leaders multicast on NOC1 from the NCRISC)
+        if (!((H_COLS >> C) & 1) || lq >= total_rows) {  // (column 1's leaders multicast on NOC1 from the NCRISC)
             return false;
         }
         invalidate_l1_cache();
@@ -307,7 +325,7 @@ void kernel_main() {
     const uint32_t xscr_addr = get_semaphore(SEM_SCRX);
     volatile tt_l1_ptr uint32_t* xscr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(xscr_addr);
     auto qx = [&]() -> bool {
-        if (!MC_COL0 || C != 0) {
+        if (!((X_COLS >> C) & 1)) {
             return false;
         }
         while (a_n < nexp_g && a_l >= rows_of(a_n) * BPR) {
@@ -390,9 +408,9 @@ void kernel_main() {
         for (uint32_t i = 0; i < 5; ++i) {
             tmx[i] = dd[i] > tmx[i] ? dd[i] : tmx[i];
         }
-        const bool mc = MC_COL0 && C == 0;
-        if (!o && !x && !a && !b && !c && !d && g_n >= nexp_g && sent >= total_rows && (!mc || lq >= total_rows) &&
-            drained >= total_rows && (!mc || a_n >= nexp_g) && g_state == 0 && qo_done()) {
+        const bool mcx = (X_COLS >> C) & 1, mch = (H_COLS >> C) & 1;
+        if (!o && !x && !a && !b && !c && !d && g_n >= nexp_g && sent >= total_rows && (!mch || lq >= total_rows) &&
+            drained >= total_rows && (!mcx || a_n >= nexp_g) && g_state == 0 && qo_done()) {
             break;
         }
     }

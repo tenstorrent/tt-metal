@@ -47,8 +47,11 @@ constexpr uint32_t SEM_HARR = 1, SEM_SCR2 = 3, SEM_SCRH = 5;
 #define WL_K 3
 #endif
 // WL_MC_NOC1: column 0's x and h-leader multicasts also go out from its NCRISC on NOC1 (none from the BRISCs on NOC0)
-#ifdef WL_MC_NOC1
-constexpr uint32_t MC_COL_MASK = 3;  // (columns that multicast from this RISC: bit c)
+// WL_BCAST: no x or column-leader multicasts here; core 0 multicasts every h row on NOC1 (QL, see wl_writer.cpp)
+#if defined(WL_BCAST)
+constexpr uint32_t MC_COL_MASK = 0;  // (columns that multicast from this RISC: bit c)
+#elif defined(WL_MC_NOC1)
+constexpr uint32_t MC_COL_MASK = 3;
 #else
 constexpr uint32_t MC_COL_MASK = 2;
 #endif
@@ -471,10 +474,44 @@ void kernel_main() {
     };
     uint32_t mx[4] = {0, 0, 0, 0}, tot[4] = {0, 0, 0, 0};
     // ---- QL: column 1's h leader multicasts (rows q with q % 10 == Y; see the BRISC's Q3)
-    const uint32_t C = J / HALF, Y = J % HALF;
-    uint32_t led = 0, lq = Y;
-    const uint32_t harr = get_semaphore(SEM_HARR), hscr_addr = get_semaphore(SEM_SCRH);
+    [[maybe_unused]] const uint32_t C = J / HALF, Y = J % HALF;
+    [[maybe_unused]] const uint32_t harr = get_semaphore(SEM_HARR);
+    const uint32_t hscr_addr = get_semaphore(SEM_SCRH);
     volatile tt_l1_ptr uint32_t* hscr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(hscr_addr);
+#ifdef WL_BCAST
+    // core 0: row q once its GC tiles are in ring slot q % NS (the slot's count, GC a use) and row q - 1's last flag
+    // has landed here (one h multicast in flight). The row goes to the other cores only (it is already in place here,
+    // and a loopback copy could land after a producer's next tile for the slot), unlinked; then both column flags to
+    // every core including this one, from the same command buffer, so each lands after the row.
+    const bool mch = J == 0;
+    uint32_t lq = 0;
+    auto ql = [&]() -> bool {
+        if (!mch || lq >= total_rows) {
+            return false;
+        }
+        invalidate_l1_cache();
+        if (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(WL_BCAST + (lq % NS) * 16) < GC * (lq / NS + 1)) {
+            return false;
+        }
+        if (lq > 0 &&
+            *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(hflags + (((lq - 1) % NS) * 2 + 1) * 16) < lq) {
+            return false;
+        }
+        const uint32_t row = hring + (lq % NS) * KTD * htile;
+        *hscr = lq + 1;
+        noc_async_write_multicast(row, get_noc_multicast_addr(mx0, my0, mx1, my1, row), KTD * htile, GC - 1, false);
+        for (uint32_t c = 0; c < 2; ++c) {
+            noc_async_write_multicast_loopback_src(
+                hscr_addr, get_noc_multicast_addr(mx0, my0, mx1, my1, hflags + ((lq % NS) * 2 + c) * 16), 4, GC,
+                false);
+        }
+        noc_async_writes_flushed();
+        ++lq;
+        return true;
+    };
+#else
+    const bool mch = (MC_COL_MASK >> C) & 1;
+    uint32_t led = 0, lq = Y;
     auto ql = [&]() -> bool {
         if (!((MC_COL_MASK >> C) & 1) || lq >= total_rows) {
             return false;
@@ -497,6 +534,7 @@ void kernel_main() {
         lq += HALF;
         return true;
     };
+#endif
 #ifdef WG_Y_NCRISC
     // ---- QY: down outputs (CB 17) to DRAM, on NOC1 (the BRISC's NOC0 keeps the DRAM reads): the group's last
     // expert's rows at tile row g ORMAX, or (WL_OUT_ALL) every expert's, packed in order from g ORMAX
@@ -557,9 +595,9 @@ void kernel_main() {
             tot[i] += dd[i];
             mx[i] = dd[i] > mx[i] ? dd[i] : mx[i];
         }
-        const bool mc = (MC_COL_MASK >> C) & 1;
-        if (!y && !l && !a && !b && !c && !d && drained >= total_rows && (!mc || lq >= total_rows) && w_n >= nexp_g &&
-            w_dn >= nexp_g && freed >= nexp_g && slots_done() && (a_n >= nexp_g || !mc) &&
+        const bool mcx = (MC_COL_MASK >> C) & 1;
+        if (!y && !l && !a && !b && !c && !d && drained >= total_rows && (!mch || lq >= total_rows) && w_n >= nexp_g &&
+            w_dn >= nexp_g && freed >= nexp_g && slots_done() && (a_n >= nexp_g || !mcx) &&
             b_s >= total_x && x_credited >= total_x && h_q >= total_rows) {
             break;
         }
