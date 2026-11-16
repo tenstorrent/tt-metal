@@ -29,3 +29,23 @@
 - **Golden test progress**: 3/3 passing (2 registry cells + regression bit-identity)
 - **Issues encountered**: Concurrent injectors are correct but slow and erratic (39–88 µs), with both Counter/unlinked and Flag/linked multicast. They are parked behind `X_ROUNDS_CONCURRENT=False`. The NoC0 prefetch lever was not built: in dedicated-NoC mode BRISC shares read cmd buffer 1 with NCRISC on NoC0, so it needs a reader-side prefetch plus a handoff. Injector placement already removed most of the prefetch contention.
 - **Tests added**: `test_wq_b_linear_x_mcast_knobs.py` (7 knob settings: correctness + bit-identity). `_op_bench.py` gains `WQB_KNOBS` overrides and the `mcast_only` / `w_compute` ablations.
+
+## Refinement 2 — W DRAM stream co-tune toward the DRAM SOL
+- Date: 2026-11-16
+- What was done: Host n split rewritten around three new single-source knobs in the program descriptor. `CORE_N_TILES = 2` gives an even split: 65 active cores instead of 18 × 2 + 92 × 1. `W_BANK_COALESCE = True`: each run of 7 (DRAM bank count) two-column cores owns columns `(n, n + 7)`, so a core's W tiles of one k row sit adjacent in one bank and arrive in one 2176 B read. The 2 unpairable columns go to single-column cores. `CORE_PLACEMENT` (row_major / spread) is added. The reader becomes one kernel per core group so read depth can differ per group (`W_READS_IN_FLIGHT_G1`). A NoC1 share of the W stream is built and parked at 0 (`W_NOC1_K_BLOCKS`, `W_NOC1_AFTER_X`): the writer reads the last K-blocks on NoC1 into their slots under its own trid and raises a local handoff semaphore, and the reader pushes them, so it stays the CB's only producer. The W block-read loop moved to `kernels/wq_b_linear_w_read.hpp`, shared by reader and writer. The writer writes y at `n_start + j * n_stride`. The handoff semaphore takes id 0; the x channels start at id 1.
+- Performance (p100a, device kernel ns, `_op_bench.py --profile`):
+
+  | Variant | Refinement 1 (µs) | Refinement 2 (µs) |
+  |---|---|---|
+  | full (median of 9) | 23.85 | 22.39 |
+  | `w_only` | 21.0 | 19.8 |
+  | `w_compute` | 22.95 | 21.64 |
+  | x only (`no_compute_no_w_read`) | 16.0 | 16.15 |
+  | `no_y_write` (new) | — | 21.69 |
+
+  W-reader (NCRISC end) max/p50: 1.045 in the full op, 1.028 in `w_only`. Re-measured at the Refinement 1 defaults: 1.087 (`w_only`); the verifier's 1.25 was taken at kb=6.
+- Findings: the W stream is not imbalance-bound. Every split, depth, placement and transfer size measured lands at 19–21 µs alone, from 32 to 110 cores, at 1–4 KB reads and depths 1–4. That is ≈343 GB/s from reader start, 77% of the 448 GB/s peak. The cap is NoC0 link load next to the DRAM endpoints, not the DRAM banks: the same stream on NoC1 takes 36 µs, and moving 6 of 16 K-blocks onto NoC1 cuts W-only to 17.9 µs. In the full op that NoC1 share loses (24–31 µs issued at start, 22.7–25.2 µs after the x phase), because the x broadcast holds BRISC and NoC1 until about 13–15 µs. Remaining tail after the last W byte: last-K-block compute + pack ≈ 1.3 µs and the y store ≈ 0.8 µs.
+- Accuracy achieved: PCC=0.999972, relative RMS=0.0077 on [1,1,160,1536] x [1536,4096] (per-core accumulation order unchanged; 8 precision-baseline cases green)
+- Golden test progress: 3/3 passing (2 registry cells + regression bit-identity)
+- Issues encountered: the W reader on NoC1 for the whole stream (both data-movement RISCs on NoC1) hung once at 110 cores. Only the experiment knob was affected; it was removed, and the shipped NoC1 share runs on BRISC, which already owns NoC1.
+- Tests added: `test_wq_b_linear_w_stream_knobs.py` (12 knob settings: split, placement, coalescing, per-group depth, NoC1 share with both x channel modes; correctness + bit-identity). `_op_bench.py`: `no_y_write` ablation; W gating now patches the shared read header, so the W ablations also cover the writer's NoC1 share.

@@ -9,6 +9,10 @@
 //   rotating:  all rounds travel on x_mcast_0 with rotating senders.
 // Chained rounds go out in order (the round-r injector has received round r - 1 first); concurrent rounds go
 // out at once. Then the core writes its (block_m_tiles x core_n_tiles) y block to L1-interleaved y.
+// With w_noc1_k_blocks > 0 this kernel also reads the last w_noc1_k_blocks W K-blocks on NoC1 into their
+// cb_w_stream slots (the reader owns the CB and pushes them) and raises the reader's handoff semaphore once
+// they landed; the x prefetch then waits on its own trid instead of every outstanding read. The reads go out
+// with the x prefetch, or after the core's x phase when w_noc1_after_x (keeping NoC1 to the broadcast).
 
 #include <cstdint>
 #include <optional>
@@ -16,7 +20,9 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
+#include "ttnn/cpp/ttnn/kernel_lib/local_copy_helpers_dataflow.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
+#include "ttnn/ttnn/operations/wq_b_linear/kernels/wq_b_linear_w_read.hpp"
 
 using namespace dataflow_kernel_lib;
 
@@ -60,8 +66,15 @@ void kernel_main() {
     constexpr bool x_channel_per_round = get_compile_time_arg_val(8) != 0;
     constexpr bool x_rounds_concurrent = get_compile_time_arg_val(9) != 0;
     constexpr uint32_t max_x_channels = get_compile_time_arg_val(10);
-    constexpr auto x_args = TensorAccessorArgs<11>();
+    constexpr uint32_t cb_w_stream = get_compile_time_arg_val(11);
+    constexpr uint32_t w_noc1_k_blocks = get_compile_time_arg_val(12);
+    constexpr uint32_t w_handoff_sem_id = get_compile_time_arg_val(13);
+    constexpr bool w_noc1_after_x = get_compile_time_arg_val(14) != 0;
+    constexpr auto x_args = TensorAccessorArgs<15>();
     constexpr auto y_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
+    constexpr auto w_args = TensorAccessorArgs<y_args.next_compile_time_args_offset()>();
+    constexpr uint32_t x_prefetch_trid = 1;
+    constexpr uint32_t w_trid = 2;
     static_assert(max_x_channels == num_declared_x_channels);
     static_assert(!x_channel_per_round || num_x_rounds <= max_x_channels);
 
@@ -69,6 +82,8 @@ void kernel_main() {
     const uint32_t y_addr = get_arg_val<uint32_t>(1);
     const uint32_t n_start = get_arg_val<uint32_t>(2);
     const uint32_t core_n_tiles = get_arg_val<uint32_t>(3);
+    const uint32_t n_stride = get_arg_val<uint32_t>(4);
+    const uint32_t w_addr = get_arg_val<uint32_t>(5);
 
     const uint32_t x_page_bytes = get_tile_size(cb_x_resident);
     const uint32_t y_page_bytes = get_tile_size(cb_y_tiles);
@@ -84,7 +99,45 @@ void kernel_main() {
     cb_x.reserve_back(round_tiles * num_x_rounds);
     const uint32_t x_base = cb_x.get_write_ptr();
 
+    const bool reads_w = w_noc1_k_blocks > 0 && core_n_tiles > 0;
+    bool x_phase_done = false;
+    auto issue_w_reads = [&]() {
+        if (!reads_w || x_phase_done != w_noc1_after_x) {
+            return;
+        }
+        constexpr uint32_t num_k_blocks = tensor_k_tiles / k_block_tiles;
+        const uint32_t w_page_bytes = get_tile_size(cb_w_stream);
+        const auto w = TensorAccessor(w_args, w_addr, w_page_bytes);
+        CircularBuffer cb_w(cb_w_stream);
+        const uint32_t block_bytes = k_block_tiles * core_n_tiles * w_page_bytes;
+        dataflow_kernel_lib::set_read_trid(noc, w_trid);
+        for (uint32_t b = num_k_blocks - w_noc1_k_blocks; b < num_k_blocks; ++b) {
+            read_w_block(
+                noc,
+                w,
+                cb_w,
+                w_page_bytes,
+                b,
+                b * block_bytes,
+                k_block_tiles,
+                tensor_n_tiles,
+                n_start,
+                core_n_tiles,
+                n_stride);
+        }
+        dataflow_kernel_lib::set_read_trid(noc, 0);
+    };
+    auto hand_off_w = [&]() {
+        if (reads_w) {
+            dataflow_kernel_lib::async_read_barrier_with_trid(noc, w_trid);
+            noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(w_handoff_sem_id)), 1);
+        }
+    };
+
     auto prefetch_round = [&](uint32_t r) {
+        if constexpr (w_noc1_k_blocks > 0) {
+            dataflow_kernel_lib::set_read_trid(noc, x_prefetch_trid);
+        }
         uint32_t offset = r * round_bytes;
         for (uint32_t b = r * x_round_k_blocks; b < (r + 1) * x_round_k_blocks; ++b) {
             for (uint32_t m = 0; m < block_m_tiles; ++m) {
@@ -95,11 +148,18 @@ void kernel_main() {
                 }
             }
         }
+        if constexpr (w_noc1_k_blocks > 0) {
+            dataflow_kernel_lib::set_read_trid(noc, 0);
+        }
     };
     bool prefetch_landed = false;
     auto send_round = [&](auto& send_pipe, uint32_t r) {
         if (!prefetch_landed) {
-            noc.async_read_barrier();
+            if constexpr (w_noc1_k_blocks > 0) {
+                dataflow_kernel_lib::async_read_barrier_with_trid(noc, x_prefetch_trid);
+            } else {
+                noc.async_read_barrier();
+            }
             prefetch_landed = true;
         }
         const uint32_t slot = x_base + r * round_bytes;
@@ -118,6 +178,7 @@ void kernel_main() {
             }
         };
         for_each_x_channel<0, num_x_rounds>(prefetch);
+        issue_w_reads();
         if constexpr (x_rounds_concurrent) {
             auto send = [&](auto ch, auto r) {
                 if (ch.can_send()) {
@@ -159,6 +220,7 @@ void kernel_main() {
                 }
             }
         }
+        issue_w_reads();
         if (x_mcast.can_receive()) {
             recv_pipe.emplace(x_mcast.receiver(noc));
         }
@@ -186,6 +248,9 @@ void kernel_main() {
         }
     }
 
+    x_phase_done = true;
+    issue_w_reads();
+    hand_off_w();
     if (core_n_tiles == 0) {
         return;
     }
@@ -196,7 +261,7 @@ void kernel_main() {
     for (uint32_t m = 0; m < block_m_tiles; ++m) {
         const uint32_t row_page = m * tensor_n_tiles + n_start;
         for (uint32_t n = 0; n < core_n_tiles; ++n) {
-            noc.async_write(cb_y, y, y_page_bytes, {.offset_bytes = offset}, {.page_id = row_page + n});
+            noc.async_write(cb_y, y, y_page_bytes, {.offset_bytes = offset}, {.page_id = row_page + n * n_stride});
             offset += y_page_bytes;
         }
     }

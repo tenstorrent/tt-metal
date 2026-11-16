@@ -5,6 +5,7 @@
 WQB_VARIANT selects an ablation: full | no_compute | no_w_read | no_compute_no_w_read | sync_only | w_only | compute_only
 | mcast_only (full-size x multicast of unread slots, no x prefetch, no W, no compute)
 | w_compute (W reads + compute; x multicast shrunk to 1 page/round, no x prefetch)
+| no_y_write (full op minus the y store NoC writes)
 (sync_only / w_only / compute_only shrink every x multicast to one page and drops the injector x prefetch).
 Ablated variants produce wrong output by design; no correctness check here.
 WQB_KNOBS overrides program-descriptor knobs, e.g. WQB_KNOBS="X_ROUND_K_BLOCKS=2,X_MCAST_PROTOCOL=chain_flag".
@@ -33,25 +34,55 @@ _orig_create = pd.create_program_descriptor
 _tmp_dir = Path(tempfile.mkdtemp(prefix="wqb_bench_"))
 
 
+_W_READ_HEADER = "ttnn/ttnn/operations/wq_b_linear/kernels/wq_b_linear_w_read.hpp"
+
+
+def _gated_w_header():
+    src = (pd.KERNEL_DIR / "wq_b_linear_w_read.hpp").read_text()
+    for needle in (
+        "noc.async_read(w, cb_w, w_page_bytes, {.page_id = row_page + n}, {.offset_bytes = offset});",
+        "noc.async_read(w, cb_w, run_bytes, {.page_id = row_page}, {.offset_bytes = offset});",
+    ):
+        assert needle in src
+        src = src.replace(needle, "if (row_page == 0xFFFFFFFF) { " + needle + " }")
+    path = _tmp_dir / "wq_b_linear_w_read_gated.hpp"
+    path.write_text(src)
+    return str(path)
+
+
+def _with_gated_w(src):
+    assert _W_READ_HEADER in src
+    return src.replace(_W_READ_HEADER, _gated_w_header())
+
+
 def _gated_reader():
-    src = (pd.KERNEL_DIR / "wq_b_linear_reader.cpp").read_text()
-    needle = "noc.async_read(w, cb_w, w_page_bytes, {.page_id = row_page + n}, {.offset_bytes = offset});"
-    assert needle in src
-    src = src.replace(needle, "if (w_addr == 0xFFFFFFFF) { " + needle + " }")
+    src = _with_gated_w((pd.KERNEL_DIR / "wq_b_linear_reader.cpp").read_text())
     path = _tmp_dir / "wq_b_linear_reader_no_w_read.cpp"
     path.write_text(src)
     return str(path)
 
 
-def _tiny_x_writer(shrink_send=True):
+def _tiny_x_writer(shrink_send=True, gate_w=False):
     src = (pd.KERNEL_DIR / "wq_b_linear_writer.cpp").read_text()
+    if gate_w:
+        src = _with_gated_w(src)
     send = "send_pipe.send(slot, slot, round_bytes);"
     read = "noc.async_read(x, cb_x, x_page_bytes, {.page_id = row_page + kk}, {.offset_bytes = offset});"
     assert send in src and read in src
     if shrink_send:
         src = src.replace(send, "send_pipe.send(slot, slot, x_page_bytes);")
     src = src.replace(read, "if (x_addr == 0xFFFFFFFF) { " + read + " }")
-    path = _tmp_dir / f"wq_b_linear_writer_tiny_x_{int(shrink_send)}.cpp"
+    path = _tmp_dir / f"wq_b_linear_writer_tiny_x_{int(shrink_send)}_{int(gate_w)}.cpp"
+    path.write_text(src)
+    return str(path)
+
+
+def _no_y_write_writer():
+    src = (pd.KERNEL_DIR / "wq_b_linear_writer.cpp").read_text()
+    write = "noc.async_write(cb_y, y, y_page_bytes, {.offset_bytes = offset}, {.page_id = row_page + n * n_stride});"
+    assert write in src
+    src = src.replace(write, "if (y_addr == 0xFFFFFFFF) { " + write + " }")
+    path = _tmp_dir / "wq_b_linear_writer_no_y_write.cpp"
     path.write_text(src)
     return str(path)
 
@@ -70,10 +101,18 @@ def _patched_create(*args, **kwargs):
             k.defines = [("SKIP_COMPUTE", "1")]
         if skip_w and k.kernel_source.endswith("wq_b_linear_reader.cpp"):
             k.kernel_source = _gated_reader()
-        if tiny_x and k.kernel_source.endswith("wq_b_linear_writer.cpp"):
-            k.kernel_source = _tiny_x_writer()
-        if no_x_prefetch and k.kernel_source.endswith("wq_b_linear_writer.cpp"):
-            k.kernel_source = _tiny_x_writer(shrink_send=False)
+        if k.kernel_source.endswith("wq_b_linear_writer.cpp"):
+            if tiny_x:
+                k.kernel_source = _tiny_x_writer(gate_w=skip_w)
+            elif no_x_prefetch:
+                k.kernel_source = _tiny_x_writer(shrink_send=False, gate_w=skip_w)
+            elif skip_w:
+                src = _with_gated_w(Path(k.kernel_source).read_text())
+                path = _tmp_dir / "wq_b_linear_writer_no_w_read.cpp"
+                path.write_text(src)
+                k.kernel_source = str(path)
+        if VARIANT == "no_y_write" and k.kernel_source.endswith("wq_b_linear_writer.cpp"):
+            k.kernel_source = _no_y_write_writer()
     desc.kernels = kernels
     return desc
 

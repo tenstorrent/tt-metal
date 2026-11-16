@@ -7,7 +7,7 @@ Blocking Model: `m` (`block_m_tiles`), `n` (`core_n_tiles`), `k` (block `tensor_
 | CB | Capacity (pages) | Live set | Axis accounting | Page format | Producer | Consumer | Lifetime | Shares with / why not |
 |----|------------------|----------|-----------------|-------------|----------|----------|----------|-----------------------|
 | `cb_x_resident` | `block_m_tiles · k_block_tiles · num_k_blocks` (= 5·3·16 = 240; whole-K resident, writer reserves all rounds up front) | 240: one write-once landing slot per multicast round (`num_x_rounds` = 4 slots of `x_round_k_blocks` = 4 K-blocks) (x is resident; rounds land ahead of compute) | `{m: spans → block_m_tiles, n: streams → replica, independent of core_n_tiles, k: spans → k_block_tiles · num_k_blocks}` | Float16_b (bf16 input; dataflow landing, unpacked to SrcB) | writer | compute | whole kernel (first round lands → last K-block popped) | none: concurrent with `cb_w_stream` and `cb_y_tiles` for the whole kernel. Write-once slots are what let Refinement 1 drop the ready handshake: each round has its own fixed-sender Flag channel (`X_MCAST_CHANNELS="per_round"`, one semaphore per round), fired once per launch. A 2-slot ring (R3) would need the handshake back; not taken because x is bounded at 491,520 B and residency keeps rounds ahead of compute |
-| `cb_w_stream` | `k_block_tiles · num_k_blocks · core_n_tiles_max` (= 3·16·2 = 96; whole-K resident, reader reserves the whole slice up front) | `48 · core_n_tiles` (96 on core_group_1, 48 on core_group_2): whole slice resident; `w_reads_in_flight` (shipped 1) K-blocks outstanding | `{m: streams → absent from W, n: spans → core_n_tiles_max, k: spans → k_block_tiles · num_k_blocks}` | Bfp8_b (bf8b weight, unpacked to SrcA) | reader | compute | whole kernel | none: concurrent with the other two. Capacity > live set on core_group_2 (52,224 B) because one descriptor serves both groups; per-group descriptors are the fix if L1 ever binds |
+| `cb_w_stream` | `k_block_tiles · num_k_blocks · core_n_tiles_max` (= 3·16·2 = 96; whole-K resident, reader reserves the whole slice up front) | `48 · core_n_tiles` (96 on the 63 two-column cores, 48 on the 2 single-column cores at the Refinement 2 defaults): whole slice resident; `w_reads_in_flight` (shipped 1) K-blocks outstanding. With `W_NOC1_K_BLOCKS > 0` (parked at 0) the writer fills the last K-block slots over NoC1 and the reader pushes them after a local handoff semaphore; the reader stays the only producer | `{m: streams → absent from W, n: spans → core_n_tiles_max, k: spans → k_block_tiles · num_k_blocks}` | Bfp8_b (bf8b weight, unpacked to SrcA) | reader | compute | whole kernel | none: concurrent with the other two. Capacity > live set on single-column cores (52,224 B) because one descriptor serves both groups; per-group descriptors are the fix if L1 ever binds |
 | `cb_y_tiles` | `block_m_tiles · core_n_tiles_max` (= 10) | `5 · core_n_tiles`: the accumulator over all K-blocks | `{m: spans → block_m_tiles, n: spans → core_n_tiles_max, k: streams → accumulated in place over num_k_blocks}` | Float16_b (matches 16-bit DEST and the bf16 output) | compute | writer | first K-block pack → store | none: it is the destination and the accumulator at once (pack-into-destination + packer L1 accumulation replace the `interm` spill buffer); concurrent with both inputs |
 
 Reuse patterns applied: pack-into-destination and fold-into-accumulator (packer L1 acc) eliminate the
@@ -24,8 +24,8 @@ disjoint lifetimes exist (all three CBs are live for the whole kernel).
 | `k_block_tiles` | divisor of 48, ≤ `K_BLOCK_TILES` = 3 | host clamp (mechanism cap) |
 | `num_k_blocks` | = 48 / `k_block_tiles` = 16; ≥ 1 | derived |
 | `num_x_rounds` | = `num_k_blocks / x_round_k_blocks` = 4; ≤ `MAX_X_MCAST_CHANNELS` = 8 | host: `_x_round_k_blocks` raises the round size until it fits |
-| `num_cores` | 16 ≤ `num_cores` ≤ 128 | `validate()` raises `RuntimeError` below 16; `split_work_to_cores` uses ≤ `tensor_n_tiles` cores |
-| `core_n_tiles_max` | = `ceil(128 / num_cores)` ≤ 8 (2 on p100a, 3 on 8×7 WH) | follows from `num_cores ≥ 16` |
+| `num_cores` | 16 ≤ grid; `num_cores` ≤ min(grid, `tensor_n_tiles`, ceil(`tensor_n_tiles` / `CORE_N_TILES`)) (65 on p100a: 63 bank-coalesced two-column cores + 2 single-column) | `validate()` raises `RuntimeError` below 16 grid cores; host `_core_n_counts` |
+| `core_n_tiles_max` | = `ceil(128 / num_cores)` ≤ 8 (2 on p100a, 3 on 8×7 WH) | follows from `num_cores ≥ 16` and `CORE_N_TILES = 2` |
 
 ## Total per-core footprint
 
@@ -72,3 +72,13 @@ delivered; busiest-core NoC inbound ≤ 104,448 (W, NoC0) + 491,520 (x, NoC1) B.
 > and the full op (23.8 µs) sits 0.9 µs above the W + compute ablation with a trivial x (22.95 µs).
 > The R5 escalation is not needed for x; the binding term is the W stream plus the compute tail on
 > the 2-column cores (Refinement 2).
+>
+> Refinement 2 (`CORE_N_TILES = 2`, `W_BANK_COALESCE`): the split is now 65 active cores (63 cores
+> own a bank-strided column pair `(n, n + 7)`, 2 cores own one column) instead of 18 × 2 + 92 × 1.
+> DRAM crossings are unchanged (W ×1, x ×1). W arrives in 2176 B single-bank transfers on the
+> paired cores. x still multicasts to the full grid (45 idle receivers; the rectangle cost is per
+> link, not per receiver). One extra semaphore (`W_HANDOFF_SEMAPHORE_ID`, id 0) is declared for
+> the parked NoC1 W share; the x channels start at id 1. The W stream alone is 19.8 µs (≈ 343 GB/s
+> from reader start, 77 % of the 448 GB/s peak) and binds via NoC0 row-link load next to the DRAM
+> endpoints, not DRAM banks: the same stream on NoC1 takes 36 µs, and adding a NoC1 share drops
+> W-only to 17.9 µs.

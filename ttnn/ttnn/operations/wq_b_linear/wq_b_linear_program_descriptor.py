@@ -18,6 +18,19 @@ K_BLOCK_TILES = 3
 MIN_CORES = 16
 MAX_READ_TRIDS = 15
 W_READS_IN_FLIGHT = 1
+# Read depth on the cores holding the n remainder (the larger n share); 0 = W_READS_IN_FLIGHT.
+W_READS_IN_FLIGHT_G1 = 0
+# n tiles per active core; 0 = fill the grid. Fewer, evenly loaded cores trade grid width for no light/heavy tail.
+CORE_N_TILES = 2
+# "row_major": active cores and the n remainder take the row-major-first cores; "spread": both evenly strided.
+CORE_PLACEMENT = "row_major"
+# Give each run of num_dram_banks equally loaded multi-column cores bank-strided columns (n, n + banks, ...):
+# a core's W tiles of one k row are then adjacent in one bank and arrive in one transfer.
+W_BANK_COALESCE = True
+# Last K-blocks of each core's W read by the writer (BRISC) on NoC1, beside the reader's NoC0 stream.
+W_NOC1_K_BLOCKS = 0
+# True: the writer issues those reads after its x phase instead of beside the x prefetch.
+W_NOC1_AFTER_X = True
 # Compute K-blocks per x multicast round (raised if needed to fit MAX_X_MCAST_CHANNELS); one injector per round.
 X_ROUND_K_BLOCKS = 4
 # "per_round": one fixed-sender Flag channel per round, each fired once per launch, so no ready handshake.
@@ -37,7 +50,8 @@ CB_X_RESIDENT = 0
 CB_W_STREAM = 1
 CB_Y_TILES = 16
 
-MCAST_FIRST_SEMAPHORE_ID = 0
+W_HANDOFF_SEMAPHORE_ID = 0
+MCAST_FIRST_SEMAPHORE_ID = 1
 
 
 def _largest_divisor_at_most(n, cap):
@@ -64,6 +78,68 @@ def _subblock(block_m_tiles, core_n_tiles, dest_limit):
             if area > best_area or (area == best_area and sb_h > best[0]):
                 best = (sb_h, sb_w)
     return best
+
+
+def _strided_pick(items, count):
+    return [items[i * len(items) // count] for i in range(count)]
+
+
+def _core_n_counts(num_grid_cores, tensor_n_tiles, num_banks):
+    """Per-core n shares, largest first."""
+    if CORE_N_TILES > 1 and W_BANK_COALESCE:
+        runs, rem = divmod(tensor_n_tiles, num_banks * CORE_N_TILES)
+        # Columns left over after the bank runs cannot pair within one bank; they go one per core.
+        if runs * num_banks + rem <= num_grid_cores:
+            return [CORE_N_TILES] * (runs * num_banks) + [1] * rem
+    num_cores = min(num_grid_cores, tensor_n_tiles)
+    if CORE_N_TILES:
+        num_cores = min(num_cores, -(-tensor_n_tiles // CORE_N_TILES))
+    base, rem = divmod(tensor_n_tiles, num_cores)
+    return [base + 1] * rem + [base] * (num_cores - rem)
+
+
+def _split_n(grid, tensor_n_tiles, num_banks):
+    """Returns [(cores, n_tiles)] per group, the larger n share first (split_work_to_cores convention)."""
+    assert CORE_PLACEMENT in ("row_major", "spread"), CORE_PLACEMENT
+    grid_row_major = [ttnn.CoreCoord(x, y) for y in range(grid.y) for x in range(grid.x)]
+    counts = _core_n_counts(len(grid_row_major), tensor_n_tiles, num_banks)
+    num_cores = len(counts)
+    num_heavy = counts.count(counts[0]) if counts[-1] != counts[0] else 0
+    if CORE_PLACEMENT == "spread":
+        active = _strided_pick(grid_row_major, num_cores)
+        heavy_idx = {i * num_cores // num_heavy for i in range(num_heavy)} if num_heavy else set()
+    else:
+        active = grid_row_major[:num_cores]
+        heavy_idx = set(range(num_heavy))
+    heavy = [c for i, c in enumerate(active) if i in heavy_idx]
+    light = [c for i, c in enumerate(active) if i not in heavy_idx]
+    return [(heavy, counts[0]), (light, counts[-1])] if num_heavy else [(light, counts[0])]
+
+
+def _assign_columns(n_groups, tensor_n_tiles, num_banks):
+    """{(x, y): (n_start, n_tiles, n_stride)}; the core owns columns n_start + j * n_stride."""
+    ordered = [(c, n_tiles) for cores, n_tiles in n_groups for c in cores]
+    assignment = {}
+    n_start = i = 0
+    while i < len(ordered):
+        n_tiles = ordered[i][1]
+        run = ordered[i : i + num_banks]
+        if W_BANK_COALESCE and n_tiles > 1 and len(run) == num_banks and all(n == n_tiles for _, n in run):
+            for j, (c, _) in enumerate(run):
+                assignment[(c.x, c.y)] = (n_start + j, n_tiles, num_banks)
+            n_start += num_banks * n_tiles
+            i += num_banks
+        else:
+            c = ordered[i][0]
+            assignment[(c.x, c.y)] = (n_start, n_tiles, 1)
+            n_start += n_tiles
+            i += 1
+    assert n_start == tensor_n_tiles
+    return assignment
+
+
+def _core_range_set(cores):
+    return ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores])
 
 
 def _x_round_k_blocks(num_k_blocks):
@@ -132,7 +208,7 @@ def create_program_descriptor(x_tensor, w_tensor, y_tensor, compute_cfg):
     block_m_tiles = tensor_m_tiles
     k_block_tiles = _largest_divisor_at_most(tensor_k_tiles, K_BLOCK_TILES)
     num_k_blocks = tensor_k_tiles // k_block_tiles
-    w_reads_in_flight = min(num_k_blocks, W_READS_IN_FLIGHT, MAX_READ_TRIDS)
+    w_noc1_k_blocks = min(W_NOC1_K_BLOCKS, num_k_blocks - 1)
     x_round_k_blocks = _x_round_k_blocks(num_k_blocks)
     num_x_rounds = num_k_blocks // x_round_k_blocks
 
@@ -140,15 +216,10 @@ def create_program_descriptor(x_tensor, w_tensor, y_tensor, compute_cfg):
     grid_cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
     num_grid_cores = grid.x * grid.y
 
-    (
-        num_cores,
-        all_cores,
-        core_group_1,
-        core_group_2,
-        n_tiles_g1,
-        n_tiles_g2,
-    ) = ttnn.split_work_to_cores(grid, tensor_n_tiles, row_wise=True)
-    core_n_tiles_max = max(n_tiles_g1, n_tiles_g2)
+    num_dram_banks = ttnn.device.get_memory_view(device, ttnn.BufferType.DRAM).num_banks
+    n_groups = _split_n(grid, tensor_n_tiles, num_dram_banks)
+    all_cores = _core_range_set([c for cores, _ in n_groups for c in cores])
+    core_n_tiles_max = n_groups[0][1]
 
     grid_row_major = [ttnn.CoreCoord(x, y) for y in range(grid.y) for x in range(grid.x)]
     if X_MCAST_CHANNELS == "per_round":
@@ -179,30 +250,36 @@ def create_program_descriptor(x_tensor, w_tensor, y_tensor, compute_cfg):
         cb(CB_Y_TILES, y_cb_pages, y_page_bytes, y_tensor.dtype, all_cores),
     ]
 
-    # ---- per-core n assignment (row-major prefix sum) ----
-    assignment = {}
-    n_start = 0
-    for group, n_tiles in ((core_group_1, n_tiles_g1), (core_group_2, n_tiles_g2)):
-        if n_tiles == 0:
-            continue
-        for core in ttnn.corerange_to_cores(group, row_wise=True):
-            assignment[(core.x, core.y)] = (n_start, n_tiles)
-            n_start += n_tiles
-    assert n_start == tensor_n_tiles
+    assignment = _assign_columns(n_groups, tensor_n_tiles, num_dram_banks)
 
-    # ---- reader: W stream (NCRISC, NoC0) ----
-    reader_ct = [CB_W_STREAM, tensor_n_tiles, k_block_tiles, num_k_blocks, w_reads_in_flight]
-    reader_ct.extend(ttnn.TensorAccessorArgs(w_tensor).get_compile_time_args())
-    reader_rt = ttnn.RuntimeArgs()
-    for (cx, cy), (core_n_start, core_n) in assignment.items():
-        reader_rt[cx][cy] = [w_tensor.buffer_address(), core_n_start, core_n]
-    reader_kernel = ttnn.KernelDescriptor(
-        kernel_source=str(KERNEL_DIR / "wq_b_linear_reader.cpp"),
-        core_ranges=all_cores,
-        compile_time_args=reader_ct,
-        runtime_args=reader_rt,
-        config=ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.NOC_0),
-    )
+    # ---- reader: W stream (NCRISC, NoC0), one kernel per core group (read depth is CT) ----
+    reader_kernels = []
+    for gi, (cores, _) in enumerate(n_groups):
+        depth = W_READS_IN_FLIGHT_G1 if gi == 0 and len(n_groups) > 1 and W_READS_IN_FLIGHT_G1 else W_READS_IN_FLIGHT
+        reader_ct = [
+            CB_W_STREAM,
+            tensor_n_tiles,
+            k_block_tiles,
+            num_k_blocks,
+            min(num_k_blocks - w_noc1_k_blocks, depth, MAX_READ_TRIDS),
+            w_noc1_k_blocks,
+            W_HANDOFF_SEMAPHORE_ID,
+        ]
+        reader_ct.extend(ttnn.TensorAccessorArgs(w_tensor).get_compile_time_args())
+        reader_rt = ttnn.RuntimeArgs()
+        for c in cores:
+            reader_rt[c.x][c.y] = [w_tensor.buffer_address(), *assignment[(c.x, c.y)]]
+        reader_kernels.append(
+            ttnn.KernelDescriptor(
+                kernel_source=str(KERNEL_DIR / "wq_b_linear_reader.cpp"),
+                core_ranges=_core_range_set(cores),
+                compile_time_args=reader_ct,
+                runtime_args=reader_rt,
+                config=ttnn.DataMovementConfigDescriptor(
+                    processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.NOC_0
+                ),
+            )
+        )
 
     # ---- writer: x broadcast + y store (BRISC, NoC1), full grid ----
     writer_ct = [
@@ -217,13 +294,22 @@ def create_program_descriptor(x_tensor, w_tensor, y_tensor, compute_cfg):
         int(X_MCAST_CHANNELS == "per_round"),
         int(X_ROUNDS_CONCURRENT),
         MAX_X_MCAST_CHANNELS,
+        CB_W_STREAM,
+        w_noc1_k_blocks,
+        W_HANDOFF_SEMAPHORE_ID,
+        int(W_NOC1_AFTER_X),
     ]
     writer_ct.extend(ttnn.TensorAccessorArgs(x_tensor).get_compile_time_args())
     writer_ct.extend(ttnn.TensorAccessorArgs(y_tensor).get_compile_time_args())
+    writer_ct.extend(ttnn.TensorAccessorArgs(w_tensor).get_compile_time_args())
     writer_rt = ttnn.RuntimeArgs()
     for core in grid_row_major:
-        core_n_start, core_n = assignment.get((core.x, core.y), (0, 0))
-        writer_rt[core.x][core.y] = [x_tensor.buffer_address(), y_tensor.buffer_address(), core_n_start, core_n]
+        writer_rt[core.x][core.y] = [
+            x_tensor.buffer_address(),
+            y_tensor.buffer_address(),
+            *assignment.get((core.x, core.y), (0, 0, 1)),
+            w_tensor.buffer_address(),
+        ]
     writer_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "wq_b_linear_writer.cpp"),
         core_ranges=grid_cores,
@@ -235,9 +321,7 @@ def create_program_descriptor(x_tensor, w_tensor, y_tensor, compute_cfg):
     # ---- compute: one kernel per core group (core_n_tiles and subblocks are CT) ----
     dest_limit = _dest_limit(compute_cfg)
     compute_kernels = []
-    for group, n_tiles in ((core_group_1, n_tiles_g1), (core_group_2, n_tiles_g2)):
-        if n_tiles == 0 or group.num_cores() == 0:
-            continue
+    for cores, n_tiles in n_groups:
         sb_h, sb_w = _subblock(block_m_tiles, n_tiles, dest_limit)
         compute_ct = [
             CB_X_RESIDENT,
@@ -253,16 +337,17 @@ def create_program_descriptor(x_tensor, w_tensor, y_tensor, compute_cfg):
         compute_kernels.append(
             ttnn.KernelDescriptor(
                 kernel_source=str(KERNEL_DIR / "wq_b_linear_compute.cpp"),
-                core_ranges=group,
+                core_ranges=_core_range_set(cores),
                 compile_time_args=compute_ct,
                 runtime_args=[],
                 config=_copy_compute_config(compute_cfg),
             )
         )
 
-    descriptor = ttnn.ProgramDescriptor(kernels=[], semaphores=[], cbs=cbs)
+    semaphores = [ttnn.SemaphoreDescriptor(id=W_HANDOFF_SEMAPHORE_ID, core_ranges=all_cores, initial_value=0)]
+    descriptor = ttnn.ProgramDescriptor(kernels=[], semaphores=semaphores, cbs=cbs)
 
     _attach_x_mcast(descriptor, device, writer_kernel, grid_cores, x_injectors, num_x_rounds)
 
-    descriptor.kernels = [reader_kernel, writer_kernel, *compute_kernels]
+    descriptor.kernels = [*reader_kernels, writer_kernel, *compute_kernels]
     return descriptor

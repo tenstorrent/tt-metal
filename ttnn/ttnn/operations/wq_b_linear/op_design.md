@@ -102,6 +102,17 @@ The implementer re-tuned four design values on p100a (measured in `agent_logs/tt
 | `num_x_injectors` | `max(2, min(num_k_blocks, grid_x))` | `num_x_rounds` (per_round) | one injector per round |
 | `W_READS_IN_FLIGHT` | 1 | 1 | 2: 27.7 µs, 3: 29.3 µs (kb=6); 2 at kb=3: 24.6 µs |
 
+### As built (Refinement 2, supersedes Refinement 1 where they differ)
+
+| Knob | Refinement 1 | Refinement 2 | Evidence (p100a, device ns) |
+|------|--------------|--------------|----------|
+| n split | `split_work_to_cores` over 110 cores: 18 × 2 + 92 × 1 | `CORE_N_TILES = 2`: 65 cores (host `_core_n_counts` / `_split_n`) | full 23.94 → 22.99 µs; W-reader max/p50 1.09 → 1.03 |
+| `W_BANK_COALESCE` (new) | contiguous columns | runs of `num_dram_banks` (7) two-column cores own `(n, n + 7)`: one 2176 B single-bank read per k row; the 2 leftover columns go to single-column cores | full 22.99 → 22.39 µs (median of 9). The leftover pair on one core read per tile and trailed by 0.8 µs |
+| `CORE_PLACEMENT` (new) | row-major | row-major | `spread`: +0.8 µs (full) |
+| `W_READS_IN_FLIGHT_G1` (new) | — | 0 (= `W_READS_IN_FLIGHT`) | deeper heavy-core reads: no gain (w_only 21.2 → 21.5–23.3 µs) |
+| `W_NOC1_K_BLOCKS` / `W_NOC1_AFTER_X` (new) | — | 0 (parked) | W-only 20.4 → 17.9 µs at 6 blocks on NoC1, but in the full op the x broadcast holds BRISC/NoC1: 24–31 µs issued at start, 22.7–25.2 µs issued after the x phase |
+| `CORE_N_TILES = 3` | — | not taken | 27.1 µs: compute (720 tile-matmuls) binds |
+
 `x_cb_k_blocks` / `w_cb_k_blocks` are not independent knobs in the code: the writer and reader reserve all `num_k_blocks` blocks up front (whole-K residency), so the CB capacities are written in `num_k_blocks` directly. A ring depth below `num_k_blocks` needs wrap-aware slot math in both kernels.
 
 Verifier ablation (p100a, device kernel ns, 3 calls each): full 26.6 µs; x broadcast + y store only (no W reads, no compute) 25.4 µs; sync-only (one-page multicast per round, no W reads, no compute) 14.7 µs; W-only (one-page x) 20.8 µs; compute-only (one-page x) 15.7 µs. The serialized 8-round x broadcast is the critical path, not the W DRAM stream. See `verification_report.md`.
