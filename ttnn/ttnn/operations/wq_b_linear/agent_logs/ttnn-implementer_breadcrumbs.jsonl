@@ -1,0 +1,1 @@
+{"event":"test_run","status":"pass","tests":"tests/ttnn/unit_tests/operations/wq_b_linear/test_wq_b_linear.py (18, dev+prod), eval/golden_tests/wq_b_linear (3)","pcc":0.99996,"ts":"2026-11-16T15:31:16+00:00"}
