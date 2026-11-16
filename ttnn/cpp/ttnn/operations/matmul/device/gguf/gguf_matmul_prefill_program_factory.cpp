@@ -56,6 +56,7 @@ struct PrefillPlan {
     std::array<uint32_t, 2> nc{};
     uint32_t np = 0;
     double cost = 1e30;
+    bool pipe = true;  // pipelined decode blocks (gguf_matmul_prefill_compute.cpp), unless the input stream bounds
 };
 
 // K split: every core sends to or receives from at most two cores of the other band.
@@ -92,6 +93,8 @@ std::optional<PrefillPlan> prefill_plan(
         const uint32_t passes = plan.np > 0 ? (plan.nc[0] + plan.np - 1) / plan.np : 1;
         const double input = double(m_tiles) * k_tiles * 2048 * passes / rate;
         plan.cost = std::max(core, input) + 0.2 * std::min(core, input);
+        // Each pipelined block first waits for the matmul's packs to drain: a cost where the cores wait for input.
+        plan.pipe = core > input;
         if (plan.cost < best.cost) {
             best = plan;
         }
@@ -195,7 +198,7 @@ std::vector<uint32_t> gguf_prefill_plan_key(const Tensor& input, const Tensor& w
     if (!p.has_value()) {
         return {};
     }
-    return {p->mg, p->ks, p->rows0, p->kt0, p->mc, p->kb, p->ur, p->nc[0], p->nc[1], p->np};
+    return {p->mg, p->ks, p->rows0, p->kt0, p->mc, p->kb, p->ur, p->nc[0], p->nc[1], p->np, uint32_t(p->pipe)};
 }
 
 GgufMatmulPrefillProgramFactory::cached_program_t GgufMatmulPrefillProgramFactory::create(
@@ -330,7 +333,8 @@ GgufMatmulPrefillProgramFactory::cached_program_t GgufMatmulPrefillProgramFactor
             .math_fidelity = MathFidelity::HiFi2,
             .fp32_dest_acc_en = true,
             .dst_full_sync_en = false,
-            .compile_args = {f.format_id, mc, kb, mchunks, ur, passes, kPrefillOutTiles}});
+            .compile_args = {f.format_id, mc, kb, mchunks, ur, passes, kPrefillOutTiles},
+            .defines = {{"GGUF_PF_PIPE", p->pipe ? "1" : "0"}}});
 
     auto band_core = [&](uint32_t band, uint32_t j) { return CoreCoord(j % grid.x, bands[band].row0 + j / grid.x); };
     for (uint32_t band = 0; band < bands.size(); band++) {
