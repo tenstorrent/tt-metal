@@ -53,7 +53,7 @@ inline constexpr bool _typecast_is_sfpu_no_op_(DataFormat src, DataFormat dst) {
  *  Bfp4_b <-> Bfp8_b
  *  Bfp4_b <-> Float16_b
  *  Bfp4_b <-> Float32
- *  Bfp2_b: same pairs as Bfp4_b
+ *  Bfp2_b: same pairs as Bfp4_b (Wormhole/Blackhole only)
  *  UInt16 <-> UInt32
  *  UInt16 <-> Int32
  *  UInt16 <-> UInt8
