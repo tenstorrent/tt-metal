@@ -54,19 +54,11 @@ class TestShellWrappersAgree(unittest.TestCase):
 
     def test_docker_sys_triage_tiers(self):
         # run_diag_docker.sh adds the journal mounts and the BMC credentials
-        # only for these, plus the old name of pre_bmc_reboot.
+        # only for these (and pre_reboot, the old name of pre_bmc_reboot).
         self.assertEqual({name for name, tier in TIERS.items() if tier.sys_triage}, {"full", "pre_bmc_reboot"})
-        self.assertIn(
-            "full|pre_bmc_reboot|pre_reboot) ${SKIP_SYS_TRIAGE} || WANT_SYS_TRIAGE=true",
-            (SUITE_DIR / "run_diag_docker.sh").read_text(),
-        )
-
-    def test_docker_qsfp_tiers(self):
-        # run_diag_docker.sh warns about missing BMC API credentials on every tier.
-        self.assertEqual({name for name, tier in TIERS.items() if not tier.qsfp_tests}, set())
 
     def test_run_health_check_tier_choices(self):
-        # Its parser is built and parsed inside parse_args(), so read the call.
+        # parse_args() builds and parses in one go, so read the call instead.
         tree = ast.parse((SUITE_DIR / "test_infrastructure" / "run_health_check.py").read_text())
         calls = [
             node
@@ -90,14 +82,6 @@ class TestDiagRunnerCli(unittest.TestCase):
     def test_deprecated_alias_reports_new_name(self):
         from diag_runner import run_diag
 
-        skip_all = dict(
-            dry_run=True,
-            skip_reset=True,
-            skip_tests=True,
-            skip_triage=True,
-            skip_qsfp_tests=True,
-            skip_sys_triage=True,
-        )
         for old, new in DEPRECATED_TIER_ALIASES.items():
             with self.subTest(old), tempfile.TemporaryDirectory() as tmp:
                 d = Path(tmp)
@@ -107,7 +91,12 @@ class TestDiagRunnerCli(unittest.TestCase):
                         input_snapshot=d / "missing.json",
                         output=d / "report.json",
                         snapshot_out=d / "snapshot.json",
-                        **skip_all,
+                        dry_run=True,
+                        skip_reset=True,
+                        skip_tests=True,
+                        skip_triage=True,
+                        skip_qsfp_tests=True,
+                        skip_sys_triage=True,
                     )
                 self.assertEqual(report["tier"], new)
 

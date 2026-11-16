@@ -139,8 +139,9 @@ Forwarded to run_diag.sh (see its --help, and diag_runner.py --help, for detail)
 Host requirements checked before starting:
   /dev/tenstorrent (required), /dev/ipmi0, /dev/hugepages, /dev/hugepages-1G,
   /etc/udev/rules.d, /lib/modules, /sys/kernel/debug, and on full and
-  pre_bmc_reboot /var/log/journal, /run/log/journal, /etc/machine-id. A missing optional path
-  is reported with what it costs rather than failing the container outright.
+  pre_bmc_reboot /var/log/journal, /run/log/journal, /etc/machine-id. A missing
+  optional path is reported with what it costs rather than failing the container
+  outright.
 
 Examples:
   # Daily tier into a timestamped directory
@@ -232,9 +233,9 @@ while (( $# )); do
     esac
 done
 
-# The sys-triage phase runs on full and pre_bmc_reboot only (pre_reboot is the
-# old name of the latter). Every other tier gets exactly the container it got
-# before the phase existed: no extra mounts or packages.
+# The sys-triage phase runs on full and pre_bmc_reboot (old name pre_reboot)
+# only. Every other tier gets exactly the container it got before the phase
+# existed: no extra mounts or packages.
 WANT_SYS_TRIAGE=false
 case "${TIER}" in
     full|pre_bmc_reboot|pre_reboot) ${SKIP_SYS_TRIAGE} || WANT_SYS_TRIAGE=true ;;
@@ -465,9 +466,9 @@ if [ -n "${_need}" ]; then
     fi
 fi
 
-# What sys-triage shells out to beyond the above, on full and pre_bmc_reboot only. Each is
-# installed after the packages above and on its own, so that a failure here
-# costs one section of the bundle and nothing else:
+# What sys-triage shells out to beyond the above, on full and pre_bmc_reboot
+# only. Each is installed after the packages above and on its own, so that a
+# failure here costs one section of the bundle and nothing else:
 #   kmod (modinfo, lsmod)  the driver row of its FW table, where a missing
 #                          binary costs the whole table rather than the row
 #   curl                   its Redfish version reads

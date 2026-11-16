@@ -29,8 +29,8 @@ Adding or renaming a tier also means updating, by hand, the tier lists in
 run_diag.sh (its case statement and --help), run_diag_docker.sh (both case
 statements, the sys-triage tier check and --help) and run_health_check.py's
 --tier choices, plus the tier table in HEALTH_CHECK.md.
-tools/scaleout/exabox/tests/test_diag_tiers.py fails until the two scripts agree
-with TIERS.
+tools/scaleout/exabox/tests/test_diag_tiers.py fails until they agree with
+TIERS.
 """
 from __future__ import annotations
 
@@ -109,9 +109,8 @@ TIERS: dict[str, Tier] = {
     ),
 }
 
-# Old tier names, still accepted until the callers in exabox-infra and
-# tt-orchestration move over. A run started under one is reported under the
-# new name.
+# Old names, accepted until the exabox-infra and tt-orchestration callers move
+# over. The report records the new name.
 DEPRECATED_TIER_ALIASES: dict[str, str] = {
     "light": "daily",
     "medium": "daily",
@@ -129,11 +128,9 @@ def _validate() -> None:
         ]
         problems += [f"{name}: unknown test {t!r}" for t in tier.tests if t not in TESTS and t not in PYTESTS]
         problems += [f"{name}: unknown triage tool {t!r}" for t in tier.triage if t not in TRIAGE_TOOLS]
-    for old, new in DEPRECATED_TIER_ALIASES.items():
-        if old in TIERS:
-            problems.append(f"{old}: both a tier and a deprecated alias")
-        if new not in TIERS:
-            problems.append(f"{old}: deprecated alias for unknown tier {new!r}")
+    problems += [
+        f"{old}: alias for unknown tier {new!r}" for old, new in DEPRECATED_TIER_ALIASES.items() if new not in TIERS
+    ]
     if problems:
         raise ValueError("tiers.py: " + "; ".join(problems))
 

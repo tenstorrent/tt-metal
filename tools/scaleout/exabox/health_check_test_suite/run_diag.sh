@@ -23,8 +23,7 @@
 #                   + triage (host_side + device_side)
 #                   + QSFP tests (ETH link, cabling and module state), if the host has the package
 #                   + sys-triage bundle, if the host has the package and BMC credentials
-# The old names light, medium, deploy and pre_reboot are still accepted; diag_runner.py
-# warns and runs the tier that replaced them (DEPRECATED_TIER_ALIASES in tiers.py).
+# The old names (light, medium, deploy, pre_reboot) still work; see DEPRECATED_TIER_ALIASES.
 #
 # Designed to match tt-metal's run_upstream_tests_vanilla.sh shape.
 # Can be used as the ENTRYPOINT of a docker image

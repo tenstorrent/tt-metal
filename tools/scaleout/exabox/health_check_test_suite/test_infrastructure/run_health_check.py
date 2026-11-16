@@ -100,10 +100,7 @@ def parse_args() -> argparse.Namespace:
         "--tier",
         default="daily",
         choices=["daily", "weekly", "full", "pre_bmc_reboot", "light", "medium", "deploy", "pre_reboot"],
-        help=(
-            "Diagnostic tier passed to the diag suite. light, medium, deploy and pre_reboot "
-            "are deprecated names for daily, daily, weekly and pre_bmc_reboot"
-        ),
+        help="Diagnostic tier passed to the diag suite (light, medium, deploy and pre_reboot are deprecated)",
     )
     p.add_argument(
         "--results-dir",

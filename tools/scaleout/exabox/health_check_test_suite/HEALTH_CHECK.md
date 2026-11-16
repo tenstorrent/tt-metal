@@ -77,12 +77,10 @@ The [sys-triage phase](#sys-triage-phase) runs last on `full` and
 `pre_bmc_reboot` only; it collects a bundle for the ticket and never gates the
 run.
 
-A `flash` tier, a quick machine status check, is planned and commented out in
-`tiers.py` until its tests exist. The old tier names still work and print a
-deprecation warning: `light` and `medium` run `daily`, `deploy` runs `weekly`,
-`pre_reboot` runs `pre_bmc_reboot`. The report records the new name
-(`DEPRECATED_TIER_ALIASES` in `tiers.py`). `run_diag_docker.sh` passes an old
-name on unchanged, so it still drives an image built before the rename.
+`flash`, a quick machine status check, is commented out in `tiers.py` until its
+tests exist. The old names still run, with a deprecation warning: `light` and
+`medium` as `daily`, `deploy` as `weekly`, `pre_reboot` as `pre_bmc_reboot`. The
+report records the new name.
 
 What each tier runs is defined in one place, `TIERS` in
 [`tiers.py`](tiers.py): per tier, the pre-test resets, the tests, the post-test
@@ -97,9 +95,9 @@ added to the tier lists in `run_diag.sh`, `run_diag_docker.sh` and
 `tools/scaleout/exabox/tests/test_diag_tiers.py` fails until they agree with
 `TIERS`.
 
-`pre_bmc_reboot` collects data; it does not check the unit. It runs on a unit that is
-about to be power cycled through the BMC, so it records the state first and runs
-nothing that would change it. It never resets the unit: the snapshot, the
+`pre_bmc_reboot` collects data; it does not check the unit. It runs on a unit
+that is about to be power cycled through the BMC, so it records the state first
+and runs nothing that would change it. It never resets the unit: the snapshot, the
 triage tools and the QSFP tests all read the unit as it was found. There are no
 gtests or pytests either: a stress run on a unit that is already going to be
 rebooted would change the state the later phases are meant to record. The reset
@@ -135,8 +133,8 @@ pytest invocations themselves are `TESTS` / `PYTESTS` in `diag/device_tests.py`.
 
 ## Triage phase
 
-`daily`, `weekly` and `full` end with a post-test `tt-smi -glx_reset` followed by the
-first-step triage tools — `host_side.sh` (host, PCIe and driver state, read from
+`daily`, `weekly` and `full` end with a post-test `tt-smi -glx_reset` followed by
+the first-step triage tools — `host_side.sh` (host, PCIe and driver state, read from
 sysfs) and `device_side.sh` (per-chip liveness, ARC scratch, telemetry and a NOC0
 node sweep). `pre_bmc_reboot` runs the same tools with no reset before them. They
 live in `tools/scaleout/kmd_triage/`. Which tiers run them, and the reset before
