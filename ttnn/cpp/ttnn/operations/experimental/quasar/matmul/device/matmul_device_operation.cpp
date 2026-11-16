@@ -772,10 +772,6 @@ void validate_unified_prefetcher_pipes(
     const MatmulUnifiedPlan& plan) {
     using tt::tt_metal::ShardDistributionStrategy;
     using tt::tt_metal::experimental::SenderCoreType;
-    TT_FATAL(
-        input_tensor_b.device()->arch() != tt::ARCH::QUASAR,
-        "prefetcher_pipes delivery of B has not been brought up on Quasar: the relay of a pipe into compute does not "
-        "work there yet");
     const ttnn::PrefetcherPipeRefList pipes = ttnn::prefetcher_pipe_refs(prefetcher_pipes);
     const tt::tt_metal::experimental::PrefetcherPipe& first_pipe = pipes.front();
     for (size_t p = 0; p < pipes.size(); ++p) {
@@ -2701,6 +2697,13 @@ MatmulDeviceOperation::tensor_return_value_t matmul(
         auto* config = std::get_if<operations::experimental::quasar::matmul::MatmulUnifiedProgramConfig>(
             &normalized_attributes.program_config.value());
         if (config != nullptr && !config->K_chunk_tiles.has_value()) {
+            // A worker-sender producer sizes its own entries, which the op cannot see; a K chunk other than theirs
+            // hangs both ends.
+            TT_FATAL(
+                ttnn::prefetcher_pipe_refs(normalized_attributes.prefetcher_pipes).front().get().sender_core_type() ==
+                    tt::tt_metal::experimental::SenderCoreType::Dram,
+                "prefetcher_pipes with worker senders need MatmulUnifiedProgramConfig::K_chunk_tiles set to the K "
+                "tiles of each entry their producer sends (for ttnn.dram_prefetcher, K tiles / receivers)");
             config->K_chunk_tiles =
                 plan_unified_matmul(
                     input_tensor_a, input_tensor_b, bias_single_tile_size, *config, normalized_attributes, C, true)

@@ -538,12 +538,13 @@ Metal 2.0 factory (`create_program_mcast_in0_artifacts`): either the DRAM-sender
 The Quasar-native matmul (`ttnn.experimental.quasar.matmul(..., prefetcher_pipes=pipes)`,
 `MatmulUnifiedProgramConfig`, `ttnn/cpp/ttnn/operations/experimental/quasar/matmul/`) drains the pipes as
 mcast-in0 does: each core is a pipe receiver computing all of M for one N slice, the cores in row-major order
-take the N slices in order, and a pipe entry is one K chunk (`K_chunk_tiles` by the N slice). The op queues
+take the N slices in order, and a pipe entry is one K chunk (`K_chunk_tiles` by the N slice). Over Tensor prefetcher pipes the op queues
 its own request (`block_count = K_tiles / K_chunk_tiles`, no rotation), since only its plan knows the K
-chunk. B_slice is a relay over the rings that the reader publishes with the same one-block window
+chunk. Over worker-sender pipes the caller runs the producer (`ttnn.dram_prefetcher`, whose entries are
+`K_tiles / receivers` deep) and must set `K_chunk_tiles` to its entry depth: the op cannot see it. B_slice is a relay over the rings that the reader publishes with the same one-block window
 (`prefetcher_pipe_in1_window.hpp`); the reader is single-threaded and on NOC 0, where a DRAM sender's
 NIU takes the credit atomics. The weight contract is mcast-in0's, with `in0_block_w = K_chunk_tiles` and
-`per_core_N` the N slice. Blackhole only so far.
+`per_core_N` the N slice. The Tensor prefetcher needs Blackhole; worker-sender pipes run on every arch.
 
 #### Gather-in0 over PrefetcherPipes
 
