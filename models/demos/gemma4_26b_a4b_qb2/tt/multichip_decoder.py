@@ -52,6 +52,8 @@ WS2_CCL_LINKS = int(os.environ.get("GEMMA4_26B_WS2_CCL_LINKS", "2"))
 WS1_BATCHED = os.environ.get("GEMMA4_26B_WS1_BATCHED", "1") != "0"
 # WS5: batch-1 decode with the fused layer boundaries (fused_decode/boundary.py; perf/WS5.md).
 WS5_FUSED = os.environ.get("GEMMA4_26B_WS5_FUSED", "1") != "0"
+# WS5: the batch-1 shared MLP through moe_decode (one always-routed expert) instead of the ttnn shared MLP.
+WS5_SHARED_B1 = os.environ.get("GEMMA4_26B_WS5_SHARED_B1", "1") != "0"
 
 
 class DecodeRopeRows:
@@ -1449,6 +1451,58 @@ class MultichipDecoder(OptimizedDecoder):
             del gu, dn
             for name in ("gate_up", "down"):
                 ttnn.deallocate(getattr(experts, name))
+        self.shared_b1 = None
+        if WS5_FUSED and WS5_SHARED_B1 and self.moe_b1 is not None and "mlp.gate_proj.weight" in state_dict:
+            # WS5: the batch-1 shared MLP as one always-routed bank-streamed expert (moe_decode, k = 1, weight 1):
+            # its tensor-parallel slice of the intermediate dimension, pre_feedforward_layernorm folded into gate|up.
+            from models.demos.gemma4_26b_a4b_qb2.tt.moe_decode import MoeDecodeB1, tp_expert_layouts, upload_per_chip
+
+            gate, up = (state_dict[f"mlp.{n}_proj.weight"].float() for n in ("gate", "up"))  # [I, H]
+            if WS2_FOLD_SHARED and "pre_feedforward_layernorm.weight" in state_dict:
+                gamma = state_dict["pre_feedforward_layernorm.weight"].float()[None, :]
+                gate, up = gate * gamma, up * gamma
+            # per chip: a whole number of tile pairs for each of the 3 bank readers (2112 -> 576 per chip, not 544)
+            shared_pad = -(-gate.shape[0] // (4 * 32 * 3)) * 4 * 32 * 3
+            gu, dn = tp_expert_layouts(
+                {
+                    "experts.gate_up_proj": torch.cat([gate, up], 0)[None],
+                    "experts.down_proj": state_dict["mlp.down_proj.weight"].float()[None],
+                },
+                tp=4,
+                banks=mesh_device.dram_grid_size().x,
+                inter_pad=shared_pad,
+                local_readers=3,
+            )
+            shared_gate = (
+                ttnn.bfloat8_b if precision_config is None else policy_dtype(precision_config["shared_gate_dtype"])
+            )
+            shared_down = (
+                ttnn.bfloat8_b if precision_config is None else policy_dtype(precision_config["shared_down_dtype"])
+            )
+            route = torch.zeros(1, 1, 32, 2)
+            route[0, 0, 0, 0] = 1.0  # weight 1, expert id 0
+            self.shared_b1 = SimpleNamespace(
+                op=MoeDecodeB1(
+                    mesh_device,
+                    hidden=config.hidden_size,
+                    inter_chip=shared_pad // 4,
+                    k=1,
+                    weight_dtype=shared_gate,
+                    down_dtype=shared_down,
+                ),
+                w_gu=upload_per_chip(mesh_device, gu, shared_gate),
+                w_down=upload_per_chip(mesh_device, dn, shared_down),
+                route=ttnn.from_torch(
+                    route,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    device=mesh_device,
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                ),
+            )
+            self.shared_b1.op.local_readers = 3
+            del gu, dn, gate, up
         self.expert_parallel = expert_parallel
         shared_class = _DramSharedMLP if shared_dram else _SharedMLP
         self.layer.shared_mlp = shared_class(self.layer.shared_mlp, compute, self.allreduce)
@@ -2136,11 +2190,23 @@ class MultichipDecoder(OptimizedDecoder):
         router_in, expert_in, shared_in = f.boundary.attn(partial, f.g_attn, f.router_scale)
         packed = self.layer.moe.router.decode_packed(router_in, prescaled=True)
         moe = self.moe_b1
-        routed = moe.op(expert_in, packed, moe.w_gu, moe.w_down)
-        shared = self.layer.shared_mlp(
-            shared_in, reduce_output=False, normalized_input=True, output_dtype=ttnn.bfloat16
-        )
-        return f.boundary.moe(shared, routed, f.g_moe, f.layer_scalar)
+        boundary = f.boundary
+        flat = boundary.flat_moe
+        if flat and self.shared_b1 is not None:
+            # both MoE partials go straight into the boundary's flat partial buffer (no row gather)
+            sb = self.shared_b1
+            sb.op(shared_in, sb.route, sb.w_gu, sb.w_down, x_flat=True, flat_out=(boundary.part, 0))
+            moe.op(expert_in, packed, moe.w_gu, moe.w_down, x_flat=True, flat_out=(boundary.part, boundary.T * 2048))
+            return boundary.moe_pregathered(f.g_moe, f.layer_scalar)
+        routed = moe.op(expert_in, packed, moe.w_gu, moe.w_down, x_flat=flat)
+        if self.shared_b1 is not None:
+            sb = self.shared_b1
+            shared = sb.op(shared_in, sb.route, sb.w_gu, sb.w_down, x_flat=flat)
+        else:
+            shared = self.layer.shared_mlp(
+                shared_in, reduce_output=False, normalized_input=True, output_dtype=ttnn.bfloat16
+            )
+        return boundary.moe(shared, routed, f.g_moe, f.layer_scalar)
 
     def _ws2_decode(self, x, **attention_kwargs):
         """Batch-1 decode layer with the residual stream width-sharded in L1 between the norms.

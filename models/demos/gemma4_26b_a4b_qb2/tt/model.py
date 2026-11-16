@@ -147,10 +147,14 @@ class Gemma4Model:
             return None
         from models.demos.gemma4_26b_a4b_qb2.tt.fused_decode.boundary import GemmaBoundary
 
+        # The moe_decode shared MLP takes a BF16 input; the ttnn shared MLP the FP32 normed vector.
+        shared_bf16 = all(getattr(layer, "shared_b1", None) is not None for layer in layers)
         boundary = GemmaBoundary(
             self.mesh,
             self.config.hidden_size,
             self.config.rms_norm_eps,
+            shared_dtype=ttnn.bfloat16 if shared_bf16 else ttnn.float32,
+            flat_moe=shared_bf16 and os.environ.get("GEMMA4_26B_WS5_FLAT_MOE", "1") != "0",
             round_n=os.environ.get("GEMMA4_26B_WS5_ROUND_N", "1") != "0",
         )
         hidden = self.config.hidden_size
