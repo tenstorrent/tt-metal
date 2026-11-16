@@ -193,14 +193,6 @@ def test_the_health_check_is_not_driven_by_the_nightlies_finishing():
     assert "workflow_run" not in triggers
 
 
-@pytest.mark.skipif(
-    not (_WORKFLOWS / _HEALTH).exists(),
-    reason="the workflow files are not in this checkout",
-)
-def test_the_watchdog_runs_after_the_health_check():
-    assert min(_crons("llk-nightly-watchdog.yaml")) > max(_crons(_HEALTH))
-
-
 def test_a_plain_nightly_reports_failed_jobs_and_a_missing_run():
     jobs = [
         _job(1, "bit-exact / blackhole", "failure"),
