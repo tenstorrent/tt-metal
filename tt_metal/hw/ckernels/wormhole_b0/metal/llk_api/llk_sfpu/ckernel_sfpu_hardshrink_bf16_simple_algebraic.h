@@ -3,7 +3,6 @@
 #pragma once
 
 namespace ckernel::sfpu::ttpoly::hardshrink {
-using namespace ::sfpi;
 using ::sfpi::DataLayout;
 template <uint32_t Hold, uint32_t Advance>
 inline void simple_threshold_pair() {
