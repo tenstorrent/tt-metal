@@ -23,7 +23,7 @@ namespace tt::tt_metal::experimental {
 // program's own args.
 
 // Words [first_word, first_word + values.size()) of the kernel's unique runtime args on `core`.
-void SetRuntimeArgs(
+void SetRuntimeArgsForDevice(
     distributed::MeshWorkload& mesh_workload,
     const distributed::MeshCoordinateRange& program_range,
     const distributed::MeshCoordinate& device,
@@ -32,7 +32,7 @@ void SetRuntimeArgs(
     uint32_t first_word,
     ttsl::Span<const uint32_t> values);
 // Words [first_word, first_word + values.size()) of the kernel's common runtime args.
-void SetCommonRuntimeArgs(
+void SetCommonRuntimeArgsForDevice(
     distributed::MeshWorkload& mesh_workload,
     const distributed::MeshCoordinateRange& program_range,
     const distributed::MeshCoordinate& device,
@@ -40,7 +40,7 @@ void SetCommonRuntimeArgs(
     uint32_t first_word,
     ttsl::Span<const uint32_t> values);
 // Drops one device's value of a field (`core` nullopt: common runtime args): it follows the program's own args again.
-void ClearRuntimeArgs(
+void UnsetRuntimeArgsForDevice(
     distributed::MeshWorkload& mesh_workload,
     const distributed::MeshCoordinateRange& program_range,
     const distributed::MeshCoordinate& device,

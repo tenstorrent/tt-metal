@@ -251,9 +251,9 @@ PerDeviceRuntimeArgsField* MeshWorkloadImpl::find_per_device_runtime_args_field(
     TT_FATAL(
         is_metal2 == metal2,
         "{}",
-        metal2 ? "experimental::SetProgramRunArgsPerDevice requires a Metal 2.0 (ProgramSpec) program"
+        metal2 ? "experimental::UpdateProgramRunArgsForDevice requires a Metal 2.0 (ProgramSpec) program"
                : "Metal 2.0 (ProgramSpec) programs set per-device values of named run args with "
-                 "experimental::SetProgramRunArgsPerDevice");
+                 "experimental::UpdateProgramRunArgsForDevice");
     TT_FATAL(num_words > 0, "Per-device runtime args: a field needs at least one word");
     TT_FATAL(
         !program_range.wraparound_shape().has_value(),
@@ -947,7 +947,7 @@ void SetRuntimeArgsPerDevice(
         program_range, kernel, core, first_word, num_words, values_in_range_order);
 }
 
-bool PerDeviceRuntimeArgsSupported(MeshDevice& mesh_device, const MeshCoordinateRange& program_range) {
+bool ArePerDeviceRuntimeArgsSupported(MeshDevice& mesh_device, const MeshCoordinateRange& program_range) {
     return !program_range.wraparound_shape().has_value() && !LightMetalCaptureContext::get().is_tracing() &&
            mesh_device.impl().metal_env().get_cluster().get_target_device_type() != tt::TargetDevice::Emule;
 }
@@ -1015,7 +1015,7 @@ std::vector<NamedArgWords> resolve_named_args(const Program& program, const Prog
     const auto& program_impl = program.impl();
     TT_FATAL(
         program_impl.created_from_spec() || program_impl.has_metal2_registry(),
-        "SetProgramRunArgsPerDevice requires a Metal 2.0 (ProgramSpec) program; legacy programs use "
+        "UpdateProgramRunArgsForDevice requires a Metal 2.0 (ProgramSpec) program; legacy programs use "
         "distributed::SetRuntimeArgsPerDevice");
     TT_FATAL(
         args.tensor_args.empty() && args.dfb_run_overrides.empty() && args.advanced_options.sram_arena_args.empty() &&
@@ -1091,7 +1091,7 @@ const Program& program_at(
 
 }  // namespace
 
-void SetProgramRunArgsPerDevice(
+void UpdateProgramRunArgsForDevice(
     distributed::MeshWorkload& workload,
     const distributed::MeshCoordinateRange& program_range,
     const distributed::MeshCoordinate& device,
@@ -1116,7 +1116,7 @@ void SetProgramRunArgsPerDevice(
     }
 }
 
-void SetRuntimeArgs(
+void SetRuntimeArgsForDevice(
     distributed::MeshWorkload& mesh_workload,
     const distributed::MeshCoordinateRange& program_range,
     const distributed::MeshCoordinate& device,
@@ -1127,7 +1127,7 @@ void SetRuntimeArgs(
     mesh_workload.impl().set_per_device_runtime_args(program_range, device, kernel, core, first_word, values);
 }
 
-void SetCommonRuntimeArgs(
+void SetCommonRuntimeArgsForDevice(
     distributed::MeshWorkload& mesh_workload,
     const distributed::MeshCoordinateRange& program_range,
     const distributed::MeshCoordinate& device,
@@ -1137,7 +1137,7 @@ void SetCommonRuntimeArgs(
     mesh_workload.impl().set_per_device_runtime_args(program_range, device, kernel, std::nullopt, first_word, values);
 }
 
-void ClearRuntimeArgs(
+void UnsetRuntimeArgsForDevice(
     distributed::MeshWorkload& mesh_workload,
     const distributed::MeshCoordinateRange& program_range,
     const distributed::MeshCoordinate& device,

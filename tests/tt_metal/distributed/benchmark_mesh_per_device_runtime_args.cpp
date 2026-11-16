@@ -175,7 +175,7 @@ void kernel_main() {
     auto set_per_device = [&] {
         uint32_t index = 0;
         for (const auto& coord : range) {
-            m2x::SetProgramRunArgsPerDevice(workload, range, coord, per_device_args[index++]);
+            m2x::UpdateProgramRunArgsForDevice(workload, range, coord, per_device_args[index++]);
         }
     };
     if (mode != 0) {

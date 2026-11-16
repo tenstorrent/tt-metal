@@ -227,7 +227,7 @@ public:
         const std::optional<CoreCoord>& core,
         uint32_t first_word);
     // Metal 2.0 (ProgramSpec) programs: the words of named run args, resolved by
-    // experimental::SetProgramRunArgsPerDevice. Same semantics as the legacy setter.
+    // experimental::UpdateProgramRunArgsForDevice. Same semantics as the legacy setter.
     void set_per_device_named_runtime_args(
         const MeshCoordinateRange& program_range,
         const MeshCoordinate& device,

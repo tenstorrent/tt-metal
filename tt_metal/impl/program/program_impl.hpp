@@ -769,7 +769,7 @@ public:
     bool program_run_args_initialized() const { return program_run_args_initialized_; }
     void mark_program_run_args_initialized() { program_run_args_initialized_ = true; }
 
-    // Metal 2.0 per-device run args (experimental::SetProgramRunArgsPerDevice). A program-level set of the run args
+    // Metal 2.0 per-device run args (experimental::UpdateProgramRunArgsForDevice). A program-level set of the run args
     // drops every per-device value, and an update drops those of the args it lists. The MeshWorkload holds the
     // per-device values, so the program only records the drops; the workload applies them before its next per-device
     // set and at enqueue. Nothing is recorded until the workload tracks a per-device arg of this program, so programs

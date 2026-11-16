@@ -770,7 +770,7 @@ public:
             std::unordered_map<ttnn::MeshCoordinateRange, std::vector<ttnn::PerDeviceRuntimeArgsField>> fields;
             for (const auto& range : tensor_coords.ranges()) {
                 if (range.shape().mesh_size() < 2 ||
-                    !tt::tt_metal::distributed::PerDeviceRuntimeArgsSupported(mesh_device, range)) {
+                    !tt::tt_metal::distributed::ArePerDeviceRuntimeArgsSupported(mesh_device, range)) {
                     continue;
                 }
                 std::unordered_map<ttnn::MeshCoordinate, size_t> index_of;

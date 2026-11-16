@@ -887,7 +887,7 @@ void set_per_device_values(MeshWorkload& workload, const MeshCoordinateRange& ra
     uint32_t index = 0;
     for (const auto& coord : range) {
         if (index != 0) {
-            SetProgramRunArgsPerDevice(workload, range, coord, l1_write_value_for_device(per_device_value(index)));
+            UpdateProgramRunArgsForDevice(workload, range, coord, l1_write_value_for_device(per_device_value(index)));
         }
         index++;
     }
@@ -908,7 +908,7 @@ void set_odd_device_addresses(MeshWorkload& workload, const MeshCoordinateRange&
     uint32_t index = 0;
     for (const auto& coord : range) {
         if (index++ % 2 == 1) {
-            SetProgramRunArgsPerDevice(workload, range, coord, l1_write_address(kAddressB));
+            UpdateProgramRunArgsForDevice(workload, range, coord, l1_write_address(kAddressB));
         }
     }
 }
@@ -1142,7 +1142,7 @@ TEST_F(CommandListMultiDeviceTest, Metal2PerDeviceValuesSetAgainAfterUpdate) {
     EXPECT_EQ(per_device_values_version(workload, all_devices), version);
 
     // A changed value is a new version.
-    SetProgramRunArgsPerDevice(
+    UpdateProgramRunArgsForDevice(
         workload, all_devices, *std::next(all_devices.begin()), l1_write_value_for_device(per_device_value(100)));
     EXPECT_GT(per_device_values_version(workload, all_devices), version);
 }
@@ -1190,7 +1190,7 @@ TEST_F(CommandListMultiDeviceTest, FailedPerDeviceRunArgsUpdateChangesNothing) {
     args.kernel_run_args.push_back(m2::ProgramRunArgs::KernelRunArgs{
         .kernel = m2::KernelSpecName{kKernelName},
         .runtime_arg_values = m2::MakeRuntimeArgsForSingleNode(m2::NodeCoord{5, 5}, {{"address", kAddressB}})});
-    EXPECT_ANY_THROW(SetProgramRunArgsPerDevice(workload, all_devices, device, args));
+    EXPECT_ANY_THROW(UpdateProgramRunArgsForDevice(workload, all_devices, device, args));
     auto& cq = mesh_device_->mesh_command_queue(0);
     for (const auto& coord : all_devices) {
         write_l1(mesh_device_, coord, kAddressA, 0);

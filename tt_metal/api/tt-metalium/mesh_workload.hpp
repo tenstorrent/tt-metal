@@ -32,7 +32,8 @@ class MeshWorkload {
     // The current iteration supports the following compute paradigms:
     //  - Single Program Multi Device (Completely Homogeneous MeshWorkload)
     //  - Multi Program Multi Device (Completely Heterogeneous MeshWorkload)
-    // Runtime args can be set per device for a program: see SetRuntimeArgsPerDevice below.
+    // Runtime args can be set per device for a program: see SetRuntimeArgsPerDevice below (legacy programs) and
+    // experimental::UpdateProgramRunArgsForDevice (Metal 2.0 programs).
 public:
     // Main User-Facing API building blocks
     MeshWorkload();
@@ -70,15 +71,18 @@ private:
 //   Its length is fixed by its first call; a call with the same first_word and another length, or one that overlaps
 //   another field of the same args, fails.
 // - `values_in_range_order` holds `num_words` words for every coordinate of `program_range`, in the range's iteration
-//   order (size == range size * num_words). Calling again replaces the values; setting the same values again does not
-//   by itself rebuild the per-device commands at the next enqueue.
+//   order (size == range size * num_words). Calling again replaces the values.
 // - Words outside every field keep the program's own args, including later changes to them (SetRuntimeArgs /
 //   GetRuntimeArgs on the Program).
 // - Setting values must be serialized with enqueue / trace capture of the workload.
 // - `program_range` names the program by the range it was added with. Values are kept for every coordinate of the
 //   range; each host uses its local ones.
 // - Supported in fast dispatch (eager and trace) and slow dispatch; not for Metal 2.0 (ProgramSpec) programs (see
-//   experimental::SetProgramRunArgsPerDevice), service workloads, emulated devices or light-metal capture.
+//   experimental::UpdateProgramRunArgsForDevice). For other limits see ArePerDeviceRuntimeArgsSupported.
+//
+// CAUTION: inside a field, a device's values win over the Program's own args, including later changes to them; unset
+// a device's values (experimental::UnsetRuntimeArgsForDevice) for it to follow the Program again. This is the opposite
+// of the Metal 2.0 rule, where setting the program's own value of an arg drops its per-device values.
 void SetRuntimeArgsPerDevice(
     MeshWorkload& mesh_workload,
     const MeshCoordinateRange& program_range,
@@ -87,8 +91,9 @@ void SetRuntimeArgsPerDevice(
     uint32_t first_word,
     uint32_t num_words,
     ttsl::Span<const uint32_t> values_in_range_order);
-// Whether per-device runtime args can be used for a program on `program_range` of `mesh_device`: false for a
-// wraparound range, during light-metal capture and on emulated devices. Callers that can fall back (one program per
-// device) check it first; SetRuntimeArgsPerDevice and enqueue fail otherwise.
-bool PerDeviceRuntimeArgsSupported(MeshDevice& mesh_device, const MeshCoordinateRange& program_range);
+// Whether per-device args can be used for a program on `program_range` of `mesh_device`, for legacy and Metal 2.0
+// programs alike. Currently false for a wraparound range, during light-metal capture and on emulated devices; service
+// workloads are rejected at enqueue. Callers that can fall back (one program per device) check it first; setting or
+// enqueue fails otherwise.
+bool ArePerDeviceRuntimeArgsSupported(MeshDevice& mesh_device, const MeshCoordinateRange& program_range);
 }  // namespace tt::tt_metal::distributed

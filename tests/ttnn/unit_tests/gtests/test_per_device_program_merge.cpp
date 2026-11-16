@@ -359,7 +359,7 @@ TEST_F(PerDeviceProgramMergeMeshTest, OpRunsAsOneProgramWithPerDeviceValues) {
         GTEST_SKIP() << "needs at least two devices";
     }
     const ttnn::MeshCoordinateRangeSet coords{ttnn::MeshCoordinateRange(shape)};
-    if (!tt::tt_metal::distributed::PerDeviceRuntimeArgsSupported(*mesh_device, ttnn::MeshCoordinateRange(shape))) {
+    if (!tt::tt_metal::distributed::ArePerDeviceRuntimeArgsSupported(*mesh_device, ttnn::MeshCoordinateRange(shape))) {
         GTEST_SKIP() << "per-device runtime args are not supported on this mesh";
     }
 
