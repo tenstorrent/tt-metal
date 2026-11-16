@@ -366,17 +366,10 @@ def _run_window(mesh_device, state_dict, ids):
     return whole, split
 
 
-# This test builds three stacks in one process (undivided, then the two ranks), and L1_SMALL that a released
-# stack held is not all returned (tt_metal_tracker-8v1.23: sparse-MLA overlap resources), so K3.1's own
-# L1_SMALL_SIZE (2048 B) runs out building the split's first stack. Test-local; the runner's constant stays.
-# Measured with 8192 B: 3776 / 3904 / 4032 B still allocated after each of the three stacks is released.
-SPLIT_L1_SMALL_SIZE = 8192
-
-
 @pytest.mark.timeout(1800)
 @pytest.mark.parametrize(
     "mesh_device, device_params",
-    placements(l1_small_size=SPLIT_L1_SMALL_SIZE),
+    placements(),
     indirect=["mesh_device", "device_params"],
 )
 def test_synthetic_split_matches_undivided(mesh_device, device_params):
