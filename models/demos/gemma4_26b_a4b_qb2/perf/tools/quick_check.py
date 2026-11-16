@@ -187,6 +187,10 @@ def batched_vs_serial(model, refs, batch):
         serial_kv = per_device(cache)
         serial = torch.cat(rows, dim=-2)
         out[f"L{index}_min_user_pcc"] = min(pcc(serial[..., s, :], batched[..., s, :]) for s in range(batch))
+        # Slots at the reference length decode the HF reference token: batched accuracy against HF directly.
+        out[f"L{index}_batched_hf_pcc"] = min(
+            pcc(refs["decode"][index], batched[..., s : s + 1, :]) for s in range(batch) if lengths[s] == LENGTH
+        )
         out[f"L{index}_kv_equal"] = all(torch.equal(a, b) for a, b in zip(batched_kv, serial_kv))
         # Slot 1 inactive (position -1): its cache pages stay bit-identical, the other users still match serial.
         cache, table = prefilled()
