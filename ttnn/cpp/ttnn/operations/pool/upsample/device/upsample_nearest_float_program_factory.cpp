@@ -10,8 +10,8 @@
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include <ttnn/operations/pool/pool_utils.hpp>
@@ -19,7 +19,7 @@
 namespace ttnn::prim {
 
 using namespace tt::tt_metal;
-namespace metal2 = tt::tt_metal::experimental;
+namespace metal2 = tt::tt_metal;
 
 constexpr std::uint32_t BUFFERING_FACTOR = 2;
 

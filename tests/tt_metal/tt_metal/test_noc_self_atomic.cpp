@@ -30,7 +30,7 @@ namespace tt::tt_metal {
 // Tests the Quasar semaphore scopes implementation.
 class NocSelfAtomicFixture : public MeshDispatchFixture {
 protected:
-    static constexpr experimental::NodeCoord core = {0, 0};
+    static constexpr NodeCoord core = {0, 0};
     // A correctness/deadlock check
     static constexpr uint32_t iterations{100};
     const std::string kernel_path_noc = "tests/tt_metal/tt_metal/test_kernels/dataflow/noc_self_atomic.cpp";
@@ -70,40 +70,40 @@ protected:
         distributed::MeshCoordinate zero_coord{0, 0};
         distributed::MeshCoordinateRange device_range{zero_coord, zero_coord};
 
-        std::vector<experimental::KernelSpec> kernel_specs;
-        std::vector<experimental::KernelSpecName> kernel_names;
-        experimental::ProgramRunArgs params;
-        const auto make_run_params = [&](const experimental::KernelSpecName& kernel_name) {
-            return experimental::ProgramRunArgs::KernelRunArgs{
+        std::vector<KernelSpec> kernel_specs;
+        std::vector<KernelSpecName> kernel_names;
+        ProgramRunArgs params;
+        const auto make_run_params = [&](const KernelSpecName& kernel_name) {
+            return ProgramRunArgs::KernelRunArgs{
                 .kernel = kernel_name,
-                .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
-                    core, {{"sem_addr", sem_addr}, {"increment_times", iterations}}),
+                .runtime_arg_values =
+                    MakeRuntimeArgsForSingleNode(core, {{"sem_addr", sem_addr}, {"increment_times", iterations}}),
             };
         };
 
         if (is_quasar) {
-            const experimental::KernelSpecName DM_KERNEL{"dm_kernel"};
-            kernel_specs.push_back(experimental::KernelSpec{
+            const KernelSpecName DM_KERNEL{"dm_kernel"};
+            kernel_specs.push_back(KernelSpec{
                 .unique_id = DM_KERNEL,
                 .source = kernel_src,
                 .num_threads = num_dms_,
                 .runtime_arg_schema = {.runtime_arg_names = {"sem_addr", "increment_times"}},
-                .hw_config = experimental::DataMovementHardwareConfig{},
+                .hw_config = DataMovementHardwareConfig{},
             });
             kernel_names.push_back(DM_KERNEL);
             params.kernel_run_args.push_back(make_run_params(DM_KERNEL));
         } else {
             for (uint32_t dm_id = 0; dm_id < num_dms_; dm_id++) {
-                const experimental::KernelSpecName name{"dm_kernel_" + std::to_string(dm_id)};
-                kernel_specs.push_back(experimental::KernelSpec{
+                const KernelSpecName name{"dm_kernel_" + std::to_string(dm_id)};
+                kernel_specs.push_back(KernelSpec{
                     .unique_id = name,
                     .source = kernel_src,
                     .num_threads = 1,
                     .runtime_arg_schema = {.runtime_arg_names = {"sem_addr", "increment_times"}},
                     .hw_config =
-                        experimental::DataMovementHardwareConfig{
+                        DataMovementHardwareConfig{
                             .config_1xx =
-                                experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                                DataMovementHardwareConfig::DataMovement1XXConfig{
                                     .processor = static_cast<tt_metal::DataMovementProcessor>(dm_id),
                                     .noc = (dm_id == 1 ? NOC::RISCV_1_default : NOC::RISCV_0_default),
                                 },
@@ -114,12 +114,12 @@ protected:
             }
         }
 
-        experimental::WorkUnitSpec main_wu{
+        WorkUnitSpec main_wu{
             .name = "main",
             .kernels = kernel_names,
             .target_nodes = core,
         };
-        experimental::ProgramSpec spec{
+        ProgramSpec spec{
             .name = "atomic_keystone",
             .kernels = kernel_specs,
             .work_units = {main_wu},
@@ -131,18 +131,18 @@ protected:
         RunProgram(mesh_device_, workload);
     }
 
-    uint32_t read_counter(const experimental::NodeCoord& node, uint32_t addr) {
+    uint32_t read_counter(const NodeCoord& node, uint32_t addr) {
         slow_dispatch::ReadFromL1(*mesh_device_, node, addr, sizeof(uint32_t), result);
         EXPECT_EQ(result.size(), 1u);
         return result.empty() ? 0u : result[0];
     }
 
-    void set_counter(const experimental::NodeCoord& node, uint32_t addr, uint32_t value) {
+    void set_counter(const NodeCoord& node, uint32_t addr, uint32_t value) {
         std::vector<uint32_t> initial_l1_words(1, value);
         slow_dispatch::WriteToL1(*mesh_device_, node, addr, initial_l1_words);
     }
 
-    void zero_counter(const experimental::NodeCoord& node, uint32_t addr) { set_counter(node, addr, 0); }
+    void zero_counter(const NodeCoord& node, uint32_t addr) { set_counter(node, addr, 0); }
 
     // Launch the single-thread cache-line-width check on a core.
     void run_cacheline_probe(uint32_t base_addr, uint32_t report_addr, uint32_t residency_addr) {
@@ -151,26 +151,26 @@ protected:
         distributed::MeshCoordinate zero_coord{0, 0};
         distributed::MeshCoordinateRange device_range{zero_coord, zero_coord};
 
-        const experimental::KernelSpecName DM_KERNEL{"cacheline_probe"};
-        experimental::KernelSpec kernel_spec{
+        const KernelSpecName DM_KERNEL{"cacheline_probe"};
+        KernelSpec kernel_spec{
             .unique_id = DM_KERNEL,
             .source = kernel_path_cacheline,
             .num_threads = 1,
             .runtime_arg_schema = {.runtime_arg_names = {"base_addr", "report_addr", "residency_addr"}},
-            .hw_config = experimental::DataMovementHardwareConfig{},
+            .hw_config = DataMovementHardwareConfig{},
         };
-        experimental::WorkUnitSpec main_wu{.name = "main", .kernels = {DM_KERNEL}, .target_nodes = core};
-        experimental::ProgramSpec spec{
+        WorkUnitSpec main_wu{.name = "main", .kernels = {DM_KERNEL}, .target_nodes = core};
+        ProgramSpec spec{
             .name = "dm_cacheline_probe",
             .kernels = {kernel_spec},
             .work_units = {main_wu},
         };
         program = experimental::MakeProgramFromSpec(*mesh_device_, spec);
-        experimental::ProgramRunArgs params;
+        ProgramRunArgs params;
         params.kernel_run_args = {
-            experimental::ProgramRunArgs::KernelRunArgs{
+            ProgramRunArgs::KernelRunArgs{
                 .kernel = DM_KERNEL,
-                .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                .runtime_arg_values = MakeRuntimeArgsForSingleNode(
                     core, {{"base_addr", base_addr}, {"report_addr", report_addr}, {"residency_addr", residency_addr}}),
             },
         };
@@ -194,27 +194,27 @@ protected:
         distributed::MeshCoordinate zero_coord{0, 0};
         distributed::MeshCoordinateRange device_range{zero_coord, zero_coord};
 
-        const experimental::KernelSpecName DM_KERNEL{"cas_drain"};
-        experimental::KernelSpec kernel_spec{
+        const KernelSpecName DM_KERNEL{"cas_drain"};
+        KernelSpec kernel_spec{
             .unique_id = DM_KERNEL,
             .source = kernel_path_cas_drain,
             .num_threads = num_dms_,
             .runtime_arg_schema =
                 {.runtime_arg_names = {"sem_addr", "lock_addr", "ret_base", "increment_times", "mode", "pairs"}},
-            .hw_config = experimental::DataMovementHardwareConfig{},
+            .hw_config = DataMovementHardwareConfig{},
         };
-        experimental::WorkUnitSpec main_wu{.name = "main", .kernels = {DM_KERNEL}, .target_nodes = core};
-        experimental::ProgramSpec spec{
+        WorkUnitSpec main_wu{.name = "main", .kernels = {DM_KERNEL}, .target_nodes = core};
+        ProgramSpec spec{
             .name = "noc_self_cas_drain",
             .kernels = {kernel_spec},
             .work_units = {main_wu},
         };
         program = experimental::MakeProgramFromSpec(*mesh_device_, spec);
-        experimental::ProgramRunArgs params;
+        ProgramRunArgs params;
         params.kernel_run_args = {
-            experimental::ProgramRunArgs::KernelRunArgs{
+            ProgramRunArgs::KernelRunArgs{
                 .kernel = DM_KERNEL,
-                .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                .runtime_arg_values = MakeRuntimeArgsForSingleNode(
                     core,
                     {{"sem_addr", sem_addr},
                      {"lock_addr", lock_addr},
@@ -264,9 +264,8 @@ TEST_F(NocSelfAtomicFixture, TestSelfVsRemoteNodeNocAtomic) {
     if (grid.x < 2 && grid.y < 2) {
         GTEST_SKIP() << "Requires >= 2 worker nodes for a genuinely-remote source (this device/emu exposes a 1x1 grid)";
     }
-    const experimental::NodeCoord node_0{0, 0};
-    const experimental::NodeCoord node_1 =
-        (grid.x >= 2) ? experimental::NodeCoord{1, 0} : experimental::NodeCoord{0, 1};
+    const NodeCoord node_0{0, 0};
+    const NodeCoord node_1 = (grid.x >= 2) ? NodeCoord{1, 0} : NodeCoord{0, 1};
 
     zero_counter(node_0, l1_unreserved_base);
 
@@ -278,61 +277,61 @@ TEST_F(NocSelfAtomicFixture, TestSelfVsRemoteNodeNocAtomic) {
     distributed::MeshCoordinate zero_coord{0, 0};
     distributed::MeshCoordinateRange device_range{zero_coord, zero_coord};
 
-    const experimental::KernelSpecName SELF_KERNEL{"self_kernel"};
-    const experimental::KernelSpecName REMOTE_KERNEL{"remote_kernel"};
+    const KernelSpecName SELF_KERNEL{"self_kernel"};
+    const KernelSpecName REMOTE_KERNEL{"remote_kernel"};
 
-    experimental::KernelSpec self_spec{
+    KernelSpec self_spec{
         .unique_id = SELF_KERNEL,
         .source = kernel_path_noc,
         .num_threads = 1,
         .runtime_arg_schema = {.runtime_arg_names = {"sem_addr", "increment_times"}},
-        .hw_config = experimental::DataMovementHardwareConfig{},
+        .hw_config = DataMovementHardwareConfig{},
     };
-    experimental::KernelSpec remote_spec{
+    KernelSpec remote_spec{
         .unique_id = REMOTE_KERNEL,
         .source = kernel_path_noc,
         .num_threads = 1,
         .compiler_options = {.defines = {{"REMOTE_TARGET", "1"}}},
         .runtime_arg_schema = {.runtime_arg_names = {"sem_addr", "increment_times", "remote_noc_x", "remote_noc_y"}},
-        .hw_config = experimental::DataMovementHardwareConfig{},
+        .hw_config = DataMovementHardwareConfig{},
     };
     if (!is_quasar) {
-        self_spec.hw_config = experimental::DataMovementHardwareConfig{
+        self_spec.hw_config = DataMovementHardwareConfig{
             .config_1xx =
-                experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                DataMovementHardwareConfig::DataMovement1XXConfig{
                     .processor = tt_metal::DataMovementProcessor::RISCV_0,
                     .noc = NOC::RISCV_0_default,
                 },
         };
-        remote_spec.hw_config = experimental::DataMovementHardwareConfig{
+        remote_spec.hw_config = DataMovementHardwareConfig{
             .config_1xx =
-                experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                DataMovementHardwareConfig::DataMovement1XXConfig{
                     .processor = tt_metal::DataMovementProcessor::RISCV_0,
                     .noc = NOC::RISCV_0_default,
                 },
         };
     }
 
-    experimental::WorkUnitSpec wu_0{.name = "wu_0", .kernels = {SELF_KERNEL}, .target_nodes = node_0};
-    experimental::WorkUnitSpec wu_1{.name = "wu_1", .kernels = {REMOTE_KERNEL}, .target_nodes = node_1};
+    WorkUnitSpec wu_0{.name = "wu_0", .kernels = {SELF_KERNEL}, .target_nodes = node_0};
+    WorkUnitSpec wu_1{.name = "wu_1", .kernels = {REMOTE_KERNEL}, .target_nodes = node_1};
 
-    experimental::ProgramSpec spec{
+    ProgramSpec spec{
         .name = "noc_self_vs_remote_atomic",
         .kernels = {self_spec, remote_spec},
         .work_units = {wu_0, wu_1},
     };
     program = experimental::MakeProgramFromSpec(*mesh_device_, spec);
 
-    experimental::ProgramRunArgs params;
+    ProgramRunArgs params;
     params.kernel_run_args = {
-        experimental::ProgramRunArgs::KernelRunArgs{
+        ProgramRunArgs::KernelRunArgs{
             .kernel = SELF_KERNEL,
-            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(
                 node_0, {{"sem_addr", l1_unreserved_base}, {"increment_times", iterations}}),
         },
-        experimental::ProgramRunArgs::KernelRunArgs{
+        ProgramRunArgs::KernelRunArgs{
             .kernel = REMOTE_KERNEL,
-            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(
                 node_1,
                 {{"sem_addr", l1_unreserved_base},
                  {"increment_times", iterations},

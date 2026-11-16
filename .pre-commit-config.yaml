@@ -98,6 +98,14 @@ repos:
       pass_filenames: false
 - repo: local
   hooks:
+    - id: check-models-do-not-import-tests
+      name: Forbid models from importing the tests package
+      entry: python3 scripts/check_models_do_not_import_tests.py
+      language: system
+      pass_filenames: false
+      files: ^models/.*\.py$
+- repo: local
+  hooks:
     - id: check-kernel-cb-ptrs
       name: Forbid get_read_ptr on cb_reserve_back'd CBs (issue #39432)
       entry: python3 scripts/check_kernel_cb_ptrs.py
