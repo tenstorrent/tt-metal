@@ -210,71 +210,8 @@ sfpi_inline void q40_params_regs()
     sfpi::dst_reg[PM + pidx(1, 1, 0)] = m3;
 }
 
-// The same phase 1 by column parity a: the scale rows of parity a replicated to all row groups, then both columns'
-// conversions interleaved (f16_both). ONE_TRANSP (Q4_0): one transpose replicates both parities' rows.
-template <int FMT, int TI, bool ONE_TRANSP>
-sfpi_inline void q40_params_rep()
-{
-    constexpr float c = FMT == Q8_0 ? -128.0f : FMT == Q4_0 ? -8.0f : -16.0f;
-    if constexpr (ONE_TRANSP)
-    {
-        static_assert(FMT == Q4_0);
-        vUInt r0 = ldu(CO + scale_row<FMT>() / 2), r1 = r0, r2 = r0, r3 = r0;
-        vUInt q0 = ldu(CO + scale_row<FMT>() / 2 + 1), q1 = q0, q2 = q0, q3 = q0;
-        sfpi::subvec_transp(r0, r1, r2, r3, q0, q1, q2, q3);
-#pragma GCC unroll 2
-        for (int a = 0; a < 2; a++)
-        {
-            vFloat d0, d1;
-            f16_both(a == 0 ? r0 : q0, d0, d1);
-            sfpi::dst_reg[PS + pidx(a, 0, 0)] = d0;
-            sfpi::dst_reg[PS + pidx(a, 1, 0)] = d1;
-            d0                                = d0 * c;
-            d1                                = d1 * c;
-            sfpi::dst_reg[PM + pidx(a, 0, 0)] = d0;
-            sfpi::dst_reg[PM + pidx(a, 1, 0)] = d1;
-        }
-        return;
-    }
-#pragma GCC unroll 2
-    for (int a = 0; a < 2; a++)
-    {
-        vUInt r0, r1, r2, r3;
-        rep4<FMT>(0, a, r0, r1, r2, r3);
-        const vUInt dw = FMT == Q5_1 && TI % 2 ? r2 : FMT == Q5_0 && TI % 2 ? r1 : r0;
-        vFloat d0, d1;
-        f16_both(dw, d0, d1);
-        if constexpr (FMT == Q4_1 || FMT == Q5_1)
-        {
-            vFloat m0, m1;
-            f16_both(FMT == Q5_1 && TI % 2 ? r3 : r1, m0, m1);
-            sfpi::dst_reg[PS + pidx(a, 0, 0)] = d0;
-            sfpi::dst_reg[PS + pidx(a, 1, 0)] = d1;
-            sfpi::dst_reg[PM + pidx(a, 0, 0)] = m0;
-            sfpi::dst_reg[PM + pidx(a, 1, 0)] = m1;
-        }
-        else
-        {
-            sfpi::dst_reg[PS + pidx(a, 0, 0)] = d0;
-            sfpi::dst_reg[PS + pidx(a, 1, 0)] = d1;
-            d0                                = d0 * c;
-            d1                                = d1 * c;
-            sfpi::dst_reg[PM + pidx(a, 0, 0)] = d0;
-            sfpi::dst_reg[PM + pidx(a, 1, 0)] = d1;
-        }
-    }
-}
-
-// Phase 1 variant of the q40_params formats: 2 = q40_params_regs, 1 = q40_params_rep with one transpose, 0 = by
-// parity. Beside an unpack (the pack-thread decode that overlaps the matmul) phase 1 also paces the weight reads:
-// there the variants are those whose tile loop keeps every shape at least as fast.
-template <int FMT, bool BESIDE_UNPACK>
-constexpr int q40_params_kind = !BESIDE_UNPACK || FMT == Q5_0 ? 2
-                                : FMT == Q4_0                 ? 1
-                                                              : 0;
-
 // Phase 1 of the linear formats. TI = tile index inside the scale page's group of K-tiles.
-template <int FMT, int TI, bool BESIDE_UNPACK>
+template <int FMT, int TI>
 sfpi_inline void linear_params()
 {
     if constexpr (page_layout<static_cast<Format>(FMT)>().fp16_rows == 0 && !group_scales<FMT>)
@@ -283,15 +220,7 @@ sfpi_inline void linear_params()
     }
     if constexpr (q40_params<FMT>)
     {
-        constexpr int kind = q40_params_kind<FMT, BESIDE_UNPACK>;
-        if constexpr (kind == 2)
-        {
-            q40_params_regs<FMT, TI>();
-        }
-        else
-        {
-            q40_params_rep<FMT, TI, kind == 1>();
-        }
+        q40_params_regs<FMT, TI>();
         return;
     }
 #pragma GCC unroll 2

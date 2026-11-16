@@ -45,8 +45,8 @@ struct traits
 // are block-float datums in the 16-bit rows that the output tile's rows address, their scratch is in the page tile past
 // the page's rows.
 
-// Phase 1 of one tile. TI = the tile's index in its group of K tiles; BESIDE_UNPACK as phase 2's.
-template <int FMT, int TI, bool BESIDE_UNPACK = true>
+// Phase 1 of one tile. TI = the tile's index in its group of K tiles.
+template <int FMT, int TI>
 inline void _calculate_gguf_decode_params_()
 {
     if constexpr (FMT == IQ2_XXS)
@@ -91,7 +91,7 @@ inline void _calculate_gguf_decode_params_()
     }
     else
     {
-        linear_params<FMT, TI, BESIDE_UNPACK>();
+        linear_params<FMT, TI>();
     }
 }
 
@@ -260,7 +260,7 @@ inline void sfpu_gguf_decode_tile_ti(const std::uint32_t dst_index, const std::u
     }
     else if constexpr (PARAMS)
     {
-        gguf::_calculate_gguf_decode_params_<FMT, TI, BESIDE_UNPACK>();
+        gguf::_calculate_gguf_decode_params_<FMT, TI>();
     }
     if constexpr (BODY && gguf::shared_body<FMT>)
     {
