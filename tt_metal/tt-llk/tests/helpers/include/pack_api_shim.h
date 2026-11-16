@@ -140,6 +140,12 @@ struct llk_pack_matmul_api<1>
 {
     static constexpr bool value = true;
 };
+
+template <>
+struct llk_pack_lofi_api<1>
+{
+    static constexpr bool value = MATH_FIDELITY == MathFidelity::LoFi;
+};
 } // namespace ckernel::packer
 #endif
 #if PACK_API_SHIM_PR && defined(PACK_API_SHIM_SFPU)

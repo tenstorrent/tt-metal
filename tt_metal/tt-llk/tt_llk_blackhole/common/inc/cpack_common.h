@@ -395,6 +395,14 @@ struct llk_pack_norm_api
     static constexpr bool value = false;
 };
 
+// Specialized by the compute API (pack_math_context.h) with the kernel's MATH_FIDELITY, which a tt-llk test defines only when it
+// names a fidelity.
+template <int api>
+struct llk_pack_lofi_api
+{
+    static constexpr bool value = false;
+};
+
 // Only a kernel with a matmul API reaches the matmul contexts; dep, a template parameter of the caller, delays the lookup.
 template <std::uint32_t dep>
 constexpr bool llk_pack_matmul_kernel()
@@ -407,7 +415,7 @@ constexpr bool llk_pack_matmul_kernel()
 template <std::uint32_t dep>
 constexpr bool llk_pack_late_start(const bool is_fp32_dest_acc_en)
 {
-    return (is_fp32_dest_acc_en || MATH_FIDELITY == MathFidelity::LoFi) && llk_pack_matmul_kernel<dep>() && !llk_pack_norm_api<dep * 0 + 1>::value;
+    return (is_fp32_dest_acc_en || llk_pack_lofi_api<dep * 0 + 1>::value) && llk_pack_matmul_kernel<dep>() && !llk_pack_norm_api<dep * 0 + 1>::value;
 }
 
 // Specialized by the headers of the pack-thread SFPU inits (compute_kernel_api.h and seven eltwise_unary headers).
