@@ -2,13 +2,13 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""``Tensor.cpu(coords=...)`` reads a subset of a mesh tensor's shards without touching its topology label.
+"""``Tensor.cpu_shards(coords)`` reads a subset of a mesh tensor's shards, one single-device host tensor each.
 
 A checkpoint writer that deduplicates replicas wants one shard per replica group off the device, not the whole
 mesh. Building that subset through ``combine_device_tensors`` relabels the mesh tensor the live parameter shares
 (``DeviceStorage::combine_device_storages`` stamps a 1-D ``Shard(0)`` label on it), so the subset read is its own
-path: the host tensor is populated at the requested coordinates only and carries the device tensor's own label,
-which the device tensor keeps.
+path: one command-queue batch, returned as one single-device host tensor per coordinate, as ``get_device_tensors``
+returns a host tensor's shards. No result lists shards it does not hold, and the device tensor keeps its label.
 
 The 2-D cases open a ``[2, 2]`` mesh; the rest use whatever mesh the fixture opens.
 """
@@ -25,8 +25,9 @@ def _label(topology):
     return names, list(topology.distribution_shape()), list(topology.mesh_coords())
 
 
-def _shard_bytes(host_tensor, coord):
-    shard = host_tensor.host_buffer().get_shard(coord)
+def _bytes(host_tensor, coord=None):
+    """The bytes of a mesh host tensor's shard at `coord`, or of a single-device host tensor's one shard."""
+    shard = host_tensor.host_buffer().get_shard(coord if coord is not None else ttnn.MeshCoordinate(0, 0))
     assert shard is not None, f"no shard at {coord}"
     return np.from_dlpack(shard).tobytes()
 
@@ -36,19 +37,16 @@ def _all_coords(mesh_device):
     return [ttnn.MeshCoordinate(r, c) for r in range(rows) for c in range(cols)]
 
 
-def _populated(host_tensor, mesh_device):
-    return [c for c in _all_coords(mesh_device) if host_tensor.host_buffer().get_shard(c) is not None]
-
-
 @pytest.mark.parametrize("mesh_device", [(2, 2)], indirect=True)
-def test_cpu_coords_reads_only_the_requested_shards_and_keeps_the_label(mesh_device):
+def test_cpu_shards_returns_one_host_tensor_per_requested_coordinate_in_order(mesh_device):
     mesh_shape = tuple(mesh_device.shape)
     if mesh_shape != (2, 2):
         pytest.skip(f"needs a [2, 2] mesh, the fixture opened {mesh_shape}")
 
     # [Replicate, Shard(2)]: mesh column c holds rows [32c, 32c + 32); both mesh rows hold the same two shards.
+    full = torch.randn(1, 1, 64, 64).to(torch.bfloat16)
     tensor = ttnn.from_torch(
-        torch.randn(1, 1, 64, 64).to(torch.bfloat16),
+        full,
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=list(mesh_shape), dims=(None, 2)),
@@ -57,20 +55,23 @@ def test_cpu_coords_reads_only_the_requested_shards_and_keeps_the_label(mesh_dev
     assert before[0] == ["Replicate", "Shard(2)"], "precondition: a 2-D label"
     reference = tensor.cpu()
 
-    owned = [ttnn.MeshCoordinate(0, 0), ttnn.MeshCoordinate(1, 1)]  # one replica of each column's shard
-    host = tensor.cpu(coords=owned)
+    owned = [ttnn.MeshCoordinate(1, 1), ttnn.MeshCoordinate(0, 0)]  # one replica of each column, not in mesh order
+    shards = tensor.cpu_shards(owned)
 
-    assert _populated(host, mesh_device) == owned
-    for coord in owned:
-        assert _shard_bytes(host, coord) == _shard_bytes(reference, coord)
-    assert _shard_bytes(host, owned[0]) != _shard_bytes(host, owned[1]), "the two columns hold different shards"
-    assert _label(host.tensor_topology()) == before, "the subset carries the device tensor's label"
+    assert len(shards) == len(owned)
+    for shard, coord in zip(shards, owned):
+        assert _bytes(shard) == _bytes(reference, coord), f"the result for {coord} holds that coordinate's shard"
+        assert len(shard.tensor_topology().mesh_coords()) == 1, "a single-device tensor, labelled as one device"
+        # Each result is a whole tensor of its own: it converts without a composer.
+        col = coord[1]
+        torch.testing.assert_close(ttnn.to_torch(shard), full[:, :, 32 * col : 32 * (col + 1), :], rtol=0, atol=0)
     assert _label(tensor.tensor_topology()) == before, "the device tensor's label is untouched"
-    assert _populated(tensor.cpu(), mesh_device) == _all_coords(mesh_device), "a later whole read is unaffected"
+    whole = tensor.cpu()
+    assert all(whole.host_buffer().get_shard(c) is not None for c in _all_coords(mesh_device)), "a later read is whole"
 
 
 @pytest.mark.parametrize("mesh_device", [(2, 2)], indirect=True)
-def test_cpu_coords_reads_one_replica_of_a_replicated_tensor(mesh_device):
+def test_cpu_shards_reads_one_replica_of_a_replicated_tensor(mesh_device):
     mesh_shape = tuple(mesh_device.shape)
     if mesh_shape != (2, 2):
         pytest.skip(f"needs a [2, 2] mesh, the fixture opened {mesh_shape}")
@@ -80,17 +81,14 @@ def test_cpu_coords_reads_one_replica_of_a_replicated_tensor(mesh_device):
         expected, layout=ttnn.TILE_LAYOUT, device=mesh_device, mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device)
     )
     before = _label(tensor.tensor_topology())
-    one = ttnn.MeshCoordinate(1, 0)
 
-    host = tensor.cpu(coords=[one])
+    (shard,) = tensor.cpu_shards([ttnn.MeshCoordinate(1, 0)])
 
-    assert _populated(host, mesh_device) == [one]
-    assert _shard_bytes(host, one) == _shard_bytes(tensor.cpu(), one)
-    assert _label(host.tensor_topology()) == before
+    torch.testing.assert_close(ttnn.to_torch(shard), expected, rtol=0, atol=0)
     assert _label(tensor.tensor_topology()) == before
 
 
-def test_cpu_coords_rejects_what_the_tensor_does_not_hold(mesh_device, expect_error):
+def test_cpu_shards_rejects_what_the_tensor_does_not_hold(mesh_device, expect_error):
     tensor = ttnn.from_torch(
         torch.zeros(1, 1, 32, 32, dtype=torch.bfloat16),
         layout=ttnn.TILE_LAYOUT,
@@ -100,21 +98,18 @@ def test_cpu_coords_rejects_what_the_tensor_does_not_hold(mesh_device, expect_er
     first = tensor.device_coords()[0]
 
     with expect_error(RuntimeError, "at least one coordinate"):
-        tensor.cpu(coords=[])
+        tensor.cpu_shards([])
     with expect_error(RuntimeError, "listed twice"):
-        tensor.cpu(coords=[first, first])
+        tensor.cpu_shards([first, first])
     with expect_error(RuntimeError, "holds no shard"):
-        tensor.cpu(coords=[ttnn.MeshCoordinate(99, 99)])
+        tensor.cpu_shards([ttnn.MeshCoordinate(99, 99)])
     with expect_error(RuntimeError, "needs a device tensor"):
-        tensor.cpu().cpu(coords=[first])
+        tensor.cpu().cpu_shards([first])
 
     if len(tensor.device_coords()) > 1:
         # A shard taken off the tensor holds one coordinate; asking it for another is refused.
         shard = ttnn.get_device_tensors(tensor)[0]
         with expect_error(RuntimeError, "holds no shard"):
-            shard.cpu(coords=[tensor.device_coords()[-1]])
-        host = shard.cpu(coords=[first])
-        assert _populated(host, mesh_device) == [first]
-        # The per-device tensor carries a one-coordinate label of its own, and so must the read, as shard.cpu()
-        # does; the mesh tensor's full label would describe shards this host tensor does not hold.
-        assert _label(host.tensor_topology()) == _label(shard.cpu().tensor_topology())
+            shard.cpu_shards([tensor.device_coords()[-1]])
+        (host,) = shard.cpu_shards([first])
+        assert _bytes(host) == _bytes(shard.cpu())
