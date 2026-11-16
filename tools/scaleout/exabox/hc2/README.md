@@ -54,8 +54,11 @@ Run folders go to `$TT_METAL_HOME/generated/hc2/`, or to `HC2_OUT_DIR` if it is 
 - `HC_HOLDFILE`, `HC_HOLD` and `HC_SITE_FILE` stay unset, so hold scripts and site data are off. A site may set them.
 - The glue refuses a core without the `HC_SETUP` hook (outside `--stub`), because such a core installs ttnn itself.
 - Synthetic H3 runs on this checkout, through a view at `<out dir>/.h3-build`, not on a pinned tt-metal sha.
-- max-util runs this checkout's `build/test/didt/unit_tests_didt_max_util` when it is built and the core takes it
-  (`TRAY_MAXUTIL_BIN`). Otherwise the core skips max-util and prints its WARNING.
+- max-util runs the core's pinned prebuilt archive (`core/fleet/maxutil.pin`), the same build and load tray-test runs.
+  The core finds the archive in `~/tray-test-dist`, `/data/$USER/tray-test-dist` or `TRAY_MAXUTIL_DIST`; without it
+  the step ends INCOMPLETE with a setup error, never a silent skip. This checkout's own
+  `build/test/didt/unit_tests_didt_max_util` is not the default: tt-metal's fast dispatch now refuses kernels on active
+  Ethernet cores, and the workload streams DRAM from them. A caller may still set `TRAY_MAXUTIL_BIN`.
 
 ## Resets
 

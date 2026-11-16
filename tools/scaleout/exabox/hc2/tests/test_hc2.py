@@ -177,6 +177,70 @@ def test_glue_sets_only_hc_setup(tmp_path):
         assert "not built" in v["FLEET_MAXUTIL_SKIP"] and v["TRAY_MAXUTIL_BIN"] == "<unset>"
 
 
+def fake_checkout(tmp_path, built=True):
+    """a copy of the glue in a fake tt-metal checkout, with or without a built unit_tests_didt_max_util"""
+    root = tmp_path / "tt-metal"
+    glue = root / "tools" / "scaleout" / "exabox" / "hc2" / "glue"
+    glue.mkdir(parents=True)
+    (root / "create_venv.sh").write_text("")
+    for f in (GLUE, CHECK):
+        (glue / f.name).write_text(f.read_text())
+    mu = root / "build" / "test" / "didt" / "unit_tests_didt_max_util"
+    if built:
+        mu.parent.mkdir(parents=True)
+        mu.write_text("#!/bin/sh\n")
+        mu.chmod(0o700)
+    return glue / GLUE.name, mu
+
+
+def run_glue_at(glue, env, *args):
+    r = subprocess.run(["bash", str(glue), *args], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
+    vals = dict(ln.split("=", 1) for ln in r.stdout.decode().splitlines() if "=" in ln)
+    return r.returncode, vals, r.stderr.decode()
+
+
+@pytest.mark.parametrize("built", [True, False])
+def test_glue_max_util_uses_pinned_archive(tmp_path, built):
+    # The checkout's own binary refuses the workload under fast dispatch (active Ethernet kernels), so a core with a
+    # pin runs its pinned archive, the build tray-test runs: the glue sets neither TRAY_MAXUTIL_BIN nor a skip.
+    glue, _ = fake_checkout(tmp_path, built)
+    core = fake_core(tmp_path)
+    (core / "fleet").mkdir()
+    (core / "fleet" / "maxutil.pin").write_text("sha256=00\nfile=maxutil-00.tar.zst\n")
+    (core / "fleet" / "maxutil.py").write_text("TRAY_MAXUTIL_BIN\n")
+    rc, v, err = run_glue_at(glue, glue_env(tmp_path, core))
+    assert rc == 0, err
+    assert v["TRAY_MAXUTIL_BIN"] == "<unset>" and v["FLEET_MAXUTIL_SKIP"] == "<unset>"
+    rc, v, err = run_glue_at(glue, glue_env(tmp_path, core, TRAY_MAXUTIL_BIN="/x/unit_tests_didt_max_util"))
+    assert rc == 0 and v["TRAY_MAXUTIL_BIN"] == "/x/unit_tests_didt_max_util", err
+    rc, v, err = run_glue_at(glue, glue_env(tmp_path, core, FLEET_MAXUTIL_SKIP="caller"))
+    assert rc == 0 and v["FLEET_MAXUTIL_SKIP"] == "caller" and v["TRAY_MAXUTIL_BIN"] == "<unset>", err
+
+
+def test_glue_max_util_without_pin(tmp_path):
+    # a core with no pin: the checkout's binary when built and the core takes it, else the skip with its reason
+    glue, mu = fake_checkout(tmp_path)
+    core = fake_core(tmp_path)
+    (core / "fleet").mkdir()
+    (core / "fleet" / "maxutil.py").write_text("TRAY_MAXUTIL_BIN\n")
+    rc, v, err = run_glue_at(glue, glue_env(tmp_path, core))
+    assert rc == 0 and v["TRAY_MAXUTIL_BIN"] == str(mu) and v["FLEET_MAXUTIL_SKIP"] == "<unset>", err
+    (core / "fleet" / "maxutil.py").write_text("")
+    rc, v, err = run_glue_at(glue, glue_env(tmp_path, core))
+    assert rc == 0 and "pinned" in v["FLEET_MAXUTIL_SKIP"] and v["TRAY_MAXUTIL_BIN"] == "<unset>", err
+    mu.unlink()
+    rc, v, err = run_glue_at(glue, glue_env(tmp_path, core))
+    assert rc == 0 and "not built" in v["FLEET_MAXUTIL_SKIP"] and v["TRAY_MAXUTIL_BIN"] == "<unset>", err
+
+
+def test_hc2_core_pins_max_util_archive():
+    # the real core carries the pin, so a real hc2 run takes the archive path above
+    pin = core_dir() / "fleet" / "maxutil.pin"
+    if not pin.is_file() and (core_dir() / "traytest").is_dir():
+        pin = core_dir() / "traytest" / "fleet" / "maxutil.pin"
+    assert re.search(r"^sha256=[0-9a-f]{64}$", pin.read_text(), re.M), pin
+
+
 def test_glue_keeps_caller_hooks_and_env_dir(tmp_path):
     core = fake_core(tmp_path)
     env = glue_env(tmp_path, core, HC_HOLD="/h/hold.sh", PYTHON_ENV_DIR="/opt/venv", HC_SETUP="true")
