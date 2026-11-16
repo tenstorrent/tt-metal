@@ -706,6 +706,7 @@ uint32_t pack_scalar_into_uint32(DataType dtype, float value) {
         case DataType::UINT8: return saturating_float_to_int<uint8_t>(std::trunc(value)) * 0x01010101u;
         case DataType::BFLOAT8_B:
         case DataType::BFLOAT4_B:
+        case DataType::BFLOAT2_B:
         case DataType::FP8_E4M3:
         case DataType::INT8:
         case DataType::MXFP8_E4M3:
