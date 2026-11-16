@@ -161,15 +161,36 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* baton =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(MLA_DSA_BATON_SEM));
     volatile tt_l1_ptr uint32_t* done = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(MLA_DSA_DONE_SEM));
+#if defined(MLA_DSA_BATON_GROUPS)
+#if !defined(MLA_DSA_GROUP_ROWS)
+#error "MLA_DSA_BATON_GROUPS: the group-scoped baton needs MLA_DSA_GROUP_ROWS"
+#endif
+    // MLA_DSA_BATON_GROUPS (GLM53_MLA_DSA_BATON_GROUPS=1, with MLA_DSA_GROUP_ROWS = GR dividing the lanes): the order
+    // is kept only inside a group -- groups are different users' slots (no shared ring tile, pool or pooled key), so
+    // row t waits for row t - 1 only when t % GR != 0. With GR | LANES row t - 1 is on lane l - 1 at the same j: lanes
+    // with t0 % GR != 0 wait BATON >= j + 1, lane l - 1 passes after every row whose successor is in its group. No
+    // DONE: a lane signals its owners after its own rows, by which time every earlier row of their groups landed.
+    static_assert(mlaatt::LANES % GR == 0, "MLA_DSA_BATON_GROUPS: the group rows divide the token lanes");
+#endif
     auto baton_wait = [&](uint32_t t) {  // row t - 1's writes landed (any lane)
         const uint32_t j = (t - t0) / mlaatt::LANES;
+#if defined(MLA_DSA_BATON_GROUPS)
+        const uint32_t need = t % GR != 0 ? j + 1 : 0;
+#else
         const uint32_t need = t0 == 0 ? j : j + 1;
+#endif
         if (need > 0) {
             noc_semaphore_wait_min(baton, need);
         }
         invalidate_l1_cache();
     };
     auto baton_pass = [&](uint32_t t) {  // after row t's writes (write barriers done in the row)
+#if defined(MLA_DSA_BATON_GROUPS)
+        if (t + 1 < t_rows && (t + 1) % GR != 0) {
+            const uint32_t x = get_arg_val<uint32_t>(BT0), y = get_arg_val<uint32_t>(BT0 + 1);
+            noc_semaphore_inc(get_noc_addr(x, y, get_semaphore(MLA_DSA_BATON_SEM)), 1);
+        }
+#else
         if (t + 1 < t_rows) {
             const uint32_t x = get_arg_val<uint32_t>(BT0), y = get_arg_val<uint32_t>(BT0 + 1);
             noc_semaphore_inc(get_noc_addr(x, y, get_semaphore(MLA_DSA_BATON_SEM)), 1);
@@ -179,6 +200,7 @@ void kernel_main() {
                 noc_semaphore_inc(get_noc_addr(x, y, get_semaphore(MLA_DSA_DONE_SEM)), 1);
             }
         }
+#endif
         noc_async_atomic_barrier();
     };
 #endif
@@ -340,17 +362,24 @@ void kernel_main() {
     }
 #if defined(MLA_DSA_ONE_SLOT_BATON)
     {  // every row of the slot written (the owners' I4 reads them all); then the per-layer counts taken back
-        noc_semaphore_wait_min(done, 1);
         uint32_t mine = 0;
         for (uint32_t t = t0; t < t_rows; t += mlaatt::LANES) {
             ++mine;
         }
+#if defined(MLA_DSA_BATON_GROUPS)
+        (void)done;
+        const uint32_t got = t0 % GR != 0 ? mine : 0;  // one BATON increment per own row that has a predecessor
+#else
+        noc_semaphore_wait_min(done, 1);
         const uint32_t got = t0 == 0 ? (mine > 0 ? mine - 1 : 0) : mine;  // the BATON increments this layer sent here
+#endif
         if (got > 0) {
             noc_semaphore_inc(
                 get_noc_addr(my_x[noc_index], my_y[noc_index], get_semaphore(MLA_DSA_BATON_SEM)), 0u - got);
         }
+#if !defined(MLA_DSA_BATON_GROUPS)
         noc_semaphore_inc(get_noc_addr(my_x[noc_index], my_y[noc_index], get_semaphore(MLA_DSA_DONE_SEM)), 0u - 1u);
+#endif
         noc_async_atomic_barrier();
     }
 #endif

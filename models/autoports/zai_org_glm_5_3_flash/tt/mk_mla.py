@@ -1960,6 +1960,11 @@ class MkMla(_MlaBase):
                 assert nx == self.att_lanes(t) > 1, (nx, self.att_lanes(t))
                 rev += [("MLA_DSA_ONE_SLOT_BATON", "1"), ("MLA_DSA_BATON_SEM", str(SEM_BATON)),
                         ("MLA_DSA_DONE_SEM", str(SEM_DONE))]  # fmt: skip
+                gr = int(st.get("group_rows") or 0)
+                if os.environ.get("GLM53_MLA_DSA_BATON_GROUPS", "0") == "1" and gr > 1 and nx % gr == 0:
+                    # the baton inside each user's group of rows only (ix_dm1.cpp MLA_DSA_BATON_GROUPS): the 8 x 1
+                    # verify's 16 rows were one 16-step chain across the lanes, now 8 independent 2-row chains
+                    rev.append(("MLA_DSA_BATON_GROUPS", "1"))
         if int(st.get("slot_stride", 1) or 1) > 1 and not st.get("one_slot"):  # rev 74: plain rows on strided slots
             rev.append(("MLA_DSA_SLOT_STRIDE", str(int(st["slot_stride"]))))
         if os.environ.get("GLM53_MLA_DSA_HSUM", "1") == "0":  # rev 52: the coordinator's old histogram sum (A/B)
