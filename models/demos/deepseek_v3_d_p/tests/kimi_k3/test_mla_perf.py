@@ -70,6 +70,7 @@ from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_mla_kv_cache
+from models.demos.deepseek_v3_d_p.utils.prefill_summary_utils import emit_perf_metrics
 from tt_py_test_utils_common.perf.cpu_clock import hold_full_cpu_clock
 from tt_py_test_utils_common.realtime_profiler_utils import profile_realtime_program
 
@@ -599,7 +600,24 @@ def test_mla_chunked_perf(request, mesh_device, device_params, scenario, variant
         request.addfinalizer(clock.restore)
         print(f"kimi_k3 MLA {box} {scenario} host: {clock.status}")
         untraced, traced, trace_pcc = _host_times(mesh_device, mla, lambda: one_forward(cache))
-        host = PerfReport(f"kimi_k3 MLA {box} {scenario}")
+
+        def emit(result):
+            emit_perf_metrics(
+                f"kimi_k3_mla_{box.lower()}_{scenario}_host_{result.mode}",
+                f"Kimi-K3 MLA {box} {scenario} host ({result.mode})",
+                {
+                    "box": box,
+                    "scenario": scenario,
+                    "mode": result.mode,
+                    "samples_ms": result.samples.values,
+                    "measured_ms": result.measured,
+                    "target_ms": result.target.ms,
+                    "margin_pct": result.target.margin * 100.0,
+                    "within_band": result.within if result.target.ms is not None else None,
+                },
+            )
+
+        host = PerfReport(f"kimi_k3 MLA {box} {scenario}", emit)
         for mode, samples in (("untraced", untraced), ("traced", traced)):
             target = HOST_PERF_TARGETS_MS.get((box, scenario, mode)) if DEFAULT_SIZES else None
             host.add(mode, samples, PerfTarget(target, HOST_PERF_MARGIN[mode]))

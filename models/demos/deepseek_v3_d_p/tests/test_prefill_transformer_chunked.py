@@ -53,12 +53,7 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     torus_xy_device_params,
 )
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.kda_slabs import attach_kda_states
-from models.demos.deepseek_v3_d_p.tests.measure.determinism import (
-    device_mismatch_marker,
-    marker_chips,
-    merge_device_mismatch_markers,
-    mismatch_report,
-)
+from models.demos.deepseek_v3_d_p.tests.measure.determinism import device_mismatch_marker, marker_chips, mismatch_report
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.transformer import TtKimiK3Transformer
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import (
     full_indexer_rank,
@@ -2221,216 +2216,232 @@ def run_chunked_transformer_updated(
         signpost("PROFILE_MEASURE_START")
 
     det_copies = []
-    if determinism_check:
-        if num_iters < 2:
-            pytest.skip("determinism_check requires num_iters >= 2 (iteration 0 is the baseline)")
-        det_storage = tt_kvpe_cache.storage if isinstance(tt_kvpe_cache, MlaKvCache) else tt_kvpe_cache
-        # ne compares values: a packed scaled-FP8 cache holds bf16 fields in FP8 bytes, which it would misread.
-        assert det_storage.dtype != ttnn.DataType.FP8_E4M3, "on-device determinism needs a bf16/bfp8 KV cache"
-        # One copy of the KV cache per iteration, allocated before any capture: a buffer allocated while a trace is
-        # live can land on its scratch and be overwritten by the next replay. Compared after the last iteration.
-        det_copies = [ttnn.allocate_tensor_on_device(det_storage.spec, mesh_device) for _ in range(num_iters)]
+    try:  # from the first copy through the capture: a failure here frees the copies
+        if determinism_check:
+            if num_iters < 2:
+                pytest.skip("determinism_check requires num_iters >= 2 (iteration 0 is the baseline)")
+            det_storage = tt_kvpe_cache.storage if isinstance(tt_kvpe_cache, MlaKvCache) else tt_kvpe_cache
+            # ne compares values: a packed scaled-FP8 cache holds bf16 fields in FP8 bytes, which it would misread.
+            assert det_storage.dtype != ttnn.DataType.FP8_E4M3, "on-device determinism needs a bf16/bfp8 KV cache"
+            # One copy of the KV cache per iteration, allocated before any capture: a buffer allocated while a trace is
+            # live can land on its scratch and be overwritten by the next replay. Compared after the last iteration.
+            for _ in range(num_iters):
+                det_copies.append(ttnn.allocate_tensor_on_device(det_storage.spec, mesh_device))
 
-    # use_trace: capture the chunk forward ONCE, then replay it per chunk. The per-chunk scalars
-    # (slot_id / actual_start / actual_end) cannot be host arguments on a captured program, so they move
-    # into 1-element uint32 DRAM tensors the metadata ops read on-device; the token input moves into a
-    # persistent buffer refreshed in place. With return_intermediates=False the forward is device-only
-    # (no host readback), so it is capturable.
+        # use_trace: capture the chunk forward ONCE, then replay it per chunk. The per-chunk scalars
+        # (slot_id / actual_start / actual_end) cannot be host arguments on a captured program, so they move
+        # into 1-element uint32 DRAM tensors the metadata ops read on-device; the token input moves into a
+        # persistent buffer refreshed in place. With return_intermediates=False the forward is device-only
+        # (no host readback), so it is capturable.
 
-    trace_controller = None
-    trace_input = None
-    trace_metadata = None
-    if use_trace:
-        rep = ttnn.ReplicateTensorToMesh(mesh_device)
+        trace_controller = None
+        trace_input = None
+        trace_metadata = None
+        if use_trace:
+            rep = ttnn.ReplicateTensorToMesh(mesh_device)
 
-        def _meta1(val):
-            return ttnn.from_torch(
-                torch.tensor([val], dtype=torch.int64).reshape(1, 1, 1, 1),
+            def _meta1(val):
+                return ttnn.from_torch(
+                    torch.tensor([val], dtype=torch.int64).reshape(1, 1, 1, 1),
+                    device=mesh_device,
+                    dtype=ttnn.uint32,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    mesh_mapper=rep,
+                )
+
+            trace_input = ttnn.from_torch(
+                chunk_tok_host[0],
                 device=mesh_device,
                 dtype=ttnn.uint32,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=rep,
-            )
-
-        trace_input = ttnn.from_torch(
-            chunk_tok_host[0],
-            device=mesh_device,
-            dtype=ttnn.uint32,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_shape), dims=token_dims),
-        )
-        # ChunkMetadata, not a bare 3-tuple: the replay reads llama4_scale at a captured address
-        # (mirrors TtPrefillRuntime._setup_trace). None for every non-Mistral variant -- including,
-        # via getattr, a NoPE variant that builds no RotarySetup to ask at all.
-        trace_metadata = ChunkMetadata(
-            _meta1(0),
-            _meta1(preload_isl),
-            _meta1(preload_isl + chunk_size),
-            _llama4_scale_buffer(transformer, chunk_size),
-        )
-        host_tok = [
-            ttnn.from_torch(
-                chunk_tok_host[c],
-                dtype=ttnn.uint32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
                 mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_shape), dims=token_dims),
             )
-            for c in range(n_chunks)
-        ]
-
-        def _fwd_meta():
-            return transformer.forward(
-                trace_input,
-                tt_kvpe_cache,
-                actual_isl=chunk_size,
-                actual_start=None,
-                actual_end=None,  # metadata carries the clamp; write_k rejects a host actual_end here
-                cache_user_id=0,
-                return_intermediates=False,
-                metadata=trace_metadata,
-                index_kv_cache=tt_index_kv_cache,
+            # ChunkMetadata, not a bare 3-tuple: the replay reads llama4_scale at a captured address
+            # (mirrors TtPrefillRuntime._setup_trace). None for every non-Mistral variant -- including,
+            # via getattr, a NoPE variant that builds no RotarySetup to ask at all.
+            trace_metadata = ChunkMetadata(
+                _meta1(0),
+                _meta1(preload_isl),
+                _meta1(preload_isl + chunk_size),
+                _llama4_scale_buffer(transformer, chunk_size),
             )
+            host_tok = [
+                ttnn.from_torch(
+                    chunk_tok_host[c],
+                    dtype=ttnn.uint32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_shape), dims=token_dims),
+                )
+                for c in range(n_chunks)
+            ]
 
-        trace_controller = SubDeviceTraceController(mesh_device)
-        transformer.set_trace_controller(trace_controller)
-        _fwd_meta()  # warm/compile the metadata-variant programs before recording
-        ttnn.synchronize_device(mesh_device)
+            def _fwd_meta():
+                return transformer.forward(
+                    trace_input,
+                    tt_kvpe_cache,
+                    actual_isl=chunk_size,
+                    actual_start=None,
+                    actual_end=None,  # metadata carries the clamp; write_k rejects a host actual_end here
+                    cache_user_id=0,
+                    return_intermediates=False,
+                    metadata=trace_metadata,
+                    index_kv_cache=tt_index_kv_cache,
+                )
 
-        trace_controller.begin_capture()
-        _fwd_meta()
-        trace_controller.end_capture()
-        ttnn.synchronize_device(mesh_device)
-        logger.info(
-            f"[no-pcc trace] captured {num_layers}-layer forward = {trace_controller.num_segments} segments, "
-            f"{trace_controller.trace_bytes() / 1024 / 1024:.2f} MB"
-        )
-        # A zero-segment capture would make every replay a no-op: the timings would collapse and any
-        # check_pcc would compare the warm pass's (correct) KV. Fail instead of reporting that.
-        assert trace_controller.num_segments > 0, "use_trace captured 0 segments — nothing to replay"
+            trace_controller = SubDeviceTraceController(mesh_device)
+            transformer.set_trace_controller(trace_controller)
+            _fwd_meta()  # warm/compile the metadata-variant programs before recording
+            ttnn.synchronize_device(mesh_device)
+
+            trace_controller.begin_capture()
+            _fwd_meta()
+            trace_controller.end_capture()
+            ttnn.synchronize_device(mesh_device)
+            logger.info(
+                f"[no-pcc trace] captured {num_layers}-layer forward = {trace_controller.num_segments} segments, "
+                f"{trace_controller.trace_bytes() / 1024 / 1024:.2f} MB"
+            )
+            # A zero-segment capture would make every replay a no-op: the timings would collapse and any
+            # check_pcc would compare the warm pass's (correct) KV. Fail instead of reporting that.
+            assert trace_controller.num_segments > 0, "use_trace captured 0 segments — nothing to replay"
+    except BaseException:
+        for det_copy in det_copies:
+            ttnn.deallocate(det_copy)
+        raise
 
     profiler.start("tt_forward")
-    for it in range(num_iters):
-        iter_start = time.time()
-        chunk_times: list[float] = []
-        for c in range(n_chunks):
-            kv_actual = preload_isl + c * chunk_size
-            if use_trace:
-                ttnn.copy_host_to_device_tensor(host_tok[c], trace_input)
-                # One call: on Mistral this also refreshes the llama4 scale buffer the replay reads.
-                # Writing the scalars alone leaves it at ones -- no temperature, and no PCC gate here
-                # would see it. No-op for variants without one.
-                write_chunk_metadata(
-                    trace_metadata,
-                    (0, kv_actual, kv_actual + chunk_size),
-                    hf_config=config,
-                    mesh_device=mesh_device,
-                    chunk_size_global=chunk_size,
-                    sp_axis=sp_axis,
+    try:
+        for it in range(num_iters):
+            iter_start = time.time()
+            chunk_times: list[float] = []
+            for c in range(n_chunks):
+                kv_actual = preload_isl + c * chunk_size
+                if use_trace:
+                    ttnn.copy_host_to_device_tensor(host_tok[c], trace_input)
+                    # One call: on Mistral this also refreshes the llama4 scale buffer the replay reads.
+                    # Writing the scalars alone leaves it at ones -- no temperature, and no PCC gate here
+                    # would see it. No-op for variants without one.
+                    write_chunk_metadata(
+                        trace_metadata,
+                        (0, kv_actual, kv_actual + chunk_size),
+                        hf_config=config,
+                        mesh_device=mesh_device,
+                        chunk_size_global=chunk_size,
+                        sp_axis=sp_axis,
+                    )
+                    chunk_start = time.time()
+                    trace_controller.replay()
+                    ttnn.synchronize_device(mesh_device)
+                    chunk_seconds = time.time() - chunk_start
+                    chunk_times.append(chunk_seconds)
+                    # Per-(iter, chunk) sample. print_duration_table only reports the median over
+                    # iterations[1:], so at num_iters=2 iteration 0's per-chunk times would otherwise be
+                    # unrecoverable (only its total is logged) -- and the traced path reaches no other
+                    # timing log at all. Emitted identically in both modes so the two are comparable.
+                    logger.info(f"[chunk timing] iter={it} chunk={c} {chunk_seconds * 1000:.2f} ms")
+                    continue
+                tt_tokens = ttnn.from_torch(
+                    chunk_tok_host[c],
+                    device=mesh_device,
+                    dtype=ttnn.uint32,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_shape), dims=token_dims),
                 )
                 chunk_start = time.time()
-                trace_controller.replay()
+                # return_intermediates only when the caller asked for per-layer PCC: it clones every layer to
+                # host, which both costs time (so the timing table stops being a perf number) and is illegal
+                # under capture. Otherwise nothing is cloned. Chunked prefill is full-chunk (all positions
+                # real) so actual_end is kv_actual + chunk_size; forward uses self.indexed_rope. The return is the
+                # intermediates dict, or None when none were requested -- no first_token: the transformer has
+                # no norm / LM-head / sampling tail.
+                reset_fused_ring_host_timing()
+                layer_outputs = transformer.forward(
+                    tt_tokens,
+                    tt_kvpe_cache,
+                    actual_isl=chunk_size,
+                    actual_start=kv_actual,
+                    actual_end=kv_actual + chunk_size,
+                    cache_user_id=0,
+                    return_intermediates=check_layer_pcc,
+                    index_kv_cache=tt_index_kv_cache,
+                )
                 ttnn.synchronize_device(mesh_device)
+                if check_layer_pcc:
+                    # min over every chunk (and iteration, though accuracy callers pass num_iters=1 since
+                    # each iteration replays the same chunks into the same cache region).
+                    local_pos = chunk_local_pos[c]
+                    for i in range(num_layers):
+                        # kv_only_last_layer=True strips the LAST layer's output path (it writes KV and
+                        # nothing else), so no "layer_{num_layers-1}" snapshot exists. That stripping is what
+                        # makes the forward device-only and therefore capturable, and it is set for BOTH modes
+                        # so the two stay comparable -- so this is a structural gap, not a missing check. The
+                        # last layer's correctness is still covered, by the KVPE cache PCC below.
+                        if f"layer_{i}" not in layer_outputs:
+                            continue
+                        # host snapshot [1, chunk_size, emb] (SP-seq + TP-hidden concatenated); [0] -> [chunk_size, emb].
+                        out_flat = layer_outputs[f"layer_{i}"][0].to(torch.float32)
+                        natural = torch.zeros(chunk_size, emb_dim, dtype=torch.float32)
+                        natural[local_pos] = out_flat  # un-rotate block-cyclic -> natural chunk order
+                        ref = _ref_layer_slice(trace_dir, layout_layer_pcc, i, kv_actual, kv_actual + chunk_size)
+                        _, pcc = comp_pcc(ref, natural)
+                        layer_min_pcc[i] = min(layer_min_pcc.get(i, 1.0), pcc)
+                        logger.info(f"  chunk {c} layer {i} PCC: {pcc:.6f}")
+                        if pcc < LAYER_PCC_THRESHOLD:
+                            logger.warning(f"  chunk {c} layer {i} PCC {pcc:.6f} below {LAYER_PCC_THRESHOLD}")
+                fused_host_calls, fused_host_seconds = get_fused_ring_host_timing()
+                ttnn.deallocate(tt_tokens)
                 chunk_seconds = time.time() - chunk_start
                 chunk_times.append(chunk_seconds)
-                # Per-(iter, chunk) sample. print_duration_table only reports the median over
-                # iterations[1:], so at num_iters=2 iteration 0's per-chunk times would otherwise be
-                # unrecoverable (only its total is logged) -- and the traced path reaches no other
-                # timing log at all. Emitted identically in both modes so the two are comparable.
                 logger.info(f"[chunk timing] iter={it} chunk={c} {chunk_seconds * 1000:.2f} ms")
-                continue
-            tt_tokens = ttnn.from_torch(
-                chunk_tok_host[c],
-                device=mesh_device,
-                dtype=ttnn.uint32,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_shape), dims=token_dims),
-            )
-            chunk_start = time.time()
-            # return_intermediates only when the caller asked for per-layer PCC: it clones every layer to
-            # host, which both costs time (so the timing table stops being a perf number) and is illegal
-            # under capture. Otherwise nothing is cloned. Chunked prefill is full-chunk (all positions
-            # real) so actual_end is kv_actual + chunk_size; forward uses self.indexed_rope. The return is the
-            # intermediates dict, or None when none were requested -- no first_token: the transformer has
-            # no norm / LM-head / sampling tail.
-            reset_fused_ring_host_timing()
-            layer_outputs = transformer.forward(
-                tt_tokens,
-                tt_kvpe_cache,
-                actual_isl=chunk_size,
-                actual_start=kv_actual,
-                actual_end=kv_actual + chunk_size,
-                cache_user_id=0,
-                return_intermediates=check_layer_pcc,
-                index_kv_cache=tt_index_kv_cache,
-            )
-            ttnn.synchronize_device(mesh_device)
-            if check_layer_pcc:
-                # min over every chunk (and iteration, though accuracy callers pass num_iters=1 since
-                # each iteration replays the same chunks into the same cache region).
-                local_pos = chunk_local_pos[c]
-                for i in range(num_layers):
-                    # kv_only_last_layer=True strips the LAST layer's output path (it writes KV and
-                    # nothing else), so no "layer_{num_layers-1}" snapshot exists. That stripping is what
-                    # makes the forward device-only and therefore capturable, and it is set for BOTH modes
-                    # so the two stay comparable -- so this is a structural gap, not a missing check. The
-                    # last layer's correctness is still covered, by the KVPE cache PCC below.
-                    if f"layer_{i}" not in layer_outputs:
-                        continue
-                    # host snapshot [1, chunk_size, emb] (SP-seq + TP-hidden concatenated); [0] -> [chunk_size, emb].
-                    out_flat = layer_outputs[f"layer_{i}"][0].to(torch.float32)
-                    natural = torch.zeros(chunk_size, emb_dim, dtype=torch.float32)
-                    natural[local_pos] = out_flat  # un-rotate block-cyclic -> natural chunk order
-                    ref = _ref_layer_slice(trace_dir, layout_layer_pcc, i, kv_actual, kv_actual + chunk_size)
-                    _, pcc = comp_pcc(ref, natural)
-                    layer_min_pcc[i] = min(layer_min_pcc.get(i, 1.0), pcc)
-                    logger.info(f"  chunk {c} layer {i} PCC: {pcc:.6f}")
-                    if pcc < LAYER_PCC_THRESHOLD:
-                        logger.warning(f"  chunk {c} layer {i} PCC {pcc:.6f} below {LAYER_PCC_THRESHOLD}")
-            fused_host_calls, fused_host_seconds = get_fused_ring_host_timing()
-            ttnn.deallocate(tt_tokens)
-            chunk_seconds = time.time() - chunk_start
-            chunk_times.append(chunk_seconds)
-            logger.info(f"[chunk timing] iter={it} chunk={c} {chunk_seconds * 1000:.2f} ms")
-            if fused_host_calls:
-                logger.info(
-                    f"[fused-indexer host timing] iter={it} chunk={c} calls={fused_host_calls} "
-                    f"host_submit={fused_host_seconds * 1000:.2f} ms "
-                    f"({fused_host_seconds / chunk_seconds * 100:.1f}% of {chunk_seconds * 1000:.2f} ms chunk)"
-                )
-        iter_total = time.time() - iter_start
-        iteration_chunk_times.append(chunk_times)
-        logger.info(f"iter {it} done ({n_chunks} chunks) in {iter_total:.3f} seconds")
-        if determinism_check:
-            # Compare the whole cache the iteration just wrote, exactly. PCC rounds away a single flipped element
-            # in num_layers x seq x kvpe; an exact compare does not. The cache is the right surface because it is
-            # what every later chunk attends to, so a write landing out of order inside the replay shows up here
-            # even when the final hidden state looks fine. On device (tests/measure/determinism.py): each iteration's
-            # cache is copied into its own buffer, and every copy is compared with iteration 0's after the last one.
-            ttnn.copy(det_storage, det_copies[it])
-        # Drop iter 0's per-layer MLA/FFN samples (the compile iteration), same as the chunk-time table.
-        if it == 0:
-            reset_block_timings()
+                if fused_host_calls:
+                    logger.info(
+                        f"[fused-indexer host timing] iter={it} chunk={c} calls={fused_host_calls} "
+                        f"host_submit={fused_host_seconds * 1000:.2f} ms "
+                        f"({fused_host_seconds / chunk_seconds * 100:.1f}% of {chunk_seconds * 1000:.2f} ms chunk)"
+                    )
+            iter_total = time.time() - iter_start
+            iteration_chunk_times.append(chunk_times)
+            logger.info(f"iter {it} done ({n_chunks} chunks) in {iter_total:.3f} seconds")
+            if determinism_check:
+                # Compare the whole cache the iteration just wrote, exactly. PCC rounds away a single flipped element
+                # in num_layers x seq x kvpe; an exact compare does not. The cache is the right surface because it is
+                # what every later chunk attends to, so a write landing out of order inside the replay shows up here
+                # even when the final hidden state looks fine. On device (tests/measure/determinism.py): each iteration's
+                # cache is copied into its own buffer, and every copy is compared with iteration 0's after the last one.
+                ttnn.copy(det_storage, det_copies[it])
+            # Drop iter 0's per-layer MLA/FFN samples (the compile iteration), same as the chunk-time table.
+            if it == 0:
+                reset_block_timings()
+    except BaseException:
+        for det_copy in det_copies:  # freed here on failure; the check below frees them otherwise
+            ttnn.deallocate(det_copy)
+        raise
     profiler.end("tt_forward")
 
     if determinism_check:
-        det_marker = None
+        markers = []
         try:
-            for det_copy in det_copies[1:]:
-                det_marker = merge_device_mismatch_markers(
-                    det_marker, device_mismatch_marker(det_copies[0], det_copy, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-                )
-            chips = marker_chips(det_marker)
-            detail = mismatch_report(["KV cache, last iteration"], [det_copies[0]], [det_copies[-1]]) if chips else ""
+            for det_copy in det_copies[1:]:  # one marker per iteration, so a failure names the iterations
+                markers.append(device_mismatch_marker(det_copies[0], det_copy, memory_config=ttnn.DRAM_MEMORY_CONFIG))
+            differing = {it: chips for it, marker in enumerate(markers, start=1) if (chips := marker_chips(marker))}
+            detail = ""
+            if differing:
+                first = min(differing)
+                try:  # a diagnostics error must not replace the failure itself
+                    detail = mismatch_report([f"KV cache, iteration {first}"], [det_copies[0]], [det_copies[first]])
+                except Exception as e:
+                    detail = f"(diagnostics failed: {e})"
         finally:
-            for t in [det_marker, *det_copies]:
-                if t is not None:
-                    ttnn.deallocate(t)
-        assert (
-            not chips
-        ), f"captured-trace replay is not deterministic: KV cache differs from iteration 0 on chips {chips}\n{detail}"
+            for t in [*markers, *det_copies]:
+                ttnn.deallocate(t)
+        assert not differing, (
+            "captured-trace replay is not deterministic: KV cache differs from iteration 0 in iterations "
+            + ", ".join(f"{it} (chips {chips})" for it, chips in differing.items())
+            + f"\n{detail}"
+        )
         logger.success(
             f"[determinism] replay bit-identical across {num_iters} iterations "
             f"(num_layers={num_layers}, n_chunks={n_chunks}, use_trace={use_trace})"

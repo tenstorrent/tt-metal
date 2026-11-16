@@ -11,6 +11,8 @@ Lifecycle, in order:
   2. compile: `compile_runs` untimed calls under the controller, each output freed.
   3. before_capture(output of the last compile run): allocate anything a replay writes into (copy buffers). A buffer
      allocated while the trace is live can land on its scratch and be overwritten by the next replay.
+  3b. after_compile(): runs once the compile outputs are freed and the device is synced, for allocations or raw
+     traces that must not see them (e.g. an input-refresh trace).
   4. capture: one call between begin_capture and end_capture; its output is `TracedStep.output`, rewritten by every
      replay.
   5. replay(sync).
@@ -66,7 +68,14 @@ class TracedStep:
     def __enter__(self):
         return self
 
-    def capture(self, before_capture: Callable[[object], None] | None = None) -> TracedStep:
+    def capture(
+        self,
+        before_capture: Callable[[object], None] | None = None,
+        after_compile: Callable[[], None] | None = None,
+    ) -> TracedStep:
+        """See the module docstring. `before_capture(output)` runs on the last compile run's output, before it is freed;
+        `after_compile()` runs once the compile outputs are freed and the device is synced, just before the capture."""
+        assert before_capture is None or self.compile_runs >= 1, "before_capture needs a compile run's output"
         if self._attach is not None:
             self._attach(self.controller)
             self._attached = True
@@ -78,8 +87,10 @@ class TracedStep:
             finally:
                 self.release(out)
         ttnn.synchronize_device(self.mesh_device)
+        if after_compile is not None:
+            after_compile()
+        self._capturing = True  # before begin_capture: a failed begin is ended too
         self.controller.begin_capture()
-        self._capturing = True
         self.output = self.step()
         self.controller.end_capture()
         self._capturing = False
@@ -94,6 +105,16 @@ class TracedStep:
         return output
 
     def __exit__(self, exc_type, exc, tb):
+        cleanup_errors = []
+
+        def attempt(what, fn):
+            # Each step runs even if an earlier one failed; a cleanup error never replaces the error in flight.
+            try:
+                fn()
+            except Exception as e:
+                logger.warning(f"{what} failed: {e}")
+                cleanup_errors.append(e)
+
         stuck = False
         if self._capturing:
             try:
@@ -102,16 +123,16 @@ class TracedStep:
             except Exception as e:
                 stuck = True
                 logger.warning(f"ending the failed capture failed: {e}")
-        try:
-            if not stuck:
-                drain(self.mesh_device)
-                self.controller.release()
-        finally:
-            if self._attached and self._detach is not None:
-                self._detach()
-            if self.output is not None:
-                self.release(self.output)
-                self.output = None
+        if not stuck:
+            drain(self.mesh_device)
+            attempt("releasing the trace", self.controller.release)
+        if self._attached and self._detach is not None:
+            attempt("detaching the trace controller", self._detach)
+        if self.output is not None:
+            output, self.output = self.output, None
+            attempt("freeing the captured output", lambda: self.release(output))
+        if cleanup_errors and exc is None:
+            raise cleanup_errors[0]
         return False
 
 

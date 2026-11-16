@@ -113,8 +113,8 @@ def test_time_untraced(clock):
 
 
 class FakeController:
-    def __init__(self, log, fail_end=False):
-        self.log, self.fail_end, self.capturing = log, fail_end, False
+    def __init__(self, log, fail_end=False, fail_release=False):
+        self.log, self.fail_end, self.fail_release, self.capturing = log, fail_end, fail_release, False
 
     def begin_capture(self):
         self.log.append("begin")
@@ -132,10 +132,12 @@ class FakeController:
     def release(self):
         assert not self.capturing
         self.log.append("release")
+        if self.fail_release:
+            raise RuntimeError("release failed")
 
 
 def _traced(log, step, **kw):
-    controller = FakeController(log, kw.pop("fail_end", False))
+    controller = FakeController(log, kw.pop("fail_end", False), kw.pop("fail_release", False))
     return TracedStep(
         "mesh",
         step,
@@ -149,7 +151,9 @@ def _traced(log, step, **kw):
 def test_traced_step_lifecycle(no_device):
     log = []
     with _traced(log, lambda: log.append("step") or "out", compile_runs=2) as t:
-        t.capture(before_capture=lambda out: log.append(f"before_capture {out}"))
+        t.capture(
+            before_capture=lambda out: log.append(f"before_capture {out}"), after_compile=lambda: log.append("after")
+        )
         assert t.output == "out"
         t.replay(sync=False)
     assert log == [
@@ -157,6 +161,7 @@ def test_traced_step_lifecycle(no_device):
         "step",
         "step",
         "before_capture out",
+        "after",
         "begin",
         "step",
         "end",
@@ -224,3 +229,21 @@ def test_traced_step_take_output_and_release_hook(no_device):
         t.capture()
         assert t.take_output() == ("out", "state")
     assert released == [("out", "state")]  # the compile run's output only; the taken one is the caller's
+
+
+def test_traced_step_cleanup_error_never_replaces_the_first(no_device, expect_error):
+    log, freed = [], []
+    with expect_error(ValueError, "body failed"):
+        with _traced(log, lambda: "out", fail_release=True, release=freed.append) as t:
+            t.capture()
+            raise ValueError("body failed")
+    assert log[-1] == "detach" and freed[-1] == "out"  # detach and free still ran after the failed release
+    with expect_error(RuntimeError, "release failed"):  # with nothing in flight, the cleanup error surfaces
+        with _traced([], lambda: "out", fail_release=True) as t:
+            t.capture()
+
+
+def test_before_capture_needs_a_compile_run(no_device, expect_error):
+    with expect_error(AssertionError, "before_capture needs"):
+        with _traced([], lambda: "out", compile_runs=0) as t:
+            t.capture(before_capture=lambda out: None)

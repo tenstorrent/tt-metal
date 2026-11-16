@@ -145,13 +145,14 @@ def test_kimi_moe_perf(variant, case, config_only, mesh_device, device_params, n
             # forward() frees its input: the compile pass gets a clone, the capture the copy trace's buffer.
             return forward(state.pop("x") if "x" in state else ttnn.clone(tt_x))
 
-        def capture_input_refresh(_compile_out):
+        def capture_input_refresh():
             # forward() frees its input mid-capture, so its address gets reused inside the trace. A separate one-op
             # trace refreshes that buffer from tt_x before every replay, keeping the routed input identical.
-            ttnn.synchronize_device(mesh_device)
             state["copy_tid"] = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-            state["x"] = ttnn.clone(tt_x)
-            ttnn.end_trace_capture(mesh_device, state["copy_tid"], cq_id=0)
+            try:
+                state["x"] = ttnn.clone(tt_x)
+            finally:  # closed even if the clone fails, so cleanup can sync and release
+                ttnn.end_trace_capture(mesh_device, state["copy_tid"], cq_id=0)
 
         def detach():
             if "copy_tid" in state:
@@ -160,7 +161,7 @@ def test_kimi_moe_perf(variant, case, config_only, mesh_device, device_params, n
             tt_moe.release_sub_device_manager()
 
         with TracedStep(mesh_device, step, attach=tt_moe.set_trace_controller, detach=detach) as traced:
-            traced.capture(before_capture=capture_input_refresh)
+            traced.capture(after_compile=capture_input_refresh)
             trace_info["segments"] = traced.controller.num_segments
             trace_info["bytes"] = traced.controller.trace_bytes()
             replays = time_traced(

@@ -309,7 +309,10 @@ def test_mla_chunked_perf(
     if scenario != "cold":
         untraced, _ = _time_untraced(mesh_device, case, cache)
         traced, _ = _time_traced(mesh_device, case, cache)
-        print(f"\n{label}: untraced {min(untraced):.3f} ms (fastest of {len(untraced)}), traced {traced[0]:.3f} ms")
+        print(
+            f"\n{label}: untraced {untraced.fastest:.3f} ms (fastest of {len(untraced.values)}), "
+            f"traced {traced.values[0]:.3f} ms"
+        )
         return
 
     # cold: one untimed fill compiles every start; then one timed untraced fill, then each chunk traced.
@@ -324,7 +327,7 @@ def test_mla_chunked_perf(
         ttnn.synchronize_device(mesh_device)
         untraced_rows.append((time.perf_counter() - t0) * 1e3)
         ttnn.deallocate(out)
-    traced_rows = [_time_traced(mesh_device, case, start)[0][0] for start in starts]
+    traced_rows = [_time_traced(mesh_device, case, start)[0].values[0] for start in starts]
     rows = list(zip(starts, untraced_rows, traced_rows))
     print(
         f"\n{label}: {len(starts)} chunks, untraced {sum(r[1] for r in rows):.3f} ms, "
