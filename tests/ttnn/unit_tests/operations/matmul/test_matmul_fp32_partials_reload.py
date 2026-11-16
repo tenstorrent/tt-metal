@@ -165,8 +165,9 @@ def test_matmul_batched_dram_sharded_fp32_partials_reload(device, packer_l1_acc)
 
 
 # With a fused bias the partials buffer is also read by the bias add (through SrcA), so the reload uses a separate
-# UnpackToDest view of it. The final bias add itself still goes through SrcA in every factory (mcast included),
-# which bounds the error at ~1.3e-3 to 1.8e-3 here; with packer_l1_acc=True there is no reload (control case).
+# UnpackToDest view of it. The final bias add itself still goes through SrcA in these factories (and in the mcast
+# ones for a non-FP32 bias), which bounds the error at ~1.3e-3 to 1.8e-3 here; with packer_l1_acc=True there is no
+# reload (control case).
 BIAS_REL_TOL = 3e-3
 # A bfloat16 output adds up to 2^-9 relative rounding on top (measured 4.1e-3 to 4.7e-3, the same as without reload).
 BIAS_REL_TOL_BF16 = 6e-3

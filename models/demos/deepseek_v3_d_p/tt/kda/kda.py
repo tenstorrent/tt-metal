@@ -564,9 +564,9 @@ class ttKDA:
         )
         if not self._bounded_gate:
             return self._softplus_decay(gate)
-        # sigmoid(r @ (A f_b) + A dt_bias) with A folded into the weights, all in the projection: the program config's
-        # fused sigmoid follows the FP32 offset add on the FP32-accumulated logits, then one rounding to the BF16 gate;
-        # see _FP32_ARTIFACTS in tt/kda/weights.py.
+        # sigmoid(r @ (A f_b) + A dt_bias) with A folded into the weights, all in the projection: the matmul adds the
+        # FP32 offset to its FP32 logits on the SFPU (an FPU add would truncate it to TF32), applies the program
+        # config's sigmoid and rounds once to the BF16 gate; see _FP32_ARTIFACTS in tt/kda/weights.py.
         return gate
 
     def _softplus_decay(self, gate: ttnn.Tensor) -> ttnn.Tensor:
