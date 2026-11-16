@@ -23,7 +23,7 @@ jobs:
         kind: shell
         shell:
           run:
-            - ./.torrentci/scripts/seed-measure.sh 4 3
+            - ./.torrentci/scripts/seed-measure.sh 4 1
   - id: seed-measure-glibc-4cpu
     description: Time the seed-pack checkout against the plain path, glibc git, 4 CPU
     timeout: 45m
@@ -40,4 +40,4 @@ jobs:
         kind: shell
         shell:
           run:
-            - ./.torrentci/scripts/seed-measure.sh 4 3
+            - ./.torrentci/scripts/seed-measure.sh 4 1

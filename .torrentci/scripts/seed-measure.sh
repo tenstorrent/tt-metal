@@ -201,6 +201,10 @@ snapshot() {
     git for-each-ref > "$out.refs"
     git rev-list --objects --all | sort > "$out.objs"
     git count-objects -v | awk '/^count|^in-pack/' > "$out.count"
+    # Every distinct object in the ODB, reachable or not: equal to the
+    # reachable set when the seed adds nothing outside the closure.
+    git cat-file --batch-all-objects --batch-check='%(objectname)' | sort -u > "$out.odb"
+    git rev-list --objects --all | cut -d' ' -f1 | sort -u > "$out.reach"
     cut -d' ' -f3- .git/logs/refs/remotes/origin/$B | sed 's/^[^>]*> [0-9]* [-+][0-9]*\t//' > "$out.reflog"
     cp .git/config "$out.config"
     git rev-parse HEAD > "$out.head"
@@ -221,10 +225,14 @@ while [ "$n" -le "$RUNS" ]; do
   sed "s/^/seeded_packs /" "$X/seeded.packs"
   sed "s/^/plain_packs /" "$X/plain.packs"
   rm -rf "$X/seeded"
-  for k in refs objs count reflog config head status; do
+  for k in refs objs odb reflog config head status; do
     if cmp -s "$X/plain.$k" "$X/seeded.$k"; then echo "EQ $k equal"; else echo "EQ $k DIFFER"; diff "$X/plain.$k" "$X/seeded.$k" | head -10; fi
   done
   echo "refs=$(wc -l < "$X/plain.refs") reachable_objects=$(wc -l < "$X/plain.objs")"
+  for v in plain seeded; do
+    echo "$v odb_distinct=$(wc -l < "$X/$v.odb") reachable_distinct=$(wc -l < "$X/$v.reach") $(tr '\n' ' ' < "$X/$v.count")"
+    cmp -s "$X/$v.odb" "$X/$v.reach" && echo "EQ $v odb == reachable" || echo "EQ $v odb DIFFERS from reachable"
+  done
   cat "$X/plain.count" "$X/seeded.count" | tr '\n' ' '
   echo
   n=$((n + 1))
