@@ -52,6 +52,7 @@ class LCfg:
     out_all: bool = False  # every expert's down rows to DRAM (WL_OUT_ALL), not only each group's last
     wpoll: int = 2  # the reader serves its weight queues every wpoll turns of its loop (WL_WPOLL)
     mcast_linked: bool = False  # group multicast payloads linked to their flags (WL_MCAST_LINKED)
+    arr_write: bool = False  # arrival counts as plain writes after the payloads, no router atomics (WL_ARR_WRITE)
 
 
 def lane_cores(g):
@@ -203,7 +204,7 @@ def build_lane(mesh, cfg: GCfg, lc: LCfg, x_t, idx_t, counts_t, ws_t, out_t, tab
     wd_ring = sharded_l1(mesh, C, [K * WDN * 32, 32], cfg.w_dt, ttnn.TILE_LAYOUT)
     assert wgu_ring.buffer_address() % 64 == 0 and wd_ring.buffer_address() % 64 == 0, "weight slots 64 B aligned"
     w16 = lambda n: sharded_l1(mesh, C, [n, 4], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, torch.int32)
-    warr, cred, freew = w16(K), w16(2 * K), w16(K)
+    warr, cred, freew, arr_stage = w16(K), w16(2 * K), w16(K), w16(2)
     hring = sharded_l1(mesh, C, [NS * KTD * 32, 32], cfg.h_dt, ttnn.TILE_LAYOUT)
     hflags = w16(NS * 2)
     xring = sharded_l1(mesh, C, [NX * BK * 32, 32], cfg.x_dt, ttnn.TILE_LAYOUT)
@@ -315,7 +316,10 @@ def build_lane(mesh, cfg: GCfg, lc: LCfg, x_t, idx_t, counts_t, ws_t, out_t, tab
                         + client_ct
                         + list(ttnn.TensorAccessorArgs(out_t).get_compile_time_args()),
                         runtime_args=rd_rt,
-                        defines=ydefs + FAB_DEFS + [("WL_WPOLL", str(lc.wpoll))],
+                        defines=ydefs
+                        + FAB_DEFS
+                        + [("WL_WPOLL", str(lc.wpoll))]
+                        + ([("WL_ARR_WRITE", str(arr_stage.buffer_address()))] if lc.arr_write else []),
                         config=dm(1),
                     )
                 )
@@ -396,5 +400,5 @@ def build_lane(mesh, cfg: GCfg, lc: LCfg, x_t, idx_t, counts_t, ws_t, out_t, tab
             mc = ttnn.MeshCoordinate(r, c)
             mpd[ttnn.MeshCoordinateRange(mc, mc)] = p
     io = [x_t, idx_t, counts_t, ws_t, tab_t, wgu_ring, wd_ring, hring, hflags, xring, xflags, xprog, counts_l1]
-    io += [idx_l1, table_l1, warr, cred, freew, st, out_t]
+    io += [idx_l1, table_l1, warr, cred, freew, arr_stage, st, out_t]
     return mpd, io, st

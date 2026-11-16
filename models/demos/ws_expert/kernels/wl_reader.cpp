@@ -154,6 +154,14 @@ void kernel_main() {
     volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr[2] = {
         PacketHeaderPool::allocate_header(), PacketHeaderPool::allocate_header()};
     volatile tt_l1_ptr PACKET_HEADER_TYPE* hcr = PacketHeaderPool::allocate_header();
+#ifdef WL_ARR_WRITE
+    // arrival counts as plain writes: after each payload, a 16-byte write of the slot's absolute arrival count from a
+    // staging word of this core (one a direction, at address WL_ARR_WRITE), through the same router command buffer
+    // as the payload, so it lands after it; the routers then do no NoC atomics into the group cores
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* hca[2] = {
+        PacketHeaderPool::allocate_header(), PacketHeaderPool::allocate_header()};
+    volatile tt_l1_ptr uint32_t* arr_stage = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(WL_ARR_WRITE);
+#endif
 
     // ---- slots: current occupant (its table entry cached in registers), its packets sent a direction, computed
     volatile tt_l1_ptr uint32_t* warr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(warr_addr);
@@ -241,6 +249,29 @@ void kernel_main() {
             if (u == 0 && cred[(d * K + s2) * 4] < k2) {
                 continue;
             }
+#ifdef WL_ARR_WRITE
+            if (!mux[d].template edm_has_space_for_packet<2>()) {  // (never block this RISC)
+                continue;
+            }
+            noc_async_writes_flushed();  // (headers, payload and staging word of the previous send out of L1)
+            fabric_unicast_noc_unicast_write(
+                &mux[d],
+                hdr[d],
+                nchip[d],
+                my_mesh,
+                slot_addr(s, u),
+                CHT * wtile,
+                tt::tt_fabric::NocUnicastCommandHeader{get_noc_addr(mex, mey, slot_addr(s2, u))});
+            arr_stage[d * 4] = PK * k2 + u + 1;
+            fabric_unicast_noc_unicast_write(
+                &mux[d],
+                hca[d],
+                nchip[d],
+                my_mesh,
+                WL_ARR_WRITE + d * 16,
+                16,
+                tt::tt_fabric::NocUnicastCommandHeader{get_noc_addr(mex, mey, warr_addr + s2 * 16)});
+#else
             if (!mux[d].edm_has_space_for_packet()) {  // (never block this RISC: its x / h queues feed the group)
                 continue;
             }
@@ -256,6 +287,7 @@ void kernel_main() {
                 CHT * wtile,
                 tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
                     get_noc_addr(mex, mey, slot_addr(s2, u)), get_noc_addr(mex, mey, warr_addr + s2 * 16), 1, true});
+#endif
             ++sent[s][d];
             ++n_fwd;
             rr = rr + t + 1;
