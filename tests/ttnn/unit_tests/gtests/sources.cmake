@@ -19,6 +19,7 @@ set(UNIT_TESTS_TTNN_BASIC_SOURCES
     test_scalar_lhs_binary.cpp
     test_add_int.cpp
     test_broadcast_to.cpp
+    test_command_list.cpp
     test_command_list_tensor_prefetcher.cpp
     test_convert_to_hwc_gather.cpp
     test_eltwise.cpp
@@ -44,6 +45,7 @@ set(UNIT_TESTS_TTNN_BASIC_SOURCES
     test_program_cache_l1.cpp
     test_reduction.cpp
     test_relational_int.cpp
+    test_relational_uint.cpp
     test_rsub_int.cpp
     test_sort_prim_validation.cpp
     test_codegen_gates_unallocated.cpp
@@ -51,7 +53,10 @@ set(UNIT_TESTS_TTNN_BASIC_SOURCES
     test_gelu_fw_ulp.cpp
     test_tanh_bw_ulp.cpp
     test_tanh_fw_ulp.cpp
+    test_pack_scalar_into_uint32.cpp
     test_work_split_tilize.cpp
+    test_runtime_length.cpp
+    test_hash_without_rows.cpp
     test_unary_program_hash.cpp
     test_unary_dram_read_plan.cpp
     test_stale_program_hash.cpp

@@ -3786,6 +3786,58 @@ class TestGraphCaptureToFile:
         assert "version" in report
         assert report["graph"] == captured_graph
 
+    def test_capture_ends_when_report_file_cannot_be_written(self, device, tmp_report_dir, expect_error):
+        blocker = tmp_report_dir / "not_a_directory"
+        blocker.write_text("")
+        report_path = blocker / "report.json"
+
+        tt_input = ttnn.from_torch(
+            torch.rand((1, 1, 32, 32), dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device
+        )
+
+        tt_output = None
+        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+        try:
+            tt_output = ttnn.relu(tt_input)
+            with expect_error(RuntimeError, "cannot create directories"):
+                ttnn.graph.end_graph_capture_to_file(report_path)
+            assert not ttnn.graph.is_graph_capture_active()
+            assert not ttnn.graph.is_python_io_recording_enabled()
+        finally:
+            if ttnn.graph.is_graph_capture_active():
+                ttnn.graph.end_graph_capture()
+            # The caught exception's traceback keeps this frame alive past device close;
+            # free the device buffers now so collecting it later touches no device.
+            ttnn.deallocate(tt_input)
+            if tt_output is not None:
+                ttnn.deallocate(tt_output)
+
+    def test_full_graph_capture_failed_write_keeps_outer_capture(self, device, tmp_report_dir, expect_error):
+        blocker = tmp_report_dir / "not_a_directory"
+        blocker.write_text("")
+
+        tt_input = ttnn.from_torch(
+            torch.rand((1, 1, 32, 32), dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device
+        )
+
+        tt_output = None
+        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+        try:
+            with expect_error(RuntimeError, "cannot create directories"):
+                with ttnn.graph.full_graph_capture(blocker / "report.json"):
+                    tt_output = ttnn.relu(tt_input)
+            assert ttnn.graph.is_graph_capture_active()
+            ttnn.graph.end_graph_capture()
+            assert not ttnn.graph.is_graph_capture_active()
+        finally:
+            while ttnn.graph.is_graph_capture_active():
+                ttnn.graph.end_graph_capture()
+            # The caught exception's traceback keeps this frame alive past device close;
+            # free the device buffers now so collecting it later touches no device.
+            ttnn.deallocate(tt_input)
+            if tt_output is not None:
+                ttnn.deallocate(tt_output)
+
     @skip_for_slow_dispatch()
     def test_default_manager_execution_metadata_round_trip(self, device, tmp_report_dir):
         report_path = tmp_report_dir / "default_manager_report.json"

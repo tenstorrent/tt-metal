@@ -26,8 +26,6 @@ static const mailbox_t mailbox_unpack = mailboxes_arr;
 static const mailbox_t mailbox_math   = mailboxes_arr + 1;
 static const mailbox_t mailbox_pack   = mailboxes_arr + 2;
 
-static const mailbox_t profiler_barrier = reinterpret_cast<mailbox_t>(0x16AFF4U);
-
 // A BRISC read of a TRISC's PC buffer returns once that TRISC waits on its own PC buffer read with nothing queued and its
 // Tensix thread is idle, which trisc.cpp does when its kernel is done.
 static const mailbox_t trisc_pc_bufs[] = {
@@ -44,16 +42,21 @@ int main()
     commit_store(mailbox_unpack, ckernel::RESET_VAL);
     commit_store(mailbox_pack, ckernel::RESET_VAL);
 
-    commit_store(profiler_barrier, 0U);
-    commit_store(profiler_barrier + 1, 0U);
-    commit_store(profiler_barrier + 2, 0U);
-
     device_setup();
 
     llk_perf::clear_debug_features();
     // Counters on only (empty otherwise, counters.h): set up the counter banks before the TRISCs start.
     llk_perf::configure_from_brisc();
 
+#if defined(ARCH_WORMHOLE) && !defined(TT_METAL_TTSIM)
+    // The L1 port both TRISC1 and TRISC2 fetch through keeps its last grantee until chip reset, and their first fetches
+    // race on it: release TRISC1 first so it takes the port alone, whatever ran on this core before.
+    const std::uint32_t trisc1_released = ckernel::reg_read(RISCV_DEBUG_REG_SOFT_RESET_0) & ~TRISC1_SOFT_RESET_MASK;
+    ckernel::reg_write(RISCV_DEBUG_REG_SOFT_RESET_0, trisc1_released);
+    while (ckernel::reg_read(RISCV_DEBUG_REG_SOFT_RESET_0) != trisc1_released)
+    {
+    }
+#endif
     clear_trisc_soft_reset();
 
 #if defined(TT_METAL_TTSIM) // ttsim models no BRISC reads of the TRISC PC buffers, and nothing there is timed: wait on L1

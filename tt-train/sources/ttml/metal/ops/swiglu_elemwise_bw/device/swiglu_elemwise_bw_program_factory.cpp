@@ -43,14 +43,6 @@ constexpr auto kSigmoidCbIndex = tt::CBIndex::c_5;
 constexpr auto kScratchCbIndex = tt::CBIndex::c_6;
 constexpr auto kSiluGradCbIndex = tt::CBIndex::c_7;
 
-// Units of the work split: rows of tiles (NC * Ht) of the padded shape. create_descriptor() and the override both
-// split these over the device grid, so the override patches exactly the cores that got runtime args.
-uint32_t num_tile_rows(const ttnn::Shape& padded_shape) {
-    const uint32_t Ht = padded_shape[-2] / tt::constants::TILE_HEIGHT;
-    const uint32_t NC = padded_shape[0] * padded_shape[1];
-    return NC * Ht;
-}
-
 }  // namespace
 
 namespace ttml::metal::ops::swiglu_elemwise_bw::device {
@@ -70,14 +62,14 @@ tt::tt_metal::ProgramDescriptor SwigluElemwiseBwProgramFactory::create_descripto
     const auto padded_shape = linear1.padded_shape();
     TT_FATAL(padded_shape.rank() == 4U, "Input tensors must be 4D");
     const uint32_t Wt = padded_shape[-1] / tt::constants::TILE_WIDTH;
-    const uint32_t total_rows = num_tile_rows(padded_shape);
+    const uint32_t total_rows = num_tile_rows(linear1);
 
     const auto grid_size = device->compute_with_storage_grid_size();
     constexpr uint32_t block_size = 4U;
 
     const auto [num_cores, all_cores, core_group_1, core_group_2, num_rows_g1, num_rows_g2] =
         tt::tt_metal::split_work_to_cores(grid_size, total_rows);
-    const auto split = compute_work_split(grid_size, total_rows);
+    const auto split = compute_tile_row_work_split(linear1);
     check_work_split(split, num_cores, core_group_1, core_group_2, num_rows_g1, num_rows_g2);
 
     const uint32_t twice_block = 2U * block_size;
@@ -140,15 +132,14 @@ void SwigluElemwiseBwProgramFactory::override_runtime_arguments(
     const std::optional<ttnn::MeshCoordinate>&) {
     // Only the buffer addresses change between hits. The outputs come from the return value, which is right for an
     // in-place call (dL_dlinear1 is linear1), a distinct preallocated output and a newly allocated one alike.
-    const uint32_t linear1_addr = tensor_args.linear1.buffer()->address();
-    const uint32_t gate_addr = tensor_args.gate.buffer()->address();
-    const uint32_t dL_dprod_addr = tensor_args.dL_dprod.buffer()->address();
-    const uint32_t dL_dlinear1_addr = output.dL_dlinear1.buffer()->address();
-    const uint32_t dL_dgate_addr = output.dL_dgate.buffer()->address();
+    const uint32_t linear1_addr = tensor_args.linear1.mesh_buffer().address();
+    const uint32_t gate_addr = tensor_args.gate.mesh_buffer().address();
+    const uint32_t dL_dprod_addr = tensor_args.dL_dprod.mesh_buffer().address();
+    const uint32_t dL_dlinear1_addr = output.dL_dlinear1.mesh_buffer().address();
+    const uint32_t dL_dgate_addr = output.dL_dgate.mesh_buffer().address();
 
     const auto& linear1 = tensor_args.linear1;
-    const auto split =
-        compute_work_split(linear1.device()->compute_with_storage_grid_size(), num_tile_rows(linear1.padded_shape()));
+    const auto split = compute_tile_row_work_split(linear1);
 
     auto& reader_rt = tt::tt_metal::GetRuntimeArgs(program, kReaderKernelIdx);
     auto& writer_rt = tt::tt_metal::GetRuntimeArgs(program, kWriterKernelIdx);
