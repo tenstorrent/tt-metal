@@ -123,14 +123,16 @@ class ParallelFeedForward(Module):
         matmul_config=None,
         num_workers_per_link=None,
         transpose_core_grid: bool | None = None,
+        persistent_buffer_rows: int | None = None,
     ) -> ttnn.Tensor:
         """
         Expects x to be replicated.
         Return output fractured on columns.
 
-        `default_block_size`, `force_transpose` and the frozen `matmul_config` / `num_workers_per_link` /
-        `transpose_core_grid` are forwarded to ff1 only, for callers that have measured block sizes for their
-        ff1 shape; ff2 keeps the generic path.
+        `default_block_size`, `force_transpose`, the frozen `matmul_config` / `num_workers_per_link` /
+        `transpose_core_grid` and `persistent_buffer_rows` are forwarded to ff1 only, for callers that have
+        measured block sizes for their ff1 shape; ff2 keeps the generic path (and its exact-shape pairs: the
+        unfused reduce-scatter's intermediate must match the op's spec).
         """
         ff1_out = self.ff1(
             x,
@@ -142,6 +144,7 @@ class ParallelFeedForward(Module):
             matmul_config=matmul_config,
             num_workers_per_link=num_workers_per_link,
             transpose_core_grid=transpose_core_grid,
+            persistent_buffer_rows=persistent_buffer_rows,
         )
         return self.ff2(
             ff1_out, compute_kernel_config=compute_kernel_config, use_persistent_buffer=use_persistent_buffer
@@ -162,7 +165,9 @@ class ParallelFeedForward(Module):
         matmul_config=None,
         num_workers_per_link=None,
         transpose_core_grid: bool | None = None,
+        persistent_buffer_rows: int | None = None,
         mmrs_config=None,
+        ff2_use_persistent_buffer: bool | None = None,
     ) -> ttnn.Tensor:
         """Fused FFN forward with addcmul fused at the RS final write step.
 
@@ -171,7 +176,9 @@ class ParallelFeedForward(Module):
         no AllGather or scatter matmul is required.
 
         `default_block_size`, `force_transpose` and the frozen ff1 config go to ff1 only, as in `forward`;
-        `mmrs_config` is ff2's frozen fused MM+RS blocking.
+        `mmrs_config` is ff2's frozen fused MM+RS blocking. `persistent_buffer_rows` sizes ff1's all-gather pair;
+        ff2's reduce-scatter output pair is the activation it returns, so a caller serving varying lengths turns
+        that pair off with `ff2_use_persistent_buffer=False` (default: `use_persistent_buffer`).
         """
         ff1_out = self.ff1(
             x,
@@ -184,13 +191,16 @@ class ParallelFeedForward(Module):
             matmul_config=matmul_config,
             num_workers_per_link=num_workers_per_link,
             transpose_core_grid=transpose_core_grid,
+            persistent_buffer_rows=persistent_buffer_rows,
         )
+        if ff2_use_persistent_buffer is None:
+            ff2_use_persistent_buffer = use_persistent_buffer
         return self.ff2.forward_fused_addcmul(
             ff1_out,
             addcmul_a,
             addcmul_b,
             scalar=scalar,
             compute_kernel_config=compute_kernel_config,
-            use_persistent_buffer=use_persistent_buffer,
+            use_persistent_buffer=ff2_use_persistent_buffer,
             mmrs_config=mmrs_config,
         )

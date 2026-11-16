@@ -103,6 +103,8 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/kernels/kernel_types.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/allocator/algorithms/address_ranges.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/allocator/algorithms/free_list_opt.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/allocator/algorithms/size_class_index.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/allocator/allocation_request.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/allocator/allocator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/allocator/allocator_state.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/allocator/bank_manager.cpp
