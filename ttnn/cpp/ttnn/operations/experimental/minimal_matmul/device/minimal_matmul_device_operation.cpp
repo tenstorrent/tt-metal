@@ -104,9 +104,9 @@ ttsl::hash::hash_t MinimalMatmulDeviceOperation::compute_program_hash(
     const uint32_t M = input.physical_volume() / input.padded_shape()[-1];
     const uint32_t N = tensor_args.weight_tensor.padded_shape()[-1];
     const auto& b = tensor_args.fused_ternary_input_b;
-    // The grid orientation (M > N) and, without an explicit config, the default subblock choice
-    // (N >= M) are the only row-dependent program decisions; they enter the key as one bit.
-    const bool transpose_core_grid = M > N;
+    // The grid orientation (M > N unless the config pins it) and, without an explicit config, the default
+    // subblock choice (N >= M) are the only row-dependent program decisions; they enter the key as one bit.
+    const bool transpose_core_grid = resolve_transpose_core_grid(operation_attributes.config, M, N);
     // A [..., 1, N] gate is broadcast (a full gate of up to 32 rows folds to one tile row too, so the logical rows
     // decide, as in the validator).
     const bool b_broadcast = b.has_value() && b->logical_shape()[-2] == 1;

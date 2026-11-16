@@ -208,7 +208,7 @@ MatmulGrid resolve_matmul_grid(const MinimalMatmulParams& operation_attributes, 
     const uint32_t M = input_tensor.physical_volume() / input_tensor.padded_shape()[-1];
     const uint32_t N = tensor_args.weight_tensor.padded_shape()[-1];
     // Transposed grids put M on x; a receiver kernel only exists when its axis spans > 1 core.
-    const bool transpose_core_grid = M > N;
+    const bool transpose_core_grid = resolve_transpose_core_grid(operation_attributes.config, M, N);
     const uint32_t in0_parallel_axis_cores = transpose_core_grid ? grid_size.x : grid_size.y;
     const uint32_t in1_parallel_axis_cores = transpose_core_grid ? grid_size.y : grid_size.x;
     return {
@@ -370,9 +370,9 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
     auto large_input_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
     auto large_input_risc = tt::tt_metal::DataMovementProcessor::RISCV_0;
 
-    // Transpose core grid if the output is wide (M > N)
+    // Transpose core grid if the output is tall (M > N), unless the config pins the orientation.
     // If transpose core grid, we parallelize M on cores_x and N on cores_y and swap the NOCs and RISCVs
-    bool transpose_core_grid = M > N;
+    bool transpose_core_grid = resolve_transpose_core_grid(config, M, N);
 
     auto in0_noc = transpose_core_grid ? large_input_noc : small_input_noc;
     auto in0_risc = transpose_core_grid ? large_input_risc : small_input_risc;
