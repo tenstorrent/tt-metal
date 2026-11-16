@@ -125,17 +125,22 @@ uint32_t free_pull_trids = PULL_TRIDS_MASK;
 // Writes issued as of the last publish; scratch may be reused once that many have left L1. Set after noc_boot:
 // the NIU's sent counter survives RISC reset, so 0 is not a safe start.
 uint32_t scratch_watermark;
-// Relies on acked host writes being visible before this one.
-void publish_done_count(const Client& client) {
+// Writes the client's done_count and the heartbeat to its control page. Relies on acked host writes being visible
+// before this one.
+void publish_control_page(const Client& client) {
     while (!noc_nonposted_writes_sent_since(noc_index, scratch_watermark));
-    *reinterpret_cast<volatile uint32_t*>(l1::SCRATCH) = client.completed;
+    volatile uint32_t* scratch = reinterpret_cast<volatile uint32_t*>(l1::SCRATCH);
+    scratch[0] = client.completed;
+    scratch[1] = command_block->header.heartbeat;
     while (!noc_try_write_packet_with_trid(
         l1::SCRATCH,
         client.control_page.at_offset(offsetof(abi::ControlPage, done_count)),
-        sizeof(client.completed),
+        2 * sizeof(uint32_t),
         PUBLISH_TRID));
     scratch_watermark = noc_nonposted_writes_checkpoint(noc_index);
 }
+// Wall clock at the last heartbeat publish to every attached client.
+uint64_t heartbeat_published_at;
 // A bit per client slot in SLOT_ATTACHED, and the round-robin start of the next pick.
 uint32_t attached_mask;
 uint32_t next_slot;
@@ -407,7 +412,7 @@ FORCE_INLINE void issue_writes(TransactionRing& txn_ring, DmaInFlight& dma, uint
         if ((done_changed & 1) == 0 || client.state != SLOT_ATTACHED) {
             continue;
         }
-        publish_done_count(client);
+        publish_control_page(client);
     }
 }
 
@@ -438,6 +443,11 @@ bool try_attach(uint32_t s) {
 bool scan_slots() {
     command_block->header.heartbeat = command_block->header.heartbeat + 1;
     command_block->header.free_pull_trid_count = __builtin_popcount(free_pull_trids);
+    const uint64_t now = get_timestamp();
+    const bool publish_heartbeat = now - heartbeat_published_at >= abi::CONTROL_PAGE_HEARTBEAT_TICKS;
+    if (publish_heartbeat) {
+        heartbeat_published_at = now;
+    }
     bool any_client = false;
     for (uint32_t s = 0; s < abi::MAX_CLIENTS; s++) {
         Client& client = clients[s];
@@ -465,6 +475,9 @@ bool scan_slots() {
         if (client.state == SLOT_IDLE) {
             try_attach(s);
         }
+        if (publish_heartbeat && client.state == SLOT_ATTACHED) {
+            publish_control_page(client);
+        }
         any_client |= client.state != SLOT_IDLE;
     }
     if (any_client) {
@@ -486,7 +499,7 @@ bool scan_slots() {
 
 int main() {
     crt1();
-    noc_boot();
+    noc_boot(command_block->header.noc2axi_niu_mask);
     scratch_watermark = noc_nonposted_writes_checkpoint(noc_index);
     dma_boot();
     bank_size = command_block->header.bank_size;

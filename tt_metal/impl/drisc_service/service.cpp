@@ -384,7 +384,7 @@ SeatClient::Kernel SeatClient::classify() const {
     if (state() == abi::SERVICE_STOPPED) {
         return Kernel::Stopped;
     }
-    const uint32_t before = heartbeat();
+    const uint32_t before = l1_heartbeat();
     std::this_thread::sleep_for(std::chrono::milliseconds(abi::ALIVE_PROBE_MS));
     const uint32_t now = state();
     if (now == abi::SERVICE_STOPPED) {
@@ -394,7 +394,7 @@ SeatClient::Kernel SeatClient::classify() const {
     core_.read_l1(abi::L1CommandBlockLayout::build_addr, &build, sizeof(build));
     const bool serving = now == abi::SERVICE_RUNNING || now == abi::SERVICE_STOPPING;
     const bool ours = build.magic == abi::BUILD_BLOCK_MAGIC && build.abi_version == abi::ABI_VERSION;
-    return serving && ours && heartbeat() != before ? Kernel::Running : Kernel::Hung;
+    return serving && ours && l1_heartbeat() != before ? Kernel::Running : Kernel::Hung;
 }
 
 // A slot whose ack is not ATTACH is free: its last client was freed, or its request was never answered.
@@ -443,11 +443,12 @@ void SeatClient::join(const ll_api::ElfFile& image) {
 }
 
 void SeatClient::launch(const ll_api::ElfFile& image, uint32_t slot) {
-    core_.force_stop(seat_.noc2axi_mask);
+    core_.force_stop();
     core_.load(image);
     abi::L1CommandBlock block{};
     block.header.bank_size = seat_.bank_size;
     std::copy(seat_.bank_noc_xy_addr.begin(), seat_.bank_noc_xy_addr.end(), block.header.bank_noc_xy_addr);
+    block.header.noc2axi_niu_mask = seat_.noc2axi_mask;
     core_.write_l1(abi::L1CommandBlockLayout::base_addr, &block, sizeof(block));
     request_attach(slot);
     core_.write_l1_u32(abi::L1CommandBlockLayout::state_addr, abi::SERVICE_BOOTING);
@@ -456,7 +457,7 @@ void SeatClient::launch(const ll_api::ElfFile& image, uint32_t slot) {
     if (!wait_until(std::chrono::milliseconds(abi::BOOT_TIMEOUT_MS), [&] { return acked(); })) {
         const std::string state_text = describe_state();
         exit_write_.reset();
-        core_.force_stop(seat_.noc2axi_mask);
+        core_.force_stop();
         core_.write_l1_u32(abi::L1CommandBlockLayout::state_addr, abi::SERVICE_STOPPED);
         TT_THROW(
             "drisc_service: the kernel launched on chip {} DRISC {} did not ack slot {}: {}",
@@ -623,8 +624,11 @@ std::optional<uint64_t> SeatClient::issue_batch(std::span<const abi::KernelComma
 }
 
 uint32_t SeatClient::in_flight() const {
-    const uint32_t done = std::atomic_ref(control_page_->done_count).load(std::memory_order_acquire);
-    return static_cast<uint32_t>(issued_) - done;
+    return static_cast<uint32_t>(issued_) - done_count();
+}
+
+uint32_t SeatClient::done_count() const {
+    return std::atomic_ref(control_page_->done_count).load(std::memory_order_acquire);
 }
 
 void SeatClient::drain(std::chrono::milliseconds timeout) const {
@@ -643,7 +647,11 @@ void SeatClient::drain(std::chrono::milliseconds timeout) const {
 
 uint32_t SeatClient::state() const { return core_.read_l1_u32(abi::L1CommandBlockLayout::state_addr); }
 
-uint32_t SeatClient::heartbeat() const { return core_.read_l1_u32(abi::L1CommandBlockLayout::heartbeat_addr); }
+uint32_t SeatClient::heartbeat() const {
+    return std::atomic_ref(control_page_->heartbeat).load(std::memory_order_relaxed);
+}
+
+uint32_t SeatClient::l1_heartbeat() const { return core_.read_l1_u32(abi::L1CommandBlockLayout::heartbeat_addr); }
 
 abi::NocEndpoint SeatClient::host_endpoint(uint64_t device_addr) const { return {device_addr, pcie_noc_xy_addr_}; }
 
@@ -651,13 +659,13 @@ std::string SeatClient::describe_state() const {
     return fmt::format(
         "state {:#x} heartbeat {} free pull TRIDs {} slot {} request {:#x} ack {:#x} exit {:#x} done_count {}",
         state(),
-        heartbeat(),
+        l1_heartbeat(),
         core_.read_l1_u32(abi::L1CommandBlockLayout::free_pull_trid_count_addr),
         slot_,
         core_.read_l1_u32(abi::L1CommandBlockLayout::request_addr(slot_)),
         core_.read_l1_u32(abi::L1CommandBlockLayout::ack_addr(slot_)),
         core_.read_l1_u32(abi::L1CommandBlockLayout::exit_mailbox_addr(slot_)),
-        std::atomic_ref(control_page_->done_count).load(std::memory_order_acquire));
+        done_count());
 }
 
 Client::Client(

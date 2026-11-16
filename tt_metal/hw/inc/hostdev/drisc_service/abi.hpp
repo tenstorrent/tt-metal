@@ -14,7 +14,7 @@
 namespace tt::tt_metal::drisc_service::abi {
 
 // Bump on any change to this file that the kernel and the host must agree on.
-inline constexpr uint32_t ABI_VERSION = 8;
+inline constexpr uint32_t ABI_VERSION = 9;
 inline constexpr size_t CONTROL_PAGE_SIZE = 4096;
 
 // The kernel's build. Its ELF carries one in section BUILD_BLOCK_SECTION, which the host checks before loading it,
@@ -141,11 +141,14 @@ struct ServiceHeader {
     // Kernel, at boot; zero before. First, so it stays at one address across ABI versions.
     KernelBuildBlock build;
     uint32_t state;                 // ServiceState; kernel, and the host before boot
-    uint32_t heartbeat;             // kernel: bumped on every slot scan; frozen = not running
+    uint32_t heartbeat;             // kernel: bumped on every slot scan, copied to ControlPage; frozen = not running
     uint32_t free_pull_trid_count;  // kernel: batch window pull TRIDs free, of PULL_TRIDS; written on every slot scan
     // Host, before boot: the seat's bank. The kernel reads a CMD_SINGLE source inside it with the GDDR DMA engine.
     uint64_t bank_size;
     uint16_t bank_noc_xy_addr[BANK_ENDPOINTS];
+    // Host, before boot: bit N set keeps NIU N in NOC2AXI mode, as tt-metal's DRISC firmware leaves it
+    // (metal_SocDescriptor::get_dram_endpoint_noc_mask). The kernel sets both NIUs to it at boot.
+    uint8_t noc2axi_niu_mask;
 };
 
 // One client's slot. The host fills control_page and doorbell, then writes
@@ -208,11 +211,18 @@ struct L1CommandBlockLayout {
 
 static_assert(L1CommandBlockLayout::base_addr % 64 == 0);
 
-// Kernel -> host completion channel in host memory, one per attached client; done_count owns its 64 B line.
+// Kernel -> host channel in host memory, one per attached client. The kernel writes both words together, so the host
+// reads them without a PCIe round trip.
 struct ControlPage {
     alignas(64) uint32_t done_count;  // bumped per completed command
+    uint32_t heartbeat;               // ServiceHeader::heartbeat, at least every CONTROL_PAGE_HEARTBEAT_TICKS
 };
+static_assert(offsetof(ControlPage, heartbeat) == offsetof(ControlPage, done_count) + sizeof(uint32_t));
 static_assert(sizeof(ControlPage) <= CONTROL_PAGE_SIZE);
+
+// Kernel wall-clock ticks (AICLK cycles) between heartbeat publishes to the control pages: 6.2 ms at 1.35 GHz, 10.5 ms
+// at 800 MHz.
+inline constexpr uint64_t CONTROL_PAGE_HEARTBEAT_TICKS = 1ull << 23;
 
 // A tick is one accept/progress pass of the kernel main loop, so a scan period in wall time varies with load; under
 // full load it must stay far below ALIVE_PROBE_MS.

@@ -20,7 +20,6 @@ namespace {
 
 // The low 8 GB of a DRAM tile's NIU space is GDDR, so the DRISC's L1 sits behind a tag.
 constexpr uint64_t drisc_l1_noc_offset = 0x2000000000ull;
-constexpr uint32_t niu_cfg_0_noc2axi = 1u << NIU_CFG_0_AXI_SUBORDINATE_ENABLE;
 
 constexpr uint64_t niu_cfg_0_addr(size_t niu) { return NOC_CFG(NIU_CFG_0) + niu * NOC_INSTANCE_OFFSET; }
 
@@ -33,17 +32,7 @@ DriscCore::DriscCore(tt::umd::Cluster& cluster, ChipId chip, const tt::umd::Core
     TT_FATAL(desc->is_chip_mmio_capable(chip), "drisc_service: chip {} is not MMIO-attached", chip);
 }
 
-void DriscCore::force_stop(uint8_t noc2axi_mask) const {
-    cluster_->assert_risc_reset(chip_, translated_, tt::umd::RiscType::BRISC);
-    const std::array<uint32_t, 2> cfg = read_niu_cfg();
-    for (size_t niu = 0; niu < cfg.size(); niu++) {
-        const uint32_t want =
-            ((noc2axi_mask >> niu) & 1u) != 0 ? cfg[niu] | niu_cfg_0_noc2axi : cfg[niu] & ~niu_cfg_0_noc2axi;
-        if (want != cfg[niu]) {
-            cluster_->write_to_device_reg(&want, sizeof(want), chip_, translated_, niu_cfg_0_addr(niu));
-        }
-    }
-}
+void DriscCore::force_stop() const { cluster_->assert_risc_reset(chip_, translated_, tt::umd::RiscType::BRISC); }
 
 void DriscCore::load(const ll_api::ElfFile& image) const {
     struct Placement {
