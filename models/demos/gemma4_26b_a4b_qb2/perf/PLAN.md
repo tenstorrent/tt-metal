@@ -71,7 +71,7 @@ No stage needs a stage from the other machine.
 
 ## Tests
 
-**Quick check, every change, ~2-4 min** (`perf/tools/quick_check.py`, from WS1's first commit):
+**Quick check, every change, ~1 min incl. model load** (`perf/tools/quick_check.py --baseline perf/results/WS0/quick_baseline.json`; refs cache in `~/gemma26-eval/refs`):
 layers 0 and 5 against stored HF references at the stage's batch sizes; prints PCC per user, µs/layer and op count; fails on PCC drop or slowdown.
 Until it lands, use `pytest models/demos/gemma4_26b_a4b_qb2/tests/test_device_numerics.py -k test_checkpoint_decoder_numerics` (~3 min).
 
@@ -99,7 +99,7 @@ stated as such in `perf/WSN.md` with the gap; less than that does not land):
 | WS6 | greedy speculative output token-identical to plain greedy on 10 prompts; effective batch-1 tok/s/user ≥ 1.5× the previous `integration` on real prompts |
 
 **Proof files:** commit the gate's evidence next to the report, in `perf/results/WSN/`: `decode_timing.json`,
-the numerics log lines (`DECODER_NUMERICS ...`), the agreement result, `gpqa/summary.json` and the serving summaries
+`numerics.txt` (the `DECODER_NUMERICS ...` lines), the agreement result, `gpqa/summary.json` and the serving summaries
 (small JSON only, no logs over 1 MB). `perf/WSN.md` quotes the numbers and states done or partial.
 
 **Merging someone else's code:** when resolving a conflict in code the other stage owns, keep their behaviour and
