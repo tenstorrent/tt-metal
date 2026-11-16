@@ -108,3 +108,37 @@ def test_from_local_host_shards_rejects_incomplete_or_foreign_shards(mesh_device
     )
     with expect_error(RuntimeError, "does not cover"):
         ttnn.from_local_host_shards(shards, mesh_device, wrong_label)
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 2)], indirect=True)
+def test_from_local_host_shards_assembles_a_tensor_that_lives_on_part_of_the_mesh(mesh_device, expect_error):
+    """A label can cover part of the mesh, as a mapper's ``mesh_shape_override`` makes one: only the coordinates it
+    lists take a shard, and the rest of the mesh stays unpopulated."""
+    _, pieces, shards, _ = _two_by_two(mesh_device)
+    row = [ttnn.MeshCoordinate(0, 0), ttnn.MeshCoordinate(0, 1)]
+    # The top half of the tensor, its columns split across mesh row 0: [Replicate, Shard(3)] over a [1, 2] distribution.
+    topology = ttnn.TensorTopology(ttnn.MeshShape(1, 2), [ttnn.PlacementReplicate(), ttnn.PlacementShard(3)], row)
+    on_row = {coord: shards[coord] for coord in row}
+
+    host = ttnn.from_local_host_shards(on_row, mesh_device, topology)
+
+    assert _names(host.tensor_topology()) == ["Replicate", "Shard(3)"]
+    assert list(host.tensor_topology().distribution_shape()) == [1, 2]
+    for coord in pieces:
+        populated = host.host_buffer().get_shard(coord) is not None
+        assert populated == (coord in row), f"{coord}: populated {populated}"
+    on_device = host.to(mesh_device)
+    assert sorted(map(str, on_device.device_coords())) == sorted(map(str, row)), "only the labelled devices hold it"
+    for shard, coord in zip(ttnn.get_device_tensors(on_device), on_device.device_coords()):
+        torch.testing.assert_close(ttnn.to_torch(shard), pieces[coord], rtol=0, atol=0)
+
+    with expect_error(RuntimeError, "no shard was given"):
+        ttnn.from_local_host_shards({row[0]: shards[row[0]]}, mesh_device, topology)
+    unlabelled = ttnn.MeshCoordinate(1, 0)
+    with expect_error(RuntimeError, "does not cover"):
+        ttnn.from_local_host_shards({**on_row, unlabelled: shards[unlabelled]}, mesh_device, topology)
+    outside = ttnn.TensorTopology(
+        ttnn.MeshShape(1, 2), [ttnn.PlacementReplicate(), ttnn.PlacementShard(3)], [row[0], ttnn.MeshCoordinate(5, 5)]
+    )
+    with expect_error(RuntimeError, "not inside the mesh"):
+        ttnn.from_local_host_shards(on_row, mesh_device, outside)
