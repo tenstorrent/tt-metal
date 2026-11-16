@@ -16,6 +16,7 @@ WS1) teacher-forces the reference tokens through ONE batched decode of N users (
 slots, which then sit at different positions) and scores every slot's top-1 against its prompt's next token.
 """
 import json
+import os
 import sys
 
 import torch
@@ -29,6 +30,18 @@ PROMPTS = [
     "Explain, step by step, why the sky appears blue during the day and red at sunset.",
     "Write a short Python function that returns the n-th Fibonacci number iteratively, then explain it.",
 ]
+# GREEDY_AGREEMENT_PROMPTS=8: six more prompts (1024 scored tokens), so a single near-tie flip moves the agreement
+# by 0.1 % instead of 0.4 %. The default stays the original two.
+_MORE_PROMPTS = [
+    "Summarize the main causes of the French Revolution in five bullet points.",
+    "A train leaves at 9:40 and travels 210 km at 84 km/h. When does it arrive? Show the calculation.",
+    "Translate into German and then explain the grammar: 'The children have been playing in the garden all day.'",
+    "Write a SQL query that returns the three customers with the highest total order value, and explain each clause.",
+    "What is the difference between a process and a thread? Give a concrete example of each.",
+    "Write a haiku about autumn rain, then describe the imagery you chose.",
+]
+if os.environ.get("GREEDY_AGREEMENT_PROMPTS") == "8":
+    PROMPTS = PROMPTS + _MORE_PROMPTS
 
 
 REF = None

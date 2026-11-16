@@ -1,0 +1,9 @@
+HF prompt='Explain, step by step, why the' integration=125/128 ws4=127/128
+HF prompt='Write a short Python function ' integration=128/128 ws4=128/128
+HF prompt='Summarize the main causes of t' integration=125/128 ws4=123/128
+HF prompt='A train leaves at 9:40 and tra' integration=126/128 ws4=126/128
+HF prompt='Translate into German and then' integration=123/128 ws4=124/128
+HF prompt='Write a SQL query that returns' integration=127/128 ws4=127/128
+HF prompt='What is the difference between' integration=123/128 ws4=123/128
+HF prompt='Write a haiku about autumn rai' integration=120/128 ws4=123/128
+HF_TOTAL integration=997/1024 (0.9736) ws4=1001/1024 (0.9775)

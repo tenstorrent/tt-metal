@@ -1,0 +1,17 @@
+MOE_DECODE gemma DataType.BFLOAT8_B chip=0 pcc=0.99973
+MOE_DECODE gemma DataType.BFLOAT8_B chip=1 pcc=0.99971
+MOE_DECODE gemma DataType.BFLOAT8_B chip=2 pcc=0.99969
+MOE_DECODE gemma DataType.BFLOAT8_B chip=3 pcc=0.99966
+MOE_DECODE gemma DataType.BFLOAT4_B chip=0 pcc=0.99998
+MOE_DECODE gemma DataType.BFLOAT4_B chip=1 pcc=0.99998
+MOE_DECODE gemma DataType.BFLOAT4_B chip=2 pcc=0.99998
+MOE_DECODE gemma DataType.BFLOAT4_B chip=3 pcc=0.99998
+MOE_DECODE gpt_oss DataType.BFLOAT8_B chip=0 pcc=0.99973
+MOE_DECODE gpt_oss DataType.BFLOAT8_B chip=1 pcc=0.99974
+MOE_DECODE gpt_oss DataType.BFLOAT8_B chip=2 pcc=0.99971
+MOE_DECODE gpt_oss DataType.BFLOAT8_B chip=3 pcc=0.99974
+MOE_DECODE gpt_oss DataType.BFLOAT4_B chip=0 pcc=0.99989
+MOE_DECODE gpt_oss DataType.BFLOAT4_B chip=1 pcc=0.99998
+MOE_DECODE gpt_oss DataType.BFLOAT4_B chip=2 pcc=0.99998
+MOE_DECODE gpt_oss DataType.BFLOAT4_B chip=3 pcc=0.99998
+======================== 5 passed, 3 warnings in 35.83s ========================

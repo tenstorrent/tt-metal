@@ -1005,6 +1005,38 @@ class GeneralizedRouter:
         )
         return RouterTopk.op(logits, self._topk_scale, base, local_experts, 8)
 
+    def decode_packed(self, normalized):
+        """Batch-1 decode for the moe_decode experts (WS4): the scaled projection in FP32 (L1), then the batch-1
+        router tail on one core (``moe_decode.router_topk_b1``: top-8 of the FP32 logits, softmax over the picks,
+        times per_expert_scale) into one ``[1, 1, 32, 16]`` bf16 row-major tensor, row 0 = the 8 routing weights then
+        the 8 global expert ids (the ``RouterTopk.op_packed`` format; 3 programs)."""
+        from models.demos.gemma4_26b_a4b_qb2.tt.moe_decode import router_topk_b1
+
+        source = self.original.source
+        router = source.source
+        if getattr(self, "_topk_scale_l1", None) is None:
+            self._topk_scale_l1 = ttnn.to_memory_config(
+                ttnn.to_layout(
+                    ttnn.reshape(ttnn.typecast(router.per_expert_scale, ttnn.bfloat16), (1, 1, 1, 128)),
+                    ttnn.ROW_MAJOR_LAYOUT,
+                ),
+                ttnn.L1_MEMORY_CONFIG,
+            )
+        scaled = ttnn.mul(
+            normalized,
+            source.scale,
+            activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.MUL_UNARY_SFPU, router.scalar_root_size)],
+        )
+        logits = ttnn.linear(
+            scaled,
+            self.projection_weight,
+            dtype=ttnn.float32,
+            program_config=self.projection_program,
+            compute_kernel_config=self.projection_compute,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        return router_topk_b1(logits, self._topk_scale_l1, 8)
+
     def decode_indices(self):
         if self.last_decode_indices is None:
             raise RuntimeError("Indexed expert projection must follow decode routing")

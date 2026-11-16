@@ -1,0 +1,152 @@
+{
+ "steps": 32,
+ "results": [
+  {
+   "batch": 1,
+   "prompt": 128,
+   "new_tokens": 128,
+   "metrics_warm": [
+    {
+     "ttft_ms": 99.27143296226859,
+     "trace_setup_ms": 0.13577891513705254,
+     "reused_request_trace": true,
+     "generation_wall_ms": 1170.942188007757,
+     "decode_tps": 118.50702605951444,
+     "input_tokens": 128,
+     "output_tokens": 128,
+     "batch": 1,
+     "source": "autoregressive",
+     "reduced_probe": false,
+     "host_sampling": false,
+     "buffered_token_output": true,
+     "counters": {
+      "model_replays": 127,
+      "sampling_replays": 127,
+      "token_refreshes": 0,
+      "position_refreshes": 0,
+      "cache_position_refreshes": 0,
+      "page_table_refreshes": 0,
+      "synchronizations": 0,
+      "token_readbacks": 1,
+      "full_logits_readbacks": 0,
+      "teacher_forcing_token_refreshes": 0,
+      "output_replays": 127
+     }
+    },
+    {
+     "ttft_ms": 92.57309511303902,
+     "trace_setup_ms": 0.12554903514683247,
+     "reused_request_trace": true,
+     "generation_wall_ms": 1164.1945850569755,
+     "decode_tps": 118.51257067790992,
+     "input_tokens": 128,
+     "output_tokens": 128,
+     "batch": 1,
+     "source": "autoregressive",
+     "reduced_probe": false,
+     "host_sampling": false,
+     "buffered_token_output": true,
+     "counters": {
+      "model_replays": 127,
+      "sampling_replays": 127,
+      "token_refreshes": 0,
+      "position_refreshes": 0,
+      "cache_position_refreshes": 0,
+      "page_table_refreshes": 0,
+      "synchronizations": 0,
+      "token_readbacks": 1,
+      "full_logits_readbacks": 0,
+      "teacher_forcing_token_refreshes": 0,
+      "output_replays": 127
+     }
+    }
+   ]
+  },
+  {
+   "batch": 1,
+   "prompt": 4096,
+   "new_tokens": 128,
+   "metrics_warm": [
+    {
+     "ttft_ms": 1722.1902750898153,
+     "trace_setup_ms": 0.1354580745100975,
+     "reused_request_trace": true,
+     "generation_wall_ms": 2853.310729144141,
+     "decode_tps": 112.27850451556269,
+     "input_tokens": 4096,
+     "output_tokens": 128,
+     "batch": 1,
+     "source": "autoregressive",
+     "reduced_probe": false,
+     "host_sampling": false,
+     "buffered_token_output": true,
+     "counters": {
+      "model_replays": 127,
+      "sampling_replays": 127,
+      "token_refreshes": 0,
+      "position_refreshes": 0,
+      "cache_position_refreshes": 0,
+      "page_table_refreshes": 0,
+      "synchronizations": 0,
+      "token_readbacks": 1,
+      "full_logits_readbacks": 0,
+      "teacher_forcing_token_refreshes": 0,
+      "output_replays": 127
+     }
+    },
+    {
+     "ttft_ms": 1723.0362710542977,
+     "trace_setup_ms": 0.12265308760106564,
+     "reused_request_trace": true,
+     "generation_wall_ms": 2853.9850951638073,
+     "decode_tps": 112.29550685951817,
+     "input_tokens": 4096,
+     "output_tokens": 128,
+     "batch": 1,
+     "source": "autoregressive",
+     "reduced_probe": false,
+     "host_sampling": false,
+     "buffered_token_output": true,
+     "counters": {
+      "model_replays": 127,
+      "sampling_replays": 127,
+      "token_refreshes": 0,
+      "position_refreshes": 0,
+      "cache_position_refreshes": 0,
+      "page_table_refreshes": 0,
+      "synchronizations": 0,
+      "token_readbacks": 1,
+      "full_logits_readbacks": 0,
+      "teacher_forcing_token_refreshes": 0,
+      "output_replays": 127
+     }
+    }
+   ]
+  },
+  {
+   "batch": 8,
+   "prompt": 127,
+   "step_ms_median": 18.528504064306617,
+   "step_ms_mean": 18.553413974586874,
+   "tok_s_user": 53.97089784093277,
+   "tok_s_total": 431.76718272746217
+  },
+  {
+   "batch": 16,
+   "prompt": 127,
+   "step_ms_median": 21.04895398952067,
+   "step_ms_mean": 21.04306149703916,
+   "tok_s_user": 47.50829901086083,
+   "tok_s_total": 760.1327841737733
+  },
+  {
+   "batch": 32,
+   "prompt": 127,
+   "step_ms_median": 23.361749481409788,
+   "step_ms_mean": 23.35157906782115,
+   "tok_s_user": 42.80501341715672,
+   "tok_s_total": 1369.760429349015
+  }
+ ],
+ "precision": "bfp8_release_selected"
+}

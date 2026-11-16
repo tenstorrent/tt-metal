@@ -1,0 +1,53 @@
+{
+  "model": "google/gemma-4-26B-A4B-it",
+  "server_capacity": 16,
+  "checkpoint_revision": "4d7ae4984b7db7de8f8457170b3f1a419ee76d52",
+  "dataset_revision": "633f5ee89ab8ad4522a9f850766b73f62147ffdd",
+  "harness_revision": "321e3bb68cb750a58c76606ab57832533302be73",
+  "selection": "first 10 Diamond rows, choice shuffle seed 42",
+  "scope": "fixed-length performance only",
+  "gpqa": {
+    "temperature": 1.0,
+    "top_p": 0.95,
+    "top_k": 20,
+    "seed": 42,
+    "thinking": false,
+    "max_output_tokens": 32768,
+    "concurrency": 1,
+    "accuracy_threshold": 0.8
+  },
+  "performance": {
+    "shapes": [
+      [
+        128,
+        128,
+        1
+      ]
+    ],
+    "warmup": "one burst per shape",
+    "repeats": 2,
+    "temperature": 0,
+    "ignore_eos": true
+  },
+  "input_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "run_start": "2026-11-16T20:03:29.230146+00:00",
+  "performance_results": [
+    {
+      "server_capacity": 16,
+      "prompt_sha256": "61178b092bbc6c66c600a997d87f79adca6b2094524557e39dd6bd2ec4a39d87",
+      "input_tokens": 128,
+      "output_tokens": 128,
+      "concurrency": 1,
+      "warmup_requests": 1,
+      "repeats": 2,
+      "ignore_eos": true,
+      "measurement_start": "2026-11-16T20:03:35.367447+00:00",
+      "measurement_end": "2026-11-16T20:03:37.705995+00:00",
+      "measured_s": 2.3385357558727264,
+      "requests": 2,
+      "mean_ttft_ms": 88.66078255232424,
+      "mean_decode_tokens_per_s": 117.57574080525413,
+      "aggregate_output_tokens_per_s": 109.47020987689045
+    }
+  ]
+}

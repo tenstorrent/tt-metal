@@ -1,0 +1,12 @@
+MOE_TIME gemma BFLOAT8_B us=34.4 MB_per_chip=13.79 GBps=401
+MOE_PART gate_up us=24.5 MB=9.19 GBps=375
+MOE_PART down us=12.1 MB=4.60 GBps=379
+MOE_TIME gemma BFLOAT4_B us=23.2 MB_per_chip=7.30 GBps=315
+MOE_PART gate_up us=16.4 MB=4.87 GBps=297
+MOE_PART down us=7.8 MB=2.43 GBps=311
+MOE_TIME gpt_oss BFLOAT8_B us=72.5 MB_per_chip=28.20 GBps=389
+MOE_PART gate_up us=50.2 MB=18.80 GBps=374
+MOE_PART down us=23.0 MB=9.40 GBps=408
+MOE_TIME gpt_oss BFLOAT4_B us=42.6 MB_per_chip=14.93 GBps=350
+MOE_PART gate_up us=29.3 MB=9.95 GBps=339
+MOE_PART down us=14.0 MB=4.98 GBps=356
