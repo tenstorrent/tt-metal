@@ -36,6 +36,13 @@ inline bool typecast_predicate(const Tensor& predicate, const Tensor& b) {
     return !is_floating_point(predicate.dtype()) && is_floating_point(b.dtype());
 }
 
+// The dtype an integer predicate is cast to before the ternary kernel reads it. BFLOAT2_B keeps one nonzero
+// magnitude per 16-element face row, so a nonzero predicate a binade below the row max would cast to 0 and pick the
+// false branch (row [2, 1] -> [2, 0]). BFLOAT16 keeps every nonzero integer nonzero.
+inline DataType predicate_cast_dtype(DataType value_dtype) {
+    return value_dtype == DataType::BFLOAT2_B ? DataType::BFLOAT16 : value_dtype;
+}
+
 // Helper function to determine output dtype
 inline std::optional<DataType> determine_output_dtype(
     const std::optional<Tensor>& output, const std::optional<DataType>& default_dtype) {
@@ -123,7 +130,8 @@ Tensor invoke_impl(
         condition.logical_shape(), t_true.logical_shape(), t_false.logical_shape());
     bool typecast_needed = ternary_utils::typecast_predicate(predicate, t_true, t_false);
     if (typecast_needed) {
-        condition = ttnn::typecast(predicate, t_true.dtype(), std::nullopt, std::nullopt, sub_core_grids);
+        condition = ttnn::typecast(
+            predicate, ternary_utils::predicate_cast_dtype(t_true.dtype()), std::nullopt, std::nullopt, sub_core_grids);
     }
 
     // A composite of gtz, lez, two multiplies and an add stood here for this
@@ -155,7 +163,8 @@ Tensor invoke_impl(
     Tensor condition = predicate;
     bool typecast_needed = ternary_utils::typecast_predicate(predicate, t_true);
     if (typecast_needed) {
-        condition = ttnn::typecast(predicate, t_true.dtype(), std::nullopt, std::nullopt, sub_core_grids);
+        condition = ttnn::typecast(
+            predicate, ternary_utils::predicate_cast_dtype(t_true.dtype()), std::nullopt, std::nullopt, sub_core_grids);
     }
 
     return operations::binary::where_operation_with_scalar<operations::binary::BinaryOpType::WHERE_TTS>(
@@ -179,7 +188,8 @@ Tensor invoke_impl(
     Tensor condition = predicate;
     bool typecast_needed = ternary_utils::typecast_predicate(predicate, t_false);
     if (typecast_needed) {
-        condition = ttnn::typecast(predicate, t_false.dtype(), std::nullopt, std::nullopt, sub_core_grids);
+        condition = ttnn::typecast(
+            predicate, ternary_utils::predicate_cast_dtype(t_false.dtype()), std::nullopt, std::nullopt, sub_core_grids);
     }
 
     return operations::binary::where_operation_with_scalar<operations::binary::BinaryOpType::WHERE_TST>(
