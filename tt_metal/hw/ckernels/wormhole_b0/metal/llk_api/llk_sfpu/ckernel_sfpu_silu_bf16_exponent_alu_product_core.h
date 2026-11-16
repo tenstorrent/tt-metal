@@ -3,8 +3,17 @@
 #pragma once
 #include "ckernel_sfpu_silu_bf16_replay_window.h"
 namespace ckernel::sfpu::ttpoly::silu {
-using namespace ::sfpi;
 using ::sfpi::DataLayout;
+using ::sfpi::SFPIADD_MOD1_ARG_IMM;
+using ::sfpi::SFPIADD_MOD1_CC_NONE;
+using ::sfpi::SFPLOADI_MOD0_FLOATB;
+using ::sfpi::SFPLOADI_MOD0_LOWER;
+using ::sfpi::SFPLOADI_MOD0_UPPER;
+using ::sfpi::SFPSETCC_MOD1_LREG_EQ0;
+using ::sfpi::SFPSETCC_MOD1_LREG_GTE0;
+using ::sfpi::SFPSETCC_MOD1_LREG_LT0;
+using ::sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B;
+using ::sfpi::SFPSTOCHRND_RND_EVEN;
 template <class Config, uint32_t Hold>
 inline void product_symmetric_wh() {
     static_assert(Config::kDomainActionCount == 3);
