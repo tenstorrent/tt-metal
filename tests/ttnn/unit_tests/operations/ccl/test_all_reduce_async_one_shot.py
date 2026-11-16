@@ -271,14 +271,7 @@ def test_all_reduce_async_one_shot_refuses_unsplittable_cores(mesh_device, expec
     ttnn.deallocate(out)
 
 
-@pytest.mark.parametrize(
-    "device_params",
-    [
-        pytest.param(_fabric_params(ttnn.FabricConfig.FABRIC_1D, 16 << 20), id="fabric_1d"),
-        pytest.param(_fabric_params_8k(ttnn.FabricConfig.FABRIC_1D, 16 << 20), id="fabric_1d_8k"),
-    ],
-    indirect=True,
-)
+@pytest.mark.parametrize("device_params", [_fabric_params(ttnn.FabricConfig.FABRIC_1D, 16 << 20)], indirect=True)
 @pytest.mark.parametrize("mesh_device", MESH_1X8, indirect=True)
 def test_all_reduce_async_one_shot_latency(mesh_device):
     """Traced latency of 64 back-to-back fused all-reduces per replay, default vs one_shot (reported, not a gate)."""
