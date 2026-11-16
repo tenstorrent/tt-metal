@@ -1628,8 +1628,9 @@ class Qwen36Model:
         """Trace body of verify row bucket ``b`` < B: the verify of users 0 .. b-1 alone, on the B-user step buffer,
         page tables and GDN verify tables, handed over to the B-user outputs. ``ids_out`` takes its argmax lanes (lanes
         past b*T hold no row) and ``rows_out`` its drafter feed rows, with every row past them zero, so the step trace,
-        the drafter and the chain program read the outputs of a B-user verify whose users from b on are padding. It
-        makes no logits: it serves only a step that reads none (no sampler, no logits verify)."""
+        the drafter and the chain program read the outputs of a B-user verify whose users from b on are padding.
+        Returns the bucket's vocab shard of the logits [1, 1, b*T, vocab/tp] when the verify has a device sampler (its
+        bucket sampler trace gathers and draws from it, _bucket_sample_body), else None: no logits verify reads it."""
         T, nb = self._vfy_T, self._vfy_nb
         owned = []
 
@@ -1643,7 +1644,8 @@ class Qwen36Model:
 
         groups = int(self._vfy_att0.spec_sdpa_groups(T, b))
         tables = (head(self._vfy_kvpt_buf, b * T), head(self._vfy_kvpt_users, b), head(self._vfy_kvpt1_buf, groups))
-        _, feed, ids, _ = self._forward_verify_bucket_tp(n_users=b, tables=tables, logits=False)
+        sample = self._vfy_sampler is not None
+        shard, feed, ids, _ = self._forward_verify_bucket_tp(n_users=b, tables=tables, logits=sample)
         for t in owned:
             ttnn.deallocate(t)
         ttnn.copy(ids, ids_out)
@@ -1651,10 +1653,19 @@ class Qwen36Model:
         ttnn.copy(full, rows_out)
         for t in (ids, feed, full):
             ttnn.deallocate(t)
+        return shard
+
+    def _bucket_sample_body(self, shard):
+        """Trace body of a verify row bucket's sampler: the vocab all-gather of a copy of the bucket's ``shard``, then
+        the device sampler over those b*T rows of logits, which writes the B-user draws buffer (VerifySampler.body)."""
+        logits = self._verify_logits(shard)
+        self._vfy_sampler.body(logits)
+        ttnn.deallocate(logits)
 
     def _warm_verify_buckets(self, buckets, ids_out, rows_out):
-        """Allocate the zero feed rows of every verify row bucket and run its body once into the warm pass's B-user
-        outputs ``ids_out`` and ``rows_out``, so its capture compiles nothing. Returns the buckets, ascending."""
+        """Allocate the zero feed rows of every verify row bucket and, with a device sampler, the sampler's inputs of
+        the bucket's rows, and run its body and its sampler body once into the warm pass's B-user outputs ``ids_out``
+        and ``rows_out``, so their captures compile nothing. Returns the buckets, ascending."""
         B, T = self._vfy_B, self._vfy_T
         buckets = tuple(sorted({int(b) for b in buckets}))
         bad = [b for b in buckets if not 1 <= b < B or self._vfy_att0.spec_sdpa_groups(T, b) > self._vfy_spec_groups]
@@ -1672,7 +1683,12 @@ class Qwen36Model:
             for b in buckets
         }
         for b in buckets:
-            self._verify_bucket_body(b, ids_out, rows_out)
+            if self._vfy_sampler is not None:
+                self._vfy_sampler.prepare_rows(b * T)
+            shard = self._verify_bucket_body(b, ids_out, rows_out)
+            if shard is not None:
+                self._bucket_sample_body(shard)
+                ttnn.deallocate(shard)
         return buckets
 
     def _vfy_row_positions(self, positions):
@@ -1729,9 +1745,11 @@ class Qwen36Model:
             if getattr(self, name, None) is not None:
                 ttnn.release_trace(self.mesh_device, getattr(self, name))
                 setattr(self, name, None)
-        for trace_id in (getattr(self, "_vfy_bucket_traces", None) or {}).values():
-            ttnn.release_trace(self.mesh_device, trace_id)
-        self._vfy_bucket_traces = {}
+        for name in ("_vfy_bucket_traces", "_vfy_bucket_sample_traces"):
+            for trace_id in (getattr(self, name, None) or {}).values():
+                ttnn.release_trace(self.mesh_device, trace_id)
+            setattr(self, name, {})
+        self._vfy_bucket_shards = {}
 
     @staticmethod
     def _fit_spec_page_table(pt, nb):
@@ -1769,8 +1787,9 @@ class Qwen36Model:
         ``sample``: also compile the device sampler over the verify's logits (spec_sample.VerifySampler), which
         record_verify_trace captures as a trace of its own and verify_traced(sample_plan=...) replays.
         ``buckets``: user counts b < B (GDN state in vLLM KV cache blocks only) whose verify of users 0 .. b-1
-        record_verify_trace also captures (_verify_bucket_body); verify_enqueue(bucket=b) replays it. They need the
-        fused per-shard argmax ids; without them no bucket is prepared (_vfy_buckets).
+        record_verify_trace also captures (_verify_bucket_body), with ``sample`` also its sampler trace
+        (_bucket_sample_body); verify_enqueue(bucket=b) replays it. They need the fused per-shard argmax ids; without
+        them no bucket is prepared (_vfy_buckets).
         Idempotent for the same (B, T, nb, sample, buckets); a different key releases any live trace first.
         """
         from models.demos.blackhole.qwen36.tt.attention.tp import KV_GROUP_WRITE_OK
@@ -1982,14 +2001,22 @@ class Qwen36Model:
         buckets = getattr(self, "_vfy_buckets", ())
         if buckets:
             self._log_trace_region("the verify trace")
-        self._vfy_bucket_traces = {}
+        self._vfy_bucket_traces, self._vfy_bucket_sample_traces, self._vfy_bucket_shards = {}, {}, {}
         for b in buckets:
             self._vfy_bucket_traces[b] = ttnn.begin_trace_capture(dev, cq_id=0)
-            self._verify_bucket_body(b, self._vfy_ids_out, self._vfy_rows_out)
+            shard = self._verify_bucket_body(b, self._vfy_ids_out, self._vfy_rows_out)
             ttnn.end_trace_capture(dev, self._vfy_bucket_traces[b], cq_id=0)
+            if shard is None:
+                continue
+            # The bucket trace's vocab shard stays allocated: its sampler trace, replayed right after it, reads it.
+            self._vfy_bucket_shards[b] = shard
+            self._vfy_bucket_sample_traces[b] = ttnn.begin_trace_capture(dev, cq_id=0)
+            self._bucket_sample_body(shard)
+            ttnn.end_trace_capture(dev, self._vfy_bucket_sample_traces[b], cq_id=0)
         if buckets:
-            logger.info(f"Verify row bucket traces captured for {list(buckets)} of {B} users")
-            self._log_trace_region("the verify row bucket traces")
+            sampled = " and their sampler traces" if self._vfy_bucket_sample_traces else ""
+            logger.info(f"Verify row bucket traces{sampled} captured for {list(buckets)} of {B} users")
+            self._log_trace_region(f"the verify row bucket traces{sampled}")
         # Fused grouped SDPA read (spec_multi_pos_tiles) or the legacy per-row call; a T with no
         # L1-fitting split (7, 11, ...) stays legacy.
         _fused = _att0.spec_sdpa_enabled(T)
@@ -2058,7 +2085,8 @@ class Qwen36Model:
         With the GDN state in vLLM KV cache blocks (gdn_blocks), ``mi_prev`` is not used: the caller writes the verify
         tables (GdnBlockState.set_verify_blocks) before the replay.
 
-        ``bucket``: replay the verify row bucket of that many users instead (verify_enqueue); it makes no logits.
+        ``bucket``: replay the verify row bucket of that many users instead (verify_enqueue), with ``sample_plan`` its
+        sampler trace; no logits can be read from it.
         """
         if read_logits and bucket is not None and int(bucket) != self._vfy_B:
             raise ValueError("a verify row bucket makes no logits to read")
@@ -2112,14 +2140,16 @@ class Qwen36Model:
         ``tokens`` and ``positions`` are not staged, and the caller checked the grouped KV write over every position
         the rows can take. A ``sample_plan`` without seeds (spec_sample.chained_sampling_plan) stages no seeds: the
         chain program wrote them. ``bucket`` (None or B: the B-user trace): replay the trace of verify row bucket
-        ``bucket`` (_verify_bucket_body), which runs users 0 .. bucket-1 only; every user from ``bucket`` on must be
-        ``inactive``, and no sampler can follow it."""
+        ``bucket`` (_verify_bucket_body), which runs users 0 .. bucket-1 only, and with ``sample_plan`` the bucket's
+        sampler trace (_bucket_sample_body); every user from ``bucket`` on must be ``inactive``, and no logits can be
+        read."""
         assert getattr(self, "_vfy_trace_id", None) is not None, "call record_verify_trace first"
         T, B = self._vfy_T, self._vfy_B
         if sample_plan is not None and self._vfy_sampler is None:
             raise ValueError("verify_traced(sample_plan=...) needs a verify trace prepared with sample=True")
-        trace_id = self._vfy_trace_id if bucket is None or int(bucket) == B else None
-        if trace_id is None:
+        bucketed = bucket is not None and int(bucket) != B
+        trace_id = self._vfy_trace_id
+        if bucketed:
             trace_id = self._vfy_bucket_trace(int(bucket), inactive, sample_plan, read_logits)
         assert len(tokens) == B, f"expected {B} users, got {len(tokens)}"
         assert all(len(t) == T for t in tokens), f"expected {T} tokens per user"
@@ -2167,6 +2197,10 @@ class Qwen36Model:
             self._vfy_sampler.stage(sample_plan)
 
         ttnn.execute_trace(dev, trace_id, cq_id=0, blocking=False)
+        if bucketed:
+            if sample_plan is not None:
+                ttnn.execute_trace(dev, self._vfy_bucket_sample_traces[int(bucket)], cq_id=0, blocking=False)
+            return
         if (sample_plan is not None or read_logits) and self._vfy_gather_trace_id is not None:
             ttnn.execute_trace(dev, self._vfy_gather_trace_id, cq_id=0, blocking=False)
         if read_logits and self._vfy_rm_trace_id is not None:
@@ -2176,13 +2210,13 @@ class Qwen36Model:
 
     def _vfy_bucket_trace(self, bucket, inactive, sample_plan, read_logits=False):
         """The trace of verify row bucket ``bucket``, or ValueError when the step needs more: a live user at or past
-        ``bucket`` (the bucket would leave it unverified, its ids stale), or logits for the sampler or a read (the
-        logits traces gather the vocab shard that only the B-user trace writes)."""
+        ``bucket`` (the bucket would leave it unverified, its ids stale), device draws without the bucket's sampler
+        trace, or logits to read (the logits traces gather the vocab shard that only the B-user trace writes)."""
         traces = getattr(self, "_vfy_bucket_traces", None) or {}
         if bucket not in traces:
             raise ValueError(f"no verify row bucket of {bucket} users (captured: {sorted(traces)})")
-        if sample_plan is not None:
-            raise ValueError("a verify row bucket makes no logits for the device sampler")
+        if sample_plan is not None and bucket not in (getattr(self, "_vfy_bucket_sample_traces", None) or {}):
+            raise ValueError(f"the verify row bucket of {bucket} users has no sampler trace for the device sampler")
         if read_logits:
             raise ValueError("a verify row bucket makes no logits to read")
         if inactive is None or not all(bool(x) for x in list(inactive)[bucket:]):

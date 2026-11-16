@@ -1918,14 +1918,16 @@ class MTPBlockEngine(MTPSpecEngine):
     drafter trace, then reads the ids, the drafter pack and the drafts with one wait. The next propose_draft_tokens
     checks that the runner committed what the device accepted and returns those drafts.
 
-    Verify row buckets: an argmax_ids verify without device draws whose live rows all sit below a bucket b of
-    verify_buckets(B) replays the verify trace of users 0 .. b-1 (Qwen36Model._verify_bucket_body) instead of the B-user
-    one; the smallest such b, chosen per step from that step's rows alone. That trace hands its ids and drafter feed rows
-    to the B-user outputs, so the step trace, the drafter, the chain program and the reads run as after a B-user verify
-    whose users from b on are padding, and a chained verify can take another bucket than its predecessor. vllm-tt-plugin's
-    InputBatch (without data-parallel lanes) keeps a decode step's n requests in rows 0 .. n-1, so they take the smallest
-    bucket of at least n users. The device sampler and a logits verify read logits, which a bucket trace does not make:
-    those steps replay the B-user trace."""
+    Verify row buckets: an argmax_ids verify whose live rows all sit below a bucket b of verify_buckets(B) replays the
+    verify trace of users 0 .. b-1 (Qwen36Model._verify_bucket_body) instead of the B-user one; the smallest such b,
+    chosen per step from that step's rows alone. That trace hands its ids and drafter feed rows to the B-user outputs,
+    so the step trace, the drafter, the chain program and the reads run as after a B-user verify whose users from b on
+    are padding, and a chained verify can take another bucket than its predecessor. A verify with device draws, chained
+    or not, also replays the bucket's sampler trace (Qwen36Model._bucket_sample_body), which draws the bucket's rows
+    into the B-user draws buffer with the seeds staged or chained as for the B-user sampler. vllm-tt-plugin's
+    InputBatch (without data-parallel lanes) keeps a decode step's n requests in rows 0 .. n-1, so they take the
+    smallest bucket of at least n users. A logits verify reads logits, which only the B-user trace gathers: it replays
+    the B-user trace."""
 
     def __init__(self, model, batch_size, draft_len):
         super().__init__(model, batch_size, draft_len)
@@ -1990,11 +1992,15 @@ class MTPBlockEngine(MTPSpecEngine):
         )
 
     def _verify_bucket(self, active, read_logits=False, sample_plan=None):
-        """The verify row bucket a step over ``active`` rows replays (verify_bucket over the captured ones), or None for
-        the B-user trace; counts the step in verify_bucket_steps."""
+        """The verify row bucket a step over ``active`` rows replays (verify_bucket over the captured ones; with
+        ``sample_plan`` over those with a sampler trace), or None for the B-user trace; counts the step in
+        verify_bucket_steps."""
         traces = getattr(self.model, "_vfy_bucket_traces", None) or {}
+        if sample_plan is not None:
+            sampled = getattr(self.model, "_vfy_bucket_sample_traces", None) or {}
+            traces = {b: t for b, t in traces.items() if b in sampled}
         users = self.B
-        if traces and not read_logits and sample_plan is None:
+        if traces and not read_logits:
             users = verify_bucket(traces, active.tolist(), self.B)
         self.verify_bucket_steps[users] = self.verify_bucket_steps.get(users, 0) + 1
         return None if users == self.B else users

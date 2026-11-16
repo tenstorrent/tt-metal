@@ -13,6 +13,9 @@ torch model of each op (``Ops``), whose top-k orders equal values by a function 
 as a row-independent top-k on the device does: the stacked sampler hands ttnn.sampling the same values and ids in the
 same order as the per-chunk one, for every such tie order, for tie-heavy logits, at every row count, and draws the
 same tokens. Whether the device top-k is row-independent is test_spec_sample.py's to show.
+
+A verify row bucket's sampler runs the same graph over the bucket's first b*T rows of logits and pads the candidates
+with zero rows to B*T: its rows' candidates and draws are the full-width sampler's.
 """
 
 from types import SimpleNamespace
@@ -22,7 +25,13 @@ import torch
 
 import ttnn
 from models.demos.blackhole.qwen36.tests.spec_op_graphs import ChunkedVerifySampler
-from models.demos.blackhole.qwen36.tt.spec_sample import SAMPLER_TOP_K, VerifySampler, sampling_plan, vocab_chunks
+from models.demos.blackhole.qwen36.tt.spec_sample import (
+    NO_CORE,
+    SAMPLER_TOP_K,
+    VerifySampler,
+    sampling_plan,
+    vocab_chunks,
+)
 
 VOCAB = 248320
 
@@ -176,11 +185,12 @@ def _run(sampler, logits, plan):
     return cand, sampler.draws.t.reshape(-1)[:rows].clone()
 
 
-def _plan(B, T, step):
+def _plan(B, T, step, live=None):
     params = SimpleNamespace(
         temperature=[1.0] * B, top_k=[SAMPLER_TOP_K] * B, top_p=[1.0] * B, seed=[1000 + u for u in range(B)]
     )
-    return sampling_plan(params, [50 + 9 * u + step for u in range(B)], T)
+    live = B if live is None else live
+    return sampling_plan(params, [50 + 9 * u + step if u < live else -1 for u in range(B)], T)
 
 
 @pytest.mark.parametrize("order", ["lowest", "highest", "hashed"])
@@ -222,12 +232,14 @@ def test_one_top_k_call_takes_every_chunk_as_rows_of_its_input(monkeypatch, B, T
     assert [tuple(t.shape) for t in ops.topk_inputs] == [(1, 1, rows, width)] * chunks
 
 
-def test_the_sampler_frees_every_intermediate(monkeypatch):
+@pytest.mark.parametrize("rows", [32, 8])
+def test_the_sampler_frees_every_intermediate(monkeypatch, rows):
     """Every tensor made while drawing is freed, the logits and the sampler's own buffers are not."""
     made = []
     ops = Ops(_tie_key("hashed"))
     ops.install(monkeypatch)
     sampler = VerifySampler("mesh", 8, 4, VOCAB)
+    sampler.prepare_rows(rows)
     own = {id(t) for t in vars(sampler).values() if isinstance(t, FT)}
     real_init = FT.__init__
 
@@ -236,9 +248,52 @@ def test_the_sampler_frees_every_intermediate(monkeypatch):
         made.append(self)
 
     monkeypatch.setattr(FT, "__init__", tracked)
-    logits = FT(_logits("bf16", 32, VOCAB, seed=5).reshape(1, 1, 32, -1), "bf16", "tile")
-    sampler.stage(_plan(8, 4, 0))
+    logits = FT(_logits("bf16", rows, VOCAB, seed=5).reshape(1, 1, rows, -1), "bf16", "tile")
+    sampler.stage(_plan(8, 4, 0, live=rows // 4))
     made.clear()
     sampler.body(logits)
     left = [t.shape for t in made if not t.freed and id(t) not in own]
     assert left == [] and not logits.freed
+
+
+@pytest.mark.parametrize("kind", ["coarse", "bf16"])
+@pytest.mark.parametrize("b", [1, 2, 4])
+def test_a_bucket_sampler_draws_its_rows_as_the_full_width_sampler_does(monkeypatch, kind, b):
+    """Logits of the first b*T rows (a verify row bucket's) give those rows the full-width sampler's candidates and
+    draws; ttnn.sampling still draws B*T rows, those past the bucket from zero candidates and no seeded core."""
+    B, T = 8, 4
+    rows = b * T
+    ops = Ops(_tie_key("hashed"))
+    ops.install(monkeypatch)
+    sampler = VerifySampler("mesh", B, T, VOCAB)
+    sampler.prepare_rows(rows)
+    logits = _logits(kind, B * T, VOCAB, seed=b)
+    for step in range(3):
+        plan = _plan(B, T, step, live=b)
+        assert plan.user_ids[rows:] == [NO_CORE] * (B * T - rows)
+        sampler.stage(plan)
+        sampler.body(FT(logits.reshape(1, 1, B * T, -1).clone(), "bf16", "tile"))
+        full = sampler.draws.t.reshape(-1).clone()
+        sampler.body(FT(logits[:rows].reshape(1, 1, rows, -1).clone(), "bf16", "tile"))
+        (v_full, i_full), (v_b, i_b) = ops.sampled[-2:]
+        assert v_b.shape == v_full.shape == (B * T, 4 * SAMPLER_TOP_K)
+        assert torch.equal(v_b[:rows], v_full[:rows]) and torch.equal(i_b[:rows], i_full[:rows])
+        assert not bool(v_b[rows:].any()) and not bool(i_b[rows:].any())
+        assert torch.equal(sampler.draws.t.reshape(-1)[:rows], full[:rows])
+
+
+def test_the_sampler_runs_over_the_full_width_or_a_prepared_row_count(monkeypatch, expect_error):
+    ops = Ops(_tie_key("lowest"))
+    ops.install(monkeypatch)
+    sampler = VerifySampler("mesh", 8, 4, VOCAB)
+    with expect_error(ValueError, r"logits of 8 rows need prepare_rows\(8\)"):
+        sampler.body(FT(torch.zeros(1, 1, 8, VOCAB), "bf16", "tile"))
+    for bad in (0, 33):
+        with expect_error(ValueError, "are not a prefix of them"):
+            sampler.prepare_rows(bad)
+    sampler.prepare_rows(32)
+    sampler.prepare_rows(8)
+    zeros = sampler._row_inputs[8][1]
+    sampler.prepare_rows(8)
+    assert sampler._row_inputs[8][1] is zeros, "prepared once"
+    assert [tuple(z.shape) for z in zeros] == [(1, 1, 24, 128)] * 2
