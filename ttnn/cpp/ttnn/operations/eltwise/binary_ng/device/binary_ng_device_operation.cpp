@@ -108,7 +108,7 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b, bool fast_and_a
         // Fused SFPU kernel only: there is no FPU form, so every float dtype routes here.
         case SITU_GLU: return true;
         case SILU_GLU:
-        case GEGLU_TANH: return a == BFLOAT16 && b == BFLOAT16;
+        case GEGLU_TANH: return a == b && (a == BFLOAT16 || a == BFLOAT8_B);
         default: return false;
     }
     return false;

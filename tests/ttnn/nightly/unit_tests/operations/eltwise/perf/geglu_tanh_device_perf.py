@@ -2,8 +2,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Device kernel time of ttnn.geglu_tanh's one binary_ng program against the composite it replaces, on the same BF16
-operands, each call first checked to launch the path it names."""
+"""Device kernel time of ttnn.multiply with the gate's GELU_TANH's one binary_ng program against the composite it replaces, on the same
+BF16 operands, each call first checked to launch the path it names."""
 
 import os
 
@@ -17,6 +17,13 @@ from loguru import logger
 # The boards the route runs geglu_tanh_tile on; Wormhole keeps the composite.
 ROUTE_BOARDS = ("blackhole",)
 OP_TYPE = "GEGLU_TANH"
+
+
+def _routed(gate, up, **kwargs):
+    """ttnn.multiply with the gate's GELU_TANH: the call that runs the GEGLU_TANH program."""
+    return ttnn.multiply(
+        gate, up, input_tensor_a_activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU_TANH)], **kwargs
+    )
 
 
 def _board(device=None):
@@ -68,7 +75,7 @@ def _calls(a, b, out):
             input_tensor_b_activations=[],
             output_tensor=out,
         ),
-        "fused": lambda: ttnn.geglu_tanh(a, b),
+        "fused": lambda: _routed(a, b),
     }
 
 

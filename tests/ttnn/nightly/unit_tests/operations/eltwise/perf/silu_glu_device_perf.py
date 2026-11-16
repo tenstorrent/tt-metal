@@ -2,8 +2,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Device kernel time of ttnn.silu_glu's one binary_ng program against the composite it replaces, on the same BF16
-operands, each call first checked to launch the path it names."""
+"""Device kernel time of ttnn.multiply with the gate's SILU's one binary_ng program against the composite it replaces, on the same
+BF16 operands, each call first checked to launch the path it names."""
 
 import os
 
@@ -17,6 +17,11 @@ from loguru import logger
 # The boards the route runs silu_glu_tile on; Wormhole keeps the composite.
 ROUTE_BOARDS = ("blackhole",)
 OP_TYPE = "SILU_GLU"
+
+
+def _routed(gate, up, **kwargs):
+    """ttnn.multiply with the gate's SILU: the call that runs the SILU_GLU program."""
+    return ttnn.multiply(gate, up, input_tensor_a_activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU)], **kwargs)
 
 
 def _board(device=None):
@@ -68,7 +73,7 @@ def _calls(a, b, out):
             input_tensor_b_activations=[],
             output_tensor=out,
         ),
-        "fused": lambda: ttnn.silu_glu(a, b),
+        "fused": lambda: _routed(a, b),
     }
 
 

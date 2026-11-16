@@ -316,7 +316,6 @@ Pointwise Binary
    ttnn.gcd
    ttnn.ge
    ttnn.ge_
-   ttnn.geglu_tanh
    ttnn.gt
    ttnn.gt_
    ttnn.hypot
@@ -352,7 +351,6 @@ Pointwise Binary
    ttnn.rpow
    ttnn.rsub
    ttnn.rsub_
-   ttnn.silu_glu
    ttnn.situ_glu
    ttnn.squared_difference
    ttnn.squared_difference_

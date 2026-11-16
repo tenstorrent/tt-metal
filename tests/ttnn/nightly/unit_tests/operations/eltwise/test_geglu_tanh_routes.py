@@ -42,8 +42,16 @@ def _on_device(t, device, dtype=ttnn.bfloat16):
 
 
 def _golden(gate, up):
-    """The exact product of the leaves, from ttnn.geglu_tanh's golden function, in float64."""
-    return ttnn.get_golden_function(ttnn.geglu_tanh)(gate, up).to(torch.float64)
+    """The exact product of the leaves, in float64."""
+    a, b = gate.to(torch.float64), up.to(torch.float64)
+    return (a / (1 + torch.exp(-(1.5957691216057308 * a + 0.07135481627260025 * a**3)))) * (b)
+
+
+def _routed(gate, up, **kwargs):
+    """ttnn.multiply with the gate's GELU_TANH: the call that runs the GEGLU_TANH program."""
+    return ttnn.multiply(
+        gate, up, input_tensor_a_activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU_TANH)], **kwargs
+    )
 
 
 def _assert_close(actual, golden, rtol=2.0**-7, atol=2.0**-100):
@@ -64,10 +72,11 @@ def _assert_pcc(actual, golden, bound):
 
 @pytest.mark.parametrize("order", ["gate_first", "up_first"])
 def test_multiply_with_the_leaves_activations_runs_geglu_tanh(device, order):
-    """ttnn.multiply of BF16 operands carrying exactly the leaves' pre-activations is ttnn.geglu_tanh, as one program."""
+    """ttnn.multiply of BF16 operands carrying exactly the leaves' pre-activations, in either order, is the multiply with the gate's GELU_TANH, as
+    one program."""
     _skip_unless_routed(device)
     gate, up = _operands((1, 1, 64, 64)), _operands((1, 1, 64, 64)).flip(-1)
-    expected = ttnn.to_torch(ttnn.geglu_tanh(_on_device(gate, device), _on_device(up, device)))
+    expected = ttnn.to_torch(_routed(_on_device(gate, device), _on_device(up, device)))
     g, u = _on_device(gate, device), _on_device(up, device)
     if order == "gate_first":
         call = lambda: ttnn.multiply(
@@ -94,10 +103,11 @@ def test_multiply_with_the_leaves_activations_runs_geglu_tanh(device, order):
 @pytest.mark.parametrize("order", ["gate_first", "up_first"])
 def test_multiply_with_width_sharded_operands_runs_geglu_tanh(device, order, output):
     """L1 width-sharded operands, and an L1 width-sharded output as deepseek_v3's decode MLP asks for one (or the
-    operands' placement, unset): the routed multiply is one program, in that placement, with ttnn.geglu_tanh's bits."""
+    operands' placement, unset): the routed multiply is one program, in that placement, with the multiply with the gate's GELU_TANH's bits.
+    """
     _skip_unless_routed(device)
     gate, up = _operands((1, 1, 32, 1024)), _operands((1, 1, 32, 1024)).flip(-1)
-    expected = ttnn.to_torch(ttnn.geglu_tanh(_on_device(gate, device), _on_device(up, device)))
+    expected = ttnn.to_torch(_routed(_on_device(gate, device), _on_device(up, device)))
     sharded = ttnn.create_sharded_memory_config(
         (32, 128),
         core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))}),
@@ -131,23 +141,89 @@ def test_multiply_with_width_sharded_operands_runs_geglu_tanh(device, order, out
     assert torch.equal(ttnn.to_torch(out).view(torch.int16), expected.view(torch.int16))
 
 
-@pytest.mark.parametrize("case", ["bfloat8_b_output", "float32_operands", "post_activation"])
+def _assert_within_bfloat8_b_blocks(actual, golden):
+    """Within one BFLOAT8_B step of its block, and half a BF16 step, of the golden: a block is 16 consecutive values
+    of a row, sharing the exponent of its largest, so its step is 2^(e - 6) for that largest value's exponent e."""
+    actual, golden = actual.to(torch.float64), golden.to(torch.float64)
+    largest = torch.maximum(actual.abs(), golden.abs()).reshape(*golden.shape[:-1], -1, 16).amax(-1, keepdim=True)
+    step = torch.exp2(torch.floor(torch.log2(largest.clamp(min=2.0**-126))) - 6)
+    bound = (1.5 * step).expand(*step.shape[:-1], 16).reshape(golden.shape)
+    error = (actual - golden).abs()
+    bad = error > bound
+    assert not bool(bad.any()), f"{int(bad.sum())} of {bad.numel()} lanes off the golden by more than a block step"
+
+
+@pytest.mark.parametrize("case", ["bfloat8_b_output", "bfloat8_b_operands", "bfloat8_b_operands_and_output"])
+def test_multiply_with_bfloat8_b_runs_geglu_tanh(device, case):
+    """BFLOAT8_B operands unpack to BF16 in DEST, and the BF16 result packs to a BFLOAT8_B output: the routed multiply
+    (as an MLP calls it, with dtype=ttnn.bfloat8_b) is one program, the golden of the operands as the device holds
+    them, to the output's precision."""
+    _skip_unless_routed(device)
+    gate, up = _operands((1, 1, 64, 64)), _operands((1, 1, 64, 64)).flip(-1)
+    dtype = ttnn.bfloat16 if case == "bfloat8_b_output" else ttnn.bfloat8_b
+    g, u = _on_device(gate, device, dtype), _on_device(up, device, dtype)
+    output = ttnn.bfloat16 if case == "bfloat8_b_operands" else ttnn.bfloat8_b
+    call = lambda: ttnn.multiply(
+        g,
+        u,
+        dtype=output,
+        input_tensor_a_activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU_TANH)],
+        input_tensor_b_activations=[],
+    )
+    out, operations, arguments = _device_operations(call)
+    assert OP_TYPE in arguments and len(operations) == 1, f"launched {operations}, not one {OP_TYPE} program"
+    assert out.dtype == output
+    golden = _golden(ttnn.to_torch(g), ttnn.to_torch(u))
+    if output == ttnn.bfloat16:
+        _assert_close(ttnn.to_torch(out), golden)
+    else:
+        _assert_within_bfloat8_b_blocks(ttnn.to_torch(out), golden)
+
+
+@pytest.mark.parametrize("case", ["mixed_operands", "float32_operands", "post_activation"])
 def test_multiply_keeps_binary_ng_elsewhere(device, case):
-    """A multiply outside the route's dtype or activations launches no GEGLU_TANH program."""
+    """A multiply outside the route's dtypes or activations launches no GEGLU_TANH program."""
     gate, up = _operands((1, 1, 64, 64)), _operands((1, 1, 64, 64))
     kwargs = dict(
         input_tensor_a_activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU_TANH)], input_tensor_b_activations=[]
     )
     dtype = ttnn.float32 if case == "float32_operands" else ttnn.bfloat16
     g, u = _on_device(gate, device, dtype), _on_device(up, device, dtype)
-    if case == "bfloat8_b_output":
-        kwargs["dtype"] = ttnn.bfloat8_b
+    if case == "mixed_operands":
+        u = _on_device(up, device, ttnn.bfloat8_b)
     if case == "post_activation":
         kwargs["activations"] = [ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)]
     out, _, arguments = _device_operations(lambda: ttnn.multiply(g, u, **kwargs))
     assert OP_TYPE not in arguments
-    # The stock path computes the same product: a BFLOAT8_B output keeps about 7 bits per block.
+    # The stock path computes the same product: a BFLOAT8_B operand keeps about 7 bits per block.
     golden = _golden(gate, up)
     if case == "post_activation":
         golden = golden.clamp(min=0)
-    _assert_pcc(ttnn.to_torch(out), golden, 0.99 if case == "bfloat8_b_output" else 0.999)
+    _assert_pcc(ttnn.to_torch(out), golden, 0.99 if case == "mixed_operands" else 0.999)
+
+
+@pytest.mark.parametrize("parameter", [0.0, 1.0])
+def test_multiply_with_a_mode_parameter_runs_geglu_tanh(device, parameter):
+    """GELU_TANH's parameter selects a mode of its one function, which the kernel computes as for the plain call: the
+    multiply is the same one GEGLU_TANH program, with the same bits."""
+    _skip_unless_routed(device)
+    gate, up = _operands((1, 1, 64, 64)), _operands((1, 1, 64, 64)).flip(-1)
+    g, u = _on_device(gate, device), _on_device(up, device)
+    expected = ttnn.to_torch(
+        ttnn.multiply(g, u, input_tensor_a_activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU_TANH)])
+    )
+    call = lambda: ttnn.multiply(
+        g, u, input_tensor_a_activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU_TANH, parameter)]
+    )
+    out, operations, arguments = _device_operations(call)
+    assert OP_TYPE in arguments and len(operations) == 1, f"launched {operations}, not one {OP_TYPE} program"
+    assert torch.equal(ttnn.to_torch(out).view(torch.int16), expected.view(torch.int16))
+
+
+def test_multiply_with_another_parameter_keeps_binary_ng(device):
+    """A parameter value outside the modes the route lists launches no GEGLU_TANH program."""
+    gate, up = _operands((1, 1, 64, 64)), _operands((1, 1, 64, 64))
+    g, u = _on_device(gate, device), _on_device(up, device)
+    activation = ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU_TANH, 0.5)
+    _, _, arguments = _device_operations(lambda: ttnn.multiply(g, u, input_tensor_a_activations=[activation]))
+    assert OP_TYPE not in arguments

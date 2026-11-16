@@ -1389,18 +1389,37 @@ Tensor divide_(
 }
 namespace {
 
-// Fused SFPU ops for multiply(activation(gate), up), one row per op and board.
+// Fused SFPU ops for multiply(activation(gate), up), one row per op, board and form of the activation's call.
 struct FusedActivationRoute {
     operations::unary::UnaryOpType gate_activation;
+    // The activation's one parameter, where it selects a mode of the same function (GELU_TANH's fast form); none
+    // for the plain call.
+    std::optional<float> gate_parameter;
     operations::binary::BinaryOpType op;
     tt::ARCH arch;
 };
 
 constexpr std::array fused_activation_routes{
     FusedActivationRoute{
-        operations::unary::UnaryOpType::GELU_TANH, operations::binary::BinaryOpType::GEGLU_TANH, tt::ARCH::BLACKHOLE},
+        operations::unary::UnaryOpType::GELU_TANH,
+        std::nullopt,
+        operations::binary::BinaryOpType::GEGLU_TANH,
+        tt::ARCH::BLACKHOLE},
     FusedActivationRoute{
-        operations::unary::UnaryOpType::SILU, operations::binary::BinaryOpType::SILU_GLU, tt::ARCH::BLACKHOLE},
+        operations::unary::UnaryOpType::GELU_TANH,
+        0.0f,
+        operations::binary::BinaryOpType::GEGLU_TANH,
+        tt::ARCH::BLACKHOLE},
+    FusedActivationRoute{
+        operations::unary::UnaryOpType::GELU_TANH,
+        1.0f,
+        operations::binary::BinaryOpType::GEGLU_TANH,
+        tt::ARCH::BLACKHOLE},
+    FusedActivationRoute{
+        operations::unary::UnaryOpType::SILU,
+        std::nullopt,
+        operations::binary::BinaryOpType::SILU_GLU,
+        tt::ARCH::BLACKHOLE},
 };
 
 struct FusedActivationOperands {
@@ -1418,9 +1437,12 @@ std::optional<FusedActivationOperands> fused_activation_operands(
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations,
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,
     const std::optional<bool>& fast_and_approximate_mode) {
-    if (lhs.device() == nullptr || lhs.dtype() != DataType::BFLOAT16 || rhs.dtype() != DataType::BFLOAT16 ||
-        output_dtype.value_or(DataType::BFLOAT16) != DataType::BFLOAT16 || output.has_value() ||
-        !post_activations.empty() || fast_and_approximate_mode.value_or(false)) {
+    // The kernels read BF16 data in DEST: BFLOAT16 tiles, and BFLOAT8_B tiles, which unpack to BF16. The packer
+    // stores the BF16 result in either.
+    const auto bf16_dest = [](DataType dtype) { return dtype == DataType::BFLOAT16 || dtype == DataType::BFLOAT8_B; };
+    if (lhs.device() == nullptr || lhs.dtype() != rhs.dtype() || !bf16_dest(lhs.dtype()) ||
+        !bf16_dest(output_dtype.value_or(lhs.dtype())) || output.has_value() || !post_activations.empty() ||
+        fast_and_approximate_mode.value_or(false)) {
         return std::nullopt;
     }
     const auto arch = lhs.device()->arch();
@@ -1428,11 +1450,15 @@ std::optional<FusedActivationOperands> fused_activation_operands(
                             ttsl::Span<const operations::unary::EltwiseUnaryWithParam> gate,
                             ttsl::Span<const operations::unary::EltwiseUnaryWithParam> up)
         -> std::optional<operations::binary::BinaryOpType> {
-        if (gate.size() != 1 || gate[0].has_parameter() || !up.empty()) {
+        if (gate.size() != 1 || !up.empty()) {
             return std::nullopt;
         }
+        const auto parameters = gate[0].get_params_if<float>();
         for (const auto& route : fused_activation_routes) {
-            if (route.gate_activation == gate[0].type() && route.arch == arch) {
+            const bool same_call = route.gate_parameter.has_value()
+                                       ? parameters.size() == 1 && parameters[0] == *route.gate_parameter
+                                       : !gate[0].has_parameter();
+            if (route.gate_activation == gate[0].type() && route.arch == arch && same_call) {
                 return route.op;
             }
         }
