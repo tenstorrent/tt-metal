@@ -27,8 +27,12 @@ public:
     // false when the fabric fell back to the stock builder
     bool uses_graph() const { return graph_.has_value(); }
 
+    // empty unless inter-domain is on
+    const std::vector<PerimeterPort>& perimeter() const { return perimeter_; }
+
 private:
     std::optional<PhysicalGraph> graph_;
+    std::vector<PerimeterPort> perimeter_;
 };
 
 }  // namespace tt::tt_fabric::graph

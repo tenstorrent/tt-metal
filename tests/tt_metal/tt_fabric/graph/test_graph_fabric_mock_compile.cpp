@@ -7,10 +7,12 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cstdlib>
 #include <optional>
 #include <utility>
 #include <vector>
+#include <string>
 
 #include <enchantum/enchantum.hpp>
 
@@ -21,6 +23,8 @@
 #include <tt-metalium/system_mesh.hpp>
 
 #include "impl/context/metal_context.hpp"
+#include "llrt/tt_cluster.hpp"
+#include "tt_metal/fabric/graph/fabric_graph_inputs.hpp"
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/graph/graph_fabric_build_session.hpp"
@@ -101,6 +105,57 @@ INSTANTIATE_TEST_SUITE_P(
         FabricConfig::FABRIC_2D_TORUS_Y,
         FabricConfig::FABRIC_2D_TORUS_XY),
     [](const auto& info) { return std::string(enchantum::to_string(info.param)); });
+
+// Inter-domain on: builds every chip, then checks the perimeter inferred from the mock's unused links.
+// TT_FABRIC_EXPECT_PERIMETER=<n> pins the port count for the mock in use.
+class GraphFabricInterDomain : public ::testing::Test {
+protected:
+    void SetUp() override {
+        if (std::getenv("TT_METAL_MOCK_CLUSTER_DESC_PATH") == nullptr) {
+            GTEST_SKIP() << "no mock cluster set";
+        }
+        auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+        rtoptions.set_fabric_graph_builder(true);
+        rtoptions.set_fabric_inter_domain(true);
+    }
+    void TearDown() override {
+        SetFabricConfig(FabricConfig::DISABLED);
+        auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+        rtoptions.set_fabric_inter_domain(false);
+        rtoptions.set_fabric_graph_builder(std::getenv("TT_FABRIC_GRAPH_STOCK") == nullptr);
+    }
+};
+
+TEST_F(GraphFabricInterDomain, PerimeterLeavesTheDomain) {
+    SetFabricConfig(FabricConfig::FABRIC_2D);
+    using namespace tt::tt_metal::distributed;
+    auto mesh = MeshDevice::create(MeshDeviceConfig(SystemMesh::instance().shape()));
+
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& mesh_graph = control_plane.get_mesh_graph();
+    const auto links = unused_links(control_plane, tt::tt_metal::MetalContext::instance().get_cluster());
+    const auto ports = perimeter_ports(links, ports_from_mesh_graph(mesh_graph, {}), mesh_graph, Topology::Mesh);
+
+    size_t leaving = 0;
+    for (const auto& l : links) {
+        leaving += !l.peer_in_domain;
+        for (const auto& [chan, direction] : control_plane.get_active_fabric_eth_channels(l.node)) {
+            EXPECT_NE(chan, l.chan) << l.node << " chan " << int(l.chan) << " is a fabric channel";
+        }
+    }
+    EXPECT_EQ(ports.size(), leaving);
+    for (const auto& p : ports) {
+        const auto it = std::find_if(
+            links.begin(), links.end(), [&](const UnusedLink& l) { return l.node == p.node && l.chan == p.eth_chan; });
+        ASSERT_NE(it, links.end());
+        EXPECT_FALSE(it->peer_in_domain);
+    }
+    std::cout << links.size() << " unused links, " << ports.size() << " perimeter ports" << std::endl;
+    if (const char* expect = std::getenv("TT_FABRIC_EXPECT_PERIMETER")) {
+        EXPECT_EQ(ports.size(), std::stoul(expect));
+    }
+    mesh->close();
+}
 
 }  // namespace
 }  // namespace tt::tt_fabric::graph
