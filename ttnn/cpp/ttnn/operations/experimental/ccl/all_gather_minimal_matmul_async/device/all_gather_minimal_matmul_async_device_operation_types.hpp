@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <utility>
 
 #include <optional>
@@ -158,9 +159,15 @@ struct AllGatherMinimalMatmulAsyncParams {
     }
 };
 
-// The orientation the program is built with. M and N are the matmul's padded row count and weight width.
+// The orientation the program is built with. M and N are the matmul's padded row count and weight width. Fabric2D
+// only runs the untransposed grid, so it is not picked there automatically.
+inline bool resolve_transpose_core_grid(
+    const AllGatherMinimalMatmulAsyncParams& params, uint32_t M, uint32_t N, bool fabric_2d) {
+    return params.transpose_core_grid.value_or(params.force_transpose || (M > N && !fabric_2d));
+}
 inline bool resolve_transpose_core_grid(const AllGatherMinimalMatmulAsyncParams& params, uint32_t M, uint32_t N) {
-    return params.transpose_core_grid.value_or(params.force_transpose || M > N);
+    return resolve_transpose_core_grid(
+        params, M, N, tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig()));
 }
 
 // Per-chunk widths (elements): explicit `chunk_sizes`, else the uniform N/chunks split.
