@@ -1299,18 +1299,20 @@ def build_generate_rank_bindings_mpi_cmd(
     return cmd
 
 
-def run_generate_rank_bindings(cmd: List[str], cwd: Path, subprocess_run=subprocess.run) -> int:
-    """Run generate_rank_bindings command via subprocess.
+def run_generate_rank_bindings(cmd: List[str], cwd: Path, subprocess_run=None) -> int:
+    """Run the Phase 1 generate_rank_bindings command.
 
     Args:
         cmd: Command to run (from build_generate_rank_bindings_mpi_cmd)
         cwd: Working directory for the command
-        subprocess_run: Subprocess run function (injectable for testing)
+        subprocess_run: A test hook, left None in production. When None, the command runs through run_launcher,
+            which owns the job (signals, leftover ranks, shared memory). A test passes its own runner (e.g. a mock)
+            to capture the command without launching a real mpirun.
 
     Returns:
         Exit code from the subprocess
     """
-    if subprocess_run is subprocess.run:
+    if subprocess_run is None:
         return run_launcher(cmd, cwd=cwd)
     result = subprocess_run(cmd, cwd=cwd)
     return result.returncode if hasattr(result, "returncode") else result
@@ -1320,7 +1322,7 @@ def run_phase1_generate_rank_bindings(
     mgd_path: Path,
     hosts: Optional[List[str]],
     output_dir: Path,
-    subprocess_run=subprocess.run,
+    subprocess_run=None,
     mock_rank_to_desc: Optional[Dict[int, Path]] = None,
     mpi_args: Optional[List[str]] = None,
     *,
@@ -3177,7 +3179,6 @@ def new_mode_flow(
                 resolved_mgd,
                 hosts_for_phase1,
                 run_dir,
-                subprocess_run=subprocess.run,
                 mock_rank_to_desc=mock_rank_to_desc,
                 mpi_args=phase1_mpi_args,
                 mgd_is_mapping_yaml=mgd_mapping_yaml,
