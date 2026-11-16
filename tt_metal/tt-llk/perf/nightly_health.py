@@ -280,21 +280,27 @@ def _legs_line(legs):
 
 
 def build_text(day, reports, extras=()):
-    problems = [p for r in [*reports, *extras] for p in r["problems"]]
-    head = ":white_check_mark:" if not problems else ":red_circle:"
-    lines = [
-        f"{head} *LLK nightly health, {day}*"
-        + (f": {len(problems)} problem(s)" if problems else ": healthy")
+    problems = [
+        f"{p} <{r['run']['html_url']}|run>" if r.get("run") else p
+        for r in [*reports, *extras]
+        for p in r["problems"]
     ]
-    lines += [f"• {p}" for p in problems]
+    head = ":red_circle:" if problems else ":white_check_mark:"
+    n = len(problems)
+    lines = [f"{head} *LLK nightly health, {day}*: {n} problem{'' if n == 1 else 's'}"]
+    return "\n".join(lines + [f"• {p}" for p in problems])
+
+
+def build_details(reports, extras=()):
+    lines = []
     for r in reports:
         run = r["run"]
         lines.append("")
         if run is None:
-            lines.append(f"*{r['name']}*: no scheduled run")
+            lines.append(f"**{r['name']}**: no scheduled run")
             continue
         lines.append(
-            f"*{r['name']}* <{run['html_url']}|run> · `{run['head_sha'][:SHORT_SHA]}` · {run['conclusion'] or run['status']}"
+            f"**{r['name']}** [run]({run['html_url']}) · `{run['head_sha'][:SHORT_SHA]}` · {run['conclusion'] or run['status']}"
         )
         if r.get("plain"):
             continue
@@ -312,7 +318,7 @@ def build_text(day, reports, extras=()):
             )
     for e in extras:
         if e["lines"]:
-            lines += ["", f"*{e['name']}*", *e["lines"]]
+            lines += ["", f"**{e['name']}**", *e["lines"]]
     return "\n".join(lines)
 
 
@@ -354,6 +360,7 @@ def main(argv=None):
         "--date", default=dt.datetime.now(dt.timezone.utc).date().isoformat()
     )
     ap.add_argument("--out", default="health_payloads.json")
+    ap.add_argument("--details", default="health_details.md")
     ap.add_argument("--workflows", default=WORKFLOWS)
     ap.add_argument("--extra", nargs="*", default=[], help="reports of other checks")
     ap.add_argument(
@@ -391,6 +398,8 @@ def main(argv=None):
             },
         )
     text = build_text(a.date, reports, extras)
+    with open(a.details, "w") as fh:
+        fh.write(build_details(reports, extras))
     problems = any(r["problems"] for r in [*reports, *extras])
     with open(a.out, "w") as fh:
         json.dump(payloads(text, problems, a.dm, a.channel, owners(a.tests_yaml)), fh)
