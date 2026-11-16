@@ -269,6 +269,31 @@ def spec_plugin_k(K: int, m: int) -> int:
     return int(m) * (int(K) + 1) - 1
 
 
+def mtp_fill_ids(row, end: int, *, final: bool, next_token=None, vocab: int | None = None) -> torch.Tensor:
+    """the ids one prefill row's MTP-cache fill is armed with (StackBackend.arm_mtp_prefill; pure): the row's history
+    through its chunk end `end`, plus -- for a chunk that does not end the prompt -- the NEXT chunk's first token. MTP
+    position p takes the token at p + 1 (generator.mtp_prefill_span fills [s, min(e, L - 1)) of an L-id history), so
+    the chunk's last row e - 1 is filled only when token e is known; armed with ``row[:e]`` alone the in-trace fill
+    wrote that row with token 0 into a real page (mtp_fill_inputs) and no later chunk rewrote it: a wrong MTP row every
+    8,192 positions of a chunked prompt, and in every snapshot taken at a chunk end. The token is ``next_token`` (the
+    plugin's ``next_token_ids`` entry, model_capabilities ``prefill_next_token_ids``: >= 0 for an intermediate chunk,
+    -1 for a final one), else the row's own history past `end` when the call carries it (an exact split's head-less
+    inner call, a shorter row of a multi-row step) and the chunk is not known to be final (``final``: a device-sampled
+    call holds final chunks only). A final chunk stops at `end`: its last row L - 1 is the seed's. A token outside the
+    vocabulary is never embedded (the history stops at `end`)."""
+    row = torch.as_tensor(row).reshape(-1).to(torch.int64)
+    e = int(end)
+    if next_token is not None:
+        nt = int(next_token)
+    elif not final and e < int(row.numel()):
+        nt = int(row[e])
+    else:
+        nt = -1
+    if nt < 0 or (vocab is not None and nt >= int(vocab)):
+        return row[:e]
+    return torch.cat([row[:e], torch.tensor([nt], dtype=torch.int64)])
+
+
 def fused_sample_block(recs: list, r, B: int, W: int, pad: int) -> tuple:
     """a chain's records (Glm53Generator.spec_step_chain, step order) -> the fused_sample verify's
     ``accepted_token_ids [B, W]`` (a speculating row: every step's committed tokens a[0..n] in order, then ``pad``;
@@ -1311,6 +1336,9 @@ class GLM53StackForCausalLM:
         "spec_requirements": ["device_propose"] if SPEC else [],
         # GLM53_SPEC_SAMPLED: the verify's ids are the device sampler's per-column draws (sampled requests speculate)
         "spec_ids_are_sampled": SPEC_SAMPLED,
+        # MODEL_CAPABILITIES.md: prefill_forward takes next_token_ids (an intermediate chunk's next prompt token) -- the
+        # MTP fill of the chunk's last row (mtp_fill_ids)
+        "prefill_next_token_ids": SPEC,
     }
 
     # model_runner.py:2301-2320: the one decode width the plugin pads to (fixed user slots, no smaller bucket) --
@@ -1569,6 +1597,8 @@ class GLM53StackForCausalLM:
         sampled inside the prefill trace; every row must be greedy, which the plugin guarantees for
         ``max_device_top_k=1``) or ``logits [B, 1, V]`` fp32 for host sampling, which the plugin also selects when a
         row is an intermediate chunk (its head output is discarded)."""
+        # (prefill_next_token_ids: row i's next chunk's first token, -1 for a final chunk -- the MTP fill's last row)
+        next_ids = kwargs.pop("next_token_ids", None)
         mm = [k for k in kwargs if k.startswith(("pixel_values", "image_", "video_", "audio_", "mm_"))]
         if mm and not self.supports_multimodal:
             raise NotImplementedError(f"multimodal prompt on the text-only stack adapter ({mm[0]})")
@@ -1585,6 +1615,10 @@ class GLM53StackForCausalLM:
         slots = list(range(B)) if empty_slots is None else [int(s) for s in empty_slots]
         if len(ends) != B or len(starts) != B or len(slots) != B:  # one entry per row (MODEL_EXECUTION.md "Prefill")
             raise ValueError(f"prefill rows {B} vs prompt_lens {len(ends)} start_pos {len(starts)} slots {len(slots)}")
+        if next_ids is not None:
+            next_ids = [int(v) for v in torch.as_tensor(next_ids).reshape(-1).tolist()]
+            if len(next_ids) != B:
+                raise ValueError(f"prefill rows {B} vs next_token_ids {len(next_ids)}")
         lens = [e - s for s, e in zip(starts, ends)]
         if any(n < 1 for n in lens) or any(e > int(tokens.shape[1]) for e in ends):
             raise ValueError(
@@ -1639,23 +1673,28 @@ class GLM53StackForCausalLM:
             for i in range(B):
                 chunk[i, : lens[i]] = tokens[i, gen_starts[i] : ends[i]].to(torch.int64)
         # Stage 17: a chunk of generator slot 0 (the slot that can speculate) also fills the MTP layer's cache (the
-        # TP prefill's in-trace fill, StackBackend.arm_mtp_prefill) from its history; a chunk's last row (the next
-        # chunk's first token unknown here) and the prompt's last one (the seed below) are left to the step. A prefix
-        # attach / snapshot of this call happens inside it, after the _spec_stop above; a request that attached or
-        # holds image rows never speculates (_spec_admit) and is not armed
+        # TP prefill's in-trace fill, StackBackend.arm_mtp_prefill) from its history; a chunk's last row takes the next
+        # chunk's first token (mtp_fill_ids: the plugin's next_token_ids, else the call's own history past the end), the
+        # prompt's last one is the seed's (below). A prefix attach / snapshot of this call happens inside it, after the
+        # _spec_stop above; a request that attached or holds image rows never speculates (_spec_admit) and is not armed
         if self.spec:
             self._spec_admit(gslots, gen_starts, extra.get("prefix_attach", {}), plan["vision"] if plan else ())
         armed = False
+
+        def fill_ids(i):
+            return mtp_fill_ids(tokens[i], ends[i], final=params is not None,
+                                next_token=None if next_ids is None else next_ids[i], vocab=self.vocab_size)  # fmt: skip
+
         if self.spec and self.spec_multi_capable and callable(getattr(self.gen.backend, "arm_mtp_prefill", None)):
             # GLM53_SPEC_MULTI: every group base of the call fills its user's MTP cache (every step's bases)
             bases = set(self.gen.spec_all_slots())
             for i, g in enumerate(gslots):
                 if g in bases and g not in self._no_spec:
-                    armed = bool(self.gen.backend.arm_mtp_prefill(g, tokens[i, : ends[i]].to(torch.int64))) or armed
+                    armed = bool(self.gen.backend.arm_mtp_prefill(g, fill_ids(i))) or armed
         elif (self.spec and 0 in gslots and 0 not in self._no_spec
                 and callable(getattr(self.gen.backend, "arm_mtp_prefill", None))):  # fmt: skip
             i0 = gslots.index(0)
-            armed = bool(self.gen.backend.arm_mtp_prefill(0, tokens[i0, : ends[i0]].to(torch.int64)))
+            armed = bool(self.gen.backend.arm_mtp_prefill(0, fill_ids(i0)))
         try:
             out = self.gen.prefill_forward(
                 chunk,

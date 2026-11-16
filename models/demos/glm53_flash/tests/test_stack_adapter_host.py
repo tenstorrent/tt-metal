@@ -77,6 +77,7 @@ from models.demos.glm53_flash.tt.generator_vllm_stack import (
     GLM53StackForCausalLM,
     cache_defaults,
     declare_multimodal_class,
+    mtp_fill_ids,
     row_params,
     spec_multi_gate,
     spec_plan_for,
@@ -3430,6 +3431,48 @@ def test_spec_enter_idle_needs_partial_groups():
     kv1 = gen1.allocate_kv_cache(B, SEQ)
     with expect_error(ValueError, "need the multi-user step's partial groups"):
         gen1.spec_enter(kv1, idle=[1])
+    assert "ttnn" not in sys.modules
+
+
+def test_served_mtp_fill_takes_the_next_chunk_token():
+    """The MTP-cache fill of a chunked prompt (the review's F-ACC): MTP position p takes the token at p + 1, so a
+    chunk's last row needs the NEXT chunk's first token. Armed with the chunk's own history only (the plugin's tokens
+    stop at the chunk end) the fill skipped that row's token -- mtp_fill_inputs wrote it with token 0 into a real page
+    and no later chunk rewrote it: rows 127 / 255 of a 300-token prompt in 128-token chunks. With the plugin's
+    next_token_ids (model_capabilities prefill_next_token_ids) every row of an intermediate chunk is filled with its
+    true next token, the final chunk stops at L - 2 (L - 1 is the seed's); a call whose history reaches past a row's
+    end (an exact split's inner call, a shorter row of a multi-row step) supplies it too. mtp_fill_ids: pure"""
+    assert GLM53StackForCausalLM.model_capabilities["prefill_next_token_ids"] == gvs.SPEC
+    row = torch.arange(10, 20)
+    assert mtp_fill_ids(row, 4, final=False, next_token=77).tolist() == [10, 11, 12, 13, 77]
+    assert mtp_fill_ids(row, 4, final=False, next_token=-1).tolist() == [10, 11, 12, 13]  # (the plugin: final)
+    assert mtp_fill_ids(row, 4, final=False).tolist() == [10, 11, 12, 13, 14]  # (the call's own history)
+    assert mtp_fill_ids(row, 4, final=True).tolist() == [10, 11, 12, 13]  # (a device-sampled call: final rows)
+    assert mtp_fill_ids(row, 10, final=False).tolist() == list(range(10, 20))  # (nothing past the end)
+    assert mtp_fill_ids(row, 4, final=False, next_token=64, vocab=64).tolist() == [10, 11, 12, 13]  # (no such token)
+    prompt, ends = _prompt(300, 9), [128, 256, 300]
+
+    def fill(pass_next: bool, width=None):
+        ad, backend, _gen, kv = _spec_adapter(K=3)
+        row = _blocks(0, 400)
+        start = 0
+        for end in ends:
+            last = end == len(prompt)
+            kw = {"next_token_ids": torch.tensor([-1 if last else prompt[end]])} if pass_next else {}
+            hist = prompt[: end if width is None or last else min(len(prompt), end + width)]
+            ad.prefill_forward(_history([hist]), page_table=_table([row[: -(-end // BLOCK_SIZE)]], 1), kv_cache=kv,
+                               prompt_lens=[end], start_pos=[start], empty_slots=[0],
+                               sampling_params=_greedy(1) if last else None, **kw)  # fmt: skip
+            start = end
+        assert ad.spec_stats["seeds"] == 1
+        return backend.mtp_spans
+
+    # the plugin without prefill_next_token_ids: the chunk-end rows 127 / 255 stay unfilled (the old behavior)
+    assert [s[:2] for s in fill(False)] == [(0, 127), (128, 127), (256, 43)]
+    spans = fill(True)
+    assert [s[:2] for s in spans] == [(0, 128), (128, 128), (256, 43)]
+    assert spans[0][2] == prompt[1:129] and spans[1][2] == prompt[129:257] and spans[2][2] == prompt[257:300]
+    assert fill(False, width=64) == spans  # (the history reaches past each intermediate end)
     assert "ttnn" not in sys.modules
 
 
