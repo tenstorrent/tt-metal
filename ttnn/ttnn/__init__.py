@@ -568,6 +568,7 @@ from ttnn.operations.ccl import (
     DispatchAlgorithm,
     WorkerMode,
     MMSignalAggregatorMode,
+    MatmulReduceScatterPrefillGrid,
 )
 
 from ttnn.operations.conv2d import (
