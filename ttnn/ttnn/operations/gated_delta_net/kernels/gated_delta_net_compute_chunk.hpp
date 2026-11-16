@@ -14,6 +14,7 @@ namespace {
 // accumulates onto beta V in DEST (the rhs in one window) and its q read is the start of the output's window.
 // The writer then adds a coefficient page with -beta.
 constexpr bool FUSED_RHS = GDN_STATE_FUSED_RHS != 0;
+static_assert(!HOLD || FUSED_RHS, "STATE_HOLD counts the fused step's windows");
 constexpr uint32_t CHUNK_BEC_BETA = PREP && FUSED_RHS ? 2 : CHUNK_BETA;
 // Host PREP_SCALE_FPU, a mask: 1 beta exp(c) (*) kn, 2 exp(c) (*) qn, 4 kn^T (*) exp(c_last - c)^T as FPU products.
 constexpr uint32_t SCALE_FPU = PREP ? GDN_PREP_SCALE_FPU : 0;
@@ -455,14 +456,22 @@ ALWI void chunk_state_prepped(Buffers& bufs, bool first_in_pair, bool last_in_pa
                 matmul_tiles(cb_in_kq, s_mm, kt, kt * Vb + vt0 + i, i);  // - beta exp(c) Rk onto beta V
             }
         }
-        tile_regs_commit();
+        if constexpr (HOLD) {
+            commit_stay();
+        } else {
+            tile_regs_commit();
+        }
         tile_regs_wait();
         pack_reconfig_data_format(cb_uw);
         pack_first(0, cb_uw, vt0);
         for (uint32_t i = 1; i < n; ++i) {
             pack_at(i, cb_uw, vt0 + i);
         }
-        tile_regs_release();
+        if constexpr (HOLD) {
+            release_stay();
+        } else {
+            tile_regs_release();
+        }
     }
     for (uint32_t vt0 = 0; !FUSED_RHS && vt0 < Vb; vt0 += PAIRS) {
         const uint32_t n = (Vb - vt0) < PAIRS ? (Vb - vt0) : PAIRS;
@@ -497,13 +506,21 @@ ALWI void chunk_state_prepped(Buffers& bufs, bool first_in_pair, bool last_in_pa
         for (uint32_t i = 0; i < n; ++i) {
             matmul_tiles(cb_in_mat, cb_uw, IN_MAT_M, vt0 + i, i);  // M x rhs
         }
-        tile_regs_commit();
+        if constexpr (HOLD) {
+            commit_stay();
+        } else {
+            tile_regs_commit();
+        }
         tile_regs_wait();
         pack_first(0, cb_u, vt0);
         for (uint32_t i = 1; i < n; ++i) {
             pack_at(i, cb_u, vt0 + i);
         }
-        tile_regs_release();
+        if constexpr (HOLD) {
+            release_stay();
+        } else {
+            tile_regs_release();
+        }
     }
     cb_pop_front(cb_uw, Vb);
     cb_push_back(cb_u, Vb);

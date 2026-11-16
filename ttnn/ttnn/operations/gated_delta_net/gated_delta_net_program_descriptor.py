@@ -171,6 +171,10 @@ PREP_NORM_MAX_ROWS = 4
 # DEST (the rhs of M in one window: no packed reads, no subtraction window) and starts the output's window with the q
 # read. Same operands and fp32 accumulation as the separate read.
 STATE_FUSED_RHS = True
+# R-PREP state core with two update batches per step (its piece of the state is the whole fp32 DEST, one batch per
+# half): the upper batch stays in its DEST half from step to step, so only the lower batch is unpacked per step
+# (4 of the 8 tile loads at Vb = 2). Needs STATE_FUSED_RHS (the step's other windows are counted) and half-sync DEST.
+STATE_HOLD = True
 # R-PREP head block: row scalings as FPU products (ELWMUL) instead of fp32 SFPU products; the scaling vector then
 # passes the 19-bit operands like kn / qn themselves. A mask: 1 beta exp(c) (*) kn, 2 exp(c) (*) qn,
 # 4 kn^T (*) exp(c_last - c)^T.
@@ -1719,6 +1723,7 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
             ("GDN_PREP_SCALE_FPU", str(int(PREP_SCALE_FPU) if prep is not None else 0)),
             ("GDN_FPU_UNBIAS_BITS", f"{PREP_FPU_UNBIAS_BITS:#x}u"),
             ("GDN_PREP_M_BETA", str(int(prep is not None and PREP_M_BETA))),
+            ("GDN_STATE_HOLD", str(int(prep is not None and STATE_HOLD and STATE_FUSED_RHS and not DST_FULL_SYNC))),
             ("GDN_M_BETA_UNBIAS_Q", str(int(PREP_M_BETA_UNBIAS_Q))),
         ]
     )

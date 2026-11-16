@@ -961,6 +961,26 @@ ALWI void qk_finish_block(Buffers& bufs) {
 }
 
 // ---------------------------------------------------------------- state read / update (shared)
+// Host STATE_HOLD (R-PREP state core, a piece of two update batches): the upper batch never leaves DEST. It has one
+// DEST half to itself, where the decay and the increment run in place and only the packs to L1 (the next reads'
+// operand) remain: no unpack of those tiles per step. Every other window of the step takes the lower half: its commit
+// does not flip (commit_stay), and its release clears the half after the packs without flipping (release_stay). A
+// window there starts on operands the previous one pushed (after its release), so none runs ahead into the clear.
+constexpr bool HOLD = STATE && GDN_STATE_HOLD != 0 && n_state == 2 * UPDATE_BATCH && Vb <= ckl::DEST_AUTO_LIMIT;
+
+ALWI void commit_stay() { MATH((ckernel::math::set_math_semaphores())); }
+
+ALWI void release_stay() {
+#ifdef TRISC_PACK
+    TTI_STALLWAIT(ckernel::p_stall::STALL_MATH, ckernel::p_stall::PACK);
+    TT_ZEROACC(ckernel::p_zeroacc::CLR_HALF, DST_ACCUM_MODE, 0, ckernel::ADDR_MOD_1, ckernel::dest_offset_id % 2);
+    _llk_packer_set_math_semaphore_<ckernel::p_stall::NONE>();
+#endif
+}
+
+// The held batch's release: no clear, flip.
+ALWI void release_keep() { PACK((_llk_pack_dest_section_done_<DST_SYNC_MODE, DST_ACCUM_MODE, false>())); }
+
 // [rk; ro] = [kn; qn] x S_{in} -> cb_reads (2 x Vb tiles). S_in is S0 for the pair's first step.
 template <uint32_t kq_cb>
 ALWI void read_state(Buffers& bufs, bool first_in_pair) {
@@ -1003,7 +1023,9 @@ ALWI void update_state(bool first_in_pair, bool last_in_pair, uint32_t u_cb, uin
     if (dst == cb_state) {
         cb_reserve_back(cb_state_mm, n_state);
     }
-    for (uint32_t first = 0; first < n_state; first += UPDATE_BATCH) {
+    for (uint32_t b = 0; b < n_state; b += UPDATE_BATCH) {
+        const uint32_t first = HOLD ? n_state - UPDATE_BATCH - b : b;  // HOLD: the held batch, then the lower one
+        const bool held = HOLD && first != 0;
         const uint32_t count = (n_state - first) < UPDATE_BATCH ? (n_state - first) : UPDATE_BATCH;
         tile_regs_acquire();
         begin_loads(src);
@@ -1013,7 +1035,7 @@ ALWI void update_state(bool first_in_pair, bool last_in_pair, uint32_t u_cb, uin
             const uint32_t t = run0 + i;
             return STATE_STAGGER != 0 && t >= n_state ? t - n_state : t;
         };
-        for (uint32_t i = 0; i < count; ++i) {
+        for (uint32_t i = 0; i < count && !(held && !first_in_pair); ++i) {
             load(src, run_tile(i), i);
         }
         binop_with_scalar_tile_init();
@@ -1025,17 +1047,30 @@ ALWI void update_state(bool first_in_pair, bool last_in_pair, uint32_t u_cb, uin
             const uint32_t tile = run_tile(i);
             matmul_tiles(knT_cb, u_cb, tile / Vb, tile % Vb, i);
         }
-        tile_regs_commit();
+        if (HOLD && !held) {
+            commit_stay();
+        } else {
+            tile_regs_commit();
+        }
         tile_regs_wait();
         // A batch pushed to cb_state_out moves its write pointer: the next batch packs from index 0.
-        const uint32_t pack_base = dst == cb_state_out ? 0 : first;
+        const uint32_t pack_base = dst == cb_state_out && !HOLD ? 0 : first;
         for (uint32_t i = 0; i < count; ++i) {
             pack_first(i, dst, pack_base + i);
         }
-        tile_regs_release();
-        if (dst == cb_state_out) {
+        if (held) {
+            release_keep();
+        } else if (HOLD) {
+            release_stay();
+        } else {
+            tile_regs_release();
+        }
+        if (dst == cb_state_out && !HOLD) {
             cb_push_back(dst, count);  // the writer stores each batch while the next one is computed
         }
+    }
+    if (dst == cb_state_out && HOLD) {
+        cb_push_back(dst, n_state);  // the batches ran out of order
     }
     if (dst == cb_state) {
         cb_push_back(dst, n_state);
