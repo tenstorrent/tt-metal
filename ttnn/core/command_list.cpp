@@ -56,9 +56,11 @@ float float32_of(const ttnn::command_list::CmdListScalar& scalar, std::string_vi
 
 uint32_t bfloat16_of(const ttnn::command_list::CmdListScalar& scalar, std::string_view encoder) {
     const float value = float32_of(scalar, encoder);
+    constexpr uint32_t bfloat16_magnitude_mask = 0x7FFF;
+    constexpr uint32_t bfloat16_infinity_bits = 0x7F80;
     const uint32_t bits = fp32_to_bf16_bits_round_to_nearest_even(value);
     TT_FATAL(
-        !std::isfinite(value) || (bits & 0x7FFF) != 0x7F80,
+        !std::isfinite(value) || (bits & bfloat16_magnitude_mask) != bfloat16_infinity_bits,
         "{} needs a value in bfloat16 range, got {}",
         encoder,
         value);
@@ -282,11 +284,14 @@ metal::ArgValue encode_uint16_high(const CmdListScalar& scalar) {
 }
 
 metal::ArgValue encode_float8_e4m3_quad(const CmdListScalar& scalar) {
+    constexpr float float8_e4m3_max = 448.0f;
     const float real = float32_of(scalar, "encode_float8_e4m3_quad");
-    // float8_e4m3 clamps infinities and overflow to 448; E4M3 has no infinity.
+    // float8_e4m3 clamps infinities and overflow to float8_e4m3_max; E4M3 has no infinity.
     TT_FATAL(
-        std::isnan(real) || std::abs(real) <= 448.0f,
-        "encode_float8_e4m3_quad needs a value in [-448, 448], got {}",
+        std::isnan(real) || std::abs(real) <= float8_e4m3_max,
+        "encode_float8_e4m3_quad needs a value in [-{}, {}], got {}",
+        float8_e4m3_max,
+        float8_e4m3_max,
         real);
     const float8_e4m3 value(real);
     return pack_four_float8_e4m3_into_uint32(value, value, value, value);
