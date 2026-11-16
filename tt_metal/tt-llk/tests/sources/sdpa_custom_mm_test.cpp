@@ -124,6 +124,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // heuristic (post1) in the MOP config.
     _llk_unpack_AB_custom_mm_init_<MM_TRANSPOSE, false /* clear_src */>(params.in0_face_r_dim, formats.unpack_A_dst, CT_DIM);
 
+    // in0 is packed densely: two [M, 16] Float16_b faces per k-tile, 4 * M 16-byte words
+    const std::uint32_t in0_k_tile_size = 4 * params.in0_face_r_dim;
+
     // Run: base_address_a = in1 (SrcA), base_address_b = in0 (SrcB).
     // The re-entry variant appends a mask to in1 and uses it only on the first pass.
     // The whole kt walk is issued by a single call (internal MOP covers kt_dim/2 iterations).
@@ -136,7 +139,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             SDPA_INPUT_TILE_OFFSET,                                                    // tile_index_a
             0,                                                                         // tile_index_b
             params.TILE_SIZE_UNPACK_A,                                                 // tile_size_a (in1 [32,32])
-            params.TILE_SIZE_UNPACK_B,                                                 // tile_size_b (in0 [M,32])
+            in0_k_tile_size,                                                           // tile_size_b (in0 [M,32])
             KT_DIM,
             CT_DIM,
             SDPA_MASK_REENTRY && pass == 0, // mask_chunk: first pass only

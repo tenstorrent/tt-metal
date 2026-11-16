@@ -146,8 +146,7 @@ class CustomMMStimuliConfig(StimuliConfig):
         )
         self.packed_a = packed_a
         self.packed_b = packed_b
-        # tile_count_A = kt reserves a full [32, 32] tile per k-tile, but in0 is packed densely at 2 * M * 16 datums
-        # per k-tile. Reserve only the bytes written, so long-K cases fit L1.
+        # Reserve only the bytes of the densely packed in0, not a full tile per k-tile
         self.tile_count_A = max(1, -(-len(packed_a) // self.tile_size_A_bytes))
         self._calculate_tile_sizes()
 
@@ -515,14 +514,12 @@ def test_custom_mm_long_k(formats, M, kt, ct):
     _run_custom_mm(M, kt, ct, formats, DestAccumulation.No)
 
 
-# Most k-tiles one SrcB face walk reads from one base; longer kt_dim runs as several walks (CUSTOM_MM_MAX_KT_PER_WALK in
-# llk_unpack_AB_custom_mm.h).
+# Matches CUSTOM_MM_MAX_KT_PER_WALK in llk_unpack_AB_custom_mm.h
 CUSTOM_MM_MAX_KT_PER_WALK = 255
 
 
 def _face_walk_starts(kt):
-    """First k-tile of each SrcB face walk: ceil(kt / 255) walks of equal length to within one k-tile, the first
-    kt % num_walks of them one longer (_llk_unpack_AB_custom_mm_run_)."""
+    """First k-tile of each SrcB face walk, split as _llk_unpack_AB_custom_mm_run_ splits kt."""
     num_walks = -(-kt // CUSTOM_MM_MAX_KT_PER_WALK)
     base_kt, long_walks = divmod(kt, num_walks)
     starts, start = [], 0
@@ -533,14 +530,8 @@ def _face_walk_starts(kt):
 
 
 def _face_walk_operands(M, kt, ct):
-    """Exact operands that catch an in0 (SrcB) face read from the wrong L1 location at a face walk's edges.
-
-    in0 holds 2 * kt faces of [M, 16]. A is zero except one +-1 datum per sentinel face: the first and last two faces,
-    the two faces each side of every walk boundary, and every face 255 mod 256, which an 8-bit counter wrapping
-    inside a walk would alias (a one-walk kt = 256 read face 511 from face 255). Row m of face f carries its datum in
-    column (f + m) % 16, and its sign flips every 256 faces, so a face read 256 faces off changes sign rather than
-    matching. B holds nonzero integers in [-2, 2], so every misread moves the result. Every product and partial sum is
-    a small integer, exact in bf16, so the result is compared exactly instead of inside a K-scaled tolerance.
+    """Integer operands, exact in bf16: A has a +-1 on in0 faces at the ends, at each walk boundary and at every face
+    255 mod 256, its sign flipping every 256 faces; B holds nonzero integers in [-2, 2].
     """
     torch.manual_seed(0)
     num_faces = 2 * kt
@@ -562,11 +553,8 @@ def _face_walk_operands(M, kt, ct):
     return torch_a, torch_b
 
 
-# 255 is one full walk. 256 and 300 run two walks (128 + 128, 150 + 150), 511 and 765 three (171 + 170 + 170 and
-# 3 x 255, full walks at every boundary). M = 1 at kt = 256 is left to LONG_K_CASES (k256-ct1), as the perf report
-# needs each configuration once. Bfp8_b and Bfp4_b weights keep the longer cases within L1 (Bfp4_b also selects the
-# post1 unpack tuning); their integers in [-2, 2] are exact. ct = 2 and 4 cross a walk boundary with the two- and
-# four-slot unpack MOPs.
+# One walk (255), two (256, 300) and three (511, 765). Bfp8_b and Bfp4_b weights keep long cases within L1; ct = 2 and
+# 4 use the two- and four-slot unpack MOPs. LONG_K_CASES covers M = 1 at kt = 256.
 FACE_WALK_CASES = [
     pytest.param(
         M,
