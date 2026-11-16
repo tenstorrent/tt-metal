@@ -108,6 +108,8 @@ enum class BinaryOp : std::uint8_t
     GCD,
     LCM,
     RESHUFFLE_ROWS,
+    MUL_SM_SHIFT23,
+    MUL_SM_SHIFT23_ENSURED,
 };
 
 enum class DataLayout

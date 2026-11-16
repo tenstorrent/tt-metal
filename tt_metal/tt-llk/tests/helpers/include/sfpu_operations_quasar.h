@@ -1664,8 +1664,14 @@ void init_binary_sfpu_operation_quasar([[maybe_unused]] std::uint32_t zero_point
     {
         calculate_gcd_init();
     }
+    else if constexpr (OP == BinaryOp::MUL_SM_SHIFT23_ENSURED)
+    {
+        // Programs the SFPLOADMACRO sequence. Flags must match the dispatch branch's.
+        _mul_int32_sm_shift23_init_<SIGN_MAGNITUDE_FORMAT, true, true, true, true>();
+    }
     // RSHFT / LSHFT / LOGICAL_RSHFT need no init beyond the shared SFPU one.
-    // ADD / SUB / GT / LT / LE / GE / COPY_DEST / LOGSIGMOID / RESHUFFLE_ROWS are stateless — no init.
+    // ADD / SUB / GT / LT / LE / GE / COPY_DEST / LOGSIGMOID / RESHUFFLE_ROWS / MUL_SM_SHIFT23
+    // are stateless — no init. MUL_SM_SHIFT23_ENSURED is the one variant that is not.
 }
 
 /**
@@ -1711,9 +1717,10 @@ template <
 void call_binary_sfpu_operation_quasar(std::uint32_t src0_tile, std::uint32_t src1_tile, std::uint32_t dst_tile, [[maybe_unused]] DataFormat math_format)
 {
     static_assert(
-        TILE_SHAPE == ckernel::trisc::DstTileShape::Tile32x32 || OP == BinaryOp::ADD || OP == BinaryOp::SUB || OP == BinaryOp::MUL || OP == BinaryOp::DIV ||
-            OP == BinaryOp::GT || OP == BinaryOp::LT || OP == BinaryOp::LE || OP == BinaryOp::GE || OP == BinaryOp::ATAN2 || OP == BinaryOp::COPY_DEST ||
-            OP == BinaryOp::GCD || OP == BinaryOp::LCM || quasar_binary_op_is_quant(OP) || quasar_binary_op_is_max_min(OP),
+        TILE_SHAPE == ckernel::trisc::DstTileShape::Tile32x32 || OP == BinaryOp::ADD || OP == BinaryOp::SUB || OP == BinaryOp::MUL ||
+            OP == BinaryOp::MUL_SM_SHIFT23 || OP == BinaryOp::MUL_SM_SHIFT23_ENSURED || OP == BinaryOp::DIV || OP == BinaryOp::GT || OP == BinaryOp::LT ||
+            OP == BinaryOp::LE || OP == BinaryOp::GE || OP == BinaryOp::ATAN2 || OP == BinaryOp::COPY_DEST || OP == BinaryOp::GCD || OP == BinaryOp::LCM ||
+            quasar_binary_op_is_quant(OP) || quasar_binary_op_is_max_min(OP),
         "This Quasar binary SFPU operation requires 32x32 tiles");
 
     if constexpr (BCAST_TYPE != BroadcastType::NONE)
@@ -1813,6 +1820,38 @@ void call_binary_sfpu_operation_quasar(std::uint32_t src0_tile, std::uint32_t sr
             TILE_SHAPE,
             calculate_binary_comp_int32,
             (false, ITERATIONS, SfpuType::ge, SIGN_MAGNITUDE_FORMAT),
+            src0_tile,
+            src1_tile,
+            dst_tile,
+            vector_mode);
+    }
+    else if constexpr (OP == BinaryOp::MUL_SM_SHIFT23_ENSURED)
+    {
+        // Same kernel with all four preconditions asserted, which is the only shape that runs on
+        // SFPLOADMACRO. The test must therefore feed non-negative operands that both fit in 23 bits.
+        // TILE_SHAPE is named here rather than appended, because the ensure_* flags sit behind it.
+        LLK_ASSERT(math_format == DataFormat::Int32, "mul_int32 sm_shift23 supports Int32 only");
+        SFPU_BINARY_CALL(
+            DST_SYNC,
+            is_fp32_dest_acc_en,
+            _mul_int32_sm_shift23_,
+            (false, ITERATIONS, SIGN_MAGNITUDE_FORMAT, TILE_SHAPE, true, true, true, true),
+            src0_tile,
+            src1_tile,
+            dst_tile,
+            vector_mode);
+    }
+    else if constexpr (OP == BinaryOp::MUL_SM_SHIFT23)
+    {
+        // sign * ((|a| * |b|) >> 23). The ensure_* preconditions all default off here, so the
+        // kernel forms every partial product and the test may feed arbitrary signed operands.
+        LLK_ASSERT(math_format == DataFormat::Int32, "mul_int32 sm_shift23 supports Int32 only");
+        SFPU_BINARY_CALL_TINY_TILE(
+            DST_SYNC,
+            is_fp32_dest_acc_en,
+            TILE_SHAPE,
+            _mul_int32_sm_shift23_,
+            (false, ITERATIONS, SIGN_MAGNITUDE_FORMAT),
             src0_tile,
             src1_tile,
             dst_tile,

@@ -311,6 +311,21 @@ const map<std::string, std::map<std::string, std::string>> sfpu_binary_op_to_op_
      {{"SFPU_OP_BINARY_MUL_INT_INCLUDE", "1"},
       {"SFPU_OP_INIT_0", "mul_int_tile_init<DataFormat::Int32>();"},
       {"SFPU_OP_CHAIN_0", "mul_int_tile<DataFormat::Int32>(0, 1, 0);"}}},
+    // mul_int_sm_shift23: sign * ((|a| * |b|) >> 23), the rescale step of an integer requant. Unlike
+    // add_int/mul_int the operands have to clear 2^23 before the shift keeps anything, so this one takes
+    // genuine Int32 L1 tiles unpacked straight to DEST instead of promoted Int8 bytes. All four ensure_*
+    // preconditions stay off, so the kernel forms every partial product and accepts arbitrary signed operands.
+    {"mul_int_sm_shift23",
+     {{"SFPU_OP_BINARY_MUL_INT_INCLUDE", "1"},
+      {"SFPU_OP_INIT_0", "mul_int_tile_sm_and_shift23_init<false, false, false, false, DataFormat::Int32>();"},
+      {"SFPU_OP_CHAIN_0", "mul_int_tile_sm_and_shift23<false, false, false, false, DataFormat::Int32>(0, 1, 0);"}}},
+    // Same op with all four preconditions asserted, which is the shape that runs on SFPLOADMACRO.
+    // Its stimuli are non-negative and both below 2^23 so the promises actually hold; feeding it the
+    // signed wide operands above would be a precondition violation, not a test.
+    {"mul_int_sm_shift23_ensured",
+     {{"SFPU_OP_BINARY_MUL_INT_INCLUDE", "1"},
+      {"SFPU_OP_INIT_0", "mul_int_tile_sm_and_shift23_init<true, true, true, true, DataFormat::Int32>();"},
+      {"SFPU_OP_CHAIN_0", "mul_int_tile_sm_and_shift23<true, true, true, true, DataFormat::Int32>(0, 1, 0);"}}},
     {"gt_int",
      {{"SFPU_OP_BINARY_GT_INT_INCLUDE", "1"},
       {"SFPU_OP_INIT_0", "gt_int_tile_init<DataFormat::Int32>();"},
@@ -846,6 +861,13 @@ bool is_int8_binary_sfpu_op(const std::string& op_name) {
            (op_name == "copy_dest_int");
 }
 
+// Binary int ops whose operands are Int32 L1 tiles unpacked straight to DEST, rather than Int8 bytes
+// promoted on the way in. Both L1 and DEST hold the same sign-magnitude words, so no encoding changes
+// hands anywhere along the path.
+bool is_int32_input_binary_sfpu_op(const std::string& op_name) {
+    return (op_name == "mul_int_sm_shift23") or (op_name == "mul_int_sm_shift23_ensured");
+}
+
 // Scalar golden for the unary SFPU ops, computed in float. Both the bf16 and
 // the Float32 paths share this: bf16 wraps the result in bfloat16,
 // Float32 consumes it directly. Keeping the math in one place is what lets the
@@ -1373,6 +1395,25 @@ std::vector<uint32_t> compute_packed_int8_binary_golden(
     }
     return packed_golden;
 }
+
+// Reference for mul_int_sm_shift23, in the sign-magnitude words the kernel reads out of and writes back
+// into DEST. The product is formed in 64 bits so the shift sees the bits above 32 that the kernel keeps
+// via its high partial product.
+std::vector<uint32_t> compute_packed_int32_sm_shift23_golden(
+    const std::vector<uint32_t>& packed_lhs, const std::vector<uint32_t>& packed_rhs) {
+    TT_FATAL(packed_lhs.size() == packed_rhs.size(), "lhs/rhs packed size mismatch");
+    constexpr uint32_t sign_bit = 0x80000000u;
+    constexpr uint32_t magnitude_mask = 0x7FFFFFFFu;
+    std::vector<uint32_t> packed_golden(packed_lhs.size());
+    for (size_t i = 0; i < packed_lhs.size(); ++i) {
+        const uint64_t product = static_cast<uint64_t>(packed_lhs[i] & magnitude_mask) *
+                                 static_cast<uint64_t>(packed_rhs[i] & magnitude_mask);
+        const auto magnitude = static_cast<uint32_t>((product >> 23) & magnitude_mask);
+        packed_golden[i] = magnitude | ((packed_lhs[i] ^ packed_rhs[i]) & sign_bit);
+    }
+    return packed_golden;
+}
+
 vector<uint32_t> generate_packed_sfpu_input(const unsigned int numel, const std::string& op_name, const int seed) {
     const auto uniform = [&](float lo, float hi) {
         return generate_packed_uniform_random_vector<uint32_t, bfloat16>(lo, hi, numel, seed);
@@ -1520,12 +1561,45 @@ static vector<uint32_t> generate_div_operand(const unsigned int numel, const int
     return pack_vector<uint32_t, bfloat16>(unpacked);
 }
 
+// Sign-magnitude Int32 operands for mul_int_sm_shift23, in the two regimes the kernel is exact in.
+// Even elements stay narrow, so both magnitudes fit in 23 bits and the two cross terms carry the whole
+// result; odd elements push the LHS past 2^23 and shrink the RHS, which is what makes the high partial
+// product the dominant term. Every magnitude is at least 2^12, so every product clears 2^23 and no lane
+// lands on a zero result -- sign-magnitude negative zero is a separate question this sweep does not ask.
+// The "_ensured" variant asserts all four preconditions, so its operands must be non-negative and
+// both below 2^23 or the kernel is within its rights to return anything.
+std::pair<vector<uint32_t>, vector<uint32_t>> generate_int32_sm_shift23_inputs(
+    const unsigned int numel, const std::string& op_name, const int seed) {
+    const bool all_ensured = op_name == "mul_int_sm_shift23_ensured";
+    std::mt19937 rng(seed);
+    std::uniform_int_distribution<uint32_t> narrow(1u << 12, (1u << 23) - 1);
+    std::uniform_int_distribution<uint32_t> wide(1u << 23, (1u << 31) - 1);
+    std::uniform_int_distribution<uint32_t> small(1u << 12, (1u << 15) - 1);
+    std::bernoulli_distribution negative(0.5);
+
+    vector<uint32_t> lhs(numel);
+    vector<uint32_t> rhs(numel);
+    for (unsigned int i = 0; i < numel; ++i) {
+        const bool wide_lhs = !all_ensured && (i % 2) != 0;
+        const uint32_t magnitude_lhs = wide_lhs ? wide(rng) : narrow(rng);
+        const uint32_t magnitude_rhs = wide_lhs ? small(rng) : narrow(rng);
+        const uint32_t sign_lhs = (!all_ensured && negative(rng)) ? 0x80000000u : 0u;
+        const uint32_t sign_rhs = (!all_ensured && negative(rng)) ? 0x80000000u : 0u;
+        lhs[i] = magnitude_lhs | sign_lhs;
+        rhs[i] = magnitude_rhs | sign_rhs;
+    }
+    return {lhs, rhs};
+}
+
 // Per-operand stimuli for binary SFPU ops. LHS and RHS use independent seeds so
 // their signs and magnitudes vary independently.
 std::pair<vector<uint32_t>, vector<uint32_t>> generate_packed_sfpu_binary_inputs(
     const unsigned int numel, const std::string& op_name, const int seed) {
     if (is_non_negative_int8_binary_op(op_name)) {
         return generate_non_negative_int8_binary_inputs(numel, op_name, seed);
+    }
+    if (is_int32_input_binary_sfpu_op(op_name)) {
+        return generate_int32_sm_shift23_inputs(numel, op_name, seed);
     }
     const auto uniform = [&](float lo, float hi, int s) {
         return generate_packed_uniform_random_vector<uint32_t, bfloat16>(lo, hi, numel, s);
@@ -1682,9 +1756,9 @@ bool is_close_packed_sfpu_output(
     if (op_name == "div_int32") {
         return is_close_packed_sfpu_output_f32(vec_a, vec_b, op_name);
     }
-    if (is_int8_binary_sfpu_op(op_name) || op_name == "binary_max" || op_name == "binary_min" ||
-        op_name == "reshuffle_rows" || op_name == "copy_dest" || op_name == "mask" || op_name == "mask_posinf" ||
-        op_name == "isclose") {
+    if (is_int8_binary_sfpu_op(op_name) || is_int32_input_binary_sfpu_op(op_name) || op_name == "binary_max" ||
+        op_name == "binary_min" || op_name == "reshuffle_rows" || op_name == "copy_dest" || op_name == "mask" ||
+        op_name == "mask_posinf" || op_name == "isclose") {
         return vec_a == vec_b;
     }
     if (is_exact_unary_sfpu_op(op_name)) {
@@ -2762,7 +2836,8 @@ bool run_sfpu_binary_two_input_buffer(distributed::MeshDevice& mesh_device, cons
         &mesh_device);
 
     const bool is_int8_op = sfpu_util::is_int8_binary_sfpu_op(test_config.sfpu_op);
-    const size_t element_size = is_int8_op ? sizeof(int8_t) : sizeof(bfloat16);
+    const bool is_int32_input_op = sfpu_util::is_int32_input_binary_sfpu_op(test_config.sfpu_op);
+    const size_t element_size = is_int8_op ? sizeof(int8_t) : (is_int32_input_op ? sizeof(int32_t) : sizeof(bfloat16));
     const uint32_t numel = per_buffer_byte_size_input / element_size;
     const int seed = sfpu_test_seed;
     auto [packed_lhs, packed_rhs] = sfpu_util::generate_packed_sfpu_binary_inputs(numel, test_config.sfpu_op, seed);
@@ -2770,6 +2845,8 @@ bool run_sfpu_binary_two_input_buffer(distributed::MeshDevice& mesh_device, cons
     std::vector<uint32_t> packed_golden;
     if (is_int8_op) {
         packed_golden = sfpu_util::compute_packed_int8_binary_golden(packed_lhs, packed_rhs, test_config.sfpu_op);
+    } else if (is_int32_input_op) {
+        packed_golden = sfpu_util::compute_packed_int32_sm_shift23_golden(packed_lhs, packed_rhs);
     } else {
         auto lhs = unpack_vector<bfloat16, uint32_t>(packed_lhs);
         auto rhs = unpack_vector<bfloat16, uint32_t>(packed_rhs);
@@ -2873,12 +2950,20 @@ bool run_sfpu_binary_two_input_buffer(distributed::MeshDevice& mesh_device, cons
             },
     };
 
+    ComputeHardwareConfig::ComputeUnpackModes unpack_modes{};
+    if (is_int32_input_op) {
+        // A 32-bit input DFB against a 32-bit DEST has to name its unpack mode explicitly, and only
+        // UnpackToDest keeps all 32 bits of the operands (UnpackToSrc would truncate them to 19).
+        unpack_modes = {
+            {IN0_DFB, tt::tt_metal::UnpackMode::UnpackToDest}, {IN1_DFB, tt::tt_metal::UnpackMode::UnpackToDest}};
+    }
     ComputeHardwareConfig compute_hw_config;
     compute_hw_config = ComputeHardwareConfig{
         .sfpu_precision_mode =
             test_config.approx_mode ? tt::tt_metal::Precision::Approximate : tt::tt_metal::Precision::Precise,
-        .enable_32_bit_dest =
-            is_int8_op || test_config.sfpu_op == "add_top_row" || sfpu_util::is_sfpu_bcast_op(test_config.sfpu_op),
+        .enable_32_bit_dest = is_int8_op || is_int32_input_op || test_config.sfpu_op == "add_top_row" ||
+                              sfpu_util::is_sfpu_bcast_op(test_config.sfpu_op),
+        .unpack_modes = unpack_modes,
     };
 
     KernelSpec compute_spec{
@@ -4040,14 +4125,18 @@ TEST_P(SingleCoreSingleMeshDeviceSfpuBinaryParameterizedFixture, TensixSfpuBinar
         GTEST_SKIP() << "Binary SFPU op test not fixed for WH/BH";
     }
 
-    // add_int/mul_int: Int8 L1 inputs promoted to sign-mag Int32 output. div_binary stays bfloat16.
+    // add_int/mul_int: Int8 L1 inputs promoted to sign-mag Int32 output. mul_int_sm_shift23 needs operands
+    // wider than 23 bits, so it is sign-mag Int32 on both sides. div_binary stays bfloat16.
     const bool is_int8_op = unit_tests::sfpu_util::is_int8_binary_sfpu_op(sfpu_op);
-    const tt::DataFormat data_format_input = is_int8_op ? tt::DataFormat::Int8 : tt::DataFormat::Float16_b;
-    tt::DataFormat data_format_output = is_int8_op ? tt::DataFormat::Int32 : tt::DataFormat::Float16_b;
+    const bool is_int32_input_op = unit_tests::sfpu_util::is_int32_input_binary_sfpu_op(sfpu_op);
+    const tt::DataFormat data_format_input =
+        is_int8_op ? tt::DataFormat::Int8 : (is_int32_input_op ? tt::DataFormat::Int32 : tt::DataFormat::Float16_b);
+    tt::DataFormat data_format_output =
+        (is_int8_op || is_int32_input_op) ? tt::DataFormat::Int32 : tt::DataFormat::Float16_b;
     if (sfpu_op == "div_int32") {
         data_format_output = tt::DataFormat::Float32;
     }
-    const size_t tile_byte_size = is_int8_op ? tt::tile_size(tt::DataFormat::Int8) : 2 * 32 * 32;
+    const size_t tile_byte_size = (is_int8_op || is_int32_input_op) ? tt::tile_size(data_format_input) : 2 * 32 * 32;
 
     CoreRange core_range({0, 0}, {0, 0});
     CoreRangeSet core_range_set({core_range});
@@ -4076,6 +4165,8 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(1, "atan2"),
         std::make_tuple(1, "add_int"),
         std::make_tuple(1, "mul_int"),
+        std::make_tuple(1, "mul_int_sm_shift23"),
+        std::make_tuple(1, "mul_int_sm_shift23_ensured"),
         std::make_tuple(1, "gt_int"),
         std::make_tuple(1, "binary_max"),
         std::make_tuple(1, "binary_min"),
