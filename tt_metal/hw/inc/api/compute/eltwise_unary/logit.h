@@ -34,7 +34,8 @@ template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, bool on_board = false>
 ALWI void logit_tile([[maybe_unused]] uint32_t idst) {
 #if defined(ARCH_BLACKHOLE) || defined(ARCH_WORMHOLE)
     static_assert(!is_fp32_dest_acc_en, "logit_tile evaluates BF16 DEST");
-    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_logit_bf16, (32), idst, VectorMode::None));
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_logit_bf16, (32 /*ITERATIONS*/), idst, VectorMode::None));
 #else
     static_assert(on_board, "logit_tile: Blackhole and Wormhole only");
 #endif

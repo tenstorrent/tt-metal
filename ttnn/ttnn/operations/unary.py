@@ -960,10 +960,6 @@ def _golden_function_logit_torch(input_tensor_a, *args, eps=None, **kwargs):
     result = torch.where(x == 1.0, math.inf, result)
     result = torch.where(x < 0.0, math.nan, result)
     result = torch.where(x > 1.0, math.nan, result)
-    result = torch.where(x == math.inf, math.nan, result)
-    result = torch.where(x == -math.inf, math.nan, result)
-    result = torch.where((x == 0) & ~torch.signbit(x), -math.inf, result)
-    result = torch.where((x == 0) & torch.signbit(x), -math.inf, result)
     result = torch.where(torch.isnan(x), math.nan, result)
     # float64 to BF16 in one rounding: to float32 by round-to-odd, then to nearest even.
     f32 = result.to(torch.float32)

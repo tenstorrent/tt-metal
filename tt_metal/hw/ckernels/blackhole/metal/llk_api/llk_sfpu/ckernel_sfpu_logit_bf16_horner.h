@@ -5,17 +5,14 @@
 #pragma once
 
 #include <cstdint>
-
 #include "sfpi.h"
 
-namespace ckernel::sfpu::ttpoly::logit
-{
-using namespace ::sfpi;
+namespace ckernel::sfpu::ttpoly::logit {
 using ::sfpi::DataLayout;
-
-__attribute__((always_inline)) inline vFloat sfpu_mad(vFloat a, vFloat b, vFloat c)
-{
+using ::sfpi::SFPMAD_MOD1_OFFSET_NONE;
+using ::sfpi::vFloat;
+__attribute__((always_inline)) inline vFloat sfpu_mad(vFloat a, vFloat b, vFloat c) {
     return __builtin_rvtt_sfpmad(a.get(), b.get(), c.get(), SFPMAD_MOD1_OFFSET_NONE);
 }
 
-} // namespace ckernel::sfpu::ttpoly::logit
+}  // namespace ckernel::sfpu::ttpoly::logit
