@@ -293,11 +293,9 @@ void kernel_main() {
             if (kt == k0) {
                 gguf_zero_tile<pack>(0);
             }
-            // The group step at t = 0 (set 0; k0 starts a group), copied to set 1 at t = 1.
+            // The group step at t = 0 (set 0; k0 starts a group), into both sets.
             if (group_step && t == 0) {
-                gguf_decode_group<fmt, pack>(out);
-            } else if (group_step && t == 1) {
-                gguf_decode_group_copy<fmt, int(out_of(1)) - int(out_of(0)), pack>(out_of(0));
+                gguf_decode_group<fmt, pack, int(out_of(1)) - int(out_of(0))>(out);
             }
             // A tile two after one of its group decodes at the same DEST tiles: their params are in place.
             if constexpr (gguf_decode_params_per_group<fmt>) {
