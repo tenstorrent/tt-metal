@@ -589,11 +589,13 @@ void kernel_main() {
     if constexpr (QK_CORE) {
         if (small_sender) {
             const uint32_t gate_page = first_unit * RATIO / TILE_ROWS;  // decode: tile row 0
+            // Packed form: b_args and a_args are mixed_qkv's; its gate tile lands in both slots, b is split below.
+            const uint32_t ba_page = GDN_PACKED_GATE_TILE + gate_page;
             const uint64_t gate_srcs[GDN_SMALL_IN_GATE_PAGES] = {
                 TensorAccessor(a_log_args, get_common_arg_val<uint32_t>(3), OUT_TILE_BYTES).get_noc_addr(gate_page),
                 TensorAccessor(dt_bias_args, get_common_arg_val<uint32_t>(4), OUT_TILE_BYTES).get_noc_addr(gate_page),
-                TensorAccessor(b_args, get_common_arg_val<uint32_t>(5), OUT_TILE_BYTES).get_noc_addr(gate_page),
-                TensorAccessor(a_args, get_common_arg_val<uint32_t>(6), OUT_TILE_BYTES).get_noc_addr(gate_page)};
+                TensorAccessor(b_args, get_common_arg_val<uint32_t>(5), OUT_TILE_BYTES).get_noc_addr(ba_page),
+                TensorAccessor(a_args, get_common_arg_val<uint32_t>(6), OUT_TILE_BYTES).get_noc_addr(ba_page)};
             noc_async_read_set_trid(SMALL_TRID);
             uint32_t dst = small_base;
             for (const uint64_t src : gate_srcs) {
@@ -715,6 +717,10 @@ void kernel_main() {
                 (col + 1 == Kt || ncrisc_noc_read_with_transaction_id_flushed(noc_index, SMALL_TRID))) {
                 noc_async_read_barrier_with_trid(SMALL_TRID);
                 noc_async_read_set_trid(0);
+                if constexpr (GDN_PACKED_TILES != 0) {
+                    const uint32_t b_tile = small_base + 2 * OUT_TILE_BYTES;
+                    gdn::packed_gate_b<OUT_TILE_BYTES>(b_tile, b_tile, Hv, 0, batch);
+                }
 #if GDN_SMALL_MCAST
                 small_channel.optional_sender(noc)->send(small_base, small_base, small_bytes);
 #endif

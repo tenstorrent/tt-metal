@@ -285,6 +285,9 @@ IN_VEC_PAGES = 1
 # The static CB region ends at or below this L1 address on every core (Refinement 12): the caller keeps L1 tensors
 # alive across the call (the model's residual stream is L1 width-sharded), allocated downward from the top of L1.
 L1_CB_REGION_END = 1_200_000
+# Tensors of the call itself in L1 below that address (the packed projection rows at T=2048 take ~155 KB per core) lower
+# the bound for the call to their lowest address, in steps of L1_END_STEP: the regimes shrink their buffers to it.
+L1_END_STEP = 16384
 
 # ---- CB indices ----
 CB_STATE_IN = 0
@@ -735,11 +738,23 @@ def l1_cb_budget(device):
     return L1_CB_REGION_END - ttnn.device.get_allocator_base_address(device, ttnn.BufferType.L1)
 
 
-def check_l1_footprint(role, footprint, budget):
+def l1_region_end(tensors):
+    """Where the static CB region must end when a tensor of the call (the packed rows, z, an L1 output) lives in L1
+    below L1_CB_REGION_END: its lowest L1 buffer address, rounded down to L1_END_STEP (part of the program cache key);
+    None when the default bound holds."""
+    lowest = min(
+        (t.buffer_address() for t in tensors if t.memory_config().buffer_type == ttnn.BufferType.L1),
+        default=L1_CB_REGION_END,
+    )
+    return None if lowest >= L1_CB_REGION_END else lowest // L1_END_STEP * L1_END_STEP
+
+
+def check_l1_footprint(role, footprint, budget, region_end=None):
     if footprint > budget:
+        beside = "" if region_end is None else " (below the call's L1 tensors)"
         raise RuntimeError(
             f"gated_delta_net: {role} cores need {footprint} B of static circular buffers, above the {budget} B that "
-            f"keep the CB region at or below L1 address {L1_CB_REGION_END}"
+            f"keep the CB region at or below L1 address {region_end or L1_CB_REGION_END}{beside}"
         )
 
 
@@ -803,6 +818,11 @@ def _prep_estimate(batch, value_heads, key_heads, tokens, Vb, heads, spare_cores
 
 def _prep_heads(batch, value_heads, key_heads, tokens, Vb, spare_cores):
     """(value heads per R-PREP group, PREP_SHARE_QK): PREP_HEADS / PREP_SHARE_QK, or the modelled fastest."""
+    return _prep_head_options(batch, value_heads, key_heads, tokens, Vb, spare_cores)[0]
+
+
+def _prep_head_options(batch, value_heads, key_heads, tokens, Vb, spare_cores):
+    """Every (value heads per R-PREP group, PREP_SHARE_QK) the knobs allow, the modelled fastest first."""
     ratio = value_heads // key_heads
     if PREP_HEADS is not None:
         assert ratio % PREP_HEADS == 0, "PREP_HEADS must divide the value heads per key head"
@@ -812,7 +832,7 @@ def _prep_heads(batch, value_heads, key_heads, tokens, Vb, spare_cores):
         if ratio % h == 0
         for shared in ((False, True) if PREP_SHARE_QK == "auto" else (bool(PREP_SHARE_QK),))
     ]
-    return min(
+    return sorted(
         options,
         key=lambda opt: (
             _prep_estimate(batch, value_heads, key_heads, tokens, Vb, opt[0], spare_cores, opt[1]),
@@ -822,11 +842,14 @@ def _prep_heads(batch, value_heads, key_heads, tokens, Vb, spare_cores):
     )
 
 
-def _prep_layout(batch, value_heads, key_heads, tokens, Kt, Vt, pieces, chunked, dtype, spare_cores, budget):
+def _prep_layout(
+    batch, value_heads, key_heads, tokens, Kt, Vt, pieces, chunked, dtype, spare_cores, budget, shrink=False
+):
     """R-PREP plan, or None to keep prep and state on the same core: (prep cores per group cap, inbox depth, value
     heads per group). A group is (sequence, key head, subset of `heads` of its value heads). Needs one unit per core
     (R-VSPLIT), at least one idle core per group, the key head's value heads in one gate tile column (one gate tile
-    per prepped tile row) and the merged plan inside L1."""
+    per prepped tile row) and the merged plan inside L1. shrink (a budget lowered by the call's L1 tensors): when the
+    modelled fastest grouping does not fit, the next ones are tried (fewer heads per group: smaller prep cores)."""
     ratio = value_heads // key_heads
     if not (PREP_OFFLOAD and chunked and pieces > 1):
         return None
@@ -834,21 +857,22 @@ def _prep_layout(batch, value_heads, key_heads, tokens, Kt, Vt, pieces, chunked,
         return None
     if min(_seq_tile_rows(seq, tokens) for seq in range(batch)) < PREP_MIN_TILE_ROWS:
         return None
-    heads, shared = _prep_heads(batch, value_heads, key_heads, tokens, Vt // pieces, spare_cores)
-    per_group = _prep_positions(batch, value_heads, key_heads, heads, shared, spare_cores)
-    if per_group < 1:
-        return None
-    # A prep core's next tile row is granted only after its current one has landed when its stride is at least
-    # the inbox depth (the cumulative credit count relies on it).
-    inbox = min([INBOX_DEPTH, per_group] + [_seq_tile_rows(seq, tokens) for seq in range(batch)])
-    if shared:  # the q / k landing and grant counters follow the inbox's
-        inbox = min(inbox, MAX_SEMAPHORES - LANDED_FIRST_SEM_ID - 4 - _prep_qk_dests(ratio, heads))
-    # The deepest inbox that fits L1 (a shallower one only costs slack between a grant and its landing).
-    while inbox >= 1:
-        plans = _prep_cb_plan(Kt, Vt, heads, _conv_on_fpu(dtype), pieces, inbox, shared)
-        if _prep_plan_bytes(plans, dtype) <= budget:
-            return per_group, inbox, heads, shared
-        inbox -= 1
+    options = _prep_head_options(batch, value_heads, key_heads, tokens, Vt // pieces, spare_cores)
+    for heads, shared in options if shrink else options[:1]:
+        per_group = _prep_positions(batch, value_heads, key_heads, heads, shared, spare_cores)
+        if per_group < 1:
+            continue
+        # A prep core's next tile row is granted only after its current one has landed when its stride is at least
+        # the inbox depth (the cumulative credit count relies on it).
+        inbox = min([INBOX_DEPTH, per_group] + [_seq_tile_rows(seq, tokens) for seq in range(batch)])
+        if shared:  # the q / k landing and grant counters follow the inbox's
+            inbox = min(inbox, MAX_SEMAPHORES - LANDED_FIRST_SEM_ID - 4 - _prep_qk_dests(ratio, heads))
+        # The deepest inbox that fits L1 (a shallower one only costs slack between a grant and its landing).
+        while inbox >= 1:
+            plans = _prep_cb_plan(Kt, Vt, heads, _conv_on_fpu(dtype), pieces, inbox, shared)
+            if _prep_plan_bytes(plans, dtype) <= budget:
+                return per_group, inbox, heads, shared
+            inbox -= 1
     return None
 
 
@@ -1036,13 +1060,15 @@ def _mcast_rects(device, cores):
     return args
 
 
-def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config):
+def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config, packed=False, l1_end=None):
+    """packed: z, b and a of `inputs` are mixed_qkv itself, whose rows hold [x | z | a | b]. l1_end: l1_region_end() of
+    the call's tensors."""
     mixed_qkv, z, b, a, conv_state, recurrent_state, conv_weight, A_log, dt_bias, norm_weight = inputs
     output, conv_state_out, recurrent_state_out = outputs
 
     assert TOKEN_TILE_ROWS_PER_BLOCK == 1, "only one tile row per prep block is built"
     batch, value_heads, key_dim, value_dim = (int(d) for d in recurrent_state.shape)
-    rows, channels = int(mixed_qkv.shape[1]), int(mixed_qkv.shape[2])
+    rows, channels = int(mixed_qkv.shape[1]), int(conv_state.shape[2])
     tokens = rows // batch
     Kt, Vt = key_dim // TILE, value_dim // TILE
     key_heads = (channels - value_heads * value_dim) // (2 * key_dim)
@@ -1059,13 +1085,26 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
     pieces = _value_pieces(num_pairs, Vt, num_grid_cores)
     chunked = _chunked(tokens, device)
     budget = l1_cb_budget(device)
+    if l1_end is not None:
+        budget -= L1_CB_REGION_END - l1_end
     if V_BLOCK_TILES is None and pieces > 1:
         # R-PREP: the modelled fastest of the piece counts it can run (else R-VSPLIT keeps its pieces).
         best = None
         for option in range(2, min(pieces, PREP_MAX_PIECES) + 1):
             spare_cores = num_grid_cores - num_pairs * option
             plan = Vt % option == 0 and _prep_layout(
-                batch, value_heads, key_heads, tokens, Kt, Vt, option, chunked, mixed_qkv.dtype, spare_cores, budget
+                batch,
+                value_heads,
+                key_heads,
+                tokens,
+                Kt,
+                Vt,
+                option,
+                chunked,
+                mixed_qkv.dtype,
+                spare_cores,
+                budget,
+                l1_end is not None,
             )
             if plan:
                 cost = _prep_estimate(
@@ -1158,7 +1197,20 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
     # and every state core its own v columns, each a column only that core reads, so in place needs no signal.
     cs_split = 0 if not qk_cores else (2 if pieces > 1 else 1)
     spare = [c for c in grid_cores if (c.x, c.y) not in state_set]
-    prep = _prep_layout(batch, value_heads, key_heads, tokens, Kt, Vt, pieces, chunked, token_dtype, len(spare), budget)
+    prep = _prep_layout(
+        batch,
+        value_heads,
+        key_heads,
+        tokens,
+        Kt,
+        Vt,
+        pieces,
+        chunked,
+        token_dtype,
+        len(spare),
+        budget,
+        l1_end is not None,
+    )
     heads = ratio  # R-PREP: value heads per prep group
     shared = False  # R-PREP: PREP_SHARE_QK (q / k cores)
     norm_split = False  # R-PREP: PREP_NORM_SPLIT
@@ -1199,7 +1251,7 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
         while unit_depth > 1 and _plan_bytes(cb_plan, token_dtype) > budget:
             unit_depth -= 1
             cb_plan = local_plan(unit_depth)
-        check_l1_footprint("pair and q / k" if qk_cores else "pair", _plan_bytes(cb_plan, token_dtype), budget)
+        check_l1_footprint("pair and q / k" if qk_cores else "pair", _plan_bytes(cb_plan, token_dtype), budget, l1_end)
     else:
         per_group, inbox, heads, shared = prep
         prep_plans = _prep_cb_plan(Kt, Vt, heads, conv_on_fpu, pieces, inbox, shared)
@@ -1223,7 +1275,7 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
                 norm_split, prep_plans = True, split_plans
         for role, plan in zip(("R-PREP state", "R-PREP prep", "R-PREP q / k"), prep_plans):
             if plan:
-                check_l1_footprint(role, _plan_bytes(plan, token_dtype), budget)
+                check_l1_footprint(role, _plan_bytes(plan, token_dtype), budget, l1_end)
         cluster_picks = None
         if PREP_CLUSTER:
             # Each group's state and prep cores as one blob around the first free core (row-major), its state cores at
@@ -1698,6 +1750,9 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
             ("GDN_STATE_FUSED_RHS", str(int(prep is not None and STATE_FUSED_RHS))),
         ]
     )
+    if packed:
+        packed_tiles = -(-int(mixed_qkv.shape[2]) // TILE)
+        defines += [("GDN_PACKED_TILES", str(packed_tiles)), ("GDN_PACKED_GATE_TILE", str(Ct + value_heads * Vt))]
     program_values = {}
     if prep is not None and STATE_FUSED_RHS:
         program_values["GDN_CHUNK_COEF_PAGES"] = CHUNK_COEF_PAGES + 1
@@ -1892,11 +1947,18 @@ def program_cache_size():
     return len(_program_cache)
 
 
-def cached_program_descriptor(key, inputs, outputs, *, epsilon, compute_kernel_config):
+def cached_program_descriptor(
+    key, inputs, outputs, *, epsilon, compute_kernel_config, packed=False, l1_end=None
+):
     entry = _program_cache.get(key)
     if entry is None:
         descriptor = create_program_descriptor(
-            inputs, outputs, epsilon=epsilon, compute_kernel_config=compute_kernel_config
+            inputs,
+            outputs,
+            epsilon=epsilon,
+            compute_kernel_config=compute_kernel_config,
+            packed=packed,
+            l1_end=l1_end,
         )
         # The structural hash leaves out per-core argument values and counts; the key covers them.
         descriptor.custom_program_hash = hash((ttnn.compute_program_descriptor_hash(descriptor), key)) % (1 << 64)

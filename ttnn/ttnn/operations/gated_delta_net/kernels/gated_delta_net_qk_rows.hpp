@@ -47,6 +47,14 @@
 #define GDN_QK_Q_READER_PCT 50
 #endif
 
+// Packed form (host: z, b and a passed as None): a mixed_qkv row holds [x | z | a | b], GDN_PACKED_TILES tiles wide
+// (0: split form), with a in columns [0, Hv) and b in [Hv, 2 Hv) of tile column GDN_PACKED_GATE_TILE. Emitted only by
+// packed programs.
+#ifndef GDN_PACKED_TILES
+#define GDN_PACKED_TILES 0
+#define GDN_PACKED_GATE_TILE 0
+#endif
+
 namespace gdn {
 
 // Declared first in kernel_main so every return drains the kernel's NoC. Semaphore::up(noc, x, y) is a non-posted
@@ -74,6 +82,34 @@ FORCE_INLINE void copy_history_rows(uint32_t cs_col, uint32_t col_win, uint32_t 
             const uint32_t dst = col_win + tap * TILE_BYTES + row_offset(p);
             noc_async_read_one_packet_with_state(src, dst);
             noc_async_read_one_packet_with_state(src + FACE_BYTES, dst + FACE_BYTES);
+        }
+    }
+}
+
+// Packed form: b of rows [row_lo, row_hi), columns [heads, 2 heads) of the landed gate tile src, into columns
+// [0, heads) of the tile dst (src itself, or the b tile beside the a tile). 2 heads <= 32: dst stays in the left faces;
+// per row one run from src's left face and one from its right face, in 32-bit words where the offsets allow.
+template <uint32_t TILE_BYTES>
+inline void packed_gate_b(uint32_t src, uint32_t dst, uint32_t heads, uint32_t row_lo, uint32_t row_hi) {
+    constexpr uint32_t ELEM_BYTES = TILE_BYTES / 1024;
+    constexpr uint32_t FACE_BYTES = TILE_BYTES / 4;
+    const uint32_t left = (heads < 16 - heads ? heads : 16 - heads) * ELEM_BYTES;  // bytes from the left face
+    const uint32_t bytes = heads * ELEM_BYTES;
+    const bool words = ((heads * ELEM_BYTES) & 3) == 0 && (left & 3) == 0;
+    for (uint32_t row = row_lo; row < row_hi; ++row) {
+        const uint32_t to = dst + (row >> 4) * 2 * FACE_BYTES + (row & 15) * 16 * ELEM_BYTES;
+        const uint32_t from_left = src + (to - dst) + heads * ELEM_BYTES;
+        const uint32_t from_right = src + (to - dst) + FACE_BYTES - left;  // + byte offset in the row = right face
+        if (words) {
+            for (uint32_t off = 0; off < bytes; off += 4) {
+                *reinterpret_cast<volatile uint32_t*>(to + off) =
+                    *reinterpret_cast<volatile uint32_t*>((off < left ? from_left : from_right) + off);
+            }
+        } else {
+            for (uint32_t off = 0; off < bytes; off += 2) {
+                *reinterpret_cast<volatile uint16_t*>(to + off) =
+                    *reinterpret_cast<volatile uint16_t*>((off < left ? from_left : from_right) + off);
+            }
         }
     }
 }

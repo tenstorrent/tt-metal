@@ -261,6 +261,15 @@ void kernel_main() {
     constexpr uint32_t n_state = Kt * Vb;
     constexpr uint32_t z_width_tiles = Hv * Vt;
     constexpr uint32_t pair_cols = 2 * Kt + Vb;
+    // Row width in tiles and first tile column of mixed_qkv, z and the gates. Packed form: z_acc, b_acc and a_acc are
+    // mixed_qkv's accessor, z follows the Ct conv columns and the gate tile (a, then b) follows z.
+    constexpr bool PACKED = GDN_PACKED_TILES != 0;
+    constexpr uint32_t Mt = PACKED ? GDN_PACKED_TILES : Ct;
+    constexpr uint32_t z_row_tiles = PACKED ? Mt : z_width_tiles;
+    constexpr uint32_t z_col0 = PACKED ? Ct : 0;
+    constexpr uint32_t gate_row_tiles = PACKED ? Mt : Gt;
+    constexpr uint32_t gate_col0 = PACKED ? GDN_PACKED_GATE_TILE : 0;
+    static_assert(!PACKED || 2 * Hv <= TILE_ROWS, "packed gates: a and b in one tile");
 
     constexpr auto mixed_args = TensorAccessorArgs<21>();
     constexpr auto z_args = TensorAccessorArgs<mixed_args.next_compile_time_args_offset()>();
@@ -549,7 +558,7 @@ void kernel_main() {
             // history rows.
             auto issue_staged = [&](uint32_t local, uint32_t slot, uint32_t tr, uint32_t row, bool with_hist) {
                 const uint32_t ct = pair_col(unit_col(local));
-                read_row_span(mixed, tr * Ct + ct, row, row + 1, cur_stage + slot * TILE_BYTES);
+                read_row_span(mixed, tr * Mt + ct, row, row + 1, cur_stage + slot * TILE_BYTES);
                 if (with_hist) {
                     const uint32_t r0 = hist_row0 % TILE_ROWS;
                     read_row_span(
@@ -645,7 +654,7 @@ void kernel_main() {
                     cb_reserve_back(cb_z, count);
                     const uint32_t z_base = get_write_ptr(cb_z);
                     for (uint32_t vt = 0; vt < count; ++vt) {
-                        const uint32_t page = tr * z_width_tiles + head * Vt + v_first + first + vt;
+                        const uint32_t page = tr * z_row_tiles + z_col0 + head * Vt + v_first + first + vt;
                         read_tile_rows(rows, z_acc, page, base_row, lo, hi, z_base + vt * TILE_BYTES);
                     }
                     rows.finish();
@@ -712,10 +721,12 @@ void kernel_main() {
                             grant.up(noc, kq_src[2], kq_src[3], 1);
                         }
                         // ---- gate inputs: token rows of the b, a tiles of the gate column ----
+                        // Packed form: the gate tile is read as the a tile; b is split from it once it has landed.
+                        uint32_t packed_gate_lo = 0, packed_gate_hi = 0;
                         if constexpr (!PREP_QK) {
                             cb_reserve_back(cb_gate_in, 2);
                             const uint32_t gate_in_base = get_write_ptr(cb_gate_in);
-                            const uint32_t gate_page = tr * Gt + head / TILE_ROWS;
+                            const uint32_t gate_page = tr * gate_row_tiles + gate_col0 + head / TILE_ROWS;
                             // Decode, units of consecutive sequences: the first unit reads the gate rows of all of
                             // them.
                             const bool shared_gates = T == 1 && unit_stride == Hv * PIECES;
@@ -729,7 +740,12 @@ void kernel_main() {
                                     gate_hi = lo - base_row + num_units - unit_idx;
                                     gate_hi = gate_hi < TILE_ROWS ? gate_hi : TILE_ROWS;
                                 }
-                                read_row_span(b_acc, gate_page, lo - base_row, gate_hi, gate_in_base);
+                                if constexpr (PACKED) {
+                                    packed_gate_lo = lo - base_row;
+                                    packed_gate_hi = gate_hi;
+                                } else {
+                                    read_row_span(b_acc, gate_page, lo - base_row, gate_hi, gate_in_base);
+                                }
                                 read_row_span(a_acc, gate_page, lo - base_row, gate_hi, gate_in_base + TILE_BYTES);
                             }
                             prev_gate_in = gate_in_base;
@@ -787,7 +803,7 @@ void kernel_main() {
                                     read_tile_rows(
                                         rows,
                                         mixed,
-                                        tr * Ct + ct,
+                                        tr * Mt + ct,
                                         base_row,
                                         lo,
                                         hi,
@@ -805,7 +821,7 @@ void kernel_main() {
                                     const uint32_t r0 = prev_row0 % TILE_ROWS;
                                     read_row_span(
                                         mixed,
-                                        (prev_row0 / TILE_ROWS) * Ct + ct,
+                                        (prev_row0 / TILE_ROWS) * Mt + ct,
                                         r0,
                                         r0 + GDN_HISTORY,
                                         hist_stage + col * TILE_BYTES);
@@ -819,7 +835,7 @@ void kernel_main() {
                                         const uint32_t tap_tile = col_win + tap * TILE_BYTES;
                                         if (row >= seq_lo + shift) {
                                             const uint32_t src = row - shift;
-                                            rows.read(mixed, (src / TILE_ROWS) * Ct + ct, src % TILE_ROWS, tap_tile, p);
+                                            rows.read(mixed, (src / TILE_ROWS) * Mt + ct, src % TILE_ROWS, tap_tile, p);
                                         } else if (!hist_staged) {
                                             const uint32_t src = hist_row0 + (row - seq_lo) + tap;
                                             rows.read(
@@ -912,6 +928,11 @@ void kernel_main() {
                                 weights_pending = false;
                             }
                             if (gates_pending) {
+                                if (packed_gate_hi != 0) {
+                                    const uint32_t gate_in = get_write_ptr(cb_gate_in);
+                                    gdn::packed_gate_b<TILE_BYTES>(
+                                        gate_in + TILE_BYTES, gate_in, Hv, packed_gate_lo, packed_gate_hi);
+                                }
                                 cb_push_back(cb_gate_in, 2);
                                 gates_pending = false;
                             }
@@ -1005,7 +1026,7 @@ void kernel_main() {
                             rows.read(conv_state, (src / TILE_ROWS) * Ct + ct, src % TILE_ROWS, scratch, slot_row + n);
                         } else {
                             const uint32_t src = seq_lo + T + n - GDN_HISTORY;
-                            rows.read(mixed, (src / TILE_ROWS) * Ct + ct, src % TILE_ROWS, scratch, slot_row + n);
+                            rows.read(mixed, (src / TILE_ROWS) * Mt + ct, src % TILE_ROWS, scratch, slot_row + n);
                         }
                     }
                 }

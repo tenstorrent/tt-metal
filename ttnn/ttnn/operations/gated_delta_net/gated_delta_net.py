@@ -18,6 +18,7 @@ from .gated_delta_net_program_descriptor import (
     knob_values,
     l1_cb_budget,
     l1_footprint_bytes,
+    l1_region_end,
 )
 
 
@@ -84,7 +85,9 @@ def _shape(t):
     return tuple(int(d) for d in t.shape)
 
 
-def _check_shapes(mixed_qkv, z, b, a, conv_state, recurrent_state, conv_weight, A_log, dt_bias, norm_weight, epsilon):
+def _check_shapes(
+    mixed_qkv, z, b, a, conv_state, recurrent_state, conv_weight, A_log, dt_bias, norm_weight, epsilon, packed
+):
     if len(recurrent_state.shape) != 4:
         raise ValueError("gated_delta_net: recurrent_state must be (B, Hv, K, V)")
     batch, value_heads, key_dim, value_dim = _shape(recurrent_state)
@@ -92,18 +95,26 @@ def _check_shapes(mixed_qkv, z, b, a, conv_state, recurrent_state, conv_weight, 
     if len(x_shape) != 3 or x_shape[0] != 1:
         raise ValueError("gated_delta_net: mixed_qkv must be (1, B*T, C)")
     rows, channels = x_shape[1], x_shape[2]
+    if packed:
+        # Rows [x (C) | z (Hv*V) | a (Hv) | b (Hv)]: z, a and b are read from them (z, b, a are mixed_qkv here).
+        channels -= value_heads * value_dim + 2 * value_heads
+        if 2 * value_heads > TILE:
+            raise ValueError("gated_delta_net: the packed form needs Hv <= 16 (a and b in one tile column)")
     if batch < 1 or rows < 1 or rows % batch:
         raise ValueError("gated_delta_net: rows of mixed_qkv must be a positive multiple of B")
     qk_channels = channels - value_heads * value_dim
     if qk_channels <= 0 or qk_channels % (2 * key_dim):
-        raise ValueError("gated_delta_net: C - Hv*V must be a positive multiple of 2*K")
+        raise ValueError(
+            "gated_delta_net: C - Hv*V must be a positive multiple of 2*K"
+            + (" (packed form: mixed_qkv is (1, B*T, C + Hv*V + 2*Hv))" if packed else "")
+        )
     key_heads = qk_channels // (2 * key_dim)
     if value_heads % key_heads:
         raise ValueError("gated_delta_net: Hv must be a multiple of Hk")
-    if _shape(z) != (1, rows, value_heads * value_dim):
+    if not packed and _shape(z) != (1, rows, value_heads * value_dim):
         raise ValueError("gated_delta_net: z must be (1, B*T, Hv*V)")
     for name, t in (("b", b), ("a", a)):
-        if _shape(t) != (1, rows, value_heads):
+        if not packed and _shape(t) != (1, rows, value_heads):
             raise ValueError(f"gated_delta_net: {name} must be (1, B*T, Hv)")
     if _shape(conv_state) != (1, HISTORY * batch, channels):
         raise ValueError("gated_delta_net: conv_state must be (1, 3*B, C)")
@@ -153,10 +164,11 @@ def _tensor_key(t):
     return (repr(t.shape), t.dtype, t.layout, t.memory_config())
 
 
-def _cache_key(tensors, conv_state_out, recurrent_state_out, epsilon, compute_kernel_config):
+def _cache_key(tensors, conv_state_out, recurrent_state_out, epsilon, compute_kernel_config, packed, memory_config):
     """Everything the checks and the program descriptor read from a call except buffer addresses: the device, every
     tensor's shape, dtype, layout and memory config, which state outputs are given and which update in place,
-    epsilon, the compute config and the descriptor knobs."""
+    epsilon, the compute config, the descriptor knobs, the packed form and the output's memory config (the L1 bound
+    of a call with L1 tensors is appended per call)."""
     conv_state, recurrent_state = tensors[4], tensors[5]
     outs = []
     for out, state in ((conv_state_out, conv_state), (recurrent_state_out, recurrent_state)):
@@ -168,7 +180,22 @@ def _cache_key(tensors, conv_state_out, recurrent_state_out, epsilon, compute_ke
         float(epsilon),
         compute_config_key(compute_kernel_config),
         knob_values(),
+        packed,
+        memory_config,
     )
+
+
+_l1_keys = {}  # cache key -> a tensor of the call is in L1
+
+
+def _any_l1(key, memory_config):
+    known = _l1_keys.get(key)
+    if known is None:
+        if len(_l1_keys) > 1024:
+            _l1_keys.clear()
+        configs = [spec[3] for spec in key[1:11]] + [memory_config]
+        known = _l1_keys[key] = any(c is not None and c.buffer_type == ttnn.BufferType.L1 for c in configs)
+    return known
 
 
 def validate(
@@ -187,22 +214,36 @@ def validate(
     compute_kernel_config=None,
     conv_state_out=None,
     recurrent_state_out=None,
+    memory_config=None,
 ):
+    inputs, packed = _inputs(mixed_qkv, z, b, a, conv_state, recurrent_state, conv_weight, A_log, dt_bias, norm_weight)
     return _validate(
-        (mixed_qkv, z, b, a, conv_state, recurrent_state, conv_weight, A_log, dt_bias, norm_weight),
-        epsilon,
-        compute_kernel_config,
-        conv_state_out,
-        recurrent_state_out,
+        inputs, epsilon, compute_kernel_config, conv_state_out, recurrent_state_out, packed, memory_config
     )[0]
 
 
-def _validate(tensors, epsilon, compute_kernel_config, conv_state_out, recurrent_state_out):
+def _inputs(mixed_qkv, z, b, a, *rest):
+    """(the ten input tensors, packed): the packed form (z, b and a all None) reads them from mixed_qkv."""
+    given = [t is not None for t in (z, b, a)]
+    if any(given) != all(given):
+        raise ValueError(
+            "gated_delta_net: pass z, b and a as tensors (split form) or all three as None (packed form: mixed_qkv "
+            "rows hold [x | z | a | b]); got "
+            + ", ".join(f"{name}={'tensor' if g else 'None'}" for name, g in zip("zba", given))
+        )
+    if not given[0]:
+        z = b = a = mixed_qkv
+    return (mixed_qkv, z, b, a, *rest), not given[0]
+
+
+def _validate(tensors, epsilon, compute_kernel_config, conv_state_out, recurrent_state_out, packed, memory_config):
     """validate(), returning (compute config, program cache key)."""
     config = compute_kernel_config if compute_kernel_config is not None else default_compute_kernel_config()
-    key = _cache_key(tensors, conv_state_out, recurrent_state_out, epsilon, compute_kernel_config)
+    key = _cache_key(
+        tensors, conv_state_out, recurrent_state_out, epsilon, compute_kernel_config, packed, memory_config
+    )
     if key not in _validated_keys:
-        _validate_structure(tensors, epsilon, config, conv_state_out, recurrent_state_out)
+        _validate_structure(tensors, epsilon, config, conv_state_out, recurrent_state_out, packed)
         if len(_validated_keys) > 1024:
             _validated_keys.clear()
         _validated_keys.add(key)
@@ -212,10 +253,10 @@ def _validate(tensors, epsilon, compute_kernel_config, conv_state_out, recurrent
     return config, key
 
 
-def _validate_structure(tensors, epsilon, config, conv_state_out, recurrent_state_out):
+def _validate_structure(tensors, epsilon, config, conv_state_out, recurrent_state_out, packed):
     mixed_qkv, z, b, a, conv_state, recurrent_state, conv_weight, A_log, dt_bias, norm_weight = tensors
     key_dim, value_dim = _check_shapes(
-        mixed_qkv, z, b, a, conv_state, recurrent_state, conv_weight, A_log, dt_bias, norm_weight, epsilon
+        mixed_qkv, z, b, a, conv_state, recurrent_state, conv_weight, A_log, dt_bias, norm_weight, epsilon, packed
     )
     _check_state_out("conv_state_out", conv_state_out, conv_state)
     _check_state_out("recurrent_state_out", recurrent_state_out, recurrent_state)
@@ -224,7 +265,7 @@ def _validate_structure(tensors, epsilon, config, conv_state_out, recurrent_stat
         "layout": mixed_qkv.layout,
         "fp32_dest_acc_en": bool(config.fp32_dest_acc_en),
     }
-    inputs = (_shape(mixed_qkv), _shape(recurrent_state))
+    inputs = ((1, _shape(mixed_qkv)[1], _shape(conv_state)[2]), _shape(recurrent_state))
     for axis_name, tagger in INPUT_TAGGERS.items():
         axes[axis_name] = tagger(inputs, axes)
 
@@ -263,26 +304,36 @@ def gated_delta_net(
     compute_kernel_config: ttnn.ComputeConfigDescriptor = None,
     conv_state_out: ttnn.Tensor = None,
     recurrent_state_out: ttnn.Tensor = None,
+    memory_config: ttnn.MemoryConfig = None,
 ):
     """Returns (output, conv_state_out, recurrent_state_out).
+
+    Packed form: with z, b and a all None, mixed_qkv is (1, B*T, C + Hv*V + 2*Hv) and holds per row x in columns
+    [0, C), z in [C, C + Hv*V), a in the next Hv columns and b in the last Hv (the model's fused projection output);
+    the tile padding beyond the last column is never read into a result. Hv <= 16.
+    mixed_qkv, z, b and a may be interleaved L1 tensors: they are read where they live, and the static buffers of the
+    program are sized to end below them (l1_region_end).
+    memory_config: of the output (default: mixed_qkv's).
 
     conv_state_out / recurrent_state_out: optional caller-provided state outputs, each either a tensor of the same
     shape, dtype, layout and memory config as its state input, or that input itself (the state is then updated in
     place; every byte of it is read before any core overwrites it). None allocates a new tensor. No other input is
     written.
     """
-    inputs = (mixed_qkv, z, b, a, conv_state, recurrent_state, conv_weight, A_log, dt_bias, norm_weight)
-    config, key = _validate(inputs, epsilon, compute_kernel_config, conv_state_out, recurrent_state_out)
+    inputs, packed = _inputs(mixed_qkv, z, b, a, conv_state, recurrent_state, conv_weight, A_log, dt_bias, norm_weight)
+    config, key = _validate(
+        inputs, epsilon, compute_kernel_config, conv_state_out, recurrent_state_out, packed, memory_config
+    )
     device = mixed_qkv.device()
     batch, value_heads, key_dim, value_dim = _shape(recurrent_state)
-    rows, channels = _shape(mixed_qkv)[1], _shape(mixed_qkv)[2]
+    rows, channels = _shape(mixed_qkv)[1], _shape(conv_state)[2]
 
     output = ttnn.allocate_tensor_on_device(
         ttnn.Shape([1, rows, value_heads * value_dim]),
         mixed_qkv.dtype,
         ttnn.TILE_LAYOUT,
         device,
-        mixed_qkv.memory_config(),
+        memory_config if memory_config is not None else mixed_qkv.memory_config(),
     )
     if conv_state_out is None:
         conv_state_out = ttnn.allocate_tensor_on_device(
@@ -302,6 +353,10 @@ def gated_delta_net(
         )
 
     outputs = (output, conv_state_out, recurrent_state_out)
-    descriptor = cached_program_descriptor(key, inputs, outputs, epsilon=epsilon, compute_kernel_config=config)
+    # Any tensor of the call in L1 (key: every memory config, in _tensor_key order): the CB region ends below them.
+    l1_end = l1_region_end((*inputs, *outputs)) if _any_l1(key, memory_config) else None
+    descriptor = cached_program_descriptor(
+        (key, l1_end), inputs, outputs, epsilon=epsilon, compute_kernel_config=config, packed=packed, l1_end=l1_end
+    )
     ttnn.generic_op([*inputs, *outputs], descriptor)
     return output, conv_state_out, recurrent_state_out
