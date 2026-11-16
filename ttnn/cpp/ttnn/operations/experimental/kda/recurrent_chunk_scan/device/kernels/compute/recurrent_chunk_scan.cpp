@@ -210,14 +210,14 @@ FORCE_INLINE void extract_paths(
     }
 }
 
-// Replace the one state held by the ring and the carry with an exact copy of seed.
-template <uint32_t Tiles>
+// Replace the one state held by the ring and the carry with an exact copy of seed (buffer ids Seed, Ring, Carry).
+template <uint32_t Tiles, uint32_t Seed, uint32_t Ring, uint32_t Carry>
 FORCE_INLINE void reseed_state(DataflowBuffer& seed, DataflowBuffer& ring, DataflowBuffer& carry) {
     ring.wait_front(Tiles);
     carry.wait_front(Tiles);
     ring.pop_front(Tiles);
     carry.pop_front(Tiles);
-    kda::copy_exact<Tiles>(seed, ring, carry);
+    kda::copy_exact<Tiles, Seed, Ring, Carry>(seed, ring, carry);
 }
 
 // S_{n+1} = S_n + (final_decay * S_n + k_dec_t @ U_n) with final_decay = expm1(G_last) (complement form). Only the
@@ -336,7 +336,7 @@ FORCE_INLINE void compute_summary(uint32_t num_chunks, uint32_t split_chunk, uin
     constexpr uint32_t key_chunk_tiles = Kt * Ct;
 
     identity.wait_front(1);
-    kda::copy_exact<key_pair_tiles>(state, state_ring, state_carry);
+    kda::copy_exact<key_pair_tiles, dfb::state, dfb::state_ring, dfb::state_carry>(state, state_ring, state_carry);
     for (uint32_t chunk = 0; chunk < num_chunks; chunk++) {
         kd.wait_front(chunk_key_tiles);
         v_beta.wait_front(chunk_value_tiles);
@@ -374,7 +374,7 @@ FORCE_INLINE void compute_summary(uint32_t num_chunks, uint32_t split_chunk, uin
             extract_paths<false, Kt, Vt, 1>(state_carry, summary_head_state, identity, value_block);
             // Restart from zero and identity so the tail summary is independent
             // of the head transition just saved above.
-            reseed_state<key_pair_tiles>(state, state_ring, state_carry);
+            reseed_state<key_pair_tiles, dfb::state, dfb::state_ring, dfb::state_carry>(state, state_ring, state_carry);
         }
         kd.pop_front(chunk_key_tiles);
         v_beta.pop_front(chunk_value_tiles);
@@ -424,14 +424,15 @@ FORCE_INLINE void compute_recurrent(uint32_t num_chunks, uint32_t reset_chunk) {
     constexpr uint32_t key_value_tiles = Kt * Vt;
     constexpr uint32_t key_chunk_tiles = Kt * Ct;
 
-    kda::copy_exact<key_value_tiles>(state, state_ring, state_carry);
+    kda::copy_exact<key_value_tiles, dfb::state, dfb::state_ring, dfb::state_carry>(state, state_ring, state_carry);
     for (uint32_t chunk = 0; chunk < num_chunks; chunk++) {
         // A chronological split restarts the causal stream mid-group. The recurrence is affine in
         // the state, so no per-chunk term changes -- only where the carry comes
         // from. reset_chunk 0 means never, which is exact rather than a sentinel:
         // r == 0 means no group straddles, and chunk 0's seed from `state` is copied before the loop.
         if (reset_chunk != 0 && chunk == reset_chunk) {
-            reseed_state<key_value_tiles>(tail_entry_states, state_ring, state_carry);
+            reseed_state<key_value_tiles, dfb::tail_entry_states, dfb::state_ring, dfb::state_carry>(
+                tail_entry_states, state_ring, state_carry);
         }
 
         // Each stage waits for the previous one's packed result. Every stage that reads only the incoming state
@@ -481,7 +482,7 @@ FORCE_INLINE void compute_recurrent(uint32_t num_chunks, uint32_t reset_chunk) {
     // The final state leaves exactly: copied from the FP32 carry straight into DST.
     state_ring.wait_front(key_value_tiles);
     state_ring.pop_front(key_value_tiles);
-    kda::copy_exact<key_value_tiles>(state_carry, final_state);
+    kda::copy_exact<key_value_tiles, dfb::state_carry, dfb::final_state>(state_carry, final_state);
 }
 
 template <uint32_t Ct, uint32_t Kt, uint32_t Vt, uint32_t summary, uint32_t emit_outputs>

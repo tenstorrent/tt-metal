@@ -139,7 +139,7 @@ TT_KERNEL void compute() {
 
     // Seed both views of the state, the matmul's (state) and the exact one the add reads (state_exact), with one exact
     // FP32 copy of the initial state.
-    kda::copy_exact<state_tiles>(initial_exact, state, state_exact);
+    kda::copy_exact<state_tiles, dfb::initial_exact, dfb::state, dfb::state_exact>(initial_exact, state, state_exact);
     for (uint32_t step = 0; step < steps; ++step) {
         state.wait_front(state_tiles);
         e.wait_front(e_tiles);
