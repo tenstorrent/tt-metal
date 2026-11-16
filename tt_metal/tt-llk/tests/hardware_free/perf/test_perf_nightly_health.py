@@ -13,12 +13,15 @@ import pytest
 import yaml
 from nightly_health import (
     NIGHTLIES,
+    OTHER_NIGHTLIES,
     assess,
+    assess_plain,
+    build_details,
     build_text,
     gate_result,
     leg_limits,
-    owners,
     payloads,
+    read_extras,
 )
 
 _WORKFLOWS = pathlib.Path(__file__).parents[5] / ".github" / "workflows"
@@ -74,8 +77,10 @@ def _jobs(wh_conclusion="success", upload="success"):
 def test_a_clean_night_has_no_problem_and_reports_leg_use_and_baseline_age():
     report = assess("SoL", RUN, _jobs(), {4: LOG, 5: LOG}, LIMITS, DAY)
     assert report["problems"] == []
-    text = build_text(DAY.isoformat(), [report])
-    assert ":white_check_mark:" in text
+    assert build_text(DAY.isoformat(), [report]) == (
+        ":white_check_mark: *LLK nightly health, 2026-10-13*: 0 problems"
+    )
+    text = build_details([report])
     assert "BH: 1/5 50%" in text and "WH: 1/5 100%" in text
     assert "baseline `6d88aa4fe5b`, 14 days old" in text
 
@@ -92,7 +97,10 @@ def test_a_timeout_a_failed_upload_and_a_regression_are_problems():
         "SoL: upload failure",
         "SoL blackhole: gate regressed, 110,671 points",
     ]
-    assert ":red_circle:" in build_text(DAY.isoformat(), [report])
+    text = build_text(DAY.isoformat(), [report])
+    assert text.startswith(":red_circle: *LLK nightly health, 2026-10-13*: 3 problems")
+    assert "• SoL: upload failure <https://x/1|run>" in text
+    assert "legs" not in text
 
 
 def test_a_missing_run_and_a_missing_verdict_are_problems():
@@ -109,6 +117,8 @@ def test_gate_result_reads_the_verdict_and_the_baseline_date():
         "regressions": 0,
         "baseline": "6d88aa4fe5b",
         "baseline_age": 14,
+        "compared": None,
+        "new": 0,
     }
 
 
@@ -129,13 +139,13 @@ def test_a_run_in_progress_shows_unfinished_legs():
         "SoL: llk_perf_wormhole group 1/5 not finished",
         "SoL: run still in_progress",
     ]
-    assert "WH: 1/5 ?% ✗" in build_text(DAY.isoformat(), [report])
+    assert "WH: 1/5 ?% ✗" in build_details([report])
 
 
 def test_a_verdict_without_a_baseline_line_has_unknown_age():
     report = assess("SoL", RUN, _jobs(), {4: LOG.splitlines()[1], 5: LOG}, LIMITS, DAY)
-    assert "gate blackhole: clean · baseline `?`, age unknown" in build_text(
-        DAY.isoformat(), [report]
+    assert "gate blackhole: clean · baseline `?`, age unknown" in build_details(
+        [report]
     )
 
 
@@ -166,7 +176,9 @@ def test_the_health_check_starts_after_every_nightly_is_due():
     """A check that runs before a nightly starts reports that nightly missing."""
     health = _crons(_HEALTH)
     assert health, "the health check needs its own schedule"
-    nightlies = [c for _, workflow in NIGHTLIES for c in _crons(workflow)]
+    nightlies = [
+        c for _, workflow in NIGHTLIES + OTHER_NIGHTLIES for c in _crons(workflow)
+    ]
     assert nightlies, "a nightly without a schedule cannot be checked for"
     assert min(health) > max(nightlies)
 
@@ -180,6 +192,36 @@ def test_the_health_check_is_not_driven_by_the_nightlies_finishing():
     doc = yaml.safe_load((_WORKFLOWS / _HEALTH).read_text()) or {}
     triggers = doc.get("on", doc.get(True)) or {}
     assert "workflow_run" not in triggers
+
+
+def test_a_plain_nightly_reports_failed_jobs_and_a_missing_run():
+    jobs = [
+        _job(1, "bit-exact / blackhole", "failure"),
+        _job(2, "bit-exact / wormhole"),
+        _job(3, "summary", "failure"),
+    ]
+    run = {**RUN, "conclusion": "failure"}
+    assert assess_plain("bit-exact", run, jobs)["problems"] == [
+        "bit-exact: bit-exact / blackhole failure"
+    ]
+    assert assess_plain("bit-exact", None, [])["problems"] == [
+        "bit-exact: no scheduled run"
+    ]
+    report = assess_plain("e2e", {**RUN, "conclusion": "cancelled"}, [])
+    assert report["problems"] == ["e2e: run cancelled"]
+    assert "legs" not in build_details([report]).split("**e2e**")[1]
+
+
+def test_reports_of_other_checks_join_the_message(tmp_path):
+    good = tmp_path / "a.json"
+    good.write_text(
+        '{"name": "Drift", "problems": ["WH matmul +4 %"], "lines": ["7 modules"]}'
+    )
+    extras = read_extras([str(good), str(tmp_path / "missing.json")])
+    assert extras[0]["problems"] == ["WH matmul +4 %"]
+    assert "no report" in extras[1]["problems"][0]
+    assert ": 2 problems" in build_text(DAY.isoformat(), [], extras)
+    assert "**Drift**\n7 modules" in build_details([], extras)
 
 
 def test_gate_result_reads_the_lines_the_gate_really_prints(
@@ -213,6 +255,8 @@ def test_gate_result_reads_the_lines_the_gate_really_prints(
         "regressions": 0,
         "baseline": "6d88aa4fe5b",
         "baseline_age": 14,
+        "compared": None,
+        "new": 0,
     }
 
 
@@ -224,16 +268,22 @@ class _Conn:
         pass
 
 
-def test_the_channel_copy_tags_the_owners_only_when_something_is_wrong(tmp_path):
-    path = tmp_path / "t.yaml"
-    path.write_text(
-        "- name: a\n  owner_id: U2\n  skus: {x: {timeout: 1}}\n"
-        "- name: b\n  owner_id: U2\n  skus: {x: {timeout: 1}}\n"
-    )
-    assert owners(str(path)) == ["U2"]
+def test_the_channel_copy_tags_the_owners_only_when_something_is_wrong():
     assert payloads("ok", False, "U1", "C1", ["U2"]) == [
         {"channel": "U1", "text": "ok"},
         {"channel": "C1", "text": "ok"},
     ]
     assert payloads("bad", True, "U1", "C1", ["U2"])[1]["text"] == "bad\n\ncc <@U2>"
     assert payloads("bad", True, "U1", "", ["U2"]) == [{"channel": "U1", "text": "bad"}]
+
+
+def test_a_gate_that_compared_part_of_the_points_is_a_problem():
+    log = (
+        LOG
+        + "2026-10-13T05:35:00Z - 378248 points compared, **41 regressed point(s) in 31 finding(s)**,"
+        " 1 improved point(s) in 1 finding(s), 79179 new point(s)\n"
+    )
+    report = assess("SoL", RUN, _jobs(), {4: log, 5: LOG}, LIMITS, DAY)
+    assert report["problems"] == [
+        "SoL blackhole: 79,179 of 457,427 measured points not compared"
+    ]

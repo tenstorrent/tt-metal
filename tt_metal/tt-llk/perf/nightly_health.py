@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Check the LLK perf nightlies of one day and build a Slack health message.
+"""Check the LLK nightlies of one day and build a Slack health message.
 
 One run of this covers the whole day. It is scheduled after every nightly is
 expected to be done, rather than driven by their completions: the nightlies
@@ -12,6 +12,7 @@ does not exist yet and report it missing.
 import argparse
 import datetime as dt
 import json
+import pathlib
 import re
 import subprocess
 import sys
@@ -22,8 +23,14 @@ NIGHTLIES = (
     ("SoL", "llk-perf.yaml"),
     ("non-SoL", "llk-perf-gate.yaml"),
 )
+OTHER_NIGHTLIES = (
+    ("bit-exact", "llk-bit-exact.yaml"),
+    ("e2e", "llk-e2e.yaml"),
+)
+WORKFLOWS = ".github/workflows"
 VERDICT = re.compile(r"verdict=(\w+) regressions=(\d+)")
 BASELINE = re.compile(r"(?:^|Z )baseline \S+ \(([0-9a-f]+), (\d{4}-\d{2}-\d{2})", re.M)
+COMPARED = re.compile(r"- (\d+) points compared, .*?(\d+) new point")
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 LEG = re.compile(r"(llk_perf_\w+ group \d+/\d+)")
 ARCHES = ("blackhole", "wormhole")
@@ -57,10 +64,6 @@ def leg_limits(tests_yaml):
     }
 
 
-def owners(tests_yaml):
-    return sorted({e["owner_id"] for e in _entries(tests_yaml) if e.get("owner_id")})
-
-
 def payloads(text, problems, dm, channel, owner_ids):
     out = [{"channel": dm, "text": text}]
     if channel:
@@ -84,6 +87,28 @@ def scheduled_run(repo, workflow, day):
         )
     )
     return runs[0] if runs else None
+
+
+def disabled_workflows(repo, workflows_dir):
+    ours = {
+        f"{WORKFLOWS}/{p.name}"
+        for p in pathlib.Path(workflows_dir).iterdir()
+        if p.name.startswith("llk-") or "quasar" in p.name
+    }
+    states = _json_lines(
+        _gh(
+            "api",
+            "--paginate",
+            f"repos/{repo}/actions/workflows?per_page=100",
+            "--jq",
+            ".workflows[] | {path, state} | @json",
+        )
+    )
+    return sorted(
+        w["path"].rsplit("/", 1)[1]
+        for w in states
+        if w["path"] in ours and w["state"] != "active"
+    )
 
 
 def run_jobs(repo, run_id):
@@ -114,6 +139,7 @@ def job_log(repo, job_id):
 def gate_result(log, day):
     verdict = VERDICT.search(log)
     baseline = BASELINE.search(log)
+    compared = COMPARED.search(log)
     return {
         "verdict": verdict.group(1) if verdict else "no verdict",
         "regressions": int(verdict.group(2)) if verdict else 0,
@@ -121,6 +147,8 @@ def gate_result(log, day):
         "baseline_age": (
             (day - dt.date.fromisoformat(baseline.group(2))).days if baseline else None
         ),
+        "compared": int(compared.group(1)) if compared else None,
+        "new": int(compared.group(2)) if compared else 0,
     }
 
 
@@ -183,6 +211,11 @@ def assess(name, run, jobs, logs, limits, day):
                 report["problems"].append(
                     f"{name} {arch}: gate {gate['verdict']}{count}"
                 )
+            if gate["new"]:
+                report["problems"].append(
+                    f"{name} {arch}: {gate['new']:,} of"
+                    f" {gate['compared'] + gate['new']:,} measured points not compared"
+                )
         elif job["conclusion"] not in (None, "success", "skipped") and not any(
             rollup in job["name"] for rollup in ROLLUP_JOBS
         ):
@@ -202,6 +235,40 @@ def assess(name, run, jobs, logs, limits, day):
     return report
 
 
+def assess_plain(name, run, jobs):
+    report = {"name": name, "run": run, "legs": [], "upload": None, "gates": {}}
+    if run is None:
+        report["problems"] = [f"{name}: no scheduled run"]
+        return report
+    problems = [
+        f"{name}: {j['name']} {j['conclusion'] or 'not finished'}"
+        for j in jobs
+        if j["conclusion"] not in ("success", "skipped")
+        and not any(rollup in j["name"] for rollup in ROLLUP_JOBS)
+    ]
+    if run["status"] != "completed":
+        problems.append(f"{name}: run still {run['status']}")
+    elif run["conclusion"] != "success" and not problems:
+        problems.append(f"{name}: run {run['conclusion']}")
+    report["problems"] = problems
+    report["plain"] = True
+    return report
+
+
+def read_extras(paths):
+    """Each report is {"name", "problems", "lines"}."""
+    out = []
+    for path in paths:
+        try:
+            with open(path) as fh:
+                out.append(json.load(fh))
+        except (OSError, ValueError) as e:
+            out.append(
+                {"name": path, "problems": [f"{path}: no report ({e})"], "lines": []}
+            )
+    return out
+
+
 def _legs_line(legs):
     parts = []
     for arch, short in (("blackhole", "BH"), ("wormhole", "WH")):
@@ -216,23 +283,31 @@ def _legs_line(legs):
     return " | ".join(parts) or "none"
 
 
-def build_text(day, reports):
-    problems = [p for r in reports for p in r["problems"]]
-    head = ":white_check_mark:" if not problems else ":red_circle:"
-    lines = [
-        f"{head} *LLK perf nightly health, {day}*"
-        + (f": {len(problems)} problem(s)" if problems else ": healthy")
+def build_text(day, reports, extras=()):
+    problems = [
+        f"{p} <{r['run']['html_url']}|run>" if r.get("run") else p
+        for r in [*reports, *extras]
+        for p in r["problems"]
     ]
-    lines += [f"• {p}" for p in problems]
+    head = ":red_circle:" if problems else ":white_check_mark:"
+    n = len(problems)
+    lines = [f"{head} *LLK nightly health, {day}*: {n} problem{'' if n == 1 else 's'}"]
+    return "\n".join(lines + [f"• {p}" for p in problems])
+
+
+def build_details(reports, extras=()):
+    lines = []
     for r in reports:
         run = r["run"]
         lines.append("")
         if run is None:
-            lines.append(f"*{r['name']}*: no scheduled run")
+            lines.append(f"**{r['name']}**: no scheduled run")
             continue
         lines.append(
-            f"*{r['name']}* <{run['html_url']}|run> · `{run['head_sha'][:SHORT_SHA]}` · {run['conclusion'] or run['status']}"
+            f"**{r['name']}** [run]({run['html_url']}) · `{run['head_sha'][:SHORT_SHA]}` · {run['conclusion'] or run['status']}"
         )
+        if r.get("plain"):
+            continue
         lines.append(f"legs, % of limit used: {_legs_line(r['legs'])}")
         lines.append(f"upload: {r['upload'] or 'not run'}")
         for arch, g in sorted(r["gates"].items()):
@@ -245,6 +320,9 @@ def build_text(day, reports):
             lines.append(
                 f"gate {arch}: {g['verdict']}{count} · baseline `{g['baseline'] or '?'}`, {age}"
             )
+    for e in extras:
+        if e["lines"]:
+            lines += ["", f"**{e['name']}**", *e["lines"]]
     return "\n".join(lines)
 
 
@@ -258,19 +336,38 @@ def main(argv=None):
         "--date", default=dt.datetime.now(dt.timezone.utc).date().isoformat()
     )
     ap.add_argument("--out", default="health_payloads.json")
+    ap.add_argument("--details", default="health_details.md")
+    ap.add_argument("--workflows", default=WORKFLOWS)
+    ap.add_argument("--extra", nargs="*", default=[], help="reports of other checks")
     a = ap.parse_args(argv)
     day = dt.date.fromisoformat(a.date)
-    runs = [scheduled_run(a.repo, workflow, a.date) for _, workflow in NIGHTLIES]
     limits = leg_limits(a.tests_yaml)
     reports = []
-    for (name, _), run in zip(NIGHTLIES, runs):
+    for name, workflow in NIGHTLIES:
+        run = scheduled_run(a.repo, workflow, a.date)
         jobs = run_jobs(a.repo, run["id"]) if run else []
         logs = {j["id"]: job_log(a.repo, j["id"]) for j in jobs if _is_gate(j)}
         reports.append(assess(name, run, jobs, logs, limits, day))
-    text = build_text(a.date, reports)
-    problems = any(r["problems"] for r in reports)
+    for name, workflow in OTHER_NIGHTLIES:
+        run = scheduled_run(a.repo, workflow, a.date)
+        reports.append(
+            assess_plain(name, run, run_jobs(a.repo, run["id"]) if run else [])
+        )
+    disabled = {
+        "name": "Disabled workflows",
+        "problems": [
+            f"{w} is disabled <https://github.com/{a.repo}/actions/workflows/{w}|enable>"
+            for w in disabled_workflows(a.repo, a.workflows)
+        ],
+        "lines": [],
+    }
+    extras = [disabled, *read_extras(a.extra)]
+    text = build_text(a.date, reports, extras)
+    with open(a.details, "w") as fh:
+        fh.write(build_details(reports, extras))
+    problems = any(r["problems"] for r in [*reports, *extras])
     with open(a.out, "w") as fh:
-        json.dump(payloads(text, problems, a.dm, a.channel, owners(a.tests_yaml)), fh)
+        json.dump(payloads(text, problems, a.dm, a.channel, [a.dm]), fh)
     print(text)
     return 0
 
