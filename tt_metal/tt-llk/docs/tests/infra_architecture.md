@@ -92,7 +92,7 @@ Addresses outlined in the tables below are abstracted away using the following v
 | 0x00020000 - 0x0002FFFF | Runtime arguments struct |
 | 0x00021000 - 0x00169FFF | Stimuli space |
 | 0x0016A000 - 0x0016AFF3 | Performance counters data |
-| 0x0016AFF4 - 0x0016AFFF | Profiler barrier |
+| 0x0016AFFC - 0x0016AFFF | Profiler epoch word (`llk_profiler::EPOCH_ADDR`) |
 | 0x0016B000 - 0x0016B3FF | TRISC0 (Unpack) perf counter memory |
 | 0x0016C000 - 0x0016C3FF | TRISC1 (Math) perf counter memory |
 | 0x0016D000 - 0x0016D3FF | TRISC2 (Pack) perf counter memory |
@@ -124,7 +124,7 @@ Addresses outlined in the tables below are abstracted away using the following v
 | 0x0006E000 - 0x00070000 | Runtime arguments struct |
 | 0x00070000 - 0x00169FFF | Stimuli space |
 | 0x0016A000 - 0x0016AFF3 | Performance counters data |
-| 0x0016AFF4 - 0x0016AFFF | Profiler barrier |
+| 0x0016AFFC - 0x0016AFFF | Profiler epoch word (`llk_profiler::EPOCH_ADDR`) |
 | 0x0016B000 - 0x0016B3FF | TRISC0 (Unpack) perf counter memory |
 | 0x0016C000 - 0x0016C3FF | TRISC1 (Math) perf counter memory |
 | 0x0016D000 - 0x0016D3FF | TRISC2 (Pack) perf counter memory |
