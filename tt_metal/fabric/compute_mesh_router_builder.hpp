@@ -54,7 +54,8 @@ public:
         const RouterLocation& location,
         const ChipRoutingFacts& chip_facts,
         std::shared_ptr<ConnectionRegistry> connection_registry = nullptr,
-        std::optional<RouterArchetype> archetype = std::nullopt);
+        std::optional<RouterArchetype> archetype = std::nullopt,
+        std::optional<RouterGraphInputs> graph_inputs = std::nullopt);
 
     // ============ FabricRouterBuilder Interface Implementation ============
 

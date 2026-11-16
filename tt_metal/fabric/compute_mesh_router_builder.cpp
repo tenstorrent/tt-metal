@@ -260,7 +260,8 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
     const RouterLocation& location,
     const ChipRoutingFacts& chip_facts,
     std::shared_ptr<ConnectionRegistry> connection_registry,
-    std::optional<RouterArchetype> archetype_override) {
+    std::optional<RouterArchetype> archetype_override,
+    std::optional<RouterGraphInputs> graph_inputs) {
     // Get fabric config
     const auto& builder_context = fabric_context.get_builder_context();
     const auto topology = fabric_context.get_fabric_topology();
@@ -383,19 +384,28 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
     const InjectionPolicy& injection_policy = express_enabled ? static_cast<const InjectionPolicy&>(express_policy)
                                                               : static_cast<const InjectionPolicy&>(non_express_policy);
 
-    for (uint32_t vc = 0; vc < num_vcs; ++vc) {
-        uint32_t num_channels_in_vc = vc_shape.sender_counts[vc];
-        // A policy answers whether a slot acquires a protected ring; whether that acquisition is
-        // guarded is the separate question of which VCs realize bubble flow control. The express
-        // derivation classifies a VC1 intermesh landing's first protected egress as an acquisition,
-        // which is the correct classification, but VC1 runs unguarded today -- so emitting the flag
-        // there would demand a bubble the rest of the stack does not provide.
-        auto vc_injection_flags = builder_config::bubble_flow_control_enabled_on_vc(vc)
-                                      ? compute_sender_channel_injection_flags(producer_slots, vc, injection_policy)
-                                      : std::vector<bool>(num_channels_in_vc, false);
-        // Flatten into router-level vector
-        for (uint32_t ch_idx = 0; ch_idx < num_channels_in_vc; ++ch_idx) {
-            router_injection_flags.push_back(vc_injection_flags.at(ch_idx));
+    if (graph_inputs) {
+        TT_FATAL(
+            graph_inputs->injection.size() == total_router_channels,
+            "Router graph inputs have {} injection flags for {} sender channels",
+            graph_inputs->injection.size(),
+            total_router_channels);
+        router_injection_flags = graph_inputs->injection;
+    } else {
+        for (uint32_t vc = 0; vc < num_vcs; ++vc) {
+            uint32_t num_channels_in_vc = vc_shape.sender_counts[vc];
+            // A policy answers whether a slot acquires a protected ring; whether that acquisition is
+            // guarded is the separate question of which VCs realize bubble flow control. The express
+            // derivation classifies a VC1 intermesh landing's first protected egress as an acquisition,
+            // which is the correct classification, but VC1 runs unguarded today -- so emitting the flag
+            // there would demand a bubble the rest of the stack does not provide.
+            auto vc_injection_flags = builder_config::bubble_flow_control_enabled_on_vc(vc)
+                                          ? compute_sender_channel_injection_flags(producer_slots, vc, injection_policy)
+                                          : std::vector<bool>(num_channels_in_vc, false);
+            // Flatten into router-level vector
+            for (uint32_t ch_idx = 0; ch_idx < num_channels_in_vc; ++ch_idx) {
+                router_injection_flags.push_back(vc_injection_flags.at(ch_idx));
+            }
         }
     }
 
@@ -563,7 +573,8 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
         actual_sender_channels_per_vc,
         actual_receiver_channels_per_vc,
         channel_trimming_overrides_for_router,
-        local_vc0_fast_path_info));
+        local_vc0_fast_path_info,
+        graph_inputs ? &*graph_inputs : nullptr));
 
     if (cluster.arch() == tt::ARCH::BLACKHOLE && fabric_context.get_rtoptions().get_enable_2_erisc_mode()) {
         // Enable updates at a fixed interval for link stability and link status updates

@@ -504,5 +504,107 @@ TEST(FabricGraphPhysical, LegacyLinkPairings) {
     EXPECT_TRUE(legacy_link_pairings(one_d.graph, Topology::NeighborExchange, {}).empty());
 }
 
+
+// ---------------------------------------------------------------- router inputs
+
+const ChannelIndex kNone = ~0u;
+
+ChannelIndex channel_of(const ChannelGraph& cg, const std::string& router, uint32_t vc, const std::string& name) {
+    const auto& g = cg.logical;
+    for (ChannelIndex c : g.routers[*g.find_router(router)].channels) {
+        if (g.channels[c].vc == vc && channel_name(g.channels[c]) == name) {
+            return c;
+        }
+    }
+    return kNone;
+}
+
+const LegacySlot* legacy_slot(const ChannelGraph& cg, const std::string& router, uint32_t vc, uint32_t index) {
+    const auto r = *cg.logical.find_router(router);
+    for (const auto& slot : cg.legacy_slots) {
+        if (slot.router == r && slot.vc == vc && slot.index == index) {
+            return &slot;
+        }
+    }
+    return nullptr;
+}
+
+const RingQueries kNoRingQueries = [](const FabricNodeId&) { return ProtectedRingQueries{}; };
+
+// 2x16 torus: X wraps, Y (2 rows) doesn't. A row-0 E router has no N producer; stock keeps its slot.
+TEST(FabricGraphRouterInputs, TorusRingEntries) {
+    const WiringOptions torus{.topology = Topology::Torus};
+    auto cg = lower_to_channels(
+        lower(metal_path("tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_galaxy_2x16_torus_xy_mesh_graph_descriptor.textproto"), torus).graph,
+        true);
+    legacy_stock_sender_counts(cg, torus);
+    mark_ring_entries(cg, torus, kNoRingQueries);
+    EXPECT_TRUE(cg.enters_ring[channel_of(cg, "m0.c3.E.p0", 0, "worker")]);
+    EXPECT_FALSE(cg.enters_ring[channel_of(cg, "m0.c3.E.p0", 0, "W")]);  // straight along the ring
+    EXPECT_TRUE(cg.enters_ring[channel_of(cg, "m0.c3.E.p0", 0, "S")]);   // turns onto it
+    EXPECT_EQ(channel_of(cg, "m0.c3.E.p0", 0, "N"), kNone);
+    const auto* n_slot = legacy_slot(cg, "m0.c3.E.p0", 0, 2);  // E-facing: [worker, W, N, S]
+    ASSERT_NE(n_slot, nullptr);
+    EXPECT_TRUE(n_slot->enters_ring);  // flagged as stock flags it
+    EXPECT_EQ(legacy_slot(cg, "m0.c3.E.p0", 0, 1), nullptr);
+}
+
+TEST(FabricGraphRouterInputs, MeshHasNoRingEntries) {
+    auto cg = lower_to_channels(lower(metal_mgd("single_bh_galaxy_mesh_graph_descriptor.textproto"), k2D).graph, true);
+    legacy_stock_sender_counts(cg, k2D);
+    mark_ring_entries(cg, k2D, kNoRingQueries);
+    EXPECT_TRUE(std::none_of(cg.enters_ring.begin(), cg.enters_ring.end(), [](bool b) { return b; }));
+    // corner chip 0: S router has worker + E; stock is 4 wide, so slots 2 and 3 are legacy
+    EXPECT_NE(legacy_slot(cg, "m0.c0.S.p0", 0, 2), nullptr);
+    EXPECT_NE(legacy_slot(cg, "m0.c0.S.p0", 0, 3), nullptr);
+    EXPECT_EQ(legacy_slot(cg, "m0.c0.S.p0", 0, 0), nullptr);
+}
+
+// fake live eth channels: direction d, plane p on chip c is channel 4 * d + p
+const LiveEthChannels kFakeLive = [](const FabricNodeId&, RoutingDirection d) {
+    std::vector<chan_id_t> chans;
+    for (uint32_t p = 0; p < 4; ++p) {
+        chans.push_back(static_cast<chan_id_t>((4 * static_cast<uint32_t>(d)) + p));
+    }
+    return chans;
+};
+
+TEST(FabricGraphRouterInputs, EthChannelBinding) {
+    const auto [ports, g, rules] = lower(metal_mgd("single_bh_galaxy_mesh_graph_descriptor.textproto"), k2D);
+    const auto chans = bind_eth_channels(g, kFakeLive);
+    ASSERT_EQ(chans.size(), g.routers.size());
+    for (RouterIndex r = 0; r < g.routers.size(); ++r) {
+        const auto& p = g.routers[r].port;
+        EXPECT_EQ(chans[r], (4 * static_cast<uint32_t>(*p.direction)) + p.plane) << g.routers[r].id;
+    }
+    // a router with no live channel for its plane
+    EXPECT_ANY_THROW(bind_eth_channels(g, [](const FabricNodeId&, RoutingDirection) { return std::vector<chan_id_t>{}; }));
+
+    const auto masters = legacy_handshake_masters(g, chans);
+    EXPECT_EQ(masters.size(), 32u);
+    for (const auto& [node, r] : masters) {
+        EXPECT_EQ(g.routers[r].port.node, node);
+    }
+}
+
+// The layout a router hands its link peer is the peer router's, across an intermesh boundary too.
+TEST(FabricGraphRouterInputs, PeerLayoutAcrossIntermesh) {
+    auto cg = lower_to_channels(lower_mesh_graph(dual_2x4(/*z=*/true), kInterMesh).graph, true);
+    legacy_stock_sender_counts(cg, kInterMesh);
+    const auto pg = lower_to_physical(std::move(cg), fake_allocator({{18, 16, 16, 16, 16}, {16, 16, 16, 16}}, {16, 12}));
+    const auto& g = pg.logical;
+    const auto z = *g.find_router("m0.c5.Z.p0");
+    const auto peer = *g.routers[z].peer;
+    EXPECT_EQ(g.routers[peer].port.node.mesh_id, MeshId{1});
+    EXPECT_EQ(pg.layouts[peer].senders[0].size(), pg.sender_counts[peer][0]);
+    for (uint32_t vc = 0; vc < 2; ++vc) {
+        const auto rx = *g.receiver(peer, vc);
+        ASSERT_EQ(pg.layouts[peer].receivers[vc].size(), 1u);
+        EXPECT_EQ(pg.layouts[peer].receivers[vc][0].base_address, pg.addresses[rx].base);
+        EXPECT_EQ(pg.layouts[peer].receivers[vc][0].num_slots, pg.addresses[rx].slots);
+    }
+    EXPECT_EQ(pg.layouts[z].receivers[1][0].num_slots, 12u);
+}
+
 }  // namespace
 }  // namespace tt::tt_fabric::graph

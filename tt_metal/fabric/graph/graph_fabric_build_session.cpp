@@ -39,6 +39,27 @@ std::map<MeshId, ExpressAxis> express_axes(const ControlPlane& control_plane) {
     return axes;
 }
 
+// the graph's link peers are the control plane's, down to the eth channel
+void check_link_peers(const PhysicalGraph& graph, const ControlPlane& control_plane) {
+    const auto& g = graph.logical;
+    for (RouterIndex r = 0; r < g.routers.size(); ++r) {
+        const auto peer = g.routers[r].peer;
+        const auto live = control_plane.try_get_connected_mesh_chip_chan_ids(g.routers[r].port.node, graph.eth_chans[r]);
+        if (!peer || !live) {
+            continue;
+        }
+        TT_FATAL(
+            live->first == g.routers[*peer].port.node && live->second == graph.eth_chans[*peer],
+            "fabric graph: router {} on eth channel {} links to {} channel {}, the control plane says {} channel {}",
+            g.routers[r].id,
+            graph.eth_chans[r],
+            g.routers[*peer].port.node,
+            graph.eth_chans[*peer],
+            live->first,
+            live->second);
+    }
+}
+
 }  // namespace
 
 GraphFabricBuildSession::GraphFabricBuildSession(FabricContext& fabric_context) {
@@ -70,16 +91,24 @@ GraphFabricBuildSession::GraphFabricBuildSession(FabricContext& fabric_context) 
     auto logical = lower_to_logical(ports, *rules);
     validate(logical, *rules, ValidationLimits{});
 
-    // channel graph: each router's slots
+    // channel graph: each router's slots, and which senders enter a protected ring
     auto channels = lower_to_channels(std::move(logical), is_2D_topology(topology));
     legacy_stock_sender_counts(channels, options);  // stock-sized routers until #65720
+    mark_ring_entries(channels, options, [&control_plane](const FabricNodeId& node) {
+        return make_protected_ring_queries(control_plane, node);
+    });
 
     // physical: addresses from the stock allocator, then the legacy link pairings
     const auto& reference = stock_allocator(fabric_context);
     graph_ = lower_to_physical(std::move(channels), [&reference](const auto& sender_counts) {
         return FabricStaticSizedChannelsAllocator(reference, sender_counts).get_layout();
     });
+    graph_->eth_chans = bind_eth_channels(graph_->logical, [&control_plane](const FabricNodeId& node, RoutingDirection d) {
+        return control_plane.get_active_fabric_eth_routing_planes_in_direction(node, d);
+    });
+    check_link_peers(*graph_, control_plane);
     graph_->links = legacy_link_pairings(graph_->logical, topology, wrap_around_meshes);
+    graph_->handshake_masters = legacy_handshake_masters(graph_->logical, graph_->eth_chans);
 
     log_info(
         tt::LogFabric,

@@ -143,10 +143,12 @@ void FabricBuilder::create_routers() {
     // Record build state
     builder_context_.set_num_fabric_initialized_routers(device_->id(), routers_.size());
     if (!routers_.empty()) {
-        master_router_chan_ = routers_.begin()->first;
+        master_router_chan_ = pick_master_router_chan();
         builder_context_.set_fabric_master_router_chan(device_->id(), master_router_chan_);
     }
 }
+
+chan_id_t FabricBuilder::pick_master_router_chan() const { return routers_.begin()->first; }
 
 std::unique_ptr<FabricRouterBuilder> FabricBuilder::make_router(const RouterLocation& location) {
     return FabricRouterBuilder::create(
@@ -284,19 +286,22 @@ void FabricBuilder::compile_kernels_for_missing_directions() {
     }
 }
 
-void FabricBuilder::create_kernels() {
+KernelCreationContext FabricBuilder::kernel_creation_context() const {
     uint32_t router_channels_mask = 0;
     for (const auto& [router_chan, _] : routers_) {
         router_channels_mask |= (1 << static_cast<uint32_t>(router_chan));
     }
 
-    KernelCreationContext ctx{
+    return KernelCreationContext{
         .is_2D_routing = fabric_context_.is_2D_routing_enabled(),
         .master_router_chan = master_router_chan_,
         .num_local_fabric_routers = routers_.size(),
         .router_channels_mask = router_channels_mask,
     };
+}
 
+void FabricBuilder::create_kernels() {
+    const KernelCreationContext ctx = kernel_creation_context();
     for (auto& [eth_chan, router_builder] : routers_) {
         router_builder->create_kernel(program_, ctx);
     }
