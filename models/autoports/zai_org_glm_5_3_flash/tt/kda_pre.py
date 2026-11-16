@@ -264,12 +264,17 @@ class KdaPre:
                 batch,
             )
             assert G <= 1 or (b % 2 == 0 and (b // 2) % G == 0), ("KDA_VERIFY_GROUPS: equal groups of row pairs", b, G)
+        # GLM53_KDA_VERIFY_PIPE=1 (KDA_VERIFY_GROUPS only): the verify reader per group -- push each group once built,
+        # the next group's reads in flight meanwhile, write-back after the push (kernels/kda_pre/reader.cpp
+        # KDA_VERIFY_PIPE; same values, same unit order, same CB pages); off = the KDA_VERIFY_GROUPS reader
+        vpipe = vsel is not None and self.verify_groups > 1 and os.environ.get("GLM53_KDA_VERIFY_PIPE", "0") == "1"
         reader = (reader_ct, self._rtd(lambda kk: addrs + [kk, b, int(roww or hist_tiles)]
                                        + ([vsel.buffer_address()] if vsel is not None else [])),
                   self.defines + ([("KDA_BATCH", "1")] if batch else []) + ([("KDA_TILES_HIST", "1")] if hist_tiles else [])
                   + ([("KDA_VERIFY", "1")] if vsel is not None else [])
                   + ([("KDA_VERIFY_GROUPS", str(self.verify_groups))] if vsel is not None and self.verify_groups > 1
-                     else []),
+                     else [])
+                  + ([("KDA_VERIFY_PIPE", "1")] if vpipe else []),
                   ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_0,
                                                     noc=ttnn.NOC.RISCV_0_default))  # fmt: skip
         writer_ct = [int(roww)]
