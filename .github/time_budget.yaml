@@ -448,8 +448,8 @@ models:
     # cache table leg the K3 / K3.1 merged-table rows (+2, 50 s measured), both on bh-glx-120-b08u02 2026-11-13.
     # Within existing bounds of the K3 accuracy suite: the K3.1 golden and checkpoint checks open its K3.1 section
     # [5/5]; the other K3.1 contract tests, the cache footprint test included, joined [1/5].
-    # 2575 -> 2460 (-115): the K3.1 depth L24 / L24-128k sections, one test since, are bounded by 45 min of
-    # measured time (see the K3 transformer suite), not by K3's L24 depth / chunked bounds (70 + 90).
+    # 2575 -> 2460 (-115): the K3.1 depth L24 / L24-128k sections, one test since, have a 45 min bound from
+    # measured time (see the K3 transformer suite), not K3's L24 depth / chunked bounds (70 + 90).
     bh_sc1: 2460
     bh_sc1_high_power: 498
     bh_sc4: 60
