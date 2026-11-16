@@ -27,17 +27,26 @@ def _pair(value):
     return tuple(value) if isinstance(value, (tuple, list)) else (value, value)
 
 
-def l1_budget_bytes(device, divisor=L1_BUDGET_DIVISOR) -> int:
+def grid_cores(device) -> int:
+    grid = device.compute_with_storage_grid_size()
+    return grid.x * grid.y
+
+
+def l1_budget_bytes(device, divisor=L1_BUDGET_DIVISOR, num_cores=None) -> int:
+    """1/divisor of the grid's L1, or of the share num_cores of its cores hold."""
     l1 = ttnn.get_memory_view(device, ttnn.BufferType.L1)
-    return l1.num_banks * l1.total_bytes_per_bank // divisor
+    total = l1.num_banks * l1.total_bytes_per_bank
+    if num_cores is not None:
+        total = total * num_cores // grid_cores(device)
+    return total // divisor
 
 
-def exceeds_l1_budget(device, num_elements: int, divisor=L1_BUDGET_DIVISOR) -> bool:
+def exceeds_l1_budget(device, num_elements: int, divisor=L1_BUDGET_DIVISOR, num_cores=None) -> bool:
     """Whether bf16 data of this size is too large for the device's L1 and has to live in DRAM.
 
     The full grid keeps these activations in L1; a reduced grid has too little L1 left for them.
     """
-    return num_elements * BF16_BYTES > l1_budget_bytes(device, divisor)
+    return num_elements * BF16_BYTES > l1_budget_bytes(device, divisor, num_cores)
 
 
 def activation_memory_config(device, tensor, width=None, divisor=L1_BUDGET_DIVISOR) -> ttnn.MemoryConfig:
@@ -101,6 +110,14 @@ class TtConv2D:
         output_height, output_width = self.output_hw
         self.band_rows = None
         self.run_in_dram = False
+        # A banded block-sharded conv runs width sharded on the most cores whose count divides the full
+        # grid's channel blocks (see below), so its bands must fit those cores' L1.
+        cores = grid_cores(device)
+        band_cores = (
+            max(n for n in range(1, cores + 1) if FULL_GRID_CHANNEL_BLOCKS % n == 0)
+            if shard_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED
+            else cores
+        )
         if exceeds_l1_budget(
             device,
             conv.batch_size * conv.input_height * conv.input_width * conv.in_channels
@@ -125,6 +142,7 @@ class TtConv2D:
                         ((rows - 1) * sh + kh) * conv.input_width * conv.in_channels
                         + rows * output_width * conv.out_channels,
                         BAND_BUDGET_DIVISOR,
+                        band_cores,
                     )
                 ]
                 assert fitting, f"no band of the {output_height}-row output fits L1"
@@ -145,12 +163,17 @@ class TtConv2D:
             # A block-sharded conv adds up its input channels in one block per core column, rounding the
             # partial sum to the output format between blocks. On a few cores the blocks are larger and
             # the sum rounds less often, which changes the result the rest of the model was matched to.
-            # Width sharding takes the block width explicitly, so the bands keep the full grid's blocks.
-            grid = device.compute_with_storage_grid_size()
-            cores = grid.x * grid.y
-            assert FULL_GRID_CHANNEL_BLOCKS % cores == 0 and conv.in_channels % (32 * FULL_GRID_CHANNEL_BLOCKS) == 0
+            # Width sharding takes the block width explicitly, so the bands keep the full grid's blocks:
+            # band_cores cores split the input channels, each into the rest of the blocks. A grid whose
+            # core count does not divide the blocks runs the bands on that many of its cores.
+            assert conv.in_channels % (32 * FULL_GRID_CHANNEL_BLOCKS) == 0
             self.conv_config.shard_layout = ttnn.TensorMemoryLayout.WIDTH_SHARDED
-            self.conv_config.act_block_w_div = FULL_GRID_CHANNEL_BLOCKS // cores
+            self.conv_config.act_block_w_div = FULL_GRID_CHANNEL_BLOCKS // band_cores
+            if band_cores != cores:
+                self.conv_config.override_sharding_config = True
+                self.conv_config.core_grid = ttnn.num_cores_to_corerangeset(
+                    band_cores, device.compute_with_storage_grid_size(), row_wise=True
+                )
         if not self.run_in_dram:
             self.slice_config = ttnn.Conv2dL1FullSliceConfig
         elif self._is_matmul():
