@@ -21,7 +21,7 @@
 #include "api/compute/cb_api.h"
 #include "api/compute/common.h"
 #include "api/compute/compute_kernel_hw_startup.h"
-#include "api/compute/eltwise_binary_sfpu.h"
+#include "api/compute/eltwise_binary.h"
 #include "api/compute/experimental/dest_srca_mm.h"
 #include "api/compute/experimental/gguf_decode.h"
 #include "api/compute/matmul.h"
@@ -279,31 +279,29 @@ void kernel_main() {
                         srca_to(cb_acc);
                         cb_wait_front(cb_acc, ur * nc);
                         if (krole == 2) {
-                            // Own sums + the partner's, in fp32 on the SFPU, two tiles at a time; one where a pair
-                            // would cross the end of c_16 (a unit of an odd number of tiles shifts the pairs).
+                            // Own sums + the partner's, added by the FPU (both in fp32 L1), up to four tiles at a time;
+                            // fewer where a group would cross the end of c_16.
                             cb_wait_front(cb_recv, ur * nca);
-                            for (uint32_t i = 0, n2 = 0; i < ur * nc; i += n2) {
-                                n2 = ur * nc - i < 2 || out_page + 1 == out_pages ? 1 : 2;
-                                out_page = out_page + n2 == out_pages ? 0 : out_page + n2;
+                            reconfig_data_format_srcb(cb_in0, cb_recv);
+                            add_init(cb_acc, cb_recv);
+                            for (uint32_t i = 0, n4 = 0; i < ur * nc; i += n4) {
+                                n4 = ur * nc - i < 4 ? ur * nc - i : 4;
+                                n4 = out_pages - out_page < n4 ? out_pages - out_page : n4;
+                                out_page = out_page + n4 == out_pages ? 0 : out_page + n4;
                                 tile_regs_acquire();
-                                copy_init(cb_acc);
-                                for (uint32_t t = 0; t < n2; t++) {
-                                    copy_tile(cb_acc, i + t, t);
-                                    copy_tile(cb_recv, i + t, 2 + t);
-                                }
-                                add_binary_tile_init();
-                                for (uint32_t t = 0; t < n2; t++) {
-                                    add_binary_tile(t, 2 + t, t);
+                                for (uint32_t t = 0; t < n4; t++) {
+                                    add_tiles(cb_acc, cb_recv, i + t, i + t, t);
                                 }
                                 tile_regs_commit();
-                                cb_reserve_back(cb_out, n2);
+                                cb_reserve_back(cb_out, n4);
                                 tile_regs_wait();
-                                for (uint32_t t = 0; t < n2; t++) {
+                                for (uint32_t t = 0; t < n4; t++) {
                                     pack_tile(t, cb_out);
                                 }
                                 tile_regs_release();
-                                cb_push_back(cb_out, n2);
+                                cb_push_back(cb_out, n4);
                             }
+                            reconfig_data_format_srcb(cb_recv, cb_in0);
                             cb_pop_front(cb_recv, ur * nca);
                         } else {
                             copy_init(cb_acc);
