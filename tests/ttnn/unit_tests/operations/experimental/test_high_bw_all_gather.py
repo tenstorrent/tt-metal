@@ -1410,6 +1410,38 @@ def test_high_bw_all_gather_full_mesh_outer_axis_accuracy(mesh_device, submesh_s
     )
 
 
+@run_for_blackhole("[RING, RING] 4x4 whole-mesh coverage requires Blackhole")
+@pytest.mark.skipif(
+    ttnn.get_num_devices() != 16,
+    reason="needs the 16-chip [RING, RING] carve (TT_VISIBLE_DEVICES + a 4x4 Ring/Ring descriptor)",
+)
+@pytest.mark.parametrize("device_params", [_FABRIC_2D_TORUS_XY_DEVICE_PARAMS], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(4, 4)], indirect=True)
+@pytest.mark.parametrize("full_mesh_outer_axis", [0, 1], ids=["row-major", "column-major"])
+@pytest.mark.parametrize("num_links", [1, 2], ids=["1_link", "2_links"])
+@pytest.mark.parametrize("ag_traced", [False, True], ids=["eager", "traced"])
+def test_high_bw_all_gather_ring_ring_4x4_whole_mesh_accuracy(mesh_device, full_mesh_outer_axis, num_links, ag_traced):
+    """cluster_axis=None over a whole 4x4 mesh that wraps on both axes.
+
+    With Ring on both axes and a mesh of at least 3x3 the gather leaves the single snake and runs two
+    edge-disjoint Hamiltonian cycles. Every rank's shard differs, so a wrong order for either
+    `full_mesh_outer_axis` is a data mismatch.
+    """
+    assert tuple(mesh_device.shape) == (4, 4)
+    _run_high_bw_all_gather_accuracy(
+        mesh_device,
+        ttnn.bfloat16,
+        width=576,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        expected_page_size=1152,
+        cluster_axis=None,
+        rows_per_device=64,
+        num_links=num_links,
+        ag_traced=ag_traced,
+        full_mesh_outer_axis=full_mesh_outer_axis,
+    )
+
+
 @run_for_blackhole("axis-ring regression requires Blackhole")
 @pytest.mark.skipif(
     not os.getenv("TT_METAL_SIMULATOR") and os.getenv("TT_METAL_HIGH_BW_ALL_GATHER_RUN_32_RANK_ACCURACY") != "1",
