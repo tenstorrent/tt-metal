@@ -19,10 +19,12 @@ void kernel_main() {
     constexpr uint32_t cb_scr = get_compile_time_arg_val(1);
     constexpr uint32_t E = get_compile_time_arg_val(2);
     constexpr uint32_t k = get_compile_time_arg_val(3);
-    constexpr auto p_args = TensorAccessorArgs<4>();
+    constexpr uint32_t extra = get_compile_time_arg_val(4);  // always-routed slots after the picks (weight 1, ids E..)
+    constexpr auto p_args = TensorAccessorArgs<5>();
     constexpr auto o_args = TensorAccessorArgs<p_args.next_compile_time_args_offset()>();
     const auto s_p = TensorAccessor(p_args, pes_addr, E * 2);
-    const auto s_o = TensorAccessor(o_args, out_addr, 4 * k);
+    constexpr uint32_t n = k + extra;
+    const auto s_o = TensorAccessor(o_args, out_addr, 4 * n);
 
     const uint32_t scr = get_write_ptr(cb_scr);  // E FP32 logits, E bf16 scales, the 2 k bf16 output row
     const uint32_t pes_l1 = scr + E * 4;
@@ -43,8 +45,18 @@ void kernel_main() {
     noc_async_write_barrier();
 #endif
     volatile tt_l1_ptr uint16_t* row = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(scr + E * 4 + E * 2);
-    router_tail::topk_softmax<E, k>(logit, reinterpret_cast<volatile tt_l1_ptr uint16_t*>(pes_l1), row);
-    noc_async_write(scr + E * 4 + E * 2, s_o.get_noc_addr(0), 4 * k);
+    volatile tt_l1_ptr uint16_t* picks = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(scr + E * 4 + E * 2 + 4 * n);
+    router_tail::topk_softmax<E, k>(logit, reinterpret_cast<volatile tt_l1_ptr uint16_t*>(pes_l1), picks);
+    // [w_0 .. w_{k-1}, 1 x extra | id_0 .. id_{k-1}, E .. E + extra - 1]
+    for (uint32_t i = 0; i < k; ++i) {
+        row[i] = picks[i];
+        row[n + i] = picks[k + i];
+    }
+    for (uint32_t i = 0; i < extra; ++i) {
+        row[k + i] = 0x3F80;  // 1.0
+        row[n + k + i] = router_tail::uint_to_bf16(E + i);
+    }
+    noc_async_write(scr + E * 4 + E * 2, s_o.get_noc_addr(0), 4 * n);
     noc_async_write_barrier();
     cb_pop_front(cb_logits, E / 32);
 }

@@ -21,9 +21,12 @@ TILE = 32
 
 
 class RouterB1:
-    def __init__(self, mesh, weight, per_expert_scale, k, *, kb_split=8, reducer=None, skip=()):
+    def __init__(self, mesh, weight, per_expert_scale, k, *, kb_split=8, reducer=None, skip=(), extra=0):
         """weight: [hidden, E] torch (applied to the prescaled FP32 input: logits = x @ weight); per_expert_scale: the
-        [1, 1, 1, E] bf16 ROW_MAJOR device tensor; skip: logical (x, y) cores to leave free (e.g. the boundary core)."""
+        [1, 1, 1, E] bf16 ROW_MAJOR device tensor; skip: logical (x, y) cores to leave free (e.g. the boundary core);
+        extra: always-routed slots appended after the k picks (weight 1, ids E, E + 1, ...: a shared MLP run as virtual
+        experts, moe_decode shared_virtual_experts), so the row has k + extra entries per half."""
+        self.extra = extra
         hidden, E = weight.shape
         assert hidden % TILE == 0 and E % TILE == 0 and (hidden // TILE) % kb_split == 0
         self.mesh, self.E, self.k, self.kb = mesh, E, k, kb_split
@@ -62,7 +65,11 @@ class RouterB1:
         Returns the packed routing row [1, 1, 32, 2k] bf16 ROW_MAJOR (L1)."""
         device = self.mesh
         out = ttnn.allocate_tensor_on_device(
-            ttnn.Shape([1, 1, TILE, 2 * self.k]), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, device, ttnn.L1_MEMORY_CONFIG
+            ttnn.Shape([1, 1, TILE, 2 * (self.k + self.extra)]),
+            ttnn.bfloat16,
+            ttnn.ROW_MAJOR_LAYOUT,
+            device,
+            ttnn.L1_MEMORY_CONFIG,
         )
         x_core = x.memory_config().shard_spec.grid.bounding_box().start
         xn = device.worker_core_from_logical_core(x_core)
@@ -75,7 +82,7 @@ class RouterB1:
             # partials: on every core (same address on every core), only the reducer's are written
             self._cb(cb_part, ttnn.float32, 4096, n_part, self.all_set),
             self._cb(cb_logits, ttnn.float32, 4096, self.n_tiles, self.red_set),
-            self._cb(cb_scr, ttnn.bfloat16, self.E * 6 + 4 * self.k + 64, 1, self.red_set),
+            self._cb(cb_scr, ttnn.bfloat16, self.E * 6 + 8 * (self.k + self.extra) + 64, 1, self.red_set),
         ]
         sems = [ttnn.SemaphoreDescriptor(sem, ttnn.CoreType.WORKER, self.all_set, 0)]
         reader_rt, writer_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
@@ -87,7 +94,7 @@ class RouterB1:
         if self.debug is not None:
             red_rt[self.reducer.x][self.reducer.y].append(self.debug.buffer_address())
         dm = ttnn.DataMovementConfigDescriptor
-        red_ct = [cb_logits, cb_scr, self.E, self.k]
+        red_ct = [cb_logits, cb_scr, self.E, self.k, self.extra]
         red_ct += ttnn.TensorAccessorArgs(self.pes).get_compile_time_args()
         red_ct += ttnn.TensorAccessorArgs(out).get_compile_time_args()
         if self.debug is not None:
