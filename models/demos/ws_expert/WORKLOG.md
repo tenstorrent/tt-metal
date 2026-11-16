@@ -609,3 +609,76 @@ Rule from the repro: on a group's multicast NoC nothing may enter the group rect
   funnel, the token-row gather and the fabric forwarding: on the torus at M 586 the compute cores' x waits grow from
   20.7M to 31.2M cycles (chip 0) and the NCRISC weight-queue loop time from 27.5M to 39.4M. QY retires each output row
   with a write barrier inside the NCRISC loop.
+
+## Stage 10: the MoE layer around the stream (ws_layer.py, tests/test_ws_layer.py)
+- Every phase runs on one chip, on that chip's own T tokens. The router and shared-expert weights are replicated, and
+  only the routed stream crosses chips (its weight streaming). The phases in order:
+  - head (ttnn ops):
+    - router matmul (fp32 out, HiFi4), softmax (or sigmoid), top-12, gate weights renormalized over the 12;
+    - the stream's inputs, built on device: the one-hot routing mask (scatter), its running count over the tokens
+      (cumsum: a routed row's position in its expert's list), the counts (the count's last row), the per-expert token
+      lists (t scattered to its position in a list of T; non-routed pairs index past the list and scatter skips them),
+      and each routed row's output row.
+  - shared expert: the same lane kernels.
+  - routed stream: build_lane with the new LCfg.out_eord.
+  - combine (ttnn ops).
+- Expert-id-ordered outputs (LCfg.out_eord, WL_OUT_EORD; needs noc_split):
+  - Expert e's down rows start at tile row out_rows + the sum of ceil(M / 32) over e' < e, so a routed row's output row
+    is base(e) 32 + position whatever the arrival order. The head computes the same base with a cumsum.
+  - Each NCRISC computes the prefix once from its counts read, for its group's experts only (e = i G + g, nexp / G
+    words past the counts). A full nexp-word prefix (+2.7 KB) pushed the 640-expert stream's L1 tensors 1.5 KB into
+    its static CBs (program build error).
+  - Output capacity: ceil(T K / 32) + nexp tile rows bounds the sum for any routing.
+- nofab on a mesh: every chip runs the one-chip program on its own inputs (the one-chip tables on each). The shared
+  expert runs this way on the Galaxy.
+- Shared expert on the expert machinery:
+  - The inner dim 2944 is split into 5 slices of 640; the last holds 384 real columns plus 256 zero columns. The token
+    chunk is TC = ceil(T / 128) 32 (7840), so there are 20 units u = i 4 + g (slice i, chunk g) on the 4 groups, 5 each.
+    Each unit is one expert with M = TC (the padding tokens read x's zero row).
+  - With expert-id order the units' outputs are [5 slices][4 chunks][TC] rows, so the shared output is the sum of the
+    5 slice blocks.
+  - A 384 slice cannot run unpadded: build_lane needs PAIRS = I / 32 = GC = 20 (each of a group's 20 cores owns one
+    gate/up pair). The padding is 8.7% more work.
+  - M limits do not bind: GCfg MMAX = T (RMAX = ceil(T / 32)), so one unit could even take M = T; the 4 chunks are
+    there for the 4 groups.
+- Combine:
+  - The routed rows are untilized (the stream writes tiles).
+  - Then per 32-token block: an embedding gather of its K 32 rows (block, k, token order), times the block's gate
+    matrix [32, 32 K] (w (t, k) at column 32 k + t) as one batched matmul, plus the shared output.
+  - The eltwise weigh-and-sum over k was slower (64.0 vs 47.8 ms on one chip).
+- Results, hold 215516 on bh-glx-110-c10u20, 1350 MHz. Reference: torch on the device's routing, with operands
+  quantized as the device sees them.
+  - (a) One chip, T 2048, 64 experts, every token: y PCC 0.99994 (max error 1.3% of max |y|). Head exact: counts, token
+    lists, output rows. Logits PCC 0.99999995, gate weights 0.999999. Top-12 is the same set as torch's on
+    2024 / 2048 tokens; the rest are near ties (worst pick 0.15% below torch's 12th score).
+  - (b) One chip, T 31250, 640 experts, 256 sampled tokens: y PCC 0.99994; head exact over every token. M per expert
+    min 461 / median 584 / max 746.
+  - (c) Galaxy torus, T 31250 a chip, 640 experts, 64 sampled tokens on chips 0 and 31: y PCC 0.99994 on both; head
+    exact on both. M over 32 chips x 640 experts: min 425 / median 585 / max 785 (mean 585.9).
+- Time, 20 warm-up + 5 measured layers, medians in ms. Wall time is synchronize to synchronize; the lane programs are
+  built before their phase starts. Device time is the group cores' compute start to end.
+| phase | one chip (b) wall | one chip device | Galaxy (c) wall | Galaxy device |
+|---|---|---|---|---|
+| head | 15.47 | | 15.60 | |
+| shared expert | 11.16 | 10.29 | 14.09 | 10.32 |
+| routed stream | 37.40 | 34.70 | 56.50 | 48.38 |
+| combine | 47.89 | | 47.76 | |
+| total | 111.92 | | 133.94 | |
+  - On one chip the stream is the proxy (every expert local).
+  - Head steps on the Galaxy (synchronized apart): router 5.2, counts + output rows 3.2, token lists 6.0, combine
+    indices / gate matrices 2.0. Token lists by a sort of mask ? t : T took 164 ms (the scatter replaced it).
+  - Combine steps: shared sum 4.8, untilize 15.1, gather 16.4, batched matmul 12.0, add shared 4.8, concat 1.4.
+  - Shared expert: 2 T 3840 2944 3 = 2.12 TFLOP a chip in 10.3 ms is 33.8% of the 110-core SOL (608 TFLOP/s; floor
+    3.48 ms), or 50.7% of the 80 group cores counting the padded work (floor 4.79 ms at 80 cores).
+  - The stream's device time with expert-id-ordered outputs (48.4 ms) matches the out_all runs (48.2 ms).
+- Open:
+  - The combine (48 ms) is as long as the stream: three DRAM round trips of the 3 GB routed output (untilize, gather,
+    matmul). A fused gather + weigh + sum kernel, and row-major outputs from the stream (no untilize), would remove
+    most of it.
+  - Lane wall time is 4-8 ms over device time (Galaxy). The gap is the dispatch of a newly built mesh program each
+    launch (fresh arrival words), plus each kernel's time before and after the compute stamps.
+  - The phases run one after another. The shared expert (20 units, M 7840) could go into the stream's program as more
+    own experts.
+  - The MoE block's moe_head and routed_experts_combine are not reused: they are built around dispatch (TP all-gather,
+    routing exchange, fabric combine), not a chip's own tokens against streamed weights.
+  - Only softmax scoring has been tested; sigmoid is selectable but untested.

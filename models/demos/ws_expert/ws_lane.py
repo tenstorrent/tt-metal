@@ -66,8 +66,13 @@ class LCfg:
     # core 0's BRISC (NOC0's start corner) multicasts both the x blocks and the h rows, fed on NOC1
     noc_split: bool = False
     # one chip, no fabric (WL_NO_FABRIC): no mux kernels, every expert the chip's own and read from DRAM, nothing
-    # forwarded; with cycles of that one chip, the per-chip load of the lane design without its fabric traffic
+    # forwarded; with cycles of that one chip, the per-chip load of the lane design without its fabric traffic. On a
+    # mesh every chip runs the same one-chip program on its own inputs (the tables of the one-chip cycles on each)
     nofab: bool = False
+    # every expert's down rows in expert-id order from tile row out_rows (WL_OUT_EORD): expert e at out_rows + the sum
+    # of ceil(M / 32) over the experts before it, whatever the arrival order (needs noc_split: each core reads its
+    # counts)
+    out_eord: bool = False
 
 
 def lane_cores(g):
@@ -85,7 +90,8 @@ def lanes(shape, lc: LCfg):
     cycles = [list(c) for c in (lc.cycles or [snake(shape)])]
     out = []
     for cyc in cycles:
-        assert sorted(cyc) == sorted((r, c) for r in range(R) for c in range(Cn)), "a cycle visits every chip once"
+        every = sorted((r, c) for r in range(R) for c in range(Cn))
+        assert lc.nofab or sorted(cyc) == every, "a cycle visits every chip once"
         for link in range(lc.NL):
             out.append((cyc, link))
     return out
@@ -232,7 +238,9 @@ def build_lane(mesh, cfg: GCfg, lc: LCfg, x_t, idx_t, counts_t, ws_t, out_t, tab
     xin = sharded_l1(mesh, C, [lc.xf * BK * 32, 32], cfg.x_dt, ttnn.TILE_LAYOUT) if lc.bcast else None
     xinf = w16(lc.xf) if lc.bcast else None
     # DRAM -> L1 reads need the L1 address congruent to the DRAM one mod 64: 64-aligned landing spots inside these
-    counts_l1 = sharded_l1(mesh, C, [1, 32 + max(4, cfg.nexp)], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, torch.int32)
+    # (the counts at word 16; with out_eord the group's experts' first output rows past them)
+    cw = 32 + max(4, cfg.nexp) + (16 + cfg.nexp // G if lc.out_eord else 0)
+    counts_l1 = sharded_l1(mesh, C, [1, cw], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, torch.int32)
     idx_l1 = sharded_l1(mesh, C, [4, 32], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, torch.int32)
     table_l1 = sharded_l1(mesh, C, [1, TLW + 16], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, torch.int32)
     a64 = lambda a: (a + 63) // 64 * 64
@@ -240,8 +248,8 @@ def build_lane(mesh, cfg: GCfg, lc: LCfg, x_t, idx_t, counts_t, ws_t, out_t, tab
         table_l1.buffer_address()
     )
     st = stamps_tensor(mesh, C)
+    assert not lc.out_eord or lc.noc_split, "out_eord computes the output rows from each core's own counts read"
     if lc.nofab:
-        assert N == 1, "nofab runs one chip"
         mcfg, ctype, client_ct, mesh_id = None, None, [0] * 5, 0  # (the reader's mux CT args are placeholders)
     else:
         mcfg = fabric_mux.Config(
@@ -276,6 +284,7 @@ def build_lane(mesh, cfg: GCfg, lc: LCfg, x_t, idx_t, counts_t, ws_t, out_t, tab
         ydefs += [("WL_BCAST", str(hcnt.buffer_address())), ("WL_XIN", str(xin.buffer_address()))]
         ydefs += [("WL_XINF", str(xinf.buffer_address())), ("WL_XF", str(lc.xf))]
     ydefs += [("WL_OUT_ALL", "1")] if lc.out_all else []
+    ydefs += [("WL_OUT_EORD", "1")] if lc.out_eord else []
     ydefs += [("WL_MCAST_LINKED", "1")] if lc.mcast_linked else []
     ydefs += [] if lc.own_read else [("WL_NO_OWN_READ", "1")]
     ydefs += [] if lc.gather else [("WG_NO_GATHER", "1")]
@@ -289,8 +298,11 @@ def build_lane(mesh, cfg: GCfg, lc: LCfg, x_t, idx_t, counts_t, ws_t, out_t, tab
             nxt = {}
             for g, gr in enumerate(groups):
                 cyc, link = ln[g]
-                i = cyc.index(me_rc)
-                nxt[g] = (cyc[(i + 1) % N], cyc[(i - 1) % N])
+                if lc.nofab:
+                    nxt[g] = (me_rc, me_rc)
+                else:
+                    i = cyc.index(me_rc)
+                    nxt[g] = (cyc[(i + 1) % N], cyc[(i - 1) % N])
                 nid = [0, 0] if lc.nofab else [int(node(mesh, nxt[g][d]).chip_id) for d in range(2)]
                 rs = noc_rects(mesh, gr)
                 assert len(rs) == 1, rs

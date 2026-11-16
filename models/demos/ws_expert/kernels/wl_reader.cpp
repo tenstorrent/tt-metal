@@ -24,12 +24,16 @@
 //     15 table addr, 16 own slices addr, then the mux client RT args (17 words) of direction 0 and of direction 1
 // CT: 0 KT, 1 BK, 2 KTD, 3 DCOLS, 4 GC, 5 G, 6 NS, 7 NX, 8 hflags, 9 xring, 10 xflags, 11 xprog, 12-15 group rect
 //     for NOC1, 16 x tile bytes, 17 counts L1, 18 table L1, 19 hring, 20 h tile bytes, 21 warr (arrivals a slot,
-//     16 B apart), 22 ORMAX (output tile rows a group), 23 HT, 24 wgu ring, 25 wd ring, 26 cred (2K words), 27 FREEW
-//     (K words), 28 CHT, 29 W tile bytes, 30-34 mux client CT args (buffers, buffer bytes, status, termination
-//     signal, clients), then TensorAccessorArgs(out), (x), (idx), (counts), (table), (own slices), then RMAX, x row
-//     bytes, NEXP, table page bytes, idx scratch L1, D (own chunk reads in flight)
+//     16 B apart), 22 ORMAX (output tile rows a group; WL_OUT_EORD: the first output tile row), 23 HT, 24 wgu ring,
+//     25 wd ring, 26 cred (2K words), 27 FREEW (K words), 28 CHT, 29 W tile bytes, 30-34 mux client CT args
+//     (buffers, buffer bytes, status, termination signal, clients), then TensorAccessorArgs(out), (x), (idx),
+//     (counts), (table), (own slices), then RMAX, x row bytes, NEXP, table page bytes, idx scratch L1, D (own chunk
+//     reads in flight)
 // WL_NO_FABRIC (one chip, every expert its own): no mux connections and no mux client RT args, nothing forwarded
 // and no credits sent; CT 30-34 are placeholders.
+// WL_OUT_EORD: every expert's down rows in expert-id order, expert e from tile row ORMAX + sum over e' < e of
+// ceil(M_e' / 32) (computed from the counts into the counts L1 past them, for this group's experts e = i G + g only),
+// so a token's output row follows from the counts alone, whatever order the experts arrive in.
 #include "api/dataflow/dataflow_api.h"
 #ifndef WL_NO_FABRIC
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux_interface.hpp"
@@ -162,6 +166,18 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* tab = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(table_l1);
     volatile tt_l1_ptr uint32_t* order = tab + 16;
     auto rows_of = [&](uint32_t n) { return (counts[16 + (order[n] & 0xFFFF)] + 31) / 32; };
+#ifdef WL_OUT_EORD
+    constexpr uint32_t EB0 = 16 + ((NEXP + 15) & ~15u);  // expert i G + g's first output tile row at counts[EB0 + i]
+    {
+        uint32_t s = ORMAX;
+        for (uint32_t e = 0; e < NEXP; ++e) {
+            if (e % G == g) {
+                counts[EB0 + e / G] = s;
+            }
+            s += (counts[16 + e] + 31) / 32;
+        }
+    }
+#endif
     uint32_t total_rows = 0, total_x = 0;
     for (uint32_t n = 0; n < nexp_g; ++n) {
         total_rows += rows_of(n);
@@ -798,11 +814,13 @@ void kernel_main() {
 #endif
 #ifdef WG_Y_NCRISC
     // ---- QY: down outputs (CB 17) to DRAM, on NOC1 (the BRISC's NOC0 keeps the DRAM reads): the group's last
-    // expert's rows at tile row g ORMAX, or (WL_OUT_ALL) every expert's, packed in order from g ORMAX
+    // expert's rows at tile row g ORMAX, or (WL_OUT_ALL) every expert's, packed in order from g ORMAX, or
+    // (WL_OUT_EORD) every expert's at its expert-id-ordered tile row
     constexpr uint32_t y_cb = tt::CBIndex::c_17;
     const uint32_t obytes = get_tile_size(y_cb);
     const auto os = TensorAccessor(oargs, get_arg_val<uint32_t>(7), obytes);
-    uint32_t drained = 0, d_n = 0, d_r = 0, d_base = 0;
+    uint32_t drained = 0, d_n = 0, d_r = 0;
+    [[maybe_unused]] uint32_t d_base = 0;
     bool y_sent = false;  // a row's writes issued, its CB 17 pages still held
     auto qy = [&]() -> bool {
         if (y_sent) {
@@ -825,7 +843,10 @@ void kernel_main() {
             ++d_n;
             d_r = 0;
         }
-#ifdef WL_OUT_ALL
+#if defined(WL_OUT_EORD)
+        if (true) {
+            const uint32_t row = counts[EB0 + (order[d_n] & 0xFFFF) / G] + d_r;
+#elif defined(WL_OUT_ALL)
         if (true) {
             const uint32_t row = g * ORMAX + d_base + d_r;
 #else
