@@ -675,7 +675,12 @@ def test_div_int32_float_scalar_promotion_output_dtype(device, rounding_mode, ou
 @pytest.mark.parametrize("rounding_mode", [None, "trunc", "floor"])
 @pytest.mark.parametrize(
     "layout, use_sub_core_grids, interleaved_output",
-    [(ttnn.ROW_MAJOR_LAYOUT, False, True), (ttnn.TILE_LAYOUT, True, False)],
+    [
+        (ttnn.ROW_MAJOR_LAYOUT, False, True),
+        (ttnn.ROW_MAJOR_LAYOUT, True, False),
+        (ttnn.TILE_LAYOUT, False, True),
+        (ttnn.TILE_LAYOUT, True, False),
+    ],
 )
 @pytest.mark.parametrize(
     "strategy,shape,grid_end",
