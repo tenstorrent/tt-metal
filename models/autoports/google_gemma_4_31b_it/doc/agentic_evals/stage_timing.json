@@ -1,8 +1,8 @@
 {
   "started_unix": 1794611725,
   "phase1_deadline_unix": 1794654925,
-  "stage_deadline_unix": 1794791725,
+  "stage_deadline_unix": 1794806125,
   "phase1_hours": 12,
-  "stage_budget_hours": 50,
-  "basis": "Goal creation; setup included in stage time"
+  "stage_budget_hours": 54,
+  "basis": "Goal creation; setup included in stage time; operator extended +4h 2026-11-16T00:15Z"
 }
