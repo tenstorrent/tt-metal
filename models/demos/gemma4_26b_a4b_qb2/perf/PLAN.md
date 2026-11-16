@@ -13,7 +13,7 @@ batch 1 **53.8 tok/s/user** (18.6 ms); batches 8 / 16 / 32 step 129 / 255 / 501 
 | WS1 | A | Batched decode: attention, router and experts once for all users; 32 whole experts per chip; batch trace buckets | 32 users: step ≤ 35 ms (from 501) |
 | WS2 | B | Glue-op cut at batch 1: norms, residual, dtypes, layouts, RoPE tables, one reduction op | B1 step ~11 ms (from 18.6) |
 | WS3 | A | **Stopped 16 Nov** (see below): batch 32 is expert-bandwidth-bound after WS1 | - |
-| WS4 | B | `moe_decode` ttnn op: per-DRAM-bank streaming experts, GeGLU/SwiGLU, BFP8/BFP4 | expert read ≥ 400 GB/s/chip |
+| WS4 | B | `moe_decode` op (Python `generic_op` + kernels, gemma4 custom_ops style): per-DRAM-bank streaming experts, GeGLU/SwiGLU, BFP8/BFP4 | expert read ≥ 400 GB/s/chip |
 | WS5 | B | Fused decode (gpt-oss `fused_decode` style) | B1 3-5 ms |
 | WS6 | A | MTP speculative decoding (port from `models/demos/gemma4`, #62806) | B1 ×1.5-2 effective |
 
@@ -30,7 +30,7 @@ All work happens in `models/demos/gemma4_26b_a4b_qb2/` (plus new op dirs for WS4
 | WS1 | batch dimension in every decode path; per-slot loops (`tt/optimized_decoder.py` decode_forward, `tt/multichip_decoder.py` `_decode_shared_batch`, `tt/model.py` decode); attention batching (RoPE per user, QKV heads, cache update, SDPA); **router**; **expert placement and MoE decode**; trace buckets in `tt/generator.py` / `tt/generator_vllm.py` | norm/residual/dtype/layout code paths except for adding the batch dimension; CCL op form |
 | WS2 | RMSNorms and residual adds, layer scalar, typecasts and dtype per segment, sharded↔interleaved moves, RoPE table layout, **CCL op form** (RS+AG → one reduction) | router, experts, attention batching |
 | WS3 | a new dense-expert module selected by batch size | sparse path from WS1 |
-| WS4 | new op under `ttnn/cpp/ttnn/operations/experimental/moe_decode/` + its tests; then the MoE call site | anything else |
+| WS4 | new `tt/moe_decode/` package (Python `ProgramDescriptor` op with its kernels beside it, like `models/demos/gemma4/custom_ops`) + its tests; then the MoE call site. A C++ ttnn device op only if another model adopts it | anything else |
 | WS5 | new `tt/fused_decode/` package + kernels; then the decode-layer switch | the non-fused path |
 | WS6 | new `tt/mtp/` + vLLM adapter hooks | decode internals |
 
