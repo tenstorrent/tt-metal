@@ -274,7 +274,7 @@ constexpr std::uint32_t matmul_api_reuse_dir() {
             return 0;
         } else if constexpr (DST_SYNC_MODE == DstSync::SyncHalf) {
             // half sync: the run-time direction where a 32-bit operand sits beside a fast one (matmul_kernel_lofi_mix)
-            return out_format != DataFormat::Float32 && matmul_kernel_lofi_mix(unpack_src_format) ? 3 : 0;
+            return !LLK_SIZE_MODE && out_format != DataFormat::Float32 && matmul_kernel_lofi_mix(unpack_src_format) ? 3 : 0;
         } else {
             return llk_matmul_kernel_mixes_32bit<MM_THROTTLE != 0>() ? 3 : 0;
         }

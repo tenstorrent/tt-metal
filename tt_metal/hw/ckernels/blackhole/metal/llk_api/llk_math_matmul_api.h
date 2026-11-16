@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include "llk_size_mode.h"
 #include <cstdint>
 #include "llk_math_common_api.h"
 #include "llk_math_matmul.h"
@@ -81,8 +82,10 @@ constexpr bool llk_math_matmul_kernel_has_32bit_cb() {
 template <bool row_mop, std::uint32_t kt_per_section, DataFormat out_format>
 constexpr bool llk_math_matmul_tile_mop() {
     if constexpr (kt_per_section == 0) {
+        // size mode keeps the tile MOP at LoFi, as main
         return !row_mop &&
-               !matmul_plain_row_form<MATH_FIDELITY, DST_SYNC_MODE, DST_ACCUM_MODE>(llk_math_matmul_kernel_has_32bit_cb(), llk_math_matmul_kernel_lofi_wide());
+               (!matmul_plain_row_form<MATH_FIDELITY, DST_SYNC_MODE, DST_ACCUM_MODE>(llk_math_matmul_kernel_has_32bit_cb(), llk_math_matmul_kernel_lofi_wide()) ||
+                (MATH_FIDELITY == MathFidelity::LoFi && LLK_SIZE_MODE));
     } else {
         return !row_mop &&
                !matmul_math_row_form<MATH_FIDELITY, DST_SYNC_MODE, DST_ACCUM_MODE, kt_per_section, out_format>();
