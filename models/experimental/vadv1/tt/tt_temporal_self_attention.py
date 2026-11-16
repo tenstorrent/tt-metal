@@ -4,7 +4,7 @@
 
 import ttnn
 import warnings
-from models.experimental.vadv1.tt.tt_utils import fused_msda, msda_operands
+from models.experimental.vadv1.tt.tt_utils import QueryCounts, fused_msda, msda_operands
 from models.experimental.vadv1.tt.matmul_helpers import linear_flatten_batch
 
 
@@ -61,6 +61,7 @@ class TtTemporalSelfAttention:
         # output projection's weight.
         self.map_spatial_shapes_hw = self.spatial_shapes_hw * num_bev_queue
         self.output_proj_mean_weight = ttnn.mul(params.output_proj.weight, 1.0 / num_bev_queue)
+        self.query_counts = QueryCounts()
 
     def __call__(
         self,
@@ -117,7 +118,13 @@ class TtTemporalSelfAttention:
             f"got {tuple(reference_points.shape)}"
         )
         output = fused_msda(
-            maps, reference_points, sampling_offsets, attention_weights, self.map_spatial_shapes_hw, "level"
+            maps,
+            reference_points,
+            sampling_offsets,
+            attention_weights,
+            self.map_spatial_shapes_hw,
+            "level",
+            self.query_counts(self.device, bs, num_query),
         )
         output = ttnn.to_layout(output, ttnn.TILE_LAYOUT)
         output = linear_flatten_batch(output, self.output_proj_mean_weight, bias=params.output_proj.bias)
