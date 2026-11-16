@@ -41,6 +41,7 @@ Ensure **`LD_LIBRARY_PATH`** includes `<build>/lib` (or your install `lib`) when
 | `--mesh-graph-descriptor` | `-m` | **Yes** | Path to the Mesh Graph Descriptor (`.textproto`). |
 | `--physical-grouping-descriptor` | `-p` | No | Path to the Physical Grouping Descriptor (`.textproto`). If omitted, a default file is chosen automatically (see [Default Physical Grouping Descriptor](#default-physical-grouping-descriptor-omitting--p)). |
 | `--output-dir` | `-o` | No | Directory for outputs. Default: `generated/ttrun` (created if needed). |
+| `--mesh-pinning-file` | | No | Optional YAML constraining mesh host ranks to hostname + `TT_VISIBLE_DEVICES` placements (see [Mesh pinning file](#mesh-pinning-file-optional)). |
 | `--help` | `-h` | No | Print usage and exit (does not require MPI work beyond parsing). |
 
 Example:
@@ -62,6 +63,69 @@ mpirun -np <N> <mpi-args> \
   --mesh-graph-descriptor /absolute/or/repo/path/to/mesh_graph_descriptor.textproto \
   --output-dir /path/to/out
 ```
+
+---
+
+## Mesh pinning file (optional)
+
+By default the auto-mapper decides where each logical `(mesh_id, mesh_host_rank)` runs. Pass
+`--mesh-pinning-file` to pin selected logical host ranks to physical `(hostname, TT_VISIBLE_DEVICES)`
+placements. Unlisted logical host ranks remain automatic.
+
+```yaml
+mesh_host_rank_pinnings:
+  # Exact pin: this host rank (4 nodes) runs on host-A using exactly devices 0-3.
+  - mesh_id: 0
+    mesh_host_rank: 0
+    hostname: host-A
+    TT_VISIBLE_DEVICES: "0,1,2,3"
+  # Partial pin: this host rank runs on host-D and must include device 6; the mapper picks the other devices.
+  - mesh_id: 0
+    mesh_host_rank: 3
+    hostname: host-D
+    TT_VISIBLE_DEVICES: "6"
+  # any_of pin: this host rank runs on exactly one of the listed placements; Phase 1 picks which.
+  - mesh_id: 0
+    mesh_host_rank: 1
+    any_of:
+      - {hostname: host-B, TT_VISIBLE_DEVICES: "0,1,2,3"}
+      - {hostname: host-C, TT_VISIBLE_DEVICES: "0,1,2,3"}
+  # Several host ranks may list the same candidates (many-to-many): chosen placements never share a device,
+  # so host ranks 1 and 2 land on host-B and host-C in whichever order the topology allows.
+  - mesh_id: 0
+    mesh_host_rank: 2
+    any_of:
+      - {hostname: host-B, TT_VISIBLE_DEVICES: "0,1,2,3"}
+      - {hostname: host-C, TT_VISIBLE_DEVICES: "0,1,2,3"}
+```
+
+Rules:
+
+- `TT_VISIBLE_DEVICES` lists devices the host rank must include. With as many devices as the host rank has
+  nodes it is the exact placement; with fewer it is a partial pin and the mapper completes it with devices
+  of the same host that keep the mesh valid (a list that cannot be completed, such as one spanning two
+  slices, or more devices than the host rank has nodes, fails). An entry has either
+  `hostname` + `TT_VISIBLE_DEVICES` or `any_of`.
+- Every pinned host rank uses exactly one of its candidates, and no two host ranks may use overlapping devices
+  on one host. Two exact pins that share a device are rejected when the file is read.
+- Phase 1 tries candidate assignments depth first (host ranks with the fewest candidates first, candidates in
+  file order), running the topology mapper once per assignment, and keeps the first that satisfies the topology,
+  MGD, rank-binding, and other pinning constraints. The worst case is the product of the candidate counts, so
+  keep `any_of` lists short. The chosen placements are logged and re-checked against the generated rank bindings.
+- Pins act at both mapper levels in Phase 1: the SAT seating may only place a pinned mesh on a physical mesh
+  that contains the pinned devices, and the intra-mesh solve then fixes the host rank onto them.
+
+Pinning currently supports one MGD (`-m`) and cannot be combined with `--all-solutions`. The generated MPI
+ranks and rankfile slots remain outputs derived after topology mapping; they are not identifiers in this input
+file.
+
+Failures reported before launch include:
+
+- a pinned hostname that physical system discovery did not find;
+- a `TT_VISIBLE_DEVICES` ID discovery did not find on the named host;
+- a pinned mesh ID or mesh host rank the MGD does not define;
+- the same `(mesh_id, mesh_host_rank)` pinned twice, or two exact pins sharing a device on one host;
+- no candidate assignment the topology can satisfy, or one that conflicts with MGD or galaxy corner pinnings.
 
 ---
 

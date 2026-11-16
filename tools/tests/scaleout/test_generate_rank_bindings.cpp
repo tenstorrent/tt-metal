@@ -14,6 +14,7 @@
 #include <yaml-cpp/yaml.h>
 
 #include "generate_rank_bindings_helpers.hpp"
+#include "mesh_pinning_file.hpp"
 
 namespace {
 
@@ -351,4 +352,110 @@ TEST(GenerateRankBindingsHelpersTest, WriteSolutionMeta_ListsHostsAndCounts) {
     EXPECT_EQ(root["num_hosts"].as<int>(), 2);  // host-a, host-b
     // host_set is emitted as a comma-joined scalar (host_set_csv), not a YAML sequence.
     EXPECT_EQ(root["host_set"].as<std::string>(), "host-a,host-b");
+}
+
+// ---------------------------------------------------------------------------
+// Mesh pinning file (optional Phase 1 mesh-host-rank placement input)
+// ---------------------------------------------------------------------------
+
+namespace {
+
+std::filesystem::path write_pinning_file(const std::filesystem::path& dir, const std::string& contents) {
+    const auto path = dir / "pinned_meshes.yaml";
+    std::ofstream out(path);
+    out << contents;
+    out.close();
+    return path;
+}
+
+}  // namespace
+
+TEST(MeshPinningFileTest, ParsesExactAndAnyOfPinnings) {
+    const auto dir = make_temp_dir("pin_flat");
+    const auto path = write_pinning_file(dir, R"(mesh_host_rank_pinnings:
+  - mesh_id: 0
+    mesh_host_rank: 0
+    hostname: host-A
+    TT_VISIBLE_DEVICES: "3,1"
+  - mesh_id: 0
+    mesh_host_rank: 1
+    any_of:
+      - {hostname: host-B, TT_VISIBLE_DEVICES: "1,3"}
+      - {hostname: host-C, TT_VISIBLE_DEVICES: "0, 2"}
+  - mesh_id: 2
+    mesh_host_rank: 0
+    any_of:
+      - {hostname: host-B, TT_VISIBLE_DEVICES: "1,3"}
+)");
+
+    const auto pinnings = parse_mesh_pinning_file(path.string());
+    ASSERT_EQ(pinnings.size(), 3u);
+    EXPECT_EQ(*pinnings[0].mesh_id, 0u);
+    EXPECT_EQ(*pinnings[0].mesh_host_rank, 0u);
+    ASSERT_EQ(pinnings[0].candidates.size(), 1u);
+    EXPECT_EQ(pinnings[0].candidates[0].hostname, "host-A");
+    EXPECT_EQ(pinnings[0].candidates[0].tt_visible_devices, std::vector<int>({1, 3}));  // sorted
+    ASSERT_EQ(pinnings[1].candidates.size(), 2u);
+    EXPECT_EQ(pinnings[1].candidates[1].hostname, "host-C");
+    EXPECT_EQ(pinnings[1].candidates[1].tt_visible_devices, std::vector<int>({0, 2}));  // whitespace tolerated
+    EXPECT_EQ(*pinnings[2].mesh_id, 2u);
+    EXPECT_EQ(pinnings[2].candidates[0], pinnings[1].candidates[0]);  // candidates may repeat across ranks
+
+    const auto empty_path = write_pinning_file(dir, "mesh_host_rank_pinnings: []\n");
+    EXPECT_TRUE(parse_mesh_pinning_file(empty_path.string()).empty());
+}
+
+TEST(MeshPinningFileTest, RejectsInvalidDocuments) {
+    const std::vector<std::pair<std::string, std::string>> invalid_documents = {
+        {"wrong top-level key", "mesh_host_pinnings:\n  - mesh_id: 0\n    hostname: host-A\n"},
+        {"top-level value is a map", "mesh_host_rank_pinnings: {}\n"},
+        {"entry is not a map", "mesh_host_rank_pinnings:\n  - 7\n"},
+        {"missing hostname",
+         "mesh_host_rank_pinnings:\n  - {mesh_id: 0, mesh_host_rank: 0, TT_VISIBLE_DEVICES: \"0\"}\n"},
+        {"missing TT_VISIBLE_DEVICES", "mesh_host_rank_pinnings:\n  - {mesh_id: 0, mesh_host_rank: 0, hostname: h}\n"},
+        {"missing mesh_host_rank",
+         "mesh_host_rank_pinnings:\n  - {mesh_id: 0, hostname: h, TT_VISIBLE_DEVICES: \"0\"}\n"},
+        {"neither exact nor any_of", "mesh_host_rank_pinnings:\n  - {mesh_id: 0, mesh_host_rank: 0}\n"},
+        {"both exact and any_of",
+         "mesh_host_rank_pinnings:\n  - {mesh_id: 0, mesh_host_rank: 0, hostname: h, TT_VISIBLE_DEVICES: \"0\", "
+         "any_of: [{hostname: h, TT_VISIBLE_DEVICES: \"1\"}]}\n"},
+        {"empty any_of", "mesh_host_rank_pinnings:\n  - {mesh_id: 0, mesh_host_rank: 0, any_of: []}\n"},
+        {"any_of item missing TT_VISIBLE_DEVICES",
+         "mesh_host_rank_pinnings:\n  - {mesh_id: 0, mesh_host_rank: 0, any_of: [{hostname: h}]}\n"},
+        {"any_of item unknown key",
+         "mesh_host_rank_pinnings:\n  - {mesh_id: 0, mesh_host_rank: 0, any_of: [{hostname: h, TT_VISIBLE_DEVICES: "
+         "\"0\", slot: 1}]}\n"},
+        {"duplicate any_of placement",
+         "mesh_host_rank_pinnings:\n  - {mesh_id: 0, mesh_host_rank: 0, any_of: [{hostname: h, TT_VISIBLE_DEVICES: "
+         "\"0,1\"}, {hostname: h, TT_VISIBLE_DEVICES: \"1,0\"}]}\n"},
+        {"unknown key",
+         "mesh_host_rank_pinnings:\n  - {mesh_id: 0, mesh_host_rank: 0, hostname: h, TT_VISIBLE_DEVICES: \"0\", "
+         "rank: 3}\n"},
+        {"negative id",
+         "mesh_host_rank_pinnings:\n  - {mesh_id: -1, mesh_host_rank: 0, hostname: h, TT_VISIBLE_DEVICES: \"0\"}\n"},
+        {"empty hostname",
+         "mesh_host_rank_pinnings:\n  - {mesh_id: 0, mesh_host_rank: 0, hostname: \"\", TT_VISIBLE_DEVICES: \"0\"}\n"},
+        {"duplicate (mesh, host rank)",
+         "mesh_host_rank_pinnings:\n"
+         "  - {mesh_id: 0, mesh_host_rank: 0, hostname: h0, TT_VISIBLE_DEVICES: \"0\"}\n"
+         "  - {mesh_id: 0, mesh_host_rank: 0, hostname: h1, TT_VISIBLE_DEVICES: \"0\"}\n"},
+        {"same device used by two exact pins on one host",
+         "mesh_host_rank_pinnings:\n"
+         "  - {mesh_id: 0, mesh_host_rank: 0, hostname: h, TT_VISIBLE_DEVICES: \"0,1\"}\n"
+         "  - {mesh_id: 0, mesh_host_rank: 1, hostname: h, TT_VISIBLE_DEVICES: \"1,2\"}\n"},
+        {"device listed twice in one entry",
+         "mesh_host_rank_pinnings:\n  - {mesh_id: 0, mesh_host_rank: 0, hostname: h, TT_VISIBLE_DEVICES: \"1,1\"}\n"},
+        {"non-numeric device",
+         "mesh_host_rank_pinnings:\n  - {mesh_id: 0, mesh_host_rank: 0, hostname: h, TT_VISIBLE_DEVICES: "
+         "\"0,nope\"}\n"},
+        {"empty device entry",
+         "mesh_host_rank_pinnings:\n  - {mesh_id: 0, mesh_host_rank: 0, hostname: h, TT_VISIBLE_DEVICES: \"0,,1\"}\n"},
+    };
+
+    for (std::size_t i = 0; i < invalid_documents.size(); ++i) {
+        const auto dir = make_temp_dir("pin_invalid_" + std::to_string(i));
+        const auto path = write_pinning_file(dir, invalid_documents[i].second);
+        EXPECT_THROW(parse_mesh_pinning_file(path.string()), std::runtime_error)
+            << "case " << i << ": " << invalid_documents[i].first;
+    }
 }

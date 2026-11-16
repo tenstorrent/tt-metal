@@ -1,0 +1,20 @@
+# any_of pool: ranks 0-2 of the 8x4 mesh each take one distinct slice of d04u02 from the same three, rank 3 stays automatic.
+mesh_host_rank_pinnings:
+  - mesh_id: 0
+    mesh_host_rank: 0
+    any_of:
+      - {hostname: bh-glx-110-d04u02, TT_VISIBLE_DEVICES: "0,1,2,3,4,5,6,7"}
+      - {hostname: bh-glx-110-d04u02, TT_VISIBLE_DEVICES: "8,9,10,11,12,13,14,15"}
+      - {hostname: bh-glx-110-d04u02, TT_VISIBLE_DEVICES: "24,25,26,27,28,29,30,31"}
+  - mesh_id: 0
+    mesh_host_rank: 1
+    any_of:
+      - {hostname: bh-glx-110-d04u02, TT_VISIBLE_DEVICES: "0,1,2,3,4,5,6,7"}
+      - {hostname: bh-glx-110-d04u02, TT_VISIBLE_DEVICES: "8,9,10,11,12,13,14,15"}
+      - {hostname: bh-glx-110-d04u02, TT_VISIBLE_DEVICES: "24,25,26,27,28,29,30,31"}
+  - mesh_id: 0
+    mesh_host_rank: 2
+    any_of:
+      - {hostname: bh-glx-110-d04u02, TT_VISIBLE_DEVICES: "0,1,2,3,4,5,6,7"}
+      - {hostname: bh-glx-110-d04u02, TT_VISIBLE_DEVICES: "8,9,10,11,12,13,14,15"}
+      - {hostname: bh-glx-110-d04u02, TT_VISIBLE_DEVICES: "24,25,26,27,28,29,30,31"}

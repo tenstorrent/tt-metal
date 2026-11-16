@@ -3201,7 +3201,7 @@ void SatPlacementEnumerationSession::finish_init(
                 asics.insert(asic_id);
                 extra_asics.insert(asic_id);
             }
-            extra_required_.emplace_back(mesh_id, std::move(extra_asics));
+            extra_required_.push_back({{mesh_id}, {std::move(extra_asics)}});
         }
         if (!placement_asic_allowlist.empty()) {
             if (asics.empty()) {
@@ -3324,6 +3324,7 @@ void SatPlacementEnumerationSession::invalidate_pending_solve() {
     }
 }
 
+// Seats of `mesh_id` whose footprint holds every ASIC in `asics` (exactly that footprint when the sizes match).
 std::set<const SatPlacementEnumerationSession::Candidate*> SatPlacementEnumerationSession::seats_matching(
     GlobalMeshId mesh_id, const std::unordered_set<tt::tt_metal::experimental::PhysicalNodeId>& asics) const {
     std::set<const Candidate*> seats;
@@ -3335,17 +3336,11 @@ std::set<const SatPlacementEnumerationSession::Candidate*> SatPlacementEnumerati
         return seats;
     }
     for (const Candidate& candidate : pool_it->second->candidates()) {
-        if (candidate.asic_count() != asics.size()) {
-            continue;
-        }
-        bool match = true;
+        std::size_t found = 0;
         for (std::size_t i = 0; i < candidate.asic_count(); ++i) {
-            if (!asics.contains(candidate.asic(i))) {
-                match = false;
-                break;
-            }
+            found += asics.contains(candidate.asic(i)) ? 1 : 0;
         }
-        if (match) {
+        if (found == asics.size()) {
             seats.insert(&candidate);
         }
     }
@@ -3363,10 +3358,17 @@ bool SatPlacementEnumerationSession::apply_extra_constraints(
             return false;
         }
     }
-    for (const auto& [mesh_id, asics] : extra_required_) {
-        const std::set<const Candidate*> seats = seats_matching(mesh_id, asics);
-        if (seats.empty() || !constraints.add_required_constraint(mesh_id, seats)) {
-            return false;
+    for (const RequiredSeats& required : extra_required_) {
+        for (const MeshId mesh_id : required.mesh_ids) {
+            std::set<const Candidate*> seats;
+            for (const auto& pool : required.pools) {
+                seats.merge(seats_matching(mesh_id, pool));
+            }
+            if (seats.empty() || !constraints.add_required_constraint(mesh_id, seats)) {
+                log_warning(
+                    tt::LogFabric, "SAT joint placement: no seat for mesh {} holds its required ASICs", mesh_id.get());
+                return false;
+            }
         }
     }
     return true;
@@ -3423,27 +3425,24 @@ bool SatPlacementEnumerationSession::add_forbidden_constraint(const PlacedMesh& 
 }
 
 bool SatPlacementEnumerationSession::add_required_constraint(
-    MeshId mesh_id, const std::unordered_set<tt::tt_metal::experimental::PhysicalNodeId>& asics) {
+    const std::set<MeshId>& mesh_ids,
+    const std::vector<std::unordered_set<tt::tt_metal::experimental::PhysicalNodeId>>& pools) {
+    extra_required_.push_back({mesh_ids, pools});
     if (!ready_) {
-        extra_required_.emplace_back(mesh_id, asics);
         return true;
     }
-    extra_required_.emplace_back(mesh_id, asics);
-    const std::set<const Candidate*> seats = seats_matching(mesh_id, asics);
-    if (!seats.empty()) {
-        MappingConstraints<GlobalMeshId, const Candidate*> trial;
-        if (build_sat_placement_constraints(*pools_, *physical_system_descriptor_, mesh_level_graph_, trial) &&
-            !apply_extra_constraints(trial)) {
-            extra_required_.pop_back();
-            return false;
-        }
+    MappingConstraints<GlobalMeshId, const Candidate*> trial;
+    if (build_sat_placement_constraints(*pools_, *physical_system_descriptor_, mesh_level_graph_, trial) &&
+        !apply_extra_constraints(trial)) {
+        extra_required_.pop_back();
+        return false;
     }
     invalidate_pending_solve();
     return true;
 }
 
 bool SatPlacementEnumerationSession::add_required_constraint(const PlacedMesh& placed) {
-    return add_required_constraint(placed.mesh_id, placed.placement.asics);
+    return add_required_constraint({placed.mesh_id}, {placed.placement.asics});
 }
 
 bool SatPlacementEnumerationSession::exclude_mapping(const AssignedMeshes& assigned) {

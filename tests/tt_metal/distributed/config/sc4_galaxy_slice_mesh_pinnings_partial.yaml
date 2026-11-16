@@ -1,0 +1,10 @@
+# Partial pins: ranks 0/1 name a few devices inside d04u02 slices 0-7 and 24-31; the mapper fills in the rest of each slice.
+mesh_host_rank_pinnings:
+  - mesh_id: 0
+    mesh_host_rank: 0
+    hostname: bh-glx-110-d04u02
+    TT_VISIBLE_DEVICES: "2,5"
+  - mesh_id: 0
+    mesh_host_rank: 1
+    hostname: bh-glx-110-d04u02
+    TT_VISIBLE_DEVICES: "30"
