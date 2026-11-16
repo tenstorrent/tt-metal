@@ -2570,6 +2570,15 @@ def test_spec_multi_refusals_and_room(monkeypatch):
     assert spec_multi_gate([0, 2], [0, 2], sp, {2}, True) is None
     assert spec_multi_gate([0, 2], [0, 2], sp, set(), False) is None
     assert spec_multi_gate([], [0, 2], sp, set(), True, partial=True) is None
+    # GLM53_SPEC_THROUGH_PREFILL: an idle live slot (a request mid-prefill) on another base stays out and the others
+    # speculate (its own verdicts unread); v1 declines with one; an idle slot off the bases (a candidate row) declines;
+    # idle slots alone leave nobody to speculate
+    assert spec_multi_gate([0, 2, 4], [0, 2, 4, 6], sp, set(), True, partial=True, idle=[4]) == [0, 2]
+    assert spec_multi_gate([0, 2], [0, 2], {0: True}, {2}, True, partial=True, idle=[2]) == [0]
+    assert spec_multi_gate([0, 2], [0, 2], sp, set(), True, idle=[2]) is None
+    assert spec_multi_gate([0, 1], [0, 2], sp, set(), True, partial=True, idle=[1]) is None
+    assert spec_multi_gate([2], [0, 2], sp, set(), True, partial=True, idle=[2]) is None
+    assert spec_multi_gate([0, 2], [0, 2], sp, set(), True, partial=True, idle=[6]) == [0, 2]  # (not live: ignored)
     # GLM53_SPEC_SAMPLED over a greedy verify head (spec_samples() False) refuses the launch
     import models.demos.glm53_flash.tt.generator_vllm_stack as gvs
 
@@ -3183,6 +3192,245 @@ def _served_alt_flow():
     assert ad.spec_stats["fallback"] == 0
     for i in range(4):
         assert st[i] == want(ps[i], st[i]), (i, st[i][:12])
+
+
+class _MockSpecMultiPartial(_MockSpecMulti):
+    """_MockSpecMulti with GLM53_SPEC_PARTIAL (kernels/spec/spec_ctl.cpp SPEC_PARTIAL): a group whose base's plain
+    position is < 0 at the bootstrap is inactive for the whole speculation -- record c -1, no token, state or position
+    written for its base -- while, as on the device (the chained KDA verify writes every row of a group: an inactive
+    group's rows take its base's state), its CANDIDATE rows are clobbered: a live request there would be corrupted"""
+
+    partial = True
+
+    def __init__(self, be, K: int, G: int, good):
+        super().__init__(be, K, G, good)
+        self.active, self.inactive = None, []  # (set_active's groups; (step, base) of every inactive group stepped)
+
+    def set_active(self, groups) -> None:
+        self.active = tuple(sorted(int(u) for u in groups))
+
+    def _idle_rec(self) -> dict:
+        return dict(n=0, c=-1, a=[0] * (self.K + 1), committed=[0], drafts=[0] * self.K, steps=self.counters["steps"])
+
+    def enter(self, rows):
+        self.set_page_tables(rows)
+        io, self._recs = self.be.io, []
+        for u, s in enumerate(self.slots):
+            p = int(io.cur_pos.t[s])
+            if p < 0:  # BOOT: an inactive group
+                self._recs.append(self._idle_rec())
+                continue
+            b = int(io.tokens.t[s])
+            self._drafts[s] = self._make_drafts(b, 0, u)
+            self._recs.append(dict(n=0, c=p - 1, a=[b] * (self.K + 1), committed=[b], drafts=list(self._drafts[s]),
+                                   steps=0))  # fmt: skip
+        assert self.active == tuple(u for u, r in enumerate(self._recs) if r["c"] >= 0), (self.active, self._recs)
+        self.counters["enters"] += 1
+
+    def step(self, blocking: bool = False):
+        io, recs = self.be.io, []
+        self.counters["steps"] += 1
+        for u, s in enumerate(self.slots):
+            prev = self._recs[u]
+            if prev["c"] < 0:  # an inactive group: its base untouched, its candidate rows take the base's state
+                for j in range(1, self.K + 1):
+                    self.be.kv.state[s + j] = list(self.be.kv.state[s])
+                self.inactive.append((self.counters["steps"], s))
+                recs.append(self._idle_rec())
+                continue
+            st, c = self.be.kv.state[s], prev["c"] + prev["n"] + 1
+            rows = [int(io.tokens.t[s])] + self._drafts[s]
+            assert len(st) == c, f"user {u}: verify at {c}, its state holds {len(st)} tokens"
+            a = [(r + 1) % VOCAB for r in rows]
+            n = 0
+            for j in range(1, self.K + 1):
+                if a[j - 1] != rows[j]:
+                    break
+                n = j
+            st.extend(rows[: n + 1])
+            io.tokens.t[s] = a[n]
+            self._drafts[s] = self._make_drafts(a[n], self.counters["steps"], u)
+            recs.append(dict(n=n, c=c, a=a, committed=a[: n + 1], drafts=list(self._drafts[s]),
+                             steps=self.counters["steps"]))  # fmt: skip
+        self._recs = recs
+
+    def leave(self) -> list:
+        recs = self.read()
+        pos = self.be.io.cur_pos.t.clone()
+        for s, rec in zip(self.slots, recs):
+            if rec["c"] >= 0:  # (an inactive group: nothing committed, no position)
+                pos[s] = rec["c"] + rec["n"] + 1
+        self.be.io.cur_pos.t = pos
+        self.counters["leaves"] += 1
+        return recs
+
+
+class _MockSpecMultiPartialBackend(_MockSpecMultiBackend):
+    def allocate_decode_io(self, kv):
+        io = super().allocate_decode_io(kv)
+        self.spec = _MockSpecMultiPartial(self, self.K, self.G, self.good)
+        return io
+
+
+def _partial_adapter(mb: int, K: int, G: int, good):
+    be = _MockSpecMultiPartialBackend(mb, K, G, good)
+    gen = Glm53Generator(be, tokenizer=SimpleNamespace(stop_token_ids=()), max_batch=mb, max_seq_len=SEQ)
+    ad = GLM53StackForCausalLM(gen, mb, SEQ, spec=True)
+    kv = ad.allocate_kv_cache((mb * SEQ // BLOCK_SIZE + mb, 1, BLOCK_SIZE, LATENT_DIM), torch.bfloat16, 45)
+    ad.warmup_model_prefill(kv_cache=kv, enable_trace=True, can_sample_on_device=True)
+    ad.warmup_model_decode(kv_cache=kv, enable_trace=True, max_batch_size=mb, num_blocks=BPS, can_sample_on_device=True)
+    assert ad._spec_partial()
+    return ad, be, gen, kv
+
+
+@pytest.mark.parametrize("thru", ["1", "0"])
+def test_served_spec_through_a_partial_prefill(monkeypatch, thru):
+    """GLM53_SPEC_THROUGH_PREFILL (F46: while a request was partway through a multi-chunk prefill every interleaved
+    decode step ran plain for every user -- the binding's live slots included the prefilling one, which the plugin's
+    decode rows never do, so every proposal declined): on the partial-groups step (G 4, K 1 on the 8-slot mock: bases
+    0 / 2 / 4 / 6) users A and B keep speculating while C prefills in three engine steps (its intermediate chunks
+    host-routed, as the plugin sends them). C's generator slot (base 4) is an idle group of every entry: never active,
+    its state untouched (each continuation chunk finds exactly its prefix: the mock asserts it), no proposal declines.
+    C's last chunk seeds A, B and C together and all three speculate. Every stream equals plain greedy.
+    GLM53_SPEC_THROUGH_PREFILL=0 keeps the old gate: every proposal declines while C is mid-prefill. Either way a request
+    mid-prefill on a CANDIDATE row (G 2 on 4 slots: base 0's row 1) declines every proposal -- the chained verify would
+    write its state -- and the generator refuses such an idle slot."""
+    monkeypatch.setenv("GLM53_SPEC_THROUGH_PREFILL", thru)
+    mb, K = 8, 1
+    ad, be, gen, kv = _partial_adapter(mb, K, 4, lambda step: K if step % 3 else 0)
+    assert gen.spec_slots() == (0, 2, 4, 6) and ad.spec_thru_pf == (thru == "1")
+    ps = [_prompt(100, 7), _prompt(90, 20), _prompt(300, 33)]
+    tab = torch.zeros(mb, BPS, dtype=torch.int32)
+    for i in range(3):
+        bl = _blocks(i, 400)
+        tab[i, : len(bl)] = torch.tensor(bl, dtype=torch.int32)
+    st, nxt = {}, {}
+    want = lambda p, s: [(p[-1] + 1 + i) % VOCAB for i in range(len(s))]  # noqa: E731  (plain greedy: next = t + 1)
+
+    def chunk(i, start, end):  # one engine step of prompt i: intermediate chunks host-routed, the last device-sampled
+        last = end == len(ps[i])
+        out = ad.prefill_forward(_history([ps[i][:end]]), page_table=tab[i : i + 1], kv_cache=kv, prompt_lens=[end],
+                                 start_pos=[start], empty_slots=[i], sampling_params=_greedy(1) if last else None)  # fmt: skip
+        if last:
+            st[i], nxt[i] = [int(out[0][0, 0])], end
+
+    def plain(users):
+        tok, pos = torch.zeros(mb, 1, dtype=torch.int64), torch.full((mb,), -1, dtype=torch.int64)
+        for i in users:
+            tok[i, 0], pos[i] = st[i][-1], nxt[i]
+        ids = ad.decode_forward(tok, pos, page_table=tab, kv_cache=kv, sampling_params=_greedy(mb))
+        for i in users:
+            st[i].append(int(ids[i, 0]))
+            nxt[i] += 1
+
+    def blk(users):  # the committed block (users: plugin row -> its committed tokens, the last at nxt - 1 + 1)
+        ct = torch.full((mb, 1 + K), PLACEHOLDER_TOKEN_ID, dtype=torch.int32)
+        cp = torch.full((mb, 1 + K), -1, dtype=torch.int32)
+        ac = torch.ones(mb, dtype=torch.int32)
+        for i, toks in users.items():
+            first = nxt[i] - len(toks) + 1
+            ct[i, : len(toks)] = torch.tensor(toks, dtype=torch.int32)
+            cp[i, :] = torch.arange(first, first + 1 + K)
+            ac[i] = len(toks)
+        return ct, cp, ac
+
+    def rounds(n, users, k):  # propose -> verify (a declined proposal: the plugin's ordinary decode)
+        ct, cp, ac = blk({i: [st[i][-1]] for i in users})
+        for _ in range(n):
+            do = ad.propose_draft_tokens(K, ct, cp, ac)
+            assert do.num_valid.tolist() == [k if i in users else 0 for i in range(mb)], do.num_valid.tolist()
+            if not k:
+                plain(users)
+                ct, cp, ac = blk({i: [st[i][-1]] for i in users})
+                continue
+            tok = torch.zeros(mb, 1 + K, dtype=torch.int32)
+            pos = torch.full((mb, 1 + K), -1, dtype=torch.int32)
+            nv = torch.zeros(mb, dtype=torch.int32)
+            dr = torch.full((mb, K), PLACEHOLDER_TOKEN_ID, dtype=torch.int32)
+            for i in users:
+                tok[i, 0], pos[i, 0], nv[i] = st[i][-1], nxt[i], k
+                for j in range(k):
+                    x = int(do.draft_token_ids[i, j])
+                    tok[i, 1 + j], pos[i, 1 + j], dr[i, j] = x, nxt[i] + 1 + j, x
+            out = ad.decode_forward(tok, pos, page_table=tab, kv_cache=kv, sampling_params=_greedy(mb),
+                                    num_valid_drafts=nv, accepted_counts=torch.ones(mb, dtype=torch.int32),
+                                    spec_mode="argmax_ids")  # fmt: skip
+            ids = out.argmax_ids
+            assert tuple(ids.shape) == (mb, 1 + K), tuple(ids.shape)
+            committed, counts = accept_greedy_walk(ids, dr[:, : int(ids.shape[1]) - 1], nv)
+            new = {i: [int(v) for v in committed[i, : int(counts[i])].tolist()] for i in users}
+            for i in users:
+                st[i].extend(new[i])
+                nxt[i] += len(new[i])
+            ct, cp, ac = blk(new)
+
+    chunk(0, 0, 100)
+    chunk(1, 0, 90)
+    assert ad._alias[:2] == [0, 2] and ad.spec_stats["seeds"] == 2 and ad._pf_open == set()
+    plain([0, 1])
+    rounds(3, [0, 1], K)
+    f0, d0, e0 = ad.spec_stats["fused"], ad.spec_stats["declines"], ad.spec_stats["enters"]
+    chunk(2, 0, 128)  # C: generator slot 4 (the third base), mid-prefill
+    assert ad._alias[2] == 4 and ad._pf_open == {4} and getattr(gen._binding(kv), "spec", None) is None
+    for start, end in ((128, 256), (256, 300)):
+        plain([0, 1])  # (the step after a prefill: the outstanding verify's ordinary answer)
+        rounds(3, [0, 1], K if thru == "1" else 0)
+        assert be.kv.state[4] == ps[2][:start]  # (C's state: exactly its prefix)
+        chunk(2, start, end)
+    assert ad._pf_open == set() and ad.spec_stats["seeds"] == 3  # (C's last chunk seeds A, B and C together)
+    if thru == "1":
+        assert ad.spec_stats["fused"] == f0 + 6 and ad.spec_stats["declines"] == d0
+        assert ad.spec_stats["enters"] == e0 + 2 and ad.spec_stats["thru_pf"] == 2
+        assert {s for _, s in be.spec.inactive} == {4, 6}  # (C's base and the empty one: never active while idle)
+    else:
+        assert ad.spec_stats["fused"] == f0 and ad.spec_stats["declines"] == d0 + 6 and ad.spec_stats["thru_pf"] == 0
+    plain([0, 1, 2])
+    rounds(4, [0, 1, 2], K)
+    for i in range(3):
+        assert st[i] == want(ps[i], st[i]), (i, st[i][:12])
+    assert be.kv.state[4][: len(ps[2])] == ps[2]
+    # ---- a request mid-prefill on a CANDIDATE row: G 2, K 1 on 4 slots (bases 0 / 2), C lands on base 0's row 1
+    ad, be, gen, kv = _partial_adapter(B, K, 2, lambda step: K)
+    mb, tab = B, tab[:B].clone()
+    chunk(0, 0, 100)
+    chunk(1, 0, 90)
+    plain([0, 1])
+    rounds(2, [0, 1], K)
+    chunk(2, 0, 128)
+    assert ad._alias[:3] == [0, 2, 1] and ad._pf_open == {1}
+    plain([0, 1])
+    rounds(2, [0, 1], 0)  # (live 0 / 1 / 2: slot 1 is no base -- every proposal declines)
+    assert be.kv.state[1] == ps[2][:128]
+    with expect_error(ValueError, "must sit on other group bases"):
+        gen.spec_enter(kv, slots=[0, 2], idle=[1])
+    chunk(2, 128, 256)  # (its state intact: the continuation finds its prefix)
+    for i in range(2):
+        assert st[i] == want(ps[i], st[i]), (i, st[i][:12])
+    assert "ttnn" not in sys.modules
+
+
+def test_spec_enter_idle_needs_partial_groups():
+    """Glm53Generator.spec_enter(idle=): only the partial-groups step keeps a live slot out (the fixed-G v1 step runs
+    every group: an idle request's rows would be verified), only on another group base of the step, and never on the
+    single-user step; spec_room(slots=) checks the speculating users only (not an idle one near the context end)"""
+    backend, gen = _spec_multi_gen(1, 2, 4)
+    kv = gen.allocate_kv_cache(4, SEQ)
+    b = gen._binding(kv)
+    for s in (0, 1, 2):
+        b.slots[s].active, b.slots[s].seq_len = True, 10
+    with expect_error(ValueError, "must sit on other group bases"):
+        gen.spec_enter(kv, slots=[0, 2], idle=[1])  # (no partial groups, and slot 1 is base 0's candidate row)
+    with expect_error(ValueError, "must be exactly the live slots"):
+        gen.spec_enter(kv, slots=[0, 2])
+    assert backend.spec.counters["enters"] == 0
+    b.slots[2].seq_len = SEQ - 2
+    assert not gen.spec_room(kv, step=0) and gen.spec_room(kv, step=0, slots=[0])
+    assert not gen.spec_room(kv, step=0, slots=[0, 2])
+    _, gen1 = _spec_gen(1)
+    kv1 = gen1.allocate_kv_cache(B, SEQ)
+    with expect_error(ValueError, "need the multi-user step's partial groups"):
+        gen1.spec_enter(kv1, idle=[1])
+    assert "ttnn" not in sys.modules
 
 
 class _MockSpecPrefixBackend(_MockPrefixBackend, _MockSpecBackend):

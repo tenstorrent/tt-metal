@@ -146,8 +146,8 @@ class KdaPre:
             + ([("KDA_SPREAD", str(self.spread))] if self.spread != 1 else [])
             + ([("KDA_RSPLIT", str(self.rsplit))] if self.rsplit != 1 else [])
             + ([("KDA_PACK", str(self.pack))] if self.pack != 2 else [])
-            + ([("KDA_PRE_REV", "2")] if self.verify_sel is not None else [])
-        )  # fmt: skip  (2: the verify reader's CB_H* pages)
+            + ([("KDA_PRE_REV", "3")] if self.verify_sel is not None else [])
+        )  # fmt: skip  (2: the verify reader's CB_H* pages; 3: KDA_VERIFY_GROUPS keeps an inactive group's history)
         # per device (a TP8 mesh holds each chip's own shard): [4, 3 * heads * 128] (bf16 values)
         hd = [ttnn.to_torch(t).float() for t in ttnn.get_device_tensors(kda.taps_hist)]
         cd = [ttnn.to_torch(t).float() for t in ttnn.get_device_tensors(kda.tap_cur)]

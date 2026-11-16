@@ -175,6 +175,14 @@ SPEC_MAX_ROWS = 4  # tt/spec_mtp.py: the speculative step runs at the B <= 4 chu
 # (``spec_multi_capable``: batch 2's fixed G = GLM53_SPEC_MULTI_USERS) verifies exactly G greedy requests on the group
 # bases; any other step keeps DraftOutput.num_valid = 0 (plain decode), exactly as the single-user plan's multi-row steps
 SPEC_MULTI_ENV = "GLM53_SPEC_MULTI"
+# GLM53_SPEC_THROUGH_PREFILL (default 1; GLM53_SPEC_MULTI with the backend's partial groups, GLM53_SPEC_PARTIAL): the
+# decoding users keep speculating while another request is mid-prefill (vLLM's chunked prefill: one 8,192-token chunk
+# per prefill step, then up to 8 interleaved decode steps). The prefilling request holds a live generator slot but no
+# decode row: it stays OUT of the step as an idle group base (Glm53Generator.spec_enter idle=: its group inactive --
+# positions -1, KDA masks 0, record c -1 -- so none of its KDA / MLA / DSA / MTP state is written) and joins at its
+# prefill end (the seed or the next proposal re-enters with it). 0: a live slot without a decode row declines every
+# step for every user (F46: every interleaved decode of a multi-chunk prefill was a plain 1-token step).
+SPEC_THRU_PF_ENV = "GLM53_SPEC_THROUGH_PREFILL"
 
 
 def spec_enabled(env=os.environ) -> bool:
@@ -196,25 +204,29 @@ SPEC = spec_enabled()
 SPEC_SAMPLED = SPEC and DEVICE_TOP_K > 1 and os.environ.get("GLM53_SPEC_SAMPLED", "0") == "1"
 
 
-def spec_multi_gate(live, bases, speculable: dict, no_spec, room: bool, *, partial: bool = False):
+def spec_multi_gate(live, bases, speculable: dict, no_spec, room: bool, *, partial: bool = False, idle=()):
     """GLM53_SPEC_MULTI's step gate -> the group bases that speculate this step (sorted), or None (a plain decode).
     v1 (``partial`` False: batch 2's fixed G): the live generator slots are exactly the G group bases. ``partial`` (the
     backend's Glm53Generator.spec_partial_groups(): an inactive group's verify rows skipped on device, a joining group
-    seeded alone): any non-empty subset of the bases. Either way every live slot is speculable (greedy, or sampled under
-    spec_ids_are_sampled) and allowed (not in ``no_spec``: a prefix-attached / image request), and every user's next step
-    fits (``room``: GLM53_SPEC_MAX_CTX); a live slot off the bases declines the step for everyone (one launch serves every
-    live row)"""
+    seeded alone): any non-empty subset of the bases. Either way every speculating slot is speculable (greedy, or
+    sampled under spec_ids_are_sampled) and allowed (not in ``no_spec``: a prefix-attached / image request), and every
+    user's next step fits (``room``: GLM53_SPEC_MAX_CTX); a live slot off the bases declines the step for everyone (one
+    launch serves every live row). ``idle`` (partial only, GLM53_SPEC_THROUGH_PREFILL): live slots that do not decode
+    (a request mid-prefill) -- they stay out of the speculation, each on a base (its group inactive), and the others
+    speculate; v1 declines with any"""
     live, bases = sorted(int(v) for v in live), sorted(int(v) for v in bases)
-    if not bases or not live or not room:
+    idle = {int(v) for v in idle} & set(live)
+    act = [s for s in live if s not in idle]
+    if not bases or not act or not room:
         return None
     if partial:
-        if not set(live) <= set(bases):
+        if not set(live) <= set(bases):  # (an idle slot too: off the bases it would sit on a group's candidate row)
             return None
-    elif live != bases:
+    elif idle or live != bases:
         return None
-    if any(not speculable.get(s, False) or s in no_spec for s in live):
+    if any(not speculable.get(s, False) or s in no_spec for s in act):
         return None
-    return live
+    return act
 
 
 SPEC_ASYNC_ENV = "GLM53_STACK_VLLM_SPEC_ASYNC"
@@ -1357,6 +1369,12 @@ class GLM53StackForCausalLM:
                 "the device sampler's head with top-k > 1)"
             )
         self._spec_active = None  # GLM53_SPEC_MULTI: the group bases of the running speculation (the gate at its entry)
+        # GLM53_SPEC_THROUGH_PREFILL: the decoding users speculate past a request mid-prefill (its slot an idle base);
+        # _pf_open = the generator slots whose prefill may still be running (a chunk ran and no decode row has carried
+        # them since: a device-sampled prefill call holds final chunks only, any other may be intermediate)
+        self.spec_thru_pf = self.spec and os.environ.get(SPEC_THRU_PF_ENV, "1") == "1"
+        self._pf_open: set = set()
+        self.spec_stats["thru_pf"] = 0  # (speculations entered with a request mid-prefill kept out)
 
     # ================================================================================= construction
     @classmethod
@@ -1485,6 +1503,7 @@ class GLM53StackForCausalLM:
             )
         self._alias = list(range(self.max_batch))  # a fresh cache: every generator slot is free
         self._chain = []
+        self._pf_open = set()
         self.prefix = None
         if PREFIX_CACHE:  # live requests may share the fully computed pages of a cached prefix (read-only)
             self.prefix = StackPrefixCache(self.gen, self.kv_cache, self.max_batch)
@@ -1661,6 +1680,10 @@ class GLM53StackForCausalLM:
         if self.spec:
             for i, g in enumerate(gslots):
                 self._greedy[g] = params is not None and params[i].is_greedy
+                # (GLM53_SPEC_THROUGH_PREFILL: a device-sampled call holds final chunks only -- an intermediate row makes
+                # the plugin sample the whole call on the host; any other row may be mid-prefill until a decode carries
+                # it)
+                (self._pf_open.discard if params is not None else self._pf_open.add)(int(g))
             if params is not None:
                 self._spec_seed(kv)
         if plan is not None and plan["failed"]:
@@ -1773,6 +1796,7 @@ class GLM53StackForCausalLM:
             logits = self.gen.decode_forward(tokens, positions, sampling_params=None, read_from_device=True, **common)
             self._alias = alias
             self._chain = [alias[i] for i in range(B) if int(positions[i]) >= 0]
+            self._pf_open.difference_update(self._chain)
             return logits.reshape(B, 1, -1).float(), None
         params = [row_params(sampling_params, i) for i in range(B)]
         bad = (
@@ -1788,6 +1812,7 @@ class GLM53StackForCausalLM:
         )
         self._alias = alias
         self._chain = [alias[i] for i in range(B) if int(positions[i]) >= 0]
+        self._pf_open.difference_update(self._chain)
         if self.spec:
             for i in range(B):
                 if int(positions[i]) >= 0:
@@ -1879,34 +1904,45 @@ class GLM53StackForCausalLM:
         """the backend's multi-user step serves any non-empty subset of its groups (Glm53Generator.spec_partial_groups)"""
         return self.spec_multi_capable and self.gen.spec_partial_groups()
 
-    def _spec_multi_pick(self, kv):
+    def _spec_multi_pick(self, kv, idle=()):
         """spec_multi_gate over the binding's live slots, per multi-user step in preference order (Glm53Generator
         .spec_steps: the primary, then GLM53_SPEC_MULTI_ALT's alternate) -> (step index, the speculating group bases) of
-        the first step whose bases hold every live user, or None"""
+        the first step whose bases hold every live user, or None. idle (GLM53_SPEC_THROUGH_PREFILL, partial groups): the
+        live slots without a decode row (a request mid-prefill) -- kept out of the speculation on idle bases"""
         b = self.gen._binding(kv)
         live = [s for s in range(b.max_batch) if b.slots[s].active and not b.slots[s].finished]
-        spec_ok = {s: self._speculable(s) for s in live}
+        idle = sorted({int(s) for s in idle} & set(live)) if self.spec_thru_pf else []
+        act_live = [s for s in live if s not in idle]
+        spec_ok = {s: self._speculable(s) for s in act_live}
+        room = {"slots": act_live} if idle else {}  # (the speculating users' room; an idle slot is not one)
         steps = self.gen.spec_steps() or [(self.gen.spec_k(), self.gen.spec_groups(), tuple(self.gen.spec_slots()))]
         for i, (_k, _g, bases) in enumerate(steps):
             act = spec_multi_gate(live, list(bases), spec_ok, self._no_spec,
-                                  bool(bases) and self.gen.spec_room(kv, step=i), partial=self._spec_partial())  # fmt: skip
+                                  bool(bases) and bool(act_live) and self.gen.spec_room(kv, step=i, **room),
+                                  partial=self._spec_partial(), idle=idle)  # fmt: skip
             if act is not None:
                 return i, act
         return None
 
-    def _spec_multi_active(self, kv):
+    def _spec_multi_active(self, kv, idle=()):
         """_spec_multi_pick's speculating group bases, or None"""
-        p = self._spec_multi_pick(kv)
+        p = self._spec_multi_pick(kv, idle)
         return None if p is None else p[1]
 
-    def _spec_multi_ok(self, kv) -> bool:
+    def _spec_multi_ok(self, kv, idle=()) -> bool:
         """GLM53_SPEC_MULTI gate (spec_multi_gate): v1 = the live requests are exactly the G group bases; with the
-        backend's partial groups any non-empty subset of them; every one speculable and allowed, every next step fitting
-        """
-        return self._spec_multi_active(kv) is not None
+        backend's partial groups any non-empty subset of them (idle: live slots kept out, on bases too); every
+        speculating one speculable and allowed, every next step fitting"""
+        return self._spec_multi_active(kv, idle) is not None
 
-    def _spec_gate(self, kv) -> bool:
-        return self._spec_multi_ok(kv) if self.spec_multi_capable else self._spec_lone(kv)
+    def _spec_gate(self, kv, idle=()) -> bool:
+        return self._spec_multi_ok(kv, idle) if self.spec_multi_capable else self._spec_lone(kv)
+
+    def _enter_idle(self, kv, act) -> dict:
+        """spec_enter's idle keyword for the live slots outside the entering bases `act` (none: no keyword)"""
+        b = self.gen._binding(kv)
+        idle = [s for s in range(b.max_batch) if b.slots[s].active and not b.slots[s].finished and s not in act]
+        return {"idle": idle} if idle else {}
 
     def _spec_admit(self, gslots, starts, attach, vision) -> None:
         """the speculation verdict of the requests one prefill call admits or continues: a request whose MTP cache
@@ -1930,15 +1966,19 @@ class GLM53StackForCausalLM:
         one bootstrap fills the MTP cache's row L - 1 (the first token after the prompt: the prefill's in-trace fill
         stops at L - 2) and is left again (GLM53_STACK_VLLM_SPEC_SEED=0: off) -- the plugin's first decode is an
         ordinary one, after which the speculation enters at L"""
-        if os.environ.get("GLM53_STACK_VLLM_SPEC_SEED", "1") != "1" or not self._spec_gate(kv):
+        # (GLM53_SPEC_THROUGH_PREFILL: a request still mid-prefill stays out, on an idle base)
+        idle = sorted(self._pf_open) if self.spec_multi_capable else ()
+        if os.environ.get("GLM53_STACK_VLLM_SPEC_SEED", "1") != "1" or not self._spec_gate(kv, idle):
             return
         try:
             if self.spec_multi_capable:  # GLM53_SPEC_MULTI: the live users' own step and bases -- with partial groups
                 # a subset (a joining user while others run: spec_enter's default, every base, refused it -- smtp3a
                 # 2026-11-13: "no MTP seed" on 20 of 52 entries); the step selected first (no speculation runs here)
-                i, act = self._spec_multi_pick(kv)
+                i, act = self._spec_multi_pick(kv, idle)
                 self.gen.spec_select(i)
-                self.gen.spec_enter(kv, slots=act)
+                kw = self._enter_idle(kv, act)
+                self.gen.spec_enter(kv, slots=act, **kw)
+                self.spec_stats["thru_pf"] += int(bool(kw))
             else:
                 self.gen.spec_enter(kv)
         except ValueError as e:  # (page coverage / context: no seed; the speculation simply starts without it)
@@ -1977,6 +2017,7 @@ class GLM53StackForCausalLM:
             raise ValueError(f"num_valid_drafts {int(nv.numel())} rows vs the block's {B}")
         VerifyOutput = contract_types()["VerifyOutput"]
         alias = self._permuted(slot_remap)
+        self._pf_open.difference_update(alias[i] for i in range(B) if int(pos[i, 0]) >= 0)  # (decode rows)
         fused = self._fused_rows if self.spec_multi_capable else self._fused_row  # (GLM53_SPEC_MULTI: every user's row)
         r = fused(kv, alias, tok, pos, nv)
         if r is not None:
@@ -2196,7 +2237,10 @@ class GLM53StackForCausalLM:
         block per user; else every row declines (the speculation is left: the next step decodes plainly)"""
         rows = {i: self._alias[i] for i in live}
         Kp = spec_plugin_k(self.gen.spec_k_max(), self.spec_steps_per_call)  # (K: the plugin's effective_k)
-        pick = self._spec_multi_pick(kv) if K == Kp else None
+        # GLM53_SPEC_THROUGH_PREFILL: a live generator slot without a row in this step (a request mid-prefill) is idle
+        idle = [s for s in range(b.max_batch) if b.slots[s].active and not b.slots[s].finished
+                and s not in rows.values()]  # fmt: skip
+        pick = self._spec_multi_pick(kv, idle) if K == Kp else None
         active = pick[1] if pick is not None else None
         ok = active is not None and sorted(rows.values()) == active
         if ok and ((self._spec_active is not None and active != self._spec_active)
@@ -2221,7 +2265,8 @@ class GLM53StackForCausalLM:
         elif ok:
             try:
                 self.gen.spec_select(pick[0])  # (no speculation runs: _spec_stop above / never entered)
-                d = self.gen.spec_enter(kv, slots=active) if self._spec_partial() else self.gen.spec_enter(kv)
+                kw = self._enter_idle(kv, active) if self._spec_partial() else None
+                d = self.gen.spec_enter(kv, slots=active, **kw) if kw is not None else self.gen.spec_enter(kv)
             except ValueError as e:  # (a refusal of the generator's: page coverage / context -> decline this step)
                 logger.warning(f"GLM53 stack spec: no multi-user bootstrap ({e})")
                 ok = False
@@ -2229,6 +2274,7 @@ class GLM53StackForCausalLM:
                 self._spec_n = None
                 self._spec_active = active
                 self.spec_stats["enters"] += 1
+                self.spec_stats["thru_pf"] += int(bool(kw))
         if not ok:
             self._spec_stop(kv)
             self.spec_stats["declines"] += 1
@@ -2362,6 +2408,7 @@ class GLM53StackForCausalLM:
             logger.info(f"GLM53 stack spec: {st} (tau {st['committed'] / max(1, st['fused']):.2f})")
         self._greedy.pop(g, None)
         self._no_spec.discard(g)
+        self._pf_open.discard(g)
         self.gen.release_slot(self.kv_cache, g)
         if self.prefix is not None:  # its prefix-cache entry loses a reader
             self.prefix.release(g)

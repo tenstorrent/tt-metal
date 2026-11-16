@@ -2781,28 +2781,38 @@ class Glm53Generator(_ReadinessGenerator):
         cap = getattr(getattr(self.backend, "spec", None), "pos_cap", None)
         return min(limit, int(cap)) if cap else limit
 
-    def spec_room(self, kv_cache, step: int | None = None) -> bool:
+    def spec_room(self, kv_cache, step: int | None = None, slots: Optional[Sequence[int]] = None) -> bool:
         """the next speculative step of slot 0 fits (its verify + the next drafts: positions up to L + 2K); step (the
-        multi-user steps, spec_steps): that step's users / K instead of the current one's"""
+        multi-user steps, spec_steps): that step's users / K instead of the current one's; slots (the multi-user
+        steps): the users that would speculate -- not an idle live base (spec_enter's idle: a request mid-prefill)"""
         b = self._binding(kv_cache)
         sp = getattr(self.backend, "spec", None)
         if sp is not None and self.spec_groups():  # GLM53_SPEC_MULTI: every user's next step fits
             lim = self._spec_limit(b)
             K, _G, bases = self.spec_steps()[self.spec_current() if step is None else int(step)]
-            if getattr(sp, "partial", False):  # GLM53_SPEC_PARTIAL: the live bases only (an empty one holds no request)
+            if slots is not None:
+                bases = [int(s) for s in slots]
+            elif getattr(sp, "partial", False):  # GLM53_SPEC_PARTIAL: the live bases only (an empty one: no request)
                 bases = [s for s in bases if b.slots[s].active and not b.slots[s].finished]
             return all(int(b.slots[s].seq_len) + 2 * int(K) + 1 <= lim for s in bases)
         return sp is not None and int(b.slots[0].seq_len) + 2 * int(sp.K) + 1 <= self._spec_limit(b)
 
-    def spec_enter(self, kv_cache, slot: int = 0, slots: Optional[Sequence[int]] = None):
+    def spec_enter(self, kv_cache, slot: int = 0, slots: Optional[Sequence[int]] = None,
+                   idle: Optional[Sequence[int]] = None):  # fmt: skip
         """start speculating for the request in `slot` (must be 0, the only live slot): its next input is made resident
         in device row 0, the plain position row 0 = its cache length; the bootstrap replay drafts -> the K drafts.
         GLM53_SPEC_MULTI: the G requests on the group bases (`slots`, default spec_slots(); exactly the live slots) ->
-        {slot: its K drafts}"""
+        {slot: its K drafts}. idle (GLM53_SPEC_PARTIAL): live slots that stay OUT of the speculation -- a request
+        mid-prefill (live, not decoding) -- each on another group base of the step, so its group is inactive and none
+        of its state is written (_spec_enter_groups)"""
         b = self._binding(kv_cache)
         sp = getattr(self.backend, "spec", None)
         if sp is not None and self.spec_groups():
-            return self._spec_enter_groups(b, sp, slots)
+            return self._spec_enter_groups(b, sp, slots, idle)
+        if idle:
+            raise ValueError(
+                f"speculative step: idle live slots {list(idle)} need the multi-user step's partial groups"
+            )
         if sp is None or slot != 0:
             raise ValueError(f"speculative step: needs the backend's spec step and slot 0 (slot {slot})")
         live = [s for s in range(b.max_batch) if b.slots[s].active and not b.slots[s].finished]
@@ -2846,10 +2856,18 @@ class Glm53Generator(_ReadinessGenerator):
         """slot s's page-table row for the speculative step (the sharded pool: its PHYSICAL row, owner-aware)"""
         return b.pt_shadow[s] if b.obm is None else b.phys[s]
 
-    def _spec_enter_groups(self, b, sp, slots) -> dict:
+    def _spec_enter_groups(self, b, sp, slots, idle=None) -> dict:
         """spec_enter of GLM53_SPEC_MULTI: every group base holds a live request and nothing else is live; per user the
         single-user checks (context, the drafter's cache, page coverage); the next inputs resident in the base rows,
-        plain positions = the cache lengths; the bootstrap drafts every group -> {slot: drafts}"""
+        plain positions = the cache lengths; the bootstrap drafts every group -> {slot: drafts}.
+        idle (GLM53_SPEC_PARTIAL, the served adapter's GLM53_SPEC_THROUGH_PREFILL): the live slots that do not decode
+        (a request mid-prefill) stay out. Each must be ANOTHER group base of this step: its group is then inactive for
+        the whole speculation -- plain position -1 at the bootstrap, so spec_ctl.cpp SPEC_PARTIAL keeps every verify /
+        MTP row of it at -1 (no latent / index / pooled-key write: p < 0), records c -1 (no ring move, no GATHER, no
+        leave copy), its KDA rows masked 0 (spec_verify_masks: S bit-identical, the conv history not written:
+        kernels/kda_pre/reader.cpp KDA_VERIFY_GROUPS) and its sampler rows greedy. A live slot on a CANDIDATE row of a
+        group is refused: the chained KDA verify writes every row of a group (an inactive group's rows take its base's
+        state), so only a base row keeps its own state."""
         bases = list(self.spec_slots())
         partial = bool(getattr(sp, "partial", False))
         slots = bases if slots is None else sorted(int(s) for s in slots)
@@ -2861,9 +2879,16 @@ class Glm53Generator(_ReadinessGenerator):
             raise ValueError(f"speculative step (GLM53_SPEC_MULTI): the users sit on the group bases {bases} "
                              f"(got {slots})")  # fmt: skip
         live = [s for s in range(b.max_batch) if b.slots[s].active and not b.slots[s].finished]
-        if live != slots:
+        idle = sorted({int(s) for s in (idle or ())} & set(live))
+        if idle:
+            bad = [s for s in idle if s not in bases or s in slots]
+            if not partial or bad:
+                raise ValueError(f"speculative step: the idle live slots {idle} must sit on other group bases of the "
+                                 f"step {bases} (inactive groups: GLM53_SPEC_PARTIAL; entering {slots})")  # fmt: skip
+        if sorted(set(live) - set(idle)) != slots:
             raise ValueError(
-                f"speculative step: the entering bases {slots} must be exactly the live slots (live {live})"
+                f"speculative step: the entering bases {slots} must be exactly the live slots (live {live}"
+                + (f", idle {idle})" if idle else ")")
             )
         K, limit = int(sp.K), self._spec_limit(b)
         for s in slots:

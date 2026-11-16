@@ -303,6 +303,12 @@ void kernel_main() {
             }
             if (update_hist) {
                 for (uint32_t u = 0; u < units; ++u) {
+                    // KDA_PRE_REV 3 (GLM53_SPEC_PARTIAL): an inactive group's rows (verify mask 0) keep their history,
+                    // as the plain decode's idle rows -- its base may hold a request mid-prefill whose next chunk
+                    // continues from it. A group is whole row pairs, so a pair is all active or all inactive.
+                    if (((active >> (2 * u)) & 3u) == 0) {
+                        continue;
+                    }
                     for (uint32_t r = 0; r < CONV_PER_CORE; ++r) {
                         const uint32_t c = c0 + r;
                         write_pair_bf16(hist, c, u, hb[1] + u * BF16_TILE, r);
