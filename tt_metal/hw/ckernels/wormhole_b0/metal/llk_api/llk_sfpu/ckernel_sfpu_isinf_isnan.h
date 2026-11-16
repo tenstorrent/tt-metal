@@ -97,6 +97,7 @@ inline void _calculate_sfpu_isinf_isnan_() {
     const sfpi::vInt bound_v = bound;
 
     // SFPU microcode
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat in = sfpi::dst_reg[0];
         sfpi::dst_reg[0] = 0.0f;
