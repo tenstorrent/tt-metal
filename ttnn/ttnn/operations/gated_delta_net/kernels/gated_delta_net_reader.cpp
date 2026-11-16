@@ -304,7 +304,8 @@ void kernel_main() {
     const uint32_t tr_offset = get_arg_val<uint32_t>(arg++);
     const uint32_t tr_stride = get_arg_val<uint32_t>(arg++);
     const uint32_t unit_stride = get_arg_val<uint32_t>(arg++);  // units first_unit, + stride, ... (R-QKCORE: Hv)
-    // R-PREP prep core: the tile rows it normalizes (its prep rows unless NORM_SPLIT).
+    // R-PREP prep core, NORM_SPLIT: the norm units (tile row i, value head j of the group: unit i * PREP_HEADS + j)
+    // it normalizes: offset, + stride, ...
     const uint32_t norm_offset = PREP ? get_arg_val<uint32_t>(arg++) : 0;
     const uint32_t norm_stride = PREP ? get_arg_val<uint32_t>(arg++) : 1;
     // R-PREP prep core under PREP_SHARE_QK (qk role receiver): NoC (x, y) of its position's q and k cores, then its
@@ -636,19 +637,19 @@ void kernel_main() {
                 const uint32_t seq_hi = seq_lo + T;
                 const uint32_t first_tr = seq_lo / TILE_ROWS;
                 const uint32_t last_tr = (seq_hi - 1) / TILE_ROWS;
-                // ---- z columns of the unit, one tile row ----
-                auto read_z = [&](uint32_t tr) {
+                // ---- z columns [first, first + count) of the unit, one tile row ----
+                auto read_z = [&](uint32_t tr, uint32_t first, uint32_t count) {
                     const uint32_t base_row = tr * TILE_ROWS;
                     const uint32_t lo = seq_lo > base_row ? seq_lo : base_row;
                     const uint32_t hi = seq_hi < base_row + TILE_ROWS ? seq_hi : base_row + TILE_ROWS;
-                    cb_reserve_back(cb_z, Vb);
+                    cb_reserve_back(cb_z, count);
                     const uint32_t z_base = get_write_ptr(cb_z);
-                    for (uint32_t vt = 0; vt < Vb; ++vt) {
-                        const uint32_t page = tr * z_width_tiles + head * Vt + v_first + vt;
+                    for (uint32_t vt = 0; vt < count; ++vt) {
+                        const uint32_t page = tr * z_width_tiles + head * Vt + v_first + first + vt;
                         read_tile_rows(rows, z_acc, page, base_row, lo, hi, z_base + vt * TILE_BYTES);
                     }
                     rows.finish();
-                    cb_push_back(cb_z, Vb);
+                    cb_push_back(cb_z, count);
                     GDN_MARK("m_rd_z");
                 };
                 for (uint32_t tr = first_tr + tr_offset; tr <= last_tr; tr += tr_stride) {
@@ -964,7 +965,7 @@ void kernel_main() {
                         continue;
                     }
                     if constexpr (!NORM_SPLIT) {
-                        read_z(tr);
+                        read_z(tr, 0, Vb);
                     }
                     if (kq_landing) {
                         ++kq_rows_landed;
@@ -974,8 +975,9 @@ void kernel_main() {
                     }
                 }
                 if constexpr (NORM_SPLIT) {
-                    for (uint32_t tr = first_tr + norm_offset; tr <= last_tr; tr += norm_stride) {
-                        read_z(tr);
+                    const uint32_t units = (last_tr - first_tr + 1) * PREP_HEADS;
+                    for (uint32_t u = norm_offset; u < units; u += norm_stride) {
+                        read_z(first_tr + u / PREP_HEADS, (u % PREP_HEADS) * Vt, Vt);
                     }
                 }
 

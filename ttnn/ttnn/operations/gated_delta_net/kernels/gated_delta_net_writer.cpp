@@ -169,7 +169,9 @@ FORCE_INLINE void push_chunk_coefs(
 template <uint32_t Kt, uint32_t Vt, uint32_t Hv, typename Accessor>
 void prep_writer(
     const Accessor& out_acc, uint32_t first_unit, uint32_t T, uint32_t tr_offset, uint32_t tr_stride, uint32_t arg) {
-    // The tile rows this core normalizes and stores (its prep rows unless NORM_SPLIT).
+    // NORM_SPLIT: the norm units (tile row i, head j of the group: unit i * RATIO + j) this core normalizes and
+    // stores: offset, + stride, ... Its k-th unit's o lands in slot k of cb_o_in (Vt tiles; never reused), counted by
+    // the semaphore LANDED_FIRST + k (those ids count inbox landings on the state cores only).
     const uint32_t norm_offset = get_arg_val<uint32_t>(arg++);
     const uint32_t norm_stride = get_arg_val<uint32_t>(arg++);
     constexpr uint32_t Vb = Vt / PIECES;
@@ -221,25 +223,34 @@ void prep_writer(
         o_landed.wait_min(row_count * GROUP);
         cb_push_back(cb_o_in, O_PAGES);
     };
-    // NORM_SPLIT: the norm rows' o landings and output stores are served while a prep row waits for its grant or for
-    // compute, and after the last prep row. The state cores are at most an inbox apart (<= the norm cores per group,
-    // host), so the cumulative o count identifies the row here too.
-    const uint32_t norm_first = first_tr + norm_offset;
-    const uint32_t norm_rows = norm_first <= last_tr ? (last_tr - norm_first) / norm_stride + 1 : 0;
-    uint32_t landed_rows = 0;
-    uint32_t stored_rows = 0;
+    // NORM_SPLIT: the norm units' o landings and output stores are served while a prep row waits for its grant or for
+    // compute, and after the last prep row.
+    const uint32_t all_units = (last_tr - first_tr + 1) * RATIO;
+    const uint32_t norm_units = norm_offset < all_units ? (all_units - 1 - norm_offset) / norm_stride + 1 : 0;
+    uint32_t landed_units = 0;
+    uint32_t stored_units = 0;
     volatile tt_l1_ptr uint32_t* granted_count =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(GDN_LANDED_FIRST_SEM_ID + INBOX_SLOTS));
-    volatile tt_l1_ptr uint32_t* o_count =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(GDN_LANDED_FIRST_SEM_ID + INBOX_SLOTS + 1));
     auto serve_norms = [&]() {
-        if (landed_rows < norm_rows && *o_count >= (landed_rows + 1) * GROUP) {
-            cb_push_back(cb_o_in, O_PAGES);
-            ++landed_rows;
+        if (landed_units < norm_units) {
+            volatile tt_l1_ptr uint32_t* o_count = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                get_semaphore(GDN_LANDED_FIRST_SEM_ID + landed_units));
+            if (*o_count >= PIECES) {
+                cb_push_back(cb_o_in, Vt);
+                ++landed_units;
+            }
         }
-        if (stored_rows < landed_rows && cb_pages_available_at_front(cb_out_rows, O_PAGES)) {
-            store(norm_first + stored_rows * norm_stride);
-            ++stored_rows;
+        if (stored_units < landed_units && cb_pages_available_at_front(cb_out_rows, Vt)) {
+            const uint32_t u = norm_offset + stored_units * norm_stride;
+            const uint32_t tr = first_tr + u / RATIO;
+            store_rows(
+                out_acc,
+                Vt,
+                tr * out_width_tiles + (head0 + u % RATIO) * Vt,
+                tr * TILE_ROWS,
+                row_lo(tr),
+                row_hi(tr));
+            ++stored_units;
         }
     };
     auto wait_send = [&](uint32_t pages) {
@@ -318,7 +329,7 @@ void prep_writer(
         }
     }
     if constexpr (NORM_SPLIT) {
-        while (stored_rows < norm_rows) {
+        while (stored_units < norm_units) {
             serve_norms();
         }
         return;
@@ -512,7 +523,8 @@ void kernel_main() {
             producer_y[q] = get_arg_val<uint32_t>(arg++);
         }
     }
-    // R-PREP state core: tile row i's o goes to prep core norm_first + i % norm_count (all of them unless NORM_SPLIT).
+    // R-PREP state core: tile row i's o goes to prep core i % producers; NORM_SPLIT: the o of norm unit
+    // u = i * RATIO + head goes to slot u / norm_count of prep core norm_first + u % norm_count.
     const uint32_t norm_first = STATE ? get_arg_val<uint32_t>(arg++) : 0;
     const uint32_t norm_count = STATE ? get_arg_val<uint32_t>(arg++) : 1;
     // STATE_SPLIT: the reader's final-state tiles (gdn::state_tile_on_reader).
@@ -816,18 +828,20 @@ void kernel_main() {
             if constexpr (STATE) {
                 // ---- R-PREP: o of the piece into its place in slot k % GDN_O_IN_DEPTH of the row's prep core ----
                 const uint32_t i = tr - first_tr;
-                const uint32_t q = norm_first + i % norm_count;
                 const uint32_t head_in_group = head % RATIO;
-                const uint32_t o_slot = (i / norm_count) % GDN_O_IN_DEPTH;
+                const uint32_t u = i * RATIO + head_in_group;
+                const uint32_t q = NORM_SPLIT ? norm_first + u % norm_count : i % producers;
+                const uint32_t o_tile = NORM_SPLIT ? (u / norm_count) * Vt
+                                                   : ((i / producers) % GDN_O_IN_DEPTH) * RATIO * Vt + head_in_group * Vt;
                 const uint32_t dst = cb_region_base(cb_in_kq, GDN_OFFSET_IN_KQ) + GDN_OFFSET_O_IN +
-                                     (o_slot * RATIO * Vt + head_in_group * Vt + v_first) * STATE_TILE_BYTES;
+                                     (o_tile + v_first) * STATE_TILE_BYTES;
                 cb_wait_front(cb_o_acc, Vb);
                 noc_async_write(
                     get_read_ptr(cb_o_acc), get_noc_addr(producer_x[q], producer_y[q], dst), Vb * STATE_TILE_BYTES);
                 noc_async_write_barrier();
                 cb_pop_front(cb_o_acc, Vb);
                 Noc noc;
-                Semaphore<> o_landed(GDN_LANDED_FIRST_SEM_ID + INBOX_SLOTS + 1);
+                Semaphore<> o_landed(GDN_LANDED_FIRST_SEM_ID + (NORM_SPLIT ? u / norm_count : INBOX_SLOTS + 1));
                 o_landed.up(noc, producer_x[q], producer_y[q], 1);
                 continue;
             }

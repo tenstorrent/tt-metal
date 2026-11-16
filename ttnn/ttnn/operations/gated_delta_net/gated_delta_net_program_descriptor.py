@@ -158,8 +158,10 @@ O_ACC_DEPTH = 2  # R-PREP: a state core's tile rows of o awaiting its writer
 PREP_SEND_HEADS = None  # R-PREP: head blocks a prep core holds for its writer; None = one tile row's (r)
 # R-PREP norm split: a prep core preps all of its tile rows before any RMS norm (the norms of a row no longer sit
 # between two rows of the state cores' supply), and the cores with one tile row more than the others (rows % stride of
-# them) normalize nothing: the other cores of the group take the norm rows round robin. cb_o_in then holds every row
-# a core normalizes (no slot is reused, so o needs no flow control): only where that is at most PREP_NORM_MAX_ROWS.
+# them) normalize nothing: the other cores of the group take the norm units (one value head of a tile row each) round
+# robin. cb_o_in then holds every unit a core normalizes (no slot is reused, so o needs no flow control), each counted
+# by its own semaphore (the inbox ids, unused on a prep core): only where a core's units are at most the inbox slots
+# and PREP_NORM_MAX_ROWS tile rows' worth.
 PREP_NORM_SPLIT = True
 PREP_NORM_MAX_ROWS = 4
 # R-PREP state step: the prep core sends -(beta exp(c)) (*) kn, so the state core accumulates the k read onto beta V in
@@ -559,7 +561,7 @@ def _prep_qk_dests(ratio, heads):
     return ratio // heads
 
 
-def _prep_cb_plan(Kt, Vt, heads, conv_on_fpu, pieces, inbox, shared=False, o_in_depth=None):
+def _prep_cb_plan(Kt, Vt, heads, conv_on_fpu, pieces, inbox, shared=False, norm_units=0):
     """R-PREP plans as (state, prep, q / k) lists of (indices, pages): the role's remotely written buffers first (the
     inbox buffers are exactly `inbox` slots, so tile row i lands in slot i % inbox; cb_kq_rows exactly PREP_KQ_DEPTH
     rows), then its own buffers. The q / k plan (PREP_SHARE_QK, else empty) starts with cb_qk_stage, its region base."""
@@ -578,7 +580,7 @@ def _prep_cb_plan(Kt, Vt, heads, conv_on_fpu, pieces, inbox, shared=False, o_in_
     prep[CB_CHUNK_MAT] = 1  # L, the operand of the inverse
     prep[CB_V_PREP] = heads * Vt
     prep[CB_PREP_SEND] = (PREP_SEND_HEADS or heads) * _head_block_pages(Kt, Vt)
-    prep[CB_O_IN] = (o_in_depth or O_IN_DEPTH) * heads * Vt
+    prep[CB_O_IN] = norm_units * Vt if norm_units else O_IN_DEPTH * heads * Vt  # PREP_NORM_SPLIT: per norm unit
     prep[CB_TOK_COEF] = (CHUNK_COEF_PAGES + int(STATE_FUSED_RHS)) * TOK_COEF_DEPTH  # STATE_FUSED_RHS: -beta too
     prep[CB_NORM_W] = Vt
     prep[CB_RINV_O] = heads * TOKEN_TILE_ROWS_PER_BLOCK
@@ -1138,7 +1140,7 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
     prep = _prep_layout(batch, value_heads, key_heads, tokens, Kt, Vt, pieces, chunked, token_dtype, len(spare), budget)
     heads = ratio  # R-PREP: value heads per prep group
     shared = False  # R-PREP: PREP_SHARE_QK (q / k cores)
-    norm_split, o_in_depth = False, O_IN_DEPTH  # R-PREP: PREP_NORM_SPLIT, tile rows of o a prep core holds
+    norm_split = False  # R-PREP: PREP_NORM_SPLIT
     if prep is None:
         inbox = 0
         # The deepest per-unit input depth that fits L1 (1 when every core runs one unit).
@@ -1185,21 +1187,18 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
         groups = [(seq * value_heads + h0) * pieces for seq in range(batch) for h0 in range(0, value_heads, heads)]
         strides = [min(per_group, _seq_tile_rows(first // pieces // value_heads, tokens)) for first in groups]
         if PREP_NORM_SPLIT:
-            # Norm cores per group: its prep cores but the rows % stride that prep one tile row more. The state cores
-            # of a group are at most an inbox apart, so with an inbox of at most that many rows each of them is at
-            # most one o ahead on any norm core (the norm core's cumulative o count then identifies the row).
-            norm_cores = [
-                stride - _seq_tile_rows(first // pieces // value_heads, tokens) % stride
-                for first, stride in zip(groups, strides)
-            ]
-            depth = max(
-                -(-_seq_tile_rows(first // pieces // value_heads, tokens) // count)
-                for first, count in zip(groups, norm_cores)
-            )
-            split_inbox = min([inbox] + norm_cores)
-            split_plans = _prep_cb_plan(Kt, Vt, heads, conv_on_fpu, pieces, split_inbox, shared, depth)
-            if depth <= PREP_NORM_MAX_ROWS and _prep_plan_bytes(split_plans, token_dtype) <= budget:
-                norm_split, o_in_depth, inbox, prep_plans = True, depth, split_inbox, split_plans
+            # Norm cores per group: its prep cores but the rows % stride that prep one tile row more; norm units per
+            # group: its tile rows times its heads.
+            group_rows = [_seq_tile_rows(first // pieces // value_heads, tokens) for first in groups]
+            units = max(
+                -(-rows * heads // (stride - rows % stride)) for rows, stride in zip(group_rows, strides)
+            )  # per norm core, at most
+            split_plans = _prep_cb_plan(Kt, Vt, heads, conv_on_fpu, pieces, inbox, shared, units)
+            if (
+                units <= min(inbox, PREP_NORM_MAX_ROWS * heads)
+                and _prep_plan_bytes(split_plans, token_dtype) <= budget
+            ):
+                norm_split, prep_plans = True, split_plans
         for role, plan in zip(("R-PREP state", "R-PREP prep", "R-PREP q / k"), prep_plans):
             if plan:
                 check_l1_footprint(role, _plan_bytes(plan, token_dtype), budget)
@@ -1551,7 +1550,7 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
             producers = [len(group_producers[group_first]) // 2] + group_producers[group_first]
             seq_rows = _seq_tile_rows(first_unit // pieces // value_heads, tokens)
             extra = seq_rows % producers[0] if norm_split else 0
-            norm_dst = [extra, producers[0] - extra]
+            norm_dst = [extra, producers[0] - extra]  # PREP_NORM_SPLIT: norm unit u goes to first + u % cores
         share = [reader_units(count), reader_share(core, count)] if state_split else []
         share += [s0_writer(core, count)] if s0_writer_any else []
         rts[0][core.x, core.y] = (
@@ -1588,10 +1587,11 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
             group_cols = _prep_group_cols(prep_cols) if shared else _window_group_cols(Kt, heads * Vt, 1, True)
             zero_slots, zero_slot_bytes = window_zeroing(prep_cols, group_cols, my_rows)
             rows = [q, stride, 1]
-            # The tile rows it normalizes: offset, stride (PREP_NORM_SPLIT: none on the first rows % stride cores).
+            # PREP_NORM_SPLIT: the norm units (tile row * heads + head) it normalizes: offset, stride (none on the first
+            # rows % stride cores), and their count.
             extra = seq_rows % stride if norm_split else 0
-            norm = [q - extra if q >= extra else seq_rows, stride - extra]
-            norm_rows = len(range(norm[0], seq_rows, norm[1]))
+            norm = [q - extra if q >= extra else seq_rows * heads, stride - extra]
+            norm_rows = len(range(norm[0], seq_rows * heads, norm[1]))
             consumers = [c for u in range(heads * pieces) for c in unit_noc[group_first + u]]
             # A head block goes to the head's pieces: one multicast per row run.
             for j in range(heads):
@@ -1675,7 +1675,7 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
             ("GDN_STATE_FUSED_RHS", str(int(prep is not None and STATE_FUSED_RHS))),
         ]
     )
-    program_values = {"GDN_O_IN_DEPTH": o_in_depth}
+    program_values = {}
     if prep is not None and STATE_FUSED_RHS:
         program_values["GDN_CHUNK_COEF_PAGES"] = CHUNK_COEF_PAGES + 1
     defines = [(name, str(program_values.get(name, value))) for name, value in defines]

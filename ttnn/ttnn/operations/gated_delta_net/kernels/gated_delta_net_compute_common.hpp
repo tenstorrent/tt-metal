@@ -1061,13 +1061,13 @@ ALWI void osum_partial(Buffers& bufs, RowScope scope, bool squared) {
 
 // PARTIAL_DONE: the token step already produced this piece's partial sum (osum_partial); squared: it pushed o^2 to
 // cb_sq_o.
-template <uint32_t o_cb, uint32_t HEADS, bool PARTIAL_DONE = false>
+template <uint32_t o_cb, uint32_t HEADS, bool PARTIAL_DONE = false, uint32_t N = Vb>
 ALWI void rmsnorm_gate_block(Buffers& bufs, uint32_t v_eps_bits, RowScope scope, bool squared = false) {
-    constexpr uint32_t W = Vb / HEADS;  // columns of one head in o_cb
+    constexpr uint32_t W = N / HEADS;  // columns of one head in o_cb (N: its tiles, the R-PREP norm unit's)
     const RsqrtPost rsqrt_post{v_eps_bits, SQRT_V_BITS, scope};
     if constexpr (PIECES == 1 || PREP) {
         if (!squared) {
-            square_block<o_cb, cb_sq_o>(0, Vb, scope);
+            square_block<o_cb, cb_sq_o>(0, N, scope);
         }
 #pragma GCC unroll 1
         for (uint32_t head = 0; head < HEADS; ++head) {
@@ -1097,11 +1097,11 @@ ALWI void rmsnorm_gate_block(Buffers& bufs, uint32_t v_eps_bits, RowScope scope,
         cb_pop_front(cb_osum_gather, PIECES);
     }
     cb_wait_front(cb_rinv_o, HEADS);
-    cb_reserve_back(cb_out_rows, Vb);
+    cb_reserve_back(cb_out_rows, N);
     if constexpr (PREP) {
         // The gate factor norm_weight (*)row silu(z) was made before o landed (zw_block).
-        cb_wait_front(cb_zw, Vb);
-        for (uint32_t vt = 0; vt < Vb; ++vt) {
+        cb_wait_front(cb_zw, N);
+        for (uint32_t vt = 0; vt < N; ++vt) {
             tile_regs_acquire();
             begin_loads(o_cb);
             load(o_cb, vt, 0);
@@ -1117,9 +1117,9 @@ ALWI void rmsnorm_gate_block(Buffers& bufs, uint32_t v_eps_bits, RowScope scope,
             pack_first(0, cb_out_rows, vt);
             tile_regs_release();
         }
-        cb_push_back(cb_out_rows, Vb);
-        cb_pop_front(o_cb, Vb);
-        cb_pop_front(cb_zw, Vb);
+        cb_push_back(cb_out_rows, N);
+        cb_pop_front(o_cb, N);
+        cb_pop_front(cb_zw, N);
         cb_pop_front(cb_rinv_o, HEADS);
         return;
     }

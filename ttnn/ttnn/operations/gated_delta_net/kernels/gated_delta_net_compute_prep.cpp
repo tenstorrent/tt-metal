@@ -11,11 +11,12 @@ static_assert(PREP, "R-PREP prep-role kernel");
 
 // R-PREP prep core: zw = norm_weight (*)row silu(z) of a tile row's Vb columns -> cb_zw (fp32), while the state cores
 // still run the row, so the RMS norm after o lands is two products per tile.
+template <uint32_t N>
 ALWI void zw_block() {
     constexpr uint32_t W = PREP ? Vb / RATIO : 1;  // columns of one head (norm_weight holds W tiles)
-    cb_wait_front(cb_z, Vb);
-    cb_reserve_back(cb_zw, Vb);
-    for (uint32_t vt = 0; vt < Vb; ++vt) {
+    cb_wait_front(cb_z, N);
+    cb_reserve_back(cb_zw, N);
+    for (uint32_t vt = 0; vt < N; ++vt) {
         tile_regs_acquire();
         begin_loads(cb_z);
         load(cb_z, vt, 0);
@@ -29,8 +30,8 @@ ALWI void zw_block() {
         pack_first(0, cb_zw, vt);
         tile_regs_release();
     }
-    cb_push_back(cb_zw, Vb);
-    cb_pop_front(cb_z, Vb);
+    cb_push_back(cb_zw, N);
+    cb_pop_front(cb_z, N);
 }
 
 // R-PREP prep core: tile rows offset, offset + stride, ... of its (sequence, key head). The RMS norm of a row runs
@@ -54,8 +55,11 @@ ALWI void prep_main(
     cb_wait_front(cb_gate_w, 2);
     cb_wait_front(cb_norm_w, Vb / RATIO);
     // Pass k preps row k and normalizes row k - 1 (one call site each: the math thread's text budget is tight).
-    // NORM_SPLIT: every prep row first (nothing between two rows of the state cores' supply), then the norm rows.
+    // NORM_SPLIT: every prep row first (nothing between two rows of the state cores' supply), then its norm units
+    // (one value head of a tile row each).
     constexpr bool NORM_SPLIT = GDN_PREP_NORM_SPLIT != 0;
+    constexpr uint32_t NORM_HEADS = NORM_SPLIT ? 1 : RATIO;
+    constexpr uint32_t NORM_TILES = NORM_HEADS * (Vb / RATIO);
     const uint32_t rows = first_tr + tr_offset <= last_tr ? (last_tr - first_tr - tr_offset) / tr_stride + 1 : 0;
     const uint32_t passes = NORM_SPLIT ? rows + norm_rows : (rows != 0 ? rows + 1 : 0);
 #pragma GCC unroll 1
@@ -99,11 +103,11 @@ ALWI void prep_main(
             cb_pop_front(cb_knT, Kt);
         }
         if (NORM_SPLIT ? k >= rows : k < rows) {
-            zw_block();
+            zw_block<NORM_TILES>();
         }
         if (NORM_SPLIT ? k >= rows : k > 0) {
             GDN_ZONE("gdn_rmsnorm");
-            rmsnorm_gate_block<cb_o_in, RATIO>(bufs, v_eps_bits, full);
+            rmsnorm_gate_block<cb_o_in, NORM_HEADS, false, NORM_TILES>(bufs, v_eps_bits, full);
         }
     }
     cb_pop_front(cb_norm_w, Vb / RATIO);
@@ -115,7 +119,7 @@ void kernel_main() {
     const uint32_t v_eps_bits = get_arg_val<uint32_t>(3);  // V * epsilon
     const uint32_t tr_offset = get_arg_val<uint32_t>(5);   // R-PREP: tile rows offset, + stride, ...
     const uint32_t tr_stride = get_arg_val<uint32_t>(6);
-    const uint32_t norm_rows = get_arg_val<uint32_t>(8);  // NORM_SPLIT: tile rows this core normalizes
+    const uint32_t norm_rows = get_arg_val<uint32_t>(8);  // NORM_SPLIT: norm units this core normalizes
 
     // R-PREP allocates each role only its own buffers: start up on buffers the role has.
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_kq_rows, cb_knT, cb_gram);
