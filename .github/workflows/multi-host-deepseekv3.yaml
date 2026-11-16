@@ -100,6 +100,8 @@ jobs:
     if: ${{ github.event_name == 'schedule' || inputs.deepseekv3_unit_tests || inputs.deepseekv3_module_tests || inputs.teacher_forced || inputs.demo || inputs.demo_stress }}
     strategy:
       fail-fast: false
+      matrix:
+        setup: [quad]
     runs-on:
       - arch-wormhole_b0
       - multi-host-glx-4x
