@@ -60,6 +60,10 @@
 #include "api/compute/eltwise_unary/erfinv.h"
 #endif
 
+#ifdef SFPU_OP_MULTIGAMMALN_INCLUDE
+#include "api/compute/eltwise_unary/multigammaln.h"
+#endif
+
 #ifdef SFPU_OP_NEG_INCLUDE
 #include "api/compute/eltwise_unary/negative.h"
 #endif

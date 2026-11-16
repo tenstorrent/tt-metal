@@ -520,13 +520,20 @@ ttnn::device_operation::ProgramArtifacts UnaryDeviceOperation::ProgramFactory::c
                     : std::nullopt;
 
     const auto& all_device_cores = operation_attributes.worker_grid;
-    const bool needs_tmp0 = needs_tmp0_dfb(ops_chain[0].type());
+    // A generated kernel computes the op in one SFPU pass of the plain SFPU program, reading only the input: the
+    // op's own temporary buffer is not allocated.
+    const auto bf16_kernel_defines = get_bf16_kernel_defines(
+        ops_chain, input.dtype(), output.dtype(), operation_attributes.fp32_dest_acc_en, input.device()->arch());
+    const bool needs_tmp0 = !bf16_kernel_defines && needs_tmp0_dfb(ops_chain[0].type());
     const auto plan = get_dram_read_plan(ops_chain, input, output.tensor_spec(), all_device_cores);
     const bool dram_flow = plan.flow != DramReadFlow::None;
     const bool work_queue = plan.flow == DramReadFlow::WorkQueue;
 
     const bool math_approx_mode = false;
     std::map<std::string, std::string> unary_defines = get_block_defines(ops_chain, "0", "0", input.dtype());
+    if (bf16_kernel_defines) {
+        unary_defines = *bf16_kernel_defines;
+    }
     add_input_dtype_defines(input.dtype(), unary_defines);
     if (const auto relu_config = get_pack_relu_config(
             ops_chain,
@@ -542,7 +549,8 @@ ttnn::device_operation::ProgramArtifacts UnaryDeviceOperation::ProgramFactory::c
 
     const std::string compute_path = fmt::format(
         "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/{}",
-        get_compute_kernel_path(ops_chain[0].type(), input.dtype()));
+        bf16_kernel_defines ? std::string_view{"eltwise_sfpu_metal2.cpp"}
+                            : get_compute_kernel_path(ops_chain[0].type(), input.dtype()));
 
     DataFormat dfb_data_format_for_input =
         (ops_chain[0].type() == unary::UnaryOpType::BITCAST) ? dfb_data_format_output : dfb_data_format;

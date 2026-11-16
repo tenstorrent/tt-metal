@@ -1,0 +1,10 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+__attribute__((always_inline)) inline void finalize_raw_domain_actions(vFloat x_raw, vFloat& result) {
+    [[maybe_unused]] vFloat x_effective = target_domain_action_coordinate(x_raw);
+    apply_selected_core_aggregate_stirling(x_raw, result);
+    (void)x_raw;
+    (void)result;
+}
