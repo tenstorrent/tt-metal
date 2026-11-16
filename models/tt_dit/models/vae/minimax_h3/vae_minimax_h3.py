@@ -563,6 +563,9 @@ class MiniMaxH3Vae:
     def _report_profile(self, total: float) -> None:
         """Log where a decode's wall time went, and stash it on `last_decode_profile`."""
         p = dict(self._profile)
+        # Every key here times a disjoint span of this thread. `readback_join` is the host waiting
+        # on the YUV finish pool -- outside `readback`'s own span -- so leaving it out let `residual`
+        # repeat it (0.24 s each on a 5 s clip).
         accounted = sum(
             p.get(k, 0.0)
             for k in (
@@ -570,6 +573,7 @@ class MiniMaxH3Vae:
                 "upload",
                 "device",
                 "readback",
+                "readback_join",
                 "unpatchify",
                 "tiling",
                 "stitch",
@@ -581,6 +585,9 @@ class MiniMaxH3Vae:
         )
         p["residual"] = max(0.0, total - accounted)
         p["total"] = total
+        # Without `profile` nothing synchronizes, so `device` is the time spent queueing ops, not
+        # the time the device spent running them; that wait shows up in `readback_join` instead.
+        p["device_synced"] = bool(self.profile)
         self.last_decode_profile = p
         if not self.log_profile or (ttnn.using_distributed_env() and int(ttnn.distributed_context_get_rank()) != 0):
             return
@@ -591,10 +598,11 @@ class MiniMaxH3Vae:
                 f"{sorted(each)[len(each) // 2] * 1000:.0f} / max {max(each) * 1000:.0f} ms  "
                 f"[{' '.join(f'{v * 1000:.0f}' for v in each)}]  on {p.get('shape')} {p.get('dtype')}"
             )
+        device_label = "device" if p["device_synced"] else "device (dispatch)"
         each_d = p.get("device_each") or []
         if each_d:
             logger.info(
-                f"    device   per wave: min {min(each_d) * 1000:.0f} / median "
+                f"    {device_label} per wave: min {min(each_d) * 1000:.0f} / median "
                 f"{sorted(each_d)[len(each_d) // 2] * 1000:.0f} / max {max(each_d) * 1000:.0f} ms  "
                 f"[{' '.join(f'{v * 1000:.0f}' for v in each_d)}]"
             )
@@ -617,7 +625,8 @@ class MiniMaxH3Vae:
         ):
             share = 100 * p[name] / total if total else 0.0
             per_wave = f"  {p[name] / waves * 1000:6.0f} ms/wave" if waves and name in ("device", "readback") else ""
-            logger.info(f"    {name:<12} {p[name]:6.2f} s  ({share:4.1f} %){per_wave}")
+            label = device_label if name == "device" else name
+            logger.info(f"    {label:<17} {p[name]:6.2f} s  ({share:4.1f} %){per_wave}")
         logger.info(f"    readback volume {p['readback_mb'] / 1000:.2f} GB")
 
     def _run_encoder_units(self, units: list[torch.Tensor]) -> list[torch.Tensor]:
