@@ -58,10 +58,13 @@ def proxy_lcfg(G, **kw):
     )
 
 
+FENCE_ROWS = 16  # spare rows past the result buffer's T S: the posted row writes' fence (one a DRAM bank)
+
+
 def result_buffer(mesh, lc: LayerCfg):
-    """The row-major result buffer [T S, H] bf16, zeroed (rows nobody writes stay finite)."""
+    """The row-major result buffer [T S + FENCE_ROWS, H] bf16, zeroed (rows nobody writes stay finite)."""
     return ttnn.zeros(
-        [lc.T * lc.S, lc.H],
+        [lc.T * lc.S + FENCE_ROWS, lc.H],
         dtype=ttnn.bfloat16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=mesh,

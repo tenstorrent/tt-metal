@@ -116,6 +116,7 @@ def layer_step(mesh, lc: LayerCfg, st, clk, span_chips=(), detail=False, trace=F
                 st["rtb"],
                 0,
                 dest_t=hd["dest_t"],
+                fence_row=lc.T * lc.S,
             ),
             lane_span_us,
         ),
@@ -203,7 +204,7 @@ def check_chip(lc: LayerCfg, ref: Ref, c, hd, st, ntok, tag):
     worst_pick = float((picked - kth).min() / kth.mean())  # < 0: a pick below torch's K-th score (near ties)
     w_ref = picked / picked.sum(1, keepdim=True)
     eo = ref.routed(c, toks, top[toks])  # [n, K, H]
-    res = get(st["res_t"]).float().reshape(T, S, lc.H)[toks]
+    res = get(st["res_t"]).float()[: T * S].reshape(T, S, lc.H)[toks]
     yd = get(st["y_t"]).float().reshape(T, lc.H)[toks]
     yr = (w[toks].unsqueeze(2) * eo).sum(1) + res[:, K]
     full = {}
@@ -211,8 +212,8 @@ def check_chip(lc: LayerCfg, ref: Ref, c, hd, st, ntok, tag):
         # every token: the result buffer read twice around a device sync (stable), and y against the end pass's sum
         # over the rows as read (bf16 gate weights, fp32 sums)
         ttnn.synchronize_device(st["res_t"].device())
-        r2 = get(st["res_t"]).reshape(T, S, lc.H)
-        allr = get(st["res_t"]).reshape(T, S, lc.H)
+        r2 = get(st["res_t"])[: T * S].reshape(T, S, lc.H)
+        allr = get(st["res_t"])[: T * S].reshape(T, S, lc.H)
         yall = get(st["y_t"]).float().reshape(T, lc.H)
         reread = bool(torch.equal(allr, r2))
         wq = w.to(torch.bfloat16).float()

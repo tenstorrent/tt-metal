@@ -35,7 +35,8 @@
 // WL_Y_RM: row-major outputs. The compute pack-untilizes each down row tile (32 rows x DCOLS * 32 columns, row after
 // row in CB 17); each of its rows goes to its own row of the row-major output, at this core's columns: the row's entry
 // in the expert's destination list (same layout as the token lists: expert e's page, entry p for its p-th token).
-// Rows past the expert's count are not written.
+// Rows past the expert's count are not written. With WL_Y_POSTED the writes are posted (no acks: DRAM reads and
+// acknowledged DRAM writes on one NoC can hang the chip), fenced at the end (WL_Y_FENCE).
 #include "api/dataflow/dataflow_api.h"
 #ifndef WL_NO_FABRIC
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux_interface.hpp"
@@ -953,6 +954,14 @@ void kernel_main() {
     noc_async_atomic_barrier();
 #ifdef WL_Y_POSTED
     noc_async_posted_writes_flushed();
+#ifdef WL_Y_FENCE
+    // the posted row writes' fence: an acknowledged 4-B write into every DRAM bank (the output's spare rows from
+    // WL_Y_FENCE, nobody reads them) after them on the same NoC and VC; its acks mean every row landed
+    for (uint32_t i = 0; i < NUM_DRAM_BANKS; ++i) {
+        noc_async_write(dst_l1, os.get_noc_addr(WL_Y_FENCE + i), 4);
+    }
+    noc_async_write_barrier();
+#endif
 #endif
 #ifndef WL_NO_FABRIC
     // mux teardown: every client disconnects; client 0 of each mux stops it once all others have

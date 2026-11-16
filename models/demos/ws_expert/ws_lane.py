@@ -201,10 +201,13 @@ def tables_tensor(mesh, tabs):
     )
 
 
-def build_lane(mesh, cfg: GCfg, lc: LCfg, x_t, idx_t, counts_t, ws_t, out_t, tab_t, T, out_rows, dest_t=None):
+def build_lane(
+    mesh, cfg: GCfg, lc: LCfg, x_t, idx_t, counts_t, ws_t, out_t, tab_t, T, out_rows, dest_t=None, fence_row=None
+):
     """generic_op mesh program of the lane design; returns (mesh program, io tensors, stamps). T: make_tables();
     out_rows: tile rows of an output block (a group's last expert, or with out_all a group's experts); with y_rm, out_t
-    is row-major [rows, H] and dest_t the destination lists [nexp, RMAX 32] uint32 (out_rows unused)."""
+    is row-major [rows, H] and dest_t the destination lists [nexp, RMAX 32] uint32 (out_rows unused); fence_row: the
+    first of out_t's spare rows (NUM_DRAM_BANKS of them) the posted row writes' fence rewrites."""
     R, Cn = tuple(mesh.shape)
     N, G, GC = R * Cn, cfg.G, cfg.GC
     assert GC == 20 and cfg.PAIRS == GC and cfg.DCOLS * GC == cfg.HT
@@ -290,6 +293,7 @@ def build_lane(mesh, cfg: GCfg, lc: LCfg, x_t, idx_t, counts_t, ws_t, out_t, tab
     ydefs += [("WL_Y_RM", "1")] if lc.y_rm else []
     ydefs += [("WL_Y_NOWRITE", "1")] if lc.y_nowrite else []
     ydefs += [("WL_Y_POSTED", "1")] if lc.y_rm and lc.y_posted else []
+    ydefs += [("WL_Y_FENCE", str(fence_row))] if lc.y_rm and lc.y_posted and fence_row is not None else []
     ydefs += [("WL_MCAST_LINKED", "1")] if lc.mcast_linked else []
     ydefs += [] if lc.own_read else [("WL_NO_OWN_READ", "1")]
     ydefs += [] if lc.gather else [("WG_NO_GATHER", "1")]
