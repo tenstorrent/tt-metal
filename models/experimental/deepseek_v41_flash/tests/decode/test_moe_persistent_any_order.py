@@ -22,9 +22,9 @@ requesters above it. ``ROWS`` 1 is the one-row request, 4 the DSpark verify bloc
 ``MOE_ANY_ORDER_ROWS`` (comma-separated mesh rows, default ``2,3,4``) picks the requesters' rows, e.g. ``0,1,2,3,4``
 for five, the five-instance layout.
 
-The mixed-rows tests (one launch for 4-row blocks serving one-row requests too) run one-row requests natively by
-default -- the plain row on the wire, 1x32 tiles through the op -- and padded into a block's row 0 with
-``DEEPSEEK_V41_MOE_NATIVE_ONE_ROW=0`` (read once per process; the A/B of ``test_moe_persistent_mixed_rows_perf``).
+The mixed-rows tests (one launch for 4-row blocks serving one-row requests too) run one-row requests natively -- the
+plain row on the wire, 1x32 tiles through the op -- and skip under ``DEEPSEEK_V41_MOE_NATIVE_ONE_ROW=0`` (the padded
+mode, which they do not cover).
 """
 
 import gc
@@ -184,9 +184,10 @@ def test_moe_persistent_mixed_rows(mesh_device):
     """One launch serving one-row and 4-row requests together (``PersistentMoE(rows=1, block_rows=4)``, mixed): every
     requester sends an uneven, shuffled run of requests, each one row or a 4-row block at random. Each output must
     match the same request run alone bit for bit, and torch. A one-row request runs natively (1x32 tiles through the
-    op, switching tile shapes with the 4-row ones around it; ``DEEPSEEK_V41_MOE_NATIVE_ONE_ROW=0``: it rides the
-    block's row 0, its other rows unused), so it also checks that neither the shape switches nor another row leak
-    into it."""
+    op, switching tile shapes with the 4-row ones around it), so it also checks that neither the shape switches nor
+    another row leak into it."""
+    if not NATIVE_ONE_ROW:
+        pytest.skip("DEEPSEEK_V41_MOE_NATIVE_ONE_ROW=0 (padded one-row requests) is not covered by these tests")
     if os.environ.get("TT_FE_FIXED_ORDER") == "1":
         pytest.skip("TT_FE_FIXED_ORDER=1 takes the requesters in strict turn, which this test's uneven counts hang")
     moe_mesh, request_meshes, config, socket_core, single_senders = _setup(mesh_device)
@@ -197,10 +198,7 @@ def test_moe_persistent_mixed_rows(mesh_device):
     rng = random.Random(1)
     # Each request one row (its block's row 0) or the whole block.
     rows_of = {(j, i): rng.choice((1, block)) for j, mine in enumerate(requests) for i in range(len(mine))}
-    logger.info(
-        f"{num_requesters} requesters, one-row requests {'native' if NATIVE_ONE_ROW else 'padded'}, rows per request "
-        f"{rows_of}"
-    )
+    logger.info(f"{num_requesters} requesters, one-row requests native, rows per request {rows_of}")
 
     moe_op = PersistentMoE(
         moe_mesh, request_meshes, moes, socket_core, socket_core, single_senders, rows=1, block_rows=block
@@ -263,11 +261,12 @@ def test_moe_persistent_mixed_rows_perf(mesh_device):
     """Per-request latency on the mixed server (one launch for 4-row blocks, ``PersistentMoE(rows=1,
     block_rows=4)``): one-row requests, 4-row requests, and the two alternating, with 1 requester and then all of
     them, each (requester, layer, rows) request traced once and replayed back to back with no host I/O (device only).
-    The one-row figure is the native mode's by default; run again with ``DEEPSEEK_V41_MOE_NATIVE_ONE_ROW=0`` for the
-    padded mode's (the A/B).
+    One-row requests run natively (1x32 tiles).
 
     ``MOE_PERF_WARMUP`` / ``MOE_PERF_STEPS`` override the step counts, ``MOE_MIXED_REQUESTERS`` (e.g. ``1``) the
     requester counts. Each traced request's output must match its eager run's bit for bit."""
+    if not NATIVE_ONE_ROW:
+        pytest.skip("DEEPSEEK_V41_MOE_NATIVE_ONE_ROW=0 (padded one-row requests) is not covered by these tests")
     moe_mesh, request_meshes, config, socket_core, single_senders = _setup(mesh_device)
     layers, moes = _load_layers(moe_mesh, config)
     hidden = config.hidden_size
@@ -281,7 +280,7 @@ def test_moe_persistent_mixed_rows_perf(mesh_device):
     for layer in sorted(set(STEPS)):
         rows = torch.randn(block, hidden, generator=g)
         data[layer] = (rows / rows.norm(dim=-1, keepdim=True) * hidden**0.5).to(torch.bfloat16).float()
-    mode = "native" if NATIVE_ONE_ROW else "padded"
+    mode = "native"
     # Per phase, the rows of request i.
     phases = {
         "1-row": lambda i: 1,
