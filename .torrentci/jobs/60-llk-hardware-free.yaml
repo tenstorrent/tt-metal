@@ -35,11 +35,11 @@ jobs:
             - echo "T venv-start $(date +%s.%N)"
             - python3 -m pip install -q uv
             - echo "T uvinstall-end $(date +%s.%N)"
-            - uv venv /tmp/venv --python python3
+            - python3 -m uv venv /tmp/venv --python python3
             - echo "T venv-end $(date +%s.%N)"
-            - uv pip install --python /tmp/venv/bin/python --index-strategy unsafe-best-match -r tt_metal/tt-llk/tests/requirements.txt
+            - python3 -m uv pip install --python /tmp/venv/bin/python --index-strategy unsafe-best-match -r tt_metal/tt-llk/tests/requirements.txt
             - echo "T install-end $(date +%s.%N)"
-            - uv pip freeze --python /tmp/venv/bin/python | sort > /tmp/freeze.txt && cat /tmp/freeze.txt
+            - python3 -m uv pip freeze --python /tmp/venv/bin/python | sort > /tmp/freeze.txt && cat /tmp/freeze.txt
             - echo "T freeze-end $(date +%s.%N)"
             - . /tmp/venv/bin/activate && cd tt_metal/tt-llk/tests && ./setup_testing_env.sh
             - echo "T sfpi-end $(date +%s.%N)"
