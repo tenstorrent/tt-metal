@@ -1087,6 +1087,50 @@ def test_quasar_reshape_rm_unit_last_dim(device):
     assert_equal(torch_input.reshape(n, 1), ttnn.to_torch(tt_out))
 
 
+def test_quasar_reshape_rm_nonclean_dest_slots_track_l1_pressure(device):
+    # dest page 10004 B (not 16 B aligned): 8 staging slots plus source scratch take ~89 KiB per core.
+    input_shape, output_shape = (64, 2501), (32, 5002)
+    torch.manual_seed(7)
+    torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
+    expected = torch_input.reshape(output_shape)
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    def run():
+        tt_out = ttnn.experimental.quasar.reshape(tt_input, output_shape, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        assert_equal(expected, ttnn.to_torch(tt_out))
+        ttnn.deallocate(tt_out)
+
+    run()
+    entries = device.num_program_cache_entries()
+
+    view = ttnn.get_memory_view(device, ttnn.BufferType.L1)
+    tiles_per_bank = (view.largest_contiguous_bytes_free_per_bank - 40 * 1024) // (32 * 32 * 2)
+    if tiles_per_bank <= 0:
+        pytest.skip("L1 already has less free space than the test needs")
+    hog = ttnn.allocate_tensor_on_device(
+        ttnn.Shape((1, 1, 32, tiles_per_bank * view.num_banks * 32)),
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        device,
+        ttnn.L1_MEMORY_CONFIG,
+    )
+    try:
+        # Only ~3 slots fit now: a different program, not a hit on the 8-slot one.
+        run()
+        assert device.num_program_cache_entries() == entries + 1
+    finally:
+        ttnn.deallocate(hog)
+    # With L1 free again the 8-slot program is a hit.
+    run()
+    assert device.num_program_cache_entries() == entries + 1
+
+
 def test_reshape_rejects_overflowing_volume(device, expect_error):
     x = ttnn.from_torch(
         torch.randn(1, 1, 32, 32).bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
