@@ -18,7 +18,7 @@ def pytest_addoption(parser):
     parser.addoption(
         "--paged_attention", action="store", type=bool, help="Whether to use paged attention or default attention"
     )
-    parser.addoption("--page_params", action="store", type=dict, help="Page parameters for paged attention")
+    parser.addoption("--page_params", action="store", type=json.loads, help="Page parameters for paged attention")
     # type=dict cannot parse a command-line string, so the option was write-only until now;
     # accept a JSON object, e.g. --sampling_params '{"temperature": 1.0, "top_k": 1, "top_p": 0.5}'
     parser.addoption("--sampling_params", action="store", type=json.loads, help="Sampling parameters for decoding")
