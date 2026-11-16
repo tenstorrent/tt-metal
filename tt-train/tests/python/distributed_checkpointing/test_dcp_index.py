@@ -30,6 +30,7 @@ from ttml.distributed_checkpointing._index import (
     find_latest,
     is_complete,
     parse_dir_name,
+    read_checked_header,
     read_header_json,
     read_index,
     read_user_header,
@@ -204,6 +205,39 @@ def test_read_user_header_returns_only_the_dict_passed_to_save(tmp_path):
     os.makedirs(ckpt)
     write_header(ckpt, {"format": "ttml-dcp", "version": 1, "user": {"step": 1, "run": "a"}, "train_state": {}})
     assert read_user_header(ckpt) == {"step": 1, "run": "a"}
+
+
+def test_a_header_save_would_not_write_is_refused(tmp_path, expect_error):
+    ckpt = str(tmp_path / "step_0000001")
+    os.makedirs(ckpt)
+    good = {"format": "ttml-dcp", "version": 1, "user": {"step": 1}}
+    write_header(ckpt, good)
+    assert read_checked_header(ckpt) == good
+
+    cases = [
+        (["not", "an", "object"], IncompleteCheckpointError, r"not a readable header \(TypeError"),
+        (
+            {"format": "ttml-dcp", "version": 1},
+            IncompleteCheckpointError,
+            r"not a readable header \(KeyError: 'user'\)",
+        ),
+        (
+            {"format": "ttml-dcp", "user": {}},
+            IncompleteCheckpointError,
+            r"not a readable header \(KeyError: 'version'\)",
+        ),
+        ({**good, "version": "1"}, IncompleteCheckpointError, "is not an integer"),
+        ({**good, "user": ["step", 1]}, IncompleteCheckpointError, "the user header is a list"),
+        ({**good, "format": "other"}, VersionError, "not a ttml-dcp header: format='other'"),
+        ({"version": 1, "user": {}}, VersionError, "not a ttml-dcp header: format=None"),
+        ({**good, "version": 2}, VersionError, "header version 2 is newer than the supported 1"),
+    ]
+    for value, error, message in cases:
+        write_header(ckpt, value)
+        with expect_error(error, message):
+            read_checked_header(ckpt)
+        with expect_error(error, message):
+            read_user_header(ckpt)
 
 
 def test_staging_becomes_complete_only_at_finalize(tmp_path, expect_error):

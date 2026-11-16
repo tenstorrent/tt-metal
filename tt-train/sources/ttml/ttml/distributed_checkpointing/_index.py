@@ -436,9 +436,40 @@ def read_header_json(directory: str) -> dict:
         ) from err
 
 
+def _check_header(value: Any) -> dict:
+    """``value`` if it is a header as save writes it: this format's name, a version no newer than the supported one and
+    a ``user`` object. Raises VersionError for another format or a newer version, KeyError or TypeError otherwise."""
+    if not isinstance(value, dict):
+        raise TypeError(f"the header is a {type(value).__name__}, not an object")
+    if value.get("format") != FORMAT:
+        raise VersionError(f"not a {FORMAT} header: format={value.get('format')!r}")
+    version = value["version"]
+    if type(version) is not int:
+        raise TypeError(f"header version {version!r} is not an integer")
+    if version > VERSION:
+        raise VersionError(f"header version {version} is newer than the supported {VERSION}")
+    if not isinstance(value["user"], dict):
+        raise TypeError(f"the user header is a {type(value['user']).__name__}, not an object")
+    return value
+
+
+def read_checked_header(directory: str) -> dict:
+    """header.json, checked as ``read_index`` checks index.json: a header save would not write is refused."""
+    value = read_header_json(directory)
+    path = os.path.join(directory, HEADER_NAME)
+    try:
+        return _check_header(value)
+    except CheckpointError as err:
+        raise type(err)(f"{path}: {err}") from err
+    except (KeyError, TypeError) as err:
+        raise IncompleteCheckpointError(
+            f"{path} is not a readable header ({type(err).__name__}: {err}); the checkpoint is corrupt or truncated"
+        ) from err
+
+
 def read_user_header(directory: str) -> dict:
     """The custom user-defined header dict passed to ``save``, without touching any device."""
-    return read_header_json(directory)["user"]
+    return read_checked_header(directory)["user"]
 
 
 def data_file_name(world_rank: int, mesh_id: int, coord: Sequence[int]) -> str:
