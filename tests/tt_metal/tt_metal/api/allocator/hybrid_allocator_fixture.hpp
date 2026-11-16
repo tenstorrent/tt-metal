@@ -18,6 +18,10 @@ namespace tt::tt_metal {
 // allocations coexist and therefore the only one where either narrowing has an effect.
 class HybridAllocatorTest : public MeshDeviceSingleCardBufferFixture {
 protected:
+    // Bytes of L1 the allocator manages per core, from the top of L1 down; the rest above KERNEL_CONFIG
+    // is the kernel-config window. A subclass may set it before SetUp.
+    size_t worker_l1_size_ = DEFAULT_WORKER_L1_SIZE;
+
     void SetUp() override {
         // Enable HYBRID allocator mode before device creation.
         setenv("TT_METAL_ALLOCATOR_MODE_HYBRID", "1", /*overwrite=*/1);
@@ -32,7 +36,7 @@ protected:
         }
         const auto& dispatch_core_config = tt::tt_metal::MetalContext::instance().resolve_dispatch_core_config();
         id_to_device_ = distributed::MeshDevice::create_unit_meshes(
-            ids, l1_small_size_, trace_region_size_, 1, dispatch_core_config, {}, DEFAULT_WORKER_L1_SIZE);
+            ids, l1_small_size_, trace_region_size_, 1, dispatch_core_config, {}, worker_l1_size_);
         devices_.clear();
         for (const auto& [device_id, device] : id_to_device_) {
             devices_.push_back(device);
