@@ -55,6 +55,7 @@ jobs:
           python3 tt_metal/tt-llk/perf/nightly_health.py \
             --repo "$GITHUB_REPOSITORY" --dm "$OWNER_SLACK_ID" --channel "$SLACK_CHANNEL_ID" \
             ${DAY:+--date "${DAY:0:10}"} --extra $(ls nightly_checks/*.json 2>/dev/null)
+          cat health_details.md >> "$GITHUB_STEP_SUMMARY"
           [ -f health_payloads.json ] || exit 0
           python3 -c 'import json; [json.dump(p, open(f"payload_{i}.json", "w")) for i, p in enumerate(json.load(open("health_payloads.json")))]'
           for payload in payload_*.json; do
