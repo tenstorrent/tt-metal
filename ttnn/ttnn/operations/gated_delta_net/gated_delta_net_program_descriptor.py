@@ -109,6 +109,13 @@ PREP_MCAST = False
 PREP_CLUSTER = True
 # R-PREP prep writer NoC (the reader takes the other): 1, 0, or "auto" (per core, the shorter paths to its state cores).
 PREP_SEND_NOC = "auto"
+# R-PREP placement in rectangles (see _prep_rect_place): the dispatcher writes kernel binaries and launch messages once
+# per core range of a kernel group, after the previous program has ended when the binaries overlap its own (in the
+# qwen36 prefill chunk: 48 ranges, 69 us). False: one blob per group (PREP_CLUSTER).
+PREP_RECT = True
+# Tile rows per sequence up to which PREP_RECT places (T=1024 233.0 us against 234.2 in blobs, T=2048 368.5 / 368.4,
+# T=4096 810.5 / 809.5: the blobs stay there).
+PREP_RECT_MAX_ROWS = 64
 NOC_GRID = (17, 12)  # Blackhole NoC torus (x, y), in NOC 0 coordinates (R-PREP is Blackhole-only)
 # Pieces per pair under R-PREP, at most; _prep_estimate picks among them. Fewer pieces leave more prep cores and halve
 # the fan-out of a prepped row, more shorten the state step: T=128 4 pieces 87 us, 2 pieces 92; T=512 255 vs 199;
@@ -1071,6 +1078,65 @@ def writer_addresses(inputs, outputs, small_mcast):
     ]
 
 
+def _prep_rect_place(device, grid, n_groups, n_state, strides):
+    """R-PREP cores as few rectangles per kernel group: the state cores of all groups as one block of 3 columns in
+    the middle (a group's heads side by side, its pieces below one another), the prep cores that send on NOC 0 (which
+    routes toward higher x and y) as the block of columns left of it, those on NOC 1 right of it, each group's rows
+    of the left block at or above its state rows and of the right block at or below (the last group's wrap to the
+    top rows: 3 hops on the torus). The rows above the state block hold the rest: its left column on NOC 0, its right
+    column on NOC 1. Returns (state cores per group, prep cores per group in stride order, {(x, y): sends on NOC 0})
+    or None when the plan does not fit this shape."""
+    width = 3
+    rows = n_state // width
+    stride = strides[0]
+    x0 = (grid.x - width) // 2
+    y0 = grid.y - n_groups * rows
+    if n_state % width or y0 < 0 or x0 < 1 or any(s != stride for s in strides):
+        return None
+    left = [ttnn.CoreCoord(x, y) for y in range(grid.y) for x in range(x0)]
+    right = [ttnn.CoreCoord(x, (y0 + y) % grid.y) for y in range(grid.y) for x in range(x0 + width, grid.x)]
+    n_left, n_right = len(left) // n_groups, len(right) // n_groups
+    rest = stride - n_left - n_right
+    top = [(ttnn.CoreCoord(x0, y), True) for y in reversed(range(y0))]
+    top += [(ttnn.CoreCoord(x0 + width - 1, y), False) for y in range(y0)]
+    if rest < 0 or rest * n_groups > len(top):
+        return None
+    # The NOC 0 column serves the first groups (nearest first), the NOC 1 column the last (through the wrap).
+    order = sorted(range(n_groups), key=lambda g: (min(g, n_groups - 1 - g), g))
+    extra = {g: [] for g in range(n_groups)}
+    lo, hi = 0, len(top) - 1
+    for _ in range(rest):
+        for g in order:
+            if g < (n_groups + 1) // 2:
+                extra[g].append(top[lo])
+                lo += 1
+            else:
+                extra[g].append(top[hi])
+                hi -= 1
+    state, picks, noc0 = [], [], {}
+    for g in range(n_groups):
+        ys = range(y0 + g * rows, y0 + (g + 1) * rows)
+        state.append([ttnn.CoreCoord(x0 + j, y) for j in range(width) for y in ys])
+        dst = [device.worker_core_from_logical_core(c) for c in state[g]]
+
+        def hops(core_noc0):
+            src = device.worker_core_from_logical_core(core_noc0[0])
+            if core_noc0[1]:
+                return sum((d.x - src.x) % NOC_GRID[0] + (d.y - src.y) % NOC_GRID[1] for d in dst)
+            return sum((src.x - d.x) % NOC_GRID[0] + (src.y - d.y) % NOC_GRID[1] for d in dst)
+
+        mine = [(c, True) for c in left[g * n_left : (g + 1) * n_left]]
+        mine += [(c, False) for c in right[g * n_right : (g + 1) * n_right]] + extra[g]
+        # Stride order (the first positions prep the most rows): the NoCs in turn, each nearest first (measured:
+        # nearest first over both 236.4 us at T=1024, farthest first 244.4, in turn 233.0).
+        on1 = sorted((m for m in mine if not m[1]), key=hops)
+        on0 = sorted((m for m in mine if m[1]), key=hops)
+        mine = [m for pair in zip(on1, on0) for m in pair] + on1[len(on0) :] + on0[len(on1) :]
+        picks.append([c for c, _ in mine])
+        noc0.update({(c.x, c.y): n for c, n in mine})
+    return state, picks, noc0
+
+
 def _mcast_rects(device, cores):
     """Multicast rectangles covering exactly `cores` (logical, row-major order): one per run of cores consecutive in
     one row of virtual NoC coordinates (non-worker columns split a row), as [count, then (x_lo, y_lo, x_hi, y_hi,
@@ -1304,7 +1370,7 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
         for role, plan in zip(("R-PREP state", "R-PREP prep", "R-PREP q / k"), prep_plans):
             if plan:
                 check_l1_footprint(role, _plan_bytes(plan, token_dtype), budget, l1_end)
-        cluster_picks = None
+        cluster_picks, rect = None, None
         if PREP_CLUSTER:
             # Each group's state and prep cores as one blob around the first free core (row-major), its state cores at
             # the blob's center: a head block crosses a few links instead of every group's converging on the top rows.
@@ -1312,7 +1378,14 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
             # own prep cores), between the key head's other groups.
             free = list(grid_cores)
             assignment, cluster_picks, qk_pools = [], [], {}
-            for g, (first, stride) in enumerate(zip(groups, strides)):
+            seq_rows = max(_seq_tile_rows(seq, tokens) for seq in range(batch))
+            rect_ok = PREP_RECT and not shared and seq_rows <= PREP_RECT_MAX_ROWS
+            rect = _prep_rect_place(device, grid, len(groups), heads * pieces, strides) if rect_ok else None
+            if rect is not None:
+                cluster_picks = rect[1]
+                for first, cores in zip(groups, rect[0]):
+                    assignment += [(core, first + u, 1, 1) for u, core in enumerate(cores)]
+            for g, (first, stride) in enumerate(() if rect else zip(groups, strides)):
                 takes_qk = shared and g % groups_per_kh == groups_per_kh // 2
                 seed = free[0]
                 blob = sorted(free, key=lambda c: (abs(c.x - seed.x) + abs(c.y - seed.y), c.y, c.x))
@@ -1712,7 +1785,7 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
             rts[1][core.x, core.y] += consumers
             rts[2][core.x, core.y] = [group_first, 1, tokens, v_eps_bits, prep_qk_role] + rows + [norm_rows, mid]
             dsts = [unit_noc[group_first + u] for u in range(heads * pieces)]
-            prep_send_noc0[core.x, core.y] = send_noc0(core, dsts)
+            prep_send_noc0[core.x, core.y] = rect[2][core.x, core.y] if rect else send_noc0(core, dsts)
         roles[ROLE_PREP] = (prep_cores, *rts)
     if prep_qk_units:
         # A q / k core's unit is its key head's first group; it writes its rows' qn (kn) to the position's prep cores.
