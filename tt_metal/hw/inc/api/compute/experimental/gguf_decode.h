@@ -49,6 +49,13 @@ ALWI void gguf_decode_group(const std::uint32_t idst, const std::uint32_t rows =
     GGUF_DECODE_ON(thr, llk_math_gguf_decode_group<fmt>(idst, rows));
 }
 
+// In place of gguf_decode_group at idst + delta for the same group: copies the results of the one at idst (Q4_K, Q5_K,
+// Q3_K, Q2_K; nothing for the others).
+template <std::uint32_t fmt, int delta, GgufDecodeThread thr = GgufDecodeThread::Math>
+ALWI void gguf_decode_group_copy(const std::uint32_t idst, const std::uint32_t rows = 0) {
+    GGUF_DECODE_ON(thr, llk_math_gguf_decode_group_copy<fmt, delta>(idst, rows));
+}
+
 // clang-format off
 /**
  * Decodes one GGUF weight tile into a Float32 [K][N] tile in DEST, scales applied (ggml's dequantization). Q4_K,

@@ -29,6 +29,12 @@ inline void llk_math_gguf_decode_group(const std::uint32_t dst_index, const std:
     sfpu::sfpu_gguf_decode_group<FMT>(dst_index, rows);
 }
 
+// The group step's results at dst_index copied to the tiles DELTA further, in place of a group step there.
+template <std::uint32_t FMT, int DELTA>
+inline void llk_math_gguf_decode_group_copy(const std::uint32_t dst_index, const std::uint32_t rows) {
+    sfpu::sfpu_gguf_decode_group_copy<FMT, DELTA>(dst_index, rows);
+}
+
 // PARAMS, BODY: phase 1 (scales) and phase 2 (codes); a decoded tile needs both, in that order. Block-float codes
 // (ckernel::gguf::bfp_codes) are in the 16-bit rows that the decoded tile's rows address; in the upper half of a
 // half-sync DEST those are rows 2 base + 64 dst_index, whose 32-bit rows alias the half's tiles (dest_srca_mm codes
