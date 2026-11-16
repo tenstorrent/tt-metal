@@ -283,7 +283,8 @@ class Gemma4Model:
             )
         if greedy_tokens is not None:
             # greedy: the argmax of the raw LM-head output (the softcap is monotonic) straight into the token input
-            logits = self.head_logits(x, softcap=False)
+            # L1: the greedy workers read row 0 of every logits tile
+            logits = self.head_logits(x, softcap=False, memory_config=ttnn.L1_MEMORY_CONFIG)
             self.fused_b1.greedy(logits, greedy_tokens)
             return logits
         if return_hidden:
@@ -333,13 +334,13 @@ class Gemma4Model:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-    def head_logits(self, hidden, softcap=True):
+    def head_logits(self, hidden, softcap=True, memory_config=ttnn.DRAM_MEMORY_CONFIG):
         logits = ttnn.linear(
             hidden,
             self.head,
             dtype=ttnn.bfloat16,
             compute_kernel_config=self.compute,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=memory_config,
             program_config=self.head_program if hidden.shape[-2] <= 32 else None,
         )
         if softcap:
