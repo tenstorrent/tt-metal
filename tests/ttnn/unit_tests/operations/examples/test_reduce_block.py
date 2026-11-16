@@ -1320,8 +1320,9 @@ _REGIMES = [
     ("helps_row_32t", "row", (2, 32, 1), "helps", {"wh": 2.09, "bh": 1.98}),
     ("helps_col_32t", "col", (32, 2, 1), "helps", {"wh": 1.88, "bh": 3.64}),
     ("helps_scalar_32t", "scalar", (4, 8, 1), "helps", {"wh": 3.04, "bh": 4.12}),
-    ("not_row_2t", "row", (4, 2, 1), "does_not_help", {"wh": 0.51, "bh": 0.39}),
-    ("not_row_4t", "row", (2, 4, 1), "does_not_help", {"wh": 0.81, "bh": 0.66}),
+    # BH ranges: the README's numbers (0.39x, 0.66x) and bh-50 (BH p150b, 13x10 grid), 20 passes, 2026-11-14 (0.46x, 0.75x).
+    ("not_row_2t", "row", (4, 2, 1), "does_not_help", {"wh": 0.51, "bh": (0.39, 0.46)}),
+    ("not_row_4t", "row", (2, 4, 1), "does_not_help", {"wh": 0.81, "bh": (0.66, 0.75)}),
     ("measure_col_4t", "col", (4, 2, 1), "measure", {"wh": 0.90, "bh": 1.11}),  # verdict differs by arch
     ("measure_scalar_4t", "scalar", (2, 2, 1), "measure", {"wh": 1.02, "bh": 1.08}),  # verdict differs by arch
 ]

@@ -168,9 +168,12 @@ kernels for both variants (`kernels/ws_reduce_*.cpp`); `k` is a runtime arg and 
   member, half the 2048 B bf16 tile). Measured alternative: one 1536 B write of faces 0–2 is within ~1% at
   `k ≤ 4` but **14% slower at `k = 16` and 27% slower at `k = 64`** — each member ingests `k` partials, so
   bytes per partial matter once `k` is large.
-- **Signal after flush, not barrier.** The data writes and the semaphore increment go to the same
-  destination on the same NoC and unicast-write VC, which delivers them in order; flushing (writes left
-  this Tensix core) before the increment is enough.
+- **Signal after a write barrier, not a flush.** The partials are acknowledged (`noc_async_write_barrier()`)
+  before the semaphore increments. Signalling after a flush (`noc_async_writes_flushed()`: writes left
+  this Tensix core) looked sufficient — data and increment go to the same destination on the same NoC —
+  but it is not: with the flush, the `R_t = 16, Wt = 64, k = 16` cell of the sweep returned wrong row
+  means in 3 of 40 sweep runs on BH p150b (13×10), and never when that cell was launched alone (600
+  launches). With the barrier: 0 of 108 sweep runs.
 - **Sum in pairs with the FPU accumulating into DST** (`add_tiles` with `acc_to_dest`). A dest-reuse add
   moves the running sum DST → SrcA every step and truncates it to SrcA's 19-bit format: a bias of ~1 ulp per
   add that reached 0.07 absolute error at `k = 32`.
@@ -179,6 +182,12 @@ kernels for both variants (`kernels/ws_reduce_*.cpp`); `k` is a runtime arg and 
 ### Measured (BH p150b, 13×10 = 130 Tensix cores, bf16, mean of 20 launches)
 
 Speedup of `width_split_reduce` over `row_split_reduce` (`k = 1`); in brackets: Tensix cores, tiles per slice.
+
+> The sweep tables below and in the `Layout::ROW_MAJOR` section were measured while the combine signalled
+> after a flush. With the write barrier it uses now, a split row costs ~0.13 µs more per tile-row at
+> `k = 4–8` (`R_t = 1, Wt = 32, k = 8`: 3 690 → 3 808 ns; `R_t = 1, W = 2 048, k = 4`: 6 872 → 6 960 ns),
+> i.e. 2–3% lower speedups on those cells, and nothing measurable at `k = 2`. The two **Helps** regime
+> rows carry the barrier numbers (20 passes of `test_width_split_regimes`, 2026-11-16).
 
 | R_t (tile-rows) | Wt | `k = 1` ns (Tensix cores) | k = 2 | k = 4 | k = 8 | k = 16 | k = 32 | k = 64 |
 |--:|--:|--:|--:|--:|--:|--:|--:|--:|
@@ -220,7 +229,7 @@ tile on BH p150b, must beat the combine (~0.5 µs at `k = 2`, ~1.5 µs at `k = 8
 
 | Regime (BH p150b, 130 Tensix cores) | row_split_reduce → width_split_reduce | speedup |
 |---|---|--:|
-| **Helps:** `R_t = 1, Wt = 32, k = 8` (1 → 8 Tensix cores, 4 tiles per slice) | 8 715 → 3 690 ns | **2.34–2.37×** |
+| **Helps:** `R_t = 1, Wt = 32, k = 8` (1 → 8 Tensix cores, 4 tiles per slice) | 8 713 → 3 808 ns | **2.27–2.30×** |
 | Helps (sweep): `R_t = 1, Wt = 64, k = 8` (8 tiles per slice) | 16 004 → 4 633 ns | 3.45× |
 | Helps, little: `R_t = 16, Wt = 64, k = 2` (16 → 32 Tensix cores) | 17 834 → 13 987 ns | 1.28× |
 | **Does not help:** `R_t = 64, Wt = 16, k = 2` (64 → 128 Tensix cores, 8 tiles per slice) | 13 581 → 13 759 ns | **0.98–0.99×** |
@@ -296,7 +305,7 @@ With the tile-rows on ≥ ~1/3 of the grid (R_t ≥ 47 of 130), do not split a s
 
 | Regime (BH p150b, 130 Tensix cores) | row_split_reduce → width_split_reduce | speedup |
 |---|---|--:|
-| **Helps:** `R_t = 1, W = 2 048, k = 4` (4 KB sticks, 1 KB pieces, 1 → 4 Tensix cores) | 12 803 → 6 872 ns | **1.86–1.88×** |
+| **Helps:** `R_t = 1, W = 2 048, k = 4` (4 KB sticks, 1 KB pieces, 1 → 4 Tensix cores) | 12 774 → 6 960 ns | **1.83–1.84×** |
 | **Does not help:** `R_t = 64, W = 256, k = 2` (512 B sticks, 256 B pieces, 64 → 128 Tensix cores) | 8 566 → 13 032 ns | **0.65–0.66×** |
 | Edge: `R_t = 64, W = 2 048, k = 2` (2 KB pieces) | 50 471 → 46 953 ns | 1.07× |
 

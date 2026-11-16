@@ -192,8 +192,9 @@ def test_mcast_topology_device_perf(device):
 # measured number is logged, not asserted; a missed bound is re-measured once and the samples are pooled.
 # `measure` regimes flip between boards and only log -- numbers per board in README.md.
 _REGIME_CASES = [
-    pytest.param(8, 32, 4, "helps", {"wh": 1.87, "bh": 2.01}, (8, 8), id="helps_8x8_64cores"),
-    pytest.param(4, 4, 4, "does_not_help", {"wh": 1.03, "bh": 0.80}, (4, 4), id="does_not_help_4x4_16cores"),
+    # BH ranges: the README's board (2.01x, 0.80x) and bh-50 (BH p150b, 13x10 grid), 20 passes, 2026-11-14 (2.61x, 0.89x).
+    pytest.param(8, 32, 4, "helps", {"wh": 1.87, "bh": (2.01, 2.61)}, (8, 8), id="helps_8x8_64cores"),
+    pytest.param(4, 4, 4, "does_not_help", {"wh": 1.03, "bh": (0.80, 0.89)}, (4, 4), id="does_not_help_4x4_16cores"),
     pytest.param(2, 2, 4, "does_not_help", {"wh": 0.73, "bh": 0.65}, (2, 2), id="does_not_help_2x2_4cores"),
 ]
 
