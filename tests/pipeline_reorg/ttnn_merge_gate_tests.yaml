@@ -188,16 +188,6 @@
   budget_type: merge_gate
   owner_id: U084B1CES7M # Borys Bradel
 
-# ---------------------------------------------------------------------------------------------
-# Quasar simulator (#61750 follow-up): the four sim_quasar sanity groups of ttnn_sanity_tests.yaml, run
-# per PR on the same two-compute-node grid (TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="3,2") and with the
-# same quasar section of ttsim-skip-list.yaml. resnet50, llama32_1b and qwen3_vl are the sanity cmds
-# unchanged; yolo leaves out its two slowest files, test_conv2d.py (~270 s) and test_concat.py (~40 s),
-# which stay in sanity. Timeouts are about twice the pytest time on ttsim v1.16.0. -n 0 on the
-# model-op suites: their conftest holds one device flock per module, which makes xdist workers time
-# out.
-# ---------------------------------------------------------------------------------------------
-
 - name: "ttnn quasar resnet50 ops smoke"
   cmd: >-
     TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="3,2" pytest --timeout 600 -v models/demos/vision/classification/resnet50/quasar/tests/ops/test_reshape_tiled.py models/demos/vision/classification/resnet50/quasar/tests/ops/test_padded_slice.py models/demos/vision/classification/resnet50/quasar/tests/ops/test_reallocate.py models/demos/vision/classification/resnet50/quasar/tests/ops/test_reshape.py models/demos/vision/classification/resnet50/quasar/tests/ops/test_sharded_to_interleaved.py models/demos/vision/classification/resnet50/quasar/tests/ops/test_slice_write.py models/demos/vision/classification/resnet50/quasar/tests/ops/test_tilize.py models/demos/vision/classification/resnet50/quasar/tests/ops/test_to_layout.py models/demos/vision/classification/resnet50/quasar/tests/ops/test_to_memory_config.py models/demos/vision/classification/resnet50/quasar/tests/ops/test_untilize_with_unpadding.py models/demos/vision/classification/resnet50/quasar/tests/ops/test_add.py models/demos/vision/classification/resnet50/quasar/tests/ops/test_linear.py models/demos/vision/classification/resnet50/quasar/tests/ops/test_avg_pool2d.py models/demos/vision/classification/resnet50/quasar/tests/ops/test_global_avgpool.py models/demos/vision/classification/resnet50/quasar/tests/ops/test_conv2d_layer3_downsample_split.py models/demos/vision/classification/resnet50/quasar/tests/ops/test_conv2d_layer_conv2_modelcfg.py models/demos/vision/classification/resnet50/quasar/tests/ops/test_max_pool2d_1x3.py models/demos/vision/classification/resnet50/quasar/tests/ops/test_max_pool2d_strided_reduce.py
