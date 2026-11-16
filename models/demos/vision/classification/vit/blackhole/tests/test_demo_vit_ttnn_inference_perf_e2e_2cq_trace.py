@@ -8,8 +8,16 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_wormhole_b0, profiler
+from models.demos.vision.classification.vit.common.tests.vit_helper_funcs import card_target
 from models.demos.vision.classification.vit.common.tests.vit_test_infra import create_test_infra
 from models.perf.perf_utils import prep_perf_report
+
+# Trace + 2CQ throughput at batch 10 by card type prefix. The model's grid width is the largest divisor of 12
+# that fits the card, so P100's 11-wide grid runs on 6 core columns and P150's on 12.
+EXPECTED_SAMPLES_PER_SEC = {
+    "p100": 2897,
+    "p150": 3700,
+}
 
 try:
     from tracy import signpost
@@ -123,7 +131,9 @@ def run_trace_2cq_model(device, test_infra, num_warmup_iterations, num_measureme
 )
 @pytest.mark.parametrize("batch_size", [10])
 def test_vit(device, batch_size):
-    expected_samples_per_sec = 3700
+    expected_samples_per_sec = card_target(EXPECTED_SAMPLES_PER_SEC)
+    if expected_samples_per_sec is None:
+        pytest.skip("No end-to-end throughput target for this card")
     torch.manual_seed(0)
 
     profiler.clear()

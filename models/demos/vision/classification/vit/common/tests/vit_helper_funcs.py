@@ -52,6 +52,22 @@ def num_images():
     return None if root is None else len(labelled_images(root))
 
 
+def card_type():
+    """The card type the kernel driver reports, e.g. "p100a", or None without one.
+
+    Read from sysfs because asking ttnn opens the cluster in this process and keeps it, and a profiled run
+    started from the same process then waits on the device forever.
+    """
+    paths = sorted(Path("/sys/class/tenstorrent").glob("*/tt_card_type"))
+    return paths[0].read_text().strip() if paths else None
+
+
+def card_target(targets):
+    """The value of targets, keyed by card type prefix, for this machine's card, or None."""
+    card = card_type()
+    return next((value for prefix, value in targets.items() if card and card.startswith(prefix)), None)
+
+
 def available_iterations(batch_size, iterations=None):
     """The batches a run can take: iterations, capped by the full batches of the labelled folder, or all of
     them when iterations is None. Synthetic inputs are unlimited."""

@@ -2,12 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from pathlib import Path
-
 import pytest
 import torch
 
 import ttnn
+from models.demos.vision.classification.vit.common.tests.vit_helper_funcs import card_target
 from models.demos.vision.classification.vit.common.tests.vit_test_infra import create_test_infra
 from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
 
@@ -25,16 +24,6 @@ EXPECTED_KERNEL_SAMPLES_PER_SEC = {
     "p100": 3135,
     "p150": 4500,
 }
-
-
-def card_type():
-    """The card type the kernel driver reports, e.g. "p100a", or None without one.
-
-    Read from sysfs because asking ttnn would open the cluster in this process and keep it, and the
-    profiled run of test_vit_device_ops started below then waits on the device forever.
-    """
-    paths = sorted(Path("/sys/class/tenstorrent").glob("*/tt_card_type"))
-    return paths[0].read_text().strip() if paths else None
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
@@ -67,13 +56,9 @@ def test_vit_device_ops(
 # Three profiled runs of the model take close to the default 300 s.
 @pytest.mark.timeout(600)
 def test_vit_perf_device(batch_size):
-    card = card_type()
-    expected = [
-        target for prefix, target in EXPECTED_KERNEL_SAMPLES_PER_SEC.items() if card and card.startswith(prefix)
-    ]
-    if not expected:
-        pytest.skip(f"No device kernel throughput target for card type {card}")
-    expected_kernel_samples_per_sec = expected[0]
+    expected_kernel_samples_per_sec = card_target(EXPECTED_KERNEL_SAMPLES_PER_SEC)
+    if expected_kernel_samples_per_sec is None:
+        pytest.skip("No device kernel throughput target for this card")
 
     command = f"pytest models/demos/vision/classification/vit/blackhole/tests/test_vit_device_perf.py::test_vit_device_ops[{batch_size}-device_params0]"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
