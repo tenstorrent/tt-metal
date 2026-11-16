@@ -280,29 +280,33 @@ inline void transpose_dest_configure_mop()
 {
     if constexpr (is_32bit)
     {
-        lltt::record<lltt::NoExec>(ckernel::math::replay_buf_offset, 16);
+        load_replay_buf(
+            ckernel::math::replay_buf_offset,
+            16,
+            []
+            {
+                TTI_MOVD2B(p_mov::DEST_32B_LOW, 16, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 0);
+                TTI_MOVD2B(p_mov::DEST_32B_LOW, 20, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 4);
+                TTI_MOVD2B(p_mov::DEST_32B_LOW, 24, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 8);
+                TTI_MOVD2B(p_mov::DEST_32B_LOW, 28, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 12);
 
-        TTI_MOVD2B(p_mov::DEST_32B_LOW, 16, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 0);
-        TTI_MOVD2B(p_mov::DEST_32B_LOW, 20, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 4);
-        TTI_MOVD2B(p_mov::DEST_32B_LOW, 24, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 8);
-        TTI_MOVD2B(p_mov::DEST_32B_LOW, 28, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 12);
+                TTI_TRNSPSRCB;
 
-        TTI_TRNSPSRCB;
+                TTI_MOVB2A(0, ADDR_MOD_1, p_movb2a::MOV_4_ROWS, 16);
+                TTI_MOVB2A(4, ADDR_MOD_1, p_movb2a::MOV_4_ROWS, 20);
+                TTI_MOVB2A(8, ADDR_MOD_1, p_movb2a::MOV_4_ROWS, 24);
 
-        TTI_MOVB2A(0, ADDR_MOD_1, p_movb2a::MOV_4_ROWS, 16);
-        TTI_MOVB2A(4, ADDR_MOD_1, p_movb2a::MOV_4_ROWS, 20);
-        TTI_MOVB2A(8, ADDR_MOD_1, p_movb2a::MOV_4_ROWS, 24);
+                TTI_MOVD2B(p_mov::DEST_NORM, 16, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 0);
+                TTI_MOVD2B(p_mov::DEST_NORM, 20, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 4);
+                TTI_MOVD2B(p_mov::DEST_NORM, 24, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 8);
+                TTI_MOVD2B(p_mov::DEST_NORM, 28, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 12);
 
-        TTI_MOVD2B(p_mov::DEST_NORM, 16, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 0);
-        TTI_MOVD2B(p_mov::DEST_NORM, 20, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 4);
-        TTI_MOVD2B(p_mov::DEST_NORM, 24, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 8);
-        TTI_MOVD2B(p_mov::DEST_NORM, 28, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 12);
+                TTI_TRNSPSRCB;
 
-        TTI_TRNSPSRCB;
-
-        TTI_MOVB2D(p_mov::DEST_NORM, 16, ADDR_MOD_1, p_movb2d::MOV_4_ROWS, 0);
-        TTI_MOVB2D(p_mov::DEST_NORM, 20, ADDR_MOD_1, p_movb2d::MOV_4_ROWS, 4);
-        TTI_MOVB2D(p_mov::DEST_NORM, 24, ADDR_MOD_1, p_movb2d::MOV_4_ROWS, 8);
+                TTI_MOVB2D(p_mov::DEST_NORM, 16, ADDR_MOD_1, p_movb2d::MOV_4_ROWS, 0);
+                TTI_MOVB2D(p_mov::DEST_NORM, 20, ADDR_MOD_1, p_movb2d::MOV_4_ROWS, 4);
+                TTI_MOVB2D(p_mov::DEST_NORM, 24, ADDR_MOD_1, p_movb2d::MOV_4_ROWS, 8);
+            });
 
         std::uint32_t loop_op_0          = lltt::replay_insn(ckernel::math::replay_buf_offset, 8);
         std::uint32_t loop_op_1          = TT_OP_MOVB2A(12, ADDR_MOD_2, p_movb2a::MOV_4_ROWS, 28);

@@ -30,13 +30,19 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3_d_p.tests.pcc.mesh_configs import ALL_MESH_CONFIGS
-from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import extract_mesh_config, get_gate_outputs
+from models.demos.deepseek_v3_d_p.tests.pcc.mesh_configs import ALL_MESH_CONFIGS, _mesh_param
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
+    dispatch_fabric2d_min_payload_bytes,
+    extract_mesh_config,
+    get_gate_outputs,
+)
 
 # One 5120-token chunk spread over the 8-chip dispatch group.
 CHUNK = 5 * 1024
 DISPATCH_GROUP_SIZE = 8
 SEQ_LEN_PER_CHIP = CHUNK // DISPATCH_GROUP_SIZE
+# Pages one forwarding channel holds. These cases are synthetic, not any one model's.
+FWD_VC_PAGES = 64
 
 # The production Galaxy row and the 8x1 TorusY LoudBox proxy. This op forwards single hops around a
 # ring, so it needs an axis whose closing link is cabled and an extent of at least 4, which rules
@@ -246,6 +252,7 @@ def test_dispatch_fabric2d(mesh_device, device_params, num_links, capacity_div, 
         seq_len_per_chip=seq_len_per_chip,
         cluster_axis=sp_axis,
         num_links=num_links,
+        fwd_vc_pages=FWD_VC_PAGES,
         topology=ttnn.Topology.Ring,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
@@ -430,6 +437,7 @@ class _Fixture:
             seq_len_per_chip=self.seq_len_per_chip,
             cluster_axis=cluster_axis,
             num_links=num_links,
+            fwd_vc_pages=FWD_VC_PAGES,
             topology=ttnn.Topology.Ring,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             subdevice_id=subdevice_id,
@@ -846,3 +854,57 @@ def test_dispatch_fabric2d_padding_config(mesh_device, device_params, num_links,
         payload, metadata = fx.run(cfg.sp_axis, num_links, padding_config=fx.padding_config(real, pad_side))
         fx.check(payload, metadata, label)
     logger.info(f"padding_config: {real} real of {fx.seq_len_per_chip} tokens, byte-exact either side")
+
+
+# Each production mesh, the 8x4 Galaxy and the 8x1 LoudBox ring, opened with only the payload a split token needs,
+# half a token plus the routing tail, at the GLM 5.3 (6144) and the DeepSeek / Kimi (7168) widths. Each token then
+# crosses every cable as two packets.
+_SPLIT_EMB_DIMS = (6144, 7168)
+_SPLIT_MESHES = [
+    ((8, 4), ttnn.FabricConfig.FABRIC_2D_TORUS_XY, "mesh-8x4", "fabric2d-torus-xy-8x4-2link"),
+    ((8, 1), ttnn.FabricConfig.FABRIC_2D_TORUS_Y, "ring", "fabric2d-torus-y-8x1-2link"),
+]
+_SPLIT_PARAMS = []
+for _shape, _fabric, _topo, _id in _SPLIT_MESHES:
+    for _emb_dim in _SPLIT_EMB_DIMS:
+        _p = _mesh_param(
+            _shape,
+            _fabric,
+            dispatch_fabric2d_min_payload_bytes(_emb_dim),
+            2,
+            _topo,
+            f"{_id}-split-emb{_emb_dim}",
+            reliability_mode=ttnn.FabricReliabilityMode.RELAXED_INIT,
+        )
+        _SPLIT_PARAMS.append(pytest.param(*_p.values, _emb_dim, marks=_p.marks, id=_p.id))
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links, emb_dim", _SPLIT_PARAMS, indirect=["mesh_device", "device_params"]
+)
+@pytest.mark.timeout(1800)
+def test_dispatch_fabric2d_split_token(mesh_device, device_params, num_links, emb_dim):
+    """A mesh whose payload is below a whole token: every token goes as two packets, a forward as two writes into
+    its forwarding page and a last hop as a write of the first part plus a scatter of the rest and the metadata.
+
+    Both layouts, byte-exact, then two launches queued back to back over alternating draws, as a traced replay
+    runs them: the split doubles the packets each queue entry puts on the cable, and a header still read by a
+    non-blocking send while it is rebuilt would hand back the wrong page.
+    """
+    assert (
+        ttnn.get_tt_fabric_max_payload_size_bytes() < 2 * emb_dim + 64
+    ), "the mesh must be too small for a whole token"
+    cfg = extract_mesh_config(mesh_device)
+    H, G = cfg.dispatch_group_size, cfg.num_dispatch_groups
+    for layout, label in ((ttnn.ROW_MAJOR_LAYOUT, "row-major"), (ttnn.TILE_LAYOUT, "tile")):
+        fx = _Fixture(mesh_device, H, G, emb_dim=emb_dim, seed=41, capacity_div=8)
+        payload, metadata = fx.run(cfg.sp_axis, num_links, layout=layout)
+        fx.check(payload, metadata, f"split token, emb {emb_dim}, {label}")
+
+    a = _Fixture(mesh_device, H, G, emb_dim=emb_dim, seed=42, capacity_div=8)
+    b = _Fixture(mesh_device, H, G, emb_dim=emb_dim, seed=43, capacity_div=8)
+    order = [a, b]
+    results = [fx.run(cfg.sp_axis, num_links) for fx in order]
+    for i, (fx, (payload, metadata)) in enumerate(zip(order, results)):
+        fx.check(payload, metadata, f"split token, emb {emb_dim}, launch {i} of two with no host sync")
+    logger.info(f"split token, emb {emb_dim}: every token as two packets, byte-exact")

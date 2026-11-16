@@ -107,11 +107,15 @@
 #include "sfpu/experimental/ckernel_sfpu_set_dst_write_addr_offset.h"
 
 // SFPLOADMACRO acceleration of the UNFUSED merge / rebuild bodies (TOPK_XL_UNFUSED_MACRO) and of the fused sort,
-// merge and rebuild step groups (TOPK_XL_FUSED_MACRO); see "Unfused bodies" in the SFPLOADMACRO section below
-// for the unfused design and the test-only mutation hook. DISABLE_TOPK_XL_SFPLOADMACRO
-// and TOPK_XL_BLAZE_COMPAT turn both off. Defined here (before `topk_mop_config`) because the merge MOP body length
-// keys on it.
-#if !defined(TOPK_XL_BLAZE_COMPAT) && !defined(DISABLE_TOPK_XL_SFPLOADMACRO) && !defined(DISABLE_SFPLOADMACRO)
+// merge and rebuild step groups (TOPK_XL_FUSED_MACRO); see the "SFPLOADMACRO acceleration for the UNFUSED merge /
+// rebuild" section below for the unfused design, silicon validation, and the opt-out contract. DISABLE_TOPK_XL_SFPLOADMACRO
+// turns both off. When TOPK_XL_FUSED_MACRO is enabled, fused step groups, including
+// `canonical_big_block_with_replay` at row_scale_factor >= 2, require `topk_xl_fused_macro::configure()` to be in effect.
+// Stock entry points and split init configure it; `_topk_xl_rebuild_columns_` relies on the preceding fused merge.
+// Any intervening code that overwrites this macro state must restore it before the step groups run.
+// Guard explicit configure() calls with #if TOPK_XL_FUSED_MACRO; the namespace is absent when disabled.
+// Defined here (before `topk_mop_config`) because the merge MOP body length keys on it.
+#if !defined(DISABLE_TOPK_XL_SFPLOADMACRO) && !defined(DISABLE_SFPLOADMACRO)
 #define TOPK_XL_UNFUSED_MACRO 1
 #define TOPK_XL_FUSED_MACRO   1
 #else
@@ -1805,8 +1809,7 @@ inline void transpose_dest_face_32b()
 template <std::uint32_t N>
 inline void transpose_faces_from_dst()
 {
-    lltt::record<lltt::Exec>(0, transpose_face_body_len);
-    transpose_dest_face_32b<0, ADDR_MOD_5>();
+    load_replay_buf<Exec>(0, transpose_face_body_len, [] { transpose_dest_face_32b<0, ADDR_MOD_5>(); });
     for (std::uint32_t face = 1; face < N; face++)
     {
         lltt::replay(0, transpose_face_body_len);
@@ -2979,8 +2982,7 @@ inline void add_lsb_indices_column_major(LoadId load_id)
     // The body (12 instructions: 4 loads + 4 ORs + 4 stores + 4 IADDs) is
     // recorded into replay slots [0..15] once and replayed for the
     // remaining iters.
-    lltt::record<lltt::Exec>(0, 16);
-    or_lsb_index_block<4, LAST_ADDR_MOD>();
+    load_replay_buf<Exec>(0, 16, [] { or_lsb_index_block<4, LAST_ADDR_MOD>(); });
 
     for (int i = 1; i < 4; i++)
     {
@@ -3041,8 +3043,7 @@ inline void _topk_xl_add_lsb_indices_()
 
         // ── OR the precomputed indices into the low 16 bits of every DST word.
         // Same 16-slot record/replay shape as the column-major body below.
-        lltt::record<lltt::Exec>(0, 16);
-        detail::or_lsb_index_block<64, ADDR_MOD_6>();
+        load_replay_buf<Exec>(0, 16, [] { detail::or_lsb_index_block<64, ADDR_MOD_6>(); });
 
         for (int i = 1; i < 4; i++)
         {
@@ -3133,10 +3134,15 @@ inline void _topk_xl_remove_msb_values_()
     {
         // Caller must quiesce MATH and retain ADDR_MOD_7 = zero advance while
         // PACK owns LREG0 and replay slots [0, 3). SyncHalf alone is insufficient.
-        lltt::record<lltt::Exec>(0, 3);
-        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
-        TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, 0);
-        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_0, 0);
+        load_replay_buf<Exec>(
+            0,
+            3,
+            []
+            {
+                TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+                TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, 0);
+                TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_0, 0);
+            });
         for (int i = 1; i < row_scale_factor * 16; i++)
         {
             lltt::replay(0, 3);
@@ -3438,16 +3444,21 @@ inline void _topk_xl_separate_indices_()
     constexpr int num_tiles_per_sequence = K == 512 ? 1 : K == 1024 ? 1 : 2;
     constexpr int indices_offset         = num_tiles_per_sequence * 64;
 
-    lltt::record<lltt::Exec>(0, 9);
-    TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
-    TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
-    TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_LOWER, 0);
-    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, 0);
-    TTI_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_USHORT, group_id);
-    TTI_SFPSHFT(0, p_sfpu::LREG12, p_sfpu::LREG2, 0);
-    TTI_SFPOR(0, p_sfpu::LREG2, p_sfpu::LREG0, 0);
-    TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
-    TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_0, indices_offset);
+    load_replay_buf<Exec>(
+        0,
+        9,
+        []
+        {
+            TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+            TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
+            TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_LOWER, 0);
+            TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, 0);
+            TTI_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_USHORT, group_id);
+            TTI_SFPSHFT(0, p_sfpu::LREG12, p_sfpu::LREG2, 0);
+            TTI_SFPOR(0, p_sfpu::LREG2, p_sfpu::LREG0, 0);
+            TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+            TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_0, indices_offset);
+        });
 
     for (int i = 1; i < row_scale_factor * 16; i++)
     {

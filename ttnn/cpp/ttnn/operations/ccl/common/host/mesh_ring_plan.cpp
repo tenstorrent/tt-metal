@@ -378,8 +378,8 @@ MeshRingPosition get_mesh_ring_position(
         }
         return MeshRingPosition{
             .transport_rank = transport_rank,
-            .tensor_rank = ttnn::ccl::snake_ring::row_major_index(
-                transport_rank, plan.mesh_rows, plan.mesh_cols, plan.orientation),
+            .tensor_rank = ttnn::ccl::snake_ring::tensor_index(
+                transport_rank, plan.mesh_rows, plan.mesh_cols, plan.orientation, plan.column_major_ranks),
             .forward_coord = forward_coord,
             .backward_coord = backward_coord};
     }

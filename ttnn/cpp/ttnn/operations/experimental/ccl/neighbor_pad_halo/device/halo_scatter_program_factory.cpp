@@ -49,7 +49,7 @@ NpHaloScatterMeshWorkloadFactory::cached_program_t NpHaloScatterMeshWorkloadFact
     Tensor& tensor_return_value) {
     Program program{};
 
-    Buffer* compact = tensor_args.compact_buffer.buffer();  // [total_sticks, C] (border source)
+    const auto* compact = &tensor_args.compact_buffer.mesh_buffer();  // [total_sticks, C] (border source)
     Buffer* dst = tensor_return_value.buffer();          // padded output (allocated) or in-place (border_only)
     // border_only: no interior reads; x_src unused (point it at dst, harmless). repack: unpadded interior.
     Buffer* x_src = op.border_only ? dst : tensor_args.interior_src.buffer();
@@ -131,9 +131,9 @@ void NpHaloScatterMeshWorkloadFactory::override_runtime_arguments(
     const NpHaloScatterParams& /*op*/,
     const NpHaloScatterInputs& tensor_args,
     Tensor& tensor_return_value) {
-    const uint32_t x_addr = tensor_args.interior_src.buffer()->address();
-    const uint32_t compact_addr = tensor_args.compact_buffer.buffer()->address();
-    const uint32_t dst_addr = tensor_return_value.buffer()->address();
+    const uint32_t x_addr = tensor_args.interior_src.mesh_buffer().address();
+    const uint32_t compact_addr = tensor_args.compact_buffer.mesh_buffer().address();
+    const uint32_t dst_addr = tensor_return_value.mesh_buffer().address();
 
     for (auto& [coordinate_range, shared_vars] : cached_workload.shared_variables) {
         auto& program = cached_workload.workload.get_programs().at(coordinate_range);
