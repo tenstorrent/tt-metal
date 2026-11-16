@@ -15,6 +15,7 @@
 #include "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/dataflow/dataflow_common.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar_metal2.hpp"
+#include "sampling_64_utils.hpp"
 /* This kernel does:
 Top-p Cumulative Probability Filtering:
 Iteratively accumulates probabilities, comparing them against the nucleus threshold p to determine the smallest set of
@@ -138,8 +139,9 @@ void kernel_main() {
     const float rand_f = ((digit_0 * RAND_DIGIT_BASE + digit_1) * RAND_DIGIT_BASE + digit_2) * RAND_GRID_SCALE;
     // wait for compute kernel
     dfb_final_indices.wait_front(num_users);
-    dfb_local_values.wait_front(1);
-    dfb_local_indices.wait_front(1);
+    constexpr uint32_t candidate_tiles = ids_per_batch / 32;
+    dfb_local_values.wait_front(candidate_tiles);
+    dfb_local_indices.wait_front(candidate_tiles);
     // Read producer-written compute outputs from these buffers in SRAM.
     const CoreLocalMem<volatile uint16_t> local_values(dfb_local_values.get_read_ptr());
 
@@ -149,83 +151,92 @@ void kernel_main() {
     const CoreLocalMem<volatile uint32_t> final_indices(
         dfb_final_indices.get_read_ptr() + (core_id * final_indices_stick_size));
 
-    uint32_t start_id_local_phase_0 = core_id * FACE_WIDTH;
-    // each user is on 1 core, so core_id = user_id
-    // users 0-16 have their data on first 2 faces (2 * FACE_WIDTH * FACE_HEIGHT = 2*16*16 = 512 values)
-    // skip the first 2 faces for users >= FACE_WIDTH users (16 users)
-    if (core_id >= FACE_WIDTH) {
-        start_id_local_phase_0 = 2 * FACE_WIDTH * FACE_HEIGHT + (core_id - FACE_WIDTH) * FACE_WIDTH;
-    }
-    uint32_t end_id_local_phase_0 = start_id_local_phase_0 + FACE_WIDTH;
-    uint32_t start_id_local_phase_1 = (FACE_WIDTH * FACE_HEIGHT) + start_id_local_phase_0;
-    uint32_t end_id_local_phase_1 = start_id_local_phase_1 + (k - FACE_WIDTH);
-    if (k <= FACE_WIDTH) {
-        end_id_local_phase_0 = start_id_local_phase_0 + k;
-        start_id_local_phase_1 = end_id_local_phase_0;
-        end_id_local_phase_1 = end_id_local_phase_0;
-    }
-
-    // Top-p filtering in float32 for precision
-    const float p_f = bf16_to_f32(static_cast<uint16_t>(p & 0xFFFF));
-    float cum_prob_f = 0.0f;
-    uint32_t kept_tokens = 0;
-    bool cutoff_found_in_phase_0 = false;
-    bool cutoff_found_in_phase_1 = false;
-    uint32_t top_p_cutoff = end_id_local_phase_1;  // Default to all tokens
-    for (uint32_t i = start_id_local_phase_0; i < end_id_local_phase_0; ++i) {
-        cum_prob_f += bf16_to_f32(local_values[i]);
-        if (cum_prob_f > p_f) {
-            top_p_cutoff = i + 1;
-            cutoff_found_in_phase_0 = true;
-            kept_tokens = top_p_cutoff - start_id_local_phase_0;
-            break;
+    uint32_t sampled_index;
+    if constexpr (ids_per_batch == 64) {
+        const float p_f = bf16_to_f32(static_cast<uint16_t>(p & 0xFFFF));
+        const uint32_t rank = sampling_64::sample_rank(k, p_f, rand_f, [&](uint32_t candidate) {
+            return bf16_to_f32(local_values[sampling_64::candidate_offset(core_id, candidate)]);
+        });
+        sampled_index = final_indices[local_indices[sampling_64::candidate_offset(core_id, rank)]];
+    } else {
+        uint32_t start_id_local_phase_0 = core_id * FACE_WIDTH;
+        // each user is on 1 core, so core_id = user_id
+        // users 0-16 have their data on first 2 faces (2 * FACE_WIDTH * FACE_HEIGHT = 2*16*16 = 512 values)
+        // skip the first 2 faces for users >= FACE_WIDTH users (16 users)
+        if (core_id >= FACE_WIDTH) {
+            start_id_local_phase_0 = 2 * FACE_WIDTH * FACE_HEIGHT + (core_id - FACE_WIDTH) * FACE_WIDTH;
         }
-    }
-    if (!cutoff_found_in_phase_0) {
-        kept_tokens = FACE_WIDTH;
-        for (uint32_t i = start_id_local_phase_1; i < end_id_local_phase_1; ++i) {
-            // cum sum of local values
+        uint32_t end_id_local_phase_0 = start_id_local_phase_0 + FACE_WIDTH;
+        uint32_t start_id_local_phase_1 = (FACE_WIDTH * FACE_HEIGHT) + start_id_local_phase_0;
+        uint32_t end_id_local_phase_1 = start_id_local_phase_1 + (k - FACE_WIDTH);
+        if (k <= FACE_WIDTH) {
+            end_id_local_phase_0 = start_id_local_phase_0 + k;
+            start_id_local_phase_1 = end_id_local_phase_0;
+            end_id_local_phase_1 = end_id_local_phase_0;
+        }
+
+        // Top-p filtering in float32 for precision
+        const float p_f = bf16_to_f32(static_cast<uint16_t>(p & 0xFFFF));
+        float cum_prob_f = 0.0f;
+        uint32_t kept_tokens = 0;
+        bool cutoff_found_in_phase_0 = false;
+        bool cutoff_found_in_phase_1 = false;
+        uint32_t top_p_cutoff = end_id_local_phase_1;  // Default to all tokens
+        for (uint32_t i = start_id_local_phase_0; i < end_id_local_phase_0; ++i) {
             cum_prob_f += bf16_to_f32(local_values[i]);
             if (cum_prob_f > p_f) {
                 top_p_cutoff = i + 1;
-                kept_tokens += top_p_cutoff - start_id_local_phase_1;
-                cutoff_found_in_phase_1 = true;
+                cutoff_found_in_phase_0 = true;
+                kept_tokens = top_p_cutoff - start_id_local_phase_0;
                 break;
             }
         }
-    }
-    // adjust phase indices
-    if (cutoff_found_in_phase_0) {
-        // skip last FACE_WIDTH tokens since cutoff found in phase 0
-        start_id_local_phase_1 = end_id_local_phase_0;
-        end_id_local_phase_1 = end_id_local_phase_0;
-        // adjust phase 0 to only keep the tokens that are in the top-p set
-        end_id_local_phase_0 = start_id_local_phase_0 + kept_tokens;
-    } else if (cutoff_found_in_phase_1) {
-        // in case cutoff not found in phase 0, but in phase 1,
-        // keep all tokens in phase 0 and part of tokens in phase 1 which is (kept_tokens - FACE_WIDTH)
-        end_id_local_phase_1 = start_id_local_phase_1 + (kept_tokens - FACE_WIDTH);
-    }
-
-    // Stochastic sampling in float32. rand_f is the k/2^24 threshold assembled above.
-    float cum_sum_f = 0.0f;
-    uint32_t sampled_index = final_indices[local_indices[start_id_local_phase_0]];
-    bool index_found = false;
-
-    for (uint32_t i = start_id_local_phase_0; i < end_id_local_phase_0; ++i) {
-        cum_sum_f += bf16_to_f32(local_values[i]) / cum_prob_f;
-        if (cum_sum_f > rand_f) {
-            sampled_index = final_indices[local_indices[i]];
-            index_found = true;
-            break;
+        if (!cutoff_found_in_phase_0) {
+            kept_tokens = FACE_WIDTH;
+            for (uint32_t i = start_id_local_phase_1; i < end_id_local_phase_1; ++i) {
+                // cum sum of local values
+                cum_prob_f += bf16_to_f32(local_values[i]);
+                if (cum_prob_f > p_f) {
+                    top_p_cutoff = i + 1;
+                    kept_tokens += top_p_cutoff - start_id_local_phase_1;
+                    cutoff_found_in_phase_1 = true;
+                    break;
+                }
+            }
         }
-    }
-    if (!index_found) {
-        for (uint32_t i = start_id_local_phase_1; i < end_id_local_phase_1; ++i) {
+        // adjust phase indices
+        if (cutoff_found_in_phase_0) {
+            // skip last FACE_WIDTH tokens since cutoff found in phase 0
+            start_id_local_phase_1 = end_id_local_phase_0;
+            end_id_local_phase_1 = end_id_local_phase_0;
+            // adjust phase 0 to only keep the tokens that are in the top-p set
+            end_id_local_phase_0 = start_id_local_phase_0 + kept_tokens;
+        } else if (cutoff_found_in_phase_1) {
+            // in case cutoff not found in phase 0, but in phase 1,
+            // keep all tokens in phase 0 and part of tokens in phase 1 which is (kept_tokens - FACE_WIDTH)
+            end_id_local_phase_1 = start_id_local_phase_1 + (kept_tokens - FACE_WIDTH);
+        }
+
+        // Stochastic sampling in float32. rand_f is the k/2^24 threshold assembled above.
+        float cum_sum_f = 0.0f;
+        sampled_index = final_indices[local_indices[start_id_local_phase_0]];
+        bool index_found = false;
+
+        for (uint32_t i = start_id_local_phase_0; i < end_id_local_phase_0; ++i) {
             cum_sum_f += bf16_to_f32(local_values[i]) / cum_prob_f;
             if (cum_sum_f > rand_f) {
                 sampled_index = final_indices[local_indices[i]];
+                index_found = true;
                 break;
+            }
+        }
+        if (!index_found) {
+            for (uint32_t i = start_id_local_phase_1; i < end_id_local_phase_1; ++i) {
+                cum_sum_f += bf16_to_f32(local_values[i]) / cum_prob_f;
+                if (cum_sum_f > rand_f) {
+                    sampled_index = final_indices[local_indices[i]];
+                    break;
+                }
             }
         }
     }
@@ -236,8 +247,8 @@ void kernel_main() {
 
     // Release consumed buffers
     dfb_rand.pop_front(1);
-    dfb_local_values.pop_front(1);
-    dfb_local_indices.pop_front(1);
+    dfb_local_values.pop_front(candidate_tiles);
+    dfb_local_indices.pop_front(candidate_tiles);
     dfb_final_indices.pop_front(num_users);
 
     const auto s_out = TensorAccessor(tensor::output);

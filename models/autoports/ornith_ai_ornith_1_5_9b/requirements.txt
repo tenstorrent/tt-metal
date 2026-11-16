@@ -1,0 +1,7 @@
+# The DRAM decode head (tt/model.py) imports LMHead1D/LazyWeight from tt-transformers.
+# Same pin as the other models in this tree so the image installs one tt-transformers;
+# the modules Ornith imports are unchanged up to the 25ebcdb commit used locally
+# (only atomic cache-file writes were added).
+# Install with --no-deps: tt-transformers depends on ttnn, and a resolving
+# install would replace tt-metal's own ttnn build.
+tt-transformers @ git+https://github.com/tenstorrent/tt-transformers.git@c95935d8934f136833f02f306f32deb8a1136177

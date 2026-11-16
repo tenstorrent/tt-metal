@@ -22,6 +22,7 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/compute/topk_common_funcs.hpp"
 
 #define DEBUG_PRINT 0
 using namespace ckernel;
@@ -417,6 +418,55 @@ void top_k() {
     sfpu::_init_sfpu_config_reg();
 }
 
+// The legacy top_k above discards the second tile after each merge. For the opt-in
+// 64-candidate path use the existing topk_local two-tile sequence schedule instead.
+// This retains both halves of each winning sequence, with the same stable tie order.
+template <uint32_t Ht, uint32_t Wt, uint32_t logWt, bool stable_sort>
+void top_k_64() {
+    static_assert(Wt >= 2);
+    constexpr uint32_t K = 64;
+    constexpr uint32_t Kt = 2;
+    constexpr uint32_t logk = 6;
+    constexpr auto tie_order = ckernel::TopkTieOrder::Descending;
+    ckernel::topk_tile_init();
+    for (uint32_t ht = 0; ht < Ht; ++ht) {
+        bool ascending = false;
+        process_and_sort_tiles<stable_sort, false, true, tie_order>(
+            dfb::input_values,
+            dfb::index,
+            dfb::input_transposed,
+            dfb::index_transposed,
+            Wt,
+            /*switch_dir=*/true,
+            ascending,
+            logk - 1);
+        uint32_t num_k_sequences = Wt / Kt;
+        uint32_t seq_per_2tiles = 2;
+        for (uint32_t m_iter = 0; m_iter < logWt; ++m_iter) {
+            process_iteration<stable_sort, false, tie_order>(
+                m_iter,
+                K,
+                Wt,
+                num_k_sequences,
+                Kt,
+                dfb::input_transposed,
+                dfb::index_transposed,
+                0,
+                1,
+                2,
+                3,
+                /*largest=*/true,
+                /*switch_dir=*/true,
+                logk,
+                seq_per_2tiles,
+                /*largest_param=*/true);
+        }
+        transpose_and_pack(dfb::input_transposed, dfb::values, Kt, Wt);
+        transpose_and_pack(dfb::index_transposed, dfb::output_ind, Kt, Wt);
+    }
+    sfpu::_init_sfpu_config_reg();
+}
+
 template <uint32_t in0_dfb, uint32_t in1_scalar_dfb, uint32_t num_tiles>
 void mul_block_bcast_scalar_inplace() {
     // Precondition: in0_cb has num_tiles produced
@@ -466,26 +516,32 @@ void kernel_main() {
     constexpr bool stable_sort = get_arg(args::stable_sort) == 1;
     generate_rand_tile(dfb::rand_tile, seed);
 
-    const uint32_t nearest32_K = 32;
-    const uint32_t logk = 5;  // log(32)
+    constexpr uint32_t max_top_k = get_arg(args::max_top_k);
+    static_assert(max_top_k == 32 || max_top_k == 64);
+    if constexpr (max_top_k == 64) {
+        top_k_64<Ht, Wt, logWt, stable_sort>();
+    } else {
+        const uint32_t nearest32_K = 32;
+        const uint32_t logk = 5;  // log(32)
 
-    // top-k
-    top_k<
-        Ht,
-        Wt,
-        nearest32_K,
-        logWt,
-        logk,
-        dfb::input_values,
-        dfb::index,
-        dfb::input_transposed,
-        dfb::index_transposed,
-        dfb::values,
-        dfb::output_ind,
-        tile_width,
-        true,
-        stable_sort>();
-    constexpr uint32_t Kt = nearest32_K / tile_width;
+        // top-k
+        top_k<
+            Ht,
+            Wt,
+            nearest32_K,
+            logWt,
+            logk,
+            dfb::input_values,
+            dfb::index,
+            dfb::input_transposed,
+            dfb::index_transposed,
+            dfb::values,
+            dfb::output_ind,
+            tile_width,
+            true,
+            stable_sort>();
+    }
+    constexpr uint32_t Kt = max_top_k / tile_width;
 
     // scale temperature
 

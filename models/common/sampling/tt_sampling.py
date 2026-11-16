@@ -128,7 +128,7 @@ class TTSampling(LightweightModule):
         vocab_size: Vocabulary size of the model
         padded_vocab_size: Padded vocabulary size (must be divisible by num devices)
         max_batch_size: Maximum batch size supported
-        max_top_k: Maximum number of top-k tokens to consider
+        max_top_k: Candidate capacity, 32 by default or explicit 64
         cluster_shape: Shape of the device cluster (rows, cols)
         sampling_all_gather_axis: Axis to all-gather over in 2D meshes (0=rows, 1=cols, default: 0)
         sub_core_grids: Sub-core grid configuration for operations
@@ -255,6 +255,9 @@ class TTSampling(LightweightModule):
         temp=None,
     ):
         super().__init__()
+        self.max_top_k = getattr(args, "max_top_k", 32)
+        if not isinstance(self.max_top_k, int) or self.max_top_k not in (32, 64):
+            raise ValueError("max_top_k must be 32 or 64")
         self.mesh_device = mesh_device
         # Use the fast unstable top-k; _adjust_values_for_tiebreak guarantees the correctness
         # host-side. stable=True (lowest-index tie-break) is only cheap where the
@@ -301,7 +304,6 @@ class TTSampling(LightweightModule):
         # Round up to the next tile boundary (32) — device tensors must be tile-aligned.
         raw_batch = getattr(args, "max_batch_size", 32)
         self.max_batch_size = max(32, ((raw_batch + 31) // 32) * 32)
-        self.max_top_k = getattr(args, "max_top_k", 32)
         self.cluster_shape = args.cluster_shape
 
         self.sampling_all_gather_axis = getattr(args, "sampling_all_gather_axis", 0)
@@ -1475,6 +1477,8 @@ class TTSampling(LightweightModule):
             temp=self.temp_tensor,
             sub_core_grids=self._sampling_sub_core_grids,
             output_tensor=tt_out_tok,
+            # Keep the legacy32 call compatible with extensions predating this option.
+            **({"max_top_k": self.max_top_k} if self.max_top_k != 32 else {}),
         )
 
         # Compute logprobs if enabled

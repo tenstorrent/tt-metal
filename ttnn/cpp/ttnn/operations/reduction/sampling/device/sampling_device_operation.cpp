@@ -60,6 +60,9 @@ void SamplingDeviceOperation::validate_on_program_cache_miss(
     auto input_shape = input_values_tensor.logical_shape();
     TT_FATAL(input_shape.rank() == 4, "Sampling input_values must be rank-4; got rank {}", input_shape.rank());
 
+    TT_FATAL(args.max_top_k == 32 || args.max_top_k == 64, "Sampling max_top_k must be 32 or 64!");
+    TT_FATAL(input_shape[3] >= args.max_top_k, "Sampling input width must be at least max_top_k!");
+
     // Users live in dim 2 (H): the output is sized [1,1,1,H] and the per-user inputs/cores are
     // indexed by the user (row) index. dims 0 and 1 (N, C) must therefore be 1; otherwise
     // num_users = N*C*H would exceed H and the writer would index past the H-sized output.
@@ -197,9 +200,10 @@ ttnn::Tensor sampling(
     const Tensor& temp,
     const std::optional<uint32_t>& seed,
     const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids,
-    const std::optional<Tensor>& preallocated_output_tensor) {
+    const std::optional<Tensor>& preallocated_output_tensor,
+    uint32_t max_top_k) {
     return ttnn::device_operation::launch<SamplingDeviceOperation>(
-        SamplingParams{.seed = seed, .sub_core_grids = sub_core_grids},
+        SamplingParams{.seed = seed, .sub_core_grids = sub_core_grids, .max_top_k = max_top_k},
         SamplingInputs{
             .input_values = input_values_tensor,
             .input_indices = input_indices_tensor,
