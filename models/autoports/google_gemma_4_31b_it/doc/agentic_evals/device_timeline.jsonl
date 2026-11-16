@@ -202,3 +202,16 @@
 {"t": 1794784941, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tests.run", "other": false}
 {"t": 1794786276, "held": 0, "of": 4, "by": "", "other": false}
 {"t": 1794787359, "held": 0, "of": 4, "by": "", "other": false, "event": "stage_end"}
+{"t": 1794787360, "held": 0, "of": 4, "by": "", "other": false, "event": "stage_end"}
+{"t": 1794787512, "held": 0, "of": 4, "by": "", "other": false, "event": "stage_start", "host": "qb2-120-p04t04", "uid": 6002, "runner_pid": 7, "pidns": "pid:[4026532779]", "interval": 15}
+{"t": 1794787663, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tools.pre", "other": false}
+{"t": 1794791203, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794791233, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tools.pre", "other": false}
+{"t": 1794791518, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794791563, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/mode", "other": false}
+{"t": 1794791638, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794791743, "held": 4, "of": 4, "by": "VLLM::EngineCore", "other": false}
+{"t": 1794791863, "held": 4, "of": 4, "by": "VLLM::EngineCore", "other": false, "unreadable": 1}
+{"t": 1794791878, "held": 4, "of": 4, "by": "VLLM::EngineCore", "other": false}
+{"t": 1794793483, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794794131, "held": 0, "of": 4, "by": "", "other": false, "event": "stage_end"}

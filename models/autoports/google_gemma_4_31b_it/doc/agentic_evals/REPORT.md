@@ -141,13 +141,13 @@ The [stage-12 natural-512 precision Pareto table and plots](setup/precision-pare
 
 | row | sessions | input tokens | cached input | uncached input | output tokens | reasoning output | model(s) |
 |---|---|---|---|---|---|---|---|
-| main | 1 | 923,869,224 | 914,317,184 | 9,552,040 | 1,946,514 | 482,813 | gpt-6-astra |
-| sub-agents (188) | 188 | 1,439,589,546 | 1,405,810,176 | 33,779,370 | 7,096,927 | 2,423,363 | gpt-6-astra, gpt-6-luna |
+| main | 1 | 27,954,765 | 27,708,928 | 245,837 | 76,379 | 28,028 | gpt-6-astra |
+| sub-agents (1) | 1 | 1,041,619 | 962,176 | 79,443 | 5,175 | 100 | gpt-6-astra |
 | remediation/review rounds | 0 | 0 | 0 | 0 | 0 | 0 | - |
-| total | 189 | 2,363,458,770 | 2,320,127,360 | 43,331,410 | 9,043,441 | 2,906,176 | gpt-6-astra, gpt-6-luna |
+| total | 2 | 28,996,384 | 28,671,104 | 325,280 | 81,554 | 28,128 | gpt-6-astra |
 
-Stage 2026-11-13T23:15:25Z to 2026-11-16T00:02:39Z (UTC), 48.79 wall hours, terminal status blocked, remediation rounds 0.
+Stage 2026-11-16T00:05:12Z to 2026-11-16T01:55:31Z (UTC), 1.84 wall hours, terminal status blocked, remediation rounds 0.
 
-Counted by thread family (the stage's main thread, its sub-agents, and the remediation/review threads the runner started, with their sub-agents) from the Codex sessions in /home/mvasiljevic/v5-agentic/codex-home; 23 other session(s) in that home are not counted; other homes on the same account are not included.
+Counted by thread family (the stage's main thread, its sub-agents, and the remediation/review threads the runner started, with their sub-agents) from the Codex sessions in /home/mvasiljevic/v5-agentic/codex-home; 212 other session(s) in that home are not counted; other homes on the same account are not included.
 
-Device (device_timeline.jsonl, checked every 15 s, ran on qb2-120-p04t04, as uid 6002, pid namespace pid:[4026532779]; view incomplete (unreadable fds, a gap or a missing start)): held 32.41 h, idle 16.38 h, unknown 0.00 h, of 48.79 wall hours; held by other holders 0.00 h (separate). Held, not busy: an idle server counts as held.
+Device (device_timeline.jsonl, checked every 15 s, ran on qb2-120-p04t04, as uid 6002, pid namespace pid:[4026532779]; view incomplete (unreadable fds, a gap or a missing start)): held 1.57 h, idle 0.27 h, unknown 0.00 h, of 1.84 wall hours; held by other holders 0.00 h (separate). Held, not busy: an idle server counts as held.

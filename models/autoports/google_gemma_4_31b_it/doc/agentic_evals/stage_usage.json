@@ -2,35 +2,34 @@
   "schema": 2,
   "stage": "12-12-agentic-evals",
   "codex_home": "/home/mvasiljevic/v5-agentic/codex-home",
-  "start_utc": "2026-11-13T23:15:25Z",
-  "end_utc": "2026-11-16T00:02:39Z",
-  "wall_hours": 48.79,
+  "start_utc": "2026-11-16T00:05:12Z",
+  "end_utc": "2026-11-16T01:55:31Z",
+  "wall_hours": 1.84,
   "terminal_status": "blocked",
   "remediation_rounds": [],
   "report": "doc/agentic_evals/REPORT.md",
   "rows": {
     "main_thread": {
       "sessions": 1,
-      "input_tokens": 923869224,
-      "cached_input_tokens": 914317184,
-      "output_tokens": 1946514,
-      "reasoning_output_tokens": 482813,
+      "input_tokens": 27954765,
+      "cached_input_tokens": 27708928,
+      "output_tokens": 76379,
+      "reasoning_output_tokens": 28028,
       "models": [
         "gpt-6-astra"
       ],
-      "uncached_input_tokens": 9552040
+      "uncached_input_tokens": 245837
     },
     "sub_agents": {
-      "sessions": 188,
-      "input_tokens": 1439589546,
-      "cached_input_tokens": 1405810176,
-      "output_tokens": 7096927,
-      "reasoning_output_tokens": 2423363,
+      "sessions": 1,
+      "input_tokens": 1041619,
+      "cached_input_tokens": 962176,
+      "output_tokens": 5175,
+      "reasoning_output_tokens": 100,
       "models": [
-        "gpt-6-astra",
-        "gpt-6-luna"
+        "gpt-6-astra"
       ],
-      "uncached_input_tokens": 33779370
+      "uncached_input_tokens": 79443
     },
     "rounds": {
       "sessions": 0,
@@ -42,26 +41,25 @@
       "uncached_input_tokens": 0
     },
     "total": {
-      "sessions": 189,
-      "input_tokens": 2363458770,
-      "cached_input_tokens": 2320127360,
-      "output_tokens": 9043441,
-      "reasoning_output_tokens": 2906176,
+      "sessions": 2,
+      "input_tokens": 28996384,
+      "cached_input_tokens": 28671104,
+      "output_tokens": 81554,
+      "reasoning_output_tokens": 28128,
       "models": [
-        "gpt-6-astra",
-        "gpt-6-luna"
+        "gpt-6-astra"
       ],
-      "uncached_input_tokens": 43331410
+      "uncached_input_tokens": 325280
     }
   },
-  "other_sessions": 23,
+  "other_sessions": 212,
   "device": {
-    "held_s": 116668,
+    "held_s": 5640,
     "held_other_s": 0,
-    "idle_s": 58951,
-    "unknown_s": 15,
-    "wall_s": 175634,
-    "span_s": 175634,
+    "idle_s": 979,
+    "unknown_s": 0,
+    "wall_s": 6619,
+    "span_s": 6619,
     "devices": 4,
     "complete": false,
     "hidden": 0,
