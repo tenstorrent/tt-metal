@@ -94,14 +94,12 @@ VERIFY = os.environ.get("DEEPSEEK_V4_SPEC_VERIFY", "block")
 # The block verify's rows: 3 drafts + 1.
 BLOCK_ROWS = 4
 # Block-verify exactness: a token that is not the block path's argmax must be within this many logits of it (a
-# near-tie). The block path is deterministic, but a row's result depends at the bf16 rounding level on the other
-# rows of its block. DEEPSEEK_V4_SPEC_CAUSAL_PROBE=1 localizes it: everything up to the MoE request input is
-# bit-identical per row whatever the other rows hold; the persistent MoE's output moves by 1-2 bf16 ulps, since the
-# union of the rows' experts decides which of its 6 groups runs which expert and the groups' partial sums are
-# reduced in bf16 (cb_acc / partials in out_df). 40 layers grow that to ~1-4 logits (max over the vocab). The same stream
-# teacher-forced at the four block alignments disagrees on ~3-4% of tokens by up to ~1.75 logits (measured with
-# DEEPSEEK_V4_SPEC_ALIGN_CONTROL=1), so a spec run, whose blocks start wherever the last round ended, does too.
-NEAR_TIE = float(os.environ.get("DEEPSEEK_V4_SPEC_NEAR_TIE", "2.5"))
+# near-tie). The block path is deterministic, and the persistent MoE's rows reduce exactly (a row's output is the same
+# bits whatever the other rows of its block route to), but a token's logits still depend on where its block starts:
+# the same stream teacher-forced at the four block alignments disagrees on ~2-3% of tokens by up to ~1.4 logits
+# (measured with DEEPSEEK_V4_SPEC_ALIGN_CONTROL=1; 300 tokens, after the MoE fix: spec runs' worst 1.25, the
+# alignments' 1.375), so a spec run, whose blocks start wherever the last round ended, does too.
+NEAR_TIE = float(os.environ.get("DEEPSEEK_V4_SPEC_NEAR_TIE", "1.5"))
 # Also teacher-force each checked stream with the blocks shifted by 1..3 positions: the alignment noise floor.
 ALIGN_CONTROL = os.environ.get("DEEPSEEK_V4_SPEC_ALIGN_CONTROL", "0") == "1"
 # Block verify: the bitwise rollback check (rejected rows leave no trace), before the spec runs.
