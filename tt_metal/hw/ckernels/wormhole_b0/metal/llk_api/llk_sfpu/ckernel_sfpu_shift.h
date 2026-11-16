@@ -16,11 +16,11 @@ namespace sfpu {
 // Map the SFP load/store instruction mode to the sfpi DataLayout whose load/store format byte
 // matches it (see ckernel_sfpu_rsub_int32.h):
 //   INT32 (4)          -> I32  (sign-mag<->2's-comp conversion on load/store)
-//   LO16 (6)           -> U16
+//   UINT16 (6)         -> U16
 //   INT32_2S_COMP (12) -> SM32 (raw)
 template <InstrModLoadStore INSTRUCTION_MODE>
 inline constexpr sfpi::DataLayout shift_layout() {
-    return (INSTRUCTION_MODE == InstrModLoadStore::LO16)            ? sfpi::DataLayout::U16
+    return (INSTRUCTION_MODE == InstrModLoadStore::UINT16)          ? sfpi::DataLayout::U16
            : (INSTRUCTION_MODE == InstrModLoadStore::INT32_2S_COMP) ? sfpi::DataLayout::SM32
                                                                     : sfpi::DataLayout::I32;
 }
@@ -41,7 +41,7 @@ template <bool APPROXIMATION_MODE, int ITERATIONS, InstrModLoadStore INSTRUCTION
 inline void calculate_binary_left_shift(
     const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
     static_assert(
-        is_valid_instruction_mode(INSTRUCTION_MODE), "INSTRUCTION_MODE must be one of: INT32_2S_COMP, INT32, LO16.");
+        is_valid_instruction_mode(INSTRUCTION_MODE), "INSTRUCTION_MODE must be one of: INT32_2S_COMP, INT32, UINT16.");
 
     constexpr InstrModLoadStore sfpload_instr_mod =
         SIGN_MAGNITUDE_FORMAT ? InstrModLoadStore::INT32_2S_COMP : INSTRUCTION_MODE;
@@ -81,7 +81,7 @@ template <bool APPROXIMATION_MODE, int ITERATIONS, InstrModLoadStore INSTRUCTION
 inline void calculate_binary_right_shift(
     const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
     static_assert(
-        is_valid_instruction_mode(INSTRUCTION_MODE), "INSTRUCTION_MODE must be one of: INT32_2S_COMP, INT32, LO16.");
+        is_valid_instruction_mode(INSTRUCTION_MODE), "INSTRUCTION_MODE must be one of: INT32_2S_COMP, INT32, UINT16.");
 
     constexpr InstrModLoadStore sfpload_instr_mod =
         SIGN_MAGNITUDE_FORMAT ? InstrModLoadStore::INT32_2S_COMP : INSTRUCTION_MODE;
@@ -135,7 +135,7 @@ template <bool APPROXIMATION_MODE, int ITERATIONS, InstrModLoadStore INSTRUCTION
 inline void calculate_logical_right_shift(
     const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
     static_assert(
-        is_valid_instruction_mode(INSTRUCTION_MODE), "INSTRUCTION_MODE must be one of: INT32_2S_COMP, INT32, LO16.");
+        is_valid_instruction_mode(INSTRUCTION_MODE), "INSTRUCTION_MODE must be one of: INT32_2S_COMP, INT32, UINT16.");
 
     constexpr InstrModLoadStore sfpload_instr_mod =
         SIGN_MAGNITUDE_FORMAT ? InstrModLoadStore::INT32_2S_COMP : INSTRUCTION_MODE;
@@ -167,7 +167,7 @@ template <bool APPROXIMATION_MODE, int ITERATIONS, InstrModLoadStore INSTRUCTION
 inline void calculate_clamped_logical_right_shift(
     const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
     static_assert(
-        is_valid_instruction_mode(INSTRUCTION_MODE), "INSTRUCTION_MODE must be one of: INT32_2S_COMP, INT32, LO16.");
+        is_valid_instruction_mode(INSTRUCTION_MODE), "INSTRUCTION_MODE must be one of: INT32_2S_COMP, INT32, UINT16.");
 
     constexpr InstrModLoadStore sfpload_instr_mod =
         SIGN_MAGNITUDE_FORMAT ? InstrModLoadStore::INT32_2S_COMP : INSTRUCTION_MODE;

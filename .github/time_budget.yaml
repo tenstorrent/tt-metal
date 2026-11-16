@@ -198,7 +198,9 @@ shield:
   demo:
     bh_sc4: 380
     bh_sc1: 120
-    bh_sc1_high_power: 210
+    # 210 -> 240 (+30): the Kimi-K3.1 L24 runner leg (60) and the GLM-5.3 2x[4,4] SC1 leg (40, #61481) each
+    # fit the 70 min of headroom over GLM-5.3 SC1 (80) + Kimi-K3 L24 SC1 (60), but not together.
+    bh_sc1_high_power: 240
 
 scaleout:
   merge_gate:
@@ -375,7 +377,7 @@ models:
     bh_p150: 27
     bh_quietbox_2: 434
     bh_galaxy: 78
-    bh_sc1: 180
+    bh_sc1: 260
     bh_sc1_high_power: 185
     bh_sc4: 75
     bh_sc4_high_power: 125
@@ -437,10 +439,18 @@ models:
     bh_quietbox_2: 80
   demo:
     bh_galaxy: 470
-    # K3.1 mirrors K3's CI coverage (user decision 2026-11-07): 2375 -> 2576 for the K3.1 synthetic suite (+50 min),
-    # the K3.1 sparse MLA section of the K3 accuracy suite (+12 min) and the K3.1 depth L24 / L24-128k sections of
-    # the K3 transformer suite (+70 +90 min, K3's own L24 depth / chunked bounds).
-    bh_sc1: 2576
+    # K3.1 mirrors K3's CI coverage (user decision 2026-11-07). Allocated 2354 -> 2561 (+207): the K3.1 synthetic
+    # suite (+35 min), the K3.1 sparse MLA section of the K3 accuracy suite (+12 min) and the K3.1 depth L24 /
+    # L24-128k sections of the K3 transformer suite (+70 +90 min, K3's own L24 depth / chunked bounds). Budget
+    # 2375 -> 2561 (+186): the other 21 min were unallocated headroom before these legs.
+    # 2561 -> 2575 (+14) for K3 / K3.1 contract tests the legs did not run: the traced DSA replay section of the
+    # K3.1 synthetic suite (+12; 6.6 min measured with three windows, 3.2 min with the two kept) and in the KV
+    # cache table leg the K3 / K3.1 merged-table rows (+2, 50 s measured), both on bh-glx-120-b08u02 2026-11-13.
+    # Within existing bounds of the K3 accuracy suite: the K3.1 golden and checkpoint checks open its K3.1 section
+    # [5/5]; the other K3.1 contract tests, the cache footprint test included, joined [1/5].
+    # 2575 -> 2460 (-115): the K3.1 depth L24 / L24-128k sections, one test since, have a 45 min bound from
+    # measured time (see the K3 transformer suite), not K3's L24 depth / chunked bounds (70 + 90).
+    bh_sc1: 2460
     bh_sc1_high_power: 498
     bh_sc4: 60
     wh_n150: 500

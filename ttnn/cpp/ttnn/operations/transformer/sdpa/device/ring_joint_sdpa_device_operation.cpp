@@ -129,7 +129,7 @@ void validate_ring_joint_all_gather_on_program_cache_miss(
     TT_FATAL(input_tensors[0].is_allocated(), "Input tensor 0 must be allocated in buffers on device");
 
     const auto dtype = input_tensors[0].dtype();
-    const auto page_size = input_tensors[0].buffer()->page_size();
+    const auto page_size = input_tensors[0].mesh_buffer().page_size();
     for (size_t i = 0; i < input_tensors.size(); ++i) {
         const auto& input_tensor = input_tensors[i];
 
@@ -143,10 +143,10 @@ void validate_ring_joint_all_gather_on_program_cache_miss(
             input_tensor.dtype(),
             dtype);
         TT_FATAL(
-            input_tensor.buffer()->page_size() == page_size,
+            input_tensor.mesh_buffer().page_size() == page_size,
             "All input tensors must have the same page size. Input tensor {} has page size {} but expected {}",
             i,
-            input_tensor.buffer()->page_size(),
+            input_tensor.mesh_buffer().page_size(),
             page_size);
     }
 
@@ -176,10 +176,10 @@ void validate_ring_joint_all_gather_on_program_cache_miss(
                 i,
                 output_tensor.dtype());
             TT_FATAL(
-                output_tensor.buffer()->page_size() == page_size,
+                output_tensor.mesh_buffer().page_size() == page_size,
                 "Output tensor {} page size should match input tensors but has {}",
                 i,
-                output_tensor.buffer()->page_size());
+                output_tensor.mesh_buffer().page_size());
             TT_FATAL(
                 output_tensor.memory_config() == operation_attributes.output_mem_config,
                 "Output tensor {} memory config should match output_mem_config",
@@ -242,7 +242,8 @@ void validate_metadata_tensors(const RingJointSDPAInputs& tensor_args, uint32_t 
         TT_FATAL(tensor.dtype() == DataType::UINT32, "{} must have UINT32 dtype", name);
         TT_FATAL(tensor.layout() == Layout::ROW_MAJOR, "{} must use ROW_MAJOR layout", name);
         TT_FATAL(tensor.logical_volume() == 1, "{} must contain exactly one element", name);
-        TT_FATAL(tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM, "{} must be stored in DRAM", name);
+        TT_FATAL(
+            tensor.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM, "{} must be stored in DRAM", name);
     };
 
     validate_metadata_tensor(tensor_args.slot_id.value(), "slot_id");
@@ -610,7 +611,8 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(attention_sink.layout() == Layout::TILE, "Attention sink must be tilized");
         TT_FATAL(attention_sink.dtype() == DataType::BFLOAT16, "GPT-OSS attention sink must be BF16");
         TT_FATAL(
-            attention_sink.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM, "Attention sink must be in DRAM");
+            attention_sink.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM,
+            "Attention sink must be in DRAM");
 
         const auto& sink_shape = attention_sink.logical_shape();
         const auto& q_shape = input_tensor_q.logical_shape();
@@ -702,7 +704,7 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
                 tensor.dtype() == DataType::BFLOAT4_B,
             "Inputs to Joint SDPA must be BF16 or BF8 or BF4");
         TT_FATAL(
-            tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
+            tensor.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM,
             "Operands to Joint SDPA need to be in DRAM");
     }
 
@@ -1103,10 +1105,10 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         // Page-size parity: joint K/V are appended to the same fused all-gather list as spatial K/V.
         // The AG validator enforces uniform page size; assert explicitly for a clear error on divergence.
         TT_FATAL(
-            tensor_args.joint_k->buffer()->page_size() == tensor_args.input_k.buffer()->page_size(),
+            tensor_args.joint_k->mesh_buffer().page_size() == tensor_args.input_k.mesh_buffer().page_size(),
             "joint K page size ({}) must match spatial K page size ({}) for fused all-gather",
-            tensor_args.joint_k->buffer()->page_size(),
-            tensor_args.input_k.buffer()->page_size());
+            tensor_args.joint_k->mesh_buffer().page_size(),
+            tensor_args.input_k.mesh_buffer().page_size());
     } else if (args.logical_l > 0 && has_joint_tensors && L != args.logical_l) {
         TT_FATAL(
             false,
@@ -1546,6 +1548,9 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     std::optional<uint64_t> route_plan_hash;
     ttnn::ccl::Topology resolved_topology = topology;
     uint32_t resolved_kv_stripe_split = 1;
+    // Split KV numbers its KV stripes SP-major: row-major over the mesh with Q's sequence on axis 0,
+    // column-major with it on axis 1 (the 4x4 prefill stages, SP on the 4-wide ring axis).
+    bool column_major_ranks = false;
     if (full_mesh) {
         TT_FATAL(
             topology == ttnn::ccl::Topology::Ring || topology == ttnn::ccl::Topology::Linear,
@@ -1572,16 +1577,19 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
         if (resolved_kv_stripe_split > 1) {
             const auto& placements = input_tensor_q.tensor_topology().placements();
             const uint32_t dims = input_tensor_q.logical_shape().rank();
+            const auto q_sequence_on = [&](uint32_t axis) {
+                return ttnn::operations::ccl::common::placement_shards_tensor_dim(placements[axis], 2, dims) &&
+                       !ttnn::operations::ccl::common::placement_shards_tensor_dim(placements[1 - axis], 2, dims) &&
+                       q_shards == mesh_shape[axis] && resolved_kv_stripe_split == mesh_shape[1 - axis];
+            };
             TT_FATAL(
-                placements.size() == 2 &&
-                    ttnn::operations::ccl::common::placement_shards_tensor_dim(placements[0], 2, dims) &&
-                    !ttnn::operations::ccl::common::placement_shards_tensor_dim(placements[1], 2, dims) &&
-                    q_shards == mesh_shape[0] && resolved_kv_stripe_split == mesh_shape[1],
-                "Split KV requires Q sequence sharded only on mesh axis 0 and the extra KV stripes on axis 1. Got "
-                "{} Q shards, mesh shape {}, KV/Q shard ratio {}",
+                placements.size() == 2 && (q_sequence_on(0) || q_sequence_on(1)),
+                "Split KV requires Q sequence sharded only on one mesh axis and the extra KV stripes on the other. "
+                "Got {} Q shards, mesh shape {}, KV/Q shard ratio {}",
                 q_shards,
                 mesh_shape,
                 resolved_kv_stripe_split);
+            column_major_ranks = !q_sequence_on(0);
             const uint32_t q_slab = input_tensor_q.logical_shape()[2];
             TT_FATAL(
                 q_slab % (resolved_kv_stripe_split * tt::constants::TILE_HEIGHT) == 0,
@@ -1631,7 +1639,8 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
         snake_orientation,
         mesh_rows,
         mesh_cols,
-        route_plan_hash};
+        route_plan_hash,
+        column_major_ranks};
     std::vector<Tensor> all_gather_input_tensors = {input_tensor_k};
     std::vector<std::optional<Tensor>> all_gather_output_tensors = {persistent_output_buffer_k};
     if (input_tensor_v.has_value()) {

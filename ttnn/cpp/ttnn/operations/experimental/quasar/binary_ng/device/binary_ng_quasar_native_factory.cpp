@@ -44,14 +44,14 @@
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/work_split.hpp>
 
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
-#include <tt-metalium/experimental/metal2_host_api/compute_hardware_config.hpp>
-#include <tt-metalium/experimental/metal2_host_api/data_movement_hardware_config.hpp>
-#include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/kernel_spec.hpp>
+#include <tt-metalium/workload/specification/dataflow_buffer_spec.hpp>
+#include <tt-metalium/workload/specification/tensor_parameter.hpp>
+#include <tt-metalium/workload/specification/compute_hardware_config.hpp>
+#include <tt-metalium/workload/specification/data_movement_hardware_config.hpp>
+#include <tt-metalium/vocabulary/node_coord.hpp>
 // log_debug and log_warning. Included explicitly: this target is a unity build, so a missing include
 // here still compiles.
 #include <tt-logger/tt-logger.hpp>
@@ -59,7 +59,7 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 using namespace tt::tt_metal;
-namespace m2 = tt::tt_metal::experimental;
+namespace m2 = tt::tt_metal;
 
 namespace ttnn::operations::experimental::quasar::binary_ng {
 
@@ -251,7 +251,8 @@ std::optional<BorrowAnchor> shard_anchor(
         !memory_config.shard_spec().has_value()) {
         return std::nullopt;
     }
-    const std::optional<BufferDistributionSpec>& distribution = holder.buffer()->buffer_distribution_spec();
+    const std::optional<BufferDistributionSpec>& distribution =
+        holder.mesh_buffer().device_local_config().sharding_args.buffer_distribution_spec();
     if (!distribution.has_value() || distribution->max_num_shards_per_core() != 1) {
         return std::nullopt;
     }
@@ -392,7 +393,8 @@ bool legacy_borrows_output_shard(const Tensor& a, const Tensor* b, const Tensor&
 // per tile is about the same borrowed or over the NoC, so a program on fewer clusters takes longer.
 uint32_t legacy_cluster_count(const Tensor& a, const Tensor* b, const Tensor& c, const CoreRangeSet& worker_grid) {
     if (legacy_borrows_output_shard(a, b, c)) {
-        const std::optional<BufferDistributionSpec>& distribution = c.buffer()->buffer_distribution_spec();
+        const std::optional<BufferDistributionSpec>& distribution =
+            c.mesh_buffer().device_local_config().sharding_args.buffer_distribution_spec();
         TT_FATAL(distribution.has_value(), "binary_ng Quasar-native: an L1-sharded output has no distribution spec");
         return static_cast<uint32_t>(distribution->cores_with_data().size());
     }
@@ -528,9 +530,9 @@ ProgramArtifacts create_native_artifacts(
     const DataType input_dtype = op.input_dtype;
     const auto op_type = op.binary_op_type;
 
-    Buffer* a_buffer = a.buffer();
+    const auto* a_buffer = &a.mesh_buffer();
     Buffer* b_buffer = is_scalar ? nullptr : b_opt->buffer();
-    Buffer* c_buffer = c.buffer();
+    const auto* c_buffer = &c.mesh_buffer();
     TT_FATAL(
         a_buffer != nullptr && (is_scalar || b_buffer != nullptr) && c_buffer != nullptr,
         "binary_ng Quasar-native requires allocated device buffers");

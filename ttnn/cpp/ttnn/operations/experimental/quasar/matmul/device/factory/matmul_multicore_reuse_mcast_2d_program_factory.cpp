@@ -23,13 +23,13 @@
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/operations/experimental/quasar/matmul/shared_with_host/activation_type.hpp"
 
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/semaphore_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
-#include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/kernel_spec.hpp>
+#include <tt-metalium/workload/specification/dataflow_buffer_spec.hpp>
+#include <tt-metalium/workload/specification/semaphore_spec.hpp>
+#include <tt-metalium/workload/specification/tensor_parameter.hpp>
+#include <tt-metalium/vocabulary/node_coord.hpp>
 
 namespace {
 // Quasar has one NOC and no torus: a multicast rectangle always runs low corner to high (see #48552).
@@ -364,7 +364,7 @@ namespace reuse_mcast_optimized_helpers {
     uint32_t in1_mcast_sender_semaphore_id = 2;
     uint32_t in1_mcast_receiver_semaphore_id = 3;
 
-    bool in1_is_dram = in1_tensor.mesh_buffer().device_local_config().buffer_type == tt_metal::BufferType::DRAM;
+    bool in1_is_dram = in1_tensor.memory_config().buffer_type() == tt_metal::BufferType::DRAM;
 
     uint32_t in0_num_subblocks = (out_block_h / out_subblock_h);
     uint32_t in0_block_num_tiles = out_subblock_h * in0_block_w * in0_num_subblocks;
@@ -1874,7 +1874,7 @@ create_program_mcast_in0_in1(
     auto in1_mcast_sender_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
     auto in1_mcast_receiver_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
 
-    bool in1_is_dram = in1_tensor.mesh_buffer().device_local_config().buffer_type == tt_metal::BufferType::DRAM;
+    bool in1_is_dram = in1_tensor.memory_config().buffer_type() == tt_metal::BufferType::DRAM;
 
     uint32_t in0_num_subblocks = (out_block_h / out_subblock_h);
     uint32_t in0_block_num_tiles = out_subblock_h * in0_block_w * in0_num_subblocks;
@@ -3124,7 +3124,7 @@ namespace CMAKE_UNIQUE_NAMESPACE {
 // under unity builds; the StrongType string *values* are the plain accessor names the kernels expect.
 // ===========================================================================================
 
-namespace m2 = tt::tt_metal::experimental;
+namespace m2 = tt::tt_metal;
 
 namespace CMAKE_UNIQUE_NAMESPACE {
 // Create a generation-agnostic data movement hardware config: Gen1 (WH/BH) takes the given
@@ -3583,7 +3583,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
              (std::size_t)start_core_y + num_cores_with_work_r - 1}};
     }
 
-    bool in1_is_dram = in1_tensor.mesh_buffer().device_local_config().buffer_type == tt_metal::BufferType::DRAM;
+    bool in1_is_dram = in1_tensor.memory_config().buffer_type() == tt_metal::BufferType::DRAM;
 
     uint32_t in0_num_subblocks = (out_block_h / out_subblock_h);
     uint32_t in0_block_num_tiles = out_subblock_h * in0_block_w * in0_num_subblocks;
@@ -4496,7 +4496,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
 
         // in0 sender / receiver
         if (in0_block_sharded) {
-            m2::AdvancedKernelRunArgs::Varargs v;
+            m2::experimental::AdvancedKernelRunArgs::Varargs v;
             uint32_t in0_mcast_receiver_grid_same_coord;
             m2::Table<std::string, uint32_t> leading;
             if (transpose_mcast) {

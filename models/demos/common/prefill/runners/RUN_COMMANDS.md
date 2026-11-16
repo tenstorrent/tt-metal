@@ -102,7 +102,7 @@ Pick the variant by its manifest name:
 | `GLM53_VARIANT` | KV cache | MTP | Users |
 |---|---|---|---|
 | `glm53` | scaled FP8 | none | 54 |
-| `glm53_mtp_kv_share` | scaled FP8 | 1 level | 53 |
+| `glm53_mtp_kv_share` | scaled FP8 | 1 level | 52 |
 | `glm53_bf16` | BF16 | none | 34 |
 | `glm53_mtp_kv_share_bf16` | BF16 | 1 level | 31 |
 

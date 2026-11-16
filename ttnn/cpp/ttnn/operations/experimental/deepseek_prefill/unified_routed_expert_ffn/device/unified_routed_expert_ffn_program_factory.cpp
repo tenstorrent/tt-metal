@@ -561,12 +561,12 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     // per weight role covers every expert (identical shape/layout), and the
     // kernels build a per-expert accessor from that descriptor + the per-expert
     // base address (passed as a runtime-arg).
-    auto* x_buffer = t.x.buffer();
-    auto* gate_buffer = t.gate_projs[0].buffer();
-    auto* up_buffer = t.up_projs[0].buffer();
-    auto* down_buffer = t.down_projs[0].buffer();
-    auto* counts_buffer = t.counts.buffer();
-    auto* idx_buffer = t.global_expert_idx_table.buffer();
+    const auto* x_buffer = &t.x.mesh_buffer();
+    const auto* gate_buffer = &t.gate_projs[0].mesh_buffer();
+    const auto* up_buffer = &t.up_projs[0].mesh_buffer();
+    const auto* down_buffer = &t.down_projs[0].mesh_buffer();
+    const auto* counts_buffer = &t.counts.mesh_buffer();
+    const auto* idx_buffer = &t.global_expert_idx_table.mesh_buffer();
     auto* out_buffer = tensor_return_value.buffer();
     TT_FATAL(x_buffer != nullptr, "x buffer must be allocated on device");
     TT_FATAL(gate_buffer != nullptr, "gate weight buffer must be allocated on device");
@@ -580,7 +580,7 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     // the writer always writes an expert's output straight into the shared
     // output buffer at start[global_id]/TILE tile-rows (fusing ttnn::insert),
     // and the reader always reads x from the same region.
-    auto* start_buffer = t.expert_region_offsets->buffer();
+    const auto* start_buffer = &t.expert_region_offsets->mesh_buffer();
     TT_FATAL(start_buffer != nullptr, "expert_region_offsets buffer must be allocated on device");
     // dst_M_tiles bounds destination writes: the shared output buffer's
     // tile-row count.

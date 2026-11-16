@@ -16,7 +16,7 @@
 
 #include "impl/metal2_host_api/llk_metadata.hpp"
 
-namespace tt::tt_metal::experimental {
+namespace tt::tt_metal {
 
 namespace {
 
@@ -51,10 +51,13 @@ ScratchpadBindingsForKernel ResolveScratchpadBindingsForKernel(
         handle.size_bytes = scratchpad_spec->size_per_node;
         handle.addr_crta_word = static_cast<uint32_t>(crta_word_index);
         handle.llk_metadata = LLKMetadataFromScratchpad(*scratchpad_spec);
+        if (const auto& source = scratchpad_spec->advanced_options.allocation_override) {
+            handle.allocation_override = SRAMArenaSource{.arena = source->arena, .offset = source->offset};
+        }
         if (scratchpad_spec->advanced_options.allow_instance_multi_binding) {
             handle.shared_allocation_identifier = scratchpad_spec->unique_id;
         }
-        // handle.allocated_address stays 0 until allocate_scratchpads runs.
+        // The address stays 0 until local allocation or SRAMArena argument binding.
         out.handles.push_back(std::move(handle));
         crta_word_index += 1;  // one address word per scratchpad binding
     }
@@ -63,4 +66,4 @@ ScratchpadBindingsForKernel ResolveScratchpadBindingsForKernel(
     return out;
 }
 
-}  // namespace tt::tt_metal::experimental
+}  // namespace tt::tt_metal

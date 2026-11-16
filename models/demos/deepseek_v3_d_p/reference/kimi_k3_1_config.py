@@ -27,7 +27,7 @@ class KimiK31Config(KimiK3Config):
 
     # K3's 1536 B/bank is spent by KDA's long-lived semaphores, MoE routing and dense MLA; a DSA layer's
     # early-Q all-to-all then needs one more 16 B slot per bank (OOM at 1536 with KDA layers 1-2 and DSA
-    # layer 3 in one forward, test_kimi_k3_1_dsa_block.py hybrid window).
+    # layer 3 in one forward, test_kimi_k3_1_dsa_trace.py hybrid_L0_3 window).
     L1_SMALL_SIZE = 2048
 
     # 1-indexed as in the HF config; identical to the full-attention layers.
@@ -48,12 +48,12 @@ def kimi_k3_1_hf_config(max_seq: int = 8192):
     # vLLM's KimiK3DSAIndexerKNorm (LayerNorm) takes config.rms_norm_eps, not DS-V3.2's 1e-6.
     cfg.index_k_norm_eps = cfg.rms_norm_eps
     # No Hadamard on the indexer q/k (vLLM PR 65685 and K3.1 decode): the index cache holds natural-basis keys
-    # (tt_metal_tracker-ao3i.5.9; DS-V3.2 / GLM keep the default, rotated).
+    # (DS-V3.2 / GLM keep the default, rotated).
     cfg.index_hadamard = False
     # Overlap the indexer TopK with the sparse-KV gather, as GLM-5.3 (serial on SP=1).
     cfg.sparse_mla_overlap_profile = "auto"
-    # Indexer score matmul at HiFi2, not the op's LoFi default for bf8 x bf8 (tt_metal_tracker-ao3i.2.7): LoFi was the
-    # largest device score error at DSA layers 3/7 (ao3i.5.7). Top-k recall vs the trace L3/L7 +0.015/+0.016 at 10K,
+    # Indexer score matmul at HiFi2, not the op's LoFi default for bf8 x bf8: LoFi was the
+    # largest device score error at DSA layers 3/7. Top-k recall vs the trace L3/L7 +0.015/+0.016 at 10K,
     # +0.033/+0.038 at 128K, for +0.2% / +0.9% scenario TTFT (stage 2, indicative 75 W).
     cfg.index_score_math_fidelity = "HiFi2"
     return cfg

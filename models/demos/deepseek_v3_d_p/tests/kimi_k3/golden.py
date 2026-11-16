@@ -32,11 +32,12 @@ K3.1 (retrained weights, so none of the above applies to it) has one, ``TRACE_K3
 ``kimi_k31_pro_10k_v2`` vLLM trace — an 8192-token prompt through the full 93-layer K3.1 model, then
 2047 sampled decode steps — with ``decoder_output_layer_{0..92}``, ``attn_output``, AttnRes block
 streams, KV and the DSA indexer streams (``indexer/indexer_k_layer_N``, ``dsa/dsa_topk_indices_layer_N``)
-for all 24 DSA layers, and routing. The tracer wrote it chunked; ``convert_golden.py`` rewrote it into
-this layout, all 10239 rows: rows past ``n_prompt_tokens`` are the decode steps. The tracer records each
-layer's FFN output as ``decoder_output``; the converter writes K3's running sum under that key instead
-(rebuilt from ``attn_output`` and the FFN output, pinned in ``test_k31_golden.py``) and keeps the FFN output
-as ``ffn_output/ffn_output_layer_N``, so ``decoder_output`` means the same thing in every trace here.
+for all 24 DSA layers, and routing. The tracer wrote it chunked; a one-shot converter outside the repo (its
+``converted_from`` metadata names the source and version) rewrote it into this layout, all 10239 rows: rows
+past ``n_prompt_tokens`` are the decode steps. The tracer records each layer's FFN output as
+``decoder_output``; the converter writes K3's running sum under that key instead (rebuilt from ``attn_output``
+and the FFN output, pinned in ``test_k31_golden.py``) and keeps the FFN output as
+``ffn_output/ffn_output_layer_N``, so ``decoder_output`` means the same thing in every trace here.
 """
 
 from __future__ import annotations
@@ -63,7 +64,8 @@ TRACE_1M = GOLDEN_ROOT / "k3_vllm_code_debug_1M"
 # The K3.1 golden; its path lives with the adapter, which hands the same trace to the runner's PCC gate.
 TRACE_K31 = Path(KimiK31Adapter.prefill_trace_default)
 # Its 128K sibling (kimi_k31_pro_128k_v2: 126976 prompt + 4096 decoded tokens), converted for layers 0-23 only
-# (`convert_golden.py --layers 24`): K3's long-context check scores those layers. Test-only; no runner gate reads it.
+# (`converted_from.layers` 24 in its metadata): K3's long-context check scores those layers. Test-only; no runner
+# gate reads it.
 TRACE_K31_128K = TRACE_K31.parent / "kimi_k31_pro_128k_v2_conv2_l24"
 
 # `kv_cache/layer_N.safetensors` is the one stream whose file stem is not its tensor key; every

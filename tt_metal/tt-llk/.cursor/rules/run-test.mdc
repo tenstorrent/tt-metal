@@ -1,11 +1,14 @@
 ---
 alwaysApply: false
-description: Use when running LLK tests. Delegates to the llk-test-runner agent. Never run pytest directly.
+description: Use when running LLK tests. Delegates device, simulator and kernel-building tests to the llk-test-runner agent; the two named host-only exceptions use their own entry points.
 ---
 
 # Running LLK Tests
 
-All test runs MUST be delegated to the `llk-test-runner` agent at `@.cursor/agents/llk-test-runner.md`. Do NOT run `pytest` directly.
+Tests that build kernels or use a device or simulator MUST be delegated to the
+`llk-test-runner` agent at `@.cursor/agents/llk-test-runner.md`; do not run
+`pytest` directly for them. The host-only exceptions are
+`tests/run_hardware_free.sh` and `compare_test_and_perf.py`.
 
 The agent wraps `.cursor/scripts/run_test.sh`, which:
 - Serialises simulator/silicon access via `flock` (per-arch lock file)
@@ -19,7 +22,7 @@ The user provides a test file (and optionally arch + flags). You parse, fill in 
 Example user inputs:
 ```
 run test_eltwise_binary_quasar.py
-run test_sfpu_square_quasar.py with -k Float16
+run test_sfpu_square_quasar.py with --k Float16
 rerun test_eltwise_binary_quasar.py
 compile-only test_eltwise_binary_quasar.py
 run test_sfpu_square_quasar.py with --no-split
@@ -31,11 +34,20 @@ run test_sfpu_square_quasar.py with --no-split
 - `--arch <arch>` — `quasar`, `blackhole`, `wormhole`. Required unless inferable (see below)
 - `--k <expr>` — pytest `-k` filter (applied to BOTH compile-producer and consumer so the two phases stay aligned)
 - `--test-id <id>` — single parametrize ID (single-quotes/brackets safe)
+- `--op <op>` — with `--perf`, keep only SFPU sweep variants for that `MathOperation` name (repeatable; applied to count, compile and consumer)
 - `--maxfail <N>` — stop after N failures
 - `--rerun` — skip compile, simulate only (uses prior compile-producer artifacts)
 - `--compile-only` — compile-producer only, no simulate
 - `--no-split` — combined compile+run in one pytest invocation (issue-solver tests)
 - `--timeout <secs>` — pytest timeout ceiling (default 600)
+- `--speed-of-light` — compile runtime parameters as constants (the build the nightly `LLK perf` run measures; the PR and merge perf gates build without it)
+- `--perf` — perf sweep matching each architecture's CI assert mode: `TT_LLK_DISABLE_ASSERTS=1` for Wormhole/Blackhole and `=0` for Quasar, plus `-m perf` (`--mode perf` for SFPU sweep modules) and `--dist loadgroup -n 15` for the silicon consumer. Unlike CI the local runner does not stop at the first failure. Asserts-on and asserts-off builds have distinct ELF variant IDs, so `simulate` cannot reuse the other kind. A module or `--k` with no perf variants exits 4. Prints a `RUN_LLK_TESTS_PERF_REPORT` line naming `perf_data/runs/<tag>`; a non-PASS consumer marks it partial. Validate a PASS result with `.claude/skills/perf-report/SKILL.md`
+- `--run-tag <tag>` / `--keep-runs <N>` — perf report directory name and retention (`PERF_RUN_TAG`, `PERF_KEEP_RUNS`; `--keep-runs 0` keeps all); need `--perf`. Tags match `[A-Za-z0-9][A-Za-z0-9._-]*` and are single-use
+- `--consumer-jobs <N>` — silicon consumer parallelism (default 15; 0 is serial); needs `--perf`
+- `--perf-counters` / `--dump-perf-counters` — counter report (a separate report kind); need `--perf`
+- `--keep-asserts` — keep `LLK_ASSERT` in a `--perf` build (already the Quasar default; differs from Wormhole/Blackhole CI)
+
+The never-call-pytest rule covers tests that build kernels or use a device or simulator. Host-only work is outside it: `tests/run_hardware_free.sh` and `compare_test_and_perf.py`.
 
 ## Arch Inference
 
@@ -64,7 +76,9 @@ If `--arch` is not provided, infer in this order:
      test_file: {test_file}
      arch:      {arch}
      command:   {count|compile|simulate|run}
-     options:   {--k EXPR | --test-id ID | --maxfail N | --no-split | --timeout S} (whatever applies)
+     options:   {--k EXPR | --test-id ID | --maxfail N | --no-split | --timeout S |
+                 --speed-of-light | --perf | --op OP | --run-tag TAG | --keep-runs N | --consumer-jobs N |
+                 --perf-counters | --dump-perf-counters | --keep-asserts} (whatever applies)
 
    MANDATORY pre-flight (do these BEFORE invoking run_test.sh):
 
@@ -96,13 +110,19 @@ If `--arch` is not provided, infer in this order:
    Use a blocking shell call (~30 min timeout); never poll.
    Do not modify code.
    ```
-4. **Report** the agent's result. If exit 1 (test failure) or 2 (compile failure), suggest the `debug-kernel` rule as the next step. If exit 3 (env error), surface the root cause and stop — don't retry blindly.
+4. **Report** the agent's result. For `--perf`, include the report directory;
+   a non-PASS report is partial, and PASS says nothing about whether its numbers
+   are plausible, so hand a PASS result to
+   `.claude/skills/perf-report/SKILL.md` for validation. If exit 1 (test
+   failure) or 2 (compile failure), suggest the `debug-kernel` rule as the next
+   step. If exit 3 (env error), surface the root cause and stop — don't retry
+   blindly.
 
 ## Multi-File Runs
 
 If multiple test files can be run together (same scenario and args), prefer a single command in one run. Only split into multiple commands when you need different scenarios, flags, or isolation.
 
-**Perf tests must run alone**; do not combine perf tests with other tests in the same command.
+**Perf tests must run alone**, with `--perf`; do not combine perf tests with other tests in the same command.
 
 ## Reuse and Limits
 
@@ -110,6 +130,8 @@ Reuse the same `llk-test-runner` agent for repeated test runs after a failure (u
 
 ## Constraints
 
-- **Never** call `pytest` directly. Always go through the script.
+- **Never** call `pytest` directly for a kernel-building, device or simulator
+  test. Use `tests/run_hardware_free.sh` and `compare_test_and_perf.py` for the
+  two host-only exceptions.
 - **Never** skip the venv check — the script exits 3 with a clear message, but the rule should detect-and-bootstrap rather than fail.
 - **Never** run multiple simulator invocations in parallel from the same agent. The script's `flock` protects against concurrent agents, but a single agent should still serialise its own runs.

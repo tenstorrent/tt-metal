@@ -303,7 +303,8 @@ void kernel_main() {
     // global start tile is at/after logical_lt are pure padding and are skipped.
     constexpr uint32_t logical_lt_compile = get_compile_time_arg_val(35);
     // Slots 36-39: transport-to-tensor rank mapping.
-    constexpr bool full_mesh_rank_mapping = get_compile_time_arg_val(36) == 1;
+    constexpr uint32_t full_mesh_rank_mapping =
+        get_compile_time_arg_val(36);  // k{Axis,RowMajor,ColumnMajor}RankMapping
     constexpr auto snake_orientation = static_cast<ttnn::ccl::snake_ring::Orientation>(get_compile_time_arg_val(37));
     constexpr uint32_t mesh_rows = get_compile_time_arg_val(38);
     constexpr uint32_t mesh_cols = get_compile_time_arg_val(39);
@@ -1372,7 +1373,7 @@ void kernel_main() {
                 // Forward K chunk via chain (uses K's data size explicitly)
                 if constexpr (!has_sliding_window) {
                     if (k_chain.should_forward(k_chain_head, q_iter_local)) {
-                        k_chain.forward(noc, cb_k_start_address, k_chunk_tiles, k_tile_bytes);
+                        k_chain.forward(noc, cb_k, k_chunk_tiles, k_tile_bytes);
                     }
                 }
 
@@ -1520,7 +1521,7 @@ void kernel_main() {
                     // popping the buffer while the mcast is still reading from it.
                     if constexpr (!has_sliding_window) {
                         if (v_chain.should_forward(nv, q_iter_local)) {
-                            v_chain.forward(noc, cb_v_start_address);
+                            v_chain.forward(noc, cb_v);
                         }
                     }
 

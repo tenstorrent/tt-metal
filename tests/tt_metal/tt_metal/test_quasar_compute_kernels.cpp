@@ -37,7 +37,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelMultipleThreads) {
     }
 
     // We are going to use the first device (0) and the first core (0, 0) on the device.
-    const experimental::NodeCoord node{0, 0};
+    const NodeCoord node{0, 0};
     // Command queue lets us submit work (execute programs and read/write buffers) to the device.
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
     // Prepare a workload and a device coordinate range that spans the mesh.
@@ -49,9 +49,9 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelMultipleThreads) {
     std::vector<uint32_t> init_values(16, 0);
     slow_dispatch::WriteToL1(*mesh_device, node, l1_address, init_values);
 
-    const experimental::KernelSpecName COMPUTE_KERNEL{"risc_math"};
+    const KernelSpecName COMPUTE_KERNEL{"risc_math"};
 
-    experimental::KernelSpec compute_kernel_spec{
+    KernelSpec compute_kernel_spec{
         .unique_id = COMPUTE_KERNEL,
         .source =
 
@@ -61,28 +61,28 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelMultipleThreads) {
             {
                 .runtime_arg_names = {"l1_address"},
             },
-        .hw_config = experimental::ComputeHardwareConfig{},
+        .hw_config = ComputeHardwareConfig{},
     };
 
-    experimental::WorkUnitSpec main_wu{
+    WorkUnitSpec main_wu{
         .name = "main",
         .kernels = {COMPUTE_KERNEL},
         .target_nodes = node,
     };
 
-    experimental::ProgramSpec spec{
+    ProgramSpec spec{
         .name = "compute_kernel_multiple_threads",
         .kernels = {compute_kernel_spec},
         .work_units = {main_wu},
     };
-    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = tt_metal::experimental::MakeProgramFromSpec(*mesh_device, spec);
 
-    experimental::ProgramRunArgs params;
-    params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
+    ProgramRunArgs params;
+    params.kernel_run_args = {ProgramRunArgs::KernelRunArgs{
         .kernel = COMPUTE_KERNEL,
-        .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(node, {{"l1_address", l1_address}}),
+        .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"l1_address", l1_address}}),
     }};
-    experimental::SetProgramRunArgs(program, params);
+    tt_metal::experimental::SetProgramRunArgs(program, params);
 
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, true);
@@ -113,7 +113,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelSingleThread) {
     }
 
     // We are going to use the first device (0) and the first core (0, 0) on the device.
-    const experimental::NodeCoord node{0, 0};
+    const NodeCoord node{0, 0};
     // Command queue lets us submit work (execute programs and read/write buffers) to the device.
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
     // Prepare a workload and a device coordinate range that spans the mesh.
@@ -125,9 +125,9 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelSingleThread) {
     std::vector<uint32_t> init_values(4, 0);
     slow_dispatch::WriteToL1(*mesh_device, node, l1_address, init_values);
 
-    const experimental::KernelSpecName COMPUTE_KERNEL{"risc_math"};
+    const KernelSpecName COMPUTE_KERNEL{"risc_math"};
 
-    experimental::KernelSpec compute_kernel_spec{
+    KernelSpec compute_kernel_spec{
         .unique_id = COMPUTE_KERNEL,
         .source =
 
@@ -137,28 +137,28 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelSingleThread) {
             {
                 .runtime_arg_names = {"l1_address"},
             },
-        .hw_config = experimental::ComputeHardwareConfig{},
+        .hw_config = ComputeHardwareConfig{},
     };
 
-    experimental::WorkUnitSpec main_wu{
+    WorkUnitSpec main_wu{
         .name = "main",
         .kernels = {COMPUTE_KERNEL},
         .target_nodes = node,
     };
 
-    experimental::ProgramSpec spec{
+    ProgramSpec spec{
         .name = "compute_kernel_single_thread",
         .kernels = {compute_kernel_spec},
         .work_units = {main_wu},
     };
-    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = tt_metal::experimental::MakeProgramFromSpec(*mesh_device, spec);
 
-    experimental::ProgramRunArgs params;
-    params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
+    ProgramRunArgs params;
+    params.kernel_run_args = {ProgramRunArgs::KernelRunArgs{
         .kernel = COMPUTE_KERNEL,
-        .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(node, {{"l1_address", l1_address}}),
+        .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"l1_address", l1_address}}),
     }};
-    experimental::SetProgramRunArgs(program, params);
+    tt_metal::experimental::SetProgramRunArgs(program, params);
 
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, true);
@@ -179,38 +179,38 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarCreateMultipleComputeKernelsSing
                         "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
     }
 
-    const experimental::KernelSpecName COMPUTE_KERNEL_1{"risc_math_1"};
-    const experimental::KernelSpecName COMPUTE_KERNEL_2{"risc_math_2"};
+    const KernelSpecName COMPUTE_KERNEL_1{"risc_math_1"};
+    const KernelSpecName COMPUTE_KERNEL_2{"risc_math_2"};
 
-    experimental::KernelSpec compute_kernel_spec_1{
+    KernelSpec compute_kernel_spec_1{
         .unique_id = COMPUTE_KERNEL_1,
         .source =
 
             OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/compute/risc_math.cpp",
         .num_threads = 1,
-        .hw_config = experimental::ComputeHardwareConfig{},
+        .hw_config = ComputeHardwareConfig{},
     };
 
-    experimental::KernelSpec compute_kernel_spec_2{
+    KernelSpec compute_kernel_spec_2{
         .unique_id = COMPUTE_KERNEL_2,
         .source =
 
             OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/compute/risc_math.cpp",
         .num_threads = 2,
-        .hw_config = experimental::ComputeHardwareConfig{},
+        .hw_config = ComputeHardwareConfig{},
     };
 
-    experimental::WorkUnitSpec main_wu{
+    WorkUnitSpec main_wu{
         .name = "main",
         .kernels = {COMPUTE_KERNEL_1, COMPUTE_KERNEL_2},
-        .target_nodes = experimental::NodeCoord{0, 0},
+        .target_nodes = NodeCoord{0, 0},
     };
 
-    experimental::ProgramSpec spec{
+    ProgramSpec spec{
         .name = "multiple_compute_kernels",
         .kernels = {compute_kernel_spec_1, compute_kernel_spec_2},
         .work_units = {main_wu},
     };
 
-    ASSERT_THROW(experimental::MakeProgramFromSpec(this->device(), spec), std::runtime_error);
+    ASSERT_THROW(tt_metal::experimental::MakeProgramFromSpec(this->device(), spec), std::runtime_error);
 }

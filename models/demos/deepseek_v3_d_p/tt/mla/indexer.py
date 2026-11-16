@@ -105,8 +105,8 @@ def score_compute_kernel_config(config, arch) -> ttnn.DeviceComputeKernelConfig 
     """The indexer score matmul's compute config from ``config.index_score_math_fidelity``.
 
     Absent -> None: the op's own default (LoFi for bf8 x bf8), which DS-V3.2 / GLM run. Kimi-K3.1 sets HiFi2
-    (tt_metal_tracker-ao3i.2.7). Only the fidelity varies: bf16 dest without L1 accumulation are the op's defaults and
-    the only modes it is validated for."""
+    (why: ``kimi_k3_1_hf_config``). Only the fidelity varies: bf16 dest without L1 accumulation are the op's
+    defaults and the only modes it is validated for."""
     fidelity = getattr(config, "index_score_math_fidelity", None)
     if fidelity is None:
         return None
@@ -199,9 +199,7 @@ class TtIndexerBase:
         return True
 
     @classmethod
-    def build_ttnn_cache(
-        cls, idx_host, cache_path, mesh_device, config, layer_idx, sp_axis: int = 0, tp_axis: int = 1
-    ) -> None:
+    def build_ttnn_cache(cls, idx_host, cache_path, mesh_device, config, layer_idx, sp_axis: int, tp_axis: int) -> None:
         """Write the indexer tensorbins to disk (device=None, no device copy)."""
         cls._convert_and_cache_weights(
             idx_host, mesh_device, config, layer_idx, sp_axis, tp_axis, cache_path=cache_path, device=None
@@ -209,7 +207,7 @@ class TtIndexerBase:
 
     @classmethod
     def _convert_and_cache_weights(
-        cls, idx_host, mesh_device, config, layer_idx, sp_axis: int = 0, tp_axis: int = 1, cache_path=None, device=None
+        cls, idx_host, mesh_device, config, layer_idx, sp_axis: int, tp_axis: int, cache_path=None, device=None
     ):
         """Indexer weights → device (or cache). Mirrors dense MLA's converter:
         - host tensors present: transpose/shard/replicate and (optionally) write the cache;
@@ -1029,6 +1027,9 @@ class TtIndexerBase:
             # The full mesh stripes the key cache over every device already.
             block_cyclic_cache_tp_sharded=False,
             compute_kernel_config=self._score_compute_kernel_config,
+            # Q rows and the index cache are SP-major (sp_coord*tp + tp_coord): row-major on the mesh at
+            # sp_axis=0, column-major at sp_axis=1.
+            full_mesh_outer_axis=self.sp_axis,
         )
         if host_start is not None:
             _fused_ring_host_timing["calls"] += 1
@@ -1229,7 +1230,7 @@ class TtCsaIndexer(TtIndexerBase):
 
     @classmethod
     def _convert_and_cache_weights(
-        cls, idx_host, mesh_device, config, layer_idx, sp_axis: int = 0, tp_axis: int = 1, cache_path=None, device=None
+        cls, idx_host, mesh_device, config, layer_idx, sp_axis: int, tp_axis: int, cache_path=None, device=None
     ):
         index_n_heads = config.index_n_heads
         index_head_dim = config.index_head_dim

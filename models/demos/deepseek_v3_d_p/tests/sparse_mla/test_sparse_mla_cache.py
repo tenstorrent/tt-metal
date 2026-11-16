@@ -50,7 +50,7 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
     init_mla_kv_cache,
 )
 from models.demos.deepseek_v3_d_p.utils.test_utils import WH_WORKER_L1_SIZE
-from tests.ttnn.utils_for_testing import comp_pcc
+from tt_py_test_utils_common.utils_for_testing import comp_pcc
 
 CACHE_DIR = Path("/tmp/DS_PREFILL_sparse_mla")
 SEQ_LEN = 256
@@ -77,7 +77,7 @@ def test_normalized_hadamard_rejects_non_power_of_two(expect_error):
         normalized_hadamard_matrix(96)
 
 
-# The index cache's key basis is a model fact (tt_metal_tracker-ao3i.5.9): GLM / DS-V3.2 decode store keys
+# The index cache's key basis is a model fact: GLM / DS-V3.2 decode store keys
 # Hadamard-rotated (absent field -> rotated), Kimi-K3.1's reference and decode do not.
 def test_index_key_basis_follows_the_model_config():
     assert index_keys_hadamard_rotated(glm_5_3_hf_config())

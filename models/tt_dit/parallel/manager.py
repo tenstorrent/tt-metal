@@ -222,7 +222,7 @@ class CCLManager:
         return self._ping_pong_buffer_cache[cache_key][current_idx]
 
     def get_ag_ping_pong_buffer(
-        self, shape, dim, mesh_axis, dtype=ttnn.bfloat16, device_synchronize=True, capacity=None
+        self, shape, dim, mesh_axis, dtype=ttnn.bfloat16, device_synchronize=True, capacity=None, rows=None
     ):
         """
         Get or create ping pong buffers for all gather operations.
@@ -234,6 +234,8 @@ class CCLManager:
             mesh_axis: Mesh axis for parallelization
             capacity: Rows to allocate along `dim` instead of the gathered size, so varying
                 gathered lengths up to it share one pair.
+            rows: Rows to allocate along the row dim (-2) instead of `shape`'s, so varying row
+                counts up to it share one pair; the consumer must read only `shape`'s rows.
 
         Returns:
             Current ping pong buffer (alternates between two buffers)
@@ -242,6 +244,11 @@ class CCLManager:
         dim = self.get_dim(dim, shape)
         output_buffer_shape = list(shape)
         output_buffer_shape[dim] = capacity or shape[dim] * self.mesh_device.shape[mesh_axis]
+        if rows is not None:
+            row_dim = len(output_buffer_shape) - 2
+            assert dim != row_dim, f"rows={rows} sizes the row dim, which is the gather dim {dim} of {tuple(shape)}"
+            assert shape[row_dim] <= rows, f"{tuple(shape)} has more rows than the pair's capacity {rows}"
+            output_buffer_shape[row_dim] = rows
         cache_key = ("ag", tuple(output_buffer_shape), dim, mesh_axis, dtype)
 
         # Create buffers if not cached
@@ -890,7 +897,9 @@ class CCLManager:
         mesh_axis: int | None,
         use_hyperparams: bool,
         use_persistent_buffer: bool = False,
+        num_workers_per_link: int | None = None,
     ) -> ttnn.Tensor:
+        """`num_workers_per_link` pins the op's worker count (else it is picked from the output byte count)."""
         if mesh_axis is None or self.mesh_device.shape[mesh_axis] == 1:
             return tensor
 
@@ -905,6 +914,8 @@ class CCLManager:
             dim += 4 - rank
 
         params = self.get_ag_hyperparams(tensor.shape) if use_hyperparams else {}
+        if num_workers_per_link is not None:
+            params["num_workers_per_link"] = num_workers_per_link
 
         tensor = ttnn.experimental.all_gather_async(
             tensor,
