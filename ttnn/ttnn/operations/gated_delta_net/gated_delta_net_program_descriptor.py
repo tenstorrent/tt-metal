@@ -183,6 +183,12 @@ STATE_IN_DEPTH = 2
 # Decode B=1 (QK_CORES_VSPLIT state cores): 0 rows 15.3-15.4, 1 row 15.0-15.2, 2 rows 14.7-14.9, 3 rows 14.6-14.8,
 # 4 rows 15.2-15.4 us.
 SWAP_NOC_ROWS = 3
+# The same when every pair core runs one whole-V unit (None: SWAP_NOC_ROWS). Decode B=8, 6 interleaved pairs on two
+# chips: 3 rows 39.35 us, 2 rows 35.63 (row 2 leaves NOC 0: 22 instead of 31 cores write there). B=1 (pieces) keeps 3:
+# 11.96 vs 12.44 at 2. B=16 / B=32 keep 3 (70.5 / 156.7 at 2 vs 69.2 / 156.1).
+SWAP_NOC_ROWS_ONE_UNIT = 2
+# Logical core rectangles (x_lo, y_lo, x_hi, y_hi), inclusive, whose pair cores take the opposite NoCs of the row rule.
+SWAP_NOC_CORES = ()
 # S0 tiles per DRAM read barrier on a core (None: the whole slice at once). Bounds the bulk a core queues at the banks
 # ahead of other cores' small window reads.
 S0_READ_TILES = None
@@ -249,7 +255,8 @@ SPLIT_BCAST_GROUPS = False
 # Level 2 also compiles the point marks (GDN_MARK) of each block's end, for chain timelines (zone_timeline.py).
 PROFILE_ZONES = int(os.environ.get("GDN_PROFILE_ZONES", "0") or 0)
 # Knob overrides for before / after runs in one build: GDN_KNOBS="NAME=literal,NAME=literal".
-for _item in filter(None, os.environ.get("GDN_KNOBS", "").replace(";", ",").split(",")):
+_knobs = os.environ.get("GDN_KNOBS", "")
+for _item in filter(None, _knobs.split(";" if ";" in _knobs else ",")):  # ";" when a value holds a comma
     _name, _literal = _item.split("=", 1)
     assert _name.isupper() and _name in globals(), f"GDN_KNOBS: unknown knob {_name}"
     globals()[_name] = ast.literal_eval(_literal)
@@ -1429,7 +1436,7 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
         """Final-state tiles the reader writes (gdn::state_tile_on_reader): R-QKCORE pair cores only."""
         if not qk_cores or count > out_states:
             return 0
-        writer_noc = 0 if SWAP_NOC_ROWS and core.y < SWAP_NOC_ROWS else 1
+        writer_noc = 0 if _noc_swapped(core, unit_depth == 1 and pieces == 1) else 1
         return 1 if STATE_WRITE_NOC is not None and writer_noc != STATE_WRITE_NOC else STATE_SPLIT
 
     def reader_units(count):
@@ -1715,14 +1722,14 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
                 (role, [c for c in cores if (c.x, c.y) in q_cores], True),
                 (role, [c for c in cores if (c.x, c.y) not in q_cores], False),
             ]
-        elif role == ROLE_LOCAL and qk_cores and SWAP_NOC_ROWS:
+        elif role == ROLE_LOCAL and qk_cores and (SWAP_NOC_ROWS or SWAP_NOC_ROWS_ONE_UNIT or SWAP_NOC_CORES):
             # Decode R-QKCORE: every pair core reads its S0 at once. NOC 0 brings read responses south, around the
             # torus for the top rows, which then lose to the lower rows' traffic; NOC 1 brings them north. The pair
             # cores in the top SWAP_NOC_ROWS rows read on NOC 1 and write on NOC 0.
             # S0_WRITER_KEEP_NOC: on the rows where S0 is the writer's, the writer takes the NoC the reader would have.
             def swapped(c):
                 s0_by_writer = s0_writer_any and S0_WRITER_KEEP_NOC and roles[role][1][c.x, c.y][-1]
-                return (c.y < SWAP_NOC_ROWS) != bool(s0_by_writer)
+                return _noc_swapped(c, unit_depth == 1 and pieces == 1) != bool(s0_by_writer)
 
             kernel_groups += [(role, [c for c in cores if swapped(c)], True)]
             kernel_groups += [(role, [c for c in cores if not swapped(c)], False)]
@@ -1843,6 +1850,13 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
 
 
 # ---- Program cache (host cost per call) ----
+def _noc_swapped(core, one_unit):
+    """R-QKCORE pair core: reads on NOC 1 and writes on NOC 0 (SWAP_NOC_ROWS, SWAP_NOC_CORES)."""
+    rows = SWAP_NOC_ROWS_ONE_UNIT if one_unit and SWAP_NOC_ROWS_ONE_UNIT is not None else SWAP_NOC_ROWS
+    flip = any(x0 <= core.x <= x1 and y0 <= core.y <= y1 for x0, y0, x1, y1 in SWAP_NOC_CORES)
+    return (core.y < rows) != flip
+
+
 # A descriptor depends on its inputs only through the cache key (gated_delta_net.py: the device, every tensor's spec,
 # which state outputs are their inputs, epsilon, the compute config and the knobs above); a call with a known key
 # re-sends the cached descriptor with its buffer addresses replaced. Entries hold no tensors.
