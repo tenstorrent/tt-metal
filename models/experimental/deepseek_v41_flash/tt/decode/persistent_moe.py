@@ -437,7 +437,7 @@ class PersistentMoE:
         # rebuilding it on the way back does not work: the block launch's program keeps L1 of its own (cached with
         # it) at the top of the freed range, so the rebuilt columns land ~100 KB lower, into the one-row launch's
         # circular buffers.
-        if not ROUTER_L1_WITH_BLOCKS and len(self.modes) > 1:
+        if not ROUTER_L1_WITH_BLOCKS and max(self.modes) > 1:
             self.router_in_l1 = False
         # A block mode's launch needs the L1 the resident router columns take, so it reads them from DRAM: the
         # server keeps a DRAM copy and frees (and on the way back rebuilds) the L1 one when it switches.

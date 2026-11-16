@@ -217,3 +217,100 @@ def test_moe_persistent_rows_perf(mesh_device):
             gc.collect()
             ttnn.synchronize_device(moe_mesh)
     logger.info(f"MoE TP12 {ROWS}-row blocks, layers interleaved {STEPS}:\n" + "\n".join(results))
+
+
+def _ulps(a: torch.Tensor, b: torch.Tensor) -> int:
+    """The largest distance between ``a`` and ``b`` in bf16 ulps (adjacent bf16 values are 1 apart)."""
+
+    def key(t):
+        bits = t.to(torch.bfloat16).view(torch.int16).to(torch.int32)
+        return torch.where(bits < 0, -(bits & 0x7FFF), bits)
+
+    return int((key(a) - key(b)).abs().max())
+
+
+@pytest.mark.skipif(_snapshot() is None, reason=f"V4.1-Flash config not found under {DEFAULT_MODEL_DIR}")
+@pytest.mark.timeout(7200)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [PARENT_MESH], indirect=True, ids=["8x4"])
+@torch.no_grad()
+def test_moe_persistent_rows_exact(mesh_device):
+    """A row's output does not depend on the other rows of its block: the same probe row, at every position of
+    blocks whose other rows route anywhere from all of its experts to none of them (unions of 6 to ~23), must come
+    back bit for bit the same. Then each probe as a one-row request (the server's other mode), which reduces in
+    another order: reported in bf16 ulps, and held to the torch PCC."""
+    moe_mesh, request_meshes, config, socket_core, request_core = _setup(mesh_device)
+    layers, moes = _load_layers(moe_mesh, config)
+    hidden = config.hidden_size
+    k = moes[0].experts.top_k
+    g = torch.Generator().manual_seed(11)
+
+    def near(x, mix):
+        row = x * (1.0 - mix) + torch.randn(hidden, generator=g) * mix
+        return (row / row.norm() * hidden**0.5).to(torch.bfloat16).float()
+
+    probes = [near(torch.zeros(hidden), 1.0) for _ in range(3)]
+    # (probe, layer) -> [(block, probe's row)]: the probe alone, then with companions near it (sharing many of its
+    # experts) and far from it, at each row position.
+    cases = {}
+    for p, x in enumerate(probes):
+        for layer in range(len(layers)):
+            blocks = [(torch.stack([x] * ROWS), 0)]
+            for pos, mixes in enumerate([(1.0, 1.0, 1.0), (0.3, 0.5, 0.7), (0.15, 0.3, 1.0), (0.6, 1.0, 0.2)]):
+                others = [near(x, m) for m in mixes][: ROWS - 1]
+                at = pos % ROWS
+                blocks.append((torch.stack(others[:at] + [x] + others[at:]), at))
+            cases[p, layer] = blocks
+
+    moe_op = PersistentMoE(
+        moe_mesh,
+        request_meshes[-1:],
+        moes,
+        socket_core,
+        request_core,
+        _single_senders(REQUEST_ROWS[-1:]),
+        rows=ROWS,
+        block_rows=1,
+    )
+    got, single = {}, {}
+    try:
+        for (p, layer), blocks in cases.items():
+            for block, at in blocks:
+                moe_op.upload(0, block)
+                out = moe_op.request(0, layer)
+                got.setdefault((p, layer), []).append(
+                    (
+                        untile_rows(PersistentMoE.row_of(out).float(), ROWS)[at],
+                        _union(block, layers[layer][1], config, k),
+                    )
+                )
+                ttnn.deallocate(out)
+        moe_op.use_rows(1)
+        for p, layer in cases:
+            moe_op.upload(0, probes[p])
+            out = moe_op.request(0, layer)
+            single[p, layer] = PersistentMoE.row_of(out).float()
+            ttnn.deallocate(out)
+    finally:
+        moe_op.stop()
+
+    report, failed = [], False
+    for (p, layer), outs in got.items():
+        first = outs[0][0]
+        differ = [(i, u, _ulps(o, first)) for i, (o, u) in enumerate(outs) if not torch.equal(o, first)]
+        failed |= bool(differ)
+        candidates, _ = _reference(probes[p], *layers[layer], config, moes[layer].experts)
+        pcc_single = max(_pcc(c, single[p, layer]) for c in candidates)
+        pcc_block = max(_pcc(c, first) for c in candidates)
+        failed |= min(pcc_single, pcc_block) < PCC
+        scale = first.abs().max()
+        report.append(
+            f"probe {p} layer {layer}: unions {[u for _, u in outs]}; "
+            + (f"DIFFERS in blocks (block, union, ulps) {differ}" if differ else "bit-identical in every block")
+            + f"; PCC vs torch {pcc_block:.5f}; vs the one-row request (PCC {pcc_single:.5f}): "
+            f"{int((single[p, layer] != first).sum())} of {hidden} elements differ, max |diff| "
+            f"{float((single[p, layer] - first).abs().max() / scale):.2e} of the row's max, PCC "
+            f"{_pcc(single[p, layer], first):.6f}"
+        )
+    logger.info("\n" + "\n".join(report))
+    assert not failed, "a row's output depends on its block's other rows:\n" + "\n".join(report)

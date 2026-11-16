@@ -59,6 +59,11 @@ constexpr uint32_t kFeHdrRouterBias = 4;
 // selections -- as (iter + 1) << 8 | hits, written into every grid core's header after the control core's (whose
 // layer-table row holds 0 here). Word 8 keeps it 16-byte aligned for the merge's multicast.
 constexpr uint32_t kFeHdrHits = 8;
+// Several-row requests: bit j set when the group's j-th expert's routed gate_up K-pieces are read (and multiplied)
+// in reverse. A function of the expert id alone (its parity), so an expert's activation does not depend on which
+// group the union deals it to. Written by each routed core's reader into its own header once the ids are in, before
+// it pushes the first piece; the next iteration's header multicast comes only after this core is done.
+constexpr uint32_t kFeHdrPieceFlags = 12;
 constexpr uint32_t kFeHdrWords = 16;
 // Then the go words, one per RISC of a worker core: BRISC, NCRISC, TRISC0-2.
 constexpr uint32_t kFeGoWords = 5;
