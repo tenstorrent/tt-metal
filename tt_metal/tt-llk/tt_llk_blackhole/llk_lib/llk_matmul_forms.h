@@ -98,18 +98,20 @@ constexpr bool matmul_kernel_lofi_wide(const std::uint8_t (&formats)[N])
     return tf32 || f32 >= 2;
 }
 
-// A LoFi kernel whose 32-bit format is an operand or the output (matmul_kernel_lofi_wide) beside a 16-bit or block float one: its plain
-// calls at half sync take the run-time direction (matmul_api_reuse_dir 3), which holds the wider operand
+// A LoFi kernel with a 32-bit operand (a Float32 CB besides the one Float32 partials CB; a Tf32 CB is an output and adds none) beside a
+// 16-bit or block float one: its plain calls at half sync take the run-time direction (matmul_api_reuse_dir 3), which holds the wider operand
 template <std::size_t N>
 constexpr bool matmul_kernel_lofi_mix(const std::uint8_t (&formats)[N])
 {
-    bool fast = false;
+    bool fast         = false;
+    std::uint32_t f32 = 0;
     for (const std::uint8_t f : formats)
     {
         const DataFormat d = static_cast<DataFormat>(f);
         fast = fast || d == DataFormat::Float16 || d == DataFormat::Float16_b || d == DataFormat::Bfp8_b || d == DataFormat::Bfp4_b;
+        f32 += d == DataFormat::Float32;
     }
-    return fast && matmul_kernel_lofi_wide(formats);
+    return fast && f32 >= 2;
 }
 
 // The kernels whose plain matmul_block calls run the ttsync unpack (formats: every CB format of the kernel): LoFi at half sync, and above LoFi except the
@@ -122,7 +124,7 @@ constexpr bool matmul_kernel_ttsync(const MathFidelity fidelity, const bool full
     if (fidelity == MathFidelity::LoFi)
     {
         // small LoFi blocks are bound by the unpack's context poll; half sync only, and not where the plain calls take the run-time
-        // direction (matmul_kernel_lofi_mix), which the ttsync unpack does not run
+        // direction (matmul_kernel_lofi_mix, a 32-bit operand beside a fast one), which the ttsync unpack does not run
         return !full_sync && !matmul_kernel_lofi_mix(formats);
     }
     if (fidelity == MathFidelity::HiFi4 && full_sync && fp32_dest)
