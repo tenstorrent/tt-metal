@@ -29,6 +29,7 @@
 #include "test_utils/program_cache.hpp"
 #include "test_utils/random_data.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
+#include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 
@@ -127,14 +128,18 @@ void add_grad(
     grads.params[name] = make_param(grad);
 }
 
+using MakeValues = std::function<xt::xarray<float>(const Shape&)>;
+
 // Parameters are named sharded_<i> and replicated_<i>. Sharded shapes are the full (unsharded) shapes; their last dim
-// is split across the TP group, with the second TP piece scaled up.
+// is split over `cluster_axis` (over the whole mesh under a single placement if nullopt), with the second piece scaled
+// up.
 Grads make_grads(
     const std::vector<Shape>& sharded_shapes,
     const std::vector<Shape>& replicated_shapes,
-    const std::function<xt::xarray<float>(const Shape&)>& make_values = random_bf16_exact) {
+    std::optional<int> cluster_axis = kTpAxis,
+    const MakeValues& make_values = random_bf16_exact) {
     Grads grads;
-    const auto sharded = shard_mapper(kShardDim);
+    const auto sharded = shard_mapper(kShardDim, cluster_axis);
     for (size_t i = 0; i < sharded_shapes.size(); ++i) {
         add_grad(
             grads,
@@ -149,10 +154,17 @@ Grads make_grads(
     return grads;
 }
 
-Grads make_grads(uint32_t num_sharded, uint32_t num_replicated) {
+// Single-tile pieces: each sharded grad splits into one tile per TP device.
+Grads make_grads(
+    uint32_t num_sharded,
+    uint32_t num_replicated,
+    std::optional<int> cluster_axis = kTpAxis,
+    const MakeValues& make_values = random_bf16_exact) {
     return make_grads(
         std::vector<Shape>(num_sharded, Shape{1U, 1U, 32U, 32U * kTpSize}),
-        std::vector<Shape>(num_replicated, Shape{1U, 1U, 32U, 32U}));
+        std::vector<Shape>(num_replicated, Shape{1U, 1U, 32U, 32U}),
+        cluster_axis,
+        make_values);
 }
 
 // clip_grad_norm without error_if_nonfinite's host read, as a training step would call it.
@@ -210,6 +222,13 @@ void verify(const Grads& grads, const autograd::TensorPtr& norm, float max_norm,
     }
 }
 
+// Clips with max_norm = max_norm_ratio * the host norm and verifies the result.
+void clip_and_verify(const Grads& grads, float max_norm_ratio = 0.5F, float p = 2.0F) {
+    const float max_norm = max_norm_ratio * reference_norm(grads, p);
+    const auto norm = clip(grads.params, max_norm, p);
+    verify(grads, norm, max_norm, p);
+}
+
 // Scales by 8 the grads of one group that step1's second launch handles: those past the first `first_launch` of the
 // group in the map's iteration order, which is the order clip_grad_norm collects them in. Unweighted, losing those
 // few tensors would move the norm by less than kRtol.
@@ -252,11 +271,8 @@ TEST_P(ClipGradNormTpTest, MatchesHostReference) {
         boost_second_launch(grads, "sharded_", cores);
         boost_second_launch(grads, "replicated_", cores);
     }
-    const float max_norm = param.max_norm_ratio * reference_norm(grads, param.p_norm_type);
 
-    auto norm = clip(grads.params, max_norm, param.p_norm_type);
-
-    verify(grads, norm, max_norm, param.p_norm_type);
+    clip_and_verify(grads, param.max_norm_ratio, param.p_norm_type);
 }
 
 INSTANTIATE_TEST_SUITE_P(
@@ -302,11 +318,8 @@ TEST_F(ClipGradNormTpTest, MixedMultiTileShapes) {
     auto grads = make_grads(
         {{1U, 1U, 32U, 64U}, {1U, 1U, 64U, 128U}, {2U, 1U, 32U, 256U}},
         {{1U, 1U, 32U, 32U}, {1U, 2U, 64U, 96U}, {1U, 1U, 96U, 32U}});
-    const float max_norm = 0.5F * reference_norm(grads);
 
-    auto norm = clip(grads.params, max_norm);
-
-    verify(grads, norm, max_norm);
+    clip_and_verify(grads);
 }
 
 // Shapes that don't fill whole tiles: the tile padding must not leak into the norm. from_xtensor zero-pads, which
@@ -314,30 +327,16 @@ TEST_F(ClipGradNormTpTest, MixedMultiTileShapes) {
 TEST_F(ClipGradNormTpTest, UnalignedShapes) {
     auto grads = make_grads({{1U, 1U, 20U, 80U}}, {{1U, 1U, 17U, 40U}, {1U, 3U, 5U, 7U}});
     poison_padding(grads.params);
-    const float max_norm = 0.5F * reference_norm(grads);
 
-    auto norm = clip(grads.params, max_norm);
-
-    verify(grads, norm, max_norm);
+    clip_and_verify(grads);
 }
 
 // Sharded grads whose params carry a single placement for the whole mesh, as GPT-2's TP linears produce.
 TEST_F(ClipGradNormTpTest, CollapsedShardPlacement) {
-    auto grads = make_grads({}, std::vector<Shape>(2, Shape{1U, 1U, 32U, 32U}));
-    const auto collapsed = shard_mapper(kShardDim, /*cluster_axis=*/std::nullopt);
-    for (size_t i = 0; i < 2; ++i) {
-        add_grad(
-            grads,
-            fmt::format("sharded_{}", i),
-            scale_second_half(random_bf16_exact({1U, 1U, 32U, 32U * kTpSize}), kShardDim, 2.0F),
-            *collapsed);
-    }
+    auto grads = make_grads(2, 2, /*cluster_axis=*/std::nullopt);
     ASSERT_EQ(grads.params.at("sharded_0")->get_value().tensor_topology().placements().size(), 1U);
-    const float max_norm = 0.5F * reference_norm(grads);
 
-    auto norm = clip(grads.params, max_norm);
-
-    verify(grads, norm, max_norm);
+    clip_and_verify(grads);
 }
 
 // A real TP block rather than synthetic grads: DistributedGPTMLP's column- and row-parallel linears after a forward
@@ -372,11 +371,8 @@ TEST_F(ClipGradNormTpTest, DistributedGptMlpMatchesGatheredGrads) {
         }
         grads.host[name] = HostGrad{.full = std::move(full), .pieces = std::move(pieces)};
     }
-    const float max_norm = 0.5F * reference_norm(grads);
 
-    auto norm = clip(grads.params, max_norm);
-
-    verify(grads, norm, max_norm);
+    clip_and_verify(grads);
 }
 
 // Column-parallel (dim 2), row-parallel (dim 3) and replicated grads are clipped in one step3 launch; each grad must
@@ -401,10 +397,8 @@ TEST_F(ClipGradNormTpTest, PreservesGradTopology) {
 
 // A zero norm hits the 1e-6 guard: the coefficient clamps to 1 and the gradients stay zero instead of NaN.
 TEST_F(ClipGradNormTpTest, ZeroGradients) {
-    auto grads = make_grads(
-        std::vector<Shape>(2, Shape{1U, 1U, 32U, 32U * kTpSize}),
-        std::vector<Shape>(2, Shape{1U, 1U, 32U, 32U}),
-        [](const Shape& shape) { return xt::xarray<float>(xt::zeros<float>(shape)); });
+    auto grads =
+        make_grads(2, 2, kTpAxis, [](const Shape& shape) { return xt::xarray<float>(xt::zeros<float>(shape)); });
 
     auto norm = clip(grads.params, 1.0F);
 
@@ -462,18 +456,21 @@ TEST_F(ClipGradNormTpTest, SkipsParamsWithoutGrad) {
     auto no_grad = autograd::create_tensor(core::zeros(ttnn::Shape({1U, 1U, 32U, 32U}), &autograd::ctx().get_device()));
     no_grad->set_requires_grad(true);
     grads.params["no_grad"] = no_grad;
-    const float max_norm = 0.5F * reference_norm(grads);
 
-    auto norm = clip(grads.params, max_norm);
+    clip_and_verify(grads);
 
-    verify(grads, norm, max_norm);
     EXPECT_FALSE(no_grad->is_grad_initialized());
     for (const auto& values : core::to_xtensor(frozen->get_grad(), core::IdentityComposer{})) {
         EXPECT_TRUE(xt::all(xt::equal(values, frozen_values))) << "frozen grad was scaled";
     }
 }
 
+// A mismatched gradient's error names it: params iterate in no fixed order, so the name is either the gradient found
+// wrong or the one it was compared against.
 TEST_F(ClipGradNormTpTest, RejectsInvalidArguments) {
+    using ::testing::AllOf;
+    using ::testing::HasSubstr;
+    using ::testing::ThrowsMessage;
     auto grads = make_grads(1, 1);
     const auto& params = grads.params;
     constexpr float kInf = std::numeric_limits<float>::infinity();
@@ -491,12 +488,20 @@ TEST_F(ClipGradNormTpTest, RejectsInvalidArguments) {
     auto with_fp32 = params;
     with_fp32["fp32"] = make_param(
         core::from_xtensor<float, ttnn::DataType::FLOAT32>(values, device, ttnn::Layout::TILE, mapper.get()));
-    EXPECT_THROW(clip(with_fp32, 1.0F), std::logic_error) << "dtype mismatch";
+    EXPECT_THAT(
+        [&] { clip(with_fp32, 1.0F); },
+        ThrowsMessage<std::logic_error>(AllOf(HasSubstr("share one dtype"), HasSubstr("fp32"))));
+
+    auto with_l1 = params;
+    with_l1["l1"] = make_param(ttnn::to_memory_config(distribute(values, *mapper), ttnn::L1_MEMORY_CONFIG));
+    EXPECT_THAT(
+        [&] { clip(with_l1, 1.0F); },
+        ThrowsMessage<std::logic_error>(AllOf(HasSubstr("share one memory config"), HasSubstr("l1"))));
 
     auto with_2d = params;
     xt::xarray<float> values_2d = xt::reshape_view(values, {32U, 32U});
     with_2d["2d"] = make_param(distribute(values_2d, *mapper));
-    EXPECT_THROW(clip(with_2d, 1.0F), std::logic_error) << "2D grad";
+    EXPECT_THAT([&] { clip(with_2d, 1.0F); }, ThrowsMessage<std::logic_error>(HasSubstr("gradient of 2d has rank 2")));
 }
 
 // DP x TP: DP on mesh axis 0 and TP on axis 1, as after DDP gradient sync.
@@ -510,11 +515,8 @@ protected:
 // the same result. Reducing over the DP axis instead would add each TP piece to its own copy.
 TEST_F(ClipGradNormTp2x2Test, EveryDpRowMatchesHostReference) {
     auto grads = make_grads(2, 4);
-    const float max_norm = 0.5F * reference_norm(grads);
 
-    auto norm = clip(grads.params, max_norm);
-
-    verify(grads, norm, max_norm);
+    clip_and_verify(grads);
 }
 
 // Grads sharded on the DP axis (FSDP), on both axes (FSDP x TP), or across the whole mesh under a single placement are
@@ -539,11 +541,8 @@ TEST_F(ClipGradNormTp2x2Test, ShardedOnAnyAxesMatchesHostReference) {
         "whole_mesh",
         scale_second_half(random_bf16_exact({1U, 1U, 32U, 128U}), kShardDim, 2.0F),
         *shard_mapper(kShardDim, /*cluster_axis=*/std::nullopt));
-    const float max_norm = 0.5F * reference_norm(grads);
 
-    auto norm = clip(grads.params, max_norm);
-
-    verify(grads, norm, max_norm);
+    clip_and_verify(grads);
 }
 
 class ClipGradNormTpSingleDeviceTest : public ::testing::Test {
