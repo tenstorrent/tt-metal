@@ -43,7 +43,10 @@ ttnn::Tensor scaled_dot_product_attention(
     bool output_concat_heads = false,
     /// Non causal with attn_mask only. [Bm, Hm, ceil(Sq / q_chunk), ceil(Sk / k_chunk)] int32/uint32 ROW_MAJOR, nonzero
     /// where a (q chunk, k chunk) block of the mask has a visible entry; the other blocks are skipped.
-    const std::optional<ttnn::Tensor>& attn_mask_block_map = std::nullopt);
+    const std::optional<ttnn::Tensor>& attn_mask_block_map = std::nullopt,
+    /// The kernels take the Q and K sequence lengths at run time, so a new length reuses the compiled kernels.
+    /// Non causal, without a mask, window, sink or output_concat_heads, with fp32_dest_acc_en=True.
+    bool runtime_seq_len = false);
 
 /// Chunked SDPA over paged K/V: one Q chunk per call, K/V in paged layout.
 /// Two overloads: legacy (chunk_start_idx as int) or flexible (chunk_start_idx_tensor on device).

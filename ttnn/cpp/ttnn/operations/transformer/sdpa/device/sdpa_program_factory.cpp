@@ -631,7 +631,8 @@ KvChains build_kv_chains(
     bool retain_kv,
     bool causal,
     bool pool_causal_heads,
-    const GlobalQRangeFn& global_q_range_for_core) {
+    const GlobalQRangeFn& global_q_range_for_core,
+    bool allow_mcast) {
     const uint32_t num_cores = grid_size.x * grid_size.y;
     // A segment is a core's run of Q chunks of one segment key. Non-causal segments span the chain key: it covers
     // key_q_heads consecutive Q heads (one KV head under GQA), whose Q chunks are contiguous in the flat
@@ -1052,7 +1053,9 @@ KvChains build_kv_chains(
             break;
         }
     }
-    if (all_eligible && !candidates.empty()) {
+    // Multicast is a compile-time choice of the reader, so a caller that keeps the binary independent
+    // of the sequence length (runtime_seq_len) builds unicast chains only.
+    if (allow_mcast && all_eligible && !candidates.empty()) {
         mcast_chains = candidates.size();
         for (const auto& cand : candidates) {
             const uint32_t chain_size = cand.core_indices.size();
@@ -1201,12 +1204,13 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     const uint32_t effective_kv_block_size = kv_geo.block_size;
     // Q-head crossing (gqa_crossing_factor): only the concatenated output layout needs the true head and sequence
     // length (writer args 28 / 29).
-    const bool crossing_eligible = !operation_attributes.is_causal && !is_windowed && !attn_mask.has_value() &&
-                                   !page_table.has_value() && !attention_sink.has_value() &&
-                                   !chunk_start_idx.has_value() && !tensor_args.chunk_start_idx_tensor.has_value() &&
-                                   !sliding_window_size.has_value() && !use_mla && tensor_args.v.has_value() &&
-                                   NKH == k_shape[1] && NVH == NKH && q_shape[2] % TILE_HEIGHT == 0 &&
-                                   input_tensor_q.padded_shape()[2] == q_shape[2];
+    // Off under runtime_seq_len: the factor depends on Sq and changes NQH, a compile-time arg.
+    const bool crossing_eligible =
+        !operation_attributes.runtime_seq_len && !operation_attributes.is_causal && !is_windowed &&
+        !attn_mask.has_value() && !page_table.has_value() && !attention_sink.has_value() &&
+        !chunk_start_idx.has_value() && !tensor_args.chunk_start_idx_tensor.has_value() &&
+        !sliding_window_size.has_value() && !use_mla && tensor_args.v.has_value() && NKH == k_shape[1] && NVH == NKH &&
+        q_shape[2] % TILE_HEIGHT == 0 && input_tensor_q.padded_shape()[2] == q_shape[2];
     const CoreCoord crossing_grid = program_config.has_value()
                                         ? program_config->compute_with_storage_grid_size
                                         : input_tensor_q.device()->compute_with_storage_grid_size();
@@ -1262,7 +1266,12 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     - If no mask provided: writer generates a mask with 0 for valid K and -inf for padded K
     In causal case, the causal mask naturally handles masking of padded K tokens.
     */
-    const bool use_padded_mask = (!use_causal_kernel) && ((padded_Sk != Sk) || (padded_Sq != Sq));
+    // runtime_seq_len: the kernels take the lengths at run time, so every choice that would make the compiled
+    // kernels depend on the length is fixed. The padding mask stays on (its contents are generated at run time
+    // from the unpadded K length; without padding it is all zeros), and the length-dependent compile-time args
+    // are 0, their values passed as common runtime args (sdpa_runtime_seq_len_args.hpp).
+    const bool runtime_seq_len = operation_attributes.runtime_seq_len;
+    const bool use_padded_mask = (!use_causal_kernel) && (runtime_seq_len || (padded_Sk != Sk) || (padded_Sq != Sq));
 
     const uint32_t Sq_chunk_t = q_chunk_size / TILE_HEIGHT;
     const uint32_t Sk_chunk_t = k_chunk_size / TILE_HEIGHT;
@@ -1383,6 +1392,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     const uint32_t max_global_q_chunks_per_core =
         global_q_base_chunks_per_core + (global_q_cores_doing_extra > 0 ? global_q_extra_chunks_per_core : 0);
 
+    // Double-buffer Q whenever a core may get more than one Q chunk.
     const uint32_t q_buffer_factor = (max_global_q_chunks_per_core > 1) ? 2 : 1;
 
     // Host code is responsible for determining matmul configuration
@@ -1396,6 +1406,9 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     const uint32_t l1_budget_bytes =
         device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
     const bool use_streaming_compute = can_use_streaming_compute(fp32_dest_acc_en);
+    // Validation rejects runtime_seq_len with fp32_dest_acc_en=False: streaming bakes valid_Skt into the compute
+    // kernel.
+    TT_ASSERT(!runtime_seq_len || !use_streaming_compute);
 
     const bool has_sliding_window = sliding_window_size.value_or(0) != 0;
     // A user-provided dense mask on the streaming path takes its own per-chunk apply
@@ -1553,20 +1566,23 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     const WriterGqaPackArgs writer_gqa_pack =
         writer_gqa_pack_args(operation_attributes.output_concat_heads, gqa_pack, q_shape[2] / TILE_HEIGHT);
 
+    // A length-dependent compile-time arg, 0 under runtime_seq_len (the kernel reads it from common runtime args).
+    const auto seq_len_ct = [runtime_seq_len](uint32_t value) { return runtime_seq_len ? 0u : value; };
+
     std::vector<uint32_t> reader_compile_time_args = {// interleaved accessor args
                                                       B,
                                                       NQH,
                                                       NKH,
                                                       NVH,
-                                                      Skt,
-                                                      valid_Sqt,
-                                                      valid_Skt,
+                                                      seq_len_ct(Skt),
+                                                      seq_len_ct(valid_Sqt),
+                                                      seq_len_ct(valid_Skt),
                                                       DHt,
                                                       vDHt,
                                                       Sq_chunk_t,
-                                                      q_num_chunks,
+                                                      seq_len_ct(q_num_chunks),
                                                       Sk_chunk_t,
-                                                      k_num_chunks,
+                                                      seq_len_ct(k_num_chunks),
                                                       num_cores,
                                                       static_cast<uint32_t>(use_causal_kernel),
                                                       static_cast<uint32_t>(use_provided_mask),
@@ -1648,13 +1664,13 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         // interleaved accessor args
         B,
         NQH,
-        valid_Sqt,
-        Sk,
+        seq_len_ct(valid_Sqt),
+        seq_len_ct(Sk),
         vDHt,
         Sq_chunk_t,
-        q_num_chunks,
+        seq_len_ct(q_num_chunks),
         Sk_chunk_t,
-        k_num_chunks,
+        seq_len_ct(k_num_chunks),
         packed_identity_scalar,
         num_cores,
         static_cast<uint32_t>(use_causal_kernel),
@@ -1688,13 +1704,13 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
 
     std::vector<uint32_t> compute_compile_time_args = {
         // matmul args
-        Skt,  // Padded K tile count — used by standard SDPA path for loop bounds
+        seq_len_ct(Skt),  // Padded K tile count — used by standard SDPA path for loop bounds
         DHt,
         vDHt,
         Sq_chunk_t,
-        q_num_chunks,
+        seq_len_ct(q_num_chunks),
         Sk_chunk_t,
-        k_num_chunks,
+        seq_len_ct(k_num_chunks),
         qk_in0_block_w,
         qk_out_subblock_w,
         qk_out_subblock_h,
@@ -1713,7 +1729,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         sliding_window_size.value_or(0),
         static_cast<std::uint32_t>(use_attention_sink),
         static_cast<std::uint32_t>(use_streaming_compute),  // arg 26
-        valid_Skt,                                    // arg 27: unpadded K tile count for streaming padded_k_tiles
+        seq_len_ct(valid_Skt),                        // arg 27: unpadded K tile count for streaming padded_k_tiles
         k_partial_col,                                // arg 28: K partial-tile col (0 = no partial)
         static_cast<uint32_t>(use_zigzag_balancing),  // arg 29: unified zigzag remap
         static_cast<uint32_t>(use_k_range_ctrl),      // arg 28: K-range narrowing (windowed mode or a mask block map)
@@ -1726,6 +1742,9 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     defines_map["DHT_GRANULARITY"] = std::to_string(dht_granularity);
     defines_map["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
     defines_map["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
+    if (runtime_seq_len) {
+        defines_map["SDPA_RUNTIME_SEQ_LEN"] = "1";
+    }
     log_debug(tt::LogOp, "use_zigzag_balancing: {}", use_zigzag_balancing);
 
     KernelDescriptor::Defines defines(defines_map.begin(), defines_map.end());
@@ -1952,7 +1971,8 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
             kv_retain != 0,
             use_causal_kernel,
             Sq_chunk_t >= kMinQTilesToPool,
-            global_q_range_for_core);
+            global_q_range_for_core,
+            /*allow_mcast=*/!runtime_seq_len);
         {
             std::string lengths;
             for (uint32_t len : chains.chain_lengths) {
@@ -2114,6 +2134,13 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
              0u,                                               // 3: phase_2 chunked offset (unused, num_phases==1)
              global_q_start,                                   // 4
              global_q_count});                                 // 5
+    }
+
+    if (runtime_seq_len) {
+        // Order as in sdpa_runtime_seq_len_args.hpp.
+        for (KernelDescriptor* kernel : {&reader_desc, &writer_desc, &compute_desc}) {
+            kernel->emplace_common_runtime_args({Skt, valid_Sqt, valid_Skt, q_num_chunks, k_num_chunks, Sk});
+        }
     }
 
     desc.kernels.push_back(std::move(reader_desc));

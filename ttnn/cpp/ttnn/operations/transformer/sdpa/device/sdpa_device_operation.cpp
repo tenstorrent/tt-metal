@@ -32,6 +32,21 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
                 !tensors.chunk_start_idx_tensor.has_value(),
             "output_concat_heads is supported for the plain (non-chunked, non-paged) SDPA only");
     }
+    if (attrs.runtime_seq_len) {
+        TT_FATAL(
+            !attrs.is_causal && !use_mla && !attrs.sliding_window_size.has_value() &&
+                attrs.windowed_mode == WindowedMode::None && !attrs.output_concat_heads,
+            "runtime_seq_len supports non-causal, non-MLA SDPA without a sliding window, windows or "
+            "output_concat_heads only");
+        TT_FATAL(
+            !tensors.attn_mask.has_value() && !tensors.attn_mask_block_map.has_value() &&
+                !tensors.page_table.has_value() && !attrs.chunk_start_idx.has_value() &&
+                !tensors.chunk_start_idx_tensor.has_value() && !tensors.attention_sink.has_value(),
+            "runtime_seq_len supports SDPA without a mask, a mask block map, paging, chunks or an attention sink only");
+        TT_FATAL(
+            ttnn::get_fp32_dest_acc_en(attrs.compute_kernel_config),
+            "runtime_seq_len supports the standard compute path only, which fp32_dest_acc_en=True selects");
+    }
 
     const Tensor& q = tensors.q;
     const Tensor& k = tensors.k;
@@ -699,7 +714,8 @@ Tensor sdpa(
     const std::optional<Tensor>& windowed_q_token_offset_tensor,
     std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry,
     bool output_concat_heads,
-    const std::optional<Tensor>& attn_mask_block_map) {
+    const std::optional<Tensor>& attn_mask_block_map,
+    bool runtime_seq_len) {
     using OperationType = ttnn::prim::SDPAOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
@@ -720,6 +736,7 @@ Tensor sdpa(
             .paged_cache_geometry =
                 paged_cache_geometry.value_or(ttnn::operations::transformer::PagedCacheGeometryOverride{}),
             .output_concat_heads = output_concat_heads,
+            .runtime_seq_len = runtime_seq_len,
         },
         OperationType::tensor_args_t{
             .q = input_tensor_q,
