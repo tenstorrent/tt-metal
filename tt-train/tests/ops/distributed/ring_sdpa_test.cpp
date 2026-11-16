@@ -84,13 +84,6 @@ protected:
                 {.enable_ddp = false, .enable_tp = false, .enable_cp = true});
         }
     }
-
-    static void TearDownTestSuite() {
-        if (ttml::test_utils::system_supports_mesh(mesh_shape())) {
-            ttml::autograd::ctx().reset_parallelism_context();
-        }
-        Mesh1x2SuiteFixture::TearDownTestSuite();
-    }
 };
 
 // Reference SDPA forward and backward implementation in xtensor for comparison
