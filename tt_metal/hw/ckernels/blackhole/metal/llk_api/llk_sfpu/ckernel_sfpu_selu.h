@@ -32,13 +32,18 @@ namespace ckernel::sfpu {
 inline constexpr std::uint32_t selu_bf16_scale_bits = 0x3f867d5fu;
 // The alpha the generated selu kernel is fitted for, as FP32 bits; any other alpha runs the stock kernel.
 inline constexpr std::uint32_t selu_bf16_alpha_bits = 0x3fd62d7du;
+// TT-NN's Python default alpha, the fitted value written short; it selects the generated kernel too.
+inline constexpr std::uint32_t selu_bf16_alpha_default_word = 0x3fd62d62u;
+// TT-NN's Python default scale, the fitted value written short; it selects the generated kernel too.
+inline constexpr std::uint32_t selu_bf16_scale_default_word = 0x3f867d56u;
 // Whether BF16 DEST runs the generated selu kernel as one call over the whole tile.
 inline constexpr bool selu_bf16_whole_tile = true;
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_selu(uint32_t scale, uint32_t alpha) {
     if constexpr (!is_fp32_dest_acc_en && ITERATIONS == 32) {
-        if (bf16_dest_selu() && scale == ckernel::sfpu::selu_bf16_scale_bits &&
-            alpha == ckernel::sfpu::selu_bf16_alpha_bits) {
+        if (bf16_dest_selu() &&
+            (scale == ckernel::sfpu::selu_bf16_scale_bits || scale == ckernel::sfpu::selu_bf16_scale_default_word) &&
+            (alpha == ckernel::sfpu::selu_bf16_alpha_bits || alpha == ckernel::sfpu::selu_bf16_alpha_default_word)) {
             calculate_selu_bf16<ITERATIONS>();
             return;
         }

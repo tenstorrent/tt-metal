@@ -13,16 +13,10 @@ struct SeluBf16Config {
         0xc0c20000u, 0x00000000u, 0x41200000u, 0x00000000u, 0x3fe10966u, 0x3f6118f6u, 0x3e95c291u,
         0x3d927a57u, 0x3c54e4eau, 0x3ad80000u, 0x3905727fu, 0x36940000u, 0x00000000u, 0x3f867d5fu,
         0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u};
-    static constexpr int kParkRows[] = {-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-                                        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1};
-    static constexpr uint32_t kRowBase = 64u;
-    static constexpr uint32_t kRowLimit = 108u;
-    static constexpr uint32_t kParkedCount = 0u;
     static constexpr uint32_t kLowerBits = 0xc0c20000u;
     static constexpr uint32_t kTerminalBits = 0xbfe10000u;
     static constexpr bool kOrdered = true;
     static constexpr uint32_t degree(uint32_t segment) { return kDegree[segment]; }
-    static constexpr int park_row(uint32_t index) { return kParkRows[index]; }
     static constexpr float lut(uint32_t index) { return __builtin_bit_cast(float, kLutBits[index]); }
 };
 }  // namespace ckernel::sfpu
