@@ -11,6 +11,7 @@
 #include <map>
 #include <optional>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 #include "core/compute_kernel_config.hpp"
@@ -36,12 +37,53 @@ namespace {
 // disjoint pieces of the gradient; along the others they hold copies.
 using GradsBySharding = std::map<std::vector<uint32_t>, std::vector<ttnn::Tensor>>;
 
+// step1/step3 take their accessor args from the first input only, so every gradient must match the first one seen.
+// Named, since a model has hundreds of gradients.
+void validate_grad(
+    const std::string& name,
+    const ttnn::Tensor& grad,
+    const std::string& reference_name,
+    const ttnn::Tensor& reference) {
+    if (grad.logical_shape().rank() != 4U) {
+        throw std::logic_error(fmt::format(
+            "clip_grad_norm: gradients must be 4D, but the gradient of {} has rank {}",
+            name,
+            grad.logical_shape().rank()));
+    }
+    if (grad.dtype() != reference.dtype()) {
+        throw std::logic_error(fmt::format(
+            "clip_grad_norm: all gradients must share one dtype, but the gradient of {} is {} and that of {} is {}",
+            name,
+            grad.dtype(),
+            reference_name,
+            reference.dtype()));
+    }
+    if (grad.memory_config() != reference.memory_config()) {
+        throw std::logic_error(fmt::format(
+            "clip_grad_norm: all gradients must share one memory config, but the gradient of {} has {} and that of {} "
+            "has {}",
+            name,
+            grad.memory_config(),
+            reference_name,
+            reference.memory_config()));
+    }
+}
+
 GradsBySharding group_by_sharding(const serialization::NamedParameters& parameters) {
     GradsBySharding groups;
-    for (const auto& [_, tensor] : parameters) {
+    const std::string* reference_name = nullptr;
+    const ttnn::Tensor* reference = nullptr;
+    for (const auto& [name, tensor] : parameters) {
         if (!tensor->get_requires_grad() || !tensor->is_grad_initialized()) {
             continue;
         }
+        const auto& grad = tensor->get_grad();
+        if (reference == nullptr) {
+            reference_name = &name;
+            reference = &grad;
+        }
+        validate_grad(name, grad, *reference_name, *reference);
+
         const auto& value = tensor->get_value();
         const auto mesh_shape = value.device()->shape();
         std::vector<uint32_t> sharded_axes;
@@ -50,24 +92,9 @@ GradsBySharding group_by_sharding(const serialization::NamedParameters& paramete
                 sharded_axes.push_back(axis);
             }
         }
-        groups[sharded_axes].push_back(tensor->get_grad());
+        groups[sharded_axes].push_back(grad);
     }
     return groups;
-}
-
-// step1/step3 take their accessor args from the first input only, so every gradient must match it.
-void validate_grads(const GradsBySharding& groups) {
-    const auto& reference = groups.begin()->second.front();
-    for (const auto& [_, grads] : groups) {
-        for (const auto& grad : grads) {
-            if (grad.logical_shape().rank() != 4U) {
-                throw std::logic_error("clip_grad_norm: gradients must be 4D");
-            }
-            if (grad.dtype() != reference.dtype() || grad.memory_config() != reference.memory_config()) {
-                throw std::logic_error("clip_grad_norm: all gradients must share dtype and memory config");
-            }
-        }
-    }
 }
 
 // step1/step3 assign one gradient per core, so each launch takes at most one gradient per core.
@@ -111,7 +138,6 @@ autograd::TensorPtr clip_grad_norm(
     if (groups.empty()) {
         throw std::logic_error("clip_grad_norm: no gradients to clip");
     }
-    validate_grads(groups);
 
     // step1/step3 currently ignore this (their factories build a default compute config) and accumulate
     // Sum[|g|^p] in bf16, so the norm is underestimated for gradients of more than ~1k tiles per device (#63505).
@@ -147,13 +173,7 @@ autograd::TensorPtr clip_grad_norm(
     }
 
     // clip_coef = min(max_norm / (total_norm + 1e-6), 1), as in moreh_clip_grad_norm.
-    const auto& reference = groups.begin()->second.front();
-    auto& device = *reference.device();
-    const auto clip_coef = ttnn::div(
-        ttnn::full(ttnn::Shape({1}), max_norm, reference.dtype(), ttnn::Layout::TILE, std::ref(device)),
-        ttnn::add(total_norm, 1e-6F));
-    const auto clip_coef_clamped = ttnn::minimum(
-        clip_coef, ttnn::full(ttnn::Shape({1}), 1.0F, reference.dtype(), ttnn::Layout::TILE, std::ref(device)));
+    const auto clip_coef = ttnn::minimum(ttnn::div(max_norm, ttnn::add(total_norm, 1e-6F)), 1.0F);
 
     // All gradients share one coefficient, so step3 launches over them together.
     std::vector<ttnn::Tensor> all_grads;
@@ -161,7 +181,7 @@ autograd::TensorPtr clip_grad_norm(
         all_grads.insert(all_grads.end(), grads.begin(), grads.end());
     }
     for_each_launch(all_grads, [&](const std::vector<ttnn::Tensor>& launch_grads, uint32_t /* offset */) {
-        ttnn::prim::moreh_clip_grad_norm_step3(launch_grads, clip_coef_clamped, std::nullopt, compute_config);
+        ttnn::prim::moreh_clip_grad_norm_step3(launch_grads, clip_coef, std::nullopt, compute_config);
     });
     return autograd::create_tensor(total_norm);
 }
