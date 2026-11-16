@@ -30,6 +30,7 @@ OTHER_NIGHTLIES = (
 WORKFLOWS = ".github/workflows"
 VERDICT = re.compile(r"verdict=(\w+) regressions=(\d+)")
 BASELINE = re.compile(r"(?:^|Z )baseline \S+ \(([0-9a-f]+), (\d{4}-\d{2}-\d{2})", re.M)
+COMPARED = re.compile(r"- (\d+) points compared, .*?(\d+) new point")
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 LEG = re.compile(r"(llk_perf_\w+ group \d+/\d+)")
 ARCHES = ("blackhole", "wormhole")
@@ -138,6 +139,7 @@ def job_log(repo, job_id):
 def gate_result(log, day):
     verdict = VERDICT.search(log)
     baseline = BASELINE.search(log)
+    compared = COMPARED.search(log)
     return {
         "verdict": verdict.group(1) if verdict else "no verdict",
         "regressions": int(verdict.group(2)) if verdict else 0,
@@ -145,6 +147,8 @@ def gate_result(log, day):
         "baseline_age": (
             (day - dt.date.fromisoformat(baseline.group(2))).days if baseline else None
         ),
+        "compared": int(compared.group(1)) if compared else None,
+        "new": int(compared.group(2)) if compared else 0,
     }
 
 
@@ -206,6 +210,11 @@ def assess(name, run, jobs, logs, limits, day):
                 )
                 report["problems"].append(
                     f"{name} {arch}: gate {gate['verdict']}{count}"
+                )
+            if gate["new"]:
+                report["problems"].append(
+                    f"{name} {arch}: {gate['new']:,} of"
+                    f" {gate['compared'] + gate['new']:,} measured points not compared"
                 )
         elif job["conclusion"] not in (None, "success", "skipped") and not any(
             rollup in job["name"] for rollup in ROLLUP_JOBS
