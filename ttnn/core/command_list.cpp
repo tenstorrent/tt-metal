@@ -54,7 +54,14 @@ float float32_of(const ttnn::command_list::CmdListScalar& scalar, std::string_vi
 }
 
 uint32_t bfloat16_of(const ttnn::command_list::CmdListScalar& scalar, std::string_view encoder) {
-    return fp32_to_bf16_bits_round_to_nearest_even(float32_of(scalar, encoder));
+    const float value = float32_of(scalar, encoder);
+    const uint32_t bits = fp32_to_bf16_bits_round_to_nearest_even(value);
+    TT_FATAL(
+        !std::isfinite(value) || (bits & 0x7FFF) != 0x7F80,
+        "{} needs a value in bfloat16 range, got {}",
+        encoder,
+        value);
+    return bits;
 }
 
 uint32_t uint16_of(const ttnn::command_list::CmdListScalar& scalar, std::string_view encoder) {

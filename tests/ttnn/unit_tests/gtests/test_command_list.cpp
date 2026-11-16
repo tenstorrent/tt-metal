@@ -144,6 +144,7 @@ TEST(CommandListParamsTest, EncodersRejectValuesTheyCannotRepresent) {
     rejects(encode_uint16_low, integer(0x10000));
     rejects(encode_float32_bits, real(1e39));
     rejects(encode_bfloat16_pair, real(-1e39));
+    rejects(encode_bfloat16_low, real(3.4e38));
 }
 
 TEST_F(CommandListTest, BindsNeedARecordingBuilder) {
