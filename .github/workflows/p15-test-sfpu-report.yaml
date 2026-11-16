@@ -1,0 +1,20 @@
+name: "P15 test: SFPU report"
+
+# Throwaway: runs llk-sfpu-report.yaml from this pull request's own commit.
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: write
+  packages: write
+
+jobs:
+  report:
+    uses: ./.github/workflows/llk-sfpu-report.yaml
+    secrets: inherit
+    with:
+      pr_number: "${{ github.event.pull_request.number }}"
+      ops: "Sin,Cos,Tan,Reciprocal"
+      arch: all
+      iterations: "1"
