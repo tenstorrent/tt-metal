@@ -6,7 +6,8 @@ drive a model of the device's queues (QO / QW / QF / QR and compute, with fabric
 landing a packet in a slot that still holds another expert. Device: the 2 x 4 tray (row snake, 2 lanes, G 2) and the
 whole Galaxy torus (2 cycles x 2 links, G 4); every launch builds the program again (fresh arrival / credit words),
 WS_WARM (default 20) warm-up + WS_MEAS (default 5) measured launches; the steady-state time per expert comes from the
-group cores' expert-done stamps, PCC from the last launch (each group's last expert, or every expert with out_all)."""
+group cores' expert-done stamps, PCC from the last launch (every expert's rows are written by default (out_all); the
+checked experts and chips follow WS_PCC_EXPERTS / WS_PCC_CHIPS)."""
 
 import os
 import random
@@ -17,7 +18,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.ws_expert.bench_util import aiclk_mhz, pcc, quantize, to_dev
+from models.demos.ws_expert.bench_util import aiclk_mhz, pcc, quantize
 from models.demos.ws_expert.tests.test_ws_fab_bench import FAB, TORUS
 from models.demos.ws_expert.ws_expert import interleave_gu
 from models.demos.ws_expert.ws_fab import slice_layout
@@ -28,6 +29,43 @@ from models.demos.ws_expert.ws_sf import torus_cycles
 
 WARM = int(os.environ.get("WS_WARM", "20"))
 MEAS = int(os.environ.get("WS_MEAS", "5"))
+# PCC sample: WS_PCC_EXPERTS = k checks each group's last expert plus k evenly spaced ones (default every expert),
+# WS_PCC_CHIPS = comma-separated chips checked (default every chip); only the checked rows are read back
+PCC_EXPERTS = int(os.environ.get("WS_PCC_EXPERTS", "-1"))
+PCC_CHIPS = os.environ.get("WS_PCC_CHIPS", "")
+
+
+def pcc_chips(N):
+    return [int(c) for c in PCC_CHIPS.split(",") if c != "" and int(c) < N] if PCC_CHIPS else list(range(N))
+
+
+def pcc_pick(entries):
+    """The checked subset of a group's (row, expert) entries in compute order: all, or the last plus k evenly
+    spaced (WS_PCC_EXPERTS)."""
+    if PCC_EXPERTS < 0 or len(entries) <= PCC_EXPERTS + 1:
+        return entries
+    n = len(entries) - 1
+    keep = {round(i * (n - 1) / max(PCC_EXPERTS - 1, 1)) for i in range(PCC_EXPERTS)} if PCC_EXPERTS else set()
+    return [entries[i] for i in sorted(keep)] + [entries[-1]]
+
+
+def out_rows_of(cfg: GCfg, lc: LCfg, T, R, N):
+    """Tile rows of a group's output block: every expert's rows (out_all) or the last expert's."""
+    if lc.out_all:
+        rows = max(sum(R[e] for e in T["meta"][(X, g)]["order"]) for X in range(N) for g in range(cfg.G))
+    else:
+        rows = max(R[T["meta"][(X, g)]["order"][-1]] for X in range(N) for g in range(cfg.G))
+    return max(rows, 1)
+
+
+def out_tensor(mesh, cfg: GCfg, out_rows):
+    return ttnn.empty(
+        [cfg.G * out_rows * 32, cfg.H],
+        dtype=cfg.out_dt,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
 
 
 def table_replay(T, N, GU, P, seed=0, prob=0.5, delay=6):
@@ -222,7 +260,7 @@ def make_inputs(mesh, cfg: GCfg, lc: LCfg, T, Ms, out_rows, seed=0):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=0),
         ),
-        out_t=to_dev(torch.zeros(cfg.G * out_rows * 32, cfg.H), cfg.out_dt, mesh),
+        out_t=out_tensor(mesh, cfg, out_rows),
     )
     del per_chip
     cache = {}
@@ -238,26 +276,36 @@ def make_inputs(mesh, cfg: GCfg, lc: LCfg, T, Ms, out_rows, seed=0):
             cache[e] = (h @ wdq)[: Ms[e]]
         return cache[e]
 
-    refs = {}  # (chip, group) -> [(out tile row, expert, reference)]
-    for X in range(N):
+    refs = {}  # (chip, group) -> [(out tile row, expert, reference)], checked chips only
+    for X in pcc_chips(N):
         for g in range(cfg.G):
             order = T["meta"][(X, g)]["order"]
             if lc.out_all:
-                lst, row = [], g * out_rows
+                ent, row = [], g * out_rows
                 for e in order:
                     if Ms[e]:
-                        lst.append((row, e, ref(e)))
+                        ent.append((row, e))
                     row += (Ms[e] + 31) // 32
-                refs[(X, g)] = lst
+                refs[(X, g)] = [(row, e, ref(e)) for row, e in pcc_pick(ent)]
             else:
                 e = order[-1]
                 refs[(X, g)] = [(g * out_rows, e, ref(e))] if Ms[e] else []
     return dev, refs
 
 
+def out_rows_back(out_chip, row, n):
+    """Tile rows [row, row + n) of one chip's output, read back alone."""
+    W = out_chip.shape[-1]
+    return ttnn.to_torch(ttnn.slice(out_chip, [row * 32, 0], [(row + n) * 32, W])).float()
+
+
 def chip_pcc(refs, X, G, out_chip):
-    out = ttnn.to_torch(out_chip).float()
-    vals = [pcc(out[row * 32 : row * 32 + r.shape[0]], r) for g in range(G) for row, e, r in refs[(X, g)]]
+    """Min PCC over the chip's checked experts (1.0 if none is checked on this chip)."""
+    vals = []
+    for g in range(G):
+        for row, e, r in refs.get((X, g), []):
+            got = out_rows_back(out_chip, row, (r.shape[0] + 31) // 32)
+            vals.append(pcc(got[: r.shape[0]], r))
     return min(vals) if vals else 1.0
 
 
@@ -301,11 +349,7 @@ def run(mesh, cfg: GCfg, lc: LCfg, Ms, tag, warm=WARM, meas=MEAS):
     N = mesh.get_num_devices()
     T = make_tables(shape, cfg, lc)
     R = [(m + 31) // 32 for m in Ms]
-    if lc.out_all:
-        out_rows = max(sum(R[e] for e in T["meta"][(X, g)]["order"]) for X in range(N) for g in range(cfg.G))
-    else:
-        out_rows = max(R[T["meta"][(X, g)]["order"][-1]] for X in range(N) for g in range(cfg.G))
-    out_rows = max(out_rows, 1)
+    out_rows = out_rows_of(cfg, lc, T, R, N)
     dev, refs = make_inputs(mesh, cfg, lc, T, Ms, out_rows)
     tab_t = tables_tensor(mesh, T["tabs"])
     clk_dev = first_visible()
@@ -336,27 +380,32 @@ def run(mesh, cfg: GCfg, lc: LCfg, Ms, tag, warm=WARM, meas=MEAS):
         if i == warm + meas - 1:
             clk_end = aiclk_mhz(clk_dev)
             outs = ttnn.get_device_tensors(dev["out_t"])
-            pcs = {ci: chip_pcc(refs, ci, cfg.G, outs[ci]) for ci in chips}
+            pcs = {ci: chip_pcc(refs, ci, cfg.G, outs[ci]) for ci in pcc_chips(N)}
             sts = ttnn.get_device_tensors(st)
             for ci in (0, N - 1):
                 logger.info(f"WSL {tag} chip {ci} riscs: {risc_report(cfg, sts[ci])}")
             del outs, sts
         del mpd, io, st
     we = 3 * cfg.H * cfg.I * 576 / 1024
+    # bytes written a chip per expert: every expert's rows (out_all) or only each group's last
+    ob = sum(R) * 32 * cfg.H * 2 / len(R) if lc.out_all else 0.0
     for ci in chips:
         cyc = statistics.median(r[ci][0] for r in rows)
         ut = [100 * r[ci][1] for r in rows]
         logger.info(
             f"WSL {tag} chip {ci}: median {cyc:.0f} cyc/expert ({cyc / clk:.2f} us), util tile median "
             f"{statistics.median(ut):.1f}% (min {min(ut):.1f}, max {max(ut):.1f}), weights in "
-            f"{we / (cyc / clk * 1e3):.0f} GB/s; waits (K) tilize/x/weight/h {rows[-1][ci][2]}; pcc {pcs[ci]:.5f}"
+            f"{we / (cyc / clk * 1e3):.0f} GB/s, outputs {ob / (cyc / clk * 1e3):.0f} GB/s; waits (K) "
+            f"tilize/x/weight/h {rows[-1][ci][2]}; pcc {pcs.get(ci, float('nan')):.5f}"
         )
     allu = [100 * r[ci][1] for r in rows for ci in chips]
     logger.info(
         f"WSL {tag} SUMMARY: {warm} warm-up + {meas} measured launches, aiclk {clk} MHz (chip {clk_dev}, {clk_end} at "
         f"the end), util tile over chips and "
         f"launches median {statistics.median(allu):.1f}% (min {min(allu):.1f}, max {max(allu):.1f}), "
-        f"min pcc {min(pcs.values()):.5f}"
+        f"min pcc {min(pcs.values()):.5f} (chips {pcc_chips(N) if PCC_CHIPS else 'all'}, "
+        f"{'every' if PCC_EXPERTS < 0 else f'last + {PCC_EXPERTS}'} expert(s) a group, "
+        f"out_all {lc.out_all})"
     )
     return rows, pcs
 
@@ -390,7 +439,9 @@ def test_ws_lane_tray(mesh_device, M):
 
 @pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
 @pytest.mark.parametrize("device_params", [TORUS], indirect=True)
-@pytest.mark.parametrize("nexp,T,M", [(128, 8192, 586), (640, 31250, 586)], ids=["e128m586", "e640m586"])
+@pytest.mark.parametrize(
+    "nexp,T,M", [(128, 8192, 586), (640, 31250, 586), (640, 31250, 2048)], ids=["e128m586", "e640m586", "e640m2048"]
+)
 def test_ws_lane_glx(mesh_device, nexp, T, M):
     """The whole Galaxy (8 x 4, FABRIC_2D_TORUS_XY): two edge-disjoint Hamiltonian cycles x 2 links = 4 lanes, G 4."""
     cfg = gcfg(nexp, 4, T)
@@ -572,8 +623,8 @@ def test_ws_lane_glx_dynm(mesh_device):
 @pytest.mark.parametrize("device_params", [FAB], indirect=True)
 def test_ws_lane_tray_soak(mesh_device):
     """Soak on the tray at the 640-expert torus load of a lane (160 experts a lane, T 31250, M 586; G 2): launches
-    until WS_SOAK_SECS (default 900) or WS_SOAK_MAX launches, the util of every 50th launch logged, PCC (each group's
-    last expert) on the last."""
+    until WS_SOAK_SECS (default 900) or WS_SOAK_MAX launches, the util of every 50th launch logged, PCC (the checked
+    experts, see WS_PCC_EXPERTS) on the last."""
     import time
 
     cfg, lc = gcfg(320, 2, 31250), lcfg_from_env()
@@ -581,7 +632,7 @@ def test_ws_lane_tray_soak(mesh_device):
     mesh = mesh_device
     N = mesh.get_num_devices()
     T = make_tables(tuple(mesh.shape), cfg, lc)
-    out_rows = (586 + 31) // 32
+    out_rows = out_rows_of(cfg, lc, T, [(m + 31) // 32 for m in Ms], N)
     dev, refs = make_inputs(mesh, cfg, lc, T, Ms, out_rows)
     tab_t = tables_tensor(mesh, T["tabs"])
     secs, mx = float(os.environ.get("WS_SOAK_SECS", "900")), int(os.environ.get("WS_SOAK_MAX", "100000"))
@@ -603,7 +654,7 @@ def test_ws_lane_tray_soak(mesh_device):
             del sts
         del mpd, io, st
     outs = ttnn.get_device_tensors(dev["out_t"])
-    pcs = {ci: chip_pcc(refs, ci, cfg.G, outs[ci]) for ci in range(N)}
+    pcs = {ci: chip_pcc(refs, ci, cfg.G, outs[ci]) for ci in pcc_chips(N)}
     logger.info(
         f"WSK soak SUMMARY: {i} launches in {time.time() - t0:.0f} s without a hang, util tile median "
         f"{statistics.median(utils) if utils else 0:.1f}% over the logged launches, min pcc {min(pcs.values()):.5f}"

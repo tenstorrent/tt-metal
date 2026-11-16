@@ -49,7 +49,7 @@ class LCfg:
     D: int = 4  # own-expert chunk reads in flight
     slots: str = "d0,d1,any"  # weight slots a core and the experts each takes (ws_lane_sched.slot_types)
     keep: int = 1  # schedule: slots an owner leaves free when it injects
-    out_all: bool = False  # every expert's down rows to DRAM (WL_OUT_ALL), not only each group's last
+    out_all: bool = True  # every expert's down rows to DRAM (WL_OUT_ALL); False: only each group's last expert
     wpoll: int = 2  # the reader serves its weight queues every wpoll turns of its loop (WL_WPOLL)
     mcast_linked: bool = False  # group multicast payloads linked to their flags (WL_MCAST_LINKED)
     arr_write: bool = False  # arrival counts as plain writes after the payloads, no router atomics (WL_ARR_WRITE)
