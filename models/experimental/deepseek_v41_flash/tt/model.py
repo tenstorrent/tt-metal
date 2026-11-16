@@ -3910,6 +3910,10 @@ class DeepSeekV41Model(DeepSeekV4Model):
             streams, new_pre = layer.decode_block(
                 streams, pre_mix, sm["scaches"][li], **self._block_attention_inputs(layer.self_attn, ctx)
             )
+            if getattr(self, "_block_debug_streams", None) is not None:
+                self._block_debug_streams.append(
+                    ttnn.to_torch(ttnn.get_device_tensors(streams)[0]).float().reshape(-1, streams.shape[-1])
+                )
             if pre_mix is not sm["block_pre_mix_init"]:
                 ttnn.deallocate(pre_mix)
             pre_mix = new_pre
@@ -3961,6 +3965,11 @@ class DeepSeekV41Model(DeepSeekV4Model):
                 kept, self._block_debug_logits = self._block_debug_logits, None
             for out in outs:
                 out.deallocate(True)
+        taps = getattr(self, "_block_debug_streams", None)
+        if taps is not None:
+            # [layer, hc * T, D] of rank 0's copy: row s * T + j is stream s of block row j.
+            self.block_debug_taps = torch.stack(taps)
+            self._block_debug_streams = []
         logits = kept[0]
         parts = [ttnn.to_torch(x.cpu()).float() for x in ttnn.get_device_tensors(logits)]
         host = torch.cat([x.reshape(-1, x.shape[-1]) for x in parts], dim=-1)
