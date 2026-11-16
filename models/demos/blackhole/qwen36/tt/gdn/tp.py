@@ -6,6 +6,7 @@ Recurrence is per value-head (no cross-device comms inside); all-reduce after ro
 Reuses `recurrent_gated_delta_rule_decode_ttnn`; weights interleaved. GDN norm uses raw weight
 (no +1) + SiLU(z) gate — distinct from QK/layer norms.
 """
+import collections
 import os
 
 import torch
@@ -22,6 +23,20 @@ from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_seq i
 )
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_gated_deltanet import _causal_conv1d_fir
 from models.tt_transformers.tt.ccl import tt_all_gather, tt_all_reduce
+
+
+def _gdn_fused_env():
+    """QWEN36_GDN=fused: one ttnn gated_delta_net program between the input and output projections, on the calls
+    it can serve; chain (default) keeps the chain of ops. Spec decode needs the chain: fused only with QWEN36_SPEC=0."""
+    mode = os.environ.get("QWEN36_GDN", "chain")
+    if mode not in {"chain", "fused"}:
+        raise ValueError(f"QWEN36_GDN must be 'chain' or 'fused', got {mode!r}")
+    return mode == "fused" and os.environ.get("QWEN36_SPEC") == "0"
+
+
+_GDN_FUSED = _gdn_fused_env()
+# (call, path) -> number of forward calls (a traced call counts once, at capture).
+GDN_PATH_CALLS = collections.Counter()
 
 
 def _replace(old, new):
@@ -326,6 +341,25 @@ def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
     # Conv taps (4), sharded per Q/K/V head grouping
     taps = tpc.prepare_conv_taps(conv1d_w, key_dim, nk, dk, nv, dv, args.gdn_conv_kernel_size, tp)
     tw["conv_taps"] = [tpc.shard_small(taps[j], mesh, c(f"tap{j}")) for j in range(args.gdn_conv_kernel_size)]
+    if _GDN_FUSED and args.gdn_conv_kernel_size == 4:
+        # Weights of the fused gated_delta_net op: taps as [4, C] rows (row j = tap j), raw A_log / dt_bias [Nv],
+        # norm weight [Dv].
+        def small(t, mapper):
+            return ttnn.from_torch(
+                t.to(torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=mapper,
+            )
+
+        tw["gdn_fused"] = (
+            small(torch.stack(taps), tpc.tp_shard_mapper(mesh, -1)),
+            small(sd[P + "A_log"].float().reshape(-1), tpc.tp_shard_mapper(mesh, 0)),
+            small(sd[P + "dt_bias"].float().reshape(-1), tpc.tp_shard_mapper(mesh, 0)),
+            small(sd[P + "norm.weight"].float().reshape(-1), ttnn.ReplicateTensorToMesh(mesh)),
+        )
     return tw
 
 
@@ -434,6 +468,8 @@ class TPGatedDeltaNet:
         self._zero_rec = None
         self._zero_rec_f32 = None  # batch-1 zero initial state for carry_state=False prefill (_ensure_zero_rec_f32)
         self._pending = []  # per-user (rec, conv) states collected during batched per-user prefill
+        # QWEN36_GDN=fused: forward_prefill / forward_decode run the fused op on the calls it can serve.
+        self._gdn_fused = "gdn_fused" in tw
 
     def _release_spec_bufs(self):
         """Free the batched spec-verify buffers and forget their shape (prepare_spec_verify reallocs)."""
@@ -805,6 +841,19 @@ class TPGatedDeltaNet:
                 self.reset_state()
             self._ensure_zero_rec_f32()
 
+        # Fused op: no valid_len and one state slot, so full buckets of the single-sequence carry path only.
+        _fused = (
+            self._gdn_fused
+            and carry
+            and sp is None
+            and (valid_len is None or valid_len == T)
+            and self.args.max_batch_size == 1
+            and self._gdn_fused_state_ok(1)
+        )
+        GDN_PATH_CALLS["prefill", "fused" if _fused else "chain"] += 1
+        if _fused:
+            return self._forward_prefill_fused(x, T, capture_state)
+
         # Prefill qkvzab in L1 (DRAM above S=2048): keeps proj + q/k/v/z/a/b resident for conv+gate prep.
         _L1 = tpc.prefill_act_mem(T, ttnn.L1_MEMORY_CONFIG)
         qkv, z, a, b = self._project_qkvzab(x, T, out_mc=_L1)
@@ -1027,6 +1076,114 @@ class TPGatedDeltaNet:
         if return_state:
             return out, captured[0], captured[1]
         return out
+
+    def _gdn_fused_state_ok(self, B):
+        """The fused op reads B from the state: exactly B fp32 slots."""
+        return self.rec_state.shape[0] == B and self.rec_state.dtype == ttnn.float32
+
+    def _gdn_fused_op(self, qkv, z, a, b, conv_state):
+        """ttnn gated_delta_net: conv + SiLU, gates, delta rule, gated RMS norm * silu(z) in one program.
+        qkv/z/a/b: [1, B*T, .] bf16 TILE DRAM (consumed). conv_state [1, 3*B, C] and self.rec_state are updated
+        in place. Returns the gated output [1, B*T, value_dim_tp] bf16 DRAM."""
+        from ttnn.operations.gated_delta_net import gated_delta_net
+
+        out, _, _ = gated_delta_net(
+            qkv,
+            z,
+            b,
+            a,
+            conv_state,
+            self.rec_state,
+            *self.tw["gdn_fused"],
+            epsilon=1e-6,
+            conv_state_out=conv_state,
+            recurrent_state_out=self.rec_state,
+        )
+        for t in (qkv, z, a, b):
+            ttnn.deallocate(t)
+        return out
+
+    def _forward_prefill_fused(self, x, T, capture_state):
+        """forward_prefill on the fused op: a full chunk continuing from (and writing) the persistent state.
+        conv_carry [1, K-1, C] is the op's conv state at one slot."""
+        tw, D = self.tw, self.qkv_dim_tp
+        # The op takes its inputs from DRAM (the chain keeps the projection outputs in L1).
+        qkv, z, a, b = self._project_qkvzab(x, T)
+        gated = self._gdn_fused_op(qkv, z, a, b, self.conv_carry)
+        if capture_state:
+            # Decode conv window, as the chain: taps 1..K-1 = the last K-1 conv inputs, tap 0 = zero.
+            ttnn.copy(self._zero_conv0, self.conv_states[0])
+            for j in range(self.K - 1):
+                src = ttnn.slice(self.conv_carry, (0, j, 0), (1, j + 1, D))
+                ttnn.copy(src, self.conv_states[j + 1])
+                ttnn.deallocate(src)
+            self._conv_taps_stale = False
+            self._conv_win_stale = True
+        if self._out_colpar_prefill:
+            _bf8 = getattr(self.args, "prefill_agmm_bf8", False)
+            out = tpc.all_gather_matmul_prefill(
+                gated,
+                tw["out_colpar"],
+                self.tt_ccl,
+                self.cfg,
+                self.args.ccl_topology(),
+                out_memory_config=tpc.prefill_act_mem(T, ttnn.L1_MEMORY_CONFIG),
+                persistent_output_buffer=tpc.agmm_gather_buffer(self.tt_ccl, gated, act_bf8=_bf8),
+                act_bf8=_bf8,
+                config_override=tpc.agmm_config_override(self.args, gated.shape[-2], "gdn_out"),
+            )
+            ttnn.deallocate(gated)
+            return out
+        if self._fuse_out_mmrs_prefill:
+            x_out = ttnn.reshape(gated, (1, 1, T, gated.shape[-1]))
+            out = tpc.matmul_reduce_scatter_prefill(
+                x_out, tw["out"], self.tt_ccl, self.cfg, self.args.ccl_topology(), self.args.num_devices, ttnn.float32
+            )
+            ttnn.deallocate(gated)
+            return out
+        partial = self._row_proj(gated, tw["out"])
+        ttnn.deallocate(gated)
+        partial = ttnn.reshape(partial, (1, 1, T, partial.shape[-1]))
+        return tpc.tp_reduce_scatter(
+            partial, self.mesh, self.tt_ccl, self.args, dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+
+    def _forward_decode_fused(self, x, B):
+        """forward_decode on the fused op (B == max batch). The K taps stay the conv state everything else reads:
+        the op's history [1, 3*B, C] (user-major, oldest first) is built from taps 1..K-1 and the taps are
+        shifted as in the chain."""
+        C = self.qkv_dim_tp
+        _dram = ttnn.DRAM_MEMORY_CONFIG
+        # The op takes its inputs from DRAM (the chain keeps the projection outputs in L1).
+        qkv, z, a, b = self._project_qkvzab(x, B)
+        self.sync_conv_taps()
+        st = self.conv_states
+        if B == 1:
+            hist = ttnn.concat(st[1:], dim=1, memory_config=_dram)
+        else:
+            rows = [ttnn.reshape(c, (B, 1, C)) for c in st[1:]]
+            win = ttnn.concat(rows, dim=1, memory_config=_dram)
+            for r in rows:
+                ttnn.deallocate(r)
+            hist = ttnn.reshape(win, (1, (self.K - 1) * B, C))
+        for j in range(self.K - 1):
+            ttnn.copy(st[j + 1], st[j])
+        ttnn.copy(qkv, st[self.K - 1])
+        self._conv_win_stale = True
+        gated = self._gdn_fused_op(qkv, z, a, b, hist)
+        ttnn.deallocate(hist)
+        partial = self._row_proj(gated, self.tw["out"])
+        ttnn.deallocate(gated)
+        partial = ttnn.reshape(partial, (1, 1, B, partial.shape[-1]))
+        return tt_all_reduce(
+            partial,
+            self.mesh,
+            self.tt_ccl,
+            cluster_axis=0,
+            dim=3,
+            topology=self.args.ccl_topology(),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
 
     def forward_prefill_collect(self, x, chunk_size=128, valid_len=None):
         """Per-user prefill that stashes this user's B=1 state for later assembly.
@@ -1457,6 +1614,11 @@ class TPGatedDeltaNet:
         # preserved. Conv taps are per-channel (broadcast over batch), so the conv weighted-sum
         # works at any width. The B==Bmax path is byte-identical to before.
         B = x.shape[-2]
+
+        _fused = self._gdn_fused and B == Bmax and not self.use_fused_recurrent_decode and self._gdn_fused_state_ok(B)
+        GDN_PATH_CALLS["decode", "fused" if _fused else "chain"] += 1
+        if _fused:
+            return self._forward_decode_fused(x, B)
 
         qkv, z, a, b = self._project_qkvzab(x, B, out_mc=_L1)
 
