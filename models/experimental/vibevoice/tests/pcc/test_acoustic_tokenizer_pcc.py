@@ -14,7 +14,7 @@ import torch
 import ttnn
 
 from models.experimental.vibevoice.common.config import MODEL_PATH
-from tests.ttnn.utils_for_testing import assert_numeric_metrics
+from tt_py_test_utils_common.utils_for_testing import assert_numeric_metrics
 from models.experimental.vibevoice.tt.load_weights import (
     load_vibevoice_state_dict,
     split_submodule_weights,

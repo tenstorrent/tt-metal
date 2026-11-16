@@ -127,7 +127,7 @@ AllToAllStreamSchedule build_stream_schedule(
         TT_FATAL(connection_coord.has_value(), "No all-to-all target at device offset {}", device_offset);
         const auto connection_node = device->get_fabric_node_id(*connection_coord);
         const auto direction =
-            tt::tt_fabric::get_eth_forwarding_direction(sender_device_fabric_node_id, connection_node);
+            tt::tt_fabric::get_eth_forwarding_direction(*device, sender_device_fabric_node_id, connection_node);
         TT_FATAL(
             direction.has_value(),
             "No Fabric2D forwarding direction from all-to-all source {} to target {}",
@@ -458,7 +458,7 @@ tt::tt_metal::ProgramDescriptor build_all_to_all_async_generic_program_descripto
                 tensor_args.input_tensor, source_coord, offset, effective_topology, operation_attributes.cluster_axis);
             TT_FATAL(connection_coord.has_value(), "No all-to-all target at device offset {}", offset);
             const auto connection_node = device->get_fabric_node_id(*connection_coord);
-            const auto direction = tt::tt_fabric::get_eth_forwarding_direction(source_node, connection_node);
+            const auto direction = tt::tt_fabric::get_eth_forwarding_direction(*device, source_node, connection_node);
             TT_FATAL(
                 direction.has_value(),
                 "No Fabric2D forwarding direction from all-to-all source {} to target {}",
@@ -777,8 +777,8 @@ tt::tt_metal::ProgramDescriptor build_all_to_all_async_generic_program_descripto
             const auto target_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
                 tensor_args.input_tensor, mesh_coordinate, device_offset, effective_topology, cluster_axis);
             TT_FATAL(target_coord.has_value(), "No all-to-all target at device offset {}", device_offset);
-            const auto direction =
-                tt::tt_fabric::get_eth_forwarding_direction(self_node, device->get_fabric_node_id(*target_coord));
+            const auto direction = tt::tt_fabric::get_eth_forwarding_direction(
+                *device, self_node, device->get_fabric_node_id(*target_coord));
             TT_FATAL(
                 direction.has_value() && static_cast<uint32_t>(*direction) < num_cardinal_fabric_directions,
                 "No Fabric2D cardinal forwarding direction from all-to-all source {} to target {}",
@@ -854,7 +854,7 @@ tt::tt_metal::ProgramDescriptor build_all_to_all_async_generic_program_descripto
 
         const auto connection_node = device->get_fabric_node_id(*connection_coord);
         const auto direction =
-            tt::tt_fabric::get_eth_forwarding_direction(sender_device_fabric_node_id, connection_node);
+            tt::tt_fabric::get_eth_forwarding_direction(*device, sender_device_fabric_node_id, connection_node);
         TT_FATAL(
             direction.has_value(),
             "No Fabric2D forwarding direction from all-to-all source {} to target {}",
@@ -998,7 +998,7 @@ tt::tt_metal::ProgramDescriptor build_all_to_all_async_generic_program_descripto
                 return false;
             }
             const auto direction =
-                tt::tt_fabric::get_eth_forwarding_direction(self_node, device->get_fabric_node_id(*neighbor));
+                tt::tt_fabric::get_eth_forwarding_direction(*device, self_node, device->get_fabric_node_id(*neighbor));
             if (!direction.has_value() || static_cast<uint32_t>(*direction) >= num_cardinal_fabric_directions) {
                 return false;
             }

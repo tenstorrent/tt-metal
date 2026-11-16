@@ -792,8 +792,11 @@ class LTXDistilledPipeline(LTXPipeline):
             logger.info(f"VAE prepare: {time.time() - t0:.1f}s")
 
         latent_h, latent_w = height // SPATIAL_COMPRESSION, width // SPATIAL_COMPRESSION
-        # LTX_YUV_EXPORT routes the mp4 path through the on-device YUV 4:2:0 fast gather
-        yuv_export = output_path is not None and os.environ.get("LTX_YUV_EXPORT", "0") != "0"
+        # The mp4 path goes through the on-device YUV 4:2:0 fast gather by default, as served in
+        # production. fast_device_to_host_yuv assumes mesh axis 0 splits the height, so a VAE that
+        # splits it on axis 1 exports from float frames by default. LTX_YUV_EXPORT overrides both.
+        yuv_default = "1" if self.vae_parallel_config.height_parallel.mesh_axis == 0 else "0"
+        yuv_export = output_path is not None and os.environ.get("LTX_YUV_EXPORT", yuv_default) != "0"
         # export_video_audio needs float [-1,1]; the frame-return path uses the requested output_type.
         decode_type = ("yuv" if yuv_export else "float") if output_path is not None else output_type
         t0 = time.time()

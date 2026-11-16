@@ -27,6 +27,7 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
     convolution_tail_shape,
     decay_projection_program_config,
     l1_when_it_fits,
+    matmul_grid,
     tuned_projection_matmul_configs,
     validate_convolution_page_channels,
 )
@@ -126,6 +127,26 @@ class _HistoryExchange:
 
 
 _history_exchanges: dict[tuple[int, int], _HistoryExchange] = {}
+
+# fuse_tp_gather: all_gather_minimal_matmul_async's gathered input, per-direction arrival counters and entry barrier.
+# Peers may write them before this rank's call starts, so they persist; a mesh's layers share them (the entry barrier
+# orders calls, not layers).
+_tp_gathers: dict[tuple[int, int, int], dict] = {}
+
+
+def _tp_gather(mesh_device: ttnn.MeshDevice, rows: int, width: int) -> dict:
+    key = (mesh_device.id(), rows, width)
+    if key not in _tp_gathers:
+        # Registered with reset_persistent_semaphores, so recovery after an interrupted call clears them too.
+        semaphores = persistent_semaphores(mesh_device, 3)
+        _tp_gathers[key] = dict(
+            persistent_output_buffer=ttnn.allocate_tensor_on_device(
+                ttnn.Shape([1, rows, width]), ttnn.bfloat16, ttnn.TILE_LAYOUT, mesh_device, ttnn.DRAM_MEMORY_CONFIG
+            ),
+            multi_device_global_semaphore=semaphores[:2],
+            barrier_semaphore=semaphores[2],
+        )
+    return _tp_gathers[key]
 
 
 @dataclass(frozen=True)
@@ -281,19 +302,60 @@ class ttKDA:
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
+        grid = mesh_device.compute_with_storage_grid_size()
+        self._matmul_grid = matmul_grid(grid, program_config.max_matmul_cores)
         self.input_projection_program_config, self.output_projection_program_config = (
             tuned_projection_matmul_configs(
-                mesh_device.compute_with_storage_grid_size(),
+                self._matmul_grid,
                 self.active_seq_len_local,
                 self.weights.input_projection.shape[-1],
                 *tuple(self.weights.output_projection.shape)[-2:],
+                weight_dtype=self.weights.input_projection.dtype,
             )
             if program_config.tuned_projection_matmuls
             else (None, None)
         )
+        # fuse_tp_gather: the input projection runs the tuned schedule's blocking and gathers the TP axis as a Ring
+        # where the fabric wraps it, else as a Linear line. Each link carries the gather for a share of the core rows.
+        tuned, self._tp_gather_kwargs = self.input_projection_program_config, None
+        fuse = (
+            program_config.fuse_tp_gather
+            and self.tensor_parallel_size > 1
+            and tuned is not None
+            and self._matmul_grid.x < grid.x
+            and ttnn.get_fabric_config().name.startswith("FABRIC_2D")
+        )
+        if fuse:
+            topology = ttnn.get_usable_topology(
+                self.weights.input_projection, per_axis_topology()[self.tensor_parallel_axis], self.tensor_parallel_axis
+            )
+            # The tuned K block must fit the local K shard, and a Ring needs it to divide the shard (no tail block).
+            local_k_tiles = self._tp_input_width // ttnn.TILE_SIZE
+            fuse = tuned.in0_block_w <= local_k_tiles and (
+                topology == ttnn.Topology.Linear or local_k_tiles % tuned.in0_block_w == 0
+            )
+        if fuse:
+            links = max(1, min(self._tp_num_links, self._matmul_grid.y // 2))
+            self._tp_gather_kwargs = dict(
+                _tp_gather(mesh_device, self.active_seq_len_local, config.hidden_size),
+                config=ttnn.MinimalMatmulConfig(
+                    M_block_size=tuned.per_core_M,
+                    K_block_size=tuned.in0_block_w,
+                    N_block_size=tuned.per_core_N,
+                    subblock_h=tuned.out_subblock_h,
+                    subblock_w=tuned.out_subblock_w,
+                    compute_with_storage_grid_size=self._matmul_grid,
+                ),
+                topology=topology,
+                cluster_axis=self.tensor_parallel_axis,
+                num_links=links,
+                num_workers_per_link=-(-self._matmul_grid.y // links),
+                num_buffers_per_channel=24,
+                force_transpose=False,
+            )
         decay_width = self.config.num_heads * self.config.head_k_dim
         self.decay_program_config = decay_projection_program_config(
-            mesh_device.compute_with_storage_grid_size(),
+            self._matmul_grid,
             self.active_seq_len_local,
             self.config.head_k_dim,
             decay_width,
@@ -355,6 +417,7 @@ class ttKDA:
                 scatter_dim=-1,
                 topology=ttnn.Topology.Ring if ring else ttnn.Topology.Linear,
                 num_links=min(self._tp_num_links, 2),
+                use_column_major_ccl=program_config.output_projection_column_major_ccl,
             )
 
     @property
@@ -372,6 +435,8 @@ class ttKDA:
         Returns (input, gathered). A full-width input (TP == 1, or a caller that gathered already) is returned as is.
         """
         if self.tensor_parallel_size == 1 or hidden_states.shape[-1] == self.config.hidden_size:
+            return hidden_states, False
+        if self._fuses_tp_gather(hidden_states):  # gathered inside the input projection
             return hidden_states, False
         # The native all_gather reads its link count and topology from the opened fabric (its num_links / topology
         # arguments are deprecated and ignored), so none are passed.
@@ -441,6 +506,13 @@ class ttKDA:
         if state.convolution.dtype != ttnn.bfloat16 or state.convolution.layout != ttnn.ROW_MAJOR_LAYOUT:
             raise ValueError("convolution state must be BF16 row-major")
 
+    def _fuses_tp_gather(self, hidden_states: ttnn.Tensor) -> bool:
+        return (
+            self._tp_gather_kwargs is not None
+            and hidden_states.shape[-1] == self._tp_input_width
+            and hidden_states.dtype == ttnn.bfloat16
+        )
+
     def _project_inputs(
         self,
         hidden_states: ttnn.Tensor,
@@ -451,15 +523,24 @@ class ttKDA:
         # The tuned schedule writes the projection to L1: it is only read back by this layer (the QKV, decay, beta
         # and output-gate columns, all in place), and its DRAM write would otherwise sit after the last K block,
         # outside the compute.
-        projected = ttnn.linear(
-            hidden_states,
-            weights.input_projection,
-            program_config=self.input_projection_program_config,
-            memory_config=(
-                ttnn.DRAM_MEMORY_CONFIG if self.input_projection_program_config is None else ttnn.L1_MEMORY_CONFIG
-            ),
-            compute_kernel_config=self.input_projection_compute_config,
-        )
+        if self._fuses_tp_gather(hidden_states):
+            projected = ttnn.experimental.all_gather_minimal_matmul_async(
+                input_tensor=hidden_states,
+                weight_tensor=weights.input_projection,
+                compute_kernel_config=self.input_projection_compute_config,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                **self._tp_gather_kwargs,
+            )[0]
+        else:
+            projected = ttnn.linear(
+                hidden_states,
+                weights.input_projection,
+                program_config=self.input_projection_program_config,
+                memory_config=(
+                    ttnn.DRAM_MEMORY_CONFIG if self.input_projection_program_config is None else ttnn.L1_MEMORY_CONFIG
+                ),
+                compute_kernel_config=self.input_projection_compute_config,
+            )
         auxiliary_start = self._convolution_width
         return _ProjectedInputs(
             projected=projected,

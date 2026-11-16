@@ -2,28 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from tt_py_test_utils_common.all_gather_validate import ti_cond_skip, validate_test
+
 import pytest
 import ttnn
 
 from tests.nightly.t3000.ccl.test_all_gather import run_all_gather_impl
 from tt_py_test_utils_common.utility_functions import skip_for_wormhole_b0, skip_for_n_or_less_dev
-
-
-def ti_cond_skip(condition, reason):
-    if condition:
-        pytest.skip("Skipping unsupported case: " + reason)
-
-
-def validate_test(num_devices, topology, shape, cluster_axis):
-    if topology is None:
-        fabric_config = ttnn.get_fabric_config()
-        topology = ttnn.Topology.Ring if fabric_config == ttnn.FabricConfig.FABRIC_1D_RING else ttnn.Topology.Linear
-    ti_cond_skip((1 == num_devices), "Can't run a CCL test on 1 device")
-    ti_cond_skip(
-        ((shape[cluster_axis] != num_devices) and (topology == ttnn.Topology.Ring)),
-        "Ring configuration requires the entire row or column so it loops around",
-    )
-    ti_cond_skip((shape[cluster_axis] < num_devices), "Test requires more devices than are available on this platform")
 
 
 @skip_for_wormhole_b0()

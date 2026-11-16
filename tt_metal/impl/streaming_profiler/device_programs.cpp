@@ -25,7 +25,6 @@
 
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/kernel_types.hpp>
@@ -224,7 +223,7 @@ void DevicePrograms::carve_l1() {
 }
 
 bool DevicePrograms::boot(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-    mc_ = &MetalContext::instance(mesh_device->impl().get_context_id());
+    mc_ = &mesh_device->impl().metal_context();
     auto& cluster = mc_->get_cluster();
     const auto& hal = mc_->hal();
     const auto& rtopts = mc_->rtoptions();

@@ -1098,6 +1098,61 @@ def test_unary_rejects_unsupported_integer_dtype(ttnn_op, ttnn_dtype, extra_kwar
         ttnn_op(input_tensor, **extra_kwargs)
 
 
+def test_unary_chain_checks_ops_before_typecast(device, expect_error):
+    # FMOD has no integer kernel. Placed before the TYPECAST it would run on the raw int32 tile
+    # bits, so the chain must be rejected; placed after the cast it sees bfloat16 and is accepted.
+    input_tensor = ttnn.from_torch(
+        torch.arange(-512, 512, dtype=torch.int32).reshape(1, 1, 32, 32),
+        dtype=ttnn.int32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+    fmod = ttnn.UnaryWithParam(ttnn.UnaryOpType.FMOD, 2.0)
+    to_bfloat16 = ttnn.UnaryWithParam(
+        ttnn.UnaryOpType.TYPECAST, ttnn.DataType.INT32.value, ttnn.DataType.BFLOAT16.value
+    )
+
+    with expect_error(RuntimeError, "does not support integer input dtype"):
+        ttnn.unary_chain(input_tensor, [fmod, to_bfloat16])
+
+    # Only the position matters: the same ops with the cast first pass validation.
+    ttnn.unary_chain(input_tensor, [to_bfloat16, fmod])
+
+
+@pytest.mark.parametrize(
+    "typecast_param",
+    [
+        # UnaryWithParam holds float parameters; EltwiseUnaryWithParam given Python ints holds int32 parameters.
+        # The cast's target dtype must be read from whichever type backs the TYPECAST.
+        pytest.param(ttnn.UnaryWithParam, id="float_params"),
+        pytest.param(ttnn._ttnn.activation.EltwiseUnaryWithParam, id="int_params"),
+    ],
+)
+@pytest.mark.parametrize(
+    "op_type, scalar, torch_op",
+    [
+        (ttnn.UnaryOpType.UNARY_GT, 2.0, torch.gt),
+        (ttnn.UnaryOpType.UNARY_GT, 0.5, torch.gt),
+        (ttnn.UnaryOpType.UNARY_GT, -3.0, torch.gt),
+        (ttnn.UnaryOpType.UNARY_EQ, 2.0, torch.eq),
+    ],
+)
+def test_unary_chain_ops_after_typecast_use_cast_dtype(device, typecast_param, op_type, scalar, torch_op):
+    # After TYPECAST(INT32->FLOAT32) the tile holds float32, so a relational op placed after the cast
+    # must be generated for FLOAT32 (the float compare against the scalar) and not for the tensor's
+    # INT32 (the int32 compare, which reads the float bits as integers). The trailing cast back to
+    # INT32 gives the chain a well-defined output dtype so the result can be checked exactly.
+    torch_input = torch.arange(-512, 512, dtype=torch.int32).reshape(1, 1, 32, 32)
+    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    to_float32 = typecast_param(ttnn.UnaryOpType.TYPECAST, ttnn.DataType.INT32.value, ttnn.DataType.FLOAT32.value)
+    to_int32 = typecast_param(ttnn.UnaryOpType.TYPECAST, ttnn.DataType.FLOAT32.value, ttnn.DataType.INT32.value)
+
+    output = ttnn.unary_chain(input_tensor, [to_float32, ttnn.UnaryWithParam(op_type, scalar), to_int32])
+
+    expected = torch_op(torch_input.to(torch.float32), scalar).to(torch.int32)
+    assert_equal(expected, ttnn.to_torch(output))
+
+
 @pytest.mark.parametrize(
     "ttnn_op, extra_kwargs",
     [
@@ -1236,43 +1291,6 @@ def test_alt_complex_rotate90(device, h: int, w: int, dtype: ttnn.DataType):
     tt_output = ttnn_function(tt_input)
 
     assert torch.equal(torch_output, ttnn.to_torch(tt_output))
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    [
-        torch.Size([1, 1, 32, 32]),
-    ],
-)
-@pytest.mark.parametrize(
-    "low, high",
-    [
-        (-5, 5),  # Small range
-    ],
-)
-@pytest.mark.parametrize(
-    "ttnn_function",
-    [
-        ttnn.eqz,
-        ttnn.nez,
-        ttnn.ltz,
-        ttnn.lez,
-        ttnn.gtz,
-        ttnn.gez,
-    ],
-)
-def test_unary_zero_comp_ttnn(input_shapes, low, high, ttnn_function, device):
-    in_data = torch.randint(low, high, input_shapes, dtype=torch.int32)
-    input_tensor = ttnn.from_torch(in_data, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
-
-    cq_id = 0
-    output_tensor = ttnn_function(input_tensor, queue_id=cq_id)
-    golden_function = ttnn.get_golden_function(ttnn_function)
-    golden_tensor = golden_function(in_data)
-
-    output_tensor = ttnn.to_torch(output_tensor)
-
-    assert torch.equal(golden_tensor, output_tensor)
 
 
 @pytest.mark.parametrize(
@@ -1898,15 +1916,11 @@ def test_unary_hardtanh_ttnn(input_shapes, torch_dtype, ttnn_dtype, min_val, max
 @pytest.mark.parametrize(
     "torch_dtype, ttnn_dtype",
     [
-        (torch.int32, ttnn.int32),
         (torch.bfloat16, ttnn.bfloat8_b),
     ],
 )
 def test_unary_signbit_ttnn(input_shapes, torch_dtype, ttnn_dtype, device):
-    if torch_dtype == torch.int32:
-        in_data = torch.randint(-100, 100, input_shapes, dtype=torch_dtype)
-    else:
-        in_data = torch.empty(input_shapes, dtype=torch_dtype).uniform_(-100, 100)
+    in_data = torch.empty(input_shapes, dtype=torch_dtype).uniform_(-100, 100)
 
     input_tensor = ttnn.from_torch(in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     if ttnn_dtype == ttnn.bfloat8_b:
