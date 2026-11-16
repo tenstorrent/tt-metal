@@ -24,8 +24,7 @@ supports ``MathFidelity::LoFi`` (fidelity > LoFi is an ELWMUL-only hardware
 feature), so the test runs at LoFi.
 
 Every lane of every output tile is defined (a full tile is packed), so the
-golden validates all lanes at the format tolerance. The former blanket
-Blackhole wedge skip was removed after the test passed on Blackhole silicon.
+golden validates all lanes at the format tolerance.
 """
 
 import torch

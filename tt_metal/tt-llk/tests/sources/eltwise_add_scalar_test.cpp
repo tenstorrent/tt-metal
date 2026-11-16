@@ -113,20 +113,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
             const std::uint32_t num_faces = tensor_shape.total_num_faces();
+            const std::uint32_t handshake_count = num_blocks * inner_dim * output_tiles_in_block * num_faces;
+            // Seed AB and DEST_TO_SRCA fold both publish SrcA+SrcB once per face
+            // (fold SrcA is a dummy; do not treat dest-reuse as SrcB-only).
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
-                for (std::uint32_t block = 0; block < num_blocks; ++block)
-                {
-                    for (std::uint32_t i = 0; i < inner_dim; ++i)
-                    {
-                        for (std::uint32_t tile = 0; tile < output_tiles_in_block; ++tile)
-                        {
-                            // Seed AB and DEST_TO_SRCA fold both publish SrcA+SrcB once per face
-                            // (fold SrcA is a dummy; do not treat dest-reuse as SrcB-only).
-                            _perf_unpack_stream_set_valid<true /*set_a*/, true /*set_b*/, PERF_RUN_TYPE>(num_faces);
-                        }
-                    }
-                }
+                _perf_unpack_stream_set_valid<true /*set_a*/, true /*set_b*/, PERF_RUN_TYPE>(handshake_count);
             }
         }
         else
@@ -135,9 +127,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t block = 0; block < num_blocks; ++block)
                 {
-                    // One init per phase, and not until the previous phase's unpacks
-                    // have run. Programming DEST_TO_SRCA in INIT overwrites the seed
-                    // MOP before any seed tile is issued.
+                    // Initialize each phase after the previous phase's unpacks; configuring DEST_TO_SRCA earlier
+                    // would overwrite the seed MOP before any seed tile is issued.
                     _llk_unpack_AB_init_<BroadcastType::NONE>(tensor_shape, ckernel::Transpose::None);
                     for (std::uint32_t tile = 0; tile < output_tiles_in_block; ++tile)
                     {
