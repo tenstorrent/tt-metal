@@ -247,6 +247,48 @@ def test_attention_qkv_decode_rows(device, heads, rows):
         ttnn.deallocate(q)
 
 
+@pytest.mark.parametrize("rows", (4, 2, 8))
+@torch.no_grad()
+def test_attention_qkv_decode_rows_commit_rows(device, rows):
+    """``commit_rows``: the block's kv rows also ROW_MAJOR on one core, bit-identical to the staging rows."""
+    host, tt = _setup_rows(device, 16, rows)
+    commit = ttnn.from_torch(
+        torch.zeros(1, 1, rows, HEAD_DIM),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
+                [rows, HEAD_DIM],
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
+        ),
+    )
+    for step in range(2):  # the second call runs from the program cache
+        q = ttnn.experimental.deepseek.attention_qkv_decode(
+            tt["tokens"],
+            tt["w_q_a"],
+            tt["w_kv"],
+            tt["w_q_b"],
+            tt["q_a_gamma"],
+            tt["kv_gamma"],
+            tt["cos"],
+            tt["sin"],
+            tt["staging"],
+            tt["cache_pos"],
+            epsilon=EPS,
+            commit_rows=commit,
+        )
+        _check(host, tt, q, 16, rows, f"commit_rows h {rows} step {step}")
+        ttnn.deallocate(q)
+        got = ttnn.to_torch(commit).float().reshape(rows, HEAD_DIM)
+        staging = ttnn.to_torch(tt["staging"]).float().reshape(32, HEAD_DIM)[:rows]
+        assert torch.equal(got, staging), (got - staging).abs().max()
+
+
 @torch.no_grad()
 def test_attention_qkv_decode_rows_sdpa_layout(device):
     """q straight into flash_mqa_decode's s = 4 layout: 32 rows (8 heads x 4 rows) per core."""

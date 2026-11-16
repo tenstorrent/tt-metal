@@ -66,6 +66,8 @@ void bind_attention_qkv_decode(::nanobind::module_& mod) {
         j's angles); ``kv_cache`` is the staging tensor, 32x32 TILE ``[1, 1, 32, head_dim]``, whose rows 0..h-1
         receive the kv rows (the ring is not written and ``cache_pos`` is not read); ``comp_output`` is ``(h, 32)``
         TILE ``[1, 1, h, N_c]``; q is ``[1, 1, heads * h, head_dim]`` head-major (head hd's row j at hd * h + j).
+        ``commit_rows`` (optional, blocks only): ROW_MAJOR bfloat16 ``[1, 1, h, head_dim]``, L1 HEIGHT_SHARDED on
+        one core (shard ``[h, head_dim]``), also receives the kv rows: ``paged_update_cache``'s input for the ring.
 
         Returns:
             ttnn.Tensor: q ``[1, 1, heads, head_dim]`` bfloat16 ROW_MAJOR (``[1, 1, heads * h, head_dim]`` for a
@@ -87,7 +89,8 @@ void bind_attention_qkv_decode(::nanobind::module_& mod) {
         nb::arg("memory_config") = std::nullopt,
         nb::arg("prefetcher_pipes") = ttnn::PrefetcherPipeList{},
         nb::arg("w_comp") = std::nullopt,
-        nb::arg("comp_output") = std::nullopt);
+        nb::arg("comp_output") = std::nullopt,
+        nb::arg("commit_rows") = std::nullopt);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek::detail

@@ -38,6 +38,7 @@ const TensorParamName CACHE_POS{"cache_pos"};
 const TensorParamName Q{"q"};
 const TensorParamName W_COMP{"w_comp"};
 const TensorParamName COMP_OUT{"comp_output"};
+const TensorParamName COMMIT_ROWS{"commit_rows"};
 
 const DFBSpecName IN0_DFB{"in0"};
 const DFBSpecName W_PROJ_DFB{"w_proj"};
@@ -489,6 +490,11 @@ ttnn::device_operation::ProgramArtifacts AttentionQkvDecodeDeviceOperation::Prog
             writer.dfb_bindings.push_back(ProducerOf(ONES_DFB, "ones"));
             writer.tensor_bindings.push_back(
                 TensorBinding{.tensor_parameter_name = KV_GAMMA, .accessor_name = "kv_gamma"});
+            if (t.commit_rows.has_value()) {
+                writer.tensor_bindings.push_back(
+                    TensorBinding{.tensor_parameter_name = COMMIT_ROWS, .accessor_name = "commit_rows"});
+                writer.compiler_options.defines.emplace("COMMIT_ROWS", "1");
+            }
         }
         mark_block(writer);
         KernelRunArgs writer_run_args{.kernel = KV_WRITER};
@@ -677,6 +683,9 @@ ttnn::device_operation::ProgramArtifacts AttentionQkvDecodeDeviceOperation::Prog
     }
     if (has_comp) {
         tensors.insert(tensors.end(), {{W_COMP, &*t.w_comp}, {COMP_OUT, &*t.comp_output}});
+    }
+    if (t.commit_rows.has_value()) {
+        tensors.emplace_back(COMMIT_ROWS, &*t.commit_rows);
     }
     Group<TensorParameter> tensor_parameters;
     for (const auto& [name, tensor] : tensors) {

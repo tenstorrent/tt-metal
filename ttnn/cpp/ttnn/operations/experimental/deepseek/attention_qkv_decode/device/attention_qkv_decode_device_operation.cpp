@@ -146,6 +146,24 @@ void AttentionQkvDecodeDeviceOperation::validate_on_program_cache_miss(
     validate_gamma(t.q_a_gamma, "q_a_gamma", q_lora, weight_role_cores(WeightRole::QA));
     validate_gamma(t.kv_gamma, "kv_gamma", head_dim, weight_role_cores(WeightRole::KV));
 
+    if (t.commit_rows.has_value()) {
+        const Tensor& c = *t.commit_rows;
+        TT_FATAL(rows > 1, "attention_qkv_decode: commit_rows is a block's output");
+        TT_FATAL(
+            c.storage_type() == StorageType::DEVICE && c.layout() == Layout::ROW_MAJOR &&
+                c.dtype() == DataType::BFLOAT16 &&
+                c.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED &&
+                c.buffer()->buffer_type() == BufferType::L1 && c.shard_spec().has_value() &&
+                c.shard_spec()->grid.num_cores() == 1 && c.shard_spec()->shape[0] == rows &&
+                c.shard_spec()->shape[1] == head_dim && c.logical_shape().volume() == rows * head_dim,
+            "attention_qkv_decode: commit_rows must be ROW_MAJOR bfloat16 [1, 1, {}, {}] L1 HEIGHT_SHARDED on one "
+            "core, "
+            "got {} {}",
+            rows,
+            head_dim,
+            c.logical_shape(),
+            c.memory_config());
+    }
     TT_FATAL(
         t.w_comp.has_value() == t.comp_output.has_value(),
         "attention_qkv_decode: w_comp and comp_output must be given together");
@@ -313,7 +331,8 @@ ttnn::Tensor attention_qkv_decode(
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
     const ttnn::PrefetcherPipeList& prefetcher_pipes,
     const std::optional<ttnn::Tensor>& w_comp,
-    const std::optional<ttnn::Tensor>& comp_output) {
+    const std::optional<ttnn::Tensor>& comp_output,
+    const std::optional<ttnn::Tensor>& commit_rows) {
     using OperationType =
         ttnn::operations::experimental::deepseek::attention_qkv_decode::AttentionQkvDecodeDeviceOperation;
     using namespace ttnn::operations::experimental::deepseek::attention_qkv_decode;
@@ -345,6 +364,7 @@ ttnn::Tensor attention_qkv_decode(
         .cache_pos = cache_pos,
         .w_comp = w_comp,
         .comp_output = comp_output,
+        .commit_rows = commit_rows,
     };
     return ttnn::device_operation::launch<OperationType>(attrs, tensor_args);
 }
