@@ -299,7 +299,16 @@ void kernel_main() {
             } else if (group_step && t == 1) {
                 gguf_decode_group_copy<fmt, int(out_of(1)) - int(out_of(0)), pack>(out_of(0));
             }
-            gguf_decode_tile<fmt, pack>(out, t);
+            // A tile two after one of its group decodes at the same DEST tiles: their params are in place.
+            if constexpr (gguf_decode_params_per_group<fmt>) {
+                if (t >= 2 && kt >= k0 + 2) {
+                    gguf_decode_tile<fmt, pack, true, false>(out, t);
+                } else {
+                    gguf_decode_tile<fmt, pack>(out, t);
+                }
+            } else {
+                gguf_decode_tile<fmt, pack>(out, t);
+            }
             gguf_decode_overlap_tile_done();
             lookups.tile_decoded();
             const uint32_t in0 = kt - k_first;
