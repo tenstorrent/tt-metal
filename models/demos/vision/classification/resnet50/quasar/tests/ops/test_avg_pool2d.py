@@ -64,7 +64,7 @@ import pytest
 import torch
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 
 # avg_pool2d shares compute_pool_2d's reduce dest-sync path, so it may hang like max_pool2d; cap the run

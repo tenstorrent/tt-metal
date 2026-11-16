@@ -25,6 +25,7 @@
 #include <tt-metalium/hal_types.hpp>
 #include "hostdevcommon/kernel_structs.h"
 #include <tt-metalium/program.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include <tt-umd/types/core_coordinates.hpp>
 
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
@@ -237,6 +238,86 @@ TEST_F(MeshDeviceFixture, TensixTestCreateCircularBufferOnOutOfRangeCores) {
         CreateCircularBuffer(program_, cr_set, config);
 
         EXPECT_ANY_THROW(distributed::EnqueueMeshWorkload(cq, workload, false));
+    }
+}
+
+CBDescriptor make_cb_descriptor(const CoreRangeSet& cr_set, uint8_t buffer_index, uint32_t num_pages) {
+    CBConfig cb_config;
+    return CBDescriptor{
+        .total_size = num_pages * cb_config.page_size,
+        .core_ranges = cr_set,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = buffer_index,
+            .data_format = cb_config.data_format,
+            .page_size = cb_config.page_size,
+        }}},
+    };
+}
+
+// A program built from a ProgramDescriptor merges a CB's core ranges as CreateCircularBuffer does.
+TEST_F(MeshDispatchFixture, TensixTestCircularBufferFromDescriptorMergesCoreRanges) {
+    CBConfig cb_config;
+    CoreRangeSet cr_set(std::vector<CoreRange>{CoreRange({0, 0}, {2, 0}), CoreRange({3, 0}, {4, 0})});
+
+    ProgramDescriptor descriptor;
+    descriptor.cbs.push_back(make_cb_descriptor(cr_set, 0, cb_config.num_pages));
+    Program program_from_descriptor(descriptor);
+
+    Program program = CreateProgram(*this->devices_[0]);
+    CreateCircularBuffer(
+        program,
+        cr_set,
+        CircularBufferConfig(cb_config.num_pages * cb_config.page_size, {{0, cb_config.data_format}})
+            .set_page_size(0, cb_config.page_size));
+
+    ASSERT_EQ(program_from_descriptor.circular_buffers().size(), 1);
+    const CoreRangeSet& core_ranges = program_from_descriptor.circular_buffers()[0]->core_ranges();
+    EXPECT_EQ(core_ranges, CoreRangeSet(CoreRange({0, 0}, {4, 0}))) << core_ranges.str();
+    EXPECT_EQ(core_ranges, program.circular_buffers()[0]->core_ranges()) << core_ranges.str();
+}
+
+// TensixTestCircularBufferConfigDispatchWithOverlappingCoreRanges' layout, built from a ProgramDescriptor and run:
+// CB index 0 has a different size on two adjacent core groups, and the merged range of CB index 1 overlaps both.
+// Each core must still receive its own group's config for index 0.
+TEST_F(MeshDispatchFixture, TensixTestCircularBufferFromDescriptorWithOverlappingCoreRanges) {
+    CoreRangeSet cores0(CoreRange({0, 0}, {2, 0}));
+    CoreRangeSet cores1(CoreRange({3, 0}, {4, 0}));
+    CoreRangeSet all_cores(std::vector<CoreRange>{CoreRange({0, 0}, {2, 0}), CoreRange({3, 0}, {4, 0})});
+
+    ProgramDescriptor descriptor;
+    descriptor.cbs = {
+        make_cb_descriptor(cores0, 0, 1), make_cb_descriptor(cores1, 0, 2), make_cb_descriptor(all_cores, 1, 1)};
+    KernelDescriptor kernel;
+    kernel.kernel_source = "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp";
+    kernel.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    kernel.core_ranges = all_cores;
+    kernel.config = ReaderConfigDescriptor{};
+    descriptor.kernels.push_back(kernel);
+
+    CBConfig cb_config;
+    for (auto& device : this->devices_) {
+        distributed::MeshWorkload workload;
+        auto zero_coord = distributed::MeshCoordinate(0, 0);
+        workload.add_program(distributed::MeshCoordinateRange(zero_coord, zero_coord), Program(descriptor));
+        this->RunProgram(device, workload);
+
+        for (const CoreRange& core_range : all_cores.ranges()) {
+            for (const CoreCoord& core : core_range) {
+                std::vector<uint32_t> cb_config_vector;
+                slow_dispatch::ReadFromL1(
+                    *device,
+                    core,
+                    workload.get_sem_base_addr(device, core, tt::CoreType::WORKER),
+                    workload.get_cb_size(device, core, tt::CoreType::WORKER),
+                    cb_config_vector);
+                const uint32_t cb0_num_pages = cores0.contains(core) ? 1 : 2;
+                const uint32_t cb0_base = UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * 0;
+                const uint32_t cb1_base = UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * 1;
+                EXPECT_EQ(cb_config_vector.at(cb0_base + 1), cb0_num_pages * cb_config.page_size) << core.str();
+                EXPECT_EQ(cb_config_vector.at(cb0_base + 2), cb0_num_pages) << core.str();
+                EXPECT_EQ(cb_config_vector.at(cb1_base + 1), cb_config.page_size) << core.str();
+            }
+        }
     }
 }
 

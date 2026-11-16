@@ -15,7 +15,6 @@
 #include "tt_metal/fabric/builder/fabric_builder_helpers.hpp"
 #include "tt_metal/fabric/builder/fabric_core_placement.hpp"
 #include "tt_metal/fabric/builder/fabric_edge_capability.hpp"
-#include "tt_metal/fabric/builder/fabric_stream_assignment.hpp"
 #include "tt_metal/fabric/builder/injection_policy.hpp"
 #include "tt_metal/fabric/builder/router_wiring_rules.hpp"
 #include "impl/kernels/kernel.hpp"
@@ -23,7 +22,6 @@
 #include "llrt/tt_cluster.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-umd/types/core_coordinates.hpp>
 #include "llrt/metal_soc_descriptor.hpp"
 #include "tt_metal.hpp"
 #include <tt-logger/tt-logger.hpp>
@@ -564,6 +562,11 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
         constexpr uint32_t k_BlackholeFabricRouterContextSwitchInterval = 32;
         edm_builder->set_firmware_context_switch_interval(k_BlackholeFabricRouterContextSwitchInterval);
         edm_builder->set_firmware_context_switch_type(FabricEriscDatamoverContextSwitchType::WAIT_FOR_IDLE);
+        // An idle TX queue returns the acknowledgements for its paired RX queue only in a keepalive. At the
+        // firmware's period (8000 cycles) that caps one-way traffic; 1000 lifts the cap and costs the link nothing
+        // measurable.
+        constexpr uint32_t k_BlackholeEthTxqSeqUpdateTimeout = 1000;
+        edm_builder->set_eth_txq_seq_update_timeout(k_BlackholeEthTxqSeqUpdateTimeout);
     }
 
     // Create tensix builder if needed
@@ -889,12 +892,6 @@ void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, con
     std::map<std::string, std::string> defines = {};
     if (ctx.is_2D_routing) {
         defines["FABRIC_2D"] = "";
-
-        // FABRIC_2D_VC1_ACTIVE: Set when router actually has VC1 channels
-        bool vc1_active = vc_shape_.sender_counts[1] > 0;
-        if (vc1_active) {
-            defines["FABRIC_2D_VC1_ACTIVE"] = "";
-        }
 
         // FABRIC_2D_VC1_SERVICED: Set when router actively services VC1 traffic
         // - Intra-mesh routers service VC1 when full_mesh mode is enabled

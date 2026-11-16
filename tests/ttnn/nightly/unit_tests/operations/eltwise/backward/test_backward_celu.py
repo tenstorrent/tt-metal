@@ -105,7 +105,7 @@ def _celu_bw_torch_reference(grad, x, flush):
 
 
 def _celu_bw_reference(grad, x, flush):
-    """Torch, except on the declared lanes."""
+    """Torch, except: 0 for any grad where x < -131.7, where even exp(x) * 2^64 is below the smallest normal."""
     result = _celu_bw_torch_reference(grad, x, flush)
     x32 = x.to(torch.float32)
     result = torch.where(x32 < -131.75, torch.zeros_like(result), result)
@@ -231,8 +231,11 @@ def _celu_bw_device_operations(call):
         result = call()
     except RuntimeError as raised:
         error = raised
-    trace = ttnn.graph.extract_calltrace(ttnn.graph.end_graph_capture())
-    return result, error, trace
+    graph = ttnn.graph.end_graph_capture()
+    trace = ttnn.graph.extract_calltrace(graph)
+    # The device operation's arguments name the op type it runs.
+    launched = " ".join(str(argument) for node in graph for argument in node.get("arguments", []))
+    return result, error, trace, launched
 
 
 def _celu_bw_placements(shape):
@@ -310,9 +313,11 @@ def test_celu_bw_runs_the_fused_program_only_where_it_applies(call, device):
     scalars = CELU_BW_OTHER_SCALARS if call == "other_scalars" else {"alpha": CELU_BW_ALPHA}
     memory = {} if output_memory is None else {"memory_config": output_memory}
 
-    result, error, trace = _celu_bw_device_operations(lambda: ttnn.celu_bw(tt_g, tt_x, **scalars, **memory)[0])
+    result, error, trace, launched = _celu_bw_device_operations(
+        lambda: ttnn.celu_bw(tt_g, tt_x, **scalars, **memory)[0]
+    )
 
-    assert ("UnaryBackwardDeviceOperation" in trace) == (call in CELU_BW_FUSED_CALLS), trace
+    assert ("UnaryBackwardOpType::ELU_BW" in launched) == (call in CELU_BW_FUSED_CALLS), trace
     if call not in CELU_BW_FUSED_CALLS:
         # The composite's refusal of a call (some refuse row-major operands) is its tests' to judge; a result it
         # returns is held to torch as the fused program's is.

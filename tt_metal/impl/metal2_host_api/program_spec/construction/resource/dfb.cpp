@@ -4,39 +4,23 @@
 
 #include "impl/metal2_host_api/program_spec/construction/resource/resource.hpp"
 
-#include <algorithm>
 #include <cstdint>
 #include <limits>
-#include <map>
-#include <memory>
-#include <numeric>
 #include <optional>
-#include <set>
 #include <string>
-#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
-#include <variant>
 #include <vector>
 
-#include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_distribution_spec.hpp>
-#include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>  // fmt::formatter<tt::DataFormat> for TT_FATAL messages
-#include <hostdevcommon/tensor_accessor/arg_config.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt_stl/fmt.hpp>
 
 #include "impl/metal2_host_api/helpers.hpp"
 #include "impl/metal2_host_api/llk_metadata.hpp"
-#include "impl/context/metal_context.hpp"
 
-namespace tt::tt_metal::experimental {
+namespace tt::tt_metal {
 
 namespace {
 
@@ -233,11 +217,13 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
         .data_format = dfb_spec->data_format_metadata.value_or(tt::DataFormat::Invalid),
         .tile = dfb_spec->tile_format_metadata,
         .tensix_scope = tensix_scope,
-        // DFB borrowed memory mode is declared at program creation time.
+        // DFB externally placed storage is declared at program creation time.
         // The actual backing memory L1 address is attached at runtime: from the borrowed
-        // TensorParameter's MeshTensor, or (relay) from the PrefetcherPipe ring the relay aliases.
-        .borrows_memory =
-            dfb_spec->borrowed_from.has_value() || !dfb_spec->advanced_options.prefetcher_pipe_relays.empty(),
+        // TensorParameter's MeshTensor, an SRAMArenaParameter's allocation, or (relay) from the
+        // PrefetcherPipe ring the relay aliases.
+        .borrows_memory = dfb_spec->borrowed_from.has_value() ||
+                          dfb_spec->advanced_options.allocation_override.has_value() ||
+                          !dfb_spec->advanced_options.prefetcher_pipe_relays.empty(),
         // A PrefetcherPipe relay is lane-interleaved (producer h owns entries h, h+P, ...).
         .is_relay = !dfb_spec->advanced_options.prefetcher_pipe_relays.empty()};
 }
@@ -263,7 +249,7 @@ DataflowBufferHandles RegisterDataflowBuffers(
 
         // Add the DFB to the ProgramImpl, and register the name -> handle mapping.
         // Allocation nodes are derived from binding kernels' WorkUnitSpec membership.
-        // (For borrowed-memory DFBs, config.borrows_memory was set in MakeDataflowBufferConfig;
+        // (For externally placed DFB storage, config.borrows_memory was set in MakeDataflowBufferConfig;
         // the device-side runtime uses that to skip regular L1 allocation.)
         uint32_t dfb_id = program_impl.add_dataflow_buffer(collected.dfb_node_set.at(dfb_name), config);
         program_impl.register_dfb_spec_name(dfb_name.get(), dfb_id);
@@ -272,11 +258,12 @@ DataflowBufferHandles RegisterDataflowBuffers(
         dfb_name_to_slot[dfb_name] = program_impl.get_dataflow_buffer(dfb_id)->device_slot;
         dfb_name_to_is_relay[dfb_name] = created_config.is_relay;
 
-        // Borrowed-memory DFB: record the dfb_id ↔ TensorParamName binding so that
-        // SetProgramRunArgs / UpdateTensorArgs can resolve and attach the actual L1 Buffer
-        // at runtime (analog of dynamic CB's UpdateDynamicCircularBufferAddress).
-        if (dfb_spec.borrowed_from.has_value()) {
-            program_impl.register_dfb_borrowed_binding(dfb_id, dfb_spec.borrowed_from->get());
+        if (const auto& tensor = dfb_spec.borrowed_from) {
+            program_impl.register_dfb_storage_binding({.dfb_id = dfb_id, .source = *tensor});
+        } else if (const auto& allocation = dfb_spec.advanced_options.allocation_override) {
+            program_impl.register_dfb_storage_binding(
+                {.dfb_id = dfb_id,
+                 .source = SRAMArenaSource{.arena = allocation->arena, .offset = allocation->offset}});
         }
     }
     return DataflowBufferHandles{
@@ -316,4 +303,4 @@ void WireDFBAliases(const ProgramSpec& spec, const DFBNameToIdMap& dfb_name_to_i
     }
 }
 
-}  // namespace tt::tt_metal::experimental
+}  // namespace tt::tt_metal

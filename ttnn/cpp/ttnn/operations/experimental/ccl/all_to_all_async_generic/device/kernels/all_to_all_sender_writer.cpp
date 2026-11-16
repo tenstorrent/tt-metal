@@ -43,7 +43,10 @@ constexpr bool is_fabric_2d = get_compile_time_arg_val(15);
 constexpr uint32_t fabric_direction_mask = get_compile_time_arg_val(16);
 constexpr uint32_t max_pages_per_packet = get_compile_time_arg_val(17);
 constexpr bool use_multicast_initialization = get_compile_time_arg_val(18);
-constexpr auto output_tensor_args = TensorAccessorArgs<19>();
+// Physical fabric slots (eth_chan_directions) toward the +1 / -1 ends of the axis, resolved on the host.
+constexpr uint32_t mcast_positive_direction = get_compile_time_arg_val(19);
+constexpr uint32_t mcast_negative_direction = get_compile_time_arg_val(20);
+constexpr auto output_tensor_args = TensorAccessorArgs<21>();
 constexpr uint32_t mux_ct_base = output_tensor_args.next_compile_time_args_offset();
 // This flag is specialized per stream by the host. Endpoint streams without a physical egress compile against the
 // routing-plane-manager ABI even when other streams in the same program use a worker mux.
@@ -66,6 +69,23 @@ struct FabricMuxConnection {
 using DirectFabricConnections = std::conditional_t<is_fabric_2d, Fabric2DConnections, FabricConnectionManager>;
 using FabricConnections = std::conditional_t<stream_uses_mux, FabricMuxConnection, DirectFabricConnections>;
 constexpr bool fabric2d_multicast_initialization_is_safe = is_fabric_2d && use_multicast_initialization;
+
+// Multicast range for one physical slot: `range` hops when the packet travels along `slot`, else 0.
+constexpr uint16_t mcast_range_for(uint32_t slot, uint32_t travel_direction, uint32_t range) {
+    return slot == travel_direction ? static_cast<uint16_t>(range) : 0;
+}
+
+template <uint32_t travel_direction, uint32_t range, typename PacketHeader>
+FORCE_INLINE void set_fabric2d_line_mcast_route(volatile PacketHeader* header) {
+    tt::tt_fabric::fabric_set_mcast_route(
+        header,
+        source_chip_id,
+        source_mesh_id,
+        mcast_range_for(eth_chan_directions::EAST, travel_direction, range),
+        mcast_range_for(eth_chan_directions::WEST, travel_direction, range),
+        mcast_range_for(eth_chan_directions::NORTH, travel_direction, range),
+        mcast_range_for(eth_chan_directions::SOUTH, travel_direction, range));
+}
 
 [[noreturn]] FORCE_INLINE void fail_stop_invalid_fabric_route() {
     // ASSERT gives watcher builds a precise failure signal. The explicit trap and spin remain the production fallback:
@@ -198,22 +218,15 @@ void send_initialization(
         }
         constexpr uint32_t positive_range = num_devices - current_device_id - 1;
         constexpr uint32_t negative_range = current_device_id;
-        constexpr uint32_t positive_direction = !is_fabric_2d || replicate_axis == ReplicateGroup::ROWS
-                                                    ? eth_chan_directions::EAST
-                                                    : eth_chan_directions::SOUTH;
-        constexpr uint32_t negative_direction = !is_fabric_2d || replicate_axis == ReplicateGroup::ROWS
-                                                    ? eth_chan_directions::WEST
-                                                    : eth_chan_directions::NORTH;
+        constexpr uint32_t positive_direction = is_fabric_2d ? mcast_positive_direction : eth_chan_directions::EAST;
+        constexpr uint32_t negative_direction = is_fabric_2d ? mcast_negative_direction : eth_chan_directions::WEST;
         constexpr bool owns_positive_targets = fabric_directions[positive_direction];
         constexpr bool owns_negative_targets = fabric_directions[negative_direction];
 
         if constexpr (positive_range > 0) {
             if (owns_positive_targets) {
                 if constexpr (is_fabric_2d) {
-                    constexpr uint16_t east_range = replicate_axis == ReplicateGroup::ROWS ? positive_range : 0;
-                    constexpr uint16_t south_range = replicate_axis == ReplicateGroup::COLS ? positive_range : 0;
-                    tt::tt_fabric::fabric_set_mcast_route(
-                        pkt_hdr_sema_forward, source_chip_id, source_mesh_id, east_range, 0, 0, south_range);
+                    set_fabric2d_line_mcast_route<positive_direction, positive_range>(pkt_hdr_sema_forward);
                 } else {
                     pkt_hdr_sema_forward->to_chip_multicast(
                         tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(positive_range)});
@@ -227,10 +240,7 @@ void send_initialization(
         if constexpr (negative_range > 0) {
             if (owns_negative_targets) {
                 if constexpr (is_fabric_2d) {
-                    constexpr uint16_t west_range = replicate_axis == ReplicateGroup::ROWS ? negative_range : 0;
-                    constexpr uint16_t north_range = replicate_axis == ReplicateGroup::COLS ? negative_range : 0;
-                    tt::tt_fabric::fabric_set_mcast_route(
-                        pkt_hdr_sema_backward, source_chip_id, source_mesh_id, 0, west_range, north_range, 0);
+                    set_fabric2d_line_mcast_route<negative_direction, negative_range>(pkt_hdr_sema_backward);
                 } else {
                     pkt_hdr_sema_backward->to_chip_multicast(
                         tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(negative_range)});
@@ -272,16 +282,11 @@ void send_initialization(
     if constexpr (fabric2d_multicast_initialization_is_safe) {
         constexpr uint32_t positive_range = num_devices - current_device_id - 1;
         constexpr uint32_t negative_range = current_device_id;
-        constexpr uint32_t positive_direction =
-            replicate_axis == ReplicateGroup::COLS ? eth_chan_directions::SOUTH : eth_chan_directions::EAST;
-        constexpr uint32_t negative_direction =
-            replicate_axis == ReplicateGroup::COLS ? eth_chan_directions::NORTH : eth_chan_directions::WEST;
+        constexpr uint32_t positive_direction = mcast_positive_direction;
+        constexpr uint32_t negative_direction = mcast_negative_direction;
 
         if constexpr (positive_range > 0 && fabric_directions[positive_direction]) {
-            constexpr uint16_t east_range = replicate_axis == ReplicateGroup::ROWS ? positive_range : 0;
-            constexpr uint16_t south_range = replicate_axis == ReplicateGroup::COLS ? positive_range : 0;
-            tt::tt_fabric::fabric_set_mcast_route(
-                pkt_hdr_sema_forward, source_chip_id, source_mesh_id, east_range, 0, 0, south_range);
+            set_fabric2d_line_mcast_route<positive_direction, positive_range>(pkt_hdr_sema_forward);
             pkt_hdr_sema_forward->to_noc_unicast_atomic_inc(
                 tt::tt_fabric::NocUnicastAtomicIncCommandHeader{init_semaphore_noc_addr_in_pkt, 1});
             auto& connection = select_connection_by_direction(fabric_connections, positive_direction);
@@ -290,10 +295,7 @@ void send_initialization(
                 packet_header_buffer_addr_sema_forward, sizeof(PacketHeader));
         }
         if constexpr (negative_range > 0 && fabric_directions[negative_direction]) {
-            constexpr uint16_t west_range = replicate_axis == ReplicateGroup::ROWS ? negative_range : 0;
-            constexpr uint16_t north_range = replicate_axis == ReplicateGroup::COLS ? negative_range : 0;
-            tt::tt_fabric::fabric_set_mcast_route(
-                pkt_hdr_sema_backward, source_chip_id, source_mesh_id, 0, west_range, north_range, 0);
+            set_fabric2d_line_mcast_route<negative_direction, negative_range>(pkt_hdr_sema_backward);
             pkt_hdr_sema_backward->to_noc_unicast_atomic_inc(
                 tt::tt_fabric::NocUnicastAtomicIncCommandHeader{init_semaphore_noc_addr_in_pkt, 1});
             auto& connection = select_connection_by_direction(fabric_connections, negative_direction);

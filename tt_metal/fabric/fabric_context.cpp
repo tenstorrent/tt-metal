@@ -14,7 +14,6 @@
 #include <enchantum/enchantum.hpp>
 #include <tt_stl/reflection.hpp>
 #include "erisc_datamover_builder.hpp"
-#include <tt-umd/types/cluster_descriptor_types.hpp>  // ChipId
 #include "tt_metal/fabric/axis_route_topology.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/fabric_builder_context.hpp"
@@ -22,6 +21,7 @@
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "tt_metal/fabric/packet_header_types.hpp"
 #include "fabric/hw/inc/fabric_routing_mode.h"
+#include "llrt/hal.hpp"
 
 namespace tt::tt_fabric {
 

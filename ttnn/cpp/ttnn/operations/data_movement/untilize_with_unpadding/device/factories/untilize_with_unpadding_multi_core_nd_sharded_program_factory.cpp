@@ -13,14 +13,16 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/buffer_distribution_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include "untilize_with_unpadding_multi_core_nd_sharded_program_factory.hpp"
+#include "ttnn/operations/data_movement/untilize_with_unpadding/device/untilize_with_unpadding_device_operation.hpp"
 #include "ttnn/operations/data_movement/untilize/device/untilize_device_operation.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
+using tt::tt_metal::experimental::AdvancedKernelRunArgs;
 
 namespace ttnn::prim {
 
@@ -42,9 +44,11 @@ ttnn::device_operation::ProgramArtifacts
 UntilizeWithUnpaddingMultiCoreNDShardedProgramFactory::create_program_artifacts(
     const UntilizeWithUnpaddingParams& operation_attributes, const Tensor& input, Tensor& output) {
     const auto& fp32_dest_acc_en = operation_attributes.fp32_dest_acc_en;
-    tt::DataFormat input_dfb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
+    tt::DataFormat input_dfb_data_format =
+        get_untilize_with_unpadding_dfb_data_format(input.dtype(), input.device()->arch());
     uint32_t input_single_tile_size = tt::tile_size(input_dfb_data_format);
-    tt::DataFormat output_dfb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
+    tt::DataFormat output_dfb_data_format =
+        get_untilize_with_unpadding_dfb_data_format(output.dtype(), input.device()->arch());
     uint32_t output_single_tile_size = tt::tile_size(output_dfb_data_format);
 
     const auto& input_mesh_tensor = input.mesh_tensor();
@@ -67,7 +71,8 @@ UntilizeWithUnpaddingMultiCoreNDShardedProgramFactory::create_program_artifacts(
     uint32_t input_shard_height = nd_shard_spec.shard_shape[-2];
     uint32_t input_shard_width = nd_shard_spec.shard_shape[-1];
 
-    const auto distribution_spec = input.buffer()->buffer_distribution_spec().value();
+    const auto distribution_spec =
+        input.mesh_buffer().device_local_config().sharding_args.buffer_distribution_spec().value();
 
     uint32_t num_shards = distribution_spec.num_shards();
     const auto page_mapping = distribution_spec.compute_page_mapping();
@@ -220,7 +225,7 @@ UntilizeWithUnpaddingMultiCoreNDShardedProgramFactory::create_program_artifacts(
     }
 
     ComputeHardwareConfig compute_hw_config{.enable_32_bit_dest = fp32_dest_acc_en};
-    if (fp32_dest_acc_en) {
+    if (operations::data_movement::needs_fp32_unpack_to_dest(fp32_dest_acc_en, input.dtype())) {
         compute_hw_config.unpack_modes = {{ND_IN, UnpackMode::UnpackToDest}};
     }
 

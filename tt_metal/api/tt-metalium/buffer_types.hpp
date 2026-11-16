@@ -4,8 +4,12 @@
 
 #pragma once
 
-// Unused here, but device kernels reach this header and may rely on it.
-#include <cstdint>  // IWYU pragma: keep
+// Host-only header. Device (kernel/firmware) code must use api/buffer_types.hpp from tt_metal/hw/inc instead:
+// the two sides are compiled by different compilers and must not share this file. The device header mirrors
+// TensorMemoryLayout and BufferType; keep their enumerator values in sync with the ones below.
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
+#error "tt-metalium/buffer_types.hpp is host-only; include \"api/buffer_types.hpp\" in device code"
+#endif
 
 namespace tt::tt_metal {
 

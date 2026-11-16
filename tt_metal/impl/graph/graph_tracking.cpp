@@ -14,7 +14,6 @@
 
 #include <tt-metalium/program.hpp>
 #include "impl/context/metal_context.hpp"
-#include "impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
 

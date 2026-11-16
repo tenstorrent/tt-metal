@@ -4,11 +4,9 @@
 
 #pragma once
 
-#include <host_api.hpp>
-#include <stdint.h>
+#include <cstdint>
 #include <optional>
 
-#include "core_coord.hpp"
 #include "sub_device_types.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/impl/program/dispatch.hpp"

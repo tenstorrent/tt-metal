@@ -29,6 +29,15 @@ bool use_prefetch_q_cached(const Hal& hal, const CoreType& core_type, const tt::
     return hal.get_arch() == tt::ARCH::QUASAR && core_type != CoreType::ETH && rtl_simulator;
 }
 
+uint32_t get_l1_size(const Hal& hal, const CoreType& core_type) {
+    switch (core_type) {
+        case CoreType::WORKER: return hal.get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE);
+        case CoreType::ETH: return hal.get_dev_size(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::BASE);
+        case CoreType::DISPATCH: return hal.get_dev_size(HalProgrammableCoreType::DISPATCH, HalL1MemAddrType::BASE);
+        default: TT_THROW("DispatchMemMap not implemented for core type");
+    }
+}
+
 }  // namespace
 
 DispatchMemMap::DispatchMemMap(
@@ -49,6 +58,8 @@ DispatchMemMap::DispatchMemMap(
 
         rtoptions.get_dram_backed_cq(),
 
+        get_l1_size(hal, core_type),
+
         hal.get_alignment(HalMemType::L1),
 
         // Prefetch queue entry width: each entry encodes the prefetch command size with the MSB reserved as a
@@ -67,18 +78,15 @@ DispatchMemMap::DispatchMemMap(
         hal.get_noc_stream_remote_dest_buf_space_available_update_reg_index()),
     has_stream_registers_(hal.has_stream_registers()) {
     uint32_t l1_base;
-    uint32_t l1_size;
+    const uint32_t l1_size = get_l1_size(hal, core_type);
     if (core_type == CoreType::WORKER) {
         l1_base = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
-        l1_size = hal.get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE);
         dispatch_stream_base_ = 48u;  // 64 streams; CBs use entries 8-39
     } else if (core_type == CoreType::ETH) {
         l1_base = hal.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::UNRESERVED);
-        l1_size = hal.get_dev_size(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::BASE);
         dispatch_stream_base_ = 16u;  // 32 streams
     } else if (core_type == CoreType::DISPATCH) {
         l1_base = hal.get_dev_addr(HalProgrammableCoreType::DISPATCH, HalL1MemAddrType::DEFAULT_UNRESERVED);
-        l1_size = hal.get_dev_size(HalProgrammableCoreType::DISPATCH, HalL1MemAddrType::BASE);
         dispatch_stream_base_ = 48u;
     } else {
         TT_THROW("DispatchMemMap not implemented for core type");
