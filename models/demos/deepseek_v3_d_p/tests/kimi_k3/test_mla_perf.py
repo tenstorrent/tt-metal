@@ -571,7 +571,6 @@ def test_mla_chunked_perf(request, mesh_device, device_params, scenario, variant
     _write_outputs(scenario=scenario, cache=cache, chunk=chunk, forwards=forwards, by_op=by_op)
     box = PERF_WORKLOAD.system_name
 
-    host = None
     if not is_cold:
         clock = hold_full_cpu_clock()
         request.addfinalizer(clock.restore)
@@ -590,6 +589,11 @@ def test_mla_chunked_perf(request, mesh_device, device_params, scenario, variant
                 f"Kimi-K3 MLA {box} {scenario} host ({mode})",
                 {"box": box, "scenario": scenario, "mode": mode, "samples_ms": samples, "target_ms": target},
             )
+        # Report-only until HOST_PERF_TARGETS_MS has targets (the device gate below decides); fails on PCC.
+        pcc_failure = (
+            f"traced output differs from untraced: min per-device PCC {trace_pcc:.6f}" if trace_pcc < 0.9999 else None
+        )
+        gate(f"kimi_k3 MLA {box} {scenario} host", host, [pcc_failure], skip_unmeasured=False)
     target_ns = PERF_TARGETS.get(box, {}).get(scenario)
     measured_ns = by_op["inclusive_ns"].sum()
     if target_ns is None:
@@ -600,8 +604,3 @@ def test_mla_chunked_perf(request, mesh_device, device_params, scenario, variant
         limit_ns = target_ns * (1 + PERF_MARGIN)
         logger.info(f"{box} {scenario} device time: {measured_ns:,.0f} ns; limit: {limit_ns:,.0f} ns")
         assert measured_ns <= limit_ns, f"{box} {scenario} device time {measured_ns:,.0f} ns exceeds {limit_ns:,.0f} ns"
-    if host is not None:  # report-only until HOST_PERF_TARGETS_MS has targets; the device gate above decides
-        pcc_failure = (
-            f"traced output differs from untraced: min per-device PCC {trace_pcc:.6f}" if trace_pcc < 0.9999 else None
-        )
-        gate(f"kimi_k3 MLA {box} {scenario} host", host, [pcc_failure], skip_unmeasured=False)

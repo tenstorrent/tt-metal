@@ -54,7 +54,6 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
 )
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.kda_slabs import attach_kda_states
 from models.demos.deepseek_v3_d_p.tests.measure.determinism import (
-    device_mismatch_marker,
     marker_chips,
     merge_device_mismatch_markers,
     mismatch_report,
@@ -2419,9 +2418,10 @@ def run_chunked_transformer_updated(
         det_marker = None
         try:
             for det_copy in det_copies[1:]:
-                det_marker = merge_device_mismatch_markers(
-                    det_marker, device_mismatch_marker(det_copies[0], det_copy, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-                )
+                # The mismatch in DRAM interleaved: max cannot reduce the cache's ND sharding.
+                mismatch = ttnn.ne(det_copies[0], det_copy, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                det_marker = merge_device_mismatch_markers(det_marker, ttnn.max(mismatch))
+                ttnn.deallocate(mismatch)
             chips = marker_chips(det_marker)
             detail = mismatch_report(["KV cache, last iteration"], [det_copies[0]], [det_copies[-1]]) if chips else ""
         finally:

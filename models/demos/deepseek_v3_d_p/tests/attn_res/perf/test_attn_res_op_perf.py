@@ -36,6 +36,7 @@ from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.tests.attn_res.model.harness import EXACT_BOX, HIDDEN_SIZE, L1_SMALL_SIZE
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params, tp_axis_is_wrapped
 from models.demos.deepseek_v3_d_p.tests.measure.determinism import deterministic_input
+from models.demos.deepseek_v3_d_p.tests.measure.gate import band_failure
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res import EPS, STATS_FIDELITY
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_num_links, per_axis_topology
 from models.demos.deepseek_v3_d_p.utils.prefill_summary_utils import emit_perf_metrics
@@ -86,14 +87,8 @@ _REFERENCE_US = {
 
 
 def _assert_within_margin(what: str, measured_us: float, reference_us: float, margin: float) -> None:
-    lower, upper = reference_us * (1.0 - margin), reference_us * (1.0 + margin)
-    assert_perf_gate(
-        lower <= measured_us <= upper,
-        (
-            f"{what} {measured_us:.1f} us is outside performance range [{lower:.1f}, {upper:.1f}] us "
-            f"(reference {reference_us:.1f} us ± {margin:.0%})"
-        ),
-    )
+    failure = band_failure(what, measured_us, reference_us, margin, unit="us")
+    assert_perf_gate(failure is None, failure or "")
 
 
 def _mapper(mesh_device, sp_dim, tp_dim):

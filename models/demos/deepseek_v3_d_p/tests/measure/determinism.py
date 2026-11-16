@@ -26,14 +26,9 @@ def deterministic_input(*shape, seed=0, scale=1.0, offset=0.0, dtype=torch.bfloa
     return torch.randn(shape, generator=rng, dtype=dtype) * scale + offset
 
 
-def device_mismatch_marker(reference, actual, mask=None, memory_config=None):
-    """Non-zero on any chip where `actual` differs from `reference`. `mask` (0/1) limits the compare to defined
-    elements; `memory_config` places the elementwise mismatch (DRAM interleaved for ND-sharded inputs)."""
-    mismatch = ttnn.ne(reference, actual, dtype=ttnn.bfloat16, memory_config=memory_config)
-    if mask is not None:
-        masked = ttnn.multiply(mismatch, mask)  # exact: the mismatch is 0/1
-        ttnn.deallocate(mismatch)
-        mismatch = masked
+def device_mismatch_marker(reference, actual):
+    """Non-zero on any chip where `actual` differs from `reference`."""
+    mismatch = ttnn.ne(reference, actual, dtype=ttnn.bfloat16)
     marker = ttnn.max(mismatch)
     ttnn.deallocate(mismatch)
     return marker
@@ -83,20 +78,20 @@ def mismatch_report(names, references, outputs):
     return "\n".join(lines) or "the marker was set but the last outputs match their references"
 
 
-def check_determinism(mesh_device, step, traced, runs=RUNS):
-    """`runs` eager calls back to back, `runs` replays of `traced()` (a fresh TracedStep over the same step) each
+def check_determinism(mesh_device, step, traced):
+    """RUNS eager calls back to back, RUNS replays of `traced()` (a fresh TracedStep over the same step) each
     copied into a buffer allocated before the capture, and the first replay against the first eager run, all compared
     on device. Returns failure text, or None."""
     reference, last, copies, markers = tensors(step()), None, [], {}
     try:
-        for _ in range(1, runs):
+        for _ in range(1, RUNS):
             out = tensors(step())
             markers["eager runs"] = fold_mismatches(markers.get("eager runs"), reference, out)
             free(last)  # safe: later work reusing it runs after the queued compare (one CQ)
             last = out
         with traced() as t:
             t.capture(
-                before_capture=lambda out: copies.extend([ttnn.clone(x) for x in tensors(out)] for _ in range(runs))
+                before_capture=lambda out: copies.extend([ttnn.clone(x) for x in tensors(out)] for _ in range(RUNS))
             )
             for copy in copies:  # one CQ: each copy runs after its replay, before the next
                 t.replay(sync=False)

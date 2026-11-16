@@ -115,7 +115,6 @@ def _check(mesh_device, case, start):
             attach=case.mla.set_trace_controller,
             detach=lambda: case.mla.set_trace_controller(None),
         ),
-        RUNS,
     )
 
 

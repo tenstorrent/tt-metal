@@ -241,9 +241,13 @@ def collect_mesh_accuracy_and_determinism_results(
                 for repeat_output in outputs:
                     ttnn.deallocate(repeat_output)
                 raise ValueError("run returned output with different metadata")
-            mismatch_marker = merge_device_mismatch_markers(
-                mismatch_marker, device_mismatch_marker(reference, output, mask)
-            )
+            mismatch = ttnn.ne(reference, output, dtype=ttnn.bfloat16)
+            if mask is not None:  # exact: the mismatch is 0/1
+                masked = ttnn.multiply(mismatch, mask)
+                ttnn.deallocate(mismatch)
+                mismatch = masked
+            mismatch_marker = merge_device_mismatch_markers(mismatch_marker, ttnn.max(mismatch))
+            ttnn.deallocate(mismatch)
         for output in outputs:
             ttnn.deallocate(output)
 

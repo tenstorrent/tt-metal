@@ -80,21 +80,18 @@ class TracedStep:
         return False
 
 
-def time_traced(traced, *, samples=1, calls_per_sample=1):
-    """Host ms per replay of `calls_per_sample` back-to-back replays plus one sync, per sample. The perf gates time
-    one replay, with no warm-up replay."""
+def time_traced(traced, samples=1):
+    """Host ms of one replay through a sync, per sample. The perf gates time one replay, with no warm-up replay."""
     result = []
     for _ in range(samples):
         ttnn.synchronize_device(traced.mesh_device)
         t0 = time.perf_counter()
-        for _ in range(calls_per_sample):
-            traced.replay(sync=False)
-        ttnn.synchronize_device(traced.mesh_device)
-        result.append((time.perf_counter() - t0) * 1e3 / calls_per_sample)
+        traced.replay()
+        result.append((time.perf_counter() - t0) * 1e3)
     return result
 
 
-def measure_host(mesh_device, step, *, attach=None, detach=None, pcc=0.9999):
+def measure_host(mesh_device, step, *, attach=None, detach=None):
     """Untraced and traced host ms of `step` (time_untraced, then one replay) and the minimum per-device PCC of the
     traced output against the last timed eager output."""
     from models.common.utility_functions import comp_pcc
@@ -102,7 +99,7 @@ def measure_host(mesh_device, step, *, attach=None, detach=None, pcc=0.9999):
     def per_device(t):
         return [ttnn.to_torch(x) for x in ttnn.get_device_tensors(ttnn.from_device(t))]
 
-    untraced, out = time_untraced(step, lambda: ttnn.synchronize_device(mesh_device), keep_last=True)
+    untraced, out = time_untraced(step, lambda: ttnn.synchronize_device(mesh_device))
     try:
         eager = per_device(out)
     finally:
@@ -111,4 +108,4 @@ def measure_host(mesh_device, step, *, attach=None, detach=None, pcc=0.9999):
         traced.capture()
         traced_ms = time_traced(traced)
         replayed = per_device(traced.output)
-    return untraced, traced_ms, min(comp_pcc(a, b, pcc)[1] for a, b in zip(eager, replayed))
+    return untraced, traced_ms, min(comp_pcc(a, b)[1] for a, b in zip(eager, replayed))

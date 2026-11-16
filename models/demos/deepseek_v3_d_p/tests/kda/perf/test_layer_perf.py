@@ -29,7 +29,7 @@ from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     make_synthetic_kimi_k3_test_case,
 )
 from models.demos.deepseek_v3_d_p.tests.measure.gate import band_failure
-from models.demos.deepseek_v3_d_p.tests.measure.timing import free, time_untraced
+from models.demos.deepseek_v3_d_p.tests.measure.timing import free
 from models.demos.deepseek_v3_d_p.tests.measure.trace import TracedStep, time_traced
 from models.demos.deepseek_v3_d_p.tt.kda.config import KDA_PARTIAL_OUTPUT_L1_BYTES_PER_CORE, l1_when_it_fits
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState, reduce_scatter_tp_partials, ttKDA
@@ -255,6 +255,18 @@ def _profile_replay(mesh_device: ttnn.MeshDevice, traced: TracedStep) -> tuple[f
     return wall_ms, sum(program["duration_ns"] for program in programs.values()) / 1e6
 
 
+def _block_samples_ms(mesh_device: ttnn.MeshDevice, call: Callable[[], object], repetitions: int) -> list[float]:
+    """_TIMING_SAMPLES samples of `repetitions` back-to-back calls through one sync, in ms per call."""
+    samples = []
+    for _ in range(_TIMING_SAMPLES):
+        start = time.perf_counter()
+        for _ in range(repetitions):
+            call()
+        ttnn.synchronize_device(mesh_device)
+        samples.append((time.perf_counter() - start) * 1e3 / repetitions)
+    return samples
+
+
 def _layer_step(
     mesh_device: ttnn.MeshDevice,
     layer: ttKDA,
@@ -297,7 +309,7 @@ def _trace_wall_samples_ms(
                 if validate_first_replay is not None
                 else None
             )
-            samples = time_traced(traced, samples=_TIMING_SAMPLES, calls_per_sample=repetitions)
+            samples = _block_samples_ms(mesh_device, lambda: traced.replay(sync=False), repetitions)
         return samples, validation
     finally:
         deallocate_state(state)
@@ -335,14 +347,10 @@ def _untraced_wall_samples_ms(
     """_trace_wall_samples_ms with layer.forward() in place of the trace replay."""
     step, state = _layer_step(mesh_device, layer, hidden, actual_start, actual_end, slots)
     try:
-        samples, _ = time_untraced(
-            lambda: free(step()),  # freed inside the timed window, as the layer frees after use
-            lambda: ttnn.synchronize_device(mesh_device),
-            warmup=1,
-            samples=_TIMING_SAMPLES,
-            calls_per_sample=_REPETITIONS,
-        )
-        return samples
+        free(step())  # compile
+        ttnn.synchronize_device(mesh_device)
+        # Freed inside the timed window, as the layer frees after use.
+        return _block_samples_ms(mesh_device, lambda: free(step()), _REPETITIONS)
     finally:
         deallocate_state(state)
 

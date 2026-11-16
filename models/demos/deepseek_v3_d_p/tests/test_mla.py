@@ -1546,11 +1546,12 @@ def test_mla_chunked_perf_check(request, mesh_device, device_params, variant):
             "host_traced_ms": host["traced"][0],
         },
     )
-    assert_perf_gate(device_failure is None, device_failure or "")
     pcc_failure = (
         f"traced output differs from untraced: min per-device PCC {host['trace_pcc']:.6f}"
         if host["trace_pcc"] < 0.9999
         else None
     )
     results = {m: (host[m], min(host[m]), K3_CHUNKED_HOST_TARGETS_MS[m], MARGIN[m]) for m in ("untraced", "traced")}
-    gate("kimi_k3 MLA chunked 50k+5k host", results, [pcc_failure], skip_unmeasured=False)  # report-only for now
+    # Report-only until K3_CHUNKED_HOST_TARGETS_MS has targets; fails on PCC. Then the device gate decides.
+    gate("kimi_k3 MLA chunked 50k+5k host", results, [pcc_failure], skip_unmeasured=False)
+    assert_perf_gate(device_failure is None, device_failure or "")

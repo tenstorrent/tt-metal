@@ -22,19 +22,16 @@ def free(output) -> None:
             free(getattr(output, f.name))
 
 
-def time_untraced(step, sync, *, warmup=10, samples=10, calls_per_sample=1, keep_last=False):
-    """Host ms per call of `calls_per_sample` back-to-back `step()` calls plus one `sync()`, per sample. Outputs are
-    freed, except the last one when `keep_last` (returned, owned by the caller). Returns (ms list, kept output)."""
-    for _ in range(warmup):
+def time_untraced(step, sync):
+    """Host ms of `step()` plus `sync()`, per sample, and the last sample's output (owned by the caller)."""
+    for _ in range(10):
         free(step())
         sync()
-    result, kept = [], None
-    for i in range(samples):
+    result, out = [], None
+    for _ in range(10):
+        free(out)
         t0 = time.perf_counter()
-        outputs = [step() for _ in range(calls_per_sample)]
+        out = step()
         sync()
-        result.append((time.perf_counter() - t0) * 1e3 / calls_per_sample)
-        if keep_last and i == samples - 1:
-            kept = outputs.pop()
-        free(outputs)
-    return result, kept
+        result.append((time.perf_counter() - t0) * 1e3)
+    return result, out

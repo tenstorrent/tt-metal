@@ -101,9 +101,7 @@ def _device_tensors(tensor):
 def _time_untraced(mesh_device, case, start, repeat=None):
     """Untraced samples (ms) and the last timed forward's per-device output; appends one more, untimed forward's
     output to `repeat`, if given."""
-    samples, out = time_untraced(
-        lambda: case.forward(start), lambda: ttnn.synchronize_device(mesh_device), keep_last=True
-    )
+    samples, out = time_untraced(lambda: case.forward(start), lambda: ttnn.synchronize_device(mesh_device))
     reference = _device_tensors(out)
     ttnn.deallocate(out)
     if repeat is not None:
