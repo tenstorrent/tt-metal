@@ -94,7 +94,7 @@ The cos/sin matrices, are generated in two slightly different ways, depending on
 
 The following code sample shows how `RotarySetup` can be used in decode mode:
 ```py
-from models.tt_transformers.rope import RotarySetup
+from models.ttt_compat.tt.rope import RotarySetup
 
 # Step 1: Create the setup object
 rope_setup_decode = RotarySetup(
