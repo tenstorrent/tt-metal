@@ -3921,9 +3921,51 @@ class DeepSeekV41Model(DeepSeekV4Model):
             logits = self._lm_head_traced.linear(ttnn.to_layout(hidden, ttnn.TILE_LAYOUT))
             ttnn.deallocate(hidden)
             out = self.verify_sampler(logits)
+            if getattr(self, "_block_debug_logits", None) is not None:
+                self._block_debug_logits.append(ttnn.clone(logits, memory_config=ttnn.DRAM_MEMORY_CONFIG))
             ttnn.deallocate(logits)
         self._send_output(out)
         return out
+
+    def debug_block_logits(self, token_ids, pos: int) -> torch.Tensor:
+        """Debug: :meth:`decode_verify_block` run eagerly (not from its trace), returning the block's logits
+        ``[T, V]`` (vocab-sharded ranks concatenated). Commits the block like the traced step."""
+        t = self.verify_rows
+        ids = [int(i) for i in token_ids]
+        sm = self.submeshes_io[0]
+        self._wait_replays_dispatched()
+        self._use_server_rows(t)
+        sid = self._resident[0]
+        with self._cq_lock:
+            self.ensure_session_capacity(pos + t - 1, sid)
+            self._session_pos[sid] = pos + t
+            self._spec_dirty.add(self._resident_slot())
+            engram_rows = {}
+            if self._engram_layers:
+                lookup = self._engram_lookup
+                hashes = lookup.hash_session(self._slot_of.get(sid, 0), torch.tensor([ids], dtype=torch.long), pos)
+                for layer_idx, _ in self._engram_layers:
+                    ids_of_layer = hashes[:, :, lookup.layout.layer_ids.index(layer_idx)]
+                    engram_rows[layer_idx] = lookup.gather(layer_idx, ids_of_layer).flatten(-2)
+            self._block_debug_logits = []
+            outs = []
+
+            def dispatch() -> None:
+                if self.dspark is not None:
+                    self._spec_write_verified()
+                outs.append(self._block_verify_stage(sm, pos % 2 == 1))
+
+            try:
+                self._run_block_verify(dispatch, ids, pos, engram_rows)
+            finally:
+                kept, self._block_debug_logits = self._block_debug_logits, None
+            for out in outs:
+                out.deallocate(True)
+        logits = kept[0]
+        parts = [ttnn.to_torch(x.cpu()).float() for x in ttnn.get_device_tensors(logits)]
+        host = torch.cat([x.reshape(-1, x.shape[-1]) for x in parts], dim=-1)
+        ttnn.deallocate(logits)
+        return host.reshape(-1, host.shape[-1])[:t]
 
     def _run_block_verify(self, dispatch: Callable[[], None], ids: list[int], pos: int, engram_rows: dict) -> list[int]:
         """``dispatch`` the block's step, feed it its packet and Engram rows from a second thread (a block's rows

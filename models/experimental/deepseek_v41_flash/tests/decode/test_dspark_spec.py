@@ -7,8 +7,14 @@
 every layer's Engram, attention, hyper-connections and norms, every layer's MoE runs on the persistent TP12
 ``fused_experts`` launch on rows 5-7, and DSpark runs alone on row 3. It needs the TP12 expert cache
 (``tools/fill_expert_cache.py --all-layers --tp-size 12 --mesh-rows 3``). ``test_parallel_verify_rows`` keeps the
-seven-stage TP4 pipeline (rows 0-6, DSpark on row 7): the persistent MoE takes one row per request, so it has no
-parallel verify.
+seven-stage TP4 pipeline (rows 0-6, DSpark on row 7).
+
+By default (``DEEPSEEK_V4_SPEC_VERIFY=block``) the model is built with ``verify_rows=4`` and every DSpark round is
+ONE traced step of 4 rows (``[next, d_1, d_2, d_3]``: 3 drafts + 1) through every layer's ``(4, 32)``-tiled block
+ops (``DeepSeekV41Model.decode_verify_block``), the persistent MoE serving 4-row requests; greedy only (temperature
+0), fixed at 3 drafts. See :func:`_block_spec_decode`: it logs tok/s/u of plain greedy decode and of DSpark on the
+same model, and checks exactness. ``DEEPSEEK_V4_SPEC_VERIFY=pipelined`` runs the older pipelined verify described
+below (one-row steps per verified row, a sweep over draft counts).
 
 One model serves three runs of the same conversation, each from position 0: the demo prompt, then
 whenever the model ends its answer (end of sentence) the next of ``_FOLLOW_UPS`` as a new user turn
@@ -84,7 +90,19 @@ DRAFTS = 4
 # The pipelined DSpark runs' drafts per round: "all" or a comma list (see _draft_counts).
 DRAFT_COUNTS = os.environ.get("DEEPSEEK_V4_SPEC_DRAFTS", "all")
 CORRUPT = 1 / 3
-VERIFY = os.environ.get("DEEPSEEK_V4_SPEC_VERIFY", "pipelined")
+VERIFY = os.environ.get("DEEPSEEK_V4_SPEC_VERIFY", "block")
+# The block verify's rows: 3 drafts + 1.
+BLOCK_ROWS = 4
+# Block-verify exactness: a token that is not the block path's argmax must be within this many logits of it (a
+# near-tie). The block path is deterministic, but a row's result depends at the bf16 / bfp8 rounding level on the
+# other rows of its block (the MoE's union of the rows' experts, the grouping of its partial sums): the same stream
+# teacher-forced at the four block alignments disagrees on ~3-4% of tokens by up to ~1.75 logits (measured with
+# DEEPSEEK_V4_SPEC_ALIGN_CONTROL=1), so a spec run, whose blocks start wherever the last round ended, does too.
+NEAR_TIE = float(os.environ.get("DEEPSEEK_V4_SPEC_NEAR_TIE", "2.5"))
+# Also teacher-force each checked stream with the blocks shifted by 1..3 positions: the alignment noise floor.
+ALIGN_CONTROL = os.environ.get("DEEPSEEK_V4_SPEC_ALIGN_CONTROL", "0") == "1"
+# Block verify: the bitwise rollback check (rejected rows leave no trace), before the spec runs.
+ROLLBACK_CHECK = os.environ.get("DEEPSEEK_V4_SPEC_ROLLBACK_CHECK", "0") == "1"
 # Progress lines: the spec rounds' and rows', each prefill / extend / end of sentence, the greedy loop every 200
 # steps and every run's text. Off: one summary line per run (see the module docstring).
 _VERBOSE = os.environ.get("DEEPSEEK_V4_SPEC_VERBOSE", "0") not in ("0", "", "false", "False")
@@ -128,10 +146,13 @@ _FOLLOW_UPS = (
 )
 @pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=["mesh_device"], ids=["tp4_1stage_persistent_moe12"])
 def test_dspark_spec_decode(mesh_device, monkeypatch):
-    if VERIFY != "pipelined":
-        pytest.skip("the persistent TP12 MoE takes one row per request: no parallel verify")
     # spec.py reads DEEPSEEK_V4_SPEC_VERBOSE at import, defaulting to on; this test defaults it off.
     monkeypatch.setattr(spec_module, "_VERBOSE", _VERBOSE)
+    if VERIFY == "block":
+        _block_spec_decode(mesh_device)
+        return
+    if VERIFY != "pipelined":
+        pytest.skip(f"DEEPSEEK_V4_SPEC_VERIFY={VERIFY!r}: block or pipelined")
     loader = DeepseekV4WeightLoader(DEFAULT_MODEL_DIR)
     config = load_config(loader.snapshot_dir)
     tokenizer = AutoTokenizer.from_pretrained(loader.snapshot_dir)
@@ -300,6 +321,214 @@ def test_dspark_spec_decode(mesh_device, monkeypatch):
                     f"{tps:>6.2f}  {tps / greedy_tps:>8.2f}x"
                 )
             logger.info("\n".join(lines))
+
+
+def _block_spec_decode(mesh_device) -> None:
+    """The block-verify mode of :func:`test_dspark_spec_decode`.
+
+    One model (``verify_rows=4``, device sampling) runs, from position 0 on the demo prompt:
+
+    1. plain greedy decode on the one-row traces, ``DEEPSEEK_V4_SPEC_TOKENS`` (default 300) tokens or to the end of
+       sentence: the baseline and its tok/s/u;
+    2. DSpark rounds fed the baseline's own tokens with a third corrupted (every round rejects somewhere);
+    3. DSpark with its drafter, greedy: tok/s/u, tokens/round, ms/round and its split.
+
+    Exactness at temperature 0. The 4-row block ops compute in a different bf16 / bfp8 order than the one-row ops,
+    so at a near-tie the block path may pick the other token (the gaps are a few bf16 ulps). So each spec run is
+    checked against the block path itself, teacher-forced on the run's own output (eager block steps after a
+    one-row prefill of the prompt): every emitted token must be that step's argmax, or within ``NEAR_TIE`` logits
+    of it. A rollback that left a rejected row's trace (ring, compressor window, Engram or drafter state) breaks
+    this by far more. The first divergence from the greedy baseline is logged with the block path's top1 - top2 gap
+    there. The block verify needs the dense select (prompt + tokens below 508 positions), so there are no
+    follow-up turns.
+    """
+    rows, drafts = BLOCK_ROWS, BLOCK_ROWS - 1
+    loader = DeepseekV4WeightLoader(DEFAULT_MODEL_DIR)
+    config = load_config(loader.snapshot_dir)
+    tokenizer = AutoTokenizer.from_pretrained(loader.snapshot_dir)
+    stage_engram_tables(loader, config.engram_layer_ids)
+    nbytes = engram_ram_needed(loader, config.engram_layer_ids)
+    if _available_bytes() < ENGRAM_RAM_MARGIN * nbytes:
+        pytest.skip(f"needs {nbytes / 1e9:.0f} GB of free memory for the Engram tables")
+    eos_id = tokenizer.convert_tokens_to_ids(eos_token)
+    prompt = _tokenize_chat(tokenizer, _DEFAULT_TEXT)
+    dense_limit = config.index_topk - 2 * rows  # every compressed group in the dense select
+    n_tokens = min(int(os.environ.get("DEEPSEEK_V4_SPEC_TOKENS", "300")), dense_limit - len(prompt))
+    max_seq = _traced_max_seq(config, len(prompt) + n_tokens + 2 * rows, config.num_hidden_layers)
+    rope = _build_rope(config, loader.snapshot_dir, max_seq)
+
+    with contextlib.ExitStack() as stack:
+        model, lm_head, loader, config = _construct_model(
+            mesh_device, stack, loader=loader, config=config, num_stages=1, persistent_moe=True, verify_rows=rows
+        )
+        model.prepare_static_decode(rope, max_seq, lm_head=lm_head, device_sampling=True)
+        model.device_sampler.set_sampling(0.0, 0)
+        model.prepare_spec_decode(rope["main"])
+        if model.use_prefetcher:
+            stack.enter_context(tensor_prefetcher_session(model.dspark.device))
+        model.activate_session(model.open_session())
+        t0 = time.perf_counter()
+        model.capture_spec_traces(prompt[0], 0)
+        logger.info(f"[test] traces compiled and captured in {time.perf_counter() - t0:.0f}s")
+
+        def token_of(out) -> int:
+            return int(out.reshape(-1)[0])
+
+        # 1. Plain greedy decode on the one-row traces.
+        out = model.decode_prompt_traced(prompt, 0)
+        baseline = [token_of(out)]
+        seconds, steps = 0.0, 0
+        while len(baseline) < n_tokens and baseline[-1] != eos_id:
+            t0 = time.perf_counter()
+            out = model.decode_traced(baseline[-1], len(prompt) + len(baseline) - 1)
+            seconds += time.perf_counter() - t0
+            steps += 1
+            baseline.append(token_of(out))
+        greedy_tps = steps / seconds
+        logger.info(f"greedy: {len(baseline)} tokens, {greedy_tps:.2f} tok/s/u ({1000 / greedy_tps:.2f} ms/token)")
+        if _VERBOSE:
+            logger.info(f"greedy output: {tokenizer.decode(baseline)!r}")
+        stream = prompt + baseline
+
+        def converse(spec: DSparkSpeculator) -> list[int]:
+            got = [spec.prefill(prompt)]
+            if got[-1] != eos_id:
+                got += spec.generate(len(baseline) - 1, stop_ids=(eos_id,))
+            spec.finish()
+            return got[: len(baseline)]
+
+        def teacher_forced(got: list[int], shift: int = 0) -> list[tuple[int, float, float]]:
+            """The block path on ``prompt + got``: per generated token, (argmax, top1 logit, the token's logit). The
+            blocks start ``shift`` tokens past the prompt (the first ``shift`` tokens' entries are the stream's own,
+            unchecked: one-row prefill)."""
+            seq = prompt + got
+            # Prefilled as the spec runs do: verify blocks (padding rows restored).
+            _, padded = model.prefill_blocks(seq[: len(prompt) + shift], 0)
+            model.spec_fixup(padded)
+            res = [(got[i + 1], 0.0, 0.0) for i in range(shift)]
+            for p in range(len(prompt) + shift, len(seq), rows):
+                block = seq[p : p + rows]
+                block += [block[-1]] * (rows - len(block))
+                logits = model.debug_block_logits(block, p)
+                for j in range(rows):
+                    q = p + j + 1  # the position row j predicts
+                    if q - len(prompt) >= len(got):
+                        break
+                    top = float(logits[j].max())
+                    res.append((int(logits[j].argmax()), top, float(logits[j, seq[q]])))
+            # The stream's first token is the prefill's (the prompt's last row): one-row, not checked here.
+            return [(got[0], 0.0, 0.0)] + res[: len(got) - 1]
+
+        def check(run: str, got: list[int]) -> None:
+            forced = teacher_forced(got)
+            off = [(i, top - mine) for i, (arg, top, mine) in enumerate(forced) if arg != got[i]]
+            worst = max((d for _, d in off), default=0.0)
+            if ALIGN_CONTROL:
+                # The noise floor: the same stream teacher-forced with the blocks shifted by 1..3 positions (no
+                # rejections at all), each token's deficit to that alignment's argmax.
+                for shift in range(1, rows):
+                    other = teacher_forced(got, shift)
+                    o = [(i, top - mine) for i, (arg, top, mine) in enumerate(other) if arg != got[i]]
+                    logger.info(
+                        f"{run}: blocks shifted by {shift}: {len(o)} tokens not the argmax, deficits up to "
+                        f"{max((d for _, d in o), default=0.0):.3f} at {o[:10]}"
+                    )
+            logger.info(
+                f"{run}: {len(got)} tokens; {len(off)} not the block path's argmax (all near-ties up to "
+                f"{worst:.3f} logits, at {[i for i, _ in off][:8]})"
+            )
+            message = f"{run}: token(s) {off} are not the block path's greedy pick (> {NEAR_TIE})"
+            assert worst <= NEAR_TIE or not EXACT, message
+            if worst > NEAR_TIE:
+                logger.warning(message)
+            if got == baseline[: len(got)]:
+                logger.info(f"{run}: equal to the greedy baseline over {len(got)} tokens")
+                return
+            diff = _first_diff(got, baseline)
+            if diff == 0:
+                logger.warning(f"{run} diverged from the greedy baseline at the prefill's token")
+                return
+            # The block path at the divergence, on the common prefix: its pick and the baseline's, and their gap.
+            arg, top, _ = teacher_forced(got[: diff + 1])[diff]
+            logger.warning(
+                f"{run} diverged from the greedy baseline at token {diff}: {got[diff]} vs greedy {baseline[diff]}; "
+                f"there the block path picks {arg} (top logit {top:.3f})"
+            )
+
+        def rollback_check() -> None:
+            """A block whose rows past ``m`` are rejected: from the greedy prefix at ``p``, verify ``[s_p .. s_{p+m},
+            tail]``, roll back rows ``m+1 ..``, verify the next block at ``p + m + 1``, for a true tail (twice: the
+            path is deterministic, bit for bit) and two junk tails. Logged, not asserted: the kept rows' own logits
+            already differ with the tail at the rounding level (see NEAR_TIE), and the next block by as much."""
+            junk_rng = random.Random(1)
+            for p in (len(prompt) + 8, len(prompt) + 9, len(prompt) + 130):
+                if p + rows + 2 * rows > len(stream):
+                    continue
+                for m in range(rows - 1):
+                    outs, kept = [], []
+                    for variant in ("true", "true", "junk_a", "junk_b"):
+                        _, padded = model.prefill_blocks(stream[:p], 0)
+                        model.spec_fixup(padded)
+                        block = stream[p : p + m + 1]
+                        tail = stream[p + m + 1 : p + rows]
+                        if variant != "true":
+                            tail = [junk_rng.randrange(config.vocab_size) for _ in tail]
+                        first = model.debug_block_logits(block + tail, p)
+                        kept.append(first[: m + 1])
+                        model.spec_fixup(list(range(p + m + 1, p + rows)))
+                        q = p + m + 1
+                        outs.append(model.debug_block_logits(stream[q : q + rows], q))
+                    same = [torch.equal(outs[0], o) for o in outs[1:]]
+                    diff = [round(float((outs[0] - o).abs().max()), 4) for o in outs[1:]]
+                    kdiff = [round(float((kept[0] - k).abs().max()), 4) for k in kept[1:]]
+                    logger.info(
+                        f"rollback p={p} m={m}: next block equal to the true-rows run {same} (max diff {diff}); "
+                        f"the kept rows' own logits differ by {kdiff}"
+                    )
+                    assert same[0], f"rollback at p={p}, m={m}: the block path is not deterministic"
+
+        if ROLLBACK_CHECK:
+            rollback_check()
+
+        results = {}
+        # 2. Corrupted oracle drafts: exactness under rejection.
+        rng = random.Random(0)
+
+        def propose(token, frontier):
+            return [
+                stream[q] if q < len(stream) and rng.random() > CORRUPT else rng.randrange(config.vocab_size)
+                for q in range(frontier + 2, frontier + 2 + drafts)
+            ]
+
+        oracle = DSparkSpeculator(model, drafts, propose=propose, parallel_verify=True, temperature=0.0)
+        got = converse(oracle)
+        logger.info(f"oracle ({drafts} drafts, 1/3 corrupted), block verify: {oracle.stats.summary(drafts)}")
+        results["oracle"] = (oracle.stats, got)
+
+        # 3. The DSpark drafter, greedy.
+        spec = DSparkSpeculator(model, drafts, parallel_verify=True, temperature=0.0)
+        got = converse(spec)
+        logger.info(f"DSpark, block verify, {drafts} drafts, greedy: {spec.stats.summary(drafts)}")
+        if _VERBOSE:
+            logger.info(f"DSpark output: {tokenizer.decode(got)!r}")
+        results["dspark"] = (spec.stats, got)
+
+        lines = [
+            f"DSpark block verify T={rows} vs plain greedy decode on the same model:",
+            f"  greedy (no DSpark)  {greedy_tps:7.2f} tok/s/u  {1000 / greedy_tps:6.2f} ms/token",
+            "  run      tokens/round  ms/round   tok/s/u  vs greedy  split (ms/round)",
+        ]
+        for name, (stats, _) in results.items():
+            n = len(stats.accepted)
+            split = ", ".join(f"{k} {1000 * v / n:.2f}" for k, v in stats.phases.items())
+            tps = stats.tokens / stats.seconds
+            lines.append(
+                f"  {name:<7}  {stats.tokens / n:>12.2f}  {1000 * stats.seconds / n:>8.2f}  {tps:>8.2f}  "
+                f"{tps / greedy_tps:>8.2f}x  {split}"
+            )
+        logger.info("\n".join(lines))
+        for name, (_, got) in results.items():
+            check(f"{name} spec (block verify)", got)
 
 
 # Both parities below the sliding window (masked), across the causal switch, and past the ring's wrap.
