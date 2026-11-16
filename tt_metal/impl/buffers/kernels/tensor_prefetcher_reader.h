@@ -70,20 +70,35 @@ bool stage_tensor(const FifoConsumer& requests, const TensorStream& stream, Bloc
     WAYPOINT("TRSW");
     while (remaining > 0) {
         uint32_t reading = 0;
+        bool waiting_on_pusher = false;
         for (uint32_t i = 0; i < stream.num_receivers; ++i) {
-            if (next_block[i] == stream.block_count || staged[i] - *region.pushed(i) == fifo::kStageSlotsPerReceiver ||
-                !source.ready(i, next_block[i])) {
+            if (next_block[i] == stream.block_count) {
+                continue;
+            }
+            if (staged[i] - *region.pushed(i) == fifo::kStageSlotsPerReceiver) {
+                waiting_on_pusher = true;
+                continue;
+            }
+            if (!source.ready(i, next_block[i])) {
                 continue;
             }
             source.read(i, next_block[i], stream.stage_slot_addr(i, staged[i] % fifo::kStageSlotsPerReceiver));
             reading |= 1u << i;
         }
         if (reading == 0) {
+            // Nothing to read. The waypoint says whether a receiver's stage slots wait for the pusher to send
+            // them (TRSP) or every unfinished receiver waits for the block source (TRSB).
+            if (waiting_on_pusher) {
+                WAYPOINT("TRSP");
+            } else {
+                WAYPOINT("TRSB");
+            }
             if (requests.terminate_requested()) {
                 return false;
             }
             continue;
         }
+        WAYPOINT("TRSW");
         // A staged count tells the pusher its block has landed.
         noc_async_read_barrier();
         for (uint32_t i = 0; i < stream.num_receivers; ++i) {

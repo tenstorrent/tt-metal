@@ -436,8 +436,11 @@ public:
     // Whether a SINGLE receiver (receiver_idx) has space for num_entries entries right now: what
     // reserve_back_for_receiver waits for, without waiting. Lets one sender serving several receivers
     // move on to another receiver instead of stalling behind a slow one. Single credit lane only.
+    // Multi-DM: this hart must own receiver_idx. The writes and credits that would follow are no-ops
+    // for a receiver it does not own, so a true answer there would count a block that was never sent.
     FORCE_INLINE bool receiver_has_space(uint32_t receiver_idx, uint32_t num_entries) {
         ASSERT(num_credit_lanes() == 1);
+        ASSERT(owns_receiver(receiver_idx));
         CrossNodeSenderDFBInterface& iface = interface_.sender;
         const uint32_t wr_offset = sender_wr_offset(iface, receiver_idx);
         assert_contiguous_write(iface, wr_offset, num_entries);

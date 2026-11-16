@@ -4,7 +4,6 @@
 
 #include <gtest/gtest.h>
 
-#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <cstring>
@@ -70,17 +69,22 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensorPrefetcherDispatchEngineKernelsR
         dram_sender_dispatch_engine(this->device().impl().get_context_id(), this->device().get_device_ids()[0]);
 
     const uint32_t num_kernels = tensor_prefetcher_kernels().size();
+    // The counts are ordered as the host orders them. Fast dispatch zeroes them at launch, so they cannot
+    // wrap here; the static_asserts on fifo::count_behind cover the wrap.
     auto slots_retired_by_every_kernel = [&]() {
         uint32_t retired = read_word(this->device(), core, base + fifo::fifo_rd_offset(0));
         for (uint32_t k = 1; k < num_kernels; ++k) {
-            retired = std::min(retired, read_word(this->device(), core, base + fifo::fifo_rd_offset(k)));
+            const uint32_t kernel_rd = read_word(this->device(), core, base + fifo::fifo_rd_offset(k));
+            if (fifo::count_behind(kernel_rd, retired)) {
+                retired = kernel_rd;
+            }
         }
         return retired;
     };
     auto wait_for_retired = [&](uint32_t target) {
         const auto deadline = std::chrono::steady_clock::now() + kRetireTimeout;
         uint32_t retired = slots_retired_by_every_kernel();
-        while (retired < target && std::chrono::steady_clock::now() < deadline) {
+        while (fifo::count_behind(retired, target) && std::chrono::steady_clock::now() < deadline) {
             retired = slots_retired_by_every_kernel();
         }
         return retired;

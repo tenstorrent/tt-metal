@@ -94,8 +94,8 @@ void TensorPrefetcherManager::validate_dispatch_engine_pages(
         target.mapping.size(),
         fifo_layout_.lanes);
     TT_FATAL(
-        target.total_receivers <= fifo::kMaxReceivers,
-        "Tensor prefetcher request has {} receivers; fast dispatch's prefetcher serves at most {}",
+        target.total_receivers > 0 && target.total_receivers <= fifo::kMaxReceivers,
+        "Tensor prefetcher request has {} receivers; fast dispatch's prefetcher serves 1 to {}",
         target.total_receivers,
         fifo::kMaxReceivers);
     // The stage slot each of this target's blocks lands in, exactly as the kernels size it.
@@ -140,8 +140,7 @@ void TensorPrefetcherManager::validate_dispatch_engine_pages(
 
 uint32_t TensorPrefetcherManager::fifo_slots_retired(uint32_t d) const {
     // Every kernel's count, one cache line apart, in one read. A slot is retired once every kernel passes it,
-    // so this returns the count that is furthest behind. The counts wrap and stay within a FIFO's depth of each
-    // other, so their signed difference orders them.
+    // so this returns the count that is furthest behind, ordered as the counts wrap (fifo::count_behind).
     constexpr uint32_t kLineWords = fifo::kLineBytes / sizeof(uint32_t);
     std::array<uint32_t, (fifo::kMaxKernels - 1) * kLineWords + 1> rd{};
     const uint32_t num_kernels = tensor_prefetcher_kernels().size();
@@ -154,7 +153,7 @@ uint32_t TensorPrefetcherManager::fifo_slots_retired(uint32_t d) const {
     uint32_t retired = rd[0];
     for (uint32_t k = 1; k < num_kernels; ++k) {
         const uint32_t kernel_rd = rd[k * kLineWords];
-        if (static_cast<int32_t>(kernel_rd - retired) < 0) {
+        if (fifo::count_behind(kernel_rd, retired)) {
             retired = kernel_rd;
         }
     }
@@ -165,8 +164,7 @@ void TensorPrefetcherManager::wait_for_fifo_retired(uint32_t d, uint32_t target)
     const auto timeout = mesh_device_->impl().metal_env().get_rtoptions().get_timeout_duration_for_operations();
     uint32_t retired = fifo_slots_retired(d);
     auto last_progress = std::chrono::steady_clock::now();
-    // The counts only grow and may wrap, so compare their difference.
-    while (static_cast<int32_t>(target - retired) > 0) {
+    while (fifo::count_behind(retired, target)) {
         std::this_thread::yield();
         const uint32_t now_retired = fifo_slots_retired(d);
         const auto now = std::chrono::steady_clock::now();

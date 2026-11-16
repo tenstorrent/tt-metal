@@ -35,6 +35,20 @@ inline constexpr uint32_t kFifoWrOffset = 1 * kLineBytes;
 constexpr uint32_t fifo_rd_offset(uint32_t k) { return (2 + k) * kLineBytes; }
 inline constexpr uint32_t kControlBytes = fifo_rd_offset(kMaxKernels);
 
+// Request slots in the FIFO.
+inline constexpr uint32_t kFifoSlots = 16;
+
+// Whether FIFO count `a` is behind count `b`. The counts wrap, and every kernel's count stays within a
+// FIFO's depth of the host's, so their signed difference orders them; the numeric order is wrong once one
+// has wrapped and the other has not.
+constexpr bool count_behind(uint32_t a, uint32_t b) { return static_cast<int32_t>(a - b) < 0; }
+static_assert(count_behind(0xFFFFFFFFu, 0), "A count about to wrap is behind one that has wrapped");
+static_assert(!count_behind(0, 0xFFFFFFFFu), "A count that has wrapped is ahead of one about to wrap");
+static_assert(!count_behind(7, 7), "A count is not behind itself");
+// Before the host has written a full FIFO, the count it waits for to reuse a slot is below zero, and no
+// kernel is behind it.
+static_assert(!count_behind(0, 0 - kFifoSlots + 1), "Nothing to wait for before the FIFO first fills");
+
 // The rest of the region, in order: a FIFO of kFifoSlots request slots, the per-receiver progress
 // counters, the PrefetcherPipe sender state of the DRAM-sender endpoints placed on this dispatch engine,
 // the kernels' own state, and the stage ring. Its size depends on how many lanes a slot carries and on how
@@ -46,7 +60,6 @@ inline constexpr uint32_t kControlBytes = fifo_rd_offset(kMaxKernels);
 // on when the sender is a DRAM core, so here the bank travels in the header instead.
 inline constexpr uint32_t kLanePageBytes = kRequestPageBytes;
 inline constexpr uint32_t kSlotHeaderBytes = kLineBytes;
-inline constexpr uint32_t kFifoSlots = 16;
 
 // Per-receiver progress between the reader and the pusher: blocks staged by the reader, and blocks pushed
 // (so their stage slots are free again) by the pusher. One monotonic word per line, one writer each.
@@ -128,5 +141,8 @@ static_assert(RegionLayout{kMaxLanes}.slot_bytes() % kLineBytes == 0, "FIFO slot
 constexpr uint32_t stage_slot_bytes(uint32_t ring_bytes, uint32_t num_receivers) {
     return ring_bytes / (num_receivers * kStageSlotsPerReceiver) / kLineBytes * kLineBytes;
 }
+// The kernels run only where the ring holds kMinStageRingBytes, and the host caps a request at
+// kMaxReceivers, so no stage slot is smaller than this.
+static_assert(stage_slot_bytes(kMinStageRingBytes, kMaxReceivers) == 1024, "The smallest stage slot is 1 KiB");
 
 }  // namespace tt::tt_metal::tensor_prefetcher_fifo
