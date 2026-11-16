@@ -28,15 +28,17 @@ import tt_umd
 from cave import Injector
 from helpers.chip_architecture import get_chip_architecture
 from helpers.format_config import DataFormat, InputOutputFormat
-from helpers.llk_params import DestAccumulation, Tilize, format_dict
+from helpers.llk_params import DestAccumulation, PerfRunType, Tilize, format_dict
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     DEST_INDEX,
+    LOOP_FACTOR,
     NUM_BLOCKS,
     NUM_FACES,
     NUM_TILES_IN_BLOCK,
+    PERF_RUN_TYPE,
     TILE_COUNT,
     TILIZE,
     generate_input_dim,
@@ -75,13 +77,18 @@ def setup():
     return TestConfig(
         "sources/eltwise_unary_datacopy_test.cpp",
         FORMATS,
-        templates=[generate_input_dim(TILE, TILE), TILIZE(Tilize.No)],
+        templates=[
+            generate_input_dim(TILE, TILE),
+            TILIZE(Tilize.No),
+            PERF_RUN_TYPE(PerfRunType.L1_TO_L1),
+        ],
         runtimes=[
             DEST_INDEX(0),
             TILE_COUNT(tiles_a),
             NUM_FACES(4),
             NUM_BLOCKS(1),
             NUM_TILES_IN_BLOCK(1),
+            LOOP_FACTOR(1),
         ],
         variant_stimuli=StimuliConfig(
             src_a,
