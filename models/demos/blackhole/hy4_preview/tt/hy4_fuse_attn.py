@@ -353,6 +353,10 @@ def fused_norms(qa_g, kv, qw, kvw, eps, mc_q=None):
     assert 1 <= S <= 8 and int(qa_g.shape[3]) == 2048 and int(kv.shape[3]) == 576 and int(kv.shape[2]) == S
     bf, f32 = ttnn.bfloat16, ttnn.float32
     mq = mc_q or ttnn.DRAM_MEMORY_CONFIG
+    if (
+        os.environ.get("HY4_NORM_OUT", "") == "dram"
+    ):  # B22fix diagnostic: outputs in DRAM regardless of the model's L1 choice
+        mq = ttnn.DRAM_MEMORY_CONFIG
     qa = ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, S, 2048]), bf, ttnn.TILE_LAYOUT, md, mq)
     lat = ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, S, 512]), bf, ttnn.TILE_LAYOUT, md, mq)
     kpe = ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, S, 64]), bf, ttnn.TILE_LAYOUT, md, mq)
