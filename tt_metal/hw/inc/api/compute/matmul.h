@@ -390,8 +390,8 @@ ALWI void matmul_block_math_dynamic_throttle(
 
 #ifdef ARCH_BLACKHOLE
 // HiFi3 half sync without a Bfp8_b CB, and with a 32-bit DEST also a 32-bit CB: in a kernel whose plain calls all have a run-time
-// block (minimal_matmul) the ttsync unpack and the row form read slower (224 2x1 bf16 +329 ns with a 32-bit DEST, +0.24 % with a
-// 16-bit one); with a constant block (bmm) both are 6-16 cy faster
+// block (minimal_matmul) the ttsync unpack reads slower (224 2x1 bf16 +117 ns, 244 1x4 +52 ns); with a constant block (bmm) it is
+// 6-16 cy faster
 constexpr bool matmul_fe_hifi3_wide() {
 #if defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_UNPACK)
     bool wide = false, bfp8 = false;
@@ -417,12 +417,10 @@ namespace ckernel {
 #endif
 
 #ifdef TRISC_MATH
-// llk_math_matmul_tile_mop, and the tile MOP for a plain call in the matmul_fe_hifi3_wide class when no plain call has a constant block
+// llk_math_matmul_tile_mop (the matmul_fe_hifi3_wide class keeps the row form: minimal_matmul 424/444/888 bf16 HiFi3 -2.5 to -3.2 %)
 template <bool row_mop_on, std::uint32_t kt_key, DataFormat form_out>
 constexpr bool matmul_fe_tile_mop() {
-    return llk_math_matmul_tile_mop<row_mop_on, kt_key, form_out>() ||
-           (!row_mop_on && kt_key == 0 && matmul_fe_hifi3_wide() &&
-            !matmul_fe_mark::is_used_d<8, std::integral_constant<std::uint32_t, kt_key>>(0));
+    return llk_math_matmul_tile_mop<row_mop_on, kt_key, form_out>();
 }
 #endif
 
