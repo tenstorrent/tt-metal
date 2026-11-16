@@ -358,7 +358,7 @@ class Flux3KleinPipeline:
         image_cond = None
         if reference is not None:
             # the reference's own latent shape: h, w stay the generated image's (the pre-step helper's noise uses them)
-            rh, rw = latent_shape(*reference.size)
+            rh, rw = latent_shape(reference.height, reference.width)
             image_cond = (self._vae.encode_canvas(reference), reference_ids(rh, rw, 0))
         timings["encode_reference"] = time.time() - t0
 
