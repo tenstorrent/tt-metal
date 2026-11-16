@@ -106,13 +106,9 @@ constexpr bool matmul_kernel_lofi_mix(const std::uint8_t (&formats)[N])
 template <std::size_t N>
 constexpr bool matmul_kernel_ttsync(const MathFidelity fidelity, const bool full_sync, const bool fp32_dest, const std::uint8_t (&formats)[N])
 {
-    if (fidelity == MathFidelity::LoFi)
-    {
-        // small LoFi blocks are bound by the unpack's context poll; half sync only, and not where the plain calls take the run-time
-        // direction (matmul_kernel_lofi_mix, a 32-bit operand beside a fast one), which the ttsync unpack does not run
-        return !full_sync && !matmul_kernel_lofi_mix(formats);
-    }
-    if (fidelity == MathFidelity::HiFi4 && full_sync && fp32_dest)
+    // LoFi: the cell rule (matmul_kernel_ttsync_block) picks the blocks the ttsync unpack serves; a kernel-wide rule enabled the hardware
+    // for polling blocks too (+0.1 to +0.25 cy/block on multi-tile LoFi half blocks)
+    if (fidelity == MathFidelity::LoFi || (fidelity == MathFidelity::HiFi4 && full_sync && fp32_dest))
     {
         return false;
     }
