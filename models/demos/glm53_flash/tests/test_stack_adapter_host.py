@@ -4420,6 +4420,28 @@ def test_prefill_tail_split_pieces(monkeypatch):
     monkeypatch.setenv("GLM53_PF_SPLIT_COSTS", "2048:0=10,1000000=20;8192:0=15")
     g2 = Glm53Generator(_MockStackBackend(B), tokenizer=None, max_batch=B, max_seq_len=SEQ)
     assert g2._split_cost_ms(2048, 500000) == 15.0 and g2._split_cost_ms(1024, 0) is None
+    # a 1,024 bucket (GLM53_PREFILL_BUCKETS=1024,2048,8192), default cost table: auto takes the cheapest MIX of replay
+    # sizes -- an exact-snapshot chunk of 2,176 tokens at ~80 K replays 1,024 + 2,048 rows instead of 2 x 2,048, a
+    # 4,150-token chunk keeps two 2,048 replays (five 1,024 pieces cost more), ~1 M still prefers one 8,192 replay
+    monkeypatch.delenv("GLM53_PF_SPLIT_COSTS")
+    monkeypatch.setenv("GLM53_PF_TAIL_SPLIT", "auto")
+    b3 = _MockStackBackend(B)
+    b3.tpp = SimpleNamespace(buckets=(1024, 2048, 8192))
+    b3.prefill_resume_max = lambda: 1046528
+    g3 = Glm53Generator(b3, tokenizer=SimpleNamespace(stop_token_ids=()), max_batch=B, max_seq_len=SEQ)
+
+    def replays(pieces):  # (the bucket each piece replays in)
+        return sorted(next(c for c in (1024, 2048, 8192) if c >= p.n_valid) for p in pieces)
+
+    snap = chunk(81920, 2176)
+    out = g3._tail_split([snap])
+    assert replays(out) == [1024, 2048] and out[1].start == 81920 + out[0].n_valid and out[0].n_valid % 1024 == 0
+    assert sum(p.n_valid for p in out) == 2176 and out[1].offset == snap.offset + out[0].n_valid
+    assert g3.counters["prefill_tail_rows_saved"] == 8192 - 1024 - 2048 and g3.counters["prefill_split_ms_saved"] > 0
+    out = g3._tail_split([c64])
+    assert replays(out) == [1024, 2048, 2048] and sum(p.n_valid for p in out) == 4150
+    assert g3._tail_split([chunk(65536, 1000)]) == [chunk(65536, 1000)]  # (fits the smallest bucket: whole)
+    assert g3._tail_split([c1m]) == [c1m]
     assert "ttnn" not in sys.modules
 
 

@@ -33,6 +33,7 @@ never the default and never the measured path.
 from __future__ import annotations
 
 import contextlib
+import heapq
 import importlib
 import inspect
 import json
@@ -1755,46 +1756,89 @@ class Glm53Generator(_ReadinessGenerator):
         return list(plans[:-1]) + self._split_chunk(plans[-1], tpp, k)
 
     def _split_chunk(self, last, tpp, k: Optional[int]) -> list:
-        """[last] unchanged, or its b-row pieces (k: the GLM53_PF_TAIL_SPLIT cap; None: the cost-table rule)"""
+        """[last] unchanged, or its pieces (k: the GLM53_PF_TAIL_SPLIT cap, b-row pieces; None: the cost-table rule,
+        the cheapest mix of bucket sizes from _min_cost_sizes)"""
         plans = [last]
-        b = int(min(tpp.buckets))
-        pieces = -(-int(last.n_valid) // b)
-        natural = next((int(c) for c in sorted(tpp.buckets) if c >= last.n_valid), None)
+        buckets = sorted(int(c) for c in tpp.buckets)
+        b = buckets[0]
+        natural = next((c for c in buckets if c >= last.n_valid), None)
         if last.n_valid <= b or natural is None:
             return plans
         saved = 0.0
         if k is None:
-            whole = self._split_cost_ms(natural, int(last.start))
-            parts = [self._split_cost_ms(b, int(last.start) + j * b) for j in range(pieces)]
-            if whole is None or any(c is None for c in parts) or sum(parts) >= whole:
+            best = self._min_cost_sizes(int(last.start), int(last.n_valid), natural, buckets)
+            if best is None:
                 return plans
-            saved = whole - sum(parts)
-        elif pieces > k or pieces * b >= natural:
-            return plans
-        if b % int(self.backend.continuation_align):
+            sizes, saved = best
+        else:
+            pieces = -(-int(last.n_valid) // b)
+            if pieces > k or pieces * b >= natural:
+                return plans
+            sizes = [b] * (pieces - 1) + [int(last.n_valid) - (pieces - 1) * b]
+        if any(s % int(self.backend.continuation_align) for s in sizes[:-1]):
             return plans  # (a piece must start on the continuation grid)
         rmax_fn = getattr(self.backend, "prefill_resume_max", None)
         rmax = rmax_fn() if callable(rmax_fn) else None
-        if isinstance(rmax, int) and int(last.start) + (pieces - 1) * b > rmax:
+        if isinstance(rmax, int) and int(last.start) + sum(sizes[:-1]) > rmax:
             # (F27: a piece would start past the last resumable start, where no bucket has a key -- e.g. a 2,100-token
             # tail resumed at 1,046,400 under the 1,048,576 window: keep the chunk whole, clamp_lengths plans it tail-first)
             return plans
-        if slice_boundary(int(last.n_valid) - (pieces - 1) * b - 1, self._slice_rows(b)):
+        tail_bucket = next(c for c in buckets if c >= sizes[-1])
+        if slice_boundary(sizes[-1] - 1, self._slice_rows(tail_bucket)):
             return (
                 plans  # (the last piece would end on a chip slice boundary: keep the unsplit chunk, its rule applies)
             )
-        out = []
-        for j in range(pieces):
-            nv = min(b, int(last.n_valid) - j * b)
-            out.append(ChunkPlan(start=last.start + j * b, offset=last.offset + j * b, n_valid=nv,
+        out, off = [], 0
+        for nv in sizes:
+            out.append(ChunkPlan(start=last.start + off, offset=last.offset + off, n_valid=nv,
                                  physical=round_up(nv, self.backend.prefill_align)))  # fmt: skip
+            off += nv
         self.counters["prefill_tail_splits"] = self.counters.get("prefill_tail_splits", 0) + 1
         self.counters["prefill_tail_rows_saved"] = (
-            self.counters.get("prefill_tail_rows_saved", 0) + natural - pieces * b
+            self.counters.get("prefill_tail_rows_saved", 0) + natural - sum(sizes[:-1]) - tail_bucket
         )
         if saved:
             self.counters["prefill_split_ms_saved"] = round(self.counters.get("prefill_split_ms_saved", 0) + saved, 1)
         return out
+
+    def _min_cost_sizes(self, start: int, n: int, natural: int, buckets: list) -> Optional[tuple]:
+        """GLM53_PF_TAIL_SPLIT=auto: the cheapest piece list for an n-token chunk at absolute `start` by the cost table --
+        full pieces of the buckets below `natural`, then one last piece of the remainder in the smallest bucket that
+        holds it -- when it beats one `natural` replay: (sizes, ms saved), else None. With buckets 2,048 / 8,192 the only
+        piece size is 2,048, so this is the all-2,048 split. A 1,024 bucket makes the remainder of a 2,176-token chunk
+        (128 tokens) a 1,024-row replay instead of a second 2,048-row one, while a 4,150-token chunk keeps its 2,048
+        pieces (five 1,024 pieces cost more). Pieces only grow the consumed count, so a shortest-first sweep visits
+        every consumed count after all of its predecessors."""
+        whole = self._split_cost_ms(natural, start)
+        if whole is None:
+            return None
+        small = [c for c in buckets if c < natural]
+        best = {0: (0.0, ())}  # tokens consumed by full pieces -> (ms, sizes)
+        todo, done, found = [0], set(), None
+        while todo:
+            used = heapq.heappop(todo)
+            if used in done:
+                continue
+            done.add(used)
+            cost, sizes = best[used]
+            rest = n - used
+            tail = next((c for c in buckets if c >= rest), None)
+            if used and tail is not None:
+                ms = self._split_cost_ms(tail, start + used)
+                if ms is not None and (found is None or cost + ms < found[0]):
+                    found = (cost + ms, sizes + (rest,))
+            for c in small:
+                if used + c >= n:
+                    continue
+                ms = self._split_cost_ms(c, start + used)
+                if ms is None:
+                    continue
+                if used + c not in best or cost + ms < best[used + c][0]:
+                    best[used + c] = (cost + ms, sizes + (c,))
+                    heapq.heappush(todo, used + c)
+        if found is None or found[0] >= whole:
+            return None
+        return list(found[1]), whole - found[0]
 
     def _slice_safe(self, plans: list) -> list:
         """Stage 16's slice-boundary rule (slice_plan) over a request's chunk plan, on backends that pick a chunk's
