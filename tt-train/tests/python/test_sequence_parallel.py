@@ -13,6 +13,7 @@ import pytest
 
 import ttnn
 import ttml
+from ttml.common.utils import build_causal_mask
 from ttml.models import EmbeddingPlacement, WeightTyingType
 from ttml.models.llama import Llama, LlamaConfig
 from ttml.modules import LoraColumnParallelLinear, LoraConfig, LoraModel
@@ -72,11 +73,6 @@ def token_ids(batch: int, seq_len: int, seed: int):
     return ttml.autograd.Tensor.from_numpy(ids, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32)
 
 
-def causal_mask(seq_len: int):
-    mask = np.tril(np.ones((1, 1, seq_len, seq_len), dtype=np.float32))
-    return ttml.autograd.Tensor.from_numpy(mask, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16)
-
-
 def per_rank(tensor) -> np.ndarray:
     """Every tp rank's copy of ``tensor`` stacked along dim 1, which is 1 on every tensor here, so SP
     and TP tensors compare rank by rank whatever their placement. The layout is imposed by a composer
@@ -100,8 +96,7 @@ def perturb_lora_B(model) -> None:
     for name, param in model.parameters().items():
         if name.endswith("lora_B"):
             sharding = ttml.Sharding.from_tensor(param)
-            full = sharding.gather(param)
-            values = (np.random.default_rng(1).standard_normal(full.shape) * 0.05).astype(np.float32)
+            values = (np.random.default_rng(1).standard_normal(sharding.global_shape) * 0.05).astype(np.float32)
             ttml.autograd.assign_numpy(param, values, layout=ttnn.Layout.TILE, mapper=sharding.derive_mapper())
 
 
@@ -135,7 +130,7 @@ class TestMatchesTensorParallel:
         tp_model, sp_model = paired_models(placement)
         tp_model.eval()
         sp_model.eval()
-        ids, mask = token_ids(batch, SEQ_LEN, seed=1234 + batch), causal_mask(SEQ_LEN)
+        ids, mask = token_ids(batch, SEQ_LEN, seed=1234 + batch), build_causal_mask(SEQ_LEN, device=True)
 
         # Logits stay vocab-sharded under both strategies (gather_output=False).
         tp_logits, sp_logits = per_rank(tp_model(ids, mask)), per_rank(sp_model(ids, mask))
@@ -146,7 +141,7 @@ class TestMatchesTensorParallel:
     @pytest.mark.parametrize("placement", PLACEMENTS, ids=lambda p: p.name)
     def test_gradients_after_sync(self, placement):
         tp_model, sp_model = paired_models(placement, attention_bias=True)
-        ids, mask = token_ids(1, SEQ_LEN, seed=77), causal_mask(SEQ_LEN)
+        ids, mask = token_ids(1, SEQ_LEN, seed=77), build_causal_mask(SEQ_LEN, device=True)
         for model in (tp_model, sp_model):
             backward(model, ids, mask)
 
@@ -159,7 +154,7 @@ class TestMatchesTensorParallel:
         tp_model, sp_model = paired_models()
         optimizers = [adamw(model) for model in (tp_model, sp_model)]
         for step in range(2):
-            ids, mask = token_ids(1, SEQ_LEN, seed=step), causal_mask(SEQ_LEN)
+            ids, mask = token_ids(1, SEQ_LEN, seed=step), build_causal_mask(SEQ_LEN, device=True)
             for model, optimizer in zip((tp_model, sp_model), optimizers):
                 optimizer.zero_grad()
                 backward(model, ids, mask)
@@ -183,7 +178,7 @@ class TestMatchesTensorParallel:
             # near-zero gradient element would flip a lora_B update and fail the comparison for no SP reason.
             perturb_lora_B(wrapped[-1])
         tp_lora, sp_lora = wrapped
-        ids, mask = token_ids(1, SEQ_LEN, seed=3), causal_mask(SEQ_LEN)
+        ids, mask = token_ids(1, SEQ_LEN, seed=3), build_causal_mask(SEQ_LEN, device=True)
         for model in wrapped:
             backward(model, ids, mask)
             ttml.sync_gradients(model.parameters())
@@ -215,11 +210,11 @@ class TestValidation:
     def test_rejects_input_sequence_not_divisible_by_32_tp(self, expect_error):
         model = Llama(config(SP))
         with expect_error(ValueError, "input sequence length divisible by"):
-            model(token_ids(1, 32, seed=5), causal_mask(32))
+            model(token_ids(1, 32, seed=5), build_causal_mask(32, device=True))
 
     def test_dropout_keeps_the_tp_copies_identical(self):
         model = Llama(config(TP, attention_dropout=0.1, mlp_dropout=0.1))
-        backward(model, token_ids(1, SEQ_LEN, seed=8), causal_mask(SEQ_LEN))
+        backward(model, token_ids(1, SEQ_LEN, seed=8), build_causal_mask(SEQ_LEN, device=True))
         grad = per_rank(model.parameters()["Llama/blocks/0/mlp_norm/gamma"].get_grad_tensor())
         np.testing.assert_array_equal(grad[:, 0], grad[:, 1])
 
@@ -234,7 +229,12 @@ class TestValidation:
             head_dim=HIDDEN // N_HEADS,
         )
         with expect_error(NotImplementedError, "sequence_parallel does not support"):
-            model(token_ids(1, SEQ_LEN, seed=5), causal_mask(SEQ_LEN), kv_cache=kv_cache, new_tokens=SEQ_LEN)
+            model(
+                token_ids(1, SEQ_LEN, seed=5),
+                build_causal_mask(SEQ_LEN, device=True),
+                kv_cache=kv_cache,
+                new_tokens=SEQ_LEN,
+            )
 
 
 class TestTPStrategy:

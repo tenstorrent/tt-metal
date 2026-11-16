@@ -7,7 +7,6 @@
 #include <cstdlib>
 #include <tt_stl/assert.hpp>
 #include <ttnn/operations/eltwise/binary/binary.hpp>
-#include <variant>
 
 #include "autograd/auto_context.hpp"
 #include "autograd/graph_utils.hpp"
@@ -42,13 +41,11 @@ bool force_swiglu_composite() {
 // Whether `w2` (stored [out, in]) is sharded along its input features across a mesh axis of size > 1, as a
 // row-parallel weight is. The matmul with it then leaves each device a partial sum still to be added up.
 bool is_row_parallel(const ttnn::Tensor& w2) {
-    using Shard = tt::tt_metal::distributed::MeshMapperConfig::Shard;
     const auto placements = core::distributed::placements_per_axis(w2);
     const auto mesh_shape = w2.device()->shape();
     const int rank = static_cast<int>(w2.logical_shape().rank());
     for (size_t axis = 0; axis < placements.size(); ++axis) {
-        const auto* shard = std::get_if<Shard>(&placements[axis]);
-        if (mesh_shape[axis] > 1 && shard != nullptr && (shard->dim < 0 ? shard->dim + rank : shard->dim) == rank - 1) {
+        if (mesh_shape[axis] > 1 && core::distributed::shard_dim(placements[axis], rank) == rank - 1) {
             return true;
         }
     }
@@ -77,6 +74,12 @@ autograd::TensorPtr swiglu(
     const autograd::TensorPtr& w2,
     const autograd::TensorPtr& w3,
     float dropout_prob) {
+    // A partial sum's label cannot say it is one, so its seeding would be read wrong, and masking each partial
+    // differently is not a dropout of their sum anyway. Checked before either path runs.
+    TT_FATAL(
+        dropout_prob <= 0.0F || !is_row_parallel(w2->get_value()),
+        "swiglu cannot apply dropout when w2 is sharded along its input features: each device then holds a partial "
+        "sum still to be added up across devices, so apply dropout after that sum");
     if (force_swiglu_composite()) {
         return swiglu_composite(tensor, w1, w2, w3, dropout_prob);
     }
@@ -129,12 +132,6 @@ autograd::TensorPtr swiglu(
     float dropout_scaler = 1.0F;
     bool use_per_device_seed = false;
     if (dropout_prob > 0.0F) {
-        // A partial sum's label cannot say it is one, so its seeding would be read wrong, and masking each partial
-        // differently is not a dropout of their sum anyway.
-        TT_FATAL(
-            !is_row_parallel(w2->get_value()),
-            "swiglu cannot apply dropout when w2 is sharded along its input features: each device then holds a partial "
-            "sum still to be added up across devices, so apply dropout after that sum");
         use_per_device_seed = dropout_seed_per_device(swiglu_result);
         dropout_seed = static_cast<uint32_t>(autograd::ctx().get_generator()());
         dropout_scaler = 1.0F / (1.0F - dropout_prob);

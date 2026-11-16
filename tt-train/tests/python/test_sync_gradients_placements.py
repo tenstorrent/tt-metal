@@ -20,7 +20,7 @@ import pytest
 
 import ttnn
 import ttml
-from ttml.modules import LinearLayer
+from ttml.modules import ColumnParallelLinear, LinearLayer, RowParallelLinear
 from sync_gradients_placements_common import (
     DIM,
     NATIVE,
@@ -115,6 +115,37 @@ class TestTP:
                 np.testing.assert_array_equal(
                     shard, np.full((1, 1, 1, DIM), value, dtype=shard.dtype), err_msg=f"{name}: device {device}"
                 )
+
+    @pytest.mark.parametrize("fill", [ttml.init.zeros_, ttml.init.normal_], ids=["zeros_", "normal_"])
+    def test_in_place_inits_keep_a_sharded_weight_sharded(self, tp_mesh, fill):
+        """An in-place initializer draws values for the whole weight and lays them out as the weight is, so the
+        column-parallel weight stays sharded on tp and its output still reads as sharded along the features for the
+        row-parallel layer after it. Negative control: values drawn for one device's shape and replicated labelled the
+        weight Replicate, and the row-parallel layer scattered its already sharded input; the matmul then failed on
+        mismatched inner dims (with no bias, whose label would have hidden the weight's)."""
+        up = ColumnParallelLinear(DIM, DIM, has_bias=False)
+        down = RowParallelLinear(DIM, DIM, has_bias=False)
+        before = [str(p) for p in _placements(up.weight.tensor.get_value(NATIVE))]
+        fill(up.weight)
+        value = up.weight.tensor.get_value(NATIVE)
+        assert [str(p) for p in _placements(value)] == before
+        if fill is ttml.init.normal_:
+            first, second = _shards(value)
+            assert not np.array_equal(first, second), "both devices hold the same slice"
+        ttml.ops.unary.mean(down(up(_input((1, 1, DIM, DIM))))).backward(False)
+        ttml.autograd.AutoContext.get_instance().reset_graph()
+
+    @pytest.mark.parametrize("composite", [False, True], ids=["fused", "composite"])
+    def test_swiglu_refuses_dropout_on_a_row_parallel_w2(self, tp_mesh, expect_error, monkeypatch, composite):
+        """With w2 row-parallel each device's output is a partial sum still to be added up, so dropout belongs after that
+        sum. The benchmark switch to the composite path refuses it too."""
+        if composite:
+            monkeypatch.setenv("TTML_SWIGLU_FORCE_COMPOSITE", "1")
+        w1, w3 = (ColumnParallelLinear(DIM, 2 * DIM, has_bias=False) for _ in range(2))
+        w2 = RowParallelLinear(2 * DIM, DIM, has_bias=False)
+        x = _input((1, 1, 32, DIM))
+        with expect_error(RuntimeError, "swiglu cannot apply dropout when w2 is sharded along its input features"):
+            ttml.ops.swiglu.swiglu(x, w1.weight.tensor, w2.weight.tensor, w3.weight.tensor, 0.1)
 
     def test_synchronize_over_tp_leaves_the_tp_shards_alone(self, tp_mesh):
         """``synchronize_gradients(params, [tp])`` averages only the gradients of parameters replicated on tp; a

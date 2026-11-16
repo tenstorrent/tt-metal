@@ -43,12 +43,6 @@ RATE_TOL = 0.15
 MIN_DISAGREEMENT = 0.1
 
 
-@pytest.fixture(scope="module")
-def dp_tp_mesh(fresh_device_mesh):
-    with fresh_device_mesh((2, 2), ("dp", "tp"), what="dropout on a [2, 2] mesh", require_mgd=True) as mesh:
-        yield mesh
-
-
 @pytest.fixture(autouse=True)
 def reset_graph():
     yield

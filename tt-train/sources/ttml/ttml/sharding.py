@@ -36,14 +36,24 @@ def _fatal_message(error: BaseException) -> str:
     return text.splitlines()[0] if text else str(error).splitlines()[0]
 
 
+def _placement_dim(placement, rank: int) -> int | None:
+    """The dim of a rank-``rank`` tensor that ``placement`` shards along, a negative one counted from the end, or None
+    for Replicate. A dim outside the rank is a stale label (ttnn #52331) and is refused, not wrapped onto a real dim."""
+    if not isinstance(placement, ttnn.PlacementShard):
+        return None
+    dim = placement.dim + rank if placement.dim < 0 else placement.dim
+    if not 0 <= dim < rank:
+        raise ValueError(f"a Shard({placement.dim}) label names no dim of a rank-{rank} tensor")
+    return dim
+
+
 def shard_dim(tensor: ttml.autograd.Tensor, axis: int) -> int | None:
     """The tensor dim ``tensor`` is sharded along across mesh axis ``axis``, or None where it is replicated.
 
     ``Sharding.from_tensor(tensor).shard_dim(axis)`` without building the whole layout, for checks run on every forward.
     """
     value = tensor.get_value(ttml.autograd.PreferredPrecision.NATIVE)
-    placement = ttml.core.distributed.placements_per_axis(value)[axis]
-    return placement.dim % len(value.shape) if isinstance(placement, ttnn.PlacementShard) else None
+    return _placement_dim(ttml.core.distributed.placements_per_axis(value)[axis], len(value.shape))
 
 
 class Sharding:
@@ -84,8 +94,7 @@ class Sharding:
 
     def shard_dim(self, axis: int) -> int | None:
         """The tensor dim sharded across mesh axis ``axis``, or None where the tensor is replicated."""
-        placement = self.placements[axis]
-        return placement.dim % len(self._local_shape) if isinstance(placement, ttnn.PlacementShard) else None
+        return _placement_dim(self.placements[axis], len(self._local_shape))
 
     @property
     def is_fully_replicated(self) -> bool:

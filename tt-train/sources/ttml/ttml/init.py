@@ -389,9 +389,13 @@ def _unwrap_tensor(tensor_or_param):
 
 
 def _fill_(tensor, init_fn):
-    """Fill tensor with values from init_fn, in the dtype the tensor is stored in, and return tensor."""
+    """Fill tensor with values from init_fn, in the dtype the tensor is stored in, and return tensor.
+
+    The values are drawn for the tensor's shape across the mesh and laid out as the tensor is, so each device of a
+    sharded tensor gets its own slice and the tensor keeps its label."""
     inner = _unwrap_tensor(tensor)
-    inner.assign(init_fn(inner.shape()))
+    sharding = ttml.Sharding.from_tensor(inner)
+    inner.assign(init_fn(sharding.global_shape, sharding.derive_mapper()))
     return tensor
 
 

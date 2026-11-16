@@ -126,8 +126,8 @@ class FSDPState:
         self.replicated: dict[str, List[str]] = {}
 
         # id(autograd_tensor) -> cached sharded ttnn::Tensor, populated lazily
-        # during the first pre-forward and reused across forwards to avoid a
-        # host roundtrip on every reshard.
+        # during the first pre-forward and reused across forwards, so a
+        # reshard swaps it back in instead of partitioning the gathered value.
         self._cached_shards: dict[int, Any] = {}
 
     # -- managed-param management --------------------------------------------

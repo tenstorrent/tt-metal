@@ -4,10 +4,8 @@
 
 #include "pipeline_parallel_llama.hpp"
 
-#include <algorithm>
-#include <variant>
-
 #include "autograd/tensor.hpp"
+#include "core/distributed/distributed.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "modules/embedding_module.hpp"
 #include "modules/rms_norm_module.hpp"
@@ -18,14 +16,6 @@
 namespace ttml::models::distributed::pipeline_parallel_llama {
 
 namespace {
-
-// Whether `topology` shards its tensor on some mesh axis.
-bool has_shard(const tt::tt_metal::TensorTopology& topology) {
-    const auto& placements = topology.placements();
-    return std::any_of(placements.begin(), placements.end(), [](const auto& placement) {
-        return std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Shard>(placement);
-    });
-}
 
 void initialize_weights_tensor_parallel(PipelineParallelLlama& model) {
     auto params = model.parameters();
@@ -50,7 +40,7 @@ void initialize_weights_tensor_parallel(PipelineParallelLlama& model) {
             // The dim-0 mapper labels every weight Shard(0). A tensor-parallel weight gets back the label its module
             // gave it, which names the dim it is sharded along: a linear labels its output from it, and dropout seeds
             // from that label. Each device's shape is unchanged.
-            if (has_shard(topology)) {
+            if (core::distributed::has_shard(topology)) {
                 value.update_tensor_topology(topology);
             }
             tensor_ptr->set_value(value);

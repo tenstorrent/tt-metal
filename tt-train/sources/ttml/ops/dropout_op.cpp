@@ -6,6 +6,7 @@
 
 #include <ttnn/operations/eltwise/binary/binary.hpp>
 #include <ttnn/operations/eltwise/unary/unary.hpp>
+#include <variant>
 #include <vector>
 
 #include "autograd/auto_context.hpp"
@@ -21,13 +22,19 @@ bool dropout_seed_per_device(const ttnn::Tensor& value) {
     const auto* device = value.device();
     TT_FATAL(device != nullptr, "dropout needs a tensor allocated on a device");
     const auto mesh_shape = device->shape();
+    if (mesh_shape.mesh_size() == 1U) {
+        return false;
+    }
+    const auto placements = core::distributed::placements_per_axis(value);
     std::vector<uint32_t> replicated;
     std::vector<uint32_t> sharded;
     for (uint32_t axis = 0; axis < mesh_shape.dims(); ++axis) {
         if (mesh_shape[axis] == 1) {
             continue;
         }
-        (core::distributed::is_sharded_on_axis(value, axis) ? sharded : replicated).push_back(axis);
+        const bool is_shard =
+            std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Shard>(placements[axis]);
+        (is_shard ? sharded : replicated).push_back(axis);
     }
     TT_FATAL(
         replicated.empty() || sharded.empty(),

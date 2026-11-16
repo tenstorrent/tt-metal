@@ -4,9 +4,12 @@
 
 #include "core/distributed/distributed.hpp"
 
+#include <algorithm>
 #include <core/ttnn_all_includes.hpp>
+#include <optional>
 #include <ttnn/operations/creation/creation.hpp>
 #include <ttnn/operations/eltwise/binary/binary.hpp>
+#include <variant>
 
 #include "autograd/auto_context.hpp"
 #include "core/tt_tensor_utils.hpp"
@@ -63,6 +66,21 @@ bool is_sharded_on_axis(const ttnn::Tensor& value, uint32_t axis) {
         axis,
         placements.size());
     return std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Shard>(placements[axis]);
+}
+
+bool has_shard(const tt::tt_metal::TensorTopology& topology) {
+    const auto& placements = topology.placements();
+    return std::any_of(placements.begin(), placements.end(), [](const auto& placement) {
+        return std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Shard>(placement);
+    });
+}
+
+std::optional<int> shard_dim(const tt::tt_metal::distributed::MeshMapperConfig::Placement& placement, int rank) {
+    const auto* shard = std::get_if<tt::tt_metal::distributed::MeshMapperConfig::Shard>(&placement);
+    if (shard == nullptr) {
+        return std::nullopt;
+    }
+    return shard->dim < 0 ? shard->dim + rank : shard->dim;
 }
 
 void set_placements_per_axis(

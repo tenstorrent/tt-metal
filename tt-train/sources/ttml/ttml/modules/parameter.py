@@ -51,14 +51,13 @@ def replace_lazy_mapper(parameter: "Parameter", new_mapper: Any) -> None:
     Used by :func:`ttml.fsdp.fully_shard` to install an FSDP shard placement on
     a lazy parameter without materializing. Errors if ``parameter`` has already
     been materialized — by then the in-memory tensor has the old mapper baked in
-    and a host roundtrip is the only way to redistribute (use the eager FSDP
-    code path instead).
+    and has to be partitioned on device instead (the eager FSDP code path).
     """
     inner = parameter.peek_tensor()
     if not isinstance(inner, TensorMetadata):
         raise RuntimeError(
             "replace_lazy_mapper called on a materialized Parameter; only lazy "
-            "parameters can have their mapper rewritten without a host roundtrip."
+            "parameters can have their mapper rewritten, a materialized one is partitioned on device."
         )
     new_meta = replace(inner, mapper=new_mapper)
     object.__setattr__(parameter, "tensor", new_meta)

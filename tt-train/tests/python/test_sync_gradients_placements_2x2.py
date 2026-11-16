@@ -12,6 +12,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+import ttnn
 import ttml
 from sync_gradients_placements_common import (
     DIM,
@@ -37,13 +38,6 @@ pytestmark = [
     pytest.mark.timeout(1800),
     pytest.mark.usefixtures("strict_ccl_topology"),
 ]
-
-
-@pytest.fixture(scope="module")
-def dp_tp_mesh(fresh_device_mesh):
-    """``[2, 2]`` with axes ``("dp", "tp")``."""
-    with fresh_device_mesh((2, 2), ("dp", "tp"), what="DP x TP placements tests", require_mgd=True) as mesh:
-        yield mesh
 
 
 @pytest.fixture(scope="module")

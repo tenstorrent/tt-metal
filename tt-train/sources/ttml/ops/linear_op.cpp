@@ -106,8 +106,7 @@ void fix_ttnn_linear_output_topology(const ttnn::Tensor& weight, ttnn::Tensor& o
     // The output's label is read only if it needs fixing, which most linears' outputs do not.
     std::optional<ttsl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement>> placements;
     for (size_t axis = 0; axis < weight_placements.size(); ++axis) {
-        const auto* shard = std::get_if<Shard>(&weight_placements[axis]);
-        if (shard != nullptr && (shard->dim < 0 ? shard->dim + weight_rank : shard->dim) == weight_rank - 2) {
+        if (core::distributed::shard_dim(weight_placements[axis], weight_rank) == weight_rank - 2) {
             if (!placements) {
                 placements = core::distributed::placements_per_axis(output);
             }

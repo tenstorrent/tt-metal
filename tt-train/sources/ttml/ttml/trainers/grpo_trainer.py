@@ -1052,11 +1052,6 @@ class GRPOTrainer:
         # ("dp", "fsdp") axes (FSDP-managed params are skipped per-axis because
         # the FSDP backward hook already reduce-scattered them).
         fsdp_enabled: bool = mesh is not None and mesh.has_axis("fsdp") and mesh.axis_size("fsdp") > 1
-        fsdp_sync_axes: Tuple[str, ...] = (
-            tuple(name for name in ("dp", "fsdp") if mesh.has_axis(name) and mesh.axis_size(name) > 1)
-            if mesh is not None
-            else ()
-        )
         batch_sharded: bool = ddp_enabled or fsdp_enabled
         dp_mapper: Any = ttml.core.distributed.shard_tensor_to_mesh_mapper(device, 0) if batch_sharded else None
         dp_composer: Any = ttml.core.distributed.concat_mesh_to_tensor_composer(device, 0) if batch_sharded else None
@@ -1073,12 +1068,7 @@ class GRPOTrainer:
         # rather than blanket ``get_num_devices()``, so the normalization stays
         # correct even on a mesh whose reduced axes don't span every device
         # (e.g. a "dp" axis narrower than the full mesh).
-        if fsdp_enabled:
-            # sync_gradients averages over fsdp_sync_axes -> divide by their size product.
-            grad_sync_world_size = 1
-            for _name in fsdp_sync_axes:
-                grad_sync_world_size *= mesh.axis_size(_name)
-        elif ddp_context_enabled:
+        if ddp_context_enabled and not fsdp_enabled:
             # C++ synchronize_gradients reduces each replicated grad over ONLY
             # the context's DDP axis (and CP, if enabled), never TP. So the
             # divisor is the DDP-axis device count, NOT get_num_devices().
@@ -1099,9 +1089,9 @@ class GRPOTrainer:
             # accessor would need binding), or the loss will silently mis-
             # normalize by the CP factor — the same bug this branch fixes for TP.
             grad_sync_world_size = autograd_ctx.get_parallelism_context().get_ddp_size()
-        elif ddp_enabled:
-            # sync_gradients averages over "dp" -> divide by the "dp" axis size.
-            grad_sync_world_size = mesh.axis_size("dp")
+        elif mesh is not None:
+            # sync_gradients averages over the "dp" and "fsdp" axes the mesh has; one of size 1 counts as 1.
+            grad_sync_world_size = math.prod(mesh.axis_size(name) for name in ("dp", "fsdp") if mesh.has_axis(name))
         else:
             grad_sync_world_size = 1
 

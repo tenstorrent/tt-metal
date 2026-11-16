@@ -30,6 +30,13 @@ ttsl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement> placem
 // Whether `value` is sharded on mesh axis `axis`, as placements_per_axis reads it.
 bool is_sharded_on_axis(const ttnn::Tensor& value, uint32_t axis);
 
+// Whether `topology` shards its tensor on some mesh axis.
+bool has_shard(const tt::tt_metal::TensorTopology& topology);
+
+// The dim of a rank-`rank` tensor that `placement` shards along, a negative dim counted from the end, or nullopt where
+// it replicates.
+std::optional<int> shard_dim(const tt::tt_metal::distributed::MeshMapperConfig::Placement& placement, int rank);
+
 // Relabels `value` with `placements`, one per mesh axis. Ops call it when ttnn's default label, which copies each
 // input's shard dim, misdescribes their output.
 void set_placements_per_axis(

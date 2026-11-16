@@ -41,6 +41,15 @@ def fetch_pretrained(src: str) -> str:
     return path
 
 
+def lora_dropout_on_mesh(dropout: float, use_ddp: bool, use_tp: bool) -> float:
+    """``dropout``, or 0 under DP+TP: the column-parallel LoRA input is then replicated across tp and sharded across
+    dp, a layout ttml's dropout refuses (its copies need one mask and its shards different ones)."""
+    if use_ddp and use_tp and dropout > 0.0:
+        print(f"LoRA dropout {dropout} -> 0.0: dropout cannot mask DP+TP activations")
+        return 0.0
+    return dropout
+
+
 def llama_config(yaml_config: dict | None, pretrained_path: str | None, num_tokens: int, use_tp: bool) -> LlamaConfig:
     """Return the config of the model to fine-tune."""
     tc = (yaml_config or {}).get("transformer_config", {})
