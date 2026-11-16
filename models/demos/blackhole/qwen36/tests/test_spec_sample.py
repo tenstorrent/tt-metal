@@ -41,9 +41,11 @@ def _parametrize(fn):
 
 
 class _Sampler:
-    """VerifySampler over a persistent logits buffer, warmed, then captured as the model captures it."""
+    """VerifySampler over a persistent logits buffer, warmed, then captured as the model captures it. With
+    ``capture=False`` the caller captures once every device buffer that the replays run next to exists: a buffer
+    allocated after the capture and alive at a replay can sit where the trace writes."""
 
-    def __init__(self, mesh, B, T):
+    def __init__(self, mesh, B, T, capture=True):
         self.mesh, self.B, self.T = mesh, B, T
         self.logits = ttnn.from_torch(
             torch.zeros(1, 1, B * T, VOCAB),
@@ -53,6 +55,12 @@ class _Sampler:
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
         )
         self.sampler = VerifySampler(mesh, B, T, VOCAB)
+        self.trace = None
+        if capture:
+            self.capture()
+
+    def capture(self):
+        mesh = self.mesh
         self.sampler.body(self.logits)
         ttnn.synchronize_device(mesh)
         mesh.set_program_cache_misses_allowed(False)
@@ -228,8 +236,7 @@ def test_a_chained_seeded_row_draws_what_an_unchained_verify_draws(mesh_device):
             ttnn.from_torch(torch.as_tensor(host).to(torch.int32), dtype=dev.dtype, mesh_mapper=rep), dev
         )
 
-    s = _Sampler(mesh_device, B, T)
-    s.stage_logits(torch.stack([_row_logits(r) for r in range(R)]))
+    s = _Sampler(mesh_device, B, T, capture=False)
     step_dev = buffer(torch.zeros(VERIFY_STEP_ROWS, pack_width(R)), ttnn.uint32)
     pack_dev = buffer(torch.zeros(drafter_pack_rows(K), pack_width(R)), ttnn.uint32)
     ctrl_devs = [buffer(torch.zeros(1, _ctrl_words(B, nv)), ttnn.int32) for _ in range(groups)]
@@ -237,6 +244,10 @@ def test_a_chained_seeded_row_draws_what_an_unchained_verify_draws(mesh_device):
     draft_devs = [buffer(torch.zeros(1, 1, B, 1), ttnn.uint32) for _ in range(K)]
     chain = ChainInputs(mesh_device, B, K, ROWS, step_dev, pack_dev, ctrl_devs, nv, sampler=s.sampler)
     chain.bind(ids_dev, draft_devs)
+    # As in the engine, the chain program and every buffer it reads or writes exist before the sampler is captured.
+    chain.body()
+    s.capture()
+    s.stage_logits(torch.stack([_row_logits(r) for r in range(R)]))
     seeded = [u for u in range(B) if u % 2 == 0]
     params = SimpleNamespace(
         temperature=[1.0] * B,
