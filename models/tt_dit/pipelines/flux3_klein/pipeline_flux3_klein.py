@@ -5,7 +5,6 @@
 from __future__ import annotations
 
 import hashlib
-import itertools
 import math
 import os
 import time
@@ -105,7 +104,7 @@ def layout_buckets(buckets: tuple[int, ...], width: int, height: int, references
 
 
 def make_noise(seed: int, h: int, w: int) -> torch.Tensor:
-    """The reference's draw: [1, C, h, w] in fp32, rounded to bf16, one row per latent pixel."""
+    """BFL's draw: [1, C, h, w] in fp32, rounded to bf16, one row per latent pixel."""
     generator = torch.Generator().manual_seed(seed)
     noise = torch.randn((1, IN_CHANNELS["image"], h, w), generator=generator)
     return noise.to(torch.bfloat16).flatten(2).transpose(1, 2)[0].float().contiguous()
@@ -219,9 +218,8 @@ class Flux3KleinPipeline:
         shared = next(iter(snapshots.values()))
         if ttnn.using_distributed_env():
             # the TP collectives stay on one host: each host holds whole TP columns, the SP axis spans the hosts
-            view = mesh_device.get_view()
-            local = [c for c in itertools.product(*map(range, mesh_shape)) if view.is_local(ttnn.MeshCoordinate(*c))]
-            if len({c[tp_axis] for c in local}) != mesh_shape[tp_axis]:
+            local = tensor.local_mesh_coords(mesh_device)
+            if len(local) != mesh_shape[tp_axis] * len({c[1 - tp_axis] for c in local}):
                 raise ValueError(f"this host does not hold whole TP columns (axis {tp_axis}) of the {mesh_shape} mesh")
 
         encoder_parallel = EncoderParallelConfig(
@@ -326,6 +324,8 @@ class Flux3KleinPipeline:
             raise ValueError(f"{width}x{height} is not one of the served shapes {SHAPES} (width, height)")
         if len(request.images) > MAX_REFERENCES:
             raise ValueError(f"at most {MAX_REFERENCES} reference image")
+        if request.reference_size is not None:
+            logger.info(f"reference_size {request.reference_size} ignored: the reference is fitted as BFL's (<= 4 MP)")
         steps = request.steps or STEPS[request.model]
         guidance = GUIDANCE[request.model] if request.guidance is None else request.guidance
         if request.model == "distilled" and guidance not in (None, 1.0):
@@ -484,13 +484,15 @@ class Flux3KleinPipeline:
             # one plan per mode lengths and image / text ids; the prompt length and the reference's size and ids are
             # written into it when they change
             key = (model, sp, tuple(sorted(lengths.items())), _ids_digest({"image": ids, "text": text_ids}))
-            plan = self._plan_cache.get(key)
+            plan = self._plan_cache.pop(key, None)
             if plan is None:
-                plan = self._plan_cache[key] = transformer.prepare_plan(layout, sample_ids)
-                while len(self._plan_cache) > PLAN_CACHE_SIZE:
-                    self._plan_cache.pop(next(iter(self._plan_cache))).deallocate()
+                plan = transformer.prepare_plan(layout, sample_ids)
             elif not plan.serves(layout, sample_ids):
                 transformer.update_plan(plan, layout, sample_ids)
+            # least recently used first
+            self._plan_cache[key] = plan
+            while len(self._plan_cache) > PLAN_CACHE_SIZE:
+                self._plan_cache.pop(next(iter(self._plan_cache))).deallocate()
             return plan, embedded
 
         samples = [sample(*text)]

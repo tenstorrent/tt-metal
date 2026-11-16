@@ -4,8 +4,7 @@
 
 """The VAE encoder on fixed reference canvases. A reference (BFL's prepared image, sides multiples of 16) sits in the
 top-left corner of the smallest canvas that holds it, the rest masked out at runtime, so every reference size runs the
-programs of its canvas; the token bucket follows from the cropped latent. The masked encoder matches the encoder on the
-image alone: the area right of and below the image is zeroed before every 3x3 conv and strided downsample (their zero
+programs of its canvas. The masked encoder matches the encoder on the image alone: the area right of and below the image is zeroed before every 3x3 conv and strided downsample (their zero
 padding), GroupNorm statistics cover the image only, and the mid-block attention biases the keys outside it away."""
 
 from __future__ import annotations
@@ -18,7 +17,7 @@ import ttnn
 
 from ...layers.module import Module, Parameter
 from ...models.vae.encoder_flux2 import Flux2VaeEncoder
-from ...models.vae.vae import VaeAttention, VaeResnetBlock, _all_gather_hw, _partition_hw
+from ...models.vae.vae import VaeAttention, VaeResnetBlock, _all_gather_hw, _partition_hw, sdpa_config_for_rows
 from ...utils import tensor
 
 # 1:1, 16:9 and 9:16 canvases (width, height) at 1 MP and 4 MP; every legal reference (fitted <= 4 MP, sides <= 4096,
@@ -30,10 +29,11 @@ LEVELS = 4
 KEY_MASK_BIAS = -1.0e5
 GROUP_NORM_EPS = 1e-6
 GROUPS = 32
+_CANVASES_BY_AREA = tuple(sorted(REFERENCE_CANVASES, key=lambda s: (s[0] * s[1], s)))
 
 
 def reference_canvases() -> tuple[tuple[int, int], ...]:
-    return tuple(sorted(REFERENCE_CANVASES, key=lambda s: (s[0] * s[1], s)))
+    return _CANVASES_BY_AREA
 
 
 def canvas_for(width: int, height: int) -> tuple[int, int]:
@@ -61,6 +61,9 @@ class MaskedGroupNorm(Module):
         self.bias = Parameter(total_shape=shape, device=ctx.device, dtype=ttnn.float32, mesh_axes=axes)
         # per-channel group mean of per-channel sums: x @ groups
         self.groups = Parameter(total_shape=[1, 1, self._local, self._local], device=ctx.device, dtype=ttnn.float32)
+        self._fp32_config = ttnn.init_device_compute_kernel_config(
+            ctx.device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True
+        )
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         for name in ("weight", "bias"):
@@ -81,7 +84,7 @@ class MaskedGroupNorm(Module):
 
     def _group_mean(self, t: ttnn.Tensor, inv_n: ttnn.Tensor) -> ttnn.Tensor:
         s = self._sum(t)
-        g = ttnn.matmul(s, self.groups.data, compute_kernel_config=_FP32_CONFIG.get(self._ctx.device))
+        g = ttnn.matmul(s, self.groups.data, compute_kernel_config=self._fp32_config)
         ttnn.deallocate(s)
         out = ttnn.multiply(g, inv_n)
         ttnn.deallocate(g)
@@ -115,22 +118,6 @@ class MaskedGroupNorm(Module):
         out = mask.apply(y, dtype=ttnn.bfloat16)
         ttnn.deallocate(y)
         return out
-
-
-class _ComputeConfigs:
-    def __init__(self) -> None:
-        self._configs = {}
-
-    def get(self, device):
-        key = id(device)
-        if key not in self._configs:
-            self._configs[key] = ttnn.init_device_compute_kernel_config(
-                device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True
-            )
-        return self._configs[key]
-
-
-_FP32_CONFIG = _ComputeConfigs()
 
 
 @dataclass
@@ -170,27 +157,25 @@ class CanvasMasks:
             cols = (torch.arange(w) < vw).float().reshape(1, 1, w, 1)
             inv_n = torch.full((1, 1, 1, 1), 1.0 / (vw * vh))
 
-            def up(t, axes=None):
-                return [
-                    tensor.from_torch(t, device=device, dtype=dt, mesh_axes=axes or [None] * 4)
-                    for dt in (ttnn.float32, ttnn.bfloat16)
-                ]
+            def up(t, axes=None, dtypes=(ttnn.float32, ttnn.bfloat16)):
+                return [tensor.from_torch(t, device=device, dtype=dt, mesh_axes=axes or [None] * 4) for dt in dtypes]
 
             r32, r16 = up(rows, [None, h_axis, None, None])
             c32, c16 = up(cols)
-            n32, _ = up(inv_n)
+            (n32,) = up(inv_n, dtypes=(ttnn.float32,))
             self._shard[(h // hf, w)] = CanvasLevelMask(r32, c32, r16, c16, n32)
             if level == LEVELS - 1:
                 fr32, fr16 = up(rows)
                 fc32, fc16 = up(cols)
-                fn32, _ = up(inv_n)
+                (fn32,) = up(inv_n, dtypes=(ttnn.float32,))
                 self._full[(h, w)] = CanvasLevelMask(fr32, fc32, fr16, fc16, fn32)
                 # the attention keys' bias, built on device: 0 inside the image, KEY_MASK_BIAS outside, in 32 columns
                 # that a query extension of 1 / 32 per column sums back to the bias
                 cols32 = tensor.from_torch(cols.expand(1, 1, w, 32).contiguous(), device=device, mesh_axes=[None] * 4)
                 inside = ttnn.multiply(ttnn.repeat(fr16, ttnn.Shape((1, 1, w, 32))), cols32)
                 ttnn.deallocate(cols32)
-                bias = ttnn.add(ttnn.multiply(inside, -KEY_MASK_BIAS), KEY_MASK_BIAS)
+                # (inside - 1) * 1e5: exactly 0 inside (no bf16 1e5 - 1e5 cancellation)
+                bias = ttnn.multiply(ttnn.subtract(inside, 1.0), -KEY_MASK_BIAS)
                 ttnn.deallocate(inside)
                 self.key_bias = ttnn.reshape(bias, (1, 1, h * w, 32))
 
@@ -225,6 +210,12 @@ class CanvasVaeEncoder(Flux2VaeEncoder):
     def conv_norm_out_channels(self) -> int:
         return self.conv_out.inner.in_channels
 
+    def deallocate_weights(self) -> None:
+        super().deallocate_weights()
+        for t in self._constants.values():
+            ttnn.deallocate(t)
+        self._constants.clear()
+
     def _constant(self, shape: tuple[int, ...], value: float) -> ttnn.Tensor:
         key = (shape, value)
         if key not in self._constants:
@@ -234,14 +225,19 @@ class CanvasVaeEncoder(Flux2VaeEncoder):
         return self._constants[key]
 
     def _resnet(self, r: VaeResnetBlock, x: ttnn.Tensor, masks: CanvasMasks) -> ttnn.Tensor:
-        mask = masks.shard(int(x.shape[1]), int(x.shape[2]))
-        h = r.norm1.forward(x, mask)
-        h = r.conv1.forward(h)
-        h = r.norm2.forward(h, masks.shard(int(h.shape[1]), int(h.shape[2])))
-        h = r.conv2.forward(h)
-        if r.conv_shortcut is not None:
-            x = r.conv_shortcut.forward(x)
-        return x + h
+        n1 = r.norm1.forward(x, masks.shard(int(x.shape[1]), int(x.shape[2])))
+        c1 = r.conv1.forward(n1)
+        ttnn.deallocate(n1)
+        n2 = r.norm2.forward(c1, masks.shard(int(c1.shape[1]), int(c1.shape[2])))
+        ttnn.deallocate(c1)
+        h = r.conv2.forward(n2)
+        ttnn.deallocate(n2)
+        shortcut = r.conv_shortcut.forward(x) if r.conv_shortcut is not None else x
+        out = shortcut + h
+        ttnn.deallocate(h)
+        if shortcut is not x:
+            ttnn.deallocate(shortcut)
+        return out
 
     def _attention(self, attn: VaeAttention, x: ttnn.Tensor, masks: CanvasMasks) -> ttnn.Tensor:
         ctx, ccl, tp_axis = self._ctx, attn._ccl_manager, attn._tp_axis
@@ -249,14 +245,19 @@ class CanvasVaeEncoder(Flux2VaeEncoder):
         full = _all_gather_hw(ctx, x)
         n, h, w, _ = (int(d) for d in full.shape)
         xn = attn.norm.forward(full, masks.full(h, w))
+        if full is not identity:
+            ttnn.deallocate(full)
         xn = ttnn.reshape(xn, (n, 1, h * w, -1))
         if ccl is not None and tp_axis is not None:
-            xn = ccl.all_gather(xn, dim=-1, mesh_axis=tp_axis, use_hyperparams=True)
+            local_xn, xn = xn, ccl.all_gather(xn, dim=-1, mesh_axis=tp_axis, use_hyperparams=True)
+            ttnn.deallocate(local_xn)
         q, k, v = attn.to_qkv.forward(xn, compute_kernel_config=attn._mm_compute_kernel_config)
+        ttnn.deallocate(xn)
         if ccl is not None and tp_axis is not None:
-            q = ccl.all_gather(q, dim=-1, mesh_axis=tp_axis, use_hyperparams=True)
-            k = ccl.all_gather(k, dim=-1, mesh_axis=tp_axis, use_hyperparams=True)
-            v = ccl.all_gather(v, dim=-1, mesh_axis=tp_axis, use_hyperparams=True)
+            local_qkv = (q, k, v)
+            q, k, v = (ccl.all_gather(t, dim=-1, mesh_axis=tp_axis, use_hyperparams=True) for t in local_qkv)
+            for t in local_qkv:
+                ttnn.deallocate(t)
         channels = int(q.shape[-1])
         program_config = attn._sdpa_program_config
         h_local = h // ctx.h_factor
@@ -268,13 +269,7 @@ class CanvasVaeEncoder(Flux2VaeEncoder):
             q = ttnn.mesh_partition(q, dim=2, cluster_axis=tp_axis, memory_config=q.memory_config())
             q = ttnn.to_layout(q, ttnn.TILE_LAYOUT)
         rows = int(q.shape[2])
-        if rows % program_config.q_chunk_size:
-            program_config = ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=program_config.compute_with_storage_grid_size,
-                q_chunk_size=max(d for d in range(32, program_config.q_chunk_size + 1, 32) if rows % d == 0),
-                k_chunk_size=program_config.k_chunk_size,
-                exp_approx_mode=program_config.exp_approx_mode,
-            )
+        program_config = sdpa_config_for_rows(program_config, rows)
         # one extra tile column: the queries' 1 / 32 per column picks up the keys' bias, the values' zeros add nothing
         q = ttnn.concat([q, self._constant((1, 1, rows, 32), 1.0 / 32)], dim=-1)
         k = ttnn.concat([k, masks.key_bias], dim=-1)
@@ -290,7 +285,8 @@ class CanvasVaeEncoder(Flux2VaeEncoder):
         )
         for t in (q, k, v):
             ttnn.deallocate(t)
-        o = ttnn.slice(o, [0, 0, 0, 0], [n, 1, rows, channels])
+        o, extended = ttnn.slice(o, [0, 0, 0, 0], [n, 1, rows, channels]), o
+        ttnn.deallocate(extended)
         if local:
             o = ccl.all_gather(o, dim=2, mesh_axis=tp_axis, use_hyperparams=True)
             o = attn.to_out.forward(o, compute_kernel_config=attn._mm_compute_kernel_config)

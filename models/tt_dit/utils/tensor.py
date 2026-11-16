@@ -424,18 +424,24 @@ def local_device_to_torch(tt_tensor: ttnn.Tensor) -> torch.Tensor:
     return ttnn.to_torch(next(iter(shards.values())))
 
 
+def local_mesh_coords(device: ttnn.MeshDevice) -> list[tuple[int, ...]]:
+    """This host's coordinates of a (multi-host) mesh."""
+    view = device.get_view()
+    return [c for c in itertools.product(*map(range, device.shape)) if view.is_local(ttnn.MeshCoordinate(*c))]
+
+
 def _device_shards(x: ttnn.Tensor) -> dict[tuple[int, ...], ttnn.Tensor]:
     """This host's shards of a device tensor by mesh coordinate.
 
     On a multi-host mesh get_device_tensors holds only this host's shards, in the order of the local
     coordinates, so the coordinates are filtered to the local ones before they are paired.
     """
-    view = x.device().get_view()
-    coords = list(x.tensor_topology().mesh_coords())
+    local = set(local_mesh_coords(x.device()))
+    coords = [tuple(coord) for coord in x.tensor_topology().mesh_coords()]
     device_tensors = ttnn.get_device_tensors(x)
     if len(device_tensors) != len(coords):
-        coords = [coord for coord in coords if view.is_local(coord)]
-    return {tuple(coord): shard for coord, shard in zip(coords, device_tensors, strict=True) if view.is_local(coord)}
+        coords = [coord for coord in coords if coord in local]
+    return {coord: shard for coord, shard in zip(coords, device_tensors, strict=True) if coord in local}
 
 
 _to_torch_zero_copy_warned = False
