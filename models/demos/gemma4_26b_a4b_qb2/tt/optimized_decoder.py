@@ -1005,6 +1005,44 @@ class GeneralizedRouter:
         )
         return RouterTopk.op(logits, self._topk_scale, base, local_experts, 8)
 
+    def decode_packed(self, normalized):
+        """Batch-1 decode for the moe_decode experts (WS4): the same scaled BF16 projection as ``decode_rows_tables``,
+        then ``RouterTopk.op_packed``: one ``[1, 1, 32, 16]`` bf16 row-major tensor, row 0 = the 8 routing weights
+        (normalized, times per_expert_scale) then the 8 global expert ids (3 programs)."""
+        from models.demos.gemma4.custom_ops.router_topk import RouterTopk
+
+        source = self.original.source
+        router = source.source
+        if getattr(self, "_topk_scale", None) is None:
+            self._topk_scale = ttnn.to_layout(
+                ttnn.reshape(ttnn.typecast(router.per_expert_scale, ttnn.bfloat16), (1, 1, 1, 128)),
+                ttnn.ROW_MAJOR_LAYOUT,
+            )
+        if getattr(self, "_packed_base", None) is None:
+            import torch
+
+            self._packed_base = ttnn.from_torch(
+                torch.zeros(1, 1, 1, 16, dtype=torch.int32),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=normalized.device(),
+                mesh_mapper=ttnn.ReplicateTensorToMesh(normalized.device()),
+            )
+        scaled = ttnn.mul(
+            normalized,
+            source.scale,
+            activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.MUL_UNARY_SFPU, router.scalar_root_size)],
+        )
+        logits = ttnn.linear(
+            scaled,
+            self.projection_weight,
+            dtype=ttnn.bfloat16,
+            program_config=self.projection_program,
+            compute_kernel_config=self.projection_compute,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        return RouterTopk.op_packed(logits, self._topk_scale, self._packed_base, 8)
+
     def decode_indices(self):
         if self.last_decode_indices is None:
             raise RuntimeError("Indexed expert projection must follow decode routing")
