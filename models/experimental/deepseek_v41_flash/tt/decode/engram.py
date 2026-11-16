@@ -59,6 +59,7 @@ ROWS_SOCKET_CORE = (0, 4)
 # them; each one's slice must sit inside one streams shard. The streams are sharded over the
 # hyperconnection's 8 collapse cores, too few to fit the gate's per-core buffers beside the rest of L1.
 GATE_CORES = 16
+BLOCK_GATE_CORES = 32
 
 
 def _value(weight) -> torch.Tensor:
@@ -219,7 +220,9 @@ class DeepSeekV41Engram(DeepSeekV4Module):
                 dtype=ttnn.float32,
                 layout=ttnn.TILE_LAYOUT,
                 device=device,
-                memory_config=width_sharded_l1_config(ttnn.TILE_SIZE, d, device, num_cores=GATE_CORES),
+                # Twice the one-row cores: half the columns per core halves engram_gate's circular buffers, which
+                # on the one-row grid clash with the block mode's L1 buffers (persistent MoE 4-row partials).
+                memory_config=width_sharded_l1_config(ttnn.TILE_SIZE, d, device, num_cores=BLOCK_GATE_CORES),
                 mesh_mapper=ttnn.ReplicateTensorToMesh(device) if device.get_num_devices() > 1 else None,
             )
         if sockets is None:

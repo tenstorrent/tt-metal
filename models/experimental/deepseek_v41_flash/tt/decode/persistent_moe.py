@@ -54,6 +54,8 @@ ROUTER_PARTS = 10
 # address range on every core of the chip); beyond it they go to DRAM. The default holds the whole gate: all 40 layers
 # take 40 * 16 bfloat8_b tiles = 680 KiB of each partial core's L1, which the MoE mesh has room for.
 ROUTER_L1_BUDGET = int(os.environ.get("DEEPSEEK_V41_MOE_ROUTER_L1_BUDGET", 768 * 1024))
+# Keep the router columns in L1 when the server also serves blocks (see PersistentMoE.__init__): off.
+ROUTER_L1_WITH_BLOCKS = False
 # DEEPSEEK_V41_MOE_FUSE_HC=0: requests return the plain reduced row (2-part reduce next to the request core) and the
 # decoder layer mixes it into the streams itself (FFN_MIX), instead of the request running that post step.
 FUSE_HC = os.environ.get("DEEPSEEK_V41_MOE_FUSE_HC", "1") not in ("0", "", "false", "False")
@@ -431,6 +433,12 @@ class PersistentMoE:
         # Each layer's gate, one [D, 32] column per MoE chip: in L1 on its partial cores (see ROUTER_PART_CORES) while
         # every layer's fits ROUTER_L1_BUDGET, else in DRAM, which the partial cores read per request.
         self.router_in_l1 = len(self.layer_ids) * self.router_column_bytes(moes[self.layer_ids[0]]) <= ROUTER_L1_BUDGET
+        # With a block mode too, the columns stay in DRAM in every mode. Freeing the L1 copy for a block launch and
+        # rebuilding it on the way back does not work: the block launch's program keeps L1 of its own (cached with
+        # it) at the top of the freed range, so the rebuilt columns land ~100 KB lower, into the one-row launch's
+        # circular buffers.
+        if not ROUTER_L1_WITH_BLOCKS and len(self.modes) > 1:
+            self.router_in_l1 = False
         # A block mode's launch needs the L1 the resident router columns take, so it reads them from DRAM: the
         # server keeps a DRAM copy and frees (and on the way back rebuilds) the L1 one when it switches.
         self._router_dram = None

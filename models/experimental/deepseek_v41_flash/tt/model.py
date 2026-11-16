@@ -3344,6 +3344,9 @@ class DeepSeekV41Model(DeepSeekV4Model):
             ttnn.synchronize_device(self.dspark.device)
         for sm in self.submeshes_io:
             ttnn.synchronize_device(sm["device"])
+        # The block compile left the MoE server on block requests; the one-row traces are captured on one-row ones
+        # (their requests and the server's programs differ).
+        self._use_server_rows(1)
         self._capture_traces(token_id, pos)
         for sm in self.submeshes_io:
             tid = ttnn.begin_trace_capture(sm["device"], cq_id=0)
@@ -3932,15 +3935,24 @@ class DeepSeekV41Model(DeepSeekV4Model):
             for layer_idx, engram in self._engram_layers:
                 engram.write_rows(engram_rows[layer_idx])
 
-        writer = ThreadPoolExecutor(max_workers=1, thread_name_prefix="verify_feed")
-        try:
-            fed = writer.submit(feed)
-            dispatch()
-            out = self._read_socket_output().reshape(-1)[: self.verify_rows]
-            fed.result()
-            return [int(x) for x in out]
-        finally:
-            writer.shutdown(wait=False)
+        # A daemon thread, not an executor: if the step fails to dispatch, the writer blocks on a socket nothing
+        # drains, and an executor's worker would be joined at interpreter exit (a hang).
+        errors: list[BaseException] = []
+
+        def run() -> None:
+            try:
+                feed()
+            except BaseException as e:  # noqa: BLE001 - re-raised on the dispatching thread
+                errors.append(e)
+
+        writer = threading.Thread(target=run, name="verify_feed", daemon=True)
+        writer.start()
+        dispatch()
+        out = self._read_socket_output().reshape(-1)[: self.verify_rows]
+        writer.join()
+        if errors:
+            raise errors[0]
+        return [int(x) for x in out]
 
     def _compile_block_verify(self, token_id) -> None:
         """Pass 1 of the block verify traces: one executed step per variant (even / odd start), before any capture,
@@ -3956,9 +3968,12 @@ class DeepSeekV41Model(DeepSeekV4Model):
             outs = []
 
             def dispatch() -> None:
-                outs.append(self._block_verify_stage(sm, odd))
+                # The drafter's receive goes first: the stage's tap send stalls its queue until the receiver runs, and
+                # an op later in the stage may block the host on a first call (a CCL's setup), which would deadlock
+                # with a receive dispatched after the stage.
                 if self.dspark is not None:
                     self._spec_write_verified()
+                outs.append(self._block_verify_stage(sm, odd))
 
             self._run_block_verify(dispatch, [int(token_id)] * t, start, zeros)
             for out in outs:
@@ -3967,6 +3982,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
 
     def _capture_block_verify(self) -> None:
         sm = self.submeshes_io[0]
+        self._use_server_rows(self.verify_rows)  # its programs were compiled against the block-mode server
         for odd in (False, True):
             logger.info(f"[block-verify] capturing the {'odd' if odd else 'even'} block")
             tid = ttnn.begin_trace_capture(sm["device"], cq_id=0)
