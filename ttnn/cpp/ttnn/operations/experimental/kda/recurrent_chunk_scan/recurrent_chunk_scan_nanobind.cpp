@@ -185,9 +185,9 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
             emit_outputs (bool, optional): With one group per head, also return each chunk's
                 zero-seeded output ``F(0)`` and identity-seeded output ``F(I)`` as one terms tensor
                 ``[B*H*N/C, 2, C*32, V]`` (each block of ``C`` chunks holds its ``F(0)`` rows, then
-                its ``F(I)`` rows), and the last segment's ``A`` and ``B`` ``[B*H,K,V]``, all
+                its ``F(I)`` rows), and the last segment's ``E = A - I`` and ``B`` ``[B*H,K,V]``, all
                 FLOAT32: a chunk's output is ``F(0) + (F(I) - F(0)) @ entry`` and the final state
-                ``A @ entry + B``, where entry is the group's entry state before the chronological
+                ``entry + (E @ entry + B)``, where entry is the group's entry state before the chronological
                 reset chunk and the tail's entry state from it on. Defaults to False.
             emit_memory_config (ttnn.MemoryConfig, optional): Memory configuration of the
                 emitted terms. Height-sharded, a shard holds one block (``C`` is its height over
@@ -196,7 +196,7 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
         Returns:
             ttnn.Tensor: BFLOAT16 TILE tensor ``[S, B*H*G, K, K+V]`` with ``S = 2`` when
                 ``tail`` is set and ``S = 1`` otherwise, in ``memory_config``. With
-                ``emit_outputs``, a list of it followed by the terms, ``A`` and ``B``.
+                ``emit_outputs``, a list of it followed by the terms, ``E`` and ``B``.
 
         Note:
             Summaries accumulate in FLOAT32; E is formed in FLOAT32 and packs directly to
