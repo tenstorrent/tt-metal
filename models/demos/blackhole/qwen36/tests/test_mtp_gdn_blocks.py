@@ -51,6 +51,14 @@ from models.demos.blackhole.qwen36.tests.test_gdn_block_state import (
 from models.demos.blackhole.qwen36.tt.model import Qwen36Model
 
 LOGIT_PCC = 0.99
+# The layer count of the tests that read QWEN36_PAIR_LAYERS. Pair warms up and traces two models; at full depth (64
+# layers) their prefill traces alone need more than the 256 MiB trace region of _parametrize, so those tests then get
+# the served launch's 1 GiB.
+PAIR_LAYERS = int(os.environ.get("QWEN36_PAIR_LAYERS", N_LAYERS))
+
+
+def _parametrize_pair(fn):
+    return _parametrize(fn, trace_region_size=268435456 if PAIR_LAYERS <= N_LAYERS else 1073741824)
 
 
 class Pair:
@@ -415,13 +423,13 @@ def test_long_verifies_match_ordinary_decode(mesh_device, K, bmax, monkeypatch, 
 
 @torch.no_grad()
 @pytest.mark.timeout(3600)
-@_parametrize
+@_parametrize_pair
 def test_long_prompt_with_narrow_steps(mesh_device, monkeypatch, reset_seeds, ensure_gc):
     """K = 3, mode "none": a 4300-token prompt (two traced 2048-token chunks and a tail) in row 0 and a 130-token one
     in row 2, then ordinary [B, 1] steps (verifies without drafts) mixed with verifies, the drafter running after every
     step as the plugin calls it: every step matches ordinary decode. QWEN36_PAIR_LAYERS sets the layer count."""
     K = 3
-    pair = Pair(mesh_device, monkeypatch, K, "none", n_layers=int(os.environ.get("QWEN36_PAIR_LAYERS", N_LAYERS)))
+    pair = Pair(mesh_device, monkeypatch, K, "none", n_layers=PAIR_LAYERS)
     prompts = _prompts(2, 4300, seed=31)
     first = {
         0: int(pair.prefill(0, prompts[0].tolist()).argmax()),
@@ -724,7 +732,7 @@ def _async_run(pair, prompts, chained, hint, steps):
 
 @torch.no_grad()
 @pytest.mark.timeout(3600)
-@_parametrize
+@_parametrize_pair
 def test_a_chained_run_across_block_boundaries_equals_a_drained_run(mesh_device, monkeypatch, reset_seeds, ensure_gc):
     """K = 3, mode "align", 1024-token blocks as served, four rows whose prompts end 31 to 40 tokens before a block
     boundary (two before 1024 tokens, two before 2048). vLLM schedules a verify over the unread one counting that one's drafts as accepted, so next
@@ -736,8 +744,7 @@ def test_a_chained_run_across_block_boundaries_equals_a_drained_run(mesh_device,
     of every verify, and the GDN state of every row's last committed count, bit for bit. QWEN36_PAIR_LAYERS sets the
     layer count."""
     K, steps = 3, 60
-    n_layers = int(os.environ.get("QWEN36_PAIR_LAYERS", N_LAYERS))
-    pair = Pair(mesh_device, monkeypatch, K, "align", n_layers=n_layers, block_size=1024)
+    pair = Pair(mesh_device, monkeypatch, K, "align", n_layers=PAIR_LAYERS, block_size=1024)
     bs = pair.bs
     lens = {0: bs - 40, 1: bs - 37, 2: 2 * bs - 34, 3: 2 * bs - 31}
     target = {0: 1, 1: 2, 2: 3, 3: 1}

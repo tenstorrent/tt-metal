@@ -27,7 +27,7 @@ CTX = 4096
 DECODE_STEPS = 4
 
 
-def _parametrize(fn):
+def _parametrize(fn, trace_region_size=268435456):
     shape = _resolve_mesh_shape(8)
     fn = pytest.mark.parametrize(
         "device_params",
@@ -35,7 +35,7 @@ def _parametrize(fn):
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
                 "l1_small_size": GDN_CONV1D_L1_SMALL_SIZE,
-                "trace_region_size": 268435456,
+                "trace_region_size": trace_region_size,
             }
         ],
         indirect=True,
