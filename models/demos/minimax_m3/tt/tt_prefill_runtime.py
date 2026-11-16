@@ -41,8 +41,8 @@ import ttnn
 from models.common.multimedia_store.reader import FetchRequest
 from models.common.utils import block_cyclic_reorder
 from models.demos.common.prefill.chunk_layout import pack_forward_tokens
-from models.demos.common.prefill.media import TILE_HEIGHT, build_injection, build_media_partials, next_table_height
-from models.demos.common.prefill.prefill_chunk import MediaRef, PrefillChunk, validate_chunks
+from models.demos.common.prefill.media import build_injection, build_media_partials, warm_media_refs
+from models.demos.common.prefill.prefill_chunk import PrefillChunk, validate_chunks
 from models.demos.minimax_m3.tt.media_injection import MediaPartials, inject_media_embeddings
 from models.demos.minimax_m3.tt.residual import activation_mapper
 from models.demos.minimax_m3.utils.general_utils import sparse_attention_freq
@@ -366,35 +366,26 @@ class TtPrefillRuntime:
             x = ttnn.unsqueeze_to_4D(x)
         return x
 
-    def _warm_media(self, kv_cache, chunk: int, n_chunks: int, empty) -> None:
+    def _warm_media(self, kv_cache, chunk: int, n_chunks: int) -> None:
         """Compile the splice for every table height a forward can reach.
 
         The media hook is a lookup into the table and a where, so a height needs one embedding call
-        rather than a prefill forward. Heights climb table_height's ladder from one tile up to the largest
-        an image fitting the chunk can name, so nothing compiles while serving whatever the image count. The
-        warming image for a height is the smallest that lands in it. StubEmbeddingReader stands in for the
-        store, which need not be reachable at compile time."""
-        from models.demos.common.prefill.media_stub import stub_media_key
+        rather than a prefill forward. warm_media_refs climbs table_height's ladder up to the tallest table
+        images filling all n_chunks chunks can need, so nothing compiles while serving whatever the image
+        count. StubEmbeddingReader stands in for the store, which need not be reachable at compile time."""
         from models.demos.minimax_m3.vision.stub_reader import StubEmbeddingReader
 
-        sp = self.config.sp_factor
-        chunks = [PrefillChunk(0, 0, chunk)] + [empty] * (n_chunks - 1)
-        starts = [c.actual_start for c in chunks]
+        chunks = [PrefillChunk(k, 0, chunk) for k in range(n_chunks)]
         real_reader = self.media_embedding_reader
         self.media_embedding_reader = StubEmbeddingReader(self.hf_config.hidden_size)
         try:
-            height, below, warmed = TILE_HEIGHT, 0, []
-            while True:
-                n = max(1, sp * below)
-                if n > chunk:
-                    break
-                refs = [MediaRef(0, 0, n, stub_media_key(n, 0))]
-                inp = self.make_forward_input([[0] * chunk] * n_chunks, starts)
+            warmed = []
+            for height, refs in warm_media_refs(self.config.sp_factor, chunk, n_chunks):
+                inp = self.make_forward_input([[0] * chunk] * n_chunks, [0] * n_chunks)
                 x = self._embed_tokens(inp, media_fn=lambda: self._media_partials(chunks, refs))
                 ttnn.deallocate(x)
                 ttnn.deallocate(inp)
                 warmed.append(height)
-                height, below = next_table_height(height), height
             logger.info(f"TtPrefillRuntime.compile() — media table heights warmed: {warmed}")
         finally:
             self.media_embedding_reader = real_reader
@@ -491,7 +482,7 @@ class TtPrefillRuntime:
             inp = self.make_forward_input([[0] * chunk] * n_chunks, [c.actual_start for c in chunks])
             self.prefill_forward(inp, kv_cache, chunks)
         if cfg.is_first_rank and self.media_embedding_reader is not None:
-            self._warm_media(kv_cache, chunk, n_chunks, empty)
+            self._warm_media(kv_cache, chunk, n_chunks)
         ttnn.synchronize_device(self.mesh_device)
         warmup_ms = (time.perf_counter() - t0) * 1000.0
         logger.info(f"[prefill timing] task_id=WARMUP variants={len(plan)} runtime.compile() = {warmup_ms:.2f} ms")

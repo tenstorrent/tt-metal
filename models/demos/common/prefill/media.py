@@ -8,6 +8,7 @@ from typing import Callable, Optional
 import numpy as np
 import torch
 
+from models.demos.common.prefill.media_stub import stub_media_key
 from models.demos.common.prefill.prefill_chunk import MediaRef, PrefillChunk
 
 
@@ -75,11 +76,22 @@ def table_height(rows: int) -> int:
 
     k moves with how many images a forward names, so an exact height would compile a new program for
     every image count and could never be preallocated. Snapping leaves a few shapes the program cache hits
-    and compile() can warm, while padding stays under ~25% of the bytes uploaded each forward."""
+    and compile() can warm. From 97 rows up, padding stays under ~30% of the table; smaller tables are whole tiles."""
     height = TILE_HEIGHT
     while height < rows:
         height = next_table_height(height)
     return height
+
+
+def warm_media_refs(sp: int, chunk: int, n_chunks: int) -> list[tuple[int, list[MediaRef]]]:
+    """(height, refs) for every table height a forward of n_chunks chunks can reach. Each height gets the
+    smallest image token count that lands in it, as stub-keyed refs filling chunks 0, 1, ... in turn."""
+    height, below, plan = TILE_HEIGHT, 0, []
+    while (n := max(1, sp * below)) <= n_chunks * chunk:
+        sizes = [min(chunk, n - k * chunk) for k in range(-(-n // chunk))]
+        plan.append((height, [MediaRef(k, 0, m, stub_media_key(m, k)) for k, m in enumerate(sizes)]))
+        height, below = next_table_height(height), height
+    return plan
 
 
 def build_media_partials(

@@ -7,7 +7,13 @@ import pytest
 import torch
 
 from models.demos.common.prefill.chunk_layout import pack_forward_tokens, rotated_chunk_positions
-from models.demos.common.prefill.media import _positions, build_injection, build_media_partials, table_height
+from models.demos.common.prefill.media import (
+    _positions,
+    build_injection,
+    build_media_partials,
+    table_height,
+    warm_media_refs,
+)
 from models.demos.common.prefill.prefill_chunk import EMPTY_CHUNK, MediaRef, PrefillChunk
 
 SP, LOCAL, HIDDEN = 4, 32, 8
@@ -23,7 +29,7 @@ def u16(t):
 
 
 def table_of(height, runs):
-    """The [SP, height, HIDDEN] table MediaPartials writes the runs into, row 0 zeros."""
+    """The logical [SP, height, HIDDEN] table the runs describe, row 0 zeros."""
     table = torch.zeros(SP, height, HIDDEN, dtype=torch.bfloat16)
     for sp_row, slot, rows in runs:
         table[sp_row, slot : slot + len(rows)] = torch.from_numpy(rows.view("int16")).view(torch.bfloat16)
@@ -144,3 +150,15 @@ def test_table_is_bucketed_and_row_zero_is_never_written():
     height, lookup, _, runs = build_media_partials(refs, chunks, lambda r: u16(embs[r.media_key]), SP, LOCAL)
     assert height == table_height(int(lookup.max()) + 1)
     assert min(slot for _, slot, _ in runs) == 1, "the sentinel row must not be written"
+
+
+@pytest.mark.parametrize("n_chunks", [1, 2, 3])
+def test_warm_plan_reaches_the_tallest_table(n_chunks):
+    """compile() warms the heights warm_media_refs names: each plan lands in its height, and the last is
+    the tallest table images filling every chunk of a packed forward can need."""
+    chunks = [PrefillChunk(k, 0, C) for k in range(n_chunks)]
+    zeros = lambda r: u16(torch.zeros(r.num_tokens, HIDDEN, dtype=torch.bfloat16))
+    plan = warm_media_refs(SP, C, n_chunks)
+    for height, refs in plan:
+        assert build_media_partials(refs, chunks, zeros, SP, LOCAL)[0] == height
+    assert plan[-1][0] == table_height(n_chunks * C // SP + 1)

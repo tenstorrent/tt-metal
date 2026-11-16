@@ -16,7 +16,7 @@ import torch.nn.functional as F
 
 import ttnn
 from models.common.multimedia_store.reader import FetchRequest
-from models.demos.common.prefill.media import build_injection
+from models.demos.common.prefill.media import build_injection, build_media_partials, table_height
 from models.demos.common.prefill.prefill_chunk import MediaRef, PrefillChunk
 from models.demos.minimax_m3.config import MeshConfig
 from models.demos.minimax_m3.tt import tt_prefill_runtime
@@ -69,7 +69,7 @@ class SharedBufferStore(Store):
         return views
 
 
-def runtime_with(store, *, sp, chunk_size, mesh_shape, mesh_device=None, emb_tp_sharded=True):
+def runtime_with(store, *, sp, chunk_size, mesh_shape, mesh_device=None, emb_tp_sharded=True, hidden=HIDDEN):
     return SimpleNamespace(
         config=SimpleNamespace(
             sp_factor=sp,
@@ -79,7 +79,7 @@ def runtime_with(store, *, sp, chunk_size, mesh_shape, mesh_device=None, emb_tp_
             tp_axis=1,
             pipeline_activation_emb_tp_sharded=emb_tp_sharded,
         ),
-        hf_config=SimpleNamespace(hidden_size=HIDDEN),
+        hf_config=SimpleNamespace(hidden_size=hidden),
         media_embedding_reader=store,
         mesh_device=mesh_device,
         media_buffers=None,
@@ -211,6 +211,53 @@ def test_same_bucket_compiles_once(mesh_device, device_params):
     splice_chunks(mesh_device, table, tokens, two, Store(embs), 0, shard_vocab_on_sp=True)
 
     assert mesh_device.num_program_cache_entries() == entries, "a same-bucket image count recompiled"
+
+
+@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (2, 4), (8, 4)])
+def test_full_size_tables_refill_in_place(mesh_device, device_params):
+    """Two forwards at one table height reuse its host table. At full hidden size the table is over the 32 MB above
+    which copy_host_to_device_tensor takes its pinned, blocking path where the device can pin; each forward's device
+    table must hold its own image rows, on the right chip for every SP row and TP column."""
+    sp, tp = tuple(mesh_device.shape)
+    hidden, chunk = 6144, 4096
+    chunks = [PrefillChunk(0, 0, chunk)]
+    embs = {bytes([i]) * 32: torch.randn(n, hidden).to(torch.bfloat16) for i, n in ((1, 3000), (2, 2900))}
+    runtime = runtime_with(
+        Store(embs), sp=sp, chunk_size=chunk, mesh_shape=(sp, tp), mesh_device=mesh_device, hidden=hidden
+    )
+    shapes = []
+    for key, rows in embs.items():
+        refs = [MediaRef(0, 0, len(rows), key)]
+        media = TtPrefillRuntime._media_partials(runtime, chunks, refs)
+        got = ttnn.to_torch(
+            media.table, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=(sp, tp), dims=(0, 1))
+        )
+        shapes.append(got.shape)
+        got = got.view(sp, tp, -1, hidden // tp).transpose(1, 2).reshape(sp, -1, hidden)
+        assert got.shape[1] * sp * hidden * 2 > 32 << 20, "the table is too small to reach the pinned write path"
+        assert not got[:, 0].any(), "the sentinel row must stay zero"
+        u16 = lambda r: embs[r.media_key].view(torch.int16).numpy().view(np.uint16)
+        for sp_row, slot, want in build_media_partials(refs, chunks, u16, sp, chunk // sp)[3]:
+            assert torch.equal(
+                got[sp_row, slot : slot + len(want)], torch.from_numpy(want.view(np.int16)).view(torch.bfloat16)
+            )
+    assert shapes[0] == shapes[1], "the two forwards must share one table height to reuse its host table"
+
+
+def test_warm_media_reaches_packed_forwards(monkeypatch):
+    """compile() warms every table height a packed forward can reach: images can fill all its chunks, not just one."""
+    monkeypatch.setattr(tt_prefill_runtime.ttnn, "deallocate", lambda t: None)
+    sp, chunk, n_chunks = 2, CHUNK, 2
+    zeros = lambda r: np.zeros((r.num_tokens, HIDDEN), np.uint16)
+    heights = []
+    runtime = runtime_with(None, sp=sp, chunk_size=chunk, mesh_shape=(sp, 1))
+    runtime.make_forward_input = lambda tokens, starts: None
+    runtime._embed_tokens = lambda inp, media_fn: media_fn()
+    runtime._media_partials = lambda chunks, refs: heights.append(
+        build_media_partials(refs, chunks, zeros, sp, chunk // sp)[0]
+    )
+    TtPrefillRuntime._warm_media(runtime, None, chunk, n_chunks)
+    assert heights[-1] == table_height(n_chunks * chunk // sp + 1)
 
 
 def test_one_batched_fetch_per_forward(monkeypatch):
