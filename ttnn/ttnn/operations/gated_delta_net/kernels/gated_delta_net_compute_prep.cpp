@@ -35,7 +35,8 @@ ALWI void zw_block() {
 }
 
 // R-PREP prep core: tile rows offset, offset + stride, ... of its (sequence, key head). The RMS norm of a row runs
-// after the next row's prep, by when the state cores have usually returned the row's o.
+// after the next row's prep, by when the state cores have usually returned the row's o; under NORM_SPLIT after all of
+// its prep rows, on the norm units the host gives it.
 ALWI void prep_main(
     Buffers& bufs,
     uint32_t first_unit,

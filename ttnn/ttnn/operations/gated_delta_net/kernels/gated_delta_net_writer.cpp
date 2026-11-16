@@ -165,7 +165,7 @@ FORCE_INLINE void push_chunk_coefs(
 // piece's Vb columns). Those buffers lead the state cores' CB region, cb_o_in leads this core's, so their addresses
 // are this core's region base plus their offsets. The state cores write the row's o
 // back into slot k % GDN_O_IN_DEPTH of cb_o_in (k: this core's row count), which compute RMS-normalizes one row later
-// (after its next row's prep); this writer then stores the output rows.
+// (after its next row's prep); this writer then stores the output rows. NORM_SPLIT: see norm_offset below.
 template <uint32_t Kt, uint32_t Vt, uint32_t Hv, typename Accessor>
 void prep_writer(
     const Accessor& out_acc, uint32_t first_unit, uint32_t T, uint32_t tr_offset, uint32_t tr_stride, uint32_t arg) {

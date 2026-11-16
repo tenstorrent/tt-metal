@@ -152,7 +152,10 @@ WINDOW_GROUP_MAX_COLS = 4  # column tiles per window hand-off (one DRAM flush ea
 # waits for every column. 0: off.
 PREP_WINDOW_MAX_COLS = 0
 TOK_COEF_DEPTH = 2  # tokens of coefficient pages in flight
-INBOX_DEPTH = 12  # R-PREP: prepped tile rows in flight per state core (slots of its inbox buffers), at most
+# R-PREP: prepped tile rows in flight per state core (slots of its inbox buffers), at most. 13 is what the 16
+# semaphore ids leave (one landed counter per slot, the grant and o counters); with the prep rows no longer paced
+# by the norms the last prep cores of a round wait for their grant: T=2048 419 us at 12, 414 at 13.
+INBOX_DEPTH = 13
 O_IN_DEPTH = 2  # R-PREP: a prep core's tile rows of chunk outputs o in flight (slot k % O_IN_DEPTH for its k-th row)
 O_ACC_DEPTH = 2  # R-PREP: a state core's tile rows of o awaiting its writer
 PREP_SEND_HEADS = None  # R-PREP: head blocks a prep core holds for its writer; None = one tile row's (r)
