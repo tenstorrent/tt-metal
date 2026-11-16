@@ -1630,7 +1630,7 @@ class Qwen36Model:
         past b*T hold no row) and ``rows_out`` its drafter feed rows, with every row past them zero, so the step trace,
         the drafter and the chain program read the outputs of a B-user verify whose users from b on are padding.
         Returns the bucket's vocab shard of the logits [1, 1, b*T, vocab/tp] when the verify has a device sampler (its
-        bucket sampler trace gathers and draws from it, _bucket_sample_body), else None: no logits verify reads it."""
+        bucket sampler trace draws from it, _bucket_sample_body), else None: no logits verify reads it."""
         T, nb = self._vfy_T, self._vfy_nb
         owned = []
 
@@ -1656,16 +1656,14 @@ class Qwen36Model:
         return shard
 
     def _bucket_sample_body(self, shard):
-        """Trace body of a verify row bucket's sampler: the vocab all-gather of a copy of the bucket's ``shard``, then
-        the device sampler over those b*T rows of logits, which writes the B-user draws buffer (VerifySampler.body)."""
-        logits = self._verify_logits(shard)
-        self._vfy_sampler.body(logits)
-        ttnn.deallocate(logits)
+        """Trace body of a verify row bucket's sampler: the device sampler over the b*T rows of the bucket's vocab
+        ``shard``, which writes the B-user draws buffer (VerifySampler.body)."""
+        self._vfy_sampler.body(shard)
 
     def _warm_verify_buckets(self, buckets, ids_out, rows_out):
-        """Allocate the zero feed rows of every verify row bucket and, with a device sampler, the sampler's inputs of
-        the bucket's rows, and run its body and its sampler body once into the warm pass's B-user outputs ``ids_out``
-        and ``rows_out``, so their captures compile nothing. Returns the buckets, ascending."""
+        """Allocate the zero feed rows of every verify row bucket, and run its body and, with a device sampler, its
+        sampler body once into the warm pass's B-user outputs ``ids_out`` and ``rows_out``, so their captures compile
+        nothing. Returns the buckets, ascending."""
         B, T = self._vfy_B, self._vfy_T
         buckets = tuple(sorted({int(b) for b in buckets}))
         bad = [b for b in buckets if not 1 <= b < B or self._vfy_att0.spec_sdpa_groups(T, b) > self._vfy_spec_groups]
@@ -1683,8 +1681,6 @@ class Qwen36Model:
             for b in buckets
         }
         for b in buckets:
-            if self._vfy_sampler is not None:
-                self._vfy_sampler.prepare_rows(b * T)
             shard = self._verify_bucket_body(b, ids_out, rows_out)
             if shard is not None:
                 self._bucket_sample_body(shard)
@@ -1847,7 +1843,10 @@ class Qwen36Model:
             device=dev,
             mesh_mapper=rep,
         )
-        self._vfy_sampler = VerifySampler(dev, B, T, self.vocab_size) if sample else None
+        self._vfy_sampler = None
+        if sample:
+            shards = self.num_devices if self._lmhead_vocab_sharded else 1
+            self._vfy_sampler = VerifySampler(dev, B, T, self.vocab_size, shards=shards)
         # Grouped aliased KV write (TPAttention._write_kv_aliased): checked here for the warm passes and on
         # every replay (verify_traced), while the tables are still torch; see spec_kv_write_conflicts.
         self._vfy_pt_host = pt.clone()
@@ -1934,10 +1933,10 @@ class Qwen36Model:
 
     def _warm_verify_body(self, B, buckets=()):
         """One eager pass of the verify body, of the logits traces' bodies when the verify ends at the vocab shard, of
-        the device sampler over the logits and of every bucket's body (_warm_verify_buckets), only to compile their
-        programs before any capture; the outputs are dropped. Notes whether the ids come out as the fused argmax's
-        [1, 1, 1, 32] uint32 lanes, the input the one-enqueue step's acceptance is compiled for and the lanes a bucket
-        hands over."""
+        the device sampler over the shard (or the logits of a verify that gathers itself) and of every bucket's body
+        (_warm_verify_buckets), only to compile their programs before any capture; the outputs are dropped. Notes
+        whether the ids come out as the fused argmax's [1, 1, 1, 32] uint32 lanes, the input the one-enqueue step's
+        acceptance is compiled for and the lanes a bucket hands over."""
         outs = self._forward_verify_bucket_tp(n_users=B)
         ids = outs[2]
         self._vfy_ids_lanes = (
@@ -1945,12 +1944,12 @@ class Qwen36Model:
             and ids.dtype == ttnn.uint32
             and ids.layout == ttnn.ROW_MAJOR_LAYOUT
         )
-        logits, extra = outs[0], []
+        extra = []
         if outs[3] is None:
             logits = self._verify_logits(outs[0])
             extra = [logits, ttnn.untilize(logits, use_multicore=True)]
         if self._vfy_sampler is not None:
-            self._vfy_sampler.body(logits)  # writes the sampler's own persistent draws buffer
+            self._vfy_sampler.body(outs[0])  # writes the sampler's own persistent draws buffer
         self._vfy_buckets = ()
         if buckets and self._vfy_ids_lanes:
             self._vfy_buckets = self._warm_verify_buckets(buckets, ids, outs[1])
@@ -1964,7 +1963,8 @@ class Qwen36Model:
 
     def record_verify_trace(self):
         """Capture the verify trace over the buffers prepare_verify_trace allocated (warmup phase 2).
-        With ``sample`` prepared, also the sampler trace, which reads the verify's replicated logits (_vfy_logits_out).
+        With ``sample`` prepared, also the sampler trace, which reads the verify's vocab shard (_vfy_shard_out), or its
+        replicated logits (_vfy_logits_out) when the verify gathers them itself.
         Idempotent: a live trace is kept."""
         assert getattr(self, "_vfy_prepared_key", None) is not None, "call prepare_verify_trace first"
         if getattr(self, "_vfy_trace_id", None) is not None:
@@ -1982,8 +1982,8 @@ class Qwen36Model:
         self._vfy_shard_out = self._vfy_gather_trace_id = self._vfy_rm_trace_id = None
         if logits_rm is None:
             # The verify trace ends at the vocab shard. Two traces of their own build the logits from it, replayed by
-            # verify_enqueue right after the verify trace and only for a step that needs them: the all-gather (a
-            # device-sampled or logits step) and the ROW_MAJOR copy (a logits step).
+            # verify_enqueue right after the verify trace and only for a step that reads the logits: the all-gather
+            # and the ROW_MAJOR copy.
             self._vfy_shard_out = logits
             self._vfy_gather_trace_id = ttnn.begin_trace_capture(dev, cq_id=0)
             logits = self._verify_logits(self._vfy_shard_out)
@@ -1995,7 +1995,7 @@ class Qwen36Model:
         if self._vfy_sampler is not None:
             # A trace of its own, replayed only by a verify of a device-sampled step with a sampled row.
             self._vfy_sample_trace_id = ttnn.begin_trace_capture(dev, cq_id=0)
-            self._vfy_sampler.body(self._vfy_logits_out)
+            self._vfy_sampler.body(self._vfy_logits_out if self._vfy_shard_out is None else self._vfy_shard_out)
             ttnn.end_trace_capture(dev, self._vfy_sample_trace_id, cq_id=0)
         self._vfy_capture_count = getattr(self, "_vfy_capture_count", 0) + 1
         buckets = getattr(self, "_vfy_buckets", ())
@@ -2131,8 +2131,8 @@ class Qwen36Model:
         bucket=None,
         read_logits=False,
     ):
-        """verify_traced's staging and replays (the verify trace; with ``sample_plan`` or ``read_logits`` the logits
-        traces record_verify_trace captured; with ``sample_plan`` the sampler trace), enqueued without waiting; the
+        """verify_traced's staging and replays (the verify trace; with ``read_logits`` the logits traces
+        record_verify_trace captured; with ``sample_plan`` the sampler trace), enqueued without waiting; the
         caller enqueues what follows and reads the outputs (_vfy_ids_out, the sampler's draws, _vfy_rows_out, with
         ``read_logits`` _vfy_logits_rm_out). ``accept_rows``: {spec_step STEP_* row: B ints}, the rows of the step
         buffer that only the device acceptance reads (spec_accept.StepAccept), staged in the same copy; None stages
@@ -2201,7 +2201,7 @@ class Qwen36Model:
             if sample_plan is not None:
                 ttnn.execute_trace(dev, self._vfy_bucket_sample_traces[int(bucket)], cq_id=0, blocking=False)
             return
-        if (sample_plan is not None or read_logits) and self._vfy_gather_trace_id is not None:
+        if read_logits and self._vfy_gather_trace_id is not None:
             ttnn.execute_trace(dev, self._vfy_gather_trace_id, cq_id=0, blocking=False)
         if read_logits and self._vfy_rm_trace_id is not None:
             ttnn.execute_trace(dev, self._vfy_rm_trace_id, cq_id=0, blocking=False)

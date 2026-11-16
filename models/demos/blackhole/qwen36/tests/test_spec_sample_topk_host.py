@@ -2,20 +2,24 @@
 # SPDX-License-Identifier: Apache-2.0
 """Host-only (no device): the candidates the verify sampler (tt/spec_sample.py VerifySampler) hands ttnn.sampling.
 
-VerifySampler takes the top-32 of each vocabulary chunk of the verify's logits (4 chunks of 62080 columns at
-V = 248320) and draws from the chunks' candidates in chunk order. ttnn.sampling ranks equal values by their position
-among the candidates, so the order ttnn.topk gives equal values decides the token a draw lands on. The routed top-k
-of these widths orders equal values in a deterministic but unspecified sequence of its own merges.
+VerifySampler takes, on each device, the stable top-32 of each chunk of the device's vocabulary shard (one chunk of
+31040 columns at V = 248320 and TP = 8, padded to 32768), adds the chunk's first vocabulary id and all-gathers the
+candidates in shard order. ttnn.sampling ranks equal values by their position among the candidates, so a draw is a
+function of the candidates sorted by (value descending, position ascending), the row's top-k, top-p and temperature,
+and its core's seed.
 
-The sampler stacks the chunks as rows of one [1, chunks, rows, 62080] tensor and takes one ttnn.topk call;
-ChunkedVerifySampler (tests/spec_op_graphs.py) is the sampler with one call per chunk. Here the ops of both run on a
-torch model of each op (``Ops``), whose top-k orders equal values by a function of the row's content and width only,
-as a row-independent top-k on the device does: the stacked sampler hands ttnn.sampling the same values and ids in the
-same order as the per-chunk one, for every such tie order, for tie-heavy logits, at every row count, and draws the
-same tokens. Whether the device top-k is row-independent is test_spec_sample.py's to show.
+Here the sampler's ops run on a torch model of each op over every device of a 1 x shards mesh (``Ops``): the top-k is
+a stable sort that takes -0.0 as +0.0 (as the stable ttnn.topk does), the all-gather concatenates the devices' tensors
+in mesh order, and ``sampling`` draws, per row, the candidate at rank (seed mod k) of the candidates sorted by value,
+equal values by position. The reference is a stable torch sort of the whole vocabulary row. On tie-heavy logits, at
+every row count and shard count:
 
-A verify row bucket's sampler runs the same graph over the bucket's first b*T rows of logits and pads the candidates
-with zero rows to B*T: its rows' candidates and draws are the full-width sampler's.
+  * every device holds each shard chunk's top-32 in value order, equal values lowest id first, in shard order;
+  * sorted as ttnn.sampling sorts them, the candidates begin with the reference's top-32: the same values and ids;
+  * the draws are the reference's: the token at rank (seed mod k) of the stable sort of the whole row.
+
+A verify row bucket's sampler runs the same graph over the bucket's first b*T rows of the shard; the pad fills the
+rows up to B*T, and the bucket rows' candidates and draws are the full-width sampler's.
 """
 
 from types import SimpleNamespace
@@ -24,106 +28,133 @@ import pytest
 import torch
 
 import ttnn
-from models.demos.blackhole.qwen36.tests.spec_op_graphs import ChunkedVerifySampler
 from models.demos.blackhole.qwen36.tt.spec_sample import (
     NO_CORE,
+    PAD_LOGIT,
     SAMPLER_TOP_K,
+    TOPK_MAX_WIDTH,
     VerifySampler,
     sampling_plan,
-    vocab_chunks,
+    shard_chunks,
 )
 
 VOCAB = 248320
 
 
-class FT:
-    """A device tensor of the torch model: its value, dtype, layout, and whether it was freed."""
+class Mesh:
+    """A 1 x n mesh of the torch model."""
 
-    def __init__(self, t, dtype=None, layout=None):
-        self.t, self.dtype, self.layout, self.freed = t, dtype, layout, False
+    def __init__(self, n):
+        self.n = n
+
+
+class MT:
+    """A mesh tensor of the torch model: one torch tensor per device, its dtype and layout, whether it was freed."""
+
+    def __init__(self, parts, dtype=None, layout=None):
+        self.parts, self.dtype, self.layout, self.freed = [p.clone() for p in parts], dtype, layout, False
 
     @property
     def shape(self):
-        return tuple(self.t.shape)
+        return tuple(self.parts[0].shape)
 
 
-def _tie_key(order):
-    """Per row of x [n, W], the key that orders equal values: lowest index first, highest first, or a hash of the
-    index with the row's content and width (deterministic, independent of the row's place in the tensor)."""
+def _sharded(t, mesh, dtype="bf16"):
+    """``t`` [1, 1, rows, V] as each device's vocabulary shard."""
+    return MT(torch.chunk(t, mesh.n, dim=3), dtype, "tile")
 
-    def key(x):
-        W = x.shape[-1]
-        idx = torch.arange(W, dtype=torch.int64).expand_as(x)
-        if order == "lowest":
-            return idx
-        if order == "highest":
-            return -idx
-        digest = (x.to(torch.float64) * 1024).round().to(torch.int64).sum(dim=-1, keepdim=True) + W
-        return (idx * 2654435761 + digest * 40503) % (1 << 31)
 
-    return key
+def _replicated(t, mesh, dtype="bf16"):
+    return MT([t] * mesh.n, dtype, "tile")
 
 
 class Ops:
-    """The sampler's ttnn ops on FT tensors. ``topk`` sorts each row by value, descending, equal values by ``tie_key``;
-    ``sampling`` draws, per row, the candidate at rank (seed mod k) of the candidates sorted by value, descending, equal
-    values by position, as ttnn.sampling's stable sort ranks them. Every op refuses a freed input."""
+    """The sampler's ttnn ops on MT tensors, device by device. Every op refuses a freed input."""
 
-    def __init__(self, tie_key):
-        self.tie_key, self.topk_inputs, self.sampled = tie_key, [], []
+    def __init__(self):
+        self.topk_calls, self.sampled, self.gathers = [], [], 0
 
     @staticmethod
     def _live(*ts):
         for t in ts:
             assert not t.freed, "a freed tensor is read"
 
+    @staticmethod
+    def _each(x, fn, dtype=None, layout=None):
+        return MT([fn(p) for p in x.parts], x.dtype if dtype is None else dtype, x.layout if layout is None else layout)
+
     def install(self, monkeypatch):
-        for name in ("split", "concat", "topk", "typecast", "add", "untilize", "slice", "deallocate", "manual_seed",
-                     "sampling", "from_torch", "to_device", "copy_host_to_device_tensor"):  # fmt: skip
+        names = (
+            "split", "concat", "pad", "topk", "typecast", "add", "untilize", "slice", "deallocate", "manual_seed",
+            "sampling", "from_torch", "to_device", "copy_host_to_device_tensor", "mesh_partition",
+        )  # fmt: skip
+        for name in names:
             monkeypatch.setattr(ttnn, name, getattr(self, name))
+        monkeypatch.setattr(ttnn, "ReplicateTensorToMesh", lambda mesh: ("replicate", mesh.n))
+        monkeypatch.setattr(ttnn, "ShardTensorToMesh", lambda mesh, dim: ("shard", mesh.n, dim))
 
     def from_torch(self, t, dtype=None, layout=None, mesh_mapper=None, **kw):
-        return FT(torch.as_tensor(t).clone(), dtype, layout)
+        t = torch.as_tensor(t)
+        if mesh_mapper[0] == "shard":
+            return MT(torch.chunk(t, mesh_mapper[1], dim=mesh_mapper[2]), dtype, layout)
+        return MT([t] * mesh_mapper[1], dtype, layout)
 
     def to_device(self, t, mesh, memory_config=None):
         return t
 
     def copy_host_to_device_tensor(self, host, dev):
-        dev.t = host.t.reshape(dev.t.shape).to(dev.t.dtype).clone()
+        dev.parts = [h.reshape(d.shape).to(d.dtype).clone() for h, d in zip(host.parts, dev.parts)]
 
     def split(self, x, size, dim):
         self._live(x)
-        return [FT(p.clone(), x.dtype, x.layout) for p in torch.split(x.t, size, dim=dim)]
+        per_device = [torch.split(p, size, dim=dim) for p in x.parts]
+        return [MT([parts[i] for parts in per_device], x.dtype, x.layout) for i in range(len(per_device[0]))]
 
     def concat(self, ts, dim, memory_config=None):
         self._live(*ts)
-        return FT(torch.cat([t.t for t in ts], dim=dim), ts[0].dtype, ts[0].layout)
+        return MT([torch.cat(parts, dim=dim) for parts in zip(*(t.parts for t in ts))], ts[0].dtype, ts[0].layout)
 
-    def topk(self, x, k, dim=-1):
+    def pad(self, x, padding, value):
         self._live(x)
-        self.topk_inputs.append(x.t.clone())
-        rows = x.t.reshape(-1, x.shape[-1])
-        by_key = torch.sort(self.tie_key(rows), dim=-1, stable=True).indices
-        by_value = torch.sort(-rows.gather(1, by_key), dim=-1, stable=True).indices
-        order = by_key.gather(1, by_value)[:, :k]
-        shape = (*x.shape[:-1], k)
-        return FT(rows.gather(1, order).reshape(shape), x.dtype, x.layout), FT(order.reshape(shape), "uint16")
+        flat = [n for before_after in reversed(padding) for n in before_after]
+        return self._each(x, lambda p: torch.nn.functional.pad(p, flat, value=value))
+
+    def topk(self, x, k, dim=-1, largest=True, sorted=True, stable=False):
+        self._live(x)
+        self.topk_calls.append(dict(input=[p.clone() for p in x.parts], largest=largest, sorted=sorted, stable=stable))
+        values, indices = [], []
+        for p in x.parts:
+            rows = p.reshape(-1, p.shape[-1]) + 0.0  # -0.0 is +0.0, as the stable top-k returns it
+            order = torch.sort(rows, dim=-1, descending=True, stable=True).indices[:, :k]
+            values.append(rows.gather(1, order).reshape(*p.shape[:-1], k))
+            indices.append(order.reshape(*p.shape[:-1], k))
+        return MT(values, x.dtype, x.layout), MT(indices, "uint16", x.layout)
+
+    def all_gather(self, x):
+        self._live(x)
+        self.gathers += 1
+        return MT([torch.cat(x.parts, dim=3)] * len(x.parts), x.dtype, x.layout)
+
+    def mesh_partition(self, x, dim, cluster_axis, memory_config=None):
+        self._live(x)
+        n = len(x.parts)
+        return MT([torch.chunk(p, n, dim=dim)[d] for d, p in enumerate(x.parts)], x.dtype, x.layout)
 
     def typecast(self, x, dtype):
         self._live(x)
-        return FT(x.t.clone(), dtype, x.layout)
+        return self._each(x, lambda p: p.clone(), dtype)
 
     def add(self, a, b, dtype=None):
         self._live(a, b)
-        return FT(a.t + b.t, dtype, a.layout)
+        return MT([p + q for p, q in zip(a.parts, b.parts)], dtype, a.layout)
 
     def untilize(self, x, use_multicore=True):
         self._live(x)
-        return FT(x.t.clone(), x.dtype, "row_major")
+        return self._each(x, lambda p: p.clone(), layout="row_major")
 
     def slice(self, x, starts, ends):
         self._live(x)
-        return FT(x.t[tuple(slice(s, e) for s, e in zip(starts, ends))].clone(), x.dtype, x.layout)
+        return self._each(x, lambda p: p[tuple(slice(s, e) for s, e in zip(starts, ends))].clone())
 
     def deallocate(self, x):
         self._live(x)
@@ -131,124 +162,196 @@ class Ops:
 
     def manual_seed(self, seeds, user_ids):
         self._live(seeds, user_ids)
-        self.seeds = seeds.t.clone()
+        self.seeds = seeds.parts[0].clone()
 
     def sampling(self, vals, idx, k, p, temp, output_tensor):
         self._live(vals, idx, k, output_tensor)
-        v, i = vals.t.reshape(-1, vals.shape[-1]), idx.t.reshape(-1, idx.shape[-1])
-        self.sampled.append((v.clone(), i.clone()))
-        ranked = torch.sort(-v, dim=-1, stable=True).indices
-        rank = self.seeds[: v.shape[0]].to(torch.int64) % k.t[: v.shape[0]].to(torch.int64).clamp(min=1)
-        draws = i.gather(1, ranked.gather(1, rank.reshape(-1, 1))).reshape(-1)
-        output_tensor.t = output_tensor.t.clone()
-        output_tensor.t.reshape(-1)[: draws.numel()] = draws.to(output_tensor.t.dtype)
+        self.sampled.append(
+            (vals.parts[0].reshape(-1, vals.shape[-1]).clone(), idx.parts[0].reshape(-1, idx.shape[-1]))
+        )
+        for d, (v, i) in enumerate(zip(vals.parts, idx.parts)):
+            v, i = v.reshape(-1, v.shape[-1]), i.reshape(-1, i.shape[-1])
+            output_tensor.parts[d] = output_tensor.parts[d].clone()
+            output_tensor.parts[d].reshape(-1)[: v.shape[0]] = _draws(v, i, self.seeds, k.parts[d]).to(torch.int32)
         return output_tensor
+
+
+def _draws(values, ids, seeds, k):
+    """Per row, the id at rank (seed mod k) of the candidates sorted by value, descending, equal values by position."""
+    rows = values.shape[0]
+    ranked = torch.sort(-values, dim=-1, stable=True).indices
+    rank = seeds[:rows].to(torch.int64) % k.reshape(-1)[:rows].to(torch.int64).clamp(min=1)
+    return ids.gather(1, ranked.gather(1, rank.reshape(-1, 1))).reshape(-1)
 
 
 def _bf16(x):
     return x.to(torch.bfloat16).to(torch.float32)
 
 
-def _logits(kind, rows, vocab, seed):
-    """[rows, vocab] logits with ties: ``coarse`` integers in [-8, 8] (thousands of equal maxima per chunk),
-    ``plateau`` 40 equal maxima in the first chunk and 40 in the third, at chunk ends too, then a second plateau,
-    ``bf16`` random logits rounded to bfloat16 (ties at bfloat16 spacing), ``zeros`` +0.0 and -0.0 as the maximum."""
+def _logits(kind, rows, vocab, shards, seed):
+    """[rows, vocab] logits with ties: ``coarse`` integers in [-8, 8] (thousands of equal maxima per shard),
+    ``plateau`` 20 equal maxima and a second group of 40 equal values that holds the 32nd place, both spread over the
+    shards and on every shard boundary, ``bf16`` random logits rounded to bfloat16 (ties at bfloat16 spacing),
+    ``zeros`` 30 +0.0 and 30 -0.0 as the maximum, ``flat`` one value everywhere."""
     g = torch.Generator().manual_seed(seed)
     if kind == "coarse":
         return torch.randint(-8, 9, (rows, vocab), generator=g).to(torch.float32)
     if kind == "bf16":
         return _bf16(torch.randn(rows, vocab, generator=g) * 3)
+    if kind == "flat":
+        return torch.full((rows, vocab), 1.5)
     x = torch.full((rows, vocab), -30.0)
-    width = vocab // vocab_chunks(vocab)
+    width = vocab // shards
+    edges = torch.tensor([e for d in range(1, shards) for e in (d * width - 1, d * width)] + [0, vocab - 1])
     for r in range(rows):
         if kind == "plateau":
-            top = torch.cat(
-                [torch.randperm(width, generator=g)[:38], torch.tensor([0, width - 1])]
-                + ([torch.randperm(width, generator=g)[:38] + 2 * width, torch.tensor([2 * width, 3 * width - 1])]
-                   if vocab >= 3 * width else [])  # fmt: skip
-            )
-            x[r, top] = 5.0
-            x[r, torch.randperm(vocab, generator=g)[:50]] = 4.0
+            pick = torch.randperm(vocab, generator=g)
+            x[r, pick[:20]] = 5.0
+            x[r, pick[20:60]] = 4.0
+            x[r, edges] = 4.0 if r % 2 else 5.0
         else:
             hits = torch.randperm(vocab, generator=g)[:60]
             x[r, hits[:30]], x[r, hits[30:]] = 0.0, -0.0
+            x[r, edges] = 0.0 if r % 2 else -0.0
     return x
 
 
-def _run(sampler, logits, plan):
-    """The sampler's candidates and draws of ``logits`` [rows, vocab] under ``plan``."""
+def reference_order(logits):
+    """(values, ids) of each row sorted by value, descending, equal values lowest id first, -0.0 taken as +0.0: a
+    stable torch sort of the whole vocabulary row."""
+    x = logits + 0.0
+    order = torch.sort(x, dim=-1, descending=True, stable=True).indices
+    return x.gather(1, order), order
+
+
+def reference_candidates(logits, shards):
+    """[rows, shards * chunks * 32]: each shard chunk's top-32 by the stable sort, in shard and chunk order."""
+    width = logits.shape[1] // shards
+    cw = width // shard_chunks(width)
+    values, ids = [], []
+    for start in range(0, logits.shape[1], cw):
+        v, i = reference_order(logits[:, start : start + cw])
+        values.append(v[:, :SAMPLER_TOP_K])
+        ids.append(i[:, :SAMPLER_TOP_K] + start)
+    return torch.cat(values, dim=1), torch.cat(ids, dim=1)
+
+
+def _sampler(ops, B, T, vocab, shards):
+    return VerifySampler(Mesh(shards), B, T, vocab, shards=shards, gather=ops.all_gather)
+
+
+def _run(sampler, logits, plan, mesh, replicated=False):
+    """Per device, the sampler's candidates (values, ids) and draws of ``logits`` [rows, vocab] under ``plan``."""
     rows = logits.shape[0]
     sampler.stage(plan)
-    vals, gidx = sampler.candidates(FT(logits.reshape(1, 1, rows, -1).clone(), "bf16", "tile"))
-    cand = (vals.t.clone(), gidx.t.clone())
+    t = logits.reshape(1, 1, rows, -1)
+    x = _replicated(t, mesh) if replicated else _sharded(t, mesh)
+    vals, gidx = sampler.candidates(x)
+    cand = [(v.reshape(sampler.rows, -1), i.reshape(sampler.rows, -1)) for v, i in zip(vals.parts, gidx.parts)]
     sampler.draw(vals, gidx)
-    return cand, sampler.draws.t.reshape(-1)[:rows].clone()
+    assert not x.freed, "the sampler frees nothing it did not make"
+    return cand, [d.reshape(-1)[: sampler.rows].to(torch.int64) for d in sampler.draws.parts]
 
 
-def _plan(B, T, step, live=None):
-    params = SimpleNamespace(
-        temperature=[1.0] * B, top_k=[SAMPLER_TOP_K] * B, top_p=[1.0] * B, seed=[1000 + u for u in range(B)]
-    )
+def _plan(B, T, step, live=None, k=SAMPLER_TOP_K):
+    params = SimpleNamespace(temperature=[1.0] * B, top_k=[k] * B, top_p=[1.0] * B, seed=[1000 + u for u in range(B)])
     live = B if live is None else live
     return sampling_plan(params, [50 + 9 * u + step if u < live else -1 for u in range(B)], T)
 
 
-@pytest.mark.parametrize("order", ["lowest", "highest", "hashed"])
-@pytest.mark.parametrize("kind", ["coarse", "plateau", "bf16", "zeros"])
-@pytest.mark.parametrize("B, T, vocab", [(8, 4, VOCAB), (1, 4, VOCAB), (2, 12, 131072), (4, 4, 8192)])
-def test_the_stacked_top_k_hands_the_sampler_the_per_chunk_candidates(monkeypatch, order, kind, B, T, vocab):
-    """Values and ids equal bit for bit, in the same positions, and the same draws for 3 seeded plans."""
-    ops = Ops(_tie_key(order))
+KINDS = ("coarse", "plateau", "bf16", "zeros", "flat")
+# (shards, vocab): TP = 8, 4, 2 and 1 at the model's vocabulary (1, 2, 4, 8 chunks per shard), and a small vocabulary
+# whose 1024-column chunks pad to the stable top-k's narrowest multi-core width.
+MESHES = [(8, VOCAB), (4, VOCAB), (2, VOCAB), (1, VOCAB), (4, 4096)]
+
+
+@pytest.mark.parametrize("kind", KINDS)
+@pytest.mark.parametrize("shards, vocab", MESHES)
+@pytest.mark.parametrize("B, T", [(8, 4), (1, 4), (2, 12)])
+def test_every_device_holds_each_shards_top_32_lowest_id_first_and_draws_what_a_stable_sort_draws(
+    monkeypatch, kind, shards, vocab, B, T
+):
+    """Candidates equal the reference shard chunks' top-32 position for position, the same on every device; sorted
+    as ttnn.sampling sorts them they begin with the whole row's stable top-32; and the draws of 3 seeded plans at
+    top-k 32 and 3 at top-k 7 are the stable sort's tokens at the draw's rank, on every device."""
+    ops = Ops()
     ops.install(monkeypatch)
-    stacked, chunked = VerifySampler("mesh", B, T, vocab), ChunkedVerifySampler("mesh", B, T, vocab)
-    logits = _logits(kind, B * T, vocab, seed=B * T + len(kind))
-    for step in range(3):
-        plan = _plan(B, T, step)
-        (v1, i1), d1 = _run(stacked, logits, plan)
-        (v0, i0), d0 = _run(chunked, logits, plan)
-        assert torch.equal(v1, v0) and torch.equal(i1, i0), f"step {step}: the candidates differ"
-        assert all(torch.equal(a, b) for a, b in zip(ops.sampled[-1], ops.sampled[-2])), "ttnn.sampling inputs differ"
-        assert torch.equal(d1, d0), f"step {step}: the draws differ"
-        signs = torch.signbit(v1).flatten().tolist()
-        assert kind != "zeros" or (any(signs) and not all(signs)), "the zeros case keeps both signs of zero"
+    rows = B * T
+    sampler = _sampler(ops, B, T, vocab, shards)
+    logits = _logits(kind, rows, vocab, shards, seed=rows + len(kind) + shards)
+    want_v, want_i = reference_candidates(logits, shards)
+    top_v, top_i = reference_order(logits)
+    for step, k in enumerate((32, 32, 32, 7, 7, 7)):
+        plan = _plan(B, T, step, k=k)
+        cand, draws = _run(sampler, logits, plan, Mesh(shards))
+        for d, (v, i) in enumerate(cand):
+            assert torch.equal(v, want_v) and torch.equal(i, want_i), f"device {d}: candidates differ"
+            order = torch.sort(-v, dim=-1, stable=True).indices[:, :SAMPLER_TOP_K]
+            assert torch.equal(v.gather(1, order), top_v[:, :SAMPLER_TOP_K]), f"device {d}: top-32 values"
+            assert torch.equal(i.gather(1, order), top_i[:, :SAMPLER_TOP_K]), f"device {d}: top-32 ids"
+        seeds = torch.tensor(plan.seeds, dtype=torch.int64)
+        want = top_i.gather(1, (seeds % k).reshape(-1, 1)).reshape(-1)
+        for d, got in enumerate(draws):
+            assert torch.equal(got, want), f"step {step}, device {d}: the draws differ from the stable sort's"
+    assert all(c["stable"] and c["largest"] and c["sorted"] for c in ops.topk_calls)
 
 
-@pytest.mark.parametrize("B, T", [(8, 4), (1, 4)])
-def test_one_top_k_call_takes_every_chunk_as_rows_of_its_input(monkeypatch, B, T):
-    """The stacked sampler calls ttnn.topk once, over [1, chunks, rows, width], whose row (c, r) is chunk c of row r;
-    the per-chunk sampler calls it once per chunk over [1, 1, rows, width]."""
-    ops = Ops(_tie_key("hashed"))
+@pytest.mark.parametrize("shards", [8, 2])
+def test_one_stable_top_k_call_takes_each_shard_chunk_padded_as_a_row(monkeypatch, shards):
+    """One ttnn.topk call per sampler, over [1, chunks, B*T, 32768] on each device: row (c, r) is chunk c of the
+    device's shard for row r of the logits, then PAD_LOGIT; the rows past the logits (a bucket's) are PAD_LOGIT."""
+    ops = Ops()
     ops.install(monkeypatch)
-    rows, chunks = B * T, vocab_chunks(VOCAB)
-    width = VOCAB // chunks
-    logits = _logits("bf16", rows, VOCAB, seed=3)
-    _run(VerifySampler("mesh", B, T, VOCAB), logits, _plan(B, T, 0))
-    (stacked,) = ops.topk_inputs
-    assert stacked.shape == (1, chunks, rows, width)
-    for c in range(chunks):
-        assert torch.equal(stacked[0, c], logits[:, c * width : (c + 1) * width])
-    ops.topk_inputs.clear()
-    _run(ChunkedVerifySampler("mesh", B, T, VOCAB), logits, _plan(B, T, 0))
-    assert [tuple(t.shape) for t in ops.topk_inputs] == [(1, 1, rows, width)] * chunks
+    B, T, rows = 8, 4, 8
+    chunks = shard_chunks(VOCAB // shards)
+    cw = VOCAB // shards // chunks
+    logits = _logits("bf16", rows, VOCAB, shards, seed=3)
+    _run(_sampler(ops, B, T, VOCAB, shards), logits, _plan(B, T, 0, live=2), Mesh(shards))
+    (call,) = ops.topk_calls
+    assert call["stable"]
+    for d, x in enumerate(call["input"]):
+        assert x.shape == (1, chunks, B * T, TOPK_MAX_WIDTH)
+        for c in range(chunks):
+            start = d * VOCAB // shards + c * cw
+            assert torch.equal(x[0, c, :rows, :cw], logits[:, start : start + cw])
+        assert bool((x[0, :, :rows, cw:] == PAD_LOGIT).all()) and bool((x[0, :, rows:] == PAD_LOGIT).all())
 
 
+@pytest.mark.parametrize("kind", ["coarse", "plateau", "bf16"])
+@pytest.mark.parametrize("shards", [8, 2])
+def test_replicated_logits_give_the_candidates_of_their_shards(monkeypatch, kind, shards):
+    """Logits that every device holds whole (a verify that gathers them itself) are cut into the devices' shards first:
+    the same candidates and draws as from the shards."""
+    ops = Ops()
+    ops.install(monkeypatch)
+    B, T = 8, 4
+    sampler = _sampler(ops, B, T, VOCAB, shards)
+    logits = _logits(kind, B * T, VOCAB, shards, seed=11)
+    plan = _plan(B, T, 0)
+    got = _run(sampler, logits, plan, Mesh(shards), replicated=True)
+    want = _run(sampler, logits, plan, Mesh(shards))
+    for (gc, gd), (wc, wd) in zip(zip(*got), zip(*want)):
+        assert all(torch.equal(a, b) for a, b in zip(gc, wc)) and torch.equal(gd, wd)
+
+
+@pytest.mark.parametrize("shards, replicated", [(8, False), (2, False), (8, True), (1, False)])
 @pytest.mark.parametrize("rows", [32, 8])
-def test_the_sampler_frees_every_intermediate(monkeypatch, rows):
+def test_the_sampler_frees_every_intermediate(monkeypatch, shards, replicated, rows):
     """Every tensor made while drawing is freed, the logits and the sampler's own buffers are not."""
     made = []
-    ops = Ops(_tie_key("hashed"))
+    ops = Ops()
     ops.install(monkeypatch)
-    sampler = VerifySampler("mesh", 8, 4, VOCAB)
-    sampler.prepare_rows(rows)
-    own = {id(t) for t in vars(sampler).values() if isinstance(t, FT)}
-    real_init = FT.__init__
+    sampler = _sampler(ops, 8, 4, VOCAB, shards)
+    own = {id(t) for t in vars(sampler).values() if isinstance(t, MT)}
+    real_init = MT.__init__
 
     def tracked(self, *a, **kw):
         real_init(self, *a, **kw)
         made.append(self)
 
-    monkeypatch.setattr(FT, "__init__", tracked)
-    logits = FT(_logits("bf16", rows, VOCAB, seed=5).reshape(1, 1, rows, -1), "bf16", "tile")
+    monkeypatch.setattr(MT, "__init__", tracked)
+    t = _logits("bf16", rows, VOCAB, shards, seed=5).reshape(1, 1, rows, -1)
+    logits = _replicated(t, Mesh(shards)) if replicated else _sharded(t, Mesh(shards))
     sampler.stage(_plan(8, 4, 0, live=rows // 4))
     made.clear()
     sampler.body(logits)
@@ -256,44 +359,51 @@ def test_the_sampler_frees_every_intermediate(monkeypatch, rows):
     assert left == [] and not logits.freed
 
 
-@pytest.mark.parametrize("kind", ["coarse", "bf16"])
+@pytest.mark.parametrize("kind", ["coarse", "plateau", "bf16"])
 @pytest.mark.parametrize("b", [1, 2, 4])
 def test_a_bucket_sampler_draws_its_rows_as_the_full_width_sampler_does(monkeypatch, kind, b):
-    """Logits of the first b*T rows (a verify row bucket's) give those rows the full-width sampler's candidates and
-    draws; ttnn.sampling still draws B*T rows, those past the bucket from zero candidates and no seeded core."""
-    B, T = 8, 4
+    """The shard of the first b*T rows (a verify row bucket's) gives those rows the full-width sampler's candidates
+    and draws; ttnn.sampling still draws B*T rows, those past the bucket from PAD_LOGIT candidates and no seeded core.
+    """
+    B, T, shards = 8, 4, 8
     rows = b * T
-    ops = Ops(_tie_key("hashed"))
+    ops = Ops()
     ops.install(monkeypatch)
-    sampler = VerifySampler("mesh", B, T, VOCAB)
-    sampler.prepare_rows(rows)
-    logits = _logits(kind, B * T, VOCAB, seed=b)
+    sampler = _sampler(ops, B, T, VOCAB, shards)
+    logits = _logits(kind, B * T, VOCAB, shards, seed=b)
     for step in range(3):
         plan = _plan(B, T, step, live=b)
         assert plan.user_ids[rows:] == [NO_CORE] * (B * T - rows)
-        sampler.stage(plan)
-        sampler.body(FT(logits.reshape(1, 1, B * T, -1).clone(), "bf16", "tile"))
-        full = sampler.draws.t.reshape(-1).clone()
-        sampler.body(FT(logits[:rows].reshape(1, 1, rows, -1).clone(), "bf16", "tile"))
-        (v_full, i_full), (v_b, i_b) = ops.sampled[-2:]
-        assert v_b.shape == v_full.shape == (B * T, 4 * SAMPLER_TOP_K)
-        assert torch.equal(v_b[:rows], v_full[:rows]) and torch.equal(i_b[:rows], i_full[:rows])
-        assert not bool(v_b[rows:].any()) and not bool(i_b[rows:].any())
-        assert torch.equal(sampler.draws.t.reshape(-1)[:rows], full[:rows])
+        full_c, full_d = _run(sampler, logits, plan, Mesh(shards))
+        got_c, got_d = _run(sampler, logits[:rows], plan, Mesh(shards))
+        for d in range(shards):
+            (fv, fi), (gv, gi) = full_c[d], got_c[d]
+            assert gv.shape == fv.shape == (B * T, shards * SAMPLER_TOP_K)
+            assert torch.equal(gv[:rows], fv[:rows]) and torch.equal(gi[:rows], fi[:rows])
+            assert bool((gv[rows:] == PAD_LOGIT).all())
+            assert torch.equal(got_d[d][:rows], full_d[d][:rows])
 
 
-def test_the_sampler_runs_over_the_full_width_or_a_prepared_row_count(monkeypatch, expect_error):
-    ops = Ops(_tie_key("lowest"))
+def test_the_sampler_refuses_what_it_cannot_take(monkeypatch, expect_error):
+    ops = Ops()
     ops.install(monkeypatch)
-    sampler = VerifySampler("mesh", 8, 4, VOCAB)
-    with expect_error(ValueError, r"logits of 8 rows need prepare_rows\(8\)"):
-        sampler.body(FT(torch.zeros(1, 1, 8, VOCAB), "bf16", "tile"))
-    for bad in (0, 33):
+    sampler = _sampler(ops, 8, 4, VOCAB, 8)
+    mesh = Mesh(8)
+    for rows in (0, 33):
         with expect_error(ValueError, "are not a prefix of them"):
-            sampler.prepare_rows(bad)
-    sampler.prepare_rows(32)
-    sampler.prepare_rows(8)
-    zeros = sampler._row_inputs[8][1]
-    sampler.prepare_rows(8)
-    assert sampler._row_inputs[8][1] is zeros, "prepared once"
-    assert [tuple(z.shape) for z in zeros] == [(1, 1, 24, 128)] * 2
+            sampler.candidates(_sharded(torch.zeros(1, 1, rows, VOCAB), mesh))
+    with expect_error(ValueError, "the sampler takes 31040 \\(one of 8 shards\\)"):
+        sampler.candidates(_sharded(torch.zeros(1, 1, 32, VOCAB // 2), mesh))
+    with expect_error(ValueError, "does not split into 3 shards"):
+        _sampler(ops, 8, 4, VOCAB, 3)
+    with expect_error(ValueError, "not a power-of-two count of tiles"):
+        _sampler(ops, 8, 4, 3 * 31040, 3)
+    with expect_error(ValueError, "exceed the sampler"):
+        _sampler(ops, 9, 4, VOCAB, 8)
+
+
+def test_a_shard_splits_into_the_fewest_tile_aligned_chunks_the_top_k_takes(expect_error):
+    assert [shard_chunks(VOCAB // tp) for tp in (8, 4, 2, 1)] == [1, 2, 4, 8]
+    assert shard_chunks(1024) == 1 and shard_chunks(TOPK_MAX_WIDTH) == 1 and shard_chunks(3 * 31040) == 3
+    with expect_error(ValueError, "does not split into tile-aligned top-k chunks"):
+        shard_chunks(VOCAB + 1)

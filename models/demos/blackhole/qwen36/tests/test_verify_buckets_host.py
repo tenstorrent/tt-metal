@@ -351,7 +351,7 @@ def test_the_model_replays_the_buckets_sampler_trace_after_its_verify_trace(repl
     assert traces == ["v2", "s2"] and m._vfy_sampler.stage.call_args.args == (plan,)
     m.verify_enqueue(tokens, [10, 0, 0, 0], [0] * 4, page_tables=pt, inactive=[False, True, True, True], bucket=1)
     m.verify_enqueue(tokens, [10, 20, 30, 0], [0] * 4, page_tables=pt, inactive=[False] * 4, sample_plan=plan)
-    assert traces == ["v2", "s2", "v1", "trace", "gather", "sample"]
+    assert traces == ["v2", "s2", "v1", "trace", "sample"]
 
 
 # ----------------------------------------------------------------------------------------- the bucket body
@@ -422,8 +422,8 @@ def test_the_bucket_body_runs_the_first_rows_and_hands_over_zero_padded_outputs(
 
 def test_with_a_sampler_the_bucket_body_keeps_its_vocab_shard_and_its_sampler_body_draws_from_it(monkeypatch):
     """With a device sampler the bucket body runs the verify with logits and returns the bucket's vocab shard after the
-    same hand-over; the bucket's sampler body all-gathers a copy of that shard (the shard stays for the next replay)
-    and runs the sampler over the b*T rows of logits, then frees them."""
+    same hand-over; the bucket's sampler body runs the sampler over the shard's b*T rows, and the shard stays for the
+    next replay."""
     log = []
     monkeypatch.setattr(ttnn, "slice", lambda t, s, e: FT(e, f"{t.name}[:{e[0]}]"))
     monkeypatch.setattr(ttnn, "deallocate", lambda t: log.append(("free", t.name)))
@@ -432,7 +432,6 @@ def test_with_a_sampler_the_bucket_body_keeps_its_vocab_shard_and_its_sampler_bo
     m = _body_model()
     m._vfy_bucket_zeros = {2: FT((1, 1, 24, 640), "zeros2")}
     m._vfy_sampler = SimpleNamespace(body=lambda logits: log.append(("sampler", logits.name)))
-    m._verify_logits = lambda shard: log.append(("gather", shard.name)) or FT((1, 1, 8, 248320), "logits8")
 
     def body(n_users, tables=None, logits=True):
         log.append(("body", n_users, logits))
@@ -444,7 +443,7 @@ def test_with_a_sampler_the_bucket_body_keeps_its_vocab_shard_and_its_sampler_bo
     assert [e for e in log if e[0] == "copy"] == [("copy", "ids", "ids_out"), ("copy", "full", "rows_out")]
     log.clear()
     m._bucket_sample_body(shard)
-    assert log == [("gather", "shard8"), ("sampler", "logits8"), ("free", "logits8")]
+    assert log == [("sampler", "shard8")]
 
 
 def test_the_bucket_body_never_slices_a_table_whole(monkeypatch):
@@ -605,21 +604,21 @@ def test_warmup_runs_every_bucket_body_into_the_warm_outputs(monkeypatch, expect
             m._warm_verify_buckets(bad, ids, rows)
 
 
-def test_with_a_sampler_warmup_prepares_the_sampler_rows_and_runs_every_bucket_sampler_body(monkeypatch):
-    """Before any capture the sampler gets the inputs of each bucket's b*T rows (VerifySampler.prepare_rows), and each
-    bucket's sampler body runs once over the warm bucket body's shard, which is then freed."""
+def test_with_a_sampler_warmup_runs_every_bucket_sampler_body(monkeypatch):
+    """Before any capture each bucket's sampler body runs once over the warm bucket body's shard, which is then
+    freed."""
     events = []
     monkeypatch.setattr(ttnn, "zeros", lambda shape, dtype, layout, device, memory_config: "z")
     monkeypatch.setattr(ttnn, "deallocate", lambda t: events.append(("free", t)))
     m = _body_model(B=8, T=4)
-    m._vfy_sampler = SimpleNamespace(prepare_rows=lambda rows: events.append(("rows", rows)))
+    m._vfy_sampler = SimpleNamespace()
     m._verify_bucket_body = lambda b, ids, rows: events.append(("bucket", b)) or f"shard{b}"
     m._bucket_sample_body = lambda shard: events.append(("sample", shard))
     m._warm_verify_buckets((1, 2, 4), FT((1, 1, 1, 32), "ids", "u32"), FT((1, 1, 32, 640), "rows"))
     assert events == [
-        ("rows", 4), ("bucket", 1), ("sample", "shard1"), ("free", "shard1"),
-        ("rows", 8), ("bucket", 2), ("sample", "shard2"), ("free", "shard2"),
-        ("rows", 16), ("bucket", 4), ("sample", "shard4"), ("free", "shard4"),
+        ("bucket", 1), ("sample", "shard1"), ("free", "shard1"),
+        ("bucket", 2), ("sample", "shard2"), ("free", "shard2"),
+        ("bucket", 4), ("sample", "shard4"), ("free", "shard4"),
     ]  # fmt: skip
 
 
