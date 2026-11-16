@@ -411,7 +411,7 @@ void validate_dynamic_local_n(const RingJointSDPAParams& args, const RingJointSD
     // Balanced causal compiles the zigzag parity and the straddle chunk per length.
     TT_FATAL(!args.is_balanced && !args.is_cross, "dynamic_local_n does not support balanced or cross attention");
     // Causal with bf16 accumulation (the streaming compute path) and a Q chunk that is not a multiple of the K
-    // chunk returns wrong live rows when logical_n is below the padded total.
+    // chunk returns wrong live rows when logical_n ends inside a tile.
     TT_FATAL(
         !args.is_causal || get_fp32_dest_acc_en(args.compute_kernel_config) ||
             args.get_q_chunk_size() % args.get_k_chunk_size() == 0,

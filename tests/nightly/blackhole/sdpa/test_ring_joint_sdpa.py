@@ -9604,8 +9604,8 @@ def test_ring_joint_attention_dynamic_local_n_causal_flat_cache(topology, varian
 @pytest.mark.timeout(1800)
 def test_ring_joint_attention_dynamic_local_n_rejects_unsupported_features(expect_error):
     """With the dynamic program cached, a call adding a feature the path does not serve (balanced causal or cross
-    attention, an attention sink) or Q/K/V padded beyond their logical rows must raise from validation, never
-    dispatch the cached program or add one."""
+    attention, an attention sink, causal bf16 with a Q chunk that is not a multiple of the K chunk) or Q/K/V padded
+    beyond their logical rows must raise from validation, never dispatch the cached program or add one."""
     mesh_config = _h3_dynamic_mesh_config()
     runtime = open_ring_joint_sdpa_runtime(mesh_config)
     try:
@@ -9647,6 +9647,19 @@ def test_ring_joint_attention_dynamic_local_n_rejects_unsupported_features(expec
         for overrides in ({"is_causal": True, "is_balanced": True}, {"is_cross": True}, {"attention_sink": sink}):
             with expect_error(RuntimeError, "dynamic_local_n"):
                 call(**overrides)
+        with expect_error(RuntimeError, "requires q_chunk_size to be a multiple of k_chunk_size"):
+            _h3_dynamic_op(
+                runtime,
+                tt_q,
+                tt_k,
+                tt_v,
+                logical_n_tensor,
+                gather_k,
+                gather_v,
+                runtime.ccl_semaphore_handles,
+                qk_chunks=(128, 96),
+                is_causal=True,
+            )
         # The same buffers viewed one tile row shorter: the padded rows would be computed and written past the
         # output, so the shared miss/hit validator refuses them.
         shorter = list(tt_q.shape)
