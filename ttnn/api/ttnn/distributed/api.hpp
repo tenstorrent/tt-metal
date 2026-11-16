@@ -52,11 +52,12 @@ Tensor from_host_shards(const std::vector<Tensor>& tensor_shards, const MeshShap
 // along dim 0 if not provided).
 Tensor combine_device_tensors(const std::vector<Tensor>& tensor_shards, int shard_dim = 0);
 
-// Builds a multi-device host tensor from the shards this host holds, one per mesh coordinate local to this host, and
-// labels it with `topology` as given. Unlike `from_host_shards`, it needs no shard for the coordinates that belong to
-// other hosts of a multi-host mesh (they stay unpopulated) and spells no label of its own. Every shard must be on host
-// with the same tensor spec, every coordinate must be inside the mesh and local to this host, and every local
-// coordinate must receive a shard. On a single-host mesh every coordinate is local.
+// Builds a multi-device host tensor from the shards this host holds, one per coordinate of `topology` local to this
+// host, and labels it with `topology` as given. Unlike `from_host_shards`, it needs no shard for the coordinates that
+// belong to other hosts of a multi-host mesh or that the label does not list (they stay unpopulated, so a tensor can
+// live on part of the mesh) and spells no label of its own. Every shard must be on host with the same tensor spec,
+// every coordinate must be inside the mesh, local to this host and listed by the label, and every local coordinate the
+// label lists must receive a shard. On a single-host mesh every coordinate is local.
 Tensor from_local_host_shards(
     const std::map<MeshCoordinate, Tensor>& shards,
     const tt::tt_metal::distributed::MeshDeviceView& mesh_device_view,
