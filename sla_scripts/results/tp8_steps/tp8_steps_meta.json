@@ -1,0 +1,42 @@
+{
+ "baseline": {
+  "desc": "Baseline (stock)",
+  "kept": "\u2014"
+ },
+ "rs4": {
+  "desc": "+ Reduce-scatter on 4 links",
+  "kept": "Yes"
+ },
+ "rs4_mm": {
+  "desc": "+ Matmul configs (wo, w1w3, qkv)",
+  "kept": "Yes, best"
+ },
+ "attnag4": {
+  "desc": "+ All-gather before wo on 4 links",
+  "kept": "No, path not used here (noise)"
+ },
+ "ccl8b": {
+  "desc": "+ 8B's Galaxy CCL config",
+  "kept": "No, no gain"
+ },
+ "agmm": {
+  "desc": "Fused all-gather + matmul, 1 link",
+  "kept": "No, slower"
+ },
+ "ccl8b_agmm": {
+  "desc": "8B config + fused all-gather + matmul",
+  "kept": "No, no gain, lower accuracy"
+ },
+ "mm_no_w1w3": {
+  "desc": "Reduce-scatter 4 links + matmul configs wo, qkv (no w1w3)",
+  "kept": "No, slower end to end"
+ },
+ "mm_wo_only": {
+  "desc": "Reduce-scatter 4 links + matmul config wo only",
+  "kept": "No, slower end to end"
+ },
+ "silu_fuse": {
+  "desc": "+ SiLU fused into w1 matmul (on best config)",
+  "kept": "No, no gain"
+ }
+}

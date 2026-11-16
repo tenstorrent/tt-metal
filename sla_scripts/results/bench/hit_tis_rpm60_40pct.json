@@ -1,0 +1,24 @@
+{
+ "tag": "tis_rpm60_40pct",
+ "n": 120,
+ "rps": 1.0,
+ "prefix_len": 2048,
+ "unique_len": 3072,
+ "prompt_tokens": 614400,
+ "cached_tokens": 0,
+ "hit_rate": 0.0,
+ "designed_hit_rate": 0.4,
+ "requests_with_hit": 0,
+ "first_10_cached": [
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0
+ ]
+}
