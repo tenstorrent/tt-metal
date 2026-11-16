@@ -57,10 +57,11 @@ Tensor combine_device_tensors(const std::vector<Tensor>& tensor_shards, int shar
 // belong to other hosts of a multi-host mesh or that the label does not list (they stay unpopulated, so a tensor can
 // live on part of the mesh) and spells no label of its own. Every shard must be on host with the same tensor spec,
 // every coordinate must be inside the mesh, local to this host and listed by the label, and every local coordinate the
-// label lists must receive a shard. On a single-host mesh every coordinate is local.
+// label lists must receive a shard. `mesh_device` decides which coordinates are local; on a single-host mesh every
+// coordinate is.
 Tensor from_local_host_shards(
     const std::map<MeshCoordinate, Tensor>& shards,
-    const tt::tt_metal::distributed::MeshDeviceView& mesh_device_view,
+    const MeshDevice& mesh_device,
     const tt::tt_metal::TensorTopology& topology);
 
 }  // namespace ttnn::distributed
