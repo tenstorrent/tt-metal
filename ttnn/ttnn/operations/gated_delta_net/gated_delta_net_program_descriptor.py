@@ -239,6 +239,12 @@ STATE_READER_EARLY_UNITS = False
 # 77 us per unit behind state k - 1's barrier). Up to two final states in flight, each freed on its own transaction id.
 # 2: a state is also issued as soon as it is packed instead of after the next unit's coefficients.
 WRITER_ASYNC = 1
+# R-QKCORE pair cores: final-state tiles a core has in flight (issued, not acknowledged) at most; 0: no bound. At every
+# router the passing packets and the local writer take turns, so the cores next to the DRAM columns keep half of a
+# link and the cores upstream of them starve; a bound makes a core skip turns while its tiles are on the way.
+STATE_WRITE_WINDOW = 0
+# The bound applies from this many units per pair core on.
+STATE_WRITE_WINDOW_UNITS = 3
 # Decode token step (shared q / k builds): the token vector of a column tile in one SFPU pass over the token's band
 # instead of ~14 scalar / binary / broadcast SFPU calls with their inits (2.0 -> 0.6 us per unit at Vb = 4). "auto":
 # on for R-VSPLIT pieces (decode B=1: 12.5 -> 12.0 us), off for whole-V units (B=8 / B=16 are DRAM-bound there:
@@ -1159,7 +1165,8 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
     if prep is None:
         inbox = 0
         # The deepest per-unit input depth that fits L1 (1 when every core runs one unit).
-        unit_depth = min(UNIT_INPUT_DEPTH, max(count for _, _, count, _ in assignment))
+        core_units = max(count for _, _, count, _ in assignment)
+        unit_depth = min(UNIT_INPUT_DEPTH, core_units)
 
         def unit_lag(depth):
             # The reader must run a unit ahead of the lagged norm: two units of inputs in flight.
@@ -1761,7 +1768,10 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
         role_label = [("gdn_role", role)]
         group_qk_roles = {roles[role][3][c.x, c.y][4] for c in cores}  # compute rt arg 4: the qk role
         group_qk_role = group_qk_roles.pop() if len(group_qk_roles) == 1 else QK_PER_CORE
-        group_defines = defines + [("GDN_GROUP_QK_ROLE", str(group_qk_role))]
+        window = STATE_WRITE_WINDOW if qk_cores and prep is None and core_units >= STATE_WRITE_WINDOW_UNITS else 0
+        if isinstance(window, tuple):  # (writers on NOC 1, writers on NOC 0)
+            window = window[int(swap_nocs)]
+        group_defines = defines + [("GDN_GROUP_QK_ROLE", str(group_qk_role)), ("GDN_STATE_WRITE_WINDOW", str(window))]
         reader_config, writer_config = ttnn.ReaderConfigDescriptor(), ttnn.WriterConfigDescriptor()
         if swap_nocs:
             writer_config = ttnn.DataMovementConfigDescriptor(

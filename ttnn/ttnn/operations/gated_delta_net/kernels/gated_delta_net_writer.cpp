@@ -78,6 +78,8 @@ constexpr bool STATE_SPLIT = GDN_STATE_SPLIT != 0;     // the reader writes this
 constexpr uint32_t cb_state_done = GDN_CB_STATE_DONE;  // STATE_SPLIT: the reader's tiles of a state have left
 constexpr bool WRITER_ASYNC = GDN_WRITER_ASYNC != 0;   // UNIT_LAG cores: no unit's coefficients wait for a write
 constexpr bool ASYNC_STATE_HOLD = GDN_WRITER_ASYNC != 2;
+constexpr uint32_t STATE_WINDOW = GDN_STATE_WRITE_WINDOW;  // final-state tiles in flight at most (0: no bound)
+constexpr uint32_t STATE_TRID = 12, ROWS_TRID = 14;        // write transaction ids: states (12, 13), output rows
 constexpr uint32_t TILE_WORDS = 1024;  // cb_gates / cb_tok_coef are Float32 compute buffers
 constexpr uint32_t ONE_BITS = 0x3f800000u;  // 1.0f
 
@@ -454,19 +456,35 @@ void land_qk_rows(const QChannel& q_channel, const KChannel& k_channel, uint32_t
 }  // namespace
 
 // Issues the piece's Kt x Vb state tiles of cb_state_out to recurrent_state_out (pair state page `first_page` on),
+// Final-state tiles of this core that are issued and not acknowledged; current only while the command buffer is free.
+FORCE_INLINE uint32_t state_tiles_in_flight() {
+    return NOC_STATUS_READ_REG(noc_index, NIU_MST_REQS_OUTSTANDING_ID(STATE_TRID)) +
+           NOC_STATUS_READ_REG(noc_index, NIU_MST_REQS_OUTSTANDING_ID(STATE_TRID + 1));
+}
+
 // except the reader's (reader_share); the caller barriers and calls pop_state.
 template <uint32_t Kt, uint32_t Vt, uint32_t Vb, typename Accessor>
 void store_state(
     const Accessor& state_out, uint32_t first_page, uint32_t unit_idx, uint32_t reader_units, uint32_t reader_share) {
     // Compute pushes the final state in update batches: each tile goes out as soon as it is packed.
     const uint32_t state_base = get_read_ptr(cb_state_out);
+    if constexpr (STATE_WINDOW != 0) {
+        noc_async_write_set_trid(STATE_TRID);
+    }
     for (uint32_t j = 0; j < Kt * Vb; ++j) {
         if (gdn::state_tile_on_reader(unit_idx, j, reader_units, reader_share)) {
             continue;
         }
         cb_wait_front(cb_state_out, j + 1);
+        if constexpr (STATE_WINDOW != 0) {
+            while (!noc_cmd_buf_ready(noc_index, write_cmd_buf) || state_tiles_in_flight() >= STATE_WINDOW) {
+            }
+        }
         const uint32_t page = gdn::state_out_page<Kt, Vt, Vb>(first_page, j, STATE_STAGGER);
         noc_async_write(state_base + j * STATE_TILE_BYTES, state_out.get_noc_addr(page), STATE_TILE_BYTES);
+    }
+    if constexpr (STATE_WINDOW != 0) {
+        noc_async_write_set_trid(0);
     }
 }
 
@@ -926,7 +944,6 @@ void kernel_main() {
         // is free; up to two states in flight (transaction id = state parity), each freed when its own writes have
         // completed. (3) A unit's output rows once normalized, one unit in flight. A write-starved core thus keeps
         // computing until cb_state_out is full.
-        constexpr uint32_t STATE_TRID = 12, ROWS_TRID = 14;
         const auto& state_cb = get_local_cb_interface(cb_state_out);
         const uint32_t state_slots = state_cb.fifo_size / (n_state * STATE_TILE_BYTES) < 2 ? 1 : 2;
         uint32_t coef_unit = 1;
@@ -950,8 +967,9 @@ void kernel_main() {
             // A non-last state starts after the next unit's coefficients, as in the blocking order (earlier
             // write-backs delay the other cores' S0 reads: decode B=16 +4.4 us).
             const bool state_due = state_unit + 1 == num_units || coef_unit > state_unit + 1 || !ASYNC_STATE_HOLD;
+            const bool window_open = STATE_WINDOW == 0 || (cmd_free && state_tiles_in_flight() < STATE_WINDOW);
             if (cmd_free && state_unit < num_units && state_due && state_unit - states_freed < state_slots &&
-                cb_pages_available_at_front(cb_state_out, ahead + 1)) {
+                window_open && cb_pages_available_at_front(cb_state_out, ahead + 1)) {
                 uint32_t src = get_read_ptr(cb_state_out) + ahead * STATE_TILE_BYTES;
                 src -= src >= state_cb.fifo_limit ? state_cb.fifo_size : 0;
                 const uint32_t page =
