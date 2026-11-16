@@ -748,7 +748,12 @@ ProgramDescriptor build_program_descriptor(
         act_slots * (std::max(experts_block, group_experts) * i_tiles + shared_slots) * act_tile_bytes;
     // Per-core down output: the single accumulated [B, H] output tile-row slice (kOutTilesPerCore
     // tiles), double-buffered.
-    const uint32_t down_out_tiles = parallel_experts ? shards_per_core * kOutTilesPerCore : kOutTilesPerCore;
+    // Several experts per group (several-row requests): each H-slice's shared and per-expert terms apart, [shared |
+    // expert 0 | ...] (see the compute kernel's per-row exact reduce).
+    const uint32_t slice_block_tiles = (1u + group_experts) * kOutTilesPerCore;
+    const uint32_t down_out_tiles = !parallel_experts    ? kOutTilesPerCore
+                                    : group_experts > 1u ? shards_per_core * slice_block_tiles
+                                                         : shards_per_core * kOutTilesPerCore;
     const uint32_t down_out_cb_bytes = (parallel_experts ? 1u : 2u) * down_out_tiles * out_tile_bytes;
     // Routing-weight tiles (one per expert in the current block) for the bf16 multiply that scales
     // each expert's down output before accumulation. Built per core by the reader, once per block:
@@ -770,8 +775,16 @@ ProgramDescriptor build_program_descriptor(
         std::max((parallel_experts ? 1u : 2u) * acc_tiles, group_experts * kOutTilesPerCore) * out_tile_bytes;
     // Group-0 reduce scratch: the other (num_expert_groups-1) groups unicast their H-slice here.
     // Allocated on every core so L1 addresses match; unused on non-root groups.
-    const uint32_t reduce_cb_bytes =
-        parallel_experts ? (num_expert_groups - 1u) * acc_tiles * out_tile_bytes : std::max(32u, out_tile_bytes);
+    // Several experts per group: a slice's folder (group s's core of a down slot folds its H-slice s) takes every
+    // group's block for it, its own included.
+    const uint32_t reduce_cb_bytes = !parallel_experts    ? std::max(32u, out_tile_bytes)
+                                     : group_experts > 1u ? num_expert_groups * slice_block_tiles * out_tile_bytes
+                                                          : (num_expert_groups - 1u) * acc_tiles * out_tile_bytes;
+    TT_FATAL(
+        group_experts == 1u || shards_per_core <= num_expert_groups,
+        "fused_experts: several-row requests fold each of a down slot's {} H-slices on its own group, of {}",
+        shards_per_core,
+        num_expert_groups);
 
     // Each fetch pulls a whole slice in one contiguous NoC read into the CB's write pointer, so
     // the weight CB must be a whole number of slices for BOTH phases -- otherwise a read
@@ -2060,7 +2073,10 @@ ProgramDescriptor build_program_descriptor(
                     down_local_for(core),
                     input_buffer};
                 if (fuse_ar) {
-                    const auto [ar_sender, ar_staging_slot] = ar_sender_for(core);
+                    // Several experts per group: a slice's folder writes its sum into its down slot's place, so it
+                    // reports to the sender of that slot's group-0 core.
+                    const auto [ar_sender, ar_staging_slot] =
+                        ar_sender_for(group_experts > 1u ? CoreCoord{core.x % 2u, core.y} : core);
                     writer_args.insert(
                         writer_args.end(),
                         {all_reduce->scratch,
@@ -2091,6 +2107,16 @@ ProgramDescriptor build_program_descriptor(
                     device->worker_core_from_logical_core(CoreCoord{peer_idx / GRID_Y, peer_idx % GRID_Y});
                 writer_args.push_back(static_cast<uint32_t>(peer_noc.x));
                 writer_args.push_back(static_cast<uint32_t>(peer_noc.y));
+                // Several experts per group: the folder of each of this down slot's H-slices s, group s's core of the
+                // slot (same row, the group's same column).
+                if (group_experts > 1u) {
+                    for (uint32_t sl = 0; sl < shards_per_core; ++sl) {
+                        const auto fold_noc =
+                            device->worker_core_from_logical_core(CoreCoord{2u * sl + core.x % 2u, core.y});
+                        writer_args.push_back(static_cast<uint32_t>(fold_noc.x));
+                        writer_args.push_back(static_cast<uint32_t>(fold_noc.y));
+                    }
+                }
                 writer_desc.emplace_runtime_args(core, writer_args);
             }
         }
@@ -2472,7 +2498,8 @@ ProgramDescriptor build_program_descriptor(
             const uint32_t first = link * ar_cores_per_link;
             const uint32_t count =
                 std::min<uint32_t>(ar_cores_per_link, static_cast<uint32_t>(ar_out_cores.size()) - first);
-            std::vector<uint32_t> sender_args = {count};
+            // Several experts per group: each output core's H-slices arrive one by one, from their folders.
+            std::vector<uint32_t> sender_args = {group_experts > 1u ? count * shards_per_core : count};
             std::vector<tt::tt_fabric::FabricNodeId> dst_nodes;
             if (persistent != nullptr) {
                 const auto& params = *operation_attributes.persistent;
@@ -2684,6 +2711,7 @@ ProgramDescriptor build_program_descriptor(
         kernel.defines.emplace_back("FE_SHARED_SPLIT", std::to_string(shared_split) + "u");
         kernel.defines.emplace_back("FE_SEM_SHARED_PART", std::to_string(sem_shared_part_id));
         kernel.defines.emplace_back("FE_CB_WTMP", std::to_string(static_cast<uint32_t>(cb_wtmp)));
+        kernel.defines.emplace_back("FE_CB_ACC", std::to_string(static_cast<uint32_t>(cb_acc)));
         kernel.defines.emplace_back("FE_ROUTED_SPLIT", std::to_string(routed_split) + "u");
         kernel.defines.emplace_back("FE_GROUP_EXPERTS", std::to_string(group_experts) + "u");
         kernel.defines.emplace_back("FE_SEM_WEIGHTS", std::to_string(sem_weights_id));

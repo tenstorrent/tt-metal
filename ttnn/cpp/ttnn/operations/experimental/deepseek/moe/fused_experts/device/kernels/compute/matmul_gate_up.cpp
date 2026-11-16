@@ -162,7 +162,12 @@ void kernel_main() {
     const bool swiglu_core = local_idx < num_producers;
     const uint32_t expert_group = core_index / cores_per_expert;
     const bool down_core = get_arg_val<uint32_t>(1) != 0xFFFFFFFFu;
+#if FE_GROUP_EXPERTS > 1
+    // Several rows: the folder of H-slice expert_group (see the reduce below).
+    const bool is_root = down_core && expert_group < shards_per_core;
+#else
     const bool is_root = expert_group == 0 && down_core;
+#endif
     // 6-expert path's shared expert: the group's I-tiles are expert_group, expert_group + 6, ...,
     // and tile j runs on local core j + shared_first_local (see SharedExpert in fetch_gate_up.h).
     const uint32_t shared_tiles =
@@ -208,7 +213,20 @@ void kernel_main() {
     constexpr uint32_t kMyPieces = kGateUpPieces / FE_ROUTED_SPLIT;
     static_assert(FE_ROUTED_SPLIT == 1u || kMyPieces * FE_ROUTED_SPLIT == kGateUpPieces, "whole K-pieces per part");
     // The K-piece (of this core's half) that its p-th received piece is.
-    auto piece_of = [&](uint32_t p) -> uint32_t { return reverse_pieces ? kMyPieces - 1u - p : p; };
+    // Several rows: the group's j-th expert's order instead, by its id (persistent.h kFeHdrPieceFlags), so an expert's
+    // activation is the same bits whichever group runs it. Only the unpacker's K offsets read it, after the piece's
+    // wait_front, by which point the reader has written it.
+    auto piece_of = [&](uint32_t p, uint32_t j) -> uint32_t {
+#if FE_GROUP_EXPERTS > 1
+        (void)reverse_pieces;
+        invalidate_l1_cache();
+        const bool reverse = FE_ROUTED_SPLIT > 1u && ((fe_header(kFeHdrPieceFlags) >> j) & 1u) != 0u;
+#else
+        (void)j;
+        const bool reverse = reverse_pieces;
+#endif
+        return reverse ? kMyPieces - 1u - p : p;
+    };
     // Gate and up then share one DST acquire: 4 fp32 tiles at half sync.
     static_assert(kGateUpPieces == 1 || kShardTileCols <= 4, "a split gate_up slice holds gate and up in DST at once");
 #ifdef FE_CUSTOM_MM
@@ -297,10 +315,10 @@ void kernel_main() {
                         w_cb.wait_front(gate_up_reserve_tiles);
                         if (p + 1 == kMyPieces) {
                             custom_mm_block<CustomMmDestLayout::DefaultSplitAcc, true>(
-                                cb_input_id, cb_weights_id, piece_of(p) * kPieceK, 0, 0, kPieceK, kShardTileCols);
+                                cb_input_id, cb_weights_id, piece_of(p, j) * kPieceK, 0, 0, kPieceK, kShardTileCols);
                         } else {
                             custom_mm_block<CustomMmDestLayout::DefaultSplitAcc, false>(
-                                cb_input_id, cb_weights_id, piece_of(p) * kPieceK, 0, 0, kPieceK, kShardTileCols);
+                                cb_input_id, cb_weights_id, piece_of(p, j) * kPieceK, 0, 0, kPieceK, kShardTileCols);
                         }
                         w_cb.pop_front(gate_up_reserve_tiles);
                     }
@@ -327,13 +345,13 @@ void kernel_main() {
                                     matmul_tiles(
                                         cb_input_id,
                                         cb_weights_id,
-                                        piece_of(p) * kPieceK + k,
+                                        piece_of(p, j) * kPieceK + k,
                                         k * kShardTileCols + n,
                                         n);
                                     matmul_tiles(
                                         cb_input_id,
                                         cb_weights_id,
-                                        piece_of(p) * kPieceK + k,
+                                        piece_of(p, j) * kPieceK + k,
                                         k * kShardTileCols + swiglu_tiles + n,
                                         swiglu_tiles + n);
                                 }
@@ -458,7 +476,7 @@ void kernel_main() {
                 tile_regs_acquire();
                 for (uint32_t p = 0; p < kMyPieces; ++p) {
                     w_cb.wait_front(gate_up_reserve_tiles);
-                    const uint32_t k0 = (kMyPieces + piece_of(p)) * kPieceK;
+                    const uint32_t k0 = (kMyPieces + piece_of(p, j)) * kPieceK;
                     if (p + 1 == kMyPieces) {
                         custom_mm_block<CustomMmDestLayout::DefaultSplitAcc, true>(
                             cb_input_id, cb_weights_id, k0, 0, 0, kPieceK, kShardTileCols);
@@ -476,7 +494,7 @@ void kernel_main() {
                 tile_regs_acquire();
                 for (uint32_t p = 0; p < kMyPieces; ++p) {
                     w_cb.wait_front(gate_up_reserve_tiles);
-                    const uint32_t k0 = (kMyPieces + piece_of(p)) * kPieceK;
+                    const uint32_t k0 = (kMyPieces + piece_of(p, j)) * kPieceK;
                     for (uint32_t k = 0; k < kPieceK; ++k) {
                         for (uint32_t n = 0; n < kShardTileCols; ++n) {
                             matmul_tiles(cb_input_id, cb_weights_id, k0 + k, k * kShardTileCols + n, n);
@@ -615,7 +633,7 @@ void kernel_main() {
             read_my_experts();
             rscalar_cb.wait_front(my_experts);
 
-            const uint32_t mul_dst_id = is_root ? cb_acc_id : cb_down_out_id;
+            const uint32_t mul_dst_id = FE_GROUP_EXPERTS == 1 && is_root ? cb_acc_id : cb_down_out_id;
             CircularBuffer mul_dst_cb(mul_dst_id);
             // With shared tiles, the weighted routed slice is staged in cb_wtmp (free until the root's
             // reduce) and the shared partial is added on its way to mul_dst.
@@ -624,48 +642,54 @@ void kernel_main() {
             CircularBuffer shared_down_cb(cb_shared_down_id);
 
 #if FE_GROUP_EXPERTS > 1
-            // Each H-slice: every expert's act_j @ down_j[slice] (the reader's entries, slice-major), then the shared
-            // expert's, one custom_mm split accumulation that only the last finalizes, packed once to mul_dst.
-            for (uint32_t s = 0; s < shards_per_core; ++s) {
-                DeviceZoneScopedN("FE_C_DOWN_SLICE");
+            // Several rows, exact per row: each expert's act_j @ down_j[slice] on its own (the reader's entries,
+            // slice-major), and the shared expert's act_shared @ down_shared[slice], each finalized and packed into
+            // its own place in cb_down_out: slice s at s * kSliceBlock tiles, [shared | expert 0 | expert 1 | ...]
+            // (kOutTilesPerCore each). Chaining them in DEST would round a row's experts together with whichever
+            // others the union deals to its group; apart, a row's tiles hold only its own experts' terms (zero for the
+            // experts it did not pick: their activation rows carry a zero weight), which the slice's folder adds in a
+            // fixed order (below).
+            constexpr uint32_t kSliceBlock = (1u + FE_GROUP_EXPERTS) * kOutTilesPerCore;
+            {
                 const bool with_shared = shared_tiles > 0;
-                if (with_shared) {
-                    shared_down_cb.wait_front(shared_slots * kOutTilesPerCore);
-                }
-                mul_dst_cb.reserve_back(kOutTilesPerCore);
-                reconfig_full_operand(cb_down_w_id, cb_act_id);
-                pack_reconfig_data_format(mul_dst_id);
-                custom_mm_block_init_short<false, CustomMmDestLayout::DefaultSplitAcc>(
-                    cb_act_id, cb_down_w_id, mul_dst_id, kOutTilesPerCore);
-                tile_regs_acquire();
-                for (uint32_t j = 0; j < my_experts; ++j) {
-                    down_w_cb.wait_front(down_reserve_tiles);
-                    if (!with_shared && j + 1u == my_experts) {
+                mul_dst_cb.reserve_back(shards_per_core * kSliceBlock);
+                for (uint32_t s = 0; s < shards_per_core; ++s) {
+                    DeviceZoneScopedN("FE_C_DOWN_SLICE");
+                    reconfig_full_operand(cb_down_w_id, cb_act_id);
+                    pack_reconfig_data_format(mul_dst_id);
+                    custom_mm_block_init_short<false, CustomMmDestLayout::DefaultSplitAcc>(
+                        cb_act_id, cb_down_w_id, mul_dst_id, kOutTilesPerCore);
+                    for (uint32_t j = 0; j < my_experts; ++j) {
+                        down_w_cb.wait_front(down_reserve_tiles);
+                        tile_regs_acquire();
                         custom_mm_block<CustomMmDestLayout::DefaultSplitAcc, true>(
                             cb_act_id, cb_down_w_id, j * i_tiles, 0, 0, i_tiles, kOutTilesPerCore);
-                    } else {
-                        custom_mm_block<CustomMmDestLayout::DefaultSplitAcc, false>(
-                            cb_act_id, cb_down_w_id, j * i_tiles, 0, 0, i_tiles, kOutTilesPerCore);
+                        tile_regs_commit();
+                        tile_regs_wait();
+                        const uint32_t at = s * kSliceBlock + (1u + j) * kOutTilesPerCore;
+                        pack_tile<true>(0, mul_dst_id, at);
+                        pack_tile<true>(1, mul_dst_id, at + 1u);
+                        tile_regs_release();
+                        down_w_cb.pop_front(down_reserve_tiles);
                     }
-                    down_w_cb.pop_front(down_reserve_tiles);
+                    if (with_shared) {
+                        shared_down_cb.wait_front(shared_slots * kOutTilesPerCore);
+                        reconfig_full_operand(cb_shared_down_id, cb_act_id);
+                        custom_mm_block_init_short<false, CustomMmDestLayout::DefaultSplitAcc>(
+                            cb_act_id, cb_shared_down_id, mul_dst_id, kOutTilesPerCore);
+                        tile_regs_acquire();
+                        custom_mm_block<CustomMmDestLayout::DefaultSplitAcc, true>(
+                            cb_act_id, cb_shared_down_id, kSharedAct, 0, 0, shared_tiles, kOutTilesPerCore);
+                        tile_regs_commit();
+                        tile_regs_wait();
+                        pack_tile<true>(0, mul_dst_id, s * kSliceBlock);
+                        pack_tile<true>(1, mul_dst_id, s * kSliceBlock + 1u);
+                        tile_regs_release();
+                        shared_down_cb.pop_front(shared_slots * kOutTilesPerCore);
+                    }
+                    custom_mm_block_uninit<CustomMmDestLayout::DefaultSplitAcc>(mul_dst_id);
                 }
-                if (with_shared) {
-                    reconfig_full_operand(cb_shared_down_id, cb_act_id);
-                    custom_mm_block_init_short<false, CustomMmDestLayout::DefaultSplitAcc>(
-                        cb_act_id, cb_shared_down_id, mul_dst_id, kOutTilesPerCore);
-                    custom_mm_block<CustomMmDestLayout::DefaultSplitAcc, true>(
-                        cb_act_id, cb_shared_down_id, kSharedAct, 0, 0, shared_tiles, kOutTilesPerCore);
-                }
-                tile_regs_commit();
-                tile_regs_wait();
-                pack_tile(0, mul_dst_id);
-                pack_tile(1, mul_dst_id);
-                tile_regs_release();
-                custom_mm_block_uninit<CustomMmDestLayout::DefaultSplitAcc>(mul_dst_id);
-                mul_dst_cb.push_back(kOutTilesPerCore);
-                if (with_shared) {
-                    shared_down_cb.pop_front(shared_slots * kOutTilesPerCore);
-                }
+                mul_dst_cb.push_back(shards_per_core * kSliceBlock);
             }
 #else
             for (uint32_t s = 0; s < shards_per_core; ++s) {
@@ -834,6 +858,53 @@ void kernel_main() {
             rscalar_cb.pop_front(my_experts);
             act_cb.pop_front(act_tiles);
 
+#if FE_GROUP_EXPERTS > 1
+            if (is_root) {
+                // H-slice expert_group of this down slot: every group's [shared | expert 0 | ...] block for it, group
+                // g's at g * kSliceBlock tiles of cb_reduce. Summed in DEST in one fixed order -- the groups' shared
+                // terms in group order, then the experts in hit order (hit h is group h % 6's expert h / 6: ascending
+                // ids) -- so a row's sum is its own shared terms and then its own experts in ascending id, every other
+                // term an exact zero: the same bits whatever the other rows route to.
+                DeviceZoneScopedN("FE_C_FOLD");
+                const uint32_t hits = fe_wait_hits(fe_iter);
+                reduce_cb.wait_front(num_expert_groups * kSliceBlock);
+                acc_cb.reserve_back(kOutTilesPerCore);
+                reconfig_full_operand(cb_reduce_id, cb_reduce_id);
+                pack_reconfig_data_format(cb_acc_id);
+                for (uint32_t n = 0; n < kOutTilesPerCore; ++n) {
+                    bool first = true;
+                    auto take = [&](uint32_t tile) {
+                        if (first) {
+                            copy_init(cb_reduce_id);
+                            copy_tile(cb_reduce_id, tile, 0);
+                            add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_reduce_id);
+                            first = false;
+                        } else {
+                            add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_reduce_id, tile, 0);
+                        }
+                    };
+                    tile_regs_acquire();
+                    for (uint32_t g = 0; g < num_expert_groups; ++g) {
+                        if (g < shared_i_tiles) {
+                            take(g * kSliceBlock + n);
+                        }
+                    }
+                    for (uint32_t j = 0; j < FE_GROUP_EXPERTS; ++j) {
+                        for (uint32_t g = 0; g < num_expert_groups; ++g) {
+                            if (j < fe_group_hits(hits, g, num_expert_groups)) {
+                                take(g * kSliceBlock + (1u + j) * kOutTilesPerCore + n);
+                            }
+                        }
+                    }
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    pack_tile(0, cb_acc_id);
+                    tile_regs_release();
+                }
+                acc_cb.push_back(kOutTilesPerCore);
+                reduce_cb.pop_front(num_expert_groups * kSliceBlock);
+            }
+#else
             if (is_root) {
                 acc_cb.wait_front(kLocalTiles);
                 reduce_cb.wait_front(kRemoteGroups * kLocalTiles);
@@ -899,6 +970,7 @@ void kernel_main() {
                 ar_in_cb.pop_front(ar_ring_size * kLocalTiles);
 #endif
             }
+#endif
         } else {
             for (uint32_t blk = 0; blk < kNumBlocks; ++blk) {
                 const uint32_t first_expert = blk * experts_block;

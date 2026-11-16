@@ -778,9 +778,18 @@ inline void run_reader_loop(
         const uint32_t swiglu_tiles = i_tiles / (num_producers * i_shards_per_core);
         const uint32_t gate_up_slice_tiles = k_tiles * (2u * swiglu_tiles);
         const bool down_core = down_local != kNoDownShard;
+#if FE_GROUP_EXPERTS > 1
+        // Several rows: H-slice s of every group's down core d is summed on group s's core d (the slice's folder),
+        // from every group's per-expert slices (see the compute kernel), its own included.
+        const bool is_root = down_core && expert_group < shards_per_core;
+        const uint32_t reduce_tiles = num_expert_groups * (1u + FE_GROUP_EXPERTS) * kOutTilesPerCore;
+        const uint32_t reduce_writers = num_expert_groups;
+#else
         const bool is_root = expert_group == 0 && down_core;
         const uint32_t out_tiles = shards_per_core * kOutTilesPerCore;
         const uint32_t reduce_tiles = (num_expert_groups - 1u) * out_tiles;
+        const uint32_t reduce_writers = num_expert_groups - 1u;
+#endif
         // The group's shared-expert tiles follow its routed activation in the cb_act block, which
         // every group sizes for the largest share so the pages stay in step chip-wide.
         // FE_GROUP_EXPERTS > 1 (several-row requests): the block holds up to that many routed experts, the group's
@@ -885,8 +894,24 @@ inline void run_reader_loop(
             const bool routed_partner = kSplit > 1u && local_idx >= half && local_idx < half + num_producers;
             // Odd groups read their K-pieces in reverse: piece k of I-tile c sits on bank (6k + c) % 8, so in order
             // every group's first pieces load banks 0, 1, 4, 5 twice as hard as the rest; staggered, all 8 evenly.
-            const bool reverse_pieces = kSplit > 1u && (expert_group & 1u) != 0u;
+            // Several rows: by the expert's id parity instead (persistent.h kFeHdrPieceFlags), so an expert's K-piece
+            // order -- and so its activation, bit for bit -- does not depend on the group the union deals it to.
+            const bool group_reverse = kSplit > 1u && (expert_group & 1u) != 0u;
+#if FE_GROUP_EXPERTS > 1
+            CoreLocalMem<volatile uint32_t> hit_ids(CircularBuffer(cb_bcast_id).get_write_ptr());
+            auto reverse_of = [&](uint32_t j) { return kSplit > 1u && (hit_ids[hit_of(j)] & 1u) != 0u; };
+            if (swiglu_core || routed_partner) {
+                uint32_t flags = 0;
+                for (uint32_t j = 0; j < my_experts; ++j) {
+                    flags |= (reverse_of(j) ? 1u : 0u) << j;
+                }
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(FE_HDR_ADDR)[kFeHdrPieceFlags] = flags;
+            }
+#else
+            auto reverse_of = [&](uint32_t) { return group_reverse; };
+#endif
             for (uint32_t j = 0; j < my_experts; ++j) {
+                const bool reverse_pieces = reverse_of(j);
                 for (uint32_t s = 0; swiglu_core && s < i_shards_per_core; ++s) {
                     fetch_weight_one(
                         noc,
@@ -1139,7 +1164,7 @@ inline void run_reader_loop(
         }
 
         if (is_root) {
-            Semaphore<>(sem_reduce_id).wait((num_expert_groups - 1u) * (iter + 1u));
+            Semaphore<>(sem_reduce_id).wait(reduce_writers * (iter + 1u));
             CircularBuffer cb_reduce(cb_reduce_id);
             cb_reduce.push_back(reduce_tiles);
         }

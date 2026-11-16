@@ -515,6 +515,64 @@ void kernel_main() {
                 return;
             }
 
+#if FE_GROUP_EXPERTS > 1
+#if !(defined(FE_ALL_REDUCE) && defined(FE_PERSISTENT))
+#error "several-row requests are the persistent op's"
+#endif
+            {
+                // Several rows: H-slice s's block -- [shared | expert 0 | ... | expert n-1], kOutTiles each, the
+                // compute's per-expert terms -- goes to the slice's folder (group s's core of this down slot), at
+                // this group's place in its cb_reduce.
+                DeviceZoneScopedN("FE_W_FOLD_SEND");
+                constexpr uint32_t kSliceBlock = (1u + FE_GROUP_EXPERTS) * kOutTiles;
+                constexpr uint32_t kSliceBytes = kSliceBlock * out_tile_bytes;
+                const uint32_t group_hits = fe_group_hits(fe_wait_hits(iter), expert_group, num_expert_groups);
+                const uint32_t send_bytes = (1u + group_hits) * kOutTiles * out_tile_bytes;
+                cb_down_out.wait_front(shards_per_core * kSliceBlock);
+                for (uint32_t s = 0; s < shards_per_core; ++s) {
+                    noc.async_write(
+                        cb_down_out,
+                        UnicastEndpoint{},
+                        send_bytes,
+                        {.offset_bytes = s * kSliceBytes},
+                        {.noc_x = get_arg_val<uint32_t>(kAggArg + 4u + 2u * s),
+                         .noc_y = get_arg_val<uint32_t>(kAggArg + 5u + 2u * s),
+                         .addr = reduce_base + expert_group * kSliceBytes});
+                }
+                noc.async_write_barrier();
+                for (uint32_t s = 0; s < shards_per_core; ++s) {
+                    Semaphore<>(sem_reduce_id)
+                        .up(noc,
+                            get_arg_val<uint32_t>(kAggArg + 4u + 2u * s),
+                            get_arg_val<uint32_t>(kAggArg + 5u + 2u * s),
+                            1);
+                }
+                cb_down_out.pop_front(shards_per_core * kSliceBlock);
+            }
+            if (expert_group < shards_per_core) {
+                // This core folds H-slice expert_group of its down slot: the sum goes to its columns of the slot's
+                // place in the link sender's staging.
+                DeviceZoneScopedN("FE_W_FOLD_OUT");
+                constexpr uint32_t core_bytes = shards_per_core * kOutTiles * out_tile_bytes;
+                CircularBuffer cb_fold(FE_CB_ACC);
+                cb_fold.wait_front(kOutTiles);
+                noc.async_write(
+                    cb_fold,
+                    UnicastEndpoint{},
+                    kOutTiles * out_tile_bytes,
+                    {.offset_bytes = 0},
+                    {.noc_x = ar_sender_noc_x,
+                     .noc_y = ar_sender_noc_y,
+                     .addr = ar_scratch_addr + ((iter & 1u) * ar_staging_slots + ar_staging_slot) * core_bytes +
+                             expert_group * kOutTiles * out_tile_bytes});
+                noc.async_write_barrier();
+                Semaphore<>(sem_ar_ready_id).up(noc, ar_sender_noc_x, ar_sender_noc_y, 1);
+                cb_fold.pop_front(kOutTiles);
+            }
+            (void)ar_slot;
+            (void)ar_out_ready_addrs;
+            (void)out_staging_addr;
+#else
             constexpr uint32_t kLocalTiles = shards_per_core * kOutTiles;
             cb_down_out.wait_front(kLocalTiles);
             if (expert_group == 0) {
@@ -614,6 +672,7 @@ void kernel_main() {
                 noc_semaphore_set(out_ready, 0);
             }
 #endif
+#endif  // FE_GROUP_EXPERTS > 1
         } else {
             if (swiglu_core) {
                 for (uint32_t blk = 0; blk < kNumBlocks; ++blk) {
