@@ -11,7 +11,9 @@ PYTHONPATH (ttnn still comes from this build):
   git worktree add --detach /tmp/int hub/integration; mkdir /tmp/intpath; ln -s /tmp/int/models /tmp/intpath/models
   PYTHONPATH=/tmp/intpath:$PWD python .../greedy_agreement.py ref.json
 The second argument selects decoder paths on code that has the WS2 switches: "ws2" (default) or "base" (WS2
-batch-1 attention and norm paths off at runtime); code without them ignores it.
+batch-1 attention and norm paths off at runtime); code without them ignores it. Mode "b<N>" (with a reference;
+WS1) teacher-forces the reference tokens through ONE batched decode of N users (the prompts repeated over the
+slots, which then sit at different positions) and scores every slot's top-1 against its prompt's next token.
 """
 import json
 import sys
@@ -32,6 +34,31 @@ PROMPTS = [
 REF = None
 
 
+def batched_agreement(gen, prompts, refs, batch):
+    """Teacher-forced top-1 agreement of one ``batch``-user decode (WS1): slot s decodes prompt s % len(prompts)."""
+    slots = [s % len(prompts) for s in range(batch)]
+    steps = min(len(r) for r in refs) - 1
+    longest = max(len(p) for p in prompts)
+    caches, table = gen.model.allocate_cache(slots=batch, context=-(-(longest + steps + 32) // 32) * 32)
+    tokens = torch.zeros(batch, longest, dtype=torch.int64)
+    lengths = [len(prompts[p]) for p in slots]
+    for s, p in enumerate(slots):
+        tokens[s, : lengths[s]] = torch.tensor(prompts[p])
+    gen._release_trace()
+    gen.prefill_forward(tokens, page_table=table, kv_cache=caches, prompt_lens=lengths, slots=list(range(batch)))
+    matches = [0] * batch
+    for t in range(steps):
+        ids = torch.tensor([refs[p][t] for p in slots])
+        pos = torch.tensor([lengths[s] + t for s in range(batch)], dtype=torch.int32)
+        out = gen.decode_forward(ids, pos, page_table=table, kv_cache=caches, return_logits=True)
+        top = gen._read_logits(out)[..., :batch, :].reshape(batch, -1).argmax(-1)
+        for s, p in enumerate(slots):
+            matches[s] += int(top[s]) == refs[p][t + 1]
+    gen._release_trace()
+    del caches
+    return [m / steps for m in matches]
+
+
 def main():
     global REF
     out = sys.argv[1]
@@ -50,6 +77,23 @@ def main():
             for layer in gen.model.layers
         ]
         for mode in modes:
+            if mode[0] == "b" and mode[1:].isdigit():
+                assert REF is not None, "batched mode scores against a reference"
+                texts = list(REF)
+                prompts = [
+                    tok.encode(
+                        tok.apply_chat_template(
+                            [{"role": "user", "content": t}], add_generation_prompt=True, tokenize=False
+                        ),
+                        add_special_tokens=False,
+                    )
+                    for t in texts
+                ]
+                per_slot = batched_agreement(gen, prompts, [REF[t] for t in texts], int(mode[1:]))
+                row = {"mode": mode, "per_slot_agreement": per_slot, "agreement": sum(per_slot) / len(per_slot)}
+                print("AGREEMENT", mode, f"{row['agreement']:.4f}", "min slot", f"{min(per_slot):.4f}", flush=True)
+                report["runs"].append(row)
+                continue
             for layer, (heads, norm) in zip(gen.model.layers, saved):
                 if heads is not None:  # ws2-glue code; integration code has neither switch
                     layer.layer.self_attn.fused_heads = heads and mode == "ws2"

@@ -6,6 +6,11 @@ Device 0, ops between the LAYER_<i>_START / _END signposts. The anchors below ma
 (GeneralizedRouter + indexed sparse_matmul experts); another router / expert path needs its own anchors, and the
 script raises StopIteration rather than mislabel when an anchor is missing.
 
+The WS1 batched path (2-32 users) is recognised by the RouterTopk generic op between the FP32 unshard and the
+first SparseMatmul: router = the unshard's successors up to and including RouterTopk, except the expert-input
+multiply (FP32 x FP32 -> BF16); experts = first SparseMatmul through MoeCombine (the generic op after the second
+SparseMatmul).
+
 Scope rules (sliding and full layers have the same structure):
   bench   - the layer_bench input reshard (DRAM interleaved -> sharded); in the model the residual arrives sharded
   router  - from the router's scaled projection input (first FP32 BinaryNg after the FP32 unshard) up to the first
@@ -53,15 +58,25 @@ for name, ops in sections.items():
         for i, o in enumerate(ops)
         if o["OP CODE"].startswith("ShardedToInterleaved") and o.get("OUTPUT_0_DATATYPE") == "FLOAT32"
     )
+    batched = any(ops[i]["OP CODE"].startswith("GenericOp") for i in range(unshard + 1, first_sparse))
     for i in range(unshard + 1, first_sparse):
         o = ops[i]
-        expert_input = o["OP CODE"].startswith("BinaryNg") and o.get("OUTPUT_0_DATATYPE") == "BFLOAT8_B"
+        out_dtype = o.get("OUTPUT_0_DATATYPE")
+        expert_input = o["OP CODE"].startswith("BinaryNg") and (
+            out_dtype == "BFLOAT8_B" or (batched and out_dtype == "BFLOAT16" and o.get("INPUT_0_DATATYPE") == "FLOAT32")
+        )
         labels[i] = "ws2" if expert_input else "router"
-    mix = next(
-        i
-        for i in range(first_sparse, len(ops))
-        if ops[i]["OP CODE"].startswith("Matmul") and ops[i].get("INPUT_0_X_PAD[LOGICAL]", "").startswith("32[")
-    )
+    if batched:
+        second_sparse = next(
+            i for i in range(first_sparse + 1, len(ops)) if ops[i]["OP CODE"].startswith("SparseMatmul")
+        )
+        mix = next(i for i in range(second_sparse + 1, len(ops)) if ops[i]["OP CODE"].startswith("GenericOp"))
+    else:
+        mix = next(
+            i
+            for i in range(first_sparse, len(ops))
+            if ops[i]["OP CODE"].startswith("Matmul") and ops[i].get("INPUT_0_X_PAD[LOGICAL]", "").startswith("32[")
+        )
     for i in range(first_sparse, mix + 1):
         labels[i] = "experts"
     count = defaultdict(int)
