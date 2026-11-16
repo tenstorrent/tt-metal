@@ -1457,13 +1457,67 @@ TEST_F(DriscService, SameBankSingleRunsAsLocal) {
     expect_all_stopped({0});
 }
 
+// The control page carries the heartbeat often enough for a host watchdog, and done_count() follows completed().
+TEST_F(DriscService, ControlPageCarriesHeartbeatAndDoneCount) {
+    std::optional<Client> client;
+    attach(client, {0});
+    SeatClient& seat = client->seat(0, 0);
+    using clock = std::chrono::steady_clock;
+    uint32_t last = seat.heartbeat();
+    uint32_t changes = 0;
+    auto last_change = clock::now();
+    auto longest = clock::duration::zero();
+    for (const auto end = last_change + std::chrono::seconds(1); clock::now() < end;) {
+        if (const uint32_t value = seat.heartbeat(); value != last) {
+            const auto now = clock::now();
+            longest = std::max(longest, now - last_change);
+            last_change = now;
+            last = value;
+            changes++;
+        }
+    }
+    longest = std::max(longest, clock::now() - last_change);
+    EXPECT_GT(changes, 10u) << "the control page heartbeat barely moved in 1 s";
+    EXPECT_LT(longest, std::chrono::milliseconds(50))
+        << "the control page heartbeat stood still for "
+        << std::chrono::duration_cast<std::chrono::milliseconds>(longest).count() << " ms";
+
+    Exerciser exerciser(device(), *client, 1, 9);
+    for (uint32_t i = 0; i < 4; i++) {
+        ASSERT_EQ(exerciser.round(0, 0, Op::local, 4, true), "");
+    }
+    EXPECT_EQ(seat.done_count(), 4u) << "one batch per round";
+    EXPECT_EQ(seat.done_count(), static_cast<uint32_t>(seat.completed()));
+}
+
+// A seat's NIUs keep whatever mode they were left in, such as NOC2AXI on both after a chip reset before any tt-metal
+// open: the kernel sets the seat's layout when it boots.
+TEST_F(DriscService, KernelSetsNiuModesAtBoot) {
+    for (const Seat& seat : device().seats(0)) {
+        const std::array<uint32_t, 2> cfg = device().core(seat).read_niu_cfg();
+        for (uint32_t niu = 0; niu < cfg.size(); niu++) {
+            const uint32_t noc2axi = cfg[niu] | niu_cfg_noc2axi;
+            device().umd.write_to_device_reg(
+                &noc2axi, sizeof(noc2axi), chip_id, seat.translated, NOC_CFG(NIU_CFG_0) + niu * NOC_INSTANCE_OFFSET);
+        }
+    }
+    std::optional<Client> client;
+    attach(client, {0});
+    Exerciser exerciser(device(), *client, 1, 11);
+    for (uint32_t noc = 0; noc < 2; noc++) {
+        EXPECT_EQ(exerciser.round(0, noc, Op::d2h, 4, true), "") << "NoC" << noc;
+    }
+    client.reset();
+    expect_all_stopped({0});
+}
+
 // A kernel that stops beating while it serves a client is not relaunched under it by a joining client, and is
 // relaunched by the next client that holds the seat alone.
 TEST_F(DriscService, HungKernelIsRelaunchedOnlyBySoleClient) {
     std::optional<Client> first;
     attach(first, {0});
     const Seat seat = first->seat(0, 0).seat();
-    device().core(seat).force_stop(seat.noc2axi_mask);
+    device().core(seat).force_stop();
     ASSERT_EQ(first->seat(0, 0).state(), abi::SERVICE_RUNNING) << "the forced stop changed the kernel's state word";
     ASSERT_FALSE(heartbeat_moves(first->seat(0, 0))) << "the kernel kept running through a forced stop";
 
