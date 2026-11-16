@@ -58,6 +58,20 @@ void kernel_main() {
             staging.get_noc_addr(kv_index, face * tile_face_bytes),
             block_face_bytes);
     }
+#ifdef COMMIT_ROWS
+    // The same rows ROW_MAJOR into commit_rows (one core's [rows, head_dim] shard, a row a page): this core's 32
+    // columns of row j are face 0's row j then face 1's.
+    constexpr uint32_t commit_half_bytes = 16 * 2;
+    const auto commit = TensorAccessor(tensor::commit_rows);
+    for (uint32_t j = 0; j < rows; ++j) {
+        for (uint32_t face = 0; face < 2; ++face) {
+            noc_async_write(
+                block_addr + face * block_face_bytes + j * commit_half_bytes,
+                commit.get_noc_addr(j, kv_index * 2 * commit_half_bytes + face * commit_half_bytes),
+                commit_half_bytes);
+        }
+    }
+#endif
     noc.async_write_barrier();
     out_cb.pop_front(1);
     return;

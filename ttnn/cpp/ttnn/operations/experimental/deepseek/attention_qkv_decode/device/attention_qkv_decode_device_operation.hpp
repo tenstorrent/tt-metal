@@ -85,6 +85,9 @@ struct AttentionQkvDecodeDeviceOperation {
         // compressor-column core, read from DRAM whether or not the other weights come through pipes.
         std::optional<Tensor> w_comp;
         std::optional<Tensor> comp_output;
+        // A block only: its kv rows also written ROW_MAJOR into commit_rows ([1, 1, h, head_dim] bfloat16, L1
+        // HEIGHT_SHARDED on one core, shard [h, head_dim]): paged_update_cache's input for the ring commit.
+        std::optional<Tensor> commit_rows;
     };
 
     using spec_return_value_t = tt::tt_metal::TensorSpec;
@@ -124,6 +127,7 @@ ttnn::Tensor attention_qkv_decode(
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
     const ttnn::PrefetcherPipeList& prefetcher_pipes,
     const std::optional<ttnn::Tensor>& w_comp,
-    const std::optional<ttnn::Tensor>& comp_output);
+    const std::optional<ttnn::Tensor>& comp_output,
+    const std::optional<ttnn::Tensor>& commit_rows = std::nullopt);
 
 }  // namespace ttnn::prim
