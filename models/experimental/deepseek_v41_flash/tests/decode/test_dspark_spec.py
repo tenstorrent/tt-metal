@@ -98,8 +98,12 @@ BLOCK_ROWS = 4
 # bits whatever the other rows of its block route to), but a token's logits still depend on where its block starts:
 # the same stream teacher-forced at the four block alignments disagrees on ~2-3% of tokens by up to ~1.4 logits
 # (measured with DEEPSEEK_V4_SPEC_ALIGN_CONTROL=1; 300 tokens, after the MoE fix: spec runs' worst 1.25, the
-# alignments' 1.375), so a spec run, whose blocks start wherever the last round ended, does too.
-NEAR_TIE = float(os.environ.get("DEEPSEEK_V4_SPEC_NEAR_TIE", "1.5"))
+# alignments' 1.375), so a spec run, whose blocks start wherever the last round ended, does too. Over a whole run the
+# noise has a tail: the per-layer replay (DEEPSEEK_V4_SPEC_REPLAY=1) shows the kept rows bit-identical whatever the
+# rejected rows hold, while the two alignments' logits differ by 1.3 median / 5.4 max, and a default-prompt run's worst
+# deficit reached 2.125. The bit-exact checks (the replay, the probing oracle) are the correctness gates; this bound
+# only flags gross errors.
+NEAR_TIE = float(os.environ.get("DEEPSEEK_V4_SPEC_NEAR_TIE", "2.5"))
 # Also teacher-force each checked stream with the blocks shifted by 1..3 positions: the alignment noise floor.
 ALIGN_CONTROL = os.environ.get("DEEPSEEK_V4_SPEC_ALIGN_CONTROL", "0") == "1"
 # Block verify: the bitwise rollback check (rejected rows leave no trace), before the spec runs.
