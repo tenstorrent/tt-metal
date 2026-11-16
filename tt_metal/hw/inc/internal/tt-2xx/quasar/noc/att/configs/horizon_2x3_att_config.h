@@ -61,6 +61,19 @@ constexpr noc_att::Window REMOTE_WINDOW{
     .translate_address = true,
 };  // mask-table slot 1, BAR 0
 
+// GLOBAL reaches any flat address F, a crossbar address below 2^39, at
+// compare | (exit << 40) | F. The selector, bit 40, picks the NOC2AXI the
+// request leaves through, (0,2) or (1,2) (a split device has only its own),
+// and translation keeps bits 39:0, so F reaches the crossbar unchanged.
+constexpr noc_att::Window GLOBAL_WINDOW{
+    .compare = 0x20000000000ull,
+    .mask_bits = 41,
+    .endpoint_shift = 40,
+    .endpoint_size = 1,
+    .endpoint_table_offset = 5,
+    .translate_address = true,
+};  // BAR 0
+
 // Every operand for this initiator's own L1 is LOCAL_WINDOW_BASE | local_address.
 constexpr std::uint64_t LOCAL_WINDOW_BASE = LOCAL_WINDOW.make_address(/*selector*/ 0, /*local_address*/ 0);
 static_assert(LOCAL_WINDOW_BASE == 0x1800000000ull);

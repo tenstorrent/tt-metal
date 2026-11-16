@@ -39,12 +39,12 @@ static constexpr uint32_t MAX_HORIZON_DEVS_PER_MESH = 56;  // (2704-16)/(2*3*8) 
 static constexpr uint32_t MAX_HORIZON_NOC_X = 2;           // from horizon_2x3_att_config.h
 static constexpr uint32_t MAX_HORIZON_NOC_Y = 3;           // from horizon_2x3_att_config.h
 // ATT window constants — from horizon_2x3_att_config.h; update if the ATT config changes.
-static constexpr uint64_t HORIZON_LOCAL_WINDOW_COMPARE = 0x1800000000ULL;   // LOCAL_WINDOW.compare
-static constexpr uint32_t HORIZON_LOCAL_WINDOW_MASK_BITS = 33;              // LOCAL_WINDOW.mask_bits
 static constexpr uint64_t HORIZON_REMOTE_WINDOW_COMPARE = 0x1000000000ULL;  // REMOTE_WINDOW.compare
-static constexpr uint32_t HORIZON_REMOTE_WINDOW_MASK_BITS = 32;             // REMOTE_WINDOW.mask_bits
 static constexpr uint32_t HORIZON_REMOTE_ENDPOINT_SHIFT = 26;               // REMOTE_WINDOW.endpoint_shift
 static constexpr uint32_t HORIZON_ATT_WORKER_GRID_X = 2;                    // ATT_WORKER_GRID_X
+static constexpr uint64_t HORIZON_GLOBAL_WINDOW_COMPARE = 0x20000000000ULL; // GLOBAL_WINDOW.compare
+static constexpr uint32_t HORIZON_GLOBAL_WINDOW_MASK_BITS = 41;             // GLOBAL_WINDOW.mask_bits
+static constexpr uint32_t HORIZON_GLOBAL_EXIT_SHIFT = 40;                   // GLOBAL_WINDOW.endpoint_shift
 
 constexpr std::uint8_t USE_DYNAMIC_CREDIT_ADDR = 255;
 
