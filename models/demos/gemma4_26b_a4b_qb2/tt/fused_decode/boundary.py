@@ -48,13 +48,26 @@ class GemmaBoundary:
     CB_A, CB_B, CB_SS, CB_RS, CB_NB = 8, 9, 10, 11, 12
     CB_RES_OUT, CB_O0 = 16, 17  # outputs CB_O0 .. CB_O0 + 2
 
-    def __init__(self, mesh, hidden, eps, *, core=(0, 0), shared_dtype=ttnn.float32, round_n=True, flat_moe=False):
+    def __init__(
+        self,
+        mesh,
+        hidden,
+        eps,
+        *,
+        core=(0, 0),
+        shared_dtype=ttnn.float32,
+        round_n=True,
+        flat_moe=False,
+        flat_router=False,
+    ):
         """round_n: the attn boundary rounds its normed vector to BF16 before the router / expert / shared scales (as
         the ttnn RMSNorm output of the unfused path); False keeps it FP32. flat_moe: expert_in and shared_in are flat
         BF16 vectors on the boundary core (moe_decode x_flat consumers) instead of row 0 of TILE tensors."""
         self.round_n = round_n
         self.flat_moe = flat_moe
+        self.flat_router = flat_router  # router_in flat FP32 on the boundary core (fused_decode/router.py)
         assert not flat_moe or shared_dtype == ttnn.bfloat16
+        assert not flat_router or flat_moe
         self.mesh = mesh
         self.hidden, self.eps = hidden, eps
         self.ring = mesh.shape[1]
@@ -106,7 +119,7 @@ class GemmaBoundary:
 
         # Consumer inputs: row 0 rewritten by every boundary, rows 1..31 zero.
         self.qkv_in = rows(ttnn.bfloat16)
-        self.router_in = rows(ttnn.float32)
+        self.router_in = flat(self.T, ttnn.float32) if flat_router else rows(ttnn.float32)
         # shared_in: the plain normed vector (shared-MLP gamma folded into its weights)
         self.expert_in = flat(self.T) if flat_moe else rows(ttnn.bfloat16)
         self.shared_in = flat(self.T) if flat_moe else rows(shared_dtype)
@@ -216,7 +229,7 @@ class GemmaBoundary:
         vft = vf if vf is not None else gamma
         reader_ct = [self.CB_PART, self.CB_RES, self.CB_RECV, self.CB_G, self.CB_SCALER, self.CB_VF, T, npart]
         reader_ct += [slots, self.ring, 1 if mode == 0 else 0, self.htiles, gcount, 1 if vf is not None else 0]
-        o = list(outs) + [outs[0]] * (3 - len(outs))
+        o = list(outs) + [outs[0] if outs else self.qkv_in] * (3 - len(outs))
         reader_ct += [self.CB_SYNC, 1 if pregathered else 0, len(outs), self.CB_O0, fp32_mask]
         reader_ct += acc(p0) + acc(p1) + acc(gamma) + acc(vft) + acc(o[0]) + acc(o[1]) + acc(o[2])
         reader_rt = ttnn.RuntimeArgs()
@@ -327,10 +340,10 @@ class GemmaBoundary:
             3 if shared_gamma else 2,
             self.res[0],
             self.res[1],
-            outs[:1] if self.flat_moe else outs,
+            [] if self.flat_router else (outs[:1] if self.flat_moe else outs),
             vf=router_scale,
             out2_gamma=shared_gamma,
-            flat_outs=outs[1:] if self.flat_moe else (),
+            flat_outs=outs if self.flat_router else (outs[1:] if self.flat_moe else ()),
         )
         return self.router_in, self.expert_in, self.shared_in
 
