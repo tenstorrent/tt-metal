@@ -352,11 +352,12 @@ def fused_norms(qa_g, kv, qw, kvw, eps, mc_q=None):
     S = int(qa_g.shape[2])
     assert 1 <= S <= 8 and int(qa_g.shape[3]) == 2048 and int(kv.shape[3]) == 576 and int(kv.shape[2]) == S
     bf, f32 = ttnn.bfloat16, ttnn.float32
-    mq = mc_q or ttnn.DRAM_MEMORY_CONFIG
-    if (
-        os.environ.get("HY4_NORM_OUT", "") == "dram"
-    ):  # B22fix diagnostic: outputs in DRAM regardless of the model's L1 choice
-        mq = ttnn.DRAM_MEMORY_CONFIG
+    # B22fix: the three outputs (6 KB per L1 bank, rewritten by every layer of a decode trace) default to DRAM. In L1 they sit in the topmost few KB of the L1 buffer region, which is also where persistent L1 buffers
+    # created lazily AFTER the trace captures land (GlobalSemaphores of new all_gather / all_broadcast workloads of longer prompts): the next trace replay overwrote one and the following prefill hung on it
+    # (RESULT_B22FIX.md). HY4_NORM_OUT=l1 restores the model's L1 choice (the original B22 behaviour; do not use in a server). Numerics identical, cost +0.02 ms at NL=16 (8.77 -> 8.79).
+    mq = (
+        ttnn.DRAM_MEMORY_CONFIG if os.environ.get("HY4_NORM_OUT", "dram") != "l1" else (mc_q or ttnn.DRAM_MEMORY_CONFIG)
+    )
     qa = ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, S, 2048]), bf, ttnn.TILE_LAYOUT, md, mq)
     lat = ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, S, 512]), bf, ttnn.TILE_LAYOUT, md, mq)
     kpe = ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, S, 64]), bf, ttnn.TILE_LAYOUT, md, mq)
