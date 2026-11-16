@@ -478,6 +478,8 @@ ttnn/cpp/ttnn/operations/experimental/slice_write/ @tenstorrent/metalium-develop
 ttnn/cpp/ttnn/operations/experimental/slice_write/**/CMakeLists.txt @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/metalium-developers-infra
 ttnn/cpp/ttnn/operations/experimental/sparse_kv_push/ @tenstorrent/metalium-developers-ds-prefill
 ttnn/cpp/ttnn/operations/experimental/sparse_kv_push/**/CMakeLists.txt @tenstorrent/metalium-developers-ds-prefill @tenstorrent/metalium-developers-infra
+ttnn/cpp/ttnn/operations/experimental/tensor_prefetcher/ @tenstorrent/metalium-developers-ops-leads @tenstorrent/metalium-runtime-performance
+ttnn/cpp/ttnn/operations/experimental/tensor_prefetcher/**/CMakeLists.txt @tenstorrent/metalium-developers-ops-leads @tenstorrent/metalium-developers-infra @tenstorrent/metalium-runtime-performance
 ttnn/cpp/ttnn/operations/experimental/topk_large_indices/ @tenstorrent/metalium-developers-sdpa
 ttnn/cpp/ttnn/operations/experimental/transformer/dit_layernorm_post_all_gather/ @tenstorrent/metallium-maintainers-llama-models
 ttnn/cpp/ttnn/operations/experimental/transformer/dit_layernorm_pre_all_gather/ @tenstorrent/metallium-maintainers-llama-models
