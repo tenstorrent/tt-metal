@@ -13,7 +13,7 @@ import ttnn
 from ...blocks.attention_opt import Attention
 from ...blocks.transformer_block_opt import TransformerBlock
 from ...layers.embeddings import CombinedTimestepGuidanceTextProjEmbeddings
-from ...layers.linear import ColParallelLinear, RowParallelLinear, prepare_chunked_linear_output
+from ...layers.linear import ColParallelLinear, Linear, RowParallelLinear, prepare_chunked_linear_output
 from ...layers.module import Module, ModuleList
 from ...layers.normalization import DistributedLayerNorm
 from ...utils.substate import rename_substate
@@ -302,16 +302,11 @@ class Flux2Transformer(Module):
             row_capacity=row_capacity,
         )
 
-        self.proj_out = RowParallelLinear(
-            inner_dim,
-            out_channels,
-            bias=False,
-            mesh_device=device,
-            mesh_axis=tp_axis,
-            ccl_manager=ccl_manager,
-            # No explicit L1 mm_memory_config: this layer's fused path uses the rolling-window L1
-            # handoff by default, and its plain forward never read mm_memory_config.
-        )
+        # Replicated rather than split over TP: its input is all-gathered on the channels, which
+        # takes the token count at run time. A split layer would reduce-scatter its 128 output
+        # channels over the token rows (too few channels to scatter over TP 8), and that
+        # reduce-scatter compiles a program per token count. The weights are 0.75 MB.
+        self.proj_out = Linear(inner_dim, out_channels, bias=False, mesh_device=device)
 
         self.device = device
         self._ccl_manager = ccl_manager
@@ -449,4 +444,5 @@ class Flux2Transformer(Module):
             self.norm_out(ttnn.unsqueeze(spatial, 0), dynamic_weight=norm_out_scale, dynamic_bias=norm_out_shift), 0
         )
 
-        return self.proj_out(spatial, gather_output=True)
+        spatial = self._ccl_manager.all_gather(spatial, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=True)
+        return self.proj_out(spatial)
