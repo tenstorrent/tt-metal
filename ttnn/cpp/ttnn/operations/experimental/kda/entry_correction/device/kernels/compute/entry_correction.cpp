@@ -201,13 +201,21 @@ TT_KERNEL void compute() {
         seed_group.wait_front(state_tiles);
         seed_group_exact.wait_front(state_tiles);
     }
-    if (need_tail) {
-        seed_tail.wait_front(state_tiles);
-        seed_tail_exact.wait_front(state_tiles);
-    }
+    // The tail's seed lands after the group's: wait for it where it is first used.
+    bool tail_landed = !need_tail;
+    const auto wait_tail = [&]() {
+        if (!tail_landed) {
+            seed_tail.wait_front(state_tiles);
+            seed_tail_exact.wait_front(state_tiles);
+            tail_landed = true;
+        }
+    };
     const uint32_t group_id = seed_group.get_id();
     const uint32_t tail_id = seed_tail.get_id();
     for (uint32_t c = 0; c < chunks; ++c) {
+        if (c >= group_chunks) {
+            wait_tail();
+        }
         const uint32_t seed = c < group_chunks ? group_id : tail_id;
         // Tile index of this chunk's row in the terms and difference buffers.
         const uint32_t row = streamed ? 0 : c * kt;
@@ -278,6 +286,9 @@ TT_KERNEL void compute() {
     // registers, so the long-memory seed is never truncated to their precision. Each pass forms `columns` tiles of the
     // row in DST slots [0, columns), with the seed's tiles in [columns, 2 columns).
     if (final) {
+        if (final_tail) {
+            wait_tail();
+        }
         constexpr uint32_t columns = kda::largest_divisor_at_most(kt, dst_tiles / 2);
         const uint32_t seed = final_tail ? tail_id : group_id;
         const uint32_t seed_exact = final_tail ? seed_tail_exact.get_id() : seed_group_exact.get_id();
@@ -324,6 +335,7 @@ TT_KERNEL void compute() {
         seed_group_exact.pop_front(state_tiles);
     }
     if (need_tail) {
+        wait_tail();
         seed_tail.pop_front(state_tiles);
         seed_tail_exact.pop_front(state_tiles);
     }

@@ -100,6 +100,12 @@ TT_KERNEL void reader(
     writer_words[3] = final_stride;
     ctl_writer.push_back(1);
     ctl.push_back(1);
+    // The differences need no seed: they run while the seeds arrive.
+    if (!streamed && chunks != 0) {
+        // This core's chunk rows are in place in its shard of the emitted terms.
+        terms.reserve_back(2 * core_chunks * kt);
+        terms.push_back(2 * core_chunks * kt);
+    }
 
     if constexpr (norm) {
         dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
@@ -119,12 +125,12 @@ TT_KERNEL void reader(
     }
 
     // The head's first core reads the head's seeds and writes them to the head's other cores, at the same buffer
-    // address on each. Every core reading its own copy instead makes the K3 layer 17 us slower on Galaxy.
+    // address on each. Every core reading its own copy instead makes the K3 layer 17 us slower on Galaxy. Each seed is
+    // released as soon as it has landed: the group's, then the tail's, which only the chunks from the reset on need.
     Semaphore landed(sem::seed_landed);
-    const uint32_t seeds = need_group + need_tail;
-    if (seed_sender) {
-        const auto send = [&](auto& buffer, const auto& states) {
-            buffer.reserve_back(state_tiles);
+    const auto deliver = [&](auto& buffer, auto& exact, const auto& states, uint32_t landed_seeds) {
+        buffer.reserve_back(state_tiles);
+        if (seed_sender) {
             const uint32_t tile = buffer.get_entry_size();
             for (uint32_t i = 0; i < state_tiles; ++i) {
                 noc.async_read(states, buffer, tile, {.page_id = head * state_tiles + i}, {.offset_bytes = i * tile});
@@ -135,47 +141,26 @@ TT_KERNEL void reader(
                 const uint32_t xy = get_vararg(d);
                 noc_async_write(local, get_noc_addr(xy & 0xFFFF, xy >> 16, local), state_tiles * tile);
             }
-            buffer.push_back(state_tiles);
-        };
-        if (need_group) {
-            send(seed, TensorAccessor(tensor::entry));
-        }
-        if (need_tail) {
-            send(tail, TensorAccessor(tensor::tail_entry));
-        }
-        if (seeds != 0) {
             noc_async_write_barrier();
             for (uint32_t d = 0; d < seed_receivers; ++d) {
                 const uint32_t xy = get_vararg(d);
-                landed.up(noc, xy & 0xFFFF, xy >> 16, seeds);
+                landed.up(noc, xy & 0xFFFF, xy >> 16, 1);
             }
-            noc_async_atomic_barrier();
+        } else {
+            landed.wait_min(landed_seeds);
         }
-    } else if (seeds != 0) {
-        landed.wait_min(seeds);
-        if (need_group) {
-            seed.reserve_back(state_tiles);
-            seed.push_back(state_tiles);
-        }
-        if (need_tail) {
-            tail.reserve_back(state_tiles);
-            tail.push_back(state_tiles);
-        }
-    }
-    // The seeds have landed (read here, or written by the head's first core): their exact views are ready too.
+        buffer.push_back(state_tiles);
+        // The seed's exact view: the same storage.
+        exact.reserve_back(state_tiles);
+        exact.push_back(state_tiles);
+    };
     if (need_group) {
-        seed_exact.reserve_back(state_tiles);
-        seed_exact.push_back(state_tiles);
+        deliver(seed, seed_exact, TensorAccessor(tensor::entry), 1);
     }
     if (need_tail) {
-        tail_exact.reserve_back(state_tiles);
-        tail_exact.push_back(state_tiles);
+        deliver(tail, tail_exact, TensorAccessor(tensor::tail_entry), 2);
     }
-    if (!streamed && chunks != 0) {
-        // This core's chunk rows are in place in its shard of the emitted terms.
-        terms.reserve_back(2 * core_chunks * kt);
-        terms.push_back(2 * core_chunks * kt);
-    }
+    noc_async_atomic_barrier();
     // Streamed, each chunk's F(0) row then its F(I) row: head h's F(0) rows are tile rows h * 2 * num_chunks + chunk
     // of the terms, its F(I) rows num_chunks further. With the norm, each chunk's gate row too.
     constexpr uint32_t num_chunks = local_rows / 32;
