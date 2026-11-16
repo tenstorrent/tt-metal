@@ -291,6 +291,21 @@ def test_zeros(device, input_shape):
     assert torch.allclose(torch_tensor, tensor)
 
 
+@pytest.mark.parametrize("fill_value", [2147483648, 3000000001, 4294967295])
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+def test_full_uint32_fill_above_int32_max(device, fill_value, layout):
+    expected = torch.full([32, 64], fill_value, dtype=torch.int64)
+
+    tensor = ttnn.full([32, 64], fill_value, dtype=ttnn.uint32, layout=layout, device=device)
+    assert torch.equal(ttnn.to_torch(tensor).to(torch.int64) & 0xFFFFFFFF, expected)
+
+    input_tensor = ttnn.from_torch(
+        torch.zeros([32, 64], dtype=torch.int32), dtype=ttnn.uint32, layout=layout, device=device
+    )
+    tensor = ttnn.full_like(input_tensor, fill_value)
+    assert torch.equal(ttnn.to_torch(tensor).to(torch.int64) & 0xFFFFFFFF, expected)
+
+
 @pytest.mark.parametrize(
     "input_shape",
     [
