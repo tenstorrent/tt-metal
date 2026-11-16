@@ -15,7 +15,6 @@ from models.demos.deepseek_v3_d_p.reference.kda.config import KDA_SOFTPLUS_BETA,
 from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDA_CHUNK_SIZE,
     KDA_DECAY_L1_BYTES_PER_CORE,
-    KDA_DECAY_LOGITS_L1_BYTES_PER_CORE,
     KDA_HISTORY_EXCHANGE_ROWS,
     KDA_HISTORY_EXCHANGE_SEMAPHORES,
     KDA_NORM_OUTPUT_L1_BYTES_PER_CORE,
@@ -359,14 +358,12 @@ class ttKDA:
             self.active_seq_len_local,
             self.config.head_k_dim,
             decay_width,
+            # The bounded gate's sigmoid runs in the projection after its fused offset add (_compute_decay).
+            fused_activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID) if self._bounded_gate else None,
         )
         # The prepared chunk terms read the decay gate; L1 spares its DRAM round trip.
         self.decay_memory_config = l1_when_it_fits(
             mesh_device, self.active_seq_len_local * decay_width * 2, KDA_DECAY_L1_BYTES_PER_CORE
-        )
-        # The bounded gate's FP32 logits (4 bytes per element) between the projection and the offset add.
-        self.decay_logits_memory_config = l1_when_it_fits(
-            mesh_device, self.active_seq_len_local * decay_width * 4, KDA_DECAY_LOGITS_L1_BYTES_PER_CORE
         )
         # Experimental KDA operations reject packer_l1_acc=True: kernels that accumulate in L1 enable it
         # themselves. Keep this separate from projection matmuls, which accept the flag.
@@ -555,46 +552,21 @@ class ttKDA:
         The low-rank activations are read in place from the fused projection's columns at ``decay_rank_offset``.
         """
         weights = self.weights
-        if not self._bounded_gate:
-            gate = ttnn.linear(
-                projected,
-                weights.decay_output_projection,
-                bias=weights.decay_bias_flat,
-                program_config=self.decay_program_config,
-                memory_config=self.decay_memory_config,
-                compute_kernel_config=self.compute_config,
-                in0_column_offset=decay_rank_offset,
-            )
-            return self._softplus_decay(gate)
-        # sigmoid(r @ (A f_b) + A dt_bias) with A folded into the weights: FP32 logits plus the FP32 offset, one rounding
-        # to the BF16 gate; see _FP32_ARTIFACTS in tt/kda/weights.py. The gate is allocated before the logits so that
-        # the freed logits leave their L1 next to the circular buffers rather than below the gate.
-        # Indexed, not iterated: iterating a ttnn.Shape ends in an exception.
-        projected_shape = projected.shape
-        gate = ttnn.allocate_tensor_on_device(
-            ttnn.Shape([projected_shape[0], projected_shape[1], weights.decay_output_projection.shape[-1]]),
-            ttnn.bfloat16,
-            ttnn.TILE_LAYOUT,
-            self.device,
-            self.decay_memory_config,
-        )
-        logits = ttnn.linear(
+        gate = ttnn.linear(
             projected,
             weights.decay_output_projection,
+            bias=weights.decay_bias_flat,
             program_config=self.decay_program_config,
-            dtype=ttnn.float32,
-            memory_config=self.decay_logits_memory_config,
+            memory_config=self.decay_memory_config,
+            dtype=ttnn.bfloat16,
             compute_kernel_config=self.compute_config,
             in0_column_offset=decay_rank_offset,
         )
-        ttnn.add(
-            logits,
-            weights.decay_bias_flat,
-            activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID)],
-            memory_config=self.decay_memory_config,
-            output_tensor=gate,
-        )
-        ttnn.deallocate(logits)
+        if not self._bounded_gate:
+            return self._softplus_decay(gate)
+        # sigmoid(r @ (A f_b) + A dt_bias) with A folded into the weights, all in the projection: the program config's
+        # fused sigmoid follows the FP32 offset add on the FP32-accumulated logits, then one rounding to the BF16 gate;
+        # see _FP32_ARTIFACTS in tt/kda/weights.py.
         return gate
 
     def _softplus_decay(self, gate: ttnn.Tensor) -> ttnn.Tensor:
