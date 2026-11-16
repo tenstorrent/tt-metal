@@ -34,6 +34,27 @@ from models.demos.gemma4_26b_a4b_qb2.tt.precision_policy import fidelity_name
 from models.demos.gemma4_26b_a4b_qb2.tt.routing_precision import Router
 from models.demos.gpt_oss.tt.ccl import CCLManager
 
+# WS2 glue cut (perf/WS2.md). Each switch defaults on; "0" restores the previous decode path for A/B runs.
+WS2_HEADS = os.environ.get("GEMMA4_26B_WS2_HEADS", "1") != "0"
+
+
+class DecodeRopeRows:
+    """Position-gathered decode RoPE rows ``cos / sin [1, 1, B, head_dim]`` (bf16 TILE, row u = user u).
+
+    The model gathers them once per decode step and layer type; layers given the raw ``[context, head_dim]``
+    tables gather them themselves."""
+
+    def __init__(self, cos, sin):
+        self.cos, self.sin = cos, sin
+
+    @staticmethod
+    def gather(tables, position_idx):
+        if isinstance(tables, DecodeRopeRows):
+            return tables
+        return DecodeRopeRows(
+            *(ttnn.unsqueeze_to_4D(ttnn.embedding(position_idx, table, layout=ttnn.TILE_LAYOUT)) for table in tables)
+        )
+
 
 class _MeshCCLManager(CCLManager):
     """Cover every worker that native CCL may choose on this mesh."""
@@ -153,7 +174,7 @@ class _Projection:
             weight, compute, mesh, block_w=8 if sliding else 16, block_h=4 if sliding else 2
         )
 
-    def __call__(self, x):
+    def __call__(self, x, *, dtype=ttnn.float32):
         if x.shape[-2] > 1:
             return self.prefill(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         if getattr(self, "input_bfp8", False):
@@ -161,9 +182,9 @@ class _Projection:
         if self.decode_dram is not None:
             return self.decode_dram(x, compute=self.decode_compute, memory_config=ttnn.L1_MEMORY_CONFIG)
         return ttnn.linear(
-            ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG),
+            x if x.memory_config() == ttnn.L1_MEMORY_CONFIG else ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG),
             self.weight,
-            dtype=ttnn.float32,
+            dtype=dtype,
             compute_kernel_config=self.decode_compute,
             program_config=self.program,
             memory_config=ttnn.L1_MEMORY_CONFIG,
@@ -227,6 +248,59 @@ class _GatherProjection:
 
 
 class _LocalAttention(OptimizedAttention):
+    fused_heads = False
+
+    def decode(self, hidden_states, **kwargs):
+        """Batch-1 decode with the head split, q/k/v RMSNorm and q/k RoPE as one program.
+
+        ``QkvHeadsNormRope`` (models/demos/gemma4/custom_ops) reads the bf16 L1 QKV projection and writes the
+        height-sharded q / k / v that the cache update and SDPA take directly. Replaces the head split, the
+        FP32 per-head norm chains, the per-layer RoPE table gather and tilize, and the typecast / reshard
+        programs around RoPE and the cache update (51 programs -> 4 on a sliding layer)."""
+        if not self.fused_heads or hidden_states.shape[-2] != 1:
+            return super().decode(hidden_states, **kwargs)
+        from models.demos.gemma4.custom_ops.qkv_heads_norm_rope import QkvHeadsNormRope
+
+        cfg = self.source.config
+        qkv = self.source.weights.wqkv(hidden_states, dtype=ttnn.bfloat16)
+        rope = DecodeRopeRows.gather(kwargs["rope_mats"], kwargs["position_idx"])
+        q, k, v = QkvHeadsNormRope.op(
+            qkv,
+            cfg.num_attention_heads,
+            cfg.num_key_value_heads,
+            cfg.head_dim,
+            self.q_gamma,
+            self.k_gamma,
+            rope.cos,
+            rope.sin,
+            cfg.rms_norm_eps,
+        )
+        cache_pos, page_table = kwargs["position_idx_cache"], kwargs["page_table"]
+        k_cache, v_cache = kwargs["kv_cache"]
+        for cache, update in ((k_cache, k), (v_cache, v)):
+            ttnn.experimental.paged_update_cache(
+                cache,
+                update,
+                update_idxs_tensor=cache_pos,
+                page_table=page_table,
+                block_size=cache.shape[-2],
+                num_kv_heads=cfg.num_key_value_heads,
+            )
+        sdpa = self.decode_sdpa
+        attention = ttnn.transformer.paged_scaled_dot_product_attention_decode(
+            q,
+            k_cache,
+            v_cache,
+            cur_pos_tensor=cache_pos,
+            page_table_tensor=page_table,
+            scale=1.0,
+            sliding_window_size=sdpa.config.sliding_window if sdpa.config.is_sliding else None,
+            program_config=sdpa.program,
+            compute_kernel_config=sdpa.compute,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        return self.project(attention, True)
+
     def rotary(self, value, cos, sin, *, decode=False):
         if not decode or not getattr(self, "sharded_decode_rope", False):
             return super().rotary(value, cos, sin, decode=decode)
@@ -1007,6 +1081,11 @@ class MultichipDecoder(OptimizedDecoder):
             )
             self.attention_dram_extra_weight_bytes = attention.decode_output_dram.extra_weight_bytes
         attention.sharded_decode_rope = sliding if sharded_decode_rope is None else bool(sharded_decode_rope)
+        if WS2_HEADS and optimized_decode and not fused_agmm and attention_dram != "qkv":
+            attention.fused_heads = True
+            attention.q_gamma, attention.k_gamma = (
+                ttnn.typecast(weight, ttnn.bfloat16) for weight in (base.q_weight, base.k_weight)
+            )
         attention.reduce = self._reduce_attention
         self.layer.self_attn = attention
         router = BroadcastRouter(Router(self.layer.moe.router, config.rms_norm_eps), self.normalize)

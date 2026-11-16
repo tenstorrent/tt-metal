@@ -13,7 +13,7 @@ from transformers.models.gemma4.modeling_gemma4 import Gemma4TextRotaryEmbedding
 
 import ttnn
 from models.demos.gemma4.tt.model import _get_lm_head_program_config
-from models.demos.gemma4_26b_a4b_qb2.tt.multichip_decoder import CollectiveBufferPool, MultichipDecoder
+from models.demos.gemma4_26b_a4b_qb2.tt.multichip_decoder import CollectiveBufferPool, DecodeRopeRows, MultichipDecoder
 from models.demos.gemma4_26b_a4b_qb2.tt.precision_ops import rms_norm
 from models.demos.gemma4_26b_a4b_qb2.tt.precision_policy import assert_precision_matches
 from models.demos.gemma4_26b_a4b_qb2.tt.precision_policy import dtype as policy_dtype
@@ -240,9 +240,16 @@ class Gemma4Model:
             raise ValueError("KV cache must contain one pair per model layer")
         hidden = self.embed(tokens[..., :batch])
         active = tuple(range(batch)) if active_slots is None else tuple(active_slots)
+        # Batch 1: gather the RoPE rows once per step and layer type, not once per layer.
+        rope_rows = {}
         for layer_number, (layer, cache, index) in enumerate(zip(self.layers, kv_cache, self.layer_indices)):
             layer_table = page_table[layer_number] if isinstance(page_table, (tuple, list)) else page_table
-            rope = self.rope_decode[self.config.layer_types[index]]
+            kind = self.config.layer_types[index]
+            rope = self.rope_decode[kind]
+            if batch == 1 and layer.layer.self_attn.fused_heads:
+                if kind not in rope_rows:
+                    rope_rows[kind] = DecodeRopeRows.gather(rope, current_pos)
+                rope = rope_rows[kind]
             if len(active) == batch:
                 hidden = layer.decode_forward(
                     hidden,
