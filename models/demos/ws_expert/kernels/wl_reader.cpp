@@ -28,12 +28,16 @@
 //     (K words), 28 CHT, 29 W tile bytes, 30-34 mux client CT args (buffers, buffer bytes, status, termination
 //     signal, clients), then TensorAccessorArgs(out), (x), (idx), (counts), (table), (own slices), then RMAX, x row
 //     bytes, NEXP, table page bytes, idx scratch L1, D (own chunk reads in flight)
+// WL_NO_FABRIC (one chip, every expert its own): no mux connections and no mux client RT args, nothing forwarded
+// and no credits sent; CT 30-34 are placeholders.
 #include "api/dataflow/dataflow_api.h"
+#ifndef WL_NO_FABRIC
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux_interface.hpp"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/mesh/api.h"
 using namespace tt::tt_fabric::mesh::experimental;
+#endif
 
 constexpr uint32_t xr_cb = tt::CBIndex::c_0;
 constexpr uint32_t w_cb = tt::CBIndex::c_1;
@@ -133,10 +137,10 @@ void kernel_main() {
     const uint32_t J = get_arg_val<uint32_t>(0), g = get_arg_val<uint32_t>(1), nexp_g = get_arg_val<uint32_t>(2);
     const uint32_t cxs[2] = {get_arg_val<uint32_t>(3), get_arg_val<uint32_t>(4)};
     const uint32_t ny0 = get_arg_val<uint32_t>(5);
-    const uint16_t my_mesh = get_arg_val<uint32_t>(8);
-    const uint8_t nchip[2] = {(uint8_t)get_arg_val<uint32_t>(9), (uint8_t)get_arg_val<uint32_t>(10)};
+    [[maybe_unused]] const uint16_t my_mesh = get_arg_val<uint32_t>(8);
+    [[maybe_unused]] const uint8_t nchip[2] = {(uint8_t)get_arg_val<uint32_t>(9), (uint8_t)get_arg_val<uint32_t>(10)};
     const uint32_t myxy = get_arg_val<uint32_t>(11);
-    const uint32_t mex = myxy & 0xFF, mey = myxy >> 8;
+    [[maybe_unused]] const uint32_t mex = myxy & 0xFF, mey = myxy >> 8;
 
     volatile tt_l1_ptr uint32_t* counts = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(counts_l1);
 #ifdef WL_NOC_SPLIT
@@ -164,6 +168,7 @@ void kernel_main() {
     }
     total_x = total_rows * BPR;
 
+#ifndef WL_NO_FABRIC
     // ---- mux connections (index d: to the next chip in direction d), headers
     tt::tt_fabric::WorkerToFabricMuxSender<mux_nbuf> mux[2];
     bool master[2];
@@ -204,10 +209,11 @@ void kernel_main() {
         PacketHeaderPool::allocate_header(), PacketHeaderPool::allocate_header()};
     volatile tt_l1_ptr uint32_t* arr_stage = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(WL_ARR_WRITE);
 #endif
+#endif
 
     // ---- slots: current occupant (its table entry cached in registers), its packets sent a direction, computed
     volatile tt_l1_ptr uint32_t* warr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(warr_addr);
-    volatile tt_l1_ptr uint32_t* cred = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cred_addr);
+    [[maybe_unused]] volatile tt_l1_ptr uint32_t* cred = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cred_addr);
     volatile tt_l1_ptr uint32_t* freew = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(freew_addr);
     uint32_t occ[K] = {}, sent[K][2] = {}, cur_e[K], cur_fwd[K], cur_nk[K], cur_dst[K][2], base[K];
     bool live[K], done_c[K] = {};
@@ -230,7 +236,8 @@ void kernel_main() {
     for (uint32_t s = 0; s < K; ++s) {
         load(s);
     }
-    auto slot_addr = [&](uint32_t s, uint32_t u) {  // packet u of slot s in this core's L1 (same on every chip)
+    // packet u of slot s in this core's L1 (same on every chip)
+    [[maybe_unused]] auto slot_addr = [&](uint32_t s, uint32_t u) {
         return u < GU_PK ? wgu_ring + (s * WGU + u * CHT) * wtile : wd_ring + (s * WDN + (u - GU_PK) * CHT) * wtile;
     };
 
@@ -276,7 +283,10 @@ void kernel_main() {
     };
 
     // ---- QF: forward the slots' occupants, a packet a call; QR: release finished slots
-    uint32_t rr = 0, n_fwd = 0, n_credit = 0;
+    [[maybe_unused]] uint32_t rr = 0, n_fwd = 0, n_credit = 0;
+#ifdef WL_NO_FABRIC
+    auto qf = [&]() -> bool { return false; };  // (one chip: no slot occupant goes on to another chip)
+#else
     auto qf = [&]() -> bool {
         for (uint32_t t = 0; t < 2 * K; ++t) {
             const uint32_t s = (rr + t) % K, d = ((rr + t) / K) % 2;
@@ -337,6 +347,7 @@ void kernel_main() {
         }
         return false;
     };
+#endif
     auto qr = [&]() -> bool {
         bool did = false;
         for (uint32_t s = 0; s < K; ++s) {
@@ -348,13 +359,17 @@ void kernel_main() {
                 continue;
             }
             const uint32_t nk = cur_nk[s], next = occ[s] + 1;
+#ifndef WL_NO_FABRIC
             if (nk >= 2 && !mux[1 - (nk - 2)].edm_has_space_for_packet()) {
                 continue;
             }
+#endif
             noc_async_writes_flushed();  // (every forward of the slot has left L1 before it is refilled)
             if (nk == 1) {
                 freew[s * 4] = next;  // (the BRISC reads the chip's own next expert into it)
-            } else if (nk >= 2) {
+            }
+#ifndef WL_NO_FABRIC
+            else if (nk >= 2) {
                 // next occupant arrives on direction d = nk - 2 from the previous chip in d: through mux 1 - d
                 const uint32_t d = nk - 2;
                 fabric_unicast_noc_unicast_inline_write(
@@ -366,6 +381,7 @@ void kernel_main() {
                         get_noc_addr(mex, mey, cred_addr + (d * K + s) * 16), next});
                 ++n_credit;
             }
+#endif
             occ[s] = next;
             sent[s][0] = sent[s][1] = 0;
             done_c[s] = false;
@@ -851,6 +867,7 @@ void kernel_main() {
     }
     noc_async_write_barrier();
     noc_async_atomic_barrier();
+#ifndef WL_NO_FABRIC
     // mux teardown: every client disconnects; client 0 of each mux stops it once all others have
     for (uint32_t d = 0; d < 2; ++d) {
         tt::tt_fabric::fabric_client_disconnect(mux[d]);
@@ -862,6 +879,7 @@ void kernel_main() {
             noc_async_atomic_barrier();
         }
     }
+#endif
     volatile tt_l1_ptr uint32_t* st = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(6));
     st[48] = t_cred;
     st[49] = t_empty;

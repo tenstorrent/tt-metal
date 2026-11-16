@@ -65,6 +65,9 @@ class LCfg:
     # the muxes, so nothing enters a group rectangle from outside on its multicasts' NoC (WL_NOC_SPLIT); with bcast,
     # core 0's BRISC (NOC0's start corner) multicasts both the x blocks and the h rows, fed on NOC1
     noc_split: bool = False
+    # one chip, no fabric (WL_NO_FABRIC): no mux kernels, every expert the chip's own and read from DRAM, nothing
+    # forwarded; with cycles of that one chip, the per-chip load of the lane design without its fabric traffic
+    nofab: bool = False
 
 
 def lane_cores(g):
@@ -200,7 +203,7 @@ def build_lane(mesh, cfg: GCfg, lc: LCfg, x_t, idx_t, counts_t, ws_t, out_t, tab
     ln = lanes((R, Cn), lc)
     groups = [lane_cores(g) for g in range(G)]
     C = [c for gr in groups for c in gr]
-    muxes = [mux_core(g, d) for g in range(G) for d in range(2)]
+    muxes = [] if lc.nofab else [mux_core(g, d) for g in range(G) for d in range(2)]
     assert not set(muxes) & set(C)
     gx, gy = mesh.compute_with_storage_grid_size().x, mesh.compute_with_storage_grid_size().y
     assert all(x < gx and y < gy for x, y in C + muxes), f"core layout outside the {gx} x {gy} grid"
@@ -237,17 +240,21 @@ def build_lane(mesh, cfg: GCfg, lc: LCfg, x_t, idx_t, counts_t, ws_t, out_t, tab
         table_l1.buffer_address()
     )
     st = stamps_tensor(mesh, C)
-    mcfg = fabric_mux.Config(
-        num_full_size_channels=GC,
-        num_header_only_channels=0,
-        num_buffers_per_full_size_channel=lc.nbuf,
-        num_buffers_per_header_only_channel=0,
-        full_size_channel_buffer_size_bytes=fabric_mux.channel_buffer_size_bytes(mesh),
-        base_l1_address=ttnn.get_allocator_base_address(mesh, ttnn.BufferType.L1),
-    )
-    ctype = fabric_mux.ChannelType.FULL_SIZE
-    client_ct = list(fabric_mux.client_compile_time_args(num_clients=GC, channel_type=ctype, config=mcfg))
-    mesh_id = int(node(mesh, (0, 0)).mesh_id)
+    if lc.nofab:
+        assert N == 1, "nofab runs one chip"
+        mcfg, ctype, client_ct, mesh_id = None, None, [0] * 5, 0  # (the reader's mux CT args are placeholders)
+    else:
+        mcfg = fabric_mux.Config(
+            num_full_size_channels=GC,
+            num_header_only_channels=0,
+            num_buffers_per_full_size_channel=lc.nbuf,
+            num_buffers_per_header_only_channel=0,
+            full_size_channel_buffer_size_bytes=fabric_mux.channel_buffer_size_bytes(mesh),
+            base_l1_address=ttnn.get_allocator_base_address(mesh, ttnn.BufferType.L1),
+        )
+        ctype = fabric_mux.ChannelType.FULL_SIZE
+        client_ct = list(fabric_mux.client_compile_time_args(num_clients=GC, channel_type=ctype, config=mcfg))
+        mesh_id = int(node(mesh, (0, 0)).mesh_id)
     dm = lambda risc: ttnn.DataMovementConfigDescriptor(
         processor=ttnn.DataMovementProcessor.RISCV_0 if risc == 0 else ttnn.DataMovementProcessor.RISCV_1,
         noc=ttnn.NOC.RISCV_0_default if risc == 0 else ttnn.NOC.RISCV_1_default,
@@ -284,7 +291,7 @@ def build_lane(mesh, cfg: GCfg, lc: LCfg, x_t, idx_t, counts_t, ws_t, out_t, tab
                 cyc, link = ln[g]
                 i = cyc.index(me_rc)
                 nxt[g] = (cyc[(i + 1) % N], cyc[(i - 1) % N])
-                nid = [int(node(mesh, nxt[g][d]).chip_id) for d in range(2)]
+                nid = [0, 0] if lc.nofab else [int(node(mesh, nxt[g][d]).chip_id) for d in range(2)]
                 rs = noc_rects(mesh, gr)
                 assert len(rs) == 1, rs
                 r0 = list(rs[0][:4])
@@ -355,7 +362,7 @@ def build_lane(mesh, cfg: GCfg, lc: LCfg, x_t, idx_t, counts_t, ws_t, out_t, tab
                         + [cfg.RMAX, cfg.H * 2, cfg.nexp, TLW * 4, idx_addr, lc.D],
                         runtime_args=rd_rt,
                         defines=ydefs
-                        + FAB_DEFS
+                        + ([("WL_NO_FABRIC", "1")] if lc.nofab else FAB_DEFS)
                         + [("WL_WPOLL", str(lc.wpoll))]
                         + ([("WL_ARR_WRITE", str(arr_stage.buffer_address()))] if lc.arr_write else []),
                         config=dm(1),
@@ -378,20 +385,23 @@ def build_lane(mesh, cfg: GCfg, lc: LCfg, x_t, idx_t, counts_t, ws_t, out_t, tab
             mrt = ttnn.RuntimeArgs()
             for m in muxes:
                 mrt[m[0]][m[1]] = []
-            kernels.append(
-                ttnn.KernelDescriptor(
-                    kernel_source="tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp",
-                    core_ranges=crs(muxes),
-                    compile_time_args=list(mcfg.kernel_compile_time_args()),
-                    runtime_args=mrt,
-                    defines=FAB_DEFS,
-                    config=ttnn.DataMovementConfigDescriptor(
-                        processor=ttnn.DataMovementProcessor.RISCV_0,
-                        noc=ttnn.NOC.RISCV_1_default if lc.mux_noc1 or lc.noc_split else ttnn.NOC.RISCV_0_default,
-                    ),
-                    opt_level=fabric_mux.KernelBuildOptLevel.O3,
+            if not lc.nofab:
+                kernels.append(
+                    ttnn.KernelDescriptor(
+                        kernel_source="tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp",
+                        core_ranges=crs(muxes),
+                        compile_time_args=list(mcfg.kernel_compile_time_args()),
+                        runtime_args=mrt,
+                        defines=FAB_DEFS,
+                        config=ttnn.DataMovementConfigDescriptor(
+                            processor=ttnn.DataMovementProcessor.RISCV_0,
+                            noc=(
+                                ttnn.NOC.RISCV_1_default if lc.mux_noc1 or lc.noc_split else ttnn.NOC.RISCV_0_default
+                            ),
+                        ),
+                        opt_level=fabric_mux.KernelBuildOptLevel.O3,
+                    )
                 )
-            )
             cbs = [
                 ttnn.cb_descriptor_from_sharded_tensor(0, xring),
                 ttnn.cb_descriptor_from_sharded_tensor(1, wgu_ring),
@@ -404,40 +414,41 @@ def build_lane(mesh, cfg: GCfg, lc: LCfg, x_t, idx_t, counts_t, ws_t, out_t, tab
             ]
             sems = [ttnn.SemaphoreDescriptor(id=s, core_ranges=cset, initial_value=0) for s in range(6)]
             p = ttnn.ProgramDescriptor(kernels=kernels, semaphores=sems, cbs=cbs)
-            for g, gr in enumerate(groups):
-                cyc, link = ln[g]
-                for d in range(2):
-                    m = mux_core(g, d)
-                    p.kernels[mux_idx].runtime_args[m[0]][m[1]].extend(
-                        mcfg.kernel_runtime_args(
-                            source_node_id=node(mesh, me_rc),
-                            destination_node_id=node(mesh, nxt[g][d]),
-                            link_index=link,
-                            program_descriptor=p,
-                            mux_logical_core=ttnn.CoreCoord(*m),
+            if not lc.nofab:
+                for g, gr in enumerate(groups):
+                    cyc, link = ln[g]
+                    for d in range(2):
+                        m = mux_core(g, d)
+                        p.kernels[mux_idx].runtime_args[m[0]][m[1]].extend(
+                            mcfg.kernel_runtime_args(
+                                source_node_id=node(mesh, me_rc),
+                                destination_node_id=node(mesh, nxt[g][d]),
+                                link_index=link,
+                                program_descriptor=p,
+                                mux_logical_core=ttnn.CoreCoord(*m),
+                            )
                         )
-                    )
-                for d in range(2):
-                    m = mux_core(g, d)
-                    mux_vc = mesh.worker_core_from_logical_core(ttnn.CoreCoord(*m))
-                    master_vc = mesh.worker_core_from_logical_core(ttnn.CoreCoord(*gr[0]))
-                    term_sem = None
-                    for j, (x, y) in enumerate(gr):
-                        args = fabric_mux.client_runtime_args(
-                            connection_valid=True,
-                            is_termination_master=j == 0,
-                            channel_type=ctype,
-                            mux_virtual_core=mux_vc,
-                            client_index=j,
-                            client_logical_core=ttnn.CoreCoord(x, y),
-                            config=mcfg,
-                            program_descriptor=p,
-                            termination_master_virtual_core=master_vc,
-                            termination_master_semaphore_id=term_sem,
-                        )
-                        if j == 0:
-                            term_sem = args[10]
-                        p.kernels[rd_idx[g]].runtime_args[x][y].extend(args)
+                    for d in range(2):
+                        m = mux_core(g, d)
+                        mux_vc = mesh.worker_core_from_logical_core(ttnn.CoreCoord(*m))
+                        master_vc = mesh.worker_core_from_logical_core(ttnn.CoreCoord(*gr[0]))
+                        term_sem = None
+                        for j, (x, y) in enumerate(gr):
+                            args = fabric_mux.client_runtime_args(
+                                connection_valid=True,
+                                is_termination_master=j == 0,
+                                channel_type=ctype,
+                                mux_virtual_core=mux_vc,
+                                client_index=j,
+                                client_logical_core=ttnn.CoreCoord(x, y),
+                                config=mcfg,
+                                program_descriptor=p,
+                                termination_master_virtual_core=master_vc,
+                                termination_master_semaphore_id=term_sem,
+                            )
+                            if j == 0:
+                                term_sem = args[10]
+                            p.kernels[rd_idx[g]].runtime_args[x][y].extend(args)
             mc = ttnn.MeshCoordinate(r, c)
             mpd[ttnn.MeshCoordinateRange(mc, mc)] = p
     io = [x_t, idx_t, counts_t, ws_t, tab_t, wgu_ring, wd_ring, hring, hflags, xring, xflags, xprog, counts_l1]

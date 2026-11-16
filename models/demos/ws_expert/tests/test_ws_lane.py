@@ -287,6 +287,15 @@ def risc_report(cfg, st_chip):
                 own=float(s[:, 56].mean()))
 
 
+def first_visible():
+    """PCI index (/dev/tenstorrent/N, sysfs tenstorrent!N) of the first opened chip: TT_VISIBLE_DEVICES' first entry, or
+    0 when every chip is open."""
+    try:
+        return int(os.environ.get("TT_VISIBLE_DEVICES", "0").split(",")[0])
+    except ValueError:
+        return 0
+
+
 def run(mesh, cfg: GCfg, lc: LCfg, Ms, tag, warm=WARM, meas=MEAS):
     shape = tuple(mesh.shape)
     N = mesh.get_num_devices()
@@ -299,7 +308,8 @@ def run(mesh, cfg: GCfg, lc: LCfg, Ms, tag, warm=WARM, meas=MEAS):
     out_rows = max(out_rows, 1)
     dev, refs = make_inputs(mesh, cfg, lc, T, Ms, out_rows)
     tab_t = tables_tensor(mesh, T["tabs"])
-    clk = aiclk_mhz(0)
+    clk_dev = first_visible()
+    clk = aiclk_mhz(clk_dev)
     logger.info(
         f"WSL {tag}: grid {mesh.compute_with_storage_grid_size()}, {T['E']} experts a lane, table {T['TLW']} words, "
         f"schedule model util {T['sch']['util']:.3f}, {len(T['own'][0])} own experts a chip, {lc}"
@@ -324,6 +334,7 @@ def run(mesh, cfg: GCfg, lc: LCfg, Ms, tag, warm=WARM, meas=MEAS):
                 f"{[round(100 * row[ci][1], 1) for ci in chips]}"
             )
         if i == warm + meas - 1:
+            clk_end = aiclk_mhz(clk_dev)
             outs = ttnn.get_device_tensors(dev["out_t"])
             pcs = {ci: chip_pcc(refs, ci, cfg.G, outs[ci]) for ci in chips}
             sts = ttnn.get_device_tensors(st)
@@ -342,7 +353,8 @@ def run(mesh, cfg: GCfg, lc: LCfg, Ms, tag, warm=WARM, meas=MEAS):
         )
     allu = [100 * r[ci][1] for r in rows for ci in chips]
     logger.info(
-        f"WSL {tag} SUMMARY: {warm} warm-up + {meas} measured launches, aiclk {clk} MHz, util tile over chips and "
+        f"WSL {tag} SUMMARY: {warm} warm-up + {meas} measured launches, aiclk {clk} MHz (chip {clk_dev}, {clk_end} at "
+        f"the end), util tile over chips and "
         f"launches median {statistics.median(allu):.1f}% (min {min(allu):.1f}, max {max(allu):.1f}), "
         f"min pcc {min(pcs.values()):.5f}"
     )
@@ -354,7 +366,7 @@ def lcfg_from_env(**kw):
     for item in filter(None, os.environ.get("WS_LANE", "").split(";")):
         k, v = item.split("=")
         flags = ("out_all", "mcast_linked", "arr_write", "mc_noc1", "bcast", "own_read", "gather", "mux_noc1")
-        flags += ("noc_split",)
+        flags += ("noc_split", "nofab")
         kw[k] = bool(int(v)) if k in flags else (v if k == "slots" else int(v))
     return LCfg(**kw)
 
@@ -386,6 +398,33 @@ def test_ws_lane_glx(mesh_device, nexp, T, M):
     Ms = [M] * cfg.nexp
     warm = int(os.environ.get("WS_LANE_WARM", WARM))
     rows, pcs = run(mesh_device, cfg, lc, Ms, f"glx {nexp} experts M {M}", warm=warm)
+    assert min(pcs.values()) > 0.999
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize("device_params", [{}], indirect=True)
+@pytest.mark.parametrize(
+    "G,nexp,T,M",
+    [
+        (4, 64, 8192, 586),
+        (4, 64, 8192, 0),
+        (4, 64, 8192, 5),
+        (2, 320, 31250, 586),
+        (4, 640, 31250, 586),
+        (2, 320, 31250, 2048),
+        (4, 640, 31250, 2048),
+    ],
+    ids=["g4e64m586", "g4e64mzero", "g4e64mfive", "g2e320m586", "g4e640m586", "g2e320m2048", "g4e640m2048"],
+)
+def test_ws_lane_chip(mesh_device, G, nexp, T, M):
+    """Single-chip proxy of the lane design (LCfg.nofab): one chip (TT_VISIBLE_DEVICES), no fabric, every expert the
+    chip's own and read from DRAM into its slots (nothing forwarded, no credits), the G groups on the chip's tokens as
+    on the Galaxy (160 experts a group for e320 / e640, T 31250); slots of any kind (keep 0), the rest from WS_LANE."""
+    cfg = gcfg(nexp, G, T)
+    lc = lcfg_from_env(cycles=[[(0, 0)]] * ((G + 1) // 2), nofab=True, slots="any,any,any,any", keep=0)
+    Ms = [M] * cfg.nexp
+    warm = int(os.environ.get("WS_LANE_WARM", WARM))
+    rows, pcs = run(mesh_device, cfg, lc, Ms, f"chip G {G} {nexp} experts M {M}", warm=warm)
     assert min(pcs.values()) > 0.999
 
 
