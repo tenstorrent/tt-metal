@@ -157,22 +157,22 @@ tt::tt_metal::ProgramDescriptor MlaQRopeProgramFactory::create_descriptor(
     desc.cbs.push_back(
         make_cb_descriptor(all_cores, kRopeOutCbIndex, data_format, single_tile_size, rope_cb_num_tiles));
 
-    auto* q_in_buffer = q_in.buffer();
-    auto* cos_buffer = tensor_args.cos_cache.buffer();
-    auto* sin_buffer = tensor_args.sin_cache.buffer();
-    auto* trans_buffer = tensor_args.trans_mat.buffer();
-    auto* q_out_buffer = q_out.buffer();
+    const auto& q_in_tensor = q_in.mesh_tensor();
+    const auto& cos_tensor = tensor_args.cos_cache.mesh_tensor();
+    const auto& sin_tensor = tensor_args.sin_cache.mesh_tensor();
+    const auto& trans_tensor = tensor_args.trans_mat.mesh_tensor();
+    const auto& q_out_tensor = q_out.mesh_tensor();
 
     std::vector<uint32_t> reader_compile_time_args = {
         Tn, Tr, H, Ts, tiles_per_head, nope_chunk_tiles, packed_input_u32};
-    tt::tt_metal::TensorAccessorArgs(q_in_buffer).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(cos_buffer).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(sin_buffer).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(trans_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(q_in_tensor).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(cos_tensor).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(sin_tensor).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(trans_tensor).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {
         Tn, Tr, H, Ts, tiles_per_head, nope_chunk_tiles, packed_input_u32};
-    tt::tt_metal::TensorAccessorArgs(q_out_buffer).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(q_out_tensor).append_to(writer_compile_time_args);
 
     const std::vector<uint32_t> compute_compile_time_args = {
         (std::uint32_t)kQPeCbIndex,
@@ -213,8 +213,8 @@ tt::tt_metal::ProgramDescriptor MlaQRopeProgramFactory::create_descriptor(
         const uint32_t q_in_tile_base = args.packed_input ? packed_base : head_major_base;
         const uint32_t q_out_tile_base = args.packed_input ? head_major_base : packed_base;
         reader.emplace_runtime_args(
-            core, {q_in_buffer, cos_buffer, sin_buffer, trans_buffer, num_blocks, sb_start, q_in_tile_base});
-        writer.emplace_runtime_args(core, {q_out_buffer, num_blocks, sb_start, q_out_tile_base});
+            core, {q_in_tensor, cos_tensor, sin_tensor, trans_tensor, num_blocks, sb_start, q_in_tile_base});
+        writer.emplace_runtime_args(core, {q_out_tensor, num_blocks, sb_start, q_out_tile_base});
         compute.emplace_runtime_args(core, {num_blocks});
     });
 

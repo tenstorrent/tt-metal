@@ -90,7 +90,7 @@ tt::tt_metal::ProgramDescriptor receive_program_factory(
         detail::fabric_1d_routing(mesh_device, receive_coord, send_coord, topology);
 
     std::vector<uint32_t> reader_ct_args = {packet_header_cb_id, packet_cb_id, receiver_cb_id, l1_alignment};
-    tt::tt_metal::TensorAccessorArgs(output_tensors.at(0).buffer()).append_to(reader_ct_args);
+    tt::tt_metal::TensorAccessorArgs(output_tensors.at(0).mesh_tensor()).append_to(reader_ct_args);
 
     tt::tt_metal::KernelDescriptor reader_kernel_desc;
     reader_kernel_desc.kernel_source =
@@ -102,7 +102,7 @@ tt::tt_metal::ProgramDescriptor receive_program_factory(
 
     // And the writer
     std::vector<uint32_t> writer_ct_args = {receiver_cb_id};
-    tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_ct_args);
+    tt::tt_metal::TensorAccessorArgs(output_tensor.mesh_tensor()).append_to(writer_ct_args);
 
     tt::tt_metal::KernelDescriptor writer_kernel_desc;
     writer_kernel_desc.kernel_source =
@@ -164,7 +164,7 @@ tt::tt_metal::ProgramDescriptor receive_program_factory(
         reader_rt_args_builder.reserve(reader_runtime_args.size());
         for (size_t i = 0; i < reader_runtime_args.size(); ++i) {
             if (i == 3) {
-                reader_rt_args_builder.push_back(intermediate_tensor.buffer());
+                reader_rt_args_builder.push_back(intermediate_tensor.mesh_tensor());
             } else {
                 reader_rt_args_builder.push_back(reader_runtime_args[i]);
             }
@@ -174,7 +174,7 @@ tt::tt_metal::ProgramDescriptor receive_program_factory(
         // Writer RT args.  Index 0 is the output buffer's base address —
         // push as Buffer* so the framework records a BufferBinding.
         tt::tt_metal::KernelDescriptor::RTArgList writer_rt_args;
-        writer_rt_args.push_back(output_tensor.buffer());
+        writer_rt_args.push_back(output_tensor.mesh_tensor());
         writer_rt_args.push_back(increment);
         writer_rt_args.push_back(page_idx_start);
         writer_rt_args.push_back(output_page_size_bytes);

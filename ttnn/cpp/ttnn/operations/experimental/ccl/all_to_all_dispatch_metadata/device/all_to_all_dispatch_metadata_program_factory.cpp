@@ -528,13 +528,13 @@ tt::tt_metal::ProgramDescriptor build_all_to_all_dispatch_metadata_program_descr
         output_scores_page_size,         // 43
         aligned_output_scores_page_size  // 44
     };
-    tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(indices_tensor.buffer()).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(scores_tensor.buffer()).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(mapping_tensor.buffer()).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(metadata_tensor.buffer()).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(scores_out_tensor.buffer()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(input_tensor.mesh_tensor()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(indices_tensor.mesh_tensor()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(scores_tensor.mesh_tensor()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(mapping_tensor.mesh_tensor()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(output_tensor.mesh_tensor()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(metadata_tensor.mesh_tensor()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(scores_out_tensor.mesh_tensor()).append_to(reader_compile_time_args);
 
     const auto& writer_compile_time_args = reader_compile_time_args;
 
@@ -891,13 +891,13 @@ tt::tt_metal::ProgramDescriptor build_all_to_all_dispatch_metadata_program_descr
                                                const std::vector<uint32_t>& scalar_args) {
             tt::tt_metal::KernelDescriptor::RTArgList rt_args;
             rt_args.reserve(scalar_args.size());
-            rt_args.push_back(input_tensor.buffer());
-            rt_args.push_back(indices_tensor.buffer());
-            rt_args.push_back(scores_tensor.buffer());
-            rt_args.push_back(mapping_tensor.buffer());
-            rt_args.push_back(output_tensor.buffer());
-            rt_args.push_back(metadata_tensor.buffer());
-            rt_args.push_back(scores_out_tensor.buffer());
+            rt_args.push_back(input_tensor.mesh_tensor());
+            rt_args.push_back(indices_tensor.mesh_tensor());
+            rt_args.push_back(scores_tensor.mesh_tensor());
+            rt_args.push_back(mapping_tensor.mesh_tensor());
+            rt_args.push_back(output_tensor.mesh_tensor());
+            rt_args.push_back(metadata_tensor.mesh_tensor());
+            rt_args.push_back(scores_out_tensor.mesh_tensor());
             for (size_t arg_idx = kCrossDeviceSemaphoreRuntimeArgSlot; arg_idx < scalar_args.size(); ++arg_idx) {
                 rt_args.push_back(scalar_args[arg_idx]);
             }

@@ -165,7 +165,7 @@ tt::tt_metal::ProgramDescriptor ConcatS2SMultiProgramFactory::create_descriptor(
                 .data_format = cb_data_format,
                 .page_size = page_size,
             }}},
-            .buffer = input_tensors[input_id].buffer(),
+            .tensor = &input_tensors[input_id].mesh_tensor(),
         });
 
         // Height concat: this input's rows within one block. Width concat: one stick.
@@ -186,7 +186,7 @@ tt::tt_metal::ProgramDescriptor ConcatS2SMultiProgramFactory::create_descriptor(
             .data_format = cb_data_format,
             .page_size = page_size,
         }}},
-        .buffer = output.buffer(),
+        .tensor = &output.mesh_tensor(),
     });
 
     const uint32_t output_stride = page_size * output_num_pages_per_stick;

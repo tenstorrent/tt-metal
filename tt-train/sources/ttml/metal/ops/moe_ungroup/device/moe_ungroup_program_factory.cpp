@@ -202,11 +202,11 @@ tt::tt_metal::ProgramDescriptor MoeUngroupProgramFactory::create_descriptor(
     // -------------------------------------------------------------------------
     // Buffer pointers
     // -------------------------------------------------------------------------
-    auto* expert_out_buf = args.expert_out.buffer();
-    auto* ungrouped_buf = output.buffer();
-    auto* plan_buf = args.plan.buffer();
-    auto* offsets_buf = args.offsets.buffer();
-    auto* grouped_scores_buf = args.grouped_scores.buffer();
+    const auto& expert_out_tensor = args.expert_out.mesh_tensor();
+    const auto& ungrouped_tensor = output.mesh_tensor();
+    const auto& plan_tensor = args.plan.mesh_tensor();
+    const auto& offsets_tensor = args.offsets.mesh_tensor();
+    const auto& grouped_scores_tensor = args.grouped_scores.mesh_tensor();
 
     // -------------------------------------------------------------------------
     // Mcast rectangle (covers full worker grid).
@@ -243,8 +243,8 @@ tt::tt_metal::ProgramDescriptor MoeUngroupProgramFactory::create_descriptor(
         kCbCtrl,                    // 16
         Wt,                         // 17
     };
-    tt::tt_metal::TensorAccessorArgs(expert_out_buf).append_to(reader_ct_args);
-    tt::tt_metal::TensorAccessorArgs(offsets_buf).append_to(reader_ct_args);
+    tt::tt_metal::TensorAccessorArgs(expert_out_tensor).append_to(reader_ct_args);
+    tt::tt_metal::TensorAccessorArgs(offsets_tensor).append_to(reader_ct_args);
 
     desc.kernels.push_back(  // kReaderKernelIdx
         make_reader_kernel_descriptor(worker_all, reader_ct_args, {}, kReaderKernelPath));
@@ -265,10 +265,10 @@ tt::tt_metal::ProgramDescriptor MoeUngroupProgramFactory::create_descriptor(
         kBriscReleaseSemId,  // 9
         kL1_ALIGN,           // 10
     };
-    tt::tt_metal::TensorAccessorArgs(ungrouped_buf).append_to(writer_ct_args);
-    tt::tt_metal::TensorAccessorArgs(plan_buf).append_to(writer_ct_args);
-    tt::tt_metal::TensorAccessorArgs(offsets_buf).append_to(writer_ct_args);
-    tt::tt_metal::TensorAccessorArgs(grouped_scores_buf).append_to(writer_ct_args);
+    tt::tt_metal::TensorAccessorArgs(ungrouped_tensor).append_to(writer_ct_args);
+    tt::tt_metal::TensorAccessorArgs(plan_tensor).append_to(writer_ct_args);
+    tt::tt_metal::TensorAccessorArgs(offsets_tensor).append_to(writer_ct_args);
+    tt::tt_metal::TensorAccessorArgs(grouped_scores_tensor).append_to(writer_ct_args);
 
     desc.kernels.push_back(  // kWriterKernelIdx
         make_writer_kernel_descriptor(worker_all, writer_ct_args, {}, kWriterKernelPath));
@@ -298,18 +298,18 @@ tt::tt_metal::ProgramDescriptor MoeUngroupProgramFactory::create_descriptor(
         reader.emplace_runtime_args(
             core,
             {
-                expert_out_buf,  // 0
-                offsets_buf,     // 1
-                worker_idx,      // 2 my_core_idx
+                expert_out_tensor,  // 0
+                offsets_tensor,     // 1
+                worker_idx,         // 2 my_core_idx
             });
         writer.emplace_runtime_args(
             core,
             {
-                ungrouped_buf,       // 0
-                plan_buf,            // 1
-                offsets_buf,         // 2
-                grouped_scores_buf,  // 3
-                worker_idx,          // 4 my_core_idx
+                ungrouped_tensor,       // 0
+                plan_tensor,            // 1
+                offsets_tensor,         // 2
+                grouped_scores_tensor,  // 3
+                worker_idx,             // 4 my_core_idx
             });
         worker_idx++;
     }

@@ -167,9 +167,9 @@ ProgramDescriptor MoeExpertTokenRemapDeviceOperation::Multicore::create_descript
         mapping_page_size_bytes,
         metadata_page_size_bytes,
         local_reduce};
-    TensorAccessorArgs(topk_tensor.buffer()).append_to(reader_ct_args);
-    TensorAccessorArgs(mapping_tensor.buffer()).append_to(reader_ct_args);
-    TensorAccessorArgs(metadata_tensor.buffer()).append_to(reader_ct_args);
+    TensorAccessorArgs(topk_tensor.mesh_tensor()).append_to(reader_ct_args);
+    TensorAccessorArgs(mapping_tensor.mesh_tensor()).append_to(reader_ct_args);
+    TensorAccessorArgs(metadata_tensor.mesh_tensor()).append_to(reader_ct_args);
 
     KernelDescriptor reader_desc;
     reader_desc.kernel_source =
@@ -194,8 +194,8 @@ ProgramDescriptor MoeExpertTokenRemapDeviceOperation::Multicore::create_descript
         output_reduced_page_size_bytes,
         reduction_size,
     };
-    TensorAccessorArgs(*output_mapping_tensor.buffer()).append_to(writer_ct_args);
-    TensorAccessorArgs(*output_reduced_tensor.buffer()).append_to(writer_ct_args);
+    TensorAccessorArgs(output_mapping_tensor.mesh_tensor()).append_to(writer_ct_args);
+    TensorAccessorArgs(output_reduced_tensor.mesh_tensor()).append_to(writer_ct_args);
 
     KernelDescriptor writer_desc;
     writer_desc.kernel_source =
@@ -212,12 +212,6 @@ ProgramDescriptor MoeExpertTokenRemapDeviceOperation::Multicore::create_descript
     const auto [core_page_increments, all_cores] =
         split_work_to_cores_even_multiples(grid, num_metadata_pages, reduction_size);
 
-    Buffer* mapping_buffer = mapping_tensor.buffer();
-    Buffer* metadata_buffer = metadata_tensor.buffer();
-    Buffer* topk_buffer = topk_tensor.buffer();
-    Buffer* output_mapping_buffer = output_mapping_tensor.buffer();
-    Buffer* output_reduced_buffer = output_reduced_tensor.buffer();
-
     uint32_t page_idx_start = 0, page_idx_end = 0;
     std::vector<CoreCoord> utilized_cores = corerange_to_cores(all_cores, std::nullopt);
     TT_FATAL(utilized_cores.size() == core_page_increments.size(), "Internal error");
@@ -228,13 +222,23 @@ ProgramDescriptor MoeExpertTokenRemapDeviceOperation::Multicore::create_descript
         // Buffer* entries (slots 0..2) trigger BufferBinding so the framework can
         // patch addresses on cache hits without rebuilding the descriptor.
         reader_desc.emplace_runtime_args(
-            *cit, {mapping_buffer, metadata_buffer, topk_buffer, page_idx_start, page_idx_end});
+            *cit,
+            {mapping_tensor.mesh_tensor(),
+             metadata_tensor.mesh_tensor(),
+             topk_tensor.mesh_tensor(),
+             page_idx_start,
+             page_idx_end});
 
         const uint32_t reduction_idx_start = page_idx_start / reduction_size;
 
         // Buffer* entries at slots 0 and 3 use BufferBinding for cache-hit address patching.
         writer_desc.emplace_runtime_args(
-            *cit, {output_mapping_buffer, page_idx_start, page_idx_end, output_reduced_buffer, reduction_idx_start});
+            *cit,
+            {output_mapping_tensor.mesh_tensor(),
+             page_idx_start,
+             page_idx_end,
+             output_reduced_tensor.mesh_tensor(),
+             reduction_idx_start});
 
         page_idx_start += increment;
         ++cit;

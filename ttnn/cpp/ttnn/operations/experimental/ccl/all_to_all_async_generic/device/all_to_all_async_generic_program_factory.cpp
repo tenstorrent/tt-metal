@@ -686,7 +686,7 @@ tt::tt_metal::ProgramDescriptor build_all_to_all_async_generic_program_descripto
         number_pages_per_packet                     // max_pages_per_packet
     };
 
-    tt::tt_metal::TensorAccessorArgs(tensor_args.input_tensor.buffer()).append_to(sender_reader_compile_args);
+    tt::tt_metal::TensorAccessorArgs(tensor_args.input_tensor.mesh_tensor()).append_to(sender_reader_compile_args);
 
     tt::tt_metal::KernelDescriptor sender_reader_kernel;
     sender_reader_kernel.kernel_source =
@@ -1051,7 +1051,7 @@ tt::tt_metal::ProgramDescriptor build_all_to_all_async_generic_program_descripto
             mcast_negative_direction,                    // mcast_negative_direction (physical slot)
         };
 
-        tt::tt_metal::TensorAccessorArgs(tensor_return_value.buffer()).append_to(sender_writer_compile_args);
+        tt::tt_metal::TensorAccessorArgs(tensor_return_value.mesh_tensor()).append_to(sender_writer_compile_args);
         const bool stream_uses_mux = use_worker_mux && stream < num_direction_groups * workers_per_direction &&
                                      sender_stream_direction_masks[stream] != 0;
         sender_writer_compile_args.push_back(stream_uses_mux);
@@ -1073,12 +1073,12 @@ tt::tt_metal::ProgramDescriptor build_all_to_all_async_generic_program_descripto
 
     {
         tt::tt_metal::KernelDescriptor::RTArgList reader_common_args;
-        reader_common_args.push_back(tensor_args.input_tensor.buffer());
+        reader_common_args.push_back(tensor_args.input_tensor.mesh_tensor());
         desc.kernels[sender_reader_kernel_id].emplace_common_runtime_args(reader_common_args);
     }
     for (const auto kernel_id : sender_writer_kernel_ids) {
         tt::tt_metal::KernelDescriptor::RTArgList writer_common_args;
-        writer_common_args.push_back(tensor_return_value.buffer());
+        writer_common_args.push_back(tensor_return_value.mesh_tensor());
         // clang-format off
         writer_common_args.push_back(static_cast<uint32_t>(init_barrier_semaphore.address()));  // smuggled-rta-ok: persistent GlobalSemaphore (parked on the WorkloadDescriptor)
         writer_common_args.push_back(static_cast<uint32_t>(final_barrier_semaphore.address()));  // smuggled-rta-ok: persistent GlobalSemaphore (parked on the WorkloadDescriptor)

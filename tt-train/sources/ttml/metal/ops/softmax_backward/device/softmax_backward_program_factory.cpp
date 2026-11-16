@@ -236,11 +236,11 @@ tt::tt_metal::ProgramDescriptor SoftmaxBackwardFactory::create_descriptor(
 
     std::vector<uint32_t> reader_compile_time_args = {
         src0_cb_index, src1_cb_index, ones_cb_index, width_tiles, tiles_per_block, mask_w};
-    TensorAccessorArgs(softmax_output.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(upstream_grad.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(softmax_output.mesh_tensor()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(upstream_grad.mesh_tensor()).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {out_cb_index, width_tiles, tiles_per_block};
-    TensorAccessorArgs(tensor_return_value.buffer()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(tensor_return_value.mesh_tensor()).append_to(writer_compile_time_args);
 
     const std::vector<uint32_t> compute_compile_time_args = {
         src0_cb_index,
@@ -265,8 +265,8 @@ tt::tt_metal::ProgramDescriptor SoftmaxBackwardFactory::create_descriptor(
 
     // Buffer addresses travel in common runtime args (slots named at the top of the file); override_runtime_arguments()
     // rewrites them on every cache hit. start_row/num_rows follow from the hashed tensor specs and sub_core_grids.
-    reader.emplace_common_runtime_args({softmax_output.buffer(), upstream_grad.buffer()});
-    writer.emplace_common_runtime_args({tensor_return_value.buffer()});
+    reader.emplace_common_runtime_args({softmax_output.mesh_tensor(), upstream_grad.mesh_tensor()});
+    writer.emplace_common_runtime_args({tensor_return_value.mesh_tensor()});
     for (const CoreRowAssignment& a : core_row_assignments) {
         reader.emplace_runtime_args(a.core, {a.start_row, a.num_rows});
         writer.emplace_runtime_args(a.core, {a.start_row, a.num_rows});

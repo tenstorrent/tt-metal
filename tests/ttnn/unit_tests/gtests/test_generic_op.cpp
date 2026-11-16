@@ -130,8 +130,8 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpArgmaxSingleCore) {
         .format_descriptors = {output_format_descriptor},
     };
 
-    auto* const src_buffer = device_input_tensor.buffer();
-    auto* const dst_buffer = device_output_tensor.buffer();
+    const auto& src_tensor = device_input_tensor.mesh_tensor();
+    const auto& dst_tensor = device_output_tensor.mesh_tensor();
 
     const auto inner_dim_units = output_last_dim;
     const auto outer_dim_units = input_tensor.logical_volume() / inner_dim_units / red_dim_units;
@@ -146,12 +146,12 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpArgmaxSingleCore) {
         red_dim_units,
         (uint32_t)(reduce_all),
     };
-    TensorAccessorArgs(*src_buffer).append_to(compile_time_args);
-    TensorAccessorArgs(*dst_buffer).append_to(compile_time_args);
+    TensorAccessorArgs(src_tensor).append_to(compile_time_args);
+    TensorAccessorArgs(dst_tensor).append_to(compile_time_args);
 
     const KernelDescriptor::CoreRuntimeArgs runtime_args = {
-        src_buffer->address(),
-        dst_buffer->address(),
+        src_tensor.address(),
+        dst_tensor.address(),
     };
     const KernelDescriptor::RuntimeArgs runtime_args_per_cores = {{{0, 0}, runtime_args}};  // single-core
 
@@ -252,13 +252,13 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpUnaryReluSharded) {
         .total_size = in_cb_npages * in_cb_pagesize,
         .core_ranges = all_cores,
         .format_descriptors = {in_format_descriptor},
-        .buffer = device_input_tensor.buffer(),
+        .tensor = &device_input_tensor.mesh_tensor(),
     };
     CBDescriptor output_cb_descriptor = {
         .total_size = in_cb_npages * in_cb_pagesize,
         .core_ranges = all_cores,
         .format_descriptors = {out_format_descriptor},
-        .buffer = device_output_tensor.buffer(),
+        .tensor = &device_output_tensor.mesh_tensor(),
     };
 
     const KernelDescriptor::CompileTimeArgs reader_ct_args = {(std::uint32_t)in_cb_id};
@@ -368,11 +368,11 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpBinaryEltwiseAdd) {
 
     bool block_or_width_sharded = false;
     KernelDescriptor::CompileTimeArgs reader_compile_time_args = {(uint32_t)block_or_width_sharded};
-    TensorAccessorArgs(*device_input_tensor_a.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(*device_input_tensor_b.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(device_input_tensor_a.mesh_tensor()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(device_input_tensor_b.mesh_tensor()).append_to(reader_compile_time_args);
 
     KernelDescriptor::CompileTimeArgs writer_compile_time_args = {dst_cb_index};
-    TensorAccessorArgs(*device_output_tensor.buffer()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(device_output_tensor.mesh_tensor()).append_to(writer_compile_time_args);
 
     // setup runtime arguments for data movement kernels
     uint32_t num_cores_total = compute_with_storage_grid_size.x * compute_with_storage_grid_size.y;
@@ -517,8 +517,8 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpMatmul) {
                 input_tensor_a.memory_config())),
         input_tensor_a.device());
 
-    tt::tt_metal::Buffer* src0_buffer = input_tensor_a.buffer();
-    tt::tt_metal::Buffer* src1_buffer = input_tensor_b.buffer();
+    const auto& src0_tensor = input_tensor_a.mesh_tensor();
+    const auto& src1_tensor = input_tensor_b.mesh_tensor();
 
     ttnn::Shape cshape = output.logical_shape();  // C=A*B, N1MK*11KN->N1MN
 
@@ -540,8 +540,8 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpMatmul) {
         !core_group_2.ranges().empty(),
         "Core group 2 for matmul generic test is empty. We should never hit this case.");
 
-    tt::tt_metal::Buffer* dst_buffer = output.buffer();
-    TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
+    TT_FATAL(output.is_allocated(), "Output buffer should be allocated on device!");
+    const auto& dst_tensor = output.mesh_tensor();
 
     const auto &ashape = input_tensor_a.logical_shape(), bshape = input_tensor_b.logical_shape();
     uint32_t B = get_batch_size(ashape);
@@ -552,9 +552,9 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpMatmul) {
     uint32_t MtKt = Mt * Kt;
     uint32_t MtNt = Mt * Nt;
 
-    uint32_t src0_addr = src0_buffer->address();
-    uint32_t src1_addr = src1_buffer->address();
-    uint32_t dst_addr = dst_buffer->address();
+    uint32_t src0_addr = src0_tensor.address();
+    uint32_t src1_addr = src1_tensor.address();
+    uint32_t dst_addr = dst_tensor.address();
 
     auto src0_cb_index = tt::CBIndex::c_0;
     auto src1_cb_index = tt::CBIndex::c_1;
@@ -606,11 +606,11 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpMatmul) {
     uint32_t last_ktile_w = input_tensor_a.logical_shape()[-1] % tt::constants::TILE_WIDTH;
     uint32_t last_ktile_h = 0;
     KernelDescriptor::CompileTimeArgs reader_compile_time_args = {last_ktile_w, last_ktile_h};
-    TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
-    TensorAccessorArgs(*src1_buffer).append_to(reader_compile_time_args);
+    TensorAccessorArgs(src0_tensor).append_to(reader_compile_time_args);
+    TensorAccessorArgs(src1_tensor).append_to(reader_compile_time_args);
 
     KernelDescriptor::CompileTimeArgs writer_compile_time_args = {(uint32_t)output_cb_index};
-    TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
+    TensorAccessorArgs(dst_tensor).append_to(writer_compile_time_args);
 
     log_info(tt::LogTest, "num_cores: {}, num_core_x: {}, num_core_y: {}", num_cores, num_cores_x, num_cores_y);
     KernelDescriptor::RuntimeArgs reader_rt_args_per_core;
@@ -784,9 +784,9 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpEltwiseSFPU) {
     };
 
     KernelDescriptor::CompileTimeArgs reader_compile_time_args;
-    TensorAccessorArgs(*device_input_tensor.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(device_input_tensor.mesh_tensor()).append_to(reader_compile_time_args);
     KernelDescriptor::CompileTimeArgs writer_compile_time_args = {(std::uint32_t)cb_out_id};
-    TensorAccessorArgs(*device_output_tensor.buffer()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(device_output_tensor.mesh_tensor()).append_to(writer_compile_time_args);
 
     // only core (0, 0) is used
     const KernelDescriptor::CoreRuntimeArgs reader_rt_args = {
@@ -875,9 +875,9 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpProgramCache) {
     };
 
     KernelDescriptor::CompileTimeArgs reader_ct_args;
-    TensorAccessorArgs(*device_input_tensor_1.buffer()).append_to(reader_ct_args);
+    TensorAccessorArgs(device_input_tensor_1.mesh_tensor()).append_to(reader_ct_args);
     KernelDescriptor::CompileTimeArgs writer_ct_args = {(uint32_t)cb_out_id};
-    TensorAccessorArgs(*device_output_tensor_1.buffer()).append_to(writer_ct_args);
+    TensorAccessorArgs(device_output_tensor_1.mesh_tensor()).append_to(writer_ct_args);
 
     ProgramDescriptor program_descriptor = {
         .kernels =
@@ -990,9 +990,9 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpProgramCacheCommonRuntimeArgs) {
     };
 
     KernelDescriptor::CompileTimeArgs reader_ct_args;
-    TensorAccessorArgs(*device_input_tensor_1.buffer()).append_to(reader_ct_args);
+    TensorAccessorArgs(device_input_tensor_1.mesh_tensor()).append_to(reader_ct_args);
     KernelDescriptor::CompileTimeArgs writer_ct_args = {(uint32_t)cb_out_id};
-    TensorAccessorArgs(*device_output_tensor_1.buffer()).append_to(writer_ct_args);
+    TensorAccessorArgs(device_output_tensor_1.mesh_tensor()).append_to(writer_ct_args);
 
     // Use common_runtime_args on the reader kernel — the kernel reads per-core
     // args for the buffer address, and the common args are unused padding, but
@@ -1365,8 +1365,8 @@ TEST_F(MeshDevice1x4FabricFixture, TestGenericOpAllGather) {
 
         // Reader CT args
         std::vector<uint32_t> reader_ct_args = common_ct_args;
-        tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer()).append_to(reader_ct_args);
-        tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(reader_ct_args);
+        tt::tt_metal::TensorAccessorArgs(input_tensor.mesh_tensor()).append_to(reader_ct_args);
+        tt::tt_metal::TensorAccessorArgs(output_tensor.mesh_tensor()).append_to(reader_ct_args);
 
         // Writer CT args
         std::vector<uint32_t> writer_ct_args = common_ct_args;
@@ -1397,7 +1397,7 @@ TEST_F(MeshDevice1x4FabricFixture, TestGenericOpAllGather) {
         } else {
             writer_ct_args.insert(writer_ct_args.end(), {0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u});  // no target
         }
-        tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(writer_ct_args);
+        tt::tt_metal::TensorAccessorArgs(output_tensor.mesh_tensor()).append_to(writer_ct_args);
 
         // Keep this manual descriptor in sync with minimal_default_reader.cpp / minimal_default_writer.cpp.
         // Tensor addresses and semaphores are common RT args laid out by ttnn::ccl::AllGatherCommonArgs;
@@ -1405,8 +1405,8 @@ TEST_F(MeshDevice1x4FabricFixture, TestGenericOpAllGather) {
         using AllGatherArgs = ttnn::ccl::AllGatherCommonArgs;
         tt::tt_metal::KernelDescriptor::RTArgList common_rt_args;
         common_rt_args.reserve(AllGatherArgs::count);
-        common_rt_args.push_back(input_tensor.buffer());
-        common_rt_args.push_back(output_tensor.buffer());
+        common_rt_args.push_back(input_tensor.mesh_tensor());
+        common_rt_args.push_back(output_tensor.mesh_tensor());
         common_rt_args.push_back(0u);  // barrier_sem (unused: use_barrier_sem = false)
         common_rt_args.push_back(static_cast<uint32_t>(global_semaphores.at(0).address()));
         common_rt_args.push_back(static_cast<uint32_t>(global_semaphores.at(1).address()));

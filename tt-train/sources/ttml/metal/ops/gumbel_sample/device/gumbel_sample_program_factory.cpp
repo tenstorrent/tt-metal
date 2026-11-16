@@ -343,7 +343,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
     }
     // The null appends keep the accessor chain's length mode-independent.
     if (layout.position_aware) {
-        tt::tt_metal::TensorAccessorArgs(tensor_args.positions->buffer()).append_to(reader_ct_args);
+        tt::tt_metal::TensorAccessorArgs(tensor_args.positions->mesh_tensor()).append_to(reader_ct_args);
     } else {
         tt::tt_metal::TensorAccessorArgs().append_to(reader_ct_args);
     }
@@ -367,7 +367,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
         max_foreign_shards};
     tt::tt_metal::TensorAccessorArgs(output_buffer).append_to(writer_ct_args);
     if (layout.position_aware) {
-        tt::tt_metal::TensorAccessorArgs(tensor_args.positions->buffer()).append_to(writer_ct_args);
+        tt::tt_metal::TensorAccessorArgs(tensor_args.positions->mesh_tensor()).append_to(writer_ct_args);
     } else {
         tt::tt_metal::TensorAccessorArgs().append_to(writer_ct_args);
     }

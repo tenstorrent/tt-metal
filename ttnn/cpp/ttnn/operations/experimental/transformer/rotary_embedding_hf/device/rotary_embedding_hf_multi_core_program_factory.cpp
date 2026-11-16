@@ -96,7 +96,7 @@ ProgramDescriptor create_single_tile_prefill_descriptor(
             .data_format = input_cb_data_format,
             .page_size = input_single_tile_size,
         }}},
-        .buffer = in_sharded ? input.buffer() : nullptr,
+        .tensor = in_sharded ? &input.mesh_tensor() : nullptr,
     });
 
     constexpr uint8_t trans_mat_cb_index = tt::CBIndex::c_1;
@@ -175,13 +175,13 @@ ProgramDescriptor create_single_tile_prefill_descriptor(
             .data_format = output_cb_data_format,
             .page_size = output_single_tile_size,
         }}},
-        .buffer = out_sharded ? output.buffer() : nullptr,
+        .tensor = out_sharded ? &output.mesh_tensor() : nullptr,
     });
 
-    auto* src_buffer = input.buffer();
-    auto* cos_buffer = cos.buffer();
-    auto* sin_buffer = sin.buffer();
-    auto* dst_buffer = output.buffer();
+    const auto& src_tensor = input.mesh_tensor();
+    const auto& cos_tensor = cos.mesh_tensor();
+    const auto& sin_tensor = sin.mesh_tensor();
+    const auto& dst_tensor = output.mesh_tensor();
 
     std::vector<uint32_t> reader_compile_time_args;
     if (in_sharded) {
@@ -193,8 +193,8 @@ ProgramDescriptor create_single_tile_prefill_descriptor(
             (std::uint32_t)Ht,
             (std::uint32_t)HtWt,
         };
-        tt::tt_metal::TensorAccessorArgs(*cos_buffer).append_to(reader_compile_time_args);
-        tt::tt_metal::TensorAccessorArgs(*sin_buffer).append_to(reader_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(cos_tensor).append_to(reader_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(sin_tensor).append_to(reader_compile_time_args);
     } else {
         reader_compile_time_args = {
             (std::uint32_t)input_cb_index,
@@ -204,13 +204,13 @@ ProgramDescriptor create_single_tile_prefill_descriptor(
             (std::uint32_t)Ht,
             (std::uint32_t)HtWt,
         };
-        tt::tt_metal::TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
-        tt::tt_metal::TensorAccessorArgs(*cos_buffer).append_to(reader_compile_time_args);
-        tt::tt_metal::TensorAccessorArgs(*sin_buffer).append_to(reader_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(src_tensor).append_to(reader_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(cos_tensor).append_to(reader_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(sin_tensor).append_to(reader_compile_time_args);
     }
 
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index};
-    tt::tt_metal::TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(dst_tensor).append_to(writer_compile_time_args);
 
     KernelDescriptor::Defines writer_kernel_defines;
     if (out_sharded) {
@@ -294,20 +294,20 @@ ProgramDescriptor create_single_tile_prefill_descriptor(
 
         if (in_sharded) {
             reader_desc.emplace_runtime_args(
-                core, {cos_buffer, sin_buffer, num_rows_per_core, num_tiles_written / Wt % Ht, cos_sin_start_id});
+                core, {cos_tensor, sin_tensor, num_rows_per_core, num_tiles_written / Wt % Ht, cos_sin_start_id});
         } else {
             reader_desc.emplace_runtime_args(
                 core,
-                {src_buffer,
-                 cos_buffer,
-                 sin_buffer,
+                {src_tensor,
+                 cos_tensor,
+                 sin_tensor,
                  num_rows_per_core,
                  num_tiles_written,
                  num_tiles_written / Wt % Ht,
                  cos_sin_start_id});
         }
 
-        writer_desc.emplace_runtime_args(core, {dst_buffer, num_rows_per_core * Wt, num_tiles_written});
+        writer_desc.emplace_runtime_args(core, {dst_tensor, num_rows_per_core * Wt, num_tiles_written});
         num_tiles_written += num_rows_per_core * Wt;
     }
 
@@ -398,7 +398,7 @@ ProgramDescriptor create_multi_tile_descriptor(
             .data_format = input_cb_data_format,
             .page_size = input_single_tile_size,
         }}},
-        .buffer = in_sharded ? input.buffer() : nullptr,
+        .tensor = in_sharded ? &input.mesh_tensor() : nullptr,
     });
 
     constexpr uint8_t rotated_input_cb_index = tt::CBIndex::c_1;
@@ -491,15 +491,15 @@ ProgramDescriptor create_multi_tile_descriptor(
             .data_format = output_cb_data_format,
             .page_size = output_single_tile_size,
         }}},
-        .buffer = out_sharded ? output.buffer() : nullptr,
+        .tensor = out_sharded ? &output.mesh_tensor() : nullptr,
     });
 
     const uint16_t bfloat16_scalar = std::bit_cast<uint16_t>(bfloat16(-1.0f));
 
-    auto* src_buffer = input.buffer();
-    auto* cos_buffer = cos.buffer();
-    auto* sin_buffer = sin.buffer();
-    auto* dst_buffer = output.buffer();
+    const auto& src_tensor = input.mesh_tensor();
+    const auto& cos_tensor = cos.mesh_tensor();
+    const auto& sin_tensor = sin.mesh_tensor();
+    const auto& dst_tensor = output.mesh_tensor();
 
     std::vector<uint32_t> reader_compile_time_args = {
         (std::uint32_t)input_cb_index,
@@ -513,12 +513,12 @@ ProgramDescriptor create_multi_tile_descriptor(
         (std::uint32_t)HtWt,
         (std::uint32_t)half_Wt,
     };
-    tt::tt_metal::TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(*cos_buffer).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(*sin_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(src_tensor).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(cos_tensor).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(sin_tensor).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index};
-    tt::tt_metal::TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(dst_tensor).append_to(writer_compile_time_args);
 
     KernelDescriptor::Defines writer_kernel_defines;
     if (out_sharded) {
@@ -603,15 +603,15 @@ ProgramDescriptor create_multi_tile_descriptor(
 
         reader_desc.emplace_runtime_args(
             core,
-            {src_buffer,
-             cos_buffer,
-             sin_buffer,
+            {src_tensor,
+             cos_tensor,
+             sin_tensor,
              num_rows_per_core,
              num_tiles_written,
              num_tiles_written / Wt % Ht,
              cos_sin_start_id});
 
-        writer_desc.emplace_runtime_args(core, {dst_buffer, num_rows_per_core * Wt, num_tiles_written});
+        writer_desc.emplace_runtime_args(core, {dst_tensor, num_rows_per_core * Wt, num_tiles_written});
         num_tiles_written += num_rows_per_core * Wt;
     }
 

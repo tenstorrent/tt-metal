@@ -785,15 +785,15 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
         (has_rope || tiled_rope) ? tensor_args.rope->padded_shape()[-1] / TILE_WIDTH : 0u,
         static_cast<uint32_t>(has_scaled),
         tiled_rope ? kRopeCbIndex : 0u};
-    TensorAccessorArgs(input.buffer()).append_to(reader_compile_args);
+    TensorAccessorArgs(input.mesh_tensor()).append_to(reader_compile_args);
     if (tensor_args.rope.has_value()) {
-        TensorAccessorArgs(tensor_args.rope->buffer()).append_to(reader_compile_args);
+        TensorAccessorArgs(tensor_args.rope->mesh_tensor()).append_to(reader_compile_args);
     }
     if (has_scaled) {
-        TensorAccessorArgs(tensor_args.scales->buffer()).append_to(reader_compile_args);
+        TensorAccessorArgs(tensor_args.scales->mesh_tensor()).append_to(reader_compile_args);
     }
     if (has_metadata) {
-        TensorAccessorArgs(tensor_args.kv_actual_global->buffer()).append_to(reader_compile_args);
+        TensorAccessorArgs(tensor_args.kv_actual_global->mesh_tensor()).append_to(reader_compile_args);
     }
 
     KernelDescriptor reader_kernel;
@@ -822,10 +822,10 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
         block_tiles,
         static_cast<uint32_t>(has_scaled),
         tiled_rope ? kUntilizedCbIndex : 0u};
-    TensorAccessorArgs(cache.buffer()).append_to(writer_compile_args);
+    TensorAccessorArgs(cache.mesh_tensor()).append_to(writer_compile_args);
     if (has_metadata) {
         // One accessor reused for both 1-element tensors (identical layout).
-        TensorAccessorArgs(tensor_args.slot_idx->buffer()).append_to(writer_compile_args);
+        TensorAccessorArgs(tensor_args.slot_idx->mesh_tensor()).append_to(writer_compile_args);
     }
 
     KernelDescriptor writer_kernel;
@@ -897,9 +897,9 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
 
     // Bind each shared buffer once per kernel. Cache hits refresh these common bindings and the
     // metadata controls above; per-core work assignments depend only on the hashed tensor specs.
-    auto* src_buffer = input.buffer();
-    auto* dst_buffer = cache.buffer();
-    reader_kernel.emplace_common_runtime_args({src_buffer});
+    const auto& src_tensor = input.mesh_tensor();
+    const auto& dst_tensor = cache.mesh_tensor();
+    reader_kernel.emplace_common_runtime_args({src_tensor});
     if (has_input_window(args, input_shape[-2])) {
         // Window row r of head h reads input row h * INPUT_ROW_STRIDE_T + offset + r. A windowed call has no
         // rope / scales bindings, so the offset sits right after the source binding (index 9).
@@ -907,12 +907,12 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
         reader_kernel.emplace_common_runtime_args({input_row_offset_page_rows(args, cache)});
     }
     if (tensor_args.rope.has_value()) {
-        reader_kernel.emplace_common_runtime_args({tensor_args.rope->buffer()});
+        reader_kernel.emplace_common_runtime_args({tensor_args.rope->mesh_tensor()});
     }
     if (has_scaled) {
-        reader_kernel.emplace_common_runtime_args({tensor_args.scales->buffer()});
+        reader_kernel.emplace_common_runtime_args({tensor_args.scales->mesh_tensor()});
     }
-    writer_kernel.emplace_common_runtime_args({dst_buffer});
+    writer_kernel.emplace_common_runtime_args({dst_tensor});
     // The chip table (size 0 without one) follows the other compile-time args (cache_dataflow_helpers.hpp).
     for (KernelDescriptor* kernel : {&reader_kernel, &writer_kernel}) {
         kernel->named_compile_time_args.emplace_back(

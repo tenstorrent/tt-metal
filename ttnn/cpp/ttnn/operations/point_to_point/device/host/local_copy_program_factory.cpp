@@ -53,7 +53,7 @@ tt::tt_metal::ProgramDescriptor local_copy_program_factory(
 
     // Reader: input_tensor -> CB.
     std::vector<uint32_t> reader_ct_args;
-    tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_ct_args);
+    tt::tt_metal::TensorAccessorArgs(input_tensor.mesh_tensor()).append_to(reader_ct_args);
     tt::tt_metal::KernelDescriptor reader_kernel_desc;
     reader_kernel_desc.kernel_source =
         "ttnn/cpp/ttnn/operations/point_to_point/device/kernels/dataflow/reader_unary_interleaved_start_id_gen.cpp";
@@ -64,7 +64,7 @@ tt::tt_metal::ProgramDescriptor local_copy_program_factory(
 
     // Writer: CB -> output_tensor.
     std::vector<uint32_t> writer_ct_args = {static_cast<uint32_t>(cb_id)};
-    tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_ct_args);
+    tt::tt_metal::TensorAccessorArgs(output_tensor.mesh_tensor()).append_to(writer_ct_args);
     tt::tt_metal::KernelDescriptor writer_kernel_desc;
     writer_kernel_desc.kernel_source =
         "ttnn/cpp/ttnn/operations/point_to_point/device/kernels/dataflow/writer_unary_interleaved_start_id_gen.cpp";
@@ -93,14 +93,14 @@ tt::tt_metal::ProgramDescriptor local_copy_program_factory(
         }
 
         tt::tt_metal::KernelDescriptor::RTArgList reader_rt_args;
-        reader_rt_args.push_back(input_tensor.buffer());
+        reader_rt_args.push_back(input_tensor.mesh_tensor());
         reader_rt_args.push_back(core_pages);
         reader_rt_args.push_back(start_id);
         reader_rt_args.push_back(page_size_bytes);
         desc.kernels[reader_kernel_id].emplace_runtime_args(c, reader_rt_args);
 
         tt::tt_metal::KernelDescriptor::RTArgList writer_rt_args;
-        writer_rt_args.push_back(output_tensor.buffer());
+        writer_rt_args.push_back(output_tensor.mesh_tensor());
         writer_rt_args.push_back(core_pages);
         writer_rt_args.push_back(start_id);
         writer_rt_args.push_back(page_size_bytes);

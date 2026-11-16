@@ -110,10 +110,10 @@ tt::tt_metal::ProgramDescriptor build_program(
         in.actual_end.has_value(),
         tail_groups,
         head_tiles};
-    tt::tt_metal::TensorAccessorArgs(in.rank_final.buffer()).append_to(reader_args);
-    tt::tt_metal::TensorAccessorArgs(in.prefix_final.buffer()).append_to(reader_args);
-    tt::tt_metal::TensorAccessorArgs(in.actual_start.buffer()).append_to(reader_args);
-    tt::tt_metal::TensorAccessorArgs(end_tensor.buffer()).append_to(reader_args);
+    tt::tt_metal::TensorAccessorArgs(in.rank_final.mesh_tensor()).append_to(reader_args);
+    tt::tt_metal::TensorAccessorArgs(in.prefix_final.mesh_tensor()).append_to(reader_args);
+    tt::tt_metal::TensorAccessorArgs(in.actual_start.mesh_tensor()).append_to(reader_args);
+    tt::tt_metal::TensorAccessorArgs(end_tensor.mesh_tensor()).append_to(reader_args);
     std::vector<uint32_t> writer_args = {
         tiles_cb,
         mode_cb,
@@ -125,7 +125,7 @@ tt::tt_metal::ProgramDescriptor build_program(
         uint32_t(backward.has_value()),
         backward ? targets_backward : 0u,
         uint32_t(unicast_peers)};
-    tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_args);
+    tt::tt_metal::TensorAccessorArgs(output.mesh_tensor()).append_to(writer_args);
 
     tt::tt_metal::KernelDescriptor reader;
     reader.kernel_source = std::string(kernel_dir) + "reader_select_final_carry.cpp";
@@ -145,8 +145,11 @@ tt::tt_metal::ProgramDescriptor build_program(
     tt::tt_metal::KernelHandle writer_id = 1;
     // Every core reads the same buffers, so they are bound once per kernel.
     desc.kernels[reader_id].emplace_common_runtime_args(
-        {in.rank_final.buffer(), in.prefix_final.buffer(), in.actual_start.buffer(), end_tensor.buffer()});
-    desc.kernels[writer_id].emplace_common_runtime_args({output.buffer()});
+        {in.rank_final.mesh_tensor(),
+         in.prefix_final.mesh_tensor(),
+         in.actual_start.mesh_tensor(),
+         end_tensor.mesh_tensor()});
+    desc.kernels[writer_id].emplace_common_runtime_args({output.mesh_tensor()});
 
     const auto drain_core = mesh->worker_core_from_logical_core(fabric_cores.front());
     for (uint32_t link = 0; link < fabric_cores.size(); ++link) {

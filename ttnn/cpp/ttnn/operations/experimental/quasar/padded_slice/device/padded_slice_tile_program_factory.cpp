@@ -377,7 +377,7 @@ PaddedSliceTileProgramFactory::cached_program_t PaddedSliceTileProgramFactory::c
     uint32_t num_tiles_per_channel = input_padded_shape[3] / tt::constants::TILE_WIDTH;
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
 
-    const auto* src0_buffer = &a.mesh_buffer();
+    const auto& src0_tensor = a.mesh_tensor();
 
     TT_FATAL(output.is_sharded(), "Output Tensor must be sharded.");
     auto output_shard_spec = output.shard_spec().value();
@@ -406,11 +406,10 @@ PaddedSliceTileProgramFactory::cached_program_t PaddedSliceTileProgramFactory::c
         tt::div_up(output_shard_spec.shape[0], tt::constants::TILE_HEIGHT);
     uint32_t num_output_sticks_per_core = output_shard_spec.shape[0];
 
-    const auto* dst_buffer = &output.mesh_buffer();
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
+    TT_ASSERT(output.is_allocated(), "Output buffer should be allocated on device!");
 
     TT_FATAL(
-        dst_buffer->device_local_config().buffer_type == tt::tt_metal::BufferType::L1,
+        output.memory_config().buffer_type() == tt::tt_metal::BufferType::L1,
         "Output buffer should be L1 for padded_slice operation with tiled inputs");
 
     uint32_t max_read_size = 4096;
@@ -500,7 +499,7 @@ PaddedSliceTileProgramFactory::cached_program_t PaddedSliceTileProgramFactory::c
         output_row_size_bytes};
 
     std::vector<uint32_t> reader_compile_time_args_vec = {max_num_tiles_per_row};
-    tt::tt_metal::TensorAccessorArgs(src0_buffer).append_to(reader_compile_time_args_vec);
+    tt::tt_metal::TensorAccessorArgs(src0_tensor).append_to(reader_compile_time_args_vec);
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/padded_slice/device/kernels/dataflow/"
@@ -550,7 +549,7 @@ void PaddedSliceTileProgramFactory::override_runtime_arguments(
     auto& dst_tensor = output;
     TT_FATAL(dst_tensor.is_sharded(), "Output tensor must be sharded");
     UpdateDynamicCircularBufferAddress(
-        cached_program.program, std::get<1>(shared_vars.cb_output_tuple), *dst_tensor.buffer());
+        cached_program.program, std::get<1>(shared_vars.cb_output_tuple), dst_tensor.mesh_tensor());
     uint32_t output_row_size_bytes = dst_tensor.shard_spec()->shape[1] * dst_tensor.element_size();
     auto alignment = TILE_WIDTH * dst_tensor.element_size();
     auto is_non_aligned = output_row_size_bytes % alignment;

@@ -90,8 +90,8 @@ ProgramDescriptor NlpCreateHeadsBoltzDeviceOperation::Interleaved::create_descri
     const bool read_from_input_tensor_kv = input_tensor_kv.has_value();
 
     uint32_t single_tile_size = tt::tile_size(cb_data_format);
-    tt_metal::Buffer* in0_buffer = input_tensor.buffer();
-    TT_ASSERT(in0_buffer->size() % single_tile_size == 0);
+    const auto& in0_tensor = input_tensor.mesh_tensor();
+    TT_ASSERT(in0_tensor.mesh_buffer().size() % single_tile_size == 0);
 
     tt_metal::Buffer* in1_buffer = nullptr;
     if (read_from_input_tensor_kv) {
@@ -147,7 +147,7 @@ ProgramDescriptor NlpCreateHeadsBoltzDeviceOperation::Interleaved::create_descri
         (std::uint32_t)q_num_tiles,
         (std::uint32_t)kv_num_tiles,
     };
-    tt::tt_metal::TensorAccessorArgs(in0_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(in0_tensor).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(read_from_input_tensor_kv ? in1_buffer : nullptr)
         .append_to(reader_compile_time_args);
 
@@ -283,7 +283,7 @@ ProgramDescriptor NlpCreateHeadsBoltzDeviceOperation::Interleaved::create_descri
 
         KernelDescriptor::RTArgList reader_rt;
         reader_rt.reserve(5);
-        reader_rt.push_back(in0_buffer);
+        reader_rt.push_back(in0_tensor);
         if (in1_buffer != nullptr) {
             reader_rt.push_back(in1_buffer);
         } else {
@@ -512,7 +512,7 @@ ProgramDescriptor NlpCreateHeadsBoltzDeviceOperation::Sharded::create_descriptor
             .data_format = cb_data_format,
             .page_size = single_tile_size,
         }}},
-        .buffer = std::get<0>(output).buffer(),
+        .tensor = &std::get<0>(output).mesh_tensor(),
     });
 
     auto k_shard_spec = std::get<1>(output).shard_spec().value();
@@ -528,7 +528,7 @@ ProgramDescriptor NlpCreateHeadsBoltzDeviceOperation::Sharded::create_descriptor
             .data_format = cb_data_format,
             .page_size = single_tile_size,
         }}},
-        .buffer = std::get<1>(output).buffer(),
+        .tensor = &std::get<1>(output).mesh_tensor(),
     });
 
     auto v_shard_spec = std::get<2>(output).shard_spec().value();
@@ -544,7 +544,7 @@ ProgramDescriptor NlpCreateHeadsBoltzDeviceOperation::Sharded::create_descriptor
             .data_format = cb_data_format,
             .page_size = single_tile_size,
         }}},
-        .buffer = std::get<2>(output).buffer(),
+        .tensor = &std::get<2>(output).mesh_tensor(),
     });
 
     std::vector<uint32_t> reader_compile_time_args = {q_output_cb_index, k_output_cb_index};
@@ -621,9 +621,12 @@ void NlpCreateHeadsBoltzDeviceOperation::Sharded::override_runtime_arguments(
     // rather than in runtime args.  Missing one is a silent stale-address bug.  Positional mapping
     // into desc.cbs (push order q, k, v), the same one resolve_bindings uses.
     const auto cbs = program.circular_buffers();
-    tt::tt_metal::UpdateDynamicCircularBufferAddress(program, cbs[0]->id(), *std::get<0>(tensor_return_value).buffer());
-    tt::tt_metal::UpdateDynamicCircularBufferAddress(program, cbs[1]->id(), *std::get<1>(tensor_return_value).buffer());
-    tt::tt_metal::UpdateDynamicCircularBufferAddress(program, cbs[2]->id(), *std::get<2>(tensor_return_value).buffer());
+    tt::tt_metal::UpdateDynamicCircularBufferAddress(
+        program, cbs[0]->id(), std::get<0>(tensor_return_value).mesh_tensor());
+    tt::tt_metal::UpdateDynamicCircularBufferAddress(
+        program, cbs[1]->id(), std::get<1>(tensor_return_value).mesh_tensor());
+    tt::tt_metal::UpdateDynamicCircularBufferAddress(
+        program, cbs[2]->id(), std::get<2>(tensor_return_value).mesh_tensor());
 }
 
 // The input/output addresses are the leading reader/writer runtime args (emplaced as Buffer* by

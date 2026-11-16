@@ -187,13 +187,13 @@ KernelDescriptor state_kernel_descriptor(
     const uint32_t head_dim = factory_head_dim_of(args.kv);
     std::vector<uint32_t> compile_args = {
         2 * head_dim / tt::constants::TILE_WIDTH, head_dim / tt::constants::TILE_WIDTH};
-    TensorAccessorArgs(args.kv.buffer()).append_to(compile_args);
-    TensorAccessorArgs(args.gate.buffer()).append_to(compile_args);
-    TensorAccessorArgs(args.position_bias.buffer()).append_to(compile_args);
-    TensorAccessorArgs(args.base_kv_state.buffer()).append_to(compile_args);
-    TensorAccessorArgs(args.base_score_state.buffer()).append_to(compile_args);
-    TensorAccessorArgs(outputs[0].buffer()).append_to(compile_args);
-    TensorAccessorArgs(outputs[1].buffer()).append_to(compile_args);
+    TensorAccessorArgs(args.kv.mesh_tensor()).append_to(compile_args);
+    TensorAccessorArgs(args.gate.mesh_tensor()).append_to(compile_args);
+    TensorAccessorArgs(args.position_bias.mesh_tensor()).append_to(compile_args);
+    TensorAccessorArgs(args.base_kv_state.mesh_tensor()).append_to(compile_args);
+    TensorAccessorArgs(args.base_score_state.mesh_tensor()).append_to(compile_args);
+    TensorAccessorArgs(outputs[0].mesh_tensor()).append_to(compile_args);
+    TensorAccessorArgs(outputs[1].mesh_tensor()).append_to(compile_args);
 
     KernelDescriptor descriptor;
     descriptor.kernel_source = kStateKernel;
@@ -356,11 +356,11 @@ ProgramDescriptor CsaCompressionProgramFactory::create_descriptor(
 
     std::vector<uint32_t> reader_compile_args = {
         kCandidateKvCb, kCandidateScoreCb, kScratchCb, input_width_tiles, state_width_tiles, kCaBiasCb, kCbBiasCb};
-    TensorAccessorArgs(args.kv.buffer()).append_to(reader_compile_args);
-    TensorAccessorArgs(args.gate.buffer()).append_to(reader_compile_args);
-    TensorAccessorArgs(args.position_bias.buffer()).append_to(reader_compile_args);
-    TensorAccessorArgs(args.predecessor_kv_state.buffer()).append_to(reader_compile_args);
-    TensorAccessorArgs(args.predecessor_score_state.buffer()).append_to(reader_compile_args);
+    TensorAccessorArgs(args.kv.mesh_tensor()).append_to(reader_compile_args);
+    TensorAccessorArgs(args.gate.mesh_tensor()).append_to(reader_compile_args);
+    TensorAccessorArgs(args.position_bias.mesh_tensor()).append_to(reader_compile_args);
+    TensorAccessorArgs(args.predecessor_kv_state.mesh_tensor()).append_to(reader_compile_args);
+    TensorAccessorArgs(args.predecessor_score_state.mesh_tensor()).append_to(reader_compile_args);
 
     KernelDescriptor reader;
     reader.kernel_source = kReaderKernel;
@@ -378,7 +378,7 @@ ProgramDescriptor CsaCompressionProgramFactory::create_descriptor(
     compute.config = ComputeConfigDescriptor{.math_fidelity = tt::tt_metal::MathFidelity::HiFi4, .fp32_dest_acc_en = true};
 
     std::vector<uint32_t> writer_compile_args = {kPooledCb};
-    TensorAccessorArgs(outputs[0].buffer()).append_to(writer_compile_args);
+    TensorAccessorArgs(outputs[0].mesh_tensor()).append_to(writer_compile_args);
     KernelDescriptor writer;
     writer.kernel_source = kWriterKernel;
     writer.source_type = KernelDescriptor::SourceType::FILE_PATH;

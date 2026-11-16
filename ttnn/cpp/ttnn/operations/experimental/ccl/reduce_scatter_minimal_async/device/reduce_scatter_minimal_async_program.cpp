@@ -868,9 +868,9 @@ ReduceScatterDescriptorArtifacts build_ring_reduce_scatter_minimal_async_program
 
     // Positional args: TensorAccessorArgs
     std::vector<uint32_t> reader_compile_args;
-    tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);
-    tt::tt_metal::TensorAccessorArgs(intermediate_tensor.buffer()).append_to(reader_compile_args);
-    tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(reader_compile_args);
+    tt::tt_metal::TensorAccessorArgs(input_tensor.mesh_tensor()).append_to(reader_compile_args);
+    tt::tt_metal::TensorAccessorArgs(intermediate_tensor.mesh_tensor()).append_to(reader_compile_args);
+    tt::tt_metal::TensorAccessorArgs(output_tensor.mesh_tensor()).append_to(reader_compile_args);
     if (normalized_dim != 0) {
         TT_FATAL(
             !use_contiguous_interm || penult_intermediate_tensor.has_value(),
@@ -880,7 +880,8 @@ ReduceScatterDescriptorArtifacts build_ring_reduce_scatter_minimal_async_program
         // branches share one compile-time/runtime arg layout.
         const auto& penult_intermediate_accessor_source =
             use_contiguous_interm ? *penult_intermediate_tensor : output_tensor;
-        tt::tt_metal::TensorAccessorArgs(penult_intermediate_accessor_source.buffer()).append_to(reader_compile_args);
+        tt::tt_metal::TensorAccessorArgs(penult_intermediate_accessor_source.mesh_tensor())
+            .append_to(reader_compile_args);
     }
 
     std::string reader_kernel_path = normalized_dim == 0
@@ -944,13 +945,14 @@ ReduceScatterDescriptorArtifacts build_ring_reduce_scatter_minimal_async_program
     writer_compile_args.insert(writer_compile_args.end(), mcast_forward_args.begin(), mcast_forward_args.end());
     writer_compile_args.insert(writer_compile_args.end(), unicast_backward_args.begin(), unicast_backward_args.end());
     writer_compile_args.insert(writer_compile_args.end(), mcast_backward_args.begin(), mcast_backward_args.end());
-    tt::tt_metal::TensorAccessorArgs(intermediate_tensor.buffer()).append_to(writer_compile_args);
-    tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_args);
+    tt::tt_metal::TensorAccessorArgs(intermediate_tensor.mesh_tensor()).append_to(writer_compile_args);
+    tt::tt_metal::TensorAccessorArgs(output_tensor.mesh_tensor()).append_to(writer_compile_args);
     if (normalized_dim != 0) {
         // See the reader above: placeholder accessor args keep one arg layout for both branches.
         const auto& penult_intermediate_accessor_source =
             use_contiguous_interm ? *penult_intermediate_tensor : output_tensor;
-        tt::tt_metal::TensorAccessorArgs(penult_intermediate_accessor_source.buffer()).append_to(writer_compile_args);
+        tt::tt_metal::TensorAccessorArgs(penult_intermediate_accessor_source.mesh_tensor())
+            .append_to(writer_compile_args);
     }
 
     std::string writer_kernel_path = normalized_dim == 0
@@ -1555,17 +1557,17 @@ ReduceScatterDescriptorArtifacts build_line_reduce_scatter_minimal_async_program
     if (input_is_sharded) {
         shard_builder::extend_sharding_compile_time_args(input_tensor, sender_reader_compile_args);
     } else {
-        tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(sender_reader_compile_args);
+        tt::tt_metal::TensorAccessorArgs(input_tensor.mesh_tensor()).append_to(sender_reader_compile_args);
     }
     if (intermediate_is_sharded) {
         shard_builder::extend_sharding_compile_time_args(intermediate_tensor, sender_reader_compile_args);
     } else {
-        tt::tt_metal::TensorAccessorArgs(intermediate_tensor.buffer()).append_to(sender_reader_compile_args);
+        tt::tt_metal::TensorAccessorArgs(intermediate_tensor.mesh_tensor()).append_to(sender_reader_compile_args);
     }
     if (output_is_sharded) {
         shard_builder::extend_sharding_compile_time_args(output_tensor, sender_reader_compile_args);
     } else {
-        tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(sender_reader_compile_args);
+        tt::tt_metal::TensorAccessorArgs(output_tensor.mesh_tensor()).append_to(sender_reader_compile_args);
     }
 
     std::string sender_reader_kernel_path =
@@ -1629,12 +1631,12 @@ ReduceScatterDescriptorArtifacts build_line_reduce_scatter_minimal_async_program
     if (intermediate_is_sharded) {
         shard_builder::extend_sharding_compile_time_args(intermediate_tensor, sender_writer_compile_args);
     } else {
-        tt::tt_metal::TensorAccessorArgs(intermediate_tensor.buffer()).append_to(sender_writer_compile_args);
+        tt::tt_metal::TensorAccessorArgs(intermediate_tensor.mesh_tensor()).append_to(sender_writer_compile_args);
     }
     if (output_is_sharded) {
         shard_builder::extend_sharding_compile_time_args(output_tensor, sender_writer_compile_args);
     } else {
-        tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(sender_writer_compile_args);
+        tt::tt_metal::TensorAccessorArgs(output_tensor.mesh_tensor()).append_to(sender_writer_compile_args);
     }
 
     std::string sender_writer_kernel_path =

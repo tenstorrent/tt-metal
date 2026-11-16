@@ -414,13 +414,13 @@ void ring_attention_neighbor_halo_exchange_helper(
         reader_kernel.compile_time_args.push_back(page_size);
     }
     for (const auto& input : input_tensors) {
-        tt::tt_metal::TensorAccessorArgs(input.buffer()).append_to(reader_kernel.compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(input.mesh_tensor()).append_to(reader_kernel.compile_time_args);
     }
     // Metadata accessors follow the input accessors.
     reader_kernel.compile_time_args.push_back(halo.derives_start_on_device() ? 1u : 0u);
     if (halo.derives_start_on_device()) {
-        tt::tt_metal::TensorAccessorArgs(halo.slot_id->buffer()).append_to(reader_kernel.compile_time_args);
-        tt::tt_metal::TensorAccessorArgs(halo.kv_actual_isl->buffer()).append_to(reader_kernel.compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(halo.slot_id->mesh_tensor()).append_to(reader_kernel.compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(halo.kv_actual_isl->mesh_tensor()).append_to(reader_kernel.compile_time_args);
     }
 
     KernelDescriptor writer_kernel{};
@@ -446,11 +446,11 @@ void ring_attention_neighbor_halo_exchange_helper(
         writer_kernel.compile_time_args.push_back(page_size);
     }
     for (const auto& output : output_tensors) {
-        tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_kernel.compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(output.mesh_tensor()).append_to(writer_kernel.compile_time_args);
     }
     writer_kernel.compile_time_args.push_back(halo.derives_start_on_device() ? 1u : 0u);
     if (halo.derives_start_on_device()) {
-        tt::tt_metal::TensorAccessorArgs(halo.kv_actual_isl->buffer()).append_to(writer_kernel.compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(halo.kv_actual_isl->mesh_tensor()).append_to(writer_kernel.compile_time_args);
     }
 
     auto halo_signaler = fused_op_signaler;
@@ -640,7 +640,7 @@ void ring_attention_neighbor_halo_exchange_helper(
             append_halo_meta(writer_args, /*with_cache_batch=*/false, /*with_ring_size=*/true);
         }
         for (const auto& input : input_tensors) {
-            reader_args.push_back(input.buffer());
+            reader_args.push_back(input.mesh_tensor());
         }
         std::vector<uint32_t> signaler_args;
         halo_signaler.push_all_gather_fused_op_rt_args(signaler_args, num_links, link, 0);
@@ -648,7 +648,7 @@ void ring_attention_neighbor_halo_exchange_helper(
         reader_kernel.emplace_runtime_args(worker_cores[link], reader_args);
 
         for (const auto& output : output_tensors) {
-            writer_args.push_back(output.buffer());
+            writer_args.push_back(output.mesh_tensor());
         }
         std::vector<uint32_t> fabric_args;
         // FabricConnectionManager consumes flags in forward-then-backward order. The linear
@@ -1066,19 +1066,19 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         // TensorAccessorArgs tuples expect one page-size entry per tensor before the accessor blocks.
         args.insert(args.end(), num_inputs, op_config.get_page_size());
         for (const auto& tensor : input_tensor) {
-            tt::tt_metal::TensorAccessorArgs(tensor.buffer()).append_to(args);
+            tt::tt_metal::TensorAccessorArgs(tensor.mesh_tensor()).append_to(args);
         }
         for (const auto& tensor : output_tensor) {
-            tt::tt_metal::TensorAccessorArgs(tensor.buffer()).append_to(args);
+            tt::tt_metal::TensorAccessorArgs(tensor.mesh_tensor()).append_to(args);
         }
         if (has_metadata) {
             // The slot accessor block must exist whenever the metadata block does -- one reader binary
             // serves both -- but the slot itself is optional (kv_deduped gathers a BATCH-1 slab). Fall
             // back to an input buffer's accessor so the compile-time layout is fixed; the reader only
             // consults it under has_slot_metadata.
-            tt::tt_metal::TensorAccessorArgs(has_slot_metadata ? slot_id->buffer() : input_tensor[0].buffer())
+            tt::tt_metal::TensorAccessorArgs(has_slot_metadata ? slot_id->mesh_tensor() : input_tensor[0].mesh_tensor())
                 .append_to(args);
-            tt::tt_metal::TensorAccessorArgs(kv_actual_isl->buffer()).append_to(args);
+            tt::tt_metal::TensorAccessorArgs(kv_actual_isl->mesh_tensor()).append_to(args);
         }
         return args;
     };
@@ -1120,10 +1120,10 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         // TensorAccessorArgs tuples expect one page-size entry per tensor before the accessor blocks.
         args.insert(args.end(), num_inputs, op_config.get_page_size());
         for (const auto& tensor : output_tensor) {
-            tt::tt_metal::TensorAccessorArgs(tensor.buffer()).append_to(args);
+            tt::tt_metal::TensorAccessorArgs(tensor.mesh_tensor()).append_to(args);
         }
         if (has_metadata) {
-            tt::tt_metal::TensorAccessorArgs(kv_actual_isl->buffer()).append_to(args);
+            tt::tt_metal::TensorAccessorArgs(kv_actual_isl->mesh_tensor()).append_to(args);
         }
         return args;
     };
@@ -1295,21 +1295,21 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
             semaphore.at(sem_index).address()));  // smuggled-rta-ok: re-applied via override_runtime_arguments()
         reader_args.append(tensor_descriptor_args);
         for (uint32_t input_idx = 0; input_idx < num_inputs; ++input_idx) {
-            reader_args.push_back(input_tensor[input_idx].buffer());
+            reader_args.push_back(input_tensor[input_idx].mesh_tensor());
         }
         for (uint32_t input_idx = 0; input_idx < num_inputs; ++input_idx) {
-            reader_args.push_back(output_tensor[input_idx].buffer());
+            reader_args.push_back(output_tensor[input_idx].mesh_tensor());
         }
         if (has_metadata) {
             // Slot is optional even when the extent is present (kv_deduped gathers a BATCH-1 slab), so
             // push a placeholder rather than dereferencing an empty optional. The layout stays 5 words
             // wide either way; the reader ignores word 0 unless has_slot_metadata.
             if (has_slot_metadata) {
-                reader_args.push_back(slot_id->buffer());
+                reader_args.push_back(slot_id->mesh_tensor());
             } else {
                 reader_args.push_back(0u);
             }
-            reader_args.push_back(kv_actual_isl->buffer());
+            reader_args.push_back(kv_actual_isl->mesh_tensor());
             reader_args.push_back(chunk_local_tiles);
             reader_args.push_back(kv_cache_num_layers);
             reader_args.push_back(kv_cache_layer_idx);
@@ -1337,10 +1337,10 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
             semaphore.at(sem_index).address()));  // smuggled-rta-ok: re-applied via override_runtime_arguments()
         writer_args.append(tensor_descriptor_args);
         for (uint32_t input_idx = 0; input_idx < num_inputs; ++input_idx) {
-            writer_args.push_back(output_tensor[input_idx].buffer());
+            writer_args.push_back(output_tensor[input_idx].mesh_tensor());
         }
         if (has_metadata) {
-            writer_args.push_back(kv_actual_isl->buffer());
+            writer_args.push_back(kv_actual_isl->mesh_tensor());
             writer_args.push_back(chunk_local_tiles);
         }
 

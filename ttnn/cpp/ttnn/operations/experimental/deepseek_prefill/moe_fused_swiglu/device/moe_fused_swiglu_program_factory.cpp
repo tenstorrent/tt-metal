@@ -620,15 +620,15 @@ tt::tt_metal::ProgramDescriptor create_moe_fused_swiglu_program_descriptor(
 
     // Tensor bindings are uniform across workers; keep only scheduling metadata per core.
     KernelDescriptor::RTArgList reader_bindings;
-    reader_bindings.push_back(tensor_arguments.activations.buffer());
-    reader_bindings.push_back(tensor_arguments.counts.buffer());
-    reader_bindings.push_back(tensor_arguments.global_expert_idx_table.buffer());
-    reader_bindings.push_back(start_tensor.buffer());
+    reader_bindings.push_back(tensor_arguments.activations.mesh_tensor());
+    reader_bindings.push_back(tensor_arguments.counts.mesh_tensor());
+    reader_bindings.push_back(tensor_arguments.global_expert_idx_table.mesh_tensor());
+    reader_bindings.push_back(start_tensor.mesh_tensor());
     KernelDescriptor::RTArgList writer_bindings;
-    writer_bindings.push_back(tensor_return_value.buffer());
+    writer_bindings.push_back(tensor_return_value.mesh_tensor());
     for (const auto* weights : {&tensor_arguments.w_gates, &tensor_arguments.w_downs}) {
         for (const auto& weight : *weights) {
-            reader_bindings.push_back(weight.buffer());
+            reader_bindings.push_back(weight.mesh_tensor());
         }
     }
     // The full-grid multicast table is identical on every worker. Send it once
@@ -640,13 +640,13 @@ tt::tt_metal::ProgramDescriptor create_moe_fused_swiglu_program_descriptor(
         for (const auto* biases :
              {&tensor_arguments.gate_biases, &tensor_arguments.up_biases, &tensor_arguments.down_biases}) {
             for (const auto& bias : *biases) {
-                reader_bindings.push_back(bias.buffer());
+                reader_bindings.push_back(bias.mesh_tensor());
             }
         }
     }
     for (const auto* weights : {&tensor_arguments.w_ups, &tensor_arguments.w_downs}) {
         for (const auto& weight : *weights) {
-            writer_bindings.push_back(weight.buffer());
+            writer_bindings.push_back(weight.mesh_tensor());
         }
     }
     for (const auto arg : h_mcast_noc1_args) {

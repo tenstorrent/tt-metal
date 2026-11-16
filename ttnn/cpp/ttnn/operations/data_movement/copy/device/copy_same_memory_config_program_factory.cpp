@@ -119,8 +119,8 @@ ProgramDescriptor CopyDeviceOperation::SameMemoryConfig::create_descriptor(
         });
     }
 
-    Buffer* src_buffer = input.buffer();
-    Buffer* dst_buffer = output.buffer();
+    const auto& src_tensor = input.mesh_tensor();
+    const auto& dst_tensor = output.mesh_tensor();
 
     KernelDescriptor::CompileTimeArgs reader_compile_time_args;
     KernelDescriptor::CompileTimeArgs writer_compile_time_args;
@@ -131,8 +131,8 @@ ProgramDescriptor CopyDeviceOperation::SameMemoryConfig::create_descriptor(
         writer_compile_time_args = {static_cast<uint32_t>(output_cb_index), static_cast<uint32_t>(output_unit_size)};
     }
     std::map<std::string, std::string> kernel_defines;
-    TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
-    TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
+    TensorAccessorArgs(src_tensor).append_to(reader_compile_time_args);
+    TensorAccessorArgs(dst_tensor).append_to(writer_compile_time_args);
     if (backwards) {
         kernel_defines["BACKWARDS"] = "1";
     }
@@ -166,24 +166,24 @@ ProgramDescriptor CopyDeviceOperation::SameMemoryConfig::create_descriptor(
 
         if (tilized) {
             KernelDescriptor::RTArgList reader_ra;
-            reader_ra.push_back(src_buffer);
+            reader_ra.push_back(src_tensor);
             reader_ra.push_back(num_units_per_core);
             reader_ra.push_back(start_id);
             KernelDescriptor::RTArgList writer_ra;
-            writer_ra.push_back(dst_buffer);
+            writer_ra.push_back(dst_tensor);
             writer_ra.push_back(num_units_per_core);
             writer_ra.push_back(start_id);
             reader_desc.emplace_runtime_args(core, reader_ra);
             writer_desc.emplace_runtime_args(core, writer_ra);
         } else {
             KernelDescriptor::RTArgList reader_ra;
-            reader_ra.push_back(src_buffer);
+            reader_ra.push_back(src_tensor);
             reader_ra.push_back(input_unit_size);
             reader_ra.push_back(num_units_per_core);
             reader_ra.push_back(start_id);
             reader_ra.push_back(full_input_row / input_unit_size);
             KernelDescriptor::RTArgList writer_ra;
-            writer_ra.push_back(dst_buffer);
+            writer_ra.push_back(dst_tensor);
             writer_ra.push_back(output_unit_size);
             writer_ra.push_back(num_units_per_core);
             writer_ra.push_back(start_id);

@@ -78,7 +78,7 @@ tt::tt_metal::ProgramDescriptor build_program(
     // A K x K slot of the landing buffer on each head core, in place.
     const auto landing_slot_cb = [&](uint32_t index, uint32_t slot) {
         auto cb = kda_factory_detail::cb_descriptor(index, state_tiles, state_tile, tt::DataFormat::Float32, head_set);
-        cb.buffer = in.landing.buffer();
+        cb.tensor = &in.landing.mesh_tensor();
         cb.address_offset = slot * state_tiles * state_tile;
         return cb;
     };
@@ -108,21 +108,21 @@ tt::tt_metal::ProgramDescriptor build_program(
     reader_ct.push_back(cb_ein_exact);
     reader_ct.push_back(cb_identity);
     for (const auto* tensor : {&in.packed, &in.initial_state, &in.actual_start}) {
-        tt::tt_metal::TensorAccessorArgs(tensor->buffer()).append_to(reader_ct);
+        tt::tt_metal::TensorAccessorArgs(tensor->mesh_tensor()).append_to(reader_ct);
     }
     std::vector<uint32_t> writer_ct = {cb_eout, cb_chron};
     writer_ct.insert(writer_ct.end(), chronology.begin(), chronology.end());
     writer_ct.push_back(kt);
     writer_ct.push_back(ack_semaphore_id);
     for (const auto* tensor : {&entry, &final_state}) {
-        tt::tt_metal::TensorAccessorArgs(tensor->buffer()).append_to(writer_ct);
+        tt::tt_metal::TensorAccessorArgs(tensor->mesh_tensor()).append_to(writer_ct);
     }
     std::vector<uint32_t> sender_ct = {cb_stage, cb_eout};
     sender_ct.insert(sender_ct.end(), chronology.begin(), chronology.end());
     sender_ct.insert(
         sender_ct.end(),
         {kt * state_tile, relay_affine_prefix_packet_bytes(), kt, sender_slots, ack_semaphore_id, successor_hops});
-    tt::tt_metal::TensorAccessorArgs(in.actual_start.buffer()).append_to(sender_ct);
+    tt::tt_metal::TensorAccessorArgs(in.actual_start.mesh_tensor()).append_to(sender_ct);
 
     tt::tt_metal::KernelDescriptor reader{
         .kernel_source = std::string(kernel_dir) + "dataflow/reader_relay_affine_prefix.cpp",
@@ -158,8 +158,9 @@ tt::tt_metal::ProgramDescriptor build_program(
 
     const auto [arrival_address, final_address] = attrs.semaphore_addresses;
     // Every core reads the same buffers, so they are bound once per kernel.
-    reader.emplace_common_runtime_args({in.packed.buffer(), in.initial_state.buffer(), in.actual_start.buffer()});
-    writer.emplace_common_runtime_args({entry.buffer(), final_state.buffer(), in.landing.buffer()});
+    reader.emplace_common_runtime_args(
+        {in.packed.mesh_tensor(), in.initial_state.mesh_tensor(), in.actual_start.mesh_tensor()});
+    writer.emplace_common_runtime_args({entry.mesh_tensor(), final_state.mesh_tensor(), in.landing.mesh_tensor()});
     for (uint32_t h = 0; h < batch_heads; ++h) {
         const auto& core = head_cores[h];
         const auto sender_core = mesh->worker_core_from_logical_core(sender_cores[h % attrs.num_links]);
@@ -182,7 +183,7 @@ tt::tt_metal::ProgramDescriptor build_program(
     const auto destination_node = mesh->get_fabric_node_id(successor);
     const auto connection_node = fabric_2d ? destination_node : mesh->get_fabric_node_id(first_hop);
     const auto links = tt::tt_fabric::get_forwarding_link_indices(*mesh, source_node, connection_node);
-    desc.kernels[sender_kernel].emplace_common_runtime_args({in.actual_start.buffer(), in.landing.buffer()});
+    desc.kernels[sender_kernel].emplace_common_runtime_args({in.actual_start.mesh_tensor(), in.landing.mesh_tensor()});
     TT_FATAL(
         links.size() >= attrs.num_links,
         "relay_affine_prefix uses {} links; the hop towards the successor has {}",

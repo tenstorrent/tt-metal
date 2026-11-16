@@ -113,7 +113,7 @@ NpHaloScatterSetup setup_interior_scatter(
         return setup;
     }
 
-    const auto* padded_buf = &tensor_args.padded_output.value().mesh_buffer();
+    const auto& padded_tensor = tensor_args.padded_output.value().mesh_tensor();
     const uint32_t Hd_i = geom.input_halo_dim_size;      // interior H (input is unpadded in repack mode)
     const uint32_t Wd_i = geom.num_sticks_per_halo_dim;  // interior W
     const uint32_t Hp_i = Hd_i + 2 * op.np_padding_h;
@@ -154,7 +154,7 @@ NpHaloScatterSetup setup_interior_scatter(
         /*border_only=*/0u};
     TensorAccessorArgs(*geom.input_buffer).append_to(sc_ct);
     TensorAccessorArgs(*geom.halo_buffer).append_to(sc_ct);
-    TensorAccessorArgs(*padded_buf).append_to(sc_ct);
+    TensorAccessorArgs(padded_tensor).append_to(sc_ct);
     auto sc_cfg = WriterDataMovementConfig{};
     sc_cfg.compile_args = sc_ct;
     setup.kernel_id = CreateKernel(
@@ -178,7 +178,7 @@ NpHaloScatterSetup setup_interior_scatter(
                 c,
                 {geom.input_buffer->address(),
                  geom.halo_buffer->address(),
-                 padded_buf->address(),
+                 padded_tensor.address(),
                  start,
                  count,
                  /*exchange_done=*/0u,

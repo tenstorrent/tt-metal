@@ -188,8 +188,8 @@ inline void patch_stale_descriptor(
         }
     }
     for (const auto& slot : slots.cb_slots) {
-        desc.cbs[slot.cb_idx].tensor = nullptr;
-        desc.cbs[slot.cb_idx].buffer = io_tensors[slot.io_tensor_index].buffer();
+        desc.cbs[slot.cb_idx].buffer = nullptr;
+        desc.cbs[slot.cb_idx].tensor = &io_tensors[slot.io_tensor_index].mesh_tensor();
     }
 }
 

@@ -108,10 +108,10 @@ tt::tt_metal::ProgramDescriptor FusedRMSNormPreAllGatherProgramFactory::create_d
         num_tile_cols,
         dst_reg_count,
     };
-    tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(input_tensor.mesh_tensor()).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {output_cb_id, output_tiles_per_row};
-    tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(output_tensor.mesh_tensor()).append_to(writer_compile_time_args);
 
     std::vector<uint32_t> compute_args = {
         input_cb_id,
@@ -177,11 +177,11 @@ tt::tt_metal::ProgramDescriptor FusedRMSNormPreAllGatherProgramFactory::create_d
         const uint32_t tile_row_end = std::min(tile_row_start + num_tile_rows_per_core, num_tile_rows);
         const uint32_t num_tile_rows_to_process = tile_row_end - tile_row_start;
 
-        reader_kernel_desc.emplace_runtime_args(core, {input_tensor.buffer(), tile_row_start, tile_row_end});
+        reader_kernel_desc.emplace_runtime_args(core, {input_tensor.mesh_tensor(), tile_row_start, tile_row_end});
 
         compute_kernel_desc.emplace_runtime_args(core, {num_tile_rows_to_process});
 
-        writer_kernel_desc.emplace_runtime_args(core, {output_tensor.buffer(), tile_row_start, tile_row_end});
+        writer_kernel_desc.emplace_runtime_args(core, {output_tensor.mesh_tensor(), tile_row_start, tile_row_end});
     }
 
     program_descriptor.kernels.push_back(std::move(reader_kernel_desc));

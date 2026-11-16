@@ -88,7 +88,7 @@ ProgramDescriptor GridSampleNearestProgramFactory::create_descriptor(
             .data_format = grid_cb_data_format,
             .page_size = grid_stick_size,
         }}},
-        .buffer = is_sharded ? grid_tensor.buffer() : nullptr,
+        .tensor = is_sharded ? &grid_tensor.mesh_tensor() : nullptr,
     });
 
     uint32_t grid_cb_index1 = DUMMY_CB_ID;
@@ -131,7 +131,7 @@ ProgramDescriptor GridSampleNearestProgramFactory::create_descriptor(
             .data_format = output_cb_data_format,
             .page_size = output_cb_page_size,
         }}},
-        .buffer = output_tensor.buffer(),
+        .tensor = &output_tensor.mesh_tensor(),
     });
 
     // Prepare stick size arguments with proper names
@@ -159,11 +159,11 @@ ProgramDescriptor GridSampleNearestProgramFactory::create_descriptor(
     };
 
     // Add tensor accessor args for input tensor (17 compile time args offset)
-    tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer()).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(input_tensor.mesh_tensor()).append_to(writer_compile_time_args);
     if (!is_sharded) {
-        tt::tt_metal::TensorAccessorArgs(*grid_tensor.buffer()).append_to(writer_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(grid_tensor.mesh_tensor()).append_to(writer_compile_time_args);
     } else {
-        tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer()).append_to(writer_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(input_tensor.mesh_tensor()).append_to(writer_compile_time_args);
     }
 
     KernelDescriptor writer_desc;
@@ -203,15 +203,15 @@ ProgramDescriptor GridSampleNearestProgramFactory::create_descriptor(
             writer_desc.emplace_runtime_args(
                 core,
                 {
-                    input_tensor.buffer(),     // rt_arg[0]: input_buffer_address
-                    i * grid_nsticks_per_core  // rt_arg[1]: grid_stick_offset
+                    input_tensor.mesh_tensor(),  // rt_arg[0]: input_buffer_address
+                    i * grid_nsticks_per_core    // rt_arg[1]: grid_stick_offset
                 });
             if (enable_split_reader) {
                 writer1_desc.emplace_runtime_args(
                     core,
                     {
-                        input_tensor.buffer(),     // rt_arg[0]: input_buffer_address
-                        i * grid_nsticks_per_core  // rt_arg[1]: grid_stick_offset
+                        input_tensor.mesh_tensor(),  // rt_arg[0]: input_buffer_address
+                        i * grid_nsticks_per_core    // rt_arg[1]: grid_stick_offset
                     });
             }
         }
@@ -226,10 +226,10 @@ ProgramDescriptor GridSampleNearestProgramFactory::create_descriptor(
             writer_desc.emplace_runtime_args(
                 core,
                 {
-                    input_tensor.buffer(),  // rt_arg[0]: input_buffer_address
-                    grid_tensor.buffer(),   // rt_arg[1]: grid_buffer_address
-                    grid_sticks,            // rt_arg[2]: grid_sticks
-                    grid_processed          // rt_arg[3]: grid_processed
+                    input_tensor.mesh_tensor(),  // rt_arg[0]: input_buffer_address
+                    grid_tensor.mesh_tensor(),   // rt_arg[1]: grid_buffer_address
+                    grid_sticks,                 // rt_arg[2]: grid_sticks
+                    grid_processed               // rt_arg[3]: grid_processed
                 });
             if (enable_split_reader) {
                 // For split reader in nearest mode, second writer needs same runtime args
@@ -237,10 +237,10 @@ ProgramDescriptor GridSampleNearestProgramFactory::create_descriptor(
                 writer1_desc.emplace_runtime_args(
                     core,
                     {
-                        input_tensor.buffer(),  // rt_arg[0]: input_buffer_address
-                        grid_tensor.buffer(),   // rt_arg[1]: grid_buffer_address
-                        grid_sticks,            // rt_arg[2]: grid_sticks
-                        grid_processed          // rt_arg[3]: grid_processed
+                        input_tensor.mesh_tensor(),  // rt_arg[0]: input_buffer_address
+                        grid_tensor.mesh_tensor(),   // rt_arg[1]: grid_buffer_address
+                        grid_sticks,                 // rt_arg[2]: grid_sticks
+                        grid_processed               // rt_arg[3]: grid_processed
                     });
             }
 

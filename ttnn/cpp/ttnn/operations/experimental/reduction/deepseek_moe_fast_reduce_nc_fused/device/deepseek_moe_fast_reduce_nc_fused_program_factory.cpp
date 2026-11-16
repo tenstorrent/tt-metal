@@ -297,10 +297,10 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
         .shared_expert_scale_bf16 = shared_expert_scale_bf16,
     };
     std::vector<uint32_t> reader_ct_args = to_reader_ct_arg_vector(reader_ct_named);
-    TensorAccessorArgs(input_tensor.buffer()).append_to(reader_ct_args);
-    TensorAccessorArgs(scores_tensor.buffer()).append_to(reader_ct_args);
-    TensorAccessorArgs(expert_indices_tensor.buffer()).append_to(reader_ct_args);
-    TensorAccessorArgs(expert_mapping_tensor.buffer()).append_to(reader_ct_args);
+    TensorAccessorArgs(input_tensor.mesh_tensor()).append_to(reader_ct_args);
+    TensorAccessorArgs(scores_tensor.mesh_tensor()).append_to(reader_ct_args);
+    TensorAccessorArgs(expert_indices_tensor.mesh_tensor()).append_to(reader_ct_args);
+    TensorAccessorArgs(expert_mapping_tensor.mesh_tensor()).append_to(reader_ct_args);
 
     std::vector<uint32_t> writer_ct_args = {
         cb_out_id,
@@ -313,7 +313,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
         writer_ct_args.push_back(output_page_size);
     }
     for (const ttnn::Tensor& output_tensor : output_tensors) {
-        TensorAccessorArgs(output_tensor.buffer()).append_to(writer_ct_args);
+        TensorAccessorArgs(output_tensor.mesh_tensor()).append_to(writer_ct_args);
     }
 
     constexpr const char* reader_kernel_file =
@@ -472,14 +472,14 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
             // create_workload_descriptor.
             reader_desc.emplace_runtime_args(
                 core,
-                {input_tensor.buffer(),
-                 scores_tensor.buffer(),
+                {input_tensor.mesh_tensor(),
+                 scores_tensor.mesh_tensor(),
                  start_tiles_read,
                  start_tiles_to_read,
                  mesh_coord_row,
                  mesh_coord_col,
-                 expert_indices_tensor.buffer(),
-                 expert_mapping_tensor.buffer()});
+                 expert_indices_tensor.mesh_tensor(),
+                 expert_mapping_tensor.mesh_tensor()});
 
             tt::tt_metal::KernelDescriptor::RTArgList writer_rt_args;
             writer_rt_args.push_back(start_tiles_read);
@@ -487,7 +487,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
             writer_rt_args.push_back(start_slice_row_offset);
             writer_rt_args.push_back(start_pages_read_in_row);
             for (const ttnn::Tensor& output_tensor : output_tensors) {
-                writer_rt_args.push_back(output_tensor.buffer());
+                writer_rt_args.push_back(output_tensor.mesh_tensor());
             }
             writer_desc.emplace_runtime_args(core, writer_rt_args);
 

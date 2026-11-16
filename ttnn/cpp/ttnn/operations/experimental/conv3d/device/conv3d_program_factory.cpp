@@ -916,12 +916,12 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         operation_attributes.logical_h_mask,
         operation_attributes.logical_w_mask,
         cb_pad_offset_id};
-    tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(input_tensor.mesh_tensor()).append_to(reader_compile_time_args);
     // Halo buffer accessor follows the input accessor (nullptr when not in halo mode, like bias).
-    tt::tt_metal::TensorAccessorArgs(halo_mode ? tensor_args.halo_buffer.value().buffer() : nullptr)
+    tt::tt_metal::TensorAccessorArgs(halo_mode ? &tensor_args.halo_buffer.value().mesh_buffer() : nullptr)
         .append_to(reader_compile_time_args);
     // Per-device offset accessor follows the halo accessor (nullptr when not masking).
-    tt::tt_metal::TensorAccessorArgs(mask_mode ? tensor_args.pad_offset_tensor.value().buffer() : nullptr)
+    tt::tt_metal::TensorAccessorArgs(mask_mode ? &tensor_args.pad_offset_tensor.value().mesh_buffer() : nullptr)
         .append_to(reader_compile_time_args);
 
     KernelDescriptor reader_desc;
@@ -1055,11 +1055,10 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         operation_attributes.output_pad_w,
         cb_weight_lo_tiled_id,
         (uint32_t)operand_split};
-    tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(writer_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(*weight_tensor.buffer()).append_to(writer_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(bias_tensor.has_value() ? bias_tensor.value().buffer() : nullptr)
-        .append_to(writer_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(operand_split ? tensor_args.weight_lo_tensor.value().buffer() : nullptr)
+    tt::tt_metal::TensorAccessorArgs(output_tensor.mesh_tensor()).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(weight_tensor.mesh_tensor()).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(ttnn::as_optional_mesh_tensor(bias_tensor)).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(operand_split ? &tensor_args.weight_lo_tensor.value().mesh_buffer() : nullptr)
         .append_to(writer_compile_time_args);
 
     KernelDescriptor writer_desc;
@@ -1069,11 +1068,8 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
     writer_desc.compile_time_args = std::move(writer_compile_time_args);
     writer_desc.config = WriterConfigDescriptor{};
 
-    tt::tt_metal::Buffer* input_buffer = input_tensor.buffer();
     tt::tt_metal::Buffer* halo_buffer_ptr = halo_mode ? tensor_args.halo_buffer.value().buffer() : nullptr;
     tt::tt_metal::Buffer* pad_offset_buffer_ptr = mask_mode ? tensor_args.pad_offset_tensor.value().buffer() : nullptr;
-    tt::tt_metal::Buffer* out_buffer = output_tensor.buffer();
-    tt::tt_metal::Buffer* weight_buffer = weight_tensor.buffer();
     tt::tt_metal::Buffer* bias_buffer = bias_tensor.has_value() ? bias_tensor.value().buffer() : nullptr;
     tt::tt_metal::Buffer* weight_lo_buffer = operand_split ? tensor_args.weight_lo_tensor.value().buffer() : nullptr;
 
@@ -1357,7 +1353,7 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         // Trailing halo buffer address (halo mode only) is read by the reader when its halo_mode CT flag set.
         KernelDescriptor::RTArgList reader_args;
         reader_args.reserve(12);
-        reader_args.push_back(input_buffer);
+        reader_args.push_back(input_tensor.mesh_tensor());
         reader_args.push_back(cw.c_in_block_start);
         reader_args.push_back(cw.c_in_block_end);
         reader_args.push_back(cw.c_out_block_start);
@@ -1396,8 +1392,8 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         // an embedded 0 so the kernel-side address is still well-defined.
         KernelDescriptor::RTArgList writer_args;
         writer_args.reserve(27 + (num_workers > 0 ? 2 + 2 * num_workers : 0));
-        writer_args.push_back(out_buffer);
-        writer_args.push_back(weight_buffer);
+        writer_args.push_back(output_tensor.mesh_tensor());
+        writer_args.push_back(weight_tensor.mesh_tensor());
         if (bias_buffer != nullptr) {
             writer_args.push_back(bias_buffer);
         } else {

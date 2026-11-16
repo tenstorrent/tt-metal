@@ -194,8 +194,8 @@ tt::tt_metal::ProgramDescriptor build_broadcast_descriptor_at(
         shard_builder::extend_sharding_compile_time_args(input_tensor, reader_compile_args);
         shard_builder::extend_sharding_compile_time_args(input_tensor, writer_compile_args);
     } else {
-        tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);
-        tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(writer_compile_args);
+        tt::tt_metal::TensorAccessorArgs(input_tensor.mesh_tensor()).append_to(reader_compile_args);
+        tt::tt_metal::TensorAccessorArgs(input_tensor.mesh_tensor()).append_to(writer_compile_args);
     }
     tt::tt_metal::KernelDescriptor reader_kernel_desc;
     reader_kernel_desc.kernel_source =
@@ -244,7 +244,7 @@ tt::tt_metal::ProgramDescriptor build_broadcast_descriptor_at(
         uint32_t input_tile_id_start = (link * base_pages_per_worker) + std::min(link, remainder);
         uint32_t input_tile_id_end = ((link + 1) * base_pages_per_worker) + std::min(link + 1, remainder);
         tt::tt_metal::KernelDescriptor::RTArgList reader_rt_args;
-        reader_rt_args.push_back(input_tensor.buffer());                   // tensor_address0
+        reader_rt_args.push_back(input_tensor.mesh_tensor());              // tensor_address0
         reader_rt_args.push_back(input_tile_id_start * num_width_shards);  // tile_id_start
         reader_rt_args.push_back(input_tile_id_end * num_width_shards);    // tile_id_end
 

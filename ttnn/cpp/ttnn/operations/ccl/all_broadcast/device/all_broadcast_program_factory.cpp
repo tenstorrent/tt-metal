@@ -195,8 +195,8 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
         shard_builder::extend_sharding_compile_time_args(input_tensor, reader_compile_args);
         shard_builder::extend_sharding_compile_time_args(input_tensor, writer_compile_args);
     } else {
-        tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);
-        tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_args);
+        tt::tt_metal::TensorAccessorArgs(input_tensor.mesh_tensor()).append_to(reader_compile_args);
+        tt::tt_metal::TensorAccessorArgs(output_tensor.mesh_tensor()).append_to(writer_compile_args);
     }
 
     // Build kernel descriptors.  Push them onto desc.kernels NOW (before the
@@ -255,7 +255,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
         // address; push it as Buffer* so the framework records a BufferBinding
         // and patches it directly on cache hit (no override_runtime_arguments).
         tt::tt_metal::KernelDescriptor::RTArgList reader_rt_args;
-        reader_rt_args.push_back(input_tensor.buffer());                   // tensor_address0
+        reader_rt_args.push_back(input_tensor.mesh_tensor());              // tensor_address0
         reader_rt_args.push_back(input_tile_id_start * num_width_shards);  // tile_id_start
         reader_rt_args.push_back(input_tile_id_end * num_width_shards);    // tile_id_end
 
@@ -333,7 +333,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
         // positions remain plain uint32_t.
         tt::tt_metal::KernelDescriptor::RTArgList writer_rt_args_builder;
         writer_rt_args_builder.reserve(writer_rt_args.size());
-        writer_rt_args_builder.push_back(output_tensors[ring_index].buffer());
+        writer_rt_args_builder.push_back(output_tensors[ring_index].mesh_tensor());
         for (size_t i = 1; i < writer_rt_args.size(); ++i) {
             writer_rt_args_builder.push_back(writer_rt_args[i]);
         }

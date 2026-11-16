@@ -71,7 +71,7 @@ ProgramDescriptor MorehArangeOperation::create_descriptor(
     }
 
     KernelDescriptor::CompileTimeArgs writer_ct_args;
-    TensorAccessorArgs(*output.buffer()).append_to(writer_ct_args);
+    TensorAccessorArgs(output.mesh_tensor()).append_to(writer_ct_args);
 
     KernelDescriptor writer_desc;
     writer_desc.kernel_source = operation_attributes.untilize_out ? WRITER_KERNEL_RM : WRITER_KERNEL_TILE;
@@ -109,7 +109,7 @@ ProgramDescriptor MorehArangeOperation::create_descriptor(
 
         writer_desc.emplace_runtime_args(
             core,
-            {output.buffer(),
+            {output.mesh_tensor(),
              tile_offset,
              num_tiles_per_core,
              start_bits,

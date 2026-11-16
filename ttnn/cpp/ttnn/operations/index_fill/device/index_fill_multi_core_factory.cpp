@@ -221,8 +221,8 @@ tt::tt_metal::ProgramDescriptor IndexFillOperation::create_descriptor(
         (std::uint32_t)index.physical_volume(),  // num elements in index array
         (std::uint32_t)(dim == n - 1)            // is last dim
     };
-    tt::tt_metal::TensorAccessorArgs(input.buffer()).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(index.buffer()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(input.mesh_tensor()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(index.mesh_tensor()).append_to(reader_compile_time_args);
 
     KernelDescriptor reader_desc{
         .kernel_source = kernels_dir_path + "reader_index_fill.cpp",
@@ -258,7 +258,7 @@ tt::tt_metal::ProgramDescriptor IndexFillOperation::create_descriptor(
         (std::uint32_t)input.element_size(),     // element size in bytes
         (std::uint32_t)(dim == n - 1)            // is last dim
     };
-    tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(output.mesh_tensor()).append_to(writer_compile_time_args);
 
     KernelDescriptor writer_desc{
         .kernel_source = kernels_dir_path + "writer_index_fill.cpp",
@@ -272,8 +272,8 @@ tt::tt_metal::ProgramDescriptor IndexFillOperation::create_descriptor(
         reader_desc.emplace_runtime_args(
             work.core,
             {
-                input.buffer(),        // input tensor address (binding)
-                index.buffer(),        // index tensor address (binding)
+                input.mesh_tensor(),   // input tensor address (binding)
+                index.mesh_tensor(),   // index tensor address (binding)
                 work.start_row,        // start row
                 work.end_row,          // end row
                 num_rows_in_dim,       // num rows in dim
@@ -286,13 +286,13 @@ tt::tt_metal::ProgramDescriptor IndexFillOperation::create_descriptor(
         writer_desc.emplace_runtime_args(
             work.core,
             {
-                output.buffer(),    // output tensor address (binding)
-                work.start_row,     // start row
-                work.end_row,       // end row
-                num_rows_in_dim,    // num rows in dim
-                dim_size,           // dim size
-                fill_value,         // fill value
-                work.col_shard_id,  // input col shard (for last-dim bounds check)
+                output.mesh_tensor(),  // output tensor address (binding)
+                work.start_row,        // start row
+                work.end_row,          // end row
+                num_rows_in_dim,       // num rows in dim
+                dim_size,              // dim size
+                fill_value,            // fill value
+                work.col_shard_id,     // input col shard (for last-dim bounds check)
                 // --- output write params ---
                 out.col_shard_id,     // output col shard base index
                 out.row_page_stride,  // output page stride

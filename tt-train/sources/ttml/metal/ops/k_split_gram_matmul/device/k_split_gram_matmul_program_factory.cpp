@@ -249,7 +249,7 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
             M_block,
             num_n_blocks,
             reduce_ack_sem};
-        TensorAccessorArgs(*input.buffer()).append_to(ct);
+        TensorAccessorArgs(input.mesh_tensor()).append_to(ct);
         row_sender_reduce_kid = CreateKernel(
             program,
             sender_path,
@@ -271,7 +271,7 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
         cb_size,
         num_m_blocks,
         num_n_blocks};
-    TensorAccessorArgs(*input.buffer()).append_to(row_sender_ct);
+    TensorAccessorArgs(input.mesh_tensor()).append_to(row_sender_ct);
     const KernelHandle row_sender_kid = CreateKernel(
         program,
         sender_path,
@@ -293,7 +293,7 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
             cb_size,
             num_m_blocks,
             num_n_blocks};
-        TensorAccessorArgs(*input.buffer()).append_to(ct);
+        TensorAccessorArgs(input.mesh_tensor()).append_to(ct);
         col_sender_kid = CreateKernel(
             program,
             sender_path,
@@ -341,7 +341,7 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
             M_block,
             num_n_blocks,
             reduce_ack_sem};
-        TensorAccessorArgs(*output.buffer()).append_to(ct);
+        TensorAccessorArgs(output.mesh_tensor()).append_to(ct);
         return ct;
     };
 
@@ -489,8 +489,8 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
         num_m_blocks,
         M_block,
         num_n_blocks};
-    TensorAccessorArgs(*input.buffer()).append_to(ct_dram);
-    TensorAccessorArgs(*output.buffer()).append_to(ct_dram);
+    TensorAccessorArgs(input.mesh_tensor()).append_to(ct_dram);
+    TensorAccessorArgs(output.mesh_tensor()).append_to(ct_dram);
     auto dram_defines = std::map<std::string, std::string>{};
     if (mirror_active)
         dram_defines["MIRROR_OUTPUT"] = "1";

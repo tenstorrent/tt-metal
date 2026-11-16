@@ -24,9 +24,9 @@ ProgramDescriptor EmbeddingBackwardDeviceOperation::create_descriptor(
     //                 Buffer Setup
     ////////////////////////////////////////////////////////////////////////////
 
-    tt_metal::Buffer* index_tensor_buffer = tensor_args.index_tensor.buffer();
-    tt_metal::Buffer* grad_tensor_buffer = tensor_args.grad_tensor.buffer();
-    tt_metal::Buffer* out_buffer = tensor_return_value.buffer();
+    const auto& index_tensor_tensor = tensor_args.index_tensor.mesh_tensor();
+    const auto& grad_tensor_tensor = tensor_args.grad_tensor.mesh_tensor();
+    const auto& out_tensor = tensor_return_value.mesh_tensor();
 
     auto* device = tensor_args.grad_tensor.device();
 
@@ -161,9 +161,9 @@ ProgramDescriptor EmbeddingBackwardDeviceOperation::create_descriptor(
         (uint32_t)index_page_size,
         (uint32_t)(tensor_args.index_tensor.dtype() == DataType::BFLOAT16),
         (uint32_t)(tensor_return_value.dtype() == DataType::BFLOAT16)};
-    TensorAccessorArgs(*grad_tensor_buffer).append_to(reader_compile_time_args);
-    TensorAccessorArgs(*index_tensor_buffer).append_to(reader_compile_time_args);
-    TensorAccessorArgs(*out_buffer).append_to(reader_compile_time_args);
+    TensorAccessorArgs(grad_tensor_tensor).append_to(reader_compile_time_args);
+    TensorAccessorArgs(index_tensor_tensor).append_to(reader_compile_time_args);
+    TensorAccessorArgs(out_tensor).append_to(reader_compile_time_args);
 
     KernelDescriptor reader_desc;
     reader_desc.kernel_source =
@@ -196,7 +196,7 @@ ProgramDescriptor EmbeddingBackwardDeviceOperation::create_descriptor(
         }
         // Buffer* entries register for fast cache-hit address patching (see PR #42992).
         reader_desc.emplace_runtime_args(
-            core, {grad_tensor_buffer, index_tensor_buffer, out_buffer, embedding_tiles, offset, tiles_this_core});
+            core, {grad_tensor_tensor, index_tensor_tensor, out_tensor, embedding_tiles, offset, tiles_this_core});
         compute_desc.emplace_runtime_args(core, {tiles_this_core});
 
         offset += tiles_this_core;

@@ -347,7 +347,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
         .core_ranges = worker_core_range,
         .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(direct_cb_reduce_id), .data_format = df, .page_size = cb_page_size}}},
-        .buffer = arrivals_in_cb ? staging.buffer() : nullptr,
+        .tensor = arrivals_in_cb ? &staging.mesh_tensor() : nullptr,
     });
 
     // --- Kernels ---
@@ -363,8 +363,8 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
         direct_cb_reduce_id,
         (uint32_t)arrivals_in_cb,
         parity_stride_tiles};
-    tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_ct_args);  // tiled
-    tt::tt_metal::TensorAccessorArgs(staging.buffer()).append_to(reader_ct_args);       // chunk-paged
+    tt::tt_metal::TensorAccessorArgs(input_tensor.mesh_tensor()).append_to(reader_ct_args);  // tiled
+    tt::tt_metal::TensorAccessorArgs(staging.mesh_tensor()).append_to(reader_ct_args);       // chunk-paged
 
     std::vector<uint32_t> writer_ct_args = {
         single_tile_bytes,
@@ -378,8 +378,8 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
         (uint32_t)arrivals_in_cb,
         parity_stride_tiles,
         (uint32_t)needs_init_sync};
-    tt::tt_metal::TensorAccessorArgs(staging.buffer()).append_to(writer_ct_args);        // chunk-paged
-    tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_ct_args);  // tiled
+    tt::tt_metal::TensorAccessorArgs(staging.mesh_tensor()).append_to(writer_ct_args);        // chunk-paged
+    tt::tt_metal::TensorAccessorArgs(output_tensor.mesh_tensor()).append_to(writer_ct_args);  // tiled
 
     std::vector<uint32_t> compute_ct_args = {
         tile_granularity, num_devices, direct_cb_reduce_id, direct_cb_out_id, parity_stride_tiles};
@@ -574,8 +574,8 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
         }
         tt::tt_metal::KernelDescriptor::RTArgList reader_rt_args;
         reader_rt_args.reserve(reader_rt.size());
-        reader_rt_args.push_back(input_tensor.buffer());
-        reader_rt_args.push_back(staging.buffer());
+        reader_rt_args.push_back(input_tensor.mesh_tensor());
+        reader_rt_args.push_back(staging.mesh_tensor());
         for (size_t i = 2; i < reader_rt.size(); ++i) {
             reader_rt_args.push_back(reader_rt[i]);
         }
@@ -646,8 +646,8 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
 
         tt::tt_metal::KernelDescriptor::RTArgList writer_rt_args;
         writer_rt_args.reserve(writer_rt.size());
-        writer_rt_args.push_back(staging.buffer());
-        writer_rt_args.push_back(output_tensor.buffer());
+        writer_rt_args.push_back(staging.mesh_tensor());
+        writer_rt_args.push_back(output_tensor.mesh_tensor());
         for (size_t i = 2; i < writer_rt.size(); ++i) {
             writer_rt_args.push_back(writer_rt[i]);
         }

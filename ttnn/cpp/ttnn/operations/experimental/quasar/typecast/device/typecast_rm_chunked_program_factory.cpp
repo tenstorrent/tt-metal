@@ -82,13 +82,13 @@ tt::tt_metal::ProgramDescriptor TypecastRowMajorChunkedProgramFactory::create_de
 
     const auto* device = input.device();
 
-    Buffer* src_buffer = input.buffer();
-    Buffer* dst_buffer = output.buffer();
+    const auto& src_tensor = input.mesh_tensor();
+    const auto& dst_tensor = output.mesh_tensor();
 
     // Get row information
     const auto& padded_shape = input.padded_shape();
     const uint32_t row_width_elements = padded_shape[padded_shape.rank() - 1];
-    const uint32_t num_rows = src_buffer->num_pages();
+    const uint32_t num_rows = src_tensor.mesh_buffer().num_pages();
 
     // Calculate chunk configuration
     const ChunkSizeConfig chunk_config =
@@ -122,8 +122,10 @@ tt::tt_metal::ProgramDescriptor TypecastRowMajorChunkedProgramFactory::create_de
     // 8-bit input with a 32-element padded chunk yields a 32B page, leaving the second
     // double-buffered page mis-aligned and causing ttsim NOC alignment crashes
     // (see test_typecast_row_major_vs_tile_layout[UINT8_TO_BFLOAT16-8x2x64x32]).
-    const uint32_t input_cb_page_size_bytes = tt::align(padded_input_full_chunk_size_bytes, src_buffer->alignment());
-    const uint32_t output_cb_page_size_bytes = tt::align(padded_output_full_chunk_size_bytes, dst_buffer->alignment());
+    const uint32_t input_cb_page_size_bytes =
+        tt::align(padded_input_full_chunk_size_bytes, src_tensor.mesh_buffer().alignment());
+    const uint32_t output_cb_page_size_bytes =
+        tt::align(padded_output_full_chunk_size_bytes, dst_tensor.mesh_buffer().alignment());
 
     desc.cbs.push_back(tt::tt_metal::CBDescriptor{
         .total_size = num_input_pages * input_cb_page_size_bytes,
@@ -152,7 +154,7 @@ tt::tt_metal::ProgramDescriptor TypecastRowMajorChunkedProgramFactory::create_de
         input_full_chunk_size_bytes,     // 3: full_chunk_size_bytes (DRAM read size)
         input_partial_chunk_size_bytes,  // 4: partial_chunk_size_bytes (DRAM read size)
     };
-    tt::tt_metal::TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(src_tensor).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {
         output_cb_index,                  // 0: cb_id_out
@@ -161,7 +163,7 @@ tt::tt_metal::ProgramDescriptor TypecastRowMajorChunkedProgramFactory::create_de
         output_full_chunk_size_bytes,     // 3: full_chunk_size_bytes (DRAM write size)
         output_partial_chunk_size_bytes,  // 4: partial_chunk_size_bytes (DRAM write size)
     };
-    tt::tt_metal::TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(dst_tensor).append_to(writer_compile_time_args);
 
     tt::tt_metal::KernelDescriptor reader_desc;
     reader_desc.kernel_source =
@@ -260,8 +262,8 @@ tt::tt_metal::ProgramDescriptor TypecastRowMajorChunkedProgramFactory::create_de
         uint32_t num_rows_for_core = is_group_1 ? num_rows_per_core_group_1 : num_rows_per_core_group_2;
         uint32_t start_row_id = row_idx;
 
-        reader_desc.emplace_runtime_args(core, {src_buffer, num_rows_for_core, start_row_id});
-        writer_desc.emplace_runtime_args(core, {dst_buffer, num_rows_for_core, start_row_id});
+        reader_desc.emplace_runtime_args(core, {src_tensor, num_rows_for_core, start_row_id});
+        writer_desc.emplace_runtime_args(core, {dst_tensor, num_rows_for_core, start_row_id});
 
         row_idx += num_rows_for_core;
     }

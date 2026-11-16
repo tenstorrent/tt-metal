@@ -18,6 +18,7 @@
 #include <tt-metalium/math.hpp>
 #include <tt_stl/fmt.hpp>
 #include "ttnn/operations/math.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 
 using uint32_t = std::uint32_t;
 using namespace tt::tt_metal;
@@ -636,16 +637,16 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     writer_mcast_sender_compile_time_args.push_back(num_cores_per_batch * num_cores_per_group);  // reduce_factor_c
 
     // Append TensorAccessorArgs for sharded writer kernel
-    tt::tt_metal::TensorAccessorArgs(gamma.has_value() ? gamma.value().buffer() : nullptr)
+    tt::tt_metal::TensorAccessorArgs(ttnn::as_optional_mesh_tensor(gamma))
         .append_to(writer_mcast_sender_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(beta.has_value() ? beta.value().buffer() : nullptr)
+    tt::tt_metal::TensorAccessorArgs(ttnn::as_optional_mesh_tensor(beta))
         .append_to(writer_mcast_sender_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(input_mask.has_value() ? input_mask.value().buffer() : nullptr)
+    tt::tt_metal::TensorAccessorArgs(ttnn::as_optional_mesh_tensor(input_mask))
         .append_to(writer_mcast_sender_compile_time_args);
 
     // writer kernel
     if (negative_mask.has_value()) {
-        TensorAccessorArgs(*negative_mask.value().buffer()).append_to(writer_mcast_sender_compile_time_args);
+        TensorAccessorArgs(negative_mask.value().mesh_tensor()).append_to(writer_mcast_sender_compile_time_args);
     } else {
         TensorAccessorArgs().append_to(writer_mcast_sender_compile_time_args);  // placeholder
     }
@@ -903,7 +904,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
                       .data_format = in_data_format,
                       .page_size = in0_cb_page_size,
                   }}},
-            .buffer = a.buffer(),
+            .tensor = &a.mesh_tensor(),
         };
         if (welford_fp32_alias) {
             in0_desc.format_descriptors.push_back(CBFormatDescriptor{
@@ -922,7 +923,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
                 .data_format = in_data_format,
                 .page_size = in0_cb_page_size,
             }}},
-            .buffer = a.buffer(),
+            .tensor = &a.mesh_tensor(),
         };
         if (welford_fp32_alias) {
             in0_desc.format_descriptors.push_back(CBFormatDescriptor{
@@ -943,7 +944,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
                 .data_format = out_data_format,
                 .page_size = out_cb_page_size,
             }}},
-            .buffer = output.buffer(),
+            .tensor = &output.mesh_tensor(),
         });
     }
 
@@ -1354,22 +1355,22 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
         writer_mcast_sender_args.reserve(10);
         writer_mcast_sender_args.push_back(eps_u);
         if (gamma.has_value()) {
-            writer_mcast_sender_args.push_back(gamma.value().buffer());
+            writer_mcast_sender_args.push_back(gamma.value().mesh_tensor());
         } else {
             writer_mcast_sender_args.push_back(0u);
         }
         if (beta.has_value()) {
-            writer_mcast_sender_args.push_back(beta.value().buffer());
+            writer_mcast_sender_args.push_back(beta.value().mesh_tensor());
         } else {
             writer_mcast_sender_args.push_back(0u);
         }
         if (input_mask.has_value()) {
-            writer_mcast_sender_args.push_back(input_mask.value().buffer());
+            writer_mcast_sender_args.push_back(input_mask.value().mesh_tensor());
         } else {
             writer_mcast_sender_args.push_back(0u);
         }
         if (negative_mask.has_value()) {
-            writer_mcast_sender_args.push_back(negative_mask.value().buffer());
+            writer_mcast_sender_args.push_back(negative_mask.value().mesh_tensor());
         } else {
             writer_mcast_sender_args.push_back(0u);
         }

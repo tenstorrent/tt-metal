@@ -145,7 +145,7 @@ ProgramDescriptor BernoulliDeviceOperation::BernoulliProgramFactory::create_desc
 
     // Reader kernel
     std::vector<uint32_t> reader_compile_time_args{in_cb_id};
-    TensorAccessorArgs(*input.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(input.mesh_tensor()).append_to(reader_compile_time_args);
 
     KernelDescriptor reader_desc;
     reader_desc.kernel_source = kernels_dir_path + "reader_bernoulli.cpp";
@@ -156,7 +156,7 @@ ProgramDescriptor BernoulliDeviceOperation::BernoulliProgramFactory::create_desc
 
     // Writer kernel
     std::vector<uint32_t> writer_compile_time_args{in_cb_id, intermed_cb_id, intermed1_cb_id};
-    TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(output.mesh_tensor()).append_to(writer_compile_time_args);
 
     KernelDescriptor::Defines writer_defines;
     switch (input.dtype()) {
@@ -204,7 +204,7 @@ ProgramDescriptor BernoulliDeviceOperation::BernoulliProgramFactory::create_desc
 
         // Register input/output addresses as Buffer* bindings for the cache-miss build; both are
         // re-applied on every cache hit via override_runtime_arguments().
-        reader_desc.emplace_runtime_args(core, {input.buffer(), tile_offset, units_per_core});
+        reader_desc.emplace_runtime_args(core, {input.mesh_tensor(), tile_offset, units_per_core});
 
         // seed is DYNAMIC (excluded from compute_program_hash): baked here for the cache-miss
         // build, re-applied on every cache hit via override_runtime_arguments().
@@ -212,7 +212,7 @@ ProgramDescriptor BernoulliDeviceOperation::BernoulliProgramFactory::create_desc
         compute_desc.runtime_args.emplace_back(
             core, KernelDescriptor::CoreRuntimeArgs{seed, tile_offset, units_per_core});
 
-        writer_desc.emplace_runtime_args(core, {output.buffer(), tile_offset, units_per_core});
+        writer_desc.emplace_runtime_args(core, {output.mesh_tensor(), tile_offset, units_per_core});
     }
 
     desc.kernels.push_back(std::move(reader_desc));

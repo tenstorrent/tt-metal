@@ -545,14 +545,14 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
         args.ring_size,
         qk_out_subblock_h};
 
-    TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(input_tensor_v.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(gathered_input_tensor_k.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(gathered_input_tensor_v.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(joint_tensor_q.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(joint_tensor_k.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(joint_tensor_v.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(input_tensor_q.mesh_tensor()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(input_tensor_k.mesh_tensor()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(input_tensor_v.mesh_tensor()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(gathered_input_tensor_k.mesh_tensor()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(gathered_input_tensor_v.mesh_tensor()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(joint_tensor_q.mesh_tensor()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(joint_tensor_k.mesh_tensor()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(joint_tensor_v.mesh_tensor()).append_to(reader_compile_time_args);
 
     /**
      * Create semaphores used for L1-L1 store-and-forward of KV between cores.
@@ -635,7 +635,7 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     // Trace-safe logical_n: presence flag, then the accessor args for the 1-element tensor. The accessor
     // block is emitted unconditionally (nullptr when absent) so the CT-arg layout after it never shifts.
     reader_compile_time_args.push_back(static_cast<uint32_t>(has_logical_n_tensor));
-    TensorAccessorArgs(has_logical_n_tensor ? tensor_args.logical_n_tensor->buffer() : nullptr)
+    TensorAccessorArgs(has_logical_n_tensor ? &tensor_args.logical_n_tensor->mesh_buffer() : nullptr)
         .append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {
@@ -665,10 +665,10 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     // Trace-safe logical_n accessor block sits ahead of the output accessors so every downstream offset
     // (out / joint_out, and the MUX + AG block that chains off joint_out) keeps deriving normally.
     // Emitted unconditionally (nullptr when absent) to keep the layout stable across both modes.
-    TensorAccessorArgs(has_logical_n_tensor ? tensor_args.logical_n_tensor->buffer() : nullptr)
+    TensorAccessorArgs(has_logical_n_tensor ? &tensor_args.logical_n_tensor->mesh_buffer() : nullptr)
         .append_to(writer_compile_time_args);
-    TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
-    TensorAccessorArgs(joint_output_tensor.buffer()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(output_tensor.mesh_tensor()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(joint_output_tensor.mesh_tensor()).append_to(writer_compile_time_args);
 
     // Streaming-only compute kernel: NH and the classic matmul block params (in0_block_w,
     // num_subblocks, num_blocks) are not consumed — only the subblock shapes are.
@@ -1065,16 +1065,16 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     reader_compile_time_args[sem_args_offset + 4] = stream_q ? 1 : 0;
     compute_compile_time_args[20] = stream_q ? 1 : 0;
 
-    auto* const q_buf = input_tensor_q.buffer();
-    auto* const k_buf = input_tensor_k.buffer();
-    auto* const v_buf = input_tensor_v.buffer();
-    auto* const gathered_k_buf = gathered_input_tensor_k.buffer();
-    auto* const gathered_v_buf = gathered_input_tensor_v.buffer();
-    auto* const joint_q_buf = joint_tensor_q.buffer();
-    auto* const joint_k_buf = joint_tensor_k.buffer();
-    auto* const joint_v_buf = joint_tensor_v.buffer();
-    auto* const out_buf = output_tensor.buffer();
-    auto* const joint_out_buf = joint_output_tensor.buffer();
+    const auto& q_tensor = input_tensor_q.mesh_tensor();
+    const auto& k_tensor = input_tensor_k.mesh_tensor();
+    const auto& v_tensor = input_tensor_v.mesh_tensor();
+    const auto& gathered_k_tensor = gathered_input_tensor_k.mesh_tensor();
+    const auto& gathered_v_tensor = gathered_input_tensor_v.mesh_tensor();
+    const auto& joint_q_tensor = joint_tensor_q.mesh_tensor();
+    const auto& joint_k_tensor = joint_tensor_k.mesh_tensor();
+    const auto& joint_v_tensor = joint_tensor_v.mesh_tensor();
+    const auto& out_tensor = output_tensor.mesh_tensor();
+    const auto& joint_out_tensor = joint_output_tensor.mesh_tensor();
 
     /**
      * Build per-row store-and-forward chains.
@@ -1550,8 +1550,8 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
 
     writer_fabric_compile_time_args.push_back(ag_packet_size_in_pages);
     writer_fabric_compile_time_args.push_back(ag_page_size);
-    TensorAccessorArgs(gathered_input_tensor_k.buffer()).append_to(writer_fabric_compile_time_args);
-    TensorAccessorArgs(gathered_input_tensor_v.buffer()).append_to(writer_fabric_compile_time_args);
+    TensorAccessorArgs(gathered_input_tensor_k.mesh_tensor()).append_to(writer_fabric_compile_time_args);
+    TensorAccessorArgs(gathered_input_tensor_v.mesh_tensor()).append_to(writer_fabric_compile_time_args);
 
     auto writer_fabric_defines = defines;
     writer_fabric_defines["USE_MUX"] = "1";
@@ -1581,10 +1581,10 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     // Live-length tensor address for all three kernels -- each derives chunk-skip counts from it and
     // the credit/gate protocol requires they agree. Buffer* (not ->address()) so a cache hit re-patches it.
     if (has_logical_n_tensor) {
-        auto* logical_n_buffer = tensor_args.logical_n_tensor->buffer();
+        const auto& logical_n_tensor = tensor_args.logical_n_tensor->mesh_tensor();
         const auto logical_n_common_args = [&]() {
             KernelDescriptor::RTArgList args_list;
-            args_list.push_back(logical_n_buffer);
+            args_list.push_back(logical_n_tensor);
             return args_list;
         };
         reader_kernel.emplace_common_runtime_args(logical_n_common_args());
@@ -1638,14 +1638,14 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
         log_debug(tt::LogOp, "q_base={}, q_stride={}, q_count={}", work.q_base, work.q_stride, work.q_count);
 
         KernelDescriptor::RTArgList reader_args;
-        reader_args.push_back(q_buf);
-        reader_args.push_back(k_buf);
-        reader_args.push_back(v_buf);
-        reader_args.push_back(gathered_k_buf);
-        reader_args.push_back(gathered_v_buf);
-        reader_args.push_back(joint_q_buf);
-        reader_args.push_back(joint_k_buf);
-        reader_args.push_back(joint_v_buf);
+        reader_args.push_back(q_tensor);
+        reader_args.push_back(k_tensor);
+        reader_args.push_back(v_tensor);
+        reader_args.push_back(gathered_k_tensor);
+        reader_args.push_back(gathered_v_tensor);
+        reader_args.push_back(joint_q_tensor);
+        reader_args.push_back(joint_k_tensor);
+        reader_args.push_back(joint_v_tensor);
         reader_args.push_back(work.q_base);
         reader_args.push_back(work.q_stride);
         reader_args.push_back(work.q_count);
@@ -1722,9 +1722,9 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
 
         // Writer args
         KernelDescriptor::RTArgList writer_args;
-        writer_args.push_back(out_buf);
+        writer_args.push_back(out_tensor);
         // Zero-seq when no joint; address unused at runtime (L=0 => no joint writes).
-        writer_args.push_back(joint_out_buf);
+        writer_args.push_back(joint_out_tensor);
         writer_args.push_back(work.q_base);
         writer_args.push_back(work.q_stride);
         writer_args.push_back(work.q_count);
@@ -1827,8 +1827,8 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
                 writer_args.push_back(link);            // my_mux_index
                 writer_args.push_back(ag_output_Wt);
                 writer_args.push_back(ag_output_Ht);
-                writer_args.push_back(gathered_k_buf);
-                writer_args.push_back(gathered_v_buf);
+                writer_args.push_back(gathered_k_tensor);
+                writer_args.push_back(gathered_v_tensor);
                 // Split-head forwarding dedup: follower rows' clients skip fabric data + semincs
                 // (the leader row of the pair sends byte-identical packets).
                 writer_args.push_back(row_dedup_role.at(core.y) == 2 ? 1u : 0u);

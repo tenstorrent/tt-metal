@@ -283,7 +283,6 @@ DramPrefetcherValidatorDeviceOperation::ProgramFactory::create_at(
 
     const ValidatorGeometry geom = compute_validator_geometry(
         source_tensor, bank_plan_from_factory_order_mapping(global_cb.sender_receiver_core_mapping()));
-    const auto* tensor_buffer = &source_tensor.mesh_buffer();
     const CoreRangeSet receiver_cores = global_cb.receiver_cores();
 
     Program program = CreateProgram();
@@ -310,7 +309,7 @@ DramPrefetcherValidatorDeviceOperation::ProgramFactory::create_at(
         operation_attributes.print_stride,
         operation_attributes.streaming ? 1u : 0u,
     };
-    TensorAccessorArgs(*tensor_buffer).append_to(compile_args);
+    TensorAccessorArgs(source_tensor.mesh_tensor()).append_to(compile_args);
 
     KernelHandle kernel_id = CreateKernel(
         program,
@@ -319,7 +318,7 @@ DramPrefetcherValidatorDeviceOperation::ProgramFactory::create_at(
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0, .compile_args = compile_args});
 
-    const uint32_t bank_base_addr = static_cast<uint32_t>(tensor_buffer->address());
+    const uint32_t bank_base_addr = static_cast<uint32_t>(source_tensor.mesh_buffer().address());
     for (const auto& plan : geom.receivers) {
         const std::vector<uint32_t> rt_args = {
             plan.bank_id,

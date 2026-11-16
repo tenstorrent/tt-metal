@@ -36,14 +36,14 @@ tt::tt_metal::ProgramDescriptor TypecastProgramFactory::create_descriptor(
     // Get number of pages (tiles for TILE layout, rows for ROW_MAJOR layout)
     const uint32_t num_pages = input.mesh_buffer().num_pages();
 
-    Buffer* src_buffer = input.buffer();
-    Buffer* dst_buffer = output.buffer();
+    const auto& src_tensor = input.mesh_tensor();
+    const auto& dst_tensor = output.mesh_tensor();
 
     // Set CB page size correctly based on layout
     // - For TILE layout: page = one 32x32 tile
     // - For ROW_MAJOR layout: page = one full row including padding
-    const uint32_t input_page_size = is_row_major ? src_buffer->page_size() : single_tile_size_input;
-    const uint32_t output_page_size = is_row_major ? dst_buffer->page_size() : single_tile_size_output;
+    const uint32_t input_page_size = is_row_major ? src_tensor.mesh_buffer().page_size() : single_tile_size_input;
+    const uint32_t output_page_size = is_row_major ? dst_tensor.mesh_buffer().page_size() : single_tile_size_output;
 
     const CoreCoord compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     auto [num_cores, all_cores, core_group_1, core_group_2, num_items_per_core_group_1, num_items_per_core_group_2] =
@@ -75,9 +75,9 @@ tt::tt_metal::ProgramDescriptor TypecastProgramFactory::create_descriptor(
     });
 
     std::vector<uint32_t> reader_compile_time_args;
-    tt::tt_metal::TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(src_tensor).append_to(reader_compile_time_args);
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index};
-    tt::tt_metal::TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(dst_tensor).append_to(writer_compile_time_args);
 
     tt::tt_metal::KernelDescriptor reader_desc;
     reader_desc.kernel_source =
@@ -178,8 +178,8 @@ tt::tt_metal::ProgramDescriptor TypecastProgramFactory::create_descriptor(
             TT_THROW("Core not in specified core ranges");
         }
 
-        reader_desc.emplace_runtime_args(core, {src_buffer, num_items_per_core, num_items_written});
-        writer_desc.emplace_runtime_args(core, {dst_buffer, num_items_per_core, num_items_written});
+        reader_desc.emplace_runtime_args(core, {src_tensor, num_items_per_core, num_items_written});
+        writer_desc.emplace_runtime_args(core, {dst_tensor, num_items_per_core, num_items_written});
         num_items_written += num_items_per_core;
     }
 
@@ -257,13 +257,13 @@ tt::tt_metal::ProgramDescriptor TypecastSubgridProgramFactory::create_descriptor
         }}},
     });
 
-    auto* src_buffer = input.buffer();
-    auto* dst_buffer = output.buffer();
+    const auto& src_tensor = input.mesh_tensor();
+    const auto& dst_tensor = output.mesh_tensor();
 
     std::vector<uint32_t> reader_compile_time_args;
-    tt::tt_metal::TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(src_tensor).append_to(reader_compile_time_args);
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index};
-    tt::tt_metal::TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(dst_tensor).append_to(writer_compile_time_args);
 
     tt::tt_metal::KernelDescriptor reader_desc;
     reader_desc.kernel_source =
@@ -329,8 +329,8 @@ tt::tt_metal::ProgramDescriptor TypecastSubgridProgramFactory::create_descriptor
     uint32_t tile_start_id = 0;
 
     for (auto core : cores) {
-        reader_desc.emplace_runtime_args(core, {src_buffer, ntiles_per_core, tile_start_id});
-        writer_desc.emplace_runtime_args(core, {dst_buffer, ntiles_per_core, tile_start_id});
+        reader_desc.emplace_runtime_args(core, {src_tensor, ntiles_per_core, tile_start_id});
+        writer_desc.emplace_runtime_args(core, {dst_tensor, ntiles_per_core, tile_start_id});
         tile_start_id += ntiles_per_core;
     }
 

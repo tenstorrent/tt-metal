@@ -71,16 +71,16 @@ tt::tt_metal::ProgramDescriptor OffsetCumsumProgramFactory::create_descriptor(
         operation_attributes.cluster_axis,
         H);
 
-    auto* src_buffer = input.buffer();
-    auto* dst_offsets_buffer = tensor_return_value.at(0).buffer();
-    auto* dst_totals_buffer = tensor_return_value.at(1).buffer();
-    auto* dst_expert_region_buffer = tensor_return_value.at(2).buffer();
-    auto* dst_all_offsets_buffer = tensor_return_value.at(3).buffer();
-    uint32_t input_page_size = src_buffer->aligned_page_size();
-    uint32_t offsets_page_size = dst_offsets_buffer->aligned_page_size();
-    uint32_t totals_page_size = dst_totals_buffer->aligned_page_size();
-    uint32_t expert_region_page_size = dst_expert_region_buffer->aligned_page_size();
-    uint32_t all_offsets_page_size = dst_all_offsets_buffer->aligned_page_size();
+    const auto& src_tensor = input.mesh_tensor();
+    const auto& dst_offsets_tensor = tensor_return_value.at(0).mesh_tensor();
+    const auto& dst_totals_tensor = tensor_return_value.at(1).mesh_tensor();
+    const auto& dst_expert_region_tensor = tensor_return_value.at(2).mesh_tensor();
+    const auto& dst_all_offsets_tensor = tensor_return_value.at(3).mesh_tensor();
+    uint32_t input_page_size = src_tensor.mesh_buffer().aligned_page_size();
+    uint32_t offsets_page_size = dst_offsets_tensor.mesh_buffer().aligned_page_size();
+    uint32_t totals_page_size = dst_totals_tensor.mesh_buffer().aligned_page_size();
+    uint32_t expert_region_page_size = dst_expert_region_tensor.mesh_buffer().aligned_page_size();
+    uint32_t all_offsets_page_size = dst_all_offsets_tensor.mesh_buffer().aligned_page_size();
 
     // Holds all H input rows: the kernel reads the input once, behind a single barrier.
     uint32_t cb_in0_index = tt::CBIndex::c_0;
@@ -136,11 +136,11 @@ tt::tt_metal::ProgramDescriptor OffsetCumsumProgramFactory::create_descriptor(
         H,
         experts_per_chip,
     };
-    tt::tt_metal::TensorAccessorArgs(src_buffer).append_to(compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(dst_offsets_buffer).append_to(compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(dst_totals_buffer).append_to(compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(dst_expert_region_buffer).append_to(compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(dst_all_offsets_buffer).append_to(compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(src_tensor).append_to(compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(dst_offsets_tensor).append_to(compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(dst_totals_tensor).append_to(compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(dst_expert_region_tensor).append_to(compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(dst_all_offsets_tensor).append_to(compile_time_args);
 
     tt::tt_metal::KernelDescriptor reader_kernel_desc;
     reader_kernel_desc.kernel_source =
@@ -155,11 +155,11 @@ tt::tt_metal::ProgramDescriptor OffsetCumsumProgramFactory::create_descriptor(
     // for the cache-hit fast path; row_idx is plain uint32_t (no override needed —
     // it is invariant for a given coord, baked into the cached program for that coord).
     tt::tt_metal::KernelDescriptor::RTArgList reader_rt_args;
-    reader_rt_args.push_back(src_buffer);
-    reader_rt_args.push_back(dst_offsets_buffer);
-    reader_rt_args.push_back(dst_totals_buffer);
-    reader_rt_args.push_back(dst_expert_region_buffer);
-    reader_rt_args.push_back(dst_all_offsets_buffer);
+    reader_rt_args.push_back(src_tensor);
+    reader_rt_args.push_back(dst_offsets_tensor);
+    reader_rt_args.push_back(dst_totals_tensor);
+    reader_rt_args.push_back(dst_expert_region_tensor);
+    reader_rt_args.push_back(dst_all_offsets_tensor);
     reader_rt_args.push_back(row_idx);
     reader_kernel_desc.emplace_runtime_args(core, reader_rt_args);
 

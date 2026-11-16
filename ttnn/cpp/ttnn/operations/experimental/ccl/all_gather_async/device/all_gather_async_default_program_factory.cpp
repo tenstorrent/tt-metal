@@ -455,12 +455,12 @@ AllGatherDescriptorArtifacts build_all_gather_async_minimal_default_program_desc
     if (input_is_sharded) {
         shard_builder::extend_sharding_compile_time_args(input_tensor, sender_reader_compile_args);
     } else {
-        tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(sender_reader_compile_args);
+        tt::tt_metal::TensorAccessorArgs(input_tensor.mesh_tensor()).append_to(sender_reader_compile_args);
     }
     if (output_is_sharded) {
         shard_builder::extend_sharding_compile_time_args(output_tensor, sender_reader_compile_args);
     } else {
-        tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(sender_reader_compile_args);
+        tt::tt_metal::TensorAccessorArgs(output_tensor.mesh_tensor()).append_to(sender_reader_compile_args);
     }
 
     tt::tt_metal::KernelDescriptor reader_kernel_desc;
@@ -516,7 +516,7 @@ AllGatherDescriptorArtifacts build_all_gather_async_minimal_default_program_desc
     if (output_is_sharded) {
         shard_builder::extend_sharding_compile_time_args(output_tensor, sender_writer_compile_args);
     } else {
-        tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(sender_writer_compile_args);
+        tt::tt_metal::TensorAccessorArgs(output_tensor.mesh_tensor()).append_to(sender_writer_compile_args);
     }
 
     tt::tt_metal::KernelDescriptor writer_kernel_desc;
@@ -700,8 +700,8 @@ AllGatherDescriptorArtifacts build_all_gather_async_minimal_default_program_desc
     for (const size_t kernel_index : {reader_kernel_index, writer_kernel_index}) {
         tt::tt_metal::KernelDescriptor::RTArgList common_args;
         common_args.reserve(ttnn::ccl::AllGatherCommonArgs::count);
-        common_args.push_back(input_tensor.buffer());
-        common_args.push_back(output_tensor.buffer());
+        common_args.push_back(input_tensor.mesh_tensor());
+        common_args.push_back(output_tensor.mesh_tensor());
         for (const uint32_t semaphore_arg : semaphore_args) {
             common_args.push_back(semaphore_arg);  // smuggled-rta-ok: re-applied via
                                                    // apply_all_gather_async_minimal_default_semaphore_args()

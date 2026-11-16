@@ -188,7 +188,7 @@ ProgramDescriptor CreateQKVHeadsProgramFactory::create_descriptor(
             .data_format = data_format,
             .page_size = single_tile_size,
         }}},
-        .buffer = input_tensor.buffer(),
+        .tensor = &input_tensor.mesh_tensor(),
     });
 
     // q sharded
@@ -200,7 +200,7 @@ ProgramDescriptor CreateQKVHeadsProgramFactory::create_descriptor(
             .data_format = data_format,
             .page_size = single_tile_size,
         }}},
-        .buffer = output_q.buffer(),
+        .tensor = &output_q.mesh_tensor(),
     });
     // k sharded
     desc.cbs.push_back(CBDescriptor{
@@ -211,7 +211,7 @@ ProgramDescriptor CreateQKVHeadsProgramFactory::create_descriptor(
             .data_format = data_format,
             .page_size = single_tile_size,
         }}},
-        .buffer = output_k.buffer(),
+        .tensor = &output_k.mesh_tensor(),
     });
     // v sharded
     desc.cbs.push_back(CBDescriptor{
@@ -222,7 +222,7 @@ ProgramDescriptor CreateQKVHeadsProgramFactory::create_descriptor(
             .data_format = data_format,
             .page_size = single_tile_size,
         }}},
-        .buffer = output_v.buffer(),
+        .tensor = &output_v.mesh_tensor(),
     });
 
     if (transpose_k) {

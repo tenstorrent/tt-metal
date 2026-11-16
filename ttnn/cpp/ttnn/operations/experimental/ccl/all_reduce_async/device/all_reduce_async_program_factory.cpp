@@ -412,7 +412,7 @@ tt::tt_metal::ProgramDescriptor AllReduceAsyncMeshWorkloadFactory::create_descri
             .data_format = df,
             .page_size = reduction_CB_single_tile_size,
         }}},
-        .buffer = buffer_tensor.buffer(),
+        .tensor = &buffer_tensor.mesh_tensor(),
     });
 
     /* out cb */
@@ -429,7 +429,7 @@ tt::tt_metal::ProgramDescriptor AllReduceAsyncMeshWorkloadFactory::create_descri
             .data_format = output_df,
             .page_size = out_CB_single_tile_size,
         }}},
-        .buffer = output_tensor.buffer(),  // TODO: Remove once new cb attached for output
+        .tensor = &output_tensor.mesh_tensor(),  // TODO: Remove once new cb attached for output
     });
 
     const std::vector<uint32_t> no_work_rt_args = {static_cast<uint32_t>(!has_work), 0u, 0u};
@@ -665,7 +665,7 @@ tt::tt_metal::ProgramDescriptor AllReduceAsyncMeshWorkloadFactory::create_descri
             desc.kernels[kReductionReader], output_corerangeset_per_link[link], reduction_reader_rt_args);
     }
 
-    desc.kernels[kWorkerReader].emplace_common_runtime_args({input_tensor.buffer()});
+    desc.kernels[kWorkerReader].emplace_common_runtime_args({input_tensor.mesh_tensor()});
     desc.kernels[kWorkerWriter].emplace_common_runtime_args(
         {static_cast<uint32_t>(semaphore.address())});  // smuggled-rta-ok: caller GlobalSemaphore excluded from the
                                                         // program-cache key; re-applied by override_runtime_arguments
@@ -695,9 +695,10 @@ void AllReduceAsyncMeshWorkloadFactory::override_runtime_arguments(
         }
         const auto& indices = cb->buffer_indices();
         if (indices.contains(static_cast<uint8_t>(tt::CBIndex::c_1))) {
-            tt::tt_metal::UpdateDynamicCircularBufferAddress(program, cb->id(), *tensor_args.buffer_tensor.buffer());
+            tt::tt_metal::UpdateDynamicCircularBufferAddress(
+                program, cb->id(), tensor_args.buffer_tensor.mesh_tensor());
         } else if (indices.contains(static_cast<uint8_t>(tt::CBIndex::c_2))) {
-            tt::tt_metal::UpdateDynamicCircularBufferAddress(program, cb->id(), *output_tensor.buffer());
+            tt::tt_metal::UpdateDynamicCircularBufferAddress(program, cb->id(), output_tensor.mesh_tensor());
         }
     }
 }

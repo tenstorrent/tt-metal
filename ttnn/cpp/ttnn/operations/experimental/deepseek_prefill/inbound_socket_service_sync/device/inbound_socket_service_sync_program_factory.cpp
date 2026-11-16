@@ -98,7 +98,7 @@ ProgramDescriptor InboundSocketServiceSyncProgramFactory::create_descriptor(
     // and those go in the runtime args.
     ct_args.push_back(static_cast<uint32_t>(num_extra));
     if (num_extra > 0) {
-        TensorAccessorArgs(*tensor_args.extra_backings[0].buffer()).append_to(ct_args);
+        TensorAccessorArgs(tensor_args.extra_backings[0].mesh_tensor()).append_to(ct_args);
     }
     if (has_metadata) {
         TensorAccessorArgs(*metadata_buffer).append_to(ct_args);

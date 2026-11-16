@@ -350,10 +350,10 @@ ProgramDescriptor build_ring_program_descriptor(
 
     std::vector<uint32_t> reader_ct = common_ct;
     reader_ct.push_back(1u);  // fused_ring on
-    tt::tt_metal::TensorAccessorArgs(*q.buffer()).append_to(reader_ct);
-    tt::tt_metal::TensorAccessorArgs(*k.buffer()).append_to(reader_ct);
-    tt::tt_metal::TensorAccessorArgs(*w.buffer()).append_to(reader_ct);
-    tt::tt_metal::TensorAccessorArgs(*k_local.buffer()).append_to(reader_ct);  // fused: local SP shard (AG input)
+    tt::tt_metal::TensorAccessorArgs(q.mesh_tensor()).append_to(reader_ct);
+    tt::tt_metal::TensorAccessorArgs(k.mesh_tensor()).append_to(reader_ct);
+    tt::tt_metal::TensorAccessorArgs(w.mesh_tensor()).append_to(reader_ct);
+    tt::tt_metal::TensorAccessorArgs(k_local.mesh_tensor()).append_to(reader_ct);  // fused: local SP shard (AG input)
     reader_ct.push_back(k_mcast_on);
     reader_ct.push_back(q_mcast_on);
     reader_ct.push_back(k_send_sem);
@@ -414,7 +414,7 @@ ProgramDescriptor build_ring_program_descriptor(
     // key-stripe split (tp under KV dedup) times the full-mesh query regrouping (mesh_cols on a fused
     // full-mesh ring, see query_geometry_split). 1 everywhere else.
     reader_ct.push_back(has_meta ? args.key_stripe_split * program::query_geometry_split(args) : 1u);
-    tt::tt_metal::TensorAccessorArgs(has_meta ? *tensors.chunk_start_idx_tensor->buffer() : *q.buffer())
+    tt::tt_metal::TensorAccessorArgs(has_meta ? tensors.chunk_start_idx_tensor->mesh_tensor() : q.mesh_tensor())
         .append_to(reader_ct);
     // Cache-slot select, same fixed-width discipline as the block above (one kernel binary serves both
     // forms). local_slot_pages is shape-derived, and therefore already hashed: it is the per-(user, layer)
@@ -429,14 +429,14 @@ ProgramDescriptor build_ring_program_descriptor(
     reader_ct.push_back(has_slot_meta ? local_slot_pages_ct : 0u);
     reader_ct.push_back(has_slot_meta ? cb_meta_slot : 0u);
     reader_ct.push_back(has_slot_meta ? static_cast<uint32_t>(k_local.logical_shape()[0]) : 0u);
-    tt::tt_metal::TensorAccessorArgs(has_slot_meta ? *tensors.cache_batch_idx_tensor->buffer() : *q.buffer())
+    tt::tt_metal::TensorAccessorArgs(has_slot_meta ? tensors.cache_batch_idx_tensor->mesh_tensor() : q.mesh_tensor())
         .append_to(reader_ct);
     const bool has_valid_end = tensors.has_valid_end_metadata();
     // No presence flag: metadata mode is selected once, above. The slot index is pushed UNCONDITIONALLY
     // -- the kernel decides from the common arg's VALUE (0 = uncapped), so a 0 here would alias slot 0
     // (q's address, never 0) and read as "bound supplied".
     reader_ct.push_back(static_cast<uint32_t>(indexer_common::reader::ValidEnd));
-    tt::tt_metal::TensorAccessorArgs(has_valid_end ? *tensors.valid_end_tensor->buffer() : *q.buffer())
+    tt::tt_metal::TensorAccessorArgs(has_valid_end ? tensors.valid_end_tensor->mesh_tensor() : q.mesh_tensor())
         .append_to(reader_ct);
 
     std::vector<uint32_t> writer_ct = common_ct;
@@ -447,7 +447,7 @@ ProgramDescriptor build_ring_program_descriptor(
     writer_ct.push_back(block_cyclic_ct[1]);
     writer_ct.push_back(block_cyclic_ct[2]);  // logical key stripe count (SP * TP for TP-sharded KV)
     writer_ct.push_back(ring_size);           // physical SP shard count
-    tt::tt_metal::TensorAccessorArgs(*out.buffer()).append_to(writer_ct);
+    tt::tt_metal::TensorAccessorArgs(out.mesh_tensor()).append_to(writer_ct);
     // Metadata flag and reader-to-writer mailbox.
     writer_ct.push_back(has_meta ? 1u : 0u);
     writer_ct.push_back(has_meta ? cb_meta_writer : 0u);
@@ -551,15 +551,15 @@ ProgramDescriptor build_ring_program_descriptor(
     // Common buffer bindings retain descriptor ownership/alias resolution and are
     // re-applied on every dispatch. Scalars are uniform within each coordinate's kernel.
     KernelDescriptor::RTArgList reader_common;
-    reader_common.push_back(q.buffer());
-    reader_common.push_back(k.buffer());
-    reader_common.push_back(w.buffer());
-    reader_common.push_back(k_local.buffer());
+    reader_common.push_back(q.mesh_tensor());
+    reader_common.push_back(k.mesh_tensor());
+    reader_common.push_back(w.mesh_tensor());
+    reader_common.push_back(k_local.mesh_tensor());
     reader_common.push_back(k_batch_page_offset);
     reader_common.push_back(kv_len_tiles);
     reader_common.push_back(k_local_batch_page_offset);
     if (has_meta) {
-        reader_common.push_back(tensors.chunk_start_idx_tensor->buffer());
+        reader_common.push_back(tensors.chunk_start_idx_tensor->mesh_tensor());
     } else {
         reader_common.push_back(0u);
     }
@@ -569,7 +569,7 @@ ProgramDescriptor build_ring_program_descriptor(
     reader_common.push_back(geometry_ranks.device_index);
     reader_common.push_back(geometry_ranks.tp_index);
     if (has_slot_meta) {
-        reader_common.push_back(tensors.cache_batch_idx_tensor->buffer());
+        reader_common.push_back(tensors.cache_batch_idx_tensor->mesh_tensor());
     } else {
         reader_common.push_back(0u);
     }
@@ -578,7 +578,7 @@ ProgramDescriptor build_ring_program_descriptor(
     // ValidEnd: pushed unconditionally to hold the enum position, 0 when uncapped. Bound as a buffer so
     // the descriptor refreshes its address on every dispatch -- a stale one would clamp kv_len to garbage.
     if (has_valid_end) {
-        reader_common.push_back(tensors.valid_end_tensor->buffer());
+        reader_common.push_back(tensors.valid_end_tensor->mesh_tensor());
     } else {
         reader_common.push_back(0u);
     }
@@ -587,7 +587,7 @@ ProgramDescriptor build_ring_program_descriptor(
     append_multicast_axes(reader_common, phys);
     reader_kernel.emplace_common_runtime_args(reader_common);
     KernelDescriptor::RTArgList writer_common;
-    writer_common.push_back(out.buffer());
+    writer_common.push_back(out.mesh_tensor());
     append_scalars(writer_common, std::array{kv_len_tiles, chunk_t, geom.straddle_q_tile, geom.straddle_jump_tiles});
     writer_common.append(shard_order);
     writer_kernel.emplace_common_runtime_args(writer_common);

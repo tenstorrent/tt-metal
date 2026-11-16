@@ -704,8 +704,8 @@ ProgramDescriptor build_program_descriptor(
             // Slots 0 and 1 are buffer addresses. Slots 2 and 3 are local semaphore ids, stable for the program.
             KernelDescriptor::RTArgList reader_runtime_args;
             reader_runtime_args.reserve(6 + (2 * in_num_cores));
-            reader_runtime_args.push_back(temp_tensor.buffer());
-            reader_runtime_args.push_back(input_tensor.buffer());
+            reader_runtime_args.push_back(temp_tensor.mesh_tensor());
+            reader_runtime_args.push_back(input_tensor.mesh_tensor());
             reader_runtime_args.push_back(concat_semaphore_id);
             reader_runtime_args.push_back(concat_semaphore_id2);
             reader_runtime_args.append(noc_x_coords);

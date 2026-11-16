@@ -174,8 +174,8 @@ tt::tt_metal::ProgramDescriptor DeepseekGroupedGateDeviceOperation::ProgramFacto
     };
 
     std::vector<uint32_t> reader_compile_time_args = {};
-    tt::tt_metal::TensorAccessorArgs(scores.buffer()).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(bias.buffer()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(scores.mesh_tensor()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(bias.mesh_tensor()).append_to(reader_compile_time_args);
 
     // Compute kernel compile time arguments
     std::map<std::string, uint32_t> compute_named_compile_time_args = {
@@ -262,8 +262,8 @@ tt::tt_metal::ProgramDescriptor DeepseekGroupedGateDeviceOperation::ProgramFacto
     };
 
     std::vector<uint32_t> writer_compile_time_args = {};
-    tt::tt_metal::TensorAccessorArgs(output_weights.buffer()).append_to(writer_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(output_indices.buffer()).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(output_weights.mesh_tensor()).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(output_indices.mesh_tensor()).append_to(writer_compile_time_args);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Build kernels
@@ -328,10 +328,10 @@ tt::tt_metal::ProgramDescriptor DeepseekGroupedGateDeviceOperation::ProgramFacto
         end_height_tile = start_height_tile + workload_per_core;
 
         reader_kernel_desc.emplace_runtime_args(
-            core, {scores.buffer(), bias.buffer(), start_height_tile, end_height_tile});
+            core, {scores.mesh_tensor(), bias.mesh_tensor(), start_height_tile, end_height_tile});
         compute_kernel_desc.emplace_runtime_args(core, {start_height_tile, end_height_tile});
         writer_kernel_desc.emplace_runtime_args(
-            core, {output_weights.buffer(), output_indices.buffer(), start_height_tile, end_height_tile});
+            core, {output_weights.mesh_tensor(), output_indices.mesh_tensor(), start_height_tile, end_height_tile});
     }
 
     desc.kernels.push_back(std::move(reader_kernel_desc));

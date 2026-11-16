@@ -82,22 +82,22 @@ tt::tt_metal::ProgramDescriptor SwigluElemwiseBwProgramFactory::create_descripto
     program.cbs.push_back(make_cb_descriptor(all_cores, kScratchCbIndex, data_format, tile_size_bytes, twice_block));
     program.cbs.push_back(make_cb_descriptor(all_cores, kSiluGradCbIndex, data_format, tile_size_bytes, twice_block));
 
-    auto* const linear1_buf = linear1.buffer();
-    auto* const gate_buf = gate.buffer();
-    auto* const dL_dprod_buf = dL_dprod.buffer();
-    auto* const dL_dlinear1_buf = output.dL_dlinear1.buffer();
-    auto* const dL_dgate_buf = output.dL_dgate.buffer();
+    const auto& linear1_tensor = linear1.mesh_tensor();
+    const auto& gate_tensor = gate.mesh_tensor();
+    const auto& dL_dprod_tensor = dL_dprod.mesh_tensor();
+    const auto& dL_dlinear1_tensor = output.dL_dlinear1.mesh_tensor();
+    const auto& dL_dgate_tensor = output.dL_dgate.mesh_tensor();
 
     std::vector<uint32_t> reader_ct_args{block_size, Wt};
-    tt::tt_metal::TensorAccessorArgs(linear1_buf).append_to(reader_ct_args);
-    tt::tt_metal::TensorAccessorArgs(gate_buf).append_to(reader_ct_args);
-    tt::tt_metal::TensorAccessorArgs(dL_dprod_buf).append_to(reader_ct_args);
+    tt::tt_metal::TensorAccessorArgs(linear1_tensor).append_to(reader_ct_args);
+    tt::tt_metal::TensorAccessorArgs(gate_tensor).append_to(reader_ct_args);
+    tt::tt_metal::TensorAccessorArgs(dL_dprod_tensor).append_to(reader_ct_args);
     program.kernels.push_back(  // kReaderKernelIdx
         make_reader_kernel_descriptor(all_cores, reader_ct_args, {}, kReaderKernelPath));
 
     std::vector<uint32_t> writer_ct_args{block_size, Wt};
-    tt::tt_metal::TensorAccessorArgs(dL_dlinear1_buf).append_to(writer_ct_args);
-    tt::tt_metal::TensorAccessorArgs(dL_dgate_buf).append_to(writer_ct_args);
+    tt::tt_metal::TensorAccessorArgs(dL_dlinear1_tensor).append_to(writer_ct_args);
+    tt::tt_metal::TensorAccessorArgs(dL_dgate_tensor).append_to(writer_ct_args);
     program.kernels.push_back(  // kWriterKernelIdx
         make_writer_kernel_descriptor(all_cores, writer_ct_args, {}, kWriterKernelPath));
 
@@ -117,8 +117,8 @@ tt::tt_metal::ProgramDescriptor SwigluElemwiseBwProgramFactory::create_descripto
     auto& writer = program.kernels[kWriterKernelIdx];
     for_each_core_with_work(split, [&](const CoreWork& work) {
         const auto& [core, core_index, num_rows, start_row, in_group_1] = work;
-        reader.emplace_runtime_args(core, {linear1_buf, gate_buf, dL_dprod_buf, num_rows, start_row});
-        writer.emplace_runtime_args(core, {dL_dlinear1_buf, dL_dgate_buf, num_rows, start_row});
+        reader.emplace_runtime_args(core, {linear1_tensor, gate_tensor, dL_dprod_tensor, num_rows, start_row});
+        writer.emplace_runtime_args(core, {dL_dlinear1_tensor, dL_dgate_tensor, num_rows, start_row});
     });
 
     return program;

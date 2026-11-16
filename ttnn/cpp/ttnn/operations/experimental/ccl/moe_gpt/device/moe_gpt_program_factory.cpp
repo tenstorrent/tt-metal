@@ -226,7 +226,7 @@ tt::tt_metal::ProgramDescriptor create_program_descriptor_at(
 
     std::vector<uint32_t> compile_args;
     for (const auto& tensor : tensors) {
-        tt::tt_metal::TensorAccessorArgs(*tensor->buffer()).append_to(compile_args);
+        tt::tt_metal::TensorAccessorArgs(tensor->mesh_tensor()).append_to(compile_args);
     }
 
     std::vector<std::pair<std::string, uint32_t>> named_compile_time_args = {
@@ -380,9 +380,9 @@ tt::tt_metal::ProgramDescriptor create_program_descriptor_at(
         k_start_tiles[i] = k_start_tiles[i - 1] + tiles_per_core_table[i - 1];
     }
 
-    auto* input_buffer = tensor_args.input_tensor.buffer();
-    auto* w0_w1_buffer = tensor_args.w0_w1_tensor.buffer();
-    auto* w2_buffer = tensor_args.w2_tensor.buffer();
+    const auto& input_tensor = tensor_args.input_tensor.mesh_tensor();
+    const auto& w0_w1_tensor = tensor_args.w0_w1_tensor.mesh_tensor();
+    const auto& w2_tensor = tensor_args.w2_tensor.mesh_tensor();
 
     std::vector<uint32_t> vchannels;
     vchannels.reserve(dram_bank2core_coords.size());
@@ -410,9 +410,9 @@ tt::tt_metal::ProgramDescriptor create_program_descriptor_at(
         runtime_args.reserve(13);
         runtime_args.push_back(this_bank);                               // [0] dram_bank
         runtime_args.push_back(vchannel);                                // [1] vchannel
-        runtime_args.push_back(input_buffer);                            // [2] input
-        runtime_args.push_back(w0_w1_buffer);                            // [3] w0_w1
-        runtime_args.push_back(w2_buffer);                               // [4] w2
+        runtime_args.push_back(input_tensor);                            // [2] input
+        runtime_args.push_back(w0_w1_tensor);                            // [3] w0_w1
+        runtime_args.push_back(w2_tensor);                               // [4] w2
         runtime_args.push_back(output_buffer);                           // [5] output
         runtime_args.push_back(ring_semaphore_id);                       // [6]
         runtime_args.push_back(ring_pos);                                // [7]
@@ -755,16 +755,17 @@ tt::tt_metal::ProgramDescriptor create_program_descriptor_at(
 
         // --- Tilize tensor accessors ---
         std::vector<uint32_t> tilize_compile_time_args;
-        tt::tt_metal::TensorAccessorArgs(sparse_buffer.buffer()).append_to(tilize_compile_time_args);
-        tt::tt_metal::TensorAccessorArgs(expert_indices.buffer()).append_to(tilize_compile_time_args);
-        tt::tt_metal::TensorAccessorArgs(expert_scores.buffer()).append_to(tilize_compile_time_args);
-        tt::tt_metal::TensorAccessorArgs(expert_mapping.buffer()).append_to(tilize_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(sparse_buffer.mesh_tensor()).append_to(tilize_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(expert_indices.mesh_tensor()).append_to(tilize_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(expert_scores.mesh_tensor()).append_to(tilize_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(expert_mapping.mesh_tensor()).append_to(tilize_compile_time_args);
         // Metadata output tensor accessors (outputs 0, 1, 2 written by drain tilize core)
-        tt::tt_metal::TensorAccessorArgs(tensor_return_value[0].buffer())
+        tt::tt_metal::TensorAccessorArgs(tensor_return_value[0].mesh_tensor())
             .append_to(tilize_compile_time_args);  // per_expert_total_tokens
-        tt::tt_metal::TensorAccessorArgs(tensor_return_value[1].buffer())
+        tt::tt_metal::TensorAccessorArgs(tensor_return_value[1].mesh_tensor())
             .append_to(tilize_compile_time_args);  // expert_activation
-        tt::tt_metal::TensorAccessorArgs(tensor_return_value[2].buffer()).append_to(tilize_compile_time_args);  // e_t
+        tt::tt_metal::TensorAccessorArgs(tensor_return_value[2].mesh_tensor())
+            .append_to(tilize_compile_time_args);  // e_t
 
         // --- Named compile-time args ---
         std::vector<std::pair<std::string, uint32_t>> tilize_named_compile_time_args = {
@@ -932,9 +933,9 @@ tt::tt_metal::ProgramDescriptor create_program_descriptor_at(
 
         uint32_t tokens_per_tilize_core = tokens / TILIZE_NUM_CORES;
 
-        auto* per_expert_total_tokens_buffer = tensor_return_value[0].buffer();
-        auto* expert_activation_buffer = tensor_return_value[1].buffer();
-        auto* e_t_buffer = tensor_return_value[2].buffer();
+        const auto& per_expert_total_tokens_tensor = tensor_return_value[0].mesh_tensor();
+        const auto& expert_activation_tensor = tensor_return_value[1].mesh_tensor();
+        const auto& e_t_tensor = tensor_return_value[2].mesh_tensor();
 
         global_subtoken_offset = 0;
         uint32_t group_subtoken_offset = 0;
@@ -974,13 +975,13 @@ tt::tt_metal::ProgramDescriptor create_program_descriptor_at(
 
             tt::tt_metal::KernelDescriptor::RTArgList tilize_runtime_args;
             tilize_runtime_args.reserve(18 + (2 * TILIZE_NUM_CORES) + 1);
-            tilize_runtime_args.push_back(sparse_buffer.buffer());          // 0 input
-            tilize_runtime_args.push_back(expert_indices.buffer());         // 1
-            tilize_runtime_args.push_back(expert_scores.buffer());          // 2
-            tilize_runtime_args.push_back(expert_mapping.buffer());         // 3
-            tilize_runtime_args.push_back(per_expert_total_tokens_buffer);  // 4 per_expert_total_tokens
-            tilize_runtime_args.push_back(expert_activation_buffer);        // 5 expert_activation
-            tilize_runtime_args.push_back(e_t_buffer);                      // 6 e_t
+            tilize_runtime_args.push_back(sparse_buffer.mesh_tensor());     // 0 input
+            tilize_runtime_args.push_back(expert_indices.mesh_tensor());    // 1
+            tilize_runtime_args.push_back(expert_scores.mesh_tensor());     // 2
+            tilize_runtime_args.push_back(expert_mapping.mesh_tensor());    // 3
+            tilize_runtime_args.push_back(per_expert_total_tokens_tensor);  // 4 per_expert_total_tokens
+            tilize_runtime_args.push_back(expert_activation_tensor);        // 5 expert_activation
+            tilize_runtime_args.push_back(e_t_tensor);                      // 6 e_t
             tilize_runtime_args.push_back(is_drain_tilize_core);            // 7
             tilize_runtime_args.push_back(is_secondary_mcaster);            // 8
             tilize_runtime_args.push_back(static_cast<uint32_t>(initial_mcast_gather_core_physical.x));  // 9

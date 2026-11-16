@@ -49,10 +49,10 @@ NpHaloScatterMeshWorkloadFactory::cached_program_t NpHaloScatterMeshWorkloadFact
     Tensor& tensor_return_value) {
     Program program{};
 
-    const auto* compact = &tensor_args.compact_buffer.mesh_buffer();  // [total_sticks, C] (border source)
-    Buffer* dst = tensor_return_value.buffer();          // padded output (allocated) or in-place (border_only)
+    const auto& compact = tensor_args.compact_buffer.mesh_tensor();  // [total_sticks, C] (border source)
+    const auto& dst = tensor_return_value.mesh_tensor();  // padded output (allocated) or in-place (border_only)
     // border_only: no interior reads; x_src unused (point it at dst, harmless). repack: unpadded interior.
-    Buffer* x_src = op.border_only ? dst : tensor_args.interior_src.buffer();
+    const auto& x_src = op.border_only ? dst : tensor_args.interior_src.mesh_tensor();
 
     const auto& xshape = tensor_args.interior_src.logical_shape();
     const uint32_t rank = xshape.size();
@@ -68,7 +68,7 @@ NpHaloScatterMeshWorkloadFactory::cached_program_t NpHaloScatterMeshWorkloadFact
     const uint32_t Hp = Hd + 2 * pH;
     const uint32_t Wp = Wd + 2 * pW;
 
-    const uint32_t page_size = compact->aligned_page_size();
+    const uint32_t page_size = compact.mesh_buffer().aligned_page_size();
     tt::DataFormat df = datatype_to_dataformat_converter(tensor_args.compact_buffer.dtype());
 
     // Every padded page is written once: interior (Hd*Wd) from x + border (2 H-sections pH*Wd + 2
@@ -94,9 +94,9 @@ NpHaloScatterMeshWorkloadFactory::cached_program_t NpHaloScatterMeshWorkloadFact
 
     auto writer_cfg = WriterDataMovementConfig{};
     writer_cfg.compile_args = {page_size, outer, Hp, Wp, Hd, Wd, pH, pW, cb_id, cb_pages};
-    TensorAccessorArgs(*x_src).append_to(writer_cfg.compile_args);
-    TensorAccessorArgs(*compact).append_to(writer_cfg.compile_args);
-    TensorAccessorArgs(*dst).append_to(writer_cfg.compile_args);
+    TensorAccessorArgs(x_src).append_to(writer_cfg.compile_args);
+    TensorAccessorArgs(compact).append_to(writer_cfg.compile_args);
+    TensorAccessorArgs(dst).append_to(writer_cfg.compile_args);
 
     KernelHandle writer_kernel_id = CreateKernel(
         program,
@@ -112,10 +112,7 @@ NpHaloScatterMeshWorkloadFactory::cached_program_t NpHaloScatterMeshWorkloadFact
             const uint32_t start = assigned;
             const uint32_t count = (start >= total_sticks) ? 0u : std::min(per_core, total_sticks - start);
             SetRuntimeArgs(
-                program,
-                writer_kernel_id,
-                c,
-                {x_src->address(), compact->address(), dst->address(), start, count});
+                program, writer_kernel_id, c, {x_src.address(), compact.address(), dst.address(), start, count});
             assigned += count;
         }
     }
