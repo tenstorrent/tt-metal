@@ -560,24 +560,19 @@ EMIT_MAX_NEAR_ZERO_ATOL = 1e-3
 
 
 @dataclass(frozen=True)
-class Floored:
-    """A cell's measurement with the near-zero floor that makes it gateable: the worst
-    lane over every ranked lane, the worst outside the floor's band, and the floor."""
+class Measured:
+    """What a cell that could be measured recorded: its worst ranked lane, the near-zero
+    floor that makes it gateable as ``(residual, atol)`` (the worst lane outside the
+    floor's band, and the floor), and the list drawn on it."""
 
     max_ulp: int
-    residual: int
-    atol: float
+    floor: tuple[int, float] | None = None
+    domains: tuple[Domain, ...] = ()
 
 
-# What one cell recorded: a worst-lane step count, a floored measurement, or an
-# unmeasurable verdict.
-Recorded = int | Floored | Unmeasurable
-
-# The cells measured this session, by op and by the variant's key, and the list each
-# was recorded with (a cell read twice keeps one only while both readings agree; see
-# `record`).
-MEASURED: dict[MathOperation, dict[BudgetKey, Recorded]] = {}
-DOMAINS: dict[MathOperation, dict[BudgetKey, tuple[Domain, ...]]] = {}
+# The cells measured this session, by op and by the variant's key; a cell read twice
+# keeps its floor and its list only while both readings agree (see `record`).
+MEASURED: dict[MathOperation, dict[BudgetKey, "Measured | Unmeasurable"]] = {}
 
 
 def near_zero_floor(
@@ -614,10 +609,6 @@ def near_zero_floor(
     kept = selected & ~rescued
     residual = int(flat[kept].max()) if kept.any() else 0
     return residual, atol
-
-
-def _max_of(value) -> int:
-    return value.max_ulp if isinstance(value, Floored) else int(value)
 
 
 def floor_covered(
@@ -733,28 +724,25 @@ def record(
     comes from :func:`merge_measured`. A cell already unmeasurable stays so (its worst
     lane still counts). Two readings that differ in figure, floor or list keep the worst
     lane with no floor and no list (either list holds only its own reading's worst lane
-    per entry), and a cell that lost its list never gets one back."""
+    per entry), so a cell that lost its list never gets one back."""
     cells = MEASURED.setdefault(op, {})
-    lists = DOMAINS.setdefault(op, {})
     current = cells.get(key)
+    new = Measured(max_ulp, tuple(floor) if floor else None, tuple(domains))
     if isinstance(current, Unmeasurable):
         cells[key] = _with_measured(current, max_ulp)
-        return
-    new = Floored(max_ulp, *floor) if floor else max_ulp
-    if current is None:
-        cells[key], lists[key] = new, tuple(domains)
-    elif current != new or lists.get(key) != tuple(domains):
-        cells[key] = max(_max_of(new), _max_of(current))
-        lists.pop(key, None)
+    elif current is None or current == new:
+        cells[key] = new
+    else:
+        cells[key] = Measured(max(max_ulp, current.max_ulp))
 
 
 def record_unmeasurable(
     op: MathOperation, key: BudgetKey, verdict: Unmeasurable
 ) -> None:
-    """Record that the cell could not be measured; read twice, the cell keeps the reason
-    with more non-finite lanes and the larger finite-lane figure."""
+    """Record that the cell could not be measured (no list describes a parked cell);
+    read twice, the cell keeps the reason with more non-finite lanes and the larger
+    finite-lane figure."""
     cells = MEASURED.setdefault(op, {})
-    DOMAINS.setdefault(op, {}).pop(key, None)  # no list describes a parked cell
     current = cells.get(key)
     if isinstance(current, Unmeasurable):
         worse, other = sorted(
@@ -762,7 +750,7 @@ def record_unmeasurable(
         )
         verdict = _with_measured(worse, other.measured)
     elif current is not None:
-        verdict = _with_measured(verdict, _max_of(current))
+        verdict = _with_measured(verdict, current.max_ulp)
     cells[key] = verdict
 
 
@@ -780,24 +768,17 @@ def _with_measured(verdict: Unmeasurable, measured: int | None) -> Unmeasurable:
 
 def export_measured() -> bytes:
     """This process's measurements, for an xdist worker to hand to the controller."""
-    return pickle.dumps((MEASURED, DOMAINS))
+    return pickle.dumps(MEASURED)
 
 
 def merge_measured(blob: bytes | None) -> None:
     """Fold a worker's :func:`export_measured` into this process, worst lane winning."""
-    if blob is None:
-        return
-    measured, domains = pickle.loads(blob)
-    for op, cells in measured.items():
+    for op, cells in pickle.loads(blob).items() if blob else ():
         for key, value in cells.items():
             if isinstance(value, Unmeasurable):
                 record_unmeasurable(op, key, value)
-                continue
-            drawn = domains.get(op, {}).get(key, ())
-            if isinstance(value, Floored):
-                record(op, key, value.max_ulp, (value.residual, value.atol), drawn)
             else:
-                record(op, key, value, domains=drawn)
+                record(op, key, value.max_ulp, value.floor, value.domains)
 
 
 def cell_key(input_format, output_format, approx_mode, dest_acc) -> BudgetKey:
@@ -897,16 +878,13 @@ class Decision:
 
 
 def _decide(
-    cells: dict[BudgetKey, Recorded],
-    domains: dict[BudgetKey, tuple[Domain, ...]] | None = None,
+    cells: dict[BudgetKey, "Measured | Unmeasurable"],
 ) -> dict[BudgetKey, Decision]:
     """Each measured cell's :class:`Decision`. A floored cell whose worst lane demotes it
     is judged on the lanes outside its floor: enrolled at the residual, or, when even
     those are past the ceiling, demoted with the floor it tried noted."""
-    lists = domains or {}
     decided = {}
     for key, value in cells.items():
-        drawn = tuple(lists.get(key, ()))
         out = key.output_format
         if isinstance(value, Unmeasurable):
             # A verdict that ranked no lane records no figure: one written here would
@@ -917,24 +895,22 @@ def _decide(
                 nonfinite=value.nonfinite or None,
                 note=f"not measurable: {value.why}",
             )
-        elif isinstance(value, Floored):
-            plain = _verdict(value.max_ulp, out)
-            if plain is Metric.ULP:
-                decided[key] = Decision(plain, value.max_ulp, domains=drawn)
-            elif _verdict(value.residual, out) is Metric.ULP:
-                decided[key] = Decision(
-                    Metric.ULP, value.residual, floor=value.atol, domains=drawn
-                )
-            else:
-                decided[key] = Decision(
-                    Metric.TOLERANCE,
-                    value.max_ulp,
-                    floor=value.atol,
-                    note=f"{value.residual} ULP outside a {value.atol:.2e} floor",
-                    domains=drawn,
-                )
+            continue
+        metric, drawn = _verdict(value.max_ulp, out), value.domains
+        if metric is Metric.ULP or value.floor is None:
+            decided[key] = Decision(metric, value.max_ulp, domains=drawn)
+            continue
+        residual, atol = value.floor
+        if _verdict(residual, out) is Metric.ULP:
+            decided[key] = Decision(Metric.ULP, residual, floor=atol, domains=drawn)
         else:
-            decided[key] = Decision(_verdict(value, out), value, domains=drawn)
+            decided[key] = Decision(
+                Metric.TOLERANCE,
+                value.max_ulp,
+                floor=atol,
+                note=f"{residual} ULP outside a {atol:.2e} floor",
+                domains=drawn,
+            )
     return decided
 
 
@@ -997,7 +973,7 @@ def _kept(row: Row, measured: set[tuple[DataFormat, DataFormat]]) -> bool:
 
 
 def _excluded_cells(
-    cells: dict[BudgetKey, Recorded], arch: ChipArchitecture
+    cells: dict[BudgetKey, object], arch: ChipArchitecture
 ) -> frozenset[BudgetKey]:
     """The keys of the cells the sweep leaves out on *arch* because they hold fp16 in a
     16-bit Dest, at a Dest the run measured no cell of their pair at."""
@@ -1028,7 +1004,7 @@ def write_table(
         pairs = {(key.input_format, key.output_format) for key in cells}
         kept = tuple(row for row in table.get(op, ()) if _kept(row, pairs))
         taken = {row.key for row in kept}
-        decided = _decide(cells, DOMAINS.get(op))
+        decided = _decide(cells)
         emitted = tuple(
             decision.row(key)
             for key, decision in _collapse(

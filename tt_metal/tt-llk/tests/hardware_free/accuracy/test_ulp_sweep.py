@@ -40,12 +40,11 @@ from helpers.ulp_sweep import (
     _FP32_STRIDE,
     _KNOWN_NONFINITE_LANES,
     _SWEEP_TENSOR,
-    DOMAINS,
     EMIT_MAX_NEAR_ZERO_ATOL,
     MEASURED,
     SWEEP_FORMATS,
     EmitRefused,
-    Floored,
+    Measured,
     Swept,
     Unmeasurable,
     _binade_index,
@@ -117,10 +116,8 @@ def _host_only_arch(monkeypatch):
 @pytest.fixture(autouse=True)
 def _no_records():
     MEASURED.clear()
-    DOMAINS.clear()
     yield
     MEASURED.clear()
-    DOMAINS.clear()
 
 
 def _swept(src, golden, result, in_fmt, out_fmt, dest=D_YES, op=_OP, approx=NO):
@@ -215,7 +212,7 @@ def test_a_cell_recorded_twice_keeps_the_worst_lane():
     """Last-write-wins is the polarity that hides error."""
     record(GELU, _CELL, 12)
     record(GELU, _CELL, 3)
-    assert MEASURED[GELU][_CELL] == 12
+    assert MEASURED[GELU][_CELL] == Measured(12)
 
 
 def test_an_anti_diagonal_grid_is_refused_rather_than_collapsed(table):
@@ -267,7 +264,13 @@ def test_xdist_workers_measurements_merge_worst_lane_first():
     merge_measured(worker_b)
     merge_measured(worker_b)  # the same reading again, as two workers can send it
     merge_measured(None)  # a worker that recorded nothing
-    assert MEASURED == {GELU: {_CELL: 9, other: 2, floored: Floored(_WORST, *_FLOOR)}}
+    assert MEASURED == {
+        GELU: {
+            _CELL: Measured(9),
+            other: Measured(2),
+            floored: Measured(_WORST, _FLOOR),
+        }
+    }
 
 
 @pytest.mark.parametrize(
@@ -520,7 +523,7 @@ def test_a_tied_reading_resolves_the_same_whichever_arrives_first():
         for floor in order:
             record(GELU, _CELL, _WORST, floor)
         outcomes.append(MEASURED[GELU][_CELL])
-    assert outcomes == [_WORST, _WORST]
+    assert outcomes == [Measured(_WORST), Measured(_WORST)]
 
 
 @pytest.mark.parametrize(
@@ -537,7 +540,7 @@ def test_differing_readings_of_a_floored_cell_drop_the_floor(first, second):
     unfloored."""
     for max_ulp, floor in (first, second):
         record(GELU, _CELL, max_ulp, floor=floor)
-    assert MEASURED[GELU][_CELL] == _WORST
+    assert MEASURED[GELU][_CELL] == Measured(_WORST)
 
 
 def test_a_cell_with_a_list_is_written_as_the_list_and_its_floor_and_nothing_else(
@@ -551,7 +554,6 @@ def test_a_cell_with_a_list_is_written_as_the_list_and_its_floor_and_nothing_els
     # The entries were measured outside the floor, so it rides with the list even when
     # the cell as a whole is past the ceiling.
     MEASURED.clear()
-    DOMAINS.clear()
     past = (Domain(-_INF, 0, 14337), Domain(0, _INF, 100))
     _record_grid(GELU, F16, F16, _WORST, floor=(100, 1e-3), domains=past)
     write_table(table)
@@ -579,20 +581,18 @@ def test_a_list_survives_the_xdist_merge_and_a_differing_reading_drops_it():
     record(GELU, _CELL, 5, domains=_TWO)
     blob = export_measured()
     MEASURED.clear()
-    DOMAINS.clear()
     merge_measured(blob)
-    assert DOMAINS[GELU][_CELL] == _TWO
+    assert MEASURED[GELU][_CELL] == Measured(5, domains=_TWO)
     record(GELU, _CELL, 9, floor=(3, 1e-6), domains=_ONE)
-    assert MEASURED[GELU][_CELL] == 9 and _CELL not in DOMAINS[GELU]
+    assert MEASURED[GELU][_CELL] == Measured(9)
     MEASURED.clear()
-    DOMAINS.clear()
     # The worse reading's list would hold only its own worst lanes: 5 below zero, from
     # the first reading, is not in _ONE's figure there. And a list once dropped stays
     # dropped, whatever reading arrives next.
     record(GELU, _CELL, 5, domains=_TWO)
     record(GELU, _CELL, 9, domains=_ONE)
     record(GELU, _CELL, 2, domains=_TWO)
-    assert MEASURED[GELU][_CELL] == 9 and _CELL not in DOMAINS[GELU]
+    assert MEASURED[GELU][_CELL] == Measured(9)
 
 
 @pytest.mark.parametrize("order", [1, -1], ids=["a,b", "b,a"])
@@ -604,9 +604,9 @@ def test_two_readings_with_one_maximum_and_different_lists_keep_no_list(order):
     b = (Domain(-_INF, 0, 5), Domain(0, _INF, 1))
     for domains in (a, b)[::order]:
         record(GELU, _CELL, 5, domains=domains)
-    assert MEASURED[GELU][_CELL] == 5 and _CELL not in DOMAINS[GELU]
+    assert MEASURED[GELU][_CELL] == Measured(5)
     record(GELU, _CELL, 5, domains=a)
-    assert _CELL not in DOMAINS[GELU]
+    assert MEASURED[GELU][_CELL] == Measured(5)
 
 
 # ── Which lanes count ─────────────────────────────────────────────────────────
