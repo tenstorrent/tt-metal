@@ -168,6 +168,9 @@ private:
     const std::vector<uint64_t>& get_cross_node_program_ids();
     void compile_program(const MeshCoordinateRange& device_range, MeshDevice* mesh_device);
     void finalize_offsets(MeshDevice* mesh_device);
+    // Throws if the workload's kernel-config block does not fit the KERNEL_CONFIG window of a core type
+    // it runs on. Fast dispatch launches a workload only from the window.
+    void check_kernel_config_fits_window(MeshDevice* mesh_device);
 
     struct FinalizedMetadata {
         std::vector<uint32_t> program_config_sizes;
