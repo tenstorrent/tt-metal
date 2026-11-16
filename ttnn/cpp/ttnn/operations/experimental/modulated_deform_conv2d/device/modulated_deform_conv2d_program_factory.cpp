@@ -197,12 +197,18 @@ ProgramDescriptor ModulatedDeformConv2dOperation::create_descriptor(
     // core runs its blocks in waves of as many as fit L1, every wave taking every pass, and the
     // weight slices are loaded again each wave. Every core runs the same number of waves, as each
     // pass's slice is multicast to all of them; a core with fewer blocks runs shorter or empty ones.
-    // On a full grid one wave takes all of a core's blocks. The readers' outputs count one block deep.
+    // On a full grid one wave takes all of a core's blocks. The readers' outputs count one block deep,
+    // and the band its least: its two halves take one page each even when unused, and a band of
+    // pages takes both halves rounded up to whole pages.
+    auto band_cbs_nbytes = [&](uint32_t pages) -> uint64_t {
+        return 2ull * std::max<uint32_t>(1, (pages + 1) / 2) * input_page_nbytes;
+    };
+    const uint64_t min_band_nbytes = band_cbs_nbytes(0);
     uint32_t wave_blocks = std::max<uint32_t>(1, max_blocks);
     for (;; --wave_blocks) {
         descriptor.cbs.clear();
         push_cbs(wave_blocks);
-        uint64_t wave_cbs = 2ull * out_tiles * tile_nbytes;
+        uint64_t wave_cbs = 2ull * out_tiles * tile_nbytes + min_band_nbytes;
         for (const auto& cb : descriptor.cbs) {
             wave_cbs += cb.total_size;
         }
@@ -219,18 +225,13 @@ ProgramDescriptor ModulatedDeformConv2dOperation::create_descriptor(
         other_cbs += cb.total_size;
     }
     // Each reader's output, two blocks deep where L1 allows; it only drains the epilogue.
-    const uint32_t output_depth = other_cbs + 4 * out_tiles * tile_nbytes <= l1_budget ? 2 : 1;
+    const uint32_t output_depth = other_cbs + 4 * out_tiles * tile_nbytes + min_band_nbytes <= l1_budget ? 2 : 1;
     for (const uint8_t cb : {output_tile_cb, odd_output_tile_cb}) {
         push_cb(cb, output_depth * out_tiles, tile_nbytes);
         other_cbs += output_depth * out_tiles * tile_nbytes;
     }
     // The band is optional: without room for it the readers fetch the corners from the input where it
     // is. A sharded input needs none, its corners being in the core's own shard or a neighbour's.
-    // Its two halves take one page each even when unused, and a band of pages takes both halves
-    // rounded up to whole pages.
-    auto band_cbs_nbytes = [&](uint32_t pages) -> uint64_t {
-        return 2ull * std::max<uint32_t>(1, (pages + 1) / 2) * input_page_nbytes;
-    };
     // In waves the band would hold a core's whole range of input rows for any one wave's.
     const uint64_t band_budget = !sharded_input && waves == 1 && l1_budget > other_cbs ? l1_budget - other_cbs : 0;
     uint32_t band_margin = 0;
