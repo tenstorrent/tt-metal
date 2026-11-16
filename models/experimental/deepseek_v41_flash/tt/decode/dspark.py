@@ -123,10 +123,11 @@ DRAFT_PROB_PENALTY = 5e-5
 # through the block ops (fused_hyperconnection, matmul_decode, width_sharded_all_reduce) instead of per-row loops.
 BLOCK_ROWS = 8
 DSPARK_BLOCK = os.environ.get("DEEPSEEK_V4_DSPARK_BLOCK_OPS", "1") == "1"
-# The routed experts' dtype (bfloat8_b by default; bfloat4_b halves the bytes fused_experts streams). Each dtype has
+# The routed experts' dtype: bfloat4_b by default (half the bytes fused_experts streams; the same tokens per round as
+# bfloat8_b at TOK=300 on both test prompts). Each dtype has
 # its own cache files (the dtype is in their name).
 DSPARK_EXPERT_DTYPE = {"bf8": ttnn.bfloat8_b, "bf4": ttnn.bfloat4_b}[
-    os.environ.get("DEEPSEEK_V4_DSPARK_EXPERTS", "bf8")
+    os.environ.get("DEEPSEEK_V4_DSPARK_EXPERTS", "bf4")
 ]
 # The uniforms' clamp, so both logs of a Gumbel draw stay finite (and 0 * Gumbel is 0 when greedy).
 _UNIFORM_MIN, _UNIFORM_MAX = 2.0**-24, 1.0 - 2.0**-24
