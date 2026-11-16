@@ -2,8 +2,15 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 namespace ckernel::sfpu::ttpoly::atanh {
-using namespace ::sfpi;
+using ::sfpi::convert;
 using ::sfpi::DataLayout;
+using ::sfpi::dst_reg;
+using ::sfpi::l_reg;
+using ::sfpi::LRegs;
+using ::sfpi::RoundMode;
+using ::sfpi::vFloat;
+using ::sfpi::vFloat16b;
+using ::sfpi::vUInt;
 template <uint32_t NUM_DEGREE, uint32_t DEN_DEGREE, bool PIN_TOP = false>
 __attribute__((always_inline)) inline void eval_rational_parity_numer_denom(
     const float* num_coeffs,
