@@ -92,10 +92,10 @@ public:
         std::span<const device_operation::detail::CmdListProgramBindings> programs);
 
     // The TTNN command-list parameter binds of the op calls in progress while recording, for push_cmd_list_binds and
-    // pop_cmd_list_binds. Scopes nest; pop_binds(true) throws if a bind of the popped scope reached no recorded
+    // pop_cmd_list_binds. Scopes nest; pop_binds(true) warns if a bind of the popped scope reached no recorded
     // program.
     void push_binds(std::string op_name, std::vector<CmdListBind> binds);
-    void pop_binds(bool validate);
+    void pop_binds(bool warn);
     bool has_binds() const;
 
 private:

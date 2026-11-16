@@ -61,23 +61,23 @@ struct CmdListBind {
 };
 
 // Python's push/pop pair, on the TTNN CommandListBuilder recording on the calling thread. Binds are matched against
-// the device operations it records while they are pushed. pop_cmd_list_binds(true) throws if a bind of the popped
-// scope reached no recorded program.
+// the device operations it records while they are pushed. A bind that reaches no recorded program is recorded with
+// its default; pop_cmd_list_binds(true) logs a warning for it.
 void push_cmd_list_binds(std::string op_name, std::vector<CmdListBind> binds);
-void pop_cmd_list_binds(bool validate);
+void pop_cmd_list_binds(bool warn);
 
 // RAII push_cmd_list_binds / pop_cmd_list_binds. Scopes nest. Needs a recording TTNN CommandListBuilder.
 class CmdListBindScope {
 public:
     CmdListBindScope(std::string op_name, std::vector<CmdListBind> binds);
-    ~CmdListBindScope();  // pops without validating unless finish() ran
+    ~CmdListBindScope();  // pops without warning unless finish() ran
 
     CmdListBindScope(const CmdListBindScope&) = delete;
     CmdListBindScope& operator=(const CmdListBindScope&) = delete;
     CmdListBindScope(CmdListBindScope&&) = delete;
     CmdListBindScope& operator=(CmdListBindScope&&) = delete;
 
-    // Pops, then throws if a bind reached no recorded program, naming the bind and the op.
+    // Pops, then warns if a bind reached no recorded program, naming the bind and the op.
     void finish();
 
 private:

@@ -12,6 +12,7 @@
 
 #include <fmt/format.h>
 #include <tracy/Tracy.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/float8.hpp>
@@ -297,9 +298,9 @@ void push_cmd_list_binds(std::string op_name, std::vector<CmdListBind> binds) {
     t_recording->push_binds(std::move(op_name), std::move(binds));
 }
 
-void pop_cmd_list_binds(bool validate) {
+void pop_cmd_list_binds(bool warn) {
     TT_FATAL(t_recording != nullptr, "pop_cmd_list_binds: no TTNN CommandListBuilder is recording on this thread");
-    t_recording->pop_binds(validate);
+    t_recording->pop_binds(warn);
 }
 
 CmdListBindScope::CmdListBindScope(std::string op_name, std::vector<CmdListBind> binds) {
@@ -565,7 +566,7 @@ void CommandListBuilder::push_binds(std::string op_name, std::vector<CmdListBind
     }
 }
 
-void CommandListBuilder::pop_binds(bool validate) {
+void CommandListBuilder::pop_binds(bool warn) {
     TT_FATAL(!bind_scopes_.empty(), "pop_cmd_list_binds without push_cmd_list_binds");
     const BindScope scope = std::move(bind_scopes_.back());
     bind_scopes_.pop_back();
@@ -576,14 +577,15 @@ void CommandListBuilder::pop_binds(bool validate) {
         }
     }
     binds_.resize(scope.start);
-    // Validate after popping, so a throw leaves the stack consistent.
-    TT_FATAL(
-        !validate || unclaimed.empty(),
-        "{}: CmdListParam(s) {} did not reach any recorded program field. Each must be passed by keyword to an op "
-        "whose program factory maps that keyword in map_cmd_list_parameters: binder.tensor for tensors, "
-        "binder.param for scalars.",
-        scope.op_name,
-        unclaimed);
+    if (warn && !unclaimed.empty()) {
+        log_warning(
+            tt::LogOp,
+            "{}: CmdListParam(s) {} did not reach any recorded program field, so the op was recorded with their "
+            "defaults and update_args cannot change them. To support them, the op's program factory must map the "
+            "keyword in map_cmd_list_parameters: binder.tensor for tensors, binder.param for scalars.",
+            scope.op_name,
+            unclaimed);
+    }
 }
 
 bool CommandListBuilder::has_binds() const { return !binds_.empty(); }

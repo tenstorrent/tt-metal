@@ -357,12 +357,19 @@ def test_cmd_list_param_must_be_passed_by_keyword(device, builder, mask, expect_
 
 
 @skip_for_slow_dispatch()
-def test_param_the_program_does_not_read_is_reported(device, builder, expect_error):
+def test_unsupported_param_is_recorded_with_its_default(device, builder, command_lists, expect_error):
     device_input = to_device(device, torch.randn(SOFTMAX_SHAPE, dtype=torch.bfloat16))
+    expected = ttnn.to_torch(ttnn.relu(device_input))
     with builder:
         # relu's factory maps no keywords.
-        with expect_error(RuntimeError, r"CmdListParam\(s\) 'x' did not reach any recorded program field"):
-            ttnn.relu(input_tensor=ttnn.experimental.CmdListParam(device_input, "x"))
+        out = ttnn.relu(input_tensor=ttnn.experimental.CmdListParam(device_input, "x"))
+    command_list = builder.build()
+    command_lists.append(command_list)
+
+    command_list.enqueue(blocking=True)
+    assert torch.equal(ttnn.to_torch(out), expected)
+    with expect_error(RuntimeError, "Unknown TTNN command-list parameter 'x'"):
+        command_list.update_args({"x": device_input})
 
 
 @skip_for_slow_dispatch()

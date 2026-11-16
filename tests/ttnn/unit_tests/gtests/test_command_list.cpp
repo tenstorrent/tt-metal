@@ -167,16 +167,11 @@ TEST_F(CommandListTest, BindsNeedARecordingBuilder) {
     builder.end_recording();
 }
 
-TEST_F(CommandListTest, FinishReportsBindsThatReachedNoProgram) {
+TEST_F(CommandListTest, FinishAcceptsBindsThatReachedNoProgram) {
     CommandListBuilder builder(*device_);
     auto recording = builder.record_scope();
     CmdListBindScope scope("ttnn.relu", {{.name = "slope", .invoke_name = "slope", .value = real(0.5)}});
-    EXPECT_THAT(
-        [&] { scope.finish(); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::AllOf(
-            ::testing::HasSubstr("ttnn.relu"),
-            ::testing::HasSubstr("slope"),
-            ::testing::HasSubstr("did not reach any recorded program field"))));
+    EXPECT_NO_THROW(scope.finish());
     EXPECT_ANY_THROW(pop_cmd_list_binds(false));
 }
 
@@ -187,10 +182,7 @@ TEST_F(CommandListTest, BindScopesNest) {
         CmdListBindScope outer("outer_op", {{.name = "a", .invoke_name = "x", .value = integer(1)}});
         {
             CmdListBindScope inner("inner_op", {{.name = "b", .invoke_name = "y", .value = integer(2)}});
-            EXPECT_THAT(
-                [&] { inner.finish(); },
-                ::testing::ThrowsMessage<std::runtime_error>(::testing::AllOf(
-                    ::testing::HasSubstr("inner_op"), ::testing::HasSubstr("CmdListParam(s) 'b' did not reach"))));
+            EXPECT_NO_THROW(inner.finish());
         }
         CmdListBindScope empty("empty_op", {});
         EXPECT_NO_THROW(empty.finish());

@@ -219,8 +219,8 @@ void py_module(nb::module_& mod) {
     mod.def(
         "pop_cmd_list_binds",
         &ttnn::command_list::pop_cmd_list_binds,
-        nb::arg("validate"),
-        "Ends the innermost push_cmd_list_binds. With validate, raises if a bind reached no recorded program.");
+        nb::arg("warn"),
+        "Ends the innermost push_cmd_list_binds. With warn, logs a warning if a bind reached no recorded program.");
 }
 
 }  // namespace ttnn::operations::command_list

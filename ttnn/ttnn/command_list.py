@@ -13,7 +13,8 @@ class CmdListParam:
 
     Pass it by keyword to an op recorded inside ``with builder:``. The op runs with ``default`` and the recorded
     argument becomes updatable with ``ttnn.experimental.CommandList.update_args({param: value})`` or
-    ``{name: value}``. Outside a recording the op simply runs with ``default``.
+    ``{name: value}``. Outside a recording the op simply runs with ``default``. An op that does not support the
+    parameter is recorded with ``default`` and logs a warning.
 
     Args:
         default (ttnn.Tensor | float | int): Value the op is called and recorded with.
@@ -70,7 +71,7 @@ def call_with_cmd_list_params(operation, args, kwargs):
     try:
         output = operation(*args, **unwrapped_kwargs)
     except BaseException:
-        pop_cmd_list_binds(validate=False)
+        pop_cmd_list_binds(warn=False)
         raise
-    pop_cmd_list_binds(validate=True)
+    pop_cmd_list_binds(warn=True)
     return output
