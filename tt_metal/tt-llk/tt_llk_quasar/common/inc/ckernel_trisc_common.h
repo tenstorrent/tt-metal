@@ -40,10 +40,10 @@ using ckernel::TILE_C_DIM;
 using ckernel::TILE_R_DIM;
 
 // Default number of faces
-constexpr static std::uint32_t NUM_FACES = 4;
+constexpr std::uint32_t NUM_FACES = 4;
 
 // Default number of tiles processed per one _llk_* execute call
-static constexpr std::uint32_t NUM_TILES = 1;
+constexpr std::uint32_t NUM_TILES = 1;
 
 // SET_SRC/DST_TILE_FACE_ROW_IDX carry an 18-bit value, but under FACE_SEL only 11 bits reach the counter: a larger face
 // index aliases back to an earlier tile.
@@ -53,8 +53,8 @@ constexpr std::uint32_t FACE_SEL_IDX_LIMIT = 1u << 11;
 constexpr std::uint32_t TILE_SEL_IDX_LIMIT = 1u << 18;
 
 // Number of rows that can fit into Dest
-static constexpr std::uint32_t DEST_REGISTER_FULL_SIZE = 64 * FACE_R_DIM;
-static constexpr std::uint32_t DEST_REGISTER_HALF_SIZE = DEST_REGISTER_FULL_SIZE >> 1;
+constexpr std::uint32_t DEST_REGISTER_FULL_SIZE = 64 * FACE_R_DIM;
+constexpr std::uint32_t DEST_REGISTER_HALF_SIZE = DEST_REGISTER_FULL_SIZE >> 1;
 
 // Number of bits used to represent data format in unpacker/packer config.
 // The reason we keep only the bottom 4 bits is because the HW only has 4 bits to represent the dataformat.
@@ -234,12 +234,12 @@ inline std::uint32_t _get_dest_buffer_base_()
     return dest_register_offset;
 }
 
-inline constexpr static std::uint32_t masked_data_format(std::uint32_t data_format)
+inline constexpr std::uint32_t masked_data_format(std::uint32_t data_format)
 {
     return data_format & DATA_FORMAT_CONFIG_MASK;
 }
 
-constexpr static std::uint32_t SCALE_DATUM_SIZE(std::uint32_t format, std::uint32_t datum_count)
+constexpr std::uint32_t SCALE_DATUM_SIZE(std::uint32_t format, std::uint32_t datum_count)
 {
     switch (masked_data_format(format))
     {

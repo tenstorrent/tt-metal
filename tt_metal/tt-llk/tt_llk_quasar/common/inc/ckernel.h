@@ -28,10 +28,10 @@ constexpr std::uint32_t KERNEL_IN_PROGRESS = 15;
 constexpr std::uint32_t KERNEL_COMPLETE    = 0xFF;
 
 // MM Oct 13 2021: Now only 1024 rows in dest
-static int const DEST_MAX_ADDR_HALF_16B = 512;
-static int const DEST_MAX_ADDR_HALF_32B = 256;
-static int const DEST_MAX_ADDR_16B      = 1024;
-static int const DEST_MAX_ADDR_32B      = 512;
+constexpr int DEST_MAX_ADDR_HALF_16B = 512;
+constexpr int DEST_MAX_ADDR_HALF_32B = 256;
+constexpr int DEST_MAX_ADDR_16B      = 1024;
+constexpr int DEST_MAX_ADDR_32B      = 512;
 
 constexpr std::uint8_t TENSIX_MATH_SEMAPHORE = p_stall::SEMAPHORE_1;
 constexpr std::uint8_t TENSIX_PERF_SEMAPHORE = p_stall::SEMAPHORE_2;
@@ -278,12 +278,12 @@ inline void cfg_rmw(std::uint32_t cfg_addr32, std::uint32_t cfg_shamt, std::uint
 // example, a TRISC access to an unpacker 1 register and an UNPACR
 // instruction that targets unpacker 0).
 //
-constexpr static std::uint32_t TRACK_GLOBAL_CFG             = 1 << 0;
-constexpr static std::uint32_t EN_SUBDIVIDED_CFG_FOR_UNPACR = 1 << 1;
-constexpr static std::uint32_t TRACK_GPR                    = 1 << 2;
-constexpr static std::uint32_t TRACK_TDMA                   = 1 << 3;
-constexpr static std::uint32_t TRACK_TENSIX_INSTRUCTIONS    = 1 << 4;
-constexpr static std::uint32_t TRACK_ALL                    = 0x1F;
+constexpr std::uint32_t TRACK_GLOBAL_CFG             = 1 << 0;
+constexpr std::uint32_t EN_SUBDIVIDED_CFG_FOR_UNPACR = 1 << 1;
+constexpr std::uint32_t TRACK_GPR                    = 1 << 2;
+constexpr std::uint32_t TRACK_TDMA                   = 1 << 3;
+constexpr std::uint32_t TRACK_TENSIX_INSTRUCTIONS    = 1 << 4;
+constexpr std::uint32_t TRACK_ALL                    = 0x1F;
 
 // HACK: I inverted this signal in RTL, should probably clean this up at some point
 template <std::uint32_t bitmask>
@@ -694,9 +694,8 @@ inline void wait_bstatus_low(std::uint32_t val)
 }
 
 // Little utility function to help with certain single-core-io-custom-kernel tests.
-// Marked static as a dumb way to avoid multiple definition error
 [[maybe_unused]]
-static void time_waster(int num_iters)
+inline void time_waster(int num_iters)
 {
     std::uint32_t volatile *some_random_l1_address = reinterpret_cast<std::uint32_t volatile *>(0x14FFE);
     std::uint32_t dont_optimize_me_away;
@@ -836,12 +835,12 @@ __attribute__((always_inline)) inline void rv_wrcfg(
 // Refer to the comments about the Ports for RISC memory-mapped access near
 // to the top of tt_replay_unit.sv
 // The division by 4 is because the comment uses byte addresses.
-static const std::uint32_t replay_live_mutex = 256 >> 2;
-static const std::uint32_t mutex_0_unbanked  = 264 >> 2;
-static const std::uint32_t mutex_1_unbanked  = 268 >> 2;
-static const std::uint32_t replay_write_id   = 272 >> 2; // replay_instr_bank_write_id in the RTL
-static const std::uint32_t replay_read_id    = 276 >> 2; // replay_instr_bank_read_id in the RTL
-static const std::uint32_t mmio_write_id     = 280 >> 2; // mm_bank_write_id in the RTL
+constexpr std::uint32_t replay_live_mutex = 256 >> 2;
+constexpr std::uint32_t mutex_0_unbanked  = 264 >> 2;
+constexpr std::uint32_t mutex_1_unbanked  = 268 >> 2;
+constexpr std::uint32_t replay_write_id   = 272 >> 2; // replay_instr_bank_write_id in the RTL
+constexpr std::uint32_t replay_read_id    = 276 >> 2; // replay_instr_bank_read_id in the RTL
+constexpr std::uint32_t mmio_write_id     = 280 >> 2; // mm_bank_write_id in the RTL
 
 inline void start_using_replay_mmio_load(std::uint32_t double_banked = true)
 {
