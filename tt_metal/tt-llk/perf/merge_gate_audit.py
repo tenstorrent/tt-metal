@@ -1,14 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Check that every commit that landed on main on one day and changed an LLK perf
-input was measured and compared by the LLK perf merge gate (#63949).
-
-The commits and their diffs come from git, so the audit costs no API request per
-commit. Each commit is classified again by its own llk-perf-inputs-changed.sh,
-with its own perf_*.py beside it, and matched by SHA to the merge_group run of
-merge-gate.yaml that tested it.
-"""
+"""Find LLK perf input changes that landed on main without a full merge-gate compare."""
 
 import argparse
 import concurrent.futures
@@ -35,7 +28,6 @@ SHORT_SHA = 11
 
 
 def _gh(*args, tries=4):
-    # The jobs endpoint of a merge-gate run (~150 jobs) often answers 502.
     for attempt in range(tries):
         out = subprocess.run(["gh", *args], capture_output=True, text=True)
         if out.returncode == 0 or attempt == tries - 1:
@@ -55,7 +47,6 @@ def _git(repo, *args):
 
 
 def landed(repo, ref, day):
-    """First-parent commits of ``ref`` committed on ``day`` (UTC), oldest first."""
     start = dt.datetime.combine(day, dt.time(), dt.timezone.utc)
     out = _git(
         repo,
@@ -76,7 +67,6 @@ def landed(repo, ref, day):
 
 
 def needs_gate(repo, sha):
-    """The commit's own classifier on its merged diff, with its perf tests present."""
     files = _git(
         repo, "diff", "--name-only", "--diff-filter=ACMRT", f"{sha}^", sha
     ).splitlines()
@@ -103,10 +93,6 @@ def needs_gate(repo, sha):
 
 
 def queue_runs(repo, day):
-    """merge_group runs that tested a queue entry, by head SHA, from the day before to the day after.
-
-    A commit's date is when the queue made it, and its run can start hours later.
-    """
     runs = _json_lines(
         _gh(
             "api",
@@ -125,7 +111,6 @@ def queue_runs(repo, day):
 
 
 def queue_run(repo, sha):
-    """The run for one SHA, asked directly before a commit is called unqueued."""
     runs = _json_lines(
         _gh(
             "api",
@@ -168,7 +153,6 @@ def _artifact(repo, artifact_id, cache):
 
 
 def gate_outputs(repo, run_id, cache):
-    """Per arch: the verdict kind and the points compared, from the gate's artifacts."""
     artifacts = {
         a["name"]: a["id"]
         for a in _json_lines(
@@ -197,7 +181,6 @@ def gate_outputs(repo, run_id, cache):
             report = next(iter(report.values()), "")
             match = POINTS.search(report)
             points = int(match.group(1)) if match else None
-        # Runs before #63850 (2026-11-03) upload no verdict; read it from the report.
         if kind is None and report:
             kind = "regression" if "REGRESSIONS FOUND" in report else "pass"
         out[arch] = {"kind": kind, "points": points}
@@ -205,7 +188,6 @@ def gate_outputs(repo, run_id, cache):
 
 
 def assess(run, jobs, outputs):
-    """The first finding for one commit that needs the gate, or None."""
     if run is None:
         return "no-queue-run", ["no merge_group run tested this SHA"]
     by_name = {j["name"]: j for j in jobs}
@@ -251,7 +233,6 @@ def assess(run, jobs, outputs):
 
 
 def short_points(commits, ratio):
-    """Mark a compare with far fewer points than the day's median for its arch."""
     for arch in ARCHES:
         counts = [
             c["outputs"][arch]["points"]
@@ -291,7 +272,6 @@ def audit(repo, git_dir, ref, day, cache, ratio=0.9):
                 [((e.stderr or "").strip().splitlines() or [str(e)])[-1][:200]],
             )
 
-    # A run's job list takes ~10 s to page through; ask for several at once.
     with concurrent.futures.ThreadPoolExecutor(4) as pool:
         list(pool.map(check, gated))
     short_points(gated, ratio)
