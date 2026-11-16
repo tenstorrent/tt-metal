@@ -311,15 +311,18 @@ class _LocalAttention(OptimizedAttention):
             rope.sin,
             cfg.rms_norm_eps,
         )
-        for cache, update in ((k_cache, k), (v_cache, v)):
-            ttnn.experimental.paged_update_cache(
-                cache,
-                update,
-                update_idxs_tensor=cache_pos,
-                page_table=page_table,
-                block_size=cache.shape[-2],
-                num_kv_heads=cfg.num_key_value_heads,
-            )
+        # WS6 verify: rows at consecutive positions of one page; one cache update per row (see model.decode_forward).
+        row_positions = getattr(self, "kv_write_rows", None) or (cache_pos,)
+        for positions in row_positions:
+            for cache, update in ((k_cache, k), (v_cache, v)):
+                ttnn.experimental.paged_update_cache(
+                    cache,
+                    update,
+                    update_idxs_tensor=positions,
+                    page_table=page_table,
+                    block_size=cache.shape[-2],
+                    num_kv_heads=cfg.num_key_value_heads,
+                )
         return self._ws2_attend(q, k_cache, v_cache, cache_pos, page_table)
 
     def _ws2_attend(self, q, k_cache, v_cache, cache_pos, page_table):

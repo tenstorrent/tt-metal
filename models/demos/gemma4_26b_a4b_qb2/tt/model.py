@@ -203,6 +203,10 @@ class Gemma4Model:
         return value
 
     def logits(self, hidden):
+        return self.head_logits(self.final_norm(hidden))
+
+    def final_norm(self, hidden):
+        """Post-final-norm hidden (bf16, DRAM interleaved): the LM head input and the MTP drafter seed."""
         if hidden.dtype != ttnn.bfloat16:
             raise ValueError("Decoder output residual must be BF16")
         self.precision_observations["decoder_output"] = dtype_name(hidden.dtype)
@@ -222,6 +226,9 @@ class Gemma4Model:
             if hidden.is_sharded():
                 hidden = ttnn.to_memory_config(hidden, ttnn.DRAM_MEMORY_CONFIG)
             hidden = ttnn.typecast(rms_norm(hidden, self.config.rms_norm_eps, self.norm), ttnn.bfloat16)
+        return hidden
+
+    def head_logits(self, hidden):
         logits = ttnn.linear(
             hidden,
             self.head,
@@ -247,7 +254,9 @@ class Gemma4Model:
         self.precision_observations["logits_output"] = dtype_name(logits.dtype)
         return logits
 
-    def prefill_forward(self, tokens, *, page_table, kv_cache, user_id=0, return_all_logits=False, start_pos=0):
+    def prefill_forward(
+        self, tokens, *, page_table, kv_cache, user_id=0, return_all_logits=False, start_pos=0, return_hidden=False
+    ):
         if len(kv_cache) != len(self.layers):
             raise ValueError("KV cache must contain one pair per model layer")
         hidden = self.embed(tokens)
@@ -263,13 +272,50 @@ class Gemma4Model:
             )
         if not return_all_logits:
             hidden = hidden[:, :, -1:, :]
+        if return_hidden:
+            # WS6 (MTP): also hand back the post-final-norm hidden, the drafter's seed.
+            normed = self.final_norm(hidden)
+            return self.head_logits(normed), normed
         return self.logits(hidden)
 
-    def decode_forward(self, tokens, *, current_pos, cache_pos, page_table, kv_cache, batch, active_slots=None):
+    def decode_forward(
+        self,
+        tokens,
+        *,
+        current_pos,
+        cache_pos,
+        page_table,
+        kv_cache,
+        batch,
+        active_slots=None,
+        return_hidden=False,
+        kv_write_rows=None,
+    ):
+        """``return_hidden`` (WS6): return ``(logits, post-final-norm hidden)``. ``kv_write_rows`` (WS6 verify):
+        one int32 cache-position tensor per row, each with only that row's position set (-1 elsewhere); the
+        batched layers then write K/V one row per program, in row order, because verify rows sit at consecutive
+        positions of one page and a single batched cache update would race on the shared tile."""
         # Sampler output is the persistent [1,1,1,32] token input. Only live slots
         # are embedded; the model trace fixes the slot count at request setup.
         if len(kv_cache) != len(self.layers):
             raise ValueError("KV cache must contain one pair per model layer")
+        if kv_write_rows is not None:
+            for layer in self.layers:
+                layer.layer.self_attn.kv_write_rows = tuple(kv_write_rows)
+            try:
+                return self.decode_forward(
+                    tokens,
+                    current_pos=current_pos,
+                    cache_pos=cache_pos,
+                    page_table=page_table,
+                    kv_cache=kv_cache,
+                    batch=batch,
+                    active_slots=active_slots,
+                    return_hidden=return_hidden,
+                )
+            finally:
+                for layer in self.layers:
+                    layer.layer.self_attn.kv_write_rows = None
         hidden = self.embed(tokens[..., :batch])
         active = tuple(range(batch)) if active_slots is None else tuple(active_slots)
         # Batch 1: gather the RoPE rows once per step and layer type, not once per layer.
@@ -315,4 +361,7 @@ class Gemma4Model:
                     else:
                         rows.append(self.zero_hidden)
                 hidden = ttnn.concat(rows, dim=2)
+        if return_hidden:
+            normed = self.final_norm(hidden)
+            return self.head_logits(normed), normed
         return self.logits(hidden)
