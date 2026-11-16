@@ -384,3 +384,81 @@ def test_partial_gradients_are_marked_across_tp(tp_mesh, shard_dim):
     assert len(expected) == len(partial), sorted(params)
     marked = {name: ttml.parallel.partial_axes(p) for name, p in params.items() if ttml.parallel.partial_axes(p)}
     assert marked == {name: {"tp"} for name in expected}
+
+
+def test_per_head_norm_gradients_match_transformers(tp_mesh):
+    """Each device normalizes only its own heads, so the gradients of the per-head norms q_norm and k_norm are partial
+    across tp until ttml.sync_gradients sums them. After that sum they equal transformers' gradients on the same
+    weights and tokens (about 1 % apart in bf16). The vocab of 128 splits into tile-aligned halves, so no padded logits
+    make the two losses differ. Negative control: unmarked, each device kept its own heads' part (relative error about
+    0.6)."""
+    pytest.importorskip("transformers", reason="needs transformers for the reference gradients")
+    from transformers import Qwen3Config as HFConfig
+    from transformers.models.qwen3.modeling_qwen3 import Qwen3ForCausalLM
+    from ttml.models.qwen3.weights import repermute_norm_weights
+
+    vocab = 128
+    hf_config = HFConfig(
+        vocab_size=vocab,
+        hidden_size=HIDDEN,
+        intermediate_size=INTERMEDIATE,
+        num_hidden_layers=1,
+        num_attention_heads=HEADS,
+        num_key_value_heads=KV_HEADS,
+        head_dim=HEAD_DIM,
+        max_position_embeddings=SEQ,
+        tie_word_embeddings=False,
+    )
+    # transformers' default RoPE base differs from ttml's and has moved between releases; ttml takes the reference's.
+    rope = getattr(hf_config, "rope_parameters", None) or {}
+    rope_theta = float(rope.get("rope_theta", getattr(hf_config, "rope_theta", 1e6)))
+    torch.manual_seed(0)
+    hf = Qwen3ForCausalLM(hf_config)
+    state_dict = {k: v.detach().clone().float() for k, v in hf.state_dict().items()}
+    rng = np.random.default_rng(3)
+    ids = rng.integers(0, vocab, SEQ)
+    targets = np.roll(ids, -1)
+
+    cfg = Qwen3Config(
+        hidden_size=HIDDEN,
+        intermediate_size=INTERMEDIATE,
+        num_hidden_layers=1,
+        num_attention_heads=HEADS,
+        num_key_value_heads=KV_HEADS,
+        head_dim=HEAD_DIM,
+        vocab_size=vocab,
+        max_position_embeddings=SEQ,
+        rope_theta=rope_theta,
+    )
+    with empty_init():
+        model = DistributedQwen3ForCausalLM(cfg, tie_word_embeddings=False, shard_dim=1)
+    load_weights_from_hf_distributed(model, state_dict, cfg, tie_word_embeddings=False, shard_dim=1)
+    ctx = ttml.autograd.AutoContext.get_instance()
+    device = ctx.get_device()
+    ctx.set_gradient_mode(ttml.autograd.GradMode.ENABLED)
+    logits = model(
+        create_input_tensor_from_torch(torch.from_numpy(ids.reshape(1, 1, 1, SEQ)), device),
+        create_causal_mask_tensor(SEQ, device),
+    )
+    targets_tt = ttml.autograd.Tensor.from_numpy(
+        targets.reshape(1, SEQ).astype(np.uint32), ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32
+    )
+    ttml.ops.distributed.vocab_parallel_cross_entropy_loss(logits, targets_tt, cluster_axis=1).backward(False)
+    params = model.parameters()
+    ttml.sync_gradients(params)
+
+    hf_logits = hf(torch.from_numpy(ids).unsqueeze(0)).logits[0]
+    torch.nn.functional.cross_entropy(hf_logits, torch.from_numpy(targets)).backward()
+    copies, errors = {}, {}
+    for which in ("q_norm", "k_norm"):
+        name = next(n for n in params if n.endswith(f"self_attn/{which}/weight"))
+        copies[which] = [ttnn.to_torch(t).float().flatten() for t in ttnn.get_device_tensors(params[name].get_grad())]
+        expected = getattr(hf.model.layers[0].self_attn, which).weight.grad
+        actual = repermute_norm_weights(copies[which][0])
+        errors[which] = float(torch.linalg.norm(actual - expected) / torch.linalg.norm(expected))
+    ctx.reset_graph()
+    for which, per_device in copies.items():
+        assert all(
+            torch.equal(per_device[0], c) for c in per_device[1:]
+        ), f"{which}: the devices disagree after the sync"
+    assert max(errors.values()) < 0.05, errors

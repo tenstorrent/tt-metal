@@ -37,7 +37,8 @@ from sync_gradients_placements_common import (
     _shards,
     is_sharded_on_axis,
 )
-from tp_block import TPBlock
+from tp_block import TPBlock, assert_identical_across_devices, gather_like
+from ttml.models.deepseek.transformer import DeepSeekMLP
 
 pytestmark = [
     pytest.mark.requires_device,
@@ -146,6 +147,41 @@ class TestTP:
         x = _input((1, 1, 32, DIM))
         with expect_error(RuntimeError, "swiglu cannot apply dropout when w2 is sharded along its input features"):
             ttml.ops.swiglu.swiglu(x, w1.weight.tensor, w2.weight.tensor, w3.weight.tensor, 0.1)
+
+    def test_a_tensor_parallel_deepseek_mlp_matches_the_whole_one(self, tp_mesh):
+        """The fused SwiGLU leaves each tp rank a partial sum of the MLP's output and of the gradient it sends its
+        input. The MLP adds both up, so its output is whole and reads as replicated, as the column-parallel layer after
+        it requires, and so is its input's gradient. Negative controls: without the output sum the output read Shard(2)
+        and that layer refused it; without the gradient sum each rank's input gradient was its own part."""
+        whole, tp = DeepSeekMLP(DIM, 2 * DIM), DeepSeekMLP(DIM, 2 * DIM, tp_axis_name="tp")
+        sources = whole.parameters()
+        for name, param in tp.parameters().items():
+            values = gather_like(sources[name].get_value(NATIVE), sources[name])
+            ttml.autograd.assign_numpy(param, values, mapper=ttml.Sharding.from_tensor(param).derive_mapper())
+
+        def relative_error(actual, expected):
+            actual, expected = actual.astype(np.float64), expected.astype(np.float64)
+            return np.linalg.norm(actual - expected) / np.linalg.norm(expected)
+
+        x_tp, x_whole = (ttml.autograd.create_tensor(_input((1, 1, 32, DIM)).get_value(), True) for _ in range(2))
+        out = tp(x_tp)
+        assert all(isinstance(p, ttnn.PlacementReplicate) for p in _placements(out.get_value())), _placements(
+            out.get_value()
+        )
+        actual = assert_identical_across_devices(out.get_value(), "the MLP output")
+        expected_out = whole(x_whole)
+        errors = {"output": relative_error(actual, _shards(expected_out.get_value())[0])}
+        ttml.ops.unary.mean(out).backward(False)
+        ttml.ops.unary.mean(expected_out).backward(False)
+        assert x_tp.is_grad_initialized() and x_whole.is_grad_initialized()
+        errors["input gradient"] = relative_error(
+            assert_identical_across_devices(x_tp.get_grad(), "the input gradient"), _shards(x_whole.get_grad())[0]
+        )
+        for name, param in tp.parameters().items():
+            expected = gather_like(sources[name].get_grad(), sources[name])
+            errors[f"gradient of {name}"] = relative_error(gather_like(param.get_grad(), param), expected)
+        ttml.autograd.AutoContext.get_instance().reset_graph()
+        assert max(errors.values()) < 0.02, errors
 
     def test_synchronize_over_tp_leaves_the_tp_shards_alone(self, tp_mesh):
         """``synchronize_gradients(params, [tp])`` averages only the gradients of parameters replicated on tp; a
