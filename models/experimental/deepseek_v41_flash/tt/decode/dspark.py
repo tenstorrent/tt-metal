@@ -759,8 +759,8 @@ class DeepSeekV41DSpark(DeepSeekV4Module):
     :attr:`stash`, the ring the decode model writes each step's target-layer means into at
     ``pos % stash_rows`` (per target, ``[1, 1, stash_rows, STASH_PIECE]`` column pieces).
 
-    ``expert_dtype`` defaults to bfloat8_b, not the decode MoE's bfloat4_b: it flips fewer of the bf16-ranked
-    top-3-of-128 routes. ``fused_experts`` double-buffers a full-K weight slice per core (~700 KB at bfloat8_b),
+    ``expert_dtype`` defaults to :data:`DSPARK_EXPERT_DTYPE` (bfloat4_b: half the bytes of bfloat8_b at the same
+    tokens per round). ``fused_experts`` double-buffers a full-K weight slice per core (~700 KB at bfloat8_b),
     which fits below the drafter's own rings on its stage.
 
     ``weight_dtype`` (attention projections and ``main_proj``) and ``shared_dtype`` (shared expert) size
