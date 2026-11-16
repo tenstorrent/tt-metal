@@ -6,7 +6,7 @@ pack_api_sweep.h runs them: production's pack_block, pack init and reconfigure t
 An arm keeps the sweeps' (code, form) id. code & 3 the state: 0 steady, 1 a pack init before every block, 2 outputs A and B
 alternating with a reconfigure. code & 4: main's per-tile loop for both outputs. code & 8 (or 16): A takes W in a CB of two
 blocks (or one), so llk_pack_w_take continues or programs the base by itself. form in states 0 and 1: 0 per tile, 1 block,
-2 W, 3 main, 5 the form tables (production's own choice); in state 2 the forms of A and B: 0 T/T, 1 B/T, 2 B/B, 3 T/B, 4 W/T,
+2 W, 3 main, 5 the form tables (production's own choice); state 3 is state 0 with a reconfigure to its output before every block; in state 2 the forms of A and B: 0 T/T, 1 B/T, 2 B/B, 3 T/B, 4 W/T,
 5 the tables for both.
 """
 

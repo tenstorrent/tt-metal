@@ -6,8 +6,9 @@
 
 // The block loop of the pack sweep kernels through pack_api_shim.h (include it first): production's pack_block, pack init
 // and reconfigure per arm. pack_sweep_state 0 steady (one output), 1 a pack init before every block, 2 outputs A and B
-// alternating with a reconfigure before each block. Arms: 'T', 'B', 'W' (pack_block's arm forms), 0 the form tables, 'M'
-// main's per-tile loop; on main's LLK every arm is main's loop.
+// alternating with a reconfigure before each block, 3 one output with a reconfigure to it before every block (bmm's per-subblock
+// reconfigure). Arms: 'T', 'B', 'W' (pack_block's arm forms), 0 the form tables, 'M' main's per-tile loop; on main's LLK every arm
+// is main's loop.
 
 #if defined(ARCH_BLACKHOLE) && defined(LLK_TRISC_PACK)
 
@@ -113,7 +114,7 @@ __attribute__((always_inline)) inline void block(const std::uint32_t dst, BlockI
     {
         _llk_packer_wait_for_math_done_();
     }
-    if constexpr (state == 2)
+    if constexpr (state == 2 || state == 3)
     {
 #if PACK_API_SHIM_PR
         pack_api_shim::pack_reconfig_data_format<is_fp32_dest_acc_en, out>();
