@@ -3,7 +3,6 @@
 #pragma once
 
 namespace ckernel::sfpu::ttpoly::cosh {
-using namespace ::sfpi;
 using ::sfpi::DataLayout;
 // Fills one hazard gap of the core: reloads c0 (slots 13, 15) or the compose scale (21, 23) into LREG4,
 // which only slots 18 and 29 read; otherwise a NOP.
