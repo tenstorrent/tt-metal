@@ -27,6 +27,7 @@
 #include "ttnn/operations/data_movement/copy/copy.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/eltwise/ternary/ternary.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/experimental/reshape/view.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -56,11 +57,11 @@ namespace detail {
 
 // Merges one ring step's attention result into the running result (online softmax).
 // O_i, l_i: this step's normalized output and logsumexp; O, L: the running ones.
-//   L' = logaddexp(L, l_i)
-//   O' = O * exp(L - L') + O_i * exp(l_i - L')
-// The two weights are the shares of the softmax mass and sum to 1, so each product and their sum
-// stay within max(|O|, |O_i|) up to rounding. The equivalent lerp O + w * (O_i - O) forms
-// O_i - O, which overflows for large finite outputs of opposite sign.
+//   L' = logaddexp(L, l_i),  w = exp(l_i - L')
+//   O' = O * (1 - w) + O_i * w
+// w is this step's share of the softmax mass and 1 - w = exp(L - L') the running share, so each
+// product and their sum stay within max(|O|, |O_i|) up to rounding. The equivalent lerp
+// O + w * (O_i - O) forms O_i - O, which overflows for large finite outputs of opposite sign.
 //
 // A logsumexp of -inf means no contribution: the first merge (L = -inf) gives O' = O_i, and a
 // step the causal schedule skips (l_i = -inf) leaves O and L unchanged. Both -inf would make the
@@ -102,29 +103,36 @@ void online_softmax_merge(
     //    logaddexp(-inf, x) = x.
     ttnn::Tensor new_lse = ttnn::logaddexp(running_lse, lse_chunk);
 
-    // 3. The log-weights L - L' and l_i - L', (B, H, S, 1).
-    const ttnn::Tensor old_log_weight = ttnn::subtract(running_lse, new_lse);
-    const ttnn::Tensor new_log_weight = ttnn::subtract(lse_chunk, new_lse);
-
-    // 4. O' = O * exp(L - L') + O_i * exp(l_i - L'). Each multiply broadcasts its (B, H, S, 1)
-    //    log-weight along the head dim and applies exp to it as an input activation (0.0f selects
-    //    the accurate exp, ttnn::exp's default). Both run on the SFPU in FP32, and the bf16 step
-    //    output is unpacked exactly; its product is requested as FP32, so the combine stays FP32.
-    //    The FP32 accumulator matters: backward consumes the saved O in u = rowsum(dO * O).
+    // 3. w = exp(l_i - L'), (B, H, S, 1): subtract with exp fused as a post-activation (0.0f
+    //    selects the accurate exp, ttnn::exp's default).
     using EltwiseUnary = ttnn::operations::unary::EltwiseUnaryWithParam;
     const EltwiseUnary exp_act{ttnn::operations::unary::UnaryOpType::EXP, 0.0F};
-    const auto weighted = [&exp_act](const ttnn::Tensor& output, const ttnn::Tensor& log_weight) {
-        return ttnn::multiply(
-            output,
-            log_weight,
-            /*output_dtype=*/ttnn::DataType::FLOAT32,
-            /*memory_config=*/std::nullopt,
-            /*output=*/std::nullopt,
-            /*post_activations=*/{},
-            /*lhs_activations=*/{},
-            /*rhs_activations=*/ttsl::Span<const EltwiseUnary>(&exp_act, 1));
-    };
-    output_accum = ttnn::add(weighted(output_accum, old_log_weight), weighted(step_output, new_log_weight));
+    const ttnn::Tensor new_weight = ttnn::subtract(
+        lse_chunk,
+        new_lse,
+        /*output_dtype=*/std::nullopt,
+        /*memory_config=*/std::nullopt,
+        /*output=*/std::nullopt,
+        /*post_activations=*/ttsl::Span<const EltwiseUnary>(&exp_act, 1));
+
+    // 4. O * (1 - w), with 1 - w = exp(L - L') applied to the broadcast weight column as an input
+    //    activation (rsub(w, 1) = 1 - w).
+    const EltwiseUnary one_minus_act{ttnn::operations::unary::UnaryOpType::RSUB, 1.0F};
+    const ttnn::Tensor old_weighted = ttnn::multiply(
+        output_accum,
+        new_weight,
+        /*output_dtype=*/std::nullopt,
+        /*memory_config=*/std::nullopt,
+        /*output=*/std::nullopt,
+        /*post_activations=*/{},
+        /*lhs_activations=*/{},
+        /*rhs_activations=*/ttsl::Span<const EltwiseUnary>(&one_minus_act, 1));
+
+    // 5. O' = w * O_i + O * (1 - w) in one fused multiply-add. mac takes its output dtype from the
+    //    first operand, so the FP32 weight goes first: with an FP32 operand every input is unpacked
+    //    into an FP32 Dest (bf16 -> FP32 is exact) and the combine stays FP32. The FP32
+    //    accumulator matters: backward consumes the saved O in u = rowsum(dO * O).
+    output_accum = ttnn::mac(new_weight, step_output, old_weighted);
     running_lse = std::move(new_lse);
 }
 
