@@ -749,6 +749,13 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
             // the tensor must then not be written through.
             [](const nb::ndarray<nb::array_api, nb::ro>& buffer, const tt::tt_metal::TensorSpec& spec) -> Tensor {
                 using tt::tt_metal::HostBuffer;
+                // The buffer's memory becomes the host tensor's, so it must be CPU memory: a DLPack exporter of
+                // device memory (a CUDA tensor) would otherwise hand a device pointer to code that reads it on the
+                // host. Refused rather than copied, since this function never copies.
+                TT_FATAL(
+                    buffer.device_type() == nb::device::cpu::value,
+                    "host_tensor_from_bytes takes a buffer in CPU memory (got DLPack device type {})",
+                    buffer.device_type());
                 TT_FATAL(
                     buffer.dtype() == nb::dtype<uint8_t>() && buffer.ndim() == 1 &&
                         (buffer.size() == 0 || buffer.stride(0) == 1),
@@ -788,8 +795,8 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
                 Wrap a Python byte buffer as a host tensor without copying or converting it.
 
                 ``buffer`` is a contiguous one-dimensional uint8 array (a numpy array, a memoryview over bytes, or
-                any DLPack exporter) holding exactly the bytes of ``tensor_spec``: its storage dtype, in its layout,
-                at its physical shape (tile padding included for TILE layouts), i.e.
+                any DLPack exporter of CPU memory) holding exactly the bytes of ``tensor_spec``: its storage dtype,
+                in its layout, at its physical shape (tile padding included for TILE layouts), i.e.
                 ``physical_shape().height() * physical_shape().width()`` elements, starting at an address aligned to
                 the dtype's element size. Fixed-width dtypes only: block-float
                 and fp8 specs are refused, because sizing them needs the device runtime, which this function never
