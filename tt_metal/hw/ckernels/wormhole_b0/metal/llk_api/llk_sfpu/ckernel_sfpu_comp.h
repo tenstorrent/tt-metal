@@ -292,8 +292,7 @@ inline void calculate_comp_unary_int(int scalar) {
     // (DataLayout::I32, SFPLOAD INT32). The default vInt load (INT32_SM) converts the word from
     // sign-magnitude to two's complement on the way in, and the explicit conversion this kernel
     // used to apply on top of it undid that for every word except 0x80000000, which the load turns
-    // into 0: a tile value of exactly 2^31 (UINT32) or INT32_MIN (INT32) compared equal to 0 and
-    // unequal to its own scalar.
+    // into 0: a tile value of INT32_MIN compared equal to 0 and unequal to its own scalar.
     vInt s = scalar;
 
 #pragma GCC unroll 8
