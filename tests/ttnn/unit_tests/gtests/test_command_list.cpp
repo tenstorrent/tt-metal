@@ -290,6 +290,12 @@ TEST(CommandListBinderTest, RejectsInvalidBindings) {
         "Metal param 'scale' is declared twice");
     rejects(
         [](CmdListBinder& b) {
+            b.param("p");
+            (void)b.finish();
+        },
+        "Metal param 'p' binds no kernel argument");
+    rejects(
+        [](CmdListBinder& b) {
             b.param("a").common_runtime(kReader, "value");
             b.param("b").common_runtime(kReader, "value");
         },
