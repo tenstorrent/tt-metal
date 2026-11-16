@@ -645,8 +645,8 @@ void append_to_descriptor(
     append(reader_ct, h_mcast_ct);
     for (const auto* tensor :
          {&tensor_arguments.activations,
-          &tensor_arguments.w_gates[0],
-          &tensor_arguments.w_downs[0],
+          &tensor_arguments.w_gates.front(),
+          &tensor_arguments.w_downs.front(),
           &tensor_arguments.counts,
           &tensor_arguments.global_expert_idx_table,
           &start_tensor}) {
@@ -659,7 +659,9 @@ void append_to_descriptor(
         reader_ct.push_back(geo::CB_UP_BIAS);
         reader_ct.push_back(geo::CB_DOWN_BIAS);
         for (const auto* tensor :
-             {&tensor_arguments.gate_biases[0], &tensor_arguments.up_biases[0], &tensor_arguments.down_biases[0]}) {
+             {&tensor_arguments.gate_biases.front(),
+              &tensor_arguments.up_biases.front(),
+              &tensor_arguments.down_biases.front()}) {
             TensorAccessorArgs(tensor->mesh_tensor()).append_to(reader_ct);
         }
     }
@@ -676,7 +678,7 @@ void append_to_descriptor(
         wg,
         wd);
     for (const auto* tensor :
-         {&tensor_arguments.w_ups[0], &std::as_const(tensor_return_value), &tensor_arguments.w_downs[0]}) {
+         {&tensor_arguments.w_ups.front(), &std::as_const(tensor_return_value), &tensor_arguments.w_downs.front()}) {
         TensorAccessorArgs(tensor->mesh_tensor()).append_to(writer_ct);
     }
     auto compute_ct = make_compute_ct(blocking, experts_per_chip, activations_are_row_major);

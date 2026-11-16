@@ -19,6 +19,7 @@
 #include <tt-metalium/tensor/tensor_types.hpp>
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 
 using namespace tt::tt_metal;
 using namespace tt::constants;

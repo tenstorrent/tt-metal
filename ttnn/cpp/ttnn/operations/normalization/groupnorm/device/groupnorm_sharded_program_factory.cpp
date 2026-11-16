@@ -18,6 +18,7 @@
 #include <tt-metalium/math.hpp>
 #include <tt_stl/fmt.hpp>
 #include "ttnn/operations/math.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 
 using uint32_t = std::uint32_t;
 using namespace tt::tt_metal;
