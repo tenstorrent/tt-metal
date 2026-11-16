@@ -10,80 +10,52 @@ Scenarios (Galaxy sizes; LoudBox and QuietBox scale the chunk and cache by SP/8 
   * cold: every chunk from an empty cache up to the warm step, with real forwards that fill the caches.
   * long: one chunk over a 500k cache.
 
-Boxes (_BOX, from the device count and TT_MESH_GRAPH_DESC_PATH):
-  * Galaxy: 8x4, SP=8 on mesh axis 0, torus XY, 5k chunks.
-  * Galaxy 4x4: one 4x4 prefill stage on a tray half (tests/run_4x4_stage_tests.sh; [LINE, RING] descriptor): SP=4
-    on the axis-1 ring, TP=4 on the axis-0 line, torus X, 2.5k chunks over the same 50k / 500k contexts.
-  * Galaxy 4x4 subtorus: the same stage on the 16-chip subtorus (single_bh_galaxy_subtorus_xy4 descriptor; its header
-    names the chips to make visible): rings on both axes, torus XY.
-  * LoudBox: 2x4, SP on axis 0, Fabric2D.
+Boxes and gate cases: perf_cases.py.
 
 test_sparse_mla_perf: the CI gate. Warm and long with the production scaled-FP8 KVPE cache (SPxTP-sharded), for
-GATE_CASES: K3.1 (last DSA layer's slot of 24, at
-K3.1's packet size), GLM-5.3 (last full indexer layer) and a GLM-5.3 shared layer (no indexer; reuses that layer's
-top-k). Untraced: fastest of UNTRACED_SAMPLES calls after UNTRACED_WARMUP discarded ones. Traced: one timed replay of
-the captured trace. Each (case, box, scenario, mode) is gated two-sided against PERF_TARGETS_MS ± PERF_MARGIN[mode] (a
-case without targets only reports), and the traced output must match the untraced one (one extra untimed run of each,
-for triage, plus one untimed eager forward with a per-op host profile). Each layer runs standalone (no next-layer KV
-prefetch overlapped with its attention); the shared layer reuses its push plan, as it would inside a stage.
+GATE_CASES, each at its model's fabric packet size: K3.1 (last DSA layer's slot of 24), GLM-5.3 (last full indexer
+layer) and a GLM-5.3 shared layer (no indexer; reuses that layer's top-k). Untraced: fastest of UNTRACED_SAMPLES calls
+after UNTRACED_WARMUP discarded ones. Traced: one timed replay of the captured trace. Each (case, box, scenario, mode)
+is gated two-sided against PERF_TARGETS_MS ± PERF_MARGIN[mode] (a case without targets only reports), and the traced
+output must match the untraced one (one extra untimed run of each, for triage). Each layer runs standalone (no
+next-layer KV prefetch overlapped with its attention); the shared layer reuses its push plan, as it would inside a
+stage.
 
 test_mla_chunked_perf: the exploration matrix (QuietBox, LoudBox, Galaxy; skipped on CI), reports only.
 GLM-5.3 (last full indexer layer, 21-slot index cache) and K3.1 x warm/cold/long x sparse with a BF16 or
 scaled-FP8 cache / dense ring-MLA baseline. Narrow with -k, e.g. -k "glm_5_3 and cold and kv_scaled_fp8".
 """
 
-import copy
-import gc
 import os
-import resource
 import time
-from dataclasses import dataclass
-from fractions import Fraction
 
 import pytest
 
 import ttnn
 from models.common.utility_functions import comp_pcc, skip_with_llk_assert, skip_with_watcher
-from models.demos.deepseek_v3_d_p.reference.cpu_deepseek_v32 import random_mla_weights
-from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config
-from models.demos.deepseek_v3_d_p.reference.kimi_k3_1_config import KimiK31Config
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
-    fabric2d_device_params,
-    mesh_descriptor_topologies,
-    moe_fabric_payload,
-    torus_x_device_params,
-    torus_xy_device_params,
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import model_fabric_payload
+from models.demos.deepseek_v3_d_p.tests.sparse_mla.perf_cases import (
+    BOX,
+    GATE_CASES,
+    LONG_CACHE_TOKENS,
+    SCENARIO_CACHE_TOKENS,
+    WARM_CACHE_TOKENS,
+    build_sparse_perf_case,
+    detect_box,
+    gate_params,
 )
 from models.demos.deepseek_v3_d_p.tests.sparse_mla.sparse_mla_mesh import detect_num_devices
-from models.demos.deepseek_v3_d_p.tests.sparse_mla.sparse_mla_reference import make_hidden
-from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
-from models.demos.deepseek_v3_d_p.tt.mla.indexer import num_full_indexer_layers
-from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
-from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat
 from models.demos.deepseek_v3_d_p.utils.prefill_summary_utils import emit_perf_metrics
 from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import require_high_power
 from models.demos.deepseek_v3_d_p.utils.sub_device_trace import SubDeviceTraceController
-from tt_py_test_utils_common.perf.cpu_clock import current_cpu, hold_full_cpu_clock
+from tt_py_test_utils_common.perf.cpu_clock import hold_full_cpu_clock
 
-GALAXY_SP = 8
-# Galaxy-global scenario sizes: a 5k chunk over a 50k (warm) or 500k (long) cache. A 4x4 stage runs 2.5k chunks.
-CHUNK_TOKENS = 5120
-STAGE_4X4_CHUNK_TOKENS = 2560
-WARM_CACHE_TOKENS = 51200
-LONG_CACHE_TOKENS = 512000
 # Untraced: discarded calls (the first compiles), then timed calls, each through sync; the gate takes the fastest.
 UNTRACED_WARMUP = 10
 UNTRACED_SAMPLES = 10
-SCENARIO_CACHE_TOKENS = {"warm": WARM_CACHE_TOKENS, "long": LONG_CACHE_TOKENS}
 MODES = ("untraced", "traced")
-# Gate cases: (variant, shared_layer). GLM-5.3 also gates a shared layer, which reuses a full layer's top-k and runs
-# no indexer.
-GATE_CASES = {
-    "kimi_k3_1": ("kimi_k3_1", False),
-    "glm_5_3": ("glm_5_3", False),
-    "glm_5_3-no_indexer": ("glm_5_3", True),
-}
 # Host time of one chunk forward through device synchronization, in ms, per case: (warm untraced, warm traced, long
 # untraced, long traced), on the CI hosts (LOGURU_LEVEL=ERROR, TT_METAL_SHM_TRACKING_DISABLED=1, one pytest process per
 # model as the jobs run them). Traced is the mean of the runs; untraced is the fastest run. Galaxy untraced and Galaxy
@@ -125,374 +97,22 @@ TRACE_PCC = 0.9999
 CI_RUN = os.environ.get("CI") == "true"
 
 
-@dataclass(frozen=True)
-class PerfBox:
-    """Where the gate runs: `name` keys the targets; meshes are (rows, cols), with SP on `sp_axis`."""
-
-    name: str
-    mesh: tuple[int, int]
-    device_params: object
-    sp_axis: int
-    chunk: int
-    # Box-local cache = Galaxy cache x cache_scale: LoudBox / QuietBox keep Galaxy's per-chip depth (SP/8); a 4x4
-    # stage holds the whole context (1).
-    cache_scale: Fraction
-
-    @property
-    def id(self) -> str:
-        base, mesh = self.name.lower().replace(" ", "-"), f"{self.mesh[0]}x{self.mesh[1]}"
-        return base if mesh in base else f"{base}-{mesh}"
-
-    def cache_tokens(self, galaxy_cache: int) -> int:
-        return int(galaxy_cache * self.cache_scale)
-
-
-def _scaled_box(name, mesh, device_params):
-    """An SP-on-axis-0 box with fewer chips than Galaxy, scaled to Galaxy's per-chip work."""
-    sp = mesh[0]
-    return PerfBox(name, mesh, device_params, 0, CHUNK_TOKENS * sp // GALAXY_SP, Fraction(sp, GALAXY_SP))
-
-
-def _galaxy_box() -> PerfBox:
-    """The Galaxy layout TT_MESH_GRAPH_DESC_PATH selects: a 4x4 stage or the full 8x4."""
-    descriptor = os.environ.get("TT_MESH_GRAPH_DESC_PATH")
-    topologies = set(mesh_descriptor_topologies(descriptor)) if descriptor else set()
-    if topologies == {("4", "4", "LINE", "RING")}:
-        return PerfBox("Galaxy 4x4", (4, 4), torus_x_device_params, 1, STAGE_4X4_CHUNK_TOKENS, Fraction(1))
-    if topologies == {("4", "4", "RING", "RING")}:
-        return PerfBox("Galaxy 4x4 subtorus", (4, 4), torus_xy_device_params, 1, STAGE_4X4_CHUNK_TOKENS, Fraction(1))
-    assert not any(t[:2] == ("4", "4") for t in topologies), f"{descriptor}: unsupported 4x4 layout {topologies}"
-    return PerfBox("Galaxy", (8, 4), torus_xy_device_params, 0, CHUNK_TOKENS, Fraction(1))
-
-
-def detect_box(num_devices: int, matrix: bool = False) -> PerfBox | None:
-    if not ttnn.device.is_blackhole():  # DSA ops are Blackhole-only; an 8-chip Wormhole T3K is not a LoudBox
-        return None
-    if num_devices == 32:
-        return _galaxy_box()
-    if num_devices == 8:
-        return _scaled_box("LoudBox", (2, 4), fabric2d_device_params)
-    if num_devices == 4 and matrix:
-        return _scaled_box("QuietBox", (2, 2), fabric2d_device_params)
-    return None
-
-
-@dataclass
-class SparsePerfCase:
-    mla: ttMLA
-    x: ttnn.Tensor
-    rope: dict
-    kvpe_cache: ttnn.Tensor
-    index_kv_cache: ttnn.Tensor | None
-    cache_layer_idx: int
-    # ShardTensor2dMesh dims of a chunk's input: sequence over SP, hidden over TP.
-    input_shard_dims: tuple
-    # A GLM-5.3 shared layer runs no indexer: it takes a full layer's top-k indices.
-    indexer_indices: ttnn.Tensor | None = None
-
-    def forward(self, start: int) -> ttnn.Tensor:
-        """One chunk forward at `start`; the caller owns (and deallocates) the output."""
-        return self.mla.forward(
-            self.x,
-            self.rope,
-            self.kvpe_cache,
-            actual_start=start,
-            cache_layer_idx=self.cache_layer_idx,
-            index_kv_cache=self.index_kv_cache,
-            indexer_indices=self.indexer_indices,
-        )
-
-
-def build_sparse_perf_case(
-    mesh_device,
-    variant,
-    config_only,
-    *,
-    cache: int,
-    chunk: int,
-    topology,
-    attn_mode: str = "sparse",
-    kv_cache_format=MlaKvCacheFormat.SCALED_FP8,
-    tp_shard_kv: bool = True,
-    shared_layer: bool = False,
-    sp_axis: int = 0,
-) -> SparsePerfCase:
-    """ttMLA, its caches and one chunk of input for forwards over a `cache + chunk` prefix.
-
-    sparse: DSA indexer + sparse SDPA over `kv_cache_format`, caches SPxTP-sharded when `tp_shard_kv`.
-    dense: the v3.1 baseline, no indexer, full-prefix ring MLA over the tiled BFP8 cache.
-    shared_layer (GLM-5.3, sparse): the last shared layer, which runs no indexer and reuses the top-k indices of a
-    full layer's forward at `cache`.
-    """
-    has_indexer = attn_mode == "sparse"
-    tp_axis = 1 - sp_axis
-    sp, tp = mesh_device.shape[sp_axis], mesh_device.shape[tp_axis]
-    kv_tp_axis = tp_axis if tp_shard_kv else None
-    total = cache + chunk
-    # The cold loop steps by `chunk`, and the indexed rope table needs total to be a whole number of chunks.
-    assert cache % chunk == 0, f"cache {cache} must be a whole number of {chunk}-token chunks"
-    assert total % sp == 0 and (total // sp) % 32 == 0, f"total {total} must be tile-aligned per SP={sp} chip"
-    if tp_shard_kv:
-        for name, n in (("cache", total), ("chunk", chunk)):
-            assert (
-                n % (sp * tp) == 0 and (n // (sp * tp)) % 32 == 0
-            ), f"tp_shard_kv: {name} {n} must split into tile-aligned per-chip stripes over sp {sp} x tp {tp}"
-    assert config_only.num_attention_heads % tp == 0 and config_only.index_n_heads % tp == 0, (
-        f"{variant.name} heads (MLA={config_only.num_attention_heads}, index={config_only.index_n_heads}) "
-        f"must be divisible by TP={tp}"
-    )
-
-    config = copy.deepcopy(config_only)
-    config.max_seq_len = total
-    # GLM-5.3 packs its index-K cache by full indexer layers (21 slots): build the last full layer (74 -> slot
-    # 20) so the ring score selects a real slot, not slot 0 of a one-slot proxy.
-    full_indexer_layers = num_full_indexer_layers(config) if has_indexer else None
-    index_cache_layers = full_indexer_layers or 1
-    mla_layer_idx = 0
-    if full_indexer_layers:
-        full_layer_indices = [i for i, mode in enumerate(config.indexer_types) if mode == "full"]
-        assert len(full_layer_indices) == full_indexer_layers
-        mla_layer_idx = full_layer_indices[-1]
-    # Kimi-K3.1: the last DSA layer's slot of a 24-slot cache.
-    mla_layer_num, cache_layer_idx = 1, 0
-    if variant.name == "kimi_k3_1" and has_indexer:
-        mla_layer_ids = variant.model_config.mla_layer_ids()
-        mla_layer_num, mla_layer_idx = len(mla_layer_ids), mla_layer_ids[-1]
-        cache_layer_idx = variant.model_config.mla_kv_slot(mla_layer_idx)
-        index_cache_layers = mla_layer_num
-
-    mla = ttMLA(
-        config,
-        dict(random_mla_weights(config)),
-        mesh_device,
-        topology=topology,
-        layer_idx=mla_layer_idx,
-        seq_len=total,
-        sp_axis=sp_axis,
-        tp_axis=tp_axis,
-        is_chunked=True,
-        active_seq_len=chunk,
-        layer_num=mla_layer_num,
-        has_indexer=has_indexer,
-        sparse_kv_cache_format=kv_cache_format if has_indexer else MlaKvCacheFormat.BF16_RM,
-    )
-    rope = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False).get_rope_tensors_indexed(total, chunk)
-    kvpe_cache = init_mla_kv_cache(
-        cache_format=kv_cache_format if has_indexer else MlaKvCacheFormat.BFP8_TILE,
-        hf_config=config,
-        mesh_device=mesh_device,
-        seq_len=total,
-        mesh_shape=list(mesh_device.shape),
-        sp_axis=sp_axis,
-        num_kvpe_cache_layers=mla_layer_num if has_indexer else 1,
-        tp_axis=kv_tp_axis if has_indexer else None,
-    )
-    # Both caches start at zero: the ring indexer always covers the full prefix, so cache contents don't change
-    # op shapes or timing. (cold fills them with real chunk forwards.)
-    index_kv_cache = None
-    if has_indexer:
-        index_kv_cache = init_kvpe_cache(
-            kvpe_cache_head_dim=mla._indexer.index_args.index_head_dim,
-            mesh_device=mesh_device,
-            seq_len=total,
-            mesh_shape=list(mesh_device.shape),
-            sp_axis=sp_axis,
-            num_kvpe_cache_layers=index_cache_layers,
-            num_users=1,
-            dtype=ttnn.bfloat8_b,
-            tp_axis=kv_tp_axis,
-        )
-    shard_dims = [None, None]
-    shard_dims[tp_axis], shard_dims[sp_axis] = -1, -2
-    x = ttnn.from_torch(
-        make_hidden(chunk, config.hidden_size, seed=42)[:, :chunk].unsqueeze(0),
-        device=mesh_device,
-        dtype=ttnn.bfloat16,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
-    )
-    case = SparsePerfCase(mla, x, rope, kvpe_cache, index_kv_cache, cache_layer_idx, tuple(shard_dims))
-    if not shared_layer:
-        return case
-
-    assert has_indexer and full_indexer_layers, f"{variant.name} has no shared (indexer-reuse) layers"
-    out, indices = mla.forward(
-        x,
-        rope,
-        kvpe_cache,
-        actual_start=cache,
-        cache_layer_idx=cache_layer_idx,
-        index_kv_cache=index_kv_cache,
-        return_indexer_indices=True,
-    )
-    ttnn.deallocate(out)
-    # Free the full layer before building the shared one: ttMLA holds reference cycles, so without a collection its
-    # buffers would linger and could be freed mid-measurement.
-    ttnn.deallocate(index_kv_cache)
-    ttnn.deallocate(kvpe_cache.storage)
-    del case, mla, kvpe_cache, index_kv_cache
-    gc.collect()
-    # Inside a stage a shared layer reuses the sparse KV push plan its full layer built; only a stage's first layer
-    # rebuilds it. This standalone layer is not marked first, so it builds the plan in warm-up and then reuses it: the
-    # in-stage case. Plan construction is outside its timing and determinism checks.
-    shared_layer_idx = [i for i, mode in enumerate(config.indexer_types) if mode == "shared"][-1]
-    shared = ttMLA(
-        config,
-        dict(random_mla_weights(config)),
-        mesh_device,
-        topology=topology,
-        layer_idx=shared_layer_idx,
-        seq_len=total,
-        sp_axis=sp_axis,
-        tp_axis=tp_axis,
-        is_chunked=True,
-        active_seq_len=chunk,
-        layer_num=1,
-        has_indexer=True,
-        sparse_kv_cache_format=kv_cache_format,
-    )
-    shared_kvpe_cache = init_mla_kv_cache(
-        cache_format=kv_cache_format,
-        hf_config=config,
-        mesh_device=mesh_device,
-        seq_len=total,
-        mesh_shape=list(mesh_device.shape),
-        sp_axis=sp_axis,
-        num_kvpe_cache_layers=1,
-        tp_axis=kv_tp_axis,
-    )
-    return SparsePerfCase(shared, x, rope, shared_kvpe_cache, None, 0, tuple(shard_dims), indexer_indices=indices)
-
-
-_BOX = detect_box(detect_num_devices())
-# Each model opens the fabric at its production packet size.
-_FABRIC_PAYLOAD = {"kimi_k3_1": KimiK31Config, "glm_5_3": GLM53Config}
-
-
-def _gate_params():
-    if _BOX is None:
-        return [
-            pytest.param(
-                (8, 4),
-                {},
-                "kimi_k3_1",
-                "kimi_k3_1",
-                marks=pytest.mark.skip(reason="sparse MLA perf gate runs on Blackhole Galaxy and LoudBox only"),
-            )
-        ]
-    params = []
-    for case, (variant, _) in GATE_CASES.items():
-        payload = _FABRIC_PAYLOAD.get(variant)
-        dp = _BOX.device_params(
-            fabric_payload_size=moe_fabric_payload(payload) if payload else None,
-            worker_l1_size=ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE,
-            trace_region_size=16 * 1024 * 1024,
-        )
-        params.append(pytest.param(_BOX.mesh, dp, variant, case, id=f"{_BOX.id}-{case}"))
-    return params
-
-
 def _device_tensors(tensor):
     return [ttnn.to_torch(t) for t in ttnn.get_device_tensors(tensor)]
 
 
-def _cpu_ranges(cpus):
-    out, run = [], []
-    for cpu in cpus:
-        if run and cpu != run[-1] + 1:
-            out.append(run)
-            run = []
-        run.append(cpu)
-    if run:
-        out.append(run)
-    return ",".join(f"{r[0]}-{r[-1]}" if len(r) > 1 else f"{r[0]}" for r in out)
-
-
-def _host_state():
-    try:
-        affinity = sorted(os.sched_getaffinity(0))
-        return (
-            f"{len(affinity)} CPUs allowed ({_cpu_ranges(affinity)}), {os.cpu_count()} online, "
-            f"load {os.getloadavg()[0]:.1f}"
-        )
-    except OSError as e:
-        return f"unavailable ({e})"
-
-
-def _thp_state():
-    """Transparent huge page settings and this process's anonymous huge-page memory: a CI diagnostic."""
-    out = []
-    for name in ("enabled", "defrag"):
-        try:
-            with open(f"/sys/kernel/mm/transparent_hugepage/{name}") as f:
-                out.append(f"thp {name} {f.read().strip()}")
-        except OSError:
-            pass
-    try:
-        with open("/proc/self/smaps_rollup") as f:
-            kib = {}
-            for line in f:
-                key, _, value = line.partition(":")
-                if value.split():
-                    kib[key] = value.split()[0]
-        rss, huge = (int(kib.get(k, -1024)) // 1024 for k in ("Rss", "AnonHugePages"))
-        out.append(f"rss {rss} MiB, anon huge {huge} MiB")
-    except Exception:
-        pass
-    return "; ".join(out)
-
-
-_VMSTAT_KEYS = ("compact_stall", "compact_fail", "thp_fault_alloc", "thp_fault_fallback", "thp_collapse_alloc")
-
-
-def _rusage():
-    """(minor faults, involuntary context switches) of the whole process, all threads."""
-    ru = resource.getrusage(resource.RUSAGE_SELF)
-    return ru.ru_minflt, ru.ru_nivcsw
-
-
-def _vmstat():
-    """System-wide compaction and THP allocation counters (/proc/vmstat), or {} if unavailable."""
-    try:
-        with open("/proc/vmstat") as f:
-            pairs = (line.split() for line in f)
-            return {k: int(v) for k, v, *_ in pairs if k in _VMSTAT_KEYS}
-    except Exception:
-        return {}
-
-
-def _time_untraced(mesh_device, case, start, cpus=None, repeat=None, enqueue=None, host=None):
-    """Host ms of each timed eager forward through sync, and the last timed forward's per-device output. Appends the CPU
-    the main thread ran on after each sample to `cpus`, the ms until forward() returned (before the sync) to `enqueue`,
-    per-sample host counters to `host` (process minor faults during enqueue and during the sync, involuntary context
-    switches, and /proc/vmstat compaction/THP deltas), and the output of one more, untimed forward to `repeat`, if
-    given."""
+def _time_untraced(mesh_device, case, start, repeat=None):
+    """Host ms of each timed eager forward through sync, and the last timed forward's per-device output; appends one
+    more, untimed forward's output to `repeat`, if given."""
     for _ in range(UNTRACED_WARMUP):  # the first call compiles
         ttnn.deallocate(case.forward(start))
         ttnn.synchronize_device(mesh_device)
     samples = []
     for i in range(UNTRACED_SAMPLES):
-        if host is not None:
-            vm0, (f0, c0) = _vmstat(), _rusage()
         t0 = time.perf_counter()
         out = case.forward(start)
-        t1 = time.perf_counter()
-        if host is not None:
-            f1, _ = _rusage()  # outside the enqueue window, ~1 us inside the total one
         ttnn.synchronize_device(mesh_device)
         samples.append((time.perf_counter() - t0) * 1e3)
-        if host is not None:
-            (f2, c2), vm2 = _rusage(), _vmstat()
-            if vm0 and vm2:
-                vm = " ".join(f"{k}={vm2[k] - vm0[k]}" for k in sorted(vm0.keys() & vm2.keys()) if vm2[k] != vm0[k])
-            else:
-                vm = "vmstat unavailable"
-            host.append(f"{f1 - f0}/{f2 - f1}/{c2 - c0}" + (f" {vm}" if vm else ""))
-        if enqueue is not None:
-            enqueue.append((t1 - t0) * 1e3)
-        if cpus is not None:
-            cpus.append(current_cpu())
         if i == UNTRACED_SAMPLES - 1:
             reference = _device_tensors(out)
         ttnn.deallocate(out)
@@ -501,46 +121,6 @@ def _time_untraced(mesh_device, case, start, cpus=None, repeat=None, enqueue=Non
         repeat.append(_device_tensors(out))
         ttnn.deallocate(out)
     return samples, reference
-
-
-def _op_host_profile(mesh_device, case, start, top=12):
-    """One untimed eager forward with each ttnn op call timed on the host: a CI diagnostic for untraced host-time noise
-    (which ops grow when a run is slow). Times are inclusive (a Python op that calls other ttnn ops counts them too) and
-    cover only ops called through ttnn's FastOperation wrapper (CI runs in fast-runtime mode). Returns a summary."""
-    from ttnn.decorators import FastOperation
-
-    per_op, original = {}, FastOperation.__call__
-
-    def timed(self, *args, **kwargs):
-        t = time.perf_counter()
-        try:
-            return original(self, *args, **kwargs)
-        finally:
-            calls, total = per_op.get(self.python_fully_qualified_name, (0, 0.0))
-            per_op[self.python_fully_qualified_name] = (calls + 1, total + time.perf_counter() - t)
-
-    entries, out = mesh_device.num_program_cache_entries(), None
-    try:
-        FastOperation.__call__ = timed
-        try:
-            t0 = time.perf_counter()
-            out = case.forward(start)
-            t1 = time.perf_counter()
-        finally:
-            FastOperation.__call__ = original
-        ttnn.synchronize_device(mesh_device)
-        t2 = time.perf_counter()
-    finally:
-        if out is not None:
-            ttnn.deallocate(out)
-    rows = sorted(per_op.items(), key=lambda kv: -kv[1][1])[:top]
-    ops = ", ".join(f"{name.rsplit('.', 1)[-1]} {calls}x {total * 1e3:.3f}" for name, (calls, total) in rows)
-    return (
-        f"forward() {(t1 - t0) * 1e3:.3f} ms, sync {(t2 - t1) * 1e3:.3f} ms, "
-        f"{sum(c for c, _ in per_op.values())} op calls, "
-        f"{sum(t for _, t in per_op.values()) * 1e3:.3f} ms in ops (inclusive), "
-        f"program cache +{mesh_device.num_program_cache_entries() - entries}; top ops (ms): {ops}"
-    )
 
 
 def _time_traced(mesh_device, case, start, repeat=None):
@@ -585,18 +165,18 @@ def _time_traced(mesh_device, case, start, repeat=None):
 @pytest.mark.timeout(900)
 @pytest.mark.parametrize(
     "mesh_device, device_params, variant, case_name",
-    _gate_params(),
+    gate_params(),
     indirect=["mesh_device", "device_params", "variant"],
 )
 @pytest.mark.parametrize("scenario", list(SCENARIO_CACHE_TOKENS))
 def test_sparse_mla_perf(request, mesh_device, device_params, variant, case_name, config_only, scenario):
-    box = _BOX.name
+    box = BOX.name
     shared_layer = GATE_CASES[case_name][1]
     label = f"{case_name} sparse MLA {box} {scenario}"
     if box.startswith("Galaxy"):
         require_high_power(f"{label} perf")
-    chunk = _BOX.chunk
-    cache = _BOX.cache_tokens(SCENARIO_CACHE_TOKENS[scenario])
+    chunk = BOX.chunk
+    cache = BOX.cache_tokens(SCENARIO_CACHE_TOKENS[scenario])
     case = build_sparse_perf_case(
         mesh_device,
         variant,
@@ -605,26 +185,15 @@ def test_sparse_mla_perf(request, mesh_device, device_params, variant, case_name
         chunk=chunk,
         topology=per_axis_topology(device_params["fabric_config"]),
         shared_layer=shared_layer,
-        sp_axis=_BOX.sp_axis,
+        sp_axis=BOX.sp_axis,
     )
     start = cache
     clock = hold_full_cpu_clock()
     request.addfinalizer(clock.restore)
     print(f"{label} host: {clock.status}")
     samples = {}
-    cpus = []
     eager_repeat, traced_repeat = [], []
-    enqueue, host = [], []
-    thp_before = _thp_state()
-    samples["untraced"], eager_out = _time_untraced(mesh_device, case, start, cpus, eager_repeat, enqueue, host)
-    print(f"{label} host: {_host_state()}; untraced sample CPUs {' '.join(map(str, cpus))}")
-    print(f"{label} untraced enqueue (forward() returns, ms): {' '.join(f'{x:.3f}' for x in enqueue)}")
-    print(
-        f"{label} untraced host per sample (process-wide minor faults in enqueue/sync, involuntary ctx switches; "
-        f"system-wide vmstat deltas; windows approximate): {' | '.join(host)}; "
-        f"before: {thp_before}; after: {_thp_state()}"
-    )
-    print(f"{label} untraced op profile: {_op_host_profile(mesh_device, case, start)}")
+    samples["untraced"], eager_out = _time_untraced(mesh_device, case, start, eager_repeat)
     samples["traced"], traced_out = _time_traced(mesh_device, case, start, traced_repeat)
 
     def min_pcc(xs, ys):
@@ -648,16 +217,14 @@ def test_sparse_mla_perf(request, mesh_device, device_params, variant, case_name
             f"{label} ({mode})",
             {
                 "box": box,
-                "mesh": f"{_BOX.mesh[0]}x{_BOX.mesh[1]}",
-                "sp_axis": _BOX.sp_axis,
+                "mesh": f"{BOX.mesh[0]}x{BOX.mesh[1]}",
+                "sp_axis": BOX.sp_axis,
                 "scenario": scenario,
                 "mode": mode,
                 "chunk_tokens": chunk,
                 "cache_tokens": cache,
                 "fabric": device_params["fabric_config"].name,
-                "fabric_payload_bytes": (
-                    moe_fabric_payload(_FABRIC_PAYLOAD[variant.name]) if variant.name in _FABRIC_PAYLOAD else None
-                ),
+                "fabric_payload_bytes": model_fabric_payload(variant.name),
                 "kv_cache_format": "scaled_fp8",
                 "weights": "random",
                 "samples_ms": samples[mode],
@@ -726,9 +293,8 @@ def _matrix_params():
         ]
     params = []
     for variant in MATRIX_VARIANTS:
-        payload = _FABRIC_PAYLOAD.get(variant)
         dp = _MATRIX_BOX.device_params(
-            fabric_payload_size=moe_fabric_payload(payload) if payload else None,
+            fabric_payload_size=model_fabric_payload(variant),
             worker_l1_size=ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE,
             trace_region_size=16 * 1024 * 1024,
         )

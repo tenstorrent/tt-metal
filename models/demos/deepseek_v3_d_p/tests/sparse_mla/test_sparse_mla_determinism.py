@@ -42,12 +42,12 @@ from models.demos.deepseek_v3_d_p.tests.attn_res.device_determinism import (
     merge_device_mismatch_markers,
     mismatch_report,
 )
-from models.demos.deepseek_v3_d_p.tests.sparse_mla.test_sparse_mla_perf import (
-    _BOX,
+from models.demos.deepseek_v3_d_p.tests.sparse_mla.perf_cases import (
+    BOX,
     GATE_CASES,
     SCENARIO_CACHE_TOKENS,
-    _gate_params,
     build_sparse_perf_case,
+    gate_params,
 )
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.utils.sub_device_trace import SubDeviceTraceController
@@ -59,7 +59,7 @@ PREFIXES = {"warm": ("zero", "filled"), "long": ("zero",)}
 def _params():
     """The perf gate's cases x scenarios; each case checks its scenario's PREFIXES on one build."""
     params = []
-    for gate in _gate_params():
+    for gate in gate_params():
         mesh, dp, variant, case_name = gate.values
         for scenario in PREFIXES:
             params.append(
@@ -243,8 +243,8 @@ def _check(mesh_device, case, start):
 def test_sparse_mla_determinism(mesh_device, device_params, variant, case_name, config_only, scenario):
     shared_layer = GATE_CASES[case_name][1]
     prefixes = [p for p in PREFIXES[scenario] if not (p == "filled" and shared_layer)]
-    chunk = _BOX.chunk
-    cache = _BOX.cache_tokens(SCENARIO_CACHE_TOKENS[scenario])
+    chunk = BOX.chunk
+    cache = BOX.cache_tokens(SCENARIO_CACHE_TOKENS[scenario])
     case = build_sparse_perf_case(
         mesh_device,
         variant,
@@ -253,7 +253,7 @@ def test_sparse_mla_determinism(mesh_device, device_params, variant, case_name, 
         chunk=chunk,
         topology=per_axis_topology(device_params["fabric_config"]),
         shared_layer=shared_layer,
-        sp_axis=_BOX.sp_axis,
+        sp_axis=BOX.sp_axis,
     )
     try:
         failures = _run_prefixes(
@@ -275,7 +275,7 @@ def _run_prefixes(mesh_device, case, case_name, scenario, prefixes, cache, chunk
 
     failures = []
     for prefix in prefixes:
-        label = f"{case_name} sparse MLA {_BOX.name} {scenario} {prefix} prefix"
+        label = f"{case_name} sparse MLA {BOX.name} {scenario} {prefix} prefix"
         if prefix == "filled":
             _fill_prefix(mesh_device, case, cache, chunk, hidden_size)
         failure = _check(mesh_device, case, cache)

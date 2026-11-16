@@ -19,10 +19,9 @@ from ttnn.device import is_blackhole
 
 import ttnn
 from models.common.utility_functions import comp_pcc
-from models.demos.deepseek_v3_d_p.reference.kimi_k3_1_config import KimiK31Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     fabric2d_device_params,
-    moe_fabric_payload,
+    model_fabric_payload,
     torus_x_device_params,
     torus_xy_device_params,
 )
@@ -116,17 +115,9 @@ def _worker_l1_size():
     return ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE
 
 
-# Variants whose meshes open with the production runner's fabric packet size instead of the arch maximum.
-MODEL_PAYLOAD_CONFIGS = {"kimi_k3_1": KimiK31Config}
-
-
 def _device_params_for_mesh(mesh, variant_name=None):
     """Assign one fabric to each existing mesh; topology is not a separate test axis."""
-    model_config = MODEL_PAYLOAD_CONFIGS.get(variant_name)
-    params = {
-        "worker_l1_size": _worker_l1_size(),
-        "fabric_payload_size": moe_fabric_payload(model_config) if model_config else None,
-    }
+    params = {"worker_l1_size": _worker_l1_size(), "fabric_payload_size": model_fabric_payload(variant_name)}
     if mesh == (1, 4):
         return torus_x_device_params(**params)
     if mesh == (8, 4):
