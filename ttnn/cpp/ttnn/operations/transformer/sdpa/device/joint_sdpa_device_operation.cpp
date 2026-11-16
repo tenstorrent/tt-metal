@@ -243,6 +243,7 @@ JointSDPAResult joint_scaled_dot_product_attention(
     const std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
     using OperationType = ttnn::prim::JointSDPADeviceOperation;
 
+    ttnn::verify_numerical_configuration(input_tensor_q.device()->arch(), compute_kernel_config);
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);
 
