@@ -239,12 +239,15 @@ void kernel_main() {
                 noc_semaphore_inc(get_noc_addr(merge_x, merge_y, get_semaphore(sem_expert_go_id)), 1);
                 noc_async_atomic_barrier();
             };
-            if (page_row_bytes(page) != row_bytes) {
-                DeviceZoneScopedN("FE_CTRL_MCAST_1R");
-                expert_mcast();
-            } else {
+            {
+                // A native one-row iteration's zone nests a marker in it (the zone stays one per iteration).
                 DeviceZoneScopedN("FE_CTRL_MCAST");
-                expert_mcast();
+                if (page_row_bytes(page) != row_bytes) {
+                    DeviceZoneScopedN("FE_CTRL_MCAST_1R");
+                    expert_mcast();
+                } else {
+                    expert_mcast();
+                }
             }
             socket_pop_pages(in[k], 1);
             routed &= ~(1u << k);
@@ -279,11 +282,11 @@ void kernel_main() {
                     send_route_go(r + 1u);
                     noc_async_atomic_barrier();
                 };
+                DeviceZoneScopedN("FE_CTRL_ROUTE_MCAST");
                 if (page_row_bytes(page) != row_bytes) {
                     DeviceZoneScopedN("FE_CTRL_ROUTE_MCAST_1R");
                     route_mcast();
                 } else {
-                    DeviceZoneScopedN("FE_CTRL_ROUTE_MCAST");
                     route_mcast();
                 }
                 routed_queue[r % kFeSourceRing] = k;
