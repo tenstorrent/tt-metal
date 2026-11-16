@@ -34,7 +34,7 @@ KERNELS = Path(__file__).resolve().parent / "kernels"
 TILE = 32
 PAGE = TILE * TILE * 2  # BF16 tile page
 SITES = ("attn", "moe")
-FAST_RECONFIG = os.environ.get("GEMMA4_26B_WS5_BND_FAST", "0") != "0"
+FAST_RECONFIG = os.environ.get("GEMMA4_26B_WS5_BND_FAST", "1") != "0"
 
 
 def _f32_bits(v):
