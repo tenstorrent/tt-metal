@@ -134,11 +134,6 @@ void validate_config(const SparseKvPushParams& params, const SparseKvPushInputs&
     const auto mesh_shape = mesh_device->shape();
     const uint32_t num_devices = mesh_shape.mesh_size();
     TT_FATAL(
-        fabric_supported(mesh_device),
-        "the sparse KV push needs a 2D fabric (FABRIC_2D or a 2D torus) on a 2D mesh of at least 2 chips, got {} on {}",
-        params.fabric_config,
-        mesh_shape);
-    TT_FATAL(
         num_devices <= ::sparse_push::plan_table::kMaxDevices,
         "the plan table holds at most {} owners, the mesh has {}",
         ::sparse_push::plan_table::kMaxDevices,
@@ -147,21 +142,11 @@ void validate_config(const SparseKvPushParams& params, const SparseKvPushInputs&
         params.num_links >= 1 && params.num_links <= 2,
         "the sparse KV push supports 1 or 2 links, got {}",
         params.num_links);
-    // Every direction must forward on num_links links; the fabric gives some neighbours fewer.
-    for (const auto& coord : tt::tt_metal::distributed::MeshCoordinateRange(mesh_shape)) {
-        for (const auto& direction : fabric_directions(input, coord)) {
-            TT_FATAL(
-                direction.links.size() >= params.num_links,
-                "the sparse KV push needs {} links from chip {} to its neighbour {}, the fabric has {}: {}",
-                params.num_links,
-                coord,
-                direction.neighbor,
-                direction.links.size(),
-                direction.links);
-        }
-    }
+    // The same check is_sparse_kv_push_supported makes, so a caller it sent here does not land on this.
+    const auto routes = fabric_routes(mesh_device, params.num_links);
+    TT_FATAL(routes.ok(), "the sparse KV push cannot route on this mesh: {}", routes.problem);
     // Chips with fewer fabric neighbours use a prefix of the grid.
-    const uint32_t cores = cores_needed(params.num_links, max_fabric_directions(input));
+    const uint32_t cores = cores_needed(params.num_links, routes.max_directions());
     TT_FATAL(
         params.core_grid.num_cores() >= cores,
         "the sparse KV push needs {} cores on {} links, core_grid has {}",

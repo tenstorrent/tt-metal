@@ -201,7 +201,9 @@ bool is_axis_wrap_wired(const tt::tt_metal::distributed::MeshDevice& mesh_device
 }
 
 tt::tt_fabric::Topology get_axis_topology(
-    const Tensor& tensor, tt::tt_fabric::FabricConfig fabric_config, uint32_t axis) {
+    const tt::tt_metal::distributed::MeshDevice& mesh_device,
+    tt::tt_fabric::FabricConfig fabric_config,
+    uint32_t axis) {
     // Whether the fabric wraps this axis into a ring/torus.
     const bool fabric_is_2d = ::tt::tt_fabric::is_2d_fabric_config(fabric_config);
     bool axis_can_wrap;
@@ -219,8 +221,13 @@ tt::tt_fabric::Topology get_axis_topology(
 
     // The torus flags name a fabric axis. A view axis can be a permutation of it, so the flag alone
     // says nothing about this axis: only a wired closing link makes it a ring.
-    const bool axis_is_ring = axis_can_wrap && is_axis_wrap_wired(*tensor.device(), axis);
+    const bool axis_is_ring = axis_can_wrap && is_axis_wrap_wired(mesh_device, axis);
     return axis_is_ring ? tt::tt_fabric::Topology::Ring : tt::tt_fabric::Topology::Linear;
+}
+
+tt::tt_fabric::Topology get_axis_topology(
+    const Tensor& tensor, tt::tt_fabric::FabricConfig fabric_config, uint32_t axis) {
+    return get_axis_topology(*tensor.device(), fabric_config, axis);
 }
 
 tt::tt_fabric::Topology get_usable_topology(
@@ -1450,7 +1457,7 @@ void fabric_mux_connection_rt_args(
     worker_rt_args.push_back(
         mux_kernel_config.get_buffer_index_address(channel_type, worker_id));  // fabric_mux_buffer_index_address 8
     worker_rt_args.push_back(
-        mux_kernel_config.get_channel_credits_stream_id(channel_type, worker_id));    // fabric_mux_channel_id 9
+        mux_kernel_config.get_channel_credits_stream_id(channel_type, worker_id));  // fabric_mux_channel_id 9
     const uint32_t termination_sync_semaphore_id =
         termination_master_semaphore_id.has_value() ? *termination_master_semaphore_id : alloc_sem();
     worker_rt_args.push_back(termination_sync_semaphore_id);      // termination_sync_address 10

@@ -43,14 +43,17 @@ void bind_experimental_sparse_kv_push_operations(nb::module_& mod) {
         mod,
         R"doc(
             Whether ``sparse_push_plan`` and ``sparse_kv_push`` can serve a cache of ``max_rows`` rows in blocks of
-            ``stripe_chunk`` rows on ``mesh_device``: a 2D fabric (FABRIC_2D or a torus on either or both axes) on a 2D
-            mesh of 2 to 32 chips, and a cache geometry the plan table and the plan's reduce fit. When this returns
-            False the ops would raise, so callers can gather the whole prefix instead.
+            ``stripe_chunk`` rows on ``mesh_device`` with ``num_links`` links: a 2D fabric (FABRIC_2D or a torus on
+            either or both axes) on a 2D mesh of 2 to 32 chips that every chip can route on with ``num_links`` links
+            (the push's own routing check), and a cache geometry the plan table and the plan's reduce fit. When this
+            returns False the ops would raise, so callers can gather the whole prefix instead. The push's core grid is
+            the caller's: it needs ``num_links * SPARSE_KV_PUSH_CORES_PER_LINK`` cores.
 
             Args:
                 mesh_device (ttnn.MeshDevice): The mesh the ops would run on.
                 stripe_chunk: Rows per block-cyclic block of the cache.
                 max_rows: Cache rows the plan would cover.
+                num_links: Fabric links the push would run on.
 
             Returns:
                 bool
@@ -58,7 +61,8 @@ void bind_experimental_sparse_kv_push_operations(nb::module_& mod) {
         &is_sparse_kv_push_supported,
         nb::arg("mesh_device"),
         nb::arg("stripe_chunk"),
-        nb::arg("max_rows"));
+        nb::arg("max_rows"),
+        nb::arg("num_links") = 2);
 
     ttnn::bind_function<"sparse_kv_push_output_spec", "ttnn.experimental.">(
         mod,

@@ -66,6 +66,8 @@ size_t l1_small_floor_address(const tt::tt_metal::distributed::MeshDevice& mesh_
 
 // Resolve the topology (Ring vs Linear) for a single mesh axis
 tt::tt_fabric::Topology get_axis_topology(
+    const tt::tt_metal::distributed::MeshDevice& mesh_device, tt::tt_fabric::FabricConfig fabric_config, uint32_t axis);
+tt::tt_fabric::Topology get_axis_topology(
     const Tensor& tensor, tt::tt_fabric::FabricConfig fabric_config, uint32_t axis);
 
 tt::tt_fabric::Topology convert_2d_to_1d_topology(tt::tt_fabric::Topology topology);
