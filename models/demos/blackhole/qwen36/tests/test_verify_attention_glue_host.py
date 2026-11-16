@@ -353,7 +353,10 @@ def test_the_verify_body_slices_no_positions_for_the_kv_write(monkeypatch):
     model = object.__new__(Qwen36Model)
     model._vfy_T, model._vfy_step_buf = 4, "step"
     model.args = SimpleNamespace(gdn_chunk_size=128)
-    model.rope_lookup = lambda rows, n: (FT((1, 1, n, 64), "cos"), FT((1, 1, n, 64), "sin"))
+    model.rope_lookup = lambda rows, n, row_view=False: log.append(("rope_lookup", n, row_view)) or (
+        FT((1, 1, n * 32 if row_view else n, 64), "cos"),
+        FT((1, 1, n * 32 if row_view else n, 64), "sin"),
+    )
     model._vfy_kvpt_buf = model._vfy_kvpt_users = model._vfy_kvpt1_buf = None
     model._vfy_state_idx = model._vfy_conv_sel = None
     model.embd = lambda tok: FT((1, 1, 8, DIM), "x")
@@ -364,6 +367,7 @@ def test_the_verify_body_slices_no_positions_for_the_kv_write(monkeypatch):
 
     slices = [c for c in log if c[0] == "slice"]
     assert [(c[1], c[2], c[3]) for c in slices] == [("step", (r, 0), (r + 1, 8)) for r in range(3)]
+    assert [c for c in log if c[0] == "rope_lookup"] == [("rope_lookup", 8, True)]
     layers = [c for c in log if c[0] == "layer"]
     assert len(layers) == 4 and not any("spec_pos_groups" in c[2] for c in layers)
     tail = next(i for i, c in enumerate(log) if c[0] == "tail")
