@@ -37,6 +37,7 @@ inline constexpr bool pack_size_mode<DST_SYNC_MODE> = LLK_SIZE_MODE;
 inline void llk_pack_wait_fp32_dest_acc(bool enable) {
     SAN_HOOK(unsupported());
     _llk_set_fp32_dest_acc_<ThreadId::PackThreadId>(enable);
+    ckernel::packer::llk_pack_live_forget();
 }
 
 /**
@@ -303,6 +304,21 @@ inline void llk_pack_reconfig_data_format_body(const std::uint32_t new_output) {
     }
 }
 
+// A constant-output reconfigure to the output whose configuration is live writes nothing (pack_live_output); not in size mode,
+// nor at half sync where its writes keep the pack off the unpackers' L1 grants (the u2d gate, unpack-bound matmul). A run-time
+// output keeps the full reconfigure: its compare, on every real switch, spills registers in the switching loop.
+template <bool is_fp32_dest_acc_en>
+constexpr bool llk_pack_live_skip() {
+    constexpr bool skip_all =
+        (ckernel::packer::llk_pack_reconfig_skip_all<is_fp32_dest_acc_en, DST_SYNC_MODE, sizeof(pack_dst_format), true>(
+             pack_src_format, pack_dst_format, pack_tile_num_faces, pack_partial_face) &
+         ckernel::packer::LLK_PACK_RECONFIG_SKIP_ALL) != 0;
+    return !LLK_SIZE_MODE && !skip_all &&
+           !ckernel::packer::llk_pack_reconfig_u2d_half<is_fp32_dest_acc_en, DST_SYNC_MODE>() &&
+           !(DST_SYNC_MODE == DstSync::SyncHalf &&
+             ckernel::packer::llk_pack_late_start<static_cast<std::uint32_t>(is_fp32_dest_acc_en)>(is_fp32_dest_acc_en));
+}
+
 template <bool is_fp32_dest_acc_en>
 inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
     if constexpr (ckernel::packer::llk_pack_reconfig_u2d_half<is_fp32_dest_acc_en, DST_SYNC_MODE>()) {
@@ -394,6 +410,11 @@ __attribute__((always_inline)) inline void llk_pack_reconfig_data_format_ct() {
             }
         } else {
             llk_pack_reconfig_data_format_ct_gate<is_fp32_dest_acc_en, new_output, false>();
+        }
+    } else if constexpr (llk_pack_live_skip<is_fp32_dest_acc_en>()) {
+        if (ckernel::packer::pack_live_output != new_output + 1) {
+            llk_pack_reconfig_data_format_ct_gate<is_fp32_dest_acc_en, new_output, true>();
+            ckernel::packer::pack_live_output = new_output + 1;
         }
     } else {
         llk_pack_reconfig_data_format_ct_gate<is_fp32_dest_acc_en, new_output, true>();

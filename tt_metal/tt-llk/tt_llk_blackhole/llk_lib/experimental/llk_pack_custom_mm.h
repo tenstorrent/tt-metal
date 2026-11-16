@@ -41,6 +41,7 @@ inline std::uint32_t custom_mm_pack_row_bytes(const std::uint32_t pack_src_forma
 template <CustomMmDestLayout layout = CustomMmDestLayout::Default>
 inline void _llk_pack_custom_mm_init_(const std::uint32_t pack_src_format)
 {
+    ckernel::packer::llk_pack_live_forget();
     const std::uint32_t row_bytes = custom_mm_pack_row_bytes(pack_src_format);
     if constexpr (custom_mm_tile_rows(layout) == 32)
     {
@@ -65,6 +66,7 @@ inline void _llk_pack_custom_mm_init_(const std::uint32_t pack_src_format)
 template <CustomMmDestLayout layout = CustomMmDestLayout::Default>
 inline void _llk_pack_custom_mm_uninit_(const std::uint32_t pack_src_format)
 {
+    ckernel::packer::llk_pack_live_forget();
     const std::uint32_t row_bytes = custom_mm_pack_row_bytes(pack_src_format);
     if constexpr (layout == CustomMmDestLayout::Compact)
     {

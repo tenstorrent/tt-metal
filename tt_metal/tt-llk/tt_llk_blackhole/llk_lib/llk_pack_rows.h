@@ -108,6 +108,7 @@ inline void _llk_pack_rows_mop_config_(const std::uint32_t num_rows)
  */
 inline void _llk_pack_rows_init_(const std::uint32_t num_rows)
 {
+    ckernel::packer::llk_pack_live_forget();
     // In row-major layout, each row is FACE_C_DIM (16) datums.
     // A full tile has TILE_R_DIM * TILE_C_DIM / FACE_C_DIM = 32 * 32 / 16 = 64 rows.
     constexpr std::uint32_t MAX_ROWS = (TILE_R_DIM * TILE_C_DIM) / FACE_C_DIM;

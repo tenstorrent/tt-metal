@@ -332,6 +332,14 @@ __attribute__((noinline)) bool is_packer_to_L1_conversion_supported(const DataFo
 [[maybe_unused]] alignas(4) static std::uint8_t pack_state[4] = {0, 0, 0, 0};
 constexpr std::uint8_t LLK_PACK_STATE_FU_OPEN = 0xff;
 constexpr std::uint8_t LLK_PACK_STATE_W       = 0x80;
+// The output (id + 1) whose configuration the last llk_pack_reconfig_data_format wrote, 0 when unknown: a reconfigure to
+// the same output then writes nothing. Every other writer of the fields it writes forgets it; unread, its stores drop.
+[[maybe_unused]] static std::uint8_t pack_live_output = 0;
+#define LLK_PACK_LIVE_OUTPUT 1
+inline void llk_pack_live_forget()
+{
+    pack_live_output = 0;
+}
 inline std::uint32_t llk_pack_state_half()
 {
     std::uint16_t half;
@@ -504,6 +512,7 @@ inline constexpr PackMode llk_pack_default_mode = PackMode::Default;
 template <PackMode pack_mode = PackMode::Default, bool reconfigured = false, bool store_state = true, bool zero_ch1 = false, bool ch1_u2d = false>
 inline void set_packer_strides(const std::uint32_t pack_src_format, const std::uint32_t tile_c_dim)
 {
+    llk_pack_live_forget();
     std::uint32_t x_stride = datum_size_in_bytes(pack_src_format);
     // The state stores first: behind the config writes they wait for them.
     if constexpr (store_state)
@@ -997,6 +1006,7 @@ __attribute__((always_inline)) inline void reconfig_packer_data_format_impl(
     const std::uint32_t num_faces,
     const bool partial_face)
 {
+    llk_pack_live_forget();
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     const std::uint32_t pack_output_src_format = masked_data_format(pack_src_format);
     const std::uint32_t pack_output_dst_format = masked_data_format(pack_dst_format);
@@ -1317,6 +1327,7 @@ template <
     std::uint32_t num_faces>
 TT_ALWAYS_INLINE void reconfig_packer_data_format_imm_and_state()
 {
+    llk_pack_live_forget();
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     LLK_ASSERT(
         is_packer_to_L1_conversion_supported(
@@ -1375,6 +1386,7 @@ inline void configure_pack(
     const bool partial_face                         = false,
     const std::uint32_t relu_config                 = 0)
 {
+    llk_pack_live_forget();
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     LLK_ASSERT(
         is_packer_to_L1_conversion_supported(static_cast<DataFormat>(pack_src_format & 0xF), static_cast<DataFormat>(pack_dst_format & 0xF)),

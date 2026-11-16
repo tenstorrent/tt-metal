@@ -425,6 +425,7 @@ inline void pack_init_apply(
     else
     {
         LLK_PACK_OTHER_PROGRAM_SET();
+        llk_pack_live_forget();
     }
     if constexpr (!skip_addrmod_config)
     {

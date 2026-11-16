@@ -163,8 +163,24 @@ struct llk_pack_sfpu_api<1>
 #include "llk_pack_block.h"
 #endif
 
+#if __has_include("llk_fp32_dest_acc.h")
+#include "llk_fp32_dest_acc.h"
+#define PACK_API_SHIM_FP32_SWITCH 1
+#endif
+
 namespace pack_api_shim
 {
+
+#ifdef PACK_API_SHIM_FP32_SWITCH
+// The compute API's llk_pack_wait_fp32_dest_acc (llk_pack_common_api.h): the run-time FP32 DEST switch's pack side.
+inline void pack_wait_fp32_dest_acc(const bool enable)
+{
+    _llk_set_fp32_dest_acc_<ThreadId::PackThreadId>(enable);
+#ifdef LLK_PACK_LIVE_OUTPUT
+    ckernel::packer::llk_pack_live_forget();
+#endif
+}
+#endif
 
 #ifndef PACK_API_SHIM_CB_COUNTS
 #define PACK_API_SHIM_CB_COUNTS
@@ -378,6 +394,21 @@ inline void pack_reconfig_data_format_body(const std::uint32_t new_output)
         false /* partial_face */);
 }
 
+#if PACK_API_SHIM_PR
+// llk_pack_live_skip (llk_pack_common_api.h); the harness has no size mode. Trees without the skip (main, the head before it) build the
+// shim too.
+template <bool is_fp32_dest_acc_en>
+constexpr bool pack_live_skip()
+{
+    constexpr bool skip_all = (ckernel::packer::llk_pack_reconfig_skip_all<is_fp32_dest_acc_en, DST_SYNC_MODE, sizeof(pack_dst_format), true>(
+                                   pack_src_format, pack_dst_format, pack_tile_num_faces, pack_partial_face) &
+                               ckernel::packer::LLK_PACK_RECONFIG_SKIP_ALL) != 0;
+    return !skip_all && !ckernel::packer::llk_pack_reconfig_u2d_half<is_fp32_dest_acc_en, DST_SYNC_MODE>() &&
+           !(DST_SYNC_MODE == DstSync::SyncHalf &&
+             ckernel::packer::llk_pack_late_start<static_cast<std::uint32_t>(is_fp32_dest_acc_en)>(is_fp32_dest_acc_en));
+}
+#endif
+
 template <bool is_fp32_dest_acc_en>
 inline void pack_reconfig_data_format(const std::uint32_t new_output)
 {
@@ -469,6 +500,16 @@ __attribute__((always_inline)) inline void pack_reconfig_data_format()
             pack_reconfig_data_format_gate<is_fp32_dest_acc_en, new_output, false>();
         }
     }
+#ifdef LLK_PACK_LIVE_OUTPUT
+    else if constexpr (pack_live_skip<is_fp32_dest_acc_en>())
+    {
+        if (ckernel::packer::pack_live_output != new_output + 1)
+        {
+            pack_reconfig_data_format_gate<is_fp32_dest_acc_en, new_output, true>();
+            ckernel::packer::pack_live_output = new_output + 1;
+        }
+    }
+#endif
     else
     {
         pack_reconfig_data_format_gate<is_fp32_dest_acc_en, new_output, true>();
