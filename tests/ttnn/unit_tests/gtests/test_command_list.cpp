@@ -145,6 +145,8 @@ TEST(CommandListParamsTest, EncodersRejectValuesTheyCannotRepresent) {
     rejects(encode_float32_bits, real(1e39));
     rejects(encode_bfloat16_pair, real(-1e39));
     rejects(encode_bfloat16_low, real(3.4e38));
+    rejects(encode_float8_e4m3_quad, real(512.0));
+    rejects(encode_float8_e4m3_quad, real(-std::numeric_limits<double>::infinity()));
 }
 
 TEST_F(CommandListTest, BindsNeedARecordingBuilder) {

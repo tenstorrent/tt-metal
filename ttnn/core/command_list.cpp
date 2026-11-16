@@ -281,7 +281,13 @@ metal::ArgValue encode_uint16_high(const CmdListScalar& scalar) {
 }
 
 metal::ArgValue encode_float8_e4m3_quad(const CmdListScalar& scalar) {
-    const float8_e4m3 value(float32_of(scalar, "encode_float8_e4m3_quad"));
+    const float real = float32_of(scalar, "encode_float8_e4m3_quad");
+    // float8_e4m3 clamps infinities and overflow to 448; E4M3 has no infinity.
+    TT_FATAL(
+        std::isnan(real) || std::abs(real) <= 448.0f,
+        "encode_float8_e4m3_quad needs a value in [-448, 448], got {}",
+        real);
+    const float8_e4m3 value(real);
     return pack_four_float8_e4m3_into_uint32(value, value, value, value);
 }
 
