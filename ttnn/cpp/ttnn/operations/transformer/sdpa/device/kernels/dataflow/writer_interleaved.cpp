@@ -14,19 +14,29 @@
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "dataflow_common.hpp"
 #include "windowed_mask_gen.hpp"
+#include "cpp/ttnn/operations/transformer/sdpa/device/kernels/sdpa_runtime_seq_len_args.hpp"
 
 void kernel_main() {
     Noc noc;
 
     constexpr uint32_t B = get_compile_time_arg_val(0);
     constexpr uint32_t NQH = get_compile_time_arg_val(1);
+#ifdef SDPA_RUNTIME_SEQ_LEN
+    // The sequence lengths come at run time (compile-time slots 2, 3, 6 and 8 are 0), so one binary
+    // serves every length.
+    const uint32_t valid_Sqt = get_common_arg_val<uint32_t>(sdpa_seq_len_args::VALID_SQT);
+    const uint32_t unpadded_Sk = get_common_arg_val<uint32_t>(sdpa_seq_len_args::SK);
+    const uint32_t q_num_chunks = get_common_arg_val<uint32_t>(sdpa_seq_len_args::Q_NUM_CHUNKS);
+    const uint32_t k_num_chunks = get_common_arg_val<uint32_t>(sdpa_seq_len_args::K_NUM_CHUNKS);
+#else
     constexpr uint32_t valid_Sqt = get_compile_time_arg_val(2);
     constexpr uint32_t unpadded_Sk = get_compile_time_arg_val(3);
+    constexpr uint32_t q_num_chunks = get_compile_time_arg_val(6);
+    constexpr uint32_t k_num_chunks = get_compile_time_arg_val(8);
+#endif
     constexpr uint32_t vDHt = get_compile_time_arg_val(4);
     constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(5);
-    constexpr uint32_t q_num_chunks = get_compile_time_arg_val(6);
     constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(7);
-    constexpr uint32_t k_num_chunks = get_compile_time_arg_val(8);
     constexpr uint32_t identity_scalar_packed = get_compile_time_arg_val(9);
     constexpr uint32_t num_cores = get_compile_time_arg_val(10);
     constexpr uint32_t is_causal = get_compile_time_arg_val(11) == 1;
@@ -242,7 +252,7 @@ void kernel_main() {
             // output. The call resolves to a no-op overload for WindowedMode::None, so the generator is only
             // instantiated in a windowed mode (kernel_main is not a template, so a bare `if constexpr` here
             // would still compile the discarded body). valid_Skt derived from the unpadded K length.
-            constexpr uint32_t windowed_valid_Skt =
+            const uint32_t windowed_valid_Skt =
                 (unpadded_Sk + tt::constants::TILE_HEIGHT - 1) / tt::constants::TILE_HEIGHT;
             windowed_generate_if_enabled<windowed_mode, cb_mask_in, cb_cu_window_in>(
                 noc,
