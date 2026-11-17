@@ -390,7 +390,8 @@ class ColParallelLinear(Module):
 
         `persistent_buffer_rows` sizes the persistent all-gather pair's rows above `x`'s, so every row count up
         to it shares one pair (the dynamic-length path); it keeps the layer off the strided op, which sizes its
-        gather on the buffer.
+        gather on the buffer. The unfused gather returns its buffer as the activation, so it cannot take a larger
+        one; there `persistent_buffer_rows` turns the persistent pair off instead of keeping one per row count.
 
         `addcmul_a` / `addcmul_b` fuse a gated residual into the matmul epilogue, returning
         `addcmul_a + addcmul_scalar * matmul_result * addcmul_b`. Both must already be at the
@@ -536,7 +537,7 @@ class ColParallelLinear(Module):
                     dim=-1,
                     mesh_axis=parallel_config.tensor_parallel.mesh_axis,
                     use_hyperparams=True,
-                    use_persistent_buffer=use_persistent_buffer,
+                    use_persistent_buffer=use_persistent_buffer and persistent_buffer_rows is None,
                 )
 
             if self.chunks is not None:
@@ -686,6 +687,7 @@ class RowParallelLinear(Module):
         dtype=None,
         gather_output: bool = False,
         reduce_scatter_dim: int = -1,
+        persistent_buffer_rows: int | None = None,
     ) -> ttnn.Tensor:
         """
         Expects x to be column fractured.
@@ -693,6 +695,10 @@ class RowParallelLinear(Module):
         Return output fractured on columns.
 
         `reduce_scatter_dim` selects the reduce-scatter axis (default -1, hidden); -2 splits on the sequence dim.
+
+        `persistent_buffer_rows` is the largest row count `x` takes. With it, every row count up to it shares one
+        persistent reduce-scatter intermediate on the line topology (see `CCLManager.reduce_scatter`), and the
+        output gather of `gather_output` keeps no persistent pair.
         """
         if self.fsdp_mesh_axis is not None and self.mesh_device.shape[self.fsdp_mesh_axis] > 1:
             unsqueezed_weight = ttnn.unsqueeze_to_4D(self.weight.data)
@@ -737,7 +743,11 @@ class RowParallelLinear(Module):
             # Reduce over rows when replicating: N may be too narrow to scatter over the mesh axis.
             dim = -2 if gather_output else reduce_scatter_dim
             output = self.ccl_manager.reduce_scatter(
-                output, dim=dim, mesh_axis=self.mesh_axis, use_persistent_buffer=use_persistent_buffer
+                output,
+                dim=dim,
+                mesh_axis=self.mesh_axis,
+                use_persistent_buffer=use_persistent_buffer,
+                rows=persistent_buffer_rows if dim != -2 else None,
             )
             if gather_output:
                 output = self.ccl_manager.all_gather(
@@ -745,7 +755,7 @@ class RowParallelLinear(Module):
                     dim=dim,
                     mesh_axis=self.mesh_axis,
                     use_hyperparams=True,
-                    use_persistent_buffer=use_persistent_buffer,
+                    use_persistent_buffer=use_persistent_buffer and persistent_buffer_rows is None,
                 )
 
         return output
