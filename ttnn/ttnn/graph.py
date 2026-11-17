@@ -13,6 +13,8 @@ import graphviz
 
 from ttnn._ttnn.graph import (
     RunMode,
+    CompileSession,
+    CompileSessionStats,
     begin_graph_capture as _cpp_begin_graph_capture,
     end_graph_capture as _cpp_end_graph_capture,
     end_graph_capture_to_file as _cpp_end_graph_capture_to_file,

@@ -257,6 +257,9 @@ public:
     std::unordered_map<MeshCoordinateRange, Program>& get_programs() { return programs_; }
     const std::unordered_map<MeshCoordinateRange, Program>& get_programs() const { return programs_; }
     void compile(MeshDevice* mesh_device);
+    // True while the calling thread's compile session takes the kernels of programs compiled for mesh_device
+    // (a mock device); see CompileSession::set_build_sink.
+    static bool sinks_kernel_builds(MeshDevice* mesh_device);
     // Compile/finalize the workload and commit its kernel binaries to DRAM without executing it.
     // The returned owner must remain alive while commands referencing the binary addresses may execute.
     std::shared_ptr<MeshBuffer> prepare_for_command_list(MeshCommandQueue& mesh_cq);

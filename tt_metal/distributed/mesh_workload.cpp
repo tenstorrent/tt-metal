@@ -4,6 +4,7 @@
 
 #include <mesh_buffer.hpp>
 #include <tt-metalium/experimental/allocation_context.hpp>
+#include <tt-metalium/experimental/compile_session.hpp>
 #include <tt-metalium/experimental/mesh_workload_runtime_args.hpp>
 #include <tt-metalium/experimental/program_preparation.hpp>
 #include <tt_stl/fmt.hpp>
@@ -569,7 +570,7 @@ void MeshWorkloadImpl::compile(MeshDevice* mesh_device) {
     // programs are already compiled and laid out, so compile_program is a flag check per program;
     // handing those to the thread pool costs a worker wake-up and a join for no work. Only the
     // first compile of a multi-program workload does enough to be worth parallelizing.
-    if (programs_.size() == 1 || this->is_finalized()) {
+    if (programs_.size() == 1 || this->is_finalized() || sinks_kernel_builds(mesh_device)) {
         // Compile from main thread for homogeneous workloads
         for (auto& [device_range, _] : programs_) {
             this->compile_program(device_range, mesh_device);
@@ -582,7 +583,17 @@ void MeshWorkloadImpl::compile(MeshDevice* mesh_device) {
         }
         mesh_device->wait_for_thread_pool();
     }
+    // With a build sink on, a mock device's kernels are built in the background and their binaries never loaded,
+    // so the offsets that depend on binary sizes stay unset; nothing reads them on a mock device.
+    if (sinks_kernel_builds(mesh_device)) {
+        return;
+    }
     finalize_offsets(mesh_device);
+}
+
+bool MeshWorkloadImpl::sinks_kernel_builds(MeshDevice* mesh_device) {
+    return tt::tt_metal::experimental::CompileSession::build_sink() != nullptr &&
+           mesh_device->impl().metal_env().get_cluster().get_target_device_type() == tt::TargetDevice::Mock;
 }
 
 void MeshWorkloadImpl::load_binaries(MeshCommandQueue& mesh_cq) {

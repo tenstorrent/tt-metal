@@ -34,6 +34,8 @@
 namespace tt::tt_metal {
 
 class JitBuildOptions;
+class BuildEnvManager;
+struct DeviceBuildEnv;
 namespace detail {
 class ProgramImpl;
 }  // namespace detail
@@ -447,6 +449,10 @@ public:
 
     virtual void set_build_options(JitBuildOptions& /*build_options*/) const {}
     virtual void generate_binaries(IDevice* device, JitBuildOptions& build_options) const = 0;
+    // Same as generate_binaries, from the given build env, without a device. Only kernel types returning true from
+    // supports_detached_build() implement it.
+    virtual bool supports_detached_build() const { return false; }
+    virtual void generate_binaries_detached(BuildEnvManager& build_env_manager, const DeviceBuildEnv& build_env) const;
     virtual void read_binaries(IDevice* device, const std::string& binary_root) = 0;
 
     void register_kernel_elf_paths_with_watcher(IDevice& device, const std::string& binary_root) const;
@@ -610,6 +616,8 @@ public:
 
     uint32_t get_kernel_processor_type(int index) const override;
     void generate_binaries(IDevice* device, JitBuildOptions& build_options) const override;
+    bool supports_detached_build() const override { return true; }
+    void generate_binaries_detached(BuildEnvManager& build_env_manager, const DeviceBuildEnv& build_env) const override;
     void read_binaries(IDevice* device, const std::string& binary_root) override;
 
     bool configure(
@@ -653,6 +661,8 @@ public:
 
     uint32_t get_kernel_processor_type(int index) const override;
     void generate_binaries(IDevice* device, JitBuildOptions& build_options) const override;
+    bool supports_detached_build() const override { return true; }
+    void generate_binaries_detached(BuildEnvManager& build_env_manager, const DeviceBuildEnv& build_env) const override;
     void read_binaries(IDevice* device, const std::string& binary_root) override;
 
     bool configure(
@@ -693,6 +703,8 @@ public:
 
     uint32_t get_kernel_processor_type(int index) const override;
     void generate_binaries(IDevice* device, JitBuildOptions& build_options) const override;
+    bool supports_detached_build() const override { return true; }
+    void generate_binaries_detached(BuildEnvManager& build_env_manager, const DeviceBuildEnv& build_env) const override;
     void read_binaries(IDevice* device, const std::string& binary_root) override;
 
     bool configure(
@@ -818,6 +830,8 @@ public:
     uint32_t get_kernel_processor_type(int index) const override;
     void set_build_options(JitBuildOptions& build_options) const override;
     void generate_binaries(IDevice* device, JitBuildOptions& build_options) const override;
+    bool supports_detached_build() const override { return true; }
+    void generate_binaries_detached(BuildEnvManager& build_env_manager, const DeviceBuildEnv& build_env) const override;
     void read_binaries(IDevice* device, const std::string& binary_root) override;
 
     bool configure(
