@@ -113,8 +113,8 @@ inline volatile void *memcpy_blocking(volatile void *dst, const volatile void *s
     // - memory clobber
     //     - prevents the COMPILER from reordering memory accesses across this boundary
 
-    volatile char *dstc       = reinterpret_cast<volatile char *>(dst);
-    const volatile char *srcc = reinterpret_cast<const volatile char *>(src);
+    volatile char *dstc       = static_cast<volatile char *>(dst);
+    const volatile char *srcc = static_cast<const volatile char *>(src);
 
     for (std::size_t i = 0; i < len; i++)
     {
@@ -243,7 +243,7 @@ inline void sync_regfile_write(const std::uint32_t index);
 
 // Field value overflow check
 template <typename T>
-static constexpr bool is_valid(const T val, const std::uint8_t wid)
+constexpr bool is_valid(const T val, const std::uint8_t wid)
 {
     const T mask = (1 << wid) - 1;
     return (val & mask) == val;
@@ -624,7 +624,7 @@ inline void init_prng_seed(const std::uint32_t seed)
 
 inline constexpr bool is_valid_instruction_mode(InstrModLoadStore mode)
 {
-    return mode == InstrModLoadStore::INT32_2S_COMP || mode == InstrModLoadStore::INT32 || mode == InstrModLoadStore::LO16;
+    return mode == InstrModLoadStore::INT32_2S_COMP || mode == InstrModLoadStore::INT32 || mode == InstrModLoadStore::UINT16;
 }
 
 constexpr std::uint32_t DstTileSizeLog2[3] = {
@@ -666,10 +666,9 @@ constexpr std::uint32_t get_dest_max_tiles()
 template <DstSync SYNC_MODE, DstTileShape TILE_SHAPE>
 inline std::uint32_t get_dest_max_tiles_rt()
 {
-    const bool accum_mode = llk_assert_fp32_dest_acc_en;
-    const std::uint32_t dest_register_size =
-        SYNC_MODE == DstSync::SyncHalf ? (accum_mode ? DEST_REGISTER_HALF_SIZE >> 1 : DEST_REGISTER_HALF_SIZE)
-                                       : (accum_mode ? DEST_REGISTER_FULL_SIZE >> 1 : DEST_REGISTER_FULL_SIZE);
+    const bool accum_mode                  = llk_assert_fp32_dest_acc_en;
+    const std::uint32_t dest_register_size = SYNC_MODE == DstSync::SyncHalf ? (accum_mode ? DEST_REGISTER_HALF_SIZE >> 1 : DEST_REGISTER_HALF_SIZE)
+                                                                            : (accum_mode ? DEST_REGISTER_FULL_SIZE >> 1 : DEST_REGISTER_FULL_SIZE);
     return dest_register_size >> DstTileSizeLog2[static_cast<int>(TILE_SHAPE)];
 }
 

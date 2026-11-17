@@ -46,6 +46,11 @@
 #                             Keep these constant across the commits you compare:
 #                             they are not part of the cache key, so changing them
 #                             mid-comparison silently compares unlike runs.
+#   TT_LLK_DISABLE_ASSERTS    1 (default, as Wormhole/Blackhole CI perf) builds
+#                             without LLK_ASSERT (variant suffix -noassert); 0
+#                             keeps asserts in (-assert). Part of the cache key.
+#                             With 1, a commit whose test_config.py predates the
+#                             switch is refused: it always builds with asserts.
 #   RESET_BETWEEN_RUNS=1      tt-smi -r between iterations
 #   ALLOW_CROSS_HOST=1        reuse cached runs measured on another host (invalid
 #                             comparison; only for inspecting old data)
@@ -191,6 +196,14 @@ if [ "$SPEED_OF_LIGHT" = 1 ]; then
     VARIANT=sol
     PYTEST_VARIANT_ARGS+=(--speed-of-light)
 fi
+TT_LLK_DISABLE_ASSERTS="${TT_LLK_DISABLE_ASSERTS:-1}"
+case "$TT_LLK_DISABLE_ASSERTS" in
+1) VARIANT="$VARIANT-noassert" ;;
+# Not the bare name: older caches under runtime/ and sol/ may hold either kind.
+0) VARIANT="$VARIANT-assert" ;;
+*) die "TT_LLK_DISABLE_ASSERTS must be 0 or 1, got '$TT_LLK_DISABLE_ASSERTS'" ;;
+esac
+export TT_LLK_DISABLE_ASSERTS
 
 # --- resolve both sides to full commit hashes
 cd "$LLK_PRIMARY"
@@ -213,6 +226,17 @@ CURRENT_SHORT="${CURRENT_SHA:0:12}"
 
 [ "$BASELINE_SHA" != "$CURRENT_SHA" ] ||
     die "both sides resolve to $BASELINE_SHORT -- nothing to compare"
+
+# A test_config.py older than TT_LLK_DISABLE_ASSERTS always builds LLK_ASSERT,
+# so an asserts-off comparison would charge assert overhead to that side only.
+if [ "$TT_LLK_DISABLE_ASSERTS" = 1 ]; then
+    for sha in "$BASELINE_SHA" "$CURRENT_SHA"; do
+        test_config="$(git show "$sha:$LLK_RELPATH/tests/python_tests/helpers/test_config.py" 2>/dev/null || true)"
+        [[ "$test_config" == *TT_LLK_DISABLE_ASSERTS* ]] ||
+            die "${sha:0:12} predates TT_LLK_DISABLE_ASSERTS and always builds with LLK_ASSERT;
+       pick a newer baseline, or compare both sides with asserts: TT_LLK_DISABLE_ASSERTS=0"
+    done
+fi
 
 # A ref only ever names a commit, so uncommitted work is invisible here. Say so
 # rather than let someone read the verdict as covering their working tree. .claude/

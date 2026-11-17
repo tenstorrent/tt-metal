@@ -6,7 +6,7 @@
 
 #include <optional>
 
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 
 #include "ttnn/operation.hpp"
 #include "ttnn/device_operation.hpp"
@@ -22,7 +22,7 @@ struct UntilizeMultiCoreProgramFactory {
         const UntilizeTensorArgs& tensor_args,
         UntilizeTensorReturnValue& output);
 
-    static tt::tt_metal::experimental::ProgramRunArgs override_runtime_arguments(
+    static tt::tt_metal::ProgramRunArgs override_runtime_arguments(
         const UntilizeOperationAttributes& operation_attributes,
         const UntilizeTensorArgs& tensor_args,
         UntilizeTensorReturnValue& output,

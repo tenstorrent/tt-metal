@@ -347,7 +347,8 @@ def run_demo(args):
         prepared = tt_model.prepare_frame(first_metas)
         *_, prev_bev = tt_model(tt_image, prepared)
         ttnn.synchronize_device(device)
-        ttnn.deallocate(tt_image)
+        for camera in tt_image:
+            ttnn.deallocate(camera)
         logger.info(f"Preparation frame {first_token} completed outside measurements")
 
         # Compile the path that consumes a previous BEV. Keep the preparation frame's BEV as the
@@ -358,7 +359,8 @@ def run_demo(args):
         warm_outputs = tt_model(warm_image, prepared, prev_bev=prev_bev)
         warm_detections = detect_frame(*warm_outputs[:2])
         ttnn.synchronize_device(device)
-        ttnn.deallocate(warm_image)
+        for camera in warm_image:
+            ttnn.deallocate(camera)
         del warm_outputs, warm_detections
         logger.info(f"Temporal warmup on frame {warm_token} completed outside measurements")
 
@@ -367,7 +369,7 @@ def run_demo(args):
             traced = TTBEVFormerTrace(
                 tt_model,
                 device,
-                to_image_layout(warm_images, None),
+                to_image_layout(warm_images, device, upload=False),
                 prepared,
                 prev_bev,
                 score_threshold=args.score_threshold,
@@ -379,7 +381,7 @@ def run_demo(args):
             # Host work only, so the prefetch thread can run it: the frame's images in the image
             # buffer's layout, its metas and its token.
             images, metas, token = load_frame(index)
-            return to_image_layout(images, None), metas, token
+            return to_image_layout(images, device, upload=False), metas, token
 
         def prefetched_inputs(index):
             # host_inputs plus the frame's other inputs as host tensors, all ahead of the device.
@@ -410,7 +412,9 @@ def run_demo(args):
             for index in range(1, frame_count):
                 end_to_end_start = time.perf_counter()
                 host_image, metas, token = host_inputs(index)
-                tt_image = ttnn.to_device(host_image, device)
+                tt_image = [
+                    ttnn.to_device(camera, device, memory_config=camera.memory_config()) for camera in host_image
+                ]
                 # The write is queued, not done: as in run_traced, the upload stays out of the device latency.
                 ttnn.synchronize_device(device)
                 # Preparing the frame projects the cameras on device and queues their visible counts' readback.
@@ -422,7 +426,8 @@ def run_demo(args):
                 device_latency = time.perf_counter() - device_start
                 scores, labels, _, boxes, valid = detections
                 compacted = tt_model.get_bboxes(scores, labels, boxes, valid)[0]
-                ttnn.deallocate(tt_image)
+                for camera in tt_image:
+                    ttnn.deallocate(camera)
                 record(index, token, compacted, device_latency, time.perf_counter() - end_to_end_start)
 
         def run_traced():
