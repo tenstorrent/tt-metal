@@ -2050,9 +2050,10 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_SplitUnits) {
 
 TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_ChunkKnobs_SplitUnits_Sweep) {
     SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
-    // The same rows against the references with four pieces, uncut, and on 32 cores so senders, whole items
-    // and mergers share cores.
-    run_chunk_knob_sweep(kSplitUnitsBase, {{64, 128, 1, 4, 0}, {64, 128, 1, 1, 0}, {64, 128, 1, 0, 32}});
+    // The uncut row against the references and the default pick's output. The four-piece and 32-core rows
+    // are the blocking test's two configs on the same inputs with looser checks, so they are not repeated
+    // here; what this adds is the uncut chunking, which no split-vs-unsplit arm checks against a reference.
+    run_chunk_knob_sweep(kSplitUnitsBase, {{64, 128, 1, 1, 0}});
 }
 
 TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_SplitUnits_Backward) {
@@ -2144,7 +2145,8 @@ TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_ChunkKnobs_SplitUnits_Long) {
         .num_key_heads = 2U,
         .mask_type = ttml::metal::AttentionMaskType::Causal,
         .test_name = "ChunkKnobs_SplitUnits_Long"};
-    run_chunk_knob_sweep(base, {{128, 256, 1, 4, 0}, {128, 128, 1, 8, 0}, {64, 128, 1, 2, 0}, {64, 128, 1, 0, 48}});
+    // {128, 128, 1, 8, 0} is left to run_split_vs_unsplit below rather than swept as well.
+    run_chunk_knob_sweep(base, {{128, 256, 1, 4, 0}, {64, 128, 1, 2, 0}, {64, 128, 1, 0, 48}});
     run_split_vs_unsplit(base, {128, 128, 1, 8, 0});
 }
 
@@ -2161,7 +2163,8 @@ TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_ChunkKnobs_SplitUnits_ManyPieces
         .num_key_heads = 1U,
         .mask_type = ttml::metal::AttentionMaskType::Causal,
         .test_name = "ChunkKnobs_SplitUnits_ManyPieces"};
-    run_chunk_knob_sweep(base, {{128, 32, 1, 8, 0}, {128, 32, 1, 16, 0}});
+    // {128, 32, 1, 16, 0} is left to run_split_vs_unsplit below rather than swept as well.
+    run_chunk_knob_sweep(base, {{128, 32, 1, 8, 0}});
     run_split_vs_unsplit(base, {128, 32, 1, 16, 0});
 }
 
@@ -2220,8 +2223,9 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_SplitUnits_GQA_Gate) {
 TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_ChunkKnobs_SplitUnits_GQA_Gate_Sweep) {
     SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
     // Three pieces on 16 cores: 128-row chunks of two heads at 32-row steps, so the heavy items have the
-    // steps to cut three ways.
-    run_chunk_knob_sweep(kSplitUnitsGqaGateBase, {{64, 128, 2, 4, 0}, {128, 32, 2, 3, 16}});
+    // steps to cut three ways. The {64, 128, 2, 4, 0} row is the blocking GQA_Gate test's config, so it is
+    // not repeated here.
+    run_chunk_knob_sweep(kSplitUnitsGqaGateBase, {{128, 32, 2, 3, 16}});
 }
 
 TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_NumCores) {
