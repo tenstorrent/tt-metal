@@ -62,6 +62,15 @@ INPUT_TILE_DEPTH_BATCHES = 2
 # so offsetting each core's first read spreads the cores over the banks. 0 disables the stagger.
 SLAB_READ_STAGGER_PX_PER_CORE = 0
 
+# Weight multicast (regime R1): one sender reads each weight K-block from DRAM once and multicasts it
+# into every participant's cb_weights slot. Participants are the cores that run the most M-blocks
+# (all but a ragged last core), and the channel is built only when at least this many of them exist.
+# A large value disables it (every core streams its own weights, regime R0).
+WEIGHT_MCAST_MIN_CORES = 2
+WEIGHT_MCAST_PREFIX = "weight_mcast"
+# Hardware multicast rectangles one channel may carry (dataflow_kernel_lib::MAX_MCAST_RECTANGLES).
+MAX_MCAST_RECTANGLES = 3
+
 
 def l1_cb_budget_bytes(resident_shard_bytes=0):
     """CB bytes per core. `resident_shard_bytes` is one call's input plus output shard on a core."""
@@ -376,6 +385,20 @@ def _core_range_set(cores):
     )
 
 
+def _weight_mcast_cores(core_list, m_blocks_per_core):
+    """Cores sharing one weight stream: those that run the most M-blocks, so every participant takes
+    the same rounds and its cb_weights write pointer matches the sender's each round. The sender is
+    work core 0. None when the channel would be too small or needs more rectangles than a sender has."""
+    most = max(m_blocks_per_core)
+    cores = [c for c, n in zip(core_list, m_blocks_per_core) if n == most]
+    if len(cores) < max(WEIGHT_MCAST_MIN_CORES, 2):
+        return None
+    receivers = _core_range_set(cores)
+    if len(receivers.ranges()) > MAX_MCAST_RECTANGLES:
+        return None
+    return receivers
+
+
 def _cb(index, data_format, page_size, num_pages, cores):
     return ttnn.CBDescriptor(
         total_size=page_size * num_pages,
@@ -529,10 +552,11 @@ def create_program_descriptor(
     bias_addr = bias_tensor.buffer_address() if has_bias else 0
     output_addr = output_tensor.buffer_address()
     n_tile_start = 0
-    for core_idx, (core, (m_tile_start, actual_m_tiles)) in enumerate(
-        zip(core_list, _core_m_ranges(g.tensor_m_tiles, b.core_m_tiles))
+    core_m_ranges = _core_m_ranges(g.tensor_m_tiles, b.core_m_tiles)
+    m_blocks_per_core = [_div_up(actual_m_tiles, bm) for _, actual_m_tiles in core_m_ranges]
+    for core_idx, (core, (m_tile_start, actual_m_tiles), num_m_blocks_this_core) in enumerate(
+        zip(core_list, core_m_ranges, m_blocks_per_core)
     ):
-        num_m_blocks_this_core = _div_up(actual_m_tiles, bm)
         reader_rt[core.x][core.y] = [
             input_addr,
             m_tile_start,
@@ -576,4 +600,18 @@ def create_program_descriptor(
             fp32_dest_acc_en=True,
         ),
     )
-    return ttnn.ProgramDescriptor(kernels=[reader, writer, compute], semaphores=[], cbs=cbs)
+    descriptor = ttnn.ProgramDescriptor(kernels=[], semaphores=[], cbs=cbs)
+    mcast_receivers = _weight_mcast_cores(core_list, m_blocks_per_core)
+    if mcast_receivers is None:
+        ttnn.attach_absent_mcast(writer, WEIGHT_MCAST_PREFIX)
+    else:
+        weight_mcast = ttnn.Mcast(
+            input_tensor.device(),
+            ttnn.McastConfig(noc=ttnn.NOC.NOC_1),  # the writer's NoC (WriterConfigDescriptor)
+            mcast_receivers,
+            mcast_receivers.num_cores(),
+            ttnn.McastExplicitFixedSenderConfig([core_list[0]]),
+        )
+        weight_mcast.attach(descriptor, WEIGHT_MCAST_PREFIX, [writer], 0)
+    descriptor.kernels = [reader, writer, compute]
+    return descriptor

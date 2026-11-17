@@ -131,3 +131,61 @@ Lamps measured (kept at design defaults):
     - COL_MAJOR orientation on a 3x4 grid at (1, 1), 11 shards on 12 cores, plus a cache-hit re-dispatch. It fails at PCC 0.088 if the shard order ignores the orientation.
     - Multi-M-block shard with ReLU (one-tile-row blocks in a 4-tile-row shard).
   - `test_conv2d_3x3_perf.py`: `test_conv2d_3x3_height_sharded_perf` over 6 Panoptic HEIGHT layers at their pinned geometry.
+
+## Refinement 3 — Weight multicast for the HEIGHT-sharded Panoptic layers
+- **Date**: 2026-11-17
+- **What was done**: built regime R1 (weight read-once + multicast) as an overlay on every regime (R0 / R2 / R3), with the multicast helper (`ttnn.Mcast` + `attach()` on the host, `McastArgs` in the writer).
+  - **Topology.** One channel, `weight_mcast`, on the writer's NoC 1. Participants are the cores that run the most M-blocks (all but a ragged last core). The fixed sender is work core 0 (`McastExplicitFixedSenderConfig`).
+  - **Writer.** Every weight K-block is one round. The sender reserves its `cb_weights` slot, reads the `bk*bn` tiles from DRAM into it and multicasts them to the same slot on every receiver. A receiver reserves its slot, calls `receive()` (ack, then wait for data-ready) and pushes `bk*bn` exactly as the R0 writer does. Participants push the same quanta in the same order, so their write pointers agree every round.
+  - **Fallback.** A core outside the channel keeps R0's own DRAM stream. That is the ragged last core, or every core when the channel would have fewer than `WEIGHT_MCAST_MIN_CORES` (2) participants or more than 3 rectangles. A ragged core inside the channel would owe rounds it never consumes.
+  - **Unchanged.** No CB, block extent, buffer depth or compute phase changed. The new L1 is two semaphores per participant. Reader and compute are unchanged.
+  - **Knob.** `WEIGHT_MCAST_MIN_CORES` is the single on/off control; a large value restores the byte-identical R0 weight stream. It is on by default because it won on every measured shape.
+  - **Reused / added.** Reused: R0's `cb_weights` quantum, depth and push protocol, and the descriptor's core list. Added: the channel and the sender/receiver branch in `issue_weight_k_block`.
+- **Accuracy achieved**: the weights are bit-identical copies, so accuracy is unchanged from Refinement 2. The golden tolerances hold: bf16 (0.997, 0.04), bf8_b (0.99, 0.12). Perf harness PCC >= 0.99 on all 14 HEIGHT layers.
+- **Golden test progress**:
+  - LOOSE_CASES: 14 / 14 HEIGHT pass, 9 BLOCK xfail.
+  - `test_op` slice (shapes 32x64x128 incl. s2 / d6 / d18, 8x16x2048, 32x32x8, 16x16x64; every layout, placement and dtype): 336 pass, 168 xfail (BLOCK), 168 INVALID skipped.
+  - Unit tests: `test_conv2d_3x3.py` + layouts + precision baseline 112 / 112. HEIGHT 31 / 31; the 29 pre-existing HEIGHT cases plus 32x64x128 RM interleaved are also clean under `--dev` (watcher + NoC sanitizer).
+- **Measured** (Blackhole p150b, DEVICE KERNEL DURATION, one fresh-cache run per variant; R0 = `WEIGHT_MCAST_MIN_CORES` parked off, R1 = channel on):
+
+  | Layer (HEIGHT, Panoptic config) | cores | R0 | R1 |
+  |---------------------------------|-------|----|----|
+  | semantic decoder.res2.fuse_conv.0 | 103 | 864.0 us | 466.5 us |
+  | semantic res2.fuse_conv.1 | 103 | 745.7 us | 396.8 us |
+  | semantic decoder.res3.fuse_conv.0 | 86 | 391.5 us | 145.2 us |
+  | semantic decoder.res3.fuse_conv.1 | 86 | 312.1 us | 110.0 us |
+  | instance decoder.res3.fuse_conv.0 | 86 | 198.1 us | 91.7 us |
+  | instance decoder.res2.fuse_conv.0 | 103 | 188.3 us | 154.2 us |
+  | instance res2.fuse_conv.1 | 103 | 144.9 us | 134.0 us |
+  | res3.0.conv2 (s2) | 86 | 78.8 us | 40.0 us |
+  | res3.x.conv2 | 86 | 79.1 us | 40.7 us |
+  | res2.x.conv2 | 103 | 75.8 us | 76.6 us |
+  | center_head.1 | 103 | 79.4 us | 79.4 us |
+  | stem.conv1 (RM bf16) | 108 | 214.4 us | 214.3 us |
+  | stem.conv2 | 108 | 258.7 us | 258.7 us |
+  | stem.conv3 | 108 | 330.6 us | 330.8 us |
+
+  The 14 layers sum to 3961 -> 2539 us (1.56x). The flat layers were not weight-bound.
+
+  - **Interleaved perf matrix** (RM bf16 / TILE bf16 / TILE bf8_b; Refinement 1 numbers -> R1):
+    - 32x64x128: 97.6 / 97.7 / 97.6 -> 25.9 / 25.3 / 23.8 us
+    - 16x16x64: 16.4 / 16.3 / 16.1 -> 10.7 / 10.2 / 10.3 us
+    - 8x16x512: 126.0 / 126.0 / 126.1 -> 79.7 / 79.6 / 79.9 us
+    - 8x16x2048 (4 cores): 468.7 / 462.8 / 461.1 -> 282.7 / 289.3 / 288.9 us
+    - 64x128x128: 135.2 / 134.1 / 135.3 -> 80.0 / 60.4 / 52.6 us
+    - 128x256x64: 225.7 / 111.5 / 102.1 -> 209.6 / 102.9 / 91.4 us
+    - Nothing regressed, including the few-core deep-K shape the verifier flagged: a single sender multicasting to 3 cores beats 4 cores each reading 9.4 MB.
+  - **Ablation (all weight movement stubbed, only reserve/push kept):**
+    - fuse_conv.0: 465.9 vs 466.5 us. res3.0 / res3.x: 40.0 / 41.5 vs 40.0 / 40.7 us. The weight path is fully hidden on the HEIGHT targets.
+    - Still exposed: 8x16x2048 TILE bf16 268.5 vs 289.3 us (21 us over 36 rounds); 32x64x128 RM 25.2 vs 25.9 us, TILE bf8_b 20.7 vs 23.8 us; 128x256x64 TILE bf8_b 91.0 vs 91.4 us.
+  - **bm re-check** (Refinement 2 asked to re-measure bm 10 vs 5 once R1 landed; extra L1 from budgeting one shard pair instead of two):
+    - fuse_conv.0: bm 10 / bk 9 / ub 2 497 us vs bm 5 / bk 9 / ub 7 466 us.
+    - fuse_conv.1: bm 10 / bk 12 / ub 2 414 us vs bm 5 / bk 12 / ub 7 397 us.
+    - stem.conv3: bm 38 / bk 3 581 us vs bm 19 / bk 6 331 us.
+    - With weights multicast, the coarser bm no longer pays. The two-pair budget stays.
+- **Bottleneck now**: fuse_conv.0 / fuse_conv.1 are compute-thread-bound. Per core: 6480 / 5760 HiFi4 tile-MACs (bf8_b x bf8_b) plus the tilize and untilize of the slab, about 460 / 400 us. The stem layers and res2.x are bound by the slab fill / gather / untilize path (Refinement 6's lamps), not weights.
+- **Next lever, not taken**: injector double-buffering. The sender would read round r+1 while round r multicasts, with depth 3 or a sender-only staging CB and per-round read trids. It would recover at most the 21 us on the 4-core deep-K shape and 1-3 us on the small interleaved shapes. The HEIGHT targets have 0 us of weight time left to recover, so it was not built.
+- **Issues encountered**: none on device; the first build passed every test. Note: an ablation run where tests fail on PCC leaves their L1 shards alive (exception frames). Later tests then hit a CB / L1-buffer clash at enqueue (`program.cpp:2691`). Profile each failing variant on its own.
+- **Tests added**:
+  - `test_conv2d_3x3_height_sharded.py::test_conv2d_3x3_height_sharded_weight_mcast_ragged_core` (RM bf16, TILE bf8_b). One-tile-row M-blocks in 6-tile-row shards over 64 tile-rows: 10 cores take 18 multicast rounds and the ragged last core runs 4 M-blocks. It asserts the channel excludes that core.
+  - `test_conv2d_3x3_perf.py`: `test_conv2d_3x3_height_sharded_perf` covers all 14 HEIGHT LOOSE layers (8 added).

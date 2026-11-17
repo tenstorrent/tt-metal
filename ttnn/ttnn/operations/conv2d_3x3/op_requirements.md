@@ -115,7 +115,7 @@
 - On a sharded output, `bm` is restricted to divisors of the shard's tile-rows.
 - `semantic decoder.res2.fuse_conv.0` solves to bm 5 of 10 and streams its weights twice (868 us). bm 10 / bk 9 measured 506 us but misses the 2-pair L1 budget by 2 KB. This is Refinement 3's starting point.
 
-### [ ] Refinement 3 — Weight multicast for the HEIGHT-sharded Panoptic layers
+### [x] Refinement 3 — Weight multicast for the HEIGHT-sharded Panoptic layers
 
 **Type**: perf
 
@@ -137,6 +137,16 @@
   - HEIGHT RM (stem.conv1),
   - HEIGHT TILE (e.g. `res3.{1,2,3}.conv2`),
   - the few-core deep-K `8x16x2048 -> 256`, where an extra semaphore round per K-block can cost more than it saves.
+
+**Outcome**:
+- **Measured** (DEVICE KERNEL DURATION, R0 per-core stream -> R1 multicast):
+  - fuse_conv.0: 864 -> 466 us.
+  - Other weight-dominated HEIGHT layers: semantic res2.fuse_conv.1 746 -> 397 us, semantic res3.fuse_conv.0 392 -> 145 us, semantic res3.fuse_conv.1 312 -> 110 us, instance res3.fuse_conv.0 198 -> 92 us, res3.x 79 -> 41 us, instance res2.fuse_conv.0 188 -> 154 us.
+  - All 14 HEIGHT layers: 3961 -> 2539 us.
+  - Guard set: 32x64x128 RM 98 -> 26 us, TILE bf8_b 98 -> 24 us. stem.conv1 214 -> 214 us. res3.x as above. Deep-K 4-core TILE bf16 465 -> 289 us: multicast wins even there.
+- **Bottleneck now**: a weights-stubbed ablation matches the R1 number on every HEIGHT target (fuse_conv.0 466 vs 466 us). Those layers are compute-thread-bound (HiFi4 bf8_b matmul + tilize/untilize); stem / res2.x are bound by the slab fill / gather.
+- **Next lever, not taken**: injector double-buffering (read round r+1 during round r's multicast). It would recover at most the 21 us still exposed on the 4-core deep-K shape and 1-3 us on small interleaved shapes, and none on the HEIGHT targets.
+- **bm re-check**: the bm 10 vs 5 choice was re-measured; the coarser bm is now slower (fuse_conv.0 497 vs 466 us), so the L1 budget rule stays.
 
 ### [ ] Refinement 4 — BLOCK_SHARDED: K split across core columns + row reduce-scatter (regime R4)
 

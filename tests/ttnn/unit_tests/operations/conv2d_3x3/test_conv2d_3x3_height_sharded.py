@@ -9,6 +9,8 @@
   (0, 0) (work index i must run where shard i lives), and the program-cache hit on fresh shards.
 - multi-M-block shard: a pinned M-block smaller than the shard makes each core pack several M-blocks
   into its output shard, with ReLU state crossing the blocks.
+- weight multicast (regime R1): a ragged last core that runs fewer M-blocks stays outside the
+  channel and streams its own weights, while the others take one multicast round per K-block.
 """
 
 import importlib
@@ -201,3 +203,47 @@ def test_conv2d_3x3_height_sharded_multi_m_block(dtype, layout, with_bias, devic
 
     monkeypatch.setattr(_op_module, "select_blocking", one_tile_row_blocks)
     _run(((H, W, c_in), c_out, 1, 1, 1), dtype, layout, config, device, with_bias=with_bias, relu=True)
+
+
+@pytest.mark.parametrize("dtype,layout", [LAYOUTS[0], LAYOUTS[2]])
+def test_conv2d_3x3_height_sharded_weight_mcast_ragged_core(dtype, layout, device, monkeypatch):
+    """One-tile-row M-blocks in 6-tile-row output shards over 64 tile-rows: 10 cores run 6 M-blocks
+    (18 multicast rounds of 3 kh K-blocks), the last runs 4 and must read its own weights. A ragged core
+    inside the channel would take rounds it never consumes and desynchronize every cb_weights slot."""
+    torch.manual_seed(3)
+    (H, W, c_in), c_out = (32, 64, 64), 64
+    config = _row_major_config(device, H * W, c_in, layout, 192)
+    real_select = _pd.select_blocking
+    real_mcast_cores = _pd._weight_mcast_cores
+    channels = []
+
+    def one_tile_row_blocks(g, grid, l1_budget):
+        b = real_select(g, grid, l1_budget)
+        assert g.sharded_output and b.core_m_tiles == 6 and b.num_m_groups == 11
+        fit = _pd._footprint(g, b.core_m_tiles, 1, b.block_k_tiles, b.block_n_tiles)
+        assert fit["num_k_blocks"] == 3
+        return _pd.Conv3x3Blocking(
+            grid_x=b.grid_x,
+            core_m_tiles=b.core_m_tiles,
+            num_m_groups=b.num_m_groups,
+            block_m_tiles=1,
+            block_k_tiles=b.block_k_tiles,
+            block_n_tiles=b.block_n_tiles,
+            im2col_rm_depth_rows=b.im2col_rm_depth_rows,
+            out_depth_row_groups=b.out_depth_row_groups,
+            **fit,
+        )
+
+    def recording_mcast_cores(core_list, m_blocks_per_core):
+        receivers = real_mcast_cores(core_list, m_blocks_per_core)
+        channels.append((receivers, list(core_list)))
+        return receivers
+
+    monkeypatch.setattr(_op_module, "select_blocking", one_tile_row_blocks)
+    monkeypatch.setattr(_pd, "_weight_mcast_cores", recording_mcast_cores)
+    _run(((H, W, c_in), c_out, 1, 1, 1), dtype, layout, config, device, with_bias=True, relu=True)
+
+    ((receivers, core_list),) = channels
+    assert receivers is not None, "the weight multicast channel was not built"
+    assert receivers.num_cores() == len(core_list) - 1
+    assert not receivers.contains(core_list[-1]), "the ragged last core must stream its own weights"

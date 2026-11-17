@@ -9,10 +9,18 @@
 // Sharded output: cb_output_tiles is backed on the output shard, so compute packs in place and
 // store_block is empty. The writer only streams bias and weights; compute never waits on the output
 // CB there, so blocking weight reserves cannot deadlock.
+//
+// Weight multicast (regime R1, the `weight_mcast` channel): every K-block is one round. The sender
+// reads it from DRAM into its own cb_weights slot and multicasts it to the same slot on every
+// receiver; a receiver acks only after reserving that slot, so the slot is free. All participants
+// push the same quanta in the same order, so their cb_weights write pointers agree every round.
+// A core outside the channel (one with fewer M-blocks, or an absent channel) reads its own weights.
 
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
 
 void kernel_main() {
     constexpr uint32_t cb_weights = get_compile_time_arg_val(0);
@@ -29,6 +37,9 @@ void kernel_main() {
     constexpr auto weight_args = TensorAccessorArgs<11>();
     [[maybe_unused]] constexpr auto bias_args = TensorAccessorArgs<weight_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto output_args = TensorAccessorArgs<bias_args.next_compile_time_args_offset()>();
+    constexpr auto weight_mcast = dataflow_kernel_lib::McastArgs<
+        get_named_compile_time_arg_val("weight_mcast_ct_offset"),
+        get_named_compile_time_arg_val("weight_mcast_rt_offset")>();
 
     const uint32_t weight_addr = get_arg_val<uint32_t>(0);
     [[maybe_unused]] const uint32_t bias_addr = get_arg_val<uint32_t>(1);
@@ -60,10 +71,8 @@ void kernel_main() {
     // ---- stream_weight_blocks: K-block tiles k-major, n-fastest (matmul in1 layout).
     const uint32_t total_k_blocks = num_m_blocks_this_core * num_k_blocks;
     uint32_t k_blocks_issued = 0;
-    auto issue_weight_k_block = [&]() {
+    auto read_weight_k_block = [&](uint32_t l1) {
         const uint32_t k_tile0 = (k_blocks_issued % num_k_blocks) * block_k_tiles;
-        cb_reserve_back(cb_weights, weight_k_block_tiles);
-        uint32_t l1 = get_write_ptr(cb_weights);
         for (uint32_t k = 0; k < block_k_tiles; ++k) {
             const uint32_t row_page = (k_tile0 + k) * tensor_n_tiles + n_tile_start;
             for (uint32_t n = 0; n < block_n_tiles; ++n, l1 += weight_tile_bytes) {
@@ -71,6 +80,22 @@ void kernel_main() {
             }
         }
         noc_async_read_barrier();
+    };
+
+    Noc noc;
+    auto weight_sender = weight_mcast.optional_sender(noc);
+    auto weight_receiver = weight_mcast.optional_receiver(noc);
+    auto issue_weight_k_block = [&]() {
+        cb_reserve_back(cb_weights, weight_k_block_tiles);
+        const uint32_t l1 = get_write_ptr(cb_weights);
+        if (weight_sender && weight_mcast.should_send(k_blocks_issued)) {
+            read_weight_k_block(l1);
+            weight_sender->send(l1, l1, weight_k_block_tiles * weight_tile_bytes);
+        } else if (weight_receiver) {
+            weight_receiver->receive(k_blocks_issued);
+        } else {
+            read_weight_k_block(l1);
+        }
         cb_push_back(cb_weights, weight_k_block_tiles);
         ++k_blocks_issued;
     };

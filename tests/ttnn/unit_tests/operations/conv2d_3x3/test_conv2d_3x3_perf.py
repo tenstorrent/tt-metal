@@ -5,7 +5,7 @@
 Correctness is still checked (PCC), so a profile of a wrong kernel is not mistaken for a number.
 
 test_conv2d_3x3_perf: DRAM-interleaved inputs on the whole grid (regimes R0 / R3).
-test_conv2d_3x3_height_sharded_perf: Panoptic HEIGHT-sharded layers at their pinned 110-core shard
+test_conv2d_3x3_height_sharded_perf: the 14 Panoptic HEIGHT-sharded layers at their pinned shard
 geometry, in their real config (bf8_b weights, bias, ReLU; regime R2)."""
 
 import pytest
@@ -92,6 +92,14 @@ HEIGHT_SHAPES = [
     ("res3_0_conv2", ((128, 256, 128), 128, 1, 2), ttnn.bfloat8_b, ttnn.TILE_LAYOUT, [384, 128], 86),
     ("res3_conv2", ((64, 128, 128), 128, 1, 1), ttnn.bfloat8_b, ttnn.TILE_LAYOUT, [96, 128], 86),
     ("sem_res2_fuse_conv0", ((128, 256, 288), 256, 1, 1), ttnn.bfloat8_b, ttnn.TILE_LAYOUT, [320, 288], 103),
+    ("stem_conv2", ((256, 512, 64), 64, 1, 1), ttnn.bfloat8_b, ttnn.TILE_LAYOUT, [1216, 64], 110),
+    ("sem_res3_fuse_conv0", ((64, 128, 320), 256, 1, 1), ttnn.bfloat8_b, ttnn.TILE_LAYOUT, [96, 320], 86),
+    ("inst_res3_fuse_conv0", ((64, 128, 320), 128, 1, 1), ttnn.bfloat8_b, ttnn.TILE_LAYOUT, [96, 320], 86),
+    ("sem_res3_fuse_conv1", ((64, 128, 256), 256, 1, 1), ttnn.bfloat8_b, ttnn.TILE_LAYOUT, [96, 256], 86),
+    ("inst_res2_fuse_conv0", ((128, 256, 160), 128, 1, 1), ttnn.bfloat8_b, ttnn.TILE_LAYOUT, [320, 160], 103),
+    ("sem_res2_fuse_conv1", ((128, 256, 256), 256, 1, 1), ttnn.bfloat8_b, ttnn.TILE_LAYOUT, [320, 256], 103),
+    ("inst_res2_fuse_conv1", ((128, 256, 128), 128, 1, 1), ttnn.bfloat8_b, ttnn.TILE_LAYOUT, [320, 128], 103),
+    ("center_head1", ((128, 256, 128), 32, 1, 1), ttnn.bfloat8_b, ttnn.TILE_LAYOUT, [320, 128], 103),
 ]
 
 
