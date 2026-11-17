@@ -40,7 +40,7 @@ import pytest
 import torch
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 PCC = 0.97  # bf16 + MathFidelity.LoFi (matches the model's batch-1 LoFi config)
 

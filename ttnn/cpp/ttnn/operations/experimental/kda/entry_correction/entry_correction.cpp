@@ -9,7 +9,7 @@ namespace ttnn::experimental::kda {
 
 std::tuple<ttnn::Tensor, ttnn::Tensor> entry_correction(
     const ttnn::Tensor& terms,
-    const ttnn::Tensor& final_a,
+    const ttnn::Tensor& final_e,
     const ttnn::Tensor& final_b,
     const ttnn::Tensor& entry,
     const ttnn::Tensor& tail_entry,
@@ -33,7 +33,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> entry_correction(
         /*default_l1_acc=*/false);
     return ttnn::experimental::prim::entry_correction(
         terms,
-        final_a,
+        final_e,
         final_b,
         entry,
         tail_entry,

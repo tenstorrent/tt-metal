@@ -28,9 +28,9 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 
 #include "command_queue_fixture.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
@@ -67,13 +67,13 @@ TEST_F(UnitMeshCQSingleCardFixture, ScratchpadWriteReadback) {
     constexpr uint32_t kReportAddr = 100 * 1024;                         // host-known fixed L1 addr
     constexpr uint32_t kPatternBase = 0xC0DE0000u;                       // must match the kernel
 
-    const experimental::NodeCoord node{0, 0};
+    const NodeCoord node{0, 0};
 
     // -------------------------------------------------------
     // Build ProgramSpec: one Gen1 DM kernel binding one scratchpad.
     // -------------------------------------------------------
-    experimental::KernelSpec dm_kernel{
-        .unique_id = experimental::KernelSpecName{"scratch_kernel"},
+    KernelSpec dm_kernel{
+        .unique_id = KernelSpecName{"scratch_kernel"},
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/scratchpad_write_pattern.cpp",
         .num_threads = 1,
         .runtime_arg_schema =
@@ -81,25 +81,24 @@ TEST_F(UnitMeshCQSingleCardFixture, ScratchpadWriteReadback) {
                 .runtime_arg_names = {"report_addr"},
             },
         .hw_config =
-            experimental::DataMovementHardwareConfig{
+            DataMovementHardwareConfig{
                 .config_1xx =
-                    experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                    DataMovementHardwareConfig::DataMovement1XXConfig{
                         .processor = DataMovementProcessor::RISCV_0,
                         .noc = NOC::NOC_0,
                     },
             },
     };
-    dm_kernel.scratchpad_bindings.push_back(experimental::KernelSpec::ScratchpadBinding{
-        .scratchpad_spec_name = experimental::ScratchpadSpecName{"pad"}, .accessor_name = "pad"});
+    dm_kernel.scratchpad_bindings.push_back(
+        KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"pad"}, .accessor_name = "pad"});
 
-    experimental::ProgramSpec spec{
+    ProgramSpec spec{
         .name = "scratchpad_write_readback",
         .kernels = {dm_kernel},
-        .scratchpads = {experimental::ScratchpadSpec{
-            .unique_id = experimental::ScratchpadSpecName{"pad"}, .size_per_node = kScratchpadBytes}},
-        .work_units = std::vector<experimental::WorkUnitSpec>{experimental::WorkUnitSpec{
+        .scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"pad"}, .size_per_node = kScratchpadBytes}},
+        .work_units = std::vector<WorkUnitSpec>{WorkUnitSpec{
             .name = "work_unit_0",
-            .kernels = {experimental::KernelSpecName{"scratch_kernel"}},
+            .kernels = {KernelSpecName{"scratch_kernel"}},
             .target_nodes = node,
         }},
     };
@@ -109,10 +108,10 @@ TEST_F(UnitMeshCQSingleCardFixture, ScratchpadWriteReadback) {
     // -------------------------------------------------------
     // Runtime args: the host-known report L1 address.
     // -------------------------------------------------------
-    experimental::ProgramRunArgs params;
-    params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
-        .kernel = experimental::KernelSpecName{"scratch_kernel"},
-        .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(node, {{"report_addr", kReportAddr}}),
+    ProgramRunArgs params;
+    params.kernel_run_args = {ProgramRunArgs::KernelRunArgs{
+        .kernel = KernelSpecName{"scratch_kernel"},
+        .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"report_addr", kReportAddr}}),
     }};
     experimental::SetProgramRunArgs(program, params);
 
@@ -193,7 +192,7 @@ TEST_F(UnitMeshCQSingleCardFixture, ScratchpadNocEndpoints) {
     static_assert(kTransferBytes % 32 == 0);
     static_assert(kOffsetBytes + kTransferBytes < kScratchpadBytes, "need a non-empty zero suffix");
 
-    const experimental::NodeCoord node{0, 0};
+    const NodeCoord node{0, 0};
     // The NoC peer: a different core, so this is a real cross-core transaction. It runs no kernel of
     // its own; the host uses its L1 as the source and destination buffer.
     const CoreCoord remote_core{1, 0};
@@ -202,8 +201,8 @@ TEST_F(UnitMeshCQSingleCardFixture, ScratchpadNocEndpoints) {
     // -------------------------------------------------------
     // Build ProgramSpec: one Gen1 DM kernel binding one scratchpad.
     // -------------------------------------------------------
-    experimental::KernelSpec dm_kernel{
-        .unique_id = experimental::KernelSpecName{"scratch_noc_kernel"},
+    KernelSpec dm_kernel{
+        .unique_id = KernelSpecName{"scratch_noc_kernel"},
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/scratchpad_noc_roundtrip.cpp",
         .num_threads = 1,
         .runtime_arg_schema =
@@ -211,35 +210,34 @@ TEST_F(UnitMeshCQSingleCardFixture, ScratchpadNocEndpoints) {
                 .runtime_arg_names = {"remote_noc_x", "remote_noc_y", "src_addr", "dst_addr", "report_addr"},
             },
         .hw_config =
-            experimental::DataMovementHardwareConfig{
+            DataMovementHardwareConfig{
                 .config_1xx =
-                    experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                    DataMovementHardwareConfig::DataMovement1XXConfig{
                         .processor = DataMovementProcessor::RISCV_0,
                         .noc = NOC::NOC_0,
                     },
             },
     };
-    dm_kernel.scratchpad_bindings.push_back(experimental::KernelSpec::ScratchpadBinding{
-        .scratchpad_spec_name = experimental::ScratchpadSpecName{"pad"}, .accessor_name = "pad"});
+    dm_kernel.scratchpad_bindings.push_back(
+        KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"pad"}, .accessor_name = "pad"});
 
-    experimental::ProgramSpec spec{
+    ProgramSpec spec{
         .name = "scratchpad_noc_endpoints",
         .kernels = {dm_kernel},
-        .scratchpads = {experimental::ScratchpadSpec{
-            .unique_id = experimental::ScratchpadSpecName{"pad"}, .size_per_node = kScratchpadBytes}},
-        .work_units = std::vector<experimental::WorkUnitSpec>{experimental::WorkUnitSpec{
+        .scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"pad"}, .size_per_node = kScratchpadBytes}},
+        .work_units = std::vector<WorkUnitSpec>{WorkUnitSpec{
             .name = "work_unit_0",
-            .kernels = {experimental::KernelSpecName{"scratch_noc_kernel"}},
+            .kernels = {KernelSpecName{"scratch_noc_kernel"}},
             .target_nodes = node,
         }},
     };
 
     Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
-    experimental::ProgramRunArgs params;
-    params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
-        .kernel = experimental::KernelSpecName{"scratch_noc_kernel"},
-        .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+    ProgramRunArgs params;
+    params.kernel_run_args = {ProgramRunArgs::KernelRunArgs{
+        .kernel = KernelSpecName{"scratch_noc_kernel"},
+        .runtime_arg_values = MakeRuntimeArgsForSingleNode(
             node,
             {{"remote_noc_x", static_cast<uint32_t>(remote_virtual_core.x)},
              {"remote_noc_y", static_cast<uint32_t>(remote_virtual_core.y)},
