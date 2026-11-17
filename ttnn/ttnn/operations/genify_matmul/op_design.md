@@ -288,6 +288,11 @@ for (uint32_t block_idx = 0; block_idx < num_blocks_this_core; ++block_idx) {   
 > - **K-blocks**: `block_k = kw / s`, where `s` divides the shard width. A shard core's K-block must be one contiguous run of its row-major shard, so `s > 1` requires `block_m == 1`.
 > - **Output**: the op builds `ShardSpec(workers in bank order, [padded rows, out_sw·32])`; `CoreRangeSet` keeps insertion order, so every worker owns its shard and the compute packs in place (`cb_output_shard`). The remote-write branch is never needed.
 > - **swiglu**: coalesced bank reads keep B's natural (gate, up) tile pairs, so the epilogue walks the block flat with Strided row stride 2 (`swiglu_natural_pairs`) instead of the reader's per-tile permutation.
+>
+> **Refinement 6 (PERF FOCUS 2).** Three R4 knobs, measured by ablation (one-core-per-bank decode was compute-bound: 38.7 µs of matmul vs a 28-29 µs B stream):
+> - **`cores_per_bank` split** (`DS_CORES_PER_BANK`, auto via `DS_CORE_N_TILES_MIN`): each bank's columns are split over C workers (the bank's optimal worker + its C − 1 nearest free cores), each streaming its column slice of every K row (`ds_row_reads`). C = 1 is the Refinement 4 topology (in place); C > 1 streams the output through `cb_output_tiles` and the output's sharded accessor into the bank's shard on its primary worker. The output placement the op builds is unchanged.
+> - **A rounds on the writer** (`DS_ACT_ON_WRITER`): the shared round implementation (`kernels/genify_matmul_ds_act.hpp`) runs on BRISC / NoC1, so the reader's B issues and barriers on NCRISC / NoC0 no longer wait out each round (`split_reader`). The Mcast `act` channel attaches to the writers; non-worker broadcast cores run only the writer.
+> - **trid B ring** (`DS_B_AHEAD`, `DS_DEPTH_WEIGHT`): K-blocks in flight on per-K-block transaction ids (`trid_double_issue`). Parked at 1 / 2: once C slice readers share a bank it is saturated, and depth 2–3 measured flat to +3%.
 
 ### TARGET values as regimes / unlock class
 

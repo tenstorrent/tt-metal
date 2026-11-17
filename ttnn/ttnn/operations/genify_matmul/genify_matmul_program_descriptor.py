@@ -20,10 +20,12 @@ grid line instead of once per core -- the line's first core reads each A K-block
 along the line of cores that share its rows, and likewise for B down the line sharing its columns.
 
 Regime R4 `dram_sharded` (Refinement 4, `create_dram_sharded_program_descriptor`): B is DRAM width-
-sharded one column shard per bank, A is L1 width-sharded over K. One worker per bank (the device's
-optimal bank -> worker assignment) streams its bank's shard with one coalesced read per K-block, and
-every A shard crosses the NoC once: its owning core multicasts it, in its K turn (rotating senders), to
-the workers. The output is packed in place into the worker's own L1 width shard.
+sharded one column shard per bank, A is L1 width-sharded over K. Each bank's columns are split over
+`cores_per_bank` workers (Refinement 6; the bank's optimal worker plus its nearest free cores), each
+streaming its column slice of the bank shard, and every A shard crosses the NoC once: its owning core
+multicasts it, in its K turn (rotating senders), to the workers -- from the writer RISC (BRISC / NoC1,
+DS_ACT_ON_WRITER) so the rounds never stall the B stream. With one worker per bank the output is packed
+in place into its L1 width shard; split slices stream into the bank's shard through the output accessor.
 
 Regime R3 `block_sharded` (Refinement 5, `create_block_sharded_program_descriptor`): A is L1 block-
 sharded (rows over grid rows, K over grid columns), B interleaved, the output L1 block-sharded on A's

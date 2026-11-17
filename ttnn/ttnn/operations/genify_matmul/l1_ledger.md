@@ -39,6 +39,12 @@ Phase 0 (regime R1, epilogue none) allocates the first four rows. The later rows
 - **`cb_act_tiles` is also allocated on every non-worker core the A broadcast writes** (A's shard cores and the rest of the workers' bounding rectangle), at the same address: it is the multicast landing zone there, never pushed or popped. A sender-only core addresses the workers' slot as `base + (K-block % depth_act) · slot bytes` (CT `act_cb_blocks = DEPTH_ACT`).
 - One `ttnn.Mcast` channel (`act`) adds 2 L1 semaphores per participating core; the B line channel is absent.
 
+**Refinement 6 (R4 `cores_per_bank` split, writer-side A rounds, trid B ring) as built.**
+- **Workers = C per bank** (`DS_CORES_PER_BANK`, auto: the largest C dividing the bank width `sw` into slices of ≥ `DS_CORE_N_TILES_MIN = 4` columns (whole swiglu pairs) with `C · banks ≤ grid`): bank w's optimal worker plus its C − 1 nearest free cores. Every per-worker CB above is the same with `block_n_tiles = sw / C` (PERF FOCUS 2: 20 → 4 columns, 40 workers), so `cb_weight_tiles` / `cb_partials` / epilogue rows shrink C×.
+- **C > 1: `cb_output_tiles` (index 16, `depth_out · sb_h · out_block_n`) replaces `cb_output_shard`** on every worker: a slice is not the whole output shard, so it cannot be packed in place. The writer lands it in the bank's output shard (on the bank's primary worker) through the output's sharded accessor. C = 1 keeps `cb_output_shard` (0 bytes). Shares with / why not: the output shard itself only exists on the primary worker and holds all C slices' columns interleaved per row, so a slice core has no in-place target.
+- **`cb_weight_tiles` depth** = `DS_DEPTH_WEIGHT` (default 2 = `DEPTH_WEIGHT`) when it fits (`ds_weight_depth`), else `DEPTH_WEIGHT`; the B ring keeps `min(DS_B_AHEAD, depth)` K-blocks in flight on transaction ids (default 1: depth 3–4 measured no gain once 5 slice readers share each bank — the bank is already saturated — so the knob is parked at its trivial value and costs no L1).
+- **`cb_act_tiles`** unchanged in size; under `DS_ACT_ON_WRITER` (default) its producer on the workers is the **writer** (BRISC runs the A rounds), not the reader — still a single producer (the reader no longer touches it) and a single consumer (compute). The non-worker cores of the broadcast run only the writer kernel (sender-only / landing zone).
+
 **Refinement 5 (R3 `block_sharded`) as built.** Per core of A's block-shard grid (column c = K shard, row r = M shard):
 - **`cb_act_shard` (index 5)** is backed on the core's own A shard (`cb_descriptor_from_sharded_tensor`, 0 CB bytes). The reader pushes `block_m · shard_k` tiles of it on the core's own K turn (no NoC); compute selects it for K-block `own_kb = c` through `In0SourceFn`. With `nb_m > 1` the pushes walk the shard row-block by row-block; with `nb_n > 1` (only when `nb_m == 1`) each N-block pass wraps the whole shard, so the ring always lines up with the shard rows.
 - **`cb_act_tiles`** (`depth_act · block_m · shard_k`) is the landing zone of the row peers' K-slices. Under the rotating row multicast (`BS_ROW_MCAST`, default) every core of a grid row reserves / pushes round kb's slot (the sender too, receiving the loopback copy), so the row's write pointers stay in lockstep and each multicast lands at the sender's own slot address; compute retires the own round's slot unread (`PostKBlockFn`). Under the unicast stepping stone the own round pushes nothing there.
@@ -128,6 +134,8 @@ Prefill gate_up (grid 11×10, block 6×28, `nb = 1`): DRAM ≈ 21 MB (A) + 25 MB
 | residual | 1 | streamed with the epilogue | none |
 
 PERF FOCUS 2 (1×4352 @ 4352×5120 bf4b): DRAM = B once = 12.5 MB (the roofline's traffic); NoC = 8 A shards × 34 KB multicast.
+
+**Refinement 6 delta (`cores_per_bank` split):** DRAM crossings unchanged (B once: each slice worker reads its `sw / C` columns of every K row — `k_valid` row reads of `sw/C` tiles per K-block instead of one coalesced run; a slice wholly in the last bank's padding reads nothing). The A multicast now lands on the C·banks workers' bounding rectangle (PERF FOCUS 2: 100 cores) and runs on NoC1 from the writer RISC. Output: C > 1 adds one NoC write per slice tile into the bank's output shard (on its primary worker), `M · sw/C` tiles per worker.
 
 **R3 `block_sharded` as built (Refinement 5)** — DRAM / NoC crossings per tensor (grid `rows × cols`):
 

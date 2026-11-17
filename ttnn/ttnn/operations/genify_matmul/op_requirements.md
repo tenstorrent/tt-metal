@@ -214,7 +214,7 @@ Required topology (op_design.md R3/R3a):
 
 **Outcome**: `block_sharded` is in SUPPORTED as regime R3. The own shard is zero-copy via `cb_act_shard` + `In0SourceFn`; peers come over a rotating-sender row multicast (`BS_ROW_MCAST`, with unicast as the other setting); B is read from DRAM per core; the output is packed in place in the requested shard. Golden `-k block_sharded`: 311 passed (300 cartesian + 11 PDL), 150 xfail (fp32 × 16-bit-DEST EXCLUSION, batched weight), 0 failed. PDL device time with the multicast: res5 shortcut 79.8 µs (stock 72.4), res4 reduce 18.7 (16.6), res5 expand 45.6 (24.2), ASPP 1×1 19.6 (13.8). Remaining headroom: wide-N shapes are B-bound (B crosses DRAM once per grid row). Next lever: R3a's B column multicast.
 
-### [ ] Refinement 6 — Speed up PERF FOCUS 2 (Qwen3.8 decode MLP down)
+### [x] Refinement 6 — Speed up PERF FOCUS 2 (Qwen3.8 decode MLP down)
 
 **Type**: perf
 
@@ -234,6 +234,8 @@ This is a weight-streaming, DRAM-bound regime. Relevant levers in `ttnn/ttnn/ope
 No SUPPORTED change.
 
 **Done when**: measured device ns on the flagged shape improves toward 36.9 µs, its soft precision gate holds, and the golden suite is green. There must be no regression across the guard set (one representative per kernel path × placement × dtype, including the interleaved PERF FOCUS 1 shape).
+
+**Outcome**: PERF FOCUS 2 measured **42.8 → 29.2 µs** device time (one fresh run each; target `achievable_ns` 36.9 µs beaten, 7% above the 27.2 µs roofline); precision unchanged (PCC 0.999993, rel-RMS 0.0050 vs the 0.9995 / 0.03 gate). The ablation at the start showed the one-worker-per-bank R4 was **compute-bound**, not B-bound: matmul alone 38.7 µs, B stream alone ~28 µs. Levers: (1) a `cores_per_bank` split (`DS_CORES_PER_BANK`, auto: 5 workers × 4 columns per bank, 40 compute cores) — 42.8 → 34.8 µs, compute down to 10.6 µs, DM now binding; (2) the A rounds moved to the writer RISC (BRISC / NoC1, `DS_ACT_ON_WRITER`, `split_reader`) so they stop sitting between the reader's B issues and barriers — 35.0 → 28.9 µs, A now fully hidden (A-stubbed run 29.7 µs ≈ full); (3) a trid-tagged B ring (`DS_B_AHEAD` / `DS_DEPTH_WEIGHT`, `trid_double_issue`) — correct but measured flat to +3% at depth 2–3 once 5 slice readers share each bank, so parked at 1 / 2 as a live knob. Same levers on the other R4 shapes: LM head 1×5120×16384 148.5 → 105.8 µs (stock 127.0), gate_up 32×5120×9216 swiglu 103.4 → 63.1 µs (stock 64.0); the 1-tile-shard cartesian shape (C = 1) is unchanged; the rest of the guard set is within ±1% (block_sharded res5 shortcut re-measured 3×: +0.8%). **Bottleneck now**: the B stream (compute-stubbed 28.8 µs ≈ full; B alone 27.9 µs vs the 27.2 µs roofline, ~97% of DRAM peak). **Next**: what is left is ~1.5 µs of fixed cost — the first K-block's exposed B latency before compute starts and the output tail — e.g. a smaller first K-block (split A shard 0's round) to start compute earlier. Not done: it is within ~6% of the DRAM roofline and each remaining µs needs a structural change of its own.
 
 ### [ ] Refinement 7 — height_sharded placement + batched weights (local shards, independent batch split)
 

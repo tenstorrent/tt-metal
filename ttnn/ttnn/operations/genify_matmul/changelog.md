@@ -347,3 +347,39 @@
     - the default output placement;
     - the M-split and the N-split streamed-output fallbacks under a forced L1 budget.
   - Perf guard `test_perf_block_sharded`: 4 PDL representatives × {mcast, unicast}.
+
+## Refinement 6 — Speed up PERF FOCUS 2 (Qwen3.8 decode MLP down)
+- Date: 2026-11-17
+- What was done:
+  - **Bottleneck first.** Ablation of the Refinement 4 build (42.8 µs) on PERF FOCUS 2 (1×4352 @ 4352×5120 bf4b, LoFi, fp32 DEST): compute stubbed 29.7 µs, B stubbed 40.0, B + A stubbed (compute only) 38.7, all stubbed 10.0 (the A rounds). One worker per bank did 136 × 20 tile-matmuls: **compute-bound**, not B-bound as the R4 finding assumed.
+  - **Lever 1 — `cores_per_bank` split** (`DS_CORES_PER_BANK`, auto through `DS_CORE_N_TILES_MIN = 4`). `ds_cores_per_bank()` picks the largest C dividing the bank width into ≥ 4-column slices (whole swiglu pairs) with C · banks ≤ grid; `_ds_bank_cores()` assigns bank w's optimal worker plus its C − 1 nearest free cores. Each worker streams its slice of every K row (`ds_row_reads`: one read per K row; a slice wholly in the last bank's padding reads nothing), computes `block_n = sw / C`, and streams its output through `cb_output_tiles` + the writer's sharded accessor into the bank's output shard on the primary worker. C = 1 keeps the in-place Refinement 4 path. The op-built output placement is unchanged (`primary_ranges`). PF2: C = 5, 40 workers: 42.8 → 34.8 µs (compute-only 10.6 µs; DM-only 32.9 µs now binding).
+  - **Lever 2 — A rounds on the writer** (`DS_ACT_ON_WRITER = True`, the `split_reader` idea). Ablation after lever 1: B + compute 30.1 µs, A + compute 14.2 µs, full 35.0 µs — the rounds sat between the reader's B issue and its barrier. The round implementation is now one shared header (`kernels/genify_matmul_ds_act.hpp`: `ActKBlocks`, `worker_round`, `send_only`) used by the reader (knob False) or the writer (knob True, BRISC / NoC1, Mcast `act` channel on `DS_ACT_WRITER_NOC`). The writer produces `cb_act_tiles` per block row, then drains that row's output; non-worker broadcast cores run only the writer. 35.0 → 28.9 µs.
+  - **Lever 3 — trid B ring** (`DS_B_AHEAD`, `DS_DEPTH_WEIGHT`, `trid_double_issue`): the R4 reader's B stream became a ring of T K-blocks in flight, each retired by `async_read_barrier_with_trid` (`ds_weight_depth()` sizes `cb_weight_tiles`). Measured T = 1/2/3 at depth 4: 28.9 / 28.9 / 29.0 µs (writer-side A), and +3% on gate_up at T ≥ 2; with reader-side A T ≥ 2 was 3–5% slower. Five slice readers per bank already saturate it (B alone 27.9 µs vs the 27.2 µs roofline), so the knob is parked at T = 1 / depth 2 (no L1 cost) and kept live (unit-tested at T = 2, 3).
+  - **Reused**: the R4 descriptor branch, topology, blocking solve, `_footprint` (new `depth_weight` term), the writer's accessor path (R3 fallback) for split slices, the compute kernel unchanged. **Added**: topology fields `primaries` / `cores_per_bank` / `core_n_tiles` / `out_in_place`, `ds_cores_per_bank`, `_ds_bank_cores`, `ds_weight_depth`; reader CT args 27–30 (`ds_row_reads`, `ds_weight_depth`, `ds_b_ahead`, `ds_reader_act`; R3 and accessor CT args shifted); writer CT args 8–15 (the A-round role) and RT arg 12 (A address) under `ds_act`; R1 / R3 writers attach the `act` channel absent.
+- Accuracy achieved (LoFi, fp32 DEST, bf16 × bf4b; gate 0.9995 / 0.03):
+  - PERF FOCUS 2 1×4352×5120: PCC 0.999993, rel-RMS 0.0050.
+  - gate_up 32×5120×9216 swiglu: PCC 0.999984, rel-RMS 0.0088.
+  - LM head 1×5120×16384: PCC 0.999993, rel-RMS 0.0049.
+- Golden test progress:
+  - `test_golden.py -k dram_sharded` (cartesian): 310 passed, 150 xfailed (the permanent EXCLUSIONs).
+  - `test_op_loose -k dram_sharded`: 10/10 (Qwen decode, LM head); `-k "block_sharded or PERF FOCUS 1"`: 12/12.
+  - `test_translated.py` DRAM-sharded (`served_shapes_blackhole`, `cores_per_bank`, `program_cache_reuses`): 57/57.
+  - Unit regression net (`test_genify_matmul`, `_epilogue`, `_extended`, `_mcast`, `_dram_sharded`, `_block_sharded`): 98/98; `_dram_sharded` alone 15/15 after the knob cases were added.
+- Perf (device ns, one fresh run each; whole perf guard set new vs the Refinement 5 commit):
+
+  | case | before | after | stock |
+  |---|---|---|---|
+  | PERF FOCUS 2 1×4352×5120 | 42.9 µs | **29.2 µs** | 36.9 µs |
+  | LM head 1×5120×16384 | 148.5 µs | 105.8 µs | 127.0 µs |
+  | gate_up 32×5120×9216 swiglu | 103.4 µs | 63.1 µs | 64.0 µs |
+  | cartesian 384×1536×1024 (C = 1) | 137.0 µs | 137.0 µs | — |
+
+  Every non-R4 guard row is within ±1% except block_sharded res5 shortcut (+3.0% in the sweep; re-measured 3× each: 79.1 vs 78.5 µs median, +0.8%, noise).
+  - Bottleneck now: the B stream (compute-stubbed 28.8 µs ≈ full; B alone 27.9 µs, ~97% of the DRAM roofline). Remaining ~1.5 µs is fixed cost (first K-block's exposed B latency, the output tail); next lever would be a smaller first K-block so compute starts sooner. Not done: within ~6% of the roofline.
+- Issues encountered:
+  - A non-template `static_assert` inside a discarded `if constexpr` branch still fires (moved the condition into a comment).
+  - `run_safe_pytest.sh --profile` with a `-k` containing spaces is split by the Tracy wrapper; select by test id instead.
+  - The remote JIT precompile fails on this box (`__xtt_vector8`); it is best-effort and the tests compile locally.
+- Tests added:
+  - `test_genify_matmul_dram_sharded.py::test_cores_per_bank_split` (4 knob sets on N = 704 with bias: C = 3 with padding-only slices / C = 1, A rounds on writer / reader, B ring T = 1 / 2 / 3).
+  - `test_plan_blocking` now pins the PERF FOCUS 2 split (C = 5, 4-column slices, 40 distinct workers, primaries first).
