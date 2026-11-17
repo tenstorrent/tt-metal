@@ -40,6 +40,11 @@ struct TilizeDeviceOperation {
         const operation_attributes_t& args, const tensor_args_t& tensor_args);
 };
 
+// True when the unpack -> datacopy -> pack path cannot produce output_dtype from input_dtype.
+// Packer format conversion only re-rounds between float formats; it never converts an integer
+// to a float or back, so such pairs must go through an SFPU typecast.
+bool tilize_needs_typecast(tt::tt_metal::DataType input_dtype, tt::tt_metal::DataType output_dtype);
+
 ttnn::Tensor tilize(
     const Tensor& input_tensors,
     const std::optional<tt::tt_metal::MemoryConfig>& output_mem_config,
