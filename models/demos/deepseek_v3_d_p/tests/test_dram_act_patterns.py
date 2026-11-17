@@ -20,6 +20,8 @@ import importlib.util
 import json
 import os
 import random
+import socket
+import subprocess
 import time
 from pathlib import Path
 
@@ -447,10 +449,100 @@ def ca_shape_targets(gb, col):
     return [(name, addr_of(r, gb, col)) for name, r in rows]
 
 
+# PCI bus high nibble -> UBB tray slot, as in UMD's ClusterDescriptor::get_tray_id.
+UBB_TRAY_BUS_IDS = {"ubb_wormhole": (0xC0, 0x80, 0x00, 0x40), "ubb_blackhole": (0x00, 0x40, 0xC0, 0x80)}
+UBB_TRAY_BUS_IDS["ubb_blackhole_cf"] = UBB_TRAY_BUS_IDS["ubb_blackhole"]
+
+
+def parse_fru(text):
+    """{FRU name: {field: value}} from `ipmitool fru print` output."""
+    frus, cur = {}, None
+    for line in text.splitlines():
+        key, sep, val = line.partition(":")
+        if not sep:
+            continue
+        key, val = key.strip(), val.strip()
+        if key == "FRU Device Description":
+            cur = frus.setdefault(val.split(" (")[0], {})
+        elif cur is not None:
+            cur[key] = val
+    return frus
+
+
+def read_fru():
+    """(`ipmitool fru print` text, source). The UBB FRUs need root, so TT_FRU_FILE may name a saved copy."""
+    path = os.environ.get("TT_FRU_FILE")
+    if path and os.path.exists(path):
+        return Path(path).read_text(), path
+    try:
+        r = subprocess.run(["sudo", "-n", "ipmitool", "fru", "print"], capture_output=True, text=True, timeout=90)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return "", f"none ({type(e).__name__})"
+    # ipmitool exits non-zero when any one FRU is unreadable, so judge by the output.
+    if "FRU Device Description" in r.stdout:
+        return r.stdout, "sudo ipmitool fru print"
+    return "", f"none ({(r.stderr.strip().splitlines() or ['no output'])[-1]})"
+
+
+def chip_identities(chips):
+    """({device id: physical ASIC}, host line). Never raises: identity is reporting only.
+
+    Device ids are renumbered when links or chips change between boots. The ASIC ID is unique per die and the
+    tray serial per UBB tray, so those two name the hardware for syseng.
+    """
+    import yaml
+
+    host = socket.gethostname()
+    try:
+        # BaseLoader keeps every value a string; YAML 1.1 would read a BDF like 0000:01:00.0 as a number.
+        desc = yaml.load(Path(ttnn.cluster.serialize_cluster_descriptor()).read_text(), Loader=yaml.BaseLoader)
+        text, source = read_fru()
+        frus = parse_fru(text)
+        board_type = {}
+        for board in desc.get("boards") or []:
+            fields = {k: v for entry in board for k, v in entry.items()}
+            for c in fields.get("chips") or []:
+                board_type[str(c)] = str(fields.get("board_type", "")).lower()
+        ids = {}
+        for c in chips:
+            k = str(c)
+            uid = (desc.get("chip_unique_ids") or {}).get(k)
+            bus = (desc.get("chip_to_bus_id") or {}).get(k)
+            bus = int(bus, 16) if bus is not None else None
+            trays = UBB_TRAY_BUS_IDS.get(board_type.get(k), UBB_TRAY_BUS_IDS["ubb_blackhole"])
+            ubb = trays.index(bus & 0xF0) + 1 if bus is not None and (bus & 0xF0) in trays else None
+            pos = (desc.get("asic_locations") or {}).get(k)
+            ids[c] = {
+                "ubb": ubb,
+                "asic_pos": int(pos) if pos is not None else (bus & 0x0F if bus is not None else None),
+                "tray_serial": frus.get(f"UBB{ubb - 1}_FRU", {}).get("Board Serial") if ubb else None,
+                "bdf": (desc.get("chip_pci_bdfs") or {}).get(k),
+                "asic_id": f"{int(uid, 0):016X}" if uid is not None else None,
+            }
+        builtin = frus.get("Builtin FRU Device", {})
+        chassis = builtin.get("Chassis Serial") or builtin.get("Product Serial")
+        host_line = f"{host} chassis {chassis or 'unknown'} (FRU from {source})"
+    except Exception as e:
+        logger.warning(f"ASIC identity unavailable, chips reported by device id only: {type(e).__name__}: {e}")
+        return {c: {} for c in chips}, host
+    return ids, host_line
+
+
+def ident_str(ident):
+    """One line for logs, e.g. UBB4 ASIC8 tray T38S7TBA... 0000:c6:00.0 ASIC ID 09D1..."""
+    if not ident:
+        return "asic unknown"
+    parts = [f"UBB{ident['ubb']} ASIC{ident['asic_pos']}" if ident.get("ubb") else None]
+    parts += [f"tray {ident['tray_serial']}" if ident.get("tray_serial") else None, ident.get("bdf")]
+    parts += [f"ASIC ID {ident['asic_id']}" if ident.get("asic_id") else None]
+    return " ".join(p for p in parts if p) or "asic unknown"
+
+
 class ActRun:
     def __init__(self, chip, device, cfg):
         gx, gy = cfg["grid"]
         self.chip, self.cfg = chip, cfg
+        self.ident = {}
         self.cores = [(x, y) for y in range(gy) for x in range(gx)]
         self.slots = 2 * len(self.cores)
         self.grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gx - 1, gy - 1))])
@@ -671,12 +763,16 @@ class Driver:
                     merge(a, s)
                     if s["bad_reads"] and r.chip not in first:
                         first[r.chip] = first_bad(out, specs)
-                        logger.error(f"chip {r.chip} {pattern}/{name} arm {arm}: {s} first {first[r.chip]}")
+                        logger.error(
+                            f"chip {r.chip} ({ident_str(r.ident)}) {pattern}/{name} arm {arm}: "
+                            f"{s} first {first[r.chip]}"
+                        )
                 if time.monotonic() >= t_end:
                     break
             for r in self.runs:
                 a = acc[r.chip]
-                row = {"pattern": pattern, "target": name, "arm": arm, "chip": r.chip, "first": first.get(r.chip), **a}
+                row = {"pattern": pattern, "target": name, "arm": arm, "chip": r.chip, **r.ident}
+                row.update(first=first.get(r.chip), **a)
                 self.results.append(row)
             bad = {c: a["bad_reads"] for c, a in acc.items() if a["bad_reads"]}
             logger.info(
@@ -856,7 +952,13 @@ def test_dram_act_patterns():
     logger.info(f"chips {chips}, config {cfg}")
     devices = ttnn.CreateDevices(chips)
     try:
+        idents, host_line = chip_identities(chips)
+        logger.info(f"asic map: host {host_line}")
+        for c in chips:
+            logger.info(f"asic map: chip {c} = {ident_str(idents[c])}")
         runs = [ActRun(c, devices[c], cfg) for c in chips]
+        for r in runs:
+            r.ident = idents[r.chip]
         drv = Driver(runs, cfg)
         if cfg["self_test"]:
             drv.self_test()
@@ -864,11 +966,19 @@ def test_dram_act_patterns():
             run_patterns(drv, cfg)
         finally:
             (OUT_DIR / f"act_{os.environ.get('SLURM_JOB_ID', 'local')}_{int(time.time())}.json").write_text(
-                json.dumps({"config": cfg, "results": drv.results}, indent=1, default=str)
+                json.dumps(
+                    {"config": cfg, "host": host_line, "asics": idents, "results": drv.results}, indent=1, default=str
+                )
             )
         for r in runs:
             ttnn.deallocate(r.buf)
     finally:
         ttnn.CloseDevices(devices)
-    bad = sorted({(row["chip"], row["pattern"], row["target"], row["arm"]) for row in drv.results if row["bad_reads"]})
-    assert not bad, f"miscompares on (chip, pattern, target, arm): {bad}"
+    bad = sorted(
+        {
+            (row["chip"], row.get("asic_id"), row["pattern"], row["target"], row["arm"])
+            for row in drv.results
+            if row["bad_reads"]
+        }
+    )
+    assert not bad, f"miscompares on (chip, asic_id, pattern, target, arm): {bad}"

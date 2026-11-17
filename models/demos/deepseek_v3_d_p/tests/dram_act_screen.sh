@@ -137,7 +137,7 @@ do_reset() {  # do_reset <boot>
   say "${B}reset${N} ($RESET_MODE) ..."
   board_reset > "$log" 2>&1
   r=$?
-  n=$(ls /dev/tenstorrent 2>/dev/null | wc -l)
+  n=$(ls /dev/tenstorrent 2>/dev/null | grep -cE '^[0-9]+$')  # skips by-id/
   if [[ $r -ne 0 || $n -ne 32 ]]; then
     say "${R}[STOP]${N} reset failed: exit $r, $n/32 chips. Last lines of $log:"
     tail -5 "$log" | sed 's/^/         /'
@@ -151,8 +151,8 @@ do_reset() {  # do_reset <boot>
 PID=""
 trap 'say "${Y}interrupted${N}"; [[ -n $PID ]] && kill $PID 2>/dev/null; summary; exit 130' INT TERM
 
-STEP_RESULT=""
-run_step() {  # run_step <step> <boot> <ctrls> <patterns> <timeout_s>; sets STEP_RESULT to pass|hit|fail
+STEP_RESULT="" STEP_HITS=0
+run_step() {  # run_step <step> <boot> <ctrls> <patterns> <timeout_s>; sets STEP_RESULT to pass|hit|fail, STEP_HITS
   local name=$1_$2 log=$OUT/$1_$2.log r hits clean
   say "${B}$1${N} start (timeout $(($5 / 60)) min), log $log"
   ( cd "$REPO" && STRESS_ARMS=on ACT_ITERS=4000 ACT_CTRLS=$3 ACT_PATTERNS=$4 ACT_SECONDS=$SECS \
@@ -171,20 +171,32 @@ run_step() {  # run_step <step> <boot> <ctrls> <patterns> <timeout_s>; sets STEP
   PID=""
   hits=$(grep -c "bad reads by chip {" "$log")
   clean=$(grep -c "bad reads by chip none" "$log")
+  STEP_HITS=$hits
+  # Hits end in the test's final miscompare assert (exit 1); any other nonzero exit is a crash.
   if [[ $r -eq 124 ]]; then
     say "${R}[FAIL]${N} $1 timed out after $(($5 / 60)) min ($clean clean, $hits hit before that)"
+    STEP_RESULT=fail
+  elif [[ $r -ne 0 ]] && ! grep -q "miscompares on (chip" "$log"; then
+    say "${R}[FAIL]${N} $1 exit $r after $clean clean, $hits hit targets:"
+    grep -E "Error|error:|FAILED|Timeout" "$log" | tail -3 | cut -c1-200 | sed 's/^/         /'
     STEP_RESULT=fail
   elif [[ $hits -gt 0 ]]; then
     say "${R}[HIT ]${N} $1 done: $hits of $((hits + clean)) targets read wrong data"
     STEP_RESULT=hit
-  elif [[ $r -ne 0 ]]; then
-    say "${R}[FAIL]${N} $1 exit $r after $clean clean targets:"
-    grep -E "Error|error:|FAILED|Timeout" "$log" | tail -3 | cut -c1-200 | sed 's/^/         /'
-    STEP_RESULT=fail
   else
     say "${G}[PASS]${N} $1 done: $clean targets clean"
     STEP_RESULT=pass
   fi
+  [[ $hits -gt 0 ]] && asic_report "$log"
+}
+
+asic_report() {  # asic_report <log>: physical ASIC of every chip with bad reads; device ids change across boots
+  local c
+  local h; h=$(grep -m1 "asic map: host " "$1" | sed "s/.*asic map: host //")
+  [[ -n $h ]] && say "         host $h"
+  for c in $(grep -o "bad reads by chip {[^}]*}" "$1" | grep -oE "[0-9]+:" | tr -d : | sort -nu); do
+    say "         chip $c = $(grep -m1 "asic map: chip $c = " "$1" | sed "s/.*asic map: chip $c = //" | grep . || echo "asic unknown")"
+  done
 }
 
 SUMMARY=()
@@ -217,15 +229,15 @@ for ((i = 1; i <= NB; i++)); do
     if [[ $step == all8 ]]; then run_step all8 "$i" all sdpa_long,sdpa16_long 1800
     else run_step cafull "$i" "$CTRL" ca_full_long 14400; fi
     res+=" $step:$STEP_RESULT"
-    [[ $STEP_RESULT == hit ]] && bad=1
+    [[ $STEP_HITS -gt 0 ]] && bad=1
     [[ $STEP_RESULT == fail ]] && break
   done
   if [[ $STEP_RESULT != fail ]] && has_step random && [[ $bad -eq 1 || $RANDOM_ALWAYS -eq 1 || $STEPS == random ]]; then
     run_step random "$i" "$CTRL" random_long 5400
     res+=" random:$STEP_RESULT"
-    [[ $STEP_RESULT == hit ]] && bad=1
+    [[ $STEP_HITS -gt 0 ]] && bad=1
   fi
-  if [[ $STEP_RESULT == fail ]]; then verdict="${R}FAIL${N}"; elif [[ $bad -eq 1 ]]; then verdict="${R}BAD${N}"; else verdict="${G}clean${N}"; fi
+  if [[ $STEP_RESULT == fail && $bad -eq 1 ]]; then verdict="${R}FAIL+BAD${N}"; elif [[ $STEP_RESULT == fail ]]; then verdict="${R}FAIL${N}"; elif [[ $bad -eq 1 ]]; then verdict="${R}BAD${N}"; else verdict="${G}clean${N}"; fi
   SUMMARY+=("boot $i: $verdict  $res")
   say "boot $i: $verdict ($res )"
 done
