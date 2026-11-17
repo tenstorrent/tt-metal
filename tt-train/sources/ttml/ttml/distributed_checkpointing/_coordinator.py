@@ -384,12 +384,14 @@ Owner = tuple[int, tuple[int, ...]]  # (rank, mesh coordinate)
 
 @dataclass
 class Election:
-    """Who writes each box of every key, and how many keys the checkpoint holds. Rank 0 elects it over the ranks' plan
-    parts and broadcasts it; every rank writes the boxes it owns, and rank 0 counts the result parts' chunks against
-    it."""
+    """Who writes each box of every key, how many keys the checkpoint holds, and every live name any rank holds each
+    key under. Rank 0 elects it over the ranks' plan parts and broadcasts it; every rank writes the boxes it owns, and
+    rank 0 counts the result parts' chunks against it and records the names, which a rank that writes none of a key's
+    boxes reports only here."""
 
     owners: dict[str, dict[tuple[int, ...], Owner]]
     keys: int
+    live_keys: dict[str, tuple[str, ...]]
 
     def to_bytes(self) -> bytes:
         return json.dumps(
@@ -398,6 +400,7 @@ class Election:
                 "owners": {
                     k: [[list(g), o[0], list(o[1])] for g, o in groups.items()] for k, groups in self.owners.items()
                 },
+                "live_keys": {k: list(v) for k, v in self.live_keys.items()},
             }
         ).encode()
 
@@ -408,7 +411,8 @@ class Election:
             k: {tuple(g): (int(rank), tuple(int(x) for x in coord)) for g, rank, coord in groups}
             for k, groups in value["owners"].items()
         }
-        return Election(owners, int(value["keys"]))
+        live_keys = {k: tuple(v) for k, v in value["live_keys"].items()}
+        return Election(owners, int(value["keys"]), live_keys)
 
     def owner_of(self, rank: int) -> Callable[[str, list[Chunk]], Chunk | None]:
         """The ``owner_of`` callback for ``create_save_plan`` on ``rank``: the group's chunk when this rank writes
@@ -466,8 +470,21 @@ def merge_plan_parts(parts: list[PlanPart]) -> Election:
     infos: dict[str, TensorInfo] = {}
     first_rank: dict[str, int] = {}
     members: dict[str, dict[tuple[int, ...], list[Owner]]] = {}
+    aliases: dict[str, set[str]] = {}
+    named: dict[str, tuple[str, int]] = {}  # a live name -> (the key it names, the first rank naming it)
     for part in parts:
         for info in part.infos:
+            # A rank may hold a key under names another does not (a layer tied to another name on that rank only);
+            # the index keeps them all, so a name, the key's own included, must mean one key on every rank using it.
+            names = {info.key, *info.live_keys}
+            for live in sorted(names):
+                key, rank = named.setdefault(live, (info.key, part.record.rank))
+                if key != info.key:
+                    raise CheckpointError(
+                        f"{live} names {info.key} on rank {part.record.rank} but {key} on rank {rank}; a checkpoint "
+                        f"maps each live name to one entry"
+                    )
+            aliases.setdefault(info.key, set()).update(names)
             if info.key in infos:
                 if not _same_description(infos[info.key], info):
                     raise CheckpointError(
@@ -497,7 +514,7 @@ def merge_plan_parts(parts: list[PlanPart]) -> Election:
                 )
             chosen[group_key] = owner(key, holders)
         owners[key] = chosen
-    return Election(owners, len(infos))
+    return Election(owners, len(infos), {key: tuple(sorted(names)) for key, names in aliases.items()})
 
 
 # --- result parts ----------------------------------------------------------------------------------------------------
@@ -577,6 +594,9 @@ def merge_results(parts: list[ResultPart], election: Election, checkpoint_id: st
             else:
                 entry.chunks = chunks
                 entries[key] = entry
+    for key, entry in entries.items():
+        # The writers' parts carry only their own names for a key; the election has every rank's.
+        entry.live_keys = tuple(sorted(set(entry.live_keys) | set(election.live_keys.get(key, ()))))
     for key, owners in election.owners.items():
         entry = entries.get(key)
         expected = len(owners)

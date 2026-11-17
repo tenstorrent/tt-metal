@@ -162,6 +162,44 @@ def test_multi_mesh_ranks_with_their_own_keys_and_one_shared_key():
     assert len(election.owners["model/norm"]) == 1, "one box, held by four (rank, coordinate) pairs"
 
 
+def test_every_ranks_names_of_a_key_reach_the_index_even_from_a_rank_that_writes_none_of_it(expect_error):
+    """A layer both ranks hold, tied to another name on one rank only: the index maps that name too, though the other
+    rank writes the layer, so the rank holding it under the extra name loads it through that name."""
+    stage0 = _info("model/stage0/w", [R, S(3)], (1, 2), (1, 1, 32, 32))
+    stage1 = _info("model/stage1/w", [R, S(3)], (1, 2), (1, 1, 32, 32))
+    norm = _info("model/norm", [R, R], (1, 2), (1, 1, 1, 64))
+
+    def parts(norm_of):
+        return [
+            PlanPart(_record(r, [(0, 0), (0, 1)], mesh_id=r, shape=(1, 2)), [stage, norm_of(r)])
+            for r, stage in ((0, stage0), (1, stage1))
+        ]
+
+    writer = merge_plan_parts(parts(lambda r: norm)).owners["model/norm"][()][0]  # names do not move the owner
+    tied = dataclasses.replace(norm, live_keys=("model/head/norm", "model/norm"))
+    election = merge_plan_parts(parts(lambda r: tied if r != writer else norm))
+    assert election.owners["model/norm"][()][0] == writer
+    assert election.live_keys["model/norm"] == ("model/head/norm", "model/norm")
+    assert Election.from_bytes(election.to_bytes()) == election
+
+    def result(rank, own_key):
+        files = [FileRecord(f"data/w{rank:03d}_m{rank}_d0-{c}.safetensors", 5120, rank, rank, (0, c)) for c in (0, 1)]
+        entries = {own_key: _entry(own_key, [_chunk(0, 0), _chunk(1, 1)])}
+        if rank == writer:
+            bias = ChunkRecord(Box((0, 0, 0, 0), (1, 1, 1, 64)), 0, 8192, 128, 9)
+            entries["model/norm"] = _entry("model/norm", [bias], (1, 1, 1, 64))
+        return _result(rank, files, entries, f"gen{rank}")
+
+    index, _ = merge_results([result(0, "model/stage0/w"), result(1, "model/stage1/w")], election, "step_0000001")
+    assert index.entries["model/norm"].live_keys == ("model/head/norm", "model/norm")
+    assert index.live_key_map()["model/head/norm"] == "model/norm"
+
+    # A name one rank uses for a key another rank holds under that very name cannot map to both.
+    clash = dataclasses.replace(norm, live_keys=("model/norm", "model/stage0/w"))
+    with expect_error(CheckpointError, r"model/stage0/w names model/norm on rank 1 but model/stage0/w on rank 0"):
+        merge_plan_parts(parts(lambda r: clash if r == 1 else norm))
+
+
 def _result(rank, files, entries, rng_text):
     return ResultPart(
         _record(rank, [(0, 2 * rank), (0, 2 * rank + 1)]),
