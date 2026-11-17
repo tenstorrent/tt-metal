@@ -39,7 +39,15 @@ void kernel_main() {
         st[2 * g] = static_cast<uint32_t>(get_timestamp());
         for (uint32_t i = 0; i < 2; ++i) {
             if (r[i][4]) {
+#ifdef G2_UNICAST  // ttsim (no multicast atomics): one unicast increment per core of the rect
+                for (uint32_t y = r[i][1]; y <= r[i][3]; ++y) {
+                    for (uint32_t x = r[i][0]; x <= r[i][2]; ++x) {
+                        noc_semaphore_inc(get_noc_addr(x, y, inr), 1);
+                    }
+                }
+#else
                 noc_semaphore_inc_multicast(get_noc_multicast_addr(r[i][0], r[i][1], r[i][2], r[i][3], inr), 1, r[i][4]);
+#endif
             }
         }
         noc_async_atomic_barrier();

@@ -24,8 +24,13 @@ MHZ = 1350
 
 dev = ttnn.open_device(device_id=DEVID, trace_region_size=32 << 20)
 grid = dev.compute_with_storage_grid_size()
-assert grid.x >= 12 and grid.y >= 10, grid
-cores = [ttnn.CoreCoord(x, y) for y in (8, 9) for x in range(12)]
+# G2_SIM=1 (ttsim: 11x10 grid, no multicast atomics): the 24 GDN cores as a 6 x 4 block (x 0..5, rows 6..9; every head /
+# key-head consumer set stays within 2 row runs) and unicast in_ready increments from the stand-in. Logic / handshake
+# check only: the NoC geometry is NOT the engine's 12 x 2.
+SIM = os.environ.get("G2_SIM", "0") == "1"
+assert SIM or (grid.x >= 12 and grid.y >= 10), grid
+cores = ([ttnn.CoreCoord(x, y) for y in (6, 7, 8, 9) for x in range(6)] if SIM else
+         [ttnn.CoreCoord(x, y) for y in (8, 9) for x in range(12)])
 ex = set((c.x, c.y) for c in cores)
 QR = ttnn.CoreCoord(0, 0)   # the stand-in (engine Q root = full-grid core 0)
 prod = [ttnn.CoreCoord(x, y) for y in range(grid.y) for x in range(grid.x) if (x, y) not in ex and (x, y) != (0, 0)]
@@ -46,19 +51,20 @@ print(f"[g2] role: {len(role.role['kernels'])} kernels, {len(role.role['cbs'])} 
       flush=True)
 
 # the GDN rects (NoC 0 coordinates; the DRAM column split cuts rows 8-9 in two)
-px = [dev.worker_core_from_logical_core(ttnn.CoreCoord(i, 8)).x for i in range(12)]
-split = next((i for i in range(1, 12) if px[i] != px[i - 1] + 1), 12)
+NXC = 6 if SIM else 12
+px = [dev.worker_core_from_logical_core(ttnn.CoreCoord(i, 8)).x for i in range(NXC)]
+split = next((i for i in range(1, NXC) if px[i] != px[i - 1] + 1), NXC)
 
 
 def prect(x0, x1):
     if x1 < x0:
         return [0, 0, 0, 0, 0]
-    a = dev.worker_core_from_logical_core(ttnn.CoreCoord(x0, 8))
+    a = dev.worker_core_from_logical_core(ttnn.CoreCoord(x0, 6 if SIM else 8))
     b = dev.worker_core_from_logical_core(ttnn.CoreCoord(x1, 9))
-    return [a.x, a.y, b.x, b.y, (x1 - x0 + 1) * 2]
+    return [a.x, a.y, b.x, b.y, (x1 - x0 + 1) * (4 if SIM else 2)]
 
 
-RECTS = prect(0, split - 1) + prect(split, 11)
+RECTS = prect(0, split - 1) + prect(split, NXC - 1)
 assert RECTS[4] + RECTS[9] == 24, RECTS
 stamps = ttnn.from_torch(torch.zeros(1, 2 * NG + 14, dtype=torch.int32).reshape(1, -1), dtype=ttnn.uint32,
                          layout=ttnn.ROW_MAJOR_LAYOUT, device=dev, memory_config=ttnn.MemoryConfig(
@@ -71,7 +77,8 @@ def program(gap_us):
     rt[QR.x][QR.y] = [NG, int(gap_us * MHZ), SA["in_ready"], SA["out_ready"], 24, stamps.buffer_address()] + RECTS + role.standin_gin()
     k = ttnn.KernelDescriptor(kernel_source=f"{HERE}/g2_standin.cpp", core_ranges=qcrs,
                               compile_time_args=ttnn.TensorAccessorArgs(role.qkv).get_compile_time_args(),
-                              runtime_args=rt, config=ttnn.DataMovementConfigDescriptor(
+                              runtime_args=rt, defines=[("G2_UNICAST", "1")] if SIM else [],
+                              config=ttnn.DataMovementConfigDescriptor(
                                   processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_0))
     scr = ttnn.CBDescriptor(total_size=2048, core_ranges=qcrs, format_descriptors=[ttnn.CBFormatDescriptor(
         buffer_index=0, data_format=ttnn.bfloat16, page_size=2048)])
