@@ -59,32 +59,23 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_polynomial_(sfpi::vFloat x) {
 }
 
 // Loads the coefficients _sfpu_tanh_polynomial_ reads (softcap, situ_glu) and the address mode
-// calculate_tanh stores through; SFPNONLINEAR's TANH_MODE itself uses its internal LUT. The template parameters are
-// unused; they keep the Blackhole signature so tanh_tile_init needs no Quasar branch.
+// calculate_tanh stores through. The template parameters are unused; they keep the Blackhole
+// signature so tanh_tile_init needs no Quasar branch.
 template <bool APPROXIMATION_MODE /*unused*/, bool is_fp32_dest_acc_en /*unused*/>
 inline void tanh_init() {
     math::_reset_counters_<p_setrwc::SET_ABD_F>();
-    // calculate_tanh stores through ADDR_MOD_6: Dest += SFP_ROWS per pass, the programming
-    // init_typecast uses.
+    // calculate_tanh stores through ADDR_MOD_6: Dest += SFP_ROWS per pass.
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = ckernel::math::SFP_ROWS}}.set(ADDR_MOD_6);
     sfpi::vConstFloatPrgm0 = 5.876733921468257904052734375e-3;
     sfpi::vConstFloatPrgm1 = -6.6649019718170166015625e-2;
     sfpi::vConstFloatPrgm2 = 0.281917631626129150390625;
 }
 
-// Pipelined across passes: _calculate_tanh_sfp_rows_ issues load / SFPNONLINEAR / store plus a
-// TTINCRWC per pass of SFP_ROWS rows (4 slots), each waiting on the one before. Here the next pass's
-// SFPLOAD and the previous pass's SFPSTORE sit between an SFPNONLINEAR and its consumer (3 slots per
-// pass); the steady-state body is recorded once and replayed; the store walks Dest through
-// ADDR_MOD_6 (+SFP_ROWS, programmed by tanh_init the way init_typecast does), so no TTINCRWC per
-// pass. Same instruction and mode as before.
-//
-// The recorded body runs once per replay, so every value it carries from one pass to the next has to
-// sit in the same LReg at its end as at its start. sfpi does not know the block repeats, so those
-// values are pinned through l_reg[]; that costs no instruction as long as the generated body matches
-// the *_REPLAY_LEN below (check the disassembly if the body or the sfpi version changes). Quasar's
-// REPLAY cannot execute while it records (sfpi rejects lltt::Exec), so the body is recorded without
-// executing and replayed for every pass.
+// Passes are pipelined (3 slots each): the next pass's load and the previous pass's store sit
+// between an SFPNONLINEAR and its consumer. The store advances Dest through ADDR_MOD_6, set by
+// tanh_init.
+// Values carried between passes are pinned through l_reg[] so the recorded body ends in the state it
+// starts in. Quasar cannot execute while recording, so the body is recorded, then replayed per pass.
 inline constexpr sfpi::LRegs TANH_RESULT_LREG = sfpi::LRegs::LReg1;
 inline constexpr unsigned TANH_REPLAY_START = 0;
 inline constexpr unsigned TANH_REPLAY_LEN = 3;

@@ -23,29 +23,14 @@ namespace ckernel::sfpu {
 // =============================================================================
 // Approximate GELU - 6-segment piecewise-linear LUT
 // =============================================================================
-// GELU(x) ~= 0.5 * x + f(|x|), with f evaluated by the SFPU LUT unit. Same table and same math as
-// Blackhole's calculate_gelu_appx (gelu_init has the segment breakdown); only the table location
-// differs. Quasar's SFPLUTFP32 reads the table from the constant LRegs 9-14 and the looked-up value
-// from LReg3, where WH/BH read the table from LReg0-2/LReg4-6.
+// GELU(x) ~= 0.5 * x + f(|x|), f from the SFPU LUT unit; same table and math as Blackhole.
+// gelu_init loads the table into the LUT config registers, overwriting the SFPU constants in
+// LReg9-12, so no sfpi code that needs them may run between the init and the loop.
 //
-// So gelu_init loads the table with sfpi::lut_init (SFPCONFIG writes). The table overwrites the SFPU
-// constants 0.0/1.0/-1.0 in LReg9/10/11 and vConstFloatPrgm0 (LReg12) is a table intercept word, so
-// no sfpi code that needs them may run between the init and the loop; each op's init restores them
-// via _init_sfpu_config_reg_, so a following op is unaffected.
-//
-// A plain per-pass sfpi loop serialises every pass as load / lut / loadi 0.5 / mad / store plus a
-// TTINCRWC (6 slots per pass of SFP_ROWS rows). Here the 0.5 is loaded once per call and the passes
-// pipeline: the next pass's SFPLOAD and the previous pass's SFPSTORE sit between the MAD and the LUT
-// that feeds it (4 slots per pass). The steady-state body is recorded once and replayed; the store
-// walks Dest through ADDR_MOD_6 (+SFP_ROWS, programmed by gelu_init<true> the way init_typecast
-// does), so no TTINCRWC per pass. Same LUT mode and the same x * 0.5 + lut MAD as before.
-//
-// The recorded body runs once per replay, so every value it carries from one pass to the next has to
-// sit in the same LReg at its end as at its start. sfpi does not know the block repeats, so those
-// values are pinned through l_reg[]; that costs no instruction as long as the generated body matches
-// the *_REPLAY_LEN below (check the disassembly if the body or the sfpi version changes). Quasar's
-// REPLAY cannot execute while it records (sfpi rejects lltt::Exec), so the body is recorded without
-// executing and replayed for every pass.
+// Passes are pipelined (4 slots each): the next pass's load and the previous pass's store sit
+// between the MAD and the LUT. The store advances Dest through ADDR_MOD_6, set by gelu_init<true>.
+// Values carried between passes are pinned through l_reg[] so the recorded body ends in the state it
+// starts in. Quasar cannot execute while recording, so the body is recorded, then replayed per pass.
 // =============================================================================
 
 inline constexpr sfpi::LRegs GELU_APPX_HALF_LREG = sfpi::LRegs::LReg0;
@@ -199,8 +184,7 @@ sfpi_inline sfpi::vFloat calculate_gelu_piecewise(sfpi::vFloat x) {
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void gelu_init() {
     if constexpr (APPROXIMATION_MODE) {
-        // calculate_gelu_appx stores through ADDR_MOD_6: Dest += SFP_ROWS per pass, the programming
-        // init_typecast uses.
+        // calculate_gelu_appx stores through ADDR_MOD_6: Dest += SFP_ROWS per pass.
         addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = ckernel::math::SFP_ROWS}}.set(ADDR_MOD_6);
 
         // Segment slopes/intercepts, packed hi/lo the way SFPLUTFP32's FP16 6-entry mode 1 reads
