@@ -31,7 +31,7 @@ inline void llk_unpack_AB_matmul_set_in1_column_stride(
 * This function initializes the unpacker to unpack operand 0 from the input0 operand circular buffer into SrcB
 * and operand 1 from the input1 operand circular buffer into SrcA. Matrix multiply FPU operation does SrcB * SrcA.
 *
-* Each operand gets a BFD id allocated from the unpack partition and its table entry is programmed here;
+* Each operand's table entry (fixed per-engine BFD id) is programmed here;
 * the DFB ids are used only to fetch buffer info, never as BFD ids. Mind the role flip: operandA feeds
 * UNPACR1 -> SrcB (Unp1) and operandB feeds UNPACR0 -> SrcA (Unp0).
 * Operand tile shapes are read from circular-buffer metadata.
@@ -59,8 +59,10 @@ __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
         !TRANSPOSE_EN || static_cast<DataFormat>(get_operand_src_format(operandB_id)) != DataFormat::MxFp4,
         "matmul SrcA transpose is not supported for 2x-format inputs");
 
-    const std::uint8_t bfd_a = llk_unpack_program_bfd<ckernel::trisc::BfdResource::Unp1>(operandA_id);
-    const std::uint8_t bfd_b = llk_unpack_program_bfd<ckernel::trisc::BfdResource::Unp0>(operandB_id);
+    llk_unpack_program_bfd<ckernel::trisc::BFD_ID_UNP1>(operandA_id);
+    constexpr std::uint8_t bfd_a = ckernel::trisc::BFD_ID_UNP1;
+    llk_unpack_program_bfd<ckernel::trisc::BFD_ID_UNP0>(operandB_id);
+    constexpr std::uint8_t bfd_b = ckernel::trisc::BFD_ID_UNP0;
 
     _llk_unpack_matmul_init_<TRANSPOSE_EN>(bfd_a, bfd_b, ct_dim, rt_dim, kt_dim, src_b_shape, src_a_shape);
 
@@ -172,11 +174,11 @@ inline void llk_unpack_AB_matmul(
     LLK_TDMA_GUARD_NOTE_TDMA(operandA);  // TEN-4746: real unpack (UNPACR) disarms these dfbs
     LLK_TDMA_GUARD_NOTE_TDMA(operandB);
     LLK_REINIT_GUARD_ASSERT_MATCHES(
-        ckernel::trisc::BfdResource::Unp1,
+        ckernel::trisc::BFD_ID_UNP1,
         operandA,
         "unpack_AB_matmul operandA DFB differs from the one llk_unpack_AB_matmul_init programmed");
     LLK_REINIT_GUARD_ASSERT_MATCHES(
-        ckernel::trisc::BfdResource::Unp0,
+        ckernel::trisc::BFD_ID_UNP0,
         operandB,
         "unpack_AB_matmul operandB DFB differs from the one llk_unpack_AB_matmul_init programmed");
 

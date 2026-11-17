@@ -4,18 +4,18 @@
 //
 // Quasar BFD re-architecture POC kernel. Copies three input DFBs to one output DFB the
 // realistic way -- init once per operand, then a block loop of tiles -- and wraps the whole
-// three-operand sequence in an outer loop so the unpack partition wraps within a single run.
+// three-operand sequence in an outer loop so the single Unp0 descriptor is re-programmed many
+// times within one run.
 //
 // compute_kernel_hw_startup(in0, out) does the one-time setup (packer for out + unpack/pack
 // hw_configure) once, outside every loop. Each operand switch then calls
-// copy_init, which re-runs llk_unpack_A_init -> bump-allocates the next id
-// from the unpack partition ([0,16)) and programs it from that input's own L1 address
-// (get_local_dfb_interface(operand).tc_slots[0].base_addr). copy_tile itself only executes; it
-// programs no descriptor, so there is NO per-tile re-init -- the per-operand copy_init is what
-// repoints the single Unp0 engine at each input. With num_inputs * num_loops (= 30) operand
-// inits per run the partition wraps and hands out reused ids; every copy (including post-wrap
-// ones) is bit-exact-checked on the host, so a wrapped id that programs the wrong descriptor is
-// caught. The readers re-stream the same tiles each loop (the Quasar tile-counter model consumes
+// copy_init, which re-runs llk_unpack_A_init -> re-programs the fixed Unp0 entry (id 0) from that
+// input's own L1 address (get_local_dfb_interface(operand).tc_slots[0].base_addr). copy_tile itself
+// only executes; it programs no descriptor, so there is NO per-tile re-init -- the per-operand
+// copy_init is what repoints the single Unp0 engine at each input. With num_inputs * num_loops
+// (= 30) operand inits per run the entry is re-programmed back to back; every copy is
+// bit-exact-checked on the host, so a stale descriptor that points at the wrong input is caught.
+// The readers re-stream the same tiles each loop (the Quasar tile-counter model consumes
 // a tile per unpack, so re-copying requires re-streaming).
 
 #include <cstdint>
@@ -64,7 +64,7 @@ void kernel_main() {
     compute_kernel_hw_startup(dfb::in0, dfb::out);
 
     // Outer loop: repeat the whole three-input block copy num_loops times. Each operand switch
-    // bump-allocates a fresh unpack BFD, wrapping the partition once its 16 ids are exhausted.
+    // re-programs the Unp0 BFD.
     for (std::uint32_t loop = 0; loop < num_loops; ++loop) {
         copy_init(dfb::in0);
         copy_block(dfb_in0, dfb::in0, dfb_out, tiles_per_input);

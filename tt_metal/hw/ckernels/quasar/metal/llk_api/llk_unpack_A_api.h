@@ -4,7 +4,7 @@
 
 #pragma once
 #include <cstdint>
-#include "llk_bfd_alloc.h"
+#include "ckernel_buf_desc.h"
 #include "llk_unpack_common_api.h"
 #include "llk_unpack_unary_broadcast_operands.h"
 #include "llk_unpack_unary_operand.h"
@@ -26,17 +26,17 @@
  * @tparam BType: Broadcast type
  * @tparam binary_reuse_dest: Dest reuse mode
  * @tparam unpack_to_dest: When true, the operand is routed through UNP_DEST
- * @return The TDMA engine the unpack_A paths program
+ * @return The fixed BFD id (BFD_ID_UNP0 or BFD_ID_UNP1) of the engine the unpack_A paths program
  */
 template <BroadcastType BType, EltwiseBinaryReuseDestType binary_reuse_dest, bool unpack_to_dest>
-inline constexpr ckernel::trisc::BfdResource unpack_a_bfd_resource() {
+inline constexpr std::uint8_t unpack_a_bfd_id() {
     if constexpr (binary_reuse_dest != EltwiseBinaryReuseDestType::NONE) {
-        return binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCA ? ckernel::trisc::BfdResource::Unp1
-                                                                             : ckernel::trisc::BfdResource::Unp0;
+        return binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCA ? ckernel::trisc::BFD_ID_UNP1
+                                                                             : ckernel::trisc::BFD_ID_UNP0;
     } else if constexpr (BType == BroadcastType::NONE) {
-        return ckernel::trisc::BfdResource::Unp0;
+        return ckernel::trisc::BFD_ID_UNP0;
     } else {
-        return unpack_to_dest ? ckernel::trisc::BfdResource::Unp0 : ckernel::trisc::BfdResource::Unp1;
+        return unpack_to_dest ? ckernel::trisc::BFD_ID_UNP0 : ckernel::trisc::BFD_ID_UNP1;
     }
 }
 
@@ -76,8 +76,8 @@ inline void llk_unpack_A_init(
     // The unpack_to_dest primitive takes no shape: it supports full 32x32 tiles only, asserted below.
     [[maybe_unused]] const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
 
-    constexpr ckernel::trisc::BfdResource engine = unpack_a_bfd_resource<BType, binary_reuse_dest, unpack_to_dest>();
-    const std::uint8_t bfd_id = llk_unpack_program_bfd<engine>(operand_id);
+    constexpr std::uint8_t bfd_id = unpack_a_bfd_id<BType, binary_reuse_dest, unpack_to_dest>();
+    llk_unpack_program_bfd<bfd_id>(operand_id);
 
     if constexpr (binary_reuse_dest != EltwiseBinaryReuseDestType::NONE) {
         static_assert(unpack_to_dest == false, "unpack_to_dest is not yet supported on Quasar");
@@ -85,7 +85,7 @@ inline void llk_unpack_A_init(
         static_assert(BType == BroadcastType::NONE, "On Quasar, only BroadcastType::NONE is supported for dest reuse");
 
         // For Quasar, the unp_sel field is ignored if binary_reuse_dest != EltwiseBinaryReuseDestType::NONE
-        // CB_UNP in the reuse-dest MOP is UNP_B for DEST_TO_SRCA, UNP_A otherwise — unpack_a_bfd_resource
+        // CB_UNP in the reuse-dest MOP is UNP_B for DEST_TO_SRCA, UNP_A otherwise — unpack_a_bfd_id
         // picks Unp1/Unp0 accordingly.
         _llk_unpack_unary_operand_init_<
             p_unpacr::UNP_A,
@@ -164,7 +164,7 @@ inline void llk_unpack_A(
     const std::uint32_t operand, const std::uint32_t tile_index, const std::uint32_t dst_tile_index = 0) {
     LLK_TDMA_GUARD_NOTE_TDMA(operand);  // TEN-4746: real unpack (UNPACR) disarms this dfb
     LLK_REINIT_GUARD_ASSERT_MATCHES(
-        (unpack_a_bfd_resource<BType, binary_reuse_dest, unpack_to_dest>()),
+        (unpack_a_bfd_id<BType, binary_reuse_dest, unpack_to_dest>()),
         operand,
         "unpack_A operand DFB differs from the one llk_unpack_A_init programmed");
 
@@ -233,7 +233,7 @@ inline void llk_unpack_A_block(
     const std::uint32_t start_dst_tile_index = 0) {
     LLK_TDMA_GUARD_NOTE_TDMA(operand);  // TEN-4746: real unpack (UNPACR) disarms this dfb
     LLK_REINIT_GUARD_ASSERT_MATCHES(
-        (unpack_a_bfd_resource<BType, binary_reuse_dest, unpack_to_dest>()),
+        (unpack_a_bfd_id<BType, binary_reuse_dest, unpack_to_dest>()),
         operand,
         "unpack_A_block operand DFB differs from the one llk_unpack_A_init programmed");
 

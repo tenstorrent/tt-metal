@@ -23,7 +23,7 @@ enum class p_dim_stride_target
  * @brief Programs the unpacker source register format.
  *
  * L1 buffer info is not programmed here: it lives in buffer descriptors, which op inits
- * program via the per-TRISC allocator (see llk_bfd_alloc.h).
+ * program via the engine's fixed id (see ckernel_buf_desc.h).
  *
  * @tparam UNP_SEL: Selects which unpacker to configure, values = <p_unpacr::UNP_A/UNP_B/UNP_S/UNP_DEST>
  * @param reg_data_format: Source register (out) data format.

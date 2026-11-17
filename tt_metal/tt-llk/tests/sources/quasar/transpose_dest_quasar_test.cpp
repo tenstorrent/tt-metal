@@ -17,7 +17,7 @@
 
 #ifdef LLK_TRISC_UNPACK
 
-#include "llk_bfd_alloc.h"
+#include "ckernel_buf_desc.h"
 #include "llk_math_common.h"
 #include "llk_unpack_common.h"
 #include "llk_unpack_unary_operand.h"
@@ -69,8 +69,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
             l1_addr_16B = L1_ADDRESS(buffer_A[0]);
         }
 
-        const auto bfd_unpack =
-            ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(TENSOR_SHAPE_FROM_PARAMS(params), l1_addr_16B, formats.unpack_A_src);
+        ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_UNP0>(TENSOR_SHAPE_FROM_PARAMS(params), l1_addr_16B, formats.unpack_A_src);
+        constexpr std::uint8_t bfd_unpack = ckernel::trisc::BFD_ID_UNP0;
         if constexpr (is_fp32_dest_acc_en && !unpack_to_dest)
         {
             // If Dest is in 32bit mode and operation is Mov2D, we need both SrcA/B fmts to be configured since Mov2D will be implemented via ELWADD
@@ -285,7 +285,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef LLK_TRISC_PACK
 
-#include "llk_bfd_alloc.h"
+#include "ckernel_buf_desc.h"
 #include "llk_pack.h"
 #include "llk_pack_common.h"
 #include "params.h"
@@ -325,8 +325,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
             }
         }
 
-        const auto bfd_pack = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(
-            TENSOR_SHAPE_FROM_PARAMS(params), L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
+        ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_PACK0>(TENSOR_SHAPE_FROM_PARAMS(params), L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
+        constexpr std::uint8_t bfd_pack = ckernel::trisc::BFD_ID_PACK0;
         _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
         _llk_pack_init_(bfd_pack, ckernel::DEFAULT_TENSOR_SHAPE, output_tiles_in_block);
         PROFILER_SYNC();
