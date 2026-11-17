@@ -13,6 +13,8 @@ from . import (
     noc_metrics,
     riscv_metrics,
     riscv_pmc,
+    router_counters,
+    router_metrics,
 )
 from .headers import (
     BANK_KEYS,
@@ -31,6 +33,10 @@ from .headers import (
     riscv_event_select,
     riscv_event_tables,
     riscv_select_events,
+    router_constants,
+    router_counter_table,
+    router_option,
+    router_port_names,
 )
 from .metrics import (
     METRIC_LABELS,
@@ -77,6 +83,12 @@ __all__ = [
     "riscv_event_select",
     "riscv_event_tables",
     "riscv_select_events",
+    "router_constants",
+    "router_counter_table",
+    "router_counters",
+    "router_metrics",
+    "router_option",
+    "router_port_names",
     "quasar_l1_client_label",
     "quasar_l1_client_selection_is_valid",
 ]

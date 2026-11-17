@@ -37,3 +37,8 @@ change.
 - `dram_counters.py` decodes `dram_traffic.csv` and `dram_idle.csv` of `TT_METAL_PROFILE_DRAM_COUNTERS` into bytes per DRAM tile
   and per program (`per_program`), subtracting the idle drift model; `headers.dram_counter_table(arch)` and
   `headers.dram_layout(arch)` parse `dram_counters_*.h`. Reference: `docs/performance_counters/dram_counters.md`.
+
+NoC router counters: `headers.router_counter_table(arch)`, `router_option(arch, option)` and `router_constants()` parse the
+`router_counters_*.h` tables and the option mask layout; `router_counters.py` decodes the profiler markers 9120 to 9136
+into per-NoC counts per port, or per port and virtual channel; `router_metrics.py` derives the output and input totals.
+Adding a bank needs no Python change. Reference: `docs/performance_counters/router_counters.md`.

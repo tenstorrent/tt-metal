@@ -474,3 +474,108 @@ def dram_niu_address(arch, noc, tile_noc0_y, offset, include_dir=None) -> int:
         + instance * layout.tile_instance_stride
         + offset
     )
+
+
+    return DramLayout(*(int(g.rstrip("uU"), 0) for g in match.groups()))
+
+
+# NoC router counters: router_counters_types.h has the port names, the option mask layout and the virtual channel
+# count, router_counters_<arch>.h the {port, bank offset} table in capture order and the layout of one bank.
+_ROUTER_ARCH_HEADER = {
+    "blackhole": "router_counters_blackhole.h",
+    "wormhole": "router_counters_wormhole.h",
+    "wormhole_b0": "router_counters_wormhole.h",
+    "quasar": "router_counters_quasar.h",
+}
+_ROUTER_ENTRY = re.compile(r"\{\s*RouterPort::(\w+)\s*,\s*(0[xX][0-9a-fA-F]+|\d+)\s*\}")
+_ROUTER_TABLE_DECL = re.compile(
+    r"std::array<\s*Bank\s*,\s*(\d+)\s*>\s+router_banks\b[^=;]*="
+)
+
+
+class RouterBank(NamedTuple):
+    port: str
+    offset: int
+
+
+class RouterTable(NamedTuple):
+    banks: List[RouterBank]
+    num_nocs: int
+    counter_bits: int
+    count_kind: (
+        str  # NONE, HEAD_FLIT (a packet per count) or ALL_FLIT (a flit per count)
+    )
+
+
+class RouterOption(NamedTuple):
+    banks: List[RouterBank]  # selected banks in capture order
+    vcs: List[int]  # selected virtual channels, ascending
+    per_vc: bool  # one value per selected channel; otherwise the channels of a bank are added up
+
+
+def router_port_names(include_dir=None) -> List[str]:
+    """RouterPort enumerator names in declaration order (UNDEF first), parsed from router_counters_types.h."""
+    header = find_include_dir(include_dir) / "router_counters_types.h"
+    names = parse_enum(header.read_text(), "RouterPort")
+    if not names:
+        raise ValueError(f"enum RouterPort in {header} parsed empty")
+    return [names[i] for i in sorted(names)]
+
+
+def router_constants(include_dir=None) -> Dict[str, int]:
+    """Option mask layout and channel count from router_counters_types.h."""
+    header = find_include_dir(include_dir) / "router_counters_types.h"
+    text = _strip_comments(header.read_text())
+    names = (
+        "NUM_VCS",
+        "VC_MASK_ALL",
+        "BANK_SHIFT",
+        "BANKS_ALL",
+        "PER_VC",
+        "MAX_VALUES",
+    )
+    return {n: _noc_constant(text, n, header) for n in names}
+
+
+def router_counter_table(arch, include_dir=None) -> RouterTable:
+    """Capture-order bank table, NoC count, counter width and count meaning of one arch. Wormhole has no banks."""
+    arch = normalize_arch(arch)
+    if arch not in _ROUTER_ARCH_HEADER:
+        raise ValueError(
+            f"unknown arch {arch!r}; expected one of {sorted(_ROUTER_ARCH_HEADER)}"
+        )
+    header = find_include_dir(include_dir) / _ROUTER_ARCH_HEADER[arch]
+    text = _strip_comments(header.read_text())
+    decl = _ROUTER_TABLE_DECL.search(text)
+    if decl is None:
+        raise ValueError(f"{header}: no router_banks table found")
+    size = int(decl.group(1))
+    chunk = text[decl.end() :].split("}};", 1)[0] if size else ""
+    banks = [RouterBank(p, int(o, 0)) for p, o in _ROUTER_ENTRY.findall(chunk)]
+    if len(banks) != size:
+        raise ValueError(
+            f"router_banks: parsed {len(banks)} entries but the array declares {size}"
+        )
+    kind = re.search(r"\bCOUNT_KIND\s*=\s*CountKind::(\w+)", text)
+    if kind is None:
+        raise ValueError(f"{header}: COUNT_KIND not found")
+    return RouterTable(
+        banks,
+        _noc_constant(text, "ROUTER_NOCS", header),
+        _noc_constant(text, "COUNTER_BITS", header),
+        kind.group(1),
+    )
+
+
+def router_option(arch, option, include_dir=None) -> RouterOption:
+    """Banks, channels and keep-apart flag an option mask selects on one arch; bank bits past the table are dropped."""
+    consts = router_constants(include_dir)
+    table = router_counter_table(arch, include_dir)
+    option = int(option)
+    banks = [
+        b
+        for i, b in enumerate(table.banks)
+        if (option >> (consts["BANK_SHIFT"] + i)) & 1
+    ]
+    vcs = [vc for vc in range(consts["NUM_VCS"]) if (option >> vc) & 1]
+    return RouterOption(banks, vcs, bool(option & consts["PER_VC"]))
