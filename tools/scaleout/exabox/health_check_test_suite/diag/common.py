@@ -153,4 +153,8 @@ def print_phase_summary(phase_name: str, phase_dict: dict) -> None:
 def print_phase_line(phase_dict: dict) -> None:
     """The phase's rollup on one line, for phases that print their own
     per-step lines as they run."""
-    print(f"  {phase_dict['name']:14} {phase_dict['status']:5} ({phase_dict['duration_s']:.1f}s)", flush=True)
+    line = f"  {phase_dict['name']:14} {phase_dict['status']:5} ({phase_dict['duration_s']:.1f}s)"
+    checks = phase_dict.get("checks", [])
+    if phase_dict["status"] == "SKIP" and len(checks) == 1:
+        line += f"  {checks[0].get('details', '')}"
+    print(line, flush=True)

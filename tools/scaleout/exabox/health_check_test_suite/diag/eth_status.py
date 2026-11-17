@@ -486,7 +486,9 @@ def _counter_checks(
         else:
             worst_k, worst = ranked[0]
             status = PASS
-            details = f"max {worst:,.1f}/s {span} on {len(uncorr)} links (worst {where(now[worst_k])})"
+            details = f"max {worst:,.1f}/s {span} on {len(uncorr)} links" + (
+                f" (worst {where(now[worst_k])})" if worst > 0 else ""
+            )
         details += reset_note
     else:
         many = [f"{where(l)}: {l.uncorr:,}" for l in now.values() if (l.uncorr or 0) >= UNCORR_WARN_TOTAL]
@@ -738,6 +740,20 @@ class TriageRead:
     links: dict[tuple[int, str], EthLink]
 
 
+EXCEPTION_RE = re.compile(r"\b\w*(?:Error|Exception)\b.*")
+
+
+def _import_error(*outputs: str) -> str | None:
+    """The exception a failed import ended on. Triage's excepthook prints its
+    traceback as a table on stdout, so every stream is searched, not just stderr."""
+    for text in outputs:
+        for line in reversed(text.splitlines()):
+            m = EXCEPTION_RE.search(line)
+            if m:
+                return m.group(0).strip()
+    return next((ln.strip() for text in outputs for ln in reversed(text.splitlines()) if ln.strip()), None)
+
+
 def resolve_triage_python(tt_metal: Path) -> str:
     """The repo venv's python, where create_venv.sh installs the triage
     requirements, else the one running the suite (the image's venv)."""
@@ -795,16 +811,17 @@ def run_eth_status(
 ) -> None:
     """Read every on-host ETH link twice and judge the two reads.
 
-    * **SKIP** — no reading taken: triage is not in this checkout or cannot
-      import its requirements, no chip is on PCIe, or one has dropped off it
-      (``eth_status_pcie_gate`` then FAILs and says which).
-    * **WARN** on ``eth_status_read`` — triage ran but listed no eth core, or
-      only the first read did. Lost coverage, not a statement about the links.
+    * **SKIP** — no reading taken: no chip is on PCIe, or one has dropped off
+      it (``eth_status_pcie_gate`` then FAILs and says which).
+    * **WARN** on ``eth_status_read`` — triage is not in this checkout or
+      cannot import its requirements, or it ran but listed no eth core, or only
+      the first read did. Lost coverage, not a statement about the links; a
+      SKIP here would let a run that read no link at all roll up to PASS.
     * Every other check is a finding about the links; see judge_eth_status.
     """
     script = tt_metal / TRIAGE_SCRIPT
     if not script.is_file():
-        phase.add(Check(name="eth_status_read", status=SKIP, details=f"not present: {script}", ip="other"))
+        phase.add(Check(name="eth_status_read", status=WARN, details=f"not present: {script}", ip="other"))
         return
     python = resolve_triage_python(tt_metal)
     # A log path that does not exist keeps Inspector out of the read. By default
@@ -834,18 +851,27 @@ def run_eth_status(
         phase.add(Check(name="eth_status_read", status=SKIP, details=f"links not read: {reason}", ip="other"))
         return
 
+    # The scripts are imported too, from their own directory as triage loads
+    # them: one that fails to import drops its options from triage's command
+    # line, and triage then prints only its usage text, naming nothing.
+    scripts_to_import = ", ".join(dict.fromkeys(FIRST_READ_SCRIPTS + SECOND_READ_SCRIPTS))
+    preflight = f"{TRIAGE_IMPORTS}; import {scripts_to_import}"
     try:
-        rc, _out, err, _timed_out = run_with_timeout([python, "-c", TRIAGE_IMPORTS], 120)
+        rc, out, err, _timed_out = run_with_timeout([python, "-c", preflight], 120, cwd=str(script.parent))
     except OSError as e:
-        rc, err = 127, repr(e)
+        rc, out, err = 127, "", repr(e)
     if rc != 0:
-        reason = next((ln.strip() for ln in reversed(err.splitlines()) if ln.strip()), f"rc={rc}")
+        reason = _import_error(err, out) or f"rc={rc}"
+        hint = (
+            f". Install {TRIAGE_REQUIREMENTS} (create_venv.sh does)"
+            if reason.startswith(("ModuleNotFoundError", "ImportError"))
+            else ""
+        )
         phase.add(
             Check(
                 name="eth_status_read",
-                status=SKIP,
-                details=f"triage cannot run under {python}: {reason[:200]}. Install {TRIAGE_REQUIREMENTS} "
-                f"(create_venv.sh does)",
+                status=WARN,
+                details=f"triage cannot run under {python}: {reason[:200]}{hint}",
                 ip="other",
             )
         )

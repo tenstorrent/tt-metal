@@ -573,10 +573,20 @@ else
     rm -rf "${_pkg_dir}"
 fi
 
-[ -f "${HC_RUN_DIAG}" ] || {
-    echo "ERROR: ${HC_RUN_DIAG} is not present in this image." >&2
+if [ ! -f "${HC_RUN_DIAG}" ]; then
+    # A host checkout bind-mounted over the suite can be there and still be
+    # unreadable: the image user is not the host user, and a umask of 007
+    # leaves the checkout closed to everyone else.
+    _seen="${HC_RUN_DIAG}"
+    while [ "${_seen}" != / ] && [ ! -e "${_seen}" ]; do _seen="$(dirname "${_seen}")"; done
+    if [ -d "${_seen}" ] && [ ! -x "${_seen}" ]; then
+        echo "ERROR: the image user (uid $(id -u)) cannot enter ${_seen}, so ${HC_RUN_DIAG} cannot be read." >&2
+        echo "       A host directory mounted there must be readable by others: chmod -R o+rX <host path>" >&2
+    else
+        echo "ERROR: ${HC_RUN_DIAG} is not present in this image." >&2
+    fi
     exit 1
-}
+fi
 
 # The suite is the copy baked into the image, which can predate the sys-triage
 # phase. Its argument parser would reject the phase flags and take the whole

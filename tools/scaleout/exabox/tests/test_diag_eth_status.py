@@ -347,6 +347,9 @@ class TestRunEthStatus(unittest.TestCase):
         triage_dir = self.tt_metal / "tools" / "triage"
         triage_dir.mkdir(parents=True)
         (triage_dir / "triage.py").write_text(FAKE_TRIAGE)
+        for name in eth_status.FIRST_READ_SCRIPTS + eth_status.SECOND_READ_SCRIPTS:
+            (triage_dir / f"{name}.py").write_text("")
+        self.triage_dir = triage_dir
         (triage_dir / "read1.txt").write_text(triage_text(galaxy_rows()))
         second = galaxy_rows(overrides={(2, 4, 6): {"Retrain Count": "1"}})
         (triage_dir / "read2.txt").write_text(triage_text(second, with_device_info=False))
@@ -381,13 +384,40 @@ class TestRunEthStatus(unittest.TestCase):
         self.assertEqual(checks["eth_status_read"].status, SKIP)
         self.assertFalse(self.ran.exists())
 
-    def test_missing_triage_requirements_skip(self):
+    def test_missing_triage_requirements_warn(self):
         fake_sysfs(self.sys_root)
         with mock.patch.object(eth_status, "TRIAGE_IMPORTS", "import ttexalens_not_installed_here"):
-            checks = self.run_phase()
-        self.assertEqual(checks["eth_status_read"].status, SKIP)
+            phase = Phase(name="eth_status")
+            with mock.patch("sys.stdout"), mock.patch("sys.stderr"):
+                run_eth_status(self.tt_metal, phase, False, self.logs, sys_root=self.sys_root, interval_s=0)
+        checks = by_name(phase.checks)
+        self.assertEqual(checks["eth_status_read"].status, WARN)
         self.assertIn("ttexalens_not_installed_here", checks["eth_status_read"].details)
         self.assertFalse(self.ran.exists())
+        phase.rollup()
+        self.assertEqual(phase.status, WARN)
+
+    def test_triage_script_that_does_not_import_is_named(self):
+        # As tools/triage/inspector.capnp does in a sparse checkout without its
+        # symlink target: triage's excepthook prints the traceback on stdout.
+        fake_sysfs(self.sys_root)
+        (self.triage_dir / "check_eth_status.py").write_text(
+            "import sys\n"
+            "print('inspector_capnp.py:13  SchemaParser.load  OSError: File not found: /x/inspector.capnp')\n"
+            "sys.exit(1)\n"
+        )
+        checks = self.run_phase()
+        self.assertEqual(checks["eth_status_read"].status, WARN)
+        self.assertIn("OSError: File not found: /x/inspector.capnp", checks["eth_status_read"].details)
+        self.assertNotIn("Install", checks["eth_status_read"].details)
+        self.assertFalse(self.ran.exists())
+
+    def test_missing_triage_script_warns(self):
+        fake_sysfs(self.sys_root)
+        (self.tt_metal / "tools" / "triage" / "triage.py").unlink()
+        checks = self.run_phase()
+        self.assertEqual(checks["eth_status_read"].status, WARN)
+        self.assertIn("not present", checks["eth_status_read"].details)
 
     def test_falls_back_to_dev_tenstorrent_order_without_device_info(self):
         fake_sysfs(self.sys_root)

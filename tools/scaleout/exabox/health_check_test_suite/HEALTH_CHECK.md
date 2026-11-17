@@ -281,7 +281,7 @@ container of its own. `<python>` is `python_env/bin/python` where it exists
 (`create_venv.sh` installs `tools/triage/requirements.txt` there), else the
 python running the suite, which in the `exabox-tools` image is its venv. Before
 the first read the phase checks that this python can import triage's
-requirements, and SKIPs naming the missing module if it cannot.
+requirements, and WARNs naming the missing module if it cannot.
 
 - **`--inspector-log-path` points at a path that does not exist**, which keeps
   Inspector out. By default triage loads `/tmp/tt-metal/inspector`, where the
@@ -331,12 +331,14 @@ cabled alike.
 
 ### Statuses
 
-- **SKIP** — no reading: triage is not in the tree, its requirements do not
-  import, no chip is on PCIe, or one dropped off it.
-- **WARN on `eth_status_read`** — triage ran but listed no eth core (its last
+- **SKIP** — no reading: no chip is on PCIe, or one dropped off it.
+- **WARN on `eth_status_read`** — triage is not in the tree or its
+  requirements do not import; or triage ran but listed no eth core (its last
   output lines are in `details`; a chip that stopped answering shows up as a
   register timeout there), or only the first read did, and the counters were
-  judged on one read. Lost coverage, not a statement about the links.
+  judged on one read. Lost coverage, not a statement about the links. Not a
+  SKIP, because the PCIe gate has already PASSed by then, and a SKIP beside it
+  would roll the phase, and a flash run, up to PASS with no link read.
 - Every other check is a finding about the links, at the thresholds below
   (module constants in `diag/eth_status.py`):
 
@@ -594,7 +596,7 @@ whose baked-in suite predates the phase has the `--skip-sys-triage` and
 | `--tt-smi-path PATH` | `/opt/tt_metal_infra/.../tt-smi` else `tt-smi` on PATH | Override tt-smi binary or repo path |
 | `--tt-metal-path PATH` | `$TT_METAL_HOME` | tt-metal repo root. The deployment-test binary is looked up under `build_Release/`, `build/`, `build_Debug/` and `build_RelWithDebInfo/`, in that order (`DEPLOYMENT_BIN_CANDIDATES`). |
 | `--output PATH` | `./diag_report.json` | Where to write the JSON report. Gtest logs go to `<output_dir>/logs/`. |
-| `--snapshot-out PATH` | `/tmp/diag_snapshot.json` | Where `tt-smi -f` writes the raw snapshot |
+| `--snapshot-out PATH` | `diag_snapshot.json` beside `--output` | Where `tt-smi -f` writes the raw snapshot |
 
 ## Checks (grouped by IP)
 
@@ -673,7 +675,7 @@ for how they are taken and the thresholds. Links are named
 | Check | Rule | On fail |
 |---|---|---|
 | `eth_status_pcie_gate` | Every Tenstorrent PCI function answers in config space with memory decoding on. Read from sysfs before any chip is opened. | **FAIL**, naming the chips, and the links are not read. **SKIP** with no chip on PCIe. |
-| `eth_status_read` | Both triage reads listed eth cores | **WARN** when triage listed none (with its last output lines) or only the first read did. **SKIP** when it could not start: triage absent, its requirements missing, or the PCIe gate stopped it. |
+| `eth_status_read` | Both triage reads listed eth cores | **WARN** when triage is absent or its requirements are missing, when it listed no eth core (with its last output lines), or when only the first read did. **SKIP** when the PCIe gate stopped it. |
 | `eth_status_links_down` | Every listed link not on an unused port is up and readable, and none went away between the reads | **FAIL**, naming the links |
 | `eth_status_heartbeat` | No eth core's heartbeat stood still between triage's two samples (a core released to metal is fine) | **FAIL** — the core has stopped |
 | `eth_status_port_state` | No port reports `Unknown`, `Invalid` or `Unsupported FW` | **WARN** |
@@ -806,6 +808,18 @@ ninja -C build_Release unit_tests_deployment
 The `flash` tier needs no build, only triage's Python requirements, which
 `./create_venv.sh` installs into `python_env/` (or, into another environment,
 `uv pip install -r tools/triage/requirements.txt`).
+
+A sparse checkout runs `flash` on the host too, given triage and the file its
+`inspector.capnp` symlink points at, and a `python_env/` that carries triage's
+requirements:
+
+```bash
+git clone --depth 1 --filter=blob:none --sparse -b <branch> https://github.com/tenstorrent/tt-metal.git tt-metal
+cd tt-metal
+git sparse-checkout set tools/scaleout/exabox tools/triage tt_metal/impl/debug/inspector
+python3 -m venv python_env && python_env/bin/pip install -r tools/triage/requirements.txt
+./tools/scaleout/exabox/health_check_test_suite/run_diag.sh flash --output /path/to/run/diag_report.json
+```
 
 ## Repo layout
 

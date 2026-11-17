@@ -49,8 +49,9 @@ Tiers:
 
 The ETH status read (flash) runs tools/triage/triage.py from this checkout under
 python_env/bin/python (create_venv.sh installs the triage requirements there), else
-the python running this script. It checks PCIe in sysfs first and does not open the
-chips if one has dropped off; the raw reads land in <output dir>/logs/eth_status_read_*.
+the python running this script. A sparse checkout needs tools/triage and
+tt_metal/impl/debug/inspector for it. It checks PCIe in sysfs first and does not open
+the chips if one has dropped off; the raw reads land in <output dir>/logs/eth_status_read_*.
 
 The QSFP tests check ETH link training, cabling and module state across all 448
 ports. They run on medium, deploy and pre_reboot when \`tt-bh-glx-cluster-debug\` is on PATH

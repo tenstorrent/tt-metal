@@ -148,7 +148,11 @@ def build_diag_arg_parser() -> argparse.ArgumentParser:
         help="tt-metal repo root (contains build/test/tt_metal/unit_tests_deployment).",
     )
     ap.add_argument("--output", type=Path, default=Path("diag_report.json"))
-    ap.add_argument("--snapshot-out", type=Path, default=Path("/tmp/diag_snapshot.json"))
+    ap.add_argument(
+        "--snapshot-out",
+        type=Path,
+        help="Where tt-smi writes the raw snapshot. Default: diag_snapshot.json beside the --output report.",
+    )
     return ap
 
 
@@ -167,17 +171,17 @@ def _guarded(phase: Phase, error_check: str, error_status: str, body: Callable[[
         phase.add(Check(name=error_check, status=error_status, details=repr(e), ip="other"))
 
 
-def _finish(report: dict, phase: Phase, t0: float, *, summary: bool, all_skip_stays_skip: bool = False) -> None:
+def _finish(report: dict, phase: Phase, t0: float, *, summary: bool) -> None:
     """Time, roll up, record and print a phase.
 
     ``summary`` prints the grouped per-check summary; without it the phase gets
     one rollup line, for phases that print their own per-step lines as they run.
-    ``all_skip_stays_skip`` keeps a phase that only skipped at SKIP rather than
-    rolling it up to PASS, for the optional-tool phases where no reading at all
-    must not read as a clean one.
+    A phase whose checks all skipped stays SKIP rather than rolling up to PASS:
+    a phase the tier or a --skip-* flag left empty ran nothing, and must not
+    read as a clean run of it.
     """
     phase.duration_s = time.time() - t0
-    if not all_skip_stays_skip or any(c.status != SKIP for c in phase.checks):
+    if any(c.status != SKIP for c in phase.checks):
         phase.rollup()
     report["phases"][phase.name] = asdict(phase)
     if summary:
@@ -239,7 +243,7 @@ def run_diag(
     bmc_user: str | None = None,
     bmc_password: str | None = None,
     output: Path = Path("diag_report.json"),
-    snapshot_out: Path = Path("/tmp/diag_snapshot.json"),
+    snapshot_out: Path | None = None,
 ) -> tuple[int, dict]:
     """Run the full pipeline (snapshot → resets → gtests → triage → ETH status → QSFP tests → sys-triage).
 
@@ -253,6 +257,10 @@ def run_diag(
     plan = TIERS[tier]
     if tt_metal_path is None:
         tt_metal_path = default_tt_metal_path()
+    if snapshot_out is None:
+        # Not a fixed path under /tmp: on a shared node a copy another user left
+        # there cannot be overwritten, and tt-smi -f then fails the snapshot.
+        snapshot_out = output.parent / "diag_snapshot.json"
 
     started = datetime.now(timezone.utc)
     report = {
@@ -398,7 +406,7 @@ def run_diag(
             WARN,
             lambda: run_eth_status(tt_metal_path, eth_phase, dry_run, logs_dir),
         )
-    _finish(report, eth_phase, t0, summary=True, all_skip_stays_skip=True)
+    _finish(report, eth_phase, t0, summary=True)
 
     # Phase 7: the QSFP tests, when the host has the package. Last,
     # and after the post-test reset for the same two reasons the triage phase
@@ -433,7 +441,7 @@ def run_diag(
                 detected_rev=report.get("detected_board_rev"),
             ),
         )
-    _finish(report, qsfp_phase, t0, summary=True, all_skip_stays_skip=True)
+    _finish(report, qsfp_phase, t0, summary=True)
 
     # Phase 8: the sys-triage bundle, when the host has the package. After the
     # QSFP tests for the same reason they follow triage: it opens every chip
@@ -463,7 +471,7 @@ def run_diag(
                 bmc_password=bmc_password,
             ),
         )
-    _finish(report, sys_triage_phase, t0, summary=True, all_skip_stays_skip=True)
+    _finish(report, sys_triage_phase, t0, summary=True)
 
     ended = datetime.now(timezone.utc)
     report["ended_utc"] = ended.isoformat()

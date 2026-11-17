@@ -110,6 +110,21 @@ class TestRunDiagReport(unittest.TestCase):
         self.assertIn("ERROR: could not write report", log)
         self.assertFalse(self.output.exists(), "the earlier run's report must not stand in for this one")
 
+    def test_a_phase_the_tier_leaves_empty_is_skip_not_pass(self):
+        # flash runs no resets, tests or triage tools: those phases ran nothing.
+        _rc, report, _log = self.run_diag()
+        for name in ("reset_loop", "tests", "triage", "eth_status"):
+            with self.subTest(phase=name):
+                self.assertEqual(report["phases"][name]["status"], "SKIP")
+
+    def test_the_snapshot_defaults_to_beside_the_report(self):
+        with mock.patch.object(diag_runner, "take_snapshot", return_value={}) as take:
+            with mock.patch.object(diag_runner, "resolve_tt_smi", return_value="tt-smi"):
+                with mock.patch.object(diag_runner, "detect_tt_smi_version", return_value=None):
+                    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                        diag_runner.run_diag("flash", dry_run=True, skip_eth_status=True, output=self.output)
+        self.assertEqual(take.call_args.args[1], self.output.parent / "diag_snapshot.json")
+
 
 if __name__ == "__main__":
     unittest.main()
